@@ -913,6 +913,21 @@ class _Canvas:
     #: Cells a machine occupies, which block *every* level.
     solid: set[tuple[int, int]] = field(default_factory=set)
 
+    #: ``cell -> port (x, y)``: one way in or out, held for that port's nets.
+    #:
+    #: A port is a lane's end tile, so it has at most three free neighbours and
+    #: often one.  Without a reservation an earlier net's path takes the last
+    #: one, and every net using that port is then handed an EMPTY start or goal
+    #: set: A* returns ``None`` having expanded zero nodes.  That is
+    #: indistinguishable from congestion in the counters and cannot be
+    #: negotiated away, because a net that expands nothing never registers a
+    #: conflict for the history term to price.  Measured on the magnetic-ring
+    #: spec: 48 of 128 searches failed at zero expansions, at every candidate
+    #: height, with two thirds of the routing budget still unspent.
+    reserved: dict[tuple[int, int, int], tuple[int, int]] = field(default_factory=dict)
+    #: Ports the net currently being routed owns; it may use their reservations.
+    routing_ports: frozenset[tuple[int, int]] = frozenset()
+
     def add(self, b: PlacedBuilding, *, solid: bool = False) -> int:
         idx = len(self.buildings)
         self.buildings.append(b)
@@ -928,7 +943,10 @@ class _Canvas:
 
     def free(self, cell: tuple[int, int, int]) -> bool:
         x, y, _ = cell
-        return cell not in self.blocked and (x, y) not in self.solid
+        if cell in self.blocked or (x, y) in self.solid:
+            return False
+        port = self.reserved.get(cell)
+        return port is None or port in self.routing_ports
 
 
 def _pick_sorter(rate: Fraction, span: int, machines: int) -> tuple[int, int]:
@@ -1384,6 +1402,8 @@ def _route_all(
     # records in `route_failures`.
     budget = {"left": _ROUTING_BUDGET}
 
+    _reserve_port_access(canvas, nets)
+
     for it in range(RRR_MAX):
         iterations = it + 1
         for path in committed:
@@ -1402,6 +1422,12 @@ def _route_all(
         paths: dict[int, list[tuple[int, int, int]]] = {}
         for i in order:
             net = nets[i]
+            # Claim this net's port reservations for the duration of its search,
+            # so its own way in and out reads as free while every other port's
+            # stays held.
+            canvas.routing_ports = frozenset(
+                {(net.src.x, net.src.y), (net.dst.x, net.dst.y)}
+            )
             starts = [
                 (net.src.x + dx, net.src.y + dy, 0)
                 for dx, dy in _STEPS
@@ -1413,6 +1439,7 @@ def _route_all(
                 if canvas.free((net.dst.x + dx, net.dst.y + dy, 0))
             }
             routed = _astar(canvas, starts, goals, history, pressure, bounds, budget)
+            canvas.routing_ports = frozenset()
             if routed is None:
                 failed += 1
                 continue
@@ -1421,15 +1448,53 @@ def _route_all(
                 canvas.blocked[cell] = -2  # tentative reservation
             committed.append(routed)
         if failed == 0:
-            _commit_paths(canvas, nets, paths, belt_id, belt_model)
-            return len(paths), 0, iterations
+            unlinked = _commit_paths(canvas, nets, paths, belt_id, belt_model)
+            return len(paths) - unlinked, unlinked, iterations
         for path in committed:
             for cell in path:
                 history[cell] += 1.0
         if it == RRR_MAX - 1:
-            _commit_paths(canvas, nets, paths, belt_id, belt_model)
-            return len(paths), failed, iterations
+            unlinked = _commit_paths(canvas, nets, paths, belt_id, belt_model)
+            return len(paths) - unlinked, failed + unlinked, iterations
     return 0, len(nets), iterations
+
+
+def _reserve_port_access(canvas: _Canvas, nets: list[_Net]) -> int:
+    """Hold one cell next to every port, so no net can be walled in by another.
+
+    Returns the number of ports that had no free neighbour to reserve -- those
+    are genuinely boxed in by the packing and no routing order can save them,
+    which is worth knowing separately from a net that merely lost a race.
+
+    Reservations are per PORT, not per net: several nets can share one lane end
+    (a lane feeding two consumers), and they can share its access cell too,
+    because they all leave from the same tile.  Reserving per net would hand the
+    second net a different cell it does not need and take it away from someone
+    who does.
+
+    Ports are served longest-lane-first.  A short lane's end tile usually has
+    three free neighbours and can spare one; a lane wedged against a strip
+    boundary may have exactly one, so it must not be the last to ask.
+    """
+    canvas.reserved.clear()
+    ports: dict[tuple[int, int], int] = {}
+    for net in nets:
+        for port in (net.src, net.dst):
+            key = (port.x, port.y)
+            ports[key] = max(ports.get(key, 0), len(port.columns()))
+
+    boxed_in = 0
+    for key in sorted(ports, key=lambda k: (ports[k], k)):
+        px, py = key
+        cells = [(px + dx, py + dy, 0) for dx, dy in _STEPS]
+        # `free` already refuses a cell reserved for another port, since
+        # `routing_ports` is empty here.
+        got = next((c for c in cells if canvas.free(c)), None)
+        if got is None:
+            boxed_in += 1
+            continue
+        canvas.reserved[got] = key
+    return boxed_in
 
 
 def _commit_paths(
@@ -1438,13 +1503,37 @@ def _commit_paths(
     paths: dict[int, list[tuple[int, int, int]]],
     belt_id: int,
     belt_model: int,
-) -> None:
-    """Turn reserved cells into real belts, forward-linked source to sink."""
+) -> int:
+    """Turn reserved cells into real belts, forward-linked source to sink.
+
+    Returns the number of routed nets that could NOT be linked to their source.
+
+    A belt tile has ONE ``output_obj``.  When several nets leave the same lane
+    end -- an iron-ingot strip feeding both the gear strip and the motor strip --
+    each of them wants that tile to point at its own path, and the last one to
+    commit used to win silently.  The earlier paths stayed on the grid as belts
+    nothing fed: real buildings, real area, no items.  That is the same defect
+    class as the fallback this replaced, and it hides in the same place, so it
+    is counted as a routing failure rather than absorbed.
+
+    Serving several destinations from one lane needs a splitter, which the
+    catalog does not model yet.  Until it does, refusing is the honest outcome:
+    the alternative is a blueprint that pastes cleanly and then starves two
+    thirds of the build.
+    """
     for cell, owner in list(canvas.blocked.items()):
         if owner == -2:
             del canvas.blocked[cell]
+    unlinked = 0
+    claimed_src: set[int] = set()
     for i, path in paths.items():
         net = nets[i]
+        if net.src.belt in claimed_src:
+            # Somebody already owns this lane end's single output. Do not lay
+            # the belts: an unfed belt run is worse than no belt run, because it
+            # costs area and reads as a connection.
+            unlinked += 1
+            continue
         indices: list[int] = []
         ok = True
         for x, y, lvl in path:
@@ -1466,7 +1555,9 @@ def _commit_paths(
                 )
             )
         if not ok or not indices:
+            unlinked += 1
             continue
+        claimed_src.add(net.src.belt)
         for a, b in zip(indices, indices[1:], strict=False):
             canvas.buildings[a] = _relink(canvas.buildings[a], output_obj=b)
         canvas.buildings[net.src.belt] = _relink(
@@ -1475,6 +1566,7 @@ def _commit_paths(
         canvas.buildings[indices[-1]] = _relink(
             canvas.buildings[indices[-1]], output_obj=net.dst.belt
         )
+    return unlinked
 
 
 # --- power -----------------------------------------------------------------
