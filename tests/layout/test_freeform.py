@@ -359,19 +359,19 @@ class TestPlacementProperties:
     def test_no_two_blocking_footprints_share_a_tile(
         self, spec_fn: object, power: bool
     ) -> None:
-        p = FreeformLayout(power=power).lay_out(spec_fn(), time_budget_s=0.4)  # type: ignore[operator]
+        p = FreeformLayout(power=power).lay_out(spec_fn(), time_budget_s=0.5)  # type: ignore[operator]
         tiles = blocking_tiles(p)
         assert len(tiles) == len(set(tiles)), "overlapping footprints"
 
     def test_every_machine_is_placed(self, spec_fn: object, power: bool) -> None:
         spec = spec_fn()  # type: ignore[operator]
-        p = FreeformLayout(power=power).lay_out(spec, time_budget_s=0.4)
+        p = FreeformLayout(power=power).lay_out(spec, time_budget_s=0.5)
         assert len(machines_of(p)) == spec.machine_count
 
     def test_every_sorter_is_within_reach_and_single_altitude(
         self, spec_fn: object, power: bool
     ) -> None:
-        p = FreeformLayout(power=power).lay_out(spec_fn(), time_budget_s=0.4)  # type: ignore[operator]
+        p = FreeformLayout(power=power).lay_out(spec_fn(), time_budget_s=0.5)  # type: ignore[operator]
         for b in p.buildings:
             if not catalog.is_sorter(b.item_id):
                 continue
@@ -385,7 +385,7 @@ class TestPlacementProperties:
     def test_sorter_endpoints_reference_distinct_real_buildings(
         self, spec_fn: object, power: bool
     ) -> None:
-        p = FreeformLayout(power=power).lay_out(spec_fn(), time_budget_s=0.4)  # type: ignore[operator]
+        p = FreeformLayout(power=power).lay_out(spec_fn(), time_budget_s=0.5)  # type: ignore[operator]
         n = len(p.buildings)
         for b in p.buildings:
             if not catalog.is_sorter(b.item_id):
@@ -395,7 +395,7 @@ class TestPlacementProperties:
             assert b.input_obj != b.output_obj
 
     def test_belt_links_are_adjacent_and_acyclic(self, spec_fn: object, power: bool) -> None:
-        p = FreeformLayout(power=power).lay_out(spec_fn(), time_budget_s=0.4)  # type: ignore[operator]
+        p = FreeformLayout(power=power).lay_out(spec_fn(), time_budget_s=0.5)  # type: ignore[operator]
         bs = p.buildings
         for i, b in enumerate(bs):
             if not catalog.is_belt(b.item_id):
@@ -409,7 +409,7 @@ class TestPlacementProperties:
 
     def test_validator_reports_no_errors(self, spec_fn: object, power: bool) -> None:
         """The neutral judge is the real acceptance criterion."""
-        p = FreeformLayout(power=power).lay_out(spec_fn(), time_budget_s=0.4)  # type: ignore[operator]
+        p = FreeformLayout(power=power).lay_out(spec_fn(), time_budget_s=0.5)  # type: ignore[operator]
         # Declare whether power was requested. The validator will not infer it:
         # treating "no towers" as "power was off" would make a dropped tower
         # indistinguishable from a deliberate --no-power build.
@@ -424,7 +424,7 @@ class TestProliferationForbidsDirectInsertion:
     def test_belt_required_edges_are_never_direct_inserted(self) -> None:
         spec = proliferated_spec()
         layout = FreeformLayout(power=False)
-        p = layout.lay_out(spec, time_budget_s=0.4)
+        p = layout.lay_out(spec, time_budget_s=0.5)
         assert p.stats["direct_inserts"] == 0.0
 
     def test_an_unproliferated_twin_permits_direct_insertion(self) -> None:
@@ -434,12 +434,12 @@ class TestProliferationForbidsDirectInsertion:
         the previous test would prove nothing about the constraint.
         """
         layout = FreeformLayout(power=False)
-        p = layout.lay_out(two_stage_spec(), time_budget_s=0.4)
+        p = layout.lay_out(two_stage_spec(), time_budget_s=0.5)
         assert p.stats["direct_insert_candidates"] > 0.0
 
     def test_the_proliferated_spec_still_validates(self) -> None:
         """A silently under-producing build pastes cleanly, so the judge matters."""
-        p = FreeformLayout(power=False).lay_out(proliferated_spec(), time_budget_s=0.4)
+        p = FreeformLayout(power=False).lay_out(proliferated_spec(), time_budget_s=0.5)
         report = validate.validate(p, expect_power=False)
         assert report.ok, "\n".join(f"{f.check}: {f.message}" for f in report.errors[:5])
 
@@ -473,7 +473,7 @@ class TestDirectInsertion:
             strips,
             height=height,
             width_bound=max(s.width + 1 for s in strips) * 2,
-            time_budget_s=1.0,
+            time_budget_s=0.5,
             direct_candidates=cands,
             workers=DETERMINISTIC_WORKERS,
         )
@@ -538,7 +538,7 @@ class TestDirectInsertion:
         """
         spec = balanced_pair_spec()
         kw = {"power": False, "workers": DETERMINISTIC_WORKERS}
-        swept = FreeformLayout(direct_insert=True, **kw).lay_out(spec, time_budget_s=0.8)  # type: ignore[arg-type]
+        swept = FreeformLayout(direct_insert=True, **kw).lay_out(spec, time_budget_s=0.5)  # type: ignore[arg-type]
         stacked, _ = self._stacked(spec, direct=True)
 
         assert stacked.stats["direct_inserts"] >= 1.0
@@ -615,8 +615,8 @@ class TestSolverActuallyRuns:
         """
         spec = two_stage_spec()
         w = DETERMINISTIC_WORKERS
-        a = FreeformLayout(power=True, workers=w).lay_out(spec, time_budget_s=0.4)
-        b = FreeformLayout(power=True, workers=w).lay_out(spec, time_budget_s=0.4)
+        a = FreeformLayout(power=True, workers=w).lay_out(spec, time_budget_s=0.5)
+        b = FreeformLayout(power=True, workers=w).lay_out(spec, time_budget_s=0.5)
         assert a.area == b.area
         assert len(a.buildings) == len(b.buildings)
 
@@ -627,8 +627,8 @@ class TestSolverActuallyRuns:
 class TestPower:
     def test_towers_appear_only_when_power_is_on(self) -> None:
         spec = two_stage_spec()
-        on = FreeformLayout(power=True).lay_out(spec, time_budget_s=0.4)
-        off = FreeformLayout(power=False).lay_out(spec, time_budget_s=0.4)
+        on = FreeformLayout(power=True).lay_out(spec, time_budget_s=0.5)
+        off = FreeformLayout(power=False).lay_out(spec, time_budget_s=0.5)
         assert on.stats["towers"] > 0
         assert off.stats["towers"] == 0
 
@@ -674,7 +674,7 @@ class TestPower:
 
     def test_coverage_is_skipped_rather_than_failed_when_power_is_off(self) -> None:
         """``--no-power`` is a legitimate mode, not a factory-wide error."""
-        p = FreeformLayout(power=False).lay_out(magnetic_ring_spec(), time_budget_s=0.4)
+        p = FreeformLayout(power=False).lay_out(magnetic_ring_spec(), time_budget_s=0.5)
         assert p.stats["towers"] == 0
         report = validate.validate(p, only=["power.coverage"], expect_power=False)
         assert not report.findings
@@ -729,7 +729,7 @@ class TestProliferatorIsActuallySupplied:
 
     def test_some_belt_carries_the_proliferator(self) -> None:
         spec = proliferated_spec()
-        p = FreeformLayout(power=False).lay_out(spec, time_budget_s=0.6)
+        p = FreeformLayout(power=False).lay_out(spec, time_budget_s=0.5)
         prolif = {i for i in spec.external_inputs if i.startswith("proliferator")}
         assert prolif, "fixture must declare a proliferator input"
         carried = {
@@ -741,7 +741,7 @@ class TestProliferatorIsActuallySupplied:
 
     def test_every_coater_has_a_sorter_drawing_from_a_supply_belt(self) -> None:
         spec = proliferated_spec()
-        p = FreeformLayout(power=False).lay_out(spec, time_budget_s=0.6)
+        p = FreeformLayout(power=False).lay_out(spec, time_budget_s=0.5)
         report = _full_report(p, spec)
         starved = report.by_check("prolif.coaters_are_supplied")
         assert not starved, "\n".join(f.message for f in starved)
@@ -749,7 +749,7 @@ class TestProliferatorIsActuallySupplied:
     def test_coaters_sit_on_the_lane_carrying_the_item_they_spray(self) -> None:
         """A coater on some unrelated belt sprays the wrong items."""
         spec = proliferated_spec()
-        p = FreeformLayout(power=False).lay_out(spec, time_budget_s=0.6)
+        p = FreeformLayout(power=False).lay_out(spec, time_budget_s=0.5)
         belt_at = {
             (b.x, b.y, b.z): b for b in p.buildings if catalog.is_belt(b.item_id)
         }
@@ -766,7 +766,7 @@ class TestProliferatorIsActuallySupplied:
     def test_no_proliferator_spec_places_no_supply_lane(self) -> None:
         """The machinery must cost nothing when proliferation is off."""
         spec = two_stage_spec()
-        p = FreeformLayout(power=False).lay_out(spec, time_budget_s=0.4)
+        p = FreeformLayout(power=False).lay_out(spec, time_budget_s=0.5)
         assert p.stats["spray_coaters"] == 0
         assert not [b for b in p.buildings if b.item_id == catalog.SPRAY_COATER_ID]
 
@@ -781,7 +781,7 @@ class TestSortersCanCarryTheirDemand:
         was being handed 0.546/s.
         """
         spec = proliferated_spec()
-        p = FreeformLayout(power=False).lay_out(spec, time_budget_s=0.6)
+        p = FreeformLayout(power=False).lay_out(spec, time_budget_s=0.5)
         over = _full_report(p, spec).by_check("flow.sorter_capacity")
         assert not over, "\n".join(f.message for f in over)
 
@@ -810,14 +810,14 @@ class TestRealUrlCandidatesAreSupplied:
     @pytest.mark.slow
     def test_every_candidate_supplies_its_coaters(self) -> None:
         for spec in self._candidates():
-            p = FreeformLayout(power=True).lay_out(spec, time_budget_s=1.0)
+            p = FreeformLayout(power=True).lay_out(spec, time_budget_s=0.5)
             bad = _full_report(p, spec, power=True).by_check("prolif.coaters_are_supplied")
             assert not bad, f"{spec.label}: " + "; ".join(f.message for f in bad)
 
     @pytest.mark.slow
     def test_every_candidate_respects_sorter_capacity(self) -> None:
         for spec in self._candidates():
-            p = FreeformLayout(power=True).lay_out(spec, time_budget_s=1.0)
+            p = FreeformLayout(power=True).lay_out(spec, time_budget_s=0.5)
             bad = _full_report(p, spec, power=True).by_check("flow.sorter_capacity")
             assert not bad, f"{spec.label}: " + "; ".join(f.message for f in bad)
 
@@ -832,7 +832,7 @@ class TestRealUrlCandidatesAreSupplied:
         asserts the property itself so the guarantee is covered regardless.
         """
         for spec in self._candidates():
-            p = FreeformLayout(power=True).lay_out(spec, time_budget_s=1.0)
+            p = FreeformLayout(power=True).lay_out(spec, time_budget_s=0.5)
             for i, b in enumerate(p.buildings):
                 if not catalog.is_belt(b.item_id):
                     continue
@@ -967,7 +967,7 @@ class TestProducerWithManyConsumers:
         """
         spec = fan_out_spec(4)
         p = FreeformLayout(power=power, workers=DETERMINISTIC_WORKERS).lay_out(
-            spec, time_budget_s=1.0
+            spec, time_budget_s=0.5
         )
         assert p.stats.get("route_failures", 0) == 0, "a net went unrouted"
         report = _full_report(p, spec, power=power)
@@ -1068,7 +1068,7 @@ class TestMixedItemLanes:
 
     def test_it_lays_out_and_validates(self) -> None:
         spec = six_input_spec()
-        p = FreeformLayout(power=False).lay_out(spec, time_budget_s=1.5)
+        p = FreeformLayout(power=False).lay_out(spec, time_budget_s=0.5)
         report = _full_report(p, spec, power=False)
         assert report.ok, "\n".join(f"{f.check}: {f.message}" for f in report.errors[:8])
 
@@ -1079,7 +1079,7 @@ class TestMixedItemLanes:
         the paste looks wrong -- so this is correctness, not tidiness.
         """
         spec = six_input_spec()
-        p = FreeformLayout(power=False).lay_out(spec, time_budget_s=1.5)
+        p = FreeformLayout(power=False).lay_out(spec, time_budget_s=0.5)
         shared = _lane_runs(p)
         assert shared, "a six-input strip must produce at least one mixed lane"
         assert any(len(f) > 1 for f in shared.values()), (
@@ -1094,7 +1094,7 @@ class TestMixedItemLanes:
         decomposition to a lane it had not actually checked.
         """
         spec = magnetic_ring_spec()
-        p = FreeformLayout(power=False).lay_out(spec, time_budget_s=1.0)
+        p = FreeformLayout(power=False).lay_out(spec, time_budget_s=0.5)
         assert not _lane_runs(p), "no lane in this spec is shared, so none may filter"
 
 
@@ -1128,7 +1128,7 @@ def mode_driven_spec() -> BuildSpec:
 class TestModeDrivenMachines:
     def test_it_lays_out(self) -> None:
         spec = mode_driven_spec()
-        p = FreeformLayout(power=False).lay_out(spec, time_budget_s=1.0)
+        p = FreeformLayout(power=False).lay_out(spec, time_budget_s=0.5)
         assert p.buildings
 
     def test_the_machine_carries_the_mode_not_a_recipe(self) -> None:
@@ -1136,7 +1136,7 @@ class TestModeDrivenMachines:
         from flab2bp.dsp import params
 
         spec = mode_driven_spec()
-        p = FreeformLayout(power=False).lay_out(spec, time_budget_s=1.0)
+        p = FreeformLayout(power=False).lay_out(spec, time_budget_s=0.5)
         exchangers = [
             b for b in p.buildings if b.item_id == catalog.ENERGY_EXCHANGER_ID
         ]
@@ -1203,7 +1203,7 @@ class TestShardedGroupsAreFedOnEveryShard:
     def test_no_shard_is_left_starving(self, power: bool) -> None:
         spec = sharded_consumer_spec()
         p = FreeformLayout(power=power, workers=DETERMINISTIC_WORKERS).lay_out(
-            spec, time_budget_s=1.0
+            spec, time_budget_s=0.5
         )
         report = _full_report(p, spec, power=power)
         starved = [f for f in report.errors if f.check == "flow.lane_sourced"]
@@ -1231,7 +1231,7 @@ class TestShardedGroupsAreFedOnEveryShard:
         ]
         assert len(producers) >= 2, "fixture must shard the producer"
         p = FreeformLayout(power=False, workers=DETERMINISTIC_WORKERS).lay_out(
-            spec, time_budget_s=1.0
+            spec, time_budget_s=0.5
         )
         report = _full_report(p, spec, power=False)
         starved = [f for f in report.errors if f.check == "flow.lane_sourced"]

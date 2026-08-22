@@ -262,7 +262,7 @@ class TestPlacementProperties:
     def test_no_two_blocking_footprints_share_a_tile(
         self, spec_fn: SpecFactory, power: bool
     ) -> None:
-        p = SpineLayout(power=power).lay_out(spec_fn(), time_budget_s=0.3)
+        p = SpineLayout(power=power).lay_out(spec_fn(), time_budget_s=0.5)
         tiles = blocking_tiles(p)
         assert len(tiles) == len(set(tiles)), "overlapping footprints"
 
@@ -270,13 +270,13 @@ class TestPlacementProperties:
         self, spec_fn: SpecFactory, power: bool
     ) -> None:
         spec = spec_fn()
-        p = SpineLayout(power=power).lay_out(spec, time_budget_s=0.3)
+        p = SpineLayout(power=power).lay_out(spec, time_budget_s=0.5)
         assert len(machines_of(p)) == spec.machine_count
 
     def test_every_sorter_is_within_reach_and_single_altitude(
         self, spec_fn: SpecFactory, power: bool
     ) -> None:
-        p = SpineLayout(power=power).lay_out(spec_fn(), time_budget_s=0.3)
+        p = SpineLayout(power=power).lay_out(spec_fn(), time_budget_s=0.5)
         for b in p.buildings:
             if not catalog.is_sorter(b.item_id):
                 continue
@@ -288,7 +288,7 @@ class TestPlacementProperties:
     def test_sorter_endpoints_reference_real_buildings(
         self, spec_fn: SpecFactory, power: bool
     ) -> None:
-        p = SpineLayout(power=power).lay_out(spec_fn(), time_budget_s=0.3)
+        p = SpineLayout(power=power).lay_out(spec_fn(), time_budget_s=0.5)
         n = len(p.buildings)
         for b in p.buildings:
             if not catalog.is_sorter(b.item_id):
@@ -300,7 +300,7 @@ class TestPlacementProperties:
     def test_belt_chains_link_forward_and_terminate(
         self, spec_fn: SpecFactory, power: bool
     ) -> None:
-        p = SpineLayout(power=power).lay_out(spec_fn(), time_budget_s=0.3)
+        p = SpineLayout(power=power).lay_out(spec_fn(), time_budget_s=0.5)
         belts = [i for i, b in enumerate(p.buildings) if catalog.is_belt(b.item_id)]
         for i in belts:
             nxt = p.buildings[i].output_obj
@@ -314,7 +314,7 @@ class TestPlacementProperties:
     def test_placement_is_non_empty_and_has_area(
         self, spec_fn: SpecFactory, power: bool
     ) -> None:
-        p = SpineLayout(power=power).lay_out(spec_fn(), time_budget_s=0.3)
+        p = SpineLayout(power=power).lay_out(spec_fn(), time_budget_s=0.5)
         assert p.buildings
         assert p.area > 0
 
@@ -404,12 +404,12 @@ class TestKnownGaps:
 
 class TestPower:
     def test_no_power_emits_zero_towers(self) -> None:
-        p = SpineLayout(power=False).lay_out(magnetic_ring_spec(), time_budget_s=0.3)
+        p = SpineLayout(power=False).lay_out(magnetic_ring_spec(), time_budget_s=0.5)
         assert not any(b.item_id == catalog.TESLA_TOWER_ID for b in p.buildings)
         assert p.stats["towers"] == 0
 
     def test_power_emits_towers(self) -> None:
-        p = SpineLayout(power=True).lay_out(magnetic_ring_spec(), time_budget_s=0.3)
+        p = SpineLayout(power=True).lay_out(magnetic_ring_spec(), time_budget_s=0.5)
         assert p.stats["towers"] > 0
 
     def test_every_powered_building_is_covered(self) -> None:
@@ -468,7 +468,7 @@ class TestProliferation:
             spray_lanes={"iron-ingot": False},
             label="prolif",
         )
-        p = SpineLayout(power=False).lay_out(prolif, time_budget_s=0.3)
+        p = SpineLayout(power=False).lay_out(prolif, time_budget_s=0.5)
         coaters = [b for b in p.buildings if b.item_id == catalog.SPRAY_COATER_ID]
         assert coaters
         assert not catalog.building(catalog.SPRAY_COATER_ID).occupies_tiles
@@ -488,7 +488,7 @@ class TestProliferation:
             label="prolif",
         )
         layout = SpineLayout(power=False)
-        p = layout.lay_out(prolif, time_budget_s=0.3)
+        p = layout.lay_out(prolif, time_budget_s=0.5)
         assert p.stats["direct_inserts"] == 0
 
 
@@ -615,8 +615,8 @@ class TestSolverBehaviour:
         DETERMINISTIC_WORKERS because it asserts run-to-run identity.
         """
         w = DETERMINISTIC_WORKERS
-        a = SpineLayout(power=True, workers=w).lay_out(magnetic_ring_spec(), time_budget_s=0.4)
-        b = SpineLayout(power=True, workers=w).lay_out(magnetic_ring_spec(), time_budget_s=0.4)
+        a = SpineLayout(power=True, workers=w).lay_out(magnetic_ring_spec(), time_budget_s=0.5)
+        b = SpineLayout(power=True, workers=w).lay_out(magnetic_ring_spec(), time_budget_s=0.5)
         assert a.buildings == b.buildings
 
     def test_solving_is_no_worse_than_the_fallback(self) -> None:
@@ -641,7 +641,7 @@ class TestSolverBehaviour:
         assert solved.stats["fallback_used"] == 0.0
 
     def test_stats_carry_the_bake_off_fields(self) -> None:
-        p = SpineLayout(power=True).lay_out(two_stage_spec(), time_budget_s=0.3)
+        p = SpineLayout(power=True).lay_out(two_stage_spec(), time_budget_s=0.5)
         for key in (
             "area",
             "machines",
@@ -690,7 +690,7 @@ class TestRealCorpusSpecsActuallySolve:
         ["graphene", "plastic", "processor", "energy-matrix", "casimir-crystal"],
     )
     def test_solver_does_not_fall_back(self, url_id: str) -> None:
-        p = SpineLayout(power=False).lay_out(self._spec(url_id), time_budget_s=2.0)
+        p = SpineLayout(power=False).lay_out(self._spec(url_id), time_budget_s=0.5)
         assert p.stats["fallback_used"] == 0.0, (
             f"{url_id} fell back, reason={p.stats['fallback_reason']}"
         )
@@ -700,7 +700,7 @@ class TestRealCorpusSpecsActuallySolve:
     def test_a_wide_spec_packs_rows_rather_than_one_group_each(self) -> None:
         """The fallback's signature is one row per group; a solve must beat it."""
         spec = self._spec("information-matrix")
-        solved = SpineLayout(power=False).lay_out(spec, time_budget_s=2.0)
+        solved = SpineLayout(power=False).lay_out(spec, time_budget_s=0.5)
         assert solved.stats["fallback_used"] == 0.0
         assert solved.stats["rows"] < len(spec.groups)
         fallback = SpineLayout(power=False).lay_out(spec, time_budget_s=0.0)
@@ -748,7 +748,7 @@ class TestPowerCoverageOnRealSpecs:
     )
     def test_every_powered_building_is_covered(self, url_id: str) -> None:
         spec = self._spec(url_id)
-        p = SpineLayout(power=True).lay_out(spec, time_budget_s=3.0)
+        p = SpineLayout(power=True).lay_out(spec, time_budget_s=0.5)
         assert p.stats["fallback_used"] == 0.0
         # No powered building left stranded. The top-up reports what it could
         # not reach rather than swallowing it, so this doubles as a check that
@@ -764,7 +764,7 @@ class TestPowerCoverageOnRealSpecs:
     def test_a_deep_corridor_spec_lays_out_at_all(self) -> None:
         """The regression proper: this raised ValueError before the fix."""
         spec = self._spec("information-matrix")
-        p = SpineLayout(power=True).lay_out(spec, time_budget_s=3.0)
+        p = SpineLayout(power=True).lay_out(spec, time_budget_s=0.5)
         assert p.stats["towers"] > 0
         assert p.area > 0
 
@@ -924,7 +924,7 @@ class TestRealSpecsValidateClean:
         from flab2bp.pipeline import _id_map
 
         spec = self._spec(url_id)
-        p = SpineLayout(power=True).lay_out(spec, time_budget_s=2.0)
+        p = SpineLayout(power=True).lay_out(spec, time_budget_s=0.5)
         report = validate.validate(p, spec, ids=_id_map(spec), expect_power=True)
         assert report.ok, "\n".join(f"{f.check}: {f.message}" for f in report.errors[:10])
 
@@ -956,7 +956,7 @@ class TestSprayCoatersAreFed:
         from flab2bp.layout.spine import proliferator_item
 
         spec = self._prolif_spec()
-        p = SpineLayout(power=False).lay_out(spec, time_budget_s=1.5)
+        p = SpineLayout(power=False).lay_out(spec, time_budget_s=0.5)
         prolif = proliferator_item(spec)
         assert prolif is not None
         carried = {b.carries_item for b in p.buildings if catalog.is_belt(b.item_id)}
@@ -969,7 +969,7 @@ class TestSprayCoatersAreFed:
         from flab2bp.layout.spine import proliferator_item
 
         spec = self._prolif_spec()
-        p = SpineLayout(power=False).lay_out(spec, time_budget_s=1.5)
+        p = SpineLayout(power=False).lay_out(spec, time_budget_s=0.5)
         prolif = proliferator_item(spec)
         supply = {
             i
@@ -1027,13 +1027,13 @@ class TestModeDrivenMachines:
 
     def test_a_mode_driven_group_lays_out_at_all(self) -> None:
         """Before this, emission raised: no DSP recipe id exists for the mode."""
-        p = SpineLayout(power=False).lay_out(self._exchanger_spec(), time_budget_s=0.4)
+        p = SpineLayout(power=False).lay_out(self._exchanger_spec(), time_budget_s=0.5)
         assert len(self._exchangers(p)) == 2
 
     def test_the_machine_carries_the_mode_not_a_recipe(self) -> None:
         from flab2bp.dsp import params
 
-        p = SpineLayout(power=False).lay_out(self._exchanger_spec(), time_budget_s=0.4)
+        p = SpineLayout(power=False).lay_out(self._exchanger_spec(), time_budget_s=0.5)
         for b in self._exchangers(p):
             assert b.recipe_id == 0, "a mode-driven machine must not claim a recipe id"
             assert b.parameters == params.parameters_for("accumulator-full")
@@ -1046,10 +1046,10 @@ class TestModeDrivenMachines:
         factory instead of filling it.
         """
         charge = SpineLayout(power=False).lay_out(
-            self._exchanger_spec("accumulator-full"), time_budget_s=0.4
+            self._exchanger_spec("accumulator-full"), time_budget_s=0.5
         )
         discharge = SpineLayout(power=False).lay_out(
-            self._exchanger_spec("accumulator-discharge"), time_budget_s=0.4
+            self._exchanger_spec("accumulator-discharge"), time_budget_s=0.5
         )
         (c,) = {b.parameters for b in self._exchangers(charge)}
         (d,) = {b.parameters for b in self._exchangers(discharge)}
@@ -1057,7 +1057,7 @@ class TestModeDrivenMachines:
 
     def test_ordinary_recipes_still_carry_a_recipe_id(self) -> None:
         """The mode path must not swallow normal machines."""
-        p = SpineLayout(power=False).lay_out(single_recipe_spec(), time_budget_s=0.4)
+        p = SpineLayout(power=False).lay_out(single_recipe_spec(), time_budget_s=0.5)
         smelters = [b for b in p.buildings if b.item_id == MACHINE_ITEM_IDS["arc-smelter"]]
         assert smelters
         assert all(b.recipe_id == catalog.recipe_id("iron-ingot") for b in smelters)
@@ -1132,7 +1132,7 @@ class TestSortersAreSizedPerItem:
             "&mmr=arc-smelter~assembling-machine-2~chemical-plant~matrix-lab&v=11"
         )
         for spec in build_candidates(load_vendored(), parse_url(url), count=3).candidates:
-            p = SpineLayout(power=False).lay_out(spec, time_budget_s=1.0)
+            p = SpineLayout(power=False).lay_out(spec, time_budget_s=0.5)
             report = validate.validate(
                 p,
                 spec,

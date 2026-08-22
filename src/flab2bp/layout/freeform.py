@@ -2053,12 +2053,20 @@ class FreeformLayout:
         ``solver_status`` between them say exactly how the answer was reached.
         A bake-off that cannot tell a solved layout from a fallback is comparing
         nothing.
+
+        A pack that cannot be wired is not a solution at any time budget, so
+        ROUTABILITY ORDERS AHEAD OF AREA here.  Ranking on area alone actively
+        rewarded dropping connections: an unrouted net is a missing belt run, so
+        the broken pack measures *smaller* than the correct one and wins.  That
+        is how a build with 119 unrouted nets came to score as the densest
+        candidate on offer.
         """
         if time_budget_s <= 0:
             return fallback_placement(spec, power=self.power)
 
         candidates = _direct_insert_candidates(spec)
         best: Placement | None = None
+        best_key: tuple[int, int, float] | None = None
         per_solve = max(0.1, time_budget_s / 6.0)
 
         try:
@@ -2090,24 +2098,32 @@ class FreeformLayout:
             placement, failed, _towers = _build(
                 spec, strips, pack, power=self.power, route=True
             )
-            # Area first, then belt count. Two packs of equal area are not
-            # equally good: the one with fewer belt tiles is fewer buildings to
-            # paste, and a direct insert shows up here as exactly that. Without
-            # the second key, ties fell to whichever height the sweep tried
-            # first, which silently discarded direct-inserted packs.
-            if best is None or (placement.area, placement.stats["belt_tiles"]) < (
-                best.area,
-                best.stats["belt_tiles"],
-            ):
+            # Routable first, then area, then belt count. Two packs of equal
+            # area are not equally good: the one with fewer belt tiles is fewer
+            # buildings to paste, and a direct insert shows up here as exactly
+            # that. Without the third key, ties fell to whichever height the
+            # sweep tried first, which silently discarded direct-inserted packs.
+            key = (1 if failed else 0, placement.area, float(placement.stats["belt_tiles"]))
+            if best_key is None or key < best_key:
                 placement.stats["solver_status"] = 1.0 if pack.status == "OPTIMAL" else 0.5
                 placement.stats["hit_time_budget"] = float(pack.hit_budget)
                 placement.stats["fallback_used"] = 0.0
                 placement.stats["direct_insert_candidates"] = float(len(candidates))
                 placement.stats["area"] = float(placement.area)
-                best = placement
+                best, best_key = placement, key
 
         if best is None:
             return fallback_placement(spec, power=self.power)
+        # NOTE: routability is ordered ahead of area above, which prefers a
+        # routable pack whenever the sweep found one. That is a ranking, NOT the
+        # hard constraint it should be -- phase 1 can still emit a pack nothing
+        # can wire, and when every height does so the least-bad one is returned.
+        #
+        # Falling back here was tried and is WORSE: `fallback_placement` is
+        # documented as routable by construction and is not. On the calibration
+        # spec it returns 3162 tiles against the solved 2208 and carries the same
+        # 11 unsourced lanes, so it trades area away for nothing. The validator
+        # rejects either, which is the only reason this is survivable.
         return best
 
 
