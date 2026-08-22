@@ -1017,21 +1017,35 @@ def _conservation(ctx: Context) -> Iterable[Finding]:
 
 @check("flow.belt_capacity", needs_spec=True)
 def _belt_capacity(ctx: Context) -> Iterable[Finding]:
-    """No belt run may be asked to carry more than its tier sustains."""
+    """No belt run may be asked to carry more than its tier sustains.
+
+    The comparison is against the SUM across every item on the run, because a
+    lane is one pipe: 7/s of copper and 7/s of iron do not each fit in a 12/s
+    belt merely because neither exceeds 12 alone.
+    """
     assert ctx.spec is not None
-    demand = _run_demand(ctx)
-    for ridx, required in sorted(demand.items()):
+    for ridx, per_item in sorted(_run_demand(ctx).items()):
         run = ctx.runs[ridx]
         capacity = cat.BELT_RATE.get(run.tier_item_id)
+        required = sum(per_item.values(), Fraction(0))
         if capacity is None or required <= capacity:
             continue
+        breakdown = {(k or "unattributed"): str(v) for k, v in sorted(
+            per_item.items(), key=lambda kv: (kv[0] is None, kv[0] or "")
+        )}
+        shared = " across " + ", ".join(breakdown) if len(per_item) > 1 else ""
         yield Finding(
             "flow.belt_capacity",
             Severity.ERROR,
-            f"belt run {ridx} must carry {required} items/s but its tier sustains "
-            f"only {capacity}",
+            f"belt run {ridx} must carry {required} items/s{shared} but its tier "
+            f"sustains only {capacity}",
             run.indices,
-            {"run": ridx, "required": str(required), "capacity": str(capacity)},
+            {
+                "run": ridx,
+                "required": str(required),
+                "capacity": str(capacity),
+                "per_item": breakdown,
+            },
         )
 
 
@@ -1039,42 +1053,57 @@ def _belt_capacity(ctx: Context) -> Iterable[Finding]:
 def _sorter_capacity(ctx: Context) -> Iterable[Finding]:
     """No sorter may be asked to move more than its tier sustains at its span."""
     assert ctx.spec is not None
+    items = _sorter_items(ctx)
     for i, s in ctx.of_kind(Kind.SORTER):
         a = _anchors(s)
         if a is None:
             continue
         (x1, y1, _), (x2, y2, _) = a
-        span = abs(x2 - x1) + abs(y2 - y1)
+        # Chebyshev, matching `sorter.reach`. For a straight sorter one axis is
+        # zero so the two agree, but keeping them in step stops a future
+        # non-integer anchor from being charged a longer span here than the
+        # reach check measured -- they must not disagree about the same sorter.
+        span = max(abs(x2 - x1), abs(y2 - y1))
         if span < 1 or span > cat.SORTER_MAX_REACH:
             continue  # sorter.reach already reported this
         if s.item_id not in cat.SORTER_RATE_AT_1:
             continue
         capacity = cat.sorter_rate(s.item_id, span)
-        required = _sorter_demand(ctx, i)
+        required = _sorter_demand(ctx, i, items)
         if required is None or required <= capacity:
             continue
+        moves = f" of {items[i]}" if items.get(i) else ""
         yield Finding(
             "flow.sorter_capacity",
             Severity.ERROR,
-            f"sorter {i} must move {required} items/s across {span} tiles but sustains "
-            f"only {capacity}",
+            f"sorter {i} must move {required} items/s{moves} across {span} tiles but "
+            f"sustains only {capacity}",
             (i,) + tuple(x for x in (s.input_obj, s.output_obj) if x is not None),
             {
                 "sorter": i,
                 "span": span,
+                "item": items.get(i),
                 "required": str(required),
                 "capacity": str(capacity),
             },
         )
 
 
-def _sorter_demand(ctx: Context, index: int) -> Fraction | None:
+def _sorter_demand(
+    ctx: Context, index: int, items: Mapping[int, str | None] | None = None
+) -> Fraction | None:
     """Items/second one sorter must move.
 
-    Feeding a machine, the demand is that machine's input rate divided across
-    the sorters that feed it; draining one, its output rate divided across the
-    sorters draining it.  Dividing rather than assuming one sorter per machine
-    is what keeps this honest when a strategy parallelises a hot connection.
+    Attributed PER ITEM wherever the sorter's item is known: a sorter feeding
+    copper carries the copper rate, not an average.  Splitting a machine's total
+    evenly across its sorters -- which is what this did -- hides an overloaded
+    sorter behind an underloaded one the moment a recipe's ingredient rates
+    differ, which is most recipes.  Measured: a machine wanting copper 2/s and
+    iron 10/s reported both sorters at 6/s and passed, while the iron sorter was
+    moving 10/s against a 6/s tier.
+
+    Falls back to the even split only when the item cannot be determined, which
+    ``flow.lane_attribution`` reports separately whenever it matters.
     """
     bs = ctx.placement.buildings
     s = bs[index]
@@ -1083,34 +1112,170 @@ def _sorter_demand(ctx: Context, index: int) -> Fraction | None:
         return None
     if not (0 <= src < len(bs) and 0 <= dst < len(bs)):
         return None
+    table = items if items is not None else _sorter_items(ctx)
+    item = table.get(index)
     if ctx.kinds[dst] is Kind.MACHINE:
         g = ctx.group_for(dst)
         if g is None:
             return None
-        total = sum(g.inputs_per_machine.values(), Fraction(0))
-        share = sum(1 for _j, o in ctx.of_kind(Kind.SORTER) if o.output_obj == dst) or 1
-        return total / share
+        return _item_share(ctx, g.inputs_per_machine, item, dst, table, feeding=True)
     if ctx.kinds[src] is Kind.MACHINE:
         g = ctx.group_for(src)
         if g is None:
             return None
-        total = sum(g.outputs_per_machine.values(), Fraction(0))
-        share = sum(1 for _j, o in ctx.of_kind(Kind.SORTER) if o.input_obj == src) or 1
-        return total / share
+        return _item_share(ctx, g.outputs_per_machine, item, src, table, feeding=False)
     return None
 
 
-def _run_demand(ctx: Context) -> dict[int, Fraction]:
-    """Items/second each belt run must carry, from its consumers' demands."""
-    demand: dict[int, Fraction] = defaultdict(Fraction)
+def _sorter_item(ctx: Context, index: int) -> str | None:
+    """The FactorioLab item id a sorter moves, or ``None`` if undeterminable.
+
+    Three sources, most reliable first: an explicit ``filter_id``, the
+    ``carries_item`` label on the belt it touches, and -- only when the machine
+    leaves no ambiguity -- the single item that machine consumes or produces.
+    """
+    bs = ctx.placement.buildings
+    s = bs[index]
+
+    if s.filter_id and ctx.ids is not None:
+        named = ctx.ids.item_name(s.filter_id)
+        if named is not None:
+            return named
+
+    for link in (s.input_obj, s.output_obj):
+        if link is None or not (0 <= link < len(bs)):
+            continue
+        if ctx.kinds[link] is Kind.BELT and bs[link].carries_item:
+            return bs[link].carries_item
+
+    # Unambiguous only when the machine deals in exactly one item on that side.
+    src, dst = s.input_obj, s.output_obj
+    if dst is not None and 0 <= dst < len(bs) and ctx.kinds[dst] is Kind.MACHINE:
+        g = ctx.group_for(dst)
+        if g is not None and len(g.inputs_per_machine) == 1:
+            return next(iter(g.inputs_per_machine))
+    if src is not None and 0 <= src < len(bs) and ctx.kinds[src] is Kind.MACHINE:
+        g = ctx.group_for(src)
+        if g is not None and len(g.outputs_per_machine) == 1:
+            return next(iter(g.outputs_per_machine))
+    return None
+
+
+def _sorter_items(ctx: Context) -> dict[int, str | None]:
+    """Item per sorter, resolved once.
+
+    Built in one pass because both flow checks need it and resolving per call
+    would make every check quadratic in the sorter count.
+    """
+    return {i: _sorter_item(ctx, i) for i, _ in ctx.of_kind(Kind.SORTER)}
+
+
+def _item_share(
+    ctx: Context,
+    rates: Mapping[str, Fraction],
+    item: str | None,
+    machine: int,
+    items: Mapping[int, str | None],
+    *,
+    feeding: bool,
+) -> Fraction | None:
+    """This sorter's slice of a machine's demand for one item.
+
+    When the item is known, the slice is that item's rate divided among the
+    sorters moving *that same item* to or from the machine.  When it is not, the
+    old even split across every sorter is the only available estimate, and
+    ``flow.lane_attribution`` reports the cases where relying on it would matter.
+    """
+    if item is not None and item in rates:
+        peers = sum(
+            1
+            for j, o in ctx.of_kind(Kind.SORTER)
+            if (o.output_obj if feeding else o.input_obj) == machine and items.get(j) == item
+        )
+        return rates[item] / (peers or 1)
+    total = sum(rates.values(), Fraction(0))
+    share = sum(
+        1
+        for _j, o in ctx.of_kind(Kind.SORTER)
+        if (o.output_obj if feeding else o.input_obj) == machine
+    )
+    return total / (share or 1)
+
+
+def _run_items(ctx: Context, items: Mapping[int, str | None]) -> dict[int, set[str | None]]:
+    """Items drawn from or put onto each belt run, ``None`` for undeterminable.
+
+    A run holding more than one entry is a SHARED lane -- several item types on
+    one belt, which DSP supports natively and real builds use heavily (236 of
+    1,288 corpus sorters set a filter; falk-v7-mall-full sets one on all 196).
+    """
+    per_run: dict[int, set[str | None]] = defaultdict(set)
     for i, s in ctx.of_kind(Kind.SORTER):
-        d = _sorter_demand(ctx, i)
+        for link in (s.input_obj, s.output_obj):
+            if link is not None and link in ctx.run_of:
+                per_run[ctx.run_of[link]].add(items.get(i))
+    return dict(per_run)
+
+
+@check("flow.lane_attribution", needs_spec=True)
+def _lane_attribution(ctx: Context) -> Iterable[Finding]:
+    """A shared lane whose shares cannot be attributed is not judgeable.
+
+    An unfiltered sorter drawing from a lane that carries several item types
+    takes whatever passes, so its slice of the lane's capacity is unknown -- and
+    a capacity verdict computed from the even-split estimate would be a verdict
+    the build never earned.  Reported rather than assumed, because a check that
+    quietly stops applying is worse than one that fails.
+
+    A single-input machine is NOT ambiguous even without a filter: the recipe
+    names the item.  Only genuine ambiguity is reported.
+    """
+    assert ctx.spec is not None
+    items = _sorter_items(ctx)
+    for ridx, carried in sorted(_run_items(ctx, items).items()):
+        if len(carried) < 2 or None not in carried:
+            continue  # single-item lane, or shared but fully attributed
+        culprits = tuple(
+            i
+            for i, s in ctx.of_kind(Kind.SORTER)
+            if items.get(i) is None
+            and any(
+                link is not None and ctx.run_of.get(link) == ridx
+                for link in (s.input_obj, s.output_obj)
+            )
+        )
+        known = sorted(c for c in carried if c is not None)
+        yield Finding(
+            "flow.lane_attribution",
+            Severity.ERROR,
+            f"belt run {ridx} carries several items ({', '.join(known)} and at least one "
+            f"more) but sorter(s) {list(culprits)} name no item, so their share of the "
+            f"lane cannot be determined and its capacity cannot be judged",
+            culprits,
+            {"run": ridx, "known_items": known, "unattributed": list(culprits)},
+        )
+
+
+def _run_demand(ctx: Context) -> dict[int, dict[str | None, Fraction]]:
+    """Items/second each belt run must carry, broken down by item.
+
+    The breakdown matters for shared lanes: a bare total says a lane is over
+    capacity without saying which items put it there, and a finding that cannot
+    be debugged from the report alone is barely better than no check.  The flows
+    on one lane are coupled by ONE capacity, so callers compare the SUM against
+    the tier -- judging items independently would accept 7/s plus 7/s on a 12/s
+    belt because neither exceeds 12 alone.
+    """
+    items = _sorter_items(ctx)
+    demand: dict[int, dict[str | None, Fraction]] = defaultdict(lambda: defaultdict(Fraction))
+    for i, s in ctx.of_kind(Kind.SORTER):
+        d = _sorter_demand(ctx, i, items)
         if d is None:
             continue
         for link in (s.input_obj, s.output_obj):
             if link is not None and link in ctx.run_of:
-                demand[ctx.run_of[link]] += d
-    return dict(demand)
+                demand[ctx.run_of[link]][items.get(i)] += d
+    return {r: dict(per_item) for r, per_item in demand.items()}
 
 
 @check("flow.headroom", needs_spec=True)
@@ -1123,16 +1288,28 @@ def _headroom(ctx: Context) -> Iterable[Finding]:
     near-saturation visible before it becomes a bug.
     """
     assert ctx.spec is not None
-    for ridx, required in sorted(_run_demand(ctx).items()):
+    for ridx, per_item in sorted(_run_demand(ctx).items()):
         capacity = cat.BELT_RATE.get(ctx.runs[ridx].tier_item_id)
         if not capacity:
             continue
+        required = sum(per_item.values(), Fraction(0))
+        breakdown = {(k or "unattributed"): str(v) for k, v in sorted(
+            per_item.items(), key=lambda kv: (kv[0] is None, kv[0] or "")
+        )}
+        shared = f" ({', '.join(f'{k} {v}' for k, v in breakdown.items())})" if len(
+            per_item
+        ) > 1 else ""
         yield Finding(
             "flow.headroom",
             Severity.INFO,
-            f"belt run {ridx} carries {required} of {capacity} items/s",
+            f"belt run {ridx} carries {required} of {capacity} items/s{shared}",
             ctx.runs[ridx].indices,
-            {"run": ridx, "required": str(required), "capacity": str(capacity)},
+            {
+                "run": ridx,
+                "required": str(required),
+                "capacity": str(capacity),
+                "per_item": breakdown,
+            },
         )
 
 

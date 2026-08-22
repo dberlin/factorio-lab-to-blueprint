@@ -476,6 +476,17 @@ _FOOTPRINT_OVERRIDES: dict[int, tuple[int, int]] = {
     2012: (1, 1),
     2013: (1, 1),
     2014: (1, 1),
+    # Energy Exchanger. The collider derives 11x11, which real blueprints
+    # disprove: `temple-of-effectiveness` places 20 of them on a clean integer
+    # grid spaced exactly 10.0 apart, and at 11x11 that is 209 overlapping
+    # cells. The game cannot emit an overlapping blueprint.
+    #
+    # The corpus bounds this at <= 9 rather than pinning it: 9x9 and 7x7 both
+    # give zero overlaps at that spacing, so it cannot distinguish them. 9 is
+    # the largest value consistent with observation, and over-reserving is the
+    # safe direction -- it can waste a tile, never collide. Worth an in-game
+    # check if exchanger builds start looking loose.
+    2209: (9, 9),
 }
 
 #: Belts carry no build collider in the asset table, so they are absent from it

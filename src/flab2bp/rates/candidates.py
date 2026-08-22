@@ -19,6 +19,7 @@ candidate to beat rather than a heuristic guess.
 
 from __future__ import annotations
 
+import warnings
 from fractions import Fraction
 
 from flab2bp.lab.schema import Dataset
@@ -160,9 +161,21 @@ def build_candidates(
     then ``all-speed-mode``.  Each is independently valid; they differ only in
     how much direct-insertion freedom they trade for fewer machines.  Candidates
     are independent, so the layout stage may lay them out in parallel.
+
+    A candidate whose machine count runs away is dropped rather than returned.
+    Proliferation exists to CUT machines, so a proliferated plan can never
+    legitimately need more of them than the unproliferated baseline; when it
+    does, the solve found a degenerate cycle rather than a factory.  Recipes
+    that consume an item and produce more of it -- ``reforming-refine`` turns
+    two refined oil into three, and ``plasma-refining`` also yields refined oil
+    -- form exactly such a loop, and the productivity bonus can tip it.  One
+    real URL produced 515,396,248 machines this way, and the layout stage then
+    sat trying to place them.
     """
     baseline = solve(data, request, time_limit_s=time_limit_s)
     specs = [_to_build_spec(data, request, baseline, "no-proliferator")]
+    baseline_machines = specs[0].machine_count
+    dropped: list[str] = []
 
     if tier is not ProliferatorTier.NONE and count > 1:
         free, _costly = partition_recipes(data, request)
@@ -198,10 +211,47 @@ def build_candidates(
                 )
             )
         for label, plan in plans[: count - 1]:
-            specs.append(_to_build_spec(data, request, plan, label))
+            spec = _to_build_spec(data, request, plan, label)
+            if _is_runaway(spec, baseline_machines):
+                dropped.append(f"{label} ({spec.machine_count:,} machines)")
+                continue
+            specs.append(spec)
+
+    if dropped:
+        # Surfaced, not swallowed: a silently missing candidate reads as "the
+        # frontier had nothing better", which is a different and misleading
+        # statement from "the solve degenerated".
+        warnings.warn(
+            "dropped degenerate candidate(s) whose machine count exceeded the "
+            f"unproliferated baseline of {baseline_machines:,}: {', '.join(dropped)}. "
+            "This is a self-feeding recipe loop in the rate solve, not a layout limit.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
 
     _assert_same_objective(data, request, specs)
     return BuildSpecSet(candidates=tuple(specs))
+
+
+#: How far past the unproliferated baseline a candidate may sit before it is
+#: treated as a degenerate solve rather than a build.  Proliferation should only
+#: ever reduce machine count, so in principle any excess is suspect; the slack
+#: absorbs integer rounding, where a handful of groups can each gain a machine.
+_RUNAWAY_FACTOR = 4
+
+
+def _is_runaway(spec: BuildSpec, baseline_machines: int) -> bool:
+    """Did this candidate's machine count run away from the baseline?
+
+    Guards against self-feeding recipe cycles.  ``reforming-refine`` consumes
+    two refined oil and produces three, and ``plasma-refining`` also yields
+    refined oil, so the pair forms a loop with net gain; a productivity bonus
+    can tip it into a solution with astronomically many machines that is
+    arithmetically consistent and physically nonsense.
+    """
+    if baseline_machines <= 0:
+        return False
+    return spec.machine_count > baseline_machines * _RUNAWAY_FACTOR
 
 
 def _assert_same_objective(

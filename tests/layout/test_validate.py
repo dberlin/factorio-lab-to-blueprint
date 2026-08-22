@@ -589,6 +589,213 @@ def test_flow_rates_are_reported_as_exact_fractions() -> None:
     f = r.by_check("flow.belt_capacity")[0]
     assert f.detail["required"] == "50/3"
 
+# --- per-item demand attribution -------------------------------------------
+#
+# Demand used to be split EVENLY across the sorters feeding a machine, which
+# hides an overloaded sorter behind an underloaded one whenever a recipe's
+# ingredient rates differ -- which is most recipes.  `filter_id` says which item
+# a sorter moves and was never consulted.
+
+PILE = 2014  # Pile Sorter, 20/s at one tile -- lets belt limits be tested
+             # without the sorter limit firing first and masking them
+COPPER_ID = 1104
+IRON_ID = 1101
+
+
+def lopsided_spec() -> BuildSpec:
+    """One machine, two ingredients at very different rates."""
+    return BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id="magnetic-coil",
+                machine_item_id="assembling-machine-2",
+                count=1,
+                inputs_per_machine={"copper-ingot": Fraction(2), "iron-ingot": Fraction(10)},
+                outputs_per_machine={"magnetic-coil": Fraction(1)},
+            ),
+        ),
+    )
+
+
+LOPSIDED_IDS = IdMap(
+    recipes={"magnetic-coil": 6},
+    items={
+        "assembling-machine-2": ASSEMBLER,
+        "copper-ingot": COPPER_ID,
+        "iron-ingot": IRON_ID,
+    },
+)
+
+
+def lopsided_placement() -> Placement:
+    """Copper 2/s and iron 10/s into one machine, one filtered sorter each."""
+    return place(
+        machine(4, 0, recipe_id=6),  # 0
+        belt(3, 0),  # 1
+        belt(3, 1),  # 2
+        sorter(3, 0, 4, 0, inp=1, out=0, filter_id=COPPER_ID),  # 3 -- 2/s
+        sorter(3, 1, 4, 1, inp=2, out=0, filter_id=IRON_ID),  # 4 -- 10/s
+    )
+
+
+def test_flow_sorter_capacity_attributes_demand_per_item() -> None:
+    """The iron sorter moves 10/s; a Mk.III sustains 6/s at one tile.
+
+    Splitting the machine's 12/s total evenly gives each sorter 6/s, which is
+    exactly at capacity and reports clean -- so the genuinely overloaded sorter
+    is hidden by the underloaded one.  This is the load-bearing test.
+    """
+    r = validate(lopsided_placement(), lopsided_spec(), ids=LOPSIDED_IDS)
+    findings = r.by_check("flow.sorter_capacity")
+    assert findings, "the iron sorter moves 10/s against a 6/s tier and must be reported"
+    assert any("4" in str(f.detail.get("sorter")) for f in findings)
+
+
+def test_flow_sorter_capacity_does_not_blame_the_light_sorter() -> None:
+    """Attribution has to be right in both directions, not merely stricter."""
+    r = validate(lopsided_placement(), lopsided_spec(), ids=LOPSIDED_IDS)
+    blamed = {f.detail.get("sorter") for f in r.by_check("flow.sorter_capacity")}
+    assert 3 not in blamed, "the copper sorter moves 2/s and is well inside its tier"
+
+
+def test_flow_headroom_reports_the_attributed_rate_not_an_even_split() -> None:
+    r = validate(lopsided_placement(), lopsided_spec(), ids=LOPSIDED_IDS)
+    carried = sorted(str(f.detail["required"]) for f in r.by_check("flow.headroom"))
+    assert carried == ["10", "2"], f"expected the real per-item rates, got {carried}"
+
+
+# --- shared (mixed-item) lanes ---------------------------------------------
+#
+# One belt carrying several item types, with filtered sorters picking off what
+# they need.  Measured in the corpus: 236 of 1,288 sorters set a filter, and
+# falk-v7-mall-full sets one on all 196 of its sorters.
+
+
+def two_consumer_spec(copper: Fraction, iron: Fraction) -> BuildSpec:
+    return BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id="magnetic-coil",
+                machine_item_id="assembling-machine-2",
+                count=1,
+                inputs_per_machine={"copper-ingot": copper},
+                outputs_per_machine={"magnetic-coil": Fraction(1)},
+            ),
+            MachineGroup(
+                recipe_id="iron-ingot",
+                machine_item_id="arc-smelter",
+                count=1,
+                inputs_per_machine={"iron-ingot": iron},
+                outputs_per_machine={"magnet": Fraction(1)},
+            ),
+        ),
+    )
+
+
+TWO_CONSUMER_IDS = IdMap(
+    recipes={"magnetic-coil": 6, "iron-ingot": 1},
+    items={
+        "assembling-machine-2": ASSEMBLER,
+        "arc-smelter": SMELTER,
+        "copper-ingot": COPPER_ID,
+        "iron-ingot": IRON_ID,
+    },
+)
+
+
+def shared_lane(*, copper_filter: int = COPPER_ID, iron_filter: int = IRON_ID) -> Placement:
+    """One belt run feeding two machines different items.
+
+    Belts (3,0)->(3,1) form a single run.  The assembler sits east of it, the
+    smelter west, each drawn from by its own filtered sorter.
+    """
+    return place(
+        machine(4, 0, recipe_id=6),  # 0  assembler, x 4..7
+        machine(0, 0, item_id=SMELTER, recipe_id=1),  # 1  smelter, x 0..2
+        belt(3, 0, out=3),  # 2
+        belt(3, 1),  # 3
+        sorter(3, 0, 4, 0, inp=2, out=0, item_id=PILE, filter_id=copper_filter),  # 4
+        sorter(3, 1, 2, 1, inp=3, out=1, item_id=PILE, filter_id=iron_filter),  # 5
+    )
+
+
+def test_flow_shared_lane_couples_items_against_one_capacity() -> None:
+    """Each item fits alone; together they exceed the belt.
+
+    7 + 7 = 14 on a Mk.II lane that sustains 12.  Judging the items
+    independently accepts this, because neither 7 exceeds 12 on its own.  The
+    lane is one pipe and the flows share it.
+    """
+    p = shared_lane()
+    r = validate(p, two_consumer_spec(Fraction(7), Fraction(7)), ids=TWO_CONSUMER_IDS)
+    assert fired(r, "flow.belt_capacity"), (
+        "7/s copper plus 7/s iron on one 12/s lane must be rejected"
+    )
+
+
+def test_flow_shared_lane_clean_when_the_sum_fits() -> None:
+    p = shared_lane()
+    r = validate(p, two_consumer_spec(Fraction(5), Fraction(5)), ids=TWO_CONSUMER_IDS)
+    assert not fired(r, "flow.belt_capacity")
+
+
+def test_flow_shared_lane_reports_the_per_item_breakdown() -> None:
+    """A bare total is not debuggable; the finding must name the contributors."""
+    p = shared_lane()
+    r = validate(p, two_consumer_spec(Fraction(7), Fraction(7)), ids=TWO_CONSUMER_IDS)
+    detail = r.by_check("flow.belt_capacity")[0].detail
+    assert "copper-ingot" in str(detail.get("per_item"))
+    assert "iron-ingot" in str(detail.get("per_item"))
+
+
+def test_flow_lane_attribution_fires_when_a_shared_lane_sorter_is_unfiltered() -> None:
+    """Never silently pass.
+
+    An unfiltered sorter on a shared lane takes whatever passes, so its share of
+    the lane cannot be determined -- and a capacity verdict computed from a
+    guess would be a verdict the build never earned.
+
+    The consumer needs TWO ingredients for this to bite: with a single-input
+    machine the item is inferable from the recipe alone, and inference is
+    legitimate.  Ambiguity is what cannot be judged, not the missing filter.
+    """
+    ambiguous = BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id="magnetic-coil",
+                machine_item_id="assembling-machine-2",
+                count=1,
+                inputs_per_machine={"copper-ingot": Fraction(5)},
+                outputs_per_machine={"magnetic-coil": Fraction(1)},
+            ),
+            MachineGroup(
+                recipe_id="iron-ingot",
+                machine_item_id="arc-smelter",
+                count=1,
+                # Two ingredients, so an unfiltered sorter could be moving either.
+                inputs_per_machine={"iron-ingot": Fraction(3), "copper-ingot": Fraction(2)},
+                outputs_per_machine={"magnet": Fraction(1)},
+            ),
+        ),
+    )
+    p = shared_lane(iron_filter=0)
+    r = validate(p, ambiguous, ids=TWO_CONSUMER_IDS)
+    findings = r.by_check("flow.lane_attribution")
+    assert findings
+    assert 5 in findings[0].buildings  # the unfiltered sorter  # the unfiltered sorter
+
+
+def test_flow_lane_attribution_clean_when_every_share_is_known() -> None:
+    p = shared_lane()
+    r = validate(p, two_consumer_spec(Fraction(5), Fraction(5)), ids=TWO_CONSUMER_IDS)
+    assert not fired(r, "flow.lane_attribution")
+
+
+def test_flow_lane_attribution_clean_on_single_item_lanes() -> None:
+    """An unfiltered sorter is fine when its lane carries only one thing."""
+    r = validate(fed_machine(), hungry_spec(Fraction(5)), ids=TWO_INPUT_IDS)
+    assert not fired(r, "flow.lane_attribution")
+
 
 # --- negative control against real game blueprints -------------------------
 #

@@ -297,22 +297,39 @@ class TestPlanStrips:
         report = validate.validate(p, expect_power=False)
         assert report.ok, "\n".join(f"{f.check}: {f.message}" for f in report.errors[:6])
 
-    def test_a_recipe_needing_more_lanes_than_two_sides_carry_is_rejected(self) -> None:
-        """Seven lanes cannot fit on two sides of three, and truncating one would
-        produce a blueprint that pastes cleanly and then stalls."""
-        spec = BuildSpec(
+    @staticmethod
+    def _many_input_spec(n: int) -> BuildSpec:
+        import string
+
+        return BuildSpec(
             groups=(
                 group(
                     "impossible",
                     "assembling-machine-2",
                     1,
-                    {k: F(1) for k in "abcdefg"},
+                    {k: F(1) for k in string.ascii_lowercase[:n]},
                     {"out": F(1)},
                 ),
             )
         )
-        with pytest.raises(ValueError, match="lanes"):
-            plan_strips(spec, strip_len=6)
+
+    def test_mixing_raises_the_ceiling_well_past_any_real_recipe(self) -> None:
+        """Fifteen ingredients now seat: three lanes above and two below, each
+        holding up to the assembler's three-tile width, with the last south lane
+        left for the output."""
+        strips = plan_strips(self._many_input_spec(15), strip_len=6)
+        assert len(strips[0].in_lanes) == 15
+
+    def test_a_recipe_needing_more_lanes_than_two_sides_carry_is_rejected(self) -> None:
+        """Sixteen exceeds even mixed lanes, and truncating one ingredient would
+        produce a blueprint that pastes cleanly and then stalls.
+
+        The bar moved from seven to sixteen when lanes learned to carry several
+        items; DSP's own recipes top out at six ingredients, so this limit no
+        longer binds anything real.
+        """
+        with pytest.raises(ValueError, match="cannot be seated"):
+            plan_strips(self._many_input_spec(16), strip_len=6)
 
 
 # --- fallback --------------------------------------------------------------
@@ -940,3 +957,184 @@ class TestProducerWithManyConsumers:
         p = FreeformLayout(power=power).lay_out(spec, time_budget_s=1.0)
         report = _full_report(p, spec, power=power)
         assert report.ok, "\n".join(f"{f.check}: {f.message}" for f in report.errors[:8])
+
+
+# --- mixed-item lanes ------------------------------------------------------
+
+
+def six_input_spec() -> BuildSpec:
+    """A REAL six-ingredient recipe, fed entirely from outside.
+
+    ``universe-matrix`` takes antimatter plus all five lower matrices and runs in
+    a Matrix Lab.  Six inputs plus one output is seven lanes, and two sides of
+    three cannot carry that one-item-per-lane -- which is what mixing is for.
+
+    Deliberately a real recipe, not a synthesised one: a made-up name plans
+    perfectly well and then dies at ``catalog.recipe_id``, so a synthetic-only
+    test would pass while the feature stayed broken.
+    """
+    ingredients = [
+        "antimatter",
+        "electromagnetic-matrix",
+        "energy-matrix",
+        "gravity-matrix",
+        "information-matrix",
+        "structure-matrix",
+    ]
+    return BuildSpec(
+        groups=(
+            group(
+                "universe-matrix",
+                "matrix-lab",
+                2,
+                {i: F(1) for i in ingredients},
+                {"universe-matrix": F(1)},
+            ),
+        ),
+        external_inputs={i: F(2) for i in ingredients},
+        outputs={"universe-matrix": F(2)},
+        belt_item_id="conveyor-belt-3",
+        belt_items_per_second=F(30),
+        label="six-input",
+    )
+
+
+def _lane_runs(p: Placement) -> dict[int, set[int]]:
+    """Belt RUN -> the set of non-zero sorter filters drawing from it.
+
+    This is the signal the validator keys on to spot a shared lane, and it is
+    per-RUN rather than per-tile: each machine is served from its own column, so
+    two items sharing a lane attach to two different belt tiles of the same
+    forward-linked run. Collecting filters per tile would miss that entirely.
+
+    A sorter only carries a filter when its lane is mixed, so a run with two
+    distinct filters against it provably carries two items.
+    """
+    # Forward-linked belt chains, collapsed to a representative index.
+    run_of: dict[int, int] = {}
+    for i, b in enumerate(p.buildings):
+        if not catalog.is_belt(b.item_id):
+            continue
+        run_of.setdefault(i, i)
+        nxt = b.output_obj
+        if (
+            nxt is not None
+            and 0 <= nxt < len(p.buildings)
+            and catalog.is_belt(p.buildings[nxt].item_id)
+        ):
+            run_of[nxt] = run_of[i]
+
+    filters: dict[int, set[int]] = {}
+    for b in p.buildings:
+        if not catalog.is_sorter(b.item_id) or not b.filter_id:
+            continue
+        if b.input_obj is None or b.input_obj not in run_of:
+            continue
+        filters.setdefault(run_of[b.input_obj], set()).add(b.filter_id)
+    return filters
+
+
+class TestMixedItemLanes:
+    """One item per lane is our simplification, not a DSP rule.
+
+    Measured across the fixture corpus, 236 of 1,288 real sorters carry a
+    filter, and ``falk-v7-mall-full`` filters 100% of its 196 -- bus designs
+    where several items share a belt and filtered sorters pick off the one they
+    want.
+    """
+
+    def test_a_six_ingredient_recipe_plans(self) -> None:
+        strips = plan_strips(six_input_spec(), strip_len=6)
+        assert strips
+        s = strips[0]
+        assert len(s.in_lanes) == 6, "every ingredient must still be present"
+        lanes = len(s.in_above) + len(s.in_below)
+        assert lanes < 6, f"expected mixing to save lanes, used {lanes} for 6 items"
+
+    def test_it_lays_out_and_validates(self) -> None:
+        spec = six_input_spec()
+        p = FreeformLayout(power=False).lay_out(spec, time_budget_s=1.5)
+        report = _full_report(p, spec, power=False)
+        assert report.ok, "\n".join(f"{f.check}: {f.message}" for f in report.errors[:8])
+
+    def test_every_sorter_on_a_mixed_lane_is_filtered(self) -> None:
+        """An unfiltered sorter on a shared lane grabs whatever passes.
+
+        That starves the machine that needed the other item, and nothing about
+        the paste looks wrong -- so this is correctness, not tidiness.
+        """
+        spec = six_input_spec()
+        p = FreeformLayout(power=False).lay_out(spec, time_budget_s=1.5)
+        shared = _lane_runs(p)
+        assert shared, "a six-input strip must produce at least one mixed lane"
+        assert any(len(f) > 1 for f in shared.values()), (
+            "expected some belt to be drawn from under two different filters"
+        )
+
+    def test_unmixed_lanes_stay_unfiltered(self) -> None:
+        """The signal only means something if it is absent when lanes are pure.
+
+        If ordinary strips also filtered, the validator could not tell a shared
+        lane from a plain one and would keep applying its single-commodity
+        decomposition to a lane it had not actually checked.
+        """
+        spec = magnetic_ring_spec()
+        p = FreeformLayout(power=False).lay_out(spec, time_budget_s=1.0)
+        assert not _lane_runs(p), "no lane in this spec is shared, so none may filter"
+
+
+# --- mode-driven machines --------------------------------------------------
+
+
+def mode_driven_spec() -> BuildSpec:
+    """An Energy Exchanger charging accumulators.
+
+    ``accumulator-full`` is a MODE, not a craft: DSP has no recipe id for it and
+    the job is selected by a word in the parameter block.
+    """
+    return BuildSpec(
+        groups=(
+            group(
+                "accumulator-full",
+                "energy-exchanger",
+                2,
+                {"accumulator": F(1)},
+                {"accumulator-full": F(1)},
+            ),
+        ),
+        external_inputs={"accumulator": F(2)},
+        outputs={"accumulator-full": F(2)},
+        belt_item_id="conveyor-belt-2",
+        belt_items_per_second=F(12),
+        label="mode-driven",
+    )
+
+
+class TestModeDrivenMachines:
+    def test_it_lays_out(self) -> None:
+        spec = mode_driven_spec()
+        p = FreeformLayout(power=False).lay_out(spec, time_budget_s=1.0)
+        assert p.buildings
+
+    def test_the_machine_carries_the_mode_not_a_recipe(self) -> None:
+        """recipe_id stays zero; the mode rides in the parameter block."""
+        from flab2bp.dsp import params
+
+        spec = mode_driven_spec()
+        p = FreeformLayout(power=False).lay_out(spec, time_budget_s=1.0)
+        exchangers = [
+            b for b in p.buildings if b.item_id == catalog.ENERGY_EXCHANGER_ID
+        ]
+        assert len(exchangers) == 2, f"expected 2 exchangers, got {len(exchangers)}"
+        want = params.parameters_for("accumulator-full")
+        for b in exchangers:
+            assert b.recipe_id == 0, "a mode-driven machine has no recipe id"
+            assert b.parameters == want, f"expected {want}, got {b.parameters}"
+
+    def test_charge_and_discharge_differ(self) -> None:
+        """A guard on the poles: emitting the wrong one drains what it should fill."""
+        from flab2bp.dsp import params
+
+        assert params.parameters_for("accumulator-full") != params.parameters_for(
+            "accumulator-discharge"
+        )

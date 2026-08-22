@@ -39,7 +39,7 @@ from fractions import Fraction
 
 from ortools.sat.python import cp_model
 
-from flab2bp.dsp import catalog
+from flab2bp.dsp import catalog, params
 from flab2bp.layout.base import (
     DEFAULT_SEARCH_WORKERS,
     Facing,
@@ -656,40 +656,29 @@ def _measure(spec: BuildSpec, plan: _Plan) -> int:
 
 
 def _pick_sorter(rate: Fraction, span: int, available: int) -> tuple[int, int] | None:
-    """Cheapest tier and per-machine count carrying ``rate`` across ``span``.
+    """Cheapest tier and per-machine count carrying ONE ITEM's ``rate``.
 
-    ``rate`` is the load on ONE machine, not the group's total.  A sorter serves
-    the single machine it touches, so a group of eight machines needs eight
-    feeds even when two sorters' worth of throughput would cover the rate.
-    Sizing by throughput alone left most machines in a group with nothing
-    delivering to them at all.
-    """
-    for tier in SORTER_TIERS:
-        per = catalog.sorter_rate(tier, span)
-        count = math.ceil(rate / per) if rate > 0 else 1
-        if count <= available:
-            return tier, max(count, 1)
-    return None
+    ``rate`` is what a single machine consumes (or produces) of the single item
+    this feed moves -- not the machine's total across its ingredients.
 
-
-def _pick_sorter_share(
-    total_rate: Fraction, item_count: int, span: int, available: int
-) -> tuple[int, int] | None:
-    """Tier and per-machine count so each sorter sustains its share of the load.
-
-    A machine's sorters are indistinguishable by item, so the load one of them
-    must carry is the machine's TOTAL rate on that side divided across every
-    sorter on that side -- not the rate of the single item it happens to move.
-    Sizing against one item's rate under-provisions whichever ingredient is the
-    hot one, which is a real under-build and not merely a bookkeeping quibble.
+    Sizing against the average was a real under-build, and a self-concealing
+    one.  A machine's ingredients have different rates: ``electric-motor`` takes
+    iron-ingot, gear and magnetic-coil, and charging each feed the mean lets the
+    hot ingredient's sorter come up short while the cold one's is oversized, so
+    the pair averages out to something that reads as fine.  The starved sorter
+    then throttles the machine, the build pastes and runs, and it quietly misses
+    its rate.  Measured on the example URL: 12 sorters asked for 1 item/s of
+    iron-ingot across 2 tiles, where a Mk.I sustains 3/4.
 
     Prefers the fewest sorters, then the cheapest tier: extra sorters are extra
-    buildings to paste, and a higher tier costs nothing spatially.
+    buildings to paste, while a higher tier costs nothing spatially.  Note a
+    longer span costs throughput linearly (``rate_at_1 / span``), so shortening
+    a span is as valid a remedy as upgrading a tier, and usually cheaper.
     """
-    if item_count <= 0:
-        return None
+    if rate <= 0:
+        return SORTER_TIERS[0], 1
     for count in range(1, max(1, available) + 1):
-        share = total_rate / (item_count * count) if total_rate > 0 else Fraction(0)
+        share = rate / count
         for tier in SORTER_TIERS:
             if catalog.sorter_rate(tier, span) >= share:
                 return tier, count
@@ -805,6 +794,25 @@ def _realizable_direct(
         current.discard(worst[1])
 
 
+def _machine_config(factoriolab_recipe_id: str) -> tuple[int, tuple[int, ...]]:
+    """``(recipe_id, parameters)`` for the machine running this recipe.
+
+    Most machines are told what to make through ``recipe_id`` and carry no
+    parameters.  A few are configured by a MODE in their parameter block
+    instead, with ``recipe_id`` left at zero -- an Energy Exchanger's
+    charge/discharge, a Ray Receiver's photon/power.  FactorioLab models both
+    kinds as ordinary recipes with real item flow, so they belt, sort and lay
+    out identically; only this one decision differs.
+
+    Resolved here rather than at the call site so a machine can never be emitted
+    half-configured: every placement gets exactly one of the two, and a recipe
+    that is neither raises rather than pasting an idle machine.
+    """
+    if factoriolab_recipe_id in catalog.MODE_DRIVEN_MACHINE:
+        return 0, params.parameters_for(factoriolab_recipe_id)
+    return catalog.recipe_id(factoriolab_recipe_id), ()
+
+
 def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
     """Turn a row/lane plan into concrete buildings on the grid."""
     groups, edges = _adapt(spec)
@@ -874,6 +882,10 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
                 continue
             g = groups[s.key]
             machine_at[s.key].append(len(buildings))
+            # A machine with no recipe pastes into the game and then sits idle.
+            # Mode-driven machines are the exception: their job lives in the
+            # parameter block and recipe_id stays zero.
+            recipe_id, parameters = _machine_config(g.recipe_id)
             buildings.append(
                 PlacedBuilding(
                     item_id=g.item_id,
@@ -882,9 +894,8 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
                     y=row_y[r],
                     width=g.width,
                     height=g.height,
-                    # A machine with no recipe pastes into the game and then
-                    # sits idle. This was 0 for every machine.
-                    recipe_id=catalog.recipe_id(g.recipe_id),
+                    recipe_id=recipe_id,
+                    parameters=parameters,
                 )
             )
         row_widths.append(width)
@@ -1095,14 +1106,11 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
             machines = machine_at[key]
             if not machines:
                 continue
-            # Size against the machine's TOTAL load on this side, shared across
-            # every sorter on that side. Every machine also needs its own feed
-            # for every distinct item, however little each one carries.
-            side = g.inputs if into_machine else g.outputs
-            total_per_machine = sum(side.values(), Fraction(0))
-            pick = _pick_sorter_share(
-                total_per_machine, len(side), tap.span, g.width
-            )
+            # Size against THIS item's per-machine rate. `rate` here is the
+            # group total, so divide it back out: a sorter serves one machine.
+            # Sizing against the machine's average across its ingredients
+            # under-provisions whichever one is hot -- see _pick_sorter.
+            pick = _pick_sorter(rate / g.count, tap.span, g.width)
             if pick is None:
                 continue
             tier, per_machine = pick

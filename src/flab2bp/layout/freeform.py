@@ -57,7 +57,7 @@ from fractions import Fraction
 
 from ortools.sat.python import cp_model
 
-from flab2bp.dsp import catalog
+from flab2bp.dsp import catalog, params
 from flab2bp.layout.base import (
     DEFAULT_SEARCH_WORKERS,
     Facing,
@@ -135,6 +135,9 @@ class _Group:
     inputs: dict[str, Fraction]
     outputs: dict[str, Fraction]
     proliferated: bool
+    #: Parameter block for a machine selected by MODE rather than recipe id.
+    #: Empty for an ordinary craft.
+    mode_params: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -162,6 +165,15 @@ class Strip:
     Outputs sit immediately below the machines and the overflow inputs below
     them, so when ``in_below`` is empty every row index is exactly what it was
     when inputs were above-only.  That is what keeps the change additive.
+
+    An input LANE carries one or more items.  One item per lane is our
+    simplification, not a DSP rule -- belts carry mixed items natively and a
+    filtered sorter picks off the one it wants, which is how bus designs work
+    (236 of 1,288 sorters in the fixture corpus carry a filter, and
+    ``falk-v7-mall-full`` filters all 196 of its own).  Mixing is used ONLY as
+    overflow, when one item per lane would not fit, because
+    ``layout/validate.py`` decomposes its throughput check into independent
+    single-commodity flows exactly BECAUSE a lane normally carries one item.
     """
 
     group_key: str
@@ -171,20 +183,24 @@ class Strip:
     machines: int
     mw: int
     mh: int
-    #: Items arriving on the north side, one lane each, ordered top-down.
-    in_above: tuple[str, ...]
+    #: Lanes arriving on the north side, ordered top-down.  Each lane holds one
+    #: or more items; more than one means a shared lane whose sorters filter.
+    in_above: tuple[tuple[str, ...], ...]
     #: ``(item, destination strip id)`` per lane, ordered top-down, starting
     #: directly under the machine band.  A separate lane per destination is what
     #: removes the need for splitters.
     out_lanes: tuple[tuple[str, str], ...]
-    #: Items arriving on the south side, below ``out_lanes``.  Non-empty only
+    #: Lanes arriving on the south side, below ``out_lanes``.  Non-empty only
     #: when a recipe has more ingredients than one side can reach.
-    in_below: tuple[str, ...] = ()
+    in_below: tuple[tuple[str, ...], ...] = ()
+    #: Parameter block for a machine configured by a MODE rather than a recipe
+    #: (Energy Exchanger, Ray Receiver).  Empty for an ordinary craft.
+    mode_params: tuple[int, ...] = ()
 
     @property
     def in_lanes(self) -> tuple[str, ...]:
-        """Every ingredient, regardless of which side feeds it."""
-        return self.in_above + self.in_below
+        """Every ingredient, regardless of which side or lane feeds it."""
+        return tuple(item for lane in self.in_above + self.in_below for item in lane)
 
     @property
     def width(self) -> int:
@@ -199,16 +215,43 @@ class Strip:
         """Row index of the machine band's top edge, relative to the strip."""
         return len(self.in_above)
 
+    @property
+    def is_mode_driven(self) -> bool:
+        return bool(self.mode_params)
+
+    def lane_of_input(self, item: str) -> tuple[str, ...]:
+        """The lane carrying ``item``, including anything sharing it."""
+        for lane in self.in_above + self.in_below:
+            if item in lane:
+                return lane
+        raise KeyError(f"{item!r} is not an ingredient of {self.recipe_id!r}")
+
+    def input_is_shared(self, item: str) -> bool:
+        """Does ``item`` ride a lane with other items?
+
+        A sorter drawing from a shared lane MUST set a filter, or it takes
+        whatever passes and starves the machine that wanted the other item.
+        """
+        return len(self.lane_of_input(item)) > 1
+
+    def slot_of_input(self, item: str) -> int:
+        """Position within its lane, which fixes the sorter's column.
+
+        Two sorters serving one machine from one lane cannot share an anchor, so
+        each item on a shared lane takes its own column across the machine's
+        width.  That caps a lane at ``mw`` items.
+        """
+        return self.lane_of_input(item).index(item)
+
     def row_of_input(self, item: str) -> int:
         """Row index carrying ``item``, relative to the strip's top."""
-        if item in self.in_above:
-            return self.in_above.index(item)
-        return (
-            len(self.in_above)
-            + self.mh
-            + len(self.out_lanes)
-            + self.in_below.index(item)
-        )
+        for j, lane in enumerate(self.in_above):
+            if item in lane:
+                return j
+        for j, lane in enumerate(self.in_below):
+            if item in lane:
+                return len(self.in_above) + self.mh + len(self.out_lanes) + j
+        raise KeyError(f"{item!r} is not an ingredient of {self.recipe_id!r}")
 
     def row_of_output(self, k: int) -> int:
         """Row index of the ``k``-th output lane, relative to the strip's top."""
@@ -307,9 +350,20 @@ def _allocate_machines(
 def _adapt(spec: BuildSpec) -> dict[str, _Group]:
     groups: dict[str, _Group] = {}
     for i, mg in enumerate(spec.groups):
-        item_id = MACHINE_ITEM_IDS.get(mg.machine_item_id)
-        if item_id is None:
-            raise KeyError(f"no DSP building known for machine {mg.machine_item_id!r}")
+        # A mode-driven recipe names its machine in the catalog registry rather
+        # than through the spec's producer, and carries no DSP recipe id at all.
+        mode = catalog.MODE_DRIVEN_MACHINE.get(mg.recipe_id)
+        if mode is not None:
+            item_id = mode.machine_item_id
+            mode_params = params.parameters_for(mg.recipe_id)
+        else:
+            resolved = MACHINE_ITEM_IDS.get(mg.machine_item_id)
+            if resolved is None:
+                raise KeyError(
+                    f"no DSP building known for machine {mg.machine_item_id!r}"
+                )
+            item_id = resolved
+            mode_params = ()
         b = catalog.building(item_id)
         groups[f"{mg.recipe_id}#{i}"] = _Group(
             key=f"{mg.recipe_id}#{i}",
@@ -322,8 +376,71 @@ def _adapt(spec: BuildSpec) -> dict[str, _Group]:
             inputs=dict(mg.inputs_per_machine),
             outputs=dict(mg.outputs_per_machine),
             proliferated=mg.is_proliferated,
+            mode_params=mode_params,
         )
     return groups
+
+
+def _check_shared_lane_capacity(
+    g: _Group, lanes: tuple[tuple[str, ...], ...], machines: int, spec: BuildSpec
+) -> None:
+    """A shared lane must carry the SUM of its items within the belt tier.
+
+    Only shared lanes are checked.  A single-item lane is left exactly as it
+    was, so this cannot reject a spec that already worked -- mixing is the new
+    thing, so mixing is what gets the new constraint.
+
+    Exact ``Fraction`` throughout: a float here would let a lane that lands
+    precisely on the tier's limit read as over capacity, or worse, the reverse.
+    """
+    cap = spec.belt_items_per_second
+    for lane in lanes:
+        if len(lane) < 2:
+            continue
+        total = sum(
+            (g.inputs.get(item, Fraction(0)) * machines for item in lane),
+            Fraction(0),
+        )
+        if total > cap:
+            raise ValueError(
+                f"recipe {g.recipe_id!r}: lane carrying {list(lane)} needs "
+                f"{total} items/s across {machines} machine(s), over the "
+                f"{cap}/s a {spec.belt_item_id} sustains; these ingredients "
+                f"cannot share a belt at this rate"
+            )
+
+
+def _seat_inputs(
+    items: tuple[str, ...], n_sinks: int, reach: int, max_per_lane: int
+) -> tuple[tuple[tuple[str, ...], ...], tuple[tuple[str, ...], ...]]:
+    """Seat ingredients into lanes above and below the machine band.
+
+    Tries one item per lane FIRST and only mixes when that will not fit, which
+    is what makes this additive: every spec that already worked seats exactly as
+    it did before, so mixing opens new territory rather than trading anything.
+
+    Mixing is capped at ``max_per_lane`` -- the machine's width -- because two
+    sorters serving one machine from one lane cannot share an anchor, so each
+    item on a shared lane needs its own column across that width.
+
+    Returns ``(above, below)``.  ``below`` shares the south side with the output
+    lanes, so it is kept as small as possible.
+    """
+    n = len(items)
+    if n == 0:
+        return (), ()
+    for k in range(1, max(1, max_per_lane) + 1):
+        lanes = [tuple(items[i : i + k]) for i in range(0, n, k)]
+        above, below = tuple(lanes[:reach]), tuple(lanes[reach:])
+        if len(below) > reach:
+            continue  # more lanes than two sides can hold; mix harder
+        if n_sinks and reach - len(below) <= 0:
+            continue  # no room left below for an output lane
+        return above, below
+    raise ValueError(
+        f"{n} ingredients cannot be seated: two sides of {reach} lanes carrying "
+        f"at most {max_per_lane} items each leaves no room for the output lane"
+    )
 
 
 def plan_strips(spec: BuildSpec, *, strip_len: int = 6) -> list[Strip]:
@@ -349,9 +466,9 @@ def plan_strips(spec: BuildSpec, *, strip_len: int = 6) -> list[Strip]:
     INPUTS are handled the other way about.  Sharding cannot help them: a machine
     needs all its ingredients simultaneously, so splitting two ingredients into
     one shard and two into another leaves both shards stalled.  Instead the strip
-    is fed from BOTH sides -- up to ``SORTER_MAX_REACH`` lanes above, the
-    remainder below alongside the output lanes.  Only a recipe needing more than
-    both sides can carry is genuinely unbuildable.
+    is fed from BOTH sides, and where two sides of single-item lanes still will
+    not fit, ingredients SHARE a lane and their sorters filter -- see
+    :func:`_seat_inputs`.
 
     Raises rather than truncating: a silently dropped ingredient would produce a
     blueprint that pastes cleanly and then stalls.
@@ -375,17 +492,7 @@ def plan_strips(spec: BuildSpec, *, strip_len: int = 6) -> list[Strip]:
     reach = catalog.SORTER_MAX_REACH
     strips: list[Strip] = []
     for key, g in groups.items():
-        in_lanes = tuple(sorted(g.inputs))
-        # Fill the north side first, so the south side keeps as much room as
-        # possible for output lanes.
-        in_above = in_lanes[:reach]
-        in_below = in_lanes[reach:]
-        if len(in_below) > reach:
-            raise ValueError(
-                f"recipe {g.recipe_id!r} needs {len(in_lanes)} input lanes, but a "
-                f"strip carries at most {reach} per side and a sorter spans "
-                f"{reach} tiles; this recipe cannot be fed at all"
-            )
+        in_items = tuple(sorted(g.inputs))
 
         sinks: list[tuple[str, str]] = []
         for item in sorted(g.outputs):
@@ -394,15 +501,16 @@ def plan_strips(spec: BuildSpec, *, strip_len: int = 6) -> list[Strip]:
             if item in spec.outputs or not dests:
                 sinks.append((item, ""))  # leaves the build
 
+        try:
+            in_above, in_below = _seat_inputs(
+                in_items, len(sinks), reach, max_per_lane=g.width
+            )
+        except ValueError as exc:
+            raise ValueError(f"recipe {g.recipe_id!r}: {exc}") from None
+
         # Output lanes share the south side with any overflow inputs, so the
         # shard size is what is left after those are seated.
         out_cap = reach - len(in_below)
-        if out_cap <= 0 and sinks:
-            raise ValueError(
-                f"recipe {g.recipe_id!r} needs {len(in_lanes)} input lanes and "
-                f"{len(sinks)} output lanes, more than two sides of {reach} can "
-                f"carry; this recipe cannot be both fed and drained"
-            )
         shards = _shard_sinks(sinks, cap=out_cap) if sinks else [[]]
         if len(shards) > g.count:
             raise ValueError(
@@ -427,6 +535,7 @@ def plan_strips(spec: BuildSpec, *, strip_len: int = 6) -> list[Strip]:
                 n = base + (1 if s < extra else 0)
                 if n <= 0:
                     continue
+                _check_shared_lane_capacity(g, in_above + in_below, n, spec)
                 strips.append(
                     Strip(
                         group_key=key,
@@ -439,6 +548,7 @@ def plan_strips(spec: BuildSpec, *, strip_len: int = 6) -> list[Strip]:
                         in_above=in_above,
                         in_below=in_below,
                         out_lanes=tuple(shard),
+                        mode_params=g.mode_params,
                     )
                 )
     return strips
@@ -822,6 +932,22 @@ class _Port:
         return range(self.x0, self.x1 + 1)
 
 
+def _lane_filter(item: str) -> int:
+    """The DSP item id a sorter on a shared lane must filter to.
+
+    Raises rather than falling back to zero: an unfiltered sorter on a shared
+    lane grabs whatever passes and starves the machine that wanted the other
+    item, and the blueprint still pastes cleanly.
+    """
+    got = catalog.get_item_id(item)
+    if got is None:
+        raise KeyError(
+            f"{item!r} shares a belt lane but has no DSP item id, so its sorter "
+            f"cannot be filtered; it would take whatever passed instead"
+        )
+    return got
+
+
 def _emit_strip(
     canvas: _Canvas,
     s: Strip,
@@ -830,7 +956,8 @@ def _emit_strip(
     belt_id: int,
     belt_model: int,
     rates: dict[str, Fraction],
-    machine_demand: tuple[Fraction, Fraction] = (Fraction(0), Fraction(0)),
+    in_rates: Mapping[str, Fraction] | None = None,
+    out_rates: Mapping[str, Fraction] | None = None,
 ) -> tuple[dict[str, _Port], dict[tuple[str, str], _Port], int]:
     """Place one strip's lanes, machines and sorters.
 
@@ -839,20 +966,38 @@ def _emit_strip(
 
     Inputs may sit on either side of the machine band; ``Strip.row_of_input``
     owns that arithmetic so it is stated once rather than re-derived here.
+
+    Where a lane carries several items, each gets its OWN sorter, filtered to
+    that item and offset into its own column across the machine's width.  Two
+    sorters serving one machine from one lane cannot share an anchor, and an
+    unfiltered sorter on a shared lane takes whatever passes -- starving the
+    machine that wanted the other item, with nothing about the paste looking
+    wrong.
+
+    Sorter tiers are sized from the rate of the ITEM EACH SORTER MOVES, per
+    machine.  Sizing from a machine's average across its sorters is wrong and
+    hid a real starvation bug: ``circuit-board`` takes copper at 1/s and iron at
+    2/s, and charging both sorters the 1.5/s average exactly meets a Mk.I, so it
+    read as clean while the sorter actually carrying the iron starved the
+    machine.  An overloaded sorter hides behind an underloaded one whenever
+    ingredient rates differ, which is most of the time.
     """
+    in_rates = in_rates or {}
+    out_rates = out_rates or {}
     in_ports: dict[str, _Port] = {}
     out_ports: dict[tuple[str, str], _Port] = {}
     width = s.width
     n_above = len(s.in_above)
-    n_in = len(s.in_lanes)
 
-    # Row -> the item that row's belt carries. Building it up front removes the
+    # Row -> the item that row's belt is labelled with. On a shared lane this is
+    # the FIRST item; the authoritative set is the sorters' filters, which is
+    # what the validator keys on. Building it up front removes the
     # branch-per-row this used to need, and it is what lets the marker pass
     # label external input belts later: the knowledge is unrecoverable once
     # emission drops it.
     lane_item_of: dict[int, str] = {}
-    for item in s.in_lanes:
-        lane_item_of[s.row_of_input(item)] = item
+    for lane in s.in_above + s.in_below:
+        lane_item_of[s.row_of_input(lane[0])] = lane[0]
     for k, (item, _dest) in enumerate(s.out_lanes):
         lane_item_of[s.row_of_output(k)] = item
 
@@ -893,35 +1038,50 @@ def _emit_strip(
                     y=machine_y,
                     width=s.mw,
                     height=s.mh,
-                    # This was `abs(hash(name)) % 30000`, which is not a DSP
-                    # recipe id and is not even stable across processes, since
-                    # Python randomises string hashing.
-                    recipe_id=catalog.recipe_id(s.recipe_id),
+                    # A mode-driven machine carries no recipe id at all: its job
+                    # is the word in the parameter block. This was once
+                    # `abs(hash(name)) % 30000`, which is not a DSP recipe id and
+                    # is not even stable across processes, since Python
+                    # randomises string hashing.
+                    recipe_id=0 if s.is_mode_driven else catalog.recipe_id(s.recipe_id),
+                    parameters=s.mode_params,
                 ),
                 solid=True,
             )
         )
 
-    # Per-sorter demand, on the SAME basis the validator uses: a machine's total
-    # input rate divided across the sorters feeding it, and likewise for output.
-    # Tier selection previously divided ONE item's group total by this strip's
-    # machine count -- a different quantity entirely, which is how a Mk.I ended
-    # up handed 0.546/s when it sustains 0.5/s at span 3.
-    in_total, out_total = machine_demand
-    in_each = in_total / max(1, n_in)
-    out_each = out_total / max(1, len(s.out_lanes))
-
     bottom = machine_y + s.mh - 1
     sorters = 0
 
-    for j, item in enumerate(s.in_above):
-        row = j
-        span = n_above - j
-        in_ports[item] = _Port(lane_idx[row][0], ox, oy + row, ox, ox + width - 1)
-        tier, _count = _pick_sorter(in_each or rates.get(item, Fraction(1)), span, 1)
-        sorters += _link_lane(
-            canvas, lane_idx[row], machines, oy + row, machine_y, tier, into_machine=True
-        )
+    def item_rate(item: str, table: Mapping[str, Fraction]) -> Fraction:
+        """What ONE sorter moves: one machine's rate for this one item."""
+        got = table.get(item)
+        if got is not None and got > 0:
+            return got
+        return rates.get(item, Fraction(1))
+
+    def feed(lane: tuple[str, ...], row: int, span: int, near_edge: int) -> int:
+        """One filtered sorter per (item, machine) for this lane."""
+        placed = 0
+        shared = len(lane) > 1
+        for slot, item in enumerate(lane):
+            in_ports[item] = _Port(lane_idx[row][0], ox, oy + row, ox, ox + width - 1)
+            tier, _count = _pick_sorter(item_rate(item, in_rates), span, 1)
+            placed += _link_lane(
+                canvas,
+                lane_idx[row],
+                machines,
+                oy + row,
+                near_edge,
+                tier,
+                into_machine=True,
+                filter_id=_lane_filter(item) if shared else 0,
+                column=slot,
+            )
+        return placed
+
+    for j, lane in enumerate(s.in_above):
+        sorters += feed(lane, row=j, span=n_above - j, near_edge=machine_y)
 
     for j, (item, dest) in enumerate(s.out_lanes):
         row = s.row_of_output(j)
@@ -929,20 +1089,17 @@ def _emit_strip(
         out_ports[item, dest] = _Port(
             lane_idx[row][-1], ox + width - 1, oy + row, ox, ox + width - 1
         )
-        tier, _count = _pick_sorter(out_each or rates.get(item, Fraction(1)), span, 1)
+        tier, _count = _pick_sorter(item_rate(item, out_rates), span, 1)
         sorters += _link_lane(
             canvas, lane_idx[row], machines, oy + row, bottom, tier, into_machine=False
         )
 
     # Overflow ingredients, seated below the output lanes and reaching up to the
     # machine band's south edge.
-    for j, item in enumerate(s.in_below):
-        row = s.row_of_input(item)
-        span = len(s.out_lanes) + j + 1
-        in_ports[item] = _Port(lane_idx[row][0], ox, oy + row, ox, ox + width - 1)
-        tier, _count = _pick_sorter(in_each or rates.get(item, Fraction(1)), span, 1)
-        sorters += _link_lane(
-            canvas, lane_idx[row], machines, oy + row, bottom, tier, into_machine=True
+    for j, lane in enumerate(s.in_below):
+        row = s.row_of_input(lane[0])
+        sorters += feed(
+            lane, row=row, span=len(s.out_lanes) + j + 1, near_edge=bottom
         )
 
     return in_ports, out_ports, sorters
@@ -957,19 +1114,27 @@ def _link_lane(
     tier: int,
     *,
     into_machine: bool,
+    filter_id: int = 0,
+    column: int = 0,
 ) -> int:
     """One sorter per machine, between the lane and the machine's near edge.
 
     Anchors sit *on* the two buildings and the connection indices carry the
     semantics, which is how the game itself represents this -- a sorter consumes
     no grid cell of its own.
+
+    ``column`` offsets the sorter across the machine's width so several items
+    sharing one lane each get their own anchor; ``filter_id`` pins which item
+    this sorter moves, which is mandatory on a shared lane and left at zero on a
+    plain one.  That zero-versus-set distinction is the signal the validator
+    uses to tell the two apart, so do not set a filter where none is needed.
     """
     model_index = catalog.building(tier).model_index
     facing = Facing.SOUTH.value if lane_y < machine_y else Facing.NORTH.value
     placed = 0
     for m_idx in machines:
         m = canvas.buildings[m_idx]
-        x = m.x
+        x = m.x + min(column, m.width - 1)
         belt_idx = next((i for i in lane if canvas.buildings[i].x == x), None)
         if belt_idx is None:
             continue
@@ -994,6 +1159,7 @@ def _link_lane(
                 yaw2=facing,
                 input_obj=src,
                 output_obj=dst,
+                filter_id=filter_id,
             )
         )
         placed += 1
@@ -1441,15 +1607,18 @@ def _build(
         for item, r in list(g.inputs.items()) + list(g.outputs.items()):
             rates[item] = max(rates.get(item, Fraction(0)), r * g.count)
 
-    # Per-machine totals, keyed by group. Sorter tier selection needs the same
-    # basis the validator checks against, which is a machine's whole input rate
-    # split across its feeding sorters -- not one item's group total.
-    demand: dict[str, tuple[Fraction, Fraction]] = {
-        key: (
-            sum(g.inputs.values(), Fraction(0)),
-            sum(g.outputs.values(), Fraction(0)),
-        )
-        for key, g in _adapt(spec).items()
+    # PER-ITEM per-machine rates, keyed by group. One sorter serves one machine
+    # and moves one item, so that item's per-machine rate is exactly what the
+    # sorter must sustain.
+    #
+    # This used to be the machine's TOTAL split evenly across its sorters, which
+    # under-sizes whenever ingredient rates differ -- and they usually do.
+    # `circuit-board` takes copper at 1/s and iron at 2/s; the 1.5/s average
+    # exactly meets a Mk.I, so it read as clean while the sorter carrying the
+    # iron starved the machine. The overloaded sorter hid behind the underloaded
+    # one, and the validator averaged the same way so it never caught it.
+    per_item: dict[str, tuple[Mapping[str, Fraction], Mapping[str, Fraction]]] = {
+        key: (dict(g.inputs), dict(g.outputs)) for key, g in _adapt(spec).items()
     }
 
     in_ports: dict[tuple[str, str], _Port] = {}
@@ -1466,7 +1635,7 @@ def _build(
             belt_id,
             belt_model,
             rates,
-            demand.get(s.group_key, (Fraction(0), Fraction(0))),
+            *per_item.get(s.group_key, ({}, {})),
         )
         sorters += placed
         strip_in_ports.append(ins)

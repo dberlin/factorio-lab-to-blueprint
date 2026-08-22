@@ -987,3 +987,159 @@ class TestSprayCoatersAreFed:
         assert coaters, "expected coaters on a max-proliferation spec"
         starved = [i for i in coaters if i not in fed]
         assert not starved, f"{len(starved)} of {len(coaters)} coaters unfed"
+
+
+class TestModeDrivenMachines:
+    """Some machines are configured by a MODE, not a recipe id.
+
+    An Energy Exchanger's charge/discharge lives in its parameter block while
+    ``recipe_id`` stays zero.  FactorioLab still models these as ordinary
+    recipes with real item flow, so they belt, sort and lay out like anything
+    else -- only the emission differs.
+
+    Getting the block wrong is worse than omitting it: the blueprint pastes
+    cleanly and then runs the wrong way round, draining the accumulators it was
+    meant to fill, and nothing about the paste looks wrong.
+    """
+
+    @staticmethod
+    def _exchanger_spec(recipe: str = "accumulator-full") -> BuildSpec:
+        """Two exchangers fed by a belted accumulator supply."""
+        return BuildSpec(
+            groups=(
+                group(
+                    recipe,
+                    "energy-exchanger",
+                    2,
+                    {"accumulator": F(1)},
+                    {"accumulator-full": F(1)},
+                ),
+            ),
+            external_inputs={"accumulator": F(2)},
+            outputs={"accumulator-full": F(2)},
+            belt_item_id="conveyor-belt-2",
+            belt_items_per_second=F(12),
+            label="exchanger",
+        )
+
+    def _exchangers(self, p: Placement) -> list[PlacedBuilding]:
+        return [b for b in p.buildings if b.item_id == catalog.ENERGY_EXCHANGER_ID]
+
+    def test_a_mode_driven_group_lays_out_at_all(self) -> None:
+        """Before this, emission raised: no DSP recipe id exists for the mode."""
+        p = SpineLayout(power=False).lay_out(self._exchanger_spec(), time_budget_s=0.4)
+        assert len(self._exchangers(p)) == 2
+
+    def test_the_machine_carries_the_mode_not_a_recipe(self) -> None:
+        from flab2bp.dsp import params
+
+        p = SpineLayout(power=False).lay_out(self._exchanger_spec(), time_budget_s=0.4)
+        for b in self._exchangers(p):
+            assert b.recipe_id == 0, "a mode-driven machine must not claim a recipe id"
+            assert b.parameters == params.parameters_for("accumulator-full")
+
+    def test_the_two_poles_emit_different_blocks(self) -> None:
+        """Charge and discharge are opposite words, not the same machine twice.
+
+        A test that only checked ``parameters != ()`` would pass with both poles
+        wired to the same value, which is exactly the failure that drains a
+        factory instead of filling it.
+        """
+        charge = SpineLayout(power=False).lay_out(
+            self._exchanger_spec("accumulator-full"), time_budget_s=0.4
+        )
+        discharge = SpineLayout(power=False).lay_out(
+            self._exchanger_spec("accumulator-discharge"), time_budget_s=0.4
+        )
+        (c,) = {b.parameters for b in self._exchangers(charge)}
+        (d,) = {b.parameters for b in self._exchangers(discharge)}
+        assert c == (1,) and d == (-1,), f"charge={c} discharge={d}"
+
+    def test_ordinary_recipes_still_carry_a_recipe_id(self) -> None:
+        """The mode path must not swallow normal machines."""
+        p = SpineLayout(power=False).lay_out(single_recipe_spec(), time_budget_s=0.4)
+        smelters = [b for b in p.buildings if b.item_id == MACHINE_ITEM_IDS["arc-smelter"]]
+        assert smelters
+        assert all(b.recipe_id == catalog.recipe_id("iron-ingot") for b in smelters)
+        assert all(b.parameters == () for b in smelters)
+
+    def test_the_placement_validates(self) -> None:
+        from flab2bp.pipeline import _id_map
+
+        spec = self._exchanger_spec()
+        p = SpineLayout(power=True).lay_out(spec, time_budget_s=0.5)
+        report = validate.validate(p, spec, ids=_id_map(spec), expect_power=True)
+        assert report.ok, "\n".join(f"{f.check}: {f.message}" for f in report.errors[:5])
+
+
+class TestSortersAreSizedPerItem:
+    """A sorter must carry the item it actually moves, not a machine average.
+
+    A machine's ingredients have DIFFERENT rates -- ``electric-motor`` takes
+    iron-ingot, gear and magnetic-coil -- so charging every feed the machine's
+    mean lets the hot ingredient's sorter come up short while the cold one's is
+    oversized.  The pair averages out to something that reads as fine, the
+    starved sorter throttles the machine, and the build pastes, runs and quietly
+    misses its rate.
+
+    Measured before the fix on the example URL: 12 sorters asked for 1 item/s of
+    iron-ingot across 2 tiles, where a Mk.I sustains 3/4.
+    """
+
+    def test_a_rate_above_the_cheap_tier_does_not_get_the_cheap_tier(self) -> None:
+        """Directly pins the sizing contract, and fails under averaging.
+
+        1/s across 2 tiles is exactly the case that shipped broken: a Mk.I
+        manages 3/4 there, so it must not be chosen with a single sorter.
+        """
+        from flab2bp.layout.spine import SORTER_TIERS, _pick_sorter
+
+        tier, count = _pick_sorter(F(1), span=2, available=3)  # type: ignore[misc]
+        assert catalog.sorter_rate(tier, 2) * count >= F(1), (
+            f"tier {tier} x{count} sustains "
+            f"{catalog.sorter_rate(tier, 2) * count}, needs 1"
+        )
+        assert not (tier == SORTER_TIERS[0] and count == 1), (
+            "a single Mk.I carries only 3/4 across two tiles"
+        )
+
+    def test_every_tier_choice_actually_carries_its_rate(self) -> None:
+        """Sweep the space rather than trusting one sample."""
+        from flab2bp.layout.spine import _pick_sorter
+
+        for span in (1, 2, 3):
+            for num in range(1, 25):
+                rate = F(num, 4)
+                pick = _pick_sorter(rate, span=span, available=4)
+                if pick is None:
+                    continue
+                tier, count = pick
+                assert catalog.sorter_rate(tier, span) * count >= rate, (
+                    f"rate={rate} span={span}: {tier} x{count} is short"
+                )
+
+    @pytest.mark.slow
+    def test_the_real_chain_has_no_starved_sorters(self) -> None:
+        """The repro that shipped: every candidate of the example URL."""
+        from flab2bp.lab.data import load_vendored
+        from flab2bp.lab.url import parse_url
+        from flab2bp.pipeline import _id_map
+        from flab2bp.rates.candidates import build_candidates
+
+        url = (
+            "https://factoriolab.github.io/dsp/flow?o=super-magnetic-ring*60"
+            "&ibe=conveyor-belt-2"
+            "&mmr=arc-smelter~assembling-machine-2~chemical-plant~matrix-lab&v=11"
+        )
+        for spec in build_candidates(load_vendored(), parse_url(url), count=3).candidates:
+            p = SpineLayout(power=False).lay_out(spec, time_budget_s=1.0)
+            report = validate.validate(
+                p,
+                spec,
+                ids=_id_map(spec),
+                expect_power=False,
+                only=["flow.sorter_capacity"],
+            )
+            assert report.ok, f"{spec.label}: " + "\n".join(
+                f.message for f in report.errors[:5]
+            )
