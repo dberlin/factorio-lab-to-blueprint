@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import math
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from fractions import Fraction
 
 from ortools.sat.python import cp_model
@@ -287,19 +287,40 @@ def _lane_requirements(
     # a row with more taps than one corridor can reach spills into the other.
     # This is what lets a row hold several groups at once -- without it the
     # solver's denser row packings are silently unroutable.
+    #
+    # Row ``r`` owns exactly two tap slots and shares them with nobody:
+    # ``tap_below[r]`` (corridor r, above the row) and ``tap_above[r + 1]``
+    # (corridor r + 1, below it).  Each holds at most ``reach`` lanes.
+    #
+    # The allocation has to be JOINT across consumes and produces.  Assigning
+    # each stream its own near/far independently let both overflow into the same
+    # slot: on a real 16-group spec, corridor 0 took three consumed items at its
+    # preference plus two produced items spilling the other way, for five taps
+    # against a reach of three -- so every width in the sweep raised and the
+    # whole strategy silently degraded to its greedy fallback.
     for r in range(len(rows)):
-        for items, near, far in (
-            (sorted(consumes[r]), r, r + 1),
-            (sorted(produces[r]), r + 1, r),
+        slot_below: set[str] = set()  # corridor r, tapped from below by this row
+        slot_above: set[str] = set()  # corridor r + 1, tapped from above by it
+        for items, first, second in (
+            (sorted(consumes[r]), slot_below, slot_above),
+            (sorted(produces[r]), slot_above, slot_below),
         ):
-            for i, item in enumerate(items):
-                c = near if i < reach else far
-                if c >= n_corr or c < 0:
-                    c = near
+            for item in items:
+                if item in slot_below or item in slot_above:
+                    continue  # already reachable from this row
+                target = first if len(first) < reach else second
+                if len(target) >= reach:
+                    raise ValueError(
+                        f"row {r} taps {len(consumes[r] | produces[r])} distinct items, "
+                        f"exceeding the {2 * reach} its two corridors can reach"
+                    )
+                target.add(item)
+        for c, slot_items in ((r, slot_below), (r + 1, slot_above)):
+            if not 0 <= c < n_corr:
+                continue
+            for item in slot_items:
                 lo, hi = span[item]
                 widen(item, min(lo, c), max(hi, c))
-                # Corridor r sits above row r, so the row taps it from below;
-                # corridor r+1 sits below, so the row taps it from above.
                 (tap_below if c == r else tap_above)[c].add(item)
 
     for item, (lo, hi) in span.items():
@@ -333,7 +354,21 @@ def fallback_plan(spec: BuildSpec) -> _Plan:
     return _Plan(rows=rows, lanes=lanes, solver_status="fallback")
 
 
-def _solve_plan(spec: BuildSpec, *, time_budget_s: float, workers: int) -> _Plan | None:
+#: Why a placement used the greedy fallback instead of a solved plan, reported
+#: as ``stats["fallback_reason"]``.  Three different failure modes used to be
+#: indistinguishable behind ``fallback_used=1``, which is how a strategy that had
+#: stopped solving entirely on real specs went unnoticed.
+FALLBACK_NONE = 0.0  # a solved plan was used; no fallback
+FALLBACK_NO_BUDGET = 1.0  # time_budget_s <= 0, so the solver was never asked
+FALLBACK_EMPTY_SPEC = 2.0  # nothing to lay out
+FALLBACK_UNROUTABLE = 3.0  # every candidate width packed rows that cannot be wired
+FALLBACK_NO_SOLUTION = 4.0  # CP-SAT found neither OPTIMAL nor FEASIBLE
+FALLBACK_EMISSION = 5.0  # a plan solved, but emitting it raised
+
+
+def _solve_plan(
+    spec: BuildSpec, *, time_budget_s: float, workers: int
+) -> tuple[_Plan | None, float]:
     """Pack groups into rows and choose direct inserts, minimising area.
 
     Area is ``W * H``, a variable product with a weak relaxation, so instead of
@@ -346,12 +381,13 @@ def _solve_plan(spec: BuildSpec, *, time_budget_s: float, workers: int) -> _Plan
     depth = {key: i for i, key in enumerate(order)}
     n = len(order)
     if n == 0:
-        return None
+        return None, FALLBACK_EMPTY_SPEC
 
     widths = _candidate_widths(groups, base)
     best: _Plan | None = None
     best_area = math.inf
     per_solve = max(time_budget_s / max(len(widths), 1), 0.25)
+    unroutable = 0
 
     for w_cap in widths:
         try:
@@ -360,13 +396,19 @@ def _solve_plan(spec: BuildSpec, *, time_budget_s: float, workers: int) -> _Plan
             # This width produced a row packing that cannot be routed within
             # sorter reach.  Skip it and keep sweeping rather than abandoning
             # every remaining width.
+            unroutable += 1
             continue
         if plan is None:
             continue
         area = _measure(spec, plan)
         if area < best_area:
             best_area, best = area, plan
-    return best
+    if best is not None:
+        return best, FALLBACK_NONE
+    # Distinguish "packed rows nothing could wire" from "CP-SAT found nothing",
+    # because they call for opposite fixes: the first is a structural limit in
+    # the model, the second a search or feasibility problem.
+    return None, FALLBACK_UNROUTABLE if unroutable else FALLBACK_NO_SOLUTION
 
 
 def _candidate_widths(groups: dict[str, _Group], base: _Plan) -> list[int]:
@@ -426,6 +468,32 @@ def _solve_one(
             model.add(hh >= groups[k].height * in_row[k, r])
         row_w.append(ww)
         row_h.append(hh)
+
+    # --- tap capacity ------------------------------------------------------
+    # Row r reaches exactly two corridors -- r from below and r+1 from above --
+    # each holding at most ``sorter_max_reach`` lanes.  So a row can tap at most
+    # ``2 * reach`` DISTINCT items, counting an item once however many groups in
+    # the row touch it.
+    #
+    # This has to live in the model.  Without it CP-SAT freely packed five
+    # groups into one row, `_lane_requirements` correctly refused the result,
+    # and `_solve_plan` skipped every width in the sweep and returned None --
+    # so the strategy fell back to its greedy layout on every real spec while
+    # reporting only `fallback_used=1`.  Rejecting after the fact cannot work
+    # here: routability is a property of the packing, so the packer has to know.
+    tap_reach = CONSTANTS.sorter_max_reach
+    tapped_by: dict[str, list[str]] = defaultdict(list)
+    for k, g in groups.items():
+        for item in set(g.inputs) | set(g.outputs):
+            tapped_by[item].append(k)
+    for r in range(n):
+        flags = []
+        for item, holders in tapped_by.items():
+            t = model.new_bool_var(f"tap_{r}_{item}")
+            model.add_max_equality(t, [in_row[k, r] for k in holders])
+            flags.append(t)
+        if flags:
+            model.add(sum(flags) <= 2 * tap_reach)
 
     # --- direct insertion --------------------------------------------------
     # A producer within sorter reach of its consumer is joined by a sorter alone,
@@ -735,7 +803,9 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
                     y=row_y[r],
                     width=g.width,
                     height=g.height,
-                    recipe_id=0,
+                    # A machine with no recipe pastes into the game and then
+                    # sits idle. This was 0 for every machine.
+                    recipe_id=catalog.recipe_id(g.recipe_id),
                 )
             )
         row_widths.append(width)
@@ -791,6 +861,11 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
                         width=1,
                         height=1,
                         yaw=Facing.EAST.value,
+                        # Which item this lane carries is layout knowledge that
+                        # nothing can recover once emission drops it.  The belt
+                        # marker pass needs it to tag external-input runs, and
+                        # the validator's per-item flow check needs it too.
+                        carries_item=item,
                     )
                 )
             # Forward-link the run west to east, matching what the game emits.
@@ -966,19 +1041,16 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
 
 
 def _with_output(b: PlacedBuilding, target: int) -> PlacedBuilding:
-    return PlacedBuilding(
-        item_id=b.item_id,
-        model_index=b.model_index,
-        x=b.x,
-        y=b.y,
-        z=b.z,
-        width=b.width,
-        height=b.height,
-        yaw=b.yaw,
-        recipe_id=b.recipe_id,
-        output_obj=target,
-        input_obj=b.input_obj,
-    )
+    """Relink a belt to its downstream tile, preserving everything else.
+
+    ``dataclasses.replace`` rather than a field-by-field rebuild on purpose: the
+    old version enumerated nine fields and silently dropped the rest, so it was
+    already discarding ``parameters``, ``filter_id``, both slot groups and the
+    second anchor -- and it would have swallowed ``carries_item`` the moment
+    that was set, making the belt marker pass come out empty and look like a
+    marker bug rather than a relink one.  Any new field is now carried for free.
+    """
+    return replace(b, output_obj=target)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1150,9 +1222,12 @@ class SpineLayout:
         """
         placement: Placement | None = None
         rejected = 0.0
+        reason = FALLBACK_NO_BUDGET
         if time_budget_s > 0:
             try:
-                plan = _solve_plan(spec, time_budget_s=time_budget_s, workers=self.workers)
+                plan, reason = _solve_plan(
+                    spec, time_budget_s=time_budget_s, workers=self.workers
+                )
                 if plan is not None:
                     # Emission is inside the guard on purpose.  A direct insert
                     # the solver believed in may turn out to have no machine pair
@@ -1164,10 +1239,13 @@ class SpineLayout:
                     # area.
                     placement = _emit(spec, plan, power=self.power)
             except (ValueError, KeyError):
-                placement, rejected = None, 1.0
+                placement, rejected, reason = None, 1.0, FALLBACK_EMISSION
         if placement is None:
             placement = _emit(spec, fallback_plan(spec), power=self.power)
+        else:
+            reason = FALLBACK_NONE
         placement.stats["solver_rejected"] = rejected
+        placement.stats["fallback_reason"] = reason
         return placement
 
 

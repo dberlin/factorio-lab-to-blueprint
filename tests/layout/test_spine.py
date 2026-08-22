@@ -14,8 +14,10 @@ from fractions import Fraction
 import pytest
 
 from flab2bp.dsp import catalog
-from flab2bp.layout.base import DETERMINISTIC_WORKERS, Placement
+from flab2bp.layout.base import DETERMINISTIC_WORKERS, PlacedBuilding, Placement
 from flab2bp.layout.spine import (
+    FALLBACK_NO_BUDGET,
+    FALLBACK_NONE,
     MACHINE_ITEM_IDS,
     SpineLayout,
     fallback_plan,
@@ -622,6 +624,21 @@ class TestSolverBehaviour:
         fallback = SpineLayout(power=False).lay_out(spec, time_budget_s=0.0)
         assert solved.area <= fallback.area
 
+    def test_fallback_reason_distinguishes_why(self) -> None:
+        """One flag for three failure modes is how a dead solver hid.
+
+        ``fallback_used=1`` alone could mean "no budget", "nothing routable" or
+        "emission rejected the plan", and telling them apart mattered: the
+        strategy stopped solving real specs entirely and the flag looked the
+        same as a deliberate ``time_budget_s=0``.
+        """
+        no_budget = SpineLayout(power=False).lay_out(two_stage_spec(), time_budget_s=0.0)
+        assert no_budget.stats["fallback_reason"] == FALLBACK_NO_BUDGET
+
+        solved = SpineLayout(power=False).lay_out(two_stage_spec(), time_budget_s=0.5)
+        assert solved.stats["fallback_reason"] == FALLBACK_NONE
+        assert solved.stats["fallback_used"] == 0.0
+
     def test_stats_carry_the_bake_off_fields(self) -> None:
         p = SpineLayout(power=True).lay_out(two_stage_spec(), time_budget_s=0.3)
         for key in (
@@ -636,3 +653,113 @@ class TestSolverBehaviour:
             "fallback_used",
         ):
             assert key in p.stats, key
+
+
+# --- real corpus specs -----------------------------------------------------
+
+
+class TestRealCorpusSpecsActuallySolve:
+    """The absence of this class is what let a dead solver ship.
+
+    Every other spine test builds its spec by hand, and the hand-built ones are
+    small enough that the solver always coped.  On real FactorioLab specs it did
+    not: `_lane_requirements` refused every candidate width, `_solve_plan`
+    returned None, and the strategy silently produced its greedy fallback --
+    roughly twice the area, and 3.4x worse than Strategy B on the same input.
+
+    These tests are slow because they run the rate solver and CP-SAT on real
+    URLs, so they are marked; the default run stays fast.
+    """
+
+    @staticmethod
+    def _spec(url_id: str) -> BuildSpec:
+        from flab2bp.bench.corpus import entry
+        from flab2bp.lab.data import load_vendored
+        from flab2bp.lab.url import parse_url
+        from flab2bp.rates.candidates import build_candidates
+
+        candidates = build_candidates(
+            load_vendored(), parse_url(entry(url_id).url), count=3
+        ).candidates
+        return min(candidates, key=lambda s: s.machine_count)
+
+    @pytest.mark.slow
+    @pytest.mark.parametrize(
+        "url_id",
+        ["graphene", "plastic", "processor", "energy-matrix", "casimir-crystal"],
+    )
+    def test_solver_does_not_fall_back(self, url_id: str) -> None:
+        p = SpineLayout(power=False).lay_out(self._spec(url_id), time_budget_s=2.0)
+        assert p.stats["fallback_used"] == 0.0, (
+            f"{url_id} fell back, reason={p.stats['fallback_reason']}"
+        )
+        assert p.stats["fallback_reason"] == FALLBACK_NONE
+
+    @pytest.mark.slow
+    def test_a_wide_spec_packs_rows_rather_than_one_group_each(self) -> None:
+        """The fallback's signature is one row per group; a solve must beat it."""
+        spec = self._spec("information-matrix")
+        solved = SpineLayout(power=False).lay_out(spec, time_budget_s=2.0)
+        assert solved.stats["fallback_used"] == 0.0
+        assert solved.stats["rows"] < len(spec.groups)
+        fallback = SpineLayout(power=False).lay_out(spec, time_budget_s=0.0)
+        assert solved.area < fallback.area
+
+
+class TestBeltsCarryTheirItemLabel:
+    """`carries_item` is unrecoverable once emission drops it.
+
+    A belt's DSP record says nothing about what flows along it, so the item is
+    layout knowledge that has to be carried forward deliberately.  The external
+    input markers and the validator's per-item flow check both depend on it.
+    """
+
+    def test_every_emitted_belt_is_labelled(self) -> None:
+        p = SpineLayout(power=False).lay_out(magnetic_ring_spec(), time_budget_s=0.5)
+        belts = [b for b in p.buildings if catalog.is_belt(b.item_id)]
+        assert belts
+        unlabelled = [b for b in belts if b.carries_item is None]
+        assert not unlabelled, f"{len(unlabelled)} of {len(belts)} belts carry no item label"
+
+    def test_relinking_a_belt_preserves_every_field(self) -> None:
+        """Guards the relink trap.
+
+        A field-by-field rebuild silently drops whatever it forgets to list.
+        The freeform copy of this helper was already discarding `parameters`
+        and ate `carries_item` the instant it was added -- the markers came out
+        empty and it looked like a marker bug rather than a relink one.
+        """
+        from flab2bp.layout.spine import _with_output
+
+        original = PlacedBuilding(
+            item_id=2002,
+            model_index=36,
+            x=1,
+            y=2,
+            carries_item="iron-ore",
+            parameters=(1001, 0),
+            filter_id=7,
+            x2=3,
+            y2=4,
+            output_offset=2,
+        )
+        relinked = _with_output(original, 9)
+        assert relinked.output_obj == 9
+        for f in ("carries_item", "parameters", "filter_id", "x2", "y2", "output_offset"):
+            assert getattr(relinked, f) == getattr(original, f), f"relink dropped {f}"
+
+    def test_external_inputs_all_get_a_marker(self) -> None:
+        from flab2bp.layout import markers
+
+        spec = magnetic_ring_spec()
+        p = markers.mark_external_inputs(
+            SpineLayout(power=False).lay_out(spec, time_budget_s=0.5), spec
+        )
+        marked = {
+            b.carries_item
+            for b in p.buildings
+            if catalog.is_belt(b.item_id) and b.parameters and b.carries_item
+        }
+        assert marked >= set(spec.external_inputs), (
+            f"unmarked external inputs: {set(spec.external_inputs) - marked}"
+        )
