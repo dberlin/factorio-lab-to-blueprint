@@ -31,6 +31,7 @@ sys.path.insert(0, str(_ROOT))
 sys.path.insert(0, str(_ROOT / "src"))
 
 from flab2bp.bench.corpus import URL_CORPUS, Tier  # noqa: E402
+from flab2bp.layout.base import NoValidLayout  # noqa: E402
 from flab2bp.layout.freeform import FreeformLayout  # noqa: E402
 from flab2bp.layout.spine import SpineLayout  # noqa: E402
 
@@ -51,6 +52,14 @@ class Result:
     route_failures: int = 0
     #: Which checks the invalid samples failed, for the report.
     checks: set[str] = dataclass_field(default_factory=set)
+    #: Samples where the strategy raised ``NoValidLayout``.  Counted apart from
+    #: ``errors`` because a refusal is a result, not a crash: it means the
+    #: strategy looked and found nothing it could wire.  Lumping the two
+    #: together would print the whole row as ERROR and hide the other strategy's
+    #: perfectly good number.
+    refused: int = 0
+    #: Why the refusals happened, deduplicated.
+    reasons: set[str] = dataclass_field(default_factory=set)
 
     @property
     def area(self) -> int | None:
@@ -102,6 +111,16 @@ def run(entry: object, budget: float, repeat: int, candidates: int) -> tuple[Res
             t = time.time()
             try:
                 p = cls(power=False).lay_out(spec, time_budget_s=budget)  # type: ignore[arg-type]
+            except NoValidLayout as exc:
+                # Not an error. The strategy searched, found nothing routable,
+                # and said so -- which is the behaviour that replaced the
+                # fallback. It has to stay visible and stay separate from a
+                # crash, because "B refused" and "B blew up" call for different
+                # investigations.
+                r.refused += 1
+                r.reasons.add(exc.reason)
+                r.walls.append(time.time() - t)
+                continue
             except Exception as exc:  # noqa: BLE001
                 r.errors.append(f"{type(exc).__name__}: {exc}")
                 continue
@@ -162,10 +181,17 @@ def main() -> int:
             # compare a real layout against a broken one, which is exactly the
             # comparison this gate exists to prevent.
             miss = "A" if a.area is None else "B"
-            checks = sorted(a.checks if a.area is None else b.checks)[:3]
+            side = a if a.area is None else b
+            # Say WHICH kind of nothing. A refusal means the strategy searched
+            # and found no routable pack; an invalid result means it returned
+            # one the validator then rejected. Same blank cell, opposite bug.
+            why = sorted(side.reasons)[:1] if side.refused else sorted(side.checks)[:3]
+            kind = "refused" if side.refused and not side.invalid else "no valid"
             print(
-                f"{name:<26}{'no valid':>8}  {miss} produced no valid layout in "
-                f"{args.repeat} run(s): {', '.join(checks) or 'unknown'}"
+                f"{name:<26}{kind:>8}  {miss} produced no valid layout in "
+                f"{args.repeat} run(s) "
+                f"[refused {side.refused}, invalid {side.invalid}]: "
+                f"{'; '.join(why) or 'unknown'}"
             )
             continue
         ratio = b.area / a.area
@@ -173,6 +199,8 @@ def main() -> int:
         flag = " *" if b.fallbacks or a.fallbacks else ""
         if a.invalid or b.invalid:
             flag += f"  [invalid A:{a.invalid} B:{b.invalid}]"
+        if a.refused or b.refused:
+            flag += f"  [refused A:{a.refused} B:{b.refused}]"
         print(
             f"{name:<26}{a.area:>8}{max(a.direct, default=0):>6}"
             f"{b.area:>8}{max(b.direct, default=0):>6}"

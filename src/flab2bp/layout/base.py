@@ -226,8 +226,9 @@ class LayoutStrategy(Protocol):
     def lay_out(self, spec: BuildSpec, *, time_budget_s: float = 60.0) -> Placement:
         """Lay out ``spec``, returning the densest valid ``Placement`` found.
 
-        Must always return a valid ``Placement``, even on solver timeout -- every
-        strategy carries a guaranteed-feasible fallback construction, because the
-        bake-off can only compare strategies that always produce something.
+        Raises :class:`NoValidLayout` rather than returning a degraded result.
+        The bake-off can only compare strategies that produce something, but the
+        answer to that is to report the refusal as a refusal -- not to
+        manufacture a placement so the table has a number in it.
         """
         ...

@@ -42,7 +42,9 @@ from ortools.sat.python import cp_model
 from flab2bp.dsp import catalog, params
 from flab2bp.layout.base import (
     DEFAULT_SEARCH_WORKERS,
+    RETRY_BUDGET_S,
     Facing,
+    NoValidLayout,
     PlacedBuilding,
     Placement,
 )
@@ -372,10 +374,14 @@ def _lane_requirements(
 
 
 def fallback_plan(spec: BuildSpec) -> _Plan:
-    """Deterministic, always-feasible: one group per row, no direct insertion.
+    """Deterministic, always-*constructible*: one group per row, no direct inserts.
 
-    Also the CP-SAT warm start and width-sweep seed, so it runs on every solve
-    and cannot rot.
+    Named for the role it used to have.  It is no longer a fallback -- returning
+    it when the solver found nothing was returning something that had never been
+    checked for routability, and usually was not.  Its real value was always the
+    other two jobs it does, which it keeps: the CP-SAT warm start in
+    :func:`_solve_one` and the width-sweep seed in :func:`_candidate_widths`.
+    Because it runs on every solve, it cannot rot.
     """
     groups, edges = _adapt(spec)
     rows = _topological_rows(groups, edges)
@@ -383,16 +389,36 @@ def fallback_plan(spec: BuildSpec) -> _Plan:
     return _Plan(rows=rows, lanes=lanes, solver_status="fallback")
 
 
-#: Why a placement used the greedy fallback instead of a solved plan, reported
-#: as ``stats["fallback_reason"]``.  Three different failure modes used to be
-#: indistinguishable behind ``fallback_used=1``, which is how a strategy that had
-#: stopped solving entirely on real specs went unnoticed.
-FALLBACK_NONE = 0.0  # a solved plan was used; no fallback
+#: Why no solved plan was produced.  These began as fallback *reasons*, reported
+#: as ``stats["fallback_reason"]`` on a degraded placement; the degradation is
+#: gone and they are now refusal reasons, carried in the :class:`NoValidLayout`
+#: message instead.  The distinction they draw is what earns them their keep:
+#: three different failure modes used to be indistinguishable behind
+#: ``fallback_used=1``, which is how a strategy that had stopped solving entirely
+#: on real specs went unnoticed.  The names are unchanged so the existing
+#: ``fallback_reason`` stat, which still marks a solved plan as such, keeps its
+#: meaning.
+FALLBACK_NONE = 0.0  # a solved plan was used; nothing to report
 FALLBACK_NO_BUDGET = 1.0  # time_budget_s <= 0, so the solver was never asked
 FALLBACK_EMPTY_SPEC = 2.0  # nothing to lay out
 FALLBACK_UNROUTABLE = 3.0  # every candidate width packed rows that cannot be wired
 FALLBACK_NO_SOLUTION = 4.0  # CP-SAT found neither OPTIMAL nor FEASIBLE
 FALLBACK_EMISSION = 5.0  # a plan solved, but emitting it raised
+
+_REFUSAL_TEXT = {
+    FALLBACK_NO_BUDGET: "no time budget was given, so the solver was never asked",
+    FALLBACK_EMPTY_SPEC: "the spec contains no machine groups",
+    FALLBACK_UNROUTABLE: (
+        "every candidate width packed rows that no sorter could wire "
+        "(a structural limit in the row model, not a search failure)"
+    ),
+    FALLBACK_NO_SOLUTION: "CP-SAT found no feasible row assignment at any candidate width",
+    FALLBACK_EMISSION: "a plan solved but could not be emitted onto the grid",
+}
+
+
+def _refusal(reason: float) -> str:
+    return _REFUSAL_TEXT.get(reason, f"unknown reason {reason}")
 
 
 def _solve_plan(
@@ -1743,40 +1769,63 @@ class SpineLayout:
         self.workers = DEFAULT_SEARCH_WORKERS if workers is None else workers
 
     def lay_out(self, spec: BuildSpec, *, time_budget_s: float = 60.0) -> Placement:
-        """Always returns a valid ``Placement``, solver or no solver.
+        """Return a solved, emitted ``Placement``, or raise :class:`NoValidLayout`.
 
-        A solver plan that turns out to be unroutable degrades to the fallback,
-        but never silently: ``stats["solver_rejected"]`` records it, so a
-        regression that quietly disables the solver shows up in the bake-off
-        rather than hiding behind a plausible-looking area.
+        There used to be a fallback here.  A solver plan that turned out to be
+        unroutable degraded to :func:`fallback_plan`'s greedy stacking, and this
+        method promised it "always returns a valid Placement".  The promise was
+        false -- the greedy plan is not routable either -- so the degradation
+        traded a visible failure for an invisible one, and did it while
+        *shrinking* the reported area, because a lane that was never wired is a
+        corridor that does not exist.
+
+        :func:`fallback_plan` still runs on every solve, in the role it is
+        actually good at: warm start and width-sweep seed inside
+        :func:`_solve_plan`.  Same construction, opposite role -- bounding the
+        search instead of replacing it.
+
+        A budget that finds nothing feasible is retried ONCE at
+        :data:`RETRY_BUDGET_S` before refusing.  Deterministic refusals (no
+        budget, empty spec) skip the retry: repeating them cannot change them.
         """
-        placement: Placement | None = None
-        rejected = 0.0
-        reason = FALLBACK_NO_BUDGET
-        if time_budget_s > 0:
+        if time_budget_s <= 0:
+            raise NoValidLayout(
+                _refusal(FALLBACK_NO_BUDGET),
+                spec_label=spec.label,
+                budget_s=time_budget_s,
+            )
+
+        budgets = [time_budget_s]
+        if time_budget_s < RETRY_BUDGET_S:
+            budgets.append(RETRY_BUDGET_S)
+
+        reason = FALLBACK_NO_SOLUTION
+        spent = 0.0
+        for budget in budgets:
+            spent = budget
             try:
                 plan, reason = _solve_plan(
-                    spec, time_budget_s=time_budget_s, workers=self.workers
+                    spec, time_budget_s=budget, workers=self.workers
                 )
-                if plan is not None:
-                    # Emission is inside the guard on purpose.  A direct insert
-                    # the solver believed in may turn out to have no machine pair
-                    # within reach once real x positions exist, and dropping that
-                    # lane without emitting its replacement sorter would starve
-                    # the consumer.  Degrade to the fallback instead -- and record
-                    # it, so a regression that quietly disables the solver shows
-                    # up in the bake-off rather than hiding behind a plausible
-                    # area.
-                    placement = _emit(spec, plan, power=self.power)
+                if plan is None:
+                    if reason == FALLBACK_EMPTY_SPEC:
+                        break  # deterministic -- more seconds cannot help
+                    continue
+                # Emission stays inside the guard on purpose.  A direct insert
+                # the solver believed in may turn out to have no machine pair
+                # within reach once real x positions exist, and dropping that
+                # lane without emitting its replacement sorter would starve the
+                # consumer.  So a plan that will not emit is not a layout: retry
+                # it under a longer budget, and refuse if that fails too.
+                placement = _emit(spec, plan, power=self.power)
             except (ValueError, KeyError):
-                placement, rejected, reason = None, 1.0, FALLBACK_EMISSION
-        if placement is None:
-            placement = _emit(spec, fallback_plan(spec), power=self.power)
-        else:
-            reason = FALLBACK_NONE
-        placement.stats["solver_rejected"] = rejected
-        placement.stats["fallback_reason"] = reason
-        return placement
+                reason = FALLBACK_EMISSION
+                continue
+            placement.stats["solver_rejected"] = 0.0
+            placement.stats["fallback_reason"] = FALLBACK_NONE
+            return placement
+
+        raise NoValidLayout(_refusal(reason), spec_label=spec.label, budget_s=spent)
 
 
 def machine_group_footprint(group: MachineGroup) -> tuple[int, int]:

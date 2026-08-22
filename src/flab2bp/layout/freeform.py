@@ -60,7 +60,9 @@ from ortools.sat.python import cp_model
 from flab2bp.dsp import catalog, params
 from flab2bp.layout.base import (
     DEFAULT_SEARCH_WORKERS,
+    RETRY_BUDGET_S,
     Facing,
+    NoValidLayout,
     PlacedBuilding,
     Placement,
 )
@@ -720,12 +722,20 @@ def _pack(
     time_budget_s: float,
     direct_candidates: dict[tuple[int, int], _DirectCandidate],
     workers: int,
+    seed: _Pack | None = None,
 ) -> _Pack | None:
     """Minimise width at a fixed height with CP-SAT.
 
     Height is swept outside rather than multiplied inside: ``W * H`` is a product
     of two variables, whose CP-SAT relaxation is weak enough that the search
     flounders.  Several easy solves beat one hard one.
+
+    ``seed`` is a shelf packing at this same height -- feasible by construction,
+    so it does two things no heuristic guess could.  It hints every ``x``/``y``,
+    which gives the search an incumbent immediately instead of after it finds
+    one; and its width is a proven upper bound on ``w_var``, which cuts the
+    domain the bound has to climb through.  This is the construction that used
+    to be the fallback, put to the one use it is genuinely good for.
     """
     model = cp_model.CpModel()
     n = len(strips)
@@ -856,6 +866,20 @@ def _pack(
     )
     missed = sum(di.Not() for di in direct_vars.values())
     model.minimize(w_var * cap + LAMBDA_HPWL * sum(terms) + MU_DIRECT * missed)
+
+    # Warm start.  The seed is feasible at this height by construction, so its
+    # width bounds `w_var` from above and its positions give the search an
+    # incumbent to improve on rather than one to find.  Values are clamped into
+    # each variable's domain: an out-of-domain hint is not a tighter hint, it is
+    # a discarded one.
+    if seed is not None:
+        model.add(w_var <= min(seed.width, width_bound))
+        for i, (hx, hy) in seed.at.items():
+            if i >= n:
+                continue
+            w, h = sizes[i]
+            model.add_hint(xs[i], min(max(hx, 0), max(0, width_bound - w)))
+            model.add_hint(ys[i], min(max(hy, 0), max(0, height - h)))
 
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = max(0.05, time_budget_s)
@@ -1995,11 +2019,20 @@ def _place_proliferator_entry(
 
 
 def fallback_placement(spec: BuildSpec, *, power: bool = True) -> Placement:
-    """A layout that cannot fail: one strip per group, stacked vertically.
+    """One strip per group, stacked vertically.  NOT a usable layout.
 
-    Deliberately a degenerate Strategy A.  If Strategy B falls back often, the
-    bake-off will report B approximately equal to A, which is the honest answer
-    rather than a flattering one.
+    It cannot fail to *construct*, which is a different and much weaker property
+    than the "always valid" it was once documented with.  It calls
+    ``_build(route=False)``: it never attempts the wiring, so it cannot report
+    that the wiring is impossible, and on real specs it is not routable.  That
+    is why :class:`FreeformLayout` no longer falls back to it -- returning it
+    when the solver found nothing returned a smaller *broken* layout in place of
+    an honest refusal.
+
+    Kept only because :mod:`flab2bp.layout.packsolver`, the rejected
+    PackingSolver experiment, still calls it.  Do not add callers; if you want
+    the construction for its bounding value, use :func:`_greedy_pack`, which is
+    what :func:`_pack` warm-starts from.
     """
     strips = plan_strips(spec, strip_len=max(1, spec.machine_count))
     at: dict[int, tuple[int, int]] = {}
@@ -2046,45 +2079,96 @@ class FreeformLayout:
         self.direct_insert = direct_insert
 
     def lay_out(self, spec: BuildSpec, *, time_budget_s: float = 60.0) -> Placement:
-        """Always returns a valid ``Placement``.
+        """Return the densest ROUTABLE ``Placement``, or raise :class:`NoValidLayout`.
 
-        Every way of *not* getting a solved answer is recorded in ``stats``
-        rather than absorbed: ``fallback_used``, ``route_failures`` and
-        ``solver_status`` between them say exactly how the answer was reached.
-        A bake-off that cannot tell a solved layout from a fallback is comparing
-        nothing.
-
-        A pack that cannot be wired is not a solution at any time budget, so
-        ROUTABILITY ORDERS AHEAD OF AREA here.  Ranking on area alone actively
-        rewarded dropping connections: an unrouted net is a missing belt run, so
-        the broken pack measures *smaller* than the correct one and wins.  That
-        is how a build with 119 unrouted nets came to score as the densest
+        Routability is a condition for existing, not a ranking key.  It used to
+        be the latter -- packs were ordered ``(routable, area, belt_tiles)`` and
+        the least-bad one was returned even when every height failed to wire --
+        which meant a pack nothing could connect still came back, still got
+        measured, and measured *small*: an unrouted net is a belt run that does
+        not exist, so the broken pack has the tighter bounding box and wins.
+        That is how a build with 119 unrouted nets scored as the densest
         candidate on offer.
+
+        The old escape hatch, :func:`fallback_placement`, is gone from this path.
+        It was documented as routable by construction and is not -- it calls
+        ``_build(route=False)``, so it never even attempts the wiring it claims.
+        On the calibration spec it returned 3162 tiles against the solver's 2208
+        while carrying the same unsourced lanes, so it traded area away for
+        nothing.  What replaces it is the shelf packing it was built on, handed
+        to :func:`_pack` as a warm start: same construction, bounding the search
+        instead of substituting for it.
+
+        A sweep that produces no routable pack is retried ONCE at
+        :data:`RETRY_BUDGET_S` before refusing.
         """
         if time_budget_s <= 0:
-            return fallback_placement(spec, power=self.power)
-
-        candidates = _direct_insert_candidates(spec)
-        best: Placement | None = None
-        best_key: tuple[int, int, float] | None = None
-        per_solve = max(0.1, time_budget_s / 6.0)
+            raise NoValidLayout(
+                "no time budget was given, so the packer was never asked",
+                spec_label=spec.label,
+                budget_s=time_budget_s,
+            )
 
         try:
             strips = plan_strips(spec, strip_len=self.strip_len)
-        except (ValueError, KeyError):
+        except (ValueError, KeyError) as exc:
+            # One retry with every machine of a group on a single strip. That is
+            # the coarsest legal strip plan, so if it also fails the spec cannot
+            # be turned into strips at all and no budget will change that.
             try:
                 strips = plan_strips(spec, strip_len=max(1, spec.machine_count))
             except (ValueError, KeyError):
-                return fallback_placement(spec, power=self.power)
+                raise NoValidLayout(
+                    f"the spec cannot be split into strips: {exc}",
+                    spec_label=spec.label,
+                    budget_s=time_budget_s,
+                ) from exc
+        if not strips:
+            raise NoValidLayout(
+                "the spec contains no machine groups",
+                spec_label=spec.label,
+                budget_s=time_budget_s,
+            )
 
+        budgets = [time_budget_s]
+        if time_budget_s < RETRY_BUDGET_S:
+            budgets.append(RETRY_BUDGET_S)
+
+        for budget in budgets:
+            best = self._sweep(spec, strips, budget)
+            if best is not None:
+                return best
+
+        raise NoValidLayout(
+            f"no packing of {len(strips)} strips could be wired at any candidate "
+            "height; every pack the sweep produced left nets unrouted",
+            spec_label=spec.label,
+            budget_s=budgets[-1],
+        )
+
+    def _sweep(
+        self, spec: BuildSpec, strips: list[Strip], time_budget_s: float
+    ) -> Placement | None:
+        """Try every candidate height, returning the best FULLY ROUTED placement.
+
+        ``None`` means no height produced one -- which is a refusal, not a
+        degraded answer.  Packs with unrouted nets are discarded here rather than
+        ranked below routed ones, so an unwireable pack can never be what this
+        returns.
+        """
+        candidates = _direct_insert_candidates(spec)
         greedy = _greedy_pack(strips, _height_seed(strips))
         bound = max(greedy.width, max((s.width + MARGIN for s in strips), default=1))
-
         net_candidates = (
             _direct_net_candidates(strips, spec) if self.direct_insert else {}
         )
 
-        for height in _candidate_heights(strips):
+        heights = _candidate_heights(strips)
+        per_solve = max(0.1, time_budget_s / max(len(heights), 1))
+
+        best: Placement | None = None
+        best_key: tuple[int, float] | None = None
+        for height in heights:
             pack = _pack(
                 strips,
                 height=height,
@@ -2092,18 +2176,21 @@ class FreeformLayout:
                 time_budget_s=per_solve,
                 direct_candidates=net_candidates,
                 workers=self.workers,
+                seed=_greedy_pack(strips, height),
             )
             if pack is None:
                 continue
             placement, failed, _towers = _build(
                 spec, strips, pack, power=self.power, route=True
             )
-            # Routable first, then area, then belt count. Two packs of equal
-            # area are not equally good: the one with fewer belt tiles is fewer
-            # buildings to paste, and a direct insert shows up here as exactly
-            # that. Without the third key, ties fell to whichever height the
-            # sweep tried first, which silently discarded direct-inserted packs.
-            key = (1 if failed else 0, placement.area, float(placement.stats["belt_tiles"]))
+            if failed:
+                continue
+            # Area, then belt count. Two packs of equal area are not equally
+            # good: the one with fewer belt tiles is fewer buildings to paste,
+            # and a direct insert shows up here as exactly that. Without the
+            # second key, ties fell to whichever height the sweep tried first,
+            # which silently discarded direct-inserted packs.
+            key = (placement.area, float(placement.stats["belt_tiles"]))
             if best_key is None or key < best_key:
                 placement.stats["solver_status"] = 1.0 if pack.status == "OPTIMAL" else 0.5
                 placement.stats["hit_time_budget"] = float(pack.hit_budget)
@@ -2111,19 +2198,6 @@ class FreeformLayout:
                 placement.stats["direct_insert_candidates"] = float(len(candidates))
                 placement.stats["area"] = float(placement.area)
                 best, best_key = placement, key
-
-        if best is None:
-            return fallback_placement(spec, power=self.power)
-        # NOTE: routability is ordered ahead of area above, which prefers a
-        # routable pack whenever the sweep found one. That is a ranking, NOT the
-        # hard constraint it should be -- phase 1 can still emit a pack nothing
-        # can wire, and when every height does so the least-bad one is returned.
-        #
-        # Falling back here was tried and is WORSE: `fallback_placement` is
-        # documented as routable by construction and is not. On the calibration
-        # spec it returns 3162 tiles against the solved 2208 and carries the same
-        # 11 unsourced lanes, so it trades area away for nothing. The validator
-        # rejects either, which is the only reason this is survivable.
         return best
 
 
