@@ -17,7 +17,7 @@ from flab2bp.lab.data import load_vendored
 from flab2bp.lab.schema import Dataset
 from flab2bp.lab.url import parse_url
 from flab2bp.layout import markers, validate
-from flab2bp.layout.base import Placement
+from flab2bp.layout.base import NoValidLayout, Placement
 from flab2bp.layout.freeform import FreeformLayout
 from flab2bp.layout.spine import SpineLayout
 from flab2bp.rates.candidates import build_candidates
@@ -85,6 +85,9 @@ class Build:
     strategy: str
     blueprint: str
     attempts: tuple[Attempt, ...] = field(default_factory=tuple)
+    #: Strategy/candidate pairs that produced no layout at all, with the reason.
+    #: Kept so a refusal is reported rather than silently absent from `attempts`.
+    refused: tuple[str, ...] = field(default_factory=tuple)
 
 
 def build(
@@ -117,10 +120,18 @@ def build(
     wanted = list(_STRATEGIES) if strategy == "best" else [strategy]
 
     attempts: list[Attempt] = []
+    refused: list[str] = []
     for spec in spec_set.candidates:
         for sname in wanted:
             layout = _STRATEGIES[sname](power=power)
-            placement = layout.lay_out(spec, time_budget_s=time_budget_s)
+            try:
+                placement = layout.lay_out(spec, time_budget_s=time_budget_s)
+            except NoValidLayout as exc:
+                # One strategy failing a candidate is not a failed build -- the
+                # others may well succeed. Record it so the reason survives to
+                # the report rather than vanishing into an empty result.
+                refused.append(f"{sname}/{spec.label}: {exc.reason}")
+                continue
             # Pass the spec AND the id map. Without them the nine
             # spec-dependent checks are skipped, and a build that never ran its
             # throughput or proliferator checks reads as clean.
@@ -130,7 +141,18 @@ def build(
             attempts.append(Attempt(spec.label, sname, placement, report))
 
     valid = [a for a in attempts if a.ok]
-    pool = valid or attempts  # nothing valid: return the best effort, flagged
+    if not attempts:
+        raise NoValidLayout(
+            "; ".join(refused) or "every strategy refused every candidate",
+            spec_label=", ".join(s.label for s in spec_set.candidates),
+            budget_s=time_budget_s,
+        )
+    # Prefer a valid layout. Falling back to the best invalid one is deliberate
+    # and visible: the CLI refuses to emit it, and the report names the errors.
+    # What must never happen is a broken layout being SELECTED over a working
+    # one because it measured smaller -- which it will, since a missing net is a
+    # missing belt run.
+    pool = valid or attempts
     best = min(pool, key=lambda a: a.area)
     chosen_spec = next(s for s in spec_set.candidates if s.label == best.candidate)
 
@@ -156,4 +178,5 @@ def build(
         strategy=best.strategy,
         blueprint=blueprint,
         attempts=tuple(attempts),
+        refused=tuple(refused),
     )

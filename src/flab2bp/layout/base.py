@@ -168,11 +168,57 @@ class Placement:
         return (max_x - min_x + 1) * (max_y - min_y + 1)
 
 
+#: Seconds granted to a retry when the first attempt finds nothing feasible.
+#:
+#: The escalation is deliberately once, and generous.  If a spec is genuinely
+#: solvable, a solver that found nothing in the normal budget will usually find
+#: something here; if fifteen seconds still yields nothing, the working
+#: assumption is a defect in our model rather than a hard instance, and the
+#: error says so.  Treating it as "just a big problem" is how an unroutable
+#: model gets excused indefinitely.
+RETRY_BUDGET_S = 15.0
+
+
+class NoValidLayout(Exception):
+    """No layout satisfying the constraints was found.
+
+    Raised instead of returning something invalid.  There used to be a fallback
+    construction here, guaranteeing ``lay_out`` "always returns a valid
+    Placement" -- a promise made so the bake-off would always have two things to
+    compare.  It optimised for the measurement rather than the deliverable, and
+    it was not even true: the fallback was never routable, so it returned
+    neither a valid layout nor an honest failure.
+
+    It also quietly softened the constraint it was meant to backstop.  A solver
+    that knows something will catch it can afford to treat routability as a
+    preference; with nothing to catch it, routability is what it should be --
+    a condition for existing at all.
+
+    The construction that used to serve as the fallback is now a warm start:
+    same code, opposite role, bounding the search instead of replacing it.
+    """
+
+    def __init__(self, reason: str, *, spec_label: str = "", budget_s: float = 0.0) -> None:
+        super().__init__(
+            f"no valid layout for {spec_label or 'this spec'} after "
+            f"{budget_s:g}s: {reason}. A spec that cannot be laid out in "
+            f"{RETRY_BUDGET_S:g}s is more likely a defect in the layout model "
+            f"than a hard instance -- treat it as our bug until shown otherwise."
+        )
+        self.reason = reason
+        self.spec_label = spec_label
+        self.budget_s = budget_s
+
+
 class LayoutStrategy(Protocol):
     """What every layout backend implements.
 
     Implementations must be pure: same ``BuildSpec`` in, same ``Placement`` out,
     modulo the solver time budget.
+
+    ``lay_out`` returns a placement that satisfies the constraints, or raises
+    :class:`NoValidLayout`.  It never returns a degraded one.  On finding nothing
+    feasible it retries ONCE at :data:`RETRY_BUDGET_S` before giving up.
     """
 
     name: str

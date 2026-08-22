@@ -23,6 +23,7 @@ import statistics
 import sys
 import time
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parent.parent
@@ -44,6 +45,12 @@ class Result:
     walls: list[float]
     fallbacks: int
     errors: list[str]
+    #: Samples that produced a placement the validator rejected.  Their areas
+    #: are deliberately NOT recorded -- see the gate in ``run``.
+    invalid: int = 0
+    route_failures: int = 0
+    #: Which checks the invalid samples failed, for the report.
+    checks: set[str] = dataclass_field(default_factory=set)
 
     @property
     def area(self) -> int | None:
@@ -83,6 +90,11 @@ def run(entry: object, budget: float, repeat: int, candidates: int) -> tuple[Res
         blank = Result([], [], [], [], 0, [err])
         return blank, blank
 
+    from flab2bp.layout import validate
+    from flab2bp.pipeline import _id_map
+
+    ids = _id_map(spec)
+
     out = []
     for cls in (SpineLayout, FreeformLayout):
         r = Result([], [], [], [], 0, [])
@@ -93,11 +105,26 @@ def run(entry: object, budget: float, repeat: int, candidates: int) -> tuple[Res
             except Exception as exc:  # noqa: BLE001
                 r.errors.append(f"{type(exc).__name__}: {exc}")
                 continue
+            wall = time.time() - t
+
+            # GATE ON VALIDITY. An invalid layout must never contribute an area,
+            # because the invalid ones are systematically SMALLER: a net that
+            # failed to route -- or was never created -- is a belt run that does
+            # not exist, so the broken layout has a tighter bounding box and
+            # wins on area. Scoring it would reward dropping connections. One
+            # real build had 119 unrouted nets and measured as the densest
+            # candidate in the set.
+            report = validate.validate(p, spec, ids=ids, expect_power=False)
+            r.walls.append(wall)
+            r.fallbacks += int(p.stats.get("fallback_used", 0))
+            r.route_failures += int(p.stats.get("route_failures", 0))
+            if not report.ok:
+                r.invalid += 1
+                r.checks.update(f.check for f in report.errors)
+                continue
             r.areas.append(p.area)
             r.belts.append(int(p.stats.get("belt_tiles", 0)))
             r.direct.append(int(p.stats.get("direct_inserts", 0)))
-            r.walls.append(time.time() - t)
-            r.fallbacks += int(p.stats.get("fallback_used", 0))
         out.append(r)
     return out[0], out[1]
 
@@ -127,12 +154,25 @@ def main() -> int:
     for e in entries:
         a, b = run(e, args.budget, args.repeat, args.candidates)
         name = e.url_id[:25]
-        if a.errors or a.area is None or b.area is None:
-            print(f"{name:<26}{'ERROR':>8}  {(a.errors or b.errors)[0][:40]}")
+        if a.errors or b.errors:
+            print(f"{name:<26}{'ERROR':>8}  {(a.errors or b.errors)[0][:44]}")
+            continue
+        if a.area is None or b.area is None:
+            # No VALID sample from one side. Reporting a ratio here would
+            # compare a real layout against a broken one, which is exactly the
+            # comparison this gate exists to prevent.
+            miss = "A" if a.area is None else "B"
+            checks = sorted(a.checks if a.area is None else b.checks)[:3]
+            print(
+                f"{name:<26}{'no valid':>8}  {miss} produced no valid layout in "
+                f"{args.repeat} run(s): {', '.join(checks) or 'unknown'}"
+            )
             continue
         ratio = b.area / a.area
         ratios.append(ratio)
         flag = " *" if b.fallbacks or a.fallbacks else ""
+        if a.invalid or b.invalid:
+            flag += f"  [invalid A:{a.invalid} B:{b.invalid}]"
         print(
             f"{name:<26}{a.area:>8}{max(a.direct, default=0):>6}"
             f"{b.area:>8}{max(b.direct, default=0):>6}"
@@ -147,6 +187,12 @@ def main() -> int:
         print(f"\ngeometric mean B/A = {geo:.3f}  ({'B denser' if geo < 1 else 'A denser'})")
         print(f"best for B: {min(ratios):.2f}x   worst for B: {max(ratios):.2f}x")
     print("\n* = a fallback layout was used somewhere in that cell")
+    print(
+        "Areas come ONLY from placements the validator accepted. Invalid layouts\n"
+        "are systematically smaller -- a net that failed to route, or was never\n"
+        "created, is a belt run that does not exist -- so scoring them would\n"
+        "reward dropping connections rather than packing well."
+    )
     return 0
 
 

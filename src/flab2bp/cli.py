@@ -15,6 +15,7 @@ from pathlib import Path
 
 from flab2bp import pipeline
 from flab2bp.layout import markers
+from flab2bp.layout.base import NoValidLayout
 
 
 def _report(build: pipeline.Build, *, verbose: bool) -> None:
@@ -37,6 +38,14 @@ def _report(build: pipeline.Build, *, verbose: bool) -> None:
         # Say it rather than let someone discover it while staring at an
         # unlabelled belt in game.
         print(f"  WARNING: no icon placed for {sorted(unmarked)}", file=out)
+
+    if build.refused:
+        # A strategy that produced NO layout is invisible in `attempts`, so say
+        # so. Silence here would read as "that combination was simply not the
+        # best", which is a different and much more reassuring claim.
+        print(f"  {len(build.refused)} strategy/candidate pair(s) produced no layout:", file=out)
+        for r in build.refused[:5]:
+            print(f"    {r}", file=out)
 
     if build.report.skipped:
         print(
@@ -105,6 +114,12 @@ def main(argv: list[str] | None = None) -> int:
             time_budget_s=args.budget,
             name=args.name,
         )
+    except NoValidLayout as exc:
+        # Distinct exit code: "no layout exists" is a different outcome from
+        # "the URL was bad", and per the user a spec that cannot be laid out in
+        # the retry budget is our bug until shown otherwise.
+        print(f"flab2bp: {exc}", file=sys.stderr)
+        return 3
     except (ValueError, KeyError) as exc:
         print(f"flab2bp: {exc}", file=sys.stderr)
         return 2
