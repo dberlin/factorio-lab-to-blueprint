@@ -809,6 +809,138 @@ def _inputs_supplied(ctx: Context) -> Iterable[Finding]:
             )
 
 
+@check("flow.lane_sourced", needs_spec=True)
+def _lane_sourced(ctx: Context) -> Iterable[Finding]:
+    """A belt run that feeds machines must itself be fed by something.
+
+    ``machine.inputs_supplied`` counts sorters adjacent to a machine, which is
+    not the same question.  A strategy that attaches lanes to each machine and
+    then fails to ROUTE those lanes to their producers leaves every machine with
+    its full complement of sorters, all drawing from belt runs that nothing ever
+    fills.  Measured on a real build: 119 nets, 0 routed, 119 route failures --
+    and the validator reported ONE error, because every machine had its sorters
+    and every lane existed.  Nothing was connected to anything.
+
+    Worse, such a build scores as *denser*: 119 unrouted nets are 119 missing
+    belt runs, so its bounding box is smaller than a correct layout's.  A
+    strategy comparison that does not catch this rewards failing to route.
+
+    A run is sourced if a sorter puts onto it, another run feeds it, or it
+    carries an item the spec belts in from outside.
+
+    Severity splits on whether anything actually starves.  When a machine drawing
+    from a dry lane gets the same item from somewhere else -- typically a direct
+    insertion the packer arranged, which serves the machine and leaves the lane
+    it no longer needs in place -- nothing stops running and the finding is a
+    WARNING about wasted belts.  When there is no other source, the machine
+    starves and it is an ERROR.
+    """
+    assert ctx.spec is not None
+    external = set(ctx.spec.external_inputs)
+    bs = ctx.placement.buildings
+
+    drains: set[int] = set()  # runs a sorter draws FROM
+    fills: set[int] = set()  # runs a sorter puts ONTO
+    for _i, s in ctx.of_kind(Kind.SORTER):
+        if s.input_obj is not None and s.input_obj in ctx.run_of:
+            drains.add(ctx.run_of[s.input_obj])
+        if s.output_obj is not None and s.output_obj in ctx.run_of:
+            fills.add(ctx.run_of[s.output_obj])
+
+    # Belts point FORWARD via `output_obj`, so "who feeds this belt" is the set
+    # of belts naming it as their output -- not `input_obj`, which belts do not
+    # use for chaining.  This matters because `_build_runs` starts a new run at
+    # any belt with more than one predecessor, so a MERGE POINT heads its own
+    # run while being perfectly well fed.  Reading `input_obj` here reported
+    # every such merge as unsourced.
+    fed_by_belt: set[int] = set()
+    for i, b in enumerate(bs):
+        if ctx.kinds[i] is not Kind.BELT:
+            continue
+        o = b.output_obj
+        if o is not None and 0 <= o < len(bs) and ctx.kinds[o] is Kind.BELT:
+            fed_by_belt.add(o)
+
+    items = _sorter_items(ctx)
+
+    def alternative_feed(machine: int, item: str | None, dry_run: int) -> bool:
+        """Does ``machine`` get ``item`` from a source other than ``dry_run``?
+
+        An UNRESOLVED item on the candidate counts as a possible alternative.  A
+        direct insertion is a machine-to-machine sorter with no belt to read
+        ``carries_item`` from and usually no ``filter_id``, so its item is often
+        undeterminable -- and treating that as "not an alternative" reports a
+        machine as starving while it is being fed by the very sorter the packer
+        added.  Since the ERROR half of this check blocks a build, an ambiguous
+        case belongs on the WARNING side: ``flow.lane_attribution`` is the check
+        that exists to complain about unresolvable sorters.
+        """
+        for j, s in ctx.of_kind(Kind.SORTER):
+            if s.output_obj != machine:
+                continue
+            other = items.get(j)
+            if other is not None and other != item:
+                continue
+            src = s.input_obj
+            if src is None:
+                continue
+            if src in ctx.run_of and ctx.run_of[src] == dry_run:
+                continue  # this is the dry lane itself
+            return True
+        return False
+
+    for r, run in enumerate(ctx.runs):
+        if r not in drains:
+            continue  # feeds nothing, so nothing starves on it
+        if r in fills:
+            continue
+        if run.head in fed_by_belt:
+            continue  # another run flows into this one
+        if any(bs[i].carries_item in external for i in run.indices):
+            continue  # an external input belt: filled by the player
+
+        starved: list[int] = []
+        for j, s in ctx.of_kind(Kind.SORTER):
+            src, dst = s.input_obj, s.output_obj
+            if src is None or dst is None:
+                continue
+            if ctx.run_of.get(src) != r:
+                continue
+            if not alternative_feed(dst, items.get(j), r):
+                starved.append(dst)
+
+        if starved:
+            yield Finding(
+                "flow.lane_sourced",
+                Severity.ERROR,
+                f"belt run {r} (head building {run.head}) feeds "
+                f"{len(starved)} machine(s) that have no other source of "
+                f"{bs[run.head].carries_item!r}, and nothing puts items onto it",
+                (run.head, *starved[:4]),
+                {
+                    "run": r,
+                    "length": len(run.indices),
+                    "carries": bs[run.head].carries_item,
+                    "starved": len(starved),
+                },
+            )
+        else:
+            yield Finding(
+                "flow.lane_sourced",
+                Severity.WARNING,
+                f"belt run {r} (head building {run.head}) is never filled, but "
+                f"every machine drawing from it is fed another way; these "
+                f"{len(run.indices)} belts and their sorters are wasted",
+                (run.head,),
+                {
+                    "run": r,
+                    "length": len(run.indices),
+                    "carries": bs[run.head].carries_item,
+                    "starved": 0,
+                },
+            )
+
+
 @check("machine.output_removed", needs_spec=True)
 def _output_removed(ctx: Context) -> Iterable[Finding]:
     """Every product has a sorter taking it away, or the machine jams."""

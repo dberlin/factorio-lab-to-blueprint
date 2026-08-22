@@ -55,8 +55,17 @@ def belt(
     *,
     out: int | None = None,
     item_id: int = BELT2,
+    carries: str | None = None,
 ) -> PlacedBuilding:
-    return PlacedBuilding(item_id=item_id, model_index=36, x=x, y=y, z=z, output_obj=out)
+    return PlacedBuilding(
+        item_id=item_id,
+        model_index=36,
+        x=x,
+        y=y,
+        z=z,
+        output_obj=out,
+        carries_item=carries,
+    )
 
 
 def sorter(
@@ -879,3 +888,119 @@ def test_report_ok_is_false_only_for_errors() -> None:
 def test_each_check_is_individually_selectable(cid: str) -> None:
     r = validate(place(machine(0, 0), machine(2, 2)), only={cid})
     assert all(f.check == cid for f in r.findings)
+
+
+# --- flow.lane_sourced -----------------------------------------------------
+#
+# A build was measured with 119 nets, 0 routed, 119 route failures -- nothing
+# connected to anything -- and the validator reported ONE error, because every
+# machine had its sorters and every lane existed.  They were simply never filled.
+# Such a build also scores as DENSER, since the missing nets are missing belts,
+# so a strategy comparison blind to this actively rewards failing to route.
+
+LANE_IDS = IdMap(
+    recipes={"copper-ingot": 5, "magnetic-coil": 6},
+    items={
+        "arc-smelter": SMELTER,
+        "assembling-machine-2": ASSEMBLER,
+        "copper-ore": 1002,
+        "copper-ingot": 1104,
+        "magnetic-coil": 1101,
+    },
+)
+
+
+def lane_spec() -> BuildSpec:
+    """A smelter feeding an assembler, with only the ore belted in."""
+    return BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id="copper-ingot",
+                machine_item_id="arc-smelter",
+                count=1,
+                inputs_per_machine={"copper-ore": Fraction(1)},
+                outputs_per_machine={"copper-ingot": Fraction(1)},
+            ),
+            MachineGroup(
+                recipe_id="magnetic-coil",
+                machine_item_id="assembling-machine-2",
+                count=1,
+                inputs_per_machine={"copper-ingot": Fraction(1)},
+                outputs_per_machine={"magnetic-coil": Fraction(1)},
+            ),
+        ),
+        external_inputs={"copper-ore": Fraction(1)},
+        outputs={"magnetic-coil": Fraction(1)},
+        belt_item_id="conveyor-belt-2",
+        belt_items_per_second=Fraction(12),
+    )
+
+
+def orphaned_lane() -> tuple[PlacedBuilding, ...]:
+    """A consumer, a lane it draws from, and nothing filling that lane.
+
+    0 consumer machine   1..3 lane belts   4 sorter lane -> machine
+    """
+    return (
+        machine(0, 0, recipe_id=6),
+        belt(0, 4, out=2, carries="copper-ingot"),
+        belt(1, 4, out=3, carries="copper-ingot"),
+        belt(2, 4, carries="copper-ingot"),
+        sorter(0, 4, 0, 2, inp=1, out=0),
+    )
+
+
+def test_flow_lane_sourced_fires_on_an_orphaned_lane() -> None:
+    r = validate(place(*orphaned_lane()), lane_spec(), ids=LANE_IDS)
+    assert fired(r, "flow.lane_sourced")
+
+
+def test_flow_lane_sourced_clean_when_a_producer_fills_the_lane() -> None:
+    """The same lane, with a smelter putting onto it. Nothing else changes."""
+    p = place(
+        *orphaned_lane(),
+        machine(0, 6, item_id=SMELTER, recipe_id=5),  # 5
+        sorter(0, 6, 0, 4, inp=5, out=1),  # 6: producer -> lane
+    )
+    r = validate(p, lane_spec(), ids=LANE_IDS)
+    assert not fired(r, "flow.lane_sourced")
+
+
+def test_flow_lane_sourced_clean_when_another_run_feeds_the_head() -> None:
+    """A merge point heads its own run while being perfectly well fed.
+
+    ``_build_runs`` starts a new run at any belt with more than one predecessor,
+    so a merged lane's head belongs to a run nothing *within* that run fills.
+    Reading ``input_obj`` to test this reported every merge as unsourced --
+    belts chain forward via ``output_obj`` and do not use ``input_obj`` at all.
+    """
+    p = place(
+        *orphaned_lane(),
+        belt(-1, 4, out=1, carries="copper-ingot"),  # 5
+        belt(0, 3, out=1, carries="copper-ingot"),  # 6: belt 1 now has two preds
+    )
+    r = validate(p, lane_spec(), ids=LANE_IDS)
+    assert not fired(r, "flow.lane_sourced")
+
+
+def test_flow_lane_sourced_clean_for_an_external_input_lane() -> None:
+    """An ore belt is filled by the player, not by anything in the blueprint."""
+    p = place(
+        machine(0, 0, item_id=SMELTER, recipe_id=5),
+        belt(0, 4, out=2, carries="copper-ore"),
+        belt(1, 4, out=3, carries="copper-ore"),
+        belt(2, 4, carries="copper-ore"),
+        sorter(0, 4, 0, 2, inp=1, out=0),
+    )
+    r = validate(p, lane_spec(), ids=LANE_IDS)
+    assert not fired(r, "flow.lane_sourced")
+
+
+def test_flow_lane_sourced_ignores_a_lane_nothing_draws_from() -> None:
+    """An unfed lane feeding nobody starves nobody; only drained lanes matter."""
+    p = place(
+        belt(0, 4, out=1, carries="copper-ingot"),
+        belt(1, 4, carries="copper-ingot"),
+    )
+    r = validate(p, lane_spec(), ids=LANE_IDS)
+    assert not fired(r, "flow.lane_sourced")

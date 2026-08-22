@@ -98,6 +98,11 @@ _EXACT_HEURISTIC_GOALS = 64
 #: the whole layout appears to hang.
 _MAX_EXPANSIONS = 200_000
 
+#: Total A* expansions across ALL nets and ALL rip-up rounds of one routing
+#: pass.  `_MAX_EXPANSIONS` bounds a single search; this bounds their product,
+#: which is what actually runs away at scale.
+_ROUTING_BUDGET = 2_000_000
+
 #: Tower lattice spacing.  A square lattice of spacing ``d`` leaves a worst-case
 #: distance of ``d/sqrt(2)`` to the nearest lattice point, so ``d`` must satisfy
 #: ``d <= R*sqrt(2)``.  12 clears the 10.5 radius with room to spare (8.49) and
@@ -1190,6 +1195,7 @@ def _astar(
     history: dict[tuple[int, int, int], float],
     pressure: float,
     bounds: tuple[int, int, int, int],
+    budget: dict[str, int] | None = None,
 ) -> list[tuple[int, int, int]] | None:
     """Cheapest free-cell path, with congestion history folded into the cost.
 
@@ -1211,6 +1217,8 @@ def _astar(
     # Exact min is best but costs O(|goals|) per node, so fall back to distance
     # to the goals' bounding box once that would dominate. The box distance is
     # still admissible (it under-estimates), just weaker.
+    if budget is not None and budget["left"] <= 0:
+        return None
     goal_list = list(goals)
     if len(goal_list) <= _EXACT_HEURISTIC_GOALS:
 
@@ -1252,6 +1260,10 @@ def _astar(
         expansions += 1
         if expansions > _MAX_EXPANSIONS:
             return None
+        if budget is not None:
+            budget["left"] -= 1
+            if budget["left"] <= 0:
+                return None
         if cur in goals:
             path = []
             node: tuple[int, int, int] | None = cur
@@ -1337,6 +1349,16 @@ def _route_all(
     history: dict[tuple[int, int, int], float] = defaultdict(float)
     committed: list[list[tuple[int, int, int]]] = []
     iterations = 0
+    # A TOTAL expansion budget across every net and every rip-up round.
+    #
+    # `_MAX_EXPANSIONS` bounds one search; nothing bounded the product. At
+    # 470-machine scale that is ~50 nets x 8 rounds x 200k = up to 80M
+    # expansions, which ran for over fifteen minutes -- not a hang, just work
+    # nobody had bounded. A shared budget is deterministic (no wall clock, so
+    # runs stay reproducible) and degrades honestly: an exhausted search returns
+    # None, which is already the route-failure path the caller repairs from and
+    # records in `route_failures`.
+    budget = {"left": _ROUTING_BUDGET}
 
     for it in range(RRR_MAX):
         iterations = it + 1
@@ -1366,7 +1388,7 @@ def _route_all(
                 for dx, dy in _STEPS
                 if canvas.free((net.dst.x + dx, net.dst.y + dy, 0))
             }
-            routed = _astar(canvas, starts, goals, history, pressure, bounds)
+            routed = _astar(canvas, starts, goals, history, pressure, bounds, budget)
             if routed is None:
                 failed += 1
                 continue
@@ -1621,8 +1643,23 @@ def _build(
         key: (dict(g.inputs), dict(g.outputs)) for key, g in _adapt(spec).items()
     }
 
-    in_ports: dict[tuple[str, str], _Port] = {}
-    out_ports: dict[tuple[str, str, str], _Port] = {}
+    # EVERY strip of a group keeps its port, not just the last one emitted.
+    #
+    # `out_lanes` names a destination GROUP, but a group is sharded into as many
+    # strips as its machine count needs, and each shard carries its own input
+    # lanes. Keying this by `(group_key, item)` alone let the second shard
+    # overwrite the first, so exactly one shard became a net sink and every other
+    # shard's lane was left orphaned -- belts in place, sorters in place, nothing
+    # ever putting items onto them, and the machines behind them starving.
+    #
+    # It reported `route_failures == 0` throughout, because the nets that existed
+    # did route; the missing ones were never created to fail.
+    in_ports: dict[tuple[str, str], list[_Port]] = defaultdict(list)
+    # The producer side collides the same way: sharding a producer gives several
+    # strips the SAME destination set, so keying on (group, item, dest) alone
+    # kept only the last strip's output lane. The others were emitted, drained by
+    # nobody, and left as dead belts.
+    out_ports: dict[tuple[str, str, str], list[_Port]] = defaultdict(list)
     strip_in_ports: list[dict[str, _Port]] = []
     sorters = 0
     for i, s in enumerate(strips):
@@ -1640,9 +1677,9 @@ def _build(
         sorters += placed
         strip_in_ports.append(ins)
         for item, port in ins.items():
-            in_ports[s.group_key, item] = port
+            in_ports[s.group_key, item].append(port)
         for (item, dest), port in outs.items():
-            out_ports[s.group_key, item, dest] = port
+            out_ports[s.group_key, item, dest].append(port)
 
     # Nets the packer arranged to bridge directly become a single sorter and no
     # belt route at all -- that saving IS the feature, so it happens before the
@@ -1653,16 +1690,22 @@ def _build(
     direct_placed = 0
 
     nets: list[_Net] = []
-    for (src_key, item, dest), port in out_ports.items():
+    for (src_key, item, dest), srcs in out_ports.items():
         if not dest:
             continue
-        sink = in_ports.get((dest, item))
-        if sink is None:
+        sinks = in_ports.get((dest, item), [])
+        if not srcs or not sinks:
             continue
-        if (src_key, dest) in direct_keys and _bridge(canvas, port, sink, rates, item):
-            direct_placed += 1
-            continue
-        nets.append(_Net(src=port, dst=sink, item=item))
+        # Pair the two sides cyclically so EVERY producer lane is drained and
+        # EVERY consumer lane is filled, whichever side was sharded further. One
+        # net per side-pair; taking the cross product would emit needless belts.
+        for k in range(max(len(srcs), len(sinks))):
+            port = srcs[k % len(srcs)]
+            sink = sinks[k % len(sinks)]
+            if (src_key, dest) in direct_keys and _bridge(canvas, port, sink, rates, item):
+                direct_placed += 1
+                continue
+            nets.append(_Net(src=port, dst=sink, item=item))
 
     # Coaters go in BEFORE routing, because each one needs a proliferator net
     # routed to its drop belt. Placing them afterwards -- as this used to --

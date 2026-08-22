@@ -953,8 +953,23 @@ class TestProducerWithManyConsumers:
 
     @pytest.mark.parametrize("power", [False, True])
     def test_it_lays_out_and_validates(self, power: bool) -> None:
+        """Pinned to one worker, and route failures asserted separately.
+
+        The shipping default is multi-worker CP-SAT, which is deliberately
+        nondeterministic: different runs land on different packs, and the harder
+        ones leave a net unrouted, which `flow.lane_sourced` then correctly
+        reports as a dry lane. Left unpinned this test passed or failed by which
+        worker happened to win.
+
+        `route_failures` is asserted in its own right rather than left to
+        `report.ok`, so the test cannot pass by producing a layout that quietly
+        dropped a connection.
+        """
         spec = fan_out_spec(4)
-        p = FreeformLayout(power=power).lay_out(spec, time_budget_s=1.0)
+        p = FreeformLayout(power=power, workers=DETERMINISTIC_WORKERS).lay_out(
+            spec, time_budget_s=1.0
+        )
+        assert p.stats.get("route_failures", 0) == 0, "a net went unrouted"
         report = _full_report(p, spec, power=power)
         assert report.ok, "\n".join(f"{f.check}: {f.message}" for f in report.errors[:8])
 
@@ -1138,3 +1153,86 @@ class TestModeDrivenMachines:
         assert params.parameters_for("accumulator-full") != params.parameters_for(
             "accumulator-discharge"
         )
+
+
+# --- sharded groups are fed on every shard ---------------------------------
+
+
+def sharded_consumer_spec() -> BuildSpec:
+    """A consumer big enough to shard, fed by a single producer strip.
+
+    Eight machines at ``strip_len`` 6 become two strips, and each carries its
+    OWN input lane. ``out_lanes`` names the destination GROUP, not the strip, so
+    one output lane has to reach both shards; feeding only one leaves the other
+    with belts, sorters, and nothing moving along them.
+    """
+    return BuildSpec(
+        groups=(
+            group("iron-ingot", "arc-smelter", 8, {"iron-ore": F(1)}, {"iron-ingot": F(1)}),
+            group("gear", "assembling-machine-2", 8, {"iron-ingot": F(1)}, {"gear": F(1)}),
+        ),
+        external_inputs={"iron-ore": F(8)},
+        outputs={"gear": F(8)},
+        belt_item_id="conveyor-belt-2",
+        belt_items_per_second=F(12),
+        label="sharded-consumer",
+    )
+
+
+class TestShardedGroupsAreFedOnEveryShard:
+    """Keying ports by group let one shard overwrite another's.
+
+    Traced on a real build: `gear#4` had one output lane to `electric-motor#1`,
+    that group held two strips, and only the strip whose port happened to be
+    stored last became a net sink. The other strip's lane was never filled and
+    its four machines starved -- while the build reported `route_failures == 0`,
+    because the net that existed did route and the missing one was never created
+    to fail.
+    """
+
+    def test_the_fixture_actually_shards(self) -> None:
+        """Otherwise the test below proves nothing."""
+        strips = plan_strips(sharded_consumer_spec(), strip_len=6)
+        consumers = [s for s in strips if s.group_key.startswith("gear")]
+        assert len(consumers) >= 2, (
+            f"expected the consumer to shard, got {len(consumers)} strip(s); "
+            "raise the machine count or lower strip_len"
+        )
+
+    @pytest.mark.parametrize("power", [False, True])
+    def test_no_shard_is_left_starving(self, power: bool) -> None:
+        spec = sharded_consumer_spec()
+        p = FreeformLayout(power=power, workers=DETERMINISTIC_WORKERS).lay_out(
+            spec, time_budget_s=1.0
+        )
+        report = _full_report(p, spec, power=power)
+        starved = [f for f in report.errors if f.check == "flow.lane_sourced"]
+        assert not starved, "\n".join(f.message for f in starved)
+
+    def test_a_sharded_producer_has_every_lane_drained(self) -> None:
+        """The mirror case: several producer strips shipping to one consumer.
+
+        Sharding a producer gives its strips the SAME destination set, so the
+        output side collided identically and left dead belts behind.
+        """
+        spec = BuildSpec(
+            groups=(
+                group("iron-ingot", "arc-smelter", 12, {"iron-ore": F(1)}, {"iron-ingot": F(1)}),
+                group("gear", "assembling-machine-2", 2, {"iron-ingot": F(1)}, {"gear": F(1)}),
+            ),
+            external_inputs={"iron-ore": F(12)},
+            outputs={"gear": F(2)},
+            belt_item_id="conveyor-belt-2",
+            belt_items_per_second=F(12),
+            label="sharded-producer",
+        )
+        producers = [
+            s for s in plan_strips(spec, strip_len=6) if s.group_key.startswith("iron-ingot")
+        ]
+        assert len(producers) >= 2, "fixture must shard the producer"
+        p = FreeformLayout(power=False, workers=DETERMINISTIC_WORKERS).lay_out(
+            spec, time_budget_s=1.0
+        )
+        report = _full_report(p, spec, power=False)
+        starved = [f for f in report.errors if f.check == "flow.lane_sourced"]
+        assert not starved, "\n".join(f.message for f in starved)
