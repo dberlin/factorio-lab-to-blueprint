@@ -1,226 +1,337 @@
-"""Head-to-head area comparison of the two layout strategies on real URLs.
+"""Which layout strategy is denser -- A (spine) or B (freeform) -- and by how much?
 
-Lighter than the full bake-off: no matrix, no cross-validation, no report files.
-It answers one question -- is Strategy B's extra machinery buying area on specs
-that came from actual FactorioLab URLs, rather than on hand-built fixtures.
+A real A-to-B test, not a table of numbers nobody can defend.  The measurement
+logic lives in :mod:`flab2bp.bench.ab`; this file is the driver that feeds it
+real corpus URLs and prints the answer.
 
-    uv run python scripts/ab_compare.py                       # trivial + small
-    uv run python scripts/ab_compare.py --tier mid            # add mid
-    uv run python scripts/ab_compare.py --budget 2 --repeat 3
+    uv run python scripts/ab_compare.py                          # trivial+small
+    uv run python scripts/ab_compare.py --tier mid --repeat 5
+    uv run python scripts/ab_compare.py --budget 1,2,10          # sweep the budget
+    uv run python scripts/ab_compare.py --tier mid --markdown docs/AB_RESULTS.md
 
-Why ``--repeat`` matters: the shipping default is multi-worker CP-SAT, which is
-deliberately nondeterministic (it is worth ~23% density over a single worker, so
-pinning it would compare a configuration neither strategy would ship).  A single
-sample per cell is therefore noise, and two runs can land on different packings
-entirely -- which is exactly how an earlier comparison here reached a wrong
-conclusion.  Repeats report the median and the spread instead.
+This is NOT part of ``pytest``.  A full sweep is minutes of CP-SAT; the suite
+stays at ~21s.
+
+WHY THIS SCRIPT IS SHAPED LIKE THIS
+-----------------------------------
+An earlier comparison here concluded "A wins, geometric mean 1.359" and it was
+an artifact: the harness scored layouts the validator had rejected.  Invalid
+layouts are systematically SMALLER -- an unrouted net is a belt run that does
+not exist, so the broken layout has the tighter bounding box and wins on area.
+One build with 119 unrouted nets measured as the densest candidate on offer.
+
+Five things follow from that, and each is enforced rather than remembered:
+
+* **Validity gate.**  A ``Sample`` cannot hold an area unless it is VALID; the
+  constructor raises.  There is no path that reads an area off a rejection.
+* **Four distinct failures.**  REFUSED (searched, found nothing), INVALID
+  (produced something rejected), ERROR (crashed), CROSSFAIL (our validator
+  liked it, the game's format did not).  Different bugs, different columns.
+* **Denominators everywhere.**  Coverage prints before density and the ratio
+  names the subset it describes.  "B is 1.2x denser" is meaningless if B shipped
+  3 of 12 specs and A shipped 11.
+* **Repeats, because CP-SAT is nondeterministic on purpose.**  Multi-worker is
+  the shipping default and worth ~23% density over one worker, so pinning it
+  would measure a configuration neither strategy would ship.  ``--repeat``
+  measures the noise; a verdict whose spreads overlap is marked *not separated*.
+* **Budget sweep.**  A strategy that uses its budget better looks denser at 2s
+  and worse at 10s.  ``--budget 1,2,10`` reports whether the winner flips.
+
+Fairness: both strategies get the same ``BuildSpec`` objects (resolved once per
+URL), the same budget, the same candidates, and are run back-to-back within each
+trial so machine drift hits both equally.  Neither is asked how it did -- the
+harness measures the ``Placement`` itself.
 """
 
 from __future__ import annotations
 
 import argparse
-import statistics
+import json
 import sys
 import time
-from dataclasses import dataclass
-from dataclasses import field as dataclass_field
+from collections.abc import Callable
+from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT))
 sys.path.insert(0, str(_ROOT / "src"))
 
-from flab2bp.bench.corpus import URL_CORPUS, Tier  # noqa: E402
-from flab2bp.layout.base import NoValidLayout  # noqa: E402
+from flab2bp.bench.ab import (  # noqa: E402
+    Comparison,
+    CrossSummary,
+    Outcome,
+    RunMeta,
+    Sample,
+    budget_flip,
+    compare,
+    crossvalidate_samples,
+    render_markdown,
+    render_text,
+    sample_once,
+    to_json,
+    trials_from,
+)
+from flab2bp.bench.corpus import URL_CORPUS, CorpusEntry, Tier  # noqa: E402
+from flab2bp.dsp import codec  # noqa: E402
+from flab2bp.layout import markers, validate  # noqa: E402
+from flab2bp.layout.base import LayoutStrategy, Placement  # noqa: E402
 from flab2bp.layout.freeform import FreeformLayout  # noqa: E402
 from flab2bp.layout.spine import SpineLayout  # noqa: E402
+from flab2bp.pipeline import _id_map  # noqa: E402
+from flab2bp.spec import BuildSpec  # noqa: E402
 
-_TIER_ORDER = [Tier.TRIVIAL, Tier.SMALL, Tier.MID, Tier.LARGE, Tier.STRESS]
+_TIER_ORDER = (Tier.TRIVIAL, Tier.SMALL, Tier.MID, Tier.LARGE, Tier.STRESS)
 
+A_NAME = "spine"
+B_NAME = "freeform"
 
-@dataclass
-class Result:
-    areas: list[int]
-    belts: list[int]
-    direct: list[int]
-    walls: list[float]
-    fallbacks: int
-    errors: list[str]
-    #: Samples that produced a placement the validator rejected.  Their areas
-    #: are deliberately NOT recorded -- see the gate in ``run``.
-    invalid: int = 0
-    route_failures: int = 0
-    #: Which checks the invalid samples failed, for the report.
-    checks: set[str] = dataclass_field(default_factory=set)
-    #: Samples where the strategy raised ``NoValidLayout``.  Counted apart from
-    #: ``errors`` because a refusal is a result, not a crash: it means the
-    #: strategy looked and found nothing it could wire.  Lumping the two
-    #: together would print the whole row as ERROR and hide the other strategy's
-    #: perfectly good number.
-    refused: int = 0
-    #: Why the refusals happened, deduplicated.
-    reasons: set[str] = dataclass_field(default_factory=set)
+#: Factories rather than classes so the driver never depends on the two
+#: constructors happening to share a signature.
+STRATEGIES: dict[str, Callable[[bool], LayoutStrategy]] = {
+    A_NAME: lambda power: SpineLayout(power=power),
+    B_NAME: lambda power: FreeformLayout(power=power),
+}
 
-    @property
-    def area(self) -> int | None:
-        return int(statistics.median(self.areas)) if self.areas else None
-
-    @property
-    def spread(self) -> str:
-        if len(self.areas) < 2:
-            return ""
-        return f"{min(self.areas)}-{max(self.areas)}"
+Judge = Callable[[Placement], tuple[bool, tuple[str, ...]]]
 
 
-def _spec_for(url: str, candidates: int) -> object:
-    """Resolve a URL to a BuildSpec, preferring the densest candidate."""
+def specs_for(entry: CorpusEntry, candidates: int) -> tuple[BuildSpec, ...]:
+    """Resolve a URL to its candidate frontier, once, shared by both strategies.
+
+    Every candidate is laid out by both strategies and the smallest VALID result
+    wins, exactly as ``pipeline.build`` does.  Picking the candidate with fewest
+    machines up front would be cheaper and wrong: proliferation cuts machine
+    count but forbids direct insertion on the sprayed edges, so fewer machines
+    can still lay out larger.
+    """
     from flab2bp.lab.data import load_vendored
     from flab2bp.lab.url import parse_url
     from flab2bp.rates.candidates import build_candidates
 
-    ds = load_vendored()
-    req = parse_url(url)
-    specs = build_candidates(ds, req, count=candidates)
-    # Pick the candidate with the fewest machines as a stand-in for "densest".
-    # The real bake-off lays out every candidate and keeps the smallest RESULT,
-    # which is not the same thing -- proliferation cuts machines but forbids
-    # direct insertion on the sprayed edges, so fewer machines can still lay out
-    # larger. This script is the cheap approximation; do not read it as the
-    # bake-off's answer.
-    return min(specs.candidates, key=lambda s: s.machine_count)
+    request = parse_url(entry.url)
+    return build_candidates(load_vendored(), request, count=candidates).candidates
 
 
-def run(entry: object, budget: float, repeat: int, candidates: int) -> tuple[Result, Result]:
-    url = entry.url  # type: ignore[attr-defined]
-    try:
-        spec = _spec_for(url, candidates)
-    except Exception as exc:  # noqa: BLE001 - one bad URL must not kill the sweep
-        err = f"{type(exc).__name__}: {exc}"
-        blank = Result([], [], [], [], 0, [err])
-        return blank, blank
+def judge_with(
+    spec: BuildSpec, ids: validate.IdMap, power: bool, placement: Placement
+) -> tuple[bool, tuple[str, ...]]:
+    """Is this placement shippable?
 
-    from flab2bp.layout import validate
-    from flab2bp.pipeline import _id_map
+    The ``spec`` and its id map are passed to the validator deliberately.
+    Without them nine spec-conformance and flow checks silently skip, and a
+    build that never ran its throughput checks reads as clean -- a quieter
+    version of the same artifact this harness exists to prevent.
+    (``bench/runner.py`` calls ``validate(placement)`` bare and has exactly that
+    hole; see the report for the diff that would fix it.)
 
-    ids = _id_map(spec)
-
-    out = []
-    for cls in (SpineLayout, FreeformLayout):
-        r = Result([], [], [], [], 0, [])
-        for _ in range(repeat):
-            t = time.time()
-            try:
-                p = cls(power=False).lay_out(spec, time_budget_s=budget)  # type: ignore[arg-type]
-            except NoValidLayout as exc:
-                # Not an error. The strategy searched, found nothing routable,
-                # and said so -- which is the behaviour that replaced the
-                # fallback. It has to stay visible and stay separate from a
-                # crash, because "B refused" and "B blew up" call for different
-                # investigations.
-                r.refused += 1
-                r.reasons.add(exc.reason)
-                r.walls.append(time.time() - t)
-                continue
-            except Exception as exc:  # noqa: BLE001
-                r.errors.append(f"{type(exc).__name__}: {exc}")
-                continue
-            wall = time.time() - t
-
-            # GATE ON VALIDITY. An invalid layout must never contribute an area,
-            # because the invalid ones are systematically SMALLER: a net that
-            # failed to route -- or was never created -- is a belt run that does
-            # not exist, so the broken layout has a tighter bounding box and
-            # wins on area. Scoring it would reward dropping connections. One
-            # real build had 119 unrouted nets and measured as the densest
-            # candidate in the set.
-            report = validate.validate(p, spec, ids=ids, expect_power=False)
-            r.walls.append(wall)
-            r.fallbacks += int(p.stats.get("fallback_used", 0))
-            r.route_failures += int(p.stats.get("route_failures", 0))
-            if not report.ok:
-                r.invalid += 1
-                r.checks.update(f.check for f in report.errors)
-                continue
-            r.areas.append(p.area)
-            r.belts.append(int(p.stats.get("belt_tiles", 0)))
-            r.direct.append(int(p.stats.get("direct_inserts", 0)))
-        out.append(r)
-    return out[0], out[1]
+    A skipped check is therefore not a passed check.  The one exception is the
+    power family under ``--no-power``, which is a *caller declaration* -- we told
+    the validator there would be no towers, so those skips are expected and are
+    the only ones tolerated.
+    """
+    report = validate.validate(placement, spec, ids=ids, expect_power=power)
+    checks = tuple(sorted({f.check for f in report.errors}))
+    unexpected = tuple(
+        c for c in report.skipped if power or not c.startswith("power.")
+    )
+    if unexpected:
+        return False, checks + tuple(f"unchecked:{c}" for c in unexpected)
+    return report.ok, checks
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__)
+def encode_with(spec: BuildSpec, placement: Placement) -> str:
+    """Encode exactly what the pipeline would ship, external-input markers and all.
+
+    Cross-validating a placement the pipeline would not actually emit would
+    check the wrong bytes.
+    """
+    return codec.encode(markers.mark_external_inputs(placement, spec))
+
+
+def collect(
+    entries: list[CorpusEntry],
+    *,
+    budgets: list[float],
+    repeat: int,
+    candidates: int,
+    power: bool,
+) -> list[Sample]:
+    """Run the whole matrix.
+
+    Loop order is ``budget -> trial -> url -> candidate -> strategy`` on purpose:
+    A and B are measured back-to-back on identical inputs, so thermal
+    throttling, other load, and any drift over a long sweep move both of them
+    together instead of landing on whichever ran second.
+    """
+    specs: dict[str, tuple[BuildSpec, ...]] = {}
+    spec_errors: dict[str, str] = {}
+    for entry in entries:
+        try:
+            specs[entry.url_id] = specs_for(entry, candidates)
+        except Exception as exc:  # noqa: BLE001 - a bad URL must not kill the sweep
+            spec_errors[entry.url_id] = f"spec: {type(exc).__name__}: {exc}"
+            print(f"  spec error {entry.url_id}: {exc}", file=sys.stderr)
+
+    samples: list[Sample] = []
+    for budget in budgets:
+        for trial in range(repeat):
+            for entry in entries:
+                if entry.url_id in spec_errors:
+                    # A URL that would not resolve still occupies a row, for both
+                    # strategies. Dropping it would make a broken URL look like a
+                    # URL nobody ran and shrink the denominator silently.
+                    samples.extend(
+                        Sample(
+                            entry.url_id, "-", name, budget, trial,
+                            Outcome.ERROR, 0.0, detail=spec_errors[entry.url_id],
+                        )
+                        for name in STRATEGIES
+                    )
+                    continue
+                for spec in specs[entry.url_id]:
+                    judge: Judge = partial(judge_with, spec, _id_map(spec), power)
+                    encode = partial(encode_with, spec)
+                    for name, make in STRATEGIES.items():
+                        strategy = make(power)
+                        samples.append(
+                            sample_once(
+                                url_id=entry.url_id,
+                                candidate=spec.label or "default",
+                                strategy=name,
+                                budget_s=budget,
+                                trial=trial,
+                                lay_out=partial(
+                                    strategy.lay_out, spec, time_budget_s=budget
+                                ),
+                                judge=judge,
+                                encode=encode,
+                            )
+                        )
+                print(
+                    f"  budget={budget:g}s trial={trial + 1}/{repeat} {entry.url_id}",
+                    file=sys.stderr,
+                )
+    return samples
+
+
+def _parse_args(argv: list[str] | None) -> argparse.Namespace:
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ap.add_argument("--tier", default="small", choices=[t.value for t in _TIER_ORDER])
-    ap.add_argument("--budget", type=float, default=2.0, help="seconds per lay_out call")
-    ap.add_argument("--repeat", type=int, default=3, help="samples per cell; median is reported")
+    ap.add_argument(
+        "--budget",
+        default="2",
+        help="seconds per lay_out call; comma-separated to sweep (e.g. 1,2,10)",
+    )
+    ap.add_argument(
+        "--repeat",
+        type=int,
+        default=3,
+        help="trials per cell. CP-SAT is multi-worker and nondeterministic by "
+        "design, so one sample is noise and nothing can be declared separated",
+    )
     ap.add_argument("--candidates", type=int, default=3)
-    args = ap.parse_args()
+    ap.add_argument("--power", action="store_true", help="lay out with power (default off)")
+    ap.add_argument("--only", default="", help="comma-separated url_ids to restrict to")
+    ap.add_argument("--json", type=Path, default=None, help="write raw samples here")
+    ap.add_argument("--markdown", type=Path, default=None, help="write the report here")
+    ap.add_argument(
+        "--no-crossvalidate",
+        action="store_true",
+        help="skip the independent TypeScript decoder (reported as SKIPPED, "
+        "never as a pass)",
+    )
+    return ap.parse_args(argv)
 
+
+def main(argv: list[str] | None = None) -> int:
+    args = _parse_args(argv)
+
+    budgets = [float(b) for b in str(args.budget).split(",") if b.strip()]
     cutoff = _TIER_ORDER.index(Tier(args.tier))
-    wanted = {t for t in _TIER_ORDER[: cutoff + 1]}
+    wanted = set(_TIER_ORDER[: cutoff + 1])
     entries = [e for e in URL_CORPUS if e.tier in wanted]
+    if args.only:
+        keep = {u.strip() for u in args.only.split(",")}
+        entries = [e for e in entries if e.url_id in keep]
+    if not entries:
+        print("no corpus entries selected", file=sys.stderr)
+        return 2
 
-    print(f"budget={args.budget}s  repeat={args.repeat}  power=off  {len(entries)} URLs\n")
-    cols = ("spec", "A area", "A di", "B area", "B di", "B/A", "A s", "B s")
-    head = (
-        f"{cols[0]:<26}{cols[1]:>8}{cols[2]:>6}{cols[3]:>8}"
-        f"{cols[4]:>6}{cols[5]:>7}{cols[6]:>7}{cols[7]:>7}"
+    started = datetime.now(UTC).isoformat(timespec="seconds")
+    t0 = time.perf_counter()
+    samples = collect(
+        entries,
+        budgets=budgets,
+        repeat=args.repeat,
+        candidates=args.candidates,
+        power=bool(args.power),
     )
-    print(head)
-    print("-" * len(head))
 
-    ratios = []
-    for e in entries:
-        a, b = run(e, args.budget, args.repeat, args.candidates)
-        name = e.url_id[:25]
-        if a.errors or b.errors:
-            print(f"{name:<26}{'ERROR':>8}  {(a.errors or b.errors)[0][:44]}")
-            continue
-        if a.area is None or b.area is None:
-            # No VALID sample from one side. Reporting a ratio here would
-            # compare a real layout against a broken one, which is exactly the
-            # comparison this gate exists to prevent.
-            miss = "A" if a.area is None else "B"
-            side = a if a.area is None else b
-            # Say WHICH kind of nothing. A refusal means the strategy searched
-            # and found no routable pack; an invalid result means it returned
-            # one the validator then rejected. Same blank cell, opposite bug.
-            why = sorted(side.reasons)[:1] if side.refused else sorted(side.checks)[:3]
-            kind = "refused" if side.refused and not side.invalid else "no valid"
-            print(
-                f"{name:<26}{kind:>8}  {miss} produced no valid layout in "
-                f"{args.repeat} run(s) "
-                f"[refused {side.refused}, invalid {side.invalid}]: "
-                f"{'; '.join(why) or 'unknown'}"
-            )
-            continue
-        ratio = b.area / a.area
-        ratios.append(ratio)
-        flag = " *" if b.fallbacks or a.fallbacks else ""
-        if a.invalid or b.invalid:
-            flag += f"  [invalid A:{a.invalid} B:{b.invalid}]"
-        if a.refused or b.refused:
-            flag += f"  [refused A:{a.refused} B:{b.refused}]"
-        print(
-            f"{name:<26}{a.area:>8}{max(a.direct, default=0):>6}"
-            f"{b.area:>8}{max(b.direct, default=0):>6}"
-            f"{ratio:>6.2f}x{statistics.median(a.walls):>6.1f}s"
-            f"{statistics.median(b.walls):>6.1f}s{flag}"
+    if args.no_crossvalidate:
+        cross = CrossSummary(available=False, reason="--no-crossvalidate")
+    else:
+        samples, cross = crossvalidate_samples(samples)
+
+    meta = RunMeta(
+        tiers=tuple(t.value for t in _TIER_ORDER[: cutoff + 1]),
+        budgets=tuple(budgets),
+        repeat=args.repeat,
+        candidates=args.candidates,
+        power=bool(args.power),
+        urls=len(entries),
+        started=started,
+        seconds=round(time.perf_counter() - t0, 1),
+    )
+
+    trials = trials_from(samples)
+    url_ids = [e.url_id for e in entries]
+    comparisons: list[Comparison] = [
+        compare(
+            trials,
+            a_name=A_NAME,
+            b_name=B_NAME,
+            budget_s=b,
+            url_ids=url_ids,
+            cross=cross,
         )
-        if a.spread or b.spread:
-            print(f"{'':<26}{'spread:':>8} A {a.spread or '-':<12} B {b.spread or '-'}")
+        for b in budgets
+    ]
 
-    if ratios:
-        geo = statistics.geometric_mean(ratios)
-        print(f"\ngeometric mean B/A = {geo:.3f}  ({'B denser' if geo < 1 else 'A denser'})")
-        print(f"best for B: {min(ratios):.2f}x   worst for B: {max(ratios):.2f}x")
-    print("\n* = a fallback layout was used somewhere in that cell")
+    for line in meta.lines():
+        print(line)
+    print(cross.summary())
+    for demoted in cross.demoted:
+        print(f"  demoted: {demoted}")
+    print()
+
+    for comparison in comparisons:
+        for line in render_text(comparison):
+            print(line)
+        print()
+
+    flip = budget_flip(comparisons)
+    if flip:
+        print(flip, end="\n\n")
+
     print(
-        "Areas come ONLY from placements the validator accepted. Invalid layouts\n"
-        "are systematically smaller -- a net that failed to route, or was never\n"
-        "created, is a belt run that does not exist -- so scoring them would\n"
-        "reward dropping connections rather than packing well."
+        "Areas come ONLY from placements the validator accepted AND the "
+        "independent\ndecoder round-tripped. Invalid layouts are systematically "
+        "smaller -- an\nunrouted net is a belt run that does not exist -- so "
+        "scoring them would\nreward dropping connections rather than packing well."
     )
+
+    if args.json:
+        args.json.parent.mkdir(parents=True, exist_ok=True)
+        args.json.write_text(json.dumps(to_json(samples, meta, cross), indent=2))
+        print(f"\nraw samples -> {args.json}")
+    if args.markdown:
+        args.markdown.parent.mkdir(parents=True, exist_ok=True)
+        args.markdown.write_text(render_markdown(comparisons, meta, cross))
+        print(f"report -> {args.markdown}")
     return 0
 
 

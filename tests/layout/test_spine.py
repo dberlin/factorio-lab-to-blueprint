@@ -302,19 +302,35 @@ class TestPlacementProperties:
             assert b.output_obj is not None and 0 <= b.output_obj < n
             assert b.input_obj != b.output_obj
 
-    def test_belt_chains_link_forward_and_terminate(
+    def test_belt_chains_step_one_tile_and_at_most_one_level(
         self, spec_fn: SpecFactory, power: bool
     ) -> None:
+        """A belt hands to an orthogonal neighbour, or to a junction on its tile.
+
+        This used to demand "strictly eastward by one tile on the same lane",
+        which was only true while every belt in the block was part of a
+        west-to-east corridor lane.  Risers broke all three halves of that: a
+        trunk runs south, a lane the trunk feeds runs east to west so its head is
+        the tile the junction hands to, and a bridge changes altitude to cross
+        another trunk.  What has to hold is the physical rule -- one tile, one
+        level -- not the direction.
+        """
         p = SpineLayout(power=power).lay_out(spec_fn(), time_budget_s=0.5)
-        belts = [i for i, b in enumerate(p.buildings) if catalog.is_belt(b.item_id)]
-        for i in belts:
-            nxt = p.buildings[i].output_obj
+        for i, b in enumerate(p.buildings):
+            if not catalog.is_belt(b.item_id):
+                continue
+            nxt = b.output_obj
             if nxt is None:
                 continue
-            assert catalog.is_belt(p.buildings[nxt].item_id)
-            # Forward means strictly eastward by one tile on the same lane.
-            assert p.buildings[nxt].x == p.buildings[i].x + 1
-            assert p.buildings[nxt].y == p.buildings[i].y
+            t = p.buildings[nxt]
+            if t.item_id == catalog.SPLITTER_ID:
+                assert (t.x, t.y, t.z) == (b.x, b.y, b.z), (
+                    f"belt {i} feeds a junction it does not stand on"
+                )
+                continue
+            assert catalog.is_belt(t.item_id)
+            assert abs(t.x - b.x) + abs(t.y - b.y) == 1, f"belt {i} jumps a tile"
+            assert abs(t.z - b.z) <= 1, f"belt {i} climbs more than one level"
 
     def test_placement_is_non_empty_and_has_area(
         self, spec_fn: SpecFactory, power: bool
@@ -368,43 +384,125 @@ class TestKnownGaps:
         assert p.stats["direct_inserts"] >= 1
 
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "Long-span items are not delivered: lanes in different corridors are "
-            "independent horizontal runs with no vertical connection, so a producer "
-            "several rows above its consumer pushes into a belt run the consumer "
-            "never reads. Needs the west trunk risers descoped from v1."
-        ),
-    )
+
+def _sourced_belts(p: Placement) -> set[int]:
+    """Belt tiles items can actually reach, by walking the emitted links.
+
+    Deliberately independent of ``validate``: it starts from the sorters that
+    put items onto a belt and from the block's west edge where external inputs
+    enter, then propagates along ``output_obj`` and THROUGH junctions -- a
+    splitter records no links of its own, so a belt naming it as ``input_obj``
+    is fed by every belt naming it as ``output_obj``.
+    """
+    bs = p.buildings
+    min_x, _, _, _ = p.bounds
+    forward: dict[int, list[int]] = {}
+    feeds_junction: dict[int, list[int]] = {}
+    draws_from_junction: dict[int, list[int]] = {}
+    for i, b in enumerate(bs):
+        if not catalog.is_belt(b.item_id):
+            continue
+        if b.output_obj is not None:
+            if bs[b.output_obj].item_id == catalog.SPLITTER_ID:
+                feeds_junction.setdefault(b.output_obj, []).append(i)
+            else:
+                forward.setdefault(i, []).append(b.output_obj)
+        if b.input_obj is not None and bs[b.input_obj].item_id == catalog.SPLITTER_ID:
+            draws_from_junction.setdefault(b.input_obj, []).append(i)
+
+    live: set[int] = set()
+    for i, b in enumerate(bs):
+        if catalog.is_sorter(b.item_id) and b.output_obj is not None:
+            if catalog.is_belt(bs[b.output_obj].item_id):
+                live.add(b.output_obj)
+        elif catalog.is_belt(b.item_id) and b.x == min_x:
+            live.add(i)  # the block's edge, where the player's belt arrives
+
+    frontier = list(live)
+    while frontier:
+        i = frontier.pop()
+        onward = list(forward.get(i, ()))
+        for j, feeders in feeds_junction.items():
+            if i in feeders:
+                onward.extend(draws_from_junction.get(j, ()))
+        for nxt in onward:
+            if nxt not in live:
+                live.add(nxt)
+                frontier.append(nxt)
+    return live
+
+
+class TestRisersJoinTheCopies:
+    """An item produced two rows above its consumer must actually arrive.
+
+    This is the defect risers exist for.  The lanes were always emitted -- a
+    copy in every corridor between producer and consumer -- and every sorter
+    found one; nothing joined them, so the producer filled corridor r + 1 while
+    the consumer drained corridor s and the item never travelled.
+    """
+
     def test_every_consumed_item_reaches_its_consumer(self) -> None:
-        """End-to-end reachability from each producer to each consumer.
-
-        Walks the emitted graph: a consumer's input sorter must pick up from a
-        belt run that some producer's output sorter feeds.
-        """
         p = SpineLayout(power=False).lay_out(magnetic_ring_spec(), time_budget_s=0.5)
-        # Belt runs, keyed by a representative index, via forward links.
-        run_of: dict[int, int] = {}
+        live = _sourced_belts(p)
         for i, b in enumerate(p.buildings):
-            if catalog.is_belt(b.item_id):
-                run_of.setdefault(i, i)
-        for i, b in enumerate(p.buildings):
-            if catalog.is_belt(b.item_id) and b.output_obj is not None:
-                run_of[b.output_obj] = run_of[i]
-
-        fed: set[int] = set()
-        for b in p.buildings:
-            if catalog.is_sorter(b.item_id) and b.output_obj in run_of:
-                fed.add(run_of[b.output_obj])
-
-        for b in p.buildings:
             if not catalog.is_sorter(b.item_id):
                 continue
             src = b.input_obj
-            if src is None or src not in run_of:
+            if src is None or not catalog.is_belt(p.buildings[src].item_id):
                 continue  # picks up from a machine, i.e. an output sorter
-            assert run_of[src] in fed, "a machine draws from a belt run nothing feeds"
+            assert src in live, (
+                f"sorter {i} draws {p.buildings[src].carries_item!r} from a belt "
+                f"at ({p.buildings[src].x},{p.buildings[src].y}) nothing reaches"
+            )
+
+    def test_a_long_span_item_is_joined_across_corridors(self) -> None:
+        """Not just "the buildings exist": follow the links from copy to copy."""
+        p = SpineLayout(power=False).lay_out(magnetic_ring_spec(), time_budget_s=0.5)
+        live = _sourced_belts(p)
+        rows: dict[str, set[int]] = {}
+        for i, b in enumerate(p.buildings):
+            if catalog.is_belt(b.item_id) and b.carries_item and i in live:
+                rows.setdefault(b.carries_item, set()).add(b.y)
+        spanning = {item: ys for item, ys in rows.items() if len(ys) > 1}
+        assert spanning, "no item reaches lanes in more than one corridor"
+        # copper-ingot is made in one row and consumed two below it, which is
+        # exactly the case the docstring used to claim was "correct and routable".
+        assert len(rows.get("copper-ingot", set())) > 1
+
+    def test_no_two_risers_share_a_cell(self) -> None:
+        """Trunks are interval-coloured, so overlapping spans get their own column.
+
+        A junction tile is the one legal exception: the corpus records a belt
+        running through a splitter as two belts on that tile, and a branch adds a
+        third.  Every other cell holds one riser belt or none.
+        """
+        for spec_fn in (magnetic_ring_spec, two_stage_spec):
+            p = SpineLayout(power=False).lay_out(spec_fn(), time_budget_s=0.5)
+            junction_cells = {
+                (b.x, b.y, b.z) for b in p.buildings if b.item_id == catalog.SPLITTER_ID
+            }
+            cells = [
+                (b.x, b.y, b.z)
+                for b in p.buildings
+                if catalog.is_belt(b.item_id)
+                and (b.yaw == 180.0 or b.z > 0)
+                and (b.x, b.y, b.z) not in junction_cells
+            ]
+            assert len(cells) == len(set(cells)), "two riser belts on one cell"
+
+    def test_a_riser_never_stands_on_a_machine_or_a_lane(self) -> None:
+        """The margin is east of everything; that is what makes it collision-free."""
+        p = SpineLayout(power=False).lay_out(magnetic_ring_spec(), time_budget_s=0.5)
+        occupied: set[tuple[int, int, int]] = set()
+        for b in p.buildings:
+            if catalog.is_belt_integrated(b.item_id):
+                continue
+            if not catalog.building(b.item_id).occupies_tiles:
+                continue
+            occupied |= set(b.tiles())
+        for b in p.buildings:
+            if catalog.is_belt(b.item_id) and b.yaw == 180.0:
+                assert (b.x, b.y, b.z) not in occupied, "a trunk stands on a machine"
 
 
 class TestPower:
@@ -941,15 +1039,10 @@ class TestRealSpecsValidateClean:
         ).candidates
         return min(candidates, key=lambda s: s.machine_count)
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="spine never joins an item's corridor copies -- a producer's "
-        "sorters fill corridor r+1 while its consumer's drain corridor r+k, and "
-        "nothing bridges them. Needs trunk risers; also trips "
-        "machine.output_removed on multi-product recipes. See docs/BACKLOG.md",
-    )
     @pytest.mark.slow
-    @pytest.mark.parametrize("url_id", ["graphene", "plastic", "processor"])
+    @pytest.mark.parametrize(
+        "url_id", ["graphene", "plastic", "processor", "energy-matrix", "casimir-crystal"]
+    )
     def test_validator_reports_no_errors(self, url_id: str) -> None:
         from flab2bp.layout import validate
         from flab2bp.pipeline import _id_map

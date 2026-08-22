@@ -14,6 +14,7 @@ import pytest
 
 from flab2bp.dsp.catalog import GEOMETRY_SAFE_FIXTURES, TESLA_COVER_RADIUS
 from flab2bp.dsp.catalog import building as catalog_building
+from flab2bp.layout import junction
 from flab2bp.layout.base import PlacedBuilding, Placement
 from flab2bp.layout.validate import CHECKS, IdMap, Report, Severity, validate
 from flab2bp.spec import BuildSpec, MachineGroup, ProliferatorMode
@@ -54,9 +55,17 @@ def belt(
     z: int = 0,
     *,
     out: int | None = None,
+    inp: int | None = None,
     item_id: int = BELT2,
     carries: str | None = None,
 ) -> PlacedBuilding:
+    """A belt tile.
+
+    ``out`` is the forward link belts chain with.  ``inp`` is used for exactly
+    one thing: naming the splitter this belt DRAWS from.  Belts do not use it to
+    chain -- a junction records no links of its own, so the belts around it do
+    the naming, in both directions.
+    """
     return PlacedBuilding(
         item_id=item_id,
         model_index=36,
@@ -64,8 +73,13 @@ def belt(
         y=y,
         z=z,
         output_obj=out,
+        input_obj=inp,
         carries_item=carries,
     )
+
+
+def splitter(x: int, y: int, z: int = 0, *, carries: str | None = None) -> PlacedBuilding:
+    return junction.make_splitter(x, y, z, carries_item=carries)
 
 
 def sorter(
@@ -1004,3 +1018,691 @@ def test_flow_lane_sourced_ignores_a_lane_nothing_draws_from() -> None:
     )
     r = validate(p, lane_spec(), ids=LANE_IDS)
     assert not fired(r, "flow.lane_sourced")
+
+
+# --- junctions -------------------------------------------------------------
+#
+# A splitter is the primitive that lets one belt serve more than one
+# destination, and it is a RUN BOUNDARY: `_build_runs` chains belt to belt, so
+# every check that reasons per-run used to stop dead at one and read the far
+# side as unconnected.  These tests are built around hand-made placements
+# because no strategy emitted a splitter when they were written.
+#
+# The convention is read off the 25 splitters in the fixture corpus: the
+# splitter records no links, every attached belt sits at exactly its tile, a
+# belt feeding it names it as `output_obj` and a belt drawing from it names it
+# as `input_obj`.
+
+
+def severities(report: Report, check: str) -> list[Severity]:
+    return [f.severity for f in report.by_check(check)]
+
+
+def junction_pair() -> Placement:
+    """The corpus shape: a lane into a splitter, two lanes out of it.
+
+    Belts 0..1 run into the junction, belts 3 and 5 leave it.  All three of the
+    belts touching the junction share its tile, which is how a belt running
+    *through* a splitter is recorded -- two belt buildings on that tile, one
+    ending at the junction and one starting from it.
+    """
+    return place(
+        belt(0, 1, out=1),  # 0
+        belt(0, 0, out=2),  # 1  feeds the junction
+        splitter(0, 0),  # 2
+        belt(0, 0, inp=2, out=4),  # 3  draws from it
+        belt(1, 0),  # 4
+        belt(0, 0, inp=2, out=6),  # 5  draws from it
+        belt(0, -1),  # 6
+    )
+
+
+def test_junction_ports_clean_at_four_attachments() -> None:
+    """Four is legal -- a splitter has four sides."""
+    p = place(
+        belt(0, 0, out=1),  # 0
+        splitter(0, 0),  # 1
+        belt(0, 0, inp=1),  # 2
+        belt(0, 0, inp=1),  # 3
+        belt(0, 0, inp=1),  # 4
+    )
+    assert not fired(validate(p), "junction.ports")
+
+
+def test_junction_ports_fires_on_a_fifth_attachment() -> None:
+    """A splitter with five attachments pastes cleanly and drops one.
+
+    That silent drop is the exact failure splitters were introduced to fix, so a
+    validator that lets it through is worse than useless here.
+    """
+    p = place(
+        belt(0, 0, out=1),  # 0
+        splitter(0, 0),  # 1
+        belt(0, 0, inp=1),  # 2
+        belt(0, 0, inp=1),  # 3
+        belt(0, 0, inp=1),  # 4
+        belt(0, 0, inp=1),  # 5
+    )
+    r = validate(p)
+    assert fired(r, "junction.ports")
+    assert r.by_check("junction.ports")[0].detail["attached"] == 5
+
+
+def test_junction_colocated_clean_when_every_belt_shares_the_tile() -> None:
+    assert not fired(validate(junction_pair()), "junction.colocated")
+
+
+def test_junction_colocated_fires_on_an_adjacent_attachment() -> None:
+    """A belt naming a splitter from the next tile over pastes UNCONNECTED.
+
+    Nothing about the blueprint looks wrong -- the building exists, the link
+    resolves, the geometry is plausible -- and everything downstream of that
+    side silently receives nothing.  Measured on all 25 corpus splitters:
+    dx = dy = 0, without exception.
+    """
+    p = place(
+        belt(0, 0, out=1),  # 0
+        splitter(0, 0),  # 1
+        belt(1, 0, inp=1),  # 2  one tile east of the junction
+    )
+    r = validate(p)
+    assert fired(r, "junction.colocated")
+    f = r.by_check("junction.colocated")[0]
+    assert f.detail["dx"] == 1
+    assert f.detail["belt"] == 2
+
+
+def test_junction_colocated_fires_across_altitudes_too() -> None:
+    """Same tile, wrong level, is still a side that pastes unconnected."""
+    p = place(belt(0, 0, out=1), splitter(0, 0), belt(0, 0, 1, inp=1))
+    assert fired(validate(p), "junction.colocated")
+
+
+def test_junction_records_no_links_fires_when_a_splitter_names_a_neighbour() -> None:
+    """A junction names nobody; the belts around it name it.
+
+    A link recorded on the splitter itself is invisible to every other check
+    here, because `_context` reads a junction's attachments off the BELTS.  So
+    the connection it claims is verified by nothing at all.
+    """
+    from dataclasses import replace
+
+    p = place(belt(0, 0, out=1), replace(splitter(0, 0), output_obj=0), belt(0, 0, inp=1))
+    r = validate(p)
+    assert fired(r, "junction.records_no_links")
+
+
+def test_junction_records_no_links_clean_on_the_corpus_shape() -> None:
+    assert not fired(validate(junction_pair()), "junction.records_no_links")
+
+
+def test_geom_belt_single_occupancy_allows_belts_stacked_on_a_junction() -> None:
+    """Three belts on a splitter tile is what the game itself records.
+
+    Splitter 140 in `factory-quick-start-step-3-red-cube` has exactly three
+    co-located belts: one drawing from it and two feeding it.  Reporting that
+    would flag a blueprint the game produced.
+    """
+    assert not fired(validate(junction_pair()), "geom.belt_single_occupancy")
+
+
+def test_geom_belt_single_occupancy_still_fires_on_an_unattached_stack() -> None:
+    """The exemption is for junction attachments, not for junction tiles.
+
+    A belt that merely happens to share a splitter's tile without naming it is
+    not part of the junction -- it is the ordinary collision this check exists to
+    catch, wearing a splitter as cover.
+    """
+    p = place(
+        belt(0, 0, out=1),  # 0  attached
+        splitter(0, 0),  # 1
+        belt(0, 0, inp=1),  # 2  attached
+        belt(0, 0),  # 3  names nothing: a genuine collision
+    )
+    r = validate(p)
+    assert fired(r, "geom.belt_single_occupancy")
+    assert r.by_check("geom.belt_single_occupancy")[0].detail["unattached"] == 1
+
+
+def test_geom_belt_single_occupancy_still_fires_without_any_junction() -> None:
+    assert fired(validate(place(belt(0, 0), belt(0, 0))), "geom.belt_single_occupancy")
+
+
+def test_belt_acyclic_follows_a_loop_through_a_junction() -> None:
+    """A cycle that closes THROUGH a splitter.
+
+    A splitter has no `output_obj` of its own, so a walk that follows links
+    alone stops dead at one and never closes the loop.  This is the shape a
+    fan-out router produces most easily -- tap a lane, run the branch around,
+    and merge it back into its own source.
+    """
+    p = place(
+        belt(0, 0, out=1),  # 0
+        splitter(0, 0),  # 1
+        belt(0, 0, inp=1, out=3),  # 2
+        belt(1, 0, out=4),  # 3
+        belt(1, 1, out=5),  # 4
+        belt(0, 1, out=0),  # 5  back to belt 0
+    )
+    r = validate(p)
+    assert fired(r, "belt.acyclic"), "a loop closing through a splitter is still a loop"
+
+
+def test_belt_acyclic_clean_on_a_junction_that_merely_branches() -> None:
+    assert not fired(validate(junction_pair()), "belt.acyclic")
+
+
+def test_belt_termination_fires_on_a_junction_nothing_draws_from() -> None:
+    """A run ending at a splitter with no taps is a hole items fall into.
+
+    The run terminates, the link resolves, every building exists -- and the flow
+    stops there.  An ERROR rather than the WARNING a bare belt end gets, because
+    a dangling tail is wasted area while a dead junction means the items routed
+    into it never arrive.
+    """
+    p = place(belt(0, 1, out=1), belt(0, 0, out=2), splitter(0, 0))
+    r = validate(p)
+    assert Severity.ERROR in severities(r, "belt.termination")
+
+
+def test_belt_termination_clean_when_the_junction_has_taps() -> None:
+    assert Severity.ERROR not in severities(validate(junction_pair()), "belt.termination")
+
+
+def test_belt_continuity_fires_on_a_junction_nothing_feeds() -> None:
+    """Belts drawing from a junction with no supply carry nothing.
+
+    Detectable with no BuildSpec at all, which is why it lives here: it is a
+    break in the belt path itself, visible from the placement alone.
+    """
+    p = place(splitter(0, 0), belt(0, 0, inp=0, out=2), belt(1, 0))
+    r = validate(p)
+    assert fired(r, "belt.continuity")
+    assert r.by_check("belt.continuity")[0].detail["feeding"] == 0
+
+
+def test_belt_continuity_fires_on_a_junction_with_nothing_attached() -> None:
+    assert fired(validate(place(splitter(0, 0))), "belt.continuity")
+
+
+def test_belt_continuity_clean_on_the_corpus_shape() -> None:
+    assert not fired(validate(junction_pair()), "belt.continuity")
+
+
+# --- junction-aware throughput ---------------------------------------------
+#
+# `flow.belt_capacity` is the check a splitter breaks hardest.  A splitter
+# divides throughput among its outputs and merges it on its inputs, so a check
+# that ignores junctions either misses a genuinely overloaded belt or invents a
+# violation on a correctly split one.  Both directions are pinned below.
+
+SPLIT_IDS = IdMap(
+    recipes={"magnetic-coil": 6, "copper-ingot": 5},
+    items={
+        "assembling-machine-2": ASSEMBLER,
+        "arc-smelter": SMELTER,
+        "copper-ore": 1002,
+        "copper-ingot": COPPER_ID,
+        "magnetic-coil": 1101,
+    },
+)
+
+
+def two_consumers_of_ore(rate: Fraction) -> BuildSpec:
+    """Two identical machines, each drawing ``rate`` of a belted-in ore."""
+    return BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id="magnetic-coil",
+                machine_item_id="assembling-machine-2",
+                count=2,
+                inputs_per_machine={"copper-ore": rate},
+                outputs_per_machine={"magnetic-coil": Fraction(1)},
+            ),
+        ),
+        external_inputs={"copper-ore": rate * 2},
+        outputs={"magnetic-coil": Fraction(2)},
+        belt_item_id="conveyor-belt-2",
+        belt_items_per_second=Fraction(12),
+    )
+
+
+def split_trunk() -> Placement:
+    """One trunk, a junction, two branches, a machine on each branch.
+
+    The trunk carries a belted-in ore, so NO sorter touches it: everything it
+    must carry it must carry on behalf of consumers on the far side of the
+    junction.  Summing only the sorters that touch a run charges this trunk
+    zero.
+    """
+    return place(
+        machine(3, 0, recipe_id=6),  # 0  x 3..6, y 0..3
+        machine(1, -5, recipe_id=6),  # 1  x 1..4, y -5..-2
+        belt(0, 3, out=3, carries="copper-ore"),  # 2  trunk
+        belt(0, 2, out=4, carries="copper-ore"),  # 3
+        belt(0, 1, out=5, carries="copper-ore"),  # 4
+        belt(0, 0, out=6, carries="copper-ore"),  # 5  feeds the junction
+        splitter(0, 0),  # 6
+        belt(0, 0, inp=6, out=8, carries="copper-ore"),  # 7  branch east
+        belt(1, 0, out=9, carries="copper-ore"),  # 8
+        belt(2, 0, carries="copper-ore"),  # 9
+        belt(0, 0, inp=6, out=11, carries="copper-ore"),  # 10 branch north
+        belt(0, -1, out=12, carries="copper-ore"),  # 11
+        belt(0, -2, carries="copper-ore"),  # 12
+        sorter(2, 0, 3, 0, inp=9, out=0, item_id=PILE),  # 13
+        sorter(0, -2, 1, -2, inp=12, out=1, item_id=PILE),  # 14
+    )
+
+
+def test_flow_belt_capacity_charges_a_trunk_for_what_its_branches_draw() -> None:
+    """The load-bearing junction test.
+
+    Two machines take 8/s each on the far side of a splitter, so the trunk
+    feeding that splitter must carry 16/s on a lane that sustains 12.  No sorter
+    touches the trunk at all, so a check that adds up the sorters on each run
+    charges it ZERO and reports a clean build.  Neither branch is over on its
+    own -- 8 is inside 12 -- so any finding here is necessarily the trunk.
+    """
+    r = validate(split_trunk(), two_consumers_of_ore(Fraction(8)), ids=SPLIT_IDS)
+    findings = r.by_check("flow.belt_capacity")
+    assert findings, "16/s pulled through a junction must be charged to the trunk"
+    assert findings[0].detail["required"] == "16"
+    assert 5 in findings[0].buildings, "the trunk belts are the ones to widen"
+
+
+def test_flow_belt_capacity_clean_when_the_split_load_fits() -> None:
+    r = validate(split_trunk(), two_consumers_of_ore(Fraction(5)), ids=SPLIT_IDS)
+    assert not fired(r, "flow.belt_capacity")
+
+
+def test_flow_headroom_reports_the_trunk_rate_as_an_exact_fraction() -> None:
+    r = validate(split_trunk(), two_consumers_of_ore(Fraction(7, 3)), ids=SPLIT_IDS)
+    carried = {str(f.detail["required"]) for f in r.by_check("flow.headroom")}
+    assert "14/3" in carried, f"expected the exact summed trunk rate, got {carried}"
+
+
+def merge_trunks() -> Placement:
+    """Two trunks into one junction, two branches out of it.
+
+    Four attachments, which is exactly what a splitter's four sides allow.  Each
+    trunk supplies half of what the two branches draw; charging each of them the
+    whole load is how a correctly split lane acquires an invented violation.
+    """
+    return place(
+        machine(3, 0, recipe_id=6),  # 0  x 3..6, y 0..3
+        machine(1, -5, recipe_id=6),  # 1  x 1..4, y -5..-2
+        belt(0, 3, out=3, carries="copper-ore"),  # 2  trunk A
+        belt(0, 2, out=4, carries="copper-ore"),  # 3
+        belt(0, 1, out=5, carries="copper-ore"),  # 4
+        belt(0, 0, out=10, carries="copper-ore"),  # 5  feeds the junction
+        belt(-3, 0, out=7, carries="copper-ore"),  # 6  trunk B
+        belt(-2, 0, out=8, carries="copper-ore"),  # 7
+        belt(-1, 0, out=9, carries="copper-ore"),  # 8
+        belt(0, 0, out=10, carries="copper-ore"),  # 9  feeds the junction
+        splitter(0, 0),  # 10
+        belt(0, 0, inp=10, out=12, carries="copper-ore"),  # 11 branch east
+        belt(1, 0, out=13, carries="copper-ore"),  # 12
+        belt(2, 0, carries="copper-ore"),  # 13
+        belt(0, 0, inp=10, out=15, carries="copper-ore"),  # 14 branch north
+        belt(0, -1, out=16, carries="copper-ore"),  # 15
+        belt(0, -2, carries="copper-ore"),  # 16
+        sorter(2, 0, 3, 0, inp=13, out=0, item_id=PILE),  # 17
+        sorter(0, -2, 1, -2, inp=16, out=1, item_id=PILE),  # 18
+    )
+
+
+def test_flow_belt_capacity_does_not_invent_a_violation_on_a_merged_feed() -> None:
+    """8/s per branch is 16/s through the junction, split over two trunks.
+
+    Each trunk carries 8, which fits the 12/s tier, and so does each branch.
+    Charging every input of a merge the merge's whole load would report both
+    trunks as over capacity -- punishing a layout for splitting correctly, which
+    is worse than missing an overload because it makes the tool refuse to emit.
+    """
+    r = validate(merge_trunks(), two_consumers_of_ore(Fraction(8)), ids=SPLIT_IDS)
+    assert not fired(r, "flow.belt_capacity"), [
+        f.message for f in r.by_check("flow.belt_capacity")
+    ]
+
+
+def test_flow_belt_capacity_still_fires_when_a_merged_feed_genuinely_overflows() -> None:
+    """Guards the guard: halving the charge must not disable the check.
+
+    7/s per branch is 14/s through the junction, so each trunk carries 7 and
+    fits, but each BRANCH carries 14 against a 12/s tier and does not.
+    """
+    r = validate(merge_trunks(), two_consumers_of_ore(Fraction(14)), ids=SPLIT_IDS)
+    assert fired(r, "flow.belt_capacity")
+
+
+# --- a lane is not charged twice for the same items -------------------------
+
+
+def producer_to_consumer_spec(rate: Fraction) -> BuildSpec:
+    return BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id="copper-ingot",
+                machine_item_id="arc-smelter",
+                count=1,
+                inputs_per_machine={"copper-ore": rate},
+                outputs_per_machine={"copper-ingot": rate},
+            ),
+            MachineGroup(
+                recipe_id="magnetic-coil",
+                machine_item_id="assembling-machine-2",
+                count=1,
+                inputs_per_machine={"copper-ingot": rate},
+                outputs_per_machine={"magnetic-coil": Fraction(1)},
+            ),
+        ),
+        external_inputs={"copper-ore": rate},
+        outputs={"magnetic-coil": Fraction(1)},
+        belt_item_id="conveyor-belt-2",
+        belt_items_per_second=Fraction(12),
+    )
+
+
+def one_lane_between_two_machines() -> Placement:
+    """A smelter fills a lane; an assembler drains it.  One flow, one lane."""
+    return place(
+        machine(0, 0, item_id=SMELTER, recipe_id=5),  # 0  x 0..2, y 0..2
+        machine(4, 0, recipe_id=6),  # 1  x 4..7, y 0..3
+        belt(3, 0, out=3, carries="copper-ingot"),  # 2
+        belt(3, 1, out=4, carries="copper-ingot"),  # 3
+        belt(3, 2, carries="copper-ingot"),  # 4
+        sorter(2, 1, 3, 1, inp=0, out=3, item_id=PILE),  # 5  producer -> lane
+        sorter(3, 1, 4, 1, inp=3, out=1, item_id=PILE),  # 6  lane -> consumer
+    )
+
+
+def test_a_lane_carries_what_flows_through_it_not_twice_that() -> None:
+    """Put 10/s on and take 10/s off, and the belt is carrying 10.
+
+    Adding what producers put on to what consumers take off charged this lane
+    20/s and reported a 12/s belt as over capacity -- a refusal to emit a layout
+    that runs perfectly.  Measured on freeform's real output, five runs on
+    `fan_out_spec` were being double-charged this way.
+    """
+    r = validate(
+        one_lane_between_two_machines(), producer_to_consumer_spec(Fraction(10)), ids=SPLIT_IDS
+    )
+    assert not fired(r, "flow.belt_capacity"), [
+        f.message for f in r.by_check("flow.belt_capacity")
+    ]
+    carried = {str(f.detail["required"]) for f in r.by_check("flow.headroom")}
+    assert "10" in carried and "20" not in carried, carried
+
+
+def test_a_lane_over_its_tier_is_still_reported() -> None:
+    """Guards the guard: 14/s through a 12/s lane is still an error."""
+    r = validate(
+        one_lane_between_two_machines(), producer_to_consumer_spec(Fraction(14)), ids=SPLIT_IDS
+    )
+    assert fired(r, "flow.belt_capacity")
+
+
+# --- orphan severity: "another source" is not the same as "enough" ----------
+#
+# A belt run nothing fills is graded a WARNING when every machine drawing from
+# it has another source.  That is right for a genuinely redundant lane and wrong
+# for the freeform fan-out case, where several nets left one lane end, only the
+# last was linked, and the "other source" was the one net that won the race --
+# carrying its share of the demand and no more.
+
+
+def coil_spec(rate: Fraction) -> BuildSpec:
+    """One assembler wanting ``rate`` of copper-ingot, and a smelter making it."""
+    return BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id="copper-ingot",
+                machine_item_id="arc-smelter",
+                count=1,
+                inputs_per_machine={"copper-ore": rate},
+                outputs_per_machine={"copper-ingot": rate},
+            ),
+            MachineGroup(
+                recipe_id="magnetic-coil",
+                machine_item_id="assembling-machine-2",
+                count=1,
+                inputs_per_machine={"copper-ingot": rate},
+                outputs_per_machine={"magnetic-coil": Fraction(1)},
+            ),
+        ),
+        external_inputs={"copper-ore": rate},
+        outputs={"magnetic-coil": Fraction(1)},
+        belt_item_id="conveyor-belt-2",
+        belt_items_per_second=Fraction(12),
+    )
+
+
+def half_fed_machine(*, fill_the_second_lane: bool) -> Placement:
+    """One machine drawing the same item from two lanes; one of them is dry.
+
+    Both sorters are Mk.III, which sustains 6/s at one tile, so the surviving
+    lane can deliver at most 6/s however much the machine wants.
+    """
+    parts = [
+        machine(4, 0, recipe_id=6),  # 0  x 4..7, y 0..3
+        belt(3, 0, carries="copper-ingot"),  # 1  the dry lane
+        belt(3, 1, carries="copper-ingot"),  # 2  the other lane
+        sorter(3, 0, 4, 0, inp=1, out=0),  # 3  dry lane -> machine
+        sorter(3, 1, 4, 1, inp=2, out=0),  # 4  other lane -> machine
+    ]
+    if fill_the_second_lane:
+        parts += [
+            machine(0, 0, item_id=SMELTER, recipe_id=5),  # 5  x 0..2, y 0..2
+            sorter(2, 1, 3, 1, inp=5, out=2),  # 6  producer fills lane 2
+        ]
+    return place(*parts)
+
+
+def test_orphan_lane_is_an_error_when_the_survivor_cannot_carry_the_load() -> None:
+    """The machine wants 10/s and the one live sorter sustains 6/s.
+
+    "Some other sorter also feeds it" is not the claim that matters.  A machine
+    wanting 10/s from two lanes gets 6/s when one of them is dry, and
+    under-produces for ever while the validator calls the dead lane wasted
+    belts.  That is exactly the freeform fan-out miss.
+    """
+    p = half_fed_machine(fill_the_second_lane=True)
+    r = validate(p, coil_spec(Fraction(10)), ids=SPLIT_IDS)
+    assert Severity.ERROR in severities(r, "flow.lane_sourced"), [
+        (f.severity, f.message) for f in r.by_check("flow.lane_sourced")
+    ]
+
+
+def test_orphan_lane_stays_a_warning_when_the_survivor_covers_the_demand() -> None:
+    """A genuinely redundant lane: 5/s wanted, 6/s still deliverable.
+
+    Nothing starves, so promoting this would make the tool refuse to emit a
+    build that runs.  The lane is wasted belts and is reported as such.
+    """
+    p = half_fed_machine(fill_the_second_lane=True)
+    r = validate(p, coil_spec(Fraction(5)), ids=SPLIT_IDS)
+    found = severities(r, "flow.lane_sourced")
+    assert found, "the dry lane must still be reported"
+    assert Severity.ERROR not in found
+
+
+def test_two_dry_lanes_cannot_excuse_each_other() -> None:
+    """Neither lane is fed, and each used to count as the other's alternative.
+
+    Excluding only the run being reported let a machine fed exclusively by lanes
+    nothing filled read as clean, twice over.
+    """
+    p = half_fed_machine(fill_the_second_lane=False)
+    r = validate(p, coil_spec(Fraction(5)), ids=SPLIT_IDS)
+    assert Severity.ERROR in severities(r, "flow.lane_sourced")
+
+
+# --- external inputs -------------------------------------------------------
+#
+# A run carrying an external input is exempt from `flow.lane_sourced`: the
+# player fills it.  That exemption was briefly narrowed to runs touching the
+# bounding box, which catches nothing in spine (every corridor copy runs to
+# x=0) and invents errors in freeform (in-lanes sit where the strip lands).
+# What separates a real second entry point from a lane copy nobody feeds is
+# whether the player can REACH it.
+
+
+def ore_spec() -> BuildSpec:
+    return BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id="copper-ingot",
+                machine_item_id="arc-smelter",
+                count=1,
+                inputs_per_machine={"copper-ore": Fraction(1)},
+                outputs_per_machine={"copper-ingot": Fraction(1)},
+            ),
+        ),
+        external_inputs={"copper-ore": Fraction(1)},
+        outputs={"copper-ingot": Fraction(1)},
+        belt_item_id="conveyor-belt-2",
+        belt_items_per_second=Fraction(12),
+    )
+
+
+def inland_input_lane() -> Placement:
+    """An external in-lane seated well inside the bounding box.
+
+    Freeform does exactly this -- it seats each consumer strip's in-lane where
+    the strip lands.  The player belts into it and it works, so it must not be
+    reported.
+    """
+    return place(
+        machine(6, 6, item_id=SMELTER, recipe_id=5),  # 0  x 6..8, y 6..8
+        belt(5, 6, carries="copper-ore"),  # 1
+        sorter(5, 6, 6, 6, inp=1, out=0),  # 2
+        belt(0, 0),  # 3  pushes the bounding box well away from the lane
+        belt(20, 20),  # 4
+    )
+
+
+def test_an_inland_external_lane_is_not_reported_as_unsourced() -> None:
+    r = validate(inland_input_lane(), ore_spec(), ids=SPLIT_IDS)
+    assert not fired(r, "flow.lane_sourced")
+
+
+def test_an_inland_external_lane_is_reachable() -> None:
+    """Inland is not the same as unreachable; there is free ground beside it."""
+    r = validate(inland_input_lane(), ore_spec(), ids=SPLIT_IDS)
+    assert not fired(r, "flow.external_entry_reachable")
+
+
+def walled_in_input_lane(*, leave_a_gap: bool) -> Placement:
+    """An external in-lane with every neighbouring tile built on.
+
+    Measured on freeform's `proliferated_spec` output: the `iron-ore` lane at
+    (7,0) was sealed in by the lane above it and the machine band below, so
+    nothing could reach it -- not a router, and not the player.
+    """
+    ring = [(2, 2), (3, 2), (4, 2), (2, 3), (4, 3), (2, 4), (3, 4), (4, 4)]
+    if leave_a_gap:
+        ring.remove((2, 3))
+    return place(
+        belt(3, 3, carries="copper-ore"),  # 0  the lane the player must fill
+        *(belt(x, y) for x, y in ring),
+    )
+
+
+def test_flow_external_entry_reachable_fires_on_a_walled_in_lane() -> None:
+    """No belt can be run to it, so the item never arrives.
+
+    An ERROR because nothing about the blueprint looks wrong: every building
+    exists, every link resolves, and the machines downstream simply never get
+    fed.
+    """
+    r = validate(walled_in_input_lane(leave_a_gap=False), ore_spec(), ids=SPLIT_IDS)
+    findings = r.by_check("flow.external_entry_reachable")
+    assert findings
+    assert findings[0].detail["item"] == "copper-ore"
+    assert findings[0].severity is Severity.ERROR
+
+
+def test_flow_external_entry_reachable_clean_when_one_side_is_open() -> None:
+    """Guards the guard: a single free neighbour is enough to feed the lane."""
+    r = validate(walled_in_input_lane(leave_a_gap=True), ore_spec(), ids=SPLIT_IDS)
+    assert not fired(r, "flow.external_entry_reachable")
+
+
+def test_flow_external_entry_points_warns_on_several_lanes_for_one_item() -> None:
+    """Spine's magnetic-ring output asks for `coal` at five separate lanes.
+
+    Legitimate -- the player can belt an item in as many times as asked -- but a
+    real cost that a bounding-box density comparison hides completely.
+    """
+    p = place(
+        machine(6, 6, item_id=SMELTER, recipe_id=5),  # 0
+        belt(5, 6, carries="copper-ore"),  # 1
+        belt(5, 8, carries="copper-ore"),  # 2  a second, separate entry lane
+        sorter(5, 6, 6, 6, inp=1, out=0),  # 3
+        sorter(5, 8, 6, 8, inp=2, out=0),  # 4
+    )
+    r = validate(p, ore_spec(), ids=SPLIT_IDS)
+    findings = r.by_check("flow.external_entry_points")
+    assert findings
+    assert findings[0].detail["entry_lanes"] == 2
+    assert findings[0].severity is Severity.WARNING, "nothing starves; must not block emission"
+
+
+def test_flow_external_entry_points_silent_on_a_single_entry() -> None:
+    r = validate(inland_input_lane(), ore_spec(), ids=SPLIT_IDS)
+    assert not fired(r, "flow.external_entry_points")
+
+
+# --- item attribution crosses a junction -----------------------------------
+
+
+def test_flow_lane_attribution_sees_items_arriving_through_a_junction() -> None:
+    """A trunk carrying two items, split to a branch with an unfiltered sorter.
+
+    The unfiltered sorter feeds a two-ingredient machine, so what it takes off
+    the branch cannot be determined -- and the branch is a MIXED lane only if
+    you follow the items across the junction that fills it.  Reading only the
+    sorters that touch each run left the branch looking like a clean
+    single-item lane, and a capacity verdict on it would be one the build never
+    earned.
+    """
+    spec = BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id="copper-ingot",
+                machine_item_id="arc-smelter",
+                count=1,
+                inputs_per_machine={"copper-ore": Fraction(1)},
+                outputs_per_machine={"copper-ingot": Fraction(1)},
+            ),
+            MachineGroup(
+                recipe_id="magnetic-coil",
+                machine_item_id="assembling-machine-2",
+                count=1,
+                # Two ingredients, so an unfiltered sorter could be moving either.
+                inputs_per_machine={"copper-ingot": Fraction(1), "copper-ore": Fraction(1)},
+                outputs_per_machine={"magnetic-coil": Fraction(1)},
+            ),
+        ),
+        external_inputs={"copper-ore": Fraction(2)},
+        outputs={"magnetic-coil": Fraction(1)},
+    )
+    p = place(
+        machine(3, 4, item_id=SMELTER, recipe_id=5),  # 0  x 3..5, y 4..6
+        machine(3, -5, recipe_id=6),  # 1  x 3..6, y -5..-2
+        belt(0, 1, out=2),  # 2  trunk head
+        belt(0, 0, out=3),  # 3  feeds the junction
+        splitter(0, 0),  # 4
+        belt(0, 0, inp=4, out=6),  # 5  branch east -- filtered draw
+        belt(1, 0, out=7),  # 6
+        belt(2, 0),  # 7
+        belt(0, 0, inp=4, out=9),  # 8  branch north -- unfiltered draw
+        belt(0, -1, out=10),  # 9
+        belt(0, -2),  # 10
+        sorter(2, 0, 3, 0, inp=7, out=0, item_id=PILE, filter_id=1002),  # 11 copper-ore
+        sorter(0, -2, 1, -2, inp=10, out=1, item_id=PILE),  # 12 unfiltered, ambiguous
+    )
+    r = validate(p, spec, ids=SPLIT_IDS)
+    findings = r.by_check("flow.lane_attribution")
+    assert findings, "the mixed lane is only visible by following items across the junction"
+    assert 12 in findings[0].buildings

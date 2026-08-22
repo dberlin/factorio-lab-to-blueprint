@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import heapq
 import math
+import time
 from collections import defaultdict, deque
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
@@ -58,6 +59,7 @@ from fractions import Fraction
 from ortools.sat.python import cp_model
 
 from flab2bp.dsp import catalog, params
+from flab2bp.layout import junction
 from flab2bp.layout.base import (
     DEFAULT_SEARCH_WORKERS,
     RETRY_BUDGET_S,
@@ -964,19 +966,38 @@ def _pick_sorter(rate: Fraction, span: int, machines: int) -> tuple[int, int]:
 
 @dataclass(frozen=True, slots=True)
 class _Port:
-    """Where a net starts or ends: a lane's end tile, and the way out of it."""
+    """Where a net starts or ends: a lane tile, and the way out of it."""
 
     belt: int
     x: int
     y: int
-    #: Inclusive x-range of the whole lane, not just the end tile the router
+    #: Inclusive x-range of the whole lane, not just the tile the router
     #: attaches to.  A direct-insert sorter may drop down ANY column the two
     #: lanes share, so it needs the extent rather than the endpoint.
     x0: int = 0
     x1: int = -1
+    #: Every belt index in this lane, west to east.
+    #:
+    #: Carried so that a lane feeding several consumers can give each of them
+    #: its OWN tile to leave from.  They used to share the lane's end tile, and
+    #: a belt tile has one ``output_obj``, so only one net could be linked --
+    #: see ``_commit_paths``.  A tap partway along the lane becomes a junction;
+    #: the tiles are what makes choosing distinct taps possible.
+    tiles: tuple[int, ...] = ()
 
     def columns(self) -> range:
         return range(self.x0, self.x1 + 1)
+
+    def at_tile(self, k: int) -> _Port:
+        """This port moved to the ``k``-th tile of its own lane.
+
+        Out-of-range or an unknown tile list leaves the port alone, so a caller
+        that asks for more taps than the lane has tiles degrades to sharing --
+        which the fan-out check then reports honestly rather than mis-linking.
+        """
+        if not self.tiles or not 0 <= k < len(self.tiles):
+            return self
+        return _Port(self.tiles[k], self.x0 + k, self.y, self.x0, self.x1, self.tiles)
 
 
 def _lane_filter(item: str) -> int:
@@ -1112,7 +1133,14 @@ def _emit_strip(
         placed = 0
         shared = len(lane) > 1
         for slot, item in enumerate(lane):
-            in_ports[item] = _Port(lane_idx[row][0], ox, oy + row, ox, ox + width - 1)
+            in_ports[item] = _Port(
+                lane_idx[row][0],
+                ox,
+                oy + row,
+                ox,
+                ox + width - 1,
+                tuple(lane_idx[row]),
+            )
             tier, _count = _pick_sorter(item_rate(item, in_rates), span, 1)
             placed += _link_lane(
                 canvas,
@@ -1134,7 +1162,12 @@ def _emit_strip(
         row = s.row_of_output(j)
         span = j + 1
         out_ports[item, dest] = _Port(
-            lane_idx[row][-1], ox + width - 1, oy + row, ox, ox + width - 1
+            lane_idx[row][-1],
+            ox + width - 1,
+            oy + row,
+            ox,
+            ox + width - 1,
+            tuple(lane_idx[row]),
         )
         tier, _count = _pick_sorter(item_rate(item, out_rates), span, 1)
         sorters += _link_lane(
@@ -1213,21 +1246,65 @@ def _link_lane(
     return placed
 
 
-def _relink(b: PlacedBuilding, *, output_obj: int | None) -> PlacedBuilding:
-    """Repoint a belt at its successor, preserving everything else.
+def _relink(
+    b: PlacedBuilding,
+    *,
+    output_obj: int | None = None,
+    input_obj: int | None = None,
+) -> PlacedBuilding:
+    """Repoint a belt at its successor or its feeder, preserving everything else.
 
     Uses ``replace`` rather than rebuilding field by field.  The hand-written
     version enumerated fields and therefore silently dropped any it did not
     mention -- it was already discarding ``parameters``, and it swallowed
     ``carries_item`` the moment that was added, which is why belt markers came
     out empty while the emitter was setting them correctly.
+
+    Only the arguments actually passed are applied, so ``_relink(b,
+    input_obj=j)`` cannot clear an ``output_obj`` set moments earlier.
     """
-    return replace(b, output_obj=output_obj)
+    changes: dict[str, int] = {}
+    if output_obj is not None:
+        changes["output_obj"] = output_obj
+    if input_obj is not None:
+        changes["input_obj"] = input_obj
+    return replace(b, **changes)  # type: ignore[arg-type]
 
 
 # --- phase 2: routing ------------------------------------------------------
 
 _STEPS = ((1, 0), (-1, 0), (0, 1), (0, -1))
+
+
+def _cut_loops(path: list[tuple[int, int, int]]) -> list[tuple[int, int, int]]:
+    """Remove any cell that appears twice, keeping the walk connected.
+
+    A ramp edge occupies an extra "run" cell, spliced in from ``via`` during
+    reconstruction.  That cell can already lie on the path -- the route leaves
+    it, wanders, and comes back to climb from it -- and then the same tile
+    appears twice.  Committing such a path fails: the second occurrence finds
+    the cell already built and the whole net is dropped, silently until
+    ``_commit_paths`` learned to count.  Measured on the magnetic-ring chain, 3
+    of 19 routed paths had a repeat.
+
+    Cutting the loop between the two occurrences is safe, and cheaper than
+    rerouting: consecutive cells in the walk are adjacent (or a ramp pair) by
+    construction, so splicing out everything between a repeat and its first
+    occurrence leaves a walk whose consecutive cells were already consecutive.
+    The result is also shorter, which is strictly better.
+    """
+    first: dict[tuple[int, int, int], int] = {}
+    out: list[tuple[int, int, int]] = []
+    for cell in path:
+        seen_at = first.get(cell)
+        if seen_at is not None:
+            for dropped in out[seen_at + 1 :]:
+                first.pop(dropped, None)
+            del out[seen_at + 1 :]
+            continue
+        first[cell] = len(out)
+        out.append(cell)
+    return out
 
 
 def _astar(
@@ -1324,7 +1401,7 @@ def _astar(
                 if node in via:
                     path.append(via[node])
                 node = prev[node]
-            return list(reversed(path))
+            return _cut_loops(list(reversed(path)))
         x, y, lvl = cur
         for dx, dy in _STEPS:
             nxt = (x + dx, y + dy, lvl)
@@ -1374,6 +1451,32 @@ class _Net:
     item: str
 
 
+def _merge_frontier(
+    canvas: _Canvas,
+    paths: dict[int, list[tuple[int, int, int]]],
+    siblings: tuple[int, ...],
+) -> set[tuple[int, int, int]]:
+    """Free cells beside a sibling net's path -- somewhere to merge into.
+
+    Two belts feeding one is a side merge, which the game allows and
+    ``_build_runs`` already models (a tile with two predecessors heads its own
+    run).  Reaching a sibling's belt is therefore as good as reaching the lane
+    it feeds, and it is the ONLY option when the lane itself is walled in.
+
+    The sibling's own cells are not offered as goals: they are occupied, so A*
+    could never step onto them.  Their free neighbours are what a merging belt
+    actually needs.
+    """
+    out: set[tuple[int, int, int]] = set()
+    for s in siblings:
+        for x, y, lvl in paths.get(s, ()):
+            for dx, dy in _STEPS:
+                cell = (x + dx, y + dy, lvl)
+                if canvas.free(cell):
+                    out.add(cell)
+    return out
+
+
 def _route_all(
     canvas: _Canvas,
     nets: list[_Net],
@@ -1404,6 +1507,43 @@ def _route_all(
 
     _reserve_port_access(canvas, nets)
 
+    # Nets that end at the same lane. Ordered, so "the ones before me" is
+    # well defined however the router chooses to sequence a round.
+    same_dst: dict[tuple[int, int], list[int]] = defaultdict(list)
+    for i, net in enumerate(nets):
+        same_dst[net.dst.x, net.dst.y].append(i)
+    dst_group = {
+        i: tuple(g for g in same_dst[net.dst.x, net.dst.y] if g != i)
+        for i, net in enumerate(nets)
+    }
+    # The same story on the producer side, and it needs the same answer. An
+    # out-lane sandwiched between its neighbours is only reachable at its ends,
+    # so walking it tile by tile hands the later nets a walled-in start. They
+    # BRANCH instead: leave from a sibling's path, which becomes a splitter on
+    # that path at commit time. Keyed by the LANE (row and west edge), not the
+    # port, because `at_tile` moves the port along the lane it belongs to.
+    same_src: dict[tuple[int, int], list[int]] = defaultdict(list)
+    for i, net in enumerate(nets):
+        same_src[net.src.y, net.src.x0].append(i)
+    src_group = {
+        i: tuple(g for g in same_src[net.src.y, net.src.x0] if g != i)
+        for i, net in enumerate(nets)
+    }
+    # Chained nets, which is what `_proliferator_nets` builds: net k leaves from
+    # the belt net k-1 delivers to. If that belt is walled in -- and a coater's
+    # drop belt usually is, being a lane tile with lanes above and machines
+    # below -- then k has nowhere to start and k-1 nowhere to finish, even
+    # though the two are the same point. Reaching the neighbouring net's PATH is
+    # reaching the belt, in both directions.
+    by_dst_belt: dict[int, list[int]] = defaultdict(list)
+    by_src_belt: dict[int, list[int]] = defaultdict(list)
+    for i, net in enumerate(nets):
+        by_dst_belt[net.dst.belt].append(i)
+        by_src_belt[net.src.belt].append(i)
+    for i, net in enumerate(nets):
+        src_group[i] += tuple(g for g in by_dst_belt.get(net.src.belt, ()) if g != i)
+        dst_group[i] += tuple(g for g in by_src_belt.get(net.dst.belt, ()) if g != i)
+
     for it in range(RRR_MAX):
         iterations = it + 1
         for path in committed:
@@ -1433,11 +1573,25 @@ def _route_all(
                 for dx, dy in _STEPS
                 if canvas.free((net.src.x + dx, net.src.y + dy, 0))
             ]
+            # Leaving from a sibling's belt is as good as leaving from the lane,
+            # and it is the only option when the lane is walled in. `_tap_source`
+            # turns the attachment into a splitter on that belt.
+            starts.extend(
+                sorted(_merge_frontier(canvas, paths, src_group.get(i, ())) - set(starts))
+            )
             goals = {
                 (net.dst.x + dx, net.dst.y + dy, 0)
                 for dx, dy in _STEPS
                 if canvas.free((net.dst.x + dx, net.dst.y + dy, 0))
             }
+            # A lane head has one way in. When several producers feed the same
+            # lane, only the first can use it; the rest MERGE into whatever
+            # already got there, which is what converging belts do in game. The
+            # goal set therefore grows to include the free cells beside every
+            # path already laid this round for the same destination -- reaching
+            # one of those is reaching the lane.
+            for cell in _merge_frontier(canvas, paths, dst_group.get(i, ())):
+                goals.add(cell)
             routed = _astar(canvas, starts, goals, history, pressure, bounds, budget)
             canvas.routing_ports = frozenset()
             if routed is None:
@@ -1508,32 +1662,30 @@ def _commit_paths(
 
     Returns the number of routed nets that could NOT be linked to their source.
 
-    A belt tile has ONE ``output_obj``.  When several nets leave the same lane
-    end -- an iron-ingot strip feeding both the gear strip and the motor strip --
-    each of them wants that tile to point at its own path, and the last one to
-    commit used to win silently.  The earlier paths stayed on the grid as belts
-    nothing fed: real buildings, real area, no items.  That is the same defect
-    class as the fallback this replaced, and it hides in the same place, so it
-    is counted as a routing failure rather than absorbed.
+    A belt tile has ONE ``output_obj``.  When a lane serves several consumers,
+    each of them taps a different tile of it (see ``_Port.at_tile``), and a tap
+    partway along a lane is a JUNCTION: the lane has to keep flowing east *and*
+    hand items to the branch.  ``_tap_source`` builds that as a splitter, which
+    is what the game uses and what the fixture corpus shows.
 
-    Serving several destinations from one lane needs a splitter, which the
-    catalog does not model yet.  Until it does, refusing is the honest outcome:
-    the alternative is a blueprint that pastes cleanly and then starves two
-    thirds of the build.
+    Before splitters existed, every such net rewrote the same lane-end tile and
+    the last to commit won silently.  The earlier paths stayed on the grid as
+    belts nothing fed: real buildings, real area, no items.
     """
     for cell, owner in list(canvas.blocked.items()):
         if owner == -2:
             del canvas.blocked[cell]
+    # Release the port reservations. They exist to stop one net's path from
+    # taking the last cell another net needs to leave its port, and routing is
+    # over -- but `free()` refuses a cell reserved for a port that is not being
+    # routed, and nothing is being routed here. Leaving them held made every
+    # path that ran through its OWN start or goal cell fail the free() check
+    # below and get dropped. Silently, until `_commit_paths` learned to count.
+    canvas.reserved.clear()
+    canvas.routing_ports = frozenset()
     unlinked = 0
-    claimed_src: set[int] = set()
     for i, path in paths.items():
         net = nets[i]
-        if net.src.belt in claimed_src:
-            # Somebody already owns this lane end's single output. Do not lay
-            # the belts: an unfed belt run is worse than no belt run, because it
-            # costs area and reads as a connection.
-            unlinked += 1
-            continue
         indices: list[int] = []
         ok = True
         for x, y, lvl in path:
@@ -1557,19 +1709,294 @@ def _commit_paths(
         if not ok or not indices:
             unlinked += 1
             continue
-        claimed_src.add(net.src.belt)
         for a, b in zip(indices, indices[1:], strict=False):
             canvas.buildings[a] = _relink(canvas.buildings[a], output_obj=b)
-        canvas.buildings[net.src.belt] = _relink(
-            canvas.buildings[net.src.belt], output_obj=indices[0]
-        )
+        feeder = _source_for(canvas, indices[0], net, set(indices))
+        if not _tap_source(canvas, feeder, indices[0], belt_id, belt_model):
+            unlinked += 1
+            continue
         canvas.buildings[indices[-1]] = _relink(
-            canvas.buildings[indices[-1]], output_obj=net.dst.belt
+            canvas.buildings[indices[-1]],
+            output_obj=_sink_for(canvas, indices[-1], net, set(indices)),
         )
     return unlinked
 
 
+def _source_for(canvas: _Canvas, first: int, net: _Net, own: set[int]) -> int:
+    """What this path actually left from: the lane tap, or a sibling to branch off.
+
+    The mirror of :func:`_sink_for`.  A path that could not start beside its own
+    lane was routed from a sibling's belt instead, and feeding it from
+    ``net.src.belt`` regardless would name a building it is nowhere near.
+    """
+    head = canvas.buildings[first]
+    src = canvas.buildings[net.src.belt]
+    if abs(src.x - head.x) + abs(src.y - head.y) <= 1 and src.z == head.z:
+        return net.src.belt
+    for dx, dy in _STEPS:
+        cell = (head.x + dx, head.y + dy, head.z)
+        who = canvas.blocked.get(cell)
+        if who is None or not 0 <= who < len(canvas.buildings) or who in own:
+            # Never attach to a belt of THIS path. The cell before the one we
+            # are linking is adjacent and carries the same item, so it always
+            # matches -- and pointing at it makes a two-belt cycle, which
+            # `belt.acyclic` then reports.
+            continue
+        other = canvas.buildings[who]
+        if catalog.is_belt(other.item_id) and other.carries_item == net.item:
+            return who
+    return net.src.belt
+
+
+def _sink_for(canvas: _Canvas, last: int, net: _Net, own: set[int]) -> int:
+    """What this path actually reached: the lane head, or a sibling to merge into.
+
+    A path that could not get to the lane head was routed to a sibling's belt
+    instead (see ``_merge_frontier``), so linking it to ``net.dst.belt``
+    regardless would name a building it is nowhere near -- which
+    ``belt.link_adjacent`` would then, correctly, report as an error.
+
+    Preference order is the lane head first, so the common case is unchanged and
+    a merge only happens where one was actually routed.
+    """
+    tail = canvas.buildings[last]
+    dst = canvas.buildings[net.dst.belt]
+    if abs(dst.x - tail.x) + abs(dst.y - tail.y) <= 1 and dst.z == tail.z:
+        return net.dst.belt
+    for dx, dy in _STEPS:
+        cell = (tail.x + dx, tail.y + dy, tail.z)
+        who = canvas.blocked.get(cell)
+        if who is None or not 0 <= who < len(canvas.buildings) or who in own:
+            # Never attach to a belt of THIS path. The cell before the one we
+            # are linking is adjacent and carries the same item, so it always
+            # matches -- and pointing at it makes a two-belt cycle, which
+            # `belt.acyclic` then reports.
+            continue
+        other = canvas.buildings[who]
+        if catalog.is_belt(other.item_id) and other.carries_item == net.item:
+            return who
+    # Nothing adjacent carries this item. Name the lane head anyway so the
+    # failure is visible as `belt.link_adjacent` rather than as a belt that
+    # quietly ends nowhere.
+    return net.dst.belt
+
+
+def _tap_source(
+    canvas: _Canvas, belt_idx: int, branch: int, belt_id: int, belt_model: int
+) -> bool:
+    """Make ``belt_idx`` hand items to ``branch``, junctioning if it must.
+
+    Three cases, and the distinction is the whole point:
+
+    * The tile has no onward link -- it is a lane end -- so it can simply point
+      at the branch.
+    * The tile already flows onward to the next lane tile.  It cannot also point
+      at the branch, so a splitter goes on the tile: the lane feeds it, a new
+      co-located belt carries the lane onward from it, and the branch draws from
+      it too.  Co-location is not a liberty; it is exactly what the corpus does,
+      a belt running *through* a junction being recorded as two belts on the
+      tile.
+    * The tile already feeds a splitter, because another branch got here first.
+      Attach to that same junction if it has a spare side, otherwise report the
+      failure rather than exceed a splitter's four ports, which pastes as a
+      junction quietly dropping a connection.
+
+    Returns ``False`` when the branch could not be attached.
+    """
+    b = canvas.buildings[belt_idx]
+    onward = b.output_obj
+    if onward is None:
+        canvas.buildings[belt_idx] = _relink(b, output_obj=branch)
+        return True
+
+    if canvas.buildings[onward].item_id == catalog.SPLITTER_ID:
+        junction_idx = onward
+    else:
+        junction_idx = canvas.add(
+            junction.make_splitter(b.x, b.y, b.z, carries_item=b.carries_item)
+        )
+        canvas.buildings[belt_idx] = _relink(b, output_obj=junction_idx)
+        # Carry the lane onward FROM the junction, so everything downstream of
+        # the tap stays fed. Dropping this would starve the rest of the lane in
+        # order to feed the branch -- trading one silent break for another.
+        # `replace`, not a fresh PlacedBuilding: the carry belt IS the lane belt
+        # continuing past the junction, so every field it does not change should
+        # come across untouched. Listing fields by hand is how `carries_item`
+        # and `parameters` got silently dropped elsewhere in this file.
+        carry = canvas.add(replace(b, input_obj=junction_idx, output_obj=onward))
+        del carry  # linked by construction; the index is not needed again
+
+    attached = sum(
+        1
+        for c in canvas.buildings
+        if c.output_obj == junction_idx or c.input_obj == junction_idx
+    )
+    if attached >= junction.MAX_PORTS:
+        return False
+
+    # The branch belt is ADJACENT to the junction, not on it, and every belt
+    # attached to a splitter must be CO-LOCATED with it -- that is what the
+    # corpus shows and what `junction.colocated` enforces. So the junction gets
+    # a stub on its own tile which then runs out to the branch. This is exactly
+    # the shape the game records: a splitter's port is a belt on the junction
+    # tile, and the route starts from there.
+    stub = canvas.add(
+        replace(
+            b,
+            yaw=canvas.buildings[branch].yaw,
+            input_obj=junction_idx,
+            output_obj=branch,
+        )
+    )
+    del stub  # linked by construction
+    return True
+
+
 # --- power -----------------------------------------------------------------
+
+
+def _straight_to_edge(
+    canvas: _Canvas, port: _Port, bounds: tuple[int, int, int, int]
+) -> list[tuple[int, int, int]] | None:
+    """A clear straight run from just outside the block to ``port``'s tile.
+
+    Four directions are tried, nearest edge first, and the run must be clear the
+    whole way -- a partial run is not a connection.  Returns the cells in FLOW
+    order (edge first, lane last) or ``None`` when every direction is blocked,
+    at which point the caller falls back to routing.
+    """
+    min_x, min_y, max_x, max_y = bounds
+    options: list[list[tuple[int, int, int]]] = [
+        [(x, port.y, 0) for x in range(min_x - 1, port.x)],
+        [(x, port.y, 0) for x in range(max_x + 1, port.x, -1)],
+        [(port.x, y, 0) for y in range(min_y - 1, port.y)],
+        [(port.x, y, 0) for y in range(max_y + 1, port.y, -1)],
+    ]
+    clear = [
+        cells
+        for cells in options
+        if cells and all(canvas.free(c) for c in cells)
+    ]
+    if not clear:
+        return None
+    return min(clear, key=len)
+
+
+def _route_external_inputs(
+    canvas: _Canvas,
+    spec: BuildSpec,
+    strip_in_ports: list[dict[str, _Port]],
+    belt_id: int,
+    belt_model: int,
+    bounds: tuple[int, int, int, int],
+) -> int:
+    """Run every outside input from the block edge to the lane that wants it.
+
+    Returns the number of lanes that could not be reached.
+
+    Without this, an external input was just a lane wearing a marker icon.  On a
+    packed build that lane is frequently WALLED IN -- above it another lane,
+    below it the machine band, either side the lane itself -- so no belt could
+    be run to it, by the router or by the player standing in front of it.  The
+    icon said "connect here" pointing at a tile nothing can connect to.
+
+    Routing to the boundary fixes three things at once: the lane is reachable,
+    the marker now sits on a belt the player can actually see the end of, and
+    the blueprint describes its own inputs instead of relying on the operator to
+    work out which of forty belts is the iron-ore one.
+
+    Belts flow INWARD here -- from the edge to the lane -- which is the opposite
+    direction to every other net, so the path is committed head-first with the
+    last belt feeding the lane.
+    """
+    min_x, min_y, max_x, max_y = bounds
+    # One ring outside the block: where the player's belt meets ours.
+    edge = [
+        (x, y, 0)
+        for x in range(min_x - 1, max_x + 2)
+        for y in (min_y - 1, max_y + 1)
+    ] + [
+        (x, y, 0)
+        for y in range(min_y, max_y + 1)
+        for x in (min_x - 1, max_x + 1)
+    ]
+    starts = [c for c in edge if canvas.free(c)]
+    if not starts:
+        return 0
+
+    history: dict[tuple[int, int, int], float] = defaultdict(float)
+    budget = {"left": _ROUTING_BUDGET}
+    # Deduplicate: several strips of one group each want the same item, and each
+    # of their lanes needs its own way in.
+    # Keyed by LANE, not by item. `_seat_inputs` mixes two ingredients onto one
+    # lane when they will not fit one-per-lane, and both then report the same
+    # port. Routing per item would try to build a second run to a lane that
+    # already has one, find the cell taken, and count a miss -- which is what
+    # made the six-ingredient spec refuse outright. One lane needs one way in;
+    # what travels on it is the marker pass's business.
+    wanted: dict[int, _Port] = {}
+    for ports in strip_in_ports:
+        for item, port in sorted(ports.items()):
+            if item in spec.external_inputs:
+                wanted.setdefault(port.belt, port)
+    carried = {
+        port.belt: item
+        for ports in strip_in_ports
+        for item, port in sorted(ports.items(), reverse=True)
+        if item in spec.external_inputs
+    }
+    missed = 0
+    for belt, port in wanted.items():
+        item = carried[belt]
+        # Straight out to the edge first. A lane head sits on the west face of
+        # its strip, so the run west along its own row is usually clear, costs
+        # one belt per tile, and -- unlike a routed path -- cannot compete with
+        # the other input lanes for the margin outside the block. That mattered:
+        # routing six lanes of a six-ingredient strip through a two-tile margin
+        # failed outright, while six parallel straight runs do not interact at
+        # all. It is also what spine does, and for the same reason.
+        path = _straight_to_edge(canvas, port, bounds)
+        if path is None:
+            goals = {
+                (port.x + dx, port.y + dy, 0)
+                for dx, dy in _STEPS
+                if canvas.free((port.x + dx, port.y + dy, 0))
+            }
+            if not goals:
+                missed += 1
+                continue
+            live = [c for c in starts if canvas.free(c)]
+            path = _astar(canvas, live, goals, history, 1.0, bounds, budget)
+        if path is None:
+            missed += 1
+            continue
+        indices: list[int] = []
+        for x, y, lvl in path:
+            if not canvas.free((x, y, lvl)):
+                break
+            indices.append(
+                canvas.add(
+                    PlacedBuilding(
+                        item_id=belt_id,
+                        model_index=belt_model,
+                        x=x,
+                        y=y,
+                        z=lvl,
+                        width=1,
+                        height=1,
+                        carries_item=item,
+                    )
+                )
+            )
+        if not indices:
+            missed += 1
+            continue
+        for a, b in zip(indices, indices[1:], strict=False):
+            canvas.buildings[a] = _relink(canvas.buildings[a], output_obj=b)
+        canvas.buildings[indices[-1]] = _relink(
+            canvas.buildings[indices[-1]], output_obj=port.belt
+        )
+    return missed
 
 
 def _place_power(canvas: _Canvas) -> int:
@@ -1815,8 +2242,33 @@ def _build(
         # Pair the two sides cyclically so EVERY producer lane is drained and
         # EVERY consumer lane is filled, whichever side was sharded further. One
         # net per side-pair; taking the cross product would emit needless belts.
+        #
+        # When a producer lane is reused -- more sinks than sources -- each reuse
+        # taps a DIFFERENT tile of that lane. Sharing the lane's end tile could
+        # never work: a belt tile has one `output_obj`, so only the last net to
+        # commit was linked and the rest became belts nothing fed. Distinct tiles
+        # turn the reuse into what it physically is, a junction partway along the
+        # lane, which `_commit_paths` builds a splitter for.
+        # Only the PRODUCER side moves. Walking the consumer lane inward was
+        # tried and is strictly worse: a strip's inner input lane is walled in
+        # -- above it another lane, below it the machine band, either side the
+        # lane itself -- so every tile of it has zero free neighbours. Measured
+        # on magnetic-ring: dst ports with all four neighbours occupied, on a
+        # CLEAN canvas, before any routing. Only the lane HEAD is reachable,
+        # because its west neighbour lies outside the strip.
+        #
+        # So several producers feeding one consumer lane cannot each reach it.
+        # They converge instead: the first net routes to the head and the rest
+        # merge into that net's path, which is what belts do anyway.
+        reuse_src: dict[int, int] = defaultdict(int)
         for k in range(max(len(srcs), len(sinks))):
-            port = srcs[k % len(srcs)]
+            si = k % len(srcs)
+            base = srcs[si]
+            # Tap from the east end inward, so the first consumer keeps the
+            # natural end-of-lane attachment and only the extras move.
+            nth = reuse_src[si]
+            reuse_src[si] += 1
+            port = base.at_tile(len(base.tiles) - 1 - nth) if nth else base
             sink = sinks[k % len(sinks)]
             if (src_key, dest) in direct_keys and _bridge(canvas, port, sink, rates, item):
                 direct_placed += 1
@@ -1843,9 +2295,23 @@ def _build(
     ys = [b.y for b in canvas.buildings] or [0]
     bounds = (min(xs), min(ys), max(xs) + pack.width, max(ys) + pack.height)
 
+    # Bring the outside inputs in FIRST. They have no alternative: an internal
+    # net can be routed around an obstacle, but an external lane can only be
+    # reached from beyond the block, and a strip's inner lanes have exactly one
+    # way in. Routing the internal nets first let them take those cells -- on
+    # the graphene chain two external lanes were walled in by belts that had a
+    # dozen other routes available. First claim goes to the side that has no
+    # second choice.
+    unreachable = 0
+    if route:
+        unreachable = _route_external_inputs(
+            canvas, spec, strip_in_ports, belt_id, belt_model, bounds
+        )
+
     routed, failed, iterations = (0, 0, 0)
     if route and nets:
         routed, failed, iterations = _route_all(canvas, nets, belt_id, belt_model, bounds)
+    failed += unreachable
 
     towers = _place_power(canvas) if power else 0
 
@@ -2111,39 +2577,48 @@ def _place_proliferator_entry(
 
 
 def _fanout_shortfall(strips: list[Strip]) -> list[str]:
-    """Consumer lanes that no producer lane can be dedicated to.
+    """Producer lanes with fewer tiles than the consumers they must tap.
 
     ``_build`` pairs the two sides of an edge cyclically -- ``srcs[k % len(srcs)]``
-    against ``sinks[k % len(sinks)]`` -- so that whichever side is sharded further
-    is fully served.  When there are more consumer lanes than producer lanes, the
-    same producer lane becomes the source of several nets, and a belt tile has one
-    ``output_obj``.  Only one of those nets can be linked; see ``_commit_paths``.
+    against ``sinks[k % len(sinks)]`` -- so whichever side is sharded further is
+    fully served.  More sinks than sources means a producer lane is reused, and
+    each reuse taps a different tile of that lane and junctions there.
 
-    This is a property of the STRIP PLAN, not of any packing, so it is worth
-    knowing before the height sweep rather than after.  A spec that trips it
-    refuses at every height and every budget, and each of those attempts costs a
-    full sweep plus the retry at :data:`RETRY_BUDGET_S` -- 35 to 56 seconds on
-    the magnetic-ring chain -- to rediscover something that was decided the
-    moment the strips were planned.
+    That works right up to the point where the lane runs out of tiles: two taps
+    on one tile would need two splitters on one square.  A lane is as wide as
+    its strip, so this is rare -- but it is a property of the STRIP PLAN, decided
+    before any packing exists, and worth knowing before the height sweep rather
+    than after.  A spec that trips it refuses at every height and every budget,
+    and each attempt costs a full sweep plus the retry at
+    :data:`RETRY_BUDGET_S`.
 
     Returns one description per offending edge, empty when the plan is servable.
     """
     src_lanes: dict[tuple[str, str, str], int] = defaultdict(int)
+    src_tiles: dict[tuple[str, str, str], int] = {}
     sink_lanes: dict[tuple[str, str], int] = defaultdict(int)
     for s in strips:
         for item, dest in s.out_lanes:
             if dest:
-                src_lanes[s.group_key, item, dest] += 1
+                key = (s.group_key, item, dest)
+                src_lanes[key] += 1
+                src_tiles[key] = min(src_tiles.get(key, s.width), s.width)
         for item in s.in_lanes:
             sink_lanes[s.group_key, item] += 1
 
     out: list[str] = []
     for (src_key, item, dest), n_src in sorted(src_lanes.items()):
         n_sink = sink_lanes.get((dest, item), 0)
-        if n_sink > n_src:
+        if n_sink <= n_src:
+            continue
+        # Taps land on the narrowest lane of the group, so that is the one that
+        # can run out. Ceiling division: the reuse is spread round-robin.
+        per_lane = -(-n_sink // n_src)
+        tiles = src_tiles[src_key, item, dest]
+        if per_lane > tiles:
             out.append(
-                f"{item}: {src_key} offers {n_src} output lane(s) but {dest} has "
-                f"{n_sink} input lane(s) to fill"
+                f"{item}: {src_key} lane is {tiles} tile(s) wide but must tap "
+                f"{per_lane} consumer lane(s) of {dest}"
             )
     return out
 
@@ -2266,12 +2741,16 @@ class FreeformLayout:
         # the sweep would try every height, retry the lot at RETRY_BUDGET_S, and
         # report "left nets unrouted" -- 51s on the magnetic-ring chain to
         # rediscover something fixed the moment the strips were planned.
+        #
+        # Fan-out itself is no longer a shortfall: a lane serving several
+        # consumers taps a different tile for each and junctions there. What
+        # remains unservable is a lane with fewer TILES than taps to make, since
+        # two taps on one tile would need two splitters on one square.
         shortfall = _fanout_shortfall(strips)
         if shortfall:
             raise NoValidLayout(
-                "a belt tile has one output, so one producer lane cannot feed "
-                "several consumer lanes; this needs a splitter (catalog id 2020), "
-                "which is not emitted yet. " + "; ".join(shortfall[:3]),
+                "a producer lane has fewer tiles than the consumers it must tap, "
+                "so two junctions would have to share one tile. " + "; ".join(shortfall[:3]),
                 spec_label=spec.label,
                 budget_s=0.0,
             )
@@ -2301,6 +2780,19 @@ class FreeformLayout:
         degraded answer.  Packs with unrouted nets are discarded here rather than
         ranked below routed ones, so an unwireable pack can never be what this
         returns.
+
+        ``time_budget_s`` bounds the WHOLE sweep, not just CP-SAT.  It used to
+        bound only the packing: routing is limited by an expansion count, not a
+        clock, so a 1s budget could spend 13.5s and a 4s budget 68.6s -- both on
+        specs that then refused.  A caller who says one second and waits over a
+        minute has not been given a budget, and the bake-off cannot sweep a
+        parameter the code ignores.
+
+        The deadline is checked between heights rather than inside them: a
+        half-routed pack is not a result, so interrupting one wastes the work
+        without producing anything.  Whatever has already been found is
+        returned, which is why the heights most likely to pay off are tried
+        first.
         """
         candidates = _direct_insert_candidates(spec)
         greedy = _greedy_pack(strips, _height_seed(strips))
@@ -2311,10 +2803,19 @@ class FreeformLayout:
 
         heights = _candidate_heights(strips)
         per_solve = max(0.1, time_budget_s / max(len(heights), 1))
+        deadline = time.monotonic() + time_budget_s
 
         best: Placement | None = None
         best_key: tuple[int, float] | None = None
         for height in heights:
+            # The deadline stops us IMPROVING, never FINDING. A refusal means
+            # the model could not lay the spec out; a clock must not be able to
+            # manufacture one. Breaking on time alone did exactly that: heights
+            # are tried shortest-first and the free-proliferation chain only
+            # wires at the tallest, so a 2s budget refused a spec that routes
+            # every net cleanly given the chance to reach it.
+            if best is not None and time.monotonic() >= deadline:
+                break
             pack = _pack(
                 strips,
                 height=height,

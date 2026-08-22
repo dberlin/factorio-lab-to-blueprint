@@ -6,28 +6,40 @@ collision-free channel before the solver runs.  CP-SAT therefore only ever
 chooses *how much* structure to spend, never *whether a route exists* -- there is
 no place-then-route repair loop and no infeasible-placement dead end.
 
-    corridor C0   ═══ external inputs ═══════════════
-    row 0         [ smelter ][ smelter ][T]
-    corridor C1   ═══ iron-ingot ═══════════════════
-    row 1         [ assembler ][ assembler ]
-    corridor C2   ═══ product out ═════════════════
+    corridor C0   ═══ external inputs ═══════════════ │
+    row 0         [ smelter ][ smelter ][T]           │ ← riser margin
+    corridor C1   ═══ iron-ingot ══════════════════╤══╡
+    row 1         [ assembler ][ assembler ]       │  │
+    corridor C2   ═══ iron-ingot ══════════════════╧══╡
 
-Two structural facts do most of the work:
+Three structural facts do most of the work:
 
 * **Rows hold machines, corridors hold belts**, so a Tesla tower placed in a row
   blocks no belt.  Power is just another block in the row's 1D packing.
 * **A corridor lane is within sorter reach of every machine on both sides of it**,
   so a distribution problem costs one lane per corridor rather than one route per
   machine.  Proliferator and power both ride on this.
+* **An item's copies in different corridors are joined by a trunk riser** in a
+  margin east of the block.  Without one the copies are independent horizontal
+  runs, which is what an earlier version of this docstring called "correct and
+  routable" and what the validator called eleven ``flow.lane_sourced`` errors on
+  one nine-group spec.  See :func:`_plan_risers`.
 
-Deliberate v1 scope reductions, each documented where it appears:
+The riser margin is the whole area cost of joining the copies.  Trunks are
+coloured like an interval graph, so it is as wide as the deepest pile-up of
+simultaneously live trunks -- 2 columns on graphene, 3 on processor, 4 on
+casimir-crystal -- and no taller than the block already was.
 
-* No trunk risers (``T = 0``).  An item spanning non-adjacent rows takes a lane in
-  every corridor between, which is correct and routable, just taller than a riser
-  would be.  See ``_lane_requirements``.
+Deliberate scope reductions, each documented where it appears:
+
 * All machines of a group share one row.
-* Corridor lanes are never stacked at ``z = 1``: the catalog confirms sorters
-  never span altitudes, so a raised lane could not be tapped.
+* Corridor lanes are never stacked: sorters cannot span altitudes, so a raised
+  lane could not be tapped.  The one thing that does leave the ground is a
+  riser's horizontal bridge, which only ever *crosses* another trunk -- see
+  :data:`_BRIDGE_Z`.
+* Machines sit at the top of their row, so a machine shorter than its row cannot
+  always reach the corridor below it.  ``_lane_requirements`` allocates around
+  that rather than moving the machine.
 """
 
 from __future__ import annotations
@@ -40,6 +52,7 @@ from fractions import Fraction
 from ortools.sat.python import cp_model
 
 from flab2bp.dsp import catalog, params
+from flab2bp.layout import junction
 from flab2bp.layout.base import (
     DEFAULT_SEARCH_WORKERS,
     RETRY_BUDGET_S,
@@ -150,6 +163,26 @@ def proliferator_item(spec: BuildSpec) -> str | None:
     )
 
 
+def _leaving_items(groups: dict[str, _Group], spec: BuildSpec) -> set[str]:
+    """Items that must be belted out of the block: the targets AND the byproducts.
+
+    ``spec.outputs`` names only what the build is *for*.  A recipe with two
+    products emits the other one regardless -- ``plasma-refining`` yields refined
+    oil and hydrogen -- and if nothing consumes it, ``_lane_requirements`` gave
+    it no lane, so no sorter drained it and the machine backed up.  The
+    validator's ``machine.output_removed`` says so in as many words, on graphene,
+    plastic and energy-matrix.
+
+    A byproduct is treated exactly like a target: a lane from its maker to the
+    east edge, where the player belts it away or voids it.  That is the only
+    honest option -- the alternative, leaving it unbelted, stalls the machine
+    that makes the thing the build is actually for.
+    """
+    consumed = {item for g in groups.values() for item in g.inputs}
+    produced = {item for g in groups.values() for item in g.outputs}
+    return set(spec.outputs) | (produced - consumed)
+
+
 @dataclass(frozen=True, slots=True)
 class _Edge:
     """``item`` flowing from group ``src`` to group ``dst`` at ``rate`` items/s."""
@@ -247,6 +280,23 @@ def _row_index(rows: list[list[str]]) -> dict[str, int]:
     return {key: r for r, row in enumerate(rows) for key in row}
 
 
+def _fits_below(slot: set[str], item: str, gaps: dict[str, int], reach: int) -> bool:
+    """Could the corridor BELOW a row take ``item`` as well and stay tappable?
+
+    Lane ``j`` of the corridor below sits ``gap + j + 1`` tiles from a machine
+    whose bottom edge is ``gap`` above its row's floor.  The slot's lanes are
+    emitted worst-gap-first -- see ``_lane_requirements``, which sorts the
+    corridor's top band the same way -- so the shortest machine gets the shallow
+    lane and the check is exactly that greedy assignment being feasible.
+
+    Charging the worst gap to the whole slot instead would be far too strict: a
+    corridor happily holds three lanes for a gap of 2 (spans 3, 2, 3) where a
+    flat ``reach - gap`` cap allows one.
+    """
+    combined = sorted((gaps.get(i, 0) for i in {*slot, item}), reverse=True)
+    return all(g + j + 1 <= reach for j, g in enumerate(combined))
+
+
 def _lane_requirements(
     groups: dict[str, _Group],
     edges: list[_Edge],
@@ -267,6 +317,11 @@ def _lane_requirements(
     crossing: list[set[str]] = [set() for _ in range(n_corr)]
     tap_above: list[set[str]] = [set() for _ in range(n_corr)]
     tap_below: list[set[str]] = [set() for _ in range(n_corr)]
+    #: How far the machine tapping corridor ``c`` from ABOVE stops short of its
+    #: row's floor.  Sets the order of the corridor's top band: worst gap gets
+    #: the shallowest lane, which is what ``_fits_below`` assumes when it decides
+    #: the band can hold one more.
+    above_gap: list[dict[str, int]] = [{} for _ in range(n_corr)]
 
     # What each row consumes and produces, and the corridor span each item needs.
     consumes: list[set[str]] = [set() for _ in rows]
@@ -292,7 +347,7 @@ def _lane_requirements(
             for r in consumers:
                 consumes[r].add(item)
 
-    for item in spec.outputs:
+    for item in _leaving_items(groups, spec):
         sources = [at[k] for k, g in groups.items() if item in g.outputs]
         if sources:
             widen(item, min(sources) + 1, n_corr - 1)
@@ -316,27 +371,55 @@ def _lane_requirements(
     for r in range(len(rows)):
         slot_below: set[str] = set()  # corridor r, tapped from below by this row
         slot_above: set[str] = set()  # corridor r + 1, tapped from above by it
-        for items, first, second in (
-            (sorted(consumes[r]), slot_below, slot_above),
-            (sorted(produces[r]), slot_above, slot_below),
-        ):
-            for item in items:
-                if item in slot_below or item in slot_above:
-                    continue  # already reachable from this row
-                target = first if len(first) < reach else second
-                if len(target) >= reach:
-                    raise ValueError(
-                        f"row {r} taps {len(consumes[r] | produces[r])} distinct items, "
-                        f"exceeding the {2 * reach} its two corridors can reach"
-                    )
-                target.add(item)
+        # Machines are pinned to the TOP of their row, and a row is as tall as
+        # its tallest group, so a short group stops short of the row's bottom
+        # edge -- a 3-tall smelter sharing a row with a 7-tall refinery ends four
+        # tiles above the floor.  Its top edge is still flush, so the corridor
+        # ABOVE costs it nothing, but every lane in the corridor BELOW is that
+        # gap further away.  ``_fits_below`` decides what that leaves room for,
+        # and the corridor's top band is ordered worst-gap-first to match.
+        #
+        # Getting this wrong is silent in the worst way: the lane is allocated
+        # below, `_find_tap` correctly refuses to wire something out of reach,
+        # and the machine simply gets no sorter for that item at all.  That is
+        # how graphene, plastic, energy-matrix and casimir-crystal each ended up
+        # with a smelter nothing drained.
+        row_h = max((groups[k].height for k in rows[r]), default=1)
+        gaps: dict[str, int] = {}
+        for k in rows[r]:
+            gap = row_h - groups[k].height
+            for item in set(groups[k].inputs) | set(groups[k].outputs):
+                gaps[item] = max(gaps.get(item, 0), gap)
+
+        prefers_above: dict[str, bool] = dict.fromkeys(sorted(consumes[r]), True)
+        for item in sorted(produces[r]):
+            prefers_above.setdefault(item, False)
+        # Most constrained first: an item whose tapper is short has fewer places
+        # it can go, so it has to choose before the ones that can go anywhere.
+        for item in sorted(prefers_above, key=lambda i: (-gaps.get(i, 0), i)):
+            top_ok = len(slot_below) < reach
+            bottom_ok = _fits_below(slot_above, item, gaps, reach)
+            if prefers_above[item]:
+                target = slot_below if top_ok else (slot_above if bottom_ok else None)
+            else:
+                target = slot_above if bottom_ok else (slot_below if top_ok else None)
+            if target is None:
+                raise ValueError(
+                    f"row {r} taps {len(consumes[r] | produces[r])} distinct items, "
+                    f"exceeding what its two corridors can reach"
+                )
+            target.add(item)
         for c, slot_items in ((r, slot_below), (r + 1, slot_above)):
             if not 0 <= c < n_corr:
                 continue
             for item in slot_items:
                 lo, hi = span[item]
                 widen(item, min(lo, c), max(hi, c))
-                (tap_below if c == r else tap_above)[c].add(item)
+                if c == r:
+                    tap_below[c].add(item)
+                else:
+                    tap_above[c].add(item)
+                    above_gap[c][item] = gaps.get(item, 0)
 
     for item, (lo, hi) in span.items():
         for c in range(max(lo, 0), min(hi, n_corr - 1) + 1):
@@ -360,7 +443,11 @@ def _lane_requirements(
 
     ordered: list[list[str]] = []
     for c in range(n_corr):
-        above = sorted(tap_above[c] & crossing[c])
+        # Worst gap shallowest: a machine that stops two tiles above its row's
+        # floor can only reach the corridor's first lane or two, so it takes one.
+        above = sorted(
+            tap_above[c] & crossing[c], key=lambda i: (-above_gap[c].get(i, 0), i)
+        )
         below = sorted(tap_below[c] & crossing[c])
         through = sorted(crossing[c] - set(above) - set(below))
         order = lane_order(above, below, through, reach)
@@ -369,8 +456,49 @@ def _lane_requirements(
                 f"corridor {c} needs {len(above)} taps above and {len(below)} below, "
                 f"exceeding sorter reach {reach}"
             )
+        if prolif is not None and prolif in order:
+            order = _cover_sprayed(
+                order, prolif, set(spec.spray_lanes), len(above), len(below), reach
+            )
         ordered.append(order)
     return ordered
+
+
+def _cover_sprayed(
+    order: list[str], prolif: str, sprayed: set[str], n_above: int, n_below: int, reach: int
+) -> list[str]:
+    """Add proliferator copies until every sprayed item has a coatable lane.
+
+    ``lane_order`` puts the pass-through lanes -- proliferator among them -- in
+    the middle, between the band the row above taps and the band the row below
+    taps.  On a boundary corridor there is no band above, so the proliferator
+    lands at depth 0 while the sprayed lanes sit five or six tiles down, and no
+    sorter reaches from one to the other: ``prolif.coaters_are_supplied``, on
+    graphene and casimir-crystal.
+
+    A copy may only be inserted at a BAND BOUNDARY.  Taps into the band above
+    are measured from the corridor's top edge and taps into the band below from
+    its bottom, so an insert between the two moves neither -- while an insert
+    inside a band would push its far lane out of reach and break the very thing
+    that made the corridor routable.  Both boundaries are within ``reach`` of
+    their whole band, since a band is at most ``reach`` lanes deep, so at most
+    two copies settle any corridor.
+    """
+
+    def uncovered(lanes: list[str]) -> set[str]:
+        spots = [j for j, i in enumerate(lanes) if i == prolif]
+        reachable = {
+            i
+            for j, i in enumerate(lanes)
+            if any(1 <= abs(j - p) <= reach for p in spots)
+        }
+        return {i for i in lanes if i in sprayed} - reachable
+
+    for cut in (len(order) - n_below, n_above):
+        if not uncovered(order):
+            break
+        order = [*order[:cut], prolif, *order[cut:]]
+    return order
 
 
 def fallback_plan(spec: BuildSpec) -> _Plan:
@@ -596,7 +724,8 @@ def _solve_one(
         return b
 
     # A corridor's height is its lane count.
-    lane_items = sorted({e.item for e in edges} | set(spec.external_inputs) | set(spec.outputs))
+    leaving = _leaving_items(groups, spec)
+    lane_items = sorted({e.item for e in edges} | set(spec.external_inputs) | leaving)
     corridor_h = []
     for c in range(n + 1):
         used = []
@@ -619,7 +748,7 @@ def _solve_one(
                 for k, g in groups.items():
                     if item in g.inputs:
                         contribs.append(_reified(row[k], c, less=False))
-            if item in spec.outputs:
+            if item in leaving:
                 # Leaves at the bottom, so it occupies corridors below its maker.
                 for k, g in groups.items():
                     if item in g.outputs:
@@ -798,7 +927,10 @@ def _realizable_direct(
         for ek in sorted(current):
             src, dst, _item = ek
             r_src, r_dst = at[src], at[dst]
-            dy = row_y[r_dst] - (row_y[r_src] + row_heights[r_src] - 1)
+            # The producer's OWN bottom edge, not its row's: a short machine in a
+            # tall row stops well above the row's floor, and measuring from the
+            # floor understates the gap the sorter has to cross.
+            dy = row_y[r_dst] - (row_y[r_src] + groups[src].height - 1)
             prod, cons = xs.get(src, []), xs.get(dst, [])
             if not prod or not cons or dy < 1:
                 excess = reach + 1
@@ -949,12 +1081,51 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
             towers += 1
             x += 2 * band_hr
 
+    # --- what taps what ---------------------------------------------------
+    # Which lane each group reaches, for each of its items, computed ONCE.  The
+    # extent trim, the riser planner and the sorter pass all need the same
+    # answer; deriving it three times is how a sorter came to anchor on one lane
+    # copy while the trim shortened a different one.
+    #
+    # Edges served entirely by direct insertion are left out, because they get
+    # no sorter at all.  Counting them would have the riser planner joining a
+    # lane nothing fills to a lane nothing drains.
+    leaving = _leaving_items(groups, spec)
+    rate_of = {(e.src, e.dst, e.item): e.rate for e in edges}
+    in_edges: dict[tuple[str, str], list[_Edge]] = defaultdict(list)
+    out_edges: dict[tuple[str, str], list[_Edge]] = defaultdict(list)
+    for e in edges:
+        in_edges[e.dst, e.item].append(e)
+        out_edges[e.src, e.item].append(e)
+    fully_direct_in = {
+        (k, item)
+        for (k, item), es in in_edges.items()
+        if item not in spec.external_inputs
+        and all((e.src, e.dst, e.item) in plan.direct for e in es)
+    }
+    fully_direct_out = {
+        (k, item)
+        for (k, item), es in out_edges.items()
+        if item not in leaving and all((e.src, e.dst, e.item) in plan.direct for e in es)
+    }
+
+    taps: dict[tuple[str, str, bool], _Tap] = {}
+    for key, g in groups.items():
+        r = at[key]
+        for item, into in [(i, True) for i in g.inputs] + [(o, False) for o in g.outputs]:
+            if (key, item) in (fully_direct_in if into else fully_direct_out):
+                continue
+            tap = _find_tap(plan, r, item, corr_y, row_y, g.height, out=not into)
+            if tap is not None:
+                taps[key, item, into] = tap
+
     # --- lane extents -----------------------------------------------------
     # A lane only needs belt where something actually taps it, plus a run to the
-    # block edge when it carries an external input in or a product out.  Full
-    # width costs no extra *area*, but it triples the building count, which
-    # matters when pasting.  Untapped pass-through lanes keep their full width:
-    # they reserve a channel that a future trunk riser will use.
+    # block edge when it carries an external input in or a product out, plus a
+    # run to the east margin when a riser has to reach it.  Full width costs no
+    # extra *area*, but it triples the building count, which matters when
+    # pasting.  Untapped pass-through lanes keep their full width; they stop at
+    # ``content_w - 1``, so they never reach into the riser margin.
     extents: dict[tuple[int, str], tuple[int, int]] = {}
 
     def _extend(c: int, item: str, lo: int, hi: int) -> None:
@@ -962,13 +1133,12 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
         extents[c, item] = (lo, hi) if cur is None else (min(cur[0], lo), max(cur[1], hi))
 
     for key, g in groups.items():
-        r = at[key]
         xs = [buildings[i].x for i in machine_at[key]]
         if not xs:
             continue
         lo, hi = min(xs), max(xs) + g.width - 1
         for item, into in [(i, True) for i in g.inputs] + [(o, False) for o in g.outputs]:
-            tap = _find_tap(plan, r, item, corr_y, row_y, row_heights, out=not into)
+            tap = taps.get((key, item, into))
             if tap is not None:
                 _extend(tap.corridor, item, lo, hi)
 
@@ -978,8 +1148,29 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
                 continue
             if item in spec.external_inputs:
                 _extend(c, item, 0, 0)
-            if item in spec.outputs:
+            if item in leaving:
                 _extend(c, item, content_w - 1, content_w - 1)
+
+    # --- trunk risers -----------------------------------------------------
+    # The copies of an item's lane in different corridors used to be independent
+    # horizontal runs with nothing between them, so a producer's sorters filled
+    # corridor r + 1 while its consumers drained corridor s and the item never
+    # arrived.  Every `flow.lane_sourced` error on every corpus spec was this.
+    filled: set[tuple[int, int]] = set()
+    drained: set[tuple[int, int]] = set()
+    for (_key, _item, into), tap in taps.items():
+        (drained if into else filled).add((tap.corridor, tap.depth))
+
+    risers = _plan_risers(plan, corr_y, filled, drained, set(spec.external_inputs))
+    fed_from_trunk: set[tuple[int, int]] = set()
+    joined: set[tuple[int, int]] = set()
+    for riser in risers:
+        for _y, c, d, is_source in riser.taps:
+            joined.add((c, d))
+            if not is_source:
+                fed_from_trunk.add((c, d))
+    for c, d in joined:
+        _extend(c, plan.lanes[c][d], content_w - 1, content_w - 1)
 
     # --- corridor lanes ---------------------------------------------------
     # Keyed by (corridor, DEPTH), not (corridor, item): an item may occupy
@@ -993,6 +1184,11 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
         for depth_i, item in enumerate(order):
             y = corr_y[c] + depth_i
             lo, hi = extents.get((c, item), (0, content_w - 1))
+            # A lane the trunk FEEDS has to flow away from the trunk, or the
+            # items would arrive at its far end and stop.  The trunk is in the
+            # east margin, so such a lane runs east to west and its head -- the
+            # tile the junction hands to -- is its eastmost.
+            westward = (c, depth_i) in fed_from_trunk
             indices: list[int] = []
             for x in range(lo, hi + 1):
                 indices.append(len(buildings))
@@ -1004,7 +1200,7 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
                         y=y,
                         width=1,
                         height=1,
-                        yaw=Facing.EAST.value,
+                        yaw=(Facing.WEST if westward else Facing.EAST).value,
                         # Which item this lane carries is layout knowledge that
                         # nothing can recover once emission drops it.  The belt
                         # marker pass needs it to tag external-input runs, and
@@ -1012,39 +1208,34 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
                         carries_item=item,
                     )
                 )
-            # Forward-link the run west to east, matching what the game emits.
-            for a, b in zip(indices, indices[1:], strict=False):
+            # Forward-link the run along its direction of travel, matching what
+            # the game emits.  ``indices`` stays in x order whichever way the
+            # lane runs, because everything else looks a tile up by column.
+            chain = indices[::-1] if westward else indices
+            for a, b in zip(chain, chain[1:], strict=False):
                 buildings[a] = _with_output(buildings[a], b)
             lane_tiles[c, depth_i] = indices
             lane_item_of[c, depth_i] = item
+
+    riser_belts, junctions = _emit_risers(
+        buildings,
+        risers,
+        lane_tiles,
+        content_w=content_w,
+        belt_id=belt_id,
+        belt_model=belt_model,
+    )
 
     # --- direct inserts ---------------------------------------------------
     # A direct-inserted edge has no lane, so the sorter must reach machine to
     # machine.  This runs before the belt taps so that a connection served
     # entirely by direct insertion can be skipped there rather than sprouting a
     # second, redundant feed.
-    rate_of = {(e.src, e.dst, e.item): e.rate for e in edges}
-    fully_direct_in: set[tuple[str, str]] = set()
-    fully_direct_out: set[tuple[str, str]] = set()
-    in_edges: dict[tuple[str, str], list[_Edge]] = defaultdict(list)
-    out_edges: dict[tuple[str, str], list[_Edge]] = defaultdict(list)
-    for e in edges:
-        in_edges[e.dst, e.item].append(e)
-        out_edges[e.src, e.item].append(e)
-    for (k, item), es in in_edges.items():
-        if item not in spec.external_inputs and all(
-            (e.src, e.dst, e.item) in plan.direct for e in es
-        ):
-            fully_direct_in.add((k, item))
-    for (k, item), es in out_edges.items():
-        if item not in spec.outputs and all((e.src, e.dst, e.item) in plan.direct for e in es):
-            fully_direct_out.add((k, item))
-
     sorters = 0
     direct_sorters = 0
     for src, dst, item in sorted(plan.direct):
         r_src, r_dst = at[src], at[dst]
-        y_src = row_y[r_src] + row_heights[r_src] - 1
+        y_src = row_y[r_src] + groups[src].height - 1
         y_dst = row_y[r_dst]
         dy = y_dst - y_src
         prod, cons = machine_at[src], machine_at[dst]
@@ -1113,20 +1304,15 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
 
     # --- sorters ----------------------------------------------------------
     for key, g in groups.items():
-        r = at[key]
         connections = [(item, rate * g.count, True) for item, rate in g.inputs.items()]
         connections += [(item, rate * g.count, False) for item, rate in g.outputs.items()]
         for item, rate, into_machine in connections:
             if rate <= 0:
                 continue
-            # Already fed (or drained) entirely by direct insertion.
-            if into_machine and (key, item) in fully_direct_in:
-                continue
-            if not into_machine and (key, item) in fully_direct_out:
-                continue
-            tap = _find_tap(
-                plan, r, item, corr_y, row_y, row_heights, out=not into_machine
-            )
+            # ``taps`` already dropped the connections served entirely by direct
+            # insertion, and the risers were planned against exactly this map --
+            # so a sorter here can never disagree with the lane a riser joined.
+            tap = taps.get((key, item, into_machine))
             if tap is None:
                 continue
             machines = machine_at[key]
@@ -1213,6 +1399,7 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
     if power:
         extra, uncovered = _top_up_coverage(buildings, tower_model)
         towers += extra
+        towers += _link_towers(buildings, tower_model)
 
     return Placement(
         buildings=tuple(buildings),
@@ -1221,7 +1408,10 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
         stats={
             "area": float(_bbox_area(buildings)),
             "machines": float(sum(g.count for g in groups.values())),
-            "belt_tiles": float(sum(len(v) for v in lane_tiles.values())),
+            "belt_tiles": float(sum(len(v) for v in lane_tiles.values()) + riser_belts),
+            "risers": float(len(risers)),
+            "riser_columns": float(max((r.column for r in risers), default=-1) + 1),
+            "junctions": float(junctions),
             "sorters": float(sorters),
             "direct_sorters": float(direct_sorters),
             "spray_coaters": float(coaters),
@@ -1247,6 +1437,265 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
             "fallback_used": float(plan.solver_status == "fallback"),
         },
     )
+
+
+#: Altitude a riser's horizontal bridge rides at while it crosses the trunks of
+#: other items.  Everything else in this skeleton is at ``z = 0``; a bridge is
+#: the one thing that has to pass over something, and belts are the only class of
+#: building that may.  One level is enough for any number of trunks, because a
+#: bridge only ever crosses trunks, never another bridge -- two bridges would
+#: have to share a lane's ``y``, and a lane holds one item.
+_BRIDGE_Z = 1
+
+
+@dataclass(frozen=True, slots=True)
+class _Riser:
+    """One item's vertical trunk, joining the lane copies it is tapped at.
+
+    ``taps`` is ``(y, corridor, depth, is_source)`` per joined lane, ordered top
+    to bottom.  A *source* lane is one a producer's sorters fill, and it hands
+    items to the trunk; every other lane is fed FROM the trunk.
+
+    ``column`` is an offset into the east margin, not an x.  Trunks are coloured
+    like an interval graph -- two whose vertical spans do not overlap share a
+    column -- so the margin is exactly as wide as the deepest pile-up of
+    simultaneously-live trunks, which is 2 on graphene, 3 on processor and 4 on
+    casimir-crystal.
+    """
+
+    item: str
+    taps: tuple[tuple[int, int, int, bool], ...]
+    column: int = 0
+
+
+def _plan_risers(
+    plan: _Plan,
+    corr_y: list[int],
+    filled: set[tuple[int, int]],
+    drained: set[tuple[int, int]],
+    external: set[str],
+) -> list[_Riser]:
+    """Which items need their corridor copies joined, and over what span.
+
+    External inputs are deliberately excluded.  Every tapped copy of an external
+    item is run out to ``x = 0``, so each copy is its own entry at the block
+    boundary -- the player belts the ore in three times rather than once, which
+    is both physical and free.  Risering them instead would double the margin
+    for no gain: on casimir-crystal it is the difference between 4 columns and
+    6.
+
+    A destination lying ABOVE every source is left alone rather than reached for.
+    A downward trunk cannot serve it, and quietly emitting one that does not
+    would trade a reported error for an unreported one.
+    """
+    lanes_of: dict[str, list[tuple[int, int, int, bool]]] = defaultdict(list)
+    for c, order in enumerate(plan.lanes):
+        for d, item in enumerate(order):
+            if item in external:
+                continue
+            is_source = (c, d) in filled
+            if not is_source and (c, d) not in drained:
+                continue
+            lanes_of[item].append((corr_y[c] + d, c, d, is_source))
+
+    risers: list[_Riser] = []
+    for item, lanes in sorted(lanes_of.items()):
+        lanes.sort()
+        first = next((i for i, t in enumerate(lanes) if t[3]), None)
+        if first is None:
+            continue  # nothing fills this item anywhere; not a riser's problem
+        last = next(
+            (i for i in range(len(lanes) - 1, first, -1) if not lanes[i][3]), None
+        )
+        if last is None:
+            continue  # every copy below the first source is itself a source
+        risers.append(_Riser(item=item, taps=tuple(lanes[first : last + 1])))
+    return _assign_columns(risers)
+
+
+def _assign_columns(risers: list[_Riser]) -> list[_Riser]:
+    """Colour the trunks' vertical spans, leftmost free column first.
+
+    Greedy by start point is optimal on an interval graph, so this uses the
+    fewest columns any assignment could -- and the margin's width is the whole
+    area cost of risering.
+    """
+    free_from: list[int] = []
+    out: list[_Riser] = []
+    for riser in sorted(risers, key=lambda r: (r.taps[0][0], r.item)):
+        lo, hi = riser.taps[0][0], riser.taps[-1][0]
+        col = next((i for i, y in enumerate(free_from) if y <= lo), None)
+        if col is None:
+            col = len(free_from)
+            free_from.append(hi + 1)
+        else:
+            free_from[col] = hi + 1
+        out.append(replace(riser, column=col))
+    return out
+
+
+def _emit_risers(
+    buildings: list[PlacedBuilding],
+    risers: list[_Riser],
+    lane_tiles: dict[tuple[int, int], list[int]],
+    *,
+    content_w: int,
+    belt_id: int,
+    belt_model: int,
+) -> tuple[int, int]:
+    """Build every trunk and the bridges that reach it.  Returns (belts, junctions).
+
+    Geometry, all of it forced:
+
+    * The trunk is a column of belts in the margin at ``content_w + column``,
+      running the full height of its span.  Nothing else is out there -- lanes
+      stop at ``content_w - 1`` -- so a trunk can never collide with a lane.
+    * A lane reaches its trunk along its own ``y``.  When the trunk is the first
+      margin column the lane simply links to it.  Otherwise the intervening
+      columns hold OTHER items' trunks, and the connection crosses them on a
+      belt at :data:`_BRIDGE_Z`.  This is the escape the row model needs: on
+      magnetic-ring ``iron-ingot`` spans corridors 1-3 while ``magnet`` spans
+      2-5, which properly cross, so no left-to-right column order avoids a
+      crossing and one has to go over the other.
+    * A lane handing items UP to the trunk is a plain belt merge, which DSP does
+      natively.  A trunk that must feed a lane AND carry on downwards cannot,
+      because a belt has one ``output_obj`` -- that is exactly what a splitter
+      is for, and it is the only place one is needed.
+    """
+    belts = 0
+    junctions = 0
+    for riser in risers:
+        xr = content_w + riser.column
+        stops = {y: (c, d, src) for y, c, d, src in riser.taps}
+        last_y = riser.taps[-1][0]
+
+        def _trunk_belt(x: int, y: int, item: str = riser.item) -> int:
+            idx = len(buildings)
+            buildings.append(
+                PlacedBuilding(
+                    item_id=belt_id,
+                    model_index=belt_model,
+                    x=x,
+                    y=y,
+                    width=1,
+                    height=1,
+                    yaw=Facing.SOUTH.value,
+                    carries_item=item,
+                )
+            )
+            return idx
+
+        upstream: int | None = None
+        for y in range(riser.taps[0][0], last_y + 1):
+            stop = stops.get(y)
+            branch = -1
+            if stop is not None and not stop[2] and y != last_y:
+                # The trunk must feed this lane AND carry on down, which one
+                # belt cannot: a belt has a single ``output_obj``.  That is
+                # exactly what a junction is for, and the only place one is
+                # needed.  All three belts sit ON the splitter's tile, because
+                # that is how the corpus records a belt running through one.
+                arriving = _trunk_belt(xr, y)
+                junction_idx = len(buildings)
+                buildings.append(junction.make_splitter(xr, y, carries_item=riser.item))
+                junctions += 1
+                buildings[arriving] = _with_output(buildings[arriving], junction_idx)
+                here = _trunk_belt(xr, y)
+                buildings[here] = replace(buildings[here], input_obj=junction_idx)
+                branch = _trunk_belt(xr, y)
+                buildings[branch] = replace(buildings[branch], input_obj=junction_idx)
+                belts += 3
+                if upstream is not None:
+                    buildings[upstream] = _with_output(buildings[upstream], arriving)
+            else:
+                here = _trunk_belt(xr, y)
+                belts += 1
+                if upstream is not None:
+                    buildings[upstream] = _with_output(buildings[upstream], here)
+            upstream = here
+
+            if stop is None:
+                continue
+            c, d, is_source = stop
+            end = _lane_tile_at(buildings, lane_tiles[c, d], content_w - 1)
+            if end is None:
+                continue  # the lane never reached the margin; nothing to join
+            head, tail, added = _bridge(
+                buildings,
+                y,
+                content_w,
+                xr,
+                riser.item,
+                belt_id,
+                belt_model,
+                toward_trunk=is_source,
+            )
+            belts += added
+            if is_source:
+                # Lane hands up to the trunk.  Two belts pointing at one tile is
+                # a merge, which DSP does natively and the validator models.
+                if added:
+                    buildings[end] = _with_output(buildings[end], head)
+                    buildings[tail] = _with_output(buildings[tail], here)
+                else:
+                    buildings[end] = _with_output(buildings[end], here)
+                continue
+            source = branch if branch >= 0 else here
+            if added:
+                buildings[source] = _with_output(buildings[source], head)
+                buildings[tail] = _with_output(buildings[tail], end)
+            else:
+                buildings[source] = _with_output(buildings[source], end)
+    junction.check_ports(buildings)
+    return belts, junctions
+
+
+def _bridge(
+    buildings: list[PlacedBuilding],
+    y: int,
+    content_w: int,
+    xr: int,
+    item: str,
+    belt_id: int,
+    belt_model: int,
+    *,
+    toward_trunk: bool,
+) -> tuple[int, int, int]:
+    """Belts at :data:`_BRIDGE_Z` spanning ``content_w .. xr - 1`` at row ``y``.
+
+    Returns ``(head, tail, count)`` in flow order: ``head`` is the tile the
+    upstream side hands to and ``tail`` the one that hands on.  The count is zero
+    when the trunk is already the first margin column, where the lane and the
+    trunk are adjacent and no bridge is needed at all.
+
+    A step of one altitude level per tile is what ``geom.altitude_step`` allows
+    and what this uses.  ``catalog.RAMP_TILES_PER_LEVEL`` says a real belt takes
+    two tiles to climb one level; spending them would need two margin columns
+    that carry nothing, and the margin's width is the entire area cost of
+    risering, so this rides the steeper grade the validator sanctions.
+    """
+    made: list[int] = []
+    for x in range(content_w, xr):
+        made.append(len(buildings))
+        buildings.append(
+            PlacedBuilding(
+                item_id=belt_id,
+                model_index=belt_model,
+                x=x,
+                y=y,
+                z=_BRIDGE_Z,
+                width=1,
+                height=1,
+                yaw=(Facing.EAST if toward_trunk else Facing.WEST).value,
+                carries_item=item,
+            )
+        )
+    if not made:
+        return -1, -1, 0
+    order = made if toward_trunk else made[::-1]
+    for a, b in zip(order, order[1:], strict=False):
+        buildings[a] = _with_output(buildings[a], b)
+    return order[0], order[-1], len(made)
 
 
 def _with_output(b: PlacedBuilding, target: int) -> PlacedBuilding:
@@ -1281,7 +1730,7 @@ def _find_tap(
     item: str,
     corr_y: list[int],
     row_y: list[int],
-    row_heights: list[int],
+    mach_h: int,
     *,
     out: bool,
 ) -> _Tap | None:
@@ -1293,13 +1742,19 @@ def _find_tap(
     arranges for:
 
     * from the corridor above, lane ``j`` of ``L`` is ``L - j`` tiles away;
-    * from the corridor below, lane ``j`` is ``j + 1`` tiles away.
+    * from the corridor below, lane ``j`` is ``j + 1`` tiles away *from the row's
+      bottom edge*, which is NOT the same as from the machine.
 
-    Returns ``None`` when no lane is in reach rather than emitting a sorter that
-    cannot physically connect.
+    ``mach_h`` is the height of the machine being wired, not the height of the
+    row it sits in.  A row is as tall as its tallest group, so a 3-tall smelter
+    sharing a row with a 7-tall refinery stops four tiles short of the row's
+    bottom edge.  Measuring from the edge put every one of that smelter's output
+    sorters' anchors on empty space -- ``sorter.endpoints`` caught it on three
+    corpus specs -- and understated the span, so the reach test passed for
+    sorters that could not physically reach.
     """
     top = row_y[r]
-    bottom = row_y[r] + row_heights[r] - 1
+    bottom = row_y[r] + mach_h - 1
     # Outputs prefer the corridor below (natural top-to-bottom flow); inputs the
     # corridor above.  Either is legal, so both are tried.
     order = [(r + 1, False), (r, True)] if out else [(r, True), (r + 1, False)]
@@ -1318,15 +1773,16 @@ def _find_tap(
         for j, carried in enumerate(lanes):
             if carried != item:
                 continue
+            lane_y = corr_y[c] + j
             if from_corridor_above:
-                span, machine_y = len(lanes) - j, top
+                span, machine_y = top - lane_y, top
             else:
-                span, machine_y = j + 1, bottom
+                span, machine_y = lane_y - bottom, bottom
             if 1 <= span <= CONSTANTS.sorter_max_reach:
                 return _Tap(
                     corridor=c,
                     depth=j,
-                    lane_y=corr_y[c] + j,
+                    lane_y=lane_y,
                     machine_y=machine_y,
                     span=span,
                 )
@@ -1746,6 +2202,76 @@ def _top_up_coverage(buildings: list[PlacedBuilding], tower_model: int) -> tuple
         )
         added += 1
     return added, unfixable
+
+
+def _link_towers(buildings: list[PlacedBuilding], tower_model: int) -> int:
+    """Add relay towers until every tower is in one network.  Returns how many.
+
+    The coverage top-up places a tower beside whatever it found stranded, and in
+    the riser margin that can be far from anything -- on casimir-crystal a tower
+    covering a junction landed 24.2 tiles from its nearest neighbour against a
+    22.5-tile link distance, so it powered the splitter and nothing powered it.
+
+    Repaired by stepping toward the network rather than by refusing: a tower
+    placed on the segment between the stranded one and its nearest linked
+    neighbour halves the gap, so a bounded number of steps always closes it.
+    ``power.connectivity`` still judges the result.
+    """
+    link = float(CONSTANTS.link_distance)
+    occupied: set[tuple[int, int]] = set()
+    for b in buildings:
+        try:
+            if not catalog.building(b.item_id).occupies_tiles:
+                continue
+        except KeyError:
+            continue
+        for dx in range(b.width):
+            for dy in range(b.height):
+                occupied.add((b.x + dx, b.y + dy))
+
+    towers = [
+        (b.x + b.width / 2, b.y + b.height / 2)
+        for b in buildings
+        if b.item_id == CONSTANTS.tesla_item_id
+    ]
+    added = 0
+    # Bounded: every pass either links a tower or gives up on it, and each relay
+    # halves a finite gap, so this cannot spin.
+    for _ in range(4 * len(towers) + 1):
+        seen = {0} if towers else set()
+        frontier = [0] if towers else []
+        while frontier:
+            i = frontier.pop()
+            for j, t in enumerate(towers):
+                if j not in seen and math.dist(towers[i], t) <= link:
+                    seen.add(j)
+                    frontier.append(j)
+        stray = [j for j in range(len(towers)) if j not in seen]
+        if not stray:
+            break
+        j = stray[0]
+        near = min(seen, key=lambda k: math.dist(towers[j], towers[k]))
+        sx, sy = towers[j]
+        nx, ny = towers[near]
+        spot = _nearest_free(
+            int((sx + nx) / 2), int((sy + ny) / 2), occupied, link / 2
+        )
+        if spot is None:
+            break  # nowhere to stand; the validator reports the split network
+        occupied.add(spot)
+        towers.append((spot[0] + 0.5, spot[1] + 0.5))
+        buildings.append(
+            PlacedBuilding(
+                item_id=CONSTANTS.tesla_item_id,
+                model_index=tower_model,
+                x=spot[0],
+                y=spot[1],
+                width=1,
+                height=1,
+            )
+        )
+        added += 1
+    return added
 
 
 def _bbox_area(buildings: list[PlacedBuilding]) -> int:

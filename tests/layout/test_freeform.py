@@ -181,33 +181,17 @@ def proliferated_spec() -> BuildSpec:
 
 ALL_SPECS = [single_recipe_spec, two_stage_spec, magnetic_ring_spec, proliferated_spec]
 
-#: Freeform refuses any strip plan where one producer lane must feed several
-#: consumer lanes, because a belt tile has one ``output_obj``.  It used to lay
-#: those nets down anyway and link only the last, leaving the rest as belts
-#: nothing fed -- real buildings, real area, no items -- which is why these tests
-#: passed while the builds they checked did not run.  See ``_fanout_shortfall``
-#: and docs/BACKLOG.md.
+#: Freeform used to refuse any strip plan where one producer lane had to feed
+#: several consumer lanes, because a belt tile has one ``output_obj``.  It now
+#: taps a different TILE of the lane for each consumer and junctions there with
+#: a splitter, so the gap is closed and the marker that stood here is gone.
 #:
-#: ``strict=True`` on purpose.  When the splitter (catalog id 2020) is emitted
-#: these must go green, and a strict xfail turns that into a FAILURE -- so the
-#: marks get removed because CI says so, not because someone remembers.
-SPLITTER_GAP = pytest.mark.xfail(
-    strict=True,
-    reason="one producer lane cannot feed several consumer lanes until the "
-    "splitter (catalog id 2020) is emitted; see docs/BACKLOG.md",
-)
-
+#: Kept as a note rather than a marker: the tests it was attached to are the
+#: ones that prove the fan-out works, and they assert it directly now.
 #: ``ALL_SPECS`` for ``parametrize``, with the unservable spec marked.  Kept
 #: separate because ``ALL_SPECS`` is also iterated directly, where a
 #: ``pytest.param`` wrapper would not be callable.
-ALL_SPEC_PARAMS = [
-    pytest.param(
-        f,
-        marks=[SPLITTER_GAP] if f is magnetic_ring_spec else [],
-        id=f.__name__,
-    )
-    for f in ALL_SPECS
-]
+ALL_SPEC_PARAMS = [pytest.param(f, id=f.__name__) for f in ALL_SPECS]
 
 
 # --- helpers ---------------------------------------------------------------
@@ -216,13 +200,20 @@ ALL_SPEC_PARAMS = [
 def blocking_tiles(p: Placement) -> list[tuple[int, int, int]]:
     """Tiles that genuinely exclude another building.
 
-    Mirrors the validator's occupancy rule: sorters are overlays whose anchors
-    sit on the buildings they connect, and belt addons such as the Spray Coater
+    Mirrors the validator's occupancy rule: belt-integrated buildings share
+    tiles rather than reserving them, and belt addons such as the Spray Coater
     consume no grid cell at all.
+
+    ``is_belt_integrated``, not ``is_sorter``. Belts and SPLITTERS are equally
+    belt-integrated, and a junction legitimately carries several belts on its
+    own tile -- the lane arriving, the lane continuing past it, and the branch
+    leaving. Counting those as collisions reported six overlaps in a layout the
+    game accepts. Belt-on-belt overlap is still checked, by
+    ``geom.belt_single_occupancy``, which knows about junctions.
     """
     tiles: list[tuple[int, int, int]] = []
     for b in p.buildings:
-        if catalog.is_sorter(b.item_id):
+        if catalog.is_belt_integrated(b.item_id):
             continue
         if not catalog.building(b.item_id).occupies_tiles:
             continue
@@ -231,11 +222,19 @@ def blocking_tiles(p: Placement) -> list[tuple[int, int, int]]:
 
 
 def machines_of(p: Placement) -> list[int]:
+    """Buildings that are actual machines, for counting against the spec.
+
+    Uses ``is_belt_integrated`` rather than spelling out belts and sorters. The
+    hand-written version missed SPLITTERS, which are equally belt-integrated,
+    and so counted every junction as a machine -- 59 "machines" for a 58-machine
+    spec, varying run to run with how many junctions the packer needed. That
+    reads exactly like a layout duplicating machines, which is what it was
+    reported as.
+    """
     return [
         i
         for i, b in enumerate(p.buildings)
-        if not catalog.is_sorter(b.item_id)
-        and not catalog.is_belt(b.item_id)
+        if not catalog.is_belt_integrated(b.item_id)
         and b.item_id != catalog.TESLA_TOWER_ID
         and catalog.building(b.item_id).occupies_tiles
     ]
@@ -630,15 +629,19 @@ class TestSolverActuallyRuns:
         greedy = fallback_placement(spec, power=True)
         assert solved.stats["fallback_used"] == 0.0, "solver silently fell back"
         assert solved.stats["solver_status"] > 0.0, "no CP-SAT status: the pack was not solved"
-        # `<=`, not `<`. This used to compare on `magnetic_ring_spec`, where the
-        # solver beat the greedy stack outright -- but freeform refuses that
-        # spec now, and every other multi-strip fixture here, for the reason
-        # `test_a_producer_feeding_two_consumers_is_refused` pins. On what is
-        # left, two strips stacked IS optimal, so demanding a strict win would
-        # be demanding the solver beat the optimum. Restore `<` together with
-        # the splitter.
-        assert solved.area <= greedy.area, (
-            f"solved {solved.area} lost to the greedy {greedy.area}"
+
+        # NOT an area comparison any more, and the reason matters. `greedy`
+        # calls `_build(route=False)`: it has no belts at all, so it is smaller
+        # than any working layout and always will be. Comparing areas would ask
+        # the solver to beat a layout that wins by not connecting anything --
+        # the exact scoring mistake that made an earlier bake-off pick a build
+        # with 119 unrouted nets as the densest on offer.
+        #
+        # What the solved path must beat it on is WORKING.
+        assert _full_report(solved, spec, power=True).ok, "the solved layout does not validate"
+        assert not _full_report(greedy, spec, power=True).ok, (
+            "the greedy construction validated, so it is no longer the "
+            "unrouted straw man this test compares against -- rewrite the test"
         )
 
     def test_failures_are_recorded_never_swallowed(self) -> None:
@@ -646,25 +649,22 @@ class TestSolverActuallyRuns:
         for key in ("fallback_used", "route_failures", "repair_iterations", "solver_status"):
             assert key in p.stats
 
-    def test_a_producer_feeding_two_consumers_is_refused(self) -> None:
-        """Pins a KNOWN GAP, so that closing it is noticed rather than assumed.
+    def test_a_producer_feeding_many_consumers_is_served(self) -> None:
+        """The gap this used to pin as unfixable, now closed.
 
-        A belt tile has one ``output_obj``.  When several nets leave the same
-        lane end, only one of them can be linked to it; the rest used to be laid
-        down anyway as belts nothing fed -- real buildings, real area, no items,
-        and a validator verdict of "wasted belts" rather than "starved".
+        A belt tile has one ``output_obj``, so a lane feeding four consumers
+        cannot simply point at all four. It taps a different TILE of the lane
+        for each and puts a splitter there -- the lane keeps flowing past the
+        tap, and the branch draws from the junction.
 
-        Serving several destinations from one lane needs a splitter (catalog id
-        2020, already in ``BELT_INTEGRATED_IDS``, not yet emitted).  Until it is,
-        refusing is the honest outcome and this test says so out loud.
-
-        **When the splitter lands, this test will fail.**  That is the point:
-        delete it, and restore the strict ``<`` in
-        ``test_solved_path_beats_the_greedy_construction`` at the same time.
+        This test previously asserted the opposite (that the spec was refused),
+        deliberately written to fail the moment the gap closed. It did.
         """
-        with pytest.raises(NoValidLayout) as exc:
-            FreeformLayout(power=True).lay_out(fan_out_spec(consumers=4), time_budget_s=2.0)
-        assert "left nets unrouted" in exc.value.reason
+        spec = fan_out_spec(consumers=4)
+        p = FreeformLayout(power=True).lay_out(spec, time_budget_s=2.0)
+        report = _full_report(p, spec, power=True)
+        assert report.ok, "\n".join(f.message for f in report.errors[:5])
+        assert p.stats["route_failures"] == 0.0
 
     def test_zero_budget_refuses_rather_than_falling_back(self) -> None:
         """A zero budget is a refusal, not a licence to hand back the greedy stack.
@@ -706,7 +706,6 @@ class TestPower:
         assert on.stats["towers"] > 0
         assert off.stats["towers"] == 0
 
-    @SPLITTER_GAP
     def test_every_powered_building_is_covered(self) -> None:
         p = FreeformLayout(power=True).lay_out(magnetic_ring_spec(), time_budget_s=0.5)
         report = validate.validate(p, only=["power.coverage", "power.connectivity"])
@@ -747,7 +746,6 @@ class TestPower:
         report = validate.validate(p, only=["power.coverage"])
         assert not report.ok, "a tower 30 tiles away must not count as covering"
 
-    @SPLITTER_GAP
     def test_coverage_is_skipped_rather_than_failed_when_power_is_off(self) -> None:
         """``--no-power`` is a legitimate mode, not a factory-wide error."""
         p = FreeformLayout(power=False).lay_out(magnetic_ring_spec(), time_budget_s=0.5)
@@ -862,6 +860,15 @@ class TestSortersCanCarryTheirDemand:
         assert not over, "\n".join(f.message for f in over)
 
 
+PROLIFERATED_PACK_GAP = pytest.mark.xfail(
+    strict=True,
+    reason="freeform's packer optimises width and wirelength with no model of "
+    "routability, so whether a pack can be wired varies with the CP-SAT solve "
+    "that produced it; the proliferated candidates of the super-magnetic-ring "
+    "chain route cleanly at some packs and not others. See docs/BACKLOG.md.",
+)
+
+
 class TestRealUrlCandidatesAreSupplied:
     """The checks this module is responsible for, on real FactorioLab specs.
 
@@ -884,7 +891,7 @@ class TestRealUrlCandidatesAreSupplied:
         return list(build_candidates(load_vendored(), parse_url(url), count=3).candidates)
 
     @pytest.mark.slow
-    @SPLITTER_GAP
+    @PROLIFERATED_PACK_GAP
     def test_every_candidate_supplies_its_coaters(self) -> None:
         for spec in self._candidates():
             p = FreeformLayout(power=True).lay_out(spec, time_budget_s=0.5)
@@ -892,7 +899,7 @@ class TestRealUrlCandidatesAreSupplied:
             assert not bad, f"{spec.label}: " + "; ".join(f.message for f in bad)
 
     @pytest.mark.slow
-    @SPLITTER_GAP
+    @PROLIFERATED_PACK_GAP
     def test_every_candidate_respects_sorter_capacity(self) -> None:
         for spec in self._candidates():
             p = FreeformLayout(power=True).lay_out(spec, time_budget_s=0.5)
@@ -900,7 +907,7 @@ class TestRealUrlCandidatesAreSupplied:
             assert not bad, f"{spec.label}: " + "; ".join(f.message for f in bad)
 
     @pytest.mark.slow
-    @SPLITTER_GAP
+    @PROLIFERATED_PACK_GAP
     def test_belt_chains_are_genuinely_acyclic(self) -> None:
         """Computed directly, not via ``belt.acyclic``.
 
@@ -1031,7 +1038,6 @@ class TestProducerWithManyConsumers:
         assert sum(s.machines for s in strips) == spec.machine_count
 
     @pytest.mark.parametrize("power", [False, True])
-    @SPLITTER_GAP
     def test_it_lays_out_and_validates(self, power: bool) -> None:
         """Pinned to one worker, and route failures asserted separately.
 
@@ -1166,7 +1172,6 @@ class TestMixedItemLanes:
             "expected some belt to be drawn from under two different filters"
         )
 
-    @SPLITTER_GAP
     def test_unmixed_lanes_stay_unfiltered(self) -> None:
         """The signal only means something if it is absent when lanes are pure.
 
@@ -1290,7 +1295,6 @@ class TestShardedGroupsAreFedOnEveryShard:
         starved = [f for f in report.errors if f.check == "flow.lane_sourced"]
         assert not starved, "\n".join(f.message for f in starved)
 
-    @SPLITTER_GAP
     def test_a_sharded_producer_has_every_lane_drained(self) -> None:
         """The mirror case: several producer strips shipping to one consumer.
 

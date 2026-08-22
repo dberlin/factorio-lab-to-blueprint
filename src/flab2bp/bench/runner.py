@@ -18,7 +18,7 @@ from flab2bp.bench.types import CellResult
 from flab2bp.lab import data as lab_data
 from flab2bp.lab.url import parse_url
 from flab2bp.layout import validate as validator
-from flab2bp.layout.base import LayoutStrategy, Placement
+from flab2bp.layout.base import LayoutStrategy, NoValidLayout, Placement
 from flab2bp.rates import build_candidates
 from flab2bp.spec import BuildSpec
 
@@ -83,11 +83,24 @@ def _run_cell(
     time_budget_s: float,
 ) -> CellResult:
     started = time.perf_counter()
-    placement: Placement = handle.strategy.lay_out(spec, time_budget_s=time_budget_s)
+    try:
+        placement: Placement = handle.strategy.lay_out(spec, time_budget_s=time_budget_s)
+    except NoValidLayout as exc:
+        # A refusal is a result, not a crash. Letting it propagate killed the
+        # whole matrix on the first spec either strategy could not wire, which
+        # is currently most of them -- and a bake-off that cannot run is worse
+        # than one with an honest empty row.
+        return _refused_cell(handle, entry, spec, power=power, reason=exc.reason)
     elapsed = time.perf_counter() - started
 
     m = measure(placement)
-    report = validator.validate(placement)
+    # Pass the spec AND the id map. Without them the nine spec-dependent checks
+    # (throughput, proliferator, flow) are skipped, and `valid` then means "no
+    # check that ran failed" -- which for a bare call excludes every check that
+    # could have caught a layout that pastes cleanly and does not run. The
+    # scoring module ranks on `valid`, not `verified`, so that gap fed straight
+    # into the winner.
+    report = validator.validate(placement, spec, ids=_id_map(spec), expect_power=power)
 
     stats = placement.stats
     return CellResult(
@@ -112,7 +125,13 @@ def _run_cell(
         valid=report.ok,
         errors=len(report.errors),
         warnings=len(report.warnings),
-        skipped_checks=report.skipped,
+        # A power check skipped under `--no-power` is a caller declaration, not
+        # a hole: we told the validator there would be no towers. Every other
+        # skip stays, because a check that could not run is not a check that
+        # passed.
+        skipped_checks=tuple(
+            c for c in report.skipped if power or not c.startswith("power.")
+        ),
         error_checks=tuple(sorted({f.check for f in report.errors})),
         checks_run=len(report.checks_run),
     )
@@ -163,6 +182,47 @@ def run_corpus(
                         )
                     )
     return results
+
+
+def _refused_cell(
+    handle: StrategyHandle,
+    entry: CorpusEntry,
+    spec: BuildSpec,
+    *,
+    power: bool,
+    reason: str,
+) -> CellResult:
+    """A strategy that searched and found nothing still gets a row.
+
+    Graded ``valid=False`` so it can never contribute an area, but tagged
+    ``layout.refused`` rather than a validator check name: "B refused" and "B
+    produced something the validator rejected" are opposite bugs and must stay
+    distinguishable in the report.
+    """
+    return CellResult(
+        strategy=handle.name,
+        url_id=entry.url_id,
+        candidate=spec.label or "default",
+        power=power,
+        area=0,
+        used_tiles=0,
+        width=0,
+        height=0,
+        machines=0,
+        belt_tiles=0,
+        sorters=0,
+        direct_inserts=0,
+        towers=0,
+        altitude_levels=0,
+        solve_seconds=0.0,
+        hit_time_budget=False,
+        fallback_used=False,
+        solver_status=f"REFUSED: {reason[:80]}",
+        valid=False,
+        errors=1,
+        warnings=0,
+        error_checks=("layout.refused",),
+    )
 
 
 def _failed_cell(entry: CorpusEntry, message: str) -> CellResult:
