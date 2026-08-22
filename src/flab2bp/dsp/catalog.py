@@ -267,13 +267,39 @@ NO_DSP_RECIPE = frozenset(
     }
 )
 
+#: DSP item ids of the mode-driven buildings.
+ENERGY_EXCHANGER_ID = 2209
+RAY_RECEIVER_ID = 2208
+
+
+@dataclass(frozen=True, slots=True)
+class ModeDriven:
+    """Which building a :data:`NO_DSP_RECIPE` entry runs on, and in what mode.
+
+    ``mode`` is a plain name, not a parameter word: translating it into the
+    building's parameter block is :mod:`flab2bp.dsp.params`' job, which keeps
+    block layouts out of the catalog and the dependency pointing one way.
+    """
+
+    machine_item_id: int
+    machine_name: str
+    mode: str
+
+
 #: The machine each :data:`NO_DSP_RECIPE` entry actually runs on, so the layout
-#: stage can place it once mode parameters are supported.
+#: stage can place it and ask :func:`flab2bp.dsp.params.parameters_for` for the
+#: block that selects the mode.
+#:
+#: Both photon entries deliberately share the ``photon`` mode: the Graviton Lens
+#: that separates FactorioLab's two recipes is an item consumed by the same Ray
+#: Receiver, doubling its yield, not a different setting on the building.
 MODE_DRIVEN_MACHINE = {
-    "accumulator-full": "energy-exchanger",
-    "accumulator-discharge": "energy-exchanger",
-    "critical-photon": "ray-receiver",
-    "critical-photon-graviton": "ray-receiver",
+    "accumulator-full": ModeDriven(ENERGY_EXCHANGER_ID, "energy-exchanger", "charge"),
+    "accumulator-discharge": ModeDriven(
+        ENERGY_EXCHANGER_ID, "energy-exchanger", "discharge"
+    ),
+    "critical-photon": ModeDriven(RAY_RECEIVER_ID, "ray-receiver", "photon"),
+    "critical-photon-graviton": ModeDriven(RAY_RECEIVER_ID, "ray-receiver", "photon"),
 }
 
 
@@ -319,15 +345,16 @@ def recipe_id(factoriolab_id: str) -> int:
     try:
         return _recipe_ids()[factoriolab_id]
     except KeyError:
-        machine = MODE_DRIVEN_MACHINE.get(factoriolab_id)
-        if machine is not None:
+        entry = MODE_DRIVEN_MACHINE.get(factoriolab_id)
+        if entry is not None:
             raise KeyError(
-                f"{factoriolab_id!r} is a {machine} MODE, not a craft, so DSP has "
-                f"no recipe id for it. It is still a real production step with "
-                f"real item flow that must be placed, belted and sorted like any "
-                f"other machine -- the mode goes in the building's parameter "
-                f"block, not in recipe_id. The layout stage does not yet emit "
-                f"that, so this build cannot be generated."
+                f"{factoriolab_id!r} is a {entry.machine_name} MODE "
+                f"({entry.mode}), not a craft, so DSP has no recipe id for it. It "
+                f"is still a real production step with real item flow that must be "
+                f"placed, belted and sorted like any other machine -- the mode goes "
+                f"in the building's parameter block, which "
+                f"flab2bp.dsp.params.parameters_for({factoriolab_id!r}) now "
+                f"produces. What is still missing is the layout stage emitting it."
             ) from None
         if factoriolab_id.startswith("df-"):
             raise KeyError(

@@ -216,11 +216,12 @@ def test_mode_driven_recipes_explain_themselves() -> None:
     blueprint") was wrong: charging takes empty Accumulators and produces full
     ones, which is an ordinary production step needing belts and sorters.
     """
-    for factoriolab_id, machine in catalog.MODE_DRIVEN_MACHINE.items():
+    for factoriolab_id, entry in catalog.MODE_DRIVEN_MACHINE.items():
         with pytest.raises(KeyError) as excinfo:
             catalog.recipe_id(factoriolab_id)
         message = str(excinfo.value)
-        assert machine in message
+        assert entry.machine_name in message
+        assert entry.mode in message
         assert "belted" in message
 
 

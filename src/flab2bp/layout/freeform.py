@@ -147,9 +147,21 @@ class Strip:
 
     Vertical layout, top to bottom::
 
-        input lanes   (len(in_lanes) rows, one belt lane each)
+        in_above      (len(in_above) rows, one belt lane each)
         machines      (mh rows)
-        output lanes  (len(out_lanes) rows)
+        out_lanes     (len(out_lanes) rows)
+        in_below      (len(in_below) rows)
+
+    Inputs are fed from BOTH sides.  A sorter spans ``SORTER_MAX_REACH`` tiles,
+    so the limit is three lanes per *side*, not three per strip -- lanes above
+    and below are reached by different sorters.  Stacking every input above
+    made a four-ingredient recipe unbuildable, and four ingredients is ordinary:
+    ``orbital-collector`` takes accumulator-full, interstellar-logistics-station,
+    reinforced-thruster and super-magnetic-ring.
+
+    Outputs sit immediately below the machines and the overflow inputs below
+    them, so when ``in_below`` is empty every row index is exactly what it was
+    when inputs were above-only.  That is what keeps the change additive.
     """
 
     group_key: str
@@ -159,11 +171,20 @@ class Strip:
     machines: int
     mw: int
     mh: int
-    #: Items arriving, one lane each, ordered top-down.
-    in_lanes: tuple[str, ...]
-    #: ``(item, destination strip id)`` per lane, ordered top-down.  A separate
-    #: lane per destination is what removes the need for splitters.
+    #: Items arriving on the north side, one lane each, ordered top-down.
+    in_above: tuple[str, ...]
+    #: ``(item, destination strip id)`` per lane, ordered top-down, starting
+    #: directly under the machine band.  A separate lane per destination is what
+    #: removes the need for splitters.
     out_lanes: tuple[tuple[str, str], ...]
+    #: Items arriving on the south side, below ``out_lanes``.  Non-empty only
+    #: when a recipe has more ingredients than one side can reach.
+    in_below: tuple[str, ...] = ()
+
+    @property
+    def in_lanes(self) -> tuple[str, ...]:
+        """Every ingredient, regardless of which side feeds it."""
+        return self.in_above + self.in_below
 
     @property
     def width(self) -> int:
@@ -171,7 +192,27 @@ class Strip:
 
     @property
     def height(self) -> int:
-        return len(self.in_lanes) + self.mh + len(self.out_lanes)
+        return len(self.in_above) + self.mh + len(self.out_lanes) + len(self.in_below)
+
+    @property
+    def machine_row(self) -> int:
+        """Row index of the machine band's top edge, relative to the strip."""
+        return len(self.in_above)
+
+    def row_of_input(self, item: str) -> int:
+        """Row index carrying ``item``, relative to the strip's top."""
+        if item in self.in_above:
+            return self.in_above.index(item)
+        return (
+            len(self.in_above)
+            + self.mh
+            + len(self.out_lanes)
+            + self.in_below.index(item)
+        )
+
+    def row_of_output(self, k: int) -> int:
+        """Row index of the ``k``-th output lane, relative to the strip's top."""
+        return len(self.in_above) + self.mh + k
 
     @property
     def sid(self) -> str:
@@ -194,14 +235,21 @@ def _sink_demand(
     return dest.count * dest.inputs.get(item, Fraction(0))
 
 
-def _shard_sinks(sinks: Sequence[tuple[str, str]]) -> list[list[tuple[str, str]]]:
+def _shard_sinks(
+    sinks: Sequence[tuple[str, str]], *, cap: int | None = None
+) -> list[list[tuple[str, str]]]:
     """Chunk output sinks so no strip carries more lanes than a sorter can span.
 
     ``sinks`` arrives grouped by item, so sequential chunking keeps a single
     item's destinations adjacent and avoids splitting one item's lanes across
     more shards than necessary.
+
+    ``cap`` is the room left on the south side once any overflow input lanes are
+    seated there; it defaults to the full sorter reach.
     """
-    reach = catalog.SORTER_MAX_REACH
+    reach = catalog.SORTER_MAX_REACH if cap is None else cap
+    if reach <= 0:
+        raise ValueError("no room left on the south side for any output lane")
     return [list(sinks[i : i + reach]) for i in range(0, len(sinks), reach)]
 
 
@@ -298,9 +346,15 @@ def plan_strips(spec: BuildSpec, *, strip_len: int = 6) -> list[Strip]:
     count is a property of how many consumer GROUPS the item feeds. Measured
     from ``strip_len`` 2 to 10000, the failure was identical every time.
 
-    Raises rather than truncating when a recipe needs more input lanes than a
-    sorter can span: a silently dropped ingredient would produce a blueprint that
-    pastes cleanly and then stalls.
+    INPUTS are handled the other way about.  Sharding cannot help them: a machine
+    needs all its ingredients simultaneously, so splitting two ingredients into
+    one shard and two into another leaves both shards stalled.  Instead the strip
+    is fed from BOTH sides -- up to ``SORTER_MAX_REACH`` lanes above, the
+    remainder below alongside the output lanes.  Only a recipe needing more than
+    both sides can carry is genuinely unbuildable.
+
+    Raises rather than truncating: a silently dropped ingredient would produce a
+    blueprint that pastes cleanly and then stalls.
     """
     groups = _adapt(spec)
 
@@ -318,14 +372,19 @@ def plan_strips(spec: BuildSpec, *, strip_len: int = 6) -> list[Strip]:
                 if src != key:
                     consumers[src, item].append(key)
 
+    reach = catalog.SORTER_MAX_REACH
     strips: list[Strip] = []
     for key, g in groups.items():
         in_lanes = tuple(sorted(g.inputs))
-        if len(in_lanes) > catalog.SORTER_MAX_REACH:
+        # Fill the north side first, so the south side keeps as much room as
+        # possible for output lanes.
+        in_above = in_lanes[:reach]
+        in_below = in_lanes[reach:]
+        if len(in_below) > reach:
             raise ValueError(
                 f"recipe {g.recipe_id!r} needs {len(in_lanes)} input lanes, but a "
-                f"sorter spans at most {catalog.SORTER_MAX_REACH} tiles; this "
-                f"recipe cannot be fed from one side"
+                f"strip carries at most {reach} per side and a sorter spans "
+                f"{reach} tiles; this recipe cannot be fed at all"
             )
 
         sinks: list[tuple[str, str]] = []
@@ -335,7 +394,16 @@ def plan_strips(spec: BuildSpec, *, strip_len: int = 6) -> list[Strip]:
             if item in spec.outputs or not dests:
                 sinks.append((item, ""))  # leaves the build
 
-        shards = _shard_sinks(sinks) if sinks else [[]]
+        # Output lanes share the south side with any overflow inputs, so the
+        # shard size is what is left after those are seated.
+        out_cap = reach - len(in_below)
+        if out_cap <= 0 and sinks:
+            raise ValueError(
+                f"recipe {g.recipe_id!r} needs {len(in_lanes)} input lanes and "
+                f"{len(sinks)} output lanes, more than two sides of {reach} can "
+                f"carry; this recipe cannot be both fed and drained"
+            )
+        shards = _shard_sinks(sinks, cap=out_cap) if sinks else [[]]
         if len(shards) > g.count:
             raise ValueError(
                 f"recipe {g.recipe_id!r} feeds {len(sinks)} destinations, needing "
@@ -368,7 +436,8 @@ def plan_strips(spec: BuildSpec, *, strip_len: int = 6) -> list[Strip]:
                         machines=n,
                         mw=g.width,
                         mh=g.height,
-                        in_lanes=in_lanes,
+                        in_above=in_above,
+                        in_below=in_below,
                         out_lanes=tuple(shard),
                     )
                 )
@@ -455,10 +524,13 @@ def _direct_net_candidates(
         k, item = lane
         if item not in dst.in_lanes:
             continue
+        # Ask the strip for the rows rather than recomputing the layout here:
+        # inputs may sit above or below the machine band, and duplicating that
+        # arithmetic is how the two drift apart.
         out[i, j] = _DirectCandidate(
             item=item,
-            prod_row=len(src.in_lanes) + src.mh + k,
-            cons_row=dst.in_lanes.index(item),
+            prod_row=src.row_of_output(k),
+            cons_row=dst.row_of_input(item),
         )
     return out
 
@@ -764,25 +836,31 @@ def _emit_strip(
 
     Returns the west end of each input lane and the east end of each output lane
     -- the points routing connects -- plus the sorter count.
+
+    Inputs may sit on either side of the machine band; ``Strip.row_of_input``
+    owns that arithmetic so it is stated once rather than re-derived here.
     """
     in_ports: dict[str, _Port] = {}
     out_ports: dict[tuple[str, str], _Port] = {}
     width = s.width
+    n_above = len(s.in_above)
     n_in = len(s.in_lanes)
+
+    # Row -> the item that row's belt carries. Building it up front removes the
+    # branch-per-row this used to need, and it is what lets the marker pass
+    # label external input belts later: the knowledge is unrecoverable once
+    # emission drops it.
+    lane_item_of: dict[int, str] = {}
+    for item in s.in_lanes:
+        lane_item_of[s.row_of_input(item)] = item
+    for k, (item, _dest) in enumerate(s.out_lanes):
+        lane_item_of[s.row_of_output(k)] = item
 
     lane_idx: dict[int, list[int]] = {}
     for row in range(s.height):
         y = oy + row
-        if n_in <= row < n_in + s.mh:
+        if n_above <= row < n_above + s.mh:
             continue  # machine band
-        # Which lane this row is tells us what it carries. Recording it is what
-        # lets the marker pass label external input belts afterwards; the
-        # knowledge is unrecoverable once emission drops it.
-        if row < n_in:
-            lane_item: str | None = s.in_lanes[row]
-        else:
-            out_row = row - n_in - s.mh
-            lane_item = s.out_lanes[out_row][0] if 0 <= out_row < len(s.out_lanes) else None
         indices = []
         for k in range(width):
             indices.append(
@@ -795,7 +873,7 @@ def _emit_strip(
                         width=1,
                         height=1,
                         yaw=Facing.EAST.value,
-                        carries_item=lane_item,
+                        carries_item=lane_item_of.get(row),
                     )
                 )
             )
@@ -803,7 +881,7 @@ def _emit_strip(
             canvas.buildings[a] = _relink(canvas.buildings[a], output_obj=b)
         lane_idx[row] = indices
 
-    machine_y = oy + n_in
+    machine_y = oy + n_above
     machines: list[int] = []
     for k in range(s.machines):
         machines.append(
@@ -833,19 +911,20 @@ def _emit_strip(
     in_each = in_total / max(1, n_in)
     out_each = out_total / max(1, len(s.out_lanes))
 
+    bottom = machine_y + s.mh - 1
     sorters = 0
-    for j, item in enumerate(s.in_lanes):
+
+    for j, item in enumerate(s.in_above):
         row = j
-        span = n_in - j
+        span = n_above - j
         in_ports[item] = _Port(lane_idx[row][0], ox, oy + row, ox, ox + width - 1)
         tier, _count = _pick_sorter(in_each or rates.get(item, Fraction(1)), span, 1)
         sorters += _link_lane(
             canvas, lane_idx[row], machines, oy + row, machine_y, tier, into_machine=True
         )
 
-    bottom = machine_y + s.mh - 1
     for j, (item, dest) in enumerate(s.out_lanes):
-        row = n_in + s.mh + j
+        row = s.row_of_output(j)
         span = j + 1
         out_ports[item, dest] = _Port(
             lane_idx[row][-1], ox + width - 1, oy + row, ox, ox + width - 1
@@ -854,6 +933,18 @@ def _emit_strip(
         sorters += _link_lane(
             canvas, lane_idx[row], machines, oy + row, bottom, tier, into_machine=False
         )
+
+    # Overflow ingredients, seated below the output lanes and reaching up to the
+    # machine band's south edge.
+    for j, item in enumerate(s.in_below):
+        row = s.row_of_input(item)
+        span = len(s.out_lanes) + j + 1
+        in_ports[item] = _Port(lane_idx[row][0], ox, oy + row, ox, ox + width - 1)
+        tier, _count = _pick_sorter(in_each or rates.get(item, Fraction(1)), span, 1)
+        sorters += _link_lane(
+            canvas, lane_idx[row], machines, oy + row, bottom, tier, into_machine=True
+        )
+
     return in_ports, out_ports, sorters
 
 

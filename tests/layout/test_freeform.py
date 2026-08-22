@@ -223,26 +223,95 @@ class TestPlanStrips:
         strips = plan_strips(spec, strip_len=6)
         assert all(s.machines <= 6 for s in strips)
 
-    def test_input_lanes_stay_within_sorter_reach(self) -> None:
-        """More input lanes than a sorter can span is unbuildable, not merely tall."""
+    def test_lanes_stay_within_sorter_reach_on_each_side(self) -> None:
+        """A sorter spans three tiles, so each SIDE carries at most three lanes.
+
+        The limit is per side, not per strip: lanes above and lanes below are
+        reached by different sorters, so six lanes total is fine while four on
+        one side is not.
+        """
         for spec_fn in ALL_SPECS:
             for s in plan_strips(spec_fn(), strip_len=6):
-                assert len(s.in_lanes) <= catalog.SORTER_MAX_REACH
-                assert len(s.out_lanes) <= catalog.SORTER_MAX_REACH
+                assert len(s.in_above) <= catalog.SORTER_MAX_REACH
+                assert len(s.out_lanes) + len(s.in_below) <= catalog.SORTER_MAX_REACH
 
-    def test_a_recipe_with_too_many_inputs_is_rejected_not_mangled(self) -> None:
+    def test_a_four_input_recipe_is_fed_from_both_sides(self) -> None:
+        """Four ingredients is ordinary, not exotic -- orbital-collector has four.
+
+        Three fit above; the fourth goes below alongside the output lane. Every
+        prior test used recipes with three inputs or fewer, which is why this
+        stayed broken until a real URL was tried.
+        """
+        spec = BuildSpec(
+            groups=(
+                group(
+                    "four-in",
+                    "assembling-machine-2",
+                    2,
+                    {"a": F(1), "b": F(1), "c": F(1), "d": F(1)},
+                    {"out": F(1)},
+                ),
+            ),
+            external_inputs={"a": F(2), "b": F(2), "c": F(2), "d": F(2)},
+            outputs={"out": F(2)},
+        )
+        strips = plan_strips(spec, strip_len=6)
+        assert len(strips) == 1
+        s = strips[0]
+        assert set(s.in_lanes) == {"a", "b", "c", "d"}
+        assert len(s.in_above) == catalog.SORTER_MAX_REACH
+        assert len(s.in_below) == 1
+        # Every lane still reachable: three above, two below (one in, one out).
+        assert len(s.in_above) <= catalog.SORTER_MAX_REACH
+        assert len(s.in_below) + len(s.out_lanes) <= catalog.SORTER_MAX_REACH
+        assert s.height == 3 + s.mh + 2
+
+    def test_a_four_input_recipe_lays_out_and_validates(self) -> None:
+        """Planning it is not enough -- it has to emit and pass the neutral judge.
+
+        Uses a REAL four-ingredient recipe, because emission needs a genuine DSP
+        recipe id; a synthesised name plans fine and then fails at the catalog.
+        """
+        ins = {
+            "annihilation-constraint-sphere": F(1),
+            "antimatter": F(1),
+            "hydrogen": F(1),
+            "titanium-alloy": F(1),
+        }
+        spec = BuildSpec(
+            groups=(
+                group(
+                    "antimatter-fuel-rod",
+                    "assembling-machine-2",
+                    2,
+                    ins,
+                    {"antimatter-fuel-rod": F(1)},
+                ),
+            ),
+            external_inputs={k: F(2) for k in ins},
+            outputs={"antimatter-fuel-rod": F(2)},
+        )
+        strips = plan_strips(spec, strip_len=6)
+        assert len(strips[0].in_below) == 1, "the fourth ingredient must go below"
+        p = FreeformLayout(power=False).lay_out(spec, time_budget_s=0.5)
+        report = validate.validate(p, expect_power=False)
+        assert report.ok, "\n".join(f"{f.check}: {f.message}" for f in report.errors[:6])
+
+    def test_a_recipe_needing_more_lanes_than_two_sides_carry_is_rejected(self) -> None:
+        """Seven lanes cannot fit on two sides of three, and truncating one would
+        produce a blueprint that pastes cleanly and then stalls."""
         spec = BuildSpec(
             groups=(
                 group(
                     "impossible",
                     "assembling-machine-2",
                     1,
-                    {"a": F(1), "b": F(1), "c": F(1), "d": F(1)},
+                    {k: F(1) for k in "abcdefg"},
                     {"out": F(1)},
                 ),
             )
         )
-        with pytest.raises(ValueError, match="input lanes"):
+        with pytest.raises(ValueError, match="lanes"):
             plan_strips(spec, strip_len=6)
 
 
