@@ -133,57 +133,79 @@ corpus is 11.00, which fits both 22.5-as-radius and 11.25-as-diameter (2.2% apar
 It fails visibly as a disconnected network rather than silently, but if the solver
 ever spaces towers 11.25-22.5 apart, that wants an in-game check.
 
-## BLOCKING -- neither strategy can serve two destinations from one belt
+## RESOLVED -- neither strategy could serve two destinations from one belt
 
-Found by deleting the fallback. Both strategies hit the same missing primitive,
-from opposite directions, and both used to hide it by emitting something.
+Both strategies hit the same missing primitive from opposite directions, and
+both used to hide it by emitting something. Closed by `layout/junction.py`,
+whose convention is read off the 25 splitters in the fixture corpus and
+verified through both our codec and the TypeScript viewer.
 
-**Freeform.** A belt tile has one `output_obj`. When several nets leave the same
-lane end -- an iron-ingot strip feeding both the gear strip and the motor strip
--- each rewrote that tile to point at its own path and the last to commit won.
-The earlier paths stayed on the grid as belts nothing fed: real buildings, real
-area, no items. The validator graded them a WARNING about wasted belts, because
-the machines drawing from them usually had some other source, so this never
-surfaced as an error. `_commit_paths` now counts them as routing failures, which
-makes freeform refuse `fan_out_spec`, `graphene`, `electromagnetic-matrix` and
-the magnetic-ring corpus spec. Those refusals are correct: nothing was feeding
-most of each build. Pinned by
-`test_a_producer_feeding_two_consumers_is_refused`, which is written to FAIL
-when the gap closes.
+* **Freeform** now taps a different TILE of a lane for each consumer and puts a
+  splitter there. Fixing it uncovered three silent failures worth remembering:
+  port reservations still held at commit time (every path through its own start
+  cell was dropped), A\*'s ramp reconstruction splicing a cell twice into one
+  path (3 of 19 routed paths), and a strip's inner lanes being WALLED IN so that
+  only the head is reachable -- which was all 40 A\* failures on magnetic-ring,
+  every one at zero expansions with two thirds of the routing budget unspent.
+* **Spine** joins an item's corridor copies with trunk risers in a margin east
+  of the block, y-spans coloured as an interval graph, cross-column stubs
+  bridged at z=1. `flow.lane_sourced` on magnetic-ring: 11 -> 0.
 
-**Spine.** The module docstring claims an item spanning non-adjacent rows "takes
-a lane in every corridor between, which is correct and routable". It is not
-routable: the copies are never joined. Evidence on the magnetic-ring spec --
-`copper-ingot` is produced in row 0, whose output sorters fill corridor 1, and
-consumed in row 2, whose sorters drain corridor 2. Every `_find_tap` and
-`_pick_sorter` call succeeds; the sorters exist and point at the wrong copy.
-This is the sole cause of all 11 `flow.lane_sourced` errors.
+## Freeform's packer has no model of routability
 
-Joining them needs trunk risers, and risers at a single altitude provably
-collide on real specs: `iron-ingot` spans corridors 1-3 and `magnet` spans 2-5,
-which properly cross, so no column ordering avoids it. A riser column must also
-sit outside the horizontal extent of every lane it crosses, which is why
-allocation ORDER matters -- a riser has to be placed after the lanes it crosses
-have theirs.
+The top item. `_pack` minimises width then wirelength; whether the result can be
+WIRED is discovered afterwards, in `_build`. So routability varies with the
+CP-SAT solve that produced the pack: the free-proliferation candidate of the
+super-magnetic-ring chain routes every net cleanly at one pack and fails at
+another from the same height with a different solve budget. Pinned by
+`PROLIFERATED_PACK_GAP` in `tests/layout/test_freeform.py`.
 
-Both are the same shape: a belt that fans out. The answer to both is the
-**splitter**, catalog id 2020, already in `BELT_INTEGRATED_IDS` and known to the
-encoder (25/25 in the fixture corpus, all on integer offsets), just never
-emitted. Spine additionally needs the riser geometry; vertical belt stacking is
-sanctioned and `LEVELS`/ramp costs are already modelled in freeform's A*.
+Spine does not have this problem -- it constrains tap capacity inside the model
+(`_solve_one`), having learned the same lesson: "rejecting after the fact cannot
+work here: routability is a property of the packing, so the packer has to know."
+Freeform needs the equivalent. Candidates: a congestion estimate per channel as
+a soft constraint, or reserving routing corridors in the pack itself.
 
-Until this lands the tool refuses most real URLs, which is the honest state and
-strictly better than the previous one -- it used to emit them, and they did not
-run.
+## Riser bridges climb a level per tile; the catalog says two
 
-## Validator gaps this exposed
+`catalog.RAMP_TILES_PER_LEVEL` is 2 and `BELT_CLIMB_PER_TILE` is 1/2, but
+spine's `_bridge` climbs in one tile. `geom.altitude_step` permits it, so the
+validator is complicit. Spending the tiles honestly costs two margin columns,
+and the margin is the entire area cost of risering. Physical fidelity versus
+density -- worth a decision rather than a default.
 
-* An external input entering corridor 0 does not fill its copies in corridors
-  1..n, but `flow.lane_sourced` excuses any run carrying an external item. On
-  magnetic-ring, `iron-ore` is consumed in rows 0 and 1 and only row 0's lane is
-  actually fed. The exemption should apply to the run the input ENTERS on, not
-  to every run carrying that item.
-* An orphaned belt run whose consumers happen to have another source is graded a
-  WARNING. That is right for a genuinely redundant lane and wrong for the
-  freeform fan-out case above, where the "other source" was the one net that won
-  the race for the lane end.
+## A riser carries an item's whole cross-corridor flow on one belt
+
+`flow.belt_capacity` passes on every corpus spec today, but there is no
+lane-splitting in the riser, so a spec whose inter-row flow exceeds one belt
+tier would bottleneck with no error until that check fires.
+
+## Lane direction is approximate where a lane is filled and drained locally
+
+A lane filled by a producer and drained by a consumer WEST of it: the consumer's
+sorter sees nothing, physically. Lanes always run east with taps placed at
+machine columns regardless of order. Predates risers, invisible to the
+validator.
+
+## `flow.conservation` is not junction-aware, deliberately
+
+It reads only the spec and never touches the placement. The junction-aware
+version would be a per-junction balance check, and on spine's *correct*
+magnetic-ring output junction 1639 shows downstream demand 12 against upstream
+supply 4 -- the supply side is under-counted because external input lanes have
+no sorter pushing onto them, and seeding that means guessing how a block's
+external rate divides across entry lanes. An untested WARNING that fires on
+correct builds is noise.
+
+## `belt.termination` warns too often to carry signal
+
+12 of 25 spine runs and 13 of 17 freeform runs. Honest -- lanes are untrimmed,
+which is its own backlog item above -- but at that hit rate nobody will read it.
+
+## The hand-built `magnetic_ring_spec` fixtures are unbalanced
+
+Both `tests/layout/test_spine.py` and `test_freeform.py` build a magnetic-ring
+shaped spec by hand with round numbers, and the rates do not balance: 4
+magnetic-coil/s supplying 12/s of demand, 17 items/s on a 12/s belt. Any test
+asserting flow-clean on them fails for reasons that have nothing to do with
+geometry. Real URL specs come from the rate solver and balance exactly.
