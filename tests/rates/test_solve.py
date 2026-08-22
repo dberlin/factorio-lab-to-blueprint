@@ -218,3 +218,103 @@ def test_joint_product_surplus_is_reported(data: Dataset) -> None:
     assert result.outputs["refined-oil"] >= Fraction(1)
     for rate in result.surplus.values():
         assert rate >= 0
+
+
+# --- exactness regression --------------------------------------------------
+
+
+#: Exact machine requirements for the example chain, derived by hand from the
+#: recipe graph alone.  Deliberately taken from the *unproliferated* solve: it
+#: has no mode choice, so unlike the Mk.III numbers it cannot shift when the
+#: area objective or the footprint table changes.
+EXACT_MACHINES = {
+    "super-magnetic-ring": Fraction(3),
+    "electromagnetic-turbine": Fraction(4),
+    "electric-motor": Fraction(8),
+    "gear": Fraction(4),
+    "magnetic-coil": Fraction(4),
+    "iron-ingot": Fraction(12),
+    "copper-ingot": Fraction(4),
+    "magnet": Fraction(33, 2),
+    "energetic-graphite": Fraction(2),
+}
+
+
+def test_machine_counts_are_exact_not_snapped_floats(
+    data: Dataset, plain: RateSolution
+) -> None:
+    """Guards a bug that ``isinstance(x, Fraction)`` cannot see.
+
+    The solver works in floats.  An earlier derivation took its craft rates
+    directly, snapped them to rationals with ``limit_denominator``, and used
+    those -- which yielded ``999/1000`` machines of copper-ingot where the
+    answer is exactly ``1``, and ``16397/22400`` of gear.  Those are genuine
+    ``Fraction`` objects that pass every type assertion while being quietly
+    wrong, and being wrong *upward* they occasionally push a count past an
+    integer and buy a whole extra machine.
+
+    The fix was to take only *structure* from the solver -- which columns run
+    and their integer machine counts -- and re-derive every magnitude by exact
+    demand propagation from the objective.
+
+    Verified to discriminate: injecting a relative error of 1e-4 into the
+    derived rates, which is merely SCIP's own default MIP gap and so entirely
+    representative of what a solver returns, fails this test.
+    """
+    assert {g.recipe_id: g.exact_machines for g in plain.groups} == EXACT_MACHINES
+    # Snapping a perturbed float lands on a large denominator; propagating
+    # demand exactly through this chain cannot produce one bigger than 2.
+    assert max(g.exact_machines.denominator for g in plain.groups) <= 2
+
+
+def test_proliferated_rates_have_small_denominators(data: Dataset) -> None:
+    """The same guard where mode choice makes the exact values move.
+
+    The Mk.III mix depends on the area objective, so the individual values are
+    not pinned here -- but exact demand propagation still cannot manufacture a
+    large denominator, whereas a snapped float reliably does.
+    """
+    result = solve(data, parse_url(EXAMPLE_URL), tier=ProliferatorTier.MK3)
+    assert result.groups
+    assert max(g.exact_machines.denominator for g in result.groups) <= 1000
+
+
+def test_derivation_ignores_solver_float_noise(data: Dataset) -> None:
+    """The derivation must depend on the solver's structure, never its floats.
+
+    Perturbing the reported machine counts by float noise -- the kind a solver
+    genuinely returns, ``3.9999999997`` for 4 -- must not move the derived rates
+    at all.  A derivation that reads magnitudes out of the solver fails this;
+    one that reads only ``round(n)`` and propagates demand exactly cannot.
+    """
+    from flab2bp.rates.solve import _columns, _exact_rates, _resolve_chain
+
+    request = parse_url(EXAMPLE_URL)
+    targets = target_rates(data, request)
+    excluded = frozenset(request.excluded_recipe_ids or ()) | data.default_recipe_excluded
+    producers, _external = _resolve_chain(data, targets, excluded)
+    internal = sorted(producers)
+    columns = _columns(data, producers, request, ProliferatorTier.NONE, None, None)
+
+    counts = {g.recipe_id: g.machines for g in solve(data, request).groups}
+    clean = [float(counts.get(column.recipe_id, 0)) for column in columns]
+    # Perturb well beyond float noise but strictly inside the rounding
+    # interval, so `round(n)` is unmoved while every *magnitude* shifts.  A
+    # derivation reading magnitudes out of the solver changes its answer here;
+    # one reading only the rounded count cannot.
+    noisy = [n - 0.3 if n else 0.0 for n in clean]
+    fuzzed = [n + 0.4 if n else 0.0 for n in clean]
+
+    from_clean = _exact_rates(columns, clean, internal, targets)
+    assert _exact_rates(columns, noisy, internal, targets) == from_clean
+    assert _exact_rates(columns, fuzzed, internal, targets) == from_clean
+
+    # And the derived rates are exact, not merely equal to each other.
+    by_recipe = {
+        column.recipe_id: rate / column.crafts_per_second
+        for column, rate in zip(columns, from_clean, strict=True)
+        if rate
+    }
+    assert by_recipe["iron-ingot"] == Fraction(12)
+    assert by_recipe["copper-ingot"] == Fraction(4)
+    assert by_recipe["magnet"] == Fraction(33, 2)

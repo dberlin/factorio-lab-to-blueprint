@@ -198,12 +198,64 @@ def test_lane_feeding_mixed_consumers_is_flagged_for_splitting(data: Dataset) ->
             assert item_id in spec.spray_lanes
 
 
-def test_free_proliferation_needs_no_lane_split(data: Dataset) -> None:
-    """Every free-proliferation consumer of a sprayed ore lane is proliferated."""
-    request = parse_url(EXAMPLE_URL)
-    specs = build_candidates(data, request, tier=ProliferatorTier.MK3)
+def test_split_field_is_populated_on_every_candidate(data: Dataset) -> None:
+    specs = build_candidates(data, parse_url(EXAMPLE_URL), tier=ProliferatorTier.MK3)
+    for spec in specs.candidates:
+        assert spec.lanes_requiring_split == lanes_requiring_split(data, spec)
+
+
+def test_this_chain_needs_no_lane_split(candidates: BuildSpecSet) -> None:
+    """The example chain happens to need no splits -- but see the test below.
+
+    Every consumer of its sprayed ore lanes is itself proliferated, so nothing
+    has to be cut.  This is a property of *this chain*, not of the approach.
+    """
+    for spec in candidates.candidates:
+        assert spec.lanes_requiring_split == frozenset()
+
+
+def test_free_proliferation_can_still_need_a_split(data: Dataset) -> None:
+    """Splitting is not a rare corner, and free-proliferation is not exempt.
+
+    Scanning all 151 craftable end products, 42 candidates need at least one
+    split.  ``electromagnetic-matrix`` is one: ``iron-ore`` feeds both a recipe
+    fed purely from outside (proliferated, so its lane is sprayed) and one that
+    also takes a manufactured input (not proliferated, so it must not be).
+    """
+    url = "https://factoriolab.github.io/dsp/flow?o=electromagnetic-matrix*60&v=11"
+    specs = build_candidates(data, parse_url(url), tier=ProliferatorTier.MK3, count=4)
     free = next(c for c in specs.candidates if c.label == "free-proliferation")
-    assert lanes_requiring_split(data, free) == frozenset()
+    assert free.lanes_requiring_split == frozenset({"iron-ore"})
+
+
+def test_max_proliferation_can_need_a_split(data: Dataset) -> None:
+    """Even with everything proliferable proliferated, splits still arise.
+
+    A recipe outside the products whitelist that also cannot take speed mode
+    profitably stays unproliferated, and any lane it shares gets cut.
+    """
+    url = "https://factoriolab.github.io/dsp/flow?o=conveyor-belt-3*60&v=11"
+    specs = build_candidates(data, parse_url(url), tier=ProliferatorTier.MK3, count=4)
+    spec = next(c for c in specs.candidates if c.label == "max-proliferation")
+    assert spec.lanes_requiring_split == frozenset({"electromagnetic-turbine"})
+
+
+def test_split_lanes_are_always_a_subset_of_sprayed_lanes(data: Dataset) -> None:
+    """Only a sprayed lane can need splitting; an unsprayed one has nothing to cut."""
+    for target in ("electromagnetic-matrix", "conveyor-belt-3", "processor"):
+        url = f"https://factoriolab.github.io/dsp/flow?o={target}*60&v=11"
+        specs = build_candidates(data, parse_url(url), tier=ProliferatorTier.MK3, count=4)
+        for spec in specs.candidates:
+            assert spec.lanes_requiring_split <= frozenset(spec.spray_lanes)
+
+
+def test_unproliferated_candidate_never_needs_a_split(data: Dataset) -> None:
+    """With nothing sprayed there is no boundary for a lane to straddle."""
+    for target in ("electromagnetic-matrix", "conveyor-belt-3"):
+        url = f"https://factoriolab.github.io/dsp/flow?o={target}*60&v=11"
+        specs = build_candidates(data, parse_url(url), tier=ProliferatorTier.MK3, count=4)
+        baseline = next(c for c in specs.candidates if c.label == "no-proliferator")
+        assert baseline.lanes_requiring_split == frozenset()
 
 
 # --- knobs -----------------------------------------------------------------

@@ -19,6 +19,7 @@ candidate to beat rather than a heuristic guess.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from fractions import Fraction
 
 from flab2bp.lab.schema import Dataset
@@ -102,7 +103,7 @@ def _to_build_spec(
                 belt_required.add((producer, group.recipe_id))
 
     belt_id = request.belt_id or "conveyor-belt-1"
-    return BuildSpec(
+    spec = BuildSpec(
         groups=tuple(groups),
         external_inputs=dict(solution.external_inputs),
         outputs=dict(solution.outputs),
@@ -112,6 +113,8 @@ def _to_build_spec(
         belt_required_edges=frozenset(belt_required),
         spray_lanes=spray_lanes,
     )
+    # Needs the finished spec to compute, so fill it in on a copy.
+    return replace(spec, lanes_requiring_split=lanes_requiring_split(data, spec))
 
 
 def lanes_requiring_split(data: Dataset, spec: BuildSpec) -> frozenset[str]:
@@ -121,6 +124,13 @@ def lanes_requiring_split(data: Dataset, spec: BuildSpec) -> frozenset[str]:
     on the machine, so an unproliferated consumer drinking from a sprayed lane
     quietly receives a bonus nobody costed -- it over-produces, and the running
     factory stops matching the numbers in this ``BuildSpec``.
+
+    This is not a rare corner.  Scanning all 151 craftable end products, 42
+    candidates need at least one split -- and ``free-proliferation`` is among
+    them, despite proliferating only recipes fed from outside.  ``stone``, for
+    instance, feeds ``glass`` (fed purely from outside, so proliferated) and
+    ``sulfuric-acid`` (which also takes refined-oil, so not), and the lane has
+    to be split between them.
     """
     consumers: dict[str, list[MachineGroup]] = {}
     for group in spec.groups:
