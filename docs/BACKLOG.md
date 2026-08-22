@@ -132,3 +132,58 @@ real paste into the game settles it.
 corpus is 11.00, which fits both 22.5-as-radius and 11.25-as-diameter (2.2% apart).
 It fails visibly as a disconnected network rather than silently, but if the solver
 ever spaces towers 11.25-22.5 apart, that wants an in-game check.
+
+## BLOCKING -- neither strategy can serve two destinations from one belt
+
+Found by deleting the fallback. Both strategies hit the same missing primitive,
+from opposite directions, and both used to hide it by emitting something.
+
+**Freeform.** A belt tile has one `output_obj`. When several nets leave the same
+lane end -- an iron-ingot strip feeding both the gear strip and the motor strip
+-- each rewrote that tile to point at its own path and the last to commit won.
+The earlier paths stayed on the grid as belts nothing fed: real buildings, real
+area, no items. The validator graded them a WARNING about wasted belts, because
+the machines drawing from them usually had some other source, so this never
+surfaced as an error. `_commit_paths` now counts them as routing failures, which
+makes freeform refuse `fan_out_spec`, `graphene`, `electromagnetic-matrix` and
+the magnetic-ring corpus spec. Those refusals are correct: nothing was feeding
+most of each build. Pinned by
+`test_a_producer_feeding_two_consumers_is_refused`, which is written to FAIL
+when the gap closes.
+
+**Spine.** The module docstring claims an item spanning non-adjacent rows "takes
+a lane in every corridor between, which is correct and routable". It is not
+routable: the copies are never joined. Evidence on the magnetic-ring spec --
+`copper-ingot` is produced in row 0, whose output sorters fill corridor 1, and
+consumed in row 2, whose sorters drain corridor 2. Every `_find_tap` and
+`_pick_sorter` call succeeds; the sorters exist and point at the wrong copy.
+This is the sole cause of all 11 `flow.lane_sourced` errors.
+
+Joining them needs trunk risers, and risers at a single altitude provably
+collide on real specs: `iron-ingot` spans corridors 1-3 and `magnet` spans 2-5,
+which properly cross, so no column ordering avoids it. A riser column must also
+sit outside the horizontal extent of every lane it crosses, which is why
+allocation ORDER matters -- a riser has to be placed after the lanes it crosses
+have theirs.
+
+Both are the same shape: a belt that fans out. The answer to both is the
+**splitter**, catalog id 2020, already in `BELT_INTEGRATED_IDS` and known to the
+encoder (25/25 in the fixture corpus, all on integer offsets), just never
+emitted. Spine additionally needs the riser geometry; vertical belt stacking is
+sanctioned and `LEVELS`/ramp costs are already modelled in freeform's A*.
+
+Until this lands the tool refuses most real URLs, which is the honest state and
+strictly better than the previous one -- it used to emit them, and they did not
+run.
+
+## Validator gaps this exposed
+
+* An external input entering corridor 0 does not fill its copies in corridors
+  1..n, but `flow.lane_sourced` excuses any run carrying an external item. On
+  magnetic-ring, `iron-ore` is consumed in rows 0 and 1 and only row 0's lane is
+  actually fed. The exemption should apply to the run the input ENTERS on, not
+  to every run carrying that item.
+* An orphaned belt run whose consumers happen to have another source is graded a
+  WARNING. That is right for a genuinely redundant lane and wrong for the
+  freeform fan-out case above, where the "other source" was the one net that won
+  the race for the lane end.

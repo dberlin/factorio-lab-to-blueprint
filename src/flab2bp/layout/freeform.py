@@ -2110,6 +2110,44 @@ def _place_proliferator_entry(
     return _Port(idx, x, y, x, x)
 
 
+def _fanout_shortfall(strips: list[Strip]) -> list[str]:
+    """Consumer lanes that no producer lane can be dedicated to.
+
+    ``_build`` pairs the two sides of an edge cyclically -- ``srcs[k % len(srcs)]``
+    against ``sinks[k % len(sinks)]`` -- so that whichever side is sharded further
+    is fully served.  When there are more consumer lanes than producer lanes, the
+    same producer lane becomes the source of several nets, and a belt tile has one
+    ``output_obj``.  Only one of those nets can be linked; see ``_commit_paths``.
+
+    This is a property of the STRIP PLAN, not of any packing, so it is worth
+    knowing before the height sweep rather than after.  A spec that trips it
+    refuses at every height and every budget, and each of those attempts costs a
+    full sweep plus the retry at :data:`RETRY_BUDGET_S` -- 35 to 56 seconds on
+    the magnetic-ring chain -- to rediscover something that was decided the
+    moment the strips were planned.
+
+    Returns one description per offending edge, empty when the plan is servable.
+    """
+    src_lanes: dict[tuple[str, str, str], int] = defaultdict(int)
+    sink_lanes: dict[tuple[str, str], int] = defaultdict(int)
+    for s in strips:
+        for item, dest in s.out_lanes:
+            if dest:
+                src_lanes[s.group_key, item, dest] += 1
+        for item in s.in_lanes:
+            sink_lanes[s.group_key, item] += 1
+
+    out: list[str] = []
+    for (src_key, item, dest), n_src in sorted(src_lanes.items()):
+        n_sink = sink_lanes.get((dest, item), 0)
+        if n_sink > n_src:
+            out.append(
+                f"{item}: {src_key} offers {n_src} output lane(s) but {dest} has "
+                f"{n_sink} input lane(s) to fill"
+            )
+    return out
+
+
 def fallback_placement(spec: BuildSpec, *, power: bool = True) -> Placement:
     """One strip per group, stacked vertically.  NOT a usable layout.
 
@@ -2220,6 +2258,22 @@ class FreeformLayout:
                 "the spec contains no machine groups",
                 spec_label=spec.label,
                 budget_s=time_budget_s,
+            )
+
+        # Refuse a strip plan that no packing can serve BEFORE sweeping heights.
+        # This is not an optimisation of the failure path, it is the difference
+        # between an error that names the cause and one that blames the packer:
+        # the sweep would try every height, retry the lot at RETRY_BUDGET_S, and
+        # report "left nets unrouted" -- 51s on the magnetic-ring chain to
+        # rediscover something fixed the moment the strips were planned.
+        shortfall = _fanout_shortfall(strips)
+        if shortfall:
+            raise NoValidLayout(
+                "a belt tile has one output, so one producer lane cannot feed "
+                "several consumer lanes; this needs a splitter (catalog id 2020), "
+                "which is not emitted yet. " + "; ".join(shortfall[:3]),
+                spec_label=spec.label,
+                budget_s=0.0,
             )
 
         budgets = [time_budget_s]

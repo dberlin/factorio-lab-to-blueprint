@@ -15,12 +15,17 @@ import pytest
 
 from flab2bp.dsp import catalog
 from flab2bp.layout import validate
-from flab2bp.layout.base import DETERMINISTIC_WORKERS, PlacedBuilding, Placement
+from flab2bp.layout.base import (
+    DETERMINISTIC_WORKERS,
+    NoValidLayout,
+    PlacedBuilding,
+    Placement,
+)
 from flab2bp.layout.spine import (
-    FALLBACK_NO_BUDGET,
     FALLBACK_NONE,
     MACHINE_ITEM_IDS,
     SpineLayout,
+    _emit,
     fallback_plan,
     machine_group_footprint,
 )
@@ -585,26 +590,38 @@ class TestDirectInsertion:
 
 
 class TestSolverBehaviour:
-    def test_solved_area_beats_the_fallback_outright(self) -> None:
+    def test_solved_area_beats_the_seed_construction_outright(self) -> None:
         """Guards the silent-fallback class of bug.
 
         ``lay_out`` once swallowed an exception and returned a fallback that
         looked solved on every spec; it went unnoticed until a test compared the
         two areas and found them identical.
+
+        The comparison survives the fallback's deletion because the greedy
+        construction survives it: ``fallback_plan`` is now the CP-SAT warm start
+        and width-sweep seed, so emitting it directly still yields exactly the
+        layout ``lay_out`` used to degrade to.  Solving must beat it.
         """
         spec = magnetic_ring_spec()
         w = DETERMINISTIC_WORKERS
         solved = SpineLayout(power=False, workers=w).lay_out(spec, time_budget_s=0.5)
-        fallback = SpineLayout(power=False, workers=w).lay_out(spec, time_budget_s=0.0)
+        seed = _emit(spec, fallback_plan(spec), power=False)
         assert solved.stats["fallback_used"] == 0.0
         assert solved.stats["solver_rejected"] == 0.0
-        assert solved.area < fallback.area
+        assert solved.area < seed.area
 
-    def test_always_returns_a_placement_with_no_budget(self) -> None:
-        p = SpineLayout(power=True).lay_out(magnetic_ring_spec(), time_budget_s=0.0)
-        assert p.buildings
-        assert p.stats["fallback_used"] == 1.0
+    def test_no_budget_refuses_rather_than_returning_something(self) -> None:
+        """A zero budget is a refusal, not a licence to hand back the seed.
 
+        The seed construction is not routable, so returning it was returning a
+        broken layout that measured SMALLER than a correct one -- and the
+        bake-off would then have preferred it.
+        """
+        with pytest.raises(NoValidLayout) as exc:
+            SpineLayout(power=True).lay_out(magnetic_ring_spec(), time_budget_s=0.0)
+        assert "solver was never asked" in exc.value.reason
+
+    @pytest.mark.uncached_layout
     def test_deterministic_for_a_fixed_budget(self) -> None:
         """Reproducibility is the property under test here, so pin workers.
 
@@ -619,22 +636,29 @@ class TestSolverBehaviour:
         b = SpineLayout(power=True, workers=w).lay_out(magnetic_ring_spec(), time_budget_s=0.5)
         assert a.buildings == b.buildings
 
-    def test_solving_is_no_worse_than_the_fallback(self) -> None:
+    def test_solving_is_no_worse_than_the_seed_construction(self) -> None:
         spec = magnetic_ring_spec()
         solved = SpineLayout(power=False).lay_out(spec, time_budget_s=0.5)
-        fallback = SpineLayout(power=False).lay_out(spec, time_budget_s=0.0)
-        assert solved.area <= fallback.area
+        seed = _emit(spec, fallback_plan(spec), power=False)
+        assert solved.area <= seed.area
 
-    def test_fallback_reason_distinguishes_why(self) -> None:
+    def test_a_refusal_says_which_failure_mode_it_was(self) -> None:
         """One flag for three failure modes is how a dead solver hid.
 
         ``fallback_used=1`` alone could mean "no budget", "nothing routable" or
         "emission rejected the plan", and telling them apart mattered: the
         strategy stopped solving real specs entirely and the flag looked the
         same as a deliberate ``time_budget_s=0``.
+
+        The reasons outlived the fallback -- they ride on ``NoValidLayout`` now
+        instead of on a degraded placement's stats -- and the distinction still
+        earns its keep, because a structural limit in the row model and a search
+        that ran out of time call for opposite fixes.
         """
-        no_budget = SpineLayout(power=False).lay_out(two_stage_spec(), time_budget_s=0.0)
-        assert no_budget.stats["fallback_reason"] == FALLBACK_NO_BUDGET
+        with pytest.raises(NoValidLayout) as exc:
+            SpineLayout(power=False).lay_out(two_stage_spec(), time_budget_s=0.0)
+        assert "never asked" in exc.value.reason
+        assert exc.value.spec_label == two_stage_spec().label
 
         solved = SpineLayout(power=False).lay_out(two_stage_spec(), time_budget_s=0.5)
         assert solved.stats["fallback_reason"] == FALLBACK_NONE

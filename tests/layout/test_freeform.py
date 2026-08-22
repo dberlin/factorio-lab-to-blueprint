@@ -13,7 +13,12 @@ import pytest
 
 from flab2bp.dsp import catalog
 from flab2bp.layout import validate
-from flab2bp.layout.base import DETERMINISTIC_WORKERS, PlacedBuilding, Placement
+from flab2bp.layout.base import (
+    DETERMINISTIC_WORKERS,
+    NoValidLayout,
+    PlacedBuilding,
+    Placement,
+)
 from flab2bp.layout.freeform import (
     MU_DIRECT,
     FreeformLayout,
@@ -581,29 +586,70 @@ class TestObjectiveStaysLexicographic:
 
 
 class TestSolverActuallyRuns:
-    def test_solved_path_beats_the_fallback(self) -> None:
+    def test_solved_path_beats_the_greedy_construction(self) -> None:
         """The failure Strategy A shipped: a fallback wearing a solver's clothes.
 
         A bake-off comparing two fallbacks is worse than useless, so this asserts
         the solved path is genuinely exercised and genuinely better.
+
+        ``fallback_placement`` is no longer reachable from ``lay_out`` -- it
+        calls ``_build(route=False)``, so it never attempts the wiring it once
+        claimed to guarantee -- but it is still the construction the solver has
+        to beat, so it stays here as the yardstick.
         """
-        spec = magnetic_ring_spec()
-        solved = FreeformLayout(power=True).lay_out(spec, time_budget_s=10.0)
-        fallback = fallback_placement(spec, power=True)
+        spec = two_stage_spec()
+        solved = FreeformLayout(power=True).lay_out(spec, time_budget_s=2.0)
+        greedy = fallback_placement(spec, power=True)
         assert solved.stats["fallback_used"] == 0.0, "solver silently fell back"
-        assert solved.area < fallback.area, (
-            f"solved {solved.area} did not beat fallback {fallback.area}"
+        assert solved.stats["solver_status"] > 0.0, "no CP-SAT status: the pack was not solved"
+        # `<=`, not `<`. This used to compare on `magnetic_ring_spec`, where the
+        # solver beat the greedy stack outright -- but freeform refuses that
+        # spec now, and every other multi-strip fixture here, for the reason
+        # `test_a_producer_feeding_two_consumers_is_refused` pins. On what is
+        # left, two strips stacked IS optimal, so demanding a strict win would
+        # be demanding the solver beat the optimum. Restore `<` together with
+        # the splitter.
+        assert solved.area <= greedy.area, (
+            f"solved {solved.area} lost to the greedy {greedy.area}"
         )
 
     def test_failures_are_recorded_never_swallowed(self) -> None:
-        p = FreeformLayout(power=True).lay_out(magnetic_ring_spec(), time_budget_s=10.0)
+        p = FreeformLayout(power=True).lay_out(two_stage_spec(), time_budget_s=2.0)
         for key in ("fallback_used", "route_failures", "repair_iterations", "solver_status"):
             assert key in p.stats
 
-    def test_zero_budget_falls_back_and_says_so(self) -> None:
-        p = FreeformLayout(power=True).lay_out(magnetic_ring_spec(), time_budget_s=0.0)
-        assert p.stats["fallback_used"] == 1.0
+    def test_a_producer_feeding_two_consumers_is_refused(self) -> None:
+        """Pins a KNOWN GAP, so that closing it is noticed rather than assumed.
 
+        A belt tile has one ``output_obj``.  When several nets leave the same
+        lane end, only one of them can be linked to it; the rest used to be laid
+        down anyway as belts nothing fed -- real buildings, real area, no items,
+        and a validator verdict of "wasted belts" rather than "starved".
+
+        Serving several destinations from one lane needs a splitter (catalog id
+        2020, already in ``BELT_INTEGRATED_IDS``, not yet emitted).  Until it is,
+        refusing is the honest outcome and this test says so out loud.
+
+        **When the splitter lands, this test will fail.**  That is the point:
+        delete it, and restore the strict ``<`` in
+        ``test_solved_path_beats_the_greedy_construction`` at the same time.
+        """
+        with pytest.raises(NoValidLayout) as exc:
+            FreeformLayout(power=True).lay_out(fan_out_spec(consumers=4), time_budget_s=2.0)
+        assert "left nets unrouted" in exc.value.reason
+
+    def test_zero_budget_refuses_rather_than_falling_back(self) -> None:
+        """A zero budget is a refusal, not a licence to hand back the greedy stack.
+
+        ``fallback_placement`` never routes, so returning it returned a layout
+        that was both broken and -- because an unrouted net is a belt run that
+        does not exist -- smaller than a correct one.
+        """
+        with pytest.raises(NoValidLayout) as exc:
+            FreeformLayout(power=True).lay_out(two_stage_spec(), time_budget_s=0.0)
+        assert "packer was never asked" in exc.value.reason
+
+    @pytest.mark.uncached_layout
     def test_deterministic_for_a_fixed_budget(self) -> None:
         """Reproducibility is the property under test here, so pin workers.
 
