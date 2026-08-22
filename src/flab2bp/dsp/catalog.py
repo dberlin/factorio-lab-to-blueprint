@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from dataclasses import dataclass
 from fractions import Fraction
 from functools import cache
@@ -179,6 +180,102 @@ GEOMETRY_SAFE_FIXTURES = (
 #: their neighbours.  Most such evidence comes from distorted fixtures, so this
 #: may be measurement error rather than a wrong table -- but it is unresolved.
 LOW_CONFIDENCE_FOOTPRINTS = frozenset({2101, 2104, 2203, 2205, 2209, 2210, 2212})
+
+
+# --- recipes ---------------------------------------------------------------
+
+_RECIPES = Path(__file__).parent / "data" / "recipes.json"
+
+#: DSP spells building tiers "Mk.I/II/III" where FactorioLab uses "-1/-2/-3".
+_ROMAN_TIERS = {"mk-i": "1", "mk-ii": "2", "mk-iii": "3", "mki": "1", "mkii": "2", "mkiii": "3"}
+
+
+def _kebab(name: str) -> str:
+    """DSP display name -> FactorioLab-style id."""
+    s = name.lower().replace(".", "").replace("(", "").replace(")", "")
+    s = re.sub(r"[^a-z0-9]+", "-", s).strip("-")
+    for roman, digit in _ROMAN_TIERS.items():
+        if s.endswith("-" + roman):
+            return s[: -(len(roman) + 1)] + "-" + digit
+    return s
+
+
+@cache
+def _recipe_ids() -> dict[str, int]:
+    raw = json.loads(_RECIPES.read_text())
+    return {_kebab(r["name"]): int(r["id"]) for r in raw}
+
+
+def recipe_id(factoriolab_id: str) -> int:
+    """DSP numeric recipe id for a FactorioLab recipe id.
+
+    A placed machine carries this in ``PlacedBuilding.recipe_id``; without it
+    the game pastes an unconfigured machine that produces nothing.
+
+    Raises ``KeyError`` rather than inventing a value.  Both layout strategies
+    previously faked this -- one emitted ``0`` for every machine, the other
+    ``abs(hash(name)) % 30000``, which is not a DSP id at all and is not even
+    stable across processes, since Python randomises string hashing.  A wrong
+    recipe id yields a blueprint that pastes cleanly and builds the wrong thing,
+    so failing loudly is the only safe behaviour.
+
+    Coverage is 120 of the 165 buildable DSP recipes.  The gap is the Dark Fog
+    (``df-*``) combat set: the bundled table came from an older game build and
+    predates them.  Re-extracting it from a current install would close that.
+    """
+    try:
+        return _recipe_ids()[factoriolab_id]
+    except KeyError:
+        raise KeyError(
+            f"no DSP recipe id known for {factoriolab_id!r}. The bundled recipe "
+            f"table predates the Dark Fog update; re-extract it from the game "
+            f"install to cover this recipe."
+        ) from None
+
+
+def known_recipe_ids() -> frozenset[str]:
+    return frozenset(_recipe_ids())
+
+
+# --- items and belt marker icons -------------------------------------------
+
+_ITEMS = Path(__file__).parent / "data" / "items.json"
+
+
+@cache
+def _item_ids() -> dict[str, int]:
+    raw = json.loads(_ITEMS.read_text())
+    return {_kebab(i["name"]): int(i["id"]) for i in raw}
+
+
+def item_id(factoriolab_id: str) -> int:
+    """DSP numeric item id for a FactorioLab item id.
+
+    Raises ``KeyError`` rather than guessing, for the same reason as
+    :func:`recipe_id`: a wrong id renders a plausible-looking but incorrect
+    marker, which is worse than none.
+    """
+    try:
+        return _item_ids()[factoriolab_id]
+    except KeyError:
+        raise KeyError(f"no DSP item id known for {factoriolab_id!r}") from None
+
+
+def get_item_id(factoriolab_id: str) -> int | None:
+    """:func:`item_id`, or ``None`` when unknown."""
+    return _item_ids().get(factoriolab_id)
+
+
+def belt_marker(dsp_item_id: int) -> tuple[int, int]:
+    """The ``parameters`` block that puts an item icon on a belt.
+
+    Measured, not guessed: all 109 belt parameter blocks in the fixture corpus
+    are exactly two words, ``(item_id, 0)``, and every first word resolves to a
+    real item (Proliferator Mk.III, Space Warper, Pile Sorter, ...).  Icon ids
+    are banded -- below 12000 is the item band, so an item id is its own icon
+    id, which is why no translation is needed here.
+    """
+    return (dsp_item_id, 0)
 
 
 @dataclass(frozen=True, slots=True)

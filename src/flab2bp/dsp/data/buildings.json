@@ -1,0 +1,1605 @@
+[
+ {
+  "prefab": "accumulator",
+  "itemId": 2206,
+  "name": "Accumulator",
+  "modelIndex": 46,
+  "blueprintBoxSize": [
+   2.8,
+   3.2
+  ],
+  "footprint": [
+   3,
+   3
+  ],
+  "addonType": 0,
+  "multiLevel": 0,
+  "stackHeight": null,
+  "slots": [],
+  "power": {
+   "node": true,
+   "connectDistance": 4.199999809265137,
+   "coverRadius": 0.0
+  }
+ },
+ {
+  "prefab": "assembler-mk-1",
+  "itemId": 2303,
+  "name": "Assembling Machine Mk.I",
+  "modelIndex": 65,
+  "blueprintBoxSize": [
+   3.82,
+   3.82
+  ],
+  "footprint": [
+   4,
+   4
+  ],
+  "addonType": 0,
+  "multiLevel": 0,
+  "stackHeight": null,
+  "slots": [],
+  "power": null
+ },
+ {
+  "prefab": "assembler-mk-2",
+  "itemId": 2304,
+  "name": "Assembling Machine Mk.II",
+  "modelIndex": 66,
+  "blueprintBoxSize": [
+   3.82,
+   3.82
+  ],
+  "footprint": [
+   4,
+   4
+  ],
+  "addonType": 0,
+  "multiLevel": 0,
+  "stackHeight": null,
+  "slots": [],
+  "power": null
+ },
+ {
+  "prefab": "assembler-mk-3",
+  "itemId": 2305,
+  "name": "Assembling Machine Mk.III",
+  "modelIndex": 67,
+  "blueprintBoxSize": [
+   3.82,
+   3.82
+  ],
+  "footprint": [
+   4,
+   4
+  ],
+  "addonType": 0,
+  "multiLevel": 0,
+  "stackHeight": null,
+  "slots": [],
+  "power": null
+ },
+ {
+  "prefab": "assembler-mk-4",
+  "itemId": 2318,
+  "name": "Re-composing Assembler",
+  "modelIndex": 456,
+  "blueprintBoxSize": [
+   3.82,
+   3.82
+  ],
+  "footprint": [
+   4,
+   4
+  ],
+  "addonType": 0,
+  "multiLevel": 0,
+  "stackHeight": null,
+  "slots": [],
+  "power": null
+ },
+ {
+  "prefab": "battle-base",
+  "itemId": 3009,
+  "name": "Battlefield Analysis Base",
+  "modelIndex": 453,
+  "blueprintBoxSize": [
+   1.9,
+   1.5
+  ],
+  "footprint": [
+   2,
+   2
+  ],
+  "addonType": 0,
+  "multiLevel": 0,
+  "stackHeight": 8.0,
+  "slots": [],
+  "power": null
+ },
+ {
+  "prefab": "charging-pole",
+  "itemId": 2202,
+  "name": "Wireless Power Tower",
+  "modelIndex": 71,
+  "blueprintBoxSize": [
+   1.0,
+   1.0
+  ],
+  "footprint": [
+   1,
+   1
+  ],
+  "addonType": 0,
+  "multiLevel": 0,
+  "stackHeight": null,
+  "slots": [],
+  "power": {
+   "node": true,
+   "connectDistance": 45.5,
+   "coverRadius": 6.5
+  }
+ },
+ {
+  "prefab": "chemical-plant",
+  "itemId": 2309,
+  "name": "Chemical Plant",
+  "modelIndex": 64,
+  "blueprintBoxSize": [
+   8.2,
+   4.5
+  ],
+  "footprint": [
+   8,
+   5
+  ],
+  "addonType": 0,
+  "multiLevel": 0,
+  "stackHeight": null,
+  "slots": [],
+  "power": null
+ },
+ {
+  "prefab": "chemical-plant-2",
+  "itemId": 2317,
+  "name": "Quantum Chemical Plant",
+  "modelIndex": 376,
+  "blueprintBoxSize": [
+   8.2,
+   4.5
+  ],
+  "footprint": [
+   8,
+   5
+  ],
+  "addonType": 0,
+  "multiLevel": 0,
+  "stackHeight": null,
+  "slots": [],
+  "power": null
+ },
+ {
+  "prefab": "delivery-machine",
+  "itemId": 2107,
+  "name": "Logistics Distributor",
+  "modelIndex": 371,
+  "blueprintBoxSize": [
+   3.1,
+   3.3
+  ],
+  "footprint": [
+   3,
+   3
+  ],
+  "addonType": 2,
+  "multiLevel": 0,
+  "stackHeight": null,
+  "slots": [],
+  "power": null
+ },
+ {
+  "prefab": "em-rail-ejector",
+  "itemId": 2311,
+  "name": "EM-Rail Ejector",
+  "modelIndex": 72,
+  "blueprintBoxSize": [
+   5.45,
+   5.45
+  ],
+  "footprint": [
+   5,
+   5
+  ],
+  "addonType": 0,
+  "multiLevel": 0,
+  "stackHeight": null,
+  "slots": [],
+  "power": null
+ },
+ {
+  "prefab": "energy-exchanger",
+  "itemId": 2209,
+  "name": "Energy Exchanger",
+  "modelIndex": 45,
+  "blueprintBoxSize": [
+   11.7,
+   11.7
+  ],
+  "footprint": [
+   12,
+   12
+  ],
+  "addonType": 0,
+  "multiLevel": 0,
+  "stackHeight": null,
+  "slots": [
+   {
+    "x": 0.0,
+    "y": -0.02,
+    "z": 2.85,
+    "yaw": 0.0
+   },
+   {
+    "x": 2.85,
+    "y": -0.02,
+    "z": 0.0,
+    "yaw": 90.0
+   },
+   {
+    "x": 0.0,
+    "y": -0.02,
+    "z": -2.85,
+    "yaw": 180.0
+   },
+   {
+    "x": -2.85,
+    "y": -0.02,
+    "z": 0.0,
+    "yaw": -90.0
+   }
+  ],
+  "power": {
+   "node": true,
+   "connectDistance": 15.5,
+   "coverRadius": 7.0
+  }
+ },
+ {
+  "prefab": "fractionator",
+  "itemId": 2314,
+  "name": "Fractionator",
+  "modelIndex": 119,
+  "blueprintBoxSize": [
+   4.5,
+   4.5
+  ],
+  "footprint": [
+   5,
+   5
+  ],
+  "addonType": 0,
+  "multiLevel": 0,
+  "stackHeight": null,
+  "slots": [
+   {
+    "x": 0.0,
+    "y": 0.0,
+    "z": 1.4,
+    "yaw": 0.0
+   },
+   {
+    "x": 1.4,
+    "y": 0.0,
+    "z": 0.0,
+    "yaw": 90.0
+   },
+   {
+    "x": -1.4,
+    "y": 0.0,
+    "z": 0.0,
+    "yaw": -90.0
+   }
+  ],
+  "power": null
+ },
+ {
+  "prefab": "fusion-power-station",
+  "itemId": 2211,
+  "name": "Mini Fusion Power Plant",
+  "modelIndex": 118,
+  "blueprintBoxSize": [
+   4.1,
+   8.3
+  ],
+  "footprint": [
+   4,
+   8
+  ],
+  "addonType": 0,
+  "multiLevel": 0,
+  "stackHeight": null,
+  "slots": [],
+  "power": {
+   "node": true,
+   "connectDistance": 11.75,
+   "coverRadius": 4.5
+  }
+ },
+ {
+  "prefab": "fusion-reactor",
+  "itemId": 2210,
+  "name": "Artificial Star",
+  "modelIndex": 56,
+  "blueprintBoxSize": [
+   5.8,
+   8.6
+  ],
+  "footprint": [
+   6,
+   9
+  ],
+  "addonType": 0,
+  "multiLevel": 0,
+  "stackHeight": null,
+  "slots": [],
+  "power": {
+   "node": true,
+   "connectDistance": 15.0,
+   "coverRadius": 5.0
+  }
+ },
+ {
+  "prefab": "geothermal-power-station",
+  "itemId": 2213,
+  "name": "Geothermal Power Station",
+  "modelIndex": 255,
+  "blueprintBoxSize": [
+   6.5,
+   8.25
+  ],
+  "footprint": [
+   7,
+   8
+  ],
+  "addonType": 0,
+  "multiLevel": 0,
+  "stackHeight": null,
+  "slots": [],
+  "power": {
+   "node": true,
+   "connectDistance": 22.0,
+   "coverRadius": 0.0
+  }
+ },
+ {
+  "prefab": "hadron-collider",
+  "itemId": 2310,
+  "name": "Miniature Particle Collider",
+  "modelIndex": 69,
+  "blueprintBoxSize": [
+   9.6,
+   5.56
+  ],
+  "footprint": [
+   10,
+   6
+  ],
+  "addonType": 0,
+  "multiLevel": 0,
+  "stackHeight": null,
+  "slots": [],
+  "power": null
+ },
+ {
+  "prefab": "inserter-1",
+  "itemId": 2011,
+  "name": "Sorter Mk.I",
+  "modelIndex": 41,
+  "blueprintBoxSize": [
+   0.52,
+   0.23
+  ],
+  "footprint": [
+   1,
+   0
+  ],
+  "addonType": 0,
+  "multiLevel": 0,
+  "stackHeight": null,
+  "slots": [],
+  "power": null
+ },
+ {
+  "prefab": "inserter-2",
+  "itemId": 2012,
+  "name": "Sorter Mk.II",
+  "modelIndex": 42,
+  "blueprintBoxSize": [
+   0.52,
+   0.23
+  ],
+  "footprint": [
+   1,
+   0
+  ],
+  "addonType": 0,
+  "multiLevel": 0,
+  "stackHeight": null,
+  "slots": [],
+  "power": null
+ },
+ {
+  "prefab": "inserter-3",
+  "itemId": 2013,
+  "name": "Sorter Mk.III",
+  "modelIndex": 43,
+  "blueprintBoxSize": [
+   0.52,
+   0.23
+  ],
+  "footprint": [
+   1,
+   0
+  ],
+  "addonType": 0,
+  "multiLevel": 0,
+  "stackHeight": null,
+  "slots": [],
+  "power": null
+ },
+ {
+  "prefab": "inserter-4",
+  "itemId": 2014,
+  "name": "Pile Sorter",
+  "modelIndex": 483,
+  "blueprintBoxSize": [
+   0.52,
+   0.23
+  ],
+  "footprint": [
+   1,
+   0
+  ],
+  "addonType": 0,
+  "multiLevel": 0,
+  "stackHeight": null,
+  "slots": [],
+  "power": null
+ },
+ {
+  "prefab": "interstellar-logistic-station",
+  "itemId": 2104,
+  "name": "Interstellar Logistics Station",
+  "modelIndex": 50,
+  "blueprintBoxSize": [
+   10.0,
+   10.0
+  ],
+  "footprint": [
+   10,
+   10
+  ],
+  "addonType": 0,
+  "multiLevel": 0,
+  "stackHeight": null,
+  "slots": [
+   {
+    "x": 1.256,
+    "y": -0.01,
+    "z": 2.7,
+    "yaw": 0.0
+   },
+   {
+    "x": 0.0,
+    "y": -0.01,
+    "z": 2.7,
+    "yaw": 0.0
+   },
+   {
+    "x": -1.256,
+    "y": -0.01,
+    "z": 2.7,
+    "yaw": 0.0
+   },
+   {
+    "x": -2.7,
+    "y": -0.01,
+    "z": 1.256,
+    "yaw": -90.0
+   },
+   {
+    "x": -2.7,
+    "y": -0.01,
+    "z": 0.0,
+    "yaw": -90.0
+   },
+   {
+    "x": -2.7,
+    "y": -0.01,
+    "z": -1.256,
+    "yaw": -90.0
+   },
+   {
+    "x": -1.256,
+    "y": -0.01,
+    "z": -2.7,
+    "yaw": -180.0
+   },
+   {
+    "x": 0.0,
+    "y": -0.01,
+    "z": -2.7,
+    "yaw": -180.0
+   },
+   {
+    "x": 1.256,
+    "y": -0.01,
+    "z": -2.7,
+    "yaw": -180.0
+   },
+   {
+    "x": 2.7,
+    "y": -0.01,
+    "z": -1.256,
+    "yaw": 90.0
+   },
+   {
+    "x": 2.7,
+    "y": -0.01,
+    "z": 0.0,
+    "yaw": 90.0
+   },
+   {
+    "x": 2.7,
+    "y": -0.01,
+    "z": 1.256,
+    "yaw": 90.0
+   }
+  ],
+  "power": null
+ },
+ {
+  "prefab": "lab",
+  "itemId": 2901,
+  "name": "Matrix Lab",
+  "modelIndex": 70,
+  "blueprintBoxSize": [
+   5.6,
+   5.6
+  ],
+  "footprint": [
+   6,
+   6
+  ],
+  "addonType": 0,
+  "multiLevel": 1,
+  "stackHeight": 4.0,
+  "slots": [],
+  "power": null
+ },
+ {
+  "prefab": "lab-2",
+  "itemId": 2902,
+  "name": "Self-evolution Lab",
+  "modelIndex": 455,
+  "blueprintBoxSize": [
+   5.6,
+   5.6
+  ],
+  "footprint": [
+   6,
+   6
+  ],
+  "addonType": 0,
+  "multiLevel": 1,
+  "stackHeight": 4.0,
+  "slots": [],
+  "power": null
+ },
+ {
+  "prefab": "lighthouse",
+  "itemId": 2401,
+  "name": "Holo Beacon",
+  "modelIndex": 664,
+  "blueprintBoxSize": [
+   0.5,
+   0.5
+  ],
+  "footprint": [
+   1,
+   1
+  ],
+  "addonType": 0,
+  "multiLevel": 0,
+  "stackHeight": null,
+  "slots": [],
+  "power": null
+ },
+ {
+  "prefab": "logistic-station",
+  "itemId": 2103,
+  "name": "Planetary Logistics Station",
+  "modelIndex": 49,
+  "blueprintBoxSize": [
+   5.5,
+   8.0
+  ],
+  "footprint": [
+   6,
+   8
+  ],
+  "addonType": 0,
+  "multiLevel": 0,
+  "stackHeight": null,
+  "slots": [
+   {
+    "x": 1.256,
+    "y": -0.01,
+    "z": 2.7,
+    "yaw": 0.0
+   },
+   {
+    "x": 0.0,
+    "y": -0.01,
+    "z": 2.7,
+    "yaw": 0.0
+   },
+   {
+    "x": -1.256,
+    "y": -0.01,
+    "z": 2.7,
+    "yaw": 0.0
+   },
+   {
+    "x": -2.7,
+    "y": -0.01,
+    "z": 1.256,
+    "yaw": -90.0
+   },
+   {
+    "x": -2.7,
+    "y": -0.01,
+    "z": 0.0,
+    "yaw": -90.0
+   },
+   {
+    "x": -2.7,
+    "y": -0.01,
+    "z": -1.256,
+    "yaw": -90.0
+   },
+   {
+    "x": -1.256,
+    "y": -0.01,
+    "z": -2.7,
+    "yaw": -180.0
+   },
+   {
+    "x": 0.0,
+    "y": -0.01,
+    "z": -2.7,
+    "yaw": -180.0
+   },
+   {
+    "x": 1.256,
+    "y": -0.01,
+    "z": -2.7,
+    "yaw": -180.0
+   },
+   {
+    "x": 2.7,
+    "y": -0.01,
+    "z": -1.256,
+    "yaw": 90.0
+   },
+   {
+    "x": 2.7,
+    "y": -0.01,
+    "z": 0.0,
+    "yaw": 90.0
+   },
+   {
+    "x": 2.7,
+    "y": -0.01,
+    "z": 1.256,
+    "yaw": 90.0
+   }
+  ],
+  "power": null
+ },
+ {
+  "prefab": "mining-drill",
+  "itemId": 2301,
+  "name": "Mining Machine",
+  "modelIndex": 57,
+  "blueprintBoxSize": [
+   3.02,
+   6.1
+  ],
+  "footprint": [
+   3,
+   6
+  ],
+  "addonType": 0,
+  "multiLevel": 0,
+  "stackHeight": null,
+  "slots": [
+   {
+    "x": 0.0,
+    "y": 0.0,
+    "z": 2.77,
+    "yaw": 0.0
+   }
+  ],
+  "power": null
+ },
+ {
+  "prefab": "mining-drill-mk2",
+  "itemId": 2316,
+  "name": "Advanced Mining Machine",
+  "modelIndex": 256,
+  "blueprintBoxSize": [
+   11.3,
+   5.4683
+  ],
+  "footprint": [
+   11,
+   5
+  ],
+  "addonType": 0,
+  "multiLevel": 0,
+  "stackHeight": null,
+  "slots": [
+   {
+    "x": -1.258,
+    "y": 0.0,
+    "z": 1.8,
+    "yaw": 0.0
+   },
+   {
+    "x": 0.0,
+    "y": 0.0,
+    "z": 1.8,
+    "yaw": 0.0
+   },
+   {
+    "x": 1.258,
+    "y": 0.0,
+    "z": 1.8,
+    "yaw": 0.0
+   },
+   {
+    "x": 1.8,
+    "y": 0.0,
+    "z": 1.258,
+    "yaw": 90.0
+   },
+   {
+    "x": 1.8,
+    "y": 0.0,
+    "z": 0.0,
+    "yaw": 90.0
+   },
+   {
+    "x": 1.8,
+    "y": 0.0,
+    "z": -1.258,
+    "yaw": 90.0
+   },
+   {
+    "x": -1.8,
+    "y": 0.0,
+    "z": -1.258,
+    "yaw": -90.0
+   },
+   {
+    "x": -1.8,
+    "y": 0.0,
+    "z": 0.0,
+    "yaw": -90.0
+   },
+   {
+    "x": -1.8,
+    "y": 0.0,
+    "z": 1.258,
+    "yaw": -90.0
+   }
+  ],
+  "power": null
+ },
+ {
+  "prefab": "monitor",
+  "itemId": 2030,
+  "name": "Traffic Monitor",
+  "modelIndex": 208,
+  "blueprintBoxSize": [
+   0.9,
+   1.1
+  ],
+  "footprint": [
+   1,
+   1
+  ],
+  "addonType": 1,
+  "multiLevel": 0,
+  "stackHeight": null,
+  "slots": [],
+  "power": null
+ },
+ {
+  "prefab": "oil-extractor",
+  "itemId": 2307,
+  "name": "Oil Extractor",
+  "modelIndex": 61,
+  "blueprintBoxSize": [
+   6.0,
+   11.6
+  ],
+  "footprint": [
+   6,
+   12
+  ],
+  "addonType": 0,
+  "multiLevel": 0,
+  "stackHeight": null,
+  "slots": [
+   {
+    "x": 0.0,
+    "y": -0.045,
+    "z": 5.2,
+    "yaw": 0.0
+   }
+  ],
+  "power": null
+ },
+ {
+  "prefab": "oil-refinery",
+  "itemId": 2308,
+  "name": "Oil Refinery",
+  "modelIndex": 63,
+  "blueprintBoxSize": [
+   3.5059,
+   7.2
+  ],
+  "footprint": [
+   4,
+   7
+  ],
+  "addonType": 0,
+  "multiLevel": 0,
+  "stackHeight": null,
+  "slots": [],
+  "power": null
+ },
+ {
+  "prefab": "orbital-collector",
+  "itemId": 2105,
+  "name": "Orbital Collector",
+  "modelIndex": 117,
+  "blueprintBoxSize": [
+   10.0,
+   10.0
+  ],
+  "footprint": [
+   10,
+   10
+  ],
+  "addonType": 0,
+  "multiLevel": 0,
+  "stackHeight": null,
+  "slots": [],
+  "power": null
+ },
+ {
+  "prefab": "orbital-substation",
+  "itemId": 2212,
+  "name": "Satellite Substation",
+  "modelIndex": 68,
+  "blueprintBoxSize": [
+   6.9,
+   6.9
+  ],
+  "footprint": [
+   7,
+   7
+  ],
+  "addonType": 0,
+  "multiLevel": 0,
+  "stackHeight": null,
+  "slots": [],
+  "power": {
+   "node": true,
+   "connectDistance": 53.5,
+   "coverRadius": 26.5
+  }
+ },
+ {
+  "prefab": "piler",
+  "itemId": 2040,
+  "name": "Automatic Piler",
+  "modelIndex": 257,
+  "blueprintBoxSize": [
+   1.0,
+   2.9
+  ],
+  "footprint": [
+   1,
+   3
+  ],
+  "addonType": 0,
+  "multiLevel": 1,
+  "stackHeight": 2.67,
+  "slots": [
+   {
+    "x": 0.0,
+    "y": 0.0,
+    "z": 0.25,
+    "yaw": 0.0
+   },
+   {
+    "x": 0.0,
+    "y": 0.0,
+    "z": -0.25,
+    "yaw": 180.0
+   }
+  ],
+  "power": null
+ },
+ {
+  "prefab": "power-generator",
+  "itemId": 2204,
+  "name": "Thermal Power Plant",
+  "modelIndex": 54,
+  "blueprintBoxSize": [
+   4.1,
+   8.3
+  ],
+  "footprint": [
+   4,
+   8
+  ],
+  "addonType": 0,
+  "multiLevel": 0,
+  "stackHeight": null,
+  "slots": [],
+  "power": {
+   "node": true,
+   "connectDistance": 11.75,
+   "coverRadius": 4.5
+  }
+ },
+ {
+  "prefab": "ray-receiver",
+  "itemId": 2208,
+  "name": "Ray Receiver",
+  "modelIndex": 73,
+  "blueprintBoxSize": [
+   9.4,
+   5.4
+  ],
+  "footprint": [
+   9,
+   5
+  ],
+  "addonType": 0,
+  "multiLevel": 0,
+  "stackHeight": null,
+  "slots": [
+   {
+    "x": 0.0,
+    "y": 0.0,
+    "z": 1.41,
+    "yaw": 0.0
+   },
+   {
+    "x": 0.0,
+    "y": 0.0,
+    "z": -1.41,
+    "yaw": 180.0
+   }
+  ],
+  "power": {
+   "node": true,
+   "connectDistance": 22.5,
+   "coverRadius": 10.5
+  }
+ },
+ {
+  "prefab": "smelter",
+  "itemId": 2302,
+  "name": "Arc Smelter",
+  "modelIndex": 62,
+  "blueprintBoxSize": [
+   2.9,
+   2.9
+  ],
+  "footprint": [
+   3,
+   3
+  ],
+  "addonType": 0,
+  "multiLevel": 0,
+  "stackHeight": null,
+  "slots": [],
+  "power": null
+ },
+ {
+  "prefab": "smelter-2",
+  "itemId": 2315,
+  "name": "Plane Smelter",
+  "modelIndex": 194,
+  "blueprintBoxSize": [
+   2.9,
+   2.9
+  ],
+  "footprint": [
+   3,
+   3
+  ],
+  "addonType": 0,
+  "multiLevel": 0,
+  "stackHeight": null,
+  "slots": [],
+  "power": null
+ },
+ {
+  "prefab": "smelter-3",
+  "itemId": 2319,
+  "name": "Negentropy Smelter",
+  "modelIndex": 457,
+  "blueprintBoxSize": [
+   2.9,
+   2.9
+  ],
+  "footprint": [
+   3,
+   3
+  ],
+  "addonType": 0,
+  "multiLevel": 0,
+  "stackHeight": null,
+  "slots": [],
+  "power": null
+ },
+ {
+  "prefab": "solar-panel",
+  "itemId": 2205,
+  "name": "Solar Panel",
+  "modelIndex": 55,
+  "blueprintBoxSize": [
+   3.5,
+   3.5
+  ],
+  "footprint": [
+   4,
+   4
+  ],
+  "addonType": 0,
+  "multiLevel": 0,
+  "stackHeight": null,
+  "slots": [],
+  "power": {
+   "node": true,
+   "connectDistance": 6.75,
+   "coverRadius": 0.0
+  }
+ },
+ {
+  "prefab": "splitter-a",
+  "itemId": 2020,
+  "name": "Splitter",
+  "modelIndex": 38,
+  "blueprintBoxSize": [
+   2.38,
+   1.25
+  ],
+  "footprint": [
+   2,
+   1
+  ],
+  "addonType": 0,
+  "multiLevel": 1,
+  "stackHeight": 2.67,
+  "slots": [
+   {
+    "x": 0.0,
+    "y": 0.0,
+    "z": 0.25,
+    "yaw": 0.0
+   },
+   {
+    "x": 0.25,
+    "y": 0.0,
+    "z": 0.0,
+    "yaw": 90.0
+   },
+   {
+    "x": 0.0,
+    "y": 0.0,
+    "z": -0.25,
+    "yaw": 180.0
+   },
+   {
+    "x": -0.25,
+    "y": 0.0,
+    "z": 0.0,
+    "yaw": -90.0
+   }
+  ],
+  "power": null
+ },
+ {
+  "prefab": "splitter-b",
+  "itemId": null,
+  "name": "",
+  "modelIndex": 39,
+  "blueprintBoxSize": [
+   1.65,
+   2.38
+  ],
+  "footprint": [
+   2,
+   2
+  ],
+  "addonType": 0,
+  "multiLevel": 1,
+  "stackHeight": 2.67,
+  "slots": [
+   {
+    "x": 0.0,
+    "y": 0.0,
+    "z": 0.25,
+    "yaw": 0.0
+   },
+   {
+    "x": 0.0,
+    "y": 1.333,
+    "z": 0.25,
+    "yaw": 0.0
+   },
+   {
+    "x": 0.0,
+    "y": 0.0,
+    "z": -0.25,
+    "yaw": 180.0
+   },
+   {
+    "x": 0.0,
+    "y": 1.333,
+    "z": -0.25,
+    "yaw": 180.0
+   }
+  ],
+  "power": null
+ },
+ {
+  "prefab": "splitter-c",
+  "itemId": null,
+  "name": "",
+  "modelIndex": 40,
+  "blueprintBoxSize": [
+   2.38,
+   2.38
+  ],
+  "footprint": [
+   2,
+   2
+  ],
+  "addonType": 0,
+  "multiLevel": 1,
+  "stackHeight": 2.67,
+  "slots": [
+   {
+    "x": 0.0,
+    "y": 1.333,
+    "z": 0.25,
+    "yaw": 0.0
+   },
+   {
+    "x": 0.25,
+    "y": 0.0,
+    "z": 0.0,
+    "yaw": 90.0
+   },
+   {
+    "x": 0.0,
+    "y": 1.333,
+    "z": -0.25,
+    "yaw": 180.0
+   },
+   {
+    "x": -0.25,
+    "y": 0.0,
+    "z": 0.0,
+    "yaw": -90.0
+   }
+  ],
+  "power": null
+ },
+ {
+  "prefab": "spray-coater",
+  "itemId": 2313,
+  "name": "Spray Coater",
+  "modelIndex": 120,
+  "blueprintBoxSize": [
+   0.7,
+   2.0
+  ],
+  "footprint": [
+   1,
+   2
+  ],
+  "addonType": 1,
+  "multiLevel": 1,
+  "stackHeight": null,
+  "slots": [],
+  "power": null
+ },
+ {
+  "prefab": "stone-wall",
+  "itemId": null,
+  "name": "",
+  "modelIndex": null,
+  "blueprintBoxSize": [
+   0.9,
+   0.9
+  ],
+  "footprint": [
+   1,
+   1
+  ],
+  "addonType": 0,
+  "multiLevel": 0,
+  "stackHeight": null,
+  "slots": [],
+  "power": null
+ },
+ {
+  "prefab": "storage-1",
+  "itemId": 2101,
+  "name": "Depot Mk.I",
+  "modelIndex": 51,
+  "blueprintBoxSize": [
+   3.0,
+   3.0
+  ],
+  "footprint": [
+   3,
+   3
+  ],
+  "addonType": 0,
+  "multiLevel": 1,
+  "stackHeight": 2.67,
+  "slots": [],
+  "power": null
+ },
+ {
+  "prefab": "storage-2",
+  "itemId": 2102,
+  "name": "Depot Mk.II",
+  "modelIndex": 52,
+  "blueprintBoxSize": [
+   5.85,
+   3.9
+  ],
+  "footprint": [
+   6,
+   4
+  ],
+  "addonType": 0,
+  "multiLevel": 1,
+  "stackHeight": 4.0,
+  "slots": [],
+  "power": null
+ },
+ {
+  "prefab": "storage-tank",
+  "itemId": 2106,
+  "name": "Storage Tank",
+  "modelIndex": 121,
+  "blueprintBoxSize": [
+   4.5,
+   4.5
+  ],
+  "footprint": [
+   5,
+   5
+  ],
+  "addonType": 0,
+  "multiLevel": 1,
+  "stackHeight": 4.0,
+  "slots": [
+   {
+    "x": 0.0,
+    "y": 0.0,
+    "z": 1.4,
+    "yaw": 0.0
+   },
+   {
+    "x": 1.4,
+    "y": 0.0,
+    "z": 0.0,
+    "yaw": 90.0
+   },
+   {
+    "x": 0.0,
+    "y": 0.0,
+    "z": -1.4,
+    "yaw": 180.0
+   },
+   {
+    "x": -1.4,
+    "y": 0.0,
+    "z": 0.0,
+    "yaw": -90.0
+   }
+  ],
+  "power": null
+ },
+ {
+  "prefab": "tesla-tower-1",
+  "itemId": 2201,
+  "name": "Tesla Tower",
+  "modelIndex": 44,
+  "blueprintBoxSize": [
+   0.6,
+   0.6
+  ],
+  "footprint": [
+   1,
+   1
+  ],
+  "addonType": 0,
+  "multiLevel": 0,
+  "stackHeight": null,
+  "slots": [],
+  "power": {
+   "node": true,
+   "connectDistance": 22.5,
+   "coverRadius": 10.5
+  }
+ },
+ {
+  "prefab": "turret-cannon",
+  "itemId": 3003,
+  "name": "Implosion Cannon",
+  "modelIndex": 375,
+  "blueprintBoxSize": [
+   5.8,
+   3.1
+  ],
+  "footprint": [
+   6,
+   3
+  ],
+  "addonType": 1,
+  "multiLevel": 0,
+  "stackHeight": null,
+  "slots": [],
+  "power": null
+ },
+ {
+  "prefab": "turret-disturb",
+  "itemId": 3006,
+  "name": "Jammer Tower",
+  "modelIndex": 422,
+  "blueprintBoxSize": [
+   6.2,
+   6.2
+  ],
+  "footprint": [
+   6,
+   6
+  ],
+  "addonType": 1,
+  "multiLevel": 0,
+  "stackHeight": null,
+  "slots": [],
+  "power": null
+ },
+ {
+  "prefab": "turret-gauss",
+  "itemId": 3001,
+  "name": "Gauss Turret",
+  "modelIndex": 374,
+  "blueprintBoxSize": [
+   3.9,
+   3.9
+  ],
+  "footprint": [
+   4,
+   4
+  ],
+  "addonType": 1,
+  "multiLevel": 0,
+  "stackHeight": null,
+  "slots": [],
+  "power": null
+ },
+ {
+  "prefab": "turret-laser",
+  "itemId": 3002,
+  "name": "Laser Turret",
+  "modelIndex": 373,
+  "blueprintBoxSize": [
+   5.4,
+   4.0
+  ],
+  "footprint": [
+   5,
+   4
+  ],
+  "addonType": 0,
+  "multiLevel": 0,
+  "stackHeight": null,
+  "slots": [],
+  "power": null
+ },
+ {
+  "prefab": "turret-missile",
+  "itemId": 3005,
+  "name": "Missile Turret",
+  "modelIndex": 407,
+  "blueprintBoxSize": [
+   6.0,
+   2.6
+  ],
+  "footprint": [
+   6,
+   3
+  ],
+  "addonType": 1,
+  "multiLevel": 0,
+  "stackHeight": null,
+  "slots": [],
+  "power": null
+ },
+ {
+  "prefab": "turret-plasma",
+  "itemId": 3004,
+  "name": "Plasma Turret",
+  "modelIndex": 408,
+  "blueprintBoxSize": [
+   9.0,
+   9.0
+  ],
+  "footprint": [
+   9,
+   9
+  ],
+  "addonType": 1,
+  "multiLevel": 0,
+  "stackHeight": null,
+  "slots": [],
+  "power": null
+ },
+ {
+  "prefab": "turret-plasma-ground",
+  "itemId": 3010,
+  "name": "SR Plasma Turret",
+  "modelIndex": 482,
+  "blueprintBoxSize": [
+   5.4,
+   3.0
+  ],
+  "footprint": [
+   5,
+   3
+  ],
+  "addonType": 1,
+  "multiLevel": 0,
+  "stackHeight": null,
+  "slots": [],
+  "power": null
+ },
+ {
+  "prefab": "turret-shield",
+  "itemId": 3008,
+  "name": "Planetary Shield Generator",
+  "modelIndex": 402,
+  "blueprintBoxSize": [
+   2.4,
+   3.8
+  ],
+  "footprint": [
+   2,
+   4
+  ],
+  "addonType": 0,
+  "multiLevel": 0,
+  "stackHeight": null,
+  "slots": [],
+  "power": null
+ },
+ {
+  "prefab": "turret-signal",
+  "itemId": 3007,
+  "name": "Signal Tower",
+  "modelIndex": 403,
+  "blueprintBoxSize": [
+   6.0,
+   6.0
+  ],
+  "footprint": [
+   6,
+   6
+  ],
+  "addonType": 0,
+  "multiLevel": 0,
+  "stackHeight": null,
+  "slots": [],
+  "power": {
+   "node": true,
+   "connectDistance": 60.5,
+   "coverRadius": 14.5
+  }
+ },
+ {
+  "prefab": "vertical-launching-silo",
+  "itemId": 2312,
+  "name": "Vertical Launching Silo",
+  "modelIndex": 74,
+  "blueprintBoxSize": [
+   10.9,
+   9.6
+  ],
+  "footprint": [
+   11,
+   10
+  ],
+  "addonType": 0,
+  "multiLevel": 0,
+  "stackHeight": null,
+  "slots": [],
+  "power": null
+ },
+ {
+  "prefab": "water-pump",
+  "itemId": 2306,
+  "name": "Water Pump",
+  "modelIndex": 60,
+  "blueprintBoxSize": [
+   2.4,
+   6.0
+  ],
+  "footprint": [
+   2,
+   6
+  ],
+  "addonType": 0,
+  "multiLevel": 0,
+  "stackHeight": null,
+  "slots": [
+   {
+    "x": 0.0,
+    "y": 0.0,
+    "z": 1.45,
+    "yaw": 0.0
+   }
+  ],
+  "power": null
+ },
+ {
+  "prefab": "wind-turbine",
+  "itemId": 2203,
+  "name": "Wind Turbine",
+  "modelIndex": 53,
+  "blueprintBoxSize": [
+   2.95,
+   3.25
+  ],
+  "footprint": [
+   3,
+   3
+  ],
+  "addonType": 0,
+  "multiLevel": 0,
+  "stackHeight": null,
+  "slots": [],
+  "power": {
+   "node": true,
+   "connectDistance": 16.5,
+   "coverRadius": 7.699999809265137
+  }
+ }
+]

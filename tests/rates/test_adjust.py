@@ -205,25 +205,19 @@ def test_machine_footprints_differ_across_machine_classes(data: Dataset) -> None
     assert machine_footprint("arc-smelter") == 9
 
 
-@pytest.mark.xfail(
-    reason=(
-        "dsp/catalog.py currently reports assemblers as 3x3 (9 tiles); measured "
-        "evidence from the fixture corpus says 4x4. Minimum axis-aligned spacing "
-        "between same-type assemblers is 4.0 in every fixture that contains a "
-        "pair -- 0.8.19 (n=192 and n=51), 0.10.28 (n=2) -- and 3.0 appears "
-        "nowhere, while smelters do sit at 3.0 and Matrix Labs at 6.0 in the "
-        "same blueprints. Not fixable here: catalog.py is owned elsewhere."
-    ),
-    strict=False,
-)
-def test_assemblers_are_four_by_four(data: Dataset) -> None:
-    """Assemblers are 4x4, which nearly doubles their area against a smelter.
+def test_assemblers_are_three_by_three(data: Dataset) -> None:
+    """Assemblers are 3x3, the same footprint as a smelter.
 
-    This is load-bearing for the solve: the objective is footprint area, so a
-    9-vs-16 error changes which machine the MILP prefers and every area figure
-    the bake-off will compare.
+    Settled by midpoint occupancy, not by spacing.  Two assemblers 4.0 apart in
+    ``quick-start-step-1`` have a belt at the midpoint between them; a 4x4
+    building centred on that pair would already cover the midpoint tile, and the
+    game cannot emit an overlapping blueprint.  Minimum observed spacing is only
+    a *lower* bound on size -- it cannot separate "4 wide" from "3 wide with a
+    routing gap" -- which is why the smelters-pack-flush contrast proves nothing
+    on its own: those assemblers simply have a belt running between them.
     """
-    assert machine_footprint("assembling-machine-2") == 16
+    assert machine_footprint("assembling-machine-2") == 9
+    assert machine_footprint("arc-smelter") == 9
 
 
 def test_every_lab_machine_resolves_to_a_footprint(data: Dataset) -> None:

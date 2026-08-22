@@ -1,0 +1,30 @@
+{
+  "//": [
+    "Editor-only config for scripts/crossvalidate.ts.",
+    "",
+    "This is a Python project; the one TypeScript file here exists solely as a",
+    "bridge to the sibling dsp-blueprint-viewer checkout, and is executed by",
+    "`bun` directly with no build step. So there is deliberately no package.json",
+    "and no node_modules here -- the bun and node type definitions are resolved",
+    "from the viewer's own install, matching the conventions in its tsconfig.",
+    "",
+    "If the viewer checkout is absent, this config simply does not resolve and",
+    "the script is never run either, which is the same condition the Python side",
+    "already skips on."
+  ],
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "types": ["bun", "node"],
+    "typeRoots": [
+      "../../dsp-blueprint-viewer/node_modules/@types"
+    ]
+  },
+  "include": ["*.ts"]
+}

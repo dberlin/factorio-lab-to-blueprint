@@ -19,7 +19,6 @@ candidate to beat rather than a heuristic guess.
 
 from __future__ import annotations
 
-from dataclasses import replace
 from fractions import Fraction
 
 from flab2bp.lab.schema import Dataset
@@ -114,7 +113,8 @@ def _to_build_spec(
         spray_lanes=spray_lanes,
     )
     # Needs the finished spec to compute, so fill it in on a copy.
-    return replace(spec, lanes_requiring_split=lanes_requiring_split(data, spec))
+    # BuildSpec is a pydantic model, so model_copy rather than dataclasses.replace.
+    return spec.model_copy(update={"lanes_requiring_split": lanes_requiring_split(data, spec)})
 
 
 def lanes_requiring_split(data: Dataset, spec: BuildSpec) -> frozenset[str]:
