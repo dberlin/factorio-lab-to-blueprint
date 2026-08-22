@@ -82,6 +82,14 @@ LEVELS = catalog.MAX_BELT_STACK_LEVELS
 #: Rip-up-and-reroute iterations before a placement is declared unroutable.
 RRR_MAX = 8
 
+#: Rip-up rounds with no improvement in the failure count before giving up.
+#:
+#: Three, not one: pressure grows geometrically (``0.5 * 1.6**it``), so a round
+#: that buys nothing at low pressure can still break a deadlock two rounds
+#: later. Measured on the magnetic-ring chain, where routing a pack that cannot
+#: be wired was the strategy's single largest cost.
+_RRR_STALE_ROUNDS = 3
+
 #: Outer repair iterations before falling back.
 OUTER_MAX = 3
 
@@ -1504,6 +1512,8 @@ def _route_all(
     # None, which is already the route-failure path the caller repairs from and
     # records in `route_failures`.
     budget = {"left": _ROUTING_BUDGET}
+    fewest_failed = len(nets) + 1
+    stale = 0
 
     _reserve_port_access(canvas, nets)
 
@@ -1607,7 +1617,21 @@ def _route_all(
         for path in committed:
             for cell in path:
                 history[cell] += 1.0
-        if it == RRR_MAX - 1:
+        # Give up once raising the pressure has stopped buying anything.
+        #
+        # Rip-up-and-reroute converges by making contested cells progressively
+        # dearer, so a round that fails no fewer nets than the best round so far
+        # is evidence the failures are not contention. Running the remaining
+        # rounds anyway is the single largest cost in this strategy when a pack
+        # cannot be wired -- and a pack that cannot be wired is exactly when
+        # every round runs. Three rounds of no improvement before quitting,
+        # because pressure grows geometrically and a late round can still break
+        # a deadlock that earlier ones could not.
+        if failed < fewest_failed:
+            fewest_failed, stale = failed, 0
+        else:
+            stale += 1
+        if stale >= _RRR_STALE_ROUNDS or it == RRR_MAX - 1:
             unlinked = _commit_paths(canvas, nets, paths, belt_id, belt_model)
             return len(paths) - unlinked, failed + unlinked, iterations
     return 0, len(nets), iterations
