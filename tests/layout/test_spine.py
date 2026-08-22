@@ -14,6 +14,7 @@ from fractions import Fraction
 import pytest
 
 from flab2bp.dsp import catalog
+from flab2bp.layout import validate
 from flab2bp.layout.base import DETERMINISTIC_WORKERS, PlacedBuilding, Placement
 from flab2bp.layout.spine import (
     FALLBACK_NO_BUDGET,
@@ -704,6 +705,93 @@ class TestRealCorpusSpecsActuallySolve:
         assert solved.stats["rows"] < len(spec.groups)
         fallback = SpineLayout(power=False).lay_out(spec, time_budget_s=0.0)
         assert solved.area < fallback.area
+
+
+class TestPowerCoverageOnRealSpecs:
+    """Power on real specs, which is where the coverage model broke.
+
+    Every previous power test used a hand-built spec whose corridors are a few
+    lanes deep.  A 27-group build reaches 14-lane corridors, and the reach model
+    charged each row the FULL height of its neighbouring corridors -- as if that
+    row's towers alone had to reach the far edge.  That put 21 of 27 rows past
+    the 10.5-tile radius and made Strategy A refuse to lay out a real URL at all.
+
+    An interior corridor is bordered by two rows, each with its own towers, so
+    neither has to cross it: they meet in the middle.  Only the first and last
+    corridors have a single neighbour, and the top one needs its own tower band.
+    """
+
+    @staticmethod
+    def _spec(url_id: str) -> BuildSpec:
+        from flab2bp.bench.corpus import entry
+        from flab2bp.lab.data import load_vendored
+        from flab2bp.lab.url import parse_url
+        from flab2bp.rates.candidates import build_candidates
+
+        candidates = build_candidates(
+            load_vendored(), parse_url(entry(url_id).url), count=3
+        ).candidates
+        return min(candidates, key=lambda s: s.machine_count)
+
+    @staticmethod
+    def _report(spec: BuildSpec, placement: Placement) -> validate.Report:
+        from flab2bp.pipeline import _id_map
+
+        return validate.validate(
+            placement, spec, ids=_id_map(spec), expect_power=True
+        )
+
+    @pytest.mark.slow
+    @pytest.mark.parametrize(
+        "url_id",
+        ["processor", "casimir-crystal", "information-matrix", "quantum-chip"],
+    )
+    def test_every_powered_building_is_covered(self, url_id: str) -> None:
+        spec = self._spec(url_id)
+        p = SpineLayout(power=True).lay_out(spec, time_budget_s=3.0)
+        assert p.stats["fallback_used"] == 0.0
+        # No powered building left stranded. The top-up reports what it could
+        # not reach rather than swallowing it, so this doubles as a check that
+        # the analytic model plus the repair together actually close the gap.
+        assert p.stats["power_uncovered"] == 0.0
+        report = self._report(spec, p)
+        power_errors = [
+            f for f in report.errors if f.check.startswith("power.")
+        ]
+        assert not power_errors, "\n".join(f.message for f in power_errors[:5])
+
+    @pytest.mark.slow
+    def test_a_deep_corridor_spec_lays_out_at_all(self) -> None:
+        """The regression proper: this raised ValueError before the fix."""
+        spec = self._spec("information-matrix")
+        p = SpineLayout(power=True).lay_out(spec, time_budget_s=3.0)
+        assert p.stats["towers"] > 0
+        assert p.area > 0
+
+    def test_interior_corridors_are_shared_but_boundaries_are_not(self) -> None:
+        """The asymmetry is the whole fix; pin it directly.
+
+        A hand-built check so it runs in the default suite: charging a boundary
+        corridor at half would under-cover the external input lanes, which real
+        placements do tap all the way to their deepest lane.
+        """
+        from flab2bp.layout.spine import _corridor_charge
+
+        heights = [9, 9, 9, 9]
+        assert _corridor_charge(0, heights) == 9, "top corridor has one neighbour"
+        assert _corridor_charge(3, heights) == 9, "bottom corridor has one neighbour"
+        assert _corridor_charge(1, heights) < 9, "interior corridor is shared"
+        assert _corridor_charge(2, heights) < 9
+        # With a tower band above it, the top corridor gains a second neighbour.
+        assert _corridor_charge(0, heights, has_top_band=True) < 9
+
+    def test_a_tall_top_corridor_gets_its_own_tower_band(self) -> None:
+        from flab2bp.layout.spine import _top_band_height
+
+        # Shallow: row 0's own towers reach the whole corridor.
+        assert _top_band_height([3], [2, 1]) == 0
+        # Deep: they cannot, so a band is required.
+        assert _top_band_height([3], [11, 1]) > 0
 
 
 class TestBeltsCarryTheirItemLabel:

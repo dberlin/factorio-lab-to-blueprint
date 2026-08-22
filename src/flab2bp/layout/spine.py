@@ -1175,8 +1175,10 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
     # measurement found them 22 tiles from the nearest tower on a 19-group
     # build.  No closed form fixes that, so verify the real geometry and add
     # towers where it actually falls short.
+    uncovered = 0
     if power:
-        towers += _top_up_coverage(buildings, tower_model)
+        extra, uncovered = _top_up_coverage(buildings, tower_model)
+        towers += extra
 
     return Placement(
         buildings=tuple(buildings),
@@ -1190,6 +1192,10 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
             "direct_sorters": float(direct_sorters),
             "spray_coaters": float(coaters),
             "towers": float(towers),
+            # Powered buildings the top-up could not reach because every tile
+            # within a supply radius of them was occupied. Non-zero means the
+            # build is genuinely under-powered, and the validator will say so.
+            "power_uncovered": float(uncovered),
             "direct_inserts": float(len(plan.direct)),
             "corridor_tiles": float(sum(corridor_heights)),
             "height_waste": float(
@@ -1608,21 +1614,36 @@ def _horizontal_reach(r: int, row_heights: list[int], corridor_heights: list[int
 
 
 def _nearest_free(
-    gx: int, gy: int, occupied: set[tuple[int, int]], limit: int
+    gx: int, gy: int, occupied: set[tuple[int, int]], radius: float
 ) -> tuple[int, int] | None:
-    """The unoccupied tile closest to ``(gx, gy)``, searched in expanding rings."""
+    """The unoccupied tile closest to ``(gx, gy)`` and within ``radius`` of it.
+
+    Rings expand in Chebyshev distance but the acceptance test is EUCLIDEAN: a
+    tower at the corner of a ring of side 10 is 14.1 tiles away, so it would not
+    actually cover the tile it was placed for.  Filtering on the ring index alone
+    silently produced towers that powered nothing.
+    """
+    limit = int(radius)
     for ring in range(limit + 1):
+        best: tuple[float, tuple[int, int]] | None = None
         for dx in range(-ring, ring + 1):
             for dy in range(-ring, ring + 1):
                 if ring and max(abs(dx), abs(dy)) != ring:
                     continue  # interior of this ring was covered by a smaller one
+                dist = math.hypot(dx, dy)
+                if dist > radius:
+                    continue
                 spot = (gx + dx, gy + dy)
-                if spot not in occupied:
-                    return spot
+                if spot in occupied:
+                    continue
+                if best is None or dist < best[0]:
+                    best = (dist, spot)
+        if best is not None:
+            return best[1]
     return None
 
 
-def _top_up_coverage(buildings: list[PlacedBuilding], tower_model: int) -> int:
+def _top_up_coverage(buildings: list[PlacedBuilding], tower_model: int) -> tuple[int, int]:
     """Add towers until every powered building is genuinely inside a supply radius.
 
     Verification rather than prediction.  ``_horizontal_reach`` budgets a
@@ -1635,8 +1656,10 @@ def _top_up_coverage(buildings: list[PlacedBuilding], tower_model: int) -> int:
     a tower is placed only on a tile nothing else occupies, so this can never
     introduce an overlap.
 
-    Returns the number of towers added.  Zero is the common case: the analytic
-    model is right nearly everywhere, and this only pays for the exceptions.
+    Returns ``(towers_added, still_uncovered)``.  The second number must reach
+    the caller: a building with no free tile within a radius of it cannot be
+    powered at all, and swallowing that would be exactly the silent degradation
+    ``fallback_reason`` exists to prevent.
     """
     radius = float(CONSTANTS.supply_radius)
     occupied: set[tuple[int, int]] = set()
@@ -1656,6 +1679,7 @@ def _top_up_coverage(buildings: list[PlacedBuilding], tower_model: int) -> int:
         return any(math.hypot(tx - ox, ty - oy) <= radius for ox, oy in towers)
 
     added = 0
+    unfixable = 0
     for b in list(buildings):
         if catalog.is_belt(b.item_id) or b.item_id == CONSTANTS.tesla_item_id:
             continue
@@ -1670,8 +1694,9 @@ def _top_up_coverage(buildings: list[PlacedBuilding], tower_model: int) -> int:
         gx, gy = gaps[0]
         # Nearest free tile, searched outward, so the tower lands beside the
         # thing it powers rather than somewhere that inflates the bounding box.
-        spot = _nearest_free(gx, gy, occupied, int(radius))
+        spot = _nearest_free(gx, gy, occupied, radius)
         if spot is None:
+            unfixable += 1
             continue
         occupied.add(spot)
         towers.append(spot)
@@ -1686,7 +1711,7 @@ def _top_up_coverage(buildings: list[PlacedBuilding], tower_model: int) -> int:
             )
         )
         added += 1
-    return added
+    return added, unfixable
 
 
 def _bbox_area(buildings: list[PlacedBuilding]) -> int:
