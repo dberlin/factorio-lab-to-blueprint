@@ -51,7 +51,7 @@ from __future__ import annotations
 import heapq
 import math
 from collections import defaultdict, deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from fractions import Fraction
 
 from ortools.sat.python import cp_model
@@ -649,6 +649,7 @@ def _emit_strip(
     belt_id: int,
     belt_model: int,
     rates: dict[str, Fraction],
+    machine_demand: tuple[Fraction, Fraction] = (Fraction(0), Fraction(0)),
 ) -> tuple[dict[str, _Port], dict[tuple[str, str], _Port], int]:
     """Place one strip's lanes, machines and sorters.
 
@@ -665,6 +666,14 @@ def _emit_strip(
         y = oy + row
         if n_in <= row < n_in + s.mh:
             continue  # machine band
+        # Which lane this row is tells us what it carries. Recording it is what
+        # lets the marker pass label external input belts afterwards; the
+        # knowledge is unrecoverable once emission drops it.
+        if row < n_in:
+            lane_item: str | None = s.in_lanes[row]
+        else:
+            out_row = row - n_in - s.mh
+            lane_item = s.out_lanes[out_row][0] if 0 <= out_row < len(s.out_lanes) else None
         indices = []
         for k in range(width):
             indices.append(
@@ -677,6 +686,7 @@ def _emit_strip(
                         width=1,
                         height=1,
                         yaw=Facing.EAST.value,
+                        carries_item=lane_item,
                     )
                 )
             )
@@ -696,18 +706,30 @@ def _emit_strip(
                     y=machine_y,
                     width=s.mw,
                     height=s.mh,
-                    recipe_id=abs(hash(s.recipe_id)) % 30000 or 1,
+                    # This was `abs(hash(name)) % 30000`, which is not a DSP
+                    # recipe id and is not even stable across processes, since
+                    # Python randomises string hashing.
+                    recipe_id=catalog.recipe_id(s.recipe_id),
                 ),
                 solid=True,
             )
         )
+
+    # Per-sorter demand, on the SAME basis the validator uses: a machine's total
+    # input rate divided across the sorters feeding it, and likewise for output.
+    # Tier selection previously divided ONE item's group total by this strip's
+    # machine count -- a different quantity entirely, which is how a Mk.I ended
+    # up handed 0.546/s when it sustains 0.5/s at span 3.
+    in_total, out_total = machine_demand
+    in_each = in_total / max(1, n_in)
+    out_each = out_total / max(1, len(s.out_lanes))
 
     sorters = 0
     for j, item in enumerate(s.in_lanes):
         row = j
         span = n_in - j
         in_ports[item] = _Port(lane_idx[row][0], ox, oy + row, ox, ox + width - 1)
-        tier, count = _pick_sorter(rates.get(item, Fraction(1)), span, s.machines)
+        tier, _count = _pick_sorter(in_each or rates.get(item, Fraction(1)), span, 1)
         sorters += _link_lane(
             canvas, lane_idx[row], machines, oy + row, machine_y, tier, into_machine=True
         )
@@ -719,7 +741,7 @@ def _emit_strip(
         out_ports[item, dest] = _Port(
             lane_idx[row][-1], ox + width - 1, oy + row, ox, ox + width - 1
         )
-        tier, count = _pick_sorter(rates.get(item, Fraction(1)), span, s.machines)
+        tier, _count = _pick_sorter(out_each or rates.get(item, Fraction(1)), span, 1)
         sorters += _link_lane(
             canvas, lane_idx[row], machines, oy + row, bottom, tier, into_machine=False
         )
@@ -779,24 +801,15 @@ def _link_lane(
 
 
 def _relink(b: PlacedBuilding, *, output_obj: int | None) -> PlacedBuilding:
-    return PlacedBuilding(
-        item_id=b.item_id,
-        model_index=b.model_index,
-        x=b.x,
-        y=b.y,
-        z=b.z,
-        width=b.width,
-        height=b.height,
-        yaw=b.yaw,
-        x2=b.x2,
-        y2=b.y2,
-        z2=b.z2,
-        yaw2=b.yaw2,
-        recipe_id=b.recipe_id,
-        filter_id=b.filter_id,
-        output_obj=output_obj,
-        input_obj=b.input_obj,
-    )
+    """Repoint a belt at its successor, preserving everything else.
+
+    Uses ``replace`` rather than rebuilding field by field.  The hand-written
+    version enumerated fields and therefore silently dropped any it did not
+    mention -- it was already discarding ``parameters``, and it swallowed
+    ``carries_item`` the moment that was added, which is why belt markers came
+    out empty while the emitter was setting them correctly.
+    """
+    return replace(b, output_obj=output_obj)
 
 
 # --- phase 2: routing ------------------------------------------------------
@@ -1036,6 +1049,7 @@ def _commit_paths(
                         z=lvl,
                         width=1,
                         height=1,
+                        carries_item=net.item,
                     )
                 )
             )
@@ -1227,13 +1241,35 @@ def _build(
         for item, r in list(g.inputs.items()) + list(g.outputs.items()):
             rates[item] = max(rates.get(item, Fraction(0)), r * g.count)
 
+    # Per-machine totals, keyed by group. Sorter tier selection needs the same
+    # basis the validator checks against, which is a machine's whole input rate
+    # split across its feeding sorters -- not one item's group total.
+    demand: dict[str, tuple[Fraction, Fraction]] = {
+        key: (
+            sum(g.inputs.values(), Fraction(0)),
+            sum(g.outputs.values(), Fraction(0)),
+        )
+        for key, g in _adapt(spec).items()
+    }
+
     in_ports: dict[tuple[str, str], _Port] = {}
     out_ports: dict[tuple[str, str, str], _Port] = {}
+    strip_in_ports: list[dict[str, _Port]] = []
     sorters = 0
     for i, s in enumerate(strips):
         ox, oy = pack.at[i]
-        ins, outs, placed = _emit_strip(canvas, s, ox, oy, belt_id, belt_model, rates)
+        ins, outs, placed = _emit_strip(
+            canvas,
+            s,
+            ox,
+            oy,
+            belt_id,
+            belt_model,
+            rates,
+            demand.get(s.group_key, (Fraction(0), Fraction(0))),
+        )
         sorters += placed
+        strip_in_ports.append(ins)
         for item, port in ins.items():
             in_ports[s.group_key, item] = port
         for (item, dest), port in outs.items():
@@ -1259,6 +1295,22 @@ def _build(
             continue
         nets.append(_Net(src=port, dst=sink, item=item))
 
+    # Coaters go in BEFORE routing, because each one needs a proliferator net
+    # routed to its drop belt. Placing them afterwards -- as this used to --
+    # leaves them mounted on belts with nothing feeding them, so every
+    # proliferated recipe silently runs unproliferated.
+    coater_list: list[_Coater] = []
+    prolif_item = _proliferator_item(spec)
+    if spec.spray_lanes:
+        coater_list = _place_coaters(
+            canvas, spec, strips, strip_in_ports, belt_id, belt_model
+        )
+        if coater_list and prolif_item is not None:
+            entry = _place_proliferator_entry(canvas, prolif_item, belt_id, belt_model)
+            if entry is not None:
+                nets.extend(_proliferator_nets(entry, coater_list, prolif_item))
+    coaters = len(coater_list)
+
     xs = [b.x for b in canvas.buildings] or [0]
     ys = [b.y for b in canvas.buildings] or [0]
     bounds = (min(xs), min(ys), max(xs) + pack.width, max(ys) + pack.height)
@@ -1268,10 +1320,6 @@ def _build(
         routed, failed, iterations = _route_all(canvas, nets, belt_id, belt_model, bounds)
 
     towers = _place_power(canvas) if power else 0
-
-    coaters = 0
-    if spec.spray_lanes:
-        coaters = _place_coaters(canvas, spec, strips)
 
     placement = Placement(
         buildings=tuple(canvas.buildings),
@@ -1354,45 +1402,184 @@ def _bridge(
     return True
 
 
-def _place_coaters(canvas: _Canvas, spec: BuildSpec, strips: list[Strip]) -> int:
-    """One Spray Coater per sprayed lane.
+@dataclass(frozen=True, slots=True)
+class _Coater:
+    """A placed Spray Coater and the belt tile that will feed it proliferator."""
+
+    coater: int
+    #: A one-tile belt in the strip's east margin, the sink of a proliferator net.
+    drop: int
+    x: int
+    y: int
+
+
+def _place_coaters(
+    canvas: _Canvas,
+    spec: BuildSpec,
+    strips: list[Strip],
+    ports: list[dict[str, _Port]],
+    belt_id: int,
+    belt_model: int,
+) -> list[_Coater]:
+    """One Spray Coater per sprayed input lane, each with a supply drop.
 
     A coater is a belt addon: it consumes no grid tile, so proliferation costs
     almost nothing in area.  The real cost is that it forces its edge onto a
     belt, which is what forbids direct insertion there.
+
+    Two things this has to get right, both of which it previously did not:
+
+    * **The coater must sit on the lane carrying the item it sprays.**  The old
+      version took ``next(belt for belt in canvas.buildings ...)`` -- the first
+      belt anywhere on the canvas -- so every coater piled onto one unrelated
+      tile.
+    * **It must be reachable from a proliferator supply.**  A coater with
+      nothing feeding it sprays nothing, and the build then runs unproliferated
+      while looking perfectly healthy.  Each coater gets a one-tile ``drop``
+      belt in its strip's east margin, one tile away, which a proliferator net
+      is routed to and a sorter bridges.
+
+    The east margin is reserved by ``_pack`` (each strip claims ``width +
+    MARGIN``) and nothing is emitted into it, so the drop cell is free by
+    construction rather than by luck.
     """
     coater = catalog.building(catalog.SPRAY_COATER_ID)
-    placed = 0
     wanted = set(spec.spray_lanes)
-    seen: set[str] = set()
-    for s in strips:
+    out: list[_Coater] = []
+
+    belt_at: dict[tuple[int, int, int], int] = {
+        (b.x, b.y, b.z): i
+        for i, b in enumerate(canvas.buildings)
+        if catalog.is_belt(b.item_id)
+    }
+
+    for s, in_ports in zip(strips, ports, strict=True):
         for item in s.in_lanes:
-            if item not in wanted or item in seen:
+            if item not in wanted:
                 continue
-            belt = next(
-                (
-                    b
-                    for b in canvas.buildings
-                    if catalog.is_belt(b.item_id) and b.z == 0
-                ),
-                None,
+            port = in_ports.get(item)
+            if port is None:
+                continue
+            # East end of this lane: nearest the margin the drop belt lives in.
+            cx, cy = port.x1, port.y
+            host = belt_at.get((cx, cy, 0))
+            drop_cell = (cx + 1, cy, 0)
+            if host is None or not canvas.free(drop_cell):
+                continue
+
+            drop = canvas.add(
+                PlacedBuilding(
+                    item_id=belt_id,
+                    model_index=belt_model,
+                    x=drop_cell[0],
+                    y=drop_cell[1],
+                    width=1,
+                    height=1,
+                    carries_item=_proliferator_item(spec),
+                )
             )
-            if belt is None:
-                continue
+            idx = len(canvas.buildings)
             canvas.buildings.append(
                 PlacedBuilding(
                     item_id=catalog.SPRAY_COATER_ID,
                     model_index=coater.model_index,
-                    x=belt.x,
-                    y=belt.y,
+                    x=cx,
+                    y=cy,
                     width=1,
                     height=1,
                     yaw=Facing.EAST.value,
                 )
             )
-            seen.add(item)
-            placed += 1
-    return placed
+            # Sorter drop -> coater, span 1. Anchors sit on the two buildings;
+            # the connection indices carry the semantics.
+            sorter = SORTER_TIERS[0]
+            canvas.buildings.append(
+                PlacedBuilding(
+                    item_id=sorter,
+                    model_index=catalog.building(sorter).model_index,
+                    x=drop_cell[0],
+                    y=drop_cell[1],
+                    width=1,
+                    height=1,
+                    x2=cx,
+                    y2=cy,
+                    z2=0,
+                    yaw=Facing.WEST.value,
+                    yaw2=Facing.WEST.value,
+                    input_obj=drop,
+                    output_obj=idx,
+                )
+            )
+            out.append(_Coater(coater=idx, drop=drop, x=drop_cell[0], y=drop_cell[1]))
+    return out
+
+
+def _proliferator_item(spec: BuildSpec) -> str | None:
+    """The proliferator belted in, if any.
+
+    It is an external input with no consuming machine -- coaters consume it --
+    which is exactly why no lane was ever created for it.
+    """
+    for item in sorted(spec.external_inputs):
+        if item.startswith("proliferator"):
+            return item
+    return None
+
+
+def _proliferator_nets(
+    entry: _Port, coaters: list[_Coater], item: str
+) -> list[_Net]:
+    """Daisy-chain the coater drops instead of fanning out from the entry.
+
+    Every coater needs the same item at a trivial rate (well under one item per
+    second in total, against a belt that carries twelve), so one chained lane
+    serves all of them and capacity never binds.
+
+    Routing each drop separately from the entry costs far more: eleven paths all
+    radiating from one corner roughly doubled the bounding box.  Chaining
+    nearest-neighbour keeps each hop short, and DSP belts merge natively, so the
+    chain needs no splitters.
+    """
+    remaining = list(coaters)
+    src = entry
+    nets: list[_Net] = []
+    while remaining:
+        nxt = min(remaining, key=lambda c: abs(c.x - src.x) + abs(c.y - src.y))
+        remaining.remove(nxt)
+        nets.append(
+            _Net(src=src, dst=_Port(nxt.drop, nxt.x, nxt.y, nxt.x, nxt.x), item=item)
+        )
+        src = _Port(nxt.drop, nxt.x, nxt.y, nxt.x, nxt.x)
+    return nets
+
+
+def _place_proliferator_entry(
+    canvas: _Canvas, item: str, belt_id: int, belt_model: int
+) -> _Port | None:
+    """The block's proliferator input belt, west of everything else.
+
+    A single entry tile: the router fans out from here to each coater's drop,
+    and DSP belts merge natively, so no splitter is needed.
+    """
+    xs = [b.x for b in canvas.buildings]
+    ys = [b.y for b in canvas.buildings]
+    if not xs:
+        return None
+    x, y = min(xs) - 1, min(ys)
+    if not canvas.free((x, y, 0)):
+        return None
+    idx = canvas.add(
+        PlacedBuilding(
+            item_id=belt_id,
+            model_index=belt_model,
+            x=x,
+            y=y,
+            width=1,
+            height=1,
+            carries_item=item,
+        )
+    )
+    return _Port(idx, x, y, x, x)
 
 
 def fallback_placement(spec: BuildSpec, *, power: bool = True) -> Placement:

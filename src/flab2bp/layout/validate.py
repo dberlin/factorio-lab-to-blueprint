@@ -519,6 +519,24 @@ def _endpoints(ctx: Context) -> Iterable[Finding]:
                 )
 
 
+def _addon_at(ctx: Context, link: int, cell: tuple[int, int, int]) -> bool:
+    """Is ``link`` a belt addon mounted at ``cell``?
+
+    Belt addons -- the Spray Coater is the one that matters -- consume no grid
+    tile, so ``_occupied_tiles`` deliberately excludes them and they never appear
+    in the occupancy map.  A sorter feeding a coater therefore names a building
+    the anchor cell appears not to hold, while the cell lists only the belt
+    underneath it.  That is the correct geometry, not a violation: the coater and
+    the belt genuinely share the tile.
+    """
+    if not (0 <= link < len(ctx.placement.buildings)):
+        return False
+    if ctx.kinds[link] is not Kind.ADDON:
+        return False
+    b = ctx.placement.buildings[link]
+    return (b.x, b.y, b.z) == cell
+
+
 @check("sorter.endpoint_pair")
 def _endpoint_pair(ctx: Context) -> Iterable[Finding]:
     for i, b in ctx.of_kind(Kind.SORTER):
@@ -532,7 +550,7 @@ def _endpoint_pair(ctx: Context) -> Iterable[Finding]:
             if link is None:
                 continue
             occupants = [j for j in ctx.occupancy.get(cell, ()) if j != i]
-            if occupants and link not in occupants:
+            if occupants and link not in occupants and not _addon_at(ctx, link, cell):
                 yield Finding(
                     "sorter.endpoint_pair",
                     Severity.ERROR,
@@ -608,12 +626,28 @@ def _acyclic(ctx: Context) -> Iterable[Finding]:
     colour: dict[int, int] = {}
 
     def walk(start: int) -> list[int] | None:
+        """Follow a belt chain, reporting a genuine cycle only.
+
+        Colour 1 means "on the path currently being walked", colour 2 means
+        "settled, provably not on a cycle".  Every exit therefore has to settle
+        the path it walked: leaving nodes at colour 1 after returning made the
+        NEXT chain that merged into them look like a cycle, and DSP belts merge
+        natively -- two chains pointing at one tile is how many-to-one is built,
+        and the router prefers exactly that -- so this fired on correct layouts.
+        """
         path: list[int] = []
         cur = start
         while True:
             if colour.get(cur) == 1:
-                return path[path.index(cur) :] if cur in path else [cur]
+                # Colour 1 is only ever set by THIS walk, so reaching it means a
+                # real cycle, and `cur` is necessarily on `path`.
+                cycle = path[path.index(cur) :] if cur in path else [cur]
+                for p in path:
+                    colour[p] = 2
+                return cycle
             if colour.get(cur) == 2:
+                for p in path:  # merged into settled ground: settle this path too
+                    colour[p] = 2
                 return None
             colour[cur] = 1
             path.append(cur)

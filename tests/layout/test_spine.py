@@ -763,3 +763,139 @@ class TestBeltsCarryTheirItemLabel:
         assert marked >= set(spec.external_inputs), (
             f"unmarked external inputs: {set(spec.external_inputs) - marked}"
         )
+
+
+class TestSorterGeometryIsPhysical:
+    """DSP sorters run in a straight line; a diagonal one cannot be built.
+
+    100 of 118 sorters on the magnetic-ring spec used to be diagonal, because
+    the belt-side anchor was computed from ``m.x + min(i, m.width - 1)`` while
+    the machine-side anchor used bare ``m.x``.  Every sorter after the first in
+    a group therefore skewed by exactly ``min(i, width - 1)``, which is why the
+    observed ``dx`` values were only ever 1 or 2.
+
+    These assert the property directly rather than through the validator, so a
+    regression names the geometry rather than an error count.
+    """
+
+    @staticmethod
+    def _sorters(p: Placement) -> list[PlacedBuilding]:
+        return [b for b in p.buildings if catalog.is_sorter(b.item_id) and b.x2 is not None]
+
+    @pytest.mark.parametrize("power", [False, True], ids=["no-power", "power"])
+    def test_no_sorter_runs_diagonally(self, power: bool) -> None:
+        p = SpineLayout(power=power).lay_out(magnetic_ring_spec(), time_budget_s=0.5)
+        diagonal = [
+            (i, abs(b.x2 - b.x), abs(b.y2 - b.y))
+            for i, b in enumerate(p.buildings)
+            if catalog.is_sorter(b.item_id)
+            and b.x2 is not None
+            and b.y2 is not None
+            and abs(b.x2 - b.x)
+            and abs(b.y2 - b.y)
+        ]
+        assert not diagonal, f"{len(diagonal)} diagonal sorters, e.g. {diagonal[:5]}"
+
+    def test_every_sorter_is_within_chebyshev_reach(self) -> None:
+        """Chebyshev, matching the validator and the measured corpus."""
+        p = SpineLayout(power=False).lay_out(magnetic_ring_spec(), time_budget_s=0.5)
+        for i, b in enumerate(self._sorters(p)):
+            span = max(abs(b.x2 - b.x), abs(b.y2 - b.y))  # type: ignore[operator]
+            assert 1 <= span <= catalog.SORTER_MAX_REACH, f"sorter {i} spans {span}"
+
+    def test_sorters_never_change_altitude(self) -> None:
+        p = SpineLayout(power=False).lay_out(magnetic_ring_spec(), time_budget_s=0.5)
+        for i, b in enumerate(self._sorters(p)):
+            assert b.z2 == b.z, f"sorter {i} spans altitude {b.z} -> {b.z2}"
+
+
+class TestRealSpecsValidateClean:
+    """The acceptance criterion: a spec from a real URL produces a valid build.
+
+    Every prior spine test used hand-built specs.  That is exactly how 197
+    validation errors stayed invisible -- the hand-built specs are small enough
+    that the broken paths never fire.
+    """
+
+    @staticmethod
+    def _spec(url_id: str) -> BuildSpec:
+        from flab2bp.bench.corpus import entry
+        from flab2bp.lab.data import load_vendored
+        from flab2bp.lab.url import parse_url
+        from flab2bp.rates.candidates import build_candidates
+
+        candidates = build_candidates(
+            load_vendored(), parse_url(entry(url_id).url), count=3
+        ).candidates
+        return min(candidates, key=lambda s: s.machine_count)
+
+    @pytest.mark.slow
+    @pytest.mark.parametrize("url_id", ["graphene", "plastic", "processor"])
+    def test_validator_reports_no_errors(self, url_id: str) -> None:
+        from flab2bp.layout import validate
+        from flab2bp.pipeline import _id_map
+
+        spec = self._spec(url_id)
+        p = SpineLayout(power=True).lay_out(spec, time_budget_s=2.0)
+        report = validate.validate(p, spec, ids=_id_map(spec), expect_power=True)
+        assert report.ok, "\n".join(f"{f.check}: {f.message}" for f in report.errors[:10])
+
+
+class TestSprayCoatersAreFed:
+    """A coater with no proliferator sprays nothing.
+
+    Every proliferated recipe then quietly runs unproliferated and the build
+    misses its rate -- it pastes, the machines run, and the numbers are simply
+    lower than the spec promised.  Nothing about the blueprint looks wrong.
+    """
+
+    @staticmethod
+    def _prolif_spec() -> BuildSpec:
+        from flab2bp.lab.data import load_vendored
+        from flab2bp.lab.url import parse_url
+        from flab2bp.rates.candidates import build_candidates
+
+        url = (
+            "https://factoriolab.github.io/dsp/flow?o=super-magnetic-ring*60"
+            "&ibe=conveyor-belt-2"
+            "&mmr=arc-smelter~assembling-machine-2~chemical-plant~matrix-lab&v=11"
+        )
+        cands = build_candidates(load_vendored(), parse_url(url), count=3).candidates
+        return next(c for c in cands if c.label == "max-proliferation")
+
+    @pytest.mark.slow
+    def test_a_proliferator_lane_exists(self) -> None:
+        from flab2bp.layout.spine import proliferator_item
+
+        spec = self._prolif_spec()
+        p = SpineLayout(power=False).lay_out(spec, time_budget_s=1.5)
+        prolif = proliferator_item(spec)
+        assert prolif is not None
+        carried = {b.carries_item for b in p.buildings if catalog.is_belt(b.item_id)}
+        assert prolif in carried, (
+            f"no belt carries {prolif}; carried={sorted(x for x in carried if x)}"
+        )
+
+    @pytest.mark.slow
+    def test_every_coater_has_a_sorter_drawing_proliferator(self) -> None:
+        from flab2bp.layout.spine import proliferator_item
+
+        spec = self._prolif_spec()
+        p = SpineLayout(power=False).lay_out(spec, time_budget_s=1.5)
+        prolif = proliferator_item(spec)
+        supply = {
+            i
+            for i, b in enumerate(p.buildings)
+            if catalog.is_belt(b.item_id) and b.carries_item == prolif
+        }
+        fed = {
+            b.output_obj
+            for b in p.buildings
+            if catalog.is_sorter(b.item_id) and b.input_obj in supply
+        }
+        coaters = [
+            i for i, b in enumerate(p.buildings) if b.item_id == catalog.SPRAY_COATER_ID
+        ]
+        assert coaters, "expected coaters on a max-proliferation spec"
+        starved = [i for i in coaters if i not in fed]
+        assert not starved, f"{len(starved)} of {len(coaters)} coaters unfed"

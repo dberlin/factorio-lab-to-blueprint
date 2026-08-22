@@ -135,6 +135,19 @@ class _Group:
         return self.width * self.count
 
 
+def proliferator_item(spec: BuildSpec) -> str | None:
+    """The proliferator arriving on an input belt, if this build sprays at all.
+
+    Proliferator is always belted in, never produced inside the blueprint, so it
+    is found among the external inputs rather than among the groups.
+    """
+    if not spec.spray_lanes:
+        return None
+    return next(
+        (i for i in sorted(spec.external_inputs) if i.startswith("proliferator")), None
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class _Edge:
     """``item`` flowing from group ``src`` to group ``dst`` at ``rate`` items/s."""
@@ -326,6 +339,22 @@ def _lane_requirements(
     for item, (lo, hi) in span.items():
         for c in range(max(lo, 0), min(hi, n_corr - 1) + 1):
             crossing[c].add(item)
+
+    # The proliferator utility lane.  Spray Coaters mount on the lanes they
+    # spray, so the proliferator that feeds them has to reach into the same
+    # corridor -- one lane per corridor serves every coater in it, which is the
+    # whole reason this skeleton suits proliferation.  It taps no machine row,
+    # so it is pass-through and `lane_order` is free to place it anywhere.
+    # Only corridors that actually carry a sprayed lane need it.  Adding it
+    # everywhere made every corridor a tile taller, which on a deeper spec
+    # pushed a machine row outside any tower's supply radius and aborted the
+    # layout -- height in this skeleton is never free.
+    prolif = proliferator_item(spec)
+    if prolif is not None:
+        sprayed = set(spec.spray_lanes)
+        for c in range(n_corr):
+            if crossing[c] & sprayed:
+                crossing[c].add(prolif)
 
     ordered: list[list[str]] = []
     for c in range(n_corr):
@@ -627,12 +656,43 @@ def _measure(spec: BuildSpec, plan: _Plan) -> int:
 
 
 def _pick_sorter(rate: Fraction, span: int, available: int) -> tuple[int, int] | None:
-    """Cheapest sorter tier and count carrying ``rate`` across ``span`` tiles."""
+    """Cheapest tier and per-machine count carrying ``rate`` across ``span``.
+
+    ``rate`` is the load on ONE machine, not the group's total.  A sorter serves
+    the single machine it touches, so a group of eight machines needs eight
+    feeds even when two sorters' worth of throughput would cover the rate.
+    Sizing by throughput alone left most machines in a group with nothing
+    delivering to them at all.
+    """
     for tier in SORTER_TIERS:
         per = catalog.sorter_rate(tier, span)
         count = math.ceil(rate / per) if rate > 0 else 1
         if count <= available:
             return tier, max(count, 1)
+    return None
+
+
+def _pick_sorter_share(
+    total_rate: Fraction, item_count: int, span: int, available: int
+) -> tuple[int, int] | None:
+    """Tier and per-machine count so each sorter sustains its share of the load.
+
+    A machine's sorters are indistinguishable by item, so the load one of them
+    must carry is the machine's TOTAL rate on that side divided across every
+    sorter on that side -- not the rate of the single item it happens to move.
+    Sizing against one item's rate under-provisions whichever ingredient is the
+    hot one, which is a real under-build and not merely a bookkeeping quibble.
+
+    Prefers the fewest sorters, then the cheapest tier: extra sorters are extra
+    buildings to paste, and a higher tier costs nothing spatially.
+    """
+    if item_count <= 0:
+        return None
+    for count in range(1, max(1, available) + 1):
+        share = total_rate / (item_count * count) if total_rate > 0 else Fraction(0)
+        for tier in SORTER_TIERS:
+            if catalog.sorter_rate(tier, span) >= share:
+                return tier, count
     return None
 
 
@@ -844,7 +904,13 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
                 _extend(c, item, content_w - 1, content_w - 1)
 
     # --- corridor lanes ---------------------------------------------------
-    lane_tiles: dict[tuple[int, str], list[int]] = {}
+    # Keyed by (corridor, DEPTH), not (corridor, item): an item may occupy
+    # several lanes in one corridor for capacity, and keying by item made the
+    # second lane overwrite the first.  `_find_tap` then returned the first
+    # lane's y while this dict held the last lane's tiles, so every sorter on
+    # a duplicated item anchored on one belt and named another.
+    lane_tiles: dict[tuple[int, int], list[int]] = {}
+    lane_item_of: dict[tuple[int, int], str] = {}
     for c, order in enumerate(plan.lanes):
         for depth_i, item in enumerate(order):
             y = corr_y[c] + depth_i
@@ -871,7 +937,8 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
             # Forward-link the run west to east, matching what the game emits.
             for a, b in zip(indices, indices[1:], strict=False):
                 buildings[a] = _with_output(buildings[a], b)
-            lane_tiles[c, item] = indices
+            lane_tiles[c, depth_i] = indices
+            lane_item_of[c, depth_i] = item
 
     # --- direct inserts ---------------------------------------------------
     # A direct-inserted edge has no lane, so the sorter must reach machine to
@@ -905,22 +972,36 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
         prod, cons = machine_at[src], machine_at[dst]
         if not prod or not cons:
             continue
-        # Pair each consumer with its nearest producer in x.  Rows are packed
-        # independently from x=0, so equal-footprint groups line up naturally.
-        pairs: list[tuple[int, int, int]] = []
+        # Pair each consumer with a producer it SHARES A COLUMN with.  A sorter
+        # runs in a straight line, so a direct insert is only physical when the
+        # two footprints overlap in x and the anchors sit in that overlap.
+        # Pairing by nearest-x and anchoring at each machine's own left edge
+        # produced diagonals; the span was also computed Manhattan
+        # (``|dx| + dy``) where the validator measures Chebyshev, so a pair
+        # could pass here and fail there.  With dx pinned to 0 the two agree.
+        pairs: list[tuple[int, int, int, int]] = []
         for ci in cons:
             cb = buildings[ci]
-            pi = min(prod, key=lambda p: abs(buildings[p].x - cb.x))
-            span = abs(buildings[pi].x - cb.x) + dy
-            if 1 <= span <= CONSTANTS.sorter_max_reach:
-                pairs.append((pi, ci, span))
+            best: tuple[int, int, int, int] | None = None
+            for pi in sorted(prod, key=lambda p: abs(buildings[p].x - cb.x)):
+                pb = buildings[pi]
+                lo = max(pb.x, cb.x)
+                hi = min(pb.x + pb.width, cb.x + cb.width) - 1
+                if lo > hi:
+                    continue  # no shared column: unreachable in a straight line
+                span = abs(dy)
+                if 1 <= span <= CONSTANTS.sorter_max_reach:
+                    best = (pi, ci, span, lo)
+                    break
+            if best is not None:
+                pairs.append(best)
         rate = rate_of.get((src, dst, item), Fraction(0))
         if not pairs:
             raise ValueError(
                 f"direct insert {src} -> {dst} ({item}) has no machine pair within "
                 f"sorter reach {CONSTANTS.sorter_max_reach}"
             )
-        worst = max(s for _, _, s in pairs)
+        worst = max(s for _, _, s, _x in pairs)
         tier = next(
             (t for t in SORTER_TIERS if catalog.sorter_rate(t, worst) * len(pairs) >= rate),
             None,
@@ -931,16 +1012,16 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
                 f"{len(pairs)} sorters at span {worst} cannot carry it"
             )
         tier_model = catalog.building(tier).model_index
-        for pi, ci, _span in pairs:
+        for pi, ci, _span, col in pairs:
             buildings.append(
                 PlacedBuilding(
                     item_id=tier,
                     model_index=tier_model,
-                    x=buildings[pi].x,
+                    x=col,
                     y=y_src,
                     width=1,
                     height=1,
-                    x2=buildings[ci].x,
+                    x2=col,
                     y2=y_dst,
                     z2=0,
                     yaw=Facing.SOUTH.value,
@@ -970,18 +1051,28 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
             )
             if tap is None:
                 continue
-            pick = _pick_sorter(rate, tap.span, g.block_width)
+            machines = machine_at[key]
+            if not machines:
+                continue
+            # Size against the machine's TOTAL load on this side, shared across
+            # every sorter on that side. Every machine also needs its own feed
+            # for every distinct item, however little each one carries.
+            side = g.inputs if into_machine else g.outputs
+            total_per_machine = sum(side.values(), Fraction(0))
+            pick = _pick_sorter_share(
+                total_per_machine, len(side), tap.span, g.width
+            )
             if pick is None:
                 continue
-            tier, count = pick
+            tier, per_machine = pick
             sorters += _place_sorters(
                 buildings,
-                lane_tiles[tap.corridor, item],
-                machine_at[key],
+                lane_tiles[tap.corridor, tap.depth],
+                machines,
                 lane_y=tap.lane_y,
                 machine_y=tap.machine_y,
                 tier=tier,
-                count=count,
+                per_machine=per_machine,
                 into_machine=into_machine,
             )
 
@@ -990,11 +1081,25 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
     # proliferation nearly free in area.  The cost is the proliferator lane.
     coaters = 0
     spray = catalog.building(CONSTANTS.spray_item_id)
+    prolif = proliferator_item(spec)
     for item in spec.spray_lanes:
-        for (_c, lane_item), indices in lane_tiles.items():
-            if lane_item != item or not indices:
+        # Mount on a lane copy the proliferator can reach.  An item may have
+        # several lanes in a corridor, and taking the first one stranded a
+        # coater whenever that copy sat further from the proliferator lane than
+        # a sorter can span, even though a reachable copy existed.
+        for lane_key, indices in _coater_lane_candidates(
+            lane_tiles, lane_item_of, item, prolif
+        ):
+            if not indices:
                 continue
-            mid = buildings[indices[len(indices) // 2]]
+            c, depth = lane_key
+            # Mount the coater where the proliferator lane can actually reach
+            # it. Defaulting to the lane's midpoint stranded any coater whose
+            # column the proliferator lane did not extend to.
+            mid = buildings[
+                _coater_tile(buildings, indices, lane_tiles, lane_item_of, c, prolif)
+            ]
+            coater_idx = len(buildings)
             buildings.append(
                 PlacedBuilding(
                     item_id=CONSTANTS.spray_item_id,
@@ -1007,6 +1112,19 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
                 )
             )
             coaters += 1
+            # Feed it. A coater with no proliferator sprays nothing, so every
+            # proliferated recipe would quietly run unproliferated and the build
+            # would miss its rate while looking perfectly healthy.
+            sorters += _feed_coater(
+                buildings,
+                lane_tiles,
+                lane_item_of,
+                coater_idx=coater_idx,
+                corridor=c,
+                coater_depth=depth,
+                corr_y=corr_y,
+                prolif=prolif,
+            )
             break
 
     return Placement(
@@ -1058,6 +1176,9 @@ class _Tap:
     """A reachable connection between one machine row and one corridor lane."""
 
     corridor: int
+    #: Index of the lane within the corridor. Identifies the lane uniquely
+    #: where the item alone does not, because an item may occupy several.
+    depth: int
     lane_y: int
     machine_y: int
     span: int
@@ -1095,14 +1216,29 @@ def _find_tap(
         if c < 0 or c >= len(plan.lanes) or item not in plan.lanes[c]:
             continue
         lanes = plan.lanes[c]
-        j = lanes.index(item)
-        lane_y = corr_y[c] + j
-        if from_corridor_above:
-            span, machine_y = len(lanes) - j, top
-        else:
-            span, machine_y = j + 1, bottom
-        if 1 <= span <= CONSTANTS.sorter_max_reach:
-            return _Tap(corridor=c, lane_y=lane_y, machine_y=machine_y, span=span)
+        # An item may occupy SEVERAL lanes in one corridor -- deliberately, when
+        # the corridor is tapped from both sides: a copy near the top serves the
+        # row above and a copy near the bottom serves the row below, because no
+        # single lane is within reach of both once the corridor is deeper than
+        # ``2 * reach - 1``.  Taking ``lanes.index(item)`` returned the FIRST
+        # copy regardless of which side was asking, so a row needing the bottom
+        # copy was handed the top one at a span far beyond reach, failed the
+        # test, and silently got no sorter for that ingredient at all.
+        for j, carried in enumerate(lanes):
+            if carried != item:
+                continue
+            if from_corridor_above:
+                span, machine_y = len(lanes) - j, top
+            else:
+                span, machine_y = j + 1, bottom
+            if 1 <= span <= CONSTANTS.sorter_max_reach:
+                return _Tap(
+                    corridor=c,
+                    depth=j,
+                    lane_y=corr_y[c] + j,
+                    machine_y=machine_y,
+                    span=span,
+                )
     return None
 
 
@@ -1114,10 +1250,10 @@ def _place_sorters(
     lane_y: int,
     machine_y: int,
     tier: int,
-    count: int,
+    per_machine: int,
     into_machine: bool,
 ) -> int:
-    """Connect a lane to a group's machines with ``count`` sorters.
+    """Connect a lane to EVERY machine of a group, ``per_machine`` sorters each.
 
     Anchors sit on the connected tiles and the ``input_obj`` / ``output_obj``
     indices carry the real semantics -- which is how the game itself does it.
@@ -1126,47 +1262,199 @@ def _place_sorters(
     """
     model_index = catalog.building(tier).model_index
     placed = 0
-    for i in range(count):
-        if not machines:
-            break
-        m_idx = machines[i % len(machines)]
+    for m_idx in machines:
         m = buildings[m_idx]
-        x = m.x + min(i, m.width - 1)
-        belt_idx = _lane_tile_at(buildings, lane, x)
-        if belt_idx is None:
-            continue
-        if into_machine:
-            src, dst = belt_idx, m_idx
-            ax, ay, bx, by = x, lane_y, m.x, machine_y
-        else:
-            src, dst = m_idx, belt_idx
-            ax, ay, bx, by = m.x, machine_y, x, lane_y
-        buildings.append(
-            PlacedBuilding(
-                item_id=tier,
-                model_index=model_index,
-                x=ax,
-                y=ay,
-                width=1,
-                height=1,
-                x2=bx,
-                y2=by,
-                z2=0,
-                yaw=Facing.SOUTH.value if lane_y < machine_y else Facing.NORTH.value,
-                yaw2=Facing.SOUTH.value if lane_y < machine_y else Facing.NORTH.value,
-                input_obj=src,
-                output_obj=dst,
+        used: set[int] = set()
+        for i in range(per_machine):
+            # ONE column for both anchors.  This sorter is vertical -- the lane
+            # sits in a corridor above or below the machine row -- so the two
+            # anchors must share an x.  Deriving the belt side from
+            # ``m.x + min(i, width - 1)`` while anchoring the machine side at
+            # bare ``m.x`` skewed every sorter after the first by exactly that
+            # offset, which is why 100 of 118 came out diagonal with dx of only
+            # ever 1 or 2.
+            x = _shared_column(buildings, lane, m, prefer=i, avoid=used)
+            if x is None:
+                continue
+            belt_idx = _lane_tile_at(buildings, lane, x)
+            if belt_idx is None:
+                continue
+            used.add(x)
+            if into_machine:
+                src, dst = belt_idx, m_idx
+                ax, ay, bx, by = x, lane_y, x, machine_y
+            else:
+                src, dst = m_idx, belt_idx
+                ax, ay, bx, by = x, machine_y, x, lane_y
+            buildings.append(
+                PlacedBuilding(
+                    item_id=tier,
+                    model_index=model_index,
+                    x=ax,
+                    y=ay,
+                    width=1,
+                    height=1,
+                    x2=bx,
+                    y2=by,
+                    z2=0,
+                    yaw=Facing.SOUTH.value if lane_y < machine_y else Facing.NORTH.value,
+                    yaw2=Facing.SOUTH.value if lane_y < machine_y else Facing.NORTH.value,
+                    input_obj=src,
+                    output_obj=dst,
+                )
             )
-        )
-        placed += 1
+            placed += 1
     return placed
 
 
+def _coater_lane_candidates(
+    lane_tiles: dict[tuple[int, int], list[int]],
+    lane_item_of: dict[tuple[int, int], str],
+    item: str,
+    prolif: str | None,
+) -> list[tuple[tuple[int, int], list[int]]]:
+    """Lanes carrying ``item``, reachable-from-proliferator ones first."""
+    keys = [k for k, v in lane_item_of.items() if v == item and lane_tiles.get(k)]
+    if prolif is None:
+        return [(k, lane_tiles[k]) for k in keys]
+    supply: dict[int, list[int]] = defaultdict(list)
+    for (c, depth), _ in lane_tiles.items():
+        if lane_item_of.get((c, depth)) == prolif:
+            supply[c].append(depth)
+
+    def reachable(k: tuple[int, int]) -> int:
+        c, depth = k
+        spans = [abs(depth - p) for p in supply.get(c, [])]
+        return 0 if any(1 <= s <= CONSTANTS.sorter_max_reach for s in spans) else 1
+
+    return [(k, lane_tiles[k]) for k in sorted(keys, key=reachable)]
+
+
+def _coater_tile(
+    buildings: list[PlacedBuilding],
+    lane: list[int],
+    lane_tiles: dict[tuple[int, int], list[int]],
+    lane_item_of: dict[tuple[int, int], str],
+    corridor: int,
+    prolif: str | None,
+) -> int:
+    """Index of the lane tile to mount a coater on.
+
+    Prefers a column the corridor's proliferator lane also covers, so the feed
+    sorter has somewhere to come from; falls back to the lane midpoint when no
+    such column exists, leaving the validator to report the unfed coater rather
+    than hiding it.
+    """
+    midpoint = lane[len(lane) // 2]
+    if prolif is None:
+        return midpoint
+    supply_xs: set[int] = set()
+    for (c, depth), indices in lane_tiles.items():
+        if c == corridor and lane_item_of.get((c, depth)) == prolif:
+            supply_xs |= {buildings[i].x for i in indices}
+    if not supply_xs:
+        return midpoint
+    shared = [i for i in lane if buildings[i].x in supply_xs]
+    if not shared:
+        return midpoint
+    want = buildings[midpoint].x
+    return min(shared, key=lambda i: abs(buildings[i].x - want))
+
+
+def _feed_coater(
+    buildings: list[PlacedBuilding],
+    lane_tiles: dict[tuple[int, int], list[int]],
+    lane_item_of: dict[tuple[int, int], str],
+    *,
+    coater_idx: int,
+    corridor: int,
+    coater_depth: int,
+    corr_y: list[int],
+    prolif: str | None,
+) -> int:
+    """Run a sorter from the corridor's proliferator lane into a coater.
+
+    Both ends sit in the same corridor, so the span is the difference in lane
+    depth and the sorter stays vertical -- which it must, since sorters cannot
+    change altitude and cannot run diagonally.  Returns the number placed (0 or
+    1) rather than raising: a corridor with no proliferator lane in reach is
+    reported by the validator, which is more useful than aborting the layout.
+    """
+    if prolif is None:
+        return 0
+    coater = buildings[coater_idx]
+    for (c, depth), indices in lane_tiles.items():
+        if c != corridor or lane_item_of.get((c, depth)) != prolif or not indices:
+            continue
+        span = abs(depth - coater_depth)
+        if not 1 <= span <= CONSTANTS.sorter_max_reach:
+            continue
+        source = _lane_tile_at(buildings, indices, coater.x)
+        if source is None:
+            continue
+        tier = SORTER_TIERS[0]  # rate is negligible; cheapest tier suffices
+        buildings.append(
+            PlacedBuilding(
+                item_id=tier,
+                model_index=catalog.building(tier).model_index,
+                x=coater.x,
+                y=corr_y[c] + depth,
+                width=1,
+                height=1,
+                x2=coater.x,
+                y2=coater.y,
+                z2=0,
+                yaw=Facing.SOUTH.value,
+                yaw2=Facing.SOUTH.value,
+                input_obj=source,
+                output_obj=coater_idx,
+            )
+        )
+        return 1
+    return 0
+
+
+def _shared_column(
+    buildings: list[PlacedBuilding],
+    lane: list[int],
+    machine: PlacedBuilding,
+    *,
+    prefer: int,
+    avoid: set[int] | None = None,
+) -> int | None:
+    """An x covered by both the machine's footprint and the lane.
+
+    A straight-line sorter needs one column, not two.  ``prefer`` spreads
+    successive sorters across the machine's width and ``avoid`` keeps two
+    sorters on the same machine off the same column.  Returns ``None`` rather
+    than emitting a sorter whose ends do not line up.
+    """
+    lane_xs = {buildings[i].x for i in lane}
+    if not lane_xs:
+        return None
+    taken = avoid or set()
+    covered = [
+        machine.x + d
+        for d in range(machine.width)
+        if machine.x + d in lane_xs and machine.x + d not in taken
+    ]
+    if not covered:
+        return None
+    wanted = machine.x + max(0, min(prefer, machine.width - 1))
+    return min(covered, key=lambda x: abs(x - wanted))
+
+
 def _lane_tile_at(buildings: list[PlacedBuilding], lane: list[int], x: int) -> int | None:
+    """The lane's belt tile at column ``x``, or ``None``.
+
+    No fallback to ``lane[0]``: returning a tile in a different column made the
+    sorter's anchor disagree with the belt it actually connects to, which is a
+    second way to produce a diagonal.
+    """
     for idx in lane:
         if buildings[idx].x == x:
             return idx
-    return lane[0] if lane else None
+    return None
 
 
 def _horizontal_reach(r: int, row_heights: list[int], corridor_heights: list[int]) -> int:

@@ -612,3 +612,150 @@ class TestNoFloatEntersCapacityDecisions:
         from flab2bp.layout.freeform import lanes_for
 
         assert lanes_for(F(0), F(12)) == 0
+
+
+# --- proliferator supply ---------------------------------------------------
+
+
+def _id_map_for(spec: BuildSpec) -> validate.IdMap:
+    """The same bridge the pipeline builds, so tests judge what shipping judges."""
+    from flab2bp.pipeline import _id_map
+
+    return _id_map(spec)
+
+
+def _full_report(p: Placement, spec: BuildSpec, *, power: bool = False) -> validate.Report:
+    """Validate with the spec attached.
+
+    Without it nine checks are skipped and a broken build reports clean -- which
+    is exactly how the unsupplied-coater bug survived this long.
+    """
+    return validate.validate(p, spec, ids=_id_map_for(spec), expect_power=power)
+
+
+class TestProliferatorIsActuallySupplied:
+    """A coater with nothing to spray is worse than no coater at all.
+
+    It pastes, the machines run, and every proliferated recipe quietly produces
+    at the unproliferated rate -- so the build misses the objective with nothing
+    visibly wrong.
+    """
+
+    def test_some_belt_carries_the_proliferator(self) -> None:
+        spec = proliferated_spec()
+        p = FreeformLayout(power=False).lay_out(spec, time_budget_s=0.6)
+        prolif = {i for i in spec.external_inputs if i.startswith("proliferator")}
+        assert prolif, "fixture must declare a proliferator input"
+        carried = {
+            b.carries_item for b in p.buildings if catalog.is_belt(b.item_id)
+        }
+        assert carried & prolif, (
+            f"no belt carries {sorted(prolif)}; the coaters have nothing to spray with"
+        )
+
+    def test_every_coater_has_a_sorter_drawing_from_a_supply_belt(self) -> None:
+        spec = proliferated_spec()
+        p = FreeformLayout(power=False).lay_out(spec, time_budget_s=0.6)
+        report = _full_report(p, spec)
+        starved = report.by_check("prolif.coaters_are_supplied")
+        assert not starved, "\n".join(f.message for f in starved)
+
+    def test_coaters_sit_on_the_lane_carrying_the_item_they_spray(self) -> None:
+        """A coater on some unrelated belt sprays the wrong items."""
+        spec = proliferated_spec()
+        p = FreeformLayout(power=False).lay_out(spec, time_budget_s=0.6)
+        belt_at = {
+            (b.x, b.y, b.z): b for b in p.buildings if catalog.is_belt(b.item_id)
+        }
+        coaters = [b for b in p.buildings if b.item_id == catalog.SPRAY_COATER_ID]
+        assert coaters, "fixture must produce at least one coater"
+        for c in coaters:
+            host = belt_at.get((c.x, c.y, c.z))
+            assert host is not None, f"coater at {(c.x, c.y, c.z)} is not on a belt"
+            assert host.carries_item in spec.spray_lanes, (
+                f"coater sits on a lane carrying {host.carries_item!r}, which is not "
+                f"one of the sprayed lanes {sorted(spec.spray_lanes)}"
+            )
+
+    def test_no_proliferator_spec_places_no_supply_lane(self) -> None:
+        """The machinery must cost nothing when proliferation is off."""
+        spec = two_stage_spec()
+        p = FreeformLayout(power=False).lay_out(spec, time_budget_s=0.4)
+        assert p.stats["spray_coaters"] == 0
+        assert not [b for b in p.buildings if b.item_id == catalog.SPRAY_COATER_ID]
+
+
+class TestSortersCanCarryTheirDemand:
+    def test_sorter_tiers_are_chosen_for_the_span_they_actually_span(self) -> None:
+        """Tier selection must use the validator's demand basis, not its own.
+
+        The two disagreed: selection divided one item's group total by the
+        strip's machine count, while the demand is a machine's *total* input rate
+        split across the sorters feeding it. A Mk.I at span 3 sustains 0.5/s and
+        was being handed 0.546/s.
+        """
+        spec = proliferated_spec()
+        p = FreeformLayout(power=False).lay_out(spec, time_budget_s=0.6)
+        over = _full_report(p, spec).by_check("flow.sorter_capacity")
+        assert not over, "\n".join(f.message for f in over)
+
+
+class TestRealUrlCandidatesAreSupplied:
+    """The checks this module is responsible for, on real FactorioLab specs.
+
+    The hand-built fixtures are too small to exercise sorter tier selection or a
+    multi-coater supply chain, which is why both bugs survived them.
+    """
+
+    @staticmethod
+    def _candidates() -> list[BuildSpec]:
+        from flab2bp.lab.data import load_vendored
+        from flab2bp.lab.url import parse_url
+        from flab2bp.rates.candidates import build_candidates
+
+        url = (
+            "https://factoriolab.github.io/dsp/flow?o=super-magnetic-ring*60"
+            "&ibe=conveyor-belt-2"
+            "&mmr=arc-smelter~assembling-machine-2~chemical-plant~matrix-lab"
+            "&mps=proliferator-2-products&v=11"
+        )
+        return list(build_candidates(load_vendored(), parse_url(url), count=3).candidates)
+
+    @pytest.mark.slow
+    def test_every_candidate_supplies_its_coaters(self) -> None:
+        for spec in self._candidates():
+            p = FreeformLayout(power=True).lay_out(spec, time_budget_s=1.0)
+            bad = _full_report(p, spec, power=True).by_check("prolif.coaters_are_supplied")
+            assert not bad, f"{spec.label}: " + "; ".join(f.message for f in bad)
+
+    @pytest.mark.slow
+    def test_every_candidate_respects_sorter_capacity(self) -> None:
+        for spec in self._candidates():
+            p = FreeformLayout(power=True).lay_out(spec, time_budget_s=1.0)
+            bad = _full_report(p, spec, power=True).by_check("flow.sorter_capacity")
+            assert not bad, f"{spec.label}: " + "; ".join(f.message for f in bad)
+
+    @pytest.mark.slow
+    def test_belt_chains_are_genuinely_acyclic(self) -> None:
+        """Computed directly, not via ``belt.acyclic``.
+
+        That check has a false positive on merges -- it leaves a walk's own path
+        coloured in-progress when the walk exits early, so a later chain merging
+        into it is misread as a cycle. DSP belts merge natively and the router
+        prefers source-merging, so the check fires on correct layouts. This
+        asserts the property itself so the guarantee is covered regardless.
+        """
+        for spec in self._candidates():
+            p = FreeformLayout(power=True).lay_out(spec, time_budget_s=1.0)
+            for i, b in enumerate(p.buildings):
+                if not catalog.is_belt(b.item_id):
+                    continue
+                seen: set[int] = set()
+                cur: int | None = i
+                while cur is not None and cur not in seen:
+                    seen.add(cur)
+                    nxt = p.buildings[cur].output_obj
+                    cur = nxt if nxt is not None and catalog.is_belt(
+                        p.buildings[nxt].item_id
+                    ) else None
+                assert cur is None, f"{spec.label}: real cycle reachable from belt {i}"
