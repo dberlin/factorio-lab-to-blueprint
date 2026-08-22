@@ -157,3 +157,100 @@ def test_low_confidence_footprints_are_not_production_buildings() -> None:
         2310, 2314, 2315, 2318, 2319, 2901, 2902,
     }
     assert not (generator_places & catalog.LOW_CONFIDENCE_FOOTPRINTS)
+
+
+# --- recipe and item id mapping --------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("factoriolab_id", "dsp_recipe_id"),
+    [
+        # Each pairing was verified by ingredient set, not name similarity.
+        ("storage-1", 86),  # Depot Mk.I: Iron Ingot x4, Stone Brick x4
+        ("storage-2", 91),  # Depot Mk.II: Steel x8, Stone Brick x8
+        ("sorter-4", 160),  # Pile Sorter: Sorter Mk.III x2, Ring, Processor
+        ("logistics-vessel", 96),  # Interstellar Logistics Vessel
+        ("reforming-refine", 121),  # Reformed Refinement: oil x2 -> oil x3
+    ],
+)
+def test_recipe_aliases_resolve(factoriolab_id: str, dsp_recipe_id: int) -> None:
+    """FactorioLab ids whose DSP display name differs need an explicit alias.
+
+    Without these the generator refuses to build anything using them, which is
+    how a real user URL failed outright.
+    """
+    assert catalog.recipe_id(factoriolab_id) == dsp_recipe_id
+
+
+@pytest.mark.parametrize(
+    ("factoriolab_id", "dsp_item_id"),
+    [
+        ("storage-1", 2101),
+        ("sorter-4", 2014),
+        ("accumulator-full", 2207),
+        ("critical-photon", 1208),
+        # Raw vein items: these can arrive on an input belt, and an input belt
+        # with no item id gets no marker icon.
+        ("optical-grating-crystal", 1014),
+        ("spiniform-stalagmite-crystal", 1015),
+    ],
+)
+def test_item_aliases_resolve(factoriolab_id: str, dsp_item_id: int) -> None:
+    assert catalog.get_item_id(factoriolab_id) == dsp_item_id
+
+
+def test_every_dsp_recipe_is_reachable_by_its_factoriolab_id() -> None:
+    """No DSP recipe should be stranded behind a name the mapping cannot form."""
+    import json
+
+    raw = json.loads((catalog._RECIPES).read_text())
+    known = catalog.known_recipe_ids()
+    stranded = [r["name"] for r in raw if catalog._kebab(r["name"]) not in known]
+    assert not stranded, f"DSP recipes no FactorioLab id reaches: {stranded}"
+
+
+def test_mode_driven_recipes_explain_themselves() -> None:
+    """A machine MODE is not a craft, but it is still buildable and must be belted.
+
+    The error has to say that, because the earlier wording ("cannot appear in a
+    blueprint") was wrong: charging takes empty Accumulators and produces full
+    ones, which is an ordinary production step needing belts and sorters.
+    """
+    for factoriolab_id, machine in catalog.MODE_DRIVEN_MACHINE.items():
+        with pytest.raises(KeyError) as excinfo:
+            catalog.recipe_id(factoriolab_id)
+        message = str(excinfo.value)
+        assert machine in message
+        assert "belted" in message
+
+
+def test_dark_fog_drops_are_reported_as_unbuildable() -> None:
+    with pytest.raises(KeyError, match="Dark Fog drop"):
+        catalog.recipe_id("df-corvette")
+
+
+def test_unknown_recipe_points_at_the_alias_table() -> None:
+    with pytest.raises(KeyError, match="_RECIPE_ALIASES"):
+        catalog.recipe_id("not-a-real-recipe")
+
+
+def test_table_covers_every_recipe_real_blueprints_use() -> None:
+    """Real game blueprints are ground truth for what the table must contain.
+
+    A recipe id appearing in a working blueprint that the table does not know
+    means the extraction missed something -- which no amount of internal
+    consistency would reveal.
+    """
+    import json
+
+    known = {r["id"] for r in json.loads((catalog._RECIPES).read_text())}
+    used: set[int] = set()
+    for path in sorted(pathlib.Path("tests/fixtures").glob("*.txt")):
+        try:
+            blueprint = decode(path.read_text().strip())
+        except Exception:  # noqa: BLE001 - the DYBP negative fixture is meant to fail
+            continue
+        used.update(b.recipe_id for b in blueprint.buildings if b.recipe_id)
+    assert used, "no recipe ids found in the fixture corpus; the check is vacuous"
+    unknown = sorted(used - known)
+    assert not unknown, f"recipe ids in real blueprints but not in our table: {unknown}"

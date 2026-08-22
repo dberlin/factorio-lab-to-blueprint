@@ -189,6 +189,93 @@ _RECIPES = Path(__file__).parent / "data" / "recipes.json"
 #: DSP spells building tiers "Mk.I/II/III" where FactorioLab uses "-1/-2/-3".
 _ROMAN_TIERS = {"mk-i": "1", "mk-ii": "2", "mk-iii": "3", "mki": "1", "mkii": "2", "mkiii": "3"}
 
+#: FactorioLab ids whose DSP counterpart carries a different display name, so
+#: :func:`_kebab` cannot reach it.  Each pairing was verified by ingredient set
+#: rather than by name similarity -- a name match alone would be a guess, and a
+#: wrong recipe id produces a blueprint that pastes cleanly and builds the wrong
+#: thing:
+#:
+#:   storage-1         Iron Ingot x4, Stone Brick x4        == DSP 86  Depot Mk.I
+#:   storage-2         Steel x8, Stone Brick x8             == DSP 91  Depot Mk.II
+#:   sorter-4          Sorter Mk.III x2, Super-magnetic
+#:                     Ring x1, Processor x1                == DSP 160 Pile Sorter
+#:   logistics-vessel  Titanium Alloy x10, Processor x10,
+#:                     Reinforced Thruster x2               == DSP 96  Interstellar
+#:                                                                     Logistics Vessel
+#:   reforming-refine  Refined Oil x2, Hydrogen, Coal
+#:                     -> Refined Oil x3                    == DSP 121 Reformed Refinement
+_RECIPE_ALIASES = {
+    "storage-1": "Depot Mk.I",
+    "storage-2": "Depot Mk.II",
+    "sorter-4": "Pile Sorter",
+    "logistics-vessel": "Interstellar Logistics Vessel",
+    "reforming-refine": "Reformed Refinement",
+}
+
+#: Same, for items.  ``Accumulator (full)`` and ``Critical Photon`` exist as DSP
+#: items but have no crafting recipe -- charging is an Energy Exchanger
+#: operation and critical photons come from a Ray Receiver -- so FactorioLab
+#: models them as recipes that DSP does not have.  See :data:`NO_DSP_RECIPE`.
+#: The two crystals matter beyond tidiness: they are raw vein items, so they can
+#: arrive on an input belt, and an input belt with no item id gets no marker icon.
+_ITEM_ALIASES = {
+    "storage-1": "Depot Mk.I",
+    "storage-2": "Depot Mk.II",
+    "sorter-4": "Pile Sorter",
+    "logistics-vessel": "Interstellar Logistics Vessel",
+    "accumulator-full": "Accumulator (full)",
+    "critical-photon": "Critical Photon",
+    "optical-grating-crystal": "Grating Crystal",
+    "spiniform-stalagmite-crystal": "Stalagmite Crystal",
+    "ray-receiver-pro": "Ray Receiver",
+}
+
+#: FactorioLab entries with no DSP *item* at all, so no alias exists.
+#: ``proliferator-N-products`` / ``-speed`` are FactorioLab's module pseudo-items
+#: for the two spray modes; the sprayable items themselves are
+#: ``proliferator-1/2/3`` and map normally.  ``mecha-core-1`` and
+#: ``universe-exploration-1`` are mecha upgrades.  The remaining 42 are Dark Fog
+#: drops.  None can appear on a belt, so none needs an icon.
+NO_DSP_ITEM_PREFIXES = ("df-", "proliferator-1-", "proliferator-2-", "proliferator-3-")
+
+#: FactorioLab recipes with no DSP *recipe id*, because the game expresses them
+#: as a machine mode rather than a craft.  No alias can help; the id genuinely
+#: does not exist.
+#:
+#: This is NOT the same as "cannot be built", and the distinction matters:
+#:
+#: * ``accumulator-full`` / ``accumulator-discharge`` are an **Energy Exchanger**
+#:   running in charge or discharge mode.  It is an ordinary production node with
+#:   real item flow -- charging takes empty Accumulators and produces full ones,
+#:   discharging does the reverse -- so it belts, sorts and lays out like any
+#:   other machine, and FactorioLab models the flow exactly that way
+#:   (``accumulator -> accumulator-full`` and back).  The only thing missing is
+#:   the emission: the mode lives in the building's parameter block (the
+#:   tri-state ``targetState``) rather than in ``recipe_id``.
+#: * ``critical-photon`` / ``critical-photon-graviton`` are likewise a **Ray
+#:   Receiver** mode (photon generation, optionally with a graviton lens).
+#:
+#: So both are capability gaps in the generator, not impossibilities.  The 36
+#: ``df-*`` entries are different: Dark Fog drops, genuinely not built by
+#: anything.
+NO_DSP_RECIPE = frozenset(
+    {
+        "accumulator-full",
+        "accumulator-discharge",
+        "critical-photon",
+        "critical-photon-graviton",
+    }
+)
+
+#: The machine each :data:`NO_DSP_RECIPE` entry actually runs on, so the layout
+#: stage can place it once mode parameters are supported.
+MODE_DRIVEN_MACHINE = {
+    "accumulator-full": "energy-exchanger",
+    "accumulator-discharge": "energy-exchanger",
+    "critical-photon": "ray-receiver",
+    "critical-photon-graviton": "ray-receiver",
+}
+
 
 def _kebab(name: str) -> str:
     """DSP display name -> FactorioLab-style id."""
@@ -203,7 +290,12 @@ def _kebab(name: str) -> str:
 @cache
 def _recipe_ids() -> dict[str, int]:
     raw = json.loads(_RECIPES.read_text())
-    return {_kebab(r["name"]): int(r["id"]) for r in raw}
+    table = {_kebab(r["name"]): int(r["id"]) for r in raw}
+    by_name = {r["name"]: int(r["id"]) for r in raw}
+    for factoriolab_id, dsp_name in _RECIPE_ALIASES.items():
+        if dsp_name in by_name:
+            table[factoriolab_id] = by_name[dsp_name]
+    return table
 
 
 def recipe_id(factoriolab_id: str) -> int:
@@ -219,17 +311,33 @@ def recipe_id(factoriolab_id: str) -> int:
     recipe id yields a blueprint that pastes cleanly and builds the wrong thing,
     so failing loudly is the only safe behaviour.
 
-    Coverage is 120 of the 165 buildable DSP recipes.  The gap is the Dark Fog
-    (``df-*``) combat set: the bundled table came from an older game build and
-    predates them.  Re-extracting it from a current install would close that.
+    Coverage is all 161 DSP recipes, the complete set the game ships.  What
+    FactorioLab has and DSP does not is :data:`NO_DSP_RECIPE` -- machine *modes*
+    rather than crafts, which still need belting and laying out -- plus the 36
+    ``df-*`` Dark Fog drops, which are genuinely not built by anything.
     """
     try:
         return _recipe_ids()[factoriolab_id]
     except KeyError:
+        machine = MODE_DRIVEN_MACHINE.get(factoriolab_id)
+        if machine is not None:
+            raise KeyError(
+                f"{factoriolab_id!r} is a {machine} MODE, not a craft, so DSP has "
+                f"no recipe id for it. It is still a real production step with "
+                f"real item flow that must be placed, belted and sorted like any "
+                f"other machine -- the mode goes in the building's parameter "
+                f"block, not in recipe_id. The layout stage does not yet emit "
+                f"that, so this build cannot be generated."
+            ) from None
+        if factoriolab_id.startswith("df-"):
+            raise KeyError(
+                f"{factoriolab_id!r} is a Dark Fog drop, not something any "
+                f"machine builds, so it cannot appear in a blueprint."
+            ) from None
         raise KeyError(
-            f"no DSP recipe id known for {factoriolab_id!r}. The bundled recipe "
-            f"table predates the Dark Fog update; re-extract it from the game "
-            f"install to cover this recipe."
+            f"no DSP recipe id known for {factoriolab_id!r}. If DSP does craft "
+            f"it, its display name differs from the FactorioLab id and it needs "
+            f"an entry in _RECIPE_ALIASES, verified by ingredient set."
         ) from None
 
 
@@ -245,7 +353,12 @@ _ITEMS = Path(__file__).parent / "data" / "items.json"
 @cache
 def _item_ids() -> dict[str, int]:
     raw = json.loads(_ITEMS.read_text())
-    return {_kebab(i["name"]): int(i["id"]) for i in raw}
+    table = {_kebab(i["name"]): int(i["id"]) for i in raw}
+    by_name = {i["name"]: int(i["id"]) for i in raw}
+    for factoriolab_id, dsp_name in _ITEM_ALIASES.items():
+        if dsp_name in by_name:
+            table[factoriolab_id] = by_name[dsp_name]
+    return table
 
 
 def item_id(factoriolab_id: str) -> int:

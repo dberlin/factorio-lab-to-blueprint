@@ -51,6 +51,7 @@ from __future__ import annotations
 import heapq
 import math
 from collections import defaultdict, deque
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from fractions import Fraction
 
@@ -177,6 +178,84 @@ class Strip:
         return f"{self.group_key}"
 
 
+def _sink_demand(
+    groups: dict[str, _Group], spec: BuildSpec, item: str, dest_key: str
+) -> Fraction:
+    """Items/second one sink wants of ``item``.
+
+    An empty ``dest_key`` is the build boundary -- the item leaves on an output
+    belt -- so its demand is whatever the spec promises to deliver.
+    """
+    if not dest_key:
+        return spec.outputs.get(item, Fraction(0))
+    dest = groups.get(dest_key)
+    if dest is None:
+        return Fraction(0)
+    return dest.count * dest.inputs.get(item, Fraction(0))
+
+
+def _shard_sinks(sinks: Sequence[tuple[str, str]]) -> list[list[tuple[str, str]]]:
+    """Chunk output sinks so no strip carries more lanes than a sorter can span.
+
+    ``sinks`` arrives grouped by item, so sequential chunking keeps a single
+    item's destinations adjacent and avoids splitting one item's lanes across
+    more shards than necessary.
+    """
+    reach = catalog.SORTER_MAX_REACH
+    return [list(sinks[i : i + reach]) for i in range(0, len(sinks), reach)]
+
+
+def _allocate_machines(
+    count: int,
+    shards: Sequence[Sequence[tuple[str, str]]],
+    demand: Mapping[tuple[str, str], Fraction],
+) -> list[int]:
+    """Split ``count`` machines across shards in proportion to demand served.
+
+    An even split would starve whichever shard happens to carry the hungrier
+    consumers, so each shard's weight is the largest fraction of any one item's
+    total demand that it is responsible for -- one machine produces all of its
+    recipe's outputs at once, so the binding item is the one needing most.
+
+    Every shard gets at least one machine (a shard with none leaves its
+    destinations unfed), and the total is exactly ``count`` so the placement
+    still matches the spec's machine counts.
+    """
+    n = len(shards)
+    totals: dict[str, Fraction] = defaultdict(Fraction)
+    for (item, _dest), rate in demand.items():
+        totals[item] += rate
+
+    weights: list[Fraction] = []
+    for shard in shards:
+        served: dict[str, Fraction] = defaultdict(Fraction)
+        for item, dest in shard:
+            served[item] += demand.get((item, dest), Fraction(0))
+        weight = Fraction(0)
+        for item, rate in served.items():
+            total = totals.get(item, Fraction(0))
+            weight = max(weight, rate / total if total > 0 else Fraction(1, n))
+        weights.append(weight if weight > 0 else Fraction(1, n))
+
+    total_weight = sum(weights, Fraction(0))
+    if total_weight <= 0:
+        weights = [Fraction(1)] * n
+        total_weight = Fraction(n)
+
+    # One machine each, then hand out the rest by largest remainder.
+    allocation = [1] * n
+    remaining = count - n
+    exact = [remaining * w / total_weight for w in weights]
+    floors = [int(v) for v in exact]
+    for i, f in enumerate(floors):
+        allocation[i] += f
+    leftover = remaining - sum(floors)
+    order = sorted(range(n), key=lambda i: exact[i] - floors[i], reverse=True)
+    for i in order[:leftover]:
+        allocation[i] += 1
+    return allocation
+
+
 def _adapt(spec: BuildSpec) -> dict[str, _Group]:
     groups: dict[str, _Group] = {}
     for i, mg in enumerate(spec.groups):
@@ -202,6 +281,23 @@ def _adapt(spec: BuildSpec) -> dict[str, _Group]:
 def plan_strips(spec: BuildSpec, *, strip_len: int = 6) -> list[Strip]:
     """Split every group into strips and attach each strip's lanes.
 
+    A strip carries one output lane per destination, which is what removes the
+    need for splitters, and a sorter spans at most ``SORTER_MAX_REACH`` tiles.
+    A producer feeding more destinations than that therefore cannot reach its
+    own bottom lane -- and real recipe graphs hit this routinely, ``copper-ingot``
+    feeding four consumers in the orbital-collector build.
+
+    The group is SHARDED instead: its destinations are chunked to fit the reach
+    and its machines split between the chunks in proportion to the demand each
+    chunk serves.  That keeps the no-splitter invariant intact and stays a
+    planning change rather than a geometry one.
+
+    Note that raising ``strip_len`` cannot help here, though an earlier version
+    of this error advised exactly that: ``strip_len`` splits the PRODUCER into
+    sub-strips and hands each an identical copy of the lane set, so the lane
+    count is a property of how many consumer GROUPS the item feeds. Measured
+    from ``strip_len`` 2 to 10000, the failure was identical every time.
+
     Raises rather than truncating when a recipe needs more input lanes than a
     sorter can span: a silently dropped ingredient would produce a blueprint that
     pastes cleanly and then stalls.
@@ -224,7 +320,6 @@ def plan_strips(spec: BuildSpec, *, strip_len: int = 6) -> list[Strip]:
 
     strips: list[Strip] = []
     for key, g in groups.items():
-        n_strips = max(1, math.ceil(g.count / max(1, strip_len)))
         in_lanes = tuple(sorted(g.inputs))
         if len(in_lanes) > catalog.SORTER_MAX_REACH:
             raise ValueError(
@@ -232,37 +327,51 @@ def plan_strips(spec: BuildSpec, *, strip_len: int = 6) -> list[Strip]:
                 f"sorter spans at most {catalog.SORTER_MAX_REACH} tiles; this "
                 f"recipe cannot be fed from one side"
             )
-        out: list[tuple[str, str]] = []
+
+        sinks: list[tuple[str, str]] = []
         for item in sorted(g.outputs):
             dests = consumers.get((key, item), [])
-            out.extend((item, d) for d in dests)
+            sinks.extend((item, d) for d in dests)
             if item in spec.outputs or not dests:
-                out.append((item, ""))  # leaves the build
-        if len(out) > catalog.SORTER_MAX_REACH:
+                sinks.append((item, ""))  # leaves the build
+
+        shards = _shard_sinks(sinks) if sinks else [[]]
+        if len(shards) > g.count:
             raise ValueError(
-                f"recipe {g.recipe_id!r} needs {len(out)} output lanes, more than "
-                f"the {catalog.SORTER_MAX_REACH}-tile sorter reach allows; raise "
-                f"strip_len so fewer destination strips are needed"
+                f"recipe {g.recipe_id!r} feeds {len(sinks)} destinations, needing "
+                f"{len(shards)} shards to stay inside the "
+                f"{catalog.SORTER_MAX_REACH}-tile sorter reach, but only has "
+                f"{g.count} machine(s) to split between them; a shard with no "
+                f"machines would leave its consumers unfed"
             )
-        base = g.count // n_strips
-        extra = g.count % n_strips
-        for s in range(n_strips):
-            machines = base + (1 if s < extra else 0)
-            if machines <= 0:
-                continue
-            strips.append(
-                Strip(
-                    group_key=key,
-                    recipe_id=g.recipe_id,
-                    item_id=g.item_id,
-                    model_index=g.model_index,
-                    machines=machines,
-                    mw=g.width,
-                    mh=g.height,
-                    in_lanes=in_lanes,
-                    out_lanes=tuple(out),
+        demand = {
+            (item, dest): _sink_demand(groups, spec, item, dest) for item, dest in sinks
+        }
+        per_shard = (
+            _allocate_machines(g.count, shards, demand) if len(shards) > 1 else [g.count]
+        )
+
+        for shard, machines in zip(shards, per_shard, strict=True):
+            n_strips = max(1, math.ceil(machines / max(1, strip_len)))
+            base = machines // n_strips
+            extra = machines % n_strips
+            for s in range(n_strips):
+                n = base + (1 if s < extra else 0)
+                if n <= 0:
+                    continue
+                strips.append(
+                    Strip(
+                        group_key=key,
+                        recipe_id=g.recipe_id,
+                        item_id=g.item_id,
+                        model_index=g.model_index,
+                        machines=n,
+                        mw=g.width,
+                        mh=g.height,
+                        in_lanes=in_lanes,
+                        out_lanes=tuple(shard),
+                    )
                 )
-            )
     return strips
 
 

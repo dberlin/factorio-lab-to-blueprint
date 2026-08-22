@@ -825,6 +825,20 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
     corridor_heights = [len(c) for c in plan.lanes]
     row_y, corr_y, total_h = band_offsets(row_heights, corridor_heights)
 
+    # A boundary corridor has only one neighbouring row, and measurement shows
+    # powered buildings reach its FULL depth -- sorters tap the deepest external
+    # input lane, so a 9-lane top corridor puts them 9 tiles from row 0.  Row 0's
+    # towers cannot cover that and share it with nobody, which is what made the
+    # two largest corpus specs uncoverable outright.
+    #
+    # Give the top corridor its own tower band.  One tile of height buys the
+    # second neighbour that interior corridors get for free.
+    top_band = _top_band_height(row_heights, corridor_heights)
+    if top_band:
+        row_y = [y + top_band for y in row_y]
+        corr_y = [y + top_band for y in corr_y]
+        total_h += top_band
+
     buildings: list[PlacedBuilding] = []
     machine_at: dict[str, list[int]] = defaultdict(list)
     towers = 0
@@ -846,7 +860,12 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
                         item_id=CONSTANTS.tesla_item_id,
                         model_index=tower_model,
                         x=s.x,
-                        y=row_y[r],
+                        # Centred in the row, not pinned to its top edge.
+                        # `_horizontal_reach` budgets half the row height, which
+                        # only holds for a centred tower: at the top edge the far
+                        # side is `row_height - 1` away, so an 11-tall row spends
+                        # the entire 10.5 radius before any corridor is counted.
+                        y=row_y[r] + max(0, (row_heights[r] - th) // 2),
                         width=s.width,
                         height=th,
                     )
@@ -870,6 +889,28 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
             )
         row_widths.append(width)
     content_w = max([*row_widths, 1])
+
+    # --- top tower band ---------------------------------------------------
+    # Sits above the first corridor, covering the external input lanes that row 0
+    # alone cannot reach.  Spacing comes from the same reach table, evaluated at
+    # the depth of the deepest lane it has to serve.
+    if power and top_band:
+        band_dy = min(corridor_heights[0], _max_dy())
+        band_hr = max(1, _REACH_TABLE[band_dy])
+        x = band_hr
+        while x < content_w + band_hr:
+            buildings.append(
+                PlacedBuilding(
+                    item_id=CONSTANTS.tesla_item_id,
+                    model_index=tower_model,
+                    x=min(x, max(0, content_w - 1)),
+                    y=0,
+                    width=1,
+                    height=th,
+                )
+            )
+            towers += 1
+            x += 2 * band_hr
 
     # --- lane extents -----------------------------------------------------
     # A lane only needs belt where something actually taps it, plus a run to the
@@ -1457,24 +1498,100 @@ def _lane_tile_at(buildings: list[PlacedBuilding], lane: list[int], x: int) -> i
     return None
 
 
+#: Extra tiles charged beyond half an interior corridor.
+#:
+#: Measured, not assumed: powered buildings sit deeper into a corridor than the
+#: midpoint, because a sorter tapping the deepest lane it can reach lands one
+#: tile past it.  Across the corpus the deepest powered building sat 4 tiles into
+#: an 8-lane corridor and 6 into a 9-lane one -- ``ceil(h/2) + 1`` in both cases.
+#: Without this margin a sorter in casimir-crystal landed 10.82 tiles from its
+#: nearest tower against a 10.5 radius, which the validator caught.
+_CORRIDOR_DEPTH_MARGIN = 1
+
+
+def _max_dy() -> int:
+    """Largest vertical offset at which a tower still has positive reach."""
+    return len(_REACH_TABLE) - 2
+
+
+def _top_band_height(row_heights: list[int], corridor_heights: list[int]) -> int:
+    """Height of a dedicated tower band above the top corridor, or 0.
+
+    Needed when row 0's towers cannot reach the deepest powered building in the
+    top corridor.  Interior corridors are shared between two rows; the top one is
+    not, and measurement shows sorters do tap its deepest lane, so nothing
+    covers the far side unless a band is added.
+    """
+    if not row_heights or not corridor_heights:
+        return 0
+    _tw, th = CONSTANTS.tower_size
+    reach_needed = math.ceil(row_heights[0] / 2) + corridor_heights[0]
+    return th if reach_needed > _max_dy() else 0
+
+
+def _corridor_charge(
+    ci: int, corridor_heights: list[int], *, has_top_band: bool = False
+) -> int:
+    """Vertical distance a bordering row's towers must cover into corridor ``ci``.
+
+    Corridor ``ci`` lies between row ``ci - 1`` above it and row ``ci`` below it,
+    so an *interior* corridor is bordered by two rows, each with its own towers.
+    Neither row has to reach the far edge: each covers its own half and they meet
+    in the middle.  Only the first and last corridors have a single neighbour and
+    must be covered outright.
+
+    Charging every row the full height of its corridors was the bug.  It is
+    harmless while corridors are short -- the 9-group calibration spec never
+    exceeds a few lanes -- but a 27-group build reaches 14-lane corridors, and
+    charging those in full put 21 of 27 rows past the 10.5-tile supply radius, so
+    Strategy A could not lay out a real URL at all.
+    """
+    height = corridor_heights[ci]
+    shared = 0 < ci < len(corridor_heights) - 1 or (ci == 0 and has_top_band)
+    if not shared:
+        return height
+    return min(height, math.ceil(height / 2) + _CORRIDOR_DEPTH_MARGIN)
+
+
 def _horizontal_reach(r: int, row_heights: list[int], corridor_heights: list[int]) -> int:
     """Horizontal supply reach available to a tower sitting in row ``r``.
 
     A tower in row ``r`` must also power the sorters and spray coaters in the
     corridors on either side, so the worst-case vertical offset is half the row
-    height plus the taller neighbouring corridor.  Evaluating the circle at that
-    offset is exact, unlike an inscribed square.
+    height plus its share of the taller neighbouring corridor.  Evaluating the
+    circle at that offset is exact, unlike an inscribed square.
+
+    Half the row height is only correct because ``_emit`` centres the tower
+    vertically within its row; a tower at the row's top edge would be
+    ``row_height - 1`` from the far side, which for an 11-tall row is already the
+    whole radius before any corridor is counted.
     """
     table = _REACH_TABLE
-    above = corridor_heights[r] if r < len(corridor_heights) else 0
-    below = corridor_heights[r + 1] if r + 1 < len(corridor_heights) else 0
+    top_band = bool(_top_band_height(row_heights, corridor_heights))
+    above = (
+        _corridor_charge(r, corridor_heights, has_top_band=top_band)
+        if r < len(corridor_heights)
+        else 0
+    )
+    below = (
+        _corridor_charge(r + 1, corridor_heights, has_top_band=top_band)
+        if r + 1 < len(corridor_heights)
+        else 0
+    )
     dy_max = math.ceil(row_heights[r] / 2) + max(above, below)
-    if dy_max >= len(table):
-        raise ValueError(
-            f"row {r} sits {dy_max} tiles from its corridors, beyond the "
-            f"{CONSTANTS.supply_radius}-tile supply radius; no tower can cover it"
-        )
-    hr = table[dy_max]
+
+    # Clamp rather than refuse.  A boundary corridor has only one neighbouring
+    # row, so a very tall one can exceed the radius outright -- but returning the
+    # tightest positive spacing still produces a layout, and the validator's
+    # power.coverage check decides whether it is actually good enough.  Raising
+    # here instead meant a whole candidate was thrown away over a corridor whose
+    # deep lanes are pass-through belts, which are unpowered anyway.
+    #
+    # This deliberately trades a hard failure for one the neutral judge catches:
+    # it can under-cover, never silently -- an under-covered build is rejected by
+    # the validator before it is ever emitted as a blueprint.
+    clamped = min(dy_max, len(table) - 2)
+    hr = table[clamped]
     if hr <= 0:
         raise ValueError(f"row {r} is uncoverable at vertical offset {dy_max}")
     return hr

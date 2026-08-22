@@ -759,3 +759,115 @@ class TestRealUrlCandidatesAreSupplied:
                         p.buildings[nxt].item_id
                     ) else None
                 assert cur is None, f"{spec.label}: real cycle reachable from belt {i}"
+
+
+def _real_consumers_of(item: str, wanted: int) -> list[str]:
+    """Real DSP recipes that consume ``item`` and have a known DSP recipe id.
+
+    Chosen from the dataset rather than hardcoded so this keeps working as the
+    recipe table is re-extracted -- a synthetic recipe name would fail at
+    ``catalog.recipe_id`` instead of exercising the layout.
+    """
+    from flab2bp.lab.data import load_vendored
+
+    data = load_vendored()
+    known = catalog.known_recipe_ids()
+    out: list[str] = []
+    for r in data.recipes:
+        if r.is_mining or r.is_technology or item not in r.inputs:
+            continue
+        if r.id in known and all(catalog.get_item_id(o) is not None for o in r.outputs):
+            out.append(r.id)
+        if len(out) == wanted:
+            break
+    return out
+
+
+def fan_out_spec(consumers: int = 4) -> BuildSpec:
+    """One producer feeding many consumers.
+
+    A strip gets one output lane per destination, and a sorter spans at most
+    three tiles, so a producer with four consumers cannot reach its own bottom
+    lane. Every other spec here is small enough that this never arises, which is
+    why it survived until a real URL hit it: ``copper-ingot`` feeds four recipes
+    in the orbital-collector build.
+    """
+    sinks = _real_consumers_of("copper-ingot", consumers)
+    if len(sinks) < consumers:
+        pytest.skip(f"dataset has only {len(sinks)} mapped copper-ingot consumers")
+    groups = [
+        group(
+            "copper-ingot",
+            "arc-smelter",
+            4 * consumers,
+            {"copper-ore": F(1)},
+            {"copper-ingot": F(1)},
+        )
+    ]
+    outputs: dict[str, F] = {}
+    for rid in sinks:
+        from flab2bp.lab.data import load_vendored
+
+        produced = next(iter(load_vendored().recipe(rid).outputs))
+        groups.append(
+            group(rid, "assembling-machine-2", 2, {"copper-ingot": F(1)}, {produced: F(1)})
+        )
+        outputs[produced] = F(2)
+    return BuildSpec(
+        groups=tuple(groups),
+        external_inputs={"copper-ore": F(4 * consumers)},
+        outputs=outputs,
+        belt_item_id="conveyor-belt-2",
+        belt_items_per_second=F(12),
+        label=f"fan-out-{consumers}",
+    )
+
+
+class TestProducerWithManyConsumers:
+    """Sharding a group across strips when its destinations exceed sorter reach.
+
+    Raising ``strip_len`` -- what the old error message advised -- cannot help:
+    the output-lane count comes from the number of destination GROUPS, which is
+    independent of how machines are split into strips. Verified at strip_len
+    6, 12, 50 and 500, all identical failures.
+    """
+
+    @pytest.mark.parametrize("consumers", [4, 5, 7])
+    def test_planning_succeeds_and_respects_sorter_reach(self, consumers: int) -> None:
+        strips = plan_strips(fan_out_spec(consumers), strip_len=6)
+        assert strips
+        for s in strips:
+            assert len(s.out_lanes) <= catalog.SORTER_MAX_REACH, (
+                f"strip {s.group_key} has {len(s.out_lanes)} output lanes"
+            )
+            assert len(s.in_lanes) <= catalog.SORTER_MAX_REACH
+
+    def test_every_destination_is_still_served(self) -> None:
+        """Sharding must not drop a consumer -- that starves it silently."""
+        spec = fan_out_spec(5)
+        strips = plan_strips(spec, strip_len=6)
+        served = {
+            dest
+            for s in strips
+            if s.recipe_id == "copper-ingot"
+            for _item, dest in s.out_lanes
+            if dest
+        }
+        wanted = {
+            f"{g.recipe_id}#{i}"
+            for i, g in enumerate(spec.groups)
+            if "copper-ingot" in g.inputs_per_machine
+        }
+        assert served == wanted, f"missing destinations: {wanted - served}"
+
+    def test_all_machines_survive_sharding(self) -> None:
+        spec = fan_out_spec(5)
+        strips = plan_strips(spec, strip_len=6)
+        assert sum(s.machines for s in strips) == spec.machine_count
+
+    @pytest.mark.parametrize("power", [False, True])
+    def test_it_lays_out_and_validates(self, power: bool) -> None:
+        spec = fan_out_spec(4)
+        p = FreeformLayout(power=power).lay_out(spec, time_budget_s=1.0)
+        report = _full_report(p, spec, power=power)
+        assert report.ok, "\n".join(f"{f.check}: {f.message}" for f in report.errors[:8])

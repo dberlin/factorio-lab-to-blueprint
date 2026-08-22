@@ -135,6 +135,8 @@ def target_rates(data: Dataset, request: LabRequest) -> dict[str, Fraction]:
     period = _SECONDS_PER_PERIOD[request.display_rate]
     out: dict[str, Fraction] = {}
     for objective in request.objectives:
+        if objective.type is ObjectiveType.Input:
+            continue  # a declared external supply; see supplied_rates()
         if objective.type is not ObjectiveType.Output:
             raise UnsupportedObjectiveError(
                 f"objective type {objective.type.name!r} is not supported: only "
@@ -165,6 +167,36 @@ def target_rates(data: Dataset, request: LabRequest) -> dict[str, Fraction]:
     return out
 
 
+def supplied_rates(data: Dataset, request: LabRequest) -> dict[str, Fraction]:
+    """Items the URL declares as externally supplied, in items/second.
+
+    FactorioLab's ``Input`` objective means "I already have this much of this
+    item", which is exactly what an input belt is here: the item arrives at the
+    boundary and nothing inside the blueprint makes it.  Mapping it onto
+    ``external_inputs`` is the whole of the support -- an Input objective on
+    ``proliferator-3`` is simply a proliferator belt with a declared rate.
+
+    The declared rate is a *supply*, not a demand: it caps nothing and is
+    recorded so the belt can be sized and labelled.
+    """
+    period = _SECONDS_PER_PERIOD[request.display_rate]
+    out: dict[str, Fraction] = {}
+    for objective in request.objectives:
+        if objective.type is not ObjectiveType.Input:
+            continue
+        if objective.unit is ObjectiveUnit.Items:
+            rate = objective.value / period
+        elif objective.unit is ObjectiveUnit.Belts:
+            rate = objective.value * data.belt_speed(request.belt_id or "conveyor-belt-1")
+        else:
+            raise UnsupportedObjectiveError(
+                f"an Input objective in {objective.unit.name!r} units is not "
+                "supported; use Items or Belts"
+            )
+        out[objective.target_id] = out.get(objective.target_id, Fraction(0)) + rate
+    return out
+
+
 def _buildable_producers(
     data: Dataset, item_id: str, excluded: frozenset[str]
 ) -> tuple[Recipe, ...]:
@@ -184,7 +216,10 @@ def _buildable_producers(
 
 
 def _resolve_chain(
-    data: Dataset, targets: Iterable[str], excluded: frozenset[str]
+    data: Dataset,
+    targets: Iterable[str],
+    excluded: frozenset[str],
+    supplied: frozenset[str] = frozenset(),
 ) -> tuple[dict[str, tuple[Recipe, ...]], set[str]]:
     """Walk the recipe graph from the targets.
 
@@ -200,6 +235,11 @@ def _resolve_chain(
         if item_id in seen:
             continue
         seen.add(item_id)
+        if item_id in supplied:
+            # Declared as externally supplied, so do not build it even though a
+            # recipe exists -- that is the point of an Input objective.
+            external.add(item_id)
+            continue
         options = _buildable_producers(data, item_id, excluded)
         if not options:
             external.add(item_id)
@@ -444,8 +484,9 @@ def solve(
     its inputs onto belts, and only the layout stage can price that.
     """
     targets = target_rates(data, request)
+    supplied = supplied_rates(data, request)
     excluded = frozenset(request.excluded_recipe_ids or ()) | data.default_recipe_excluded
-    producers, external = _resolve_chain(data, targets, excluded)
+    producers, external = _resolve_chain(data, targets, excluded, frozenset(supplied))
     internal_items = sorted(producers)
     columns = _columns(data, producers, request, tier, allowed_modes, proliferable)
     if not columns:
