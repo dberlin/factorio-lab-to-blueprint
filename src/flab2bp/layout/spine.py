@@ -1168,6 +1168,16 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
             )
             break
 
+    # --- coverage top-up --------------------------------------------------
+    # The analytic reach model budgets a worst-case vertical offset, which is
+    # sound for machines and sorters but cannot bound a Spray Coater: coaters
+    # ride whichever lane needs spraying, at any depth in a corridor, and
+    # measurement found them 22 tiles from the nearest tower on a 19-group
+    # build.  No closed form fixes that, so verify the real geometry and add
+    # towers where it actually falls short.
+    if power:
+        towers += _top_up_coverage(buildings, tower_model)
+
     return Placement(
         buildings=tuple(buildings),
         description=f"flab2bp spine layout ({spec.label or 'default'})",
@@ -1595,6 +1605,88 @@ def _horizontal_reach(r: int, row_heights: list[int], corridor_heights: list[int
     if hr <= 0:
         raise ValueError(f"row {r} is uncoverable at vertical offset {dy_max}")
     return hr
+
+
+def _nearest_free(
+    gx: int, gy: int, occupied: set[tuple[int, int]], limit: int
+) -> tuple[int, int] | None:
+    """The unoccupied tile closest to ``(gx, gy)``, searched in expanding rings."""
+    for ring in range(limit + 1):
+        for dx in range(-ring, ring + 1):
+            for dy in range(-ring, ring + 1):
+                if ring and max(abs(dx), abs(dy)) != ring:
+                    continue  # interior of this ring was covered by a smaller one
+                spot = (gx + dx, gy + dy)
+                if spot not in occupied:
+                    return spot
+    return None
+
+
+def _top_up_coverage(buildings: list[PlacedBuilding], tower_model: int) -> int:
+    """Add towers until every powered building is genuinely inside a supply radius.
+
+    Verification rather than prediction.  ``_horizontal_reach`` budgets a
+    worst-case offset and spaces towers accordingly, which holds for machines
+    and sorters but not for Spray Coaters -- those mount on whichever lane needs
+    spraying, at any corridor depth, so no analytic bound covers them.
+
+    Coverage is measured over EVERY tile of a building's footprint, not its
+    centre, matching ``validate.power.coverage``.  Belts are unpowered and skipped;
+    a tower is placed only on a tile nothing else occupies, so this can never
+    introduce an overlap.
+
+    Returns the number of towers added.  Zero is the common case: the analytic
+    model is right nearly everywhere, and this only pays for the exceptions.
+    """
+    radius = float(CONSTANTS.supply_radius)
+    occupied: set[tuple[int, int]] = set()
+    for b in buildings:
+        try:
+            if not catalog.building(b.item_id).occupies_tiles:
+                continue
+        except KeyError:
+            continue
+        for dx in range(b.width):
+            for dy in range(b.height):
+                occupied.add((b.x + dx, b.y + dy))
+
+    towers = [(b.x, b.y) for b in buildings if b.item_id == CONSTANTS.tesla_item_id]
+
+    def covered(tx: int, ty: int) -> bool:
+        return any(math.hypot(tx - ox, ty - oy) <= radius for ox, oy in towers)
+
+    added = 0
+    for b in list(buildings):
+        if catalog.is_belt(b.item_id) or b.item_id == CONSTANTS.tesla_item_id:
+            continue
+        gaps = [
+            (b.x + dx, b.y + dy)
+            for dx in range(b.width)
+            for dy in range(b.height)
+            if not covered(b.x + dx, b.y + dy)
+        ]
+        if not gaps:
+            continue
+        gx, gy = gaps[0]
+        # Nearest free tile, searched outward, so the tower lands beside the
+        # thing it powers rather than somewhere that inflates the bounding box.
+        spot = _nearest_free(gx, gy, occupied, int(radius))
+        if spot is None:
+            continue
+        occupied.add(spot)
+        towers.append(spot)
+        buildings.append(
+            PlacedBuilding(
+                item_id=CONSTANTS.tesla_item_id,
+                model_index=tower_model,
+                x=spot[0],
+                y=spot[1],
+                width=1,
+                height=1,
+            )
+        )
+        added += 1
+    return added
 
 
 def _bbox_area(buildings: list[PlacedBuilding]) -> int:
