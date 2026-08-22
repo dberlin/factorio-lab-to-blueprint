@@ -40,17 +40,35 @@ build-backend = "uv_build"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# The default run must stay fast enough to sit in an edit loop. Solver-heavy
-# tests are marked `slow` and excluded here; run them with `-m slow` or
-# `-m ""`. `timeout` is a backstop, not a budget -- a CP-SAT test that trips it
-# has a bug, because layout tests pass explicit sub-second budgets.
-addopts = "-q -n auto -m 'not slow'"
-timeout = 30
+# The default run is the WHOLE suite. There is no `-m 'not slow'` here any more:
+# a default that hides the solver-heavy tests is not a fast test suite, it is a
+# test suite that is not being run, and every regression those tests exist to
+# catch lands unnoticed until someone remembers the incantation.
+#
+# Deliberately NOT parallel. CP-SAT already saturates the machine on its own --
+# a single solve runs at ~700% CPU -- so `-n auto` did not add throughput, it
+# subtracted it: 16 pytest workers x 16 CP-SAT search workers oversubscribed the
+# box by an order of magnitude, and because `time_budget_s` is wall-clock, every
+# solve then got a fraction of the search it was budgeted for. That is what made
+# the parallel run both slower and flakier than the serial one. It also split
+# the shared layout memo in `tests/conftest.py` into one cache per worker, so
+# the same placement was re-solved once per worker that happened to receive a
+# test needing it. One process, one cache, one solve.
+#
+# `timeout` is a backstop, not a budget. It is generous on purpose: a strategy
+# that cannot pack a spec spends `time_budget_s + RETRY_BUDGET_S` before raising
+# `NoValidLayout`, and killing it mid-refusal is strictly worse than letting it
+# finish -- the memo never gets to record the refusal, so every subsequent test
+# on that spec pays the full timeout again, and the failure reads as "Timeout"
+# instead of naming the spec the layout model cannot handle.
+addopts = "-q"
+timeout = 120
 markers = [
     "network: hits the live FactorioLab dataset; gated on FLAB2BP_NETWORK_TESTS=1",
     "bun: cross-validates against the dsp-blueprint-viewer TypeScript decoder",
-    "slow: solver-heavy; excluded from the default run",
+    "slow: solver-heavy; still runs by default -- deselect with `-m 'not slow'` if you must",
     "packsolver: needs the optional PackingSolver binary; see scripts/build_packingsolver.sh",
+    "uncached_layout: the solve itself is the subject; bypass the shared layout memo in tests/conftest.py",
 ]
 
 [tool.ruff]

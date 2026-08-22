@@ -181,6 +181,34 @@ def proliferated_spec() -> BuildSpec:
 
 ALL_SPECS = [single_recipe_spec, two_stage_spec, magnetic_ring_spec, proliferated_spec]
 
+#: Freeform refuses any strip plan where one producer lane must feed several
+#: consumer lanes, because a belt tile has one ``output_obj``.  It used to lay
+#: those nets down anyway and link only the last, leaving the rest as belts
+#: nothing fed -- real buildings, real area, no items -- which is why these tests
+#: passed while the builds they checked did not run.  See ``_fanout_shortfall``
+#: and docs/BACKLOG.md.
+#:
+#: ``strict=True`` on purpose.  When the splitter (catalog id 2020) is emitted
+#: these must go green, and a strict xfail turns that into a FAILURE -- so the
+#: marks get removed because CI says so, not because someone remembers.
+SPLITTER_GAP = pytest.mark.xfail(
+    strict=True,
+    reason="one producer lane cannot feed several consumer lanes until the "
+    "splitter (catalog id 2020) is emitted; see docs/BACKLOG.md",
+)
+
+#: ``ALL_SPECS`` for ``parametrize``, with the unservable spec marked.  Kept
+#: separate because ``ALL_SPECS`` is also iterated directly, where a
+#: ``pytest.param`` wrapper would not be callable.
+ALL_SPEC_PARAMS = [
+    pytest.param(
+        f,
+        marks=[SPLITTER_GAP] if f is magnetic_ring_spec else [],
+        id=f.__name__,
+    )
+    for f in ALL_SPECS
+]
+
 
 # --- helpers ---------------------------------------------------------------
 
@@ -358,7 +386,7 @@ class TestFallback:
 # --- placement properties --------------------------------------------------
 
 
-@pytest.mark.parametrize("spec_fn", ALL_SPECS, ids=lambda f: f.__name__)
+@pytest.mark.parametrize("spec_fn", ALL_SPEC_PARAMS)
 @pytest.mark.parametrize("power", [True, False], ids=["power", "no-power"])
 class TestPlacementProperties:
     def test_no_two_blocking_footprints_share_a_tile(
@@ -678,6 +706,7 @@ class TestPower:
         assert on.stats["towers"] > 0
         assert off.stats["towers"] == 0
 
+    @SPLITTER_GAP
     def test_every_powered_building_is_covered(self) -> None:
         p = FreeformLayout(power=True).lay_out(magnetic_ring_spec(), time_budget_s=0.5)
         report = validate.validate(p, only=["power.coverage", "power.connectivity"])
@@ -718,6 +747,7 @@ class TestPower:
         report = validate.validate(p, only=["power.coverage"])
         assert not report.ok, "a tower 30 tiles away must not count as covering"
 
+    @SPLITTER_GAP
     def test_coverage_is_skipped_rather_than_failed_when_power_is_off(self) -> None:
         """``--no-power`` is a legitimate mode, not a factory-wide error."""
         p = FreeformLayout(power=False).lay_out(magnetic_ring_spec(), time_budget_s=0.5)
@@ -854,6 +884,7 @@ class TestRealUrlCandidatesAreSupplied:
         return list(build_candidates(load_vendored(), parse_url(url), count=3).candidates)
 
     @pytest.mark.slow
+    @SPLITTER_GAP
     def test_every_candidate_supplies_its_coaters(self) -> None:
         for spec in self._candidates():
             p = FreeformLayout(power=True).lay_out(spec, time_budget_s=0.5)
@@ -861,6 +892,7 @@ class TestRealUrlCandidatesAreSupplied:
             assert not bad, f"{spec.label}: " + "; ".join(f.message for f in bad)
 
     @pytest.mark.slow
+    @SPLITTER_GAP
     def test_every_candidate_respects_sorter_capacity(self) -> None:
         for spec in self._candidates():
             p = FreeformLayout(power=True).lay_out(spec, time_budget_s=0.5)
@@ -868,6 +900,7 @@ class TestRealUrlCandidatesAreSupplied:
             assert not bad, f"{spec.label}: " + "; ".join(f.message for f in bad)
 
     @pytest.mark.slow
+    @SPLITTER_GAP
     def test_belt_chains_are_genuinely_acyclic(self) -> None:
         """Computed directly, not via ``belt.acyclic``.
 
@@ -998,6 +1031,7 @@ class TestProducerWithManyConsumers:
         assert sum(s.machines for s in strips) == spec.machine_count
 
     @pytest.mark.parametrize("power", [False, True])
+    @SPLITTER_GAP
     def test_it_lays_out_and_validates(self, power: bool) -> None:
         """Pinned to one worker, and route failures asserted separately.
 
@@ -1132,6 +1166,7 @@ class TestMixedItemLanes:
             "expected some belt to be drawn from under two different filters"
         )
 
+    @SPLITTER_GAP
     def test_unmixed_lanes_stay_unfiltered(self) -> None:
         """The signal only means something if it is absent when lanes are pure.
 
@@ -1255,6 +1290,7 @@ class TestShardedGroupsAreFedOnEveryShard:
         starved = [f for f in report.errors if f.check == "flow.lane_sourced"]
         assert not starved, "\n".join(f.message for f in starved)
 
+    @SPLITTER_GAP
     def test_a_sharded_producer_has_every_lane_drained(self) -> None:
         """The mirror case: several producer strips shipping to one consumer.
 
