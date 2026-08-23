@@ -238,8 +238,17 @@ def _slow_note(over: int, budget: float) -> str:
       worth stopping for.  Every refusing cell lands here.
     * Emission and the self-check sit outside the deadline on purpose -- neither
       is a search, neither can be abandoned half-done -- and both scale with the
-      result: 8.7s to certify a 77,000-tile placement.  That tail is also
-      allocation-dependent, 22-26s at eight CP-SAT workers against 50s at four.
+      result.  That tail is also allocation-dependent, 22-26s at eight CP-SAT
+      workers against 50s at four.
+
+      This bullet used to read "8.7s to certify a 77,000-tile placement", which
+      is now wrong by more than an order of magnitude: ``validate.certify`` was
+      optimised 15x (18.7x on the largest placement) and a 39,320-building spine
+      build certifies in **0.41s**.  The self-check is no longer a meaningful
+      part of the tail.  Emission has NOT been measured since, so do not read
+      this as "emission is now the tail" -- nobody has checked which half is
+      which, and the honest statement is that the tail is much smaller than it
+      was and nobody has re-attributed it.
 
     So name the slow cells, because a genuine runaway hides among them, but do
     not diagnose them.  A cell far above the deadline is worth opening; a cell

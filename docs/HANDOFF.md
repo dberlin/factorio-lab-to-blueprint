@@ -195,8 +195,72 @@ It only found that by running the test against the *unfixed* code. Do that every
 5. **Regenerate `docs/AB_RESULTS.md` / `AB_COMPARISON.md`.** Still stale — they predate both
    fallback removals and everything today. **Do not quote them.** Cheap now, and
    cross-validation would finally make that column real.
-6. **A\* speed / `validate.certify` speed** — both still open from the previous handoff, both
-   still real. `certify` is 3.8s on a 92,907-tile placement and runs on every attempt.
+6. **A\* speed** — still open, in flight. `validate.certify` speed is **DONE**: see below.
+
+---
+
+## Corrections to this document, made the same evening
+
+Kept rather than silently edited, because *what was wrong and how it was found* is the most
+reusable thing here.
+
+**`certify` speed (was item 6) is done.** It is now **15x faster overall, 18.7x on the largest
+placement** (`b147d6d`, `2ca6b28`, `698d82a`). Four checks were 90% of the cost —
+`flow.belt_capacity`, `flow.sorter_capacity`, `power.coverage`, `flow.headroom` — and none for
+a reason connected to what they decide: rebuilt indices, a genuine quadratic (`of_kind` scanned
+every building, once per sorter: 986 × 37,225, twice over), and `Fraction` construction per
+tower per tile. Fixed with a per-`validate` `_Cache`, one-pass peer scan, and doubled-integer
+coordinates for the tower predicate (`d2 <= floor((2r)²)` — the same predicate, not a
+tolerance; **no float anywhere**).
+
+Measured: **7.302s → 0.392s** on 37,225 buildings; I independently measured a 39,320-building
+spine build at **0.410s**. Verified verdict-identical two ways — the author's 162 report pairs
+and my own independent A/B of 40 comparisons, **0 mismatches**, with **14,981 finding lines
+moved by injected damage** proving the oracle was not blind. That last point matters: on clean
+input those four checks emit *nothing*, so a clean-only oracle agrees with a deleted check.
+
+So **the numbers "3.8s on a 92,907-tile placement" (item 6 above) and "8.7s to certify a
+77,000-tile placement" (`scripts/audit.py::_slow_note`) are both stale by >15x.** The audit
+docstring is corrected. The self-check is no longer a meaningful part of the post-deadline
+tail — but **emission has not been re-measured**, so do not conclude "emission is the tail
+now". Nobody has re-attributed it.
+
+**`quantum-chip/max-proliferation` is NOT a distinguished cell — do not fix it.** Diagnosed
+read-only. Under identical conditions (N=32 each) it refuses ~13% against `no-proliferator`
+3/32 and `free-proliferation` 1/32, and eight audit repeats over 48 cells produced three
+refusals, **none of them `max-proliferation`**. An audit naming it twice is a coin flip, not a
+signature. It is the same defect as `universe-matrix`, an order of magnitude milder — the
+packer reserves every port's access cells on **36 of 36 packs** (0 walled), and the wall on 165
+sealed-pocket failures is **53% the router's own tentative paths**.
+
+Two findings from that work, both actionable:
+
+* **`ee9bc2a` does not help there**, measured interleaved, N=72 per arm: 12.5% vs 15.3%.
+  `_BLAME_MAX_WALL = 64` gates on the distinct tentative wall, and all 49 failures in pockets
+  ≥1000 cells have a median wall of **1128, 17x the cap**. **Do not simply raise the cap** —
+  the uncapped variant was already measured corpus-wide and is worse (mean 65.0 uncapped vs
+  65.4 capped).
+* **The binding constraint is the clock, not expansions.** Every failure left **4.5–6.0M of 6M
+  expansions unspent** (≤25% consumed), while 8–11s of the 15s ceiling went into rip-up rounds
+  that never converge — and **a pack oscillating 1→2→1→2 never trips `_RRR_STALE_ROUNDS`**.
+  **13 of 25 observed heights DID wire**, so buying more heights inside the ceiling is the
+  lever. Unmeasured hypothesis, with the numbers that motivate it.
+
+**Item 1's "next move" was the wrong question, and one command proved it.** The brief was
+"make the wall census cheap". Measured with the charge *zeroed* — paying every lookup, changing
+no decision — the corpus was unaffected: 66/65/65 against 65/66/65 with it off. **The walk is
+free.** The corpus loss was the term's *behaviour*, not its price: a pocket walled by three
+cells names a suspect, one walled by three thousand describes the whole corridor network.
+`ee9bc2a` caps the blamed wall at 64 cells; corpus-neutral (65.3 vs 65.2 over interleaved
+pairs), and it buys the h=69 pack at no cost — 139/140 paths → **140/140**, and faster,
+36.7s → 24.6s. **Always measure the null arm before optimising.**
+
+**The next blocker on `universe-matrix` is linking, not pathfinding.** At h=69 every net now
+finds a path and **nine cannot attach to anything at the far end**. Different function,
+different fix, still worth ~6 cells. Note h=69's failure count went 0 → 9 across `3f04239` and
+`00d1f78` purely as *accounting* — those commits stopped counting a path that reaches nothing
+as a success — proven by A\* expansion counts being byte-identical across the change
+(5,280,277 / 3,622,155 in both sessions).
 
 ---
 
