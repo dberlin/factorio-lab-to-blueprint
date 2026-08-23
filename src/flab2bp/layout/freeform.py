@@ -4031,18 +4031,30 @@ class FreeformLayout:
 
         # SHORTEST FIRST, and TALLEST-first was tried against it and reverted.
         #
-        # The case for reversing was real. The scarce resource here is the
-        # east-west corridor: a strip's machine band blocks every level, so the
-        # only way past a strip is the one-row channel on its south face and one
-        # belt fills it, while the north-south corridors between columns are two
-        # wide (see `WEST_CHANNEL`) and have the levels above the lane rows
-        # besides. A wide pack asks its nets to cross the whole width through
-        # those one-row channels; a narrow one does not. Routing every candidate
-        # height of `quantum-chip/max-proliferation` with a 20M expansion budget
-        # and no clock says exactly that: h=30 w=104 left two nets unrouted,
-        # h=40 w=87 three, h=50 w=61 four, h=62 w=52 three, and h=80 w=39 routed
-        # EVERY net -- while shortest-first spent the whole ceiling on the four
-        # packs that cannot be wired and never reached the one that can.
+        # The case for reversing rested on a diagnosis that later measurement
+        # CONTRADICTED, and it is left here with the correction rather than
+        # quietly deleted, because the numbers under it are still real.
+        #
+        # The story was that the scarce resource is the east-west corridor: a
+        # strip's machine band blocks every level, so the only way past a strip
+        # is the one-row channel on its south face, and a wide pack asks its nets
+        # to cross the whole width through those. That is not what the failures
+        # are. Flooding from the start cells of failing searches says the median
+        # reachable region is ONE CELL -- see `_reserve_port_access`, which now
+        # holds the way out of it. Nothing is crossing anything; the source port
+        # cannot leave its own access cell. A one-row corridor also carries three
+        # belts, not one, since only machines are solid at every level.
+        #
+        # What the measurement under it DOES show is that some heights wire and
+        # others do not, unpredictably, and shortest-first can spend the whole
+        # ceiling short of the one that would. Routing every candidate height of
+        # `quantum-chip/max-proliferation` with a 20M expansion budget and no
+        # clock: h=30 w=104 left two nets unrouted, h=40 w=87 three, h=50 w=61
+        # four, h=62 w=52 three, and h=80 w=39 routed EVERY net. It reads as a
+        # width story and is not one -- `quantum-chip/no-proliferator` at a fixed
+        # w=56 fails 12 nets at h=170, none at h=255 and h=340, and one again at
+        # h=595, on a canvas with 33,000 tiles for 40 strips. Which heights wire
+        # is a property of the arrangement, not of how much room it has.
         #
         # It measured 60/72 clean at 4s, which is what shortest-first measures,
         # with the refusals shuffled between cells. The gain on `quantum-chip` is
@@ -4051,6 +4063,14 @@ class FreeformLayout:
         # for want of a number, not for want of a reason: a height ORDER that
         # depended on the strips rather than on a fixed direction is the shape
         # this wants, and nobody has built one.
+        #
+        # `universe-matrix` is where that would have to pay off and it is not
+        # close. With the port exits held, its five candidate heights at 10s of
+        # packing each and NO routing clock leave 29, 4, 26, 23 and 10 nets
+        # unrouted -- so no order over these five reaches a pack that wires, and
+        # each pass costs 25-40 seconds against a ceiling of 15 or 120. All six
+        # of its cells refuse at both budgets and they are named in the commit
+        # message rather than bought back.
         heights = _candidate_heights(strips)
         # This sweep's own share, never more than the CALL has left. A sweep
         # asked for 15s when 3 remain must not spend 15.
