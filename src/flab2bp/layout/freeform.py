@@ -3729,6 +3729,121 @@ def _connect_short_cuts(
     return extra
 
 
+def _join_shard_islands(
+    pairs: Sequence[tuple[int, int]],
+    supply: Mapping[int, Fraction],
+    demand: Mapping[int, Fraction],
+    external: Fraction,
+) -> list[tuple[int, int]]:
+    """Extra nets joining an item's islands ACROSS a producer's shards.
+
+    :func:`_connect_short_cuts` makes the same argument one level down and
+    cannot see this case.  It is handed the ports of ONE
+    ``(producer group, item, destination)`` edge, so the only islands it can
+    join are the ones its own cyclic pairing created.  The islands here are
+    made by :func:`_shard_sinks`, which divides a producer's destinations
+    between STRIPS, and by :func:`_allocate_machines`, which then divides the
+    producer's machines between those shards.  Two shards of one group never
+    appear in the same call, so nothing downstream of the pairing could ever
+    notice that one of them is starving.
+
+    **An integer split of machines cannot serve a fractional split of demand,
+    and a rate solver that balances exactly leaves no slack to absorb the
+    rounding.**  ``universe-matrix/no-proliferator`` is the clean example and
+    the arithmetic is forced, not unlucky: ``energetic-graphite`` makes 41/42
+    per machine on 21 machines, exactly 41/2 items/s against exactly 41/2 of
+    demand.  Its four consumers do not fit one sorter reach so they shard two
+    and two; the shard carrying ``graphene`` and ``plastic`` owes 31/2 items/s,
+    which is 15.878 machines, and the other owes 5, which is 5.122.  There is
+    no way to write 21 as two integers that cover 15.878 and 5.122, so ONE of
+    the two shards starves whatever :func:`_allocate_machines` decides.  It
+    chose 15 and 6, and ``flow.conservation`` reported 14 machines reaching
+    205/14 items/s of the 31/2 they consume -- short by 6/7, which is exactly
+    the surplus sitting on the other shard.  ``iron-ingot`` in the same build
+    is the same shape: 7 machines making 14 against 15 of demand, with 6
+    against 5 next door.
+
+    Joining the two islands makes the spec's own arithmetic decide it, which is
+    the only claim backpressure cannot rescue -- and it is exactly balanced,
+    because the deficit was never anything but the other shard's surplus.
+
+    Bought only where it is needed, for the reason recorded in
+    :func:`_connect_short_cuts`: joining every sharded edge in full was measured
+    corpus-wide and cost four clean cells, because the extra belts crowd both
+    the router and the power lattice.  If every island can feed itself this adds
+    nothing at all.  Measured over the twelve-URL corpus at three candidates
+    each, thirty-six specs: it fires on ``universe-matrix`` alone, on all three
+    of its candidates, and adds ONE net per item on two items.
+
+    Islands are chained in order of DESCENDING balance, so each edge runs from
+    the side with surplus to the side without.  ``_connect_short_cuts`` chains
+    in union-find root order instead, which is arbitrary; that is sound for the
+    validator, whose islands are undirected, but a belt is not.  Running the
+    surplus downhill is the arrangement that also works in game.
+
+    ``pairs`` are belt indices ``(producer lane, consumer lane)`` already
+    linked, ``supply``/``demand`` are items/second per lane, and ``external``
+    is what the player belts in -- credited to every island holding a consumer
+    lane, because :func:`_route_external_inputs` runs an entry belt to every one
+    of them, which is the same credit ``flow.conservation`` gives.
+    """
+    parent: dict[int, int] = {}
+
+    def find(k: int) -> int:
+        parent.setdefault(k, k)
+        while parent[k] != k:
+            parent[k] = parent[parent[k]]
+            k = parent[k]
+        return k
+
+    def union(a: int, b: int) -> None:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[ra] = rb
+
+    # How many nets already meet each lane. A producer lane end becomes a
+    # junction under `_tap_source` and a junction has four sides, so the extra
+    # net goes on the least-used lane of the island rather than piling onto
+    # whichever one sorts first.
+    taps: dict[int, int] = defaultdict(int)
+    for a, b in pairs:
+        union(a, b)
+        taps[a] += 1
+        taps[b] += 1
+
+    srcs: dict[int, list[int]] = defaultdict(list)
+    sinks: dict[int, list[int]] = defaultdict(list)
+    for belt in sorted(supply):
+        srcs[find(belt)].append(belt)
+    for belt in sorted(demand):
+        sinks[find(belt)].append(belt)
+    roots = sorted(set(srcs) | set(sinks))
+    if len(roots) < 2:
+        return []
+
+    balance = {
+        r: sum((supply[b] for b in srcs[r]), Fraction(0))
+        + (external if sinks[r] else Fraction(0))
+        - sum((demand[b] for b in sinks[r]), Fraction(0))
+        for r in roots
+    }
+    if all(v >= 0 for v in balance.values()):
+        return []
+
+    order = sorted(roots, key=lambda r: (-balance[r], r))
+    extra: list[tuple[int, int]] = []
+    for a, b in zip(order, order[1:], strict=False):
+        if not srcs[a] or not sinks[b]:
+            continue
+        extra.append(
+            (
+                min(srcs[a], key=lambda t: (taps[t], t)),
+                min(sinks[b], key=lambda t: (taps[t], t)),
+            )
+        )
+    return extra
+
+
 
 def _build(
     spec: BuildSpec,
@@ -3790,6 +3905,19 @@ def _build(
     # nobody, and left as dead belts.
     out_ports: dict[tuple[str, str, str], list[_Port]] = defaultdict(list)
     strip_in_ports: list[dict[str, _Port]] = []
+    # Flow-graph bookkeeping for `_join_shard_islands`, keyed by BELT index.
+    #
+    # `lane_supply` is credited PER STRIP, not per lane, and the strip's other
+    # lanes for the same item are unioned onto the first through `sibling_lanes`
+    # -- because one strip's machines drain into every one of its own output
+    # lanes, so those lanes are one island however the destinations divide, and
+    # crediting each of them the strip's full output would count a two-lane
+    # shard's production twice. That mistake makes a starving shard read as
+    # healthy, which is the exact failure this bookkeeping exists to find.
+    lane_of: dict[int, _Port] = {}
+    lane_supply: dict[str, dict[int, Fraction]] = defaultdict(dict)
+    lane_demand: dict[str, dict[int, Fraction]] = defaultdict(dict)
+    sibling_lanes: dict[str, list[tuple[int, int]]] = defaultdict(list)
     sorters = 0
     for i, s in enumerate(strips):
         ox, oy = pack.at[i]
@@ -3807,8 +3935,18 @@ def _build(
         strip_in_ports.append(ins)
         for item, port in ins.items():
             in_ports[s.group_key, item].append(port)
+        made = per_item.get(s.group_key, ({}, {}))[1]
+        by_item: dict[str, list[int]] = defaultdict(list)
         for (item, dest), port in outs.items():
             out_ports[s.group_key, item, dest].append(port)
+            lane_of[port.belt] = port
+            by_item[item].append(port.belt)
+        for item, belts in by_item.items():
+            belts.sort()
+            lane_supply[item][belts[0]] = s.machines * made.get(item, Fraction(0))
+            for b in belts[1:]:
+                lane_supply[item][b] = Fraction(0)
+                sibling_lanes[item].append((belts[0], b))
 
     # Nets the packer arranged to bridge directly become a single sorter and no
     # belt route at all -- that saving IS the feature, so it happens before the
@@ -3819,30 +3957,50 @@ def _build(
     direct_placed = 0
 
     nets: list[_Net] = []
+    # Everything already joined for an item, so `_join_shard_islands` can see
+    # the flow graph the whole build makes rather than one edge of it. Keyed by
+    # BELT index, which is what makes a lane serving several destinations one
+    # node instead of several.
+    joined: dict[str, list[tuple[int, int]]] = defaultdict(list)
     for (src_key, item, dest_group), srcs in out_ports.items():
         # One output lane may serve SEVERAL destination groups -- see
         # `_merge_lanes` -- and each of them is its own set of consumer strips to
         # pair against. They all tap the same lane end, where `_tap_source`
         # builds the junction, exactly as it already does when ONE destination is
         # sharded across several consumer strips.
+        out_rate = per_item.get(src_key, ({}, {}))[1].get(item, Fraction(0))
         for dest in _dests(dest_group):
             sinks = in_ports.get((dest, item), [])
             if not srcs or not sinks:
                 continue
+            in_rate = per_item.get(dest, ({}, {}))[0].get(item, Fraction(0))
             # The per-machine rates on both sides, so the pairing can tell an
             # island that feeds itself from one that starves.
             for port, sink in _pair_lanes(
-                srcs,
-                sinks,
-                out_rate=per_item.get(src_key, ({}, {}))[1].get(item, Fraction(0)),
-                in_rate=per_item.get(dest, ({}, {}))[0].get(item, Fraction(0)),
+                srcs, sinks, out_rate=out_rate, in_rate=in_rate
             ):
+                joined[item].append((port.belt, sink.belt))
+                lane_of[sink.belt] = sink
+                lane_demand[item][sink.belt] = sink.machines * in_rate
                 if (src_key, dest) in direct_keys and _bridge(
                     canvas, port, sink, rates, item
                 ):
                     direct_placed += 1
                     continue
                 nets.append(_Net(src=port, dst=sink, item=item))
+
+    # A shard of a producer that cannot feed its own destinations is joined to
+    # one that can. Nothing inside the pairing above can see this, because two
+    # shards of one group are never handed to it together -- see
+    # `_join_shard_islands` for the arithmetic that forces it.
+    for item in sorted(set(joined) | set(sibling_lanes)):
+        for a, b in _join_shard_islands(
+            joined[item] + sibling_lanes[item],
+            lane_supply[item],
+            lane_demand[item],
+            spec.external_inputs.get(item, Fraction(0)),
+        ):
+            nets.append(_Net(src=lane_of[a], dst=lane_of[b], item=item))
 
     # Hold one cell beside every port BEFORE anything else can take it.
     #

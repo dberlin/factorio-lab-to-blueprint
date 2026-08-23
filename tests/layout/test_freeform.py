@@ -43,6 +43,7 @@ from flab2bp.layout.freeform import (
     _direct_net_candidates,
     _greedy_pack,
     _height_seed,
+    _join_shard_islands,
     _make_grid,
     _merge_lanes,
     _Net,
@@ -2131,6 +2132,201 @@ def _one_island(pairs: list[tuple[int, int]], n: int, m: int) -> bool:
         if a != b:
             parent[a] = b
     return len({find(k) for k in list(parent)}) == 1
+
+
+def starved_shard_spec() -> BuildSpec:
+    """A producer whose shards CANNOT both be fed, however the machines split.
+
+    ``universe-matrix/no-proliferator``'s defect, scaled down until it costs a
+    fraction of a second.  Four consumers exceed the sorter reach, so
+    :func:`_shard_sinks` splits them two and two; the producer makes 3/4 per
+    machine on four machines, exactly 3 items/s against exactly 3 of demand.
+    The first pair wants 1 items/s, which is 4/3 machines, and the second wants
+    2, which is 8/3.  **No pair of integers summing to four covers 4/3 and
+    8/3**, so one shard starves whatever :func:`_allocate_machines` decides --
+    it hands out two and two, and the second shard reaches 3/2 of the 2 it owes.
+
+    The real build is the same arithmetic one size up: ``energetic-graphite``
+    at 41/42 on 21 machines, its shards owing 5 (5.122 machines) and 31/2
+    (15.878), split 6 and 15, and ``flow.conservation`` reporting 14 machines
+    reaching 205/14 items/s of the 31/2 they consume.
+    """
+    sinks = _real_consumers_of("copper-ingot", 4)
+    if len(sinks) < 4:
+        pytest.skip(f"dataset has only {len(sinks)} mapped copper-ingot consumers")
+    from flab2bp.lab.data import load_vendored
+
+    data = load_vendored()
+    groups = [
+        group(
+            "copper-ingot",
+            "arc-smelter",
+            4,
+            {"copper-ore": F(3, 4)},
+            {"copper-ingot": F(3, 4)},
+        )
+    ]
+    outputs: dict[str, F] = {}
+    for rid, n in zip(sinks, (1, 1, 2, 2), strict=True):
+        produced = next(iter(data.recipe(rid).outputs))
+        groups.append(
+            group(
+                rid,
+                "assembling-machine-2",
+                n,
+                {"copper-ingot": F(1, 2)},
+                {produced: F(1)},
+            )
+        )
+        outputs[produced] = outputs.get(produced, F(0)) + F(n)
+    return BuildSpec(
+        groups=tuple(groups),
+        external_inputs={"copper-ore": F(3)},
+        outputs=outputs,
+        belt_item_id="conveyor-belt-2",
+        belt_items_per_second=F(12),
+        label="starved-shard",
+    )
+
+
+def _shard_balance(spec: BuildSpec, item: str) -> list[tuple[F, F]]:
+    """``(supply, demand)`` per shard of ``item``'s producer, from the PLAN.
+
+    A shard is the set of strips sharing one ``out_lanes`` tuple; its supply is
+    its machines' output and its demand is what all of its destinations draw.
+    Needed as its own function because the whole point of the defect is that it
+    is decided in :func:`plan_strips`, long before anything is packed.
+    """
+    groups = {f"{g.recipe_id}#{i}": g for i, g in enumerate(spec.groups)}
+    strips = plan_strips(spec, strip_len=6)
+    machines: dict[str, int] = {}
+    for s in strips:
+        machines[s.group_key] = machines.get(s.group_key, 0) + s.machines
+    shards: dict[tuple[str, tuple[tuple[str, str], ...]], int] = {}
+    for s in strips:
+        key = (s.group_key, s.out_lanes)
+        shards[key] = shards.get(key, 0) + s.machines
+    out: list[tuple[F, F]] = []
+    for (gk, lanes), n in shards.items():
+        g = groups[gk]
+        if item not in g.outputs_per_machine:
+            continue
+        dests = {d for it, dest in lanes if it == item for d in _dests(dest)}
+        if not dests:
+            continue
+        demand = F(0)
+        for d in dests:
+            if d:
+                demand += machines[d] * groups[d].inputs_per_machine.get(item, F(0))
+            else:
+                demand += spec.outputs.get(item, F(0))
+        out.append((n * g.outputs_per_machine[item], demand))
+    return sorted(out)
+
+
+class TestAShardThatCannotFeedItself:
+    """The cut ACROSS a producer's shards, which the pairing cannot see.
+
+    :func:`_connect_short_cuts` makes the same argument one level down and is
+    handed the ports of ONE ``(producer, item, destination)`` edge, so two
+    shards of a group never reach it together.  :func:`_join_shard_islands`
+    is that argument over every edge carrying the item.
+
+    Belt indices here are arbitrary integers; only the graph and the rates
+    matter.
+    """
+
+    #: Two shards of one producer.  Lane 20 owes 5 and makes 41/7; lane 10 owes
+    #: 31/2 and makes 205/14.  `universe-matrix/no-proliferator`, exactly.
+    PAIRS = [(10, 30), (10, 31), (20, 32), (20, 33)]
+    SUPPLY = {10: F(205, 14), 20: F(41, 7)}
+    DEMAND = {30: F(21, 2), 31: F(5), 32: F(3), 33: F(2)}
+
+    def test_a_shard_that_feeds_itself_buys_nothing(self) -> None:
+        """Extra belts crowd the router and the power lattice -- see
+        `_connect_short_cuts`, where joining every edge cost four clean cells.
+        """
+        plenty = {10: F(100), 20: F(100)}
+        assert _join_shard_islands(self.PAIRS, plenty, self.DEMAND, F(0)) == []
+
+    def test_the_starving_shard_is_joined_to_the_one_with_slack(self) -> None:
+        extra = _join_shard_islands(self.PAIRS, self.SUPPLY, self.DEMAND, F(0))
+        assert extra == [(20, 30)], (
+            "the surplus shard must be the SOURCE and the starving shard's lane "
+            f"the sink; got {extra}"
+        )
+
+    def test_joining_them_makes_the_whole_edge_one_island(self) -> None:
+        extra = _join_shard_islands(self.PAIRS, self.SUPPLY, self.DEMAND, F(0))
+        merged = self.PAIRS + extra
+        seen = {b for pair in merged for b in pair}
+        parent = dict.fromkeys(seen)
+        root = {b: b for b in seen}
+
+        def find(k: int) -> int:
+            while root[k] != k:
+                root[k] = root[root[k]]
+                k = root[k]
+            return k
+
+        for a, b in merged:
+            root[find(a)] = find(b)
+        assert len({find(b) for b in parent}) == 1, f"{merged} still cut"
+        assert sum(self.SUPPLY.values()) == sum(self.DEMAND.values()), (
+            "the joined island balances EXACTLY -- the deficit was never "
+            "anything but the other shard's surplus"
+        )
+
+    def test_two_lanes_of_one_shard_are_one_island(self) -> None:
+        """One strip's machines drain into every one of its own output lanes.
+
+        So the lanes are one island however the destinations divide, and the
+        shard's output is credited ONCE.  Without that sibling edge lane 11
+        reads as a lane with no production at all and a net is bought to feed
+        something that is already fed.
+        """
+        supply, demand = {10: F(3), 11: F(0)}, {30: F(1), 31: F(2)}
+        cut = [(10, 30), (11, 31)]
+        assert _join_shard_islands(cut, supply, demand, F(0)), (
+            "without the sibling edge the surplus is invisible -- if this is "
+            "empty the test below proves nothing"
+        )
+        assert _join_shard_islands([*cut, (10, 11)], supply, demand, F(0)) == []
+
+    def test_what_the_player_belts_in_counts_on_every_island(self) -> None:
+        """`_route_external_inputs` runs an entry belt to EVERY consumer lane,
+        which is the credit `flow.conservation` gives.
+        """
+        supply, demand = {10: F(1), 20: F(1)}, {30: F(1), 31: F(3)}
+        cut = [(10, 30), (20, 31)]
+        assert _join_shard_islands(cut, supply, demand, F(0)) == [(10, 31)]
+        assert _join_shard_islands(cut, supply, demand, F(2)) == []
+
+    def test_the_plan_really_does_starve_a_shard(self) -> None:
+        """Verify the instrument: the fixture must contain the defect.
+
+        Every test below it reads green on a build with no starving shard, so
+        without this they would pass against the unfixed code.
+        """
+        balance = _shard_balance(starved_shard_spec(), "copper-ingot")
+        assert len(balance) == 2, f"expected two shards, got {balance}"
+        assert sum(s for s, _d in balance) == sum(d for _s, d in balance) == F(3)
+        assert [(s, d) for s, d in balance if d > s] == [(F(3, 2), F(2))], (
+            f"the fixture no longer starves a shard: {balance}"
+        )
+
+    @pytest.mark.parametrize("power", [False, True])
+    def test_it_lays_out_and_conserves_flow(self, power: bool) -> None:
+        spec = starved_shard_spec()
+        p = FreeformLayout(power=power, workers=DETERMINISTIC_WORKERS).lay_out(
+            spec, time_budget_s=0.5
+        )
+        assert p.stats.get("route_failures", 0) == 0, "a net went unrouted"
+        report = _full_report(p, spec, power=power)
+        assert [f for f in report.errors if f.check == "flow.conservation"] == [], (
+            "\n".join(f.message for f in report.errors if f.check == "flow.conservation")
+        )
+        assert report.ok, "\n".join(f"{f.check}: {f.message}" for f in report.errors[:8])
 
 
 class TestTheTimeBudgetIsAWall:
