@@ -182,6 +182,61 @@ def _dedup_ints(seq: Iterable[int]) -> tuple[int, ...]:
     return tuple(dict.fromkeys(seq))
 
 
+@dataclass
+class _Cache:
+    """Derived indexes, built at most once per :func:`validate` call.
+
+    Nothing here changes a verdict.  Every field is a pure function of the
+    ``Context`` it hangs off, and several checks want the same one: measured on
+    a 37,225-building ``universe-matrix`` placement, ``flow.belt_capacity`` and
+    ``flow.headroom`` each rebuilt the whole ``_run_demand`` propagation, and
+    ``ctx.of_kind`` -- a full scan of every building -- was called once per
+    sorter from inside ``_item_share``, which made the sorter checks quadratic.
+
+    It is a mutable box on a frozen ``Context`` on purpose: the Context is the
+    immutable *statement* of what was placed, and this is scratch space for
+    answering questions about it.  ``compare=False`` keeps it out of ``__eq__``
+    and ``__hash__`` so two Contexts over the same placement stay equal whatever
+    either has happened to compute.
+    """
+
+    of_kind: dict[Kind, tuple[tuple[int, PlacedBuilding], ...]] = field(default_factory=dict)
+    group_for: dict[int, MachineGroup | None] = field(default_factory=dict)
+    recipe_names: dict[int, str] | None = None
+    item_names: dict[int, str] | None = None
+    tower_centres: list[tuple[int, Fraction, Fraction, Fraction, Fraction]] | None = None
+    sorter_items: dict[int, str | None] | None = None
+    run_labels: dict[int, set[str]] | None = None
+    run_items: dict[int, set[str | None]] | None = None
+    run_components: dict[int, int] | None = None
+    run_demand: dict[int, dict[str | None, Fraction]] | None = None
+    entry_runs: dict[str, list[int]] | None = None
+    entry_items: dict[int, set[str]] | None = None
+    sorter_peers: _SorterPeers | None = None
+
+
+@dataclass(frozen=True)
+class _SorterPeers:
+    """How many sorters share a machine's load, counted once instead of per call.
+
+    ``_item_share`` asked this question with a scan over every building, once
+    per sorter, so the cost was ``sorters x buildings``: 986 x 37,225 on
+    ``universe-matrix``, twice over (``flow.sorter_capacity`` and
+    ``_sorter_flows``).  The counts are keyed exactly as the scans matched --
+    ``output_obj`` for a sorter FEEDING a machine, ``input_obj`` for one
+    DRAWING from it -- so the divisor is the same integer either way.
+    """
+
+    #: (machine, item) -> sorters feeding that machine with that named item.
+    feed_item: Mapping[tuple[int, str], int]
+    #: machine -> sorters feeding it at all.
+    feed_any: Mapping[int, int]
+    #: (machine, item) -> sorters drawing that named item from that machine.
+    draw_item: Mapping[tuple[int, str], int]
+    #: machine -> sorters drawing from it at all.
+    draw_any: Mapping[int, int]
+
+
 @dataclass(frozen=True)
 class Context:
     placement: Placement
@@ -216,6 +271,8 @@ class Context:
     #: stopped dead at one and read the far side as unconnected.
     succ: Mapping[Node, tuple[Node, ...]]
     pred: Mapping[Node, tuple[Node, ...]]
+    #: Scratch space for indexes several checks want; see :class:`_Cache`.
+    cache: _Cache = field(default_factory=lambda: _Cache(), compare=False, repr=False)
 
     def junctions_feeding(self, run: int) -> tuple[int, ...]:
         """Splitters that put items onto ``run``.
@@ -259,16 +316,62 @@ class Context:
         )
 
     def of_kind(self, kind: Kind) -> Iterator[tuple[int, PlacedBuilding]]:
-        for i, b in enumerate(self.placement.buildings):
-            if self.kinds[i] is kind:
-                yield i, b
+        """Every building of one kind, with its index, in placement order.
+
+        Bucketed once per kind rather than rescanned per call.  Thirty-odd call
+        sites walk this, several of them from inside a per-sorter loop, so the
+        rescan was the largest single cost in the flow checks.
+        """
+        got = self.cache.of_kind.get(kind)
+        if got is None:
+            got = tuple(
+                (i, b) for i, b in enumerate(self.placement.buildings) if self.kinds[i] is kind
+            )
+            self.cache.of_kind[kind] = got
+        return iter(got)
+
+    def recipe_name(self, rid: int) -> str | None:
+        """``IdMap.recipe_name``, over a reverse index built once.
+
+        The map itself scans its whole ``recipes`` dict per lookup, and this is
+        asked once per machine and once per sorter.  First value wins, exactly
+        as the linear scan's ``return`` did.
+        """
+        if self.ids is None:
+            return None
+        table = self.cache.recipe_names
+        if table is None:
+            table = {}
+            for name, value in self.ids.recipes.items():
+                table.setdefault(value, name)
+            self.cache.recipe_names = table
+        return table.get(rid)
+
+    def item_name(self, iid: int) -> str | None:
+        """``IdMap.item_name``, over a reverse index built once."""
+        if self.ids is None:
+            return None
+        table = self.cache.item_names
+        if table is None:
+            table = {}
+            for name, value in self.ids.items.items():
+                table.setdefault(value, name)
+            self.cache.item_names = table
+        return table.get(iid)
 
     def group_for(self, index: int) -> MachineGroup | None:
         """The ``MachineGroup`` a placed machine belongs to, if determinable."""
+        cached = self.cache.group_for
+        if index in cached:
+            return cached[index]
+        cached[index] = got = self._group_for(index)
+        return got
+
+    def _group_for(self, index: int) -> MachineGroup | None:
         if self.spec is None or self.ids is None:
             return None
         b = self.placement.buildings[index]
-        name = self.ids.recipe_name(b.recipe_id)
+        name = self.recipe_name(b.recipe_id)
         if name is None:
             return None
         for g in self.spec.groups:
@@ -1104,26 +1207,47 @@ def _termination(ctx: Context) -> Iterable[Finding]:
 
 
 def _tower_centres(ctx: Context) -> list[tuple[int, Fraction, Fraction, Fraction, Fraction]]:
-    out = []
+    cached = ctx.cache.tower_centres
+    if cached is not None:
+        return cached
+    out: list[tuple[int, Fraction, Fraction, Fraction, Fraction]] = []
     for i, b in ctx.of_kind(Kind.POWER):
         info = cat.building(b.item_id)
         cx = Fraction(2 * b.x + b.width, 2)
         cy = Fraction(2 * b.y + b.height, 2)
         out.append((i, cx, cy, info.cover_radius, info.connect_distance))
+    ctx.cache.tower_centres = out
     return out
 
 
 @check("power.coverage")
 def _coverage(ctx: Context) -> Iterable[Finding]:
     towers = _tower_centres(ctx)
+    # Exact, in DOUBLED integer coordinates.  A tile centre sits at (2tx+1)/2
+    # and a tower centre at (2x+w)/2, so doubling clears the only halves in the
+    # comparison and the squared distance becomes an integer.  An integer `d2`
+    # satisfies `d2 <= (2r)**2` exactly when `d2 <= floor((2r)**2)`, so the
+    # floor is not a tolerance -- it is the same predicate, decided without
+    # allocating four Fractions and two Fraction powers per tower per tile.
+    # Measured on universe-matrix (1330 powered buildings, 7054 tiles, 141
+    # towers): 2.37s of an 8.13s certify, down to 0.06s.
+    discs = [(int(2 * ox), int(2 * oy), int((2 * r) ** 2)) for _, ox, oy, r, _ in towers]
+    # Altitude is not in the predicate, so a stack of belts over one ground
+    # cell is one question, not three.
+    covered: dict[tuple[int, int], bool] = {}
     for i, b in enumerate(ctx.placement.buildings):
         if ctx.kinds[i] not in _POWERED:
             continue
         for tx, ty, _tz in b.tiles():
-            cx, cy = Fraction(2 * tx + 1, 2), Fraction(2 * ty + 1, 2)
-            if not any(
-                (cx - ox) ** 2 + (cy - oy) ** 2 <= r**2 for _, ox, oy, r, _ in towers
-            ):
+            here = covered.get((tx, ty))
+            if here is None:
+                dx, dy = 2 * tx + 1, 2 * ty + 1
+                here = any(
+                    (dx - ox) * (dx - ox) + (dy - oy) * (dy - oy) <= lim
+                    for ox, oy, lim in discs
+                )
+                covered[(tx, ty)] = here
+            if not here:
                 yield Finding(
                     "power.coverage",
                     Severity.ERROR,
@@ -1314,6 +1438,9 @@ def _run_components(ctx: Context) -> dict[int, int]:
     lane carries, whose sorter made it ambiguous -- are properties of the
     network rather than of a direction through it.
     """
+    cached = ctx.cache.run_components
+    if cached is not None:
+        return cached
     component: dict[int, int] = {}
     for r in range(len(ctx.runs)):
         if r in component:
@@ -1329,6 +1456,7 @@ def _run_components(ctx: Context) -> dict[int, int]:
                 if nxt not in seen:
                     seen.add(nxt)
                     queue.append(nxt)
+    ctx.cache.run_components = component
     return component
 
 
@@ -1503,6 +1631,9 @@ def _entry_runs(ctx: Context) -> dict[str, list[int]]:
     :mod:`flab2bp.layout.markers` puts an icon on its head saying which item.
     """
     assert ctx.spec is not None
+    cached = ctx.cache.entry_runs
+    if cached is not None:
+        return cached
     external = set(ctx.spec.external_inputs)
     internal = _close_over_junctions(ctx, _internal_seeds(ctx)[1])
     out: dict[str, list[int]] = defaultdict(list)
@@ -1512,7 +1643,8 @@ def _entry_runs(ctx: Context) -> dict[str, list[int]]:
         item = _external_item(ctx, run, external)
         if item is not None:
             out[item].append(r)
-    return dict(out)
+    ctx.cache.entry_runs = dict(out)
+    return ctx.cache.entry_runs
 
 
 def _entry_items(ctx: Context) -> dict[int, set[str]]:
@@ -1538,6 +1670,9 @@ def _entry_items(ctx: Context) -> dict[int, set[str]]:
     assert ctx.spec is not None
     external = set(ctx.spec.external_inputs)
     bs = ctx.placement.buildings
+    cached = ctx.cache.entry_items
+    if cached is not None:
+        return cached
     internal = _close_over_junctions(ctx, _internal_seeds(ctx)[1])
     drawn = _run_items(ctx, _sorter_items(ctx))
     out: dict[int, set[str]] = {}
@@ -1549,6 +1684,7 @@ def _entry_items(ctx: Context) -> dict[int, set[str]]:
         carried = {item for item in seen if item is not None} & external
         if carried:
             out[r] = carried
+    ctx.cache.entry_items = out
     return out
 
 
@@ -1772,8 +1908,8 @@ def _belt_required(ctx: Context) -> Iterable[Finding]:
             continue
         if ctx.kinds[src] is not Kind.MACHINE or ctx.kinds[dst] is not Kind.MACHINE:
             continue  # a belt is involved somewhere; not a direct insert
-        producer = ctx.ids.recipe_name(bs[src].recipe_id)
-        consumer = ctx.ids.recipe_name(bs[dst].recipe_id)
+        producer = ctx.recipe_name(bs[src].recipe_id)
+        consumer = ctx.recipe_name(bs[dst].recipe_id)
         if producer is None or consumer is None:
             continue
         if (producer, consumer) in ctx.spec.belt_required_edges:
@@ -2204,7 +2340,14 @@ def _run_labels(ctx: Context) -> dict[int, set[str]]:
 
     Independent of sorters, so it can be consulted while resolving what a sorter
     moves without the two definitions chasing each other.
+
+    Resolved once per Context: this is a fixpoint over the whole flow graph and
+    ``_sorter_item`` consults it per sorter, so rebuilding it per call made
+    resolving a placement's items quadratic in the graph.
     """
+    cached = ctx.cache.run_labels
+    if cached is not None:
+        return cached
     bs = ctx.placement.buildings
     labels: dict[Node, set[str]] = defaultdict(set)
     for r, run in enumerate(ctx.runs):
@@ -2224,7 +2367,10 @@ def _run_labels(ctx: Context) -> dict[int, set[str]]:
                     if not here <= labels[m]:
                         labels[m] |= here
                         changed = True
-    return {r: labels[(RUN, r)] for r in range(len(ctx.runs)) if labels.get((RUN, r))}
+    ctx.cache.run_labels = {
+        r: labels[(RUN, r)] for r in range(len(ctx.runs)) if labels.get((RUN, r))
+    }
+    return ctx.cache.run_labels
 
 
 def _sorter_item(ctx: Context, index: int) -> str | None:
@@ -2238,7 +2384,7 @@ def _sorter_item(ctx: Context, index: int) -> str | None:
     s = bs[index]
 
     if s.filter_id and ctx.ids is not None:
-        named = ctx.ids.item_name(s.filter_id)
+        named = ctx.item_name(s.filter_id)
         if named is not None:
             return named
 
@@ -2280,9 +2426,15 @@ def _sorter_items(ctx: Context) -> dict[int, str | None]:
     """Item per sorter, resolved once.
 
     Built in one pass because both flow checks need it and resolving per call
-    would make every check quadratic in the sorter count.
+    would make every check quadratic in the sorter count -- and cached, because
+    five separate checks ask for "one pass" and five passes is the same problem
+    with a smaller constant.
     """
-    return {i: _sorter_item(ctx, i) for i, _ in ctx.of_kind(Kind.SORTER)}
+    cached = ctx.cache.sorter_items
+    if cached is not None:
+        return cached
+    ctx.cache.sorter_items = {i: _sorter_item(ctx, i) for i, _ in ctx.of_kind(Kind.SORTER)}
+    return ctx.cache.sorter_items
 
 
 def _item_share(
@@ -2300,21 +2452,54 @@ def _item_share(
     sorters moving *that same item* to or from the machine.  When it is not, the
     old even split across every sorter is the only available estimate, and
     ``flow.lane_attribution`` reports the cases where relying on it would matter.
+
+    The two divisors used to be counted by scanning every sorter in the
+    placement, once per sorter asking.  :func:`_sorter_peers` tallies the same
+    two things in one pass; see there for why the tally is the same integer.
     """
+    peers = _sorter_peers(ctx, items)
     if item is not None and item in rates:
-        peers = sum(
-            1
-            for j, o in ctx.of_kind(Kind.SORTER)
-            if (o.output_obj if feeding else o.input_obj) == machine and items.get(j) == item
-        )
-        return rates[item] / (peers or 1)
+        table = peers.feed_item if feeding else peers.draw_item
+        return rates[item] / (table.get((machine, item), 0) or 1)
     total = sum(rates.values(), Fraction(0))
-    share = sum(
-        1
-        for _j, o in ctx.of_kind(Kind.SORTER)
-        if (o.output_obj if feeding else o.input_obj) == machine
-    )
+    share = (peers.feed_any if feeding else peers.draw_any).get(machine, 0)
     return total / (share or 1)
+
+
+def _sorter_peers(ctx: Context, items: Mapping[int, str | None]) -> _SorterPeers:
+    """Tally, in one pass, how many sorters share each machine's load.
+
+    Mirrors the two scans it replaces exactly.  A sorter with a ``None`` link
+    matched no integer ``machine`` in the old comparison, so it is not counted
+    here either; a sorter whose item is unresolved contributes to the ``any``
+    tallies and to no ``item`` one, which is what ``items.get(j) == item`` did
+    for a non-``None`` ``item``.
+
+    Cached only against the canonical table from :func:`_sorter_items`, so a
+    caller with a table of its own gets a tally computed from that table.
+    """
+    if items is ctx.cache.sorter_items and ctx.cache.sorter_peers is not None:
+        return ctx.cache.sorter_peers
+    feed_item: dict[tuple[int, str], int] = defaultdict(int)
+    feed_any: dict[int, int] = defaultdict(int)
+    draw_item: dict[tuple[int, str], int] = defaultdict(int)
+    draw_any: dict[int, int] = defaultdict(int)
+    for j, o in ctx.of_kind(Kind.SORTER):
+        named = items.get(j)
+        if o.output_obj is not None:
+            feed_any[o.output_obj] += 1
+            if named is not None:
+                feed_item[(o.output_obj, named)] += 1
+        if o.input_obj is not None:
+            draw_any[o.input_obj] += 1
+            if named is not None:
+                draw_item[(o.input_obj, named)] += 1
+    got = _SorterPeers(
+        feed_item=feed_item, feed_any=feed_any, draw_item=draw_item, draw_any=draw_any
+    )
+    if items is ctx.cache.sorter_items:
+        ctx.cache.sorter_peers = got
+    return got
 
 
 def _run_items(ctx: Context, items: Mapping[int, str | None]) -> dict[int, set[str | None]]:
@@ -2331,7 +2516,15 @@ def _run_items(ctx: Context, items: Mapping[int, str | None]) -> dict[int, set[s
     mixed trunk with an unfiltered sorter downstream -- the case
     ``flow.lane_attribution`` exists to refuse to judge -- read as a clean
     single-item lane.
+
+    Cached only for the canonical ``items`` table -- the one
+    :func:`_sorter_items` hands out.  Every caller passes that one, but keying
+    on identity means a caller with a different table still gets an answer
+    computed from ITS table rather than a stale one.
     """
+    canonical = items is ctx.cache.sorter_items
+    if canonical and ctx.cache.run_items is not None:
+        return ctx.cache.run_items
     carried: dict[Node, set[str | None]] = defaultdict(set)
     for i, s in ctx.of_kind(Kind.SORTER):
         for link in (s.input_obj, s.output_obj):
@@ -2351,7 +2544,10 @@ def _run_items(ctx: Context, items: Mapping[int, str | None]) -> dict[int, set[s
                         carried[m] |= here
                         changed = True
 
-    return {r: carried[(RUN, r)] for r in range(len(ctx.runs)) if carried.get((RUN, r))}
+    out = {r: carried[(RUN, r)] for r in range(len(ctx.runs)) if carried.get((RUN, r))}
+    if canonical:
+        ctx.cache.run_items = out
+    return out
 
 
 @check("flow.lane_attribution", needs_spec=True)
@@ -2500,7 +2696,14 @@ def _run_demand(ctx: Context) -> dict[int, dict[str | None, Fraction]]:
     coupled by ONE capacity, so callers compare the SUM against the tier --
     judging items independently would accept 7/s plus 7/s on a 12/s belt because
     neither exceeds 12 alone.
+
+    Two checks want this -- ``flow.belt_capacity`` and ``flow.headroom`` -- and
+    it is the most expensive index the validator builds (two full propagations
+    over the flow graph, in Fractions).  Building it twice was 20% of certify.
     """
+    cached = ctx.cache.run_demand
+    if cached is not None:
+        return cached
     put, take = _sorter_flows(ctx)
     pull = _propagate(ctx, take, downstream=True)
     push = _propagate(ctx, put, downstream=False)
@@ -2515,6 +2718,7 @@ def _run_demand(ctx: Context) -> dict[int, dict[str | None, Fraction]]:
         per_item = {item: rate for item, rate in per_item.items() if rate}
         if per_item:
             out[r] = per_item
+    ctx.cache.run_demand = out
     return out
 
 
