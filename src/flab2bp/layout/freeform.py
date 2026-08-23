@@ -1159,6 +1159,38 @@ def _pack(
 
     model.add_no_overlap_2d(x_iv, y_iv)
 
+    # CUT 3 -- ROUTING CAPACITY was built here, measured, and taken out.
+    #
+    # The argument is sound as far as it goes and the brief for this work said
+    # it had never been built and measured, so it now has been.  A net whose
+    # endpoints straddle a vertical cut occupies AT LEAST one cell on that
+    # column, so free cells in a column bound the nets crossing it, and nothing
+    # in this model said so while the objective drove straight at the bound:
+    # `universe-matrix/no-proliferator` at h=69 packs a column with 70 free
+    # cells against 70 nets crossing it.  Slack ZERO, with a band of neighbours
+    # at 2.  By counting alone no router can wire that, and `_pack` called it
+    # feasible.
+    #
+    # It was expressed as one `add_cumulative` over the strips' CONTENT spans,
+    # charging `LEVELS` cells per machine row and one per lane row, against a
+    # column budget that reserved one free cell per net in the block.  It works:
+    # h=69 becomes infeasible and is no longer offered.
+    #
+    # AND IT MADE THE SPEC WORSE, which is what the calibration behind it could
+    # not see.  The numbers that motivated it compared DIFFERENT specs -- 4.6
+    # free cells per crossing net on `casimir-crystal`, 5.0 on `quantum-chip`,
+    # 1.0 on the `universe-matrix` pack -- and that comparison is confounded by
+    # spec size.  Within ONE spec it inverts: h=69, the saturated pack, routes
+    # all but ONE of its 140 nets given no clock, while h=92, h=116, h=145 and
+    # h=185 all satisfy the bound comfortably and leave 12, 26, 14 and 17
+    # unrouted.  Rejecting h=69 deletes the best candidate the sweep has.
+    # Corpus at 4s: 66/65/66 clean with it against 66/66/66 without.
+    #
+    # So cut capacity is a NECESSARY condition that is not the binding one, and
+    # enforcing a necessary condition that correlates the wrong way inside a
+    # spec costs more than it buys. What decides routability here is which cells
+    # are free, not how many.
+
     # Symmetry breaking between identical strips of the same recipe: without it
     # the search burns itself on permutations that differ by nothing.
     for i in range(n):
