@@ -75,6 +75,37 @@ from flab2bp.spec import BuildSpec
 #: belt to pass; the router uses upper levels when one is not.
 MARGIN = 1
 
+#: Free tiles reserved on a strip's WEST face -- a routing channel the model
+#: pays for, rather than a corridor the router hopes to find.
+#:
+#: THIS IS THE ROUTABILITY CONSTRAINT.  Every net starts at an output lane's
+#: EAST end and finishes at an input lane's WEST head (see ``_emit_strip``), and
+#: both of those tiles are walled in on three sides by their own strip: a lane's
+#: neighbours above and below are the next lane or the machine band, and the
+#: fourth neighbour is the lane itself.  A port therefore has exactly ONE way in
+#: or out, the tile on its own strip's east or west face, and
+#: ``_reserve_port_access`` holds precisely that tile.
+#:
+#: With a margin on the east face alone, a strip's east margin column IS the
+#: column its eastern neighbour's input heads open onto -- one channel serving
+#: two faces.  ``add_no_overlap_2d`` is satisfied, the pack is legal and tight,
+#: and two ports fight over one cell; the loser is handed an EMPTY start or goal
+#: set and A* returns ``None`` having expanded nothing.  That is not congestion
+#: and no amount of rip-up can price it away, which is why more solver time made
+#: this WORSE: a tighter pack is a pack with more faces pressed together.
+#:
+#: Measured before this existed, with every unserved port's four neighbours
+#: classified: on ``casimir-crystal/no-proliferator`` three ports were boxed in,
+#: each by two lane belts, one machine and -- on the one open side -- a cell
+#: another port had already claimed.  Every one of them was the shared-column
+#: collision.
+#:
+#: One column, not two: one is what makes the two faces' access cells DISJOINT,
+#: which is the whole property.  It costs one tile of width per column of the
+#: pack, and it is the cheapest form of "reserve the channel in the model" that
+#: the ports actually need.
+WEST_CHANNEL = 1
+
 #: Levels available to the router.  Ground plus two stacked crossing levels,
 #: matching what the corpus shows real blueprints using.
 LEVELS = catalog.MAX_BELT_STACK_LEVELS
@@ -408,6 +439,17 @@ class Strip:
     @property
     def sid(self) -> str:
         return f"{self.group_key}"
+
+
+def _box(s: Strip) -> tuple[int, int]:
+    """The footprint one strip occupies in a pack: its extent plus its channels.
+
+    Stated once so the shelf seed, the CP-SAT model and the height sweep cannot
+    drift apart about how much ground a strip costs -- they did, and a seed
+    whose width is not measured the same way as the solver's is not an upper
+    bound on anything.
+    """
+    return s.width + WEST_CHANNEL + MARGIN, s.height + MARGIN
 
 
 def _sink_demand(
@@ -1002,10 +1044,12 @@ def _greedy_pack(strips: list[Strip], height: int) -> _Pack:
     shelf_x, shelf_y, shelf_h = 0, 0, 0
     width = 0
     for i, s in enumerate(strips):
-        w, h = s.width + MARGIN, s.height + MARGIN
+        w, h = _box(s)
         if shelf_y + h > height and shelf_h:
             shelf_x, shelf_y, shelf_h = width, 0, 0
-        at[i] = (shelf_x, shelf_y)
+        # `at` is the CONTENT origin, so the west channel is stepped over here
+        # and every consumer of a pack goes on meaning the same thing by it.
+        at[i] = (shelf_x + WEST_CHANNEL, shelf_y)
         shelf_y += h
         shelf_h = max(shelf_h, w)
         width = max(width, shelf_x + w)
@@ -1041,7 +1085,11 @@ def _pack(
         return None
 
     # Sizes first: several cuts below need them before any variable exists.
-    sizes = [(s.width + MARGIN, s.height + MARGIN) for s in strips]
+    # A size is the strip PLUS its reserved channels -- see `WEST_CHANNEL`. The
+    # routing corridors are part of what `add_no_overlap_2d` keeps apart, which
+    # is what makes them a constraint the model respects rather than a corridor
+    # the router has to hope for.
+    sizes = [_box(s) for s in strips]
     if any(h > height for _, h in sizes):
         return None  # this height cannot hold some strip at all
 
@@ -1177,7 +1225,11 @@ def _pack(
             if i >= n:
                 continue
             w, h = sizes[i]
-            model.add_hint(xs[i], min(max(hx, 0), max(0, width_bound - w)))
+            # `seed.at` is a CONTENT origin and `xs` is a BOX origin, so the
+            # west channel comes back off before the hint is offered. An
+            # out-by-one hint is not a weaker hint, it is a hint for a packing
+            # that overlaps.
+            model.add_hint(xs[i], min(max(hx - WEST_CHANNEL, 0), max(0, width_bound - w)))
             model.add_hint(ys[i], min(max(hy, 0), max(0, height - h)))
 
     solver = cp_model.CpSolver()
@@ -1190,7 +1242,10 @@ def _pack(
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         return None
     return _Pack(
-        at={i: (solver.Value(xs[i]), solver.Value(ys[i])) for i in range(n)},
+        at={
+            i: (solver.Value(xs[i]) + WEST_CHANNEL, solver.Value(ys[i]))
+            for i in range(n)
+        },
         width=solver.Value(w_var),
         height=height,
         status=solver.StatusName(status),
@@ -3172,7 +3227,6 @@ def _build(
     core = _core_bounds(canvas)
     canvas.limit = _grow(core, _ENTRY_RING)
     route_bounds = _grow(core, _ROUTE_RING)
-    power_sites = _claim_power_sites(canvas, core) if power and claim_power else []
 
     # The proliferator entry is staked BEFORE the ports are held, not after the
     # external runs have settled. It can be: its cell is reserved ground that no
@@ -3195,6 +3249,26 @@ def _build(
     # when the first claim was staked.
     if route:
         hold_ports()
+
+    # The tower lattice claims its ground AFTER the ports have claimed theirs,
+    # and before anything routes.
+    #
+    # Both halves of that matter and they used to be one. The lattice claimed
+    # first, on the argument that power is otherwise handed whatever a dense
+    # block has left, which is nothing -- that argument is right and the claim
+    # stays ahead of the router. But it also ran ahead of the SECOND
+    # `hold_ports`, which is the one that sees the coater drops and the
+    # proliferator entry, and `_reserve_port_access` clears and re-stakes every
+    # reservation when it runs. So a lattice point could sit on a port's one
+    # open side and the re-stake would find it gone.
+    #
+    # Measured on `casimir-crystal/max-proliferation`: twelve ports boxed in,
+    # every one of them by a machine, two lane belts and a lattice keep-out
+    # cell. The two claims are not symmetric -- a displaced lattice point has a
+    # whole tower radius of ground to be displaced INTO, and `_place_power`
+    # repairs coverage besides, while a port with no free neighbour has no
+    # second option at all and takes its net down with it.
+    power_sites = _claim_power_sites(canvas, core) if power and claim_power else []
 
     # Bring the outside inputs in FIRST. They have no alternative: an internal
     # net can be routed around an obstacle, but an external lane can only be
@@ -3823,7 +3897,7 @@ class FreeformLayout:
         """
         candidates = _direct_insert_candidates(spec)
         greedy = _greedy_pack(strips, _height_seed(strips))
-        bound = max(greedy.width, max((s.width + MARGIN for s in strips), default=1))
+        bound = max(greedy.width, max((w for w, _h in map(_box, strips)), default=1))
         net_candidates = (
             _direct_net_candidates(strips, spec) if self.direct_insert else {}
         )
@@ -3913,14 +3987,14 @@ class FreeformLayout:
 
 
 def _height_seed(strips: list[Strip]) -> int:
-    area = sum((s.width + MARGIN) * (s.height + MARGIN) for s in strips)
-    tall = max((s.height + MARGIN for s in strips), default=1)
+    area = sum(w * h for w, h in map(_box, strips))
+    tall = max((h for _w, h in map(_box, strips)), default=1)
     return max(tall, int(math.isqrt(max(1, area))))
 
 
 def _candidate_heights(strips: list[Strip]) -> list[int]:
     """Heights to sweep, since ``W * H`` is too weak a form to minimise directly."""
     h0 = _height_seed(strips)
-    tall = max((s.height + MARGIN for s in strips), default=1)
+    tall = max((h for _w, h in map(_box, strips)), default=1)
     out = {max(tall, int(h0 * f)) for f in (0.6, 0.8, 1.0, 1.25, 1.6)}
     return sorted(out)
