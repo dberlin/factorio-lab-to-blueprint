@@ -81,20 +81,52 @@ Trimming each lane to the span it actually serves would cut building count
 substantially at no area cost, and makes the emitted blueprint much pleasanter to
 paste.
 
-## Verify `tile_to_local_offset` against the game
+## RESOLVED -- `tile_to_local_offset` is correct
 
-`dsp/codec.py::tile_to_local_offset` is the single place tile space becomes DSP world
-coordinates, and its centre-vs-corner rule is still an unverified guess -- the
-round-trip tests replay decoded structures, so they never exercise it. The bun
-cross-validation compares bounds and item histograms, which pins it indirectly. A
-real paste into the game settles it.
+No paste into the game was needed. A blueprint the game itself emitted is
+necessarily legal, and the fixtures are therefore a real oracle -- one nobody had
+pointed at this. On the three fixtures with no latitude compression, the centre
+reading gives **0 footprint overlaps, 0 of 2,656 belts inside a machine, and 686
+of 686 machine-side sorter endpoints inside the machine they serve**. The two
+corner readings score 18 and 38 overlaps, 675 and 669 buried belts, and 248/676
+and 174/666 endpoints. Locked by `tests/dsp/test_local_offset.py`.
 
-## Confirm `TESLA_LINK_DISTANCE`
+Two things worth keeping, both of which nearly wasted the exercise:
 
-22.5 is not independently pinned: the largest tower nearest-neighbour distance in the
-corpus is 11.00, which fits both 22.5-as-radius and 11.25-as-diameter (2.2% apart).
-It fails visibly as a disconnected network rather than silently, but if the solver
-ever spaces towers 11.25-22.5 apart, that wants an in-game check.
+* **The round-trip check this item originally proposed is nearly vacuous.**
+  Every catalog footprint is odd, so `w/2 - 0.5` is always an integer and
+  "recovered tile is an integer" reduces to "the building is on-grid" -- it would
+  pass under any wrong per-footprint integer offset. Only checks that compare
+  DIFFERENT footprint sizes against each other discriminate.
+* **Alignment is not enough to call a fixture geometry-safe.**
+  `temple-of-effectiveness` is 796/796 integer-aligned and still stacks 83
+  buildings onto occupied cells, because polar longitude collapse keeps whole
+  numbers while merging distinct tiles. `GEOMETRY_SAFE_FIXTURES` is wrong in
+  both directions as a result: it lists `factory-quick-start-step-3-red-cube`
+  (21 of 232 off-grid, 9 collapsed) and omits `12-s-purple-science`, which is
+  3,008 clean buildings across a real mix of footprint sizes.
+
+The even-footprint half-tile branch is **unreachable rather than verified** --
+no catalog footprint is even, so it never fires. `test_no_catalog_footprint_is_even`
+fails if that stops being true.
+
+## RESOLVED -- `TESLA_LINK_DISTANCE` is 22.5, from the game's own code
+
+`PowerSystem.OnNodeAdded` links two nodes when
+`dx*dx + dy*dy + dz*dz <= max(a.connDistance2, b.connDistance2)`, where
+`connDistance2` is `PowerDesc.connectDistance` squared, carried through
+`PrefabDesc.powerConnectDistance` and `NewNodeComponent` with no scaling. It is a
+centre-to-centre distance; 11.25-as-diameter is refuted, and `PowerDesc` has no
+diameter field at all. Read out of `Assembly-CSharp.dll` with `ikdasm`.
+
+Two consequences the constant's users need:
+
+* The rule takes the **larger** of the two nodes' reaches. A Wireless Power Tower
+  (`connectDistance` 45.5) links to a Tesla Tower at up to 45.5, so a solver
+  treating 22.5 as a universal link budget under-reaches whenever a long-range
+  node is present.
+* Node positions are projected onto a sphere of radius `realRadius + 0.2` before
+  the comparison, so the constant is only valid for flat, non-polar layouts.
 
 ## RESOLVED -- neither strategy could serve two destinations from one belt
 

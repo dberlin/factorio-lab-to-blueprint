@@ -147,18 +147,37 @@ def tile_to_local_offset(
 ) -> tuple[float, float, float]:
     """Convert an integer tile-space anchor to DSP's float ``localOffset``.
 
-    .. warning::
-       **Provisional.** The centre-vs-corner convention and the half-tile
-       offsets that distinguish odd- from even-sized footprints are being
-       established empirically from real blueprints by separate work.  Every
-       tile-to-world conversion in the codebase funnels through this one
-       function so that result lands in a single place.
-
-    Current rule, to be confirmed: ``(x, y)`` is the footprint's minimum corner
-    and DSP stores the footprint *centre*, so the centre sits half a footprint
-    further along each axis.  This puts odd-sized buildings on whole
-    coordinates and even-sized ones on half coordinates.  ``z`` is altitude and
+    ``(x, y)`` is the footprint's minimum corner -- the same convention
+    :class:`flab2bp.layout.base.Placement` uses, where a building's tiles are
+    ``range(width)`` from ``x`` -- and DSP stores the footprint *centre*, so the
+    centre sits half a footprint further along each axis.  ``z`` is altitude and
     passes through unchanged.
+
+    **Verified against the corpus**, by ``tests/dsp/test_local_offset.py``.  The
+    round-trip tests could never reach this function -- they replay *decoded*
+    structures, so ``decode(encode(decoded))`` is byte-perfect whatever the rule
+    says -- but a blueprint the game emitted is necessarily legal, and that is a
+    real oracle.  On the three fixtures with no latitude compression (3,038
+    buildings; the other seven collapse distinct tiles onto one coordinate and
+    are unusable for geometry) the centre reading gives:
+
+    * **0** overlapping cells, against 18 and 38 for the two corner readings;
+    * **0 of 2,656** belts inside a machine footprint, against 675 and 669;
+    * **686 of 686** machine-side sorter endpoints inside the machine they
+      serve, against 248/676 and 174/666.
+
+    The sorter check is the one that pins the *offset* rather than the parity: a
+    sorter endpoint is a 1x1 anchor against a 3x3 or 5x5 machine, and the
+    readings differ by exactly ``(w - 1) / 2`` there.  Confirmed at footprint
+    sizes 1, 3, 5 and 9.
+
+    The even-footprint half-tile case is a different matter: it is
+    **unreachable**, not verified.  ``catalog.derive_footprint`` returns
+    ``2 * ceil(box / 2) - 1``, always odd, and both entries in its override
+    table are odd too -- so ``width / 2 - 0.5`` is always the integer
+    ``(width - 1) / 2`` for anything that can be placed, and the corpus says
+    nothing about the branch.  ``test_no_catalog_footprint_is_even`` fails if
+    that ever stops being true.
     """
     return (x + width / 2.0 - 0.5, y + height / 2.0 - 0.5, float(z))
 

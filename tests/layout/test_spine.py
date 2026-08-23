@@ -70,16 +70,18 @@ def two_stage_spec() -> BuildSpec:
     return BuildSpec(
         groups=(
             group("iron-ingot", "arc-smelter", 4, {"iron-ore": F(1)}, {"iron-ingot": F(1)}),
+            # Four, not two: four smelters make 4 iron-ingot/s, so two gear
+            # assemblers left 2/s with nowhere to go and the smelters backed up.
             group(
                 "gear",
                 "assembling-machine-2",
-                2,
+                4,
                 {"iron-ingot": F(1)},
                 {"gear": F(1)},
             ),
         ),
         external_inputs={"iron-ore": F(4)},
-        outputs={"gear": F(2)},
+        outputs={"gear": F(4)},
         belt_item_id="conveyor-belt-2",
         belt_items_per_second=F(12),
         label="two-stage",
@@ -87,12 +89,36 @@ def two_stage_spec() -> BuildSpec:
 
 
 def magnetic_ring_spec() -> BuildSpec:
-    """Shaped like the super-magnetic-ring chain: 3/4/8/4/4 assemblers, 12/4/17/2 smelters."""
+    """Shaped like the super-magnetic-ring chain, and RATE-BALANCED.
+
+    Nine groups, 54 machines, every machine running at 1/s.  The counts are not
+    decorative: they are the unique solution of the chain's stoichiometry at two
+    rings per second, so supply equals demand for every internal item and every
+    external input equals what its consumers draw::
+
+        ring 2      <- turbine 4, graphite 2, magnet 6
+        turbine 4   <- motor 4, coil 4
+        motor 4     <- ingot 4, gear 4, coil 4
+        coil 8      <- magnet 8, copper 8
+        gear 4      <- ingot 4
+        ingot 8     <- iron-ore 8       magnet 14 <- iron-ore 14
+        copper 8    <- copper-ore 8     graphite 2 <- coal 2
+
+    It used to be round numbers instead -- 4 magnetic-coil/s against 12/s of
+    demand, and 17 magnet/s on a 12/s belt.  Any test that asserted flow-clean
+    on it therefore failed for reasons with nothing to do with geometry, which
+    is worse than no test: it makes the flow checks unusable on the one spec
+    with enough shape to exercise them.
+
+    The belt is Mk.III because the busiest lane -- iron-ore at 22/s, feeding
+    both the ingot and the magnet rows -- does not fit on Mk.II.  Under-sizing
+    the belt would reintroduce exactly the failure this fixture exists to avoid.
+    """
     return BuildSpec(
         groups=(
-            group("iron-ingot", "arc-smelter", 12, {"iron-ore": F(1)}, {"iron-ingot": F(1)}),
-            group("copper-ingot", "arc-smelter", 4, {"copper-ore": F(1)}, {"copper-ingot": F(1)}),
-            group("magnet", "arc-smelter", 17, {"iron-ore": F(1)}, {"magnet": F(1)}),
+            group("iron-ingot", "arc-smelter", 8, {"iron-ore": F(1)}, {"iron-ingot": F(1)}),
+            group("copper-ingot", "arc-smelter", 8, {"copper-ore": F(1)}, {"copper-ingot": F(1)}),
+            group("magnet", "arc-smelter", 14, {"iron-ore": F(1)}, {"magnet": F(1)}),
             group(
                 "energetic-graphite",
                 "arc-smelter",
@@ -103,7 +129,7 @@ def magnetic_ring_spec() -> BuildSpec:
             group(
                 "magnetic-coil",
                 "assembling-machine-2",
-                4,
+                8,
                 {"magnet": F(1), "copper-ingot": F(1)},
                 {"magnetic-coil": F(1)},
             ),
@@ -111,7 +137,7 @@ def magnetic_ring_spec() -> BuildSpec:
             group(
                 "electric-motor",
                 "assembling-machine-2",
-                8,
+                4,
                 {"iron-ingot": F(1), "gear": F(1), "magnetic-coil": F(1)},
                 {"electric-motor": F(1)},
             ),
@@ -125,7 +151,7 @@ def magnetic_ring_spec() -> BuildSpec:
             group(
                 "super-magnetic-ring",
                 "assembling-machine-2",
-                3,
+                2,
                 {
                     "electromagnetic-turbine": F(2),
                     "energetic-graphite": F(1),
@@ -134,10 +160,10 @@ def magnetic_ring_spec() -> BuildSpec:
                 {"super-magnetic-ring": F(1)},
             ),
         ),
-        external_inputs={"iron-ore": F(46), "copper-ore": F(8), "coal": F(4)},
-        outputs={"super-magnetic-ring": F(1)},
-        belt_item_id="conveyor-belt-2",
-        belt_items_per_second=F(12),
+        external_inputs={"iron-ore": F(22), "copper-ore": F(8), "coal": F(2)},
+        outputs={"super-magnetic-ring": F(2)},
+        belt_item_id="conveyor-belt-3",
+        belt_items_per_second=F(30),
         label="magnetic-ring",
     )
 
@@ -171,6 +197,62 @@ def machines_of(p: Placement) -> list[int]:
         and b.item_id != catalog.TESLA_TOWER_ID
         and catalog.building(b.item_id).occupies_tiles
     ]
+
+
+class TestTheFixturesBalance:
+    """A hand-built spec that does not balance makes every flow check useless.
+
+    ``magnetic_ring_spec`` used to be round numbers -- 4 magnetic-coil/s
+    supplying 12/s of demand, 17 magnet/s on a 12/s belt -- so a test asserting
+    anything about flow on it failed for arithmetic reasons and told you nothing
+    about the layout.  These two tests are pure arithmetic on the spec: they
+    cannot be satisfied by a change to the layout, only by the numbers being
+    right, so the fixture cannot rot back.
+    """
+
+    @pytest.mark.parametrize(
+        "spec_fn", [single_recipe_spec, two_stage_spec, magnetic_ring_spec], ids=lambda f: f.__name__
+    )
+    def test_supply_equals_demand_for_every_item(self, spec_fn: SpecFactory) -> None:
+        spec = spec_fn()
+        made: dict[str, Fraction] = {}
+        used: dict[str, Fraction] = {}
+        for g in spec.groups:
+            for item, rate in g.outputs_per_machine.items():
+                made[item] = made.get(item, F(0)) + rate * g.count
+            for item, rate in g.inputs_per_machine.items():
+                used[item] = used.get(item, F(0)) + rate * g.count
+        for item in set(made) | set(used):
+            supply = made.get(item, F(0)) + spec.external_inputs.get(item, F(0))
+            demand = used.get(item, F(0)) + spec.outputs.get(item, F(0))
+            assert supply == demand, (
+                f"{item}: {supply}/s supplied against {demand}/s demanded"
+            )
+
+    @pytest.mark.parametrize(
+        "spec_fn", [single_recipe_spec, two_stage_spec, magnetic_ring_spec], ids=lambda f: f.__name__
+    )
+    def test_no_item_needs_more_than_one_belt_of_its_tier(
+        self, spec_fn: SpecFactory
+    ) -> None:
+        """The spine puts an item's whole cross-corridor flow on one lane.
+
+        Lane splitting exists (:func:`_split_lanes`), but a fixture that needs it
+        for an unrelated reason turns every geometry test on that fixture into a
+        capacity test as well.  These fixtures are sized to stay under one belt.
+        """
+        spec = spec_fn()
+        belt = catalog.BELT_RATE[
+            {"conveyor-belt-1": 2001, "conveyor-belt-2": 2002, "conveyor-belt-3": 2003}[
+                spec.belt_item_id
+            ]
+        ]
+        used: dict[str, Fraction] = {}
+        for g in spec.groups:
+            for item, rate in g.inputs_per_machine.items():
+                used[item] = used.get(item, F(0)) + rate * g.count
+        for item, rate in used.items():
+            assert rate <= belt, f"{item} needs {rate}/s on a {belt}/s belt"
 
 
 # --- adapter ---------------------------------------------------------------

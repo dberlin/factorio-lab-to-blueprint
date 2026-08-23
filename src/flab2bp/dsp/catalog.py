@@ -143,12 +143,38 @@ MAX_BELT_STACK_LEVELS = 3
 #: unpowered) and *zero* machines anywhere exceed 10.5.  Bracketed both sides.
 TESLA_COVER_RADIUS = Fraction(21, 2)
 
-#: Tower-to-tower link distance.  NOT independently pinned: the largest tower
-#: nearest-neighbour distance on a uniform grid is 11.00, which fits both
-#: 22.5-as-radius and 11.25-as-diameter -- only 2.2% apart, so the corpus cannot
-#: discriminate.  This rides on field naming plus its proven-radius sibling.  It
-#: fails *visibly* (a disconnected network) rather than silently, but if the
-#: solver ever spaces towers 11.25--22.5 apart, that wants an in-game check.
+#: Tower-to-tower link distance: the maximum centre-to-centre separation at
+#: which two power nodes connect.  A *distance*, not a diameter.
+#:
+#: Settled from the game's own IL (``DSPGAME_Data/Managed/Assembly-CSharp.dll``,
+#: disassembled with ``ikdasm``), because the corpus provably cannot settle it:
+#: the largest tower nearest-neighbour distance there is 11.00, which fits both
+#: 22.5-as-distance and 11.25-as-half-a-diameter, only 2.2% apart.  The chain
+#: carries the value through with no scaling anywhere:
+#:
+#:   ``PowerDesc.connectDistance`` (Unity component, under a "Power Node"
+#:   header) -> ``PrefabDesc.powerConnectDistance`` -> ``PowerSystem
+#:   .NewNodeComponent(entityId, conn, cover)`` -> ``PowerNodeComponent
+#:   .connectDistance`` -> ``Node.connDistance2 = connectDistance *
+#:   connectDistance``
+#:
+#: and ``PowerSystem.OnNodeAdded`` then links two nodes when
+#:
+#:   ``dx*dx + dy*dy + dz*dz <= max(a.connDistance2, b.connDistance2)``
+#:
+#: i.e. squared centre-to-centre distance against the squared field value.  The
+#: identical shape one branch later tests ``d2 <= coverRadius2`` for consumer
+#: coverage, and ``coverRadius`` is independently proven to be a radius -- so
+#: the two fields have the same units and the diameter reading is refuted.
+#: There is no ``coverArea`` or diameter field in ``PowerDesc`` at all; the sole
+#: "diameter" string in the whole assembly belongs to Unity's TAA settings.
+#:
+#: Two consequences worth knowing.  The test is ``max`` of the pair, not ``min``
+#: or a sum, so a long-reach node pulls a short-reach one into its network: a
+#: Wireless Power Tower (45.5) links to a Tesla Tower at up to 45.5, not 22.5.
+#: And node positions are first projected onto a common sphere of radius
+#: ``realRadius + 0.2``, so the comparison is against a 3D chord -- which is why
+#: this constant is only usable on flat, non-polar layouts.
 TESLA_LINK_DISTANCE = Fraction(45, 2)
 
 #: Belts are unpowered in DSP.  Sorters and spray coaters are not.
@@ -167,6 +193,26 @@ UNPOWERED_ITEM_IDS = frozenset(BELT_IDS)
 #: 376 of its 591 buildings are off the half-grid, so it is latitude-distorted
 #: despite being 0.10.34.  Version is the wrong criterion; alignment is the
 #: right one.
+#:
+#: .. note::
+#:    ``tests/dsp/test_local_offset.py`` derives a *different* and stricter set
+#:    for the same purpose, and the two disagree in both directions.  Its
+#:    criterion adds "no two buildings round to the same ``(x, y, z)``", which
+#:    catches a distortion that pure alignment misses -- a polar blueprint can
+#:    keep whole-number coordinates while collapsing distinct surface tiles onto
+#:    one of them.  Under it:
+#:
+#:    * ``factory-quick-start-step-3-red-cube`` does **not** qualify: 21 of its
+#:      232 buildings are off-grid and 9 land on an occupied cell.  A run of
+#:      belts near its Storage Tank sits at y = 3.113, 3.987, 4.927, 5.801 --
+#:      spacings of 0.87 to 0.94, not 1.0.
+#:    * ``12-s-purple-science-from-smelted-refined-products`` **does**, and is
+#:      by far the best geometry fixture in the corpus: 3,008 buildings, every
+#:      one integer-aligned, no collapsed cells, and a mix of 3x3 assemblers,
+#:      5x5 Matrix Labs, 670 sorters and 2,640 belts.
+#:
+#:    This tuple is left as it is only because ``tests/layout/test_validate.py``
+#:    parametrises over it; widening it there is a separate change.
 GEOMETRY_SAFE_FIXTURES = (
     "factory-quick-start-step-1-minimum-blue-cube-automation",
     "factory-quick-start-step-3-red-cube",

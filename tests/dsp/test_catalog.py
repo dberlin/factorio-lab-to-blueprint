@@ -93,6 +93,25 @@ def test_tesla_cover_radius_is_a_radius() -> None:
     assert catalog.TESLA_COVER_RADIUS == 10.5
 
 
+def test_tesla_link_distance_tracks_the_extracted_game_table() -> None:
+    """The constant must be the game's ``connectDistance``, not a hand-typed guess.
+
+    See the note on :data:`catalog.TESLA_LINK_DISTANCE` for why 22.5 is a
+    centre-to-centre *distance* and not half of one: the game's own
+    ``PowerSystem.OnNodeAdded`` compares squared node separation against
+    ``max(a.connDistance2, b.connDistance2)``, where ``connDistance2`` is this
+    field squared.  The corpus cannot discriminate 22.5 from 11.25, so tying the
+    constant to the extracted table is the only check available here.
+    """
+    tower = catalog.building(catalog.TESLA_TOWER_ID)
+    assert tower.connect_distance == catalog.TESLA_LINK_DISTANCE
+    assert tower.cover_radius == catalog.TESLA_COVER_RADIUS
+    # The link rule takes the larger of the two nodes' reaches, so a longer-range
+    # node really does exist and really does out-reach the tower.
+    wireless = catalog.building(2202)
+    assert wireless.connect_distance > tower.connect_distance
+
+
 def _footprint_tiles(item_id: int, x: float, y: float, yaw: float) -> list[tuple[int, int]]:
     w, h = catalog.footprint(item_id)
     if round((yaw % 360) / 90) % 4 in (1, 3):

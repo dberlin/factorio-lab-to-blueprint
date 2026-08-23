@@ -353,12 +353,23 @@ def _build_graph(
 ) -> tuple[dict[Node, tuple[Node, ...]], dict[Node, tuple[Node, ...]]]:
     """Edges between runs, through junctions and through native belt merges.
 
-    TWO kinds of run boundary exist and both need crossing.  The obvious one is
-    the splitter.  The other is a plain DSP merge: ``_build_runs`` ends a chain
-    at any belt with more than one predecessor, so two lanes pointing at one
-    tile leave three runs where the items see one continuous path.  A check that
-    followed only junctions would still read a merged lane's downstream half as
-    fed by nothing.
+    THREE kinds of run boundary exist and all of them need crossing.  The
+    obvious one is the splitter.  The second is a plain DSP merge:
+    ``_build_runs`` ends a chain at any belt with more than one predecessor, so
+    two lanes pointing at one tile leave three runs where the items see one
+    continuous path.  A check that followed only junctions would still read a
+    merged lane's downstream half as fed by nothing.
+
+    The third is a **sorter with a belt on both ends** -- a lane-to-lane
+    transfer, which is how both strategies tap a trunk onto a branch without
+    spending a splitter.  It is an EDGE and not a flow source: what it moves is
+    whatever the far lane needs, so modelling it as a graph edge lets
+    ``_propagate`` derive that rate instead of guessing it.  It was invisible
+    here, and invisible in ``_sorter_flows`` too (``_sorter_demand`` returns
+    ``None`` when neither end is a machine), which left two holes: a branch fed
+    only by a transfer read as supplied by nothing, and -- the one that mattered
+    -- a trunk drained by a transfer was charged ZERO for that draw, so
+    ``flow.belt_capacity`` could not see load leaving a lane this way at all.
     """
     succ: dict[Node, list[Node]] = defaultdict(list)
     pred: dict[Node, list[Node]] = defaultdict(list)
@@ -387,6 +398,17 @@ def _build_graph(
             tapped = run_of.get(b)
             if tapped is not None:
                 link((JUNCTION, j), (RUN, tapped))
+
+    for i, s in enumerate(buildings):
+        if kinds[i] is not Kind.SORTER:
+            continue
+        src, dst = s.input_obj, s.output_obj
+        if src is None or dst is None:
+            continue
+        from_run, to_run = run_of.get(src), run_of.get(dst)
+        if from_run is None or to_run is None or from_run == to_run:
+            continue
+        link((RUN, from_run), (RUN, to_run))
 
     return (
         {n: _dedup(v) for n, v in succ.items()},
@@ -993,23 +1015,47 @@ def _acyclic(ctx: Context) -> Iterable[Finding]:
             stack.append((nxt, iter(_belt_successors(ctx, nxt))))
 
 
+#: Belt tiles a lane may run past its last tap before the overshoot is called
+#: waste.  ``SORTER_MAX_REACH`` because within it a sorter could have been stood
+#: anywhere along the surplus and still served the same machine, so the tiles are
+#: tolerance in where the tap was placed rather than lane nobody could ever use.
+_TERMINATION_SLACK = cat.SORTER_MAX_REACH
+
+
 @check("belt.termination")
 def _termination(ctx: Context) -> Iterable[Finding]:
-    """A run ends at a consumer, an onward link, or a live junction.
+    """A run ends at a live junction, an onward link, or near its last tap.
 
     The junction clause is the one that needed adding.  A run whose tail feeds a
     splitter has a non-``None`` ``output_obj``, so the original test passed it
     without ever asking whether anything draws from the far side.  A junction
     with no taps is a hole items fall into: the run terminates, the link
-    resolves, and the flow stops.  That is graded an ERROR while a plain dangling
-    tail stays a WARNING, because a bare belt end is untrimmed lane -- wasted
-    area -- whereas a dead junction means the items routed into it never arrive.
+    resolves, and the flow stops.  That is graded an ERROR while dead lane stays
+    a WARNING, because wasted belt costs area and a dead junction means the items
+    routed into it never arrive.
+
+    The warning half used to ask only whether the TAIL TILE was tapped, and
+    measured at 95 warnings over 130 belt runs across both strategies' fixtures
+    -- 73%, which is a warning nobody reads.  The question was wrong rather than
+    the answer: both strategies end a lane a couple of tiles past its last
+    consumer, so a correct lane fails a tail-tile test while wasting two tiles
+    out of fifty.  What is worth acting on is the SIZE of the overshoot, so that
+    is what is measured and reported, and lanes are judged against
+    :data:`_TERMINATION_SLACK`.
+
+    Re-measured on the same fixtures the rate falls to 7%, and the survivors are
+    the cases that deserved a reader all along: six 51-tile lanes on spine's
+    magnetic-ring output with no tap anywhere on them, and a
+    ``super-magnetic-ring`` lane running 44 tiles past its last consumer.  A lane
+    with no tap at all is always reported however short it is -- that is not an
+    overshoot, it is a lane serving nothing.
     """
     bs = ctx.placement.buildings
-    consumers: set[int] = set()
+    touched: set[int] = set()
     for _, s in ctx.of_kind(Kind.SORTER):
-        if s.input_obj is not None:
-            consumers.add(s.input_obj)
+        for link in (s.input_obj, s.output_obj):
+            if link is not None:
+                touched.add(link)
     for r, run in enumerate(ctx.runs):
         tail = run.tail
         o = bs[tail].output_obj
@@ -1024,14 +1070,30 @@ def _termination(ctx: Context) -> Iterable[Finding]:
                     {"tail": tail, "junction": o, "run": r},
                 )
             continue
-        if o is None and tail not in consumers:
-            yield Finding(
-                "belt.termination",
-                Severity.WARNING,
-                f"belt run ending at {tail} stops without a consumer or onward link",
-                (tail,),
-                {"tail": tail},
-            )
+        if o is not None:
+            continue
+        taps = [k for k, i in enumerate(run.indices) if i in touched]
+        dead = len(run.indices) - (max(taps) + 1) if taps else len(run.indices)
+        if taps and dead <= _TERMINATION_SLACK:
+            continue
+        head = bs[run.head]
+        yield Finding(
+            "belt.termination",
+            Severity.WARNING,
+            (
+                f"belt run {r} (head building {run.head} at ({head.x},{head.y}), "
+                f"carrying {head.carries_item!r}) runs {len(run.indices)} tiles and "
+                f"no sorter touches any of them; the whole lane is wasted"
+                if not taps
+                else f"belt run {r} (head building {run.head} at ({head.x},{head.y}), "
+                f"carrying {head.carries_item!r}) runs {dead} of its "
+                f"{len(run.indices)} tiles past its last tap and then stops; those "
+                f"tiles serve nothing"
+            ),
+            (tail,),
+            {"run": r, "tail": tail, "length": len(run.indices), "dead": dead,
+             "taps": len(taps)},
+        )
 
 
 # --- power -----------------------------------------------------------------
@@ -1444,6 +1506,43 @@ def _entry_runs(ctx: Context) -> dict[str, list[int]]:
     return dict(out)
 
 
+def _entry_items(ctx: Context) -> dict[int, set[str]]:
+    """Run -> EVERY external item the player has to put onto it.
+
+    ``_entry_runs`` answers the sibling question -- which lanes want a given
+    item -- and settles for the first external label it finds on a run, which is
+    all its callers need.  Seeding flow needs the other direction and needs it
+    complete: ``six_input_spec`` mixes two external items onto one lane (six
+    ingredients, four belt sides), and crediting such a lane with one item's rate
+    while charging it both items' demand invents a shortfall on a build the
+    player feeds perfectly well.
+
+    The ``carries_item`` labels alone are not enough for exactly that lane.  A
+    strategy labels a mixed belt with one of the items it carries -- the entry
+    lane at ``(-1,0)`` says ``antimatter`` down its whole length while sorters
+    draw both ``antimatter`` and ``electromagnetic-matrix`` off it -- so the
+    sorters' own item resolution is unioned in.  That is safe here and only
+    here: a run reaching this point is by construction one NOTHING inside the
+    blueprint fills, so every item a sorter names on it is an item the player
+    must supply.
+    """
+    assert ctx.spec is not None
+    external = set(ctx.spec.external_inputs)
+    bs = ctx.placement.buildings
+    internal = _close_over_junctions(ctx, _internal_seeds(ctx)[1])
+    drawn = _run_items(ctx, _sorter_items(ctx))
+    out: dict[int, set[str]] = {}
+    for r, run in enumerate(ctx.runs):
+        if r in internal:
+            continue
+        seen: set[str | None] = {bs[i].carries_item for i in run.indices}
+        seen |= drawn.get(r, set())
+        carried = {item for item in seen if item is not None} & external
+        if carried:
+            out[r] = carried
+    return out
+
+
 def _reachable_from_outside(ctx: Context, level: int) -> set[tuple[int, int]]:
     """Cells at altitude ``level`` a NEW belt could occupy, coming from outside.
 
@@ -1745,10 +1844,45 @@ def _coaters_supplied(ctx: Context) -> Iterable[Finding]:
 
 @check("flow.conservation", needs_spec=True)
 def _conservation(ctx: Context) -> Iterable[Finding]:
-    """Production minus consumption balances, in exact rational arithmetic.
+    """Supply meets demand -- first in the spec's arithmetic, then on the belts.
 
-    Independent of any geometry: a cheap arithmetic cross-check that catches
-    spec-vs-placement drift a flow model would happily rationalise away.
+    Two clauses, run in that order, because they answer different questions and
+    the second is only meaningful once the first passes.
+
+    **Spec arithmetic.**  Production minus consumption over the whole block.
+    Independent of any geometry, and cheap.
+
+    **Reachability balance, read off the PLACEMENT.**  Production must cover
+    consumption not merely in total but within every set of machines and lanes
+    an item can actually travel between.  This is the class the validator could
+    not see at all: a build whose geometry is impeccable, whose every lane is
+    sourced, whose every belt is under tier capacity, and which still
+    under-produces because a producer group's output was cut into islands that
+    do not serve their consumers.  See :func:`_lane_balance` for why it is a cut
+    argument rather than a per-lane one.
+
+    This was previously declined on the reasoning that external input lanes have
+    no sorter pushing onto them, so a per-junction balance could not be seeded
+    without guessing how a block's external rate divides across its entry lanes.
+    The cited counter-example does not survive checking.  On
+    ``magnetic_ring_spec``, junction 1639 shows downstream demand 12 against
+    upstream supply 4 because that hand-built fixture runs 4 magnetic-coil
+    machines at 1/s against 8 electric-motor plus 4 electromagnetic-turbine
+    machines wanting 1/s each.  ``magnetic-coil`` is not an external input at
+    all, and the spec clause below has always reported it -- along with three
+    more items on the same fixture.  The reading was of a genuinely unbalanced
+    fixture, not of a correct build, and no seeding question was involved.
+
+    (The seeding is nonetheless soluble and :func:`_entry_items` does it, since
+    the placement clause needs to know which lanes the player fills.  What the
+    measurement changed was the shape of the check, not whether it could be
+    written.)
+
+    The placement clause STOPS when the spec clause fires.  When the recipe
+    balance itself is short, every island carrying the short item is short, and
+    the placement clause would restate one spec defect once per island --
+    eight findings on ``magnetic_ring_spec`` saying what one already said.
+    Routing is only a question worth asking once the arithmetic balances.
     """
     assert ctx.spec is not None
     net: dict[str, Fraction] = defaultdict(Fraction)
@@ -1761,14 +1895,180 @@ def _conservation(ctx: Context) -> Iterable[Finding]:
         net[item] += rate
     for item, rate in ctx.spec.outputs.items():
         net[item] -= rate
-    for item in sorted(net):
-        if net[item] < 0:
+    short = [item for item in sorted(net) if net[item] < 0]
+    for item in short:
+        yield Finding(
+            "flow.conservation",
+            Severity.ERROR,
+            f"{item} is over-consumed by {net[item]} items/s; demand exceeds supply",
+            (),
+            {"item": item, "net": str(net[item])},
+        )
+    if short:
+        return
+    yield from _lane_balance(ctx)
+
+
+#: Union-find key: ``("g", flow-graph node)`` or ``("m", machine index)``.
+_Island = tuple[str, object]
+
+
+def _islands(ctx: Context, item: str, items: Mapping[int, str | None]) -> dict[_Island, _Island]:
+    """Union-find over everything ``item`` can physically move between.
+
+    Belts, junctions and transfer sorters connect lanes to lanes; a sorter
+    carrying ``item`` connects a machine to a lane, or to another machine when
+    the edge is direct-inserted.  What comes out is a partition into ISLANDS:
+    inside one, the item can get from any producer to any consumer, so nothing
+    a splitter or a machine's second output sorter does can starve anyone.
+    Between two, no path exists at all.
+
+    A sorter whose item cannot be resolved is treated as carrying EVERY item, so
+    it merges islands rather than separating them.  That direction is chosen
+    deliberately: merging can only hide a shortfall, and a check whose ERROR
+    depends on an item guess is not one this validator should be making.
+    """
+    parent: dict[_Island, _Island] = {}
+
+    def find(k: _Island) -> _Island:
+        parent.setdefault(k, k)
+        while parent[k] != k:
+            parent[k] = parent[parent[k]]
+            k = parent[k]
+        return k
+
+    def union(a: _Island, b: _Island) -> None:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[ra] = rb
+
+    for node, nbrs in ctx.succ.items():
+        for m in nbrs:
+            union(("g", node), ("g", m))
+    for j, _ in ctx.of_kind(Kind.SPLITTER):
+        find(("g", (JUNCTION, j)))
+    for r in range(len(ctx.runs)):
+        find(("g", (RUN, r)))
+
+    bs = ctx.placement.buildings
+    for i, s in ctx.of_kind(Kind.SORTER):
+        moved = items.get(i)
+        if moved is not None and moved != item:
+            continue
+        ends: list[_Island] = []
+        for link in (s.input_obj, s.output_obj):
+            if link is None or not (0 <= link < len(bs)):
+                continue
+            if link in ctx.run_of:
+                ends.append(("g", (RUN, ctx.run_of[link])))
+            elif ctx.kinds[link] is Kind.MACHINE:
+                ends.append(("m", link))
+        if len(ends) == 2:
+            union(ends[0], ends[1])
+    for i, _ in ctx.of_kind(Kind.MACHINE):
+        find(("m", i))
+    return {k: find(k) for k in list(parent)}
+
+
+def _lane_balance(ctx: Context) -> Iterable[Finding]:
+    """The placement half of ``flow.conservation``.
+
+    A CUT argument, not a per-lane one, and the difference is the whole
+    soundness of the check.  Three separate things in this model divide a rate
+    evenly where the game does not: a splitter feeds whichever output has room,
+    a machine with two output sorters fills whichever lane is not backed up, and
+    a lane fed by two producers draws from whichever is not empty.  Every one of
+    those self-balances, so a per-lane verdict computed from an even split
+    invents shortfalls on builds that run perfectly.  Measured on the real
+    corpus, the per-lane version reported 15 lanes short across ``processor``
+    and ``super-magnetic-ring``, and every one of them was a machine draining to
+    two lanes off one fan-out.
+
+    What does NOT self-balance is a cut with no path across it.  So the claim
+    made here is the one backpressure cannot rescue: within each connected
+    ISLAND for an item -- everything that item can physically reach, machines
+    and lanes alike -- production plus what the player belts in must cover
+    consumption.  Under that shortfall the machines in the island starve at a
+    fixed ratio and no routing inside the block can help, which is why it is an
+    ERROR.
+
+    ``flow.lane_sourced`` is the degenerate case of this (supply exactly zero on
+    a lane); this generalises it to a rate, and to the whole island rather than
+    the single lane.
+
+    External inputs are credited in full to every island holding an entry lane
+    for that item, rather than divided across them.  The player decides how much
+    goes down each belt and can simply put more on one, so an island short only
+    of an external item is not a defect in the placement -- and the aggregate
+    version of that question is what the spec clause above already answers.
+    """
+    assert ctx.spec is not None
+    items = _sorter_items(ctx)
+    bs = ctx.placement.buildings
+    makes: dict[int, Mapping[str, Fraction]] = {}
+    needs: dict[int, Mapping[str, Fraction]] = {}
+    for i, _ in ctx.of_kind(Kind.MACHINE):
+        g = ctx.group_for(i)
+        if g is None:
+            continue
+        makes[i] = g.outputs_per_machine
+        needs[i] = g.inputs_per_machine
+    wanted_items = sorted(
+        {it for rates in needs.values() for it in rates}
+        & {it for rates in makes.values() for it in rates}
+    )
+    entry = _entry_items(ctx)
+    for item in wanted_items:
+        roots = _islands(ctx, item, items)
+        supply: dict[_Island, Fraction] = defaultdict(Fraction)
+        demand: dict[_Island, Fraction] = defaultdict(Fraction)
+        starving: dict[_Island, list[int]] = defaultdict(list)
+        belted_in: set[_Island] = set()
+        for i, rates in makes.items():
+            if item in rates:
+                supply[roots[("m", i)]] += rates[item]
+        for i, rates in needs.items():
+            if item in rates:
+                key = roots[("m", i)]
+                demand[key] += rates[item]
+                starving[key].append(i)
+        for r, carried in entry.items():
+            if item in carried:
+                belted_in.add(roots[("g", (RUN, r))])
+        external = ctx.spec.external_inputs.get(item, Fraction(0))
+        for key in sorted(demand, key=lambda k: str(k)):
+            have = supply[key] + (external if key in belted_in else Fraction(0))
+            want = demand[key]
+            if want <= have:
+                continue
+            hungry = sorted(starving[key])
+            if not have and len(hungry) == 1 and not supply[key]:
+                # A lone machine with nothing at all attached for this item is
+                # `machine.inputs_supplied`'s finding word for word, naming the
+                # same building.  Saying it twice does not make it truer.
+                continue
+            lanes = sorted(
+                r
+                for r in range(len(ctx.runs))
+                if roots.get(("g", (RUN, r))) == key
+                and any(bs[b].carries_item == item for b in ctx.runs[r].indices)
+            )
             yield Finding(
                 "flow.conservation",
                 Severity.ERROR,
-                f"{item} is over-consumed by {net[item]} items/s; demand exceeds supply",
-                (),
-                {"item": item, "net": str(net[item])},
+                f"{len(hungry)} machine(s) consume {want} items/s of {item} but only "
+                f"{have} items/s of it is produced or belted in anywhere they can "
+                f"reach (lanes {lanes[:6] or 'none'}); short by {want - have} items/s "
+                f"and no routing inside the block can make it up",
+                tuple(hungry[:5]),
+                {
+                    "item": item,
+                    "demand": str(want),
+                    "supply": str(have),
+                    "shortfall": str(want - have),
+                    "starved": len(hungry),
+                    "lanes": lanes,
+                },
             )
 
 
@@ -2104,6 +2404,12 @@ def _propagate(
     junction's supply divides among its outputs.  Both divisions are exact
     ``Fraction`` arithmetic; a float here would produce capacity verdicts that
     depend on rounding, which is the one thing these checks exist to rule out.
+
+    That even split is a fair-share ESTIMATE and not a bound, which is why
+    ``flow.conservation`` does not use this function at all: a DSP splitter is
+    not a fixed divider -- it feeds whichever output has room -- so charging a
+    lane its arithmetic share is right for "how loaded is this belt" and wrong
+    for "does anything starve".  See :func:`_lane_balance`.
 
     Cycles contribute nothing rather than looping forever.  A belt cycle is a
     real defect, but it is ``belt.acyclic``'s to report -- a capacity check that

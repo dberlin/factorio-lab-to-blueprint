@@ -306,8 +306,22 @@ def _lane_requirements(
 ) -> list[list[str]]:
     """Which item occupies a lane in which corridor, ordered by sorter reach.
 
-    With no trunk risers, an edge spanning rows ``r`` to ``s`` takes a lane in
-    every corridor ``r+1 .. s``.  Corridor ``c`` sits above row ``c``.
+    Corridor ``c`` sits above row ``c``.  **A corridor holds exactly the lanes it
+    is tapped for**, plus the proliferator utility lane.
+
+    That is a consequence of risers, and it used not to be.  Before them, an edge
+    from row ``r`` to row ``s`` took a lane in every corridor ``r+1 .. s``,
+    because a horizontal run in each corridor was the only way for the item to
+    travel down the block.  A riser joins the copies through the east margin
+    instead, so the intermediate copies stopped carrying anything the moment
+    :func:`_plan_risers` landed -- and :func:`_plan_risers` skips them precisely
+    because nothing fills or drains them.
+
+    They were not free.  Measured over the 33 powered corpus runs while they were
+    still emitted: **321 of 975 lanes were pass-through, holding 34,372 of 80,620
+    lane belt tiles** -- 43% of all lane belt was joined to nothing at either end.
+    And a lane is a tile of corridor height, so they cost *area*, not just
+    buildings.
     """
     at = _row_index(rows)
     n_corr = len(rows) + 1
@@ -323,34 +337,25 @@ def _lane_requirements(
     #: the band can hold one more.
     above_gap: list[dict[str, int]] = [{} for _ in range(n_corr)]
 
-    # What each row consumes and produces, and the corridor span each item needs.
+    # What each row consumes and produces.  There is deliberately no corridor
+    # *span* here any more: a lane is needed where it is tapped and nowhere else,
+    # and the trunk carries the item between those points.
     consumes: list[set[str]] = [set() for _ in rows]
     produces: list[set[str]] = [set() for _ in rows]
-    span: dict[str, list[int]] = {}
-
-    def widen(item: str, lo: int, hi: int) -> None:
-        cur = span.setdefault(item, [lo, hi])
-        cur[0], cur[1] = min(cur[0], lo), max(cur[1], hi)
 
     for e in edges:
         if (e.src, e.dst, e.item) in direct:
             continue
-        r, s = at[e.src], at[e.dst]
-        widen(e.item, r + 1, s)
-        produces[r].add(e.item)
-        consumes[s].add(e.item)
+        produces[at[e.src]].add(e.item)
+        consumes[at[e.dst]].add(e.item)
 
     for item in spec.external_inputs:
-        consumers = [at[k] for k, g in groups.items() if item in g.inputs]
-        if consumers:
-            widen(item, 0, max(consumers))
-            for r in consumers:
-                consumes[r].add(item)
+        for r in (at[k] for k, g in groups.items() if item in g.inputs):
+            consumes[r].add(item)
 
     for item in _leaving_items(groups, spec):
         sources = [at[k] for k, g in groups.items() if item in g.outputs]
         if sources:
-            widen(item, min(sources) + 1, n_corr - 1)
             produces[min(sources)].add(item)
 
     # A machine presents edge tiles to the corridor above *and* the one below, so
@@ -413,17 +418,14 @@ def _lane_requirements(
             if not 0 <= c < n_corr:
                 continue
             for item in slot_items:
-                lo, hi = span[item]
-                widen(item, min(lo, c), max(hi, c))
                 if c == r:
                     tap_below[c].add(item)
                 else:
                     tap_above[c].add(item)
                     above_gap[c][item] = gaps.get(item, 0)
 
-    for item, (lo, hi) in span.items():
-        for c in range(max(lo, 0), min(hi, n_corr - 1) + 1):
-            crossing[c].add(item)
+    for c in range(n_corr):
+        crossing[c] |= tap_above[c] | tap_below[c]
 
     # The proliferator utility lane.  Spray Coaters mount on the lanes they
     # spray, so the proliferator that feeds them has to reach into the same
@@ -1127,20 +1129,46 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
     # pasting.  Untapped pass-through lanes keep their full width; they stop at
     # ``content_w - 1``, so they never reach into the riser margin.
     extents: dict[tuple[int, str], tuple[int, int]] = {}
+    #: Columns at which each lane is filled and drained, keyed by (corridor,
+    #: depth) rather than by item, because a direction is a property of ONE lane
+    #: and an item may hold two of them.  ``_lane_direction`` reads these.
+    fill_at: dict[tuple[int, int], tuple[int, int]] = {}
+    drain_at: dict[tuple[int, int], tuple[int, int]] = {}
 
     def _extend(c: int, item: str, lo: int, hi: int) -> None:
         cur = extents.get((c, item))
         extents[c, item] = (lo, hi) if cur is None else (min(cur[0], lo), max(cur[1], hi))
 
+    def _note_tap(side: dict[tuple[int, int], tuple[int, int]], tap: _Tap, lo: int, hi: int) -> None:
+        cur = side.get((tap.corridor, tap.depth))
+        side[tap.corridor, tap.depth] = (
+            (lo, hi) if cur is None else (min(cur[0], lo), max(cur[1], hi))
+        )
+
     for key, g in groups.items():
         xs = [buildings[i].x for i in machine_at[key]]
         if not xs:
             continue
-        lo, hi = min(xs), max(xs) + g.width - 1
         for item, into in [(i, True) for i in g.inputs] + [(o, False) for o in g.outputs]:
             tap = taps.get((key, item, into))
-            if tap is not None:
-                _extend(tap.corridor, item, lo, hi)
+            if tap is None:
+                continue
+            # A machine's sorters do not spread over its whole footprint:
+            # ``_place_sorters`` anchors the i-th at ``m.x + i``, so a group
+            # served by one sorter per machine only ever touches each machine's
+            # LEFT column.  Charging the lane the full footprint left the tiles
+            # past the last sorter dangling with nothing to draw from them --
+            # which is what ``belt.termination`` was warning about on every run.
+            #
+            # The count comes from the same call the sorter pass makes, with the
+            # same arguments, so the two cannot disagree about how many columns
+            # get used.
+            rate = (g.inputs if into else g.outputs)[item]
+            pick = _pick_sorter(rate, tap.span, g.width)
+            cols = g.width if pick is None else min(pick[1], g.width)
+            lo, hi = min(xs), max(xs) + cols - 1
+            _extend(tap.corridor, item, lo, hi)
+            _note_tap(drain_at if into else fill_at, tap, lo, hi)
 
     for c, order in enumerate(plan.lanes):
         for item in order:
@@ -1163,12 +1191,12 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
 
     risers = _plan_risers(plan, corr_y, filled, drained, set(spec.external_inputs))
     fed_from_trunk: set[tuple[int, int]] = set()
+    hands_to_trunk: set[tuple[int, int]] = set()
     joined: set[tuple[int, int]] = set()
     for riser in risers:
         for _y, c, d, is_source in riser.taps:
             joined.add((c, d))
-            if not is_source:
-                fed_from_trunk.add((c, d))
+            (hands_to_trunk if is_source else fed_from_trunk).add((c, d))
     for c, d in joined:
         _extend(c, plan.lanes[c][d], content_w - 1, content_w - 1)
 
@@ -1184,11 +1212,16 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
         for depth_i, item in enumerate(order):
             y = corr_y[c] + depth_i
             lo, hi = extents.get((c, item), (0, content_w - 1))
-            # A lane the trunk FEEDS has to flow away from the trunk, or the
-            # items would arrive at its far end and stop.  The trunk is in the
-            # east margin, so such a lane runs east to west and its head -- the
-            # tile the junction hands to -- is its eastmost.
-            westward = (c, depth_i) in fed_from_trunk
+            westward = _lane_direction(
+                (c, depth_i),
+                item,
+                fed_from_trunk=fed_from_trunk,
+                hands_to_trunk=hands_to_trunk,
+                pinned_west_edge=item in spec.external_inputs,
+                pinned_east_edge=item in leaving,
+                fill=fill_at.get((c, depth_i)),
+                drain=drain_at.get((c, depth_i)),
+            )
             indices: list[int] = []
             for x in range(lo, hi + 1):
                 indices.append(len(buildings))
@@ -1437,6 +1470,61 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
             "fallback_used": float(plan.solver_status == "fallback"),
         },
     )
+
+
+def _lane_direction(
+    key: tuple[int, int],
+    item: str,
+    *,
+    fed_from_trunk: set[tuple[int, int]],
+    hands_to_trunk: set[tuple[int, int]],
+    pinned_west_edge: bool,
+    pinned_east_edge: bool,
+    fill: tuple[int, int] | None,
+    drain: tuple[int, int] | None,
+) -> bool:
+    """Should this lane run east to west?  ``True`` for westward.
+
+    Belts are one-way, so a lane's direction decides which of its taps are
+    physically upstream of which.  Lanes used to run east unconditionally, with
+    taps dropped at machine columns in whatever order the columns happened to
+    fall -- so a consumer standing WEST of the producer that fills the lane got
+    a sorter reaching into a belt that never carries anything past it.  It
+    pastes, it looks right, and that machine simply never runs.  The validator
+    cannot see it: every link resolves, the sorter is in reach, the belt is
+    continuous.
+
+    Four of the five cases have their direction forced by something physical,
+    and they are checked first:
+
+    * a lane the trunk FEEDS takes its items at its eastmost tile, so it must
+      flow away westward or they would arrive at the far end and stop;
+    * a lane that HANDS UP to the trunk must reach it, so it flows east;
+    * an external input enters at ``x = 0``, the block's west edge;
+    * a product leaves at the east edge.
+
+    Only the fifth case -- a lane whose taps are all local -- is free, and that
+    is where the choice is made: east if the westmost drain has a fill at or
+    west of it, west if the eastmost drain has one at or east of it.  Comparing
+    the extremes is enough, because every other drain is easier than the extreme
+    one on that side.
+
+    Measured over the 33 powered corpus runs: three lanes were being served the
+    wrong way round, on magnetic-coil, plastic and processor.  Rare, but each is
+    a machine that silently does not run.  Two of the three are free lanes and
+    this fixes them; ``plastic``'s is a lane with drains on BOTH sides of its
+    fills, which no single direction can serve -- see :func:`_split_lanes` for
+    why that one wants a second lane rather than a different arrow.
+    """
+    if key in fed_from_trunk:
+        return True
+    if key in hands_to_trunk or pinned_west_edge or pinned_east_edge:
+        return False
+    if fill is None or drain is None:
+        return False  # nothing to order: one end or the other is not local
+    east_serves = fill[0] <= drain[0]
+    west_serves = fill[1] >= drain[1]
+    return west_serves and not east_serves
 
 
 #: Altitude a riser's horizontal bridge rides at while it crosses the trunks of

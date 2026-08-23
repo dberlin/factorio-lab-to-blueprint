@@ -52,7 +52,7 @@ import heapq
 import math
 import time
 from collections import defaultdict, deque
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from fractions import Fraction
 
@@ -273,6 +273,27 @@ class Strip:
     def row_of_output(self, k: int) -> int:
         """Row index of the ``k``-th output lane, relative to the strip's top."""
         return len(self.in_above) + self.mh + k
+
+    def input_lane_tiles(self, lane: tuple[str, ...]) -> int:
+        """Belt tiles an INPUT lane actually needs, counted from its west end.
+
+        An input lane is fed at its head and flows east, and every tile past the
+        last sorter drawing from it carries items nothing will ever take -- dead
+        belt, one building each to paste and one more cell the router has to path
+        around.  ``_link_lane`` puts a sorter at ``machine.x + min(slot, mw - 1)``
+        for each machine, so the last tile that does any work is the last
+        machine's column plus the highest slot on this lane.
+
+        Output lanes are NOT trimmable the same way: they are filled at every
+        machine column and drained at the east end, so every tile between the
+        first sorter and the port carries flow.
+        """
+        last_slot = min(len(lane) - 1, self.mw - 1)
+        return (self.machines - 1) * self.mw + last_slot + 1
+
+    def east_of_input(self, item: str) -> int:
+        """Offset from the strip's west edge to the last tile of ``item``'s lane."""
+        return self.input_lane_tiles(self.lane_of_input(item)) - 1
 
     @property
     def sid(self) -> str:
@@ -616,6 +637,14 @@ class _DirectCandidate:
     item: str
     prod_row: int
     cons_row: int
+    #: Belt tiles each lane occupies, counted east from its strip's west edge.
+    #: The sorter needs a column both lanes cover, and an input lane is trimmed
+    #: to its last sorter, so the consumer's span is usually SHORTER than its
+    #: strip.  Using the strip width for both would let the packer commit a pair
+    #: whose lanes share no tile, which ``_bridge`` would then refuse -- a
+    #: rewarded promise the emission stage cannot keep.
+    prod_span: int = 1
+    cons_span: int = 1
 
 
 def _direct_net_candidates(
@@ -658,6 +687,8 @@ def _direct_net_candidates(
             item=item,
             prod_row=src.row_of_output(k),
             cons_row=dst.row_of_input(item),
+            prod_span=src.width,
+            cons_span=dst.input_lane_tiles(dst.lane_of_input(item)),
         )
     return out
 
@@ -845,9 +876,10 @@ def _pack(
         model.add(gap >= 1).only_enforce_if(di)
         model.add(gap <= catalog.SORTER_MAX_REACH).only_enforce_if(di)
         # The lanes must share at least one column for the sorter to run
-        # straight down. Both are full-width lanes over their strip's machines.
-        model.add(xs[i] <= xs[j] + strips[j].width - 1).only_enforce_if(di)
-        model.add(xs[j] <= xs[i] + strips[i].width - 1).only_enforce_if(di)
+        # straight down, and each lane's span is its own -- an input lane stops
+        # at its last sorter, so it is generally narrower than its strip.
+        model.add(xs[i] <= xs[j] + cand.cons_span - 1).only_enforce_if(di)
+        model.add(xs[j] <= xs[i] + cand.prod_span - 1).only_enforce_if(di)
         direct_vars[i, j] = di
 
     # Objective: width first, wirelength only as a tie-break.
@@ -1072,10 +1104,17 @@ def _emit_strip(
     # label external input belts later: the knowledge is unrecoverable once
     # emission drops it.
     lane_item_of: dict[int, str] = {}
+    #: Row -> belt tiles that row's lane actually needs.  Input lanes stop at
+    #: their last sorter (see ``Strip.input_lane_tiles``); output lanes run the
+    #: full width because their port is the east end.
+    lane_tiles_of: dict[int, int] = {}
     for lane in s.in_above + s.in_below:
-        lane_item_of[s.row_of_input(lane[0])] = lane[0]
+        row = s.row_of_input(lane[0])
+        lane_item_of[row] = lane[0]
+        lane_tiles_of[row] = s.input_lane_tiles(lane)
     for k, (item, _dest) in enumerate(s.out_lanes):
         lane_item_of[s.row_of_output(k)] = item
+        lane_tiles_of[s.row_of_output(k)] = width
 
     lane_idx: dict[int, list[int]] = {}
     for row in range(s.height):
@@ -1083,7 +1122,7 @@ def _emit_strip(
         if n_above <= row < n_above + s.mh:
             continue  # machine band
         indices = []
-        for k in range(width):
+        for k in range(lane_tiles_of.get(row, width)):
             indices.append(
                 canvas.add(
                     PlacedBuilding(
@@ -1146,7 +1185,7 @@ def _emit_strip(
                 ox,
                 oy + row,
                 ox,
-                ox + width - 1,
+                ox + len(lane_idx[row]) - 1,
                 tuple(lane_idx[row]),
             )
             tier, _count = _pick_sorter(item_rate(item, in_rates), span, 1)
@@ -1637,8 +1676,10 @@ def _route_all(
     return 0, len(nets), iterations
 
 
-def _reserve_port_access(canvas: _Canvas, nets: list[_Net]) -> int:
-    """Hold one cell next to every port, so no net can be walled in by another.
+def _reserve_port_access(
+    canvas: _Canvas, nets: list[_Net], *, twice: Collection[tuple[int, int]] = ()
+) -> int:
+    """Hold a cell next to every port, so no net can be walled in by another.
 
     Returns the number of ports that had no free neighbour to reserve -- those
     are genuinely boxed in by the packing and no routing order can save them,
@@ -1649,6 +1690,14 @@ def _reserve_port_access(canvas: _Canvas, nets: list[_Net]) -> int:
     because they all leave from the same tile.  Reserving per net would hand the
     second net a different cell it does not need and take it away from someone
     who does.
+
+    ``twice`` names ports that need TWO approaches rather than one, which is
+    what an input lane fed from both outside and inside is.  ``_seat_inputs``
+    mixes two ingredients onto one lane when they will not fit one per lane, and
+    one of them can be an external input while the other is produced internally;
+    the external run then arrives on the lane head's one open side and the
+    internal net finds an empty goal set.  Both claims are legitimate and they
+    are not the same cell, so both are staked.
 
     Ports are served longest-lane-first.  A short lane's end tile usually has
     three free neighbours and can spare one; a lane wedged against a strip
@@ -1667,11 +1716,13 @@ def _reserve_port_access(canvas: _Canvas, nets: list[_Net]) -> int:
         cells = [(px + dx, py + dy, 0) for dx, dy in _STEPS]
         # `free` already refuses a cell reserved for another port, since
         # `routing_ports` is empty here.
-        got = next((c for c in cells if canvas.free(c)), None)
-        if got is None:
+        want = 2 if key in twice else 1
+        got = [c for c in cells if canvas.free(c)][:want]
+        if not got:
             boxed_in += 1
             continue
-        canvas.reserved[got] = key
+        for cell in got:
+            canvas.reserved[cell] = key
     return boxed_in
 
 
@@ -1972,6 +2023,21 @@ def _route_external_inputs(
     missed = 0
     for belt, port in wanted.items():
         item = carried[belt]
+        # Spend exactly ONE of this lane's access reservations and leave the
+        # rest held. Every other port's stays held too, so bringing one input in
+        # cannot wall another lane up -- measured as `belt:external` sitting on
+        # the single open side of a lane head, on a canvas that had been clean a
+        # moment earlier.
+        #
+        # Releasing rather than claiming (`routing_ports`) is the point: a lane
+        # that also receives an internal net holds TWO cells, and claiming would
+        # let one straight run take both. The internal net would then be handed
+        # the empty goal set this exists to prevent.
+        mine = next(
+            (c for c, k in canvas.reserved.items() if k == (port.x, port.y)), None
+        )
+        if mine is not None:
+            del canvas.reserved[mine]
         # Straight out to the edge first. A lane head sits on the west face of
         # its strip, so the run west along its own row is usually clear, costs
         # one belt per tile, and -- unlike a routed path -- cannot compete with
@@ -2305,6 +2371,35 @@ def _build(
                 continue
             nets.append(_Net(src=port, dst=sink, item=item))
 
+    # Hold one cell beside every port BEFORE anything else can take it.
+    #
+    # Coater drop belts and external input runs are placed onto a canvas that is
+    # otherwise empty, so they take whatever cell suits them -- and a lane head's
+    # only free neighbour is exactly the sort of cell that suits them. The net
+    # that needed it is then handed an EMPTY goal set: A* returns None having
+    # expanded nothing, and no amount of rip-up can negotiate for a cell that is
+    # occupied by a building rather than contested by another path.
+    #
+    # Measured across the trivial+small+mid corpus, before this: every boxed-in
+    # port on the refusing candidates had a coater drop or an external belt on
+    # its one open side, and the boxed-in count equalled the failure count
+    # exactly. `_route_all` re-derives these once every path is laid, so this is
+    # a claim staked early rather than a second source of truth.
+    def hold_ports() -> None:
+        # A lane carrying an external ingredient AND an internally produced one
+        # has two feeds to accept, not one, so it needs two ways in.
+        net_ports = {(p.x, p.y) for n in nets for p in (n.src, n.dst)}
+        shared_feed = {
+            (port.x, port.y)
+            for ports in strip_in_ports
+            for item, port in ports.items()
+            if item in spec.external_inputs
+        } & net_ports
+        _reserve_port_access(canvas, nets, twice=shared_feed)
+
+    if route:
+        hold_ports()
+
     # Coaters go in BEFORE routing, because each one needs a proliferator net
     # routed to its drop belt. Placing them afterwards -- as this used to --
     # leaves them mounted on belts with nothing feeding them, so every
@@ -2320,6 +2415,15 @@ def _build(
             if entry is not None:
                 nets.extend(_proliferator_nets(entry, coater_list, prolif_item))
     coaters = len(coater_list)
+
+    # Again, now that the coater drops exist. A drop is a one-tile lane and the
+    # sink of a proliferator net, so it is a port like any other -- and it did
+    # not exist when the first claim was staked, which left it the one port the
+    # external runs were still free to wall in. That was the last refusal on the
+    # trivial+small+mid corpus: graphene's `max-proliferation`, boxed at three of
+    # five heights by exactly this.
+    if route:
+        hold_ports()
 
     xs = [b.x for b in canvas.buildings] or [0]
     ys = [b.y for b in canvas.buildings] or [0]
