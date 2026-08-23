@@ -7,6 +7,7 @@ would let a rates regression masquerade as a layout one.
 
 from __future__ import annotations
 
+from collections import Counter
 from fractions import Fraction as F
 
 import pytest
@@ -21,6 +22,7 @@ from flab2bp.layout.base import (
 )
 from flab2bp.layout.freeform import (
     _ENTRY_RING,
+    _MAX_LANE_TAPS,
     _ROUTE_RING,
     MU_DIRECT,
     FreeformLayout,
@@ -28,14 +30,17 @@ from flab2bp.layout.freeform import (
     _Canvas,
     _claim_power_sites,
     _Coater,
+    _dests,
     _direct_net_candidates,
     _height_seed,
+    _merge_lanes,
     _Net,
     _pack,
     _Port,
     _proliferator_nets,
     _reserve_port_access,
     _shard_sinks,
+    _staircase,
     fallback_placement,
     plan_strips,
     tie_break_cap,
@@ -1781,6 +1786,192 @@ class TestEveryShardDrainsEveryProduct:
         )
         backed_up = _full_report(p, spec).by_check("machine.output_removed")
         assert not backed_up, "\n".join(f.message for f in backed_up)
+
+
+def _islands_of(pairs: list[tuple[int, int]], n: int, m: int) -> int:
+    """Connected components of the producer/consumer bipartite graph."""
+    parent: dict[tuple[str, int], tuple[str, int]] = {("s", i): ("s", i) for i in range(n)}
+    parent.update({("d", j): ("d", j) for j in range(m)})
+
+    def find(k: tuple[str, int]) -> tuple[str, int]:
+        while parent[k] != k:
+            parent[k] = parent[parent[k]]
+            k = parent[k]
+        return k
+
+    for i, j in pairs:
+        a, b = find(("s", i)), find(("d", j))
+        if a != b:
+            parent[a] = b
+    return len({find(k) for k in parent})
+
+
+class TestLanePairingLeavesOneIsland:
+    """``flow.conservation``'s placement clause is a CUT argument.
+
+    Within every island an item can travel across, production must cover
+    consumption -- and a pairing that partitions producer lanes against consumer
+    lanes one-to-one partitions the flow graph into that many islands, each of
+    which then has to balance on its own.  It cannot: shard sizes and consumer
+    sizes are two independent integer partitions of two different totals.
+
+    Measured on ``quantum-chip``: the four-machine ``titanium-glass`` shard was
+    cyclically handed eleven of ``plane-filter``'s sixteen machines, needing
+    11/4 of a machine's output where seven machines covering sixteen can only
+    reach 16/7.
+    """
+
+    @pytest.mark.parametrize(
+        ("n", "m"),
+        [(1, 1), (1, 4), (4, 1), (2, 3), (3, 2), (5, 5), (2, 7), (7, 2), (3, 8)],
+    )
+    def test_the_pairing_is_a_spanning_tree(self, n: int, m: int) -> None:
+        pairs = _staircase([1] * n, [1] * m)
+        assert len(pairs) == n + m - 1, "fewer edges cannot connect n + m nodes"
+        assert _islands_of(pairs, n, m) == 1
+        assert {i for i, _ in pairs} == set(range(n)), "a producer lane went undrained"
+        assert {j for _, j in pairs} == set(range(m)), "a consumer lane went unfed"
+
+    @pytest.mark.parametrize(("n", "m"), [(1, 5), (5, 1), (1, 1)])
+    def test_a_single_lane_on_one_side_pairs_exactly_as_it_used_to(
+        self, n: int, m: int
+    ) -> None:
+        """Additive: the round-robin case this replaces is a special case of it."""
+        assert _staircase([1] * n, [1] * m) == [
+            (k % n, k % m) for k in range(max(n, m))
+        ]
+
+    def test_more_machines_behind_a_lane_take_more_consumers(self) -> None:
+        pairs = _staircase([6, 2], [1, 1, 1, 1])
+        big = [j for i, j in pairs if i == 0]
+        small = [j for i, j in pairs if i == 1]
+        assert len(big) > len(small), f"{pairs} ignores the machine counts"
+
+    def test_a_producer_lane_never_takes_more_taps_than_it_can_carry(self) -> None:
+        """A splitter has four sides; the fourth branch is refused, not built.
+
+        The bound is the larger of that and the even share, because ``n + m - 1``
+        taps across ``n`` lanes can exceed four however they are dealt.
+        """
+        for n, m in ((2, 4), (3, 5), (2, 10), (4, 12)):
+            pairs = _staircase([100, *([1] * (n - 1))], [1] * m)
+            share = -(-(n + m - 1) // n)
+            cap = max(_MAX_LANE_TAPS, share)
+            counts = Counter(i for i, _ in pairs)
+            assert max(counts.values()) <= cap, f"n={n} m={m}: {counts}"
+
+
+def one_machine_fan_out_spec(consumers: int = 4) -> BuildSpec:
+    """A producer with FEWER MACHINES than the sorter reach needs shards.
+
+    ``mass-energy-storage`` in the universe-matrix build is exactly this: one
+    machine and four destinations.  Sharding wants two strips and there is only
+    one machine to put in them, so the split has to happen on the other axis --
+    several destinations sharing one output lane.
+    """
+    sinks = _real_consumers_of("copper-ingot", consumers)
+    if len(sinks) < consumers:
+        pytest.skip(f"dataset has only {len(sinks)} mapped copper-ingot consumers")
+    from flab2bp.lab.data import load_vendored
+
+    groups = [
+        group(
+            "copper-ingot",
+            "arc-smelter",
+            1,
+            {"copper-ore": F(consumers)},
+            {"copper-ingot": F(consumers)},
+        )
+    ]
+    outputs: dict[str, F] = {}
+    for rid in sinks:
+        produced = next(iter(load_vendored().recipe(rid).outputs))
+        groups.append(
+            group(rid, "assembling-machine-2", 1, {"copper-ingot": F(1)}, {produced: F(1)})
+        )
+        outputs[produced] = F(1)
+    return BuildSpec(
+        groups=tuple(groups),
+        external_inputs={"copper-ore": F(consumers)},
+        outputs=outputs,
+        belt_item_id="conveyor-belt-2",
+        belt_items_per_second=F(12),
+        label=f"one-machine-fan-out-{consumers}",
+    )
+
+
+class TestOneLaneCanServeSeveralDestinations:
+    """The other axis, for a producer that has no second machine to shard into.
+
+    Sharding splits destinations across STRIPS and costs one machine per shard.
+    ``mass-energy-storage`` has one machine and four destinations, so the reach
+    limit and the machine count are in direct contradiction and no strip plan
+    exists -- the whole universe-matrix build refused inside ``plan_strips``,
+    deterministically, in 0.0s.
+
+    Folding destinations onto one lane resolves it with machinery that already
+    existed: a lane serving several consumers is what a sharded CONSUMER group
+    already produces, and ``_tap_source`` builds the junction at the lane end.
+    """
+
+    def test_sharding_stops_at_the_machine_count(self) -> None:
+        sinks = [("a", f"d{i}") for i in range(4)]
+        assert len(_shard_sinks(sinks, cap=3)) == 2, "the fixture must want two shards"
+        assert len(_shard_sinks(sinks, cap=3, max_shards=1)) == 1
+
+    def test_merging_keeps_every_destination_inside_the_reach(self) -> None:
+        shard = [("a", f"d{i}") for i in range(4)]
+        demand = {(item, dest): F(1) for item, dest in shard}
+        lanes = _merge_lanes(shard, 3, demand, F(12))
+        assert len(lanes) == 3
+        assert {d for _item, dest in lanes for d in _dests(dest)} == {
+            "d0",
+            "d1",
+            "d2",
+            "d3",
+        }
+
+    def test_a_shard_that_already_fits_is_left_exactly_as_it_was(self) -> None:
+        """Merging must be additive: every plan that worked plans identically."""
+        shard = [("a", "d1"), ("b", "d2")]
+        assert _merge_lanes(shard, 3, {}, F(12)) == shard
+
+    def test_every_product_keeps_a_lane_of_its_own(self) -> None:
+        """A shard that cannot drain a product has machines that back up."""
+        shard = [("a", "d1"), ("a", "d2"), ("a", "d3"), ("b", "d4")]
+        lanes = _merge_lanes(shard, 2, {}, F(12))
+        assert {item for item, _dest in lanes} == {"a", "b"}
+
+    def test_a_merged_lane_over_belt_capacity_is_refused(self) -> None:
+        """Two consumers whose combined draw jams the lane is not a layout."""
+        shard = [("a", f"d{i}") for i in range(4)]
+        demand = {(item, dest): F(7) for item, dest in shard}
+        with pytest.raises(ValueError, match="over the"):
+            _merge_lanes(shard, 3, demand, F(12))
+
+    def test_a_one_machine_producer_plans_and_serves_every_consumer(self) -> None:
+        spec = one_machine_fan_out_spec(4)
+        strips = plan_strips(spec, strip_len=6)
+        producers = [s for s in strips if s.group_key.startswith("copper-ingot")]
+        assert len(producers) == 1, "one machine cannot be split across shards"
+        s = producers[0]
+        assert len(s.out_lanes) + len(s.in_below) <= catalog.SORTER_MAX_REACH
+        served = {d for _item, dest in s.out_lanes for d in _dests(dest)}
+        wanted = {
+            f"{g.recipe_id}#{i}"
+            for i, g in enumerate(spec.groups)
+            if "copper-ingot" in g.inputs_per_machine
+        }
+        assert served == wanted, f"missing destinations: {wanted - served}"
+
+    def test_the_merged_plan_lays_out_and_validates(self) -> None:
+        spec = one_machine_fan_out_spec(4)
+        p = FreeformLayout(power=True, workers=DETERMINISTIC_WORKERS).lay_out(
+            spec, time_budget_s=4.0
+        )
+        report = _full_report(p, spec, power=True)
+        assert report.ok, "\n".join(f.message for f in report.errors[:5])
+        assert p.stats["route_failures"] == 0.0
 
 
 class TestPowerClaimsItsGroundBeforeRouting:

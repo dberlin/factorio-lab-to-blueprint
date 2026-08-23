@@ -147,6 +147,15 @@ _ENTRY_RING = _ROUTE_RING + 1
 #: standing in one corridor; thirty cannot.
 _POWER_RETRY_NETS = 3
 
+#: Consumer lanes one producer lane END can hand items to.
+#:
+#: ``_tap_source`` builds a splitter on that tile and a splitter has
+#: :data:`junction.MAX_PORTS` sides: the lane feeding it, the belt carrying the
+#: lane onward past it, and one stub per branch.  Three branches fill it, and
+#: the fourth is reported as a failure rather than mis-linked -- so a pairing
+#: that asks for a fourth has already lost a net.
+_MAX_LANE_TAPS = junction.MAX_PORTS - 1
+
 #: Tower lattice spacing.  A square lattice of spacing ``d`` leaves a worst-case
 #: distance of ``d/sqrt(2)`` to the nearest lattice point, so ``d`` must satisfy
 #: ``d <= R*sqrt(2)``.
@@ -245,9 +254,15 @@ class Strip:
     #: Lanes arriving on the north side, ordered top-down.  Each lane holds one
     #: or more items; more than one means a shared lane whose sorters filter.
     in_above: tuple[tuple[str, ...], ...]
-    #: ``(item, destination strip id)`` per lane, ordered top-down, starting
+    #: ``(item, destination group key)`` per lane, ordered top-down, starting
     #: directly under the machine band.  A separate lane per destination is what
     #: removes the need for splitters.
+    #:
+    #: The destination field may name SEVERAL groups, joined by
+    #: :data:`DEST_SEP`.  That is the escape hatch for a producer with fewer
+    #: machines than the sorter reach needs shards -- see :func:`_merge_lanes`.
+    #: Use :func:`_dests` to read it; comparing it to a group key directly is
+    #: how the two representations drift apart.
     out_lanes: tuple[tuple[str, str], ...]
     #: Lanes arriving on the south side, below ``out_lanes``.  Non-empty only
     #: when a recipe has more ingredients than one side can reach.
@@ -358,8 +373,27 @@ def _sink_demand(
     return dest.count * dest.inputs.get(item, Fraction(0))
 
 
+#: Separator joining several destination group keys onto ONE output lane.
+#:
+#: A group key is ``f"{recipe_id}#{index}"`` and a recipe id never contains a
+#: pipe, so the join is unambiguous and reversible.
+DEST_SEP = "|"
+
+
+def _dests(dest: str) -> tuple[str, ...]:
+    """The destination group keys one output lane serves.
+
+    Empty for a lane that leaves the build, which is what an empty ``dest``
+    means everywhere in this module.
+    """
+    return tuple(dest.split(DEST_SEP)) if dest else ()
+
+
 def _shard_sinks(
-    sinks: Sequence[tuple[str, str]], *, cap: int | None = None
+    sinks: Sequence[tuple[str, str]],
+    *,
+    cap: int | None = None,
+    max_shards: int | None = None,
 ) -> list[list[tuple[str, str]]]:
     """Chunk output sinks so no strip carries more lanes than a sorter can span.
 
@@ -381,6 +415,15 @@ def _shard_sinks(
 
     ``cap`` is the room left on the south side once any overflow input lanes are
     seated there; it defaults to the full sorter reach.
+
+    ``max_shards`` is the number of MACHINES available.  A shard with no machine
+    leaves its destinations unfed, so the split can never be finer than that --
+    and a producer with one machine and four consumers is ordinary
+    (``mass-energy-storage`` in the universe-matrix build).  Rather than refuse,
+    the chunking stops at ``max_shards`` and hands back shards that may exceed
+    ``cap`` lanes; :func:`_merge_lanes` then puts several destinations on ONE
+    lane, which is the other axis the geometry actually has.  Callers that pass
+    ``max_shards`` must therefore call :func:`_merge_lanes` on every shard.
     """
     reach = catalog.SORTER_MAX_REACH if cap is None else cap
     if reach <= 0:
@@ -400,6 +443,8 @@ def _shard_sinks(
 
     n = 1
     while sum(max(1, math.ceil(len(d) / n)) for d in by_item.values()) > reach:
+        if max_shards is not None and n >= max_shards:
+            break
         n += 1
 
     out: list[list[tuple[str, str]]] = [[] for _ in range(n)]
@@ -408,6 +453,79 @@ def _shard_sinks(
         for s in range(n):
             chunk = dests[s * per : (s + 1) * per] or [dests[s % len(dests)]]
             out[s].extend((item, d) for d in chunk)
+    return out
+
+
+def _merge_lanes(
+    shard: Sequence[tuple[str, str]],
+    reach: int,
+    demand: Mapping[tuple[str, str], Fraction],
+    capacity: Fraction,
+) -> list[tuple[str, str]]:
+    """Fold a shard's destinations onto at most ``reach`` output lanes.
+
+    Sharding splits a producer's destinations across STRIPS and needs one
+    machine per shard.  A producer with one machine and four destinations has no
+    second shard to give, so the other axis has to move: one lane serves several
+    destinations, each consumer tapping the same lane end, and ``_tap_source``
+    turns the second and later taps into a junction there.  That is the same
+    mechanism a lane already uses when one destination group is sharded into
+    several consumer strips, so it costs no new machinery -- only the
+    bookkeeping that a lane's destination field is now a SET.
+
+    Which destinations share a lane is a bin-packing question, and the bin is a
+    belt: two consumers whose combined draw exceeds the tier would jam the lane
+    however it is routed.  Destinations are therefore packed largest-demand
+    first into the least-loaded lane, and a lane that still comes out over
+    capacity raises -- refusing is honest, while emitting it would produce a
+    blueprint that pastes and then starves whichever consumer loses the race.
+
+    Lanes are handed out one per product first (a shard must drain every
+    product, or its machines back up on the one it cannot) and the spares go to
+    whichever product has the most destinations per lane so far.
+    """
+    if len(shard) <= reach:
+        return list(shard)
+
+    by_item: dict[str, list[str]] = {}
+    for item, dest in shard:
+        by_item.setdefault(item, []).append(dest)
+    if len(by_item) > reach:
+        raise ValueError(
+            f"a machine yields {len(by_item)} distinct products but only {reach} "
+            f"output lane(s) fit inside the {catalog.SORTER_MAX_REACH}-tile sorter "
+            "reach, so one of them could never be drained"
+        )
+
+    alloc = dict.fromkeys(by_item, 1)
+    for _ in range(reach - len(by_item)):
+        room = [item for item in by_item if alloc[item] < len(by_item[item])]
+        if not room:
+            break
+        alloc[max(room, key=lambda i: (Fraction(len(by_item[i]), alloc[i]), i))] += 1
+
+    out: list[tuple[str, str]] = []
+    for item in sorted(by_item):
+        k = alloc[item]
+        bins: list[list[str]] = [[] for _ in range(k)]
+        loads = [Fraction(0)] * k
+        order = sorted(
+            by_item[item], key=lambda d: (-demand.get((item, d), Fraction(0)), d)
+        )
+        for dest in order:
+            b = min(range(k), key=lambda i: (loads[i], i))
+            bins[b].append(dest)
+            loads[b] += demand.get((item, dest), Fraction(0))
+        for b, group in enumerate(bins):
+            if not group:
+                continue
+            if loads[b] > capacity:
+                raise ValueError(
+                    f"{item}: destinations {sorted(group)} have to share one "
+                    f"output lane carrying {loads[b]} items/s, over the "
+                    f"{capacity}/s the belt sustains"
+                )
+            out.append((item, DEST_SEP.join(sorted(group))))
     return out
 
 
@@ -626,23 +744,28 @@ def plan_strips(spec: BuildSpec, *, strip_len: int = 6) -> list[Strip]:
         # Output lanes share the south side with any overflow inputs, so the
         # shard size is what is left after those are seated.
         out_cap = reach - len(in_below)
-        shards = _shard_sinks(sinks, cap=out_cap) if sinks else [[]]
-        if len(shards) > g.count:
-            raise ValueError(
-                f"recipe {g.recipe_id!r} feeds {len(sinks)} destinations, needing "
-                f"{len(shards)} shards to stay inside the "
-                f"{catalog.SORTER_MAX_REACH}-tile sorter reach, but only has "
-                f"{g.count} machine(s) to split between them; a shard with no "
-                f"machines would leave its consumers unfed"
-            )
+        shards = (
+            _shard_sinks(sinks, cap=out_cap, max_shards=g.count) if sinks else [[]]
+        )
         demand = {
             (item, dest): _sink_demand(groups, spec, item, dest) for item, dest in sinks
         }
         per_shard = (
             _allocate_machines(g.count, shards, demand) if len(shards) > 1 else [g.count]
         )
+        # Machines bound the number of shards, so a producer that still has more
+        # destinations than lanes folds several of them onto one lane instead.
+        # Merging AFTER the allocation keeps `_allocate_machines` looking at the
+        # per-destination demand it was written against.
+        try:
+            lanes = [
+                _merge_lanes(shard, out_cap, demand, spec.belt_items_per_second)
+                for shard in shards
+            ]
+        except ValueError as exc:
+            raise ValueError(f"recipe {g.recipe_id!r}: {exc}") from None
 
-        for shard, machines in zip(shards, per_shard, strict=True):
+        for shard, machines in zip(lanes, per_shard, strict=True):
             n_strips = max(1, math.ceil(machines / max(1, strip_len)))
             base = machines // n_strips
             extra = machines % n_strips
@@ -748,7 +871,7 @@ def _direct_net_candidates(
             (
                 (k, item)
                 for k, (item, dest) in enumerate(src.out_lanes)
-                if dest == dst.group_key
+                if dst.group_key in _dests(dest)
             ),
             None,
         )
@@ -809,10 +932,9 @@ def _nets_between(strips: list[Strip]) -> list[tuple[int, int]]:
     nets: set[tuple[int, int]] = set()
     for i, s in enumerate(strips):
         for _item, dest in s.out_lanes:
-            if not dest:
-                continue
-            for j in by_group.get(dest, []):
-                nets.add((i, j))
+            for d in _dests(dest):
+                for j in by_group.get(d, []):
+                    nets.add((i, j))
     return sorted(nets)
 
 
@@ -1149,6 +1271,14 @@ class _Port:
     #: see ``_commit_paths``.  A tap partway along the lane becomes a junction;
     #: the tiles are what makes choosing distinct taps possible.
     tiles: tuple[int, ...] = ()
+    #: Machines behind this lane.
+    #:
+    #: A strip's lane carries its OWN machines' share of the group's rate, and
+    #: the shards of one group are rarely the same size.  Pairing producer lanes
+    #: against consumer lanes without knowing this is what let a four-machine
+    #: shard be handed eleven of a sixteen-machine consumer group -- see
+    #: :func:`_staircase`.
+    machines: int = 1
 
     def columns(self) -> range:
         return range(self.x0, self.x1 + 1)
@@ -1162,7 +1292,15 @@ class _Port:
         """
         if not self.tiles or not 0 <= k < len(self.tiles):
             return self
-        return _Port(self.tiles[k], self.x0 + k, self.y, self.x0, self.x1, self.tiles)
+        return _Port(
+            self.tiles[k],
+            self.x0 + k,
+            self.y,
+            self.x0,
+            self.x1,
+            self.tiles,
+            self.machines,
+        )
 
 
 def _lane_filter(item: str) -> int:
@@ -1312,6 +1450,7 @@ def _emit_strip(
                 ox,
                 ox + len(lane_idx[row]) - 1,
                 tuple(lane_idx[row]),
+                s.machines,
             )
             tier, _count = _pick_sorter(item_rate(item, in_rates), span, 1)
             placed += _link_lane(
@@ -1340,6 +1479,7 @@ def _emit_strip(
             ox,
             ox + width - 1,
             tuple(lane_idx[row]),
+            s.machines,
         )
         tier, _count = _pick_sorter(item_rate(item, out_rates), span, 1)
         sorters += _link_lane(
@@ -1695,6 +1835,20 @@ def _route_all(
     budget = {"left": _ROUTING_BUDGET}
     fewest_failed = len(nets) + 1
     stale = 0
+    #: The BEST round's paths, not the last round's.
+    #:
+    #: What gets committed used to be whichever round the loop happened to stop
+    #: on, and the shared expansion budget makes the last round systematically
+    #: the WORST one: round 1 spends the budget, every round after it has
+    #: nothing left to search with, and `_astar` returns `None` for every net
+    #: before expanding a node. Committing that round throws away a perfectly
+    #: good routing and reports the pack unwireable.
+    #:
+    #: Measured on universe-matrix/max-proliferation: two of the five candidate
+    #: heights reported `routed=0 failed=115` -- every net -- while their first
+    #: round had routed roughly seventy of them. Rip-up-and-reroute is a search
+    #: over rounds; keeping the incumbent is what makes it one.
+    best_paths: dict[int, list[tuple[int, int, int]]] = {}
 
     _reserve_port_access(canvas, nets)
 
@@ -1815,13 +1969,17 @@ def _route_all(
         # because pressure grows geometrically and a late round can still break
         # a deadlock that earlier ones could not.
         if failed < fewest_failed:
-            fewest_failed, stale = failed, 0
+            fewest_failed, stale, best_paths = failed, 0, paths
         else:
             stale += 1
-        if stale >= _RRR_STALE_ROUNDS or it == RRR_MAX - 1:
-            unlinked = _commit_paths(canvas, nets, paths, belt_id, belt_model)
-            return len(paths) - unlinked, failed + unlinked, iterations
-    return 0, len(nets), iterations
+        # An exhausted expansion budget ends the search as surely as a stale
+        # round does: every further round would re-run every net against a
+        # budget of zero and fail all of them, and the counters would read as
+        # congestion rather than as work nobody had left to do.
+        if stale >= _RRR_STALE_ROUNDS or it == RRR_MAX - 1 or budget["left"] <= 0:
+            break
+    unlinked = _commit_paths(canvas, nets, best_paths, belt_id, belt_model)
+    return len(best_paths) - unlinked, fewest_failed + unlinked, iterations
 
 
 def _reserve_port_access(
@@ -2524,6 +2682,116 @@ def _link_groups(
 # --- assembly --------------------------------------------------------------
 
 
+def _pair_lanes(
+    srcs: Sequence[_Port], sinks: Sequence[_Port]
+) -> list[tuple[_Port, _Port]]:
+    """Pair one item's producer lanes against its consumer lanes.
+
+    Every reuse of a lane stays on that lane's END TILE.  Walking inward was
+    tried and is worse: a mid-lane tile is WALLED IN -- lane either side,
+    machines above, another lane below -- so the branch it was meant to serve has
+    nowhere to leave from.  Measured on the free-proliferation chain: three of
+    the five walled-in ports were taps this had moved, each with all four
+    neighbours occupied on a clean canvas.
+
+    Sharing the end tile is safe because ``_tap_source`` builds a junction there:
+    the first net links directly, the second turns the link into a splitter, and
+    further nets attach to it until the four sides run out -- at which point it
+    reports the failure instead of mis-linking.
+
+    Only the PRODUCER side is ever reused this way.  Walking the consumer lane
+    inward was tried and is strictly worse: a strip's inner input lane is walled
+    in the same way, and only the lane HEAD is reachable because its west
+    neighbour lies outside the strip.  So several producers feeding one consumer
+    lane cannot each reach it -- they converge instead, the first net routing to
+    the head and the rest merging into that net's path, which is what belts do
+    anyway.
+    """
+    return [
+        (srcs[i], sinks[j])
+        for i, j in _staircase(
+            [p.machines for p in srcs], [p.machines for p in sinks]
+        )
+    ]
+
+
+def _staircase(supply: Sequence[int], demand: Sequence[int]) -> list[tuple[int, int]]:
+    """A CONNECTED pairing of producer lanes to consumer lanes, by machine count.
+
+    Two properties, and the first is the one that makes ``flow.conservation``
+    hold structurally rather than by luck.
+
+    **Connected.**  ``flow.conservation``'s placement clause is a CUT argument:
+    within every ISLAND an item can travel across, production must cover
+    consumption.  A pairing that partitions the two sides into disjoint pairs
+    partitions the item's flow graph into that many islands, and each island
+    then has to balance on its own -- which a shard split cannot promise, since
+    the shard sizes and the consumer sizes are two independent integer
+    partitions of two different totals.  Measured on ``quantum-chip``: the
+    four-machine ``titanium-glass`` shard was cyclically handed eleven of
+    ``plane-filter``'s sixteen machines, needing 11/4 of a machine's output
+    where seven machines covering sixteen can only reach 16/7.
+
+    A staircase from ``(0, 0)`` to ``(n-1, m-1)`` uses ``n + m - 1`` pairs, which
+    is the fewest that can connect ``n + m`` nodes, so there is exactly ONE
+    island for the edge and the spec's own arithmetic decides it.  The cost is
+    ``min(n, m) - 1`` extra nets, and only where BOTH sides have more than one
+    lane -- when either side is a single lane the walk degenerates to exactly the
+    cyclic pairing this replaces, so nothing that already worked pays anything.
+
+    **Weighted.**  The step advances whichever side has fallen behind in
+    MACHINES, so a shard with twice the machines is handed roughly twice the
+    consumers.  Even round-robin was what let the imbalance above happen at all.
+
+    **Capped.**  ``_MAX_LANE_TAPS`` bounds how many consumer lanes hang off one
+    producer lane end: the splitter there has four sides and a fourth branch is
+    refused, so the walk moves on to the next producer lane rather than build a
+    tap ``_tap_source`` would reject.  Where the cap is arithmetically
+    unreachable -- ``n + m - 1`` taps across ``n`` lanes can exceed it however
+    they are dealt -- the walk spreads them evenly instead, which is the best
+    any pairing can do and no worse than the round-robin it replaces.
+    """
+    n, m = len(supply), len(demand)
+    if n == 0 or m == 0:
+        return []
+
+    def prefix(ws: Sequence[int]) -> list[int]:
+        out, run = [], 0
+        for w in ws:
+            run += max(0, w)
+            out.append(run)
+        return out
+
+    sup_pre, dem_pre = prefix(supply), prefix(demand)
+    sup_tot = sup_pre[-1] or 1
+    dem_tot = dem_pre[-1] or 1
+
+    # The walk lays n + m - 1 taps across n producer lanes, so a cap below
+    # their even share cannot be met by any dealing of them; take the larger.
+    cap = max(_MAX_LANE_TAPS, -(-(n + m - 1) // n))
+
+    i = j = 0
+    taps = 1
+    out = [(0, 0)]
+    while i < n - 1 or j < m - 1:
+        if j >= m - 1:
+            advance_src = True
+        elif i >= n - 1:
+            advance_src = False
+        else:
+            advance_src = taps >= cap or (
+                Fraction(sup_pre[i], sup_tot) <= Fraction(dem_pre[j], dem_tot)
+            )
+        if advance_src:
+            i += 1
+            taps = 1
+        else:
+            j += 1
+            taps += 1
+        out.append((i, j))
+    return out
+
+
 def _build(
     spec: BuildSpec,
     strips: list[Strip],
@@ -2603,53 +2871,23 @@ def _build(
     direct_placed = 0
 
     nets: list[_Net] = []
-    for (src_key, item, dest), srcs in out_ports.items():
-        if not dest:
-            continue
-        sinks = in_ports.get((dest, item), [])
-        if not srcs or not sinks:
-            continue
-        # Pair the two sides cyclically so EVERY producer lane is drained and
-        # EVERY consumer lane is filled, whichever side was sharded further. One
-        # net per side-pair; taking the cross product would emit needless belts.
-        #
-        # When a producer lane is reused -- more sinks than sources -- each reuse
-        # taps a DIFFERENT tile of that lane. Sharing the lane's end tile could
-        # never work: a belt tile has one `output_obj`, so only the last net to
-        # commit was linked and the rest became belts nothing fed. Distinct tiles
-        # turn the reuse into what it physically is, a junction partway along the
-        # lane, which `_commit_paths` builds a splitter for.
-        # Only the PRODUCER side moves. Walking the consumer lane inward was
-        # tried and is strictly worse: a strip's inner input lane is walled in
-        # -- above it another lane, below it the machine band, either side the
-        # lane itself -- so every tile of it has zero free neighbours. Measured
-        # on magnetic-ring: dst ports with all four neighbours occupied, on a
-        # CLEAN canvas, before any routing. Only the lane HEAD is reachable,
-        # because its west neighbour lies outside the strip.
-        #
-        # So several producers feeding one consumer lane cannot each reach it.
-        # They converge instead: the first net routes to the head and the rest
-        # merge into that net's path, which is what belts do anyway.
-        for k in range(max(len(srcs), len(sinks))):
-            # Every reuse stays on the lane END. Walking inward was tried and is
-            # worse, for the same reason the consumer side never walks: a
-            # mid-lane tile is WALLED IN -- lane either side, machines above,
-            # another lane below -- so the branch it was meant to serve has
-            # nowhere to leave from. Measured on the free-proliferation chain:
-            # three of the five walled-in ports were taps this had moved, each
-            # with all four neighbours occupied on a clean canvas.
-            #
-            # Sharing the end tile is safe because `_tap_source` builds a
-            # junction there: the first net links directly, the second turns the
-            # link into a splitter, and further nets attach to it until the four
-            # sides run out -- at which point it reports the failure instead of
-            # mis-linking.
-            port = srcs[k % len(srcs)]
-            sink = sinks[k % len(sinks)]
-            if (src_key, dest) in direct_keys and _bridge(canvas, port, sink, rates, item):
-                direct_placed += 1
+    for (src_key, item, dest_group), srcs in out_ports.items():
+        # One output lane may serve SEVERAL destination groups -- see
+        # `_merge_lanes` -- and each of them is its own set of consumer strips to
+        # pair against. They all tap the same lane end, where `_tap_source`
+        # builds the junction, exactly as it already does when ONE destination is
+        # sharded across several consumer strips.
+        for dest in _dests(dest_group):
+            sinks = in_ports.get((dest, item), [])
+            if not srcs or not sinks:
                 continue
-            nets.append(_Net(src=port, dst=sink, item=item))
+            for port, sink in _pair_lanes(srcs, sinks):
+                if (src_key, dest) in direct_keys and _bridge(
+                    canvas, port, sink, rates, item
+                ):
+                    direct_placed += 1
+                    continue
+                nets.append(_Net(src=port, dst=sink, item=item))
 
     # Hold one cell beside every port BEFORE anything else can take it.
     #
@@ -3094,8 +3332,8 @@ def _fanout_shortfall(strips: list[Strip]) -> list[str]:
     sink_lanes: dict[tuple[str, str], int] = defaultdict(int)
     for s in strips:
         for item, dest in s.out_lanes:
-            if dest:
-                key = (s.group_key, item, dest)
+            for d in _dests(dest):
+                key = (s.group_key, item, d)
                 src_lanes[key] += 1
                 src_tiles[key] = min(src_tiles.get(key, s.width), s.width)
         for item in s.in_lanes:

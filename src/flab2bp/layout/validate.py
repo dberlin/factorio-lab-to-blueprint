@@ -2551,6 +2551,60 @@ def _headroom(ctx: Context) -> Iterable[Finding]:
 # --- entry point -----------------------------------------------------------
 
 
+def id_map(spec: BuildSpec) -> IdMap:
+    """Bridge FactorioLab string ids to the DSP numeric ids a Placement uses.
+
+    Built from the spec rather than the whole catalog, so an unmappable recipe
+    elsewhere in the dataset cannot break a build that does not use it.
+
+    Lives here rather than in the pipeline because a strategy needs it to check
+    its own work, and a strategy cannot import the pipeline that imports it.
+    """
+    recipes: dict[str, int] = {}
+    items: dict[str, int] = {}
+    known = cat.known_recipe_ids()
+    for g in spec.groups:
+        if g.recipe_id in known:
+            recipes[g.recipe_id] = cat.recipe_id(g.recipe_id)
+        # The MACHINE is an item too, and `spec.machine_counts` needs it to
+        # match a group against the buildings actually placed. Omitting it made
+        # every group read as "spec demands 0" while the placement was correct.
+        machine = cat.get_item_id(g.machine_item_id)
+        if machine is not None:
+            items[g.machine_item_id] = machine
+        for item in (*g.inputs_per_machine, *g.outputs_per_machine):
+            got = cat.get_item_id(item)
+            if got is not None:
+                items[item] = got
+    for item in (*spec.external_inputs, *spec.outputs):
+        got = cat.get_item_id(item)
+        if got is not None:
+            items[item] = got
+    return IdMap(recipes=recipes, items=items)
+
+
+def certify(placement: Placement, spec: BuildSpec, *, expect_power: bool) -> Report:
+    """Judge a strategy's own output, so it cannot return something broken.
+
+    ``LayoutStrategy.lay_out`` promises a valid ``Placement`` or
+    :class:`NoValidLayout`.  For most of this project's life that promise was
+    ARGUED rather than enforced -- a fallback construction was documented as
+    "always valid", was not, and returned a layout that pasted cleanly and then
+    did not run.  Deleting it helped; it did not make the promise true, because
+    the solved path can be wrong too and nothing downstream of ``lay_out`` was
+    obliged to look.
+
+    This is what makes it true.  A strategy calls this before returning, and a
+    rejected placement becomes a refusal.  That trade is deliberate and it goes
+    the right way: refusing emits nothing, while an invalid blueprint pastes and
+    is not discovered until somebody is standing in front of it in game.
+
+    Returns the report rather than raising, so the caller can put the failing
+    check names into its own error message.
+    """
+    return validate(placement, spec, ids=id_map(spec), expect_power=expect_power)
+
+
 def validate(
     placement: Placement,
     spec: BuildSpec | None = None,

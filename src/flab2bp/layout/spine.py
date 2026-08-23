@@ -63,7 +63,7 @@ from fractions import Fraction
 from ortools.sat.python import cp_model
 
 from flab2bp.dsp import catalog, params
-from flab2bp.layout import junction
+from flab2bp.layout import junction, validate
 from flab2bp.layout.base import (
     DEFAULT_SEARCH_WORKERS,
     RETRY_BUDGET_S,
@@ -970,6 +970,26 @@ FALLBACK_EMISSION = 5.0  # a plan solved, but emitting it raised
 #: ``FALLBACK_EMISSION``, which was a plain lie: nothing had been emitted, and
 #: nothing had even been solved.
 FALLBACK_SEED_UNWIRABLE = 6.0
+#: The placement was built and then FAILED ITS OWN VALIDATION.
+#:
+#: `lay_out` promises a valid `Placement` or an exception. That promise used to
+#: be argued: a fallback was documented as always valid, was not, and returned a
+#: layout that pasted cleanly and then did not run. Deleting the fallback helped
+#: but did not make the promise true -- the solved path can be wrong too, and
+#: nothing downstream was obliged to look. Now it looks, and a rejected
+#: placement becomes a refusal.
+FALLBACK_SELF_CHECK = 7.0
+
+def _rejected(placement: Placement, spec: BuildSpec, *, power: bool) -> str:
+    """Named checks this placement fails, or ``""`` when it is clean.
+
+    Cheap next to the CP-SAT sweep that produced the placement, and it is the
+    one thing that makes ``lay_out``'s contract enforceable rather than
+    asserted.
+    """
+    report = validate.certify(placement, spec, expect_power=power)
+    return ", ".join(sorted({f.check for f in report.errors}))
+
 
 _REFUSAL_TEXT = {
     FALLBACK_NO_BUDGET: "no time budget was given, so the solver was never asked",
@@ -980,6 +1000,9 @@ _REFUSAL_TEXT = {
     ),
     FALLBACK_NO_SOLUTION: "CP-SAT found no feasible row assignment at any candidate width",
     FALLBACK_EMISSION: "a plan solved but could not be emitted onto the grid",
+    FALLBACK_SELF_CHECK: (
+        "every plan that emitted was rejected by our own validator"
+    ),
     FALLBACK_SEED_UNWIRABLE: (
         "a group cannot be wired even alone in its own row, so no packing can "
         "help it"
@@ -3407,6 +3430,14 @@ class SpineLayout:
                 continue
             placement.stats["solver_rejected"] = 0.0
             placement.stats["fallback_reason"] = FALLBACK_NONE
+            bad = _rejected(placement, spec, power=self.power)
+            if bad:
+                # Solved, emitted, and still wrong. Keep sweeping rather than
+                # hand back something the validator will refuse anyway: this
+                # method's contract is a VALID placement or an exception, and
+                # until now that was argued rather than enforced.
+                reason, detail = FALLBACK_SELF_CHECK, bad
+                continue
             return placement
 
         # Last resort, once every budget is spent: the SEED, one group per row.
@@ -3434,7 +3465,12 @@ class SpineLayout:
             else:
                 placement.stats["solver_rejected"] = 1.0
                 placement.stats["fallback_reason"] = reason
-                return placement
+                bad = _rejected(placement, spec, power=self.power)
+                if not bad:
+                    return placement
+                # The seed is judged by the same rule as everything else, which
+                # is what makes it safe to have it back at all.
+                reason, detail = FALLBACK_SELF_CHECK, bad
 
         raise NoValidLayout(
             _refusal(reason, detail), spec_label=spec.label, budget_s=spent

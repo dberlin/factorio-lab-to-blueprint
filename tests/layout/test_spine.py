@@ -1057,7 +1057,11 @@ class TestProliferation:
         spec = two_stage_spec()
         prolif = BuildSpec(
             groups=spec.groups,
-            external_inputs=spec.external_inputs,
+            # Proliferator has to be belted in. This test used to omit it, and
+            # the layout it then produced had coaters with nothing feeding them
+            # -- it passed only because the test asked whether a coater consumes
+            # a grid tile, never whether it could spray.
+            external_inputs={**spec.external_inputs, "proliferator-3": F(1) / 2},
             outputs=spec.outputs,
             belt_item_id=spec.belt_item_id,
             belt_items_per_second=spec.belt_items_per_second,

@@ -142,6 +142,34 @@ class BuildSpec(_Frozen):
             )
         return self
 
+    @model_validator(mode="after")
+    def _spraying_needs_proliferator(self) -> BuildSpec:
+        """Spraying without a proliferator supply is an unsatisfiable spec.
+
+        Spray is applied by a belt-mounted Spray Coater, and a coater consumes
+        proliferator like any other machine consumes an ingredient.  Proliferator
+        is never produced inside the block, so it has to arrive on an input belt
+        -- which is exactly the rule the user set at the outset: any
+        proliferation must take proliferator as input.
+
+        Caught here rather than in a layout strategy because it is the same
+        class as ``_no_dangling_demand`` above: a demand nothing supplies. A
+        strategy asked to satisfy it can only emit coaters that never spray,
+        which pastes cleanly and then quietly under-produces every sprayed
+        recipe -- and it did, until ``lay_out`` began checking its own work and
+        turned it into a refusal nobody could explain.
+        """
+        if not self.spray_lanes:
+            return self
+        if not any(i.startswith("proliferator") for i in self.external_inputs):
+            raise ValueError(
+                f"{self.label or 'spec'}: sprays {sorted(self.spray_lanes)} but no "
+                "proliferator is listed in external_inputs. Spray comes from a "
+                "belt-mounted Spray Coater, which has to be fed like any other "
+                "machine, and proliferator is never made inside the block."
+            )
+        return self
+
     @property
     def machine_count(self) -> int:
         return sum(g.count for g in self.groups)
