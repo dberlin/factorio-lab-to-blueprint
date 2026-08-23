@@ -50,6 +50,7 @@ from flab2bp.layout.freeform import (
     _pair_lanes,
     _Port,
     _proliferator_nets,
+    _relink,
     _reserve_port_access,
     _shard_sinks,
     _sink_for,
@@ -2273,7 +2274,7 @@ class TestAPathThatReachesNothingIsUnrouted:
             dst=_Port(dst_belt, 40, 40, 40, 40),
             item="x",
         )
-        assert _sink_for(canvas, tail, net, {tail}) is None, (
+        assert _sink_for(canvas, tail, net, {tail}, set()) is None, (
             "a path ending 80 tiles from its lane head was handed the lane head "
             "anyway, which emits a belt linking to a building it is nowhere near"
         )
@@ -2288,7 +2289,7 @@ class TestAPathThatReachesNothingIsUnrouted:
             dst=_Port(dst_belt, 1, 0, 1, 1),
             item="x",
         )
-        assert _sink_for(canvas, tail, net, {tail}) == dst_belt
+        assert _sink_for(canvas, tail, net, {tail}, set()) == dst_belt
 
     def test_a_tail_one_level_above_its_lane_head_still_links(self) -> None:
         """Belts climb half a tile at a time, so one level apart is a legal link.
@@ -2309,7 +2310,78 @@ class TestAPathThatReachesNothingIsUnrouted:
             dst=_Port(dst_belt, 0, 0, 0, 0),
             item="x",
         )
-        assert _sink_for(canvas, tail, net, {tail}) == dst_belt
+        assert _sink_for(canvas, tail, net, {tail}, set()) == dst_belt
+
+
+class TestAMergeArrivesAtItsOwnDestination:
+    """A destination lane can be MIXED, and a label cannot say where a belt goes.
+
+    ``_sink_for`` used to accept "an adjacent belt carrying my item" as the
+    merge, which is wrong in both directions.
+
+    It REFUSED merges the router had aimed at.  ``_merge_frontier`` offers the
+    free cells beside a ``dst_group`` sibling's path as goals -- sharing a
+    destination tile is what makes a sibling, and items never enter it -- so A*
+    ends the path there and this function threw it away whenever the sibling's
+    belt was labelled with the OTHER item of a mixed lane.  That is every one of
+    the seven unlinked paths on ``universe-matrix/max-proliferation`` at budget
+    4: ``information-matrix`` beside ``structure-matrix`` into (106,20),
+    ``antimatter`` beside ``electromagnetic-matrix`` into (106,18) and (78,33),
+    ``gravity-matrix`` beside ``energy-matrix`` into (106,19).  Mixed lanes are
+    not an accident of this pack -- ``validate._entry_items`` documents an entry
+    lane labelled ``antimatter`` down its whole length with sorters drawing both
+    ``antimatter`` and ``electromagnetic-matrix`` off it.
+
+    And it ADMITTED merges nobody offered: an adjacent belt carrying our item
+    that is not a sibling runs to a DIFFERENT consumer, so handing it our items
+    delivers them there.  That is the sink-side twin of the ``_source_for``
+    defect fixed in ``00d1f78``.
+    """
+
+    @staticmethod
+    def _tail_beside(
+        canvas: _Canvas, other: PlacedBuilding
+    ) -> tuple[int, int, _Net]:
+        """A net whose path ends at (0,0) with ``other`` at (1,0)."""
+        neighbour = canvas.add(other)
+        tail = canvas.add(_belt(0, 0, item="mine"))
+        dst_belt = canvas.add(_belt(40, 40, item="mine"))
+        net = _Net(
+            src=_Port(canvas.add(_belt(-9, -9, item="mine")), -9, -9, -9, -9),
+            dst=_Port(dst_belt, 40, 40, 40, 40),
+            item="mine",
+        )
+        return neighbour, tail, net
+
+    def test_a_sibling_carrying_the_other_item_is_still_the_way_in(self) -> None:
+        canvas = _Canvas()
+        neighbour, tail, net = self._tail_beside(canvas, _belt(1, 0, item="theirs"))
+        assert _sink_for(canvas, tail, net, {tail}, {(1, 0, 0)}) == neighbour, (
+            "the router routed this path to a cell beside a net delivering to "
+            "the same lane tile, and the linker refused it because the lane is "
+            "mixed and the sibling's label names the other item"
+        )
+
+    def test_a_stranger_carrying_our_item_is_not_the_way_in(self) -> None:
+        """Same geometry, same label, no sibling: it goes somewhere else."""
+        canvas = _Canvas()
+        _, tail, net = self._tail_beside(canvas, _belt(1, 0, item="mine"))
+        assert _sink_for(canvas, tail, net, {tail}, set()) is None, (
+            "a belt that carries our item but does not deliver where we deliver "
+            "is a different destination, not a cheaper way to reach ours"
+        )
+
+    def test_a_sibling_that_leads_back_here_is_still_refused(self) -> None:
+        """``kin`` widens WHICH belts qualify, never the cycle rule."""
+        canvas = _Canvas()
+        neighbour, tail, net = self._tail_beside(canvas, _belt(1, 0, item="theirs"))
+        canvas.buildings[neighbour] = _relink(
+            canvas.buildings[neighbour], output_obj=tail
+        )
+        assert _sink_for(canvas, tail, net, {tail}, {(1, 0, 0)}) is None, (
+            "merging into a belt that flows back into this path closes a loop, "
+            "which `belt.acyclic` reports and the game runs items round forever"
+        )
 
 
 class TestABranchLeavesFromItsOwnSource:

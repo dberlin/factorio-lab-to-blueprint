@@ -2629,7 +2629,7 @@ def _route_all(
             committed.append(routed)
         if failed == 0:
             unlinked = _commit_paths(
-                canvas, nets, paths, belt_id, belt_model, src_group
+                canvas, nets, paths, belt_id, belt_model, src_group, dst_group
             )
             return len(paths) - unlinked, unlinked, iterations
         for path in committed:
@@ -2690,7 +2690,7 @@ def _route_all(
         ):
             break
     unlinked = _commit_paths(
-        canvas, nets, best_paths, belt_id, belt_model, src_group
+        canvas, nets, best_paths, belt_id, belt_model, src_group, dst_group
     )
     return len(best_paths) - unlinked, fewest_failed + unlinked, iterations
 
@@ -2819,6 +2819,7 @@ def _commit_paths(
     belt_id: int,
     belt_model: int,
     src_group: Mapping[int, tuple[int, ...]] | None = None,
+    dst_group: Mapping[int, tuple[int, ...]] | None = None,
 ) -> int:
     """Turn reserved cells into real belts, forward-linked source to sink.
 
@@ -2831,6 +2832,14 @@ def _commit_paths(
     :func:`_source_for` is handed exactly those cells to attach to.  Omitting it
     lets any adjacent belt of the right item stand in for the source, which is
     how a short-cut net came to be fed by the very lane it was delivering to.
+
+    ``dst_group`` is the same record for the DESTINATION lane, and
+    :func:`_sink_for` needs it for the same reason.  A destination lane can be
+    mixed -- several items delivered to one tile, which is what a matrix lab's
+    input lane is -- so "an adjacent belt carrying my item" identifies neither
+    the siblings that ARE going where this net is going nor the strangers that
+    are not.  The router already decided the question when it offered those
+    cells as goals; handing the answer to the linker is all this does.
 
     A belt tile has ONE ``output_obj``.  When a lane serves several consumers,
     each of them taps a different tile of it (see ``_Port.at_tile``), and a tap
@@ -2894,7 +2903,12 @@ def _commit_paths(
         # reached nothing it can hand items to is unrouted, and reporting it as
         # routed is how a pack with three belts linking 40 tiles across the block
         # came back as `failed = 0`.
-        sink = _sink_for(canvas, indices[-1], net, set(indices))
+        sink_kin = {
+            cell
+            for s in (dst_group or {}).get(i, ())
+            for cell in paths.get(s, ())
+        }
+        sink = _sink_for(canvas, indices[-1], net, set(indices), sink_kin)
         if sink is None:
             unlinked += 1
             continue
@@ -3048,7 +3062,13 @@ def _leads_back(canvas: _Canvas, start: int, own: set[int]) -> bool:
     return False
 
 
-def _sink_for(canvas: _Canvas, last: int, net: _Net, own: set[int]) -> int | None:
+def _sink_for(
+    canvas: _Canvas,
+    last: int,
+    net: _Net,
+    own: set[int],
+    kin: Set[tuple[int, int, int]],
+) -> int | None:
     """What this path actually reached: the lane head, or a sibling to merge into.
 
     A path that could not get to the lane head was routed to a sibling's belt
@@ -3058,6 +3078,41 @@ def _sink_for(canvas: _Canvas, last: int, net: _Net, own: set[int]) -> int | Non
 
     Preference order is the lane head first, so the common case is unchanged and
     a merge only happens where one was actually routed.
+
+    ``kin`` IS THE SIBLING SET THE ROUTER ACTUALLY OFFERED -- the cells of the
+    paths in this net's ``dst_group``, the nets delivering to the SAME lane tile
+    -- exactly as ``_source_for`` takes the source-lane siblings.  It replaces a
+    scan for "an adjacent belt carrying my item", which was wrong in both
+    directions on ``universe-matrix``:
+
+    * IT REFUSED MERGES THE ROUTER HAD AIMED AT.  A destination lane can be
+      MIXED, and the validator says so in as many words -- ``_entry_items``
+      documents an entry lane labelled ``antimatter`` down its whole length
+      while sorters draw both ``antimatter`` and ``electromagnetic-matrix`` off
+      it.  ``_merge_frontier`` offers the free cells beside a sibling's path as
+      goals without consulting items, because sharing a destination tile is what
+      makes a sibling; A\\* then ends the path on one of those cells; and this
+      function threw it away because the sibling's belt was labelled with the
+      OTHER item of the pair.  All seven unlinked paths on
+      ``universe-matrix/max-proliferation`` at budget 4 were this, and each one
+      was adjacent to exactly one dst-sibling cell: ``information-matrix`` beside
+      ``structure-matrix`` into (106,20), ``antimatter`` beside
+      ``electromagnetic-matrix`` into (106,18) and (78,33), ``gravity-matrix``
+      beside ``energy-matrix`` into (106,19).  A ``carries_item`` label is one
+      of the items a mixed run holds, so it cannot answer "is this belt going
+      where I am going".
+    * IT ADMITTED MERGES NOBODY OFFERED.  An adjacent belt carrying our item
+      that is not a sibling runs to a DIFFERENT consumer, and handing it our
+      items delivers them there -- the sink-side twin of the ``_source_for``
+      defect fixed in ``00d1f78``, where "the first adjacent belt carrying the
+      right item" fed a net from the very lane it was delivering to.
+
+    So the scan is restricted rather than merely reordered, on the same argument:
+    a belt that does not lead to our own lane is not a cheaper way to reach the
+    destination, it is a different destination.  Measured before the restriction
+    was made: over three instrumented builds of the target cell every merge that
+    already succeeded was a ``kin`` cell (4/4, 5/5, 6/6) and NO merge was made to
+    a non-sibling belt, so this drops nothing that was working.
 
     ``None`` means this path reached NOTHING it can hand items to, and that is a
     route failure like any other.  It used to return ``net.dst.belt`` anyway, on
@@ -3080,6 +3135,8 @@ def _sink_for(canvas: _Canvas, last: int, net: _Net, own: set[int]) -> int | Non
         return net.dst.belt
     for dx, dy in _STEPS:
         cell = (tail.x + dx, tail.y + dy, tail.z)
+        if cell not in kin:
+            continue
         who = canvas.blocked.get(cell)
         if who is None or not 0 <= who < len(canvas.buildings) or who in own:
             # Never attach to a belt of THIS path. The cell before the one we
@@ -3088,11 +3145,13 @@ def _sink_for(canvas: _Canvas, last: int, net: _Net, own: set[int]) -> int | Non
             # `belt.acyclic` then reports.
             continue
         other = canvas.buildings[who]
-        if catalog.is_belt(other.item_id) and other.carries_item == net.item:
-            if _leads_back(canvas, who, own):
-                continue  # merging here would close a loop
-            return who
-    # Nothing adjacent carries this item, so this path delivers to nobody.
+        if not catalog.is_belt(other.item_id):
+            continue
+        if _leads_back(canvas, who, own):
+            continue  # merging here would close a loop
+        return who
+    # Nothing adjacent belongs to a net delivering where we deliver, so this
+    # path delivers to nobody.
     return None
 
 
