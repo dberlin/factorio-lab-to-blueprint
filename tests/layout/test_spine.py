@@ -168,6 +168,40 @@ def magnetic_ring_spec() -> BuildSpec:
     )
 
 
+def mixed_height_spec() -> BuildSpec:
+    """Two 3-tall arc smelters and a 7-tall oil refinery, tapping six lanes.
+
+    The shape that found the height-blind tap bound.  Six lanes is exactly
+    ``2 * sorter_max_reach``, so the flat bound sees nothing wrong -- but four of
+    the six are tapped by the smelters, which stop four tiles above the floor of
+    a row the refinery makes seven tall.  A gap of 4 against a reach of 3 fits in
+    the corridor ABOVE the row or nowhere, and that corridor holds three.
+
+    Seven items per second on a twelve-per-second belt, deliberately: it keeps
+    every item to one lane while making every PAIR of them overflow, so
+    ``_shareable`` cannot pair two taps onto one lane and rescue the row.  At one
+    per second two of the gapped taps shared, the row seated in five lanes, and
+    the spec proved nothing.
+    """
+    return BuildSpec(
+        groups=(
+            group("iron-ingot", "arc-smelter", 1, {"iron-ore": F(7)}, {"iron-ingot": F(7)}),
+            group(
+                "energetic-graphite", "arc-smelter", 1, {"coal": F(7)}, {"graphite": F(7)}
+            ),
+            group(
+                "reforming-refine", "oil-refinery", 1, {"refined-oil": F(7)},
+                {"plastic": F(7)},
+            ),
+        ),
+        external_inputs={"iron-ore": F(7), "coal": F(7), "refined-oil": F(7)},
+        outputs={"iron-ingot": F(7), "graphite": F(7), "plastic": F(7)},
+        belt_item_id="conveyor-belt-2",
+        belt_items_per_second=F(12),
+        label="mixed-height",
+    )
+
+
 # --- helpers ---------------------------------------------------------------
 
 
@@ -1882,6 +1916,81 @@ class TestThereIsNoSeedFallback:
         with pytest.raises(NoValidLayout) as exc:
             SpineLayout(power=False).lay_out(two_lab_spec(), time_budget_s=0.5)
         assert "cannot be wired even alone in its own row" in exc.value.reason
+
+
+class TestTapCapacityIsHeightAware:
+    """The packer may not authorise a row its own allocator then refuses.
+
+    Machines are pinned to the TOP of their row, so a group shorter than the
+    row's tallest is flush with the corridor above and gapped from the one
+    below.  ``_fits_below`` has always known that; the CP-SAT row model capped a
+    row at a flat ``2 * reach`` and did not.  So it packed rows
+    ``_lane_requirements`` could not wire, ``_solve_plan`` skipped those widths,
+    and a real URL's ``max-proliferation`` lost every width in its sweep.
+
+    Rejecting after the fact cannot fix this: routability is a property of the
+    packing, so the packer has to know.
+    """
+
+    def test_the_allocator_refuses_the_gapped_row(self) -> None:
+        """Ground truth first, with no solver anywhere in it.
+
+        If this ever stops raising, the model below is guarding nothing and the
+        two should be re-derived together rather than one of them relaxed.
+        """
+        from flab2bp.layout.spine import _adapt, _allocate_lanes, _lane_copies
+
+        spec = mixed_height_spec()
+        groups, edges = _adapt(spec)
+        keys = list(groups)
+        assert sorted({groups[k].height for k in keys}) == [3, 7]
+        copies = dict.fromkeys(_lane_copies(groups, edges, set(), spec), 1)
+
+        with pytest.raises(ValueError, match="machine heights differ"):
+            _allocate_lanes(groups, edges, [keys], set(), spec, copies)
+
+        # Split so the gap disappears and the same six lanes wire fine, which is
+        # what makes the refusal above about HEIGHT and not about lane count.
+        _allocate_lanes(groups, edges, [keys[:2], keys[2:]], set(), spec, copies)
+
+    def test_the_packer_will_not_authorise_it(self) -> None:
+        """``_solve_one`` raises the allocator's ValueError, so this is the test.
+
+        At the widest candidate width -- the densest one in the sweep -- one row
+        of all three groups costs 7 tiles of row plus two corridors, against
+        3 + 3 + 7 and four corridors for a row each.  The height-blind model took
+        it every time, and then threw the width away.
+        """
+        from flab2bp.layout.spine import (
+            _adapt,
+            _candidate_widths,
+            _solve_one,
+            _topological_rows,
+        )
+
+        spec = mixed_height_spec()
+        groups, edges = _adapt(spec)
+        order = [row[0] for row in _topological_rows(groups, edges)]
+        depth = {k: i for i, k in enumerate(order)}
+        plan, infeasible = _solve_one(
+            spec, groups, edges, depth, len(order), _candidate_widths(groups)[0], 2.0, 1
+        )
+        assert not infeasible
+        assert plan is not None
+        assert not any(len(r) == 3 for r in plan.rows), plan.rows
+
+    def test_a_uniform_height_spec_still_packs_its_rows(self) -> None:
+        """The bound must not cost density where no machine is short.
+
+        A flat ``reach - gap`` cap would have: it charges the whole corridor the
+        worst gap, where ``_fits_below`` charges lane by lane.  The nine
+        equal-height groups of ``magnetic_ring_spec`` build no gap variables at
+        all, so this is also the check that the common case is untouched.
+        """
+        spec = magnetic_ring_spec()
+        p = SpineLayout(power=False).lay_out(spec, time_budget_s=0.5)
+        assert p.stats["fallback_used"] == 0.0
+        assert p.stats["rows"] < len(spec.groups)
 
 
 # --- real corpus specs -----------------------------------------------------
