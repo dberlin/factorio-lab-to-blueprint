@@ -252,6 +252,20 @@ def build_jobs(
     return jobs
 
 
+def _available_cores() -> int:
+    """Cores this process may actually run on, not cores the box has.
+
+    ``os.cpu_count()`` reports the machine.  Under ``taskset`` -- which is how
+    two agents share one box without lying to each other about their budgets --
+    that overstates the truth by however much of the machine was withheld, and
+    every ``cores // jobs`` below it inherits the error as oversubscription.
+    """
+    affinity = getattr(os, "sched_getaffinity", None)  # Linux only.
+    if affinity is not None:
+        return len(affinity(0)) or 4
+    return os.cpu_count() or 4
+
+
 def record(tallies: dict[str, Tally], r: Result) -> None:
     t = tallies[r.job.strategy]
     t.slowest.append((r.seconds, f"{r.job.strategy} {r.label}"))
@@ -305,7 +319,7 @@ def main() -> int:
     budgets = [float(b) for b in args.budget.split(",")]
     names = list(_STRATEGIES) if args.strategy == "both" else [args.strategy]
 
-    cores = os.cpu_count() or 4
+    cores = _available_cores()
     jobs_n = args.jobs if args.jobs > 0 else max(1, cores // 4)
     per_cell_workers = max(1, cores // jobs_n)
     jobs = build_jobs(names, tiers, budgets, args.candidates, per_cell_workers)
