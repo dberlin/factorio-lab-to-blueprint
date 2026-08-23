@@ -206,6 +206,55 @@ _LEVEL_TOLL = tuple(_GROUND_TOLL if lvl == 0 else 0.0 for lvl in range(LEVELS))
 #: is now a hot-loop comparison, so it is named once.
 _TENTATIVE = -2
 
+#: Largest reachable region a failed search will census for a wall.
+#:
+#: The census is four dict lookups per settled cell, so it wants a bound -- but
+#: the bound is cheap insurance rather than the thing that makes this
+#: affordable.  Running the census with the CHARGE set to zero, so it pays the
+#: full cost and changes no decision, measures 66/65/65 clean over the corpus
+#: against 65/66/65 with the census switched off entirely.  The walk is free;
+#: what costs is what you do with it.
+_BLAME_MAX_POCKET = 32_768
+
+#: Largest WALL a failed search will charge anybody for.
+#:
+#: THIS is what makes the surcharge shippable, and the reasoning is about guilt
+#: rather than about time.  A search that dies in a pocket walled by three cells
+#: has named three suspects; one of them really did cut this net off.  A search
+#: that dies in a pocket walled by three thousand has named no one -- it is
+#: describing the whole corridor network, and charging all of it just makes
+#: every route longer.
+#:
+#: Measured, and the split is clean.  Charging every wall regardless of size
+#: gives 62-66 clean over thirteen runs, mean 65.0, against 65-66 over nine runs
+#: with no surcharge at all: the occasional four-cell loss is a round where
+#: diffuse blame sent half the block on a detour and the sweep ran out of clock.
+#: Capping it gives 64-66, mean 65.4, while keeping the whole of the gain --
+#: `universe-matrix/no-proliferator` at h=69 commits 139 of its 140 paths
+#: without the surcharge and ALL 140 with it, capped or not, and routes in 24.6s
+#: instead of 36.7s.  The diffuse walls contributed nothing but variance.
+#:
+#: The capped-versus-off comparison is INTERLEAVED, alternating the two settings
+#: run by run rather than measuring one block then the other, because
+#: `validate.py` was being edited in the tree at the time and `_sweep` calls
+#: `validate.certify` inside its own clock -- a faster validator leaves more
+#: seconds for routing and would have looked like a routing result.  Six pairs,
+#: with the validator's mtime checked either side to confirm it held still: off
+#: 66/64/65/66/65/65, mean 65.2; on 66/65/65/65/65/66, mean 65.3.  INVALID 0 in
+#: all twelve.  This buys the h=69 pack and costs nothing, which is the whole
+#: case for it -- it is not a corpus win and should not be sold as one.
+_BLAME_MAX_WALL = 64
+
+#: What a wall cell costs, in units of the plain per-round history point.
+#:
+#: The plain term charges one point for having been used at all, which after a
+#: few rounds of the geometric pressure ramp is worth a couple of tiles of
+#: detour.  A cell that cut the board in two has to be worth more than that or
+#: the net holding it simply keeps it.  Forty is where the h=69 pack tips:
+#: weights 0 and 12 leave one net with no path at all and 40 leaves none, and 80
+#: buys nothing further.
+_BLAME_WEIGHT = 40.0
+
 #: A* expansions between wall-clock checks.
 #:
 #: ``time.monotonic()`` costs about as much as an expansion, so calling it on
@@ -1815,12 +1864,22 @@ def _astar(
     bounds: tuple[int, int, int, int],
     budget: dict[str, int] | None = None,
     deadline: float | None = None,
+    blame: dict[tuple[int, int, int], float] | None = None,
 ) -> list[tuple[int, int, int]] | None:
     """Cheapest free-cell path, with congestion history folded into the cost.
 
     The history term is what makes rip-up-and-reroute converge: a cell that
     several nets have fought over becomes progressively more expensive, so they
     negotiate rather than oscillate.
+
+    ``blame`` is how a search that finds NOTHING still says something.  A
+    committed path is ``blocked`` here rather than expensive, so nets never
+    overlap and the plain history term only ever records that a cell was used,
+    never that using it walled somebody in.  When the heap empties -- and only
+    then -- the settled set is the reachable pocket and its blocked neighbours
+    are the wall; the committed cells among them are recorded here and priced by
+    :func:`_route_all`.  See :data:`_BLAME_MAX_WALL` for why only a small wall
+    is worth accusing.
 
     ``deadline`` is the caller's wall clock, checked every
     :data:`_DEADLINE_CHECK_EVERY` expansions.  A single hard net can spend
@@ -2049,6 +2108,31 @@ def _astar(
                     prev[top] = cur
                     via[top] = nxt
                     heappush(open_heap, (cost + h(top), cost, top))
+
+    # The heap emptied, so `best` is the free space this net can reach and every
+    # blocked cell touching it is part of the wall.
+    # THE HEAP EMPTIED, which is the one ending that proves no path exists -- the
+    # `return None`s above are a spent cap, a spent budget or a spent clock, and
+    # none of those says the pocket is sealed. So `best` is exactly the free
+    # space this net could reach and the blocked cells touching it are its wall.
+    # The ones a committed path put there are the only wall cells any net owns,
+    # and `_route_all` charges them so the net holding one pays to keep it.
+    if blame is not None and len(best) <= _BLAME_MAX_POCKET:
+        blocked_get = blocked.get
+        #: The wall as a SET, because its size is the question `_BLAME_MAX_WALL`
+        #: asks -- a wall of three has named a suspect, a wall of three thousand
+        #: has named the whole corridor network. Counting a cell once per
+        #: adjacent pocket cell would make a long thin pocket look guiltier than
+        #: a fat one for the same wall.
+        wall: set[tuple[int, int, int]] = set()
+        for bx, by, blvl in best:
+            for dx, dy in _STEPS:
+                cell = (bx + dx, by + dy, blvl)
+                if blocked_get(cell) == _TENTATIVE:
+                    wall.add(cell)
+        if len(wall) <= _BLAME_MAX_WALL:
+            for cell in wall:
+                blame[cell] = blame.get(cell, 0.0) + 1.0
     return None
 
 
@@ -2204,6 +2288,11 @@ def _route_all(
         committed = []
         pressure = 0.5 * (1.6**it)
         failed = 0
+        #: Cells that CUT the board this round, and how many nets each cut off.
+        #:
+        #: Fresh every round, because a wall only exists while the path that
+        #: built it does; `history` is where the charge accumulates.
+        blame: dict[tuple[int, int, int], float] = {}
         # PROMOTING LAST ROUND'S FAILURES to the front was tried here and is not
         # worth having.
         #
@@ -2266,7 +2355,8 @@ def _route_all(
             for cell in _merge_frontier(canvas, paths, dst_group.get(i, ())):
                 goals.add(cell)
             routed = _astar(
-                canvas, starts, goals, history, pressure, bounds, budget, deadline
+                canvas, starts, goals, history, pressure, bounds, budget, deadline,
+                blame,
             )
             canvas.routing_ports = frozenset()
             if routed is None:
@@ -2284,61 +2374,35 @@ def _route_all(
         for path in committed:
             for cell in path:
                 history[cell] += 1.0
-        # A SURCHARGE ON THE CELLS THAT CUT THE BOARD was built twice, measured
-        # twice, and taken out twice. The second attempt is the interesting one
-        # and the reason this note is long: the mechanism WORKS and is still not
-        # worth its cost, which is a different verdict from "it does nothing".
+        # AND A SURCHARGE ON THE CELLS THAT CUT THE BOARD.
         #
-        # The diagnosis stands and is the sharpest thing known about this router.
-        # The point above says a cell was USED; it cannot say that using it cost
+        # The point above says a cell was USED. It cannot say that using it cost
         # another net its only way through, because a committed path is `blocked`
         # rather than dear, so two nets never overlap and PathFinder's overuse
         # signal -- the thing a history term exists to carry -- is identically
-        # zero here. Every round re-runs the same nets in the same order against
-        # a map that is uniformly, uselessly dearer.
+        # zero here. Without this, every round re-runs the same nets in the same
+        # order against a map that is uniformly, uselessly dearer.
         #
-        # And the defect it aims at is provably the ROUTER'S, not the packer's.
-        # The free space `_pack` hands over is ONE connected component: on
-        # `universe-matrix` at h=69, all 197 ports sit in a single 54,077-cell
-        # region with not one of them walled in, before a single belt exists.
-        # Every pocket the router later fails in was cut out by the router's own
-        # committed paths. Greedy sequential routing paints itself into a corner
-        # and has no way to charge itself for it.
+        # It is aimed at a defect that is provably the ROUTER'S and not the
+        # packer's. The free space `_pack` hands over is ONE connected component:
+        # on `universe-matrix/no-proliferator` at h=69, all 197 ports sit in a
+        # single 54,077-cell region with none walled in, before a belt exists.
+        # Every pocket the router then fails in was cut out by its own committed
+        # paths -- greedy sequential routing painting itself into a corner it had
+        # no way to price.
         #
-        # RECOVERING THE SIGNAL IS EASY. When `_astar`'s heap empties -- the one
-        # ending that proves no path exists, as against a spent cap, budget or
-        # clock -- the settled set IS the reachable pocket and its blocked
-        # neighbours ARE the wall. Charge the committed cells among them in
-        # proportion to how many nets they cut off, and next round the net
-        # holding one pays to keep it.
+        # A search whose heap emptied has PROVED its pocket sealed, `_astar`
+        # names the committed cells in its wall, and a wall small enough to
+        # accuse somebody (`_BLAME_MAX_WALL`) is charged in proportion to how
+        # many nets it cut off. Next round the net holding one pays
+        # `_BLAME_WEIGHT` times the plain rate to keep it, which buys a detour
+        # instead of a dead end.
         #
-        # FIRST ATTEMPT, before the port cul-de-sacs were fixed: pure noise. 18
-        # unrouted nets to 16 on identical packs, 61/61/61 clean over the corpus
-        # against 61/60/63. It could not bite because those pockets were single
-        # cells -- an output port's one access cell -- walled 48% by the strip's
-        # own lane belts and 12% by other ports' claims. Three walls no net owns
-        # and no price can move.
-        #
-        # SECOND ATTEMPT, after `e1174f0` and `a834293` left pockets of thousands
-        # of cells with a committed path as the largest wall class. On the pack
-        # that matters it is decisive: `universe-matrix/no-proliferator` at h=69,
-        # identical pack in every arm, goes 1 unrouted net at weight 0 and 6, and
-        # ZERO at weight 40 -- while routing gets FASTER, 42.4s to 24.4s, because
-        # a round that stops fighting over one cell converges in fewer rounds.
-        #
-        # It still measures worse over the corpus, at both budgets. 4s, three
-        # audits each: 66/66/66 clean without it, against 64/66/64 at weight 12,
-        # 63/64/64 at weight 40 and 65/64/65 at weight 80. 120s: 64/72 without,
-        # 63/72 at weight 80. The walk is four dict lookups per settled cell and
-        # a pocket here holds thousands, so every failing search pays for the
-        # census, on every round, on every height of the sweep -- and the sweep
-        # is bounded by a clock. It buys the one pack it was built for and sells
-        # two elsewhere.
-        #
-        # What is worth trying next is the COST, not the idea: bound the number
-        # of blame walks per round rather than the size of each, or collect the
-        # wall during expansion instead of re-walking the settled set. The
-        # signal is real and it is the only one that reaches this failure.
+        # Measured on the pack it was built for: h=69 commits 139 of 140 paths
+        # without it and ALL 140 with it, in 24.6s rather than 36.7s, because a
+        # round that stops fighting over one cell converges in fewer rounds.
+        for cell, n in blame.items():
+            history[cell] += _BLAME_WEIGHT * n
         # Give up once raising the pressure has stopped buying anything.
         #
         # Rip-up-and-reroute converges by making contested cells progressively

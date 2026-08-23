@@ -23,9 +23,11 @@ from flab2bp.layout.base import (
     Placement,
 )
 from flab2bp.layout.freeform import (
+    _BLAME_MAX_WALL,
     _ENTRY_RING,
     _LEVEL_TOLL,
     _ROUTE_RING,
+    _TENTATIVE,
     LEVELS,
     MU_DIRECT,
     FreeformLayout,
@@ -2416,3 +2418,83 @@ class TestABranchLeavesFromItsOwnSource:
             item="x",
         )
         assert _source_for(canvas, head, net, {head}, set()) == src_belt
+
+
+class TestAFailedSearchNamesTheWallThatCutIt:
+    """A committed path is ``blocked``, not expensive, so nets never overlap and
+    PathFinder's overuse signal -- what a history term exists to carry -- is
+    identically zero here.  Every round would otherwise re-run the same nets in
+    the same order against a uniformly, uselessly dearer map.
+
+    The recoverable signal is the wall.  When A*'s heap empties -- the one
+    ending that proves no path exists, as against a spent cap, budget or clock
+    -- the settled set is the reachable pocket and the committed cells touching
+    it are what cut this net off.
+    """
+
+    @staticmethod
+    def _boxed_in() -> tuple[_Canvas, tuple[int, int, int, int]]:
+        """One free cell, walled by machines on three sides and a belt on the
+        fourth.  Machines are solid at every altitude and the ramp out needs its
+        ground cell free, so this really is a pocket of one."""
+        canvas = _Canvas()
+        for cell in ((1, 0), (-1, 0), (0, 1)):
+            canvas.solid.add(cell)
+            for lvl in range(LEVELS):
+                canvas.blocked[cell[0], cell[1], lvl] = 0
+        canvas.blocked[0, -1, 0] = _TENTATIVE
+        bounds = (-40, -40, 40, 40)
+        canvas.limit = bounds
+        return canvas, bounds
+
+    def test_a_sealed_pocket_charges_the_committed_cell(self) -> None:
+        canvas, bounds = self._boxed_in()
+        blame: dict[tuple[int, int, int], float] = {}
+        assert _astar(canvas, [(0, 0, 0)], {(30, 30, 0)}, {}, 1.0, bounds,
+                      None, None, blame) is None
+        assert blame == {(0, -1, 0): 1.0}, (
+            "the one committed cell walling this net in was not charged, so "
+            f"rip-up has nothing to negotiate over: {blame}"
+        )
+
+    def test_a_search_that_succeeds_charges_nobody(self) -> None:
+        """Blame is for proving a seal, not for reporting traffic."""
+        canvas = _Canvas()
+        canvas.limit = (-40, -40, 40, 40)
+        canvas.blocked[0, -1, 0] = _TENTATIVE
+        blame: dict[tuple[int, int, int], float] = {}
+        assert _astar(canvas, [(0, 0, 0)], {(4, 0, 0)}, {}, 1.0,
+                      (-40, -40, 40, 40), None, None, blame) is not None
+        assert blame == {}, blame
+
+    def test_a_spent_budget_charges_nobody(self) -> None:
+        """Running out of expansions says the search stopped, not that the
+        pocket is sealed.  Charging a wall never shown to be one is how a
+        negotiation term becomes noise."""
+        canvas, bounds = self._boxed_in()
+        blame: dict[tuple[int, int, int], float] = {}
+        assert _astar(canvas, [(0, 0, 0)], {(30, 30, 0)}, {}, 1.0, bounds,
+                      {"left": 0}, None, blame) is None
+        assert blame == {}, blame
+
+    def test_a_wall_too_diffuse_to_accuse_anyone_charges_nobody(self) -> None:
+        """A pocket walled by three cells has named a suspect.  One walled by
+        hundreds is describing the corridor network, and charging all of it just
+        makes every route longer -- measured as the difference between 62-66
+        clean over the corpus and 64-66."""
+        canvas = _Canvas()
+        bounds = (-40, -40, 200, 40)
+        canvas.limit = bounds
+        span = _BLAME_MAX_WALL  # a corridor this long has 2x3x span wall cells
+        for x in range(-1, span + 1):
+            for y in (-1, 1):
+                for lvl in range(LEVELS):
+                    canvas.blocked[x, y, lvl] = _TENTATIVE
+        for x in (-1, span):
+            canvas.solid.add((x, 0))
+            for lvl in range(LEVELS):
+                canvas.blocked[x, 0, lvl] = 0
+        blame: dict[tuple[int, int, int], float] = {}
+        assert _astar(canvas, [(0, 0, 0)], {(150, 30, 0)}, {}, 1.0, bounds,
+                      None, None, blame) is None
+        assert blame == {}, f"{len(blame)} cells charged for a diffuse wall"
