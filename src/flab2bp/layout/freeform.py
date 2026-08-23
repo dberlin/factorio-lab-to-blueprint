@@ -59,7 +59,7 @@ from fractions import Fraction
 from ortools.sat.python import cp_model
 
 from flab2bp.dsp import catalog, params
-from flab2bp.layout import junction
+from flab2bp.layout import junction, validate
 from flab2bp.layout.base import (
     DEFAULT_SEARCH_WORKERS,
     RETRY_BUDGET_S,
@@ -2366,6 +2366,39 @@ def _reserve_port_access(
             canvas.reserved[got] = key
             held[key] += 1
 
+    # A THIRD claim: the one way OUT of an access cell that has only one.
+    #
+    # An access cell nothing can leave is worth exactly as much as no access
+    # cell at all, and the router cannot tell the two apart -- both give A* a
+    # start it expands and a heap that empties. Measured on
+    # `quantum-chip/no-proliferator` at h=106: of 61 failing searches the median
+    # reachable region was ONE CELL, and every one of them was starved on the
+    # SOURCE side, at an output lane's east-end port.
+    #
+    # That port's cul-de-sac is structural. A strip's output lanes are stacked
+    # rows, so their east ports' access cells are stacked in one margin column,
+    # walled north and south by the siblings' own claims; the lane belt is west;
+    # east is the only move left. Staking it here is the same argument that
+    # justifies the access cell itself, applied to the move that makes it useful.
+    #
+    # Only where there is exactly ONE onward move. Two or more and the cell is
+    # not a cul-de-sac, and holding ground a port does not need is how a
+    # reservation pass starts costing more than it buys.
+    exits: list[tuple[tuple[int, int], tuple[int, int, int]]] = []
+    for cell, key in canvas.reserved.items():
+        cx, cy, lvl = cell
+        onward = [
+            c for c in ((cx + dx, cy + dy, lvl) for dx, dy in _STEPS) if canvas.free(c)
+        ]
+        if len(onward) == 1:
+            exits.append((key, onward[0]))
+    # Applied after the scan, not during it: `free` reads `canvas.reserved`, so
+    # staking inside the loop would let an early exit claim decide whether a
+    # later cell counts as a cul-de-sac.
+    for key, cell in exits:
+        if canvas.free(cell):
+            canvas.reserved[cell] = key
+
     return sum(1 for key in order if not held[key])
 
 
@@ -3915,13 +3948,29 @@ class FreeformLayout:
         if time_budget_s < RETRY_BUDGET_S:
             budgets.append(RETRY_BUDGET_S)
 
+        #: Checks that threw a placement out AFTER it wired -- see `_sweep`.
+        rejected: set[str] = set()
         for sweep_s in budgets:
             if _expired(deadline):
                 break
-            best = self._sweep(spec, strips, sweep_s, deadline, budget)
+            best = self._sweep(spec, strips, sweep_s, deadline, budget, rejected)
             if best is not None:
                 return best
 
+        # A build that WIRED and then failed our own validator is a different
+        # defect from one that could not be wired, and saying so is the whole
+        # value of checking: "the packer produced packs its own router cannot
+        # wire" would be false here and would send the next reader to the packer.
+        if rejected:
+            raise NoValidLayout(
+                "every packing that wired was rejected by our own validator ("
+                + ", ".join(sorted(rejected))
+                + "); a placement that fails validation is refused rather than "
+                "returned, because an invalid blueprint pastes and then does not "
+                "run",
+                spec_label=spec.label,
+                budget_s=budgets[-1],
+            )
         if _expired(deadline):
             raise NoValidLayout(
                 f"the {ceiling:g}s deadline passed with no wired packing of "
@@ -3947,13 +3996,18 @@ class FreeformLayout:
         time_budget_s: float,
         deadline: float | None = None,
         budget: dict[str, int] | None = None,
+        rejected: set[str] | None = None,
     ) -> Placement | None:
         """Try every candidate height, returning the best FULLY ROUTED placement.
 
         ``None`` means no height produced one -- which is a refusal, not a
         degraded answer.  Packs with unrouted nets are discarded here rather than
         ranked below routed ones, so an unwireable pack can never be what this
-        returns.
+        returns, and neither can one our own validator rejects.
+
+        ``rejected`` collects the check names of placements thrown out by that
+        self-check, so the refusal can say WHICH promise the build broke instead
+        of blaming the packer for a pack that wired perfectly well.
 
         ``time_budget_s`` bounds the WHOLE sweep, not just CP-SAT.  It used to
         bound only the packing: routing is limited by an expansion count, not a
@@ -4064,6 +4118,33 @@ class FreeformLayout:
             # coverage for the last net or two, like trading density for it, is
             # buying a green cell with something the build needed.
             if failed:
+                continue
+            # AND THE PLACEMENT HAS TO PASS OUR OWN VALIDATOR BEFORE IT COUNTS.
+            #
+            # `lay_out` promises a valid `Placement` or `NoValidLayout`, and
+            # until now freeform ARGUED that promise while `spine` enforced it
+            # -- `spine._rejected` has called `validate.certify` all along and
+            # this did not. The gap is not theoretical: `quantum-chip`
+            # /free-proliferation power=1 emits, roughly one build in sixteen, a
+            # placement whose titanium-glass production is cut into islands, so
+            # eleven machines can reach 16/7 items/s of an item they consume
+            # 11/4 of. It pastes and then does not run, which is the one failure
+            # nobody discovers until they are standing in front of it in game.
+            #
+            # A rejected candidate is DISCARDED, not repaired and not returned
+            # with a warning, and the sweep goes on to the next height. That is
+            # the same trade `_build`'s `failed` already makes and it goes the
+            # same way: several separately solved and separately validated packs
+            # is a search, and refusing outright is honest, while an invalid
+            # blueprint is the worst outcome this program has.
+            #
+            # It costs a validation per ROUTED candidate, which is a handful per
+            # sweep -- most heights never get here because their pack does not
+            # wire -- against a CP-SAT solve and a full routing pass each.
+            report = validate.certify(placement, spec, expect_power=self.power)
+            if report.errors:
+                if rejected is not None:
+                    rejected.update(f.check for f in report.errors)
                 continue
             # Area, then belt count. Two packs of equal area are not equally
             # good: the one with fewer belt tiles is fewer buildings to paste,

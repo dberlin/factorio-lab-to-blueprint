@@ -865,6 +865,41 @@ class TestSolverActuallyRuns:
             FreeformLayout(power=True).lay_out(two_stage_spec(), time_budget_s=0.0)
         assert "packer was never asked" in exc.value.reason
 
+    def test_a_placement_our_own_validator_rejects_is_refused(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``lay_out`` promises a valid ``Placement`` or an exception.
+
+        That promise used to be ARGUED here while ``spine`` enforced it: spine
+        has called ``validate.certify`` before returning all along and this did
+        not.  The gap was not theoretical -- ``quantum-chip``/free-proliferation
+        emitted, about one build in sixteen, a placement whose titanium-glass
+        production was cut into islands, so eleven machines could reach 16/7
+        items/s of an item they consumed 11/4 of.  It wired, it pasted, and it
+        did not run.
+
+        Forcing every candidate to be rejected proves the trade goes the right
+        way: a refusal that NAMES the failing check, never a placement.
+        """
+        rejection = validate.Report(
+            findings=(
+                validate.Finding(
+                    "flow.conservation", validate.Severity.ERROR, "forced", (), {}
+                ),
+            )
+        )
+        monkeypatch.setattr(
+            "flab2bp.layout.freeform.validate.certify",
+            lambda *a, **k: rejection,
+        )
+        with pytest.raises(NoValidLayout) as exc:
+            FreeformLayout(power=True).lay_out(two_stage_spec(), time_budget_s=1.0)
+        assert "rejected by our own validator" in exc.value.reason
+        assert "flow.conservation" in exc.value.reason, (
+            "the refusal must name the check, or the next reader goes to the "
+            f"packer for a pack that wired perfectly well: {exc.value.reason}"
+        )
+
     @pytest.mark.uncached_layout
     def test_deterministic_for_a_fixed_budget(self) -> None:
         """Reproducibility is the property under test here, so pin workers.
@@ -1574,6 +1609,54 @@ class TestPortAccessIsReservedForEveryRole:
         assert canvas.reserved.get((-1, 0, 0)) == (-2, 0), (
             "the only cell that reaches p was taken by q's second claim: "
             f"{canvas.reserved.get((-1, 0, 0))}"
+        )
+
+    def test_an_access_cell_with_one_way_out_keeps_that_way_out(self) -> None:
+        """A cul-de-sac access cell is worth exactly as much as none at all.
+
+        This is the shape the corpus refusals are made of: an output lane's
+        east-end port, whose one access cell is walled north and south by its
+        own siblings' claims and west by its lane, so a single cell east is the
+        entire route out.  Without holding it, a passing net takes it and A*
+        gets a start it can expand and a heap that empties -- which reads in the
+        counters exactly like congestion and cannot be negotiated away, because
+        nothing owns three of the four walls.
+        """
+        canvas = _Canvas()
+        canvas.add(_belt(0, 0))  # the port itself
+        # Wall the access cell (1, 0) north and south, leaving only (2, 0).
+        canvas.add(_belt(1, 1))
+        canvas.add(_belt(1, -1))
+        far = _Port(canvas.add(_belt(9, 0)), 9, 0, 9, 9)
+        port = _Port(0, 0, 0, 0, 0)
+        _reserve_port_access(canvas, [_Net(src=port, dst=far, item="x")])
+
+        assert canvas.reserved.get((1, 0, 0)) == (0, 0), (
+            f"the port did not hold its access cell: {canvas.reserved}"
+        )
+        assert canvas.reserved.get((2, 0, 0)) == (0, 0), (
+            "the access cell's ONE onward move was left for anyone to take, so "
+            f"the port's only route out is not held: {canvas.reserved}"
+        )
+
+    def test_an_access_cell_with_a_choice_holds_no_extra_ground(self) -> None:
+        """Two ways out is not a cul-de-sac, and holding ground costs somebody.
+
+        The exit claim is targeted for a reason: every cell it takes is one the
+        router cannot path through, so claiming one for a port that already has
+        alternatives spends the same currency the claim exists to protect.
+        """
+        canvas = _Canvas()
+        canvas.add(_belt(0, 0))
+        far = _Port(canvas.add(_belt(9, 0)), 9, 0, 9, 9)
+        port = _Port(0, 0, 0, 0, 0)
+        _reserve_port_access(canvas, [_Net(src=port, dst=far, item="x")])
+
+        # The port has four free neighbours, so whichever it took has three
+        # onward moves of its own and nothing further is held for it.
+        for_port = [c for c, k in canvas.reserved.items() if k == (0, 0)]
+        assert len(for_port) == 1, (
+            f"an unobstructed port held {len(for_port)} cells: {for_port}"
         )
 
 
