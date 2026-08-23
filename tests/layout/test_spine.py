@@ -493,6 +493,137 @@ class TestLaneExtents:
         assert not dead, f"{len(dead)} of {len(lanes)} lanes are joined to nothing"
 
 
+def narrow_product_spec() -> BuildSpec:
+    """A wide producing row above a single-machine consumer at the west end.
+
+    Twelve 3-wide smelters make the block 36 columns; the three assemblers that
+    drain them are packed from ``x = 0``.  So the ``gear`` they make is most of
+    the block from the east edge and none at all from the west, which is the case
+    that decides where a product should leave.
+    """
+    return BuildSpec(
+        groups=(
+            group("iron-ingot", "arc-smelter", 12, {"iron-ore": F(1)}, {"iron-ingot": F(1)}),
+            group("gear", "assembling-machine-2", 3, {"iron-ingot": F(1)}, {"gear": F(1)}),
+        ),
+        external_inputs={"iron-ore": F(12)},
+        outputs={"gear": F(3), "iron-ingot": F(9)},
+        belt_item_id="conveyor-belt-3",
+        belt_items_per_second=F(30),
+        label="narrow-product",
+    )
+
+
+class TestAProductLeavesByTheNearerEdge:
+    """Both block edges are equally physical, so the product should pick.
+
+    A product lane used to be pinned east by convention.  The block is as wide
+    as its WIDEST row, so a product made by a narrow row at the west end paid the
+    whole width in belt to reach a side it had no reason to prefer -- measured on
+    ``quantum-chip``, whose product lane ran 288 tiles with all four of its taps
+    inside the first ten.
+
+    A lane a riser has joined keeps the east exit: its east end is already
+    committed to a trunk, and two things cannot own one end of a one-way belt.
+    """
+
+    @staticmethod
+    def _lane(p: Placement, item: str) -> list[PlacedBuilding]:
+        return [
+            b
+            for b in p.buildings
+            if catalog.is_belt(b.item_id) and b.carries_item == item and b.z == 0
+        ]
+
+    def test_a_product_made_at_the_west_end_leaves_west(self) -> None:
+        p = SpineLayout(power=False).lay_out(narrow_product_spec(), time_budget_s=0.5)
+        lane = self._lane(p, "gear")
+        assert lane, "the product got no lane at all"
+        xs = [b.x for b in lane]
+        assert min(xs) == 0, "the product never reaches the west edge"
+        # The wide row is 36 columns; reaching the far side would be ~35 tiles of
+        # belt carrying the product away from every machine that fills it.
+        assert max(xs) < 12, f"the product still ran east to x={max(xs)}"
+
+    def test_it_flows_towards_the_edge_it_leaves_by(self) -> None:
+        """A belt is one-way: exiting west means the chain points west.
+
+        Pinning the lane east while running it out to ``x = 0`` would fill the
+        wrong end -- the items would pile up against the tail and the product
+        would never reach the boundary, with every link resolving and every
+        building present.
+        """
+        p = SpineLayout(power=False).lay_out(narrow_product_spec(), time_budget_s=0.5)
+        by_index = {i: b for i, b in enumerate(p.buildings)}
+        lane = [
+            i
+            for i, b in by_index.items()
+            if catalog.is_belt(b.item_id) and b.carries_item == "gear" and b.z == 0
+        ]
+        assert len(lane) > 1, "too short to have a direction"
+        steps = [
+            by_index[by_index[i].output_obj].x - by_index[i].x  # type: ignore[index]
+            for i in lane
+            if by_index[i].output_obj in lane
+        ]
+        assert steps and all(s < 0 for s in steps), f"lane does not flow west: {steps}"
+
+    def test_a_product_made_at_the_east_end_still_leaves_east(self) -> None:
+        """The default is not lost -- only the choice is new."""
+        spec = magnetic_ring_spec()
+        p = SpineLayout(power=False).lay_out(spec, time_budget_s=0.5)
+        lane = self._lane(p, "super-magnetic-ring")
+        assert lane
+        _min_x, _min_y, max_x, _max_y = p.bounds
+        # The riser margin sits east of the content, so the product's own east
+        # end is short of the placement bound rather than at it.
+        assert max(b.x for b in lane) > min(b.x for b in lane)
+
+
+class TestLaneExtentsAreOwnedByOneLane:
+    """An item may hold several lanes in one corridor; each pays its own span.
+
+    ``extents`` used to be keyed by ``(corridor, item)`` while the belts it sized
+    were keyed by ``(corridor, depth)``, so every copy of an item's lane was
+    stretched to the union of all of them -- a bottom-band copy tapped at columns
+    5..30 emitted from 5 to 280 because its top-band sibling reached that far.
+    Corpus-wide that was 261 ``belt.termination`` warnings naming 6,928 dead
+    tiles; per-lane extents cut it to 133 and 3,583, and belt tiles by 5.1%.
+    """
+
+    #: ``wide_flow_spec`` is named rather than referenced because it is defined
+    #: further down the file; it is the one fixture here that gives an item
+    #: PARALLEL lanes, which is the shape the union bug stretched.
+    @pytest.mark.parametrize("name", ["magnetic-ring", "wide-flow", "narrow-product"])
+    def test_no_internal_lane_runs_past_its_own_last_tap(self, name: str) -> None:
+        """Asserted through the validator, which measures the overshoot itself.
+
+        A lane running to a block edge is exempt by construction -- those tiles
+        carry the item in or out -- so what is left is exactly the class the
+        union bug created.
+        """
+        from flab2bp.layout.spine import _adapt, _leaving_items
+        from flab2bp.pipeline import _id_map
+
+        make = {
+            "magnetic-ring": magnetic_ring_spec,
+            "wide-flow": wide_flow_spec,
+            "narrow-product": narrow_product_spec,
+        }[name]
+        spec = make()
+        groups, _edges = _adapt(spec)
+        boundary = set(spec.external_inputs) | _leaving_items(groups, spec)
+        p = SpineLayout(power=False).lay_out(spec, time_budget_s=0.5)
+        report = validate.validate(p, spec, ids=_id_map(spec), expect_power=False)
+        offenders = [
+            f
+            for f in report.warnings
+            if f.check == "belt.termination"
+            and p.buildings[f.buildings[0]].carries_item not in boundary
+        ]
+        assert not offenders, f"{name}: {[f.message for f in offenders]}"
+
+
 class TestKnownGaps:
     @pytest.mark.xfail(
         strict=True,
@@ -1173,6 +1304,138 @@ class TestSolverBehaviour:
             "fallback_used",
         ):
             assert key in p.stats, key
+
+
+def seven_item_spec() -> BuildSpec:
+    """One Matrix Lab running the real ``universe-matrix`` recipe: 6 in, 1 out.
+
+    Shaped from the corpus spec that this skeleton cannot hold, and kept
+    hand-built so the test costs no rate solve.  Every ingredient arrives as an
+    external input, which is the *friendliest* possible case -- no producer group
+    means no precedence edge and nothing else competing for a corridor -- and it
+    still cannot be wired.
+    """
+    ingredients = (
+        "electromagnetic-matrix",
+        "energy-matrix",
+        "structure-matrix",
+        "information-matrix",
+        "gravity-matrix",
+        "antimatter",
+    )
+    return BuildSpec(
+        groups=(
+            group(
+                "universe-matrix",
+                "matrix-lab",
+                1,
+                dict.fromkeys(ingredients, F(1)),
+                {"universe-matrix": F(1)},
+            ),
+        ),
+        external_inputs=dict.fromkeys(ingredients, F(1)),
+        outputs={"universe-matrix": F(1)},
+        belt_item_id="conveyor-belt-3",
+        belt_items_per_second=F(30),
+        label="seven-item",
+    )
+
+
+class TestARecipeWiderThanTwoCorridors:
+    """The one corpus spec this skeleton cannot hold, and why it says so.
+
+    A row touches exactly two corridors and a sorter reaches
+    ``SORTER_MAX_REACH`` lanes into each, so a machine can be wired to at most
+    ``2 * reach`` = 6 distinct lanes however the rows are packed around it.
+    ``universe-matrix`` takes five matrices plus antimatter and makes one
+    product: 7.  It is the only group in the whole corpus over the cap.
+
+    Direct insertion is the only thing that removes a lane tap, and it cannot
+    close the gap here -- measured, not assumed:
+
+    * an insert from the row above needs the corridor between them no deeper
+      than ``reach - 1`` = 2, which cuts the row's own capacity from 3 + 3 to
+      2 + 3 = 5, so ``7 - k <= 5`` needs **k >= 2**;
+    * with both of that corridor's two lanes claimed from below, its upper band
+      is empty, so the producer row's whole budget is the corridor above it:
+      3 lanes;
+    * of the 15 pairs of ``universe-matrix``'s six producers, exactly one has a
+      union of 3 lanes or fewer -- ``energy-matrix`` (energetic-graphite,
+      hydrogen) with ``mass-energy-storage`` (critical-photon, hydrogen), which
+      share hydrogen. Every other pair needs 4.
+    * and that pair cannot share a row: ``mass-energy-storage`` *makes* the
+      hydrogen ``energy-matrix`` consumes, so an edge forces one strictly above
+      the other.
+
+    So the refusal is real.  What these tests pin is that it is refused for the
+    RIGHT REASON.  It used to be reported as ``FALLBACK_EMISSION`` -- "a plan
+    solved but could not be emitted onto the grid" -- which was false twice
+    over: no plan had solved, and nothing had been emitted.  ``_solve_plan``
+    opened with ``fallback_plan``, whose lane allocation raised, and ``lay_out``
+    caught that as an emission failure before CP-SAT was asked anything at all.
+    """
+
+    def test_it_refuses_rather_than_emitting_something_unwireable(self) -> None:
+        with pytest.raises(NoValidLayout):
+            SpineLayout(power=False).lay_out(seven_item_spec(), time_budget_s=0.5)
+
+    @pytest.mark.parametrize("power", [True, False], ids=["power", "no-power"])
+    def test_the_reason_names_the_recipe_and_both_numbers(self, power: bool) -> None:
+        with pytest.raises(NoValidLayout) as exc:
+            SpineLayout(power=power).lay_out(seven_item_spec(), time_budget_s=0.5)
+        reason = exc.value.reason
+        assert "universe-matrix" in reason
+        assert "7 lanes" in reason
+        assert str(2 * catalog.SORTER_MAX_REACH) in reason
+
+    def test_it_is_not_reported_as_an_emission_failure(self) -> None:
+        """The regression this whole class exists for.
+
+        The two failures call for opposite responses -- a recipe too wide for the
+        skeleton is permanent, an emission failure is worth retrying under a
+        longer budget -- so conflating them cost a real diagnosis.
+        """
+        with pytest.raises(NoValidLayout) as exc:
+            SpineLayout(power=False).lay_out(seven_item_spec(), time_budget_s=0.5)
+        assert "could not be emitted" not in exc.value.reason
+        assert "cannot be wired even alone in its own row" in exc.value.reason
+
+    def test_the_seed_alone_no_longer_decides(self) -> None:
+        """``fallback_plan`` still raises here; the strategy no longer stops there.
+
+        The seed takes no direct inserts, so its lane count is an upper bound on
+        what a solved plan needs -- which makes it a fine DIAGNOSTIC and a bad
+        GATE.  It is now consulted for the message and the solver runs regardless.
+        """
+        from flab2bp.layout.spine import FALLBACK_SEED_UNWIRABLE, _solve_plan
+
+        with pytest.raises(ValueError, match="taps 7 lanes"):
+            fallback_plan(seven_item_spec())
+
+        plan, reason, detail = _solve_plan(
+            seven_item_spec(), time_budget_s=0.5, workers=DETERMINISTIC_WORKERS
+        )
+        assert plan is None
+        assert reason == FALLBACK_SEED_UNWIRABLE
+        assert "universe-matrix" in detail
+
+    def test_a_six_item_recipe_still_lays_out(self) -> None:
+        """The cap is 6, not 5: one fewer ingredient and the same spec ships."""
+        spec = seven_item_spec()
+        g = spec.groups[0]
+        inputs = {k: v for k, v in g.inputs_per_machine.items() if k != "antimatter"}
+        trimmed = BuildSpec(
+            groups=(
+                group("universe-matrix", "matrix-lab", 1, inputs, dict(g.outputs_per_machine)),
+            ),
+            external_inputs=dict(inputs),
+            outputs={"universe-matrix": F(1)},
+            belt_item_id="conveyor-belt-3",
+            belt_items_per_second=F(30),
+            label="six-item",
+        )
+        p = SpineLayout(power=False).lay_out(trimmed, time_budget_s=0.5)
+        assert p.stats["fallback_reason"] == FALLBACK_NONE
 
 
 # --- real corpus specs -----------------------------------------------------

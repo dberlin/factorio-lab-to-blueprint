@@ -506,9 +506,17 @@ def _allocate_lanes(
             else:
                 target = slot_above if bottom_ok else (slot_below if top_ok else None)
             if target is None:
+                need = sum(copies.get(i, 1) for i in consumes[r] | produces[r])
+                who = "+".join(rows[r])
+                if need > 2 * reach:
+                    raise ValueError(
+                        f"row {r} ({who}) taps {need} lanes, more than the "
+                        f"{2 * reach} two corridors put within sorter reach"
+                    )
                 raise ValueError(
-                    f"row {r} taps {len(consumes[r] | produces[r])} distinct items, "
-                    f"exceeding what its two corridors can reach"
+                    f"row {r} ({who}) taps {need} lanes that no ordering of its two "
+                    f"corridors puts in reach; machine heights differ by up to "
+                    f"{max(gaps.values(), default=0)} tiles"
                 )
             target.add(item)
         for c, slot_items in ((r, slot_below), (r + 1, slot_above)):
@@ -637,6 +645,15 @@ FALLBACK_EMPTY_SPEC = 2.0  # nothing to lay out
 FALLBACK_UNROUTABLE = 3.0  # every candidate width packed rows that cannot be wired
 FALLBACK_NO_SOLUTION = 4.0  # CP-SAT found neither OPTIMAL nor FEASIBLE
 FALLBACK_EMISSION = 5.0  # a plan solved, but emitting it raised
+#: A group that cannot be wired even alone in its own row.  Distinct from
+#: :data:`FALLBACK_UNROUTABLE`, which is about a *packing*: one group per row is
+#: the loosest packing there is, so a row that fails there fails at every width,
+#: and the limit is the RECIPE rather than the search.  Telling them apart is the
+#: difference between "try a different width" and "this skeleton cannot hold this
+#: recipe", and the two used to arrive as the same refusal -- in fact as
+#: ``FALLBACK_EMISSION``, which was a plain lie: nothing had been emitted, and
+#: nothing had even been solved.
+FALLBACK_SEED_UNWIRABLE = 6.0
 
 _REFUSAL_TEXT = {
     FALLBACK_NO_BUDGET: "no time budget was given, so the solver was never asked",
@@ -647,31 +664,60 @@ _REFUSAL_TEXT = {
     ),
     FALLBACK_NO_SOLUTION: "CP-SAT found no feasible row assignment at any candidate width",
     FALLBACK_EMISSION: "a plan solved but could not be emitted onto the grid",
+    FALLBACK_SEED_UNWIRABLE: (
+        "a group cannot be wired even alone in its own row, so no packing can "
+        "help it"
+    ),
 }
 
 
-def _refusal(reason: float) -> str:
-    return _REFUSAL_TEXT.get(reason, f"unknown reason {reason}")
+def _refusal(reason: float, detail: str = "") -> str:
+    text = _REFUSAL_TEXT.get(reason, f"unknown reason {reason}")
+    return f"{text}: {detail}" if detail else text
 
 
 def _solve_plan(
     spec: BuildSpec, *, time_budget_s: float, workers: int
-) -> tuple[_Plan | None, float]:
+) -> tuple[_Plan | None, float, str]:
     """Pack groups into rows and choose direct inserts, minimising area.
 
     Area is ``W * H``, a variable product with a weak relaxation, so instead of
     ``AddMultiplicationEquality`` we sweep candidate widths and minimise ``H``
     under each -- a handful of easy solves rather than one hard one.
+
+    The third element is a DETAIL string naming what went wrong, empty when a
+    plan came back.
     """
     groups, edges = _adapt(spec)
-    base = fallback_plan(spec)
-    order = [row[0] for row in base.rows]
+    seed_rows = _topological_rows(groups, edges)
+    order = [row[0] for row in seed_rows]
     depth = {key: i for i, key in enumerate(order)}
     n = len(order)
     if n == 0:
-        return None, FALLBACK_EMPTY_SPEC
+        return None, FALLBACK_EMPTY_SPEC, ""
 
-    widths = _candidate_widths(groups, base)
+    # The seed's lane allocation is a DIAGNOSTIC here, not a gate.  It used to be
+    # the gate by accident: `_solve_plan` opened with `fallback_plan(spec)`, whose
+    # allocation raises on a row nothing can wire, and `lay_out` caught the
+    # ValueError as FALLBACK_EMISSION.  So a spec with one unwirable recipe was
+    # refused before CP-SAT was asked a single question, under a reason that said
+    # a plan had solved and failed to emit -- when none had solved at all.  That
+    # is exactly the class of mislabelled failure this module's refusal codes
+    # exist to prevent, and it hid the real one on `universe-matrix` for a while.
+    #
+    # Running the solve anyway costs a handful of propagations: the tap-capacity
+    # constraint holds the same arithmetic, so CP-SAT proves the same
+    # infeasibility, and it does so at every width in milliseconds.  What it buys
+    # is that a row the SEED cannot wire but a real packing could -- direct
+    # insertion removes lane taps, and the seed takes none -- is no longer thrown
+    # away unexamined.
+    seed_error = ""
+    try:
+        _lane_requirements(groups, edges, seed_rows, set(), spec)
+    except ValueError as exc:
+        seed_error = str(exc)
+
+    widths = _candidate_widths(groups)
     best: _Plan | None = None
     best_area = math.inf
     per_solve = max(time_budget_s / max(len(widths), 1), 0.25)
@@ -679,27 +725,45 @@ def _solve_plan(
 
     for w_cap in widths:
         try:
-            plan = _solve_one(spec, groups, edges, depth, n, w_cap, per_solve, workers)
+            plan, infeasible = _solve_one(
+                spec, groups, edges, depth, n, w_cap, per_solve, workers
+            )
         except ValueError:
             # This width produced a row packing that cannot be routed within
             # sorter reach.  Skip it and keep sweeping rather than abandoning
             # every remaining width.
             unroutable += 1
             continue
+        if infeasible:
+            # PROVED infeasible, not merely unsolved in the time given -- and the
+            # sweep is descending, with every width at least the widest single
+            # block.  A larger ``w_cap`` only ever ADMITS row assignments (the
+            # one-group-per-row assignment is feasible at every width in the
+            # list), so nothing narrower can be feasible when the widest is not.
+            # Sweeping on regardless cost eight model builds per refusal on a
+            # 40-group spec -- about 2s each attempt, paid by exactly the specs
+            # that were going to be refused anyway.
+            break
         if plan is None:
             continue
         area = _measure(spec, plan)
         if area < best_area:
             best_area, best = area, plan
     if best is not None:
-        return best, FALLBACK_NONE
+        return best, FALLBACK_NONE, ""
     # Distinguish "packed rows nothing could wire" from "CP-SAT found nothing",
     # because they call for opposite fixes: the first is a structural limit in
-    # the model, the second a search or feasibility problem.
-    return None, FALLBACK_UNROUTABLE if unroutable else FALLBACK_NO_SOLUTION
+    # the model, the second a search or feasibility problem.  A seed row that
+    # cannot be wired outranks both: one group per row is the loosest packing
+    # there is, so nothing a wider or narrower sweep does can rescue it, and the
+    # refusal should say which recipe and by how much rather than blaming the
+    # search.
+    if seed_error:
+        return None, FALLBACK_SEED_UNWIRABLE, seed_error
+    return None, (FALLBACK_UNROUTABLE if unroutable else FALLBACK_NO_SOLUTION), ""
 
 
-def _candidate_widths(groups: dict[str, _Group], base: _Plan) -> list[int]:
+def _candidate_widths(groups: dict[str, _Group]) -> list[int]:
     """Descending widths to sweep, seeded from the fallback's own width."""
     widest = max((g.block_width for g in groups.values()), default=1)
     total = sum(g.block_width for g in groups.values())
@@ -723,8 +787,14 @@ def _solve_one(
     w_cap: int,
     budget_s: float,
     workers: int,
-) -> _Plan | None:
-    """One CP-SAT solve: assign groups to rows, minimise total height."""
+) -> tuple[_Plan | None, bool]:
+    """One CP-SAT solve: assign groups to rows, minimise total height.
+
+    The second element says the model was PROVED infeasible, as opposed to
+    merely unsolved inside ``budget_s``.  The sweep in :func:`_solve_plan` needs
+    the difference: a proof holds at every narrower width, an exhausted budget
+    holds at none.
+    """
     model = cp_model.CpModel()
     keys = list(groups)
     row = {k: model.new_int_var(0, n - 1, f"row_{k}") for k in keys}
@@ -906,7 +976,7 @@ def _solve_one(
     solver.parameters.num_search_workers = workers
     status = solver.solve(model)
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-        return None
+        return None, status == cp_model.INFEASIBLE
 
     buckets: dict[int, list[str]] = defaultdict(list)
     for k in keys:
@@ -914,12 +984,15 @@ def _solve_one(
     rows = [sorted(buckets[r]) for r in sorted(buckets)]
     direct = {ek for ek, d in di.items() if solver.value(d)}
     lanes, _copies = _lane_requirements(groups, edges, rows, direct, spec)
-    return _Plan(
-        rows=rows,
-        lanes=lanes,
-        direct=direct,
-        solver_status=solver.status_name(status),
-        hit_budget=status == cp_model.FEASIBLE,
+    return (
+        _Plan(
+            rows=rows,
+            lanes=lanes,
+            direct=direct,
+            solver_status=solver.status_name(status),
+            hit_budget=status == cp_model.FEASIBLE,
+        ),
+        False,
     )
 
 
@@ -1316,16 +1389,39 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
     # extra *area*, but it triples the building count, which matters when
     # pasting.  Untapped pass-through lanes keep their full width; they stop at
     # ``content_w - 1``, so they never reach into the riser margin.
-    extents: dict[tuple[int, str], tuple[int, int]] = {}
+    #
+    # All of it is per LANE, not per item -- see ``extents`` below for what
+    # conflating the two cost.
+    #: Keyed by (corridor, DEPTH), like everything else that describes one lane.
+    #: It used to be keyed by (corridor, item), and that was the same mistake
+    #: ``lane_tiles`` records two blocks below: an item holds SEVERAL lanes in one
+    #: corridor -- a copy in the top band serving the row above and one in the
+    #: bottom band serving the row below, plus a copy per parallel lane -- and
+    #: unioning their spans gave every copy the widest one's extent.  A bottom-band
+    #: copy tapped at columns 5..30 was emitted from 5 to 280 because its
+    #: top-band sibling reached that far, and the 250 tiles in between carried
+    #: nothing: 261 ``belt.termination`` warnings naming 6,928 dead tiles, 7.0%
+    #: of all belt emitted.
+    extents: dict[tuple[int, int], tuple[int, int]] = {}
+    #: The union, kept only as the fallback for a copy with no taps of its own --
+    #: an item with more parallel lanes than a group has machines leaves one
+    #: empty.  Such a lane is waste either way; inheriting the sibling's span is
+    #: what it did before and is narrower than the full-width default.
+    item_extents: dict[tuple[int, str], tuple[int, int]] = {}
     #: Columns at which each lane is filled and drained, keyed by (corridor,
     #: depth) rather than by item, because a direction is a property of ONE lane
     #: and an item may hold two of them.  ``_lane_direction`` reads these.
     fill_at: dict[tuple[int, int], list[tuple[int, int]]] = defaultdict(list)
     drain_at: dict[tuple[int, int], list[tuple[int, int]]] = defaultdict(list)
 
-    def _extend(c: int, item: str, lo: int, hi: int) -> None:
-        cur = extents.get((c, item))
-        extents[c, item] = (lo, hi) if cur is None else (min(cur[0], lo), max(cur[1], hi))
+    def _extend(c: int, depth: int, lo: int, hi: int) -> None:
+        cur = extents.get((c, depth))
+        extents[c, depth] = (lo, hi) if cur is None else (min(cur[0], lo), max(cur[1], hi))
+        item = plan.lanes[c][depth]
+        was = item_extents.get((c, item))
+        item_extents[c, item] = (
+            (lo, hi) if was is None else (min(was[0], lo), max(was[1], hi))
+        )
 
     for key, g in groups.items():
         if not machine_at[key]:
@@ -1353,23 +1449,17 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
                 pick = _pick_sorter(rate, tap.span, g.width)
                 cols = g.width if pick is None else min(pick[1], g.width)
                 lo, hi = min(xs), max(xs) + cols - 1
-                _extend(tap.corridor, item, lo, hi)
+                _extend(tap.corridor, tap.depth, lo, hi)
                 (drain_at if into else fill_at)[tap.corridor, tap.depth].append((lo, hi))
-
-    for c, order in enumerate(plan.lanes):
-        for item in order:
-            if (c, item) not in extents:
-                continue
-            if item in spec.external_inputs:
-                _extend(c, item, 0, 0)
-            if item in leaving:
-                _extend(c, item, content_w - 1, content_w - 1)
 
     # --- trunk risers -----------------------------------------------------
     # The copies of an item's lane in different corridors used to be independent
     # horizontal runs with nothing between them, so a producer's sorters filled
     # corridor r + 1 while its consumers drained corridor s and the item never
     # arrived.  Every `flow.lane_sourced` error on every corpus spec was this.
+    #
+    # Planned BEFORE the boundary runs, because a lane joined to a trunk has its
+    # east end spoken for and cannot choose which way it leaves the block.
     filled: set[tuple[int, int]] = set()
     drained: set[tuple[int, int]] = set()
     for (key, _item, into), found in taps.items():
@@ -1388,7 +1478,49 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
             joined.add((c, d))
             (hands_to_trunk if is_source else fed_from_trunk).add((c, d))
     for c, d in joined:
-        _extend(c, plan.lanes[c][d], content_w - 1, content_w - 1)
+        _extend(c, d, content_w - 1, content_w - 1)
+
+    # --- boundary runs ----------------------------------------------------
+    # A product leaves at whichever edge is NEARER its last producer, not at the
+    # east one by convention.  Both edges are equally physical -- the player
+    # belts the output away from either -- and the block is as wide as its widest
+    # row, so a product made by a narrow row at the west end used to pay the
+    # whole width in belt to reach an edge it had no reason to prefer.  Measured
+    # on ``quantum-chip``: the product lane ran 288 tiles with its four taps in
+    # the first ten, so 278 of them existed only to reach the east side.
+    #
+    # A lane a riser joined does not get the choice: its east end is already
+    # committed to the trunk.
+    #: Lanes whose product exit was put at the WEST edge, so ``_lane_direction``
+    #: pins them the matching way round.  A belt is one-way, and pinning a lane
+    #: east while running it out to ``x = 0`` would fill the wrong end.
+    exits_west: set[tuple[int, int]] = set()
+    for c, order in enumerate(plan.lanes):
+        for depth_i, item in enumerate(order):
+            # Only a lane something actually taps is run out to the boundary.
+            # A copy with no taps has nothing to carry in or out, and reaching
+            # the edge would make it look like an entry the player has to feed.
+            tapped = extents.get((c, depth_i))
+            if tapped is None:
+                continue
+            if item in spec.external_inputs:
+                _extend(c, depth_i, 0, 0)
+            if item not in leaving:
+                continue
+            # An item that is BOTH externally supplied and a leaving byproduct
+            # keeps its east exit unconditionally: the west edge is already its
+            # entry, so the surplus has nowhere else to go and would back up
+            # against the last tap -- a stall no validator check can see.
+            west_cost, east_cost = tapped[0], content_w - 1 - tapped[1]
+            if (
+                (c, depth_i) not in joined
+                and item not in spec.external_inputs
+                and west_cost < east_cost
+            ):
+                exits_west.add((c, depth_i))
+                _extend(c, depth_i, 0, 0)
+            else:
+                _extend(c, depth_i, content_w - 1, content_w - 1)
 
     # --- corridor lanes ---------------------------------------------------
     # Keyed by (corridor, DEPTH), not (corridor, item): an item may occupy
@@ -1402,7 +1534,8 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
     for c, order in enumerate(plan.lanes):
         for depth_i, item in enumerate(order):
             y = corr_y[c] + depth_i
-            lo, hi = extents.get((c, item), (0, content_w - 1))
+            reach_span = extents.get((c, depth_i)) or item_extents.get((c, item))
+            lo, hi = reach_span if reach_span is not None else (0, content_w - 1)
             fills = fill_at[c, depth_i]
             drains = drain_at[c, depth_i]
             westward = _lane_direction(
@@ -1410,7 +1543,9 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
                 fed_from_trunk=fed_from_trunk,
                 hands_to_trunk=hands_to_trunk,
                 pinned_west_edge=item in spec.external_inputs,
-                pinned_east_edge=item in leaving,
+                pinned_east_edge=item in leaving and (c, depth_i) not in exits_west,
+                exits_west=(c, depth_i) in exits_west
+                and item not in spec.external_inputs,
                 fills=fills,
                 drains=drains,
             )
@@ -1727,6 +1862,7 @@ def _lane_direction(
     pinned_east_edge: bool,
     fills: list[tuple[int, int]],
     drains: list[tuple[int, int]],
+    exits_west: bool = False,
 ) -> bool:
     """Should this lane run east to west?  ``True`` for westward.
 
@@ -1746,9 +1882,14 @@ def _lane_direction(
       flow away westward or they would arrive at the far end and stop;
     * a lane that HANDS UP to the trunk must reach it, so it flows east;
     * an external input enters at ``x = 0``, the block's west edge;
-    * a product leaves at the east edge.
+    * a product leaves at whichever edge ``_emit`` sent it to -- east by
+      default, west when that is the nearer boundary and no riser has claimed
+      the lane's east end.  ``exits_west`` is the one flag here that means
+      "flows towards ``x = 0``"; ``pinned_west_edge`` is an ENTRY at that edge
+      and therefore flows the opposite way, which is why the two are separate
+      arguments rather than one side.
 
-    Only the fifth case -- a lane whose taps are all local -- is free, and there
+    Only the last case -- a lane whose taps are all local -- is free, and there
     the direction is whichever leaves fewer drains with nothing upstream, ties
     going east so the common case is unchanged.
 
@@ -1760,7 +1901,7 @@ def _lane_direction(
     direction can serve drains on BOTH sides of the fills, so one tap stays
     unserved and is counted in ``stats["starved_taps"]`` rather than hidden.
     """
-    if key in fed_from_trunk:
+    if key in fed_from_trunk or exits_west:
         return True
     if key in hands_to_trunk or pinned_west_edge or pinned_east_edge:
         return False
@@ -2726,8 +2867,9 @@ class SpineLayout:
         search instead of replacing it.
 
         A budget that finds nothing feasible is retried ONCE at
-        :data:`RETRY_BUDGET_S` before refusing.  Deterministic refusals (no
-        budget, empty spec) skip the retry: repeating them cannot change them.
+        :data:`RETRY_BUDGET_S` before refusing.  Deterministic refusals -- no
+        budget, empty spec, and a recipe no row can wire -- skip the retry:
+        repeating them cannot change them.
         """
         if time_budget_s <= 0:
             raise NoValidLayout(
@@ -2741,14 +2883,17 @@ class SpineLayout:
             budgets.append(RETRY_BUDGET_S)
 
         reason = FALLBACK_NO_SOLUTION
+        detail = ""
         spent = 0.0
         for budget in budgets:
             spent = budget
             try:
-                plan, reason = _solve_plan(
+                plan, reason, detail = _solve_plan(
                     spec, time_budget_s=budget, workers=self.workers
                 )
                 if plan is None:
+                    if reason == FALLBACK_SEED_UNWIRABLE:
+                        break  # structural -- more seconds cannot change a recipe
                     if reason == FALLBACK_EMPTY_SPEC:
                         break  # deterministic -- more seconds cannot help
                     continue
@@ -2759,14 +2904,16 @@ class SpineLayout:
                 # consumer.  So a plan that will not emit is not a layout: retry
                 # it under a longer budget, and refuse if that fails too.
                 placement = _emit(spec, plan, power=self.power)
-            except (ValueError, KeyError):
-                reason = FALLBACK_EMISSION
+            except (ValueError, KeyError) as exc:
+                reason, detail = FALLBACK_EMISSION, str(exc)
                 continue
             placement.stats["solver_rejected"] = 0.0
             placement.stats["fallback_reason"] = FALLBACK_NONE
             return placement
 
-        raise NoValidLayout(_refusal(reason), spec_label=spec.label, budget_s=spent)
+        raise NoValidLayout(
+            _refusal(reason, detail), spec_label=spec.label, budget_s=spent
+        )
 
 
 def machine_group_footprint(group: MachineGroup) -> tuple[int, int]:
