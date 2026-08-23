@@ -28,6 +28,7 @@ reaches ``BuildSpec``.
 
 from __future__ import annotations
 
+import warnings
 from collections import deque
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -357,7 +358,28 @@ def _run_milp(
     )
 
     status = model.Solve()
-    if status != pywraplp.Solver.OPTIMAL:
+    if status == pywraplp.Solver.FEASIBLE:
+        # Hit the clock with a valid plan it had not finished proving minimal.
+        # That used to raise, which threw away a whole buildable factory in
+        # exchange for a proof we do not need: since the balances are solved
+        # exactly downstream, the MILP is only choosing STRUCTURE here, and a
+        # feasible structure is a real factory -- possibly not the smallest.
+        #
+        # universe-matrix sits right on the edge: ~25s of a 30s budget on a
+        # quiet machine, so it tips over under load and the failure looked
+        # like an infeasible spec rather than a timer.
+        #
+        # Warned rather than swallowed, because "we may have shipped a larger
+        # plan than necessary" is exactly the kind of thing that becomes
+        # invisible and then becomes the baseline nobody questions.
+        warnings.warn(
+            f"the production solve hit its {time_limit_s:g}s limit with a feasible "
+            "but unproven-minimal plan; the structure is valid and the rates "
+            "below are still exact, but the factory may be larger than needed",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+    elif status != pywraplp.Solver.OPTIMAL:
         raise InfeasibleError(
             f"the production solve did not reach optimality (status: {status})"
         )

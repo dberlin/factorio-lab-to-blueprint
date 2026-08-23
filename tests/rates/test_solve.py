@@ -5,6 +5,7 @@ from __future__ import annotations
 from fractions import Fraction
 
 import pytest
+from ortools.linear_solver import pywraplp  # type: ignore[import-untyped]
 
 from flab2bp.lab.data import load_dataset
 from flab2bp.lab.schema import Dataset
@@ -498,3 +499,60 @@ def test_a_structure_that_cannot_balance_refuses() -> None:
 def test_no_machines_means_no_rates() -> None:
     loop = _column("loop", {"x": Fraction(2)}, {"x": Fraction(3)})
     assert _exact_rates([loop], [0.0], ["x"], {"x": Fraction(1)}) == [Fraction(0)]
+
+
+# --- hitting the clock is not the same as being infeasible -----------------
+
+
+TRIVIAL_URL = (
+    "https://factoriolab.github.io/dsp/list?o=magnetic-coil*60&ibe=conveyor-belt-2"
+    "&mmr=arc-smelter~assembling-machine-2~chemical-plant~matrix-lab&v=11"
+)
+
+
+def test_a_starved_solve_warns_and_still_builds(
+    data: Dataset, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A feasible-but-unproven plan is a factory, and must not be thrown away.
+
+    The MILP chooses only STRUCTURE -- the balances are solved exactly
+    downstream -- so a feasible structure is a real, buildable factory that
+    merely might not be the smallest. Raising discarded the whole build in
+    exchange for a proof we do not need. ``universe-matrix`` sat right on the
+    edge, ~25s of a 30s budget, and tipped over under load: a timer reported
+    as an infeasible spec.
+
+    It warns rather than passing quietly, and the size of the gap is why.
+    Measured on ``universe-matrix`` starved to 0.1s: 303 machines against a
+    proved-minimal 201. Shipping something 50% larger is exactly the kind of
+    thing that goes unnoticed and then becomes the baseline.
+
+    Provoked by relabelling the status rather than by actually starving a
+    solver, so this is instant and, more importantly, not a race: a real
+    0.1s budget is only reliably short on a machine as slow as today's.
+    """
+    monkeypatch.setattr(pywraplp.Solver, "FEASIBLE", pywraplp.Solver.OPTIMAL)
+
+    with pytest.warns(RuntimeWarning, match="feasible but unproven-minimal"):
+        solution = solve(data, parse_url(TRIVIAL_URL), tier=ProliferatorTier.MK3)
+
+    # Valid, not merely non-empty: real counts, and rates still exact.
+    assert solution.groups
+    assert all(g.machines >= 1 for g in solution.groups)
+    assert all(isinstance(g.crafts_per_second, Fraction) for g in solution.groups)
+
+
+def test_a_solve_that_returns_nothing_usable_still_raises(
+    data: Dataset, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The distinction that makes accepting the timeout safe.
+
+    Accepting FEASIBLE must not slide into accepting any status at all. With
+    no status the solver can return counting as usable, there is nothing valid
+    to hand back, and that still raises.
+    """
+    monkeypatch.setattr(pywraplp.Solver, "OPTIMAL", 98)
+    monkeypatch.setattr(pywraplp.Solver, "FEASIBLE", 99)
+
+    with pytest.raises(InfeasibleError, match="did not reach optimality"):
+        solve(data, parse_url(TRIVIAL_URL), tier=ProliferatorTier.MK3)
