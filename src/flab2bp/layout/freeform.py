@@ -1850,9 +1850,12 @@ def _leads_back(canvas: _Canvas, start: int, own: set[int]) -> bool:
     from_junction: dict[int, list[int]] = defaultdict(list)
     for i, b in enumerate(canvas.buildings):
         feed = b.input_obj
-        if feed is not None and 0 <= feed < len(canvas.buildings):
-            if canvas.buildings[feed].item_id == catalog.SPLITTER_ID:
-                from_junction[feed].append(i)
+        if (
+            feed is not None
+            and 0 <= feed < len(canvas.buildings)
+            and canvas.buildings[feed].item_id == catalog.SPLITTER_ID
+        ):
+            from_junction[feed].append(i)
 
     seen: set[int] = set()
     stack = [start]

@@ -211,7 +211,9 @@ class TestTheFixturesBalance:
     """
 
     @pytest.mark.parametrize(
-        "spec_fn", [single_recipe_spec, two_stage_spec, magnetic_ring_spec], ids=lambda f: f.__name__
+        "spec_fn",
+        [single_recipe_spec, two_stage_spec, magnetic_ring_spec],
+        ids=lambda f: f.__name__,
     )
     def test_supply_equals_demand_for_every_item(self, spec_fn: SpecFactory) -> None:
         spec = spec_fn()
@@ -230,14 +232,16 @@ class TestTheFixturesBalance:
             )
 
     @pytest.mark.parametrize(
-        "spec_fn", [single_recipe_spec, two_stage_spec, magnetic_ring_spec], ids=lambda f: f.__name__
+        "spec_fn",
+        [single_recipe_spec, two_stage_spec, magnetic_ring_spec],
+        ids=lambda f: f.__name__,
     )
     def test_no_item_needs_more_than_one_belt_of_its_tier(
         self, spec_fn: SpecFactory
     ) -> None:
         """The spine puts an item's whole cross-corridor flow on one lane.
 
-        Lane splitting exists (:func:`_split_lanes`), but a fixture that needs it
+        Lane splitting exists (:func:`_lane_copies`), but a fixture that needs it
         for an unrelated reason turns every geometry test on that fixture into a
         capacity test as well.  These fixtures are sized to stay under one belt.
         """
@@ -444,6 +448,50 @@ class TestLaneExtents:
         assert p.area > 0
         assert p.stats["belt_tiles"] > 0
 
+    @pytest.mark.parametrize("power", [True, False], ids=["power", "no-power"])
+    def test_no_lane_is_joined_to_nothing_at_both_ends(self, power: bool) -> None:
+        """A corridor holds the lanes it is TAPPED for and nothing else.
+
+        Before risers, an item crossing corridors needed a horizontal run in each
+        one; a trunk in the east margin does that job now, and the intermediate
+        copies became belt joined to nothing at either end.  Measured over the
+        powered corpus while they were still emitted: 321 of 975 lanes, 34,372 of
+        80,620 lane belt tiles, and a tile of corridor height each -- so they cost
+        area as well as buildings.
+
+        Asserted on the emitted geometry rather than on ``_lane_requirements``,
+        so it fails if either the allocation or the emission reintroduces one.
+        """
+        p = SpineLayout(power=power).lay_out(magnetic_ring_spec(), time_budget_s=0.5)
+        bs = p.buildings
+        lanes: dict[int, list[int]] = {}
+        for i, b in enumerate(bs):
+            if catalog.is_belt(b.item_id) and b.z == 0 and b.yaw in (90.0, 270.0):
+                lanes.setdefault(b.y, []).append(i)
+        assert lanes
+        sorter_ends: set[int] = set()
+        for b in bs:
+            if catalog.is_sorter(b.item_id):
+                sorter_ends |= {x for x in (b.input_obj, b.output_obj) if x is not None}
+        dead = []
+        for y, idxs in lanes.items():
+            own = set(idxs)
+            if own & sorter_ends:
+                continue
+            # A trunk or bridge handing into this lane, or the lane handing out
+            # to one: either end counts as joined.
+            outward = any(
+                bs[i].output_obj is not None and bs[i].output_obj not in own for i in idxs
+            )
+            inward = any(
+                b.output_obj in own
+                for j, b in enumerate(bs)
+                if j not in own and catalog.is_belt(b.item_id)
+            )
+            if not (outward or inward):
+                dead.append(y)
+        assert not dead, f"{len(dead)} of {len(lanes)} lanes are joined to nothing"
+
 
 class TestKnownGaps:
     @pytest.mark.xfail(
@@ -585,6 +633,231 @@ class TestRisersJoinTheCopies:
         for b in p.buildings:
             if catalog.is_belt(b.item_id) and b.yaw == 180.0:
                 assert (b.x, b.y, b.z) not in occupied, "a trunk stands on a machine"
+
+
+class TestRisersClimbAtBeltSpeed:
+    """A belt climbs half a level per tile, so a level costs TWO tiles of run.
+
+    ``geom.altitude_step`` only bounds the step at one level per tile and knows
+    nothing about run-up, so the validator was complicit in bridges that gained a
+    whole level in a single tile -- twice what a belt can do -- and neither side
+    of the build ever complained.  Spending the tiles honestly costs a ramp
+    column beside each trunk: measured over the corpus, **+5.4% area in total,
+    +8.4% on the median run, and nothing at all on the 10 of 66 runs that need no
+    riser**.  The worst case is a nine-machine spec whose block is narrower than
+    its margin (magnetic-coil, 90 -> 126 tiles).
+
+    Asserted as the physical rule -- no two consecutive links may both change
+    altitude -- rather than as a column count, so a different margin layout that
+    is equally honest still passes.
+    """
+
+    @pytest.mark.parametrize("power", [True, False], ids=["power", "no-power"])
+    def test_no_belt_changes_level_twice_in_a_row(self, power: bool) -> None:
+        p = SpineLayout(power=power).lay_out(magnetic_ring_spec(), time_budget_s=0.5)
+        bs = p.buildings
+        upstream: dict[int, int] = {}
+        for i, b in enumerate(bs):
+            o = b.output_obj
+            if catalog.is_belt(b.item_id) and o is not None and catalog.is_belt(bs[o].item_id):
+                upstream[o] = i
+        climbing = [
+            i
+            for i, b in enumerate(bs)
+            if catalog.is_belt(b.item_id)
+            and b.output_obj is not None
+            and catalog.is_belt(bs[b.output_obj].item_id)
+            and bs[b.output_obj].z != b.z
+        ]
+        assert climbing, "the fixture is supposed to need bridges over trunks"
+        for i in climbing:
+            prev = upstream.get(i)
+            assert prev is not None, (
+                f"belt {i} at ({bs[i].x},{bs[i].y},z={bs[i].z}) changes level with "
+                f"nothing feeding it, so it had no tile of run-up"
+            )
+            assert bs[prev].z == bs[i].z, (
+                f"belts {prev} -> {i} -> {bs[i].output_obj} change level on "
+                f"consecutive tiles; a belt needs "
+                f"{catalog.RAMP_TILES_PER_LEVEL} tiles per level"
+            )
+
+    def test_the_ramp_column_is_only_charged_when_a_trunk_exists(self) -> None:
+        """A spec with nothing to riser must not pay for a margin it never uses."""
+        from flab2bp.layout.spine import _trunk_x
+
+        p = SpineLayout(power=False).lay_out(single_recipe_spec(), time_budget_s=0.5)
+        assert p.stats["risers"] == 0
+        assert p.stats["riser_columns"] == 0
+        # And the spacing itself leaves a free column west of every trunk.
+        xs = [_trunk_x(10, c) for c in range(4)]
+        assert all(b - a >= 2 for a, b in zip(xs, xs[1:], strict=False))
+        assert xs[0] > 10
+
+
+class TestLanesFlowTowardsTheirConsumers:
+    """A belt is one-way, so a lane's direction decides which taps it serves.
+
+    A lane filled by a producer and drained by a consumer WEST of it starves that
+    consumer: the sorter reaches into a belt nothing ever carries past it.  The
+    validator cannot see it -- every link resolves, the sorter is in reach, the
+    belt is continuous -- so the build pastes, looks right, and one machine never
+    runs.
+
+    Measured over the 33 powered corpus runs before the fix: 3 lanes of 656.
+    Rare, which is why it survived so long, and exactly the kind of thing a
+    counted stat has to keep honest.
+    """
+
+    @pytest.mark.parametrize(
+        "spec_fn",
+        [single_recipe_spec, two_stage_spec, magnetic_ring_spec],
+        ids=lambda f: f.__name__,
+    )
+    @pytest.mark.parametrize("power", [True, False], ids=["power", "no-power"])
+    def test_no_sorter_draws_from_a_lane_nothing_reaches_it_on(
+        self, spec_fn: SpecFactory, power: bool
+    ) -> None:
+        p = SpineLayout(power=power).lay_out(spec_fn(), time_budget_s=0.5)
+        assert p.stats["starved_taps"] == 0.0
+
+    def test_the_stat_actually_counts_something(self) -> None:
+        """Guards the stat itself: an unservable lane must not read as clean.
+
+        Drains at columns 1 and 20 with the only fill at 7 cannot both be served
+        by one belt, whichever way it points -- so ``_lane_flow_gaps`` must say 1
+        for each direction, not 0.
+        """
+        from flab2bp.layout.spine import _lane_flow_gaps
+
+        fills = [(7, 7)]
+        drains = [(1, 1), (20, 20)]
+        assert _lane_flow_gaps(fills, drains, westward=False) == 1
+        assert _lane_flow_gaps(fills, drains, westward=True) == 1
+        assert _lane_flow_gaps(fills, [(20, 20)], westward=False) == 0
+        assert _lane_flow_gaps(fills, [(1, 1)], westward=True) == 0
+
+
+def wide_flow_spec() -> BuildSpec:
+    """10 iron-ingot/s reaching two rows down, on a belt that carries 6.
+
+    Built to bottleneck, and balanced so nothing else about it can be blamed.
+    The ingot is consumed by BOTH the row below it and the row below that, so it
+    has to travel through a trunk rather than straight across one corridor --
+    which is where the whole flow used to end up on a single belt.
+
+    ``belt_required_edges`` covers both consumers so the solver cannot answer the
+    question by direct-inserting instead: this fixture is about lanes, and a
+    direct insert would quietly remove the lane under test.
+    """
+    return BuildSpec(
+        groups=(
+            group("iron-ingot", "arc-smelter", 10, {"iron-ore": F(1)}, {"iron-ingot": F(1)}),
+            group("gear", "assembling-machine-2", 5, {"iron-ingot": F(1)}, {"gear": F(1)}),
+            group(
+                "electric-motor",
+                "assembling-machine-2",
+                5,
+                {"iron-ingot": F(1), "gear": F(1)},
+                {"electric-motor": F(1)},
+            ),
+        ),
+        external_inputs={"iron-ore": F(10)},
+        outputs={"electric-motor": F(5)},
+        belt_item_id="conveyor-belt-1",
+        belt_items_per_second=F(6),
+        belt_required_edges=frozenset(
+            {("iron-ingot", "gear"), ("iron-ingot", "electric-motor")}
+        ),
+        label="wide-flow",
+    )
+
+
+class TestOneBeltIsNotEnough:
+    """An item moving more than a belt carries needs more than one lane.
+
+    Spine used to put an item's whole cross-corridor flow on a single lane and a
+    single trunk, which caps the build at the belt's rate however many machines
+    it contains -- the same failure mode as an undersized sorter, and just as
+    invisible: it pastes, it runs, and it misses the number the spec promised.
+    Live on the corpus, not hypothetical: ``quantum-chip`` moves 48 crude-oil/s
+    and 48 refined-oil/s against a 30/s Mk.III belt.
+    """
+
+    def test_the_fixture_really_does_overflow_a_belt(self) -> None:
+        """Arithmetic, so the rest of this class cannot pass vacuously."""
+        from flab2bp.layout.spine import belt_capacity
+
+        spec = wide_flow_spec()
+        moved = sum(
+            g.inputs_per_machine.get("iron-ingot", F(0)) * g.count for g in spec.groups
+        )
+        assert moved > belt_capacity(spec), f"{moved}/s fits on one belt after all"
+
+    def test_the_overflowing_item_gets_parallel_lanes(self) -> None:
+        from flab2bp.layout.spine import _adapt, _lane_copies
+
+        spec = wide_flow_spec()
+        groups, edges = _adapt(spec)
+        assert _lane_copies(groups, edges, set(), spec)["iron-ingot"] == 2
+
+        p = SpineLayout(power=False).lay_out(spec, time_budget_s=0.5)
+        rows = {
+            b.y
+            for b in p.buildings
+            if catalog.is_belt(b.item_id) and b.carries_item == "iron-ingot" and b.z == 0
+            and b.yaw in (90.0, 270.0)
+        }
+        assert len(rows) >= 4, (
+            f"expected two parallel lanes in each of two corridors, got {len(rows)}"
+        )
+
+    def test_the_parallel_lanes_get_a_trunk_each(self) -> None:
+        """One trunk for both copies would put the flow back on one belt."""
+        p = SpineLayout(power=False).lay_out(wide_flow_spec(), time_budget_s=0.5)
+        trunks = {
+            b.x
+            for b in p.buildings
+            if catalog.is_belt(b.item_id)
+            and b.yaw == 180.0
+            and b.carries_item == "iron-ingot"
+        }
+        assert len(trunks) == 2, f"expected two trunk columns, got {sorted(trunks)}"
+
+    def test_no_belt_run_is_asked_to_carry_more_than_its_tier(self) -> None:
+        from flab2bp.pipeline import _id_map
+
+        spec = wide_flow_spec()
+        p = SpineLayout(power=False).lay_out(spec, time_budget_s=0.5)
+        report = validate.validate(
+            p, spec, ids=_id_map(spec), expect_power=False, only=["flow.belt_capacity"]
+        )
+        assert report.ok, "\n".join(f.message for f in report.errors[:5])
+
+    def test_splitting_is_given_up_rather_than_the_layout(self) -> None:
+        """Coverage outranks density, and it outranks throughput too.
+
+        A corridor deep enough to hold the extra lanes may be too deep to wire.
+        When that happens the split is abandoned and the build ships with an
+        honest ``flow.belt_capacity`` error, because a build reported as too slow
+        can be pasted and widened by hand and a build that does not exist cannot.
+        """
+        from flab2bp.layout.spine import _adapt, _lane_requirements, _topological_rows
+
+        spec = wide_flow_spec()
+        groups, edges = _adapt(spec)
+        rows = _topological_rows(groups, edges)
+        lanes, copies = _lane_requirements(groups, edges, rows, set(), spec)
+        assert copies["iron-ingot"] == 2
+        assert sum(c.count("iron-ingot") for c in lanes) >= 4
+
+        # Reach is 3 lanes a side, so an item wanting more than the whole budget
+        # cannot be allocated at all -- and `_lane_requirements` must still
+        # produce a layout rather than propagating that.
+        from flab2bp.layout.spine import _allocate_lanes
+
+        with pytest.raises(ValueError):
+            _allocate_lanes(groups, edges, rows, set(), spec, dict.fromkeys(copies, 99))
 
 
 class TestPower:

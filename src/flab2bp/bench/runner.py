@@ -115,7 +115,19 @@ def _run_cell(
         machines=m.machines,
         belt_tiles=m.belt_tiles,
         sorters=m.sorters,
-        direct_inserts=m.direct_inserts,
+        # Read what the STRATEGY reported, not what geometry infers.
+        #
+        # `metrics.measure` defines a direct insert as a sorter with a machine at
+        # both ends. Freeform's bridge spans the producer's output-lane belt to
+        # the consumer's input-lane belt, so that counter reports zero however
+        # many are emitted -- which is why `docs/AB_RESULTS.md` showed
+        # `direct_inserts = 0` for a strategy that was placing 17 of them across
+        # the corpus, and why this looked for a while like a feature that never
+        # fired rather than a counter that could not see it.
+        #
+        # Counting belt-to-belt sorters instead would swap the error round:
+        # spine's trunk taps are belt-to-belt too, and are not direct inserts.
+        direct_inserts=int(stats.get("direct_inserts", m.direct_inserts)),
         towers=m.towers,
         altitude_levels=m.altitude_levels,
         solve_seconds=elapsed,

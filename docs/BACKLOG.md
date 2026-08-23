@@ -39,39 +39,33 @@ equal-cost Manhattan plateau. Controlled at `workers=1` it cut A\* time ~15% but
 produced **12% more belt tiles**, and A\* is only 0.32s of 0.85s, so the net was
 ~5% speed for materially more buildings to paste. Not worth it.
 
-## IN PROGRESS -- emit direct insertion in both strategies
+## RESOLVED -- direct insertion fires; the COUNTER could not see it
 
-Both strategies wire up direct insertion end to end and it still does not fire.
-The machinery is all present -- `spine.py` models `di[e]` and emits it,
-`freeform.py` has `_direct_net_candidates`, `MU_DIRECT` in the objective, and
-`_bridge` to place the sorter -- yet `docs/AB_RESULTS.md` reports
-`direct_inserts` of **0 on every corpus spec but one**, where spine manages a
-single insert on `magnetic-coil`. Something in the chain from candidate to
-emitted sorter is silently dropping every opportunity.
+The item said both strategies find direct-insertion opportunities and discard
+them, on the evidence of `direct_inserts = 0` across the whole bake-off. The
+premise was wrong. Freeform emits **17 bridging sorters across the 24 (URL,
+candidate) pairs**; `bench/metrics.py::measure` defines a direct insert as a
+sorter with a MACHINE AT BOTH ENDS, and freeform's bridge spans the producer's
+output-lane belt to the consumer's input-lane belt. The counter reported zero
+however many were placed. `bench/runner.py` now reads what the strategy
+reported. Counting belt-to-belt sorters instead would swap the error round --
+spine's trunk taps are belt-to-belt too, and are not direct inserts.
 
-Every discarded candidate becomes a belt net the router must path around when it
-could be one sorter and no belt: better on both axes, fewer nets to route AND
-fewer belt tiles.
+It is worth what it costs. Measured on/off at `workers=1`, 8s, all 24 pairs
+shipping both ways: **5210 belt tiles against 5302, and 10786 area against
+10890**. Biggest single win is `processor`/`no-proliferator` at 171 belt tiles
+against 275, a 38% cut. By candidate: `no-proliferator` 7 bridges,
+`free-proliferation` 10, `max-proliferation` 0 -- correctly zero, since every
+edge there is belt-required. One honest regression, `super-magnetic-ring`/
+`no-proliferator`, which is larger with it than without.
 
-It also means the bake-off currently cannot measure the axis the candidate
-frontier exists to open. Proliferation forbids direct insertion on sprayed edges,
-so the `free-proliferation` candidate -- which proliferates only externally-fed
-recipes precisely to leave internal edges insertable -- is being compared on a
-trade-off that never materialises.
+### Machine-to-machine insertion is geometrically impossible in freeform
 
-Two constraints shape it:
-
-* **Proliferation forbids it per-edge.** A sprayed input must arrive on a belt,
-  because spraying is done by a belt-mounted Spray Coater. So every edge in
-  `BuildSpec.belt_required_edges` is ineligible, and under the default
-  `--proliferator mk3` that is nearly all of them. This is exactly why the rate
-  stage emits the `free-proliferation` candidate, which proliferates only
-  recipes fed from outside and leaves internal edges free to direct-insert.
-* **It rigidifies placement.** A direct-inserted pair must sit within sorter
-  reach (3 tiles), which the packer pays for elsewhere.
-
-Measure against the `no-proliferator` and `free-proliferation` candidates, where
-it actually bites.
+Not a bug, and proved rather than assumed: producer machine bottom to consumer
+machine top is `out_lanes + MARGIN + in_lanes + 1 >= 4` rows against a
+`SORTER_MAX_REACH` of 3. A true machine-pair insert needs the strip planner to
+omit both lanes for that edge, which changes every strip height and therefore
+the pack. A test pins the arithmetic so it cannot go stale silently.
 
 ## Trim lanes to their actual span
 

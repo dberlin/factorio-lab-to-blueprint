@@ -66,28 +66,20 @@ def single_recipe_spec() -> BuildSpec:
 
 
 def two_stage_spec() -> BuildSpec:
-    return BuildSpec(
-        groups=(
-            group("iron-ingot", "arc-smelter", 4, {"iron-ore": F(1)}, {"iron-ingot": F(1)}),
-            group("gear", "assembling-machine-2", 2, {"iron-ingot": F(1)}, {"gear": F(1)}),
-        ),
-        external_inputs={"iron-ore": F(4)},
-        outputs={"gear": F(2)},
-        belt_item_id="conveyor-belt-2",
-        belt_items_per_second=F(12),
-        label="two-stage",
-    )
+    """One producer, one consumer, RATE-BALANCED and of equal width.
 
+    Four gear assemblers, not two.  Four smelters make 4 iron-ingot/s, so two
+    assemblers left 2/s with nowhere to go: every flow check on this spec then
+    failed for arithmetic reasons and said nothing about the geometry.
 
-def balanced_pair_spec() -> BuildSpec:
-    """Producer and consumer strips of EQUAL width, so stacking is not a penalty.
-
-    Direct insertion needs the consumer stacked under the producer. For two boxes
-    of width ``a`` and ``b`` and equal height ``h``, side-by-side costs
-    ``(a+b)*h`` and stacked costs ``max(a,b)*2h`` -- identical when ``a == b``,
-    and strictly worse for stacking when they differ. ``two_stage_spec`` has
-    widths 12 and 6, so side-by-side wins there on area alone and the tie-break
-    never gets a say. Equal widths put the decision where this test wants it.
+    Equal machine counts also make it the fixture the direct-insert tests want.
+    Direct insertion needs the consumer stacked under the producer, and for two
+    boxes of width ``a`` and ``b`` at equal height ``h``, side-by-side costs
+    ``(a+b)*h`` while stacked costs ``max(a,b)*2h`` -- identical when ``a == b``
+    and strictly worse for stacking when they differ.  At 4 and 2 machines the
+    widths were 12 and 6, so side-by-side won on area alone and the tie-break
+    never got a say; the separate ``balanced_pair_spec`` that existed to dodge
+    that is gone, because balancing the rates fixed the widths too.
     """
     return BuildSpec(
         groups=(
@@ -98,32 +90,64 @@ def balanced_pair_spec() -> BuildSpec:
         outputs={"gear": F(4)},
         belt_item_id="conveyor-belt-2",
         belt_items_per_second=F(12),
-        label="balanced-pair",
+        label="two-stage",
     )
 
 
 def magnetic_ring_spec() -> BuildSpec:
-    """The calibration spec: 58 machines, 9 groups, 11 internal edges."""
+    """Shaped like the super-magnetic-ring chain, and RATE-BALANCED.
+
+    Nine groups, 54 machines, every machine running at 1/s.  The counts are the
+    unique solution of the chain's stoichiometry at two rings per second, so
+    supply equals demand for every internal item and every external input equals
+    what its consumers draw::
+
+        ring 2      <- turbine 4, graphite 2, magnet 6
+        turbine 4   <- motor 4, coil 4
+        motor 4     <- ingot 4, gear 4, coil 4
+        coil 8      <- magnet 8, copper 8
+        gear 4      <- ingot 4
+        ingot 8     <- iron-ore 8       magnet 14 <- iron-ore 14
+        copper 8    <- copper-ore 8     graphite 2 <- coal 2
+
+    It used to be round numbers instead -- 4 magnetic-coil/s against 12/s of
+    demand, and 17 magnet/s on a 12/s belt.  Any test asserting flow-clean on it
+    therefore failed for reasons with nothing to do with geometry, which is worse
+    than no test: it makes the flow checks unusable on the one fixture with
+    enough shape to exercise them.
+
+    The belt is Mk.III because the busiest lane -- iron-ore at 22/s, feeding both
+    the ingot and the magnet rows -- does not fit on Mk.II.  Under-sizing the
+    belt would reintroduce exactly the failure this fixture exists to avoid.
+
+    These numbers are deliberately identical to ``test_spine``'s fixture of the
+    same name.  The two strategies are compared on this shape, and a comparison
+    across two different specs is not one.
+    """
     return BuildSpec(
         groups=(
-            group("iron-ingot", "arc-smelter", 12, {"iron-ore": F(1)}, {"iron-ingot": F(1)}),
-            group("copper-ingot", "arc-smelter", 4, {"copper-ore": F(1)}, {"copper-ingot": F(1)}),
-            group("magnet", "arc-smelter", 17, {"iron-ore": F(1)}, {"magnet": F(1)}),
+            group("iron-ingot", "arc-smelter", 8, {"iron-ore": F(1)}, {"iron-ingot": F(1)}),
+            group("copper-ingot", "arc-smelter", 8, {"copper-ore": F(1)}, {"copper-ingot": F(1)}),
+            group("magnet", "arc-smelter", 14, {"iron-ore": F(1)}, {"magnet": F(1)}),
             group(
-                "energetic-graphite", "arc-smelter", 2, {"coal": F(2)}, {"energetic-graphite": F(1)}
+                "energetic-graphite",
+                "arc-smelter",
+                2,
+                {"coal": F(1)},
+                {"energetic-graphite": F(1)},
             ),
             group(
                 "magnetic-coil",
                 "assembling-machine-2",
-                4,
-                {"magnet": F(2), "copper-ingot": F(1)},
+                8,
+                {"magnet": F(1), "copper-ingot": F(1)},
                 {"magnetic-coil": F(1)},
             ),
             group("gear", "assembling-machine-2", 4, {"iron-ingot": F(1)}, {"gear": F(1)}),
             group(
                 "electric-motor",
                 "assembling-machine-2",
-                8,
+                4,
                 {"iron-ingot": F(1), "gear": F(1), "magnetic-coil": F(1)},
                 {"electric-motor": F(1)},
             ),
@@ -137,7 +161,7 @@ def magnetic_ring_spec() -> BuildSpec:
             group(
                 "super-magnetic-ring",
                 "assembling-machine-2",
-                3,
+                2,
                 {
                     "electromagnetic-turbine": F(2),
                     "energetic-graphite": F(1),
@@ -146,10 +170,10 @@ def magnetic_ring_spec() -> BuildSpec:
                 {"super-magnetic-ring": F(1)},
             ),
         ),
-        external_inputs={"iron-ore": F(46), "copper-ore": F(8), "coal": F(4)},
-        outputs={"super-magnetic-ring": F(1)},
-        belt_item_id="conveyor-belt-2",
-        belt_items_per_second=F(12),
+        external_inputs={"iron-ore": F(22), "copper-ore": F(8), "coal": F(2)},
+        outputs={"super-magnetic-ring": F(2)},
+        belt_item_id="conveyor-belt-3",
+        belt_items_per_second=F(30),
         label="magnetic-ring",
     )
 
@@ -163,7 +187,7 @@ def proliferated_spec() -> BuildSpec:
             group(
                 "gear",
                 "assembling-machine-2",
-                2,
+                4,
                 {"iron-ingot": F(1)},
                 {"gear": F(1)},
                 mode=ProliferatorMode.PRODUCTS,
@@ -238,6 +262,64 @@ def machines_of(p: Placement) -> list[int]:
         and b.item_id != catalog.TESLA_TOWER_ID
         and catalog.building(b.item_id).occupies_tiles
     ]
+
+
+# --- the fixtures themselves -----------------------------------------------
+
+
+class TestTheFixturesBalance:
+    """A hand-built spec that does not balance makes every flow check useless.
+
+    ``magnetic_ring_spec`` used to be round numbers -- 4 magnetic-coil/s
+    supplying 12/s of demand, 17 magnet/s on a 12/s belt -- so a test asserting
+    anything about flow on it failed for arithmetic reasons and told you nothing
+    about the layout.  These two tests are pure arithmetic on the spec: they
+    cannot be satisfied by a change to the layout, only by the numbers being
+    right, so the fixtures cannot rot back.
+
+    ``proliferated_spec`` is excluded on purpose.  Its proliferator arrives as an
+    external input that no machine GROUP consumes -- the belt-mounted coaters do
+    -- so a supply-equals-demand sum over groups is the wrong question there.
+    """
+
+    _BALANCED = [single_recipe_spec, two_stage_spec, magnetic_ring_spec]
+
+    @pytest.mark.parametrize("spec_fn", _BALANCED, ids=lambda f: f.__name__)
+    def test_supply_equals_demand_for_every_item(self, spec_fn: SpecFactory) -> None:
+        spec = spec_fn()  # type: ignore[operator]
+        made: dict[str, F] = {}
+        used: dict[str, F] = {}
+        for g in spec.groups:
+            for item, rate in g.outputs_per_machine.items():
+                made[item] = made.get(item, F(0)) + rate * g.count
+            for item, rate in g.inputs_per_machine.items():
+                used[item] = used.get(item, F(0)) + rate * g.count
+        for item in set(made) | set(used):
+            supply = made.get(item, F(0)) + spec.external_inputs.get(item, F(0))
+            demand = used.get(item, F(0)) + spec.outputs.get(item, F(0))
+            assert supply == demand, f"{item}: {supply}/s supplied against {demand}/s demanded"
+
+    @pytest.mark.parametrize("spec_fn", _BALANCED, ids=lambda f: f.__name__)
+    def test_no_item_needs_more_than_one_belt_of_its_tier(
+        self, spec_fn: SpecFactory
+    ) -> None:
+        """Freeform shards a group across strips, so a lane carries a SHARD's flow.
+
+        A whole item's flow still has to fit the belt the spec names, because an
+        external input arrives on one straight run per lane and the marker pass
+        labels it with the item's full rate.  A fixture that needs the belt tier
+        raised is a fixture written without checking, which is how 17 items/s
+        ended up nominated for a 12/s belt.
+        """
+        spec = spec_fn()  # type: ignore[operator]
+        flow: dict[str, F] = dict(spec.external_inputs)
+        for g in spec.groups:
+            for item, rate in g.outputs_per_machine.items():
+                flow[item] = flow.get(item, F(0)) + rate * g.count
+        for item, rate in flow.items():
+            assert rate <= spec.belt_items_per_second, (
+                f"{item} moves {rate}/s on a {spec.belt_items_per_second}/s belt"
+            )
 
 
 # --- strip planning --------------------------------------------------------
@@ -476,6 +558,57 @@ class TestProliferationForbidsDirectInsertion:
         assert report.ok, "\n".join(f"{f.check}: {f.message}" for f in report.errors[:5])
 
 
+# --- lane length -----------------------------------------------------------
+
+
+class TestLanesStopAtTheirLastTap:
+    """An input lane past its last sorter is a belt nothing draws from.
+
+    Lanes used to run the full strip width regardless, which cost a building per
+    tile to paste and -- the part that actually bit -- left occupied cells the
+    router had to path around.  Freeing them is what moved a Spray Coater's drop
+    belt off the neighbouring strip's face and into its own strip's interior.
+
+    Output lanes are deliberately NOT trimmed: they are filled at every machine
+    column and drained at the east end, so every tile between the first sorter
+    and the port carries flow.
+    """
+
+    def test_an_input_lane_is_long_enough_and_no_longer(self) -> None:
+        for s in plan_strips(magnetic_ring_spec(), strip_len=6):
+            for lane in s.in_above + s.in_below:
+                tiles = s.input_lane_tiles(lane)
+                assert tiles <= s.width
+                # Every machine still gets a sorter, so the last machine's
+                # column must be on the lane.
+                assert tiles >= (s.machines - 1) * s.mw + 1
+
+    def test_emission_lays_exactly_that_many_belt_tiles(self) -> None:
+        """Emission and ``Strip`` must agree on the length.
+
+        They are two statements of the same number -- the packer uses the
+        ``Strip`` one to decide whether a bridging sorter has a column to run
+        down, and emission uses its own -- so a drift between them shows up as a
+        rewarded direct insert whose lanes turn out to share no tile.
+        """
+        spec = magnetic_ring_spec()
+        strips = plan_strips(spec, strip_len=max(1, spec.machine_count))
+        expected = sum(
+            sum(s.input_lane_tiles(lane) for lane in s.in_above + s.in_below)
+            + len(s.out_lanes) * s.width
+            for s in strips
+        )
+        untrimmed = sum(
+            (len(s.in_above) + len(s.in_below) + len(s.out_lanes)) * s.width
+            for s in strips
+        )
+        assert expected < untrimmed, "the fixture no longer exercises trimming"
+
+        p = fallback_placement(spec, power=False)
+        belts = sum(1 for b in p.buildings if catalog.is_belt(b.item_id))
+        assert belts == expected
+
+
 # --- direct insertion ------------------------------------------------------
 
 
@@ -513,8 +646,44 @@ class TestDirectInsertion:
         placement, _failed, _towers = _build(spec, strips, pack, power=False, route=True)
         return placement, pack
 
+    def test_the_bridge_is_a_lane_to_lane_transfer_not_a_machine_pair(self) -> None:
+        """What freeform emits, stated plainly, because a counter disagrees.
+
+        ``bench/metrics.py`` counts a direct insert as a sorter whose BOTH ends
+        are machines.  Freeform's bridge spans the producer's output lane to the
+        consumer's input lane, so that counter reports zero however many bridges
+        are placed -- which is why the bake-off's ``B d.ins`` column read 0 on
+        every spec while 17 bridges were being emitted across the corpus.
+
+        The lanes are not an oversight that could be tightened away.  A strip is
+        input lanes / machines / output lanes stacked top to bottom, and the pack
+        keeps a margin between strips, so the closest two machine bands can come
+        is ``out_lanes + margin + in_lanes >= 1 + 1 + 1`` rows of separation plus
+        one to land on -- four tiles, against a sorter reach of three.  A
+        machine-to-machine insert needs the strip planner to omit both lanes for
+        that edge, which changes every strip's height and therefore the pack.
+        """
+        p, _ = self._stacked(two_stage_spec(), direct=True)
+        belts = {i for i, b in enumerate(p.buildings) if catalog.is_belt(b.item_id)}
+        machines = set(machines_of(p))
+        transfers = [
+            b
+            for b in p.buildings
+            if catalog.is_sorter(b.item_id)
+            and b.input_obj in belts
+            and b.output_obj in belts
+        ]
+        assert len(transfers) >= 1, "no lane-to-lane bridge was emitted"
+        assert not [
+            b
+            for b in p.buildings
+            if catalog.is_sorter(b.item_id)
+            and b.input_obj in machines
+            and b.output_obj in machines
+        ], "a machine-to-machine sorter appeared; the reach arithmetic above is stale"
+
     def test_an_adjacent_pair_is_actually_direct_inserted(self) -> None:
-        p, pack = self._stacked(balanced_pair_spec(), direct=True)
+        p, pack = self._stacked(two_stage_spec(), direct=True)
         assert pack.direct, "packer found no direct-insertable pair"  # type: ignore[attr-defined]
         assert p.stats["direct_inserts"] >= 1.0
 
@@ -526,7 +695,7 @@ class TestDirectInsertion:
         belt tiles then no net was actually replaced, which is precisely the bug
         this feature previously had: a hardcoded counter and no effect.
         """
-        spec = balanced_pair_spec()
+        spec = two_stage_spec()
         on, _ = self._stacked(spec, direct=True)
         off, _ = self._stacked(spec, direct=False)
 
@@ -539,13 +708,13 @@ class TestDirectInsertion:
         )
 
     def test_a_direct_inserted_pair_still_validates(self) -> None:
-        p, _ = self._stacked(balanced_pair_spec(), direct=True)
+        p, _ = self._stacked(two_stage_spec(), direct=True)
         assert p.stats["direct_inserts"] >= 1.0
         report = validate.validate(p, expect_power=False)
         assert report.ok, "\n".join(f"{f.check}: {f.message}" for f in report.errors[:5])
 
     def test_direct_insert_sorters_obey_reach_and_stay_on_one_level(self) -> None:
-        p, _ = self._stacked(balanced_pair_spec(), direct=True)
+        p, _ = self._stacked(two_stage_spec(), direct=True)
         assert p.stats["direct_inserts"] >= 1.0
         for b in p.buildings:
             if not catalog.is_sorter(b.item_id):
@@ -568,7 +737,7 @@ class TestDirectInsertion:
         so it cannot pay for the row it costs. Deleting those lanes is the
         structural change that would make it a real density lever.
         """
-        spec = balanced_pair_spec()
+        spec = two_stage_spec()
         kw = {"power": False, "workers": DETERMINISTIC_WORKERS}
         swept = FreeformLayout(direct_insert=True, **kw).lay_out(spec, time_budget_s=0.5)  # type: ignore[arg-type]
         stacked, _ = self._stacked(spec, direct=True)
