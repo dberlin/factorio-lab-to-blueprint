@@ -47,6 +47,7 @@ from flab2bp.layout.freeform import (
     _proliferator_nets,
     _reserve_port_access,
     _shard_sinks,
+    _sink_for,
     fallback_placement,
     plan_strips,
     tie_break_cap,
@@ -2241,3 +2242,65 @@ class TestThroughTrafficLeavesTheGround:
         """
         assert min(_LEVEL_TOLL) >= 0.0, _LEVEL_TOLL
         assert len(_LEVEL_TOLL) == LEVELS, _LEVEL_TOLL
+
+
+class TestAPathThatReachesNothingIsUnrouted:
+    """The sink side is counted exactly like the source side.
+
+    ``_sink_for`` used to name the lane head even when the path ended nowhere
+    near it, on the reasoning that a wrong link is at least VISIBLE as
+    ``belt.link_adjacent``.  Visible to whom: ``_commit_paths`` counted only
+    source-side failures, so the break came back as ``failed = 0``, the sweep
+    accepted the pack as fully wired, and it surfaced two layers later as a
+    placement our own validator threw out.  Measured on
+    ``universe-matrix/free-proliferation`` at 120s, which emitted three belts
+    linking to a lane head 35 to 40 tiles away and three more stepping two
+    altitude levels in a single tile.
+    """
+
+    def test_a_tail_with_nothing_beside_it_names_no_sink(self) -> None:
+        canvas = _Canvas()
+        dst_belt = canvas.add(_belt(40, 40, item="x"))
+        tail = canvas.add(_belt(0, 0, item="x"))
+        net = _Net(
+            src=_Port(canvas.add(_belt(-9, -9, item="x")), -9, -9, -9, -9),
+            dst=_Port(dst_belt, 40, 40, 40, 40),
+            item="x",
+        )
+        assert _sink_for(canvas, tail, net, {tail}) is None, (
+            "a path ending 80 tiles from its lane head was handed the lane head "
+            "anyway, which emits a belt linking to a building it is nowhere near"
+        )
+
+    def test_a_tail_beside_its_lane_head_still_links_to_it(self) -> None:
+        """The common case has to be untouched, or every net becomes a failure."""
+        canvas = _Canvas()
+        dst_belt = canvas.add(_belt(1, 0, item="x"))
+        tail = canvas.add(_belt(0, 0, item="x"))
+        net = _Net(
+            src=_Port(canvas.add(_belt(-9, -9, item="x")), -9, -9, -9, -9),
+            dst=_Port(dst_belt, 1, 0, 1, 1),
+            item="x",
+        )
+        assert _sink_for(canvas, tail, net, {tail}) == dst_belt
+
+    def test_a_tail_one_level_above_its_lane_head_still_links(self) -> None:
+        """Belts climb half a tile at a time, so one level apart is a legal link.
+
+        Through traffic leaves the ground now (see `_GROUND_TOLL`), so a path can
+        arrive on the tile above its lane head.  Requiring EQUAL altitude there
+        turned a perfectly good arrival into a route failure.
+        """
+        canvas = _Canvas()
+        dst_belt = canvas.add(_belt(0, 0, item="x"))
+        above = PlacedBuilding(
+            item_id=2001, model_index=35, x=0, y=1, z=1, width=1, height=1,
+            carries_item="x",
+        )
+        tail = canvas.add(above)
+        net = _Net(
+            src=_Port(canvas.add(_belt(-9, -9, item="x")), -9, -9, -9, -9),
+            dst=_Port(dst_belt, 0, 0, 0, 0),
+            item="x",
+        )
+        assert _sink_for(canvas, tail, net, {tail}) == dst_belt

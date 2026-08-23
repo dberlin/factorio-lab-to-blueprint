@@ -2547,9 +2547,16 @@ def _commit_paths(
         if not _tap_source(canvas, feeder, indices[0], belt_id, belt_model):
             unlinked += 1
             continue
+        # The SINK side is counted exactly like the source side. A path that
+        # reached nothing it can hand items to is unrouted, and reporting it as
+        # routed is how a pack with three belts linking 40 tiles across the block
+        # came back as `failed = 0`.
+        sink = _sink_for(canvas, indices[-1], net, set(indices))
+        if sink is None:
+            unlinked += 1
+            continue
         canvas.buildings[indices[-1]] = _relink(
-            canvas.buildings[indices[-1]],
-            output_obj=_sink_for(canvas, indices[-1], net, set(indices)),
+            canvas.buildings[indices[-1]], output_obj=sink
         )
     return unlinked
 
@@ -2631,7 +2638,7 @@ def _leads_back(canvas: _Canvas, start: int, own: set[int]) -> bool:
     return False
 
 
-def _sink_for(canvas: _Canvas, last: int, net: _Net, own: set[int]) -> int:
+def _sink_for(canvas: _Canvas, last: int, net: _Net, own: set[int]) -> int | None:
     """What this path actually reached: the lane head, or a sibling to merge into.
 
     A path that could not get to the lane head was routed to a sibling's belt
@@ -2641,10 +2648,25 @@ def _sink_for(canvas: _Canvas, last: int, net: _Net, own: set[int]) -> int:
 
     Preference order is the lane head first, so the common case is unchanged and
     a merge only happens where one was actually routed.
+
+    ``None`` means this path reached NOTHING it can hand items to, and that is a
+    route failure like any other.  It used to return ``net.dst.belt`` anyway, on
+    the reasoning that a wrong link is at least visible as ``belt.link_adjacent``
+    -- but visible to WHOM.  ``_commit_paths`` counted only source-side failures,
+    so the sink-side break came back as ``failed = 0``, the sweep accepted the
+    pack as fully wired, and the defect surfaced two layers later as a
+    placement our own validator threw out.  Measured on
+    ``universe-matrix/free-proliferation`` at 120s, where the emitted block
+    carried three belts linking to a lane head 35 to 40 tiles away and three more
+    stepping two altitude levels in one tile.
+
+    A net that reached nothing is unrouted.  Saying so lets the sweep discard
+    that height and try another, which is what it does for every other kind of
+    routing failure.
     """
     tail = canvas.buildings[last]
     dst = canvas.buildings[net.dst.belt]
-    if abs(dst.x - tail.x) + abs(dst.y - tail.y) <= 1 and dst.z == tail.z:
+    if abs(dst.x - tail.x) + abs(dst.y - tail.y) <= 1 and abs(dst.z - tail.z) <= 1:
         return net.dst.belt
     for dx, dy in _STEPS:
         cell = (tail.x + dx, tail.y + dy, tail.z)
@@ -2660,10 +2682,8 @@ def _sink_for(canvas: _Canvas, last: int, net: _Net, own: set[int]) -> int:
             if _leads_back(canvas, who, own):
                 continue  # merging here would close a loop
             return who
-    # Nothing adjacent carries this item. Name the lane head anyway so the
-    # failure is visible as `belt.link_adjacent` rather than as a belt that
-    # quietly ends nowhere.
-    return net.dst.belt
+    # Nothing adjacent carries this item, so this path delivers to nobody.
+    return None
 
 
 def _tap_source(
