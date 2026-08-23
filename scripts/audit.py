@@ -82,7 +82,11 @@ from flab2bp.bench.corpus import URL_CORPUS, Tier  # noqa: E402
 from flab2bp.lab.data import load_vendored  # noqa: E402
 from flab2bp.lab.url import parse_url  # noqa: E402
 from flab2bp.layout import validate  # noqa: E402
-from flab2bp.layout.base import LayoutStrategy, NoValidLayout  # noqa: E402
+from flab2bp.layout.base import (  # noqa: E402
+    RETRY_BUDGET_S,
+    LayoutStrategy,
+    NoValidLayout,
+)
 from flab2bp.layout.freeform import FreeformLayout  # noqa: E402
 from flab2bp.layout.spine import SpineLayout  # noqa: E402
 from flab2bp.rates.candidates import build_candidates  # noqa: E402
@@ -93,9 +97,9 @@ _STRATEGIES: dict[str, type[LayoutStrategy]] = {
     "freeform": FreeformLayout,
 }
 
-#: A cell slower than this is worth naming in the summary even when it passes.
-#: Budgets in this corpus are single-digit seconds, so anything here is a cell
-#: outrunning what it was given.
+#: A cell slower than this is worth NAMING in the summary even when it passes.
+#: This is a reporting threshold, not a defect threshold: see :func:`_slow_note`
+#: for why a cell above it is usually behaving exactly as designed.
 SLOW_CELL_S = 10.0
 
 
@@ -218,6 +222,37 @@ class Tally:
     @property
     def total(self) -> int:
         return self.clean + self.refused + self.invalid + self.crashed + self.not_run
+
+
+def _slow_note(over: int, budget: float) -> str:
+    """What a slow cell means, which is usually not that a budget was ignored.
+
+    This line used to read "a lay_out that does not honour time_budget_s, not a
+    slow machine".  That was measured and is false, on roughly twenty-five cells
+    a run.  Three legitimate things put a cell above the budget:
+
+    * ``lay_out`` takes ONE deadline of ``max(time_budget_s, RETRY_BUDGET_S)``
+      and threads it through every search phase, so the ceiling is the retry
+      budget, not the nominal one.  A 4s cell is allowed 15s.
+    * A REFUSAL spends that whole deadline by definition, having found nothing
+      worth stopping for.  Every refusing cell lands here.
+    * Emission and the self-check sit outside the deadline on purpose -- neither
+      is a search, neither can be abandoned half-done -- and both scale with the
+      result: 8.7s to certify a 77,000-tile placement.  That tail is also
+      allocation-dependent, 22-26s at eight CP-SAT workers against 50s at four.
+
+    So name the slow cells, because a genuine runaway hides among them, but do
+    not diagnose them.  A cell far above the deadline is worth opening; a cell
+    just above it is the design working.
+    """
+    ceiling = max(budget, RETRY_BUDGET_S)
+    return (
+        f"{over} cells took {SLOW_CELL_S:g}s or more, against a search ceiling of "
+        f"{ceiling:g}s (max(budget, RETRY_BUDGET_S)). Refusals spend that whole "
+        "ceiling, and emission plus the self-check run outside it and scale with "
+        "tile count, so this is not by itself a budget defect -- look at cells "
+        "far above it, not merely above it."
+    )
 
 
 def _slugs(raw: str, flag: str) -> set[str]:
@@ -451,12 +486,7 @@ def main() -> int:
     print(f"\n{elapsed:.0f}s wall, {done}/{len(jobs)} cells")
     over = [s for t in tallies.values() for s in t.slowest if s[0] >= SLOW_CELL_S]
     if over:
-        print(
-            f"{len(over)} cells took {SLOW_CELL_S:g}s or more. Budgets here are "
-            "single-digit seconds, so those cells are outrunning what they were "
-            "given -- a lay_out that does not honour time_budget_s, not a slow "
-            "machine."
-        )
+        print(_slow_note(len(over), max(budgets)))
     if failed:
         print(
             "\nNOT CLEAN. An INVALID cell is worse than a REFUSED one: refusing "
