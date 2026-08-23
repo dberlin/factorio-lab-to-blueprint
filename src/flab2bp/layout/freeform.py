@@ -2284,15 +2284,21 @@ def _build(
         # So several producers feeding one consumer lane cannot each reach it.
         # They converge instead: the first net routes to the head and the rest
         # merge into that net's path, which is what belts do anyway.
-        reuse_src: dict[int, int] = defaultdict(int)
         for k in range(max(len(srcs), len(sinks))):
-            si = k % len(srcs)
-            base = srcs[si]
-            # Tap from the east end inward, so the first consumer keeps the
-            # natural end-of-lane attachment and only the extras move.
-            nth = reuse_src[si]
-            reuse_src[si] += 1
-            port = base.at_tile(len(base.tiles) - 1 - nth) if nth else base
+            # Every reuse stays on the lane END. Walking inward was tried and is
+            # worse, for the same reason the consumer side never walks: a
+            # mid-lane tile is WALLED IN -- lane either side, machines above,
+            # another lane below -- so the branch it was meant to serve has
+            # nowhere to leave from. Measured on the free-proliferation chain:
+            # three of the five walled-in ports were taps this had moved, each
+            # with all four neighbours occupied on a clean canvas.
+            #
+            # Sharing the end tile is safe because `_tap_source` builds a
+            # junction there: the first net links directly, the second turns the
+            # link into a splitter, and further nets attach to it until the four
+            # sides run out -- at which point it reports the failure instead of
+            # mis-linking.
+            port = srcs[k % len(srcs)]
             sink = sinks[k % len(sinks)]
             if (src_key, dest) in direct_keys and _bridge(canvas, port, sink, rates, item):
                 direct_placed += 1
