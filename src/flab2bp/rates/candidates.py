@@ -28,6 +28,43 @@ from flab2bp.rates.adjust import ProliferatorTier
 from flab2bp.rates.solve import RateSolution, solve, target_rates
 from flab2bp.spec import BuildSpec, BuildSpecSet, MachineGroup, ProliferatorMode
 
+#: How many candidates the frontier emits by default.
+#:
+#: Three, not four.  ``all-speed-mode`` exists and is reachable with
+#: ``--candidates 4``; it was measured across the whole corpus and it does not
+#: pay for itself.  2,592 layouts -- 12 URLs x both strategies x 9 repetitions,
+#: at budget 4 with both power settings and again at the CLI's own default
+#: budget of 2.0 -- comparing best-of-3 area against best-of-4 the way
+#: ``pipeline.build`` actually chooses, ``min`` over every (candidate,
+#: strategy) pair:
+#:
+#: * A fourth candidate changed the chosen area not at all in 187 of 216 cells
+#:   at budget 4, and 90 of 108 at budget 2.  Corpus-wide it saved a median
+#:   +0.058%.
+#: * The null arm settles it.  Running the SAME three candidates a second time
+#:   and keeping the smaller saves **1.10%**; adding a fourth saves **0.67%**.
+#:   Both strategies are nondeterministic, so best-of-3 moves 1.84% median and
+#:   up to 21% run-to-run on its own -- a fourth candidate buys less density
+#:   than another roll of the dice on the three already there, and it is the
+#:   noise, not the frontier, that dominates.
+#: * It costs +33% layout wall-clock, because the extra spec is laid out by
+#:   every strategy.  The extra rate solve is not the cost: +0.51s over all 12
+#:   URLs.
+#: * The one durable win in the corpus is ``graphene``: 416 -> 403 tiles, 9/9
+#:   repetitions, zero baseline spread.  Thirteen tiles on a five-machine
+#:   build.
+#:
+#: ``information-matrix`` is both why this looked promising and why it is not.
+#: Spine alone lays ``all-speed-mode`` out ~12% smaller there.  But the CLI
+#: defaults to ``strategy="best"``, and freeform lays that same URL out in
+#: 2,430 tiles against spine's 4,074, so the fourth candidate wins a race
+#: nobody runs: measured gain 0.00% in 9/9 repetitions, both power settings,
+#: both budgets.  A per-strategy area win is not a reason to change a default
+#: that pools strategies.
+#:
+#: None of this is a correctness limit.  ``all-speed-mode`` is produced for all
+#: 12 corpus URLs, never trips ``_is_runaway``, and caused no new refusal --
+#: 0 of 324 build cells lost a valid layout by adding it.
 DEFAULT_CANDIDATES = 3
 
 
