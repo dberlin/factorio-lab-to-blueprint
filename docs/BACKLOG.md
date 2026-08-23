@@ -39,62 +39,25 @@ equal-cost Manhattan plateau. Controlled at `workers=1` it cut A\* time ~15% but
 produced **12% more belt tiles**, and A\* is only 0.32s of 0.85s, so the net was
 ~5% speed for materially more buildings to paste. Not worth it.
 
-## Original analysis (superseded, kept for the record)
-
-## Speed up the layout solver
-
-**The problem.** The layout stage is by far the slowest thing in the project. With
-`dsp` + `lab` + `rates` running in 2.7s, `tests/layout` alone took ~96s, and that is
-with tests already passing deliberately small budgets. Tests were rescued by cutting
-their budgets to 0.3-0.5s and running under `pytest-xdist`, but that treats the
-symptom: the solver itself is slow enough that a realistic budget dominates any loop
-it sits in — tests, the bake-off, and eventually the CLI.
-
-**Why it matters beyond tests.** The bake-off runs (URL x candidate x strategy x
-power) cells. With 12 URLs, 3 candidates, 2 strategies and 2 power settings that is
-144 solves per run. At even 5s each that is 12 minutes for one comparison, which
-makes the density experiment painful to iterate on — and iterating on it is the whole
-point of building two strategies.
-
-**Where to look, roughly in expected-payoff order.**
-
-1. **Profile before optimising.** Nobody has actually measured where the time goes.
-   It may be model *construction* rather than solving — building tens of thousands of
-   CP-SAT constraints in Python is not free, and `spine.py` reports ~900 vars for a
-   58-machine spec, which should not take seconds to solve. Measure the split between
-   build time and solve time first; the answer changes everything below.
-2. **Cache the model across candidates.** The rate stage emits several `BuildSpec`
-   candidates that differ only in proliferation. Much of the geometry model is
-   identical between them. If construction dominates, building once and re-solving
-   with changed constraints is a large win.
-3. **Warm-start more aggressively.** `spine.py` already does `AddHint` from the
-   fallback. Feeding the previous candidate's solution as a hint should help further,
-   since candidates are near-neighbours.
-4. **Tighten the descending-width sweep.** It currently tries several widths; a
-   better initial bound (from the fallback's area, or an area lower bound of
-   `sum(machine tiles)`) would prune most of them.
-5. **Revisit `num_search_workers`.** Pinned to 1 for bake-off determinism, which is
-   correct there — but the CLI has no such constraint and could use all cores.
-6. **Reconsider the freeform repair loop.** Strategy B's rip-up-and-reroute has a
-   hard iteration cap; if it routinely runs to the cap, that is pure wasted time and
-   the routability proxy needs strengthening instead.
-
-**Acceptance.** A realistic single layout solve should be well under a second, and
-the default `pytest` run should stay under ~30s wall-clock without relying on
-artificially tiny budgets to hide the cost.
-
 ## IN PROGRESS -- emit direct insertion in both strategies
 
-Both strategies identify direct-insertion opportunities and then discard them.
-`spine.py` models `di[e]` but emission ignores it. `freeform.py` finds **11
-candidates** on the magnetic-ring spec, hardcodes `stats["direct_inserts"] = 0.0`,
-and passes `direct_pairs` into `_pack` where it is never referenced -- so
-`MU_DIRECT = 4` rewards nothing at all.
+Both strategies wire up direct insertion end to end and it still does not fire.
+The machinery is all present -- `spine.py` models `di[e]` and emits it,
+`freeform.py` has `_direct_net_candidates`, `MU_DIRECT` in the objective, and
+`_bridge` to place the sorter -- yet `docs/AB_RESULTS.md` reports
+`direct_inserts` of **0 on every corpus spec but one**, where spine manages a
+single insert on `magnetic-coil`. Something in the chain from candidate to
+emitted sorter is silently dropping every opportunity.
 
-Every discarded candidate becomes a belt net the router must path around, when it
-could be a single sorter and no belt. That is better on both axes: fewer nets to
-route (faster) and no belt tiles for that edge (denser -- currently 799 belt tiles
-on that spec).
+Every discarded candidate becomes a belt net the router must path around when it
+could be one sorter and no belt: better on both axes, fewer nets to route AND
+fewer belt tiles.
+
+It also means the bake-off currently cannot measure the axis the candidate
+frontier exists to open. Proliferation forbids direct insertion on sprayed edges,
+so the `free-proliferation` candidate -- which proliferates only externally-fed
+recipes precisely to leave internal edges insertable -- is being compared on a
+trade-off that never materialises.
 
 Two constraints shape it:
 
@@ -151,20 +114,34 @@ verified through both our codec and the TypeScript viewer.
   of the block, y-spans coloured as an interval graph, cross-column stubs
   bridged at z=1. `flow.lane_sourced` on magnetic-ring: 11 -> 0.
 
-## Freeform's packer has no model of routability
+## MEASURED AND REJECTED -- a routing-capacity constraint in freeform's packer
 
-The top item. `_pack` minimises width then wirelength; whether the result can be
-WIRED is discovered afterwards, in `_build`. So routability varies with the
-CP-SAT solve that produced the pack: the free-proliferation candidate of the
-super-magnetic-ring chain routes every net cleanly at one pack and fails at
-another from the same height with a different solve budget. Pinned by
-`PROLIFERATED_PACK_GAP` in `tests/layout/test_freeform.py`.
+This was the top item and it was the wrong diagnosis. Recorded because the
+reasoning was plausible enough that somebody will propose it again.
 
-Spine does not have this problem -- it constrains tap capacity inside the model
-(`_solve_one`), having learned the same lesson: "rejecting after the fact cannot
-work here: routability is a property of the packing, so the packer has to know."
-Freeform needs the equivalent. Candidates: a congestion estimate per channel as
-a soft constraint, or reserving routing corridors in the pack itself.
+The theory: `_pack` minimises width then wirelength and discovers only
+afterwards, in `_build`, whether the result can be WIRED -- so give it a
+horizontal cut, `crossings(row) <= free width on that row`. That is a genuine
+necessary condition, and it is the shape spine uses for tap capacity, having
+learned the same lesson: "rejecting after the fact cannot work here; routability
+is a property of the packing, so the packer has to know."
+
+It does not pay. Over the whole trivial+small+mid corpus, every candidate, three
+repeats: **one** more valid pair out of 24 and one more valid sample out of 72 --
+inside the noise -- for 0.5% more area and a test suite going 39s to 67s. A
+single 6s sample had shown it winning decisively (0 unrouted nets against 2,
+1240 tiles against 1504); that did not reproduce at any other budget.
+
+**The packer was never the binding constraint.** Classifying every routing
+failure showed empty A\* frontiers outnumbering genuine search exhaustion about
+ten to one. The failures are GEOMETRY -- a lane port with no free neighbour --
+not congestion. A strip's inner lanes are walled in (lane above, machines below,
+lane either side), so only the head of an in-lane and the end of an out-lane are
+reachable at all, and three of the five walled-in ports on the free-proliferation
+chain turned out to be taps that an earlier fix had itself moved mid-lane.
+
+If freeform's remaining refusals are to be fixed, they will be fixed by making
+ports reachable, not by making packs roomier.
 
 ## Riser bridges climb a level per tile; the catalog says two
 
