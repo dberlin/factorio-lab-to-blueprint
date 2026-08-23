@@ -1718,16 +1718,29 @@ class TestLinkingATowerTheNetworkCannotReach:
         assert self._stray(buildings) == 0
 
 
-class TestTheSeedIsTheLastResort:
-    """A checked seed beats a refusal, and only ever arrives after the retry.
+class TestThereIsNoSeedFallback:
+    """An unroutable plan refuses. It does not degrade to the seed.
 
-    This is not the old degradation: that returned the seed unexamined on any
-    miss, and the seed usually was not routable.  ``fallback_plan`` now runs the
-    same lane allocation as any solved plan and RAISES when a row cannot be
-    wired, so a seed that comes back has every lane within sorter reach.
+    This test used to assert the opposite, and that is the point of keeping it:
+    the seed has now been removed twice.  The first removal took out a path that
+    returned ``fallback_plan``'s greedy stacking unexamined.  It came back
+    wearing a self-check, on the argument that a CHECKED seed differs in kind
+    from an unchecked one.
+
+    It does not.  The check proves only that the seed is not broken; it says
+    nothing about why the solver had nothing to return, which is the only
+    question worth asking -- a spec reaching that line has a packer producing
+    rows its own allocator cannot wire.  Emitting the seed makes the defect
+    invisible: the cell goes green and nobody looks again.  And it is bought in
+    the currency this program exists to minimise -- the seed measured 50,512
+    tiles against roughly 39,000 for a solved plan on
+    ``universe-matrix``/``free-proliferation``.
+
+    So: refusal names a bug, a fallback hides one.  If a spec that used to be
+    rescued now refuses, fix the packer.
     """
 
-    def test_it_lays_out_when_every_width_was_refused(
+    def test_it_refuses_when_every_width_was_refused(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         from flab2bp.layout import spine
@@ -1736,9 +1749,8 @@ class TestTheSeedIsTheLastResort:
         monkeypatch.setattr(
             spine, "_solve_plan", lambda *a, **k: (None, spine.FALLBACK_UNROUTABLE, "")
         )
-        p = SpineLayout(power=False).lay_out(spec, time_budget_s=0.5)
-        assert p.stats["fallback_used"] == 1.0
-        assert p.stats["fallback_reason"] == spine.FALLBACK_UNROUTABLE
+        with pytest.raises(NoValidLayout):
+            SpineLayout(power=False).lay_out(spec, time_budget_s=0.5)
 
     def test_a_recipe_no_row_can_wire_still_refuses(
         self, monkeypatch: pytest.MonkeyPatch

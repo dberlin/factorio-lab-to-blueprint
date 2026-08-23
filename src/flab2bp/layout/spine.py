@@ -3470,38 +3470,33 @@ class SpineLayout:
                 continue
             return placement
 
-        # Last resort, once every budget is spent: the SEED, one group per row.
+        # THERE IS NO FALLBACK HERE, AND THERE IS NOT GOING TO BE ONE.
         #
-        # This is not the old degradation coming back.  That one returned the
-        # seed on any miss, unexamined, and the whole point of removing it was
-        # that the seed had never been checked for routability and usually was
-        # not.  The check exists now and is exactly this call: `fallback_plan`
-        # runs the same lane allocation as any solved plan and RAISES when a row
-        # cannot be wired, so a plan that comes back is one whose every lane is
-        # within sorter reach.  Emission still judges it and this method still
-        # refuses when it raises, so the only outcome that changed is a refusal
-        # becoming a layout.
+        # This is the second time the seed has been removed.  The first removal
+        # took out a path that returned `fallback_plan`'s greedy stacking
+        # unexamined; it came back wearing a self-check, on the argument that a
+        # CHECKED seed is different in kind from an unchecked one, and that a
+        # valid-but-loose blueprint beats no blueprint.
         #
-        # Reached only after the retry, because it costs area: on
-        # `universe-matrix`/`free-proliferation`, where a long sweep can pack
-        # rows the allocator refuses at every candidate width, the seed measures
-        # 50,512 tiles against roughly 39,000 for a solved plan -- and validates
-        # clean at both power settings, where the alternative was no blueprint.
-        if reason in (FALLBACK_UNROUTABLE, FALLBACK_NO_SOLUTION, FALLBACK_EMISSION):
-            try:
-                placement = _emit(spec, fallback_plan(spec), power=self.power)
-            except (ValueError, KeyError):
-                pass
-            else:
-                placement.stats["solver_rejected"] = 1.0
-                placement.stats["fallback_reason"] = reason
-                bad = _rejected(placement, spec, power=self.power)
-                if not bad:
-                    return placement
-                # The seed is judged by the same rule as everything else, which
-                # is what makes it safe to have it back at all.
-                reason, detail = FALLBACK_SELF_CHECK, bad
-
+        # Both halves of that argument are wrong.
+        #
+        # The check only proves the seed is not broken.  It says nothing about
+        # why the solver had nothing to hand back, and that is the only question
+        # worth answering: a spec that reaches this line has a packer producing
+        # rows its own allocator cannot wire.  Emitting the seed makes that
+        # defect invisible -- the cell goes green, the audit says CLEAN, and the
+        # thing that needs fixing is never looked at again.  The measurement
+        # that was offered in its defence is the case against it: 50,512 tiles
+        # against roughly 39,000 for a solved plan on
+        # `universe-matrix`/`free-proliferation`.  Density is the objective of
+        # this whole program.  Buying a green cell with 30% more area is not a
+        # rescue, it is the failure being paid for in the currency we are here
+        # to minimise.
+        #
+        # So an unroutable plan is a REFUSAL.  If that loses cells, the packer
+        # is what to fix -- routability belongs in the model as a constraint,
+        # not in a rescue after the fact.  A refusal names a bug; a fallback
+        # hides one.
         raise NoValidLayout(
             _refusal(reason, detail), spec_label=spec.label, budget_s=spent
         )
