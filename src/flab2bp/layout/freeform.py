@@ -2282,40 +2282,61 @@ def _route_all(
         for path in committed:
             for cell in path:
                 history[cell] += 1.0
-        # A SURCHARGE ON THE CELLS THAT SEALED SOMEBODY IN was tried here and is
-        # not worth having.
+        # A SURCHARGE ON THE CELLS THAT CUT THE BOARD was built twice, measured
+        # twice, and taken out twice. The second attempt is the interesting one
+        # and the reason this note is long: the mechanism WORKS and is still not
+        # worth its cost, which is a different verdict from "it does nothing".
         #
-        # The diagnosis behind it stands and is the sharpest thing known about
-        # this router. The point above says a cell was USED; it cannot say that
-        # using it cost another net its only way out, because a committed path is
-        # `blocked` rather than dear, so two nets never overlap and PathFinder's
-        # overuse signal -- the thing a history term is designed to carry -- is
-        # identically zero here. Every round re-runs the same nets in the same
-        # order against a map that is uniformly, uselessly dearer.
+        # The diagnosis stands and is the sharpest thing known about this router.
+        # The point above says a cell was USED; it cannot say that using it cost
+        # another net its only way through, because a committed path is `blocked`
+        # rather than dear, so two nets never overlap and PathFinder's overuse
+        # signal -- the thing a history term exists to carry -- is identically
+        # zero here. Every round re-runs the same nets in the same order against
+        # a map that is uniformly, uselessly dearer.
         #
-        # The missing signal is recoverable. When `_astar`'s heap empties -- the
-        # one ending that proves no path exists, as against running out of cap,
-        # budget or clock -- the settled set IS the reachable pocket and its
-        # blocked neighbours ARE the wall. Charging the committed cells among
-        # them was built, and the instrument was checked before the effect was
-        # believed: of 26 failing searches on `quantum-chip/no-proliferator` at
-        # h=106, 25 named a wall, so coverage was not the problem.
+        # And the defect it aims at is provably the ROUTER'S, not the packer's.
+        # The free space `_pack` hands over is ONE connected component: on
+        # `universe-matrix` at h=69, all 197 ports sit in a single 54,077-cell
+        # region with not one of them walled in, before a single belt exists.
+        # Every pocket the router later fails in was cut out by the router's own
+        # committed paths. Greedy sequential routing paints itself into a corner
+        # and has no way to charge itself for it.
         #
-        # It measured nothing. Routing five identical packs -- one CP-SAT worker
-        # so the pack is the same object in both arms, the router the only
-        # difference -- `quantum-chip` went 18 unrouted nets to 16 and
-        # `casimir-crystal` went 9 to 9, with weights 4, 12 and 40 giving the
-        # same answer as each other, which is what a term that is not biting
-        # looks like. Over the corpus at 4s: 61/61/61 clean without it against
-        # 61/60/63 with it -- the same mean and more variance.
+        # RECOVERING THE SIGNAL IS EASY. When `_astar`'s heap empties -- the one
+        # ending that proves no path exists, as against a spent cap, budget or
+        # clock -- the settled set IS the reachable pocket and its blocked
+        # neighbours ARE the wall. Charge the committed cells among them in
+        # proportion to how many nets they cut off, and next round the net
+        # holding one pays to keep it.
         #
-        # Why it cannot bite is in the wall census. The median failing search
-        # reaches ONE CELL, an output lane's east port having exactly one access
-        # cell, and that cell's wall is 48% strip lane belt, 27% committed path,
-        # 12% another port's reservation. Making the one committed cell dear
-        # moves that net and the pocket stays sealed by the other three, which no
-        # pricing can move because no net owns them. This is geometry the packer
-        # hands the router, and the router cannot negotiate its way out of it.
+        # FIRST ATTEMPT, before the port cul-de-sacs were fixed: pure noise. 18
+        # unrouted nets to 16 on identical packs, 61/61/61 clean over the corpus
+        # against 61/60/63. It could not bite because those pockets were single
+        # cells -- an output port's one access cell -- walled 48% by the strip's
+        # own lane belts and 12% by other ports' claims. Three walls no net owns
+        # and no price can move.
+        #
+        # SECOND ATTEMPT, after `e1174f0` and `a834293` left pockets of thousands
+        # of cells with a committed path as the largest wall class. On the pack
+        # that matters it is decisive: `universe-matrix/no-proliferator` at h=69,
+        # identical pack in every arm, goes 1 unrouted net at weight 0 and 6, and
+        # ZERO at weight 40 -- while routing gets FASTER, 42.4s to 24.4s, because
+        # a round that stops fighting over one cell converges in fewer rounds.
+        #
+        # It still measures worse over the corpus, at both budgets. 4s, three
+        # audits each: 66/66/66 clean without it, against 64/66/64 at weight 12,
+        # 63/64/64 at weight 40 and 65/64/65 at weight 80. 120s: 64/72 without,
+        # 63/72 at weight 80. The walk is four dict lookups per settled cell and
+        # a pocket here holds thousands, so every failing search pays for the
+        # census, on every round, on every height of the sweep -- and the sweep
+        # is bounded by a clock. It buys the one pack it was built for and sells
+        # two elsewhere.
+        #
+        # What is worth trying next is the COST, not the idea: bound the number
+        # of blame walks per round rather than the size of each, or collect the
+        # wall during expansion instead of re-walking the settled set. The
+        # signal is real and it is the only one that reaches this failure.
         # Give up once raising the pressure has stopped buying anything.
         #
         # Rip-up-and-reroute converges by making contested cells progressively
