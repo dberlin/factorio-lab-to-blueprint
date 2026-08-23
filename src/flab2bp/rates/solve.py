@@ -34,8 +34,14 @@ from dataclasses import dataclass, field
 from fractions import Fraction
 from types import MappingProxyType
 
-# ortools ships no py.typed marker, so its modules read as untyped.
+# Neither ortools nor sympy ships a py.typed marker, so both read as untyped.
 from ortools.linear_solver import pywraplp  # type: ignore[import-untyped]
+from sympy import Expr, Rational, nsimplify  # type: ignore[import-untyped]
+from sympy.solvers.simplex import (  # type: ignore[import-untyped]
+    InfeasibleLPError,
+    UnboundedLPError,
+    linprog,
+)
 
 from flab2bp.lab.schema import Dataset, Recipe
 from flab2bp.lab.url import DisplayRate, LabRequest, ObjectiveType, ObjectiveUnit
@@ -361,6 +367,26 @@ def _run_milp(
     )
 
 
+def _rational(value: Fraction) -> Rational:
+    """``Fraction`` to sympy ``Rational``, exactly."""
+    return Rational(value.numerator, value.denominator)
+
+
+def _fraction(value: Expr) -> Fraction:
+    """sympy ``Rational`` back to ``Fraction``, exactly.
+
+    A float here would mean the LP had left exact arithmetic somewhere, so this
+    refuses rather than coercing: the whole point of the round trip is that it
+    is lossless.
+    """
+    number = nsimplify(value, rational=True)
+    if not isinstance(number, Rational):
+        raise InfeasibleError(
+            f"the exact rate solve returned a non-rational craft rate ({value!r})"
+        )
+    return Fraction(int(number.p), int(number.q))
+
+
 def _exact_rates(
     columns: Sequence[AdjustedRecipe],
     raw_machines: Sequence[float],
@@ -369,26 +395,66 @@ def _exact_rates(
 ) -> list[Fraction]:
     """Re-derive craft rates exactly, taking only *structure* from the solver.
 
-    The MILP decides which columns to use and, where an item has several
-    producers, in what proportion.  Nothing else about its answer is trusted:
-    the magnitudes are recomputed here by propagating demand through the chain
-    in exact rational arithmetic.
+    The MILP decides which columns to run and how many machines each gets.  Its
+    machine counts are exact -- they are ``IntVar``s, so they come back as whole
+    numbers -- and they are taken at face value here, as the capacity each group
+    is allowed to use.  Its *craft* rates are not: they are floats, and belts are
+    sized from craft rates, so a rate wrong in the last bits is a belt wrong in
+    someone's game.  Measured across the 65-cell corpus, the solver's ``x``
+    disagrees with the true requirement on 222 of 533 columns -- ``copper-ingot``
+    came back at ``1.0`` where ``2/5`` is what the chain needs -- because once
+    the machine counts are fixed the area objective no longer prices ``x`` at
+    all, so any feasible rate satisfies it equally.  The magnitudes have to be
+    re-derived.
 
-    This matters more than it sounds.  Adopting the solver's floats directly --
-    even snapped to rationals -- yields values like ``999/1000`` machines of
-    copper-ingot where the true answer is exactly ``1``.  Those are genuine
-    ``Fraction``s and would pass an ``isinstance`` check while being quietly
-    wrong, so the fix has to be in the derivation, not the type.
+    So they are re-derived as one exact linear program over ``Rational``:
 
-    For the ~466 of 473 DSP items with a single producer this is plain
-    back-substitution and is exactly right.  For the seven with several, the
-    solver's split is adopted as an exact rational partition of unity.
+        minimise   sum_j (footprint_j / crafts_per_second_j) * x_j
+        subject to sum_j net_j(item) * x_j >= demand(item)   for every item made
+                   0 <= x_j <= machines_j * crafts_per_second_j
+
+    which is the MILP's own objective -- floor area -- read continuously, over
+    the structure the MILP already chose.  The upper bound is what keeps the two
+    answers consistent: a group can never be asked to run past the machines that
+    were bought for it, so ``ceil(x_j / crafts_per_second_j) <= machines_j``
+    holds by construction and the derived plan is never larger than the MILP's.
+    Measured on all 533 groups of the corpus, the two now agree exactly.
+
+    This replaces a hand-rolled fixed-point iteration that propagated demand
+    back through the chain a bounded number of times.  That iteration had no
+    handling for cycles in the producer graph, and DSP has one:
+    ``reforming-refine`` turns two refined oil into three, and
+    ``plasma-refining`` also yields refined oil, so refined-oil demand feeds
+    back into itself.  Worse, the iteration charged a maker's own draw on the
+    item it makes to the requirement *and* netted it out of the supply, which
+    counted it twice: the balance read ``x = demand + 2x`` and grew by exactly a
+    factor of two per round.  Measured on the reporting URL at Mk.II, the answer
+    quadrupled for every two extra iterations -- 732,268 machines at the old
+    bound, 46,862,330 six iterations later -- so the figure it printed was only
+    ever a record of where the loop stopped.  To a linear program a cycle is an
+    ordinary pair of matrix entries and needs no special handling at all.
+
+    Solved rather than iterated, that URL comes back at 49 machines, with
+    ``plasma-refining`` at 3 and ``reforming-refine`` at 1 -- exactly the counts
+    the MILP had chosen all along.
+
+    The solver is sympy's, not one written here.  Nothing else in reach solves a
+    linear program in exact rationals -- ``pywraplp``/SCIP is float64 and is the
+    very solver whose rates cannot be trusted at this point, CP-SAT is exact but
+    integer-only and these rates are fractions like ``94895947/324`` whose
+    denominator is not known until after the solve, and numpy is float64 too --
+    and a hand-written simplex is a large piece of subtle numerical code whose
+    bugs look exactly like plausible answers, which is the one failure mode this
+    program is least able to absorb.
+
+    ``linprog`` raises on an infeasible or unbounded program rather than
+    returning something plausible, which is the behaviour wanted: a structure
+    that cannot balance is a degenerate recipe graph, not a rounding problem.
+    Feasibility is not in doubt for a well-formed chain -- the MILP found an
+    integer point inside these very constraints -- so a refusal here names the
+    recipes and stops.
     """
-    capacity = [
-        Fraction(round(n)) * column.crafts_per_second
-        for n, column in zip(raw_machines, columns, strict=True)
-    ]
-    active = [i for i, n in enumerate(raw_machines) if round(n) > 0]
+    active = [index for index, n in enumerate(raw_machines) if round(n) > 0]
     if not active:
         return [Fraction(0)] * len(columns)
 
@@ -398,72 +464,54 @@ def _exact_rates(
             item_id, Fraction(0)
         )
 
-    # Producers of each item, in a deterministic order.  Which columns exist and
-    # their relative sizes come from the solver; the ordering only has to be
-    # stable, so ties break on recipe id and mode.
-    producers: dict[str, list[int]] = {}
-    for item_id in internal_items:
-        makers = [i for i in active if net(i, item_id) > 0]
-        if makers:
-            makers.sort(key=lambda i: (-round(raw_machines[i]), columns[i].recipe_id,
-                                       columns[i].mode.value))
-            producers[item_id] = makers
+    # One balance row per item something here actually makes.  An item with no
+    # net producer among the active columns is belted in, and constraining it
+    # would be asking the blueprint to make something it never claimed to.
+    items = [item_id for item_id in internal_items if any(net(i, item_id) > 0 for i in active)]
+
+    # ``linprog`` minimises over ``A x <= b`` with ``x >= 0`` implied, so the
+    # balances are negated into that form.  Surplus is allowed and deficit is
+    # not, which is what makes joint products expressible at all.
+    matrix: list[list[Rational]] = []
+    limits: list[Rational] = []
+    for item_id in items:
+        matrix.append([_rational(-net(index, item_id)) for index in active])
+        limits.append(_rational(-demand.get(item_id, Fraction(0))))
+    for position, index in enumerate(active):
+        row = [Rational(0)] * len(active)
+        row[position] = Rational(1)
+        matrix.append(row)
+        limits.append(
+            _rational(Fraction(round(raw_machines[index])) * columns[index].crafts_per_second)
+        )
+
+    cost = [
+        _rational(Fraction(columns[index].footprint_area) / columns[index].crafts_per_second)
+        for index in active
+    ]
+
+    try:
+        _optimum, solution = linprog(cost, matrix, limits)
+    except (InfeasibleLPError, UnboundedLPError) as exc:
+        raise InfeasibleError(
+            "the exact rate solve found no balanced, non-negative set of craft "
+            "rates for the machines the MILP chose, so the recipe graph over "
+            f"{', '.join(sorted({columns[i].recipe_id for i in active}))} does "
+            f"not close ({type(exc).__name__})"
+        ) from exc
 
     crafts = [Fraction(0)] * len(columns)
-    for _ in range(len(internal_items) + 8):
-        required: dict[str, Fraction] = {}
-        for item_id in producers:
-            need = demand.get(item_id, Fraction(0))
-            for i in active:
-                consumed_per_craft = columns[i].inputs_per_craft.get(item_id, Fraction(0))
-                if consumed_per_craft:
-                    need += crafts[i] * consumed_per_craft
-            required[item_id] = need
-
-        updated = [Fraction(0)] * len(columns)
-        for item_id, makers in producers.items():
-            remaining = required[item_id]
-            for position, index in enumerate(makers):
-                if remaining <= 0:
-                    break
-                rate = net(index, item_id)
-                available = capacity[index] * rate
-                last = position == len(makers) - 1
-                supplied = remaining if last or remaining <= available else available
-                want = supplied / rate
-                # A column may make several items; it must run fast enough for
-                # whichever binds hardest.
-                if want > updated[index]:
-                    updated[index] = want
-                remaining -= supplied
-        if updated == crafts:
-            break
-        crafts = updated
-
-    # Guarantee feasibility even if the loop above stopped short on a cyclic
-    # chain: scale any item still in deficit up until it balances.
-    for _ in range(len(internal_items) + 2):
-        changed = False
-        for item_id in internal_items:
-            produced = sum(
-                (crafts[i] * columns[i].outputs_per_craft.get(item_id, Fraction(0))
-                 for i in range(len(columns))),
-                Fraction(0),
+    for position, index in enumerate(active):
+        rate = _fraction(solution[position])
+        # ``linprog``'s standard form implies ``x >= 0``, but a negative rate
+        # would mean negative machines, and sympy's *other* entry points do not
+        # honour ``nonnegative=True`` symbols -- so this is checked, not assumed.
+        if rate < 0:
+            raise InfeasibleError(
+                f"the exact rate solve returned a negative craft rate for "
+                f"{columns[index].recipe_id}, which would be negative machines"
             )
-            consumed = demand.get(item_id, Fraction(0)) + sum(
-                (crafts[i] * columns[i].inputs_per_craft.get(item_id, Fraction(0))
-                 for i in range(len(columns))),
-                Fraction(0),
-            )
-            makers = [i for i in producers.get(item_id, ()) if crafts[i] > 0]
-            if produced >= consumed or not makers or produced <= 0:
-                continue
-            scale = consumed / produced
-            for i in makers:
-                crafts[i] *= scale
-            changed = True
-        if not changed:
-            break
+        crafts[index] = rate
     return crafts
 
 
