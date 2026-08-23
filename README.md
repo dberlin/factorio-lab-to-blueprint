@@ -60,6 +60,14 @@ silently refuses the paste. Three independent guards:
 3. **Cross-validation.** Generated strings are parsed by the independent TypeScript decoder in
    `../dsp-blueprint-viewer` via `bun`, so an encoder bug cannot hide behind a matching bug in our
    own decoder. Skipped cleanly when that repo or `bun` is absent.
+4. **Geometry against real blueprints.** `tile_to_local_offset` — the one place tile space becomes
+   DSP world coordinates — is checked against player-built fixtures: 686 of 686 machine-side sorter
+   endpoints land inside the machine they serve, where the two corner readings score 248/676 and
+   174/666. A blueprint the game emitted is necessarily legal, which makes the fixtures an oracle.
+
+A layout is only shipped if the validator accepts it. When no strategy can produce a valid one,
+`lay_out` raises `NoValidLayout` rather than degrading — a blueprint that pastes and then does not
+run is the one failure nobody discovers until they are standing in front of it in game.
 
 DSP's blueprint checksum is a *variant* of MD5 — two altered init constants and eight altered
 round constants, not derivable from `sin()`. See `dsp/md5f.py`.
@@ -68,7 +76,28 @@ round constants, not derivable from `sin()`. See `dsp/md5f.py`.
 
 ```bash
 uv sync
-uv run pytest
+uv run pytest          # ~25s, deliberately fast enough for an edit loop
 uv run ruff check
-uv run mypy
+uv run mypy --strict src tests
 ```
+
+### Does it actually work?
+
+`pytest` pins behaviour; it does not answer "can both strategies lay out every real URL, cleanly,
+right now". That is a separate gate, because the full matrix is minutes of CP-SAT and belongs
+nowhere near an edit loop:
+
+```bash
+uv run python scripts/audit.py                  # every tier, both strategies, exits non-zero if not
+uv run python scripts/audit.py --tier mid       # quicker
+uv run python scripts/audit.py --budget 1,4,15  # sweep the solver budget
+```
+
+The budget sweep matters: CP-SAT is time-limited and multi-worker, so "clean at 4s" is not "clean".
+
+```bash
+uv run python scripts/ab_compare.py --tier mid --repeat 3   # which strategy is denser
+```
+
+Both refuse to score a layout the validator rejected. Invalid layouts are systematically *smaller* —
+an unrouted net is a belt run that does not exist — so scoring them rewards dropping connections.
