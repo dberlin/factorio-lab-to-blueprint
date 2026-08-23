@@ -9,8 +9,14 @@ import pytest
 from flab2bp.lab.data import load_dataset
 from flab2bp.lab.schema import Dataset
 from flab2bp.lab.url import parse_url
-from flab2bp.rates.adjust import ProliferatorTier
-from flab2bp.rates.solve import RateSolution, solve, target_rates
+from flab2bp.rates.adjust import AdjustedRecipe, ProliferatorTier
+from flab2bp.rates.solve import (
+    InfeasibleError,
+    RateSolution,
+    _exact_rates,
+    solve,
+    target_rates,
+)
 from flab2bp.spec import ProliferatorMode
 
 EXAMPLE_URL = (
@@ -318,3 +324,177 @@ def test_derivation_ignores_solver_float_noise(data: Dataset) -> None:
     assert by_recipe["iron-ingot"] == Fraction(12)
     assert by_recipe["copper-ingot"] == Fraction(4)
     assert by_recipe["magnet"] == Fraction(33, 2)
+
+
+# --- recipe cycles ---------------------------------------------------------
+
+
+#: The one URL in hand that activates both members of DSP's only recipe cycle.
+#: It names ``proliferator-2-products``, so it solves at Mk.II -- and Mk.II is
+#: the only tier where the MILP finds it worth running ``reforming-refine``
+#: alongside ``plasma-refining``.  At Mk.I and Mk.III it activates one or the
+#: other, and the cycle never closes.
+CYCLE_URL = (
+    "https://factoriolab.github.io/dsp/list?z=eJw1xrEKwkAQBNC.2WKqPYh208yR2IkJBLxWvULiEQgo2"
+    "uy3i4Wveisde7eVuqLbOZB-..xficEaBbfGArf7pVK21TdPKLhhwRM6QjN0hpbQA3mIfEAeI0.W2sYSij5Ge"
+    "zGlL0XsHqc_&v=11"
+)
+
+
+@pytest.fixture(scope="module")
+def cycle(data: Dataset) -> RateSolution:
+    return solve(data, parse_url(CYCLE_URL), tier=ProliferatorTier.MK2)
+
+
+def test_recipe_cycle_does_not_run_away(cycle: RateSolution) -> None:
+    """``reforming-refine`` feeding itself must not compound.
+
+    Two refined oil into three, with ``plasma-refining`` also yielding refined
+    oil and the hydrogen to drive the reformer: refined-oil demand reaches back
+    round to itself.  A fixed-point iteration walked that loop with gain two and
+    reported wherever it stopped -- 732,268 machines at one bound, and exactly
+    four times that for every two further iterations, up to 46,862,330.
+
+    The band is deliberately loose and the point is the order of magnitude: the
+    same URL solves to 60 machines at Mk.I and 41 at Mk.III, and Mk.II carries
+    more productivity than Mk.I, so any answer in the hundreds is already a bug.
+    """
+    assert cycle.machine_count == 49
+    assert Fraction(41) <= cycle.machine_count <= Fraction(60)
+
+
+def test_recipe_cycle_agrees_with_the_machines_the_milp_bought(
+    cycle: RateSolution,
+) -> None:
+    """The two members of the cycle, at the counts the MILP chose all along.
+
+    This is the tell that the derivation and the MILP are describing the same
+    plan.  While the iteration diverged these two read 292,889 and 439,334
+    against the solver's 3 and 1.
+    """
+    counts = {g.recipe_id: g.machines for g in cycle.groups}
+    assert counts["plasma-refining"] == 3
+    assert counts["reforming-refine"] == 1
+
+
+def test_recipe_cycle_balances_exactly(cycle: RateSolution) -> None:
+    """Refined oil and hydrogen close, in exact rationals, cycle and all."""
+    produced: dict[str, Fraction] = {}
+    consumed: dict[str, Fraction] = {}
+    for group in cycle.groups:
+        for item, rate in group.outputs.items():
+            produced[item] = produced.get(item, Fraction(0)) + rate
+        for item, rate in group.inputs.items():
+            consumed[item] = consumed.get(item, Fraction(0)) + rate
+    for item in ("refined-oil", "hydrogen"):
+        assert isinstance(produced[item], Fraction)
+        assert produced[item] >= consumed.get(item, Fraction(0)), item
+
+
+def test_recipe_cycle_meets_its_objective(cycle: RateSolution) -> None:
+    assert cycle.outputs["information-matrix"] >= Fraction(1)
+
+
+# --- the exact rate LP, on structures built by hand ------------------------
+
+
+def _column(
+    recipe_id: str,
+    inputs: dict[str, Fraction],
+    outputs: dict[str, Fraction],
+    craft_time: Fraction = Fraction(1),
+) -> AdjustedRecipe:
+    """A bare column, so a cycle can be posed without a URL that produces one."""
+    return AdjustedRecipe(
+        recipe_id=recipe_id,
+        machine_item_id="chemical-plant",
+        mode=ProliferatorMode.NONE,
+        tier=ProliferatorTier.NONE,
+        craft_time=craft_time,
+        inputs_per_craft=inputs,
+        outputs_per_craft=outputs,
+        proliferator_per_craft=Fraction(0),
+        proliferator_item_id=None,
+    )
+
+
+def test_self_consuming_recipe_solves_in_closed_form() -> None:
+    """Two in, three out: one net per craft, so demand is the answer exactly.
+
+    The shape of ``reforming-refine``, reduced to the one column that shows it.
+    The old derivation charged the maker's own two to the requirement *and*
+    netted them out of the supply, which made the balance read ``x = 1 + 2x``
+    and doubled every round.  Stated once and solved, it is ``x * (3 - 2) = 1``.
+    """
+    loop = _column("loop", {"x": Fraction(2)}, {"x": Fraction(3)})
+    assert _exact_rates([loop], [5.0], ["x"], {"x": Fraction(1)}) == [Fraction(1)]
+
+
+def test_two_recipe_cycle_balances_in_every_capacity_regime() -> None:
+    """DSP's actual pair, driven through the regimes the MILP can hand it.
+
+    Which member carries the load depends on how many machines were bought, and
+    the balance has to close in each case -- including the one where the cheaper
+    producer is capped and the reformer has to make up the difference, which is
+    exactly the configuration the reporting URL lands in.
+    """
+    plasma = _column(
+        "plasma-refining", {"crude": Fraction(2)},
+        {"refined": Fraction(2), "hydrogen": Fraction(1)},
+    )
+    reform = _column(
+        "reforming-refine",
+        {"refined": Fraction(2), "hydrogen": Fraction(1), "coal": Fraction(1)},
+        {"refined": Fraction(3)},
+    )
+    for machines in ([2.0, 1.0], [10.0, 10.0], [1.0, 10.0]):
+        rates = _exact_rates(
+            [plasma, reform], machines, ["refined", "hydrogen"], {"refined": Fraction(3)}
+        )
+        assert all(isinstance(r, Fraction) and r >= 0 for r in rates)
+        refined_made = rates[0] * 2 + rates[1] * 3
+        refined_used = Fraction(3) + rates[1] * 2
+        assert refined_made >= refined_used, machines
+        assert rates[0] >= rates[1], machines  # hydrogen: only plasma makes it
+        # And never past the machines that were bought.
+        for rate, count in zip(rates, machines, strict=True):
+            assert rate <= Fraction(round(count)), machines
+
+
+def test_the_capped_regime_puts_the_reformer_to_work() -> None:
+    """Cap the cheap producer and the cycle genuinely has to turn.
+
+    Pinned rather than merely asserted feasible, because ``reform`` running at
+    all is the case the old code could not do arithmetic on.
+    """
+    plasma = _column(
+        "plasma-refining", {"crude": Fraction(2)},
+        {"refined": Fraction(2), "hydrogen": Fraction(1)},
+    )
+    reform = _column(
+        "reforming-refine",
+        {"refined": Fraction(2), "hydrogen": Fraction(1), "coal": Fraction(1)},
+        {"refined": Fraction(3)},
+    )
+    rates = _exact_rates(
+        [plasma, reform], [1.0, 10.0], ["refined", "hydrogen"], {"refined": Fraction(3)}
+    )
+    # Plasma is capped at one craft/s and yields two refined; the reformer turns
+    # its one hydrogen and two of that oil into three, netting the last one.
+    assert rates == [Fraction(1), Fraction(1)]
+
+
+def test_a_structure_that_cannot_balance_refuses() -> None:
+    """A demand no number of the bought machines can reach is not a magnitude.
+
+    A refusal that names the recipes beats a plausible number: the whole reason
+    the derivation is exact is that a rate which lies sizes a belt wrong.
+    """
+    loop = _column("loop", {"x": Fraction(2)}, {"x": Fraction(3)})
+    with pytest.raises(InfeasibleError, match="loop"):
+        _exact_rates([loop], [1.0], ["x"], {"x": Fraction(50)})
+
+
+def test_no_machines_means_no_rates() -> None:
+    loop = _column("loop", {"x": Fraction(2)}, {"x": Fraction(3)})
+    assert _exact_rates([loop], [0.0], ["x"], {"x": Fraction(1)}) == [Fraction(0)]
