@@ -35,12 +35,29 @@ check on our codec that our own decoder does not share assumptions with.
 | `flow.conservation` islands, quantum-chip/free-prolif | ~3.5% of builds | **0 in 608** |
 
 **Freeform varies 62–66 across nine runs. Never quote a single run** — one measurement is
-worth ±2 cells. Spine is deterministic enough that 72/72 reproduces, but it is still CP-SAT.
+worth ±2 cells.
 
-The suite varies **41–58s** against its 60s ceiling. I chased that and my hypothesis (that
-`DEFAULT_SEARCH_WORKERS = 0` made big machines slower) was **wrong** — measured 55.7s at 16
-cores, 55.8s at 32, 50.2s at 128. It is plain solver nondeterminism. It is a live risk to the
-gate — a bad roll fails a suite that is fine — and nobody has costed a remedy.
+**Spine is NOT deterministic, and an earlier draft of this document said it was.** I wrote
+"deterministic enough that 72/72 reproduces"; it then returned **71/72 once in five
+consecutive runs** at `--budget 4 --jobs 16`, the refusal on `universe-matrix`. The other four
+were clean. The mechanism was already identified this afternoon and never cleared:
+**`lay_out`'s deadline is `now + max(budget, RETRY_BUDGET_S)` in WALL-CLOCK**, so a loaded box
+eats the search budget. The spine agent saw the same shape — load-correlated `universe-matrix`
+refusals in runs where cells took 69s against a typical 45s — and said plainly it could not
+prove they were not its own. They were not: this happened with `spine.py` untouched since.
+Treat spine as ~1-in-5 at that config under load, not as a fixed 72/72, and **do not read a
+single 71/72 as a regression** without re-running.
+
+The suite runs **45.9–47.9s** on a quiet machine (three consecutive runs after the `certify`
+work), against a 60s ceiling. But I measured **61.92s** once, with background load — an actual
+breach, not a near miss. Earlier readings spanned 41–58s. My hypothesis that
+`DEFAULT_SEARCH_WORKERS = 0` made big machines slower was **measured and refuted** (55.7s at 16
+cores, 55.8s at 32, 50.2s at 128). It is solver nondeterminism plus whatever else is running.
+The ceiling is a live risk under load and nobody has costed a remedy.
+
+**The general rule both of these teach:** every gate in this project is timing-sensitive, so a
+single bad result is a hypothesis, not a finding. Re-run before you believe a regression — and
+re-run before you believe a fix.
 
 ---
 
