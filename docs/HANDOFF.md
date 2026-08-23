@@ -30,12 +30,22 @@ check on our codec that our own decoder does not share assumptions with.
 |---|---|---|
 | spine, budget 4 | 67/72 | **72/72** |
 | spine, budgets 1/2/4/15 | — | **288/288** |
-| freeform, budget 4 | 56/72 | **62–66/72, median 66** |
+| freeform, budget 4 | 56/72 | **66–69/72** (see below) |
 | INVALID, either strategy | 0 | **0** |
 | `flow.conservation` islands, quantum-chip/free-prolif | ~3.5% of builds | **0 in 608** |
 
-**Freeform varies 62–66 across nine runs. Never quote a single run** — one measurement is
-worth ±2 cells.
+**Freeform moved twice this evening and the figure above is the latest.** The progression, all
+measured: 56 this morning → 60 after the west channel → 62–66 after the linking work → **66–69
+after `cc1d8ed` (mixed-lane merges) and `f346c50` (starved shards)**, with the canonical gate
+returning **67/72 three times running**. `universe-matrix` produced its **first ever clean
+cell** after `f346c50` — I reproduced 1/6 clean on a `--budget 15` run myself.
+
+**Never quote a single run.** One measurement is worth ±2 cells, and area is worse: the
+corpus's own area noise floor is a **median 1.84%, max 21.08%** on an identical configuration
+(`universe-matrix` 19.5%, `quantum-chip` up to 21.1%, though 11 of 24 cells are exactly
+deterministic). **Establish the noise floor before believing any density comparison** — two
+separate measurements today were reframed by it, and one conclusion of mine was overturned
+outright.
 
 **Spine is NOT deterministic, and an earlier draft of this document said it was.** I wrote
 "deterministic enough that 72/72 reproduces"; it then returned **71/72 once in five
@@ -220,10 +230,20 @@ It only found that by running the test against the *unfixed* code. Do that every
    cell across thousands. **The concept is right; the implementation is too expensive.** Next
    move — bound walks per round, or collect the wall during expansion — is written into the
    code at the site (`43b3f4e`, `69d7303`).
-2. **`--candidates 4`.** `all-speed-mode` laid out `information-matrix` in **4,488 tiles**
-   against 5,133 for the best of the default three — 12.6% better — but `DEFAULT_CANDIDATES` is
-   3 so users never see it. Measure across the corpus before changing a default; one URL is not
-   evidence.
+2. ~~**`--candidates 4`**~~ — **ANSWERED: no. Do not raise it.** Measured over 2,592 layouts,
+   9 reps, both budgets, both power settings, and recorded on `DEFAULT_CANDIDATES` in
+   `rates/candidates.py` (`9b122ff`) so nobody re-asks.
+   * The chosen area **did not move in 187 of 216 cells**; corpus median saving **+0.058%**.
+   * **The null arm settles it:** re-running the *same three* candidates and keeping the
+     smaller saves **1.10%**; adding a fourth saves **0.67%**. The fourth candidate buys less
+     density than another roll of the dice on the three already there.
+   * Cost: **+33% layout wall-clock** (every strategy lays out the extra spec). No new
+     refusals — 0 of 324 cells lost a valid layout.
+   * **My 12.6% figure was wrong, and instructively so.** I measured `all-speed-mode` against
+     spine only. Freeform lays that same URL out in **2,430 tiles** against spine's 4,074, so
+     under the default `strategy="best"` the fourth candidate wins a race nobody runs. It
+     gains **exactly 0.00%**, 9/9 reps. When comparing candidates, compare the way
+     `pipeline.build` actually chooses: `min` over every *(candidate, strategy)* pair.
 3. **`_source_for`'s last fallback** still returns `net.src.belt` even when far from the head,
    emitting a cross-map link. Safe — `belt.link_adjacent` catches it and it becomes a refusal,
    never a silent bad build — but it is the one remaining place that function can name a
