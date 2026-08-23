@@ -1855,6 +1855,194 @@ def _cut_loops(path: list[tuple[int, int, int]]) -> list[tuple[int, int, int]]:
     return out
 
 
+@dataclass
+class _Grid:
+    """The routing canvas as flat arrays: one int per cell, one byte of state.
+
+    A cell is ``(x - gx0) * gh * LEVELS + (y - gy0) * LEVELS + lvl`` -- an int,
+    hashed by identity, whose four neighbours and eight ramp targets are reached
+    by ADDING a precomputed offset rather than by building a tuple.
+
+    ``occ`` folds ``bounds``, ``blocked``, ``solid`` and ``keep_out`` into one
+    byte per cell, so :func:`_astar`'s neighbour test is a single indexed read
+    where it used to be four hashed probes and two tuple builds.  ``reserved``
+    is kept OUT of it and applied per call, because which reservations a net may
+    use depends on ``canvas.routing_ports``, which is rebound for every net.
+
+    ``base`` is ``occ`` as it stood before any path was committed.  Rip-up
+    restores from it rather than writing 1, because a ripped cell is not
+    necessarily free -- it may sit outside ``bounds``, which a start cell is
+    allowed to do.  Restoring the byte it actually had cannot get that wrong.
+
+    THE LAYOUT IS X-MAJOR ON PURPOSE.  ``heapq`` breaks a tie on ``(f, cost)`` by
+    comparing the third element, so the cell's own ordering decides which of two
+    equal-cost paths is taken.  ``x``, then ``y``, then ``lvl`` makes integer
+    order the SAME total order as tuple order, so every tie falls the way it did
+    when cells were tuples.  A level-major index -- the obvious layout -- is
+    measurably a different router: injected as a fault it left the expansion
+    count byte-identical and moved the committed paths.
+
+    ``span`` is the indexed extent and is padded two cells beyond anything the
+    search may touch, because a ramp travels two tiles and index arithmetic from
+    a passable cell must land inside the array rather than wrapping into the next
+    column.  Everything in the pad is impassable, which is also how
+    out-of-bounds is expressed.
+    """
+
+    #: The intersected ``bounds`` this was built for. A caller's grid is only
+    #: reusable for the same box, since the box is baked into ``occ``.
+    box: tuple[int, int, int, int]
+    #: The indexed extent, ``bounds`` (or the canvas limit) plus two cells.
+    span: tuple[int, int, int, int]
+    gx0: int
+    gy0: int
+    gh: int
+    xstep: int
+    size: int
+    base: bytes
+    occ: bytearray
+    #: ``(index, port)`` for every reserved cell inside the box.
+    reserved: tuple[tuple[int, tuple[int, int]], ...]
+    #: Congestion history as a flat array, or ``None`` on a round that has none.
+    hist: list[float] | None
+
+    def index(self, cell: tuple[int, int, int]) -> int:
+        x, y, lvl = cell
+        return (x - self.gx0) * self.xstep + (y - self.gy0) * LEVELS + lvl
+
+    def block(self, cell: tuple[int, int, int]) -> None:
+        """Mark a committed path cell impassable."""
+        self.occ[self.index(cell)] = 0
+
+    def restore(self, cell: tuple[int, int, int]) -> None:
+        """Undo :meth:`block` -- back to whatever the cell was before routing."""
+        at = self.index(cell)
+        self.occ[at] = self.base[at]
+
+    def refresh_history(self, history: Mapping[tuple[int, int, int], float]) -> None:
+        """Re-flatten ``history``, which changes once per rip-up round."""
+        if not history:
+            self.hist = None
+            return
+        lo_x, lo_y, hi_x, hi_y = self.box
+        flat = [0.0] * self.size
+        gx0, gy0, xstep = self.gx0, self.gy0, self.xstep
+        for (cx, cy, clvl), used in history.items():
+            if lo_x <= cx <= hi_x and lo_y <= cy <= hi_y and 0 <= clvl < LEVELS:
+                flat[(cx - gx0) * xstep + (cy - gy0) * LEVELS + clvl] = used
+        self.hist = flat
+
+
+def _span_for(
+    box: tuple[int, int, int, int],
+    starts: Sequence[tuple[int, int, int]],
+    goals: Sequence[tuple[int, int, int]],
+) -> tuple[int, int, int, int]:
+    """The indexed extent for a one-off grid: the box, its cells, and two of pad.
+
+    A start may sit outside ``bounds`` -- an external input run begins on the
+    entry ring and works inward -- and a goal that is also a start has to be
+    recognised, so both are covered even though neither is passable.
+    """
+    lo_x, lo_y, hi_x, hi_y = box
+    xs = [lo_x, hi_x]
+    ys = [lo_y, hi_y]
+    for cx, cy, _clvl in starts:
+        xs.append(cx)
+        ys.append(cy)
+    for cx, cy, _clvl in goals:
+        xs.append(cx)
+        ys.append(cy)
+    return (min(xs) - 2, min(ys) - 2, max(xs) + 2, max(ys) + 2)
+
+
+def _route_box(
+    canvas: _Canvas, bounds: tuple[int, int, int, int]
+) -> tuple[int, int, int, int]:
+    """``bounds`` intersected with the canvas limit -- where routing may go.
+
+    Both are inclusive boxes and a cell must sit in BOTH, so they are intersected
+    once rather than tested twice per neighbour.  A grid is only reusable for the
+    box it was built for, so this has to give the same answer here and in
+    :func:`_astar`.
+    """
+    lo_x, lo_y, hi_x, hi_y = bounds
+    if canvas.limit is not None:
+        lim_x0, lim_y0, lim_x1, lim_y1 = canvas.limit
+        lo_x, lo_y = max(lo_x, lim_x0), max(lo_y, lim_y0)
+        hi_x, hi_y = min(hi_x, lim_x1), min(hi_y, lim_y1)
+    return (lo_x, lo_y, hi_x, hi_y)
+
+
+def _canvas_span(canvas: _Canvas, box: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
+    """The indexed extent for a grid shared across a whole routing pass.
+
+    Two cells beyond ``canvas.limit`` when there is one, because every start and
+    goal any net offers came through :meth:`_Canvas.free`, which refuses
+    anything outside it -- so a limit-sized span is indexable for all of them.
+    """
+    if canvas.limit is None:
+        lo_x, lo_y, hi_x, hi_y = box
+        return (lo_x - 2, lo_y - 2, hi_x + 2, hi_y + 2)
+    lim_x0, lim_y0, lim_x1, lim_y1 = canvas.limit
+    return (lim_x0 - 2, lim_y0 - 2, lim_x1 + 2, lim_y1 + 2)
+
+
+def _make_grid(
+    canvas: _Canvas,
+    box: tuple[int, int, int, int],
+    span: tuple[int, int, int, int],
+    history: Mapping[tuple[int, int, int], float],
+) -> _Grid:
+    """Flatten the canvas into a :class:`_Grid`. One pass over ``blocked``."""
+    lo_x, lo_y, hi_x, hi_y = box
+    gx0, gy0, gx1, gy1 = span
+    gh = gy1 - gy0 + 1
+    xstep = gh * LEVELS
+    size = (gx1 - gx0 + 1) * xstep
+
+    occ = bytearray(size)
+    if lo_x <= hi_x and lo_y <= hi_y:
+        run = b"\x01" * ((hi_y - lo_y + 1) * LEVELS)
+        head = (lo_y - gy0) * LEVELS
+        width = len(run)
+        for gx in range(lo_x - gx0, hi_x - gx0 + 1):
+            at = gx * xstep + head
+            occ[at : at + width] = run
+    holes = bytes(LEVELS)
+    for cx, cy, clvl in canvas.blocked:
+        if lo_x <= cx <= hi_x and lo_y <= cy <= hi_y and 0 <= clvl < LEVELS:
+            occ[(cx - gx0) * xstep + (cy - gy0) * LEVELS + clvl] = 0
+    for cx, cy in canvas.solid:
+        if lo_x <= cx <= hi_x and lo_y <= cy <= hi_y:
+            at = (cx - gx0) * xstep + (cy - gy0) * LEVELS
+            occ[at : at + LEVELS] = holes
+    for cx, cy in canvas.keep_out:
+        if lo_x <= cx <= hi_x and lo_y <= cy <= hi_y:
+            at = (cx - gx0) * xstep + (cy - gy0) * LEVELS
+            occ[at : at + LEVELS] = holes
+    reserved = tuple(
+        ((cx - gx0) * xstep + (cy - gy0) * LEVELS + clvl, port)
+        for (cx, cy, clvl), port in canvas.reserved.items()
+        if lo_x <= cx <= hi_x and lo_y <= cy <= hi_y and 0 <= clvl < LEVELS
+    )
+    grid = _Grid(
+        box=box,
+        span=span,
+        gx0=gx0,
+        gy0=gy0,
+        gh=gh,
+        xstep=xstep,
+        size=size,
+        base=bytes(occ),
+        occ=occ,
+        reserved=reserved,
+        hist=None,
+    )
+    grid.refresh_history(history)
+    return grid
+
+
 def _astar(
     canvas: _Canvas,
     starts: list[tuple[int, int, int]],
@@ -1865,6 +2053,7 @@ def _astar(
     budget: dict[str, int] | None = None,
     deadline: float | None = None,
     blame: dict[tuple[int, int, int], float] | None = None,
+    grid: _Grid | None = None,
 ) -> list[tuple[int, int, int]] | None:
     """Cheapest free-cell path, with congestion history folded into the cost.
 
@@ -1899,74 +2088,74 @@ def _astar(
     works inward.
 
     THE SEARCH RUNS ON FLAT INTEGER CELL INDICES, not on ``(x, y, level)``
-    tuples, and that is worth roughly 1.8x on this loop.
-    ------------------------------------------------------------------------
-    The wall here has always been the interpreter rather than the algorithm, and
-    a tuple key charges for it twice: once to build the tuple and once to hash
-    it.  The previous profile counted 13.5 ``free`` and 14.8 ``inside`` calls per
-    expansion; fusing the ramp and step loops removed the duplicated tests, and
-    what remained was four hashed dictionary probes and half a dozen tuple
-    allocations per NEIGHBOUR.
+    tuples -- see :class:`_Grid`, which is where the index and its constraints
+    are written down.  It is worth roughly 1.8x on this loop, because the wall
+    here has always been the interpreter rather than the algorithm and a tuple
+    key charges for it twice: once to build the tuple and once to hash it.
 
-    A cell is therefore ``(x - gx0) * gh * LEVELS + (y - gy0) * LEVELS + lvl``:
-    one int, hashed by identity, and the four neighbours and eight ramp targets
-    are reached by ADDING a precomputed offset rather than by building a tuple.
-    ``blocked``, ``solid``, ``keep_out``, ``reserved`` and ``bounds`` collapse
-    into ONE ``bytearray`` of passability, so a neighbour test is a single
-    indexed byte read where it used to be four hashed probes and two tuple
-    builds.  ``best``/``prev``/``history`` become flat lists.
-
-    Two details make this an optimisation and not a change of search:
-
-    * **The layout is x-major on purpose.**  ``heapq`` breaks a tie on
-      ``(f, cost)`` by comparing the third element, so the cell's own ordering
-      decides which of two equal-cost paths is taken.  ``x`` major, then ``y``,
-      then ``lvl`` makes integer order the SAME total order as tuple order, so
-      every tie falls the way it fell before.  A level-major index -- the
-      obvious layout -- is measurably a different router: injected as a fault it
-      left the expansion count byte-identical and moved the committed paths, so
-      an expansion count alone cannot police this.
-    * **The grid is padded by two cells.**  A ramp travels two tiles, so an
-      index arithmetic step from a passable cell must land inside the array
-      rather than wrapping into the next column.  Everything in the pad is
-      impassable, which is also how out-of-bounds is expressed.
-
-    Building the passability array costs one pass over ``blocked`` -- measured
-    at 7.4ms on a 25,813-cell ``universe-matrix`` canvas, ~15ms with the history
-    array -- and that is charged per CALL.  It is worth it because a call
-    averages 6,000 expansions and the heavy ones 38,000; a caller making many
-    tiny searches over a huge canvas would want it hoisted.
+    ``grid`` is the caller's, and passing one is the difference between building
+    that flattening once for a routing pass and building it 589 times.  Omitting
+    it is correct and merely costs a build; :func:`_route_all` passes one and
+    keeps it current.
     """
     if not goals:
         return None
     if (budget is not None and budget["left"] <= 0) or _expired(deadline):
         return None
 
-    # `bounds` and `canvas.limit` are both inclusive boxes and a cell must sit
-    # in BOTH, so intersect them once instead of testing twice per neighbour.
     # Start cells stay exempt from `bounds` -- an external input run begins on
     # the entry ring, outside the routing box, and works inward -- so they are
     # still admitted by `canvas.free`, which applies `limit` and not `bounds`.
-    lo_x, lo_y, hi_x, hi_y = bounds
-    if canvas.limit is not None:
-        lim_x0, lim_y0, lim_x1, lim_y1 = canvas.limit
-        lo_x, lo_y = max(lo_x, lim_x0), max(lo_y, lim_y0)
-        hi_x, hi_y = min(hi_x, lim_x1), min(hi_y, lim_y1)
-
+    box = _route_box(canvas, bounds)
     goal_list = list(goals)
 
-    # The indexed box covers the routing box AND every start and goal, because
-    # a start may sit outside `bounds` and a goal reached as a start must still
-    # be recognised. Two cells of pad on each side so a two-tile ramp from any
-    # passable cell lands inside the array instead of wrapping.
-    gx0 = min([lo_x] + [c[0] for c in starts] + [c[0] for c in goal_list]) - 2
-    gx1 = max([hi_x] + [c[0] for c in starts] + [c[0] for c in goal_list]) + 2
-    gy0 = min([lo_y] + [c[1] for c in starts] + [c[1] for c in goal_list]) - 2
-    gy1 = max([hi_y] + [c[1] for c in starts] + [c[1] for c in goal_list]) + 2
-    gh = gy1 - gy0 + 1
+    # REUSE THE CALLER'S GRID IF IT IS THE SAME BOX, because building one is
+    # 9.79ms on a `universe-matrix` canvas and a routing pass makes 589 calls --
+    # 5.77s of a 19.5s pass, all of it re-deriving something that changed by a
+    # few dozen cells.  `_route_all` builds one and keeps it current; every other
+    # caller gets one of its own, which is still far cheaper than the tuple-keyed
+    # search it replaces.
+    #
+    # Every start and goal reached this function through `canvas.free`, which
+    # applies `canvas.limit`, and the shared grid spans that limit with two
+    # cells of pad -- so they are indexable by construction.  Checked anyway,
+    # because an index that silently lands in the wrong column is exactly the
+    # kind of fault that reads green.
+    flat = grid if grid is not None and grid.box == box else None
+    if flat is not None:
+        sx0, sy0, sx1, sy1 = flat.span
+        for cx, cy, clvl in starts:
+            if not (sx0 <= cx <= sx1 and sy0 <= cy <= sy1 and 0 <= clvl < LEVELS):
+                flat = None
+                break
+    if flat is not None:
+        sx0, sy0, sx1, sy1 = flat.span
+        for cx, cy, clvl in goal_list:
+            if not (sx0 <= cx <= sx1 and sy0 <= cy <= sy1 and 0 <= clvl < LEVELS):
+                flat = None
+                break
+    if flat is None:
+        flat = _make_grid(canvas, box, _span_for(box, starts, goal_list), history)
+
+    gx0, gy0, gh, xstep, size = flat.gx0, flat.gy0, flat.gh, flat.xstep, flat.size
     ystep = LEVELS
-    xstep = gh * LEVELS
-    size = (gx1 - gx0 + 1) * xstep
+
+    # A private copy, because the reservations a net may use are its own and
+    # `routing_ports` is rebound per net.  Copying 84KB is a memcpy; rebuilding
+    # it from four containers is not.
+    flags = bytearray(flat.occ)
+    routing_ports = canvas.routing_ports
+    for at, port in flat.reserved:
+        if port not in routing_ports:
+            flags[at] = 0
+
+    # Round one of rip-up has no history yet, and round one is the round that
+    # usually succeeds. Skipping the array and the multiply there costs one
+    # branch on the rounds that do have history.
+    hist = flat.hist
+    negotiating = hist is not None
+    if hist is None:
+        hist = []
 
     # Heuristic: Manhattan distance to the NEAREST goal, in grid-local
     # coordinates so a popped cell's decoded position can be used directly.
@@ -1992,67 +2181,22 @@ def _astar(
             return (dx if dx >= 0 else -dx) + (dy if dy >= 0 else -dy)
 
     elif len(goal_list) <= _EXACT_HEURISTIC_GOALS:
-        flat = [(g[0] - gx0, g[1] - gy0) for g in goal_list]
+        near = [(c[0] - gx0, c[1] - gy0) for c in goal_list]
 
         def h(x: int, y: int) -> float:
-            return float(min(abs(x - gx) + abs(y - gy) for gx, gy in flat))
+            return float(min(abs(x - fx) + abs(y - fy) for fx, fy in near))
 
     else:
-        bx0 = min(g[0] for g in goal_list) - gx0
-        bx1 = max(g[0] for g in goal_list) - gx0
-        by0 = min(g[1] for g in goal_list) - gy0
-        by1 = max(g[1] for g in goal_list) - gy0
+        bx0 = min(c[0] for c in goal_list) - gx0
+        bx1 = max(c[0] for c in goal_list) - gx0
+        by0 = min(c[1] for c in goal_list) - gy0
+        by1 = max(c[1] for c in goal_list) - gy0
 
         def h(x: int, y: int) -> float:
             return float(max(0, bx0 - x, x - bx1) + max(0, by0 - y, y - by1))
 
-    # ONE byte per cell: 1 where a belt may be routed, 0 everywhere else.
-    #
-    # Everything the inner loop used to ask four dictionaries and a pair of sets
-    # is folded in here: outside `bounds` is 0, so are `blocked`, `solid`,
-    # `keep_out`, and every `reserved` cell held for a port this net does not
-    # own. `routing_ports` is rebound per net -- before this is called, never
-    # during -- so it is safe to bake in.
-    flags = bytearray(size)
-    if lo_x <= hi_x and lo_y <= hi_y:
-        span = b"\x01" * ((hi_y - lo_y + 1) * LEVELS)
-        base = (lo_y - gy0) * ystep
-        width = len(span)
-        for gx in range(lo_x - gx0, hi_x - gx0 + 1):
-            at = gx * xstep + base
-            flags[at : at + width] = span
-    holes = bytes(LEVELS)
-    for cx, cy, clvl in canvas.blocked:
-        if lo_x <= cx <= hi_x and lo_y <= cy <= hi_y and 0 <= clvl < LEVELS:
-            flags[(cx - gx0) * xstep + (cy - gy0) * ystep + clvl] = 0
-    for cx, cy in canvas.solid:
-        if lo_x <= cx <= hi_x and lo_y <= cy <= hi_y:
-            at = (cx - gx0) * xstep + (cy - gy0) * ystep
-            flags[at : at + LEVELS] = holes
-    for cx, cy in canvas.keep_out:
-        if lo_x <= cx <= hi_x and lo_y <= cy <= hi_y:
-            at = (cx - gx0) * xstep + (cy - gy0) * ystep
-            flags[at : at + LEVELS] = holes
-    routing_ports = canvas.routing_ports
-    for (cx, cy, clvl), port in canvas.reserved.items():
-        if port in routing_ports:
-            continue
-        if lo_x <= cx <= hi_x and lo_y <= cy <= hi_y and 0 <= clvl < LEVELS:
-            flags[(cx - gx0) * xstep + (cy - gy0) * ystep + clvl] = 0
-
-    # Round one of rip-up has no history yet, and round one is the round that
-    # usually succeeds. Skipping the array build and the multiply there costs
-    # one branch on the rounds that do have history.
-    negotiating = bool(history)
-    hist: list[float] = []
-    if negotiating:
-        hist = [0.0] * size
-        for (cx, cy, clvl), used in history.items():
-            if lo_x <= cx <= hi_x and lo_y <= cy <= hi_y and 0 <= clvl < LEVELS:
-                hist[(cx - gx0) * xstep + (cy - gy0) * ystep + clvl] = used
-
     goal_idx = {
-        (g[0] - gx0) * xstep + (g[1] - gy0) * ystep + g[2] for g in goal_list
+        (c[0] - gx0) * xstep + (c[1] - gy0) * ystep + c[2] for c in goal_list
     }
 
     # (dx, dy, one-step offset, two-step offset) -- the ramp's run cell is the
@@ -2329,6 +2473,25 @@ def _route_all(
 
     _reserve_port_access(canvas, nets)
 
+    # ONE flattening of the canvas for the whole pass, kept current instead of
+    # rebuilt.
+    #
+    # `_astar` searches on flat integer cell indices and needs the canvas as
+    # flat arrays to do it. Building those is a pass over `blocked` -- measured
+    # at 9.79ms on `universe-matrix`, and a pass makes 589 searches, so 5.77s of
+    # a 19.5s routing pass went on re-deriving something that changes by a few
+    # dozen cells between calls. The reservations have to be staked first, since
+    # they are part of what the flattening records.
+    #
+    # It is maintained at exactly two places, the same two that write
+    # `_TENTATIVE` into `canvas.blocked`: a path commits (`block`) and a round
+    # rips up (`restore`). History is re-flattened once per round. If a third
+    # writer to `blocked` ever appears inside this loop it must update the grid
+    # too -- an `occ` that disagrees with `blocked` is a router that quietly
+    # routes through a committed belt.
+    grid_box = _route_box(canvas, bounds)
+    grid = _make_grid(canvas, grid_box, _canvas_span(canvas, grid_box), history)
+
     # Nets that end at the same lane. Ordered, so "the ones before me" is
     # well defined however the router chooses to sequence a round.
     same_dst: dict[tuple[int, int], list[int]] = defaultdict(list)
@@ -2378,7 +2541,11 @@ def _route_all(
             for cell in path:
                 if canvas.blocked.get(cell, -1) == _TENTATIVE:
                     del canvas.blocked[cell]
+                    grid.restore(cell)
         committed = []
+        # `history` gained a round's worth of use and blame at the end of the
+        # last iteration, and the search reads it flattened.
+        grid.refresh_history(history)
         pressure = 0.5 * (1.6**it)
         failed = 0
         #: Cells that CUT the board this round, and how many nets each cut off.
@@ -2449,7 +2616,7 @@ def _route_all(
                 goals.add(cell)
             routed = _astar(
                 canvas, starts, goals, history, pressure, bounds, budget, deadline,
-                blame,
+                blame, grid,
             )
             canvas.routing_ports = frozenset()
             if routed is None:
@@ -2458,6 +2625,7 @@ def _route_all(
             paths[i] = routed
             for cell in routed:
                 canvas.blocked[cell] = _TENTATIVE
+                grid.block(cell)
             committed.append(routed)
         if failed == 0:
             unlinked = _commit_paths(

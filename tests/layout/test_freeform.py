@@ -34,6 +34,7 @@ from flab2bp.layout.freeform import (
     _astar,
     _build,
     _Canvas,
+    _canvas_span,
     _claim_power_sites,
     _Coater,
     _commit_paths,
@@ -42,6 +43,7 @@ from flab2bp.layout.freeform import (
     _direct_net_candidates,
     _greedy_pack,
     _height_seed,
+    _make_grid,
     _merge_lanes,
     _Net,
     _pack,
@@ -2498,3 +2500,140 @@ class TestAFailedSearchNamesTheWallThatCutIt:
         assert _astar(canvas, [(0, 0, 0)], {(150, 30, 0)}, {}, 1.0, bounds,
                       None, None, blame) is None
         assert blame == {}, f"{len(blame)} cells charged for a diffuse wall"
+
+
+class TestTheFlatGridIsTheSameSearch:
+    """``_astar`` runs on flat integer cell indices, and neither the index nor
+    the caller-supplied grid may change what it finds.
+
+    The whole point of ``_Grid`` is that it is an ENCODING of the canvas, not a
+    second source of truth.  Two things can break that quietly, and both are
+    pinned here: the index's ordering, which decides ties, and the grid's
+    freshness, which decides what is passable.
+    """
+
+    @staticmethod
+    def _maze() -> tuple[_Canvas, tuple[int, int, int, int]]:
+        """Enough shape that a tie-break or a stale cell would show up: two
+        walls with a gap, a keep-out cell, and a reservation across the way."""
+        canvas = _Canvas()
+        bounds = (-6, -6, 24, 12)
+        canvas.limit = bounds
+        for y in range(-4, 6):
+            if y == 1:
+                continue
+            for lvl in range(LEVELS):
+                canvas.blocked[6, y, lvl] = 0
+            canvas.solid.add((6, y))
+        for y in range(-4, 6):
+            if y == 4:
+                continue
+            for lvl in range(LEVELS):
+                canvas.blocked[13, y, lvl] = 0
+            canvas.solid.add((13, y))
+        canvas.keep_out.add((9, 1))
+        canvas.blocked[3, 0, 0] = _TENTATIVE
+        canvas.reserved[10, 2, 0] = (10, 3)
+        return canvas, bounds
+
+    def test_the_index_orders_cells_the_way_tuples_did(self) -> None:
+        """X-major, then y, then level -- and it is not a matter of taste.
+
+        ``heapq`` breaks a tie on ``(f, cost)`` by comparing the third element,
+        so the cell's own ordering picks between two equal-cost paths.  When
+        cells were tuples that order was x, then y, then level; the flat index
+        has to reproduce it exactly or the router silently makes different
+        choices.  Injected as a fault, a level-major index left the expansion
+        count byte-identical and moved the committed paths, so nothing else in
+        this suite would catch it.
+        """
+        canvas, bounds = self._maze()
+        grid = _make_grid(canvas, bounds, _canvas_span(canvas, bounds), {})
+        cells = [
+            (x, y, lvl)
+            for x in range(-3, 4)
+            for y in range(-3, 4)
+            for lvl in range(LEVELS)
+        ]
+        assert sorted(cells, key=grid.index) == sorted(cells), (
+            "the flat index no longer orders cells the way (x, y, level) tuples "
+            "do, so every heapq tie now falls a different way and the router is "
+            "making different choices than it did"
+        )
+
+    def test_a_caller_grid_finds_the_identical_path(self) -> None:
+        canvas, bounds = self._maze()
+        canvas.routing_ports = frozenset({(10, 3)})
+        alone = _astar(canvas, [(0, 0, 0)], {(20, 0, 0)}, {}, 1.0, bounds)
+        grid = _make_grid(canvas, bounds, _canvas_span(canvas, bounds), {})
+        shared = _astar(
+            canvas, [(0, 0, 0)], {(20, 0, 0)}, {}, 1.0, bounds, None, None, None, grid
+        )
+        assert alone is not None
+        assert shared == alone, (
+            "a caller-supplied grid changed the path, so it is not an encoding "
+            "of the canvas but a second, disagreeing copy of it"
+        )
+
+    def test_a_grid_built_for_another_box_is_not_used(self) -> None:
+        """``bounds`` is baked into the grid, so one for a different box is a
+        wrong answer waiting to happen and has to be refused, not trusted."""
+        canvas, bounds = self._maze()
+        stale = _make_grid(canvas, (0, 0, 4, 4), _canvas_span(canvas, (0, 0, 4, 4)), {})
+        got = _astar(
+            canvas, [(0, 0, 0)], {(20, 0, 0)}, {}, 1.0, bounds, None, None, None, stale
+        )
+        assert got == _astar(canvas, [(0, 0, 0)], {(20, 0, 0)}, {}, 1.0, bounds)
+
+    def test_block_and_restore_return_the_cell_to_what_it_was(self) -> None:
+        """Rip-up restores from ``base``, not to 1.
+
+        A ripped cell is not necessarily free -- it may sit outside ``bounds``,
+        which a start cell is allowed to do -- so writing 1 back would hand the
+        next net a cell the search was never entitled to use.
+        """
+        canvas, bounds = self._maze()
+        grid = _make_grid(canvas, bounds, _canvas_span(canvas, bounds), {})
+        before = bytes(grid.occ)
+        outside = (bounds[0] - 1, 0, 0)
+        for cell in ((2, 2, 0), (6, 0, 0), outside):
+            grid.block(cell)
+        assert grid.occ != before
+        for cell in ((2, 2, 0), (6, 0, 0), outside):
+            grid.restore(cell)
+        assert bytes(grid.occ) == before, (
+            "restoring a ripped-up cell did not put back what was there, so a "
+            "later net can route through ground it does not own"
+        )
+
+    def test_the_grid_agrees_with_canvas_free(self) -> None:
+        """The encoding, cell by cell, against the predicate it encodes.
+
+        Reservations are excluded because they are applied per net -- which
+        reservations a net may use depends on ``canvas.routing_ports`` -- and
+        that is checked by the identical-path test above, which routes past one.
+        """
+        canvas, bounds = self._maze()
+        grid = _make_grid(canvas, bounds, _canvas_span(canvas, bounds), {})
+        lo_x, lo_y, hi_x, hi_y = bounds
+        for x in range(lo_x, hi_x + 1):
+            for y in range(lo_y, hi_y + 1):
+                for lvl in range(LEVELS):
+                    cell = (x, y, lvl)
+                    if cell in canvas.reserved:
+                        continue
+                    assert bool(grid.occ[grid.index(cell)]) is canvas.free(cell), cell
+
+    def test_history_flattens_and_re_flattens(self) -> None:
+        """``history` grows once per rip-up round and the search reads it flat,
+        so a round that forgets to re-flatten is a round negotiating against
+        last round's prices."""
+        canvas, bounds = self._maze()
+        grid = _make_grid(canvas, bounds, _canvas_span(canvas, bounds), {})
+        assert grid.hist is None, "an empty history should cost no array at all"
+        grid.refresh_history({(2, 2, 0): 7.0})
+        assert grid.hist is not None
+        assert grid.hist[grid.index((2, 2, 0))] == 7.0
+        assert grid.hist[grid.index((2, 3, 0))] == 0.0
+        grid.refresh_history({})
+        assert grid.hist is None
