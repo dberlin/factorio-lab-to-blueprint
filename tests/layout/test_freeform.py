@@ -1958,44 +1958,6 @@ class TestPowerClaimsItsGroundBeforeRouting:
 
 
 
-class TestTheShelfPackingIsTheLastResort:
-    """Density and routability pull in opposite directions.
-
-    ``_pack`` minimises width lexicographically, so more solver time buys a
-    tighter pack and a tighter pack leaves the router less to work with.
-    Measured on ``universe-matrix/max-proliferation``: a 4s budget produced packs
-    191 wide leaving 14 nets unrouted, a 30s budget packs 131 wide leaving 40.
-    Across the large tier the same trade shows up as whole cells -- 8 of 12
-    clean at 4s against 6 of 12 at the corpus's own 120s.
-
-    So the answer to a pack nothing can wire is LESS packing, not more solver.
-    """
-
-    def test_it_is_never_reached_when_a_solved_pack_wires(self) -> None:
-        """It must not be able to trade away a layout that already worked."""
-        p = FreeformLayout(power=True).lay_out(two_stage_spec(), time_budget_s=2.0)
-        assert p.stats["fallback_used"] == 0.0
-        assert p.stats["solver_status"] > 0.0
-
-    def test_what_it_returns_is_routed_rather_than_merely_constructed(self) -> None:
-        """The distinction ``fallback_placement`` does not make.
-
-        That one calls ``_build(route=False)`` -- it never attempts the wiring
-        it once claimed to guarantee. Everything this returns has been routed
-        with every net connected, which is the condition for returning it.
-        """
-        spec = magnetic_ring_spec()
-        strips = plan_strips(spec, strip_len=6)
-        loose = FreeformLayout(power=True)._loose_sweep(
-            spec, strips, time.monotonic() + 30.0
-        )
-        assert loose is not None, "the shelf packing must wire this fixture"
-        assert loose.stats["route_failures"] == 0.0
-        assert loose.stats["fallback_used"] == 1.0
-        report = validate.validate(loose, only=["belt.link_adjacent", "belt.acyclic"])
-        assert report.ok, "\n".join(f.message for f in report.errors[:5])
-
-
 def _lane(machines: int) -> _Port:
     """A port standing in for a lane with ``machines`` machines behind it."""
     return _Port(0, 0, 0, 0, 0, (), machines)
@@ -2081,11 +2043,11 @@ class TestTheTimeBudgetIsAWall:
     """``time_budget_s`` bounds the CALL, not just the packing.
 
     It used to bound only the packer. The sweep spent it, the escalated retry
-    spent ``RETRY_BUDGET_S`` on top, ``_loose_sweep`` had a budget of its own,
-    and the routing inside every one of them was bounded by an expansion count
-    rather than by a clock. Every phase was bounded and nothing bounded their
-    sum, so a nominal 4 seconds measured at 34s on ``casimir-crystal``, 80s on
-    ``quantum-chip`` and over 400s on a refusing ``universe-matrix`` cell.
+    spent ``RETRY_BUDGET_S`` on top, and the routing inside both was bounded by
+    an expansion count rather than by a clock. Every phase was bounded and
+    nothing bounded their sum, so a nominal 4 seconds measured at 34s on
+    ``casimir-crystal``, 80s on ``quantum-chip`` and over 400s on a refusing
+    ``universe-matrix`` cell.
     """
 
     def test_a_refusal_cannot_outrun_the_ceiling(self) -> None:
@@ -2113,12 +2075,6 @@ class TestTheTimeBudgetIsAWall:
         # A deadline already in the past: every phase must decline to start.
         assert (
             FreeformLayout(power=True)._sweep(spec, strips, 4.0, time.monotonic() - 1.0)
-            is None
-        )
-        assert (
-            FreeformLayout(power=True)._loose_sweep(
-                spec, strips, time.monotonic() - 1.0
-            )
             is None
         )
 

@@ -167,33 +167,30 @@ _DEADLINE_CHECK_EVERY = 4096
 _ROUTE_RING = 2
 _ENTRY_RING = _ROUTE_RING + 1
 
-#: Fraction of the call's wall clock held back for the shelf sweep.
-#:
-#: Measured per phase at a 4s budget on the large tier: the first sweep spends
-#: 5-12s, the escalated retry another 18-22s, and the shelf sweep 1.5-4.7s --
-#: and the shelf sweep is what wired three of those six candidates.  A third of
-#: fifteen seconds is several times what it has ever needed, and giving it none
-#: would spend the whole ceiling arriving one second short of the phase that
-#: works.
-_LOOSE_SHARE = 1.0 / 3.0
-
-#: The order :meth:`FreeformLayout._loose_sweep` takes candidate heights in.
-#:
-#: Indices into :func:`_candidate_heights`, middle outwards.  The shelf packing
-#: is being tried because nothing else wired, and a square-ish block is where a
-#: shelf construction has the most room per shelf; the extremes are worth
-#: reaching but not worth reaching first, and under a deadline "first" is often
-#: all there is.
-_HEIGHT_ORDER = (2, 3, 1, 4, 0)
-
-#: Shelf margins :meth:`FreeformLayout._loose_sweep` tries, tightest first.
-#:
-#: Four is where it stops because that is where it stops paying: measured on
-#: ``casimir-crystal/no-proliferator``, one tile of margin wires at one height
-#: of five and leaves five sorters unpowered, two wires at one, three at three,
-#: four at four.  Past that the packing is mostly air and the area it costs buys
-#: nothing a wired build did not already have.
-_LOOSE_MARGINS = (1, 2, 3, 4)
+# THERE IS NO FALLBACK PACKING HERE, AND THERE MUST NOT BE ONE.
+#
+# This has now been built and deleted TWICE: once as `fallback_placement`
+# reachable from `lay_out`, and once as `_loose_sweep`, a shelf packing at
+# progressively wider margins tried after every solved pack failed to wire.
+# The second came with a self-check -- it only returned placements that had
+# routed with every net connected -- and the self-check is exactly what made it
+# look defensible. It is not.
+#
+# A check proves the fallback's output is not broken. It says nothing about why
+# the solved path had nothing to hand back, and that is the only question worth
+# asking: a spec that reaches a fallback has a PACKER PRODUCING PACKS ITS OWN
+# ROUTER CANNOT WIRE. Emitting the shelf packing makes that defect invisible --
+# the cell goes green, the audit says CLEAN, and nobody looks again.
+#
+# And it is paid for in the one currency this program exists to minimise.
+# Measured on `casimir-crystal/no-proliferator`: solved packs of 4960-6120 tiles
+# that did not route, against a shelf packing of 8786-11628 that did. Buying a
+# green cell at twice the area is not a rescue, it is the failure being paid for
+# in density. Spine measured the same shape, 50,512 tiles against ~39,000.
+#
+# An unwireable pack is a REFUSAL. If that number is worse, it is the true
+# number, and the fix belongs in the PACKER -- routability as a constraint the
+# model respects, not a post-hoc test with a rescue behind it.
 
 #: Tower lattice spacing.  A square lattice of spacing ``d`` leaves a worst-case
 #: distance of ``d/sqrt(2)`` to the nearest lattice point, so ``d`` must satisfy
@@ -994,20 +991,18 @@ def _nets_between(strips: list[Strip]) -> list[tuple[int, int]]:
     return sorted(nets)
 
 
-def _greedy_pack(strips: list[Strip], height: int, *, margin: int = MARGIN) -> _Pack:
+def _greedy_pack(strips: list[Strip], height: int) -> _Pack:
     """Shelf packing -- always succeeds, and seeds the solver's upper bound.
 
-    ``margin`` is the free ground left on each strip's east and south faces.
-    It defaults to :data:`MARGIN`, which is what the solver's warm start wants:
-    a seed at a different spacing than the model uses is not a tighter hint, it
-    is a discarded one.  :meth:`FreeformLayout._loose_sweep` raises it, because
-    when nothing can be wired the thing to give the router is room.
+    A SEED, and only a seed.  It bounds `_pack`'s width from above and hints its
+    variables; it is never returned as a layout.  Returning it was tried twice
+    and deleted twice -- see the note by :data:`TOWER_SPACING`.
     """
     at: dict[int, tuple[int, int]] = {}
     shelf_x, shelf_y, shelf_h = 0, 0, 0
     width = 0
     for i, s in enumerate(strips):
-        w, h = s.width + margin, s.height + margin
+        w, h = s.width + MARGIN, s.height + MARGIN
         if shelf_y + h > height and shelf_h:
             shelf_x, shelf_y, shelf_h = width, 0, 0
         at[i] = (shelf_x, shelf_y)
@@ -3714,16 +3709,6 @@ class FreeformLayout:
         ceiling = max(time_budget_s, RETRY_BUDGET_S)
         started = time.monotonic()
         deadline = started + ceiling
-        # The packing phases get the front of the wall and the shelf sweep is
-        # guaranteed the tail, because the two are not comparable in cost or in
-        # yield. Measured per phase at a 4s budget on the large tier: the first
-        # sweep spends 5-12s, the escalated retry another 18-22s, and the shelf
-        # sweep 1.5-4.7s -- and of the six candidates there, the shelf sweep is
-        # what wired three of them. Letting the packer take the whole wall would
-        # spend fifteen seconds to arrive one second short of the phase that
-        # actually works. This is not a bigger ceiling, it is the same ceiling
-        # spent where it pays.
-        pack_deadline = started + ceiling * (1.0 - _LOOSE_SHARE)
         # ONE routing budget for the call. `_MAX_EXPANSIONS` bounds a single
         # search and `_ROUTING_BUDGET` bounded one routing pass; nothing bounded
         # the ten to twenty passes a sweep makes, so the packer could spend it
@@ -3784,142 +3769,29 @@ class FreeformLayout:
             budgets.append(RETRY_BUDGET_S)
 
         for sweep_s in budgets:
-            if _expired(pack_deadline):
+            if _expired(deadline):
                 break
-            best = self._sweep(spec, strips, sweep_s, pack_deadline, budget)
+            best = self._sweep(spec, strips, sweep_s, deadline, budget)
             if best is not None:
                 return best
-
-        # Nothing the PACKER found could be wired, so try the pack it was
-        # started from.  See :meth:`_loose_sweep` -- density and routability
-        # pull in opposite directions, and this is the end of that rope.  It
-        # shares the CALL's deadline rather than getting one of its own: a last
-        # resort with its own budget is how the phases came to be individually
-        # bounded and collectively unbounded.
-        loose = (
-            None
-            if _expired(deadline)
-            else self._loose_sweep(spec, strips, deadline, budget)
-        )
-        if loose is not None:
-            return loose
 
         if _expired(deadline):
             raise NoValidLayout(
                 f"the {ceiling:g}s deadline passed with no wired packing of "
-                f"{len(strips)} strips; the sweep, the retry and the shelf "
-                "packings between them ran out of clock rather than out of "
-                "candidates, so this is a REFUSAL and not a verdict on the spec",
+                f"{len(strips)} strips; the sweep and the retry between them ran "
+                "out of clock rather than out of candidates, so this is a "
+                "REFUSAL and not a verdict on the spec",
                 spec_label=spec.label,
                 budget_s=ceiling,
             )
         raise NoValidLayout(
             f"no packing of {len(strips)} strips could be wired at any candidate "
-            "height, and neither could the shelf packing they were seeded from; "
-            "every pack left nets unrouted",
+            "height; every pack the sweep produced left nets unrouted. That is a "
+            "PACKER defect -- it is producing packs its own router cannot wire -- "
+            "and it is reported rather than papered over with a looser packing",
             spec_label=spec.label,
             budget_s=budgets[-1],
         )
-
-    def _loose_sweep(
-        self,
-        spec: BuildSpec,
-        strips: list[Strip],
-        deadline: float,
-        budget: dict[str, int] | None = None,
-    ) -> Placement | None:
-        """The shelf packing, tried only once no solved pack could be wired.
-
-        DENSITY AND ROUTABILITY PULL IN OPPOSITE DIRECTIONS, and the measurement
-        is unambiguous.  ``_pack`` minimises width lexicographically, so more
-        solver time buys a tighter pack -- and a tighter pack leaves the router
-        less to work with.  On ``universe-matrix/max-proliferation`` a 4s budget
-        produced packs 191 wide that left 14 nets unrouted and a 30s budget
-        packs 131 wide that left 40.  Across the large tier the same trade shows
-        up as whole cells: 8 of 12 clean at the audit's 4s against 6 of 12 at
-        the corpus's own 120s, with ``information-matrix/free-proliferation``
-        clean at 4s and refusing at 120s.
-
-        So when every solved pack fails, the answer is not more solver time --
-        that makes it worse -- but LESS packing.  ``_greedy_pack`` is the shelf
-        construction ``_pack`` warm-starts from: feasible by construction, far
-        looser, and free, since nothing has to be solved to get it.
-
-        THE MARGIN IS WHAT DOES THE WORK, so it is swept before the height.  A
-        shelf packing at :data:`MARGIN` is loose BETWEEN shelves and as tight as
-        anything else WITHIN one, so it hands the router a one-tile corridor
-        down a column of stacked strips and the power lattice no free cell at
-        all: on ``casimir-crystal/no-proliferator`` the one-margin shelf wired at
-        exactly one height of five, and only by giving the lattice's ground up,
-        which shipped five sorters outside every tower's radius.  At three and
-        four tiles of margin the same strips wire at most heights AND cover, and
-        they come out SMALLER -- 8786 tiles against 10622 -- because room to
-        route beats a tight pack that has to be tall to work at all.
-
-        Attempts are therefore ordered margin-major: every margin's most
-        promising height first, then every margin's second, and so on.  That
-        reaches the margins that matter within four builds rather than after
-        fifteen, which is what makes a deadline survivable.
-
-        ``deadline`` is the CALL's, shared with every other phase rather than a
-        budget of this one's own -- a last resort with its own clock is how the
-        phases came to be individually bounded and collectively unbounded.  It
-        is checked between builds and inside the routing, and an attempt is not
-        started once it has passed; ``lay_out`` turns that into a refusal naming
-        the deadline, so a build that ran out of clock is never mistaken for a
-        spec that cannot be laid out.
-
-        The first fully routed placement wins.  Ranking them would be better
-        blueprints and a worse promise -- this is the last thing tried before
-        refusing, and a bounded last resort is worth more than an optimal one
-        that is still searching.
-
-        Note this is NOT :func:`fallback_placement`, which calls
-        ``_build(route=False)`` and so never attempts the wiring at all.  Every
-        placement returned here has been routed with every net connected; that
-        is the condition for returning it.
-        """
-        by_margin = {m: _candidate_heights(strips, margin=m) for m in _LOOSE_MARGINS}
-        ranks = max((len(h) for h in by_margin.values()), default=0)
-        attempts = [
-            (margin, by_margin[margin][rank])
-            for rank in _HEIGHT_ORDER[:ranks]
-            for margin in _LOOSE_MARGINS
-            if rank < len(by_margin[margin])
-        ]
-
-        for margin, height in attempts:
-            if _expired(deadline):
-                break
-            pack = _greedy_pack(strips, height, margin=margin)
-            # No `claim_power=False` retry here, and that is the point of
-            # sweeping the margin instead.  Giving the lattice's ground up to
-            # buy the last net or two is a trade worth making on a pack the
-            # solver squeezed, because there is nowhere else for the belt to go;
-            # on a shelf packing there is, one margin further out.  Taking it
-            # here bought exactly that: the one-margin shelf wired
-            # `casimir-crystal/no-proliferator` with no lattice at all and
-            # shipped five sorters outside every tower's radius -- an INVALID in
-            # place of a refusal, which is the wrong direction.  Let the attempt
-            # fail and let the margin fix it.
-            placement, failed, _towers = _build(
-                spec,
-                strips,
-                pack,
-                power=self.power,
-                route=True,
-                deadline=deadline,
-                budget=budget,
-            )
-            if failed:
-                continue
-            placement.stats["solver_status"] = 0.0
-            placement.stats["hit_time_budget"] = 0.0
-            placement.stats["fallback_used"] = 1.0
-            placement.stats["direct_insert_candidates"] = 0.0
-            placement.stats["area"] = float(placement.area)
-            return placement
-        return None
 
     def _sweep(
         self,
@@ -4004,8 +3876,7 @@ class FreeformLayout:
                 deadline=deadline,
                 budget=budget,
             )
-            # There is no `claim_power=False` retry here any more, and what
-            # replaced it is `_loose_sweep`.
+            # There is no `claim_power=False` retry here any more.
             #
             # The retry gave the WHOLE lattice claim up as soon as a pack left
             # one to three nets unrouted, on the reasoning that a build which
@@ -4019,11 +3890,10 @@ class FreeformLayout:
             # 4s, intermittently, which is exactly how a pack-dependent failure
             # looks.
             #
-            # A height that cannot be wired with the lattice in place is now
-            # simply discarded, and if no height survives, `_loose_sweep` tries
-            # shelf packings at progressively wider margins -- which gives the
-            # router its corridor AND the lattice its ground, rather than
-            # trading one for the other.
+            # A height that cannot be wired with the lattice in place is simply
+            # discarded, and if no height survives the spec is REFUSED. Trading
+            # coverage for the last net or two, like trading density for it, is
+            # buying a green cell with something the build needed.
             if failed:
                 continue
             # Area, then belt count. Two packs of equal area are not equally
@@ -4042,15 +3912,15 @@ class FreeformLayout:
         return best
 
 
-def _height_seed(strips: list[Strip], *, margin: int = MARGIN) -> int:
-    area = sum((s.width + margin) * (s.height + margin) for s in strips)
-    tall = max((s.height + margin for s in strips), default=1)
+def _height_seed(strips: list[Strip]) -> int:
+    area = sum((s.width + MARGIN) * (s.height + MARGIN) for s in strips)
+    tall = max((s.height + MARGIN for s in strips), default=1)
     return max(tall, int(math.isqrt(max(1, area))))
 
 
-def _candidate_heights(strips: list[Strip], *, margin: int = MARGIN) -> list[int]:
+def _candidate_heights(strips: list[Strip]) -> list[int]:
     """Heights to sweep, since ``W * H`` is too weak a form to minimise directly."""
-    h0 = _height_seed(strips, margin=margin)
-    tall = max((s.height + margin for s in strips), default=1)
+    h0 = _height_seed(strips)
+    tall = max((s.height + MARGIN for s in strips), default=1)
     out = {max(tall, int(h0 * f)) for f in (0.6, 0.8, 1.0, 1.25, 1.6)}
     return sorted(out)
