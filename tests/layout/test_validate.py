@@ -377,6 +377,96 @@ def test_a_long_reach_node_pulls_a_short_reach_one_into_the_network() -> None:
     assert not fired(r, "power.connectivity")
 
 
+def test_power_coverage_agrees_with_exact_rational_geometry_tile_by_tile() -> None:
+    """The disc test decides in integers; the rule is written in Fractions.
+
+    Both power checks compare a squared distance against a squared radius in
+    DOUBLED integer coordinates, because the Fraction form was 22% of a certify.
+    The two forms are the same predicate rather than an approximation of one:
+    doubling clears the only halves in the comparison, so the squared distance
+    is an integer, and an integer is ``<= (2r)**2`` exactly when it is
+    ``<= floor((2r)**2)``.
+
+    So this states the rule independently, in exact rationals, and checks it at
+    every tile of a 26x26 quadrant at once.  A SORTER is the probe because it
+    is the only powered building that occupies no cell: 676 of them can stand
+    on 676 adjacent tiles without a single ``geom.overlap``, which makes the
+    sweep exactly as fine as the lattice the rule is evaluated on.
+
+    Being that fine is load-bearing, and I found that out by trying coarser.
+    Substituting the tile CORNER for the tile CENTRE -- a real error, half a
+    tile of drift -- survives a sweep on one axis (on-axis the drift is
+    perpendicular to nothing and no tile changes side) and survives a 2D sweep
+    of 3x3 machines on a 3-tile pitch (the flip needs a tile at (7,8), and that
+    pitch never puts a machine's far corner there).  It does not survive this.
+
+    What this deliberately does NOT claim to catch is slack finer than the
+    lattice, and there is provably none to catch.  ``(2r)**2`` is 441 for a
+    Tesla Tower, and 441 = odd + even as a sum of two squares only, while a
+    doubled separation is either even in both axes (odd tower footprint) or odd
+    in both (even footprint) -- so no placement of any building under any tower
+    lands exactly ON the boundary.  Bounds of 441, 442 and 443 decide every
+    placement that can exist identically, and so do ``<`` and ``<=``.  That is
+    not a gap in the test; it is the same fact as the integer form being exact.
+
+    Fault-injected before being believed: tile-corner-for-tile-centre, the disc
+    a lattice step too big, and a lattice step too small each fail this test,
+    and the corner substitution passes two coarser sweeps I tried first.
+    """
+    tw = tower(0, 0)
+    probes = [sorter(x, y, x, y) for x in range(26) for y in range(26)]
+    report = validate(place(tw, *probes))
+    got = {i for f in report.by_check("power.coverage") for i in f.buildings}
+    want = {
+        i + 1
+        for i, p in enumerate(probes)
+        if (Fraction(2 * p.x + 1, 2) - Fraction(2 * tw.x + tw.width, 2)) ** 2
+        + (Fraction(2 * p.y + 1, 2) - Fraction(2 * tw.y + tw.height, 2)) ** 2
+        > TESLA_COVER_RADIUS**2
+    }
+    assert got == want
+    assert want and len(want) < len(probes), "the sweep must straddle the edge"
+
+
+def test_power_connectivity_agrees_with_exact_rational_geometry_around_its_edge() -> None:
+    """Same claim for the tower-to-tower test, swept around its own edge.
+
+    Pairwise rather than in one placement, because linking is transitive: a
+    third tower in the middle would join two that do not reach each other, and
+    the question here is only whether the pair test itself is exact.
+
+    Restricted to a band around the boundary because that is where a wrong
+    answer can hide and because 676 two-tower validations to re-establish that
+    a tower two tiles away is linked would be spending the suite's budget on
+    nothing.  ``max`` versus ``min`` on a mixed-reach pair is pinned separately,
+    above; both towers here are Teslas, where the two agree.
+
+    Fault-injected: a reach a lattice step too far and a lattice step too short
+    both fail this.  A wrong CENTRE convention cannot be tested here at all --
+    with two towers of the same footprint every such error is a uniform
+    translation of both, which changes no separation.  The mixed-footprint case
+    that would see it is the wireless-tower test above.
+    """
+    reach = catalog_building(TOWER).connect_distance
+    seen = set()
+    tested = 0
+    for dx in range(26):
+        for dy in range(26):
+            if abs(dx * dx + dy * dy - int(reach**2)) > 60:
+                continue
+            a, b = tower(0, 0), tower(dx, dy)
+            linked = (
+                (Fraction(2 * a.x + a.width, 2) - Fraction(2 * b.x + b.width, 2)) ** 2
+                + (Fraction(2 * a.y + a.height, 2) - Fraction(2 * b.y + b.height, 2)) ** 2
+                <= reach**2
+            )
+            seen.add(linked)
+            tested += 1
+            assert fired(validate(place(a, b)), "power.connectivity") is not linked, (dx, dy)
+    assert seen == {False, True}, "the band must straddle the edge"
+    assert tested > 20, f"the band collapsed to {tested} pairs"
+
+
 # --- spec conformance ------------------------------------------------------
 
 

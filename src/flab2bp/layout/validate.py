@@ -526,9 +526,12 @@ def _context(
     occ: dict[tuple[int, int, int], list[int]] = defaultdict(list)
     blocking: dict[tuple[int, int, int], list[int]] = defaultdict(list)
     for i, b in enumerate(placement.buildings):
+        # One question about the building, not one per tile of it: a 9x5
+        # chemical plant asked it 45 times and always got the same answer.
+        blocks = not cat.is_belt_integrated(b.item_id)
         for cell in _occupied_tiles(b, kinds[i]):
             occ[cell].append(i)
-            if not cat.is_belt_integrated(b.item_id):
+            if blocks:
                 blocking[cell].append(i)
     runs, run_of = _build_runs(placement.buildings, kinds)
     # The corpus convention: a splitter names nobody, and the belts around it
@@ -1266,17 +1269,23 @@ def _connectivity(ctx: Context) -> Iterable[Finding]:
         return
     n = len(towers)
     adj: dict[int, list[int]] = {k: [] for k in range(n)}
+    # Doubled integer coordinates, exactly as in `power.coverage`: the squared
+    # separation is an integer, so `d2 <= (2*reach)**2` is `d2 <=
+    # floor((2*reach)**2)`, and floor commutes with max -- max picks one of the
+    # two operands and floor is monotone -- so the per-pair reach can be taken
+    # over the already-floored squares.  This is n^2 in the tower count and it
+    # was 6.6% of certify at 141 towers.
+    pts = [(int(2 * ax), int(2 * ay), int((2 * link) ** 2)) for _, ax, ay, _, link in towers]
     for a in range(n):
+        ax, ay, asq = pts[a]
         for b in range(a + 1, n):
-            _, ax, ay, _, alink = towers[a]
-            _, bx, by, _, blink = towers[b]
+            bx, by, bsq = pts[b]
             # max, not min: OnNodeAdded links when the separation is within
             # max(a.connDistance2, b.connDistance2), so a long-reach node pulls
             # a short-reach one into its network -- a Wireless Power Tower
             # (45.5) links to a Tesla Tower at up to 45.5, not 22.5.  See
             # catalog.TESLA_LINK_DISTANCE, read off Assembly-CSharp.dll.
-            reach = max(alink, blink)
-            if (ax - bx) ** 2 + (ay - by) ** 2 <= reach**2:
+            if (ax - bx) ** 2 + (ay - by) ** 2 <= (asq if asq > bsq else bsq):
                 adj[a].append(b)
                 adj[b].append(a)
     seen = {0}
