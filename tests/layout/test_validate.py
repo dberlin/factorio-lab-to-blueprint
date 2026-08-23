@@ -2195,3 +2195,47 @@ def test_flow_conservation_does_not_invent_a_shortfall_at_a_fan_out() -> None:
     """
     r = validate(fan_out_placement(), fan_out_spec(), ids=FAN_OUT_IDS, expect_power=False)
     assert not r.errors, [f.message for f in r.errors]
+
+
+# --- the driver, and the indexes it shares between checks -------------------
+
+
+def test_a_check_alone_says_what_it_says_inside_a_whole_run() -> None:
+    """Order independence, which is what the shared-index cache costs.
+
+    Several checks want the same derived index -- what each sorter moves, what
+    each run must carry, where the towers are -- and building each one per
+    caller was 90% of ``certify`` on a large placement.  They are cached on the
+    ``Context`` now, so they are built by whichever check asks first.
+
+    That is only sound if no check can observe another having run.  A cache
+    keyed wrongly, or one that hands out a structure a later check mutates,
+    would show up exactly here: the check alone, on a fresh Context, disagreeing
+    with the same check inside a full run.  ``only=`` gives each one a Context
+    of its own, so this compares the two directly, finding for finding.
+
+    What this catches, injected and confirmed: one ``_Cache`` shared by every
+    Context instead of one each.
+
+    What it does NOT catch, also injected and confirmed: a check mutating a set
+    it was handed out of the cache.  These three placements are too simple for
+    that to change an answer.  The wider form of exactly this comparison --
+    eighteen real placements, each damaged eight ways, 5,258 isolated check
+    runs -- does catch it, at 18 disagreements, and it ran clean against the
+    code as committed.  That form costs minutes and the suite is at its ceiling,
+    so it lives outside; this is the part cheap enough to keep, and the reason
+    :class:`validate._Cache` carries a note that what it hands out is shared.
+    """
+    cases = (
+        (fan_out_placement(), fan_out_spec(), FAN_OUT_IDS, False),
+        (place(*orphaned_lane()), lane_spec(), LANE_IDS, True),
+        (place(tower(0, 0), *orphaned_lane()), lane_spec(), LANE_IDS, True),
+    )
+    compared = 0
+    for placement, spec, ids, power in cases:
+        whole = validate(placement, spec, ids=ids, expect_power=power)
+        for cid in whole.checks_run:
+            alone = validate(placement, spec, ids=ids, expect_power=power, only={cid})
+            assert list(alone.findings) == list(whole.by_check(cid)), cid
+            compared += 1
+    assert compared > 90, f"only {compared} checks compared"

@@ -198,6 +198,13 @@ class _Cache:
     answering questions about it.  ``compare=False`` keeps it out of ``__eq__``
     and ``__hash__`` so two Contexts over the same placement stay equal whatever
     either has happened to compute.
+
+    WHAT COMES OUT OF HERE IS SHARED.  Several of these hold mutable sets and
+    dicts, and a check that modifies one in place changes what a later check
+    reads -- which is an order dependence, the one way this optimisation could
+    change a verdict.  Copy before mutating.  The guard is
+    ``test_a_check_alone_says_what_it_says_inside_a_whole_run``, whose docstring
+    is honest about how much of that it can see on a small placement.
     """
 
     of_kind: dict[Kind, tuple[tuple[int, PlacedBuilding], ...]] = field(default_factory=dict)
