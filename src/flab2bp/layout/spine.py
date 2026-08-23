@@ -1000,7 +1000,9 @@ _REFUSAL_TEXT = {
         "(a structural limit in the row model, not a search failure)"
     ),
     FALLBACK_NO_SOLUTION: "CP-SAT found no feasible row assignment at any candidate width",
-    FALLBACK_EMISSION: "a plan solved but could not be emitted onto the grid",
+    FALLBACK_EMISSION: (
+        "every plan the width sweep solved could not be emitted onto the grid"
+    ),
     FALLBACK_SELF_CHECK: (
         "every plan that emitted was rejected by our own validator"
     ),
@@ -1018,12 +1020,37 @@ def _refusal(reason: float, detail: str = "") -> str:
 
 def _solve_plan(
     spec: BuildSpec, *, time_budget_s: float, workers: int
-) -> tuple[_Plan | None, float, str]:
+) -> tuple[list[_Plan], float, str]:
     """Pack groups into rows and choose direct inserts, minimising area.
 
     Area is ``W * H``, a variable product with a weak relaxation, so instead of
     ``AddMultiplicationEquality`` we sweep candidate widths and minimise ``H``
     under each -- a handful of easy solves rather than one hard one.
+
+    Returns EVERY plan the sweep solved, densest first, not just the densest.
+    The caller has two more gates left to pass -- emission, then our own
+    validator -- and neither is visible from in here.  Handing back a single
+    plan meant a width whose plan failed either gate discarded the other widths
+    that had solved perfectly well in the same sweep, and at a budget at or
+    above ``RETRY_BUDGET_S`` there is no second attempt to recover in.
+
+    These are all SOLVED plans from one sweep, in area order.  Trying the second
+    one is continuing the search, not falling back to something the solver never
+    proposed -- there is no seed here and there is not going to be one.
+
+    HOW OFTEN THIS MATTERS TODAY: never, and that is stated rather than assumed.
+    Measured over the 24 ``universe-matrix`` cells -- three candidates, both
+    power settings, budgets 1, 2, 4 and 15, the sweep returning between 2 and 7
+    plans each -- the densest plan passed emission and the self-check on the
+    first try in all 24.  Nothing in the corpus currently reaches past the head.
+
+    So this is insurance against gates the sweep cannot see, not a repair for a
+    cell that is failing, and it is worth being clear which of those it is.  It
+    is kept because discarding solved work on the first failure is wrong whether
+    or not it is costing a cell this week, and because it costs nothing while the
+    head keeps winning.  If it ever DOES fire, that is not this loop earning its
+    keep -- it is the packer producing a densest plan its own validator rejects,
+    and the thing to do is go and find that, not be satisfied with the green.
 
     The third element is a DETAIL string naming what went wrong, empty when a
     plan came back.
@@ -1034,7 +1061,7 @@ def _solve_plan(
     depth = {key: i for i, key in enumerate(order)}
     n = len(order)
     if n == 0:
-        return None, FALLBACK_EMPTY_SPEC, ""
+        return [], FALLBACK_EMPTY_SPEC, ""
 
     # The seed's lane allocation is a DIAGNOSTIC here, not a gate.  It used to be
     # the gate by accident: `_solve_plan` opened with `fallback_plan(spec)`, whose
@@ -1064,10 +1091,7 @@ def _solve_plan(
     # could lose to a slightly narrower one that quietly put 46 items/s back on
     # a 30/s belt -- `flow.belt_capacity` errors on `universe-matrix` that
     # another width in the very same sweep did not have.
-    best: _Plan | None = None
-    best_area = math.inf
-    degraded: _Plan | None = None
-    degraded_area = math.inf
+    found: list[tuple[int, int, _Plan]] = []  # (degraded?, area, plan)
     per_solve = max(time_budget_s / max(len(widths), 1), 0.25)
     unroutable = 0
 
@@ -1094,16 +1118,13 @@ def _solve_plan(
             break
         if plan is None:
             continue
-        area = _measure(spec, plan)
-        if plan.degraded:
-            if area < degraded_area:
-                degraded_area, degraded = area, plan
-        elif area < best_area:
-            best_area, best = area, plan
-    if best is not None:
-        return best, FALLBACK_NONE, ""
-    if degraded is not None:
-        return degraded, FALLBACK_NONE, ""
+        found.append((int(plan.degraded), _measure(spec, plan), plan))
+    if found:
+        # Degraded last, then densest first: the two pools above, expressed as
+        # one sort key now that the caller consumes the whole ordering rather
+        # than only its head.
+        found.sort(key=lambda t: (t[0], t[1]))
+        return [p for _deg, _area, p in found], FALLBACK_NONE, ""
     # Distinguish "packed rows nothing could wire" from "CP-SAT found nothing",
     # because they call for opposite fixes: the first is a structural limit in
     # the model, the second a search or feasibility problem.  A seed row that
@@ -1112,8 +1133,8 @@ def _solve_plan(
     # refusal should say which recipe and by how much rather than blaming the
     # search.
     if seed_error:
-        return None, FALLBACK_SEED_UNWIRABLE, seed_error
-    return None, (FALLBACK_UNROUTABLE if unroutable else FALLBACK_NO_SOLUTION), ""
+        return [], FALLBACK_SEED_UNWIRABLE, seed_error
+    return [], (FALLBACK_UNROUTABLE if unroutable else FALLBACK_NO_SOLUTION), ""
 
 
 def _candidate_widths(groups: dict[str, _Group]) -> list[int]:
@@ -1188,7 +1209,7 @@ def _solve_one(
     #
     # This has to live in the model.  Without it CP-SAT freely packed five
     # groups into one row, `_lane_requirements` correctly refused the result,
-    # and `_solve_plan` skipped every width in the sweep and returned None --
+    # and `_solve_plan` skipped every width in the sweep and came back empty --
     # so the strategy fell back to its greedy layout on every real spec while
     # reporting only `fallback_used=1`.  Rejecting after the fact cannot work
     # here: routability is a property of the packing, so the packer has to know.
@@ -3414,6 +3435,19 @@ class SpineLayout:
         budget, empty spec, and a recipe no row can wire -- skip the retry:
         repeating them cannot change them.
 
+        Within one attempt, :func:`_solve_plan` hands back every plan its width
+        sweep solved, densest first, and each is emitted and self-checked in turn
+        until one passes.  Emission and the validator are gates the sweep cannot
+        see, so a plan failing one says nothing about the plans behind it.  Note
+        what this is not: every element of that list is a plan CP-SAT returned
+        under the same constraints, so reaching past the head is continuing the
+        search, not reaching for a seed.  There is no seed here.
+
+        In practice the head always wins -- measured over every ``universe-matrix``
+        cell at four budgets, exactly one plan was ever emitted -- so this loop
+        adds no measurable time.  :func:`_solve_plan` has the numbers and says
+        what to conclude if that ever stops being true.
+
         ``time_budget_s`` bounds ALL the SEARCH in this call, not each solve
         inside it.  It used to bound each one separately, so the phases summed:
         a 4s budget bought 4s of search and then 15s more on the retry.  A
@@ -3433,7 +3467,16 @@ class SpineLayout:
         measures 4.2s + 10.1s of search (correctly clamped -- the retry got
         10.75s, not a fresh 15), then 0.3s to emit and 3.8s to check 92,907
         tiles, for 18.4s total.  So expect roughly the ceiling plus a few
-        seconds on a big spec, and read a cell far above that as a defect.
+        seconds on a big spec.
+
+        Read that figure as core-allocation-dependent, though, not absolute: the
+        same cell measures 22-26s with 8 search workers and 50s under the audit
+        at ``--jobs 16``, because emission and the check are real work that
+        contends like any other.  What stays true across all of them is the
+        SHAPE -- search clamped to the ceiling, then a fixed emit-and-check tail
+        proportional to the tile count.  A cell whose SEARCH runs past the
+        ceiling is the defect worth chasing; a slow tail is just a big spec on a
+        busy machine.
         """
         if time_budget_s <= 0:
             raise NoValidLayout(
@@ -3459,37 +3502,45 @@ class SpineLayout:
                 reason, detail = FALLBACK_NO_SOLUTION, "budget exhausted"
                 break
             spent = budget
-            try:
-                plan, reason, detail = _solve_plan(
-                    spec, time_budget_s=budget, workers=self.workers
-                )
-                if plan is None:
-                    if reason == FALLBACK_SEED_UNWIRABLE:
-                        break  # structural -- more seconds cannot change a recipe
-                    if reason == FALLBACK_EMPTY_SPEC:
-                        break  # deterministic -- more seconds cannot help
+            plans, reason, detail = _solve_plan(
+                spec, time_budget_s=budget, workers=self.workers
+            )
+            if not plans:
+                if reason == FALLBACK_SEED_UNWIRABLE:
+                    break  # structural -- more seconds cannot change a recipe
+                if reason == FALLBACK_EMPTY_SPEC:
+                    break  # deterministic -- more seconds cannot help
+                continue
+            # Densest first, and every one of them a plan the solver actually
+            # returned.  Emission and the self-check are gates the sweep could
+            # not see, so a plan failing one is not evidence against the plans
+            # behind it.  Measured, no cell in the corpus reaches past the head
+            # -- see `_solve_plan` -- so read a second iteration here as a
+            # defect in the packer to go and find, not as this loop paying off.
+            for plan in plans:
+                try:
+                    # Emission stays inside the guard on purpose.  A direct
+                    # insert the solver believed in may turn out to have no
+                    # machine pair within reach once real x positions exist, and
+                    # dropping that lane without emitting its replacement sorter
+                    # would starve the consumer.  So a plan that will not emit is
+                    # not a layout: try the next one, then a longer budget, and
+                    # refuse if neither works.
+                    placement = _emit(spec, plan, power=self.power)
+                except (ValueError, KeyError) as exc:
+                    reason, detail = FALLBACK_EMISSION, str(exc)
                     continue
-                # Emission stays inside the guard on purpose.  A direct insert
-                # the solver believed in may turn out to have no machine pair
-                # within reach once real x positions exist, and dropping that
-                # lane without emitting its replacement sorter would starve the
-                # consumer.  So a plan that will not emit is not a layout: retry
-                # it under a longer budget, and refuse if that fails too.
-                placement = _emit(spec, plan, power=self.power)
-            except (ValueError, KeyError) as exc:
-                reason, detail = FALLBACK_EMISSION, str(exc)
-                continue
-            placement.stats["solver_rejected"] = 0.0
-            placement.stats["fallback_reason"] = FALLBACK_NONE
-            bad = _rejected(placement, spec, power=self.power)
-            if bad:
-                # Solved, emitted, and still wrong. Keep sweeping rather than
-                # hand back something the validator will refuse anyway: this
-                # method's contract is a VALID placement or an exception, and
-                # until now that was argued rather than enforced.
-                reason, detail = FALLBACK_SELF_CHECK, bad
-                continue
-            return placement
+                placement.stats["solver_rejected"] = 0.0
+                placement.stats["fallback_reason"] = FALLBACK_NONE
+                bad = _rejected(placement, spec, power=self.power)
+                if bad:
+                    # Solved, emitted, and still wrong. Keep sweeping rather than
+                    # hand back something the validator will refuse anyway: this
+                    # method's contract is a VALID placement or an exception, and
+                    # until now that was argued rather than enforced.
+                    reason, detail = FALLBACK_SELF_CHECK, bad
+                    continue
+                return placement
 
         # THERE IS NO FALLBACK HERE, AND THERE IS NOT GOING TO BE ONE.
         #

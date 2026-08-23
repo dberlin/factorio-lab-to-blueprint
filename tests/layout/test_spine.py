@@ -1527,10 +1527,10 @@ class TestARecipeThatStillCannotBeWired:
         with pytest.raises(ValueError, match="taps 7 lanes"):
             fallback_plan(two_lab_spec())
 
-        plan, reason, detail = _solve_plan(
+        plans, reason, detail = _solve_plan(
             two_lab_spec(), time_budget_s=0.5, workers=DETERMINISTIC_WORKERS
         )
-        assert plan is None
+        assert plans == []
         assert reason == FALLBACK_SEED_UNWIRABLE
         assert "universe-matrix" in detail
 
@@ -1747,10 +1747,127 @@ class TestThereIsNoSeedFallback:
 
         spec = magnetic_ring_spec()
         monkeypatch.setattr(
-            spine, "_solve_plan", lambda *a, **k: (None, spine.FALLBACK_UNROUTABLE, "")
+            spine, "_solve_plan", lambda *a, **k: ([], spine.FALLBACK_UNROUTABLE, "")
         )
         with pytest.raises(NoValidLayout):
             SpineLayout(power=False).lay_out(spec, time_budget_s=0.5)
+
+    def test_a_second_solved_plan_is_not_a_fallback(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A plan that will not emit must not discard the sweep behind it.
+
+        This is the one thing that separates trying the sweep's second plan from
+        reaching for a seed.  Both look like "the first answer failed, use
+        another"; only one of them hands back something CP-SAT actually returned
+        under the same constraints.  So the assertion that matters here is not
+        "a placement came back" -- a seed would satisfy that -- it is that the
+        plan which emitted is an element of ``_solve_plan``'s own list.
+
+        No corpus cell currently reaches past the head plan -- measured, see
+        ``_solve_plan`` -- so this behaviour has to be pinned by construction
+        rather than by a spec that exercises it, or it would rot unnoticed.
+        That is also why the poisoning is done by identity on ``plans[0]``: it
+        makes the test fail if the loop ever stops walking, which is the only
+        thing it is here to catch.
+        """
+        from flab2bp.layout import spine
+
+        spec = magnetic_ring_spec()
+        real = spine._solve_plan
+        plans, reason, detail = real(
+            spec, time_budget_s=2.0, workers=DETERMINISTIC_WORKERS
+        )
+        assert len(plans) > 1, "this spec must give the sweep more than one plan"
+        assert reason == spine.FALLBACK_NONE
+
+        # Poison the densest plan's emission. The layout must reach past it
+        # rather than refuse, and what comes back is still a solved plan.
+        real_emit = spine._emit
+        emitted: list[object] = []
+
+        def _emit(spec_: BuildSpec, plan: object, **kw: object) -> object:
+            if plan is plans[0]:
+                raise ValueError("poisoned: the densest plan will not emit")
+            emitted.append(plan)
+            return real_emit(spec_, plan, **kw)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(
+            spine, "_solve_plan", lambda *a, **k: (plans, reason, detail)
+        )
+        monkeypatch.setattr(spine, "_emit", _emit)
+        placement = SpineLayout(power=False).lay_out(spec, time_budget_s=2.0)
+
+        assert placement.stats["fallback_reason"] == spine.FALLBACK_NONE
+        # The whole point: what got emitted is one of the solver's own plans,
+        # reached by identity, not something this module built to fill the gap.
+        assert emitted, "nothing was emitted at all"
+        assert any(emitted[-1] is p for p in plans[1:])
+
+    def test_a_plan_the_validator_rejects_does_not_discard_the_sweep(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The self-check is the gate that actually caused this, so pin it too.
+
+        Emission failing is the easy case, and the two gates are not the same
+        gate: a plan can emit perfectly well and then be rejected by OUR OWN
+        validator -- ``flow.belt_capacity`` is the plausible one, a width having
+        quietly put more items/s on a lane than its belt tier carries.
+        ``_rejected`` is as invisible to the width sweep as emission is, so the
+        loop has to walk past a validator rejection too, and a test that only
+        poisons ``_emit`` would not notice if it stopped.
+        """
+        from flab2bp.layout import spine
+
+        spec = magnetic_ring_spec()
+        real = spine._solve_plan
+        plans, reason, detail = real(
+            spec, time_budget_s=2.0, workers=DETERMINISTIC_WORKERS
+        )
+        assert len(plans) > 1, "this spec must give the sweep more than one plan"
+
+        real_emit = spine._emit
+        from_plan: dict[int, object] = {}
+
+        def _emit(spec_: BuildSpec, plan: object, **kw: object) -> object:
+            placement = real_emit(spec_, plan, **kw)  # type: ignore[arg-type]
+            from_plan[id(placement)] = plan
+            return placement
+
+        def _rejected(placement: object, *a: object, **k: object) -> str:
+            if from_plan.get(id(placement)) is plans[0]:
+                return "flow.belt_capacity: poisoned densest plan"
+            return ""
+
+        monkeypatch.setattr(
+            spine, "_solve_plan", lambda *a, **k: (plans, reason, detail)
+        )
+        monkeypatch.setattr(spine, "_emit", _emit)
+        monkeypatch.setattr(spine, "_rejected", _rejected)
+        placement = SpineLayout(power=False).lay_out(spec, time_budget_s=2.0)
+
+        assert any(from_plan.get(id(placement)) is p for p in plans[1:])
+
+    def test_it_still_refuses_when_no_solved_plan_survives(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Exhausting the sweep is a refusal, not a licence to invent a plan.
+
+        The list only ever holds what the solver returned. When none of it
+        emits, there is nothing else to hand back -- and that is the whole
+        point.
+        """
+        from flab2bp.layout import spine
+
+        spec = magnetic_ring_spec()
+
+        def _emit(*a: object, **k: object) -> object:
+            raise ValueError("nothing in this sweep emits")
+
+        monkeypatch.setattr(spine, "_emit", _emit)
+        with pytest.raises(NoValidLayout) as exc:
+            SpineLayout(power=False).lay_out(spec, time_budget_s=2.0)
+        assert "could not be emitted" in exc.value.reason
 
     def test_a_recipe_no_row_can_wire_still_refuses(
         self, monkeypatch: pytest.MonkeyPatch
