@@ -270,7 +270,28 @@ as well. `balanced_pair_spec` is deleted -- balancing it made it identical to
 `two_stage_spec`, and dodging the imbalance was its only reason to exist.
 Arithmetic tests pin both so they cannot rot back.
 
-## OPEN -- freeform cannot supply proliferator to its coaters reliably
+## RESOLVED -- freeform supplies its coaters; the numbers below are historical
+
+**Re-measured 2026-08-23 and this no longer reproduces.** On trivial+small+mid
+freeform is **48/48 clean** -- 0 refused, 0 invalid, 6s wall -- against the
+14-of-24 recorded below. Across the full stress corpus it is 62-66/72 over nine
+runs with **zero** `prolif.*` findings in any of them; every remaining miss is
+`<refused>`, and those are concentrated in `universe-matrix` (6) and
+`quantum-chip/max-proliferation` (2), neither of which is a proliferator-entry
+failure.
+
+No single commit closed this. It went out under the accumulated 2026-08-23
+freeform work -- most likely `e1174f0` (stacked output lanes were walling in
+their own east access cells, which is the same shape of defect as the entry lane
+being walled in) and `a834293` (a ground-level toll that sends through-traffic
+upstairs, so runs stop cutting the plane the entry sits on).
+
+The diagnosis below is kept because it is a good description of a real hazard
+that could recur: **the block's boundary MOVES during emission while several
+passes each assume it is fixed.** If an entry lane is ever unreachable again,
+start there. What is stale is only the measurement.
+
+### The original entry, as written
 
 The largest open defect. On the trivial+small+mid corpus freeform ships **14 of
 24 (URL, candidate) pairs**, and **15 of the 22 remaining errors are
