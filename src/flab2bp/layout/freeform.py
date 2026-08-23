@@ -1897,10 +1897,79 @@ def _astar(
     else is what walled in the external entry lanes.  Start cells are exempt:
     an external input run begins on the entry ring, outside the routing box, and
     works inward.
+
+    THE SEARCH RUNS ON FLAT INTEGER CELL INDICES, not on ``(x, y, level)``
+    tuples, and that is worth roughly 1.8x on this loop.
+    ------------------------------------------------------------------------
+    The wall here has always been the interpreter rather than the algorithm, and
+    a tuple key charges for it twice: once to build the tuple and once to hash
+    it.  The previous profile counted 13.5 ``free`` and 14.8 ``inside`` calls per
+    expansion; fusing the ramp and step loops removed the duplicated tests, and
+    what remained was four hashed dictionary probes and half a dozen tuple
+    allocations per NEIGHBOUR.
+
+    A cell is therefore ``(x - gx0) * gh * LEVELS + (y - gy0) * LEVELS + lvl``:
+    one int, hashed by identity, and the four neighbours and eight ramp targets
+    are reached by ADDING a precomputed offset rather than by building a tuple.
+    ``blocked``, ``solid``, ``keep_out``, ``reserved`` and ``bounds`` collapse
+    into ONE ``bytearray`` of passability, so a neighbour test is a single
+    indexed byte read where it used to be four hashed probes and two tuple
+    builds.  ``best``/``prev``/``history`` become flat lists.
+
+    Two details make this an optimisation and not a change of search:
+
+    * **The layout is x-major on purpose.**  ``heapq`` breaks a tie on
+      ``(f, cost)`` by comparing the third element, so the cell's own ordering
+      decides which of two equal-cost paths is taken.  ``x`` major, then ``y``,
+      then ``lvl`` makes integer order the SAME total order as tuple order, so
+      every tie falls the way it fell before.  A level-major index -- the
+      obvious layout -- is measurably a different router: injected as a fault it
+      left the expansion count byte-identical and moved the committed paths, so
+      an expansion count alone cannot police this.
+    * **The grid is padded by two cells.**  A ramp travels two tiles, so an
+      index arithmetic step from a passable cell must land inside the array
+      rather than wrapping into the next column.  Everything in the pad is
+      impassable, which is also how out-of-bounds is expressed.
+
+    Building the passability array costs one pass over ``blocked`` -- measured
+    at 7.4ms on a 25,813-cell ``universe-matrix`` canvas, ~15ms with the history
+    array -- and that is charged per CALL.  It is worth it because a call
+    averages 6,000 expansions and the heavy ones 38,000; a caller making many
+    tiny searches over a huge canvas would want it hoisted.
     """
     if not goals:
         return None
-    # Heuristic: Manhattan distance to the NEAREST goal.
+    if (budget is not None and budget["left"] <= 0) or _expired(deadline):
+        return None
+
+    # `bounds` and `canvas.limit` are both inclusive boxes and a cell must sit
+    # in BOTH, so intersect them once instead of testing twice per neighbour.
+    # Start cells stay exempt from `bounds` -- an external input run begins on
+    # the entry ring, outside the routing box, and works inward -- so they are
+    # still admitted by `canvas.free`, which applies `limit` and not `bounds`.
+    lo_x, lo_y, hi_x, hi_y = bounds
+    if canvas.limit is not None:
+        lim_x0, lim_y0, lim_x1, lim_y1 = canvas.limit
+        lo_x, lo_y = max(lo_x, lim_x0), max(lo_y, lim_y0)
+        hi_x, hi_y = min(hi_x, lim_x1), min(hi_y, lim_y1)
+
+    goal_list = list(goals)
+
+    # The indexed box covers the routing box AND every start and goal, because
+    # a start may sit outside `bounds` and a goal reached as a start must still
+    # be recognised. Two cells of pad on each side so a two-tile ramp from any
+    # passable cell lands inside the array instead of wrapping.
+    gx0 = min([lo_x] + [c[0] for c in starts] + [c[0] for c in goal_list]) - 2
+    gx1 = max([hi_x] + [c[0] for c in starts] + [c[0] for c in goal_list]) + 2
+    gy0 = min([lo_y] + [c[1] for c in starts] + [c[1] for c in goal_list]) - 2
+    gy1 = max([hi_y] + [c[1] for c in starts] + [c[1] for c in goal_list]) + 2
+    gh = gy1 - gy0 + 1
+    ystep = LEVELS
+    xstep = gh * LEVELS
+    size = (gx1 - gx0 + 1) * xstep
+
+    # Heuristic: Manhattan distance to the NEAREST goal, in grid-local
+    # coordinates so a popped cell's decoded position can be used directly.
     #
     # This used to use the goals' centroid, which is not admissible when the
     # goals are spread out and -- worse -- never reaches 0 at an actual goal.
@@ -1910,98 +1979,115 @@ def _astar(
     # Exact min is best but costs O(|goals|) per node, so fall back to distance
     # to the goals' bounding box once that would dominate. The box distance is
     # still admissible (it under-estimates), just weaker.
-    if (budget is not None and budget["left"] <= 0) or _expired(deadline):
-        return None
-    goal_list = list(goals)
     if len(goal_list) == 1:
         # By far the commonest shape -- a port with one free neighbour -- and
         # the generator, the `min` and the `float` around them were 17% of the
         # profile between them. One goal needs none of the three.
-        only_x, only_y, _ = goal_list[0]
+        only_x = goal_list[0][0] - gx0
+        only_y = goal_list[0][1] - gy0
 
-        def h(c: tuple[int, int, int]) -> float:
-            x, y, _ = c
+        def h(x: int, y: int) -> float:
             dx = x - only_x
             dy = y - only_y
             return (dx if dx >= 0 else -dx) + (dy if dy >= 0 else -dy)
 
     elif len(goal_list) <= _EXACT_HEURISTIC_GOALS:
-        flat = [(g[0], g[1]) for g in goal_list]
+        flat = [(g[0] - gx0, g[1] - gy0) for g in goal_list]
 
-        def h(c: tuple[int, int, int]) -> float:
-            x, y, _ = c
+        def h(x: int, y: int) -> float:
             return float(min(abs(x - gx) + abs(y - gy) for gx, gy in flat))
 
     else:
-        bx0 = min(g[0] for g in goal_list)
-        bx1 = max(g[0] for g in goal_list)
-        by0 = min(g[1] for g in goal_list)
-        by1 = max(g[1] for g in goal_list)
+        bx0 = min(g[0] for g in goal_list) - gx0
+        bx1 = max(g[0] for g in goal_list) - gx0
+        by0 = min(g[1] for g in goal_list) - gy0
+        by1 = max(g[1] for g in goal_list) - gy0
 
-        def h(c: tuple[int, int, int]) -> float:
-            x, y, _ = c
+        def h(x: int, y: int) -> float:
             return float(max(0, bx0 - x, x - bx1) + max(0, by0 - y, y - by1))
 
-    expansions = 0
-
-    # THE INNER LOOP IS THE WHOLE COST, so everything it touches is bound once
-    # here.  Profiled on one `universe-matrix` routing pass: 1.19M expansions in
-    # 16.4s -- 72k/sec -- of which `_Canvas.free` was 16.0M calls and 25% of the
-    # time, `inside` 17.6M calls, and `dict.get` 29.2M calls.  heapq was 3.5%.
-    # The wall was the interpreter, not the algorithm, so the checks are inlined
-    # rather than called and every attribute lookup is hoisted out.
+    # ONE byte per cell: 1 where a belt may be routed, 0 everywhere else.
     #
-    # Binding the CONTAINERS is safe where binding their contents would not be:
-    # `blocked` is mutated all through routing but never rebound, and
-    # `routing_ports` is rebound per net -- before this is called, never during.
-    blocked = canvas.blocked
-    solid = canvas.solid
-    keep_out = canvas.keep_out
-    reserved_get = canvas.reserved.get
+    # Everything the inner loop used to ask four dictionaries and a pair of sets
+    # is folded in here: outside `bounds` is 0, so are `blocked`, `solid`,
+    # `keep_out`, and every `reserved` cell held for a port this net does not
+    # own. `routing_ports` is rebound per net -- before this is called, never
+    # during -- so it is safe to bake in.
+    flags = bytearray(size)
+    if lo_x <= hi_x and lo_y <= hi_y:
+        span = b"\x01" * ((hi_y - lo_y + 1) * LEVELS)
+        base = (lo_y - gy0) * ystep
+        width = len(span)
+        for gx in range(lo_x - gx0, hi_x - gx0 + 1):
+            at = gx * xstep + base
+            flags[at : at + width] = span
+    holes = bytes(LEVELS)
+    for cx, cy, clvl in canvas.blocked:
+        if lo_x <= cx <= hi_x and lo_y <= cy <= hi_y and 0 <= clvl < LEVELS:
+            flags[(cx - gx0) * xstep + (cy - gy0) * ystep + clvl] = 0
+    for cx, cy in canvas.solid:
+        if lo_x <= cx <= hi_x and lo_y <= cy <= hi_y:
+            at = (cx - gx0) * xstep + (cy - gy0) * ystep
+            flags[at : at + LEVELS] = holes
+    for cx, cy in canvas.keep_out:
+        if lo_x <= cx <= hi_x and lo_y <= cy <= hi_y:
+            at = (cx - gx0) * xstep + (cy - gy0) * ystep
+            flags[at : at + LEVELS] = holes
     routing_ports = canvas.routing_ports
-    heappush = heapq.heappush
-    hist_get = history.get
-    level_toll = _LEVEL_TOLL
+    for (cx, cy, clvl), port in canvas.reserved.items():
+        if port in routing_ports:
+            continue
+        if lo_x <= cx <= hi_x and lo_y <= cy <= hi_y and 0 <= clvl < LEVELS:
+            flags[(cx - gx0) * xstep + (cy - gy0) * ystep + clvl] = 0
+
     # Round one of rip-up has no history yet, and round one is the round that
-    # usually succeeds. Skipping the lookup and the multiply there costs one
-    # branch on the rounds that do have history.
+    # usually succeeds. Skipping the array build and the multiply there costs
+    # one branch on the rounds that do have history.
     negotiating = bool(history)
+    hist: list[float] = []
+    if negotiating:
+        hist = [0.0] * size
+        for (cx, cy, clvl), used in history.items():
+            if lo_x <= cx <= hi_x and lo_y <= cy <= hi_y and 0 <= clvl < LEVELS:
+                hist[(cx - gx0) * xstep + (cy - gy0) * ystep + clvl] = used
 
-    # `bounds` and `canvas.limit` are both inclusive boxes and a cell must sit
-    # in BOTH, so intersect them once instead of testing twice per neighbour.
-    # Start cells stay exempt from `bounds` -- an external input run begins on
-    # the entry ring, outside the routing box, and works inward -- so they are
-    # still tested by `canvas.free`, which applies `limit` and not `bounds`.
-    # NOT `bx0`/`by0`/... -- those names belong to the goal bounding box the
-    # many-goals heuristic closes over, and reassigning them here would leave
-    # that heuristic measuring distance to the ROUTING box instead. From a cell
-    # inside it that is zero, so A* would quietly become Dijkstra on exactly the
-    # searches with the most goals to sort through.
-    lo_x, lo_y, hi_x, hi_y = bounds
-    if canvas.limit is not None:
-        lim_x0, lim_y0, lim_x1, lim_y1 = canvas.limit
-        lo_x, lo_y = max(lo_x, lim_x0), max(lo_y, lim_y0)
-        hi_x, hi_y = min(hi_x, lim_x1), min(hi_y, lim_y1)
+    goal_idx = {
+        (g[0] - gx0) * xstep + (g[1] - gy0) * ystep + g[2] for g in goal_list
+    }
 
-    open_heap: list[tuple[float, float, tuple[int, int, int]]] = []
-    best: dict[tuple[int, int, int], float] = {}
-    prev: dict[tuple[int, int, int], tuple[int, int, int] | None] = {}
+    # (dx, dy, one-step offset, two-step offset) -- the ramp's run cell is the
+    # plain step's target, so one pass over the four directions does both.
+    moves = tuple(
+        (dx, dy, dx * xstep + dy * ystep, 2 * (dx * xstep + dy * ystep))
+        for dx, dy in _STEPS
+    )
+
+    expansions = 0
+    heappush = heapq.heappush
+    heappop = heapq.heappop
+    inf = math.inf
+    level_toll = _LEVEL_TOLL
+
+    open_heap: list[tuple[float, float, int]] = []
+    best = [inf] * size
+    prev = [-1] * size
     #: Ramp moves span two cells.  The intermediate "run" cell is recorded here
     #: rather than in ``prev``, because giving it a predecessor of its own lets a
     #: later ramp clobber a predecessor the normal step expansion already set --
     #: which can point a cell's chain back through itself and make ``prev`` cyclic.
-    via: dict[tuple[int, int, int], tuple[int, int, int]] = {}
-    best_get = best.get
+    via: dict[int, int] = {}
+    via_get = via.get
     for s in starts:
         if not canvas.free(s):
             continue
-        best[s] = 0.0
-        prev[s] = None
-        heapq.heappush(open_heap, (h(s), 0.0, s))
+        si = (s[0] - gx0) * xstep + (s[1] - gy0) * ystep + s[2]
+        best[si] = 0.0
+        prev[si] = -1
+        heappush(open_heap, (h(s[0] - gx0, s[1] - gy0), 0.0, si))
 
     while open_heap:
-        _, g, cur = heapq.heappop(open_heap)
-        if g > best.get(cur, math.inf):
+        _, g, cur = heappop(open_heap)
+        if g > best[cur]:
             continue
         expansions += 1
         if expansions > _MAX_EXPANSIONS:
@@ -2012,93 +2098,84 @@ def _astar(
             budget["left"] -= 1
             if budget["left"] <= 0:
                 return None
-        if cur in goals:
+        if cur in goal_idx:
             path = []
-            node: tuple[int, int, int] | None = cur
+            node = cur
             # ``prev`` must be acyclic; walking a cycle here previously spun at
             # 100% CPU while ``path`` grew without bound.  Guard it rather than
             # trusting it, so a regression fails loudly instead of hanging.
-            seen: set[tuple[int, int, int]] = set()
-            while node is not None:
+            seen: set[int] = set()
+            while node != -1:
                 if node in seen:
+                    q, lvl = divmod(node, LEVELS)
+                    px, py = divmod(q, gh)
                     raise AssertionError(
-                        f"cycle in A* predecessor chain at {node}; "
+                        f"cycle in A* predecessor chain at "
+                        f"{(px + gx0, py + gy0, lvl)}; "
                         "a ramp move corrupted an existing predecessor"
                     )
                 seen.add(node)
-                path.append(node)
-                if node in via:
-                    path.append(via[node])
+                q, lvl = divmod(node, LEVELS)
+                px, py = divmod(q, gh)
+                path.append((px + gx0, py + gy0, lvl))
+                run = via_get(node, -1)
+                if run != -1:
+                    q, lvl = divmod(run, LEVELS)
+                    px, py = divmod(q, gh)
+                    path.append((px + gx0, py + gy0, lvl))
                 node = prev[node]
             return _cut_loops(list(reversed(path)))
-        x, y, lvl = cur
+        q, lvl = divmod(cur, LEVELS)
+        x, y = divmod(q, gh)
         # A plain step stays on `lvl`, so its toll is fixed for this expansion.
         step_toll = 1.0 + level_toll[lvl]
         # ONE pass over the four directions, doing the plain step and the two
         # ramps that share its ground cell.
         #
-        # A ramp's lower half IS the plain step's target -- both are
-        # ``(x + dx, y + dy, lvl)`` -- so the separate ramp loop was re-deriving
-        # and re-testing a cell the step loop had just tested, twice over for
-        # the two level changes.  That is why the profile showed 13.5 ``free``
-        # and 14.8 ``inside`` calls per expansion against four directions:
-        # ramps were four fifths of every neighbour check.  Fusing the loops
-        # tests each ground cell once and skips both its ramps the moment it is
-        # blocked, which on a dense pack is most of the time.
+        # A ramp's lower half IS the plain step's target, so the separate ramp
+        # loop was re-deriving and re-testing a cell the step loop had just
+        # tested, twice over for the two level changes.  Fusing them tests each
+        # ground cell once and skips both its ramps the moment it is blocked,
+        # which on a dense pack is most of the time.
         #
         # Exactly equivalent, not merely close: a ramp lands on ``lvl +- 1`` and
         # a step stays on ``lvl``, so no ramp and no step of one expansion ever
         # touch the same cell, and interleaving them cannot change which of two
         # equal-cost paths is recorded.
-        for dx, dy in _STEPS:
-            nx, ny = x + dx, y + dy
-            if not (lo_x <= nx <= hi_x and lo_y <= ny <= hi_y):
-                continue
-            nxt = (nx, ny, lvl)
-            if nxt in blocked:
-                continue
-            xy = (nx, ny)
-            if xy in solid or xy in keep_out:
-                continue
-            held = reserved_get(nxt)
-            if held is not None and held not in routing_ports:
+        for dx, dy, one, two in moves:
+            nxt = cur + one
+            if not flags[nxt]:
                 continue
 
             cost = g + step_toll
             if negotiating:
-                cost += hist_get(nxt, 0.0) * pressure
-            if cost < best_get(nxt, math.inf):
+                cost += hist[nxt] * pressure
+            if cost < best[nxt]:
                 best[nxt] = cost
                 prev[nxt] = cur
                 # A plain step reaches `nxt` directly, so any ramp via-cell
                 # recorded by an earlier, worse ramp is now stale.  Leaving it
                 # splices a cell that is not on the path into the result, which
                 # shows up as a belt linking diagonally across a level change.
-                via.pop(nxt, None)
-                heappush(open_heap, (cost + h(nxt), cost, nxt))
+                if via:
+                    via.pop(nxt, None)
+                heappush(open_heap, (cost + h(x + dx, y + dy), cost, nxt))
 
             # A level change costs two tiles of run, because belts climb 0.5 per
             # tile.  Both are reserved so the ramp physically exists -- and the
             # lower one is `nxt`, already cleared above.
-            tx, ty = x + 2 * dx, y + 2 * dy
-            if not (lo_x <= tx <= hi_x and lo_y <= ty <= hi_y):
-                continue
-            txy = (tx, ty)
-            if txy in solid or txy in keep_out:
-                continue
-            for lvl2 in (lvl + 1, lvl - 1):
+            run = cur + two
+            for step in (1, -1):
+                lvl2 = lvl + step
                 if not 0 <= lvl2 < LEVELS:
                     continue
-                top = (tx, ty, lvl2)
-                if top in blocked:
-                    continue
-                held = reserved_get(top)
-                if held is not None and held not in routing_ports:
+                top = run + step
+                if not flags[top]:
                     continue
                 cost = g + 3.0 + level_toll[lvl2]
                 if negotiating:
-                    cost += hist_get(top, 0.0) * pressure
-                if cost < best_get(top, math.inf):
+                    cost += hist[top] * pressure
+                if cost < best[top]:
                     best[top] = cost
                     # The ramp is ONE edge cur -> top that happens to occupy an
                     # extra cell.  Record `nxt` as a via, never as a node with
@@ -2107,34 +2184,50 @@ def _astar(
                     # `prev` cyclic.
                     prev[top] = cur
                     via[top] = nxt
-                    heappush(open_heap, (cost + h(top), cost, top))
+                    heappush(
+                        open_heap,
+                        (cost + h(x + 2 * dx, y + 2 * dy), cost, top),
+                    )
 
-    # The heap emptied, so `best` is the free space this net can reach and every
-    # blocked cell touching it is part of the wall.
     # THE HEAP EMPTIED, which is the one ending that proves no path exists -- the
     # `return None`s above are a spent cap, a spent budget or a spent clock, and
-    # none of those says the pocket is sealed. So `best` is exactly the free
-    # space this net could reach and the blocked cells touching it are its wall.
-    # The ones a committed path put there are the only wall cells any net owns,
-    # and `_route_all` charges them so the net holding one pays to keep it.
-    if blame is not None and len(best) <= _BLAME_MAX_POCKET:
-        blocked_get = blocked.get
-        #: The wall as a SET, because its size is the question `_BLAME_MAX_WALL`
-        #: asks -- a wall of three has named a suspect, a wall of three thousand
-        #: has named the whole corridor network. Counting a cell once per
-        #: adjacent pocket cell would make a long thin pocket look guiltier than
-        #: a fat one for the same wall.
-        wall: set[tuple[int, int, int]] = set()
-        for bx, by, blvl in best:
-            for dx, dy in _STEPS:
-                cell = (bx + dx, by + dy, blvl)
-                if blocked_get(cell) == _TENTATIVE:
-                    wall.add(cell)
-        if len(wall) <= _BLAME_MAX_WALL:
-            for cell in wall:
-                blame[cell] = blame.get(cell, 0.0) + 1.0
+    # none of those says the pocket is sealed. So the cells with a finite `best`
+    # are exactly the free space this net could reach and the blocked cells
+    # touching it are its wall. The ones a committed path put there are the only
+    # wall cells any net owns, and `_route_all` charges them so the net holding
+    # one pays to keep it.
+    if blame is not None:
+        # `best` is a flat array rather than a dict now, so the pocket is
+        # counted by scanning it. That scan only ever happens on the ending that
+        # proves the pocket sealed, and it stops as soon as the pocket is too
+        # big to accuse anybody.
+        pocket = []
+        for i, seen_at in enumerate(best):
+            if seen_at != inf:
+                pocket.append(i)
+                if len(pocket) > _BLAME_MAX_POCKET:
+                    break
+        if len(pocket) <= _BLAME_MAX_POCKET:
+            blocked_get = canvas.blocked.get
+            #: The wall as a SET, because its size is the question
+            #: `_BLAME_MAX_WALL` asks -- a wall of three has named a suspect, a
+            #: wall of three thousand has named the whole corridor network.
+            #: Counting a cell once per adjacent pocket cell would make a long
+            #: thin pocket look guiltier than a fat one for the same wall.
+            wall: set[tuple[int, int, int]] = set()
+            for i in pocket:
+                q, blvl = divmod(i, LEVELS)
+                bx, by = divmod(q, gh)
+                bx += gx0
+                by += gy0
+                for dx, dy in _STEPS:
+                    cell = (bx + dx, by + dy, blvl)
+                    if blocked_get(cell) == _TENTATIVE:
+                        wall.add(cell)
+            if len(wall) <= _BLAME_MAX_WALL:
+                for cell in wall:
+                    blame[cell] = blame.get(cell, 0.0) + 1.0
     return None
-
 
 @dataclass
 class _Net:
