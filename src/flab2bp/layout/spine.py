@@ -1205,7 +1205,9 @@ def _solve_one(
     # Row r reaches exactly two corridors -- r from below and r+1 from above --
     # each holding at most ``sorter_max_reach`` lanes.  So a row can tap at most
     # ``2 * reach`` DISTINCT items, counting an item once however many groups in
-    # the row touch it.
+    # the row touch it.  That much is height-blind and only the whole truth for
+    # a row of equal-height machines; the section after this one adds what a
+    # shorter machine loses, and the two together are Hall's condition.
     #
     # This has to live in the model.  Without it CP-SAT freely packed five
     # groups into one row, `_lane_requirements` correctly refused the result,
@@ -1259,6 +1261,112 @@ def _solve_one(
             terms.append(pairs)
         if terms:
             model.add(sum(terms) <= 2 * tap_reach)
+
+    # --- tap capacity, height-aware ----------------------------------------
+    # The flat ``2 * tap_reach`` above is only the truth when every machine in
+    # the row is the same height.  Machines are pinned to the TOP of their row,
+    # so a group ``gap`` tiles shorter than the row's tallest is still flush
+    # with the corridor ABOVE it and sits ``gap`` further from the one BELOW:
+    # lane ``j`` of the lower corridor is ``gap + j + 1`` tiles away, so a
+    # gapped lane may only take one of that corridor's first ``tap_reach - gap``
+    # positions.  ``_fits_below`` is exactly that rule.
+    #
+    # Measured, on the URL this was found with: row
+    # ``energetic-graphite + iron-ingot + reforming-refine`` taps six lanes, and
+    # four of them are tapped by 3-tall arc smelters in a row a 7-tall oil
+    # refinery makes 7 tall.  A gap of 4 against a reach of 3 fits in the upper
+    # corridor or nowhere, and the upper corridor holds three -- so the row is
+    # unwirable, `_lane_requirements` said so, and every width in the sweep was
+    # skipped for it.  Six is exactly ``2 * tap_reach``, so the flat bound saw
+    # nothing wrong.
+    #
+    # Every lane may use any of the upper corridor's ``tap_reach`` slots plus a
+    # PREFIX of the lower corridor, and those prefixes NEST by gap.  A nested
+    # family needs Hall's condition checked only on the nesting, which is one
+    # inequality per gap threshold:
+    #
+    #     lanes with gap >= t   <=   tap_reach + max(0, tap_reach - t)
+    #
+    # ``t = 0`` is the constraint above.  Thresholds stop at ``tap_reach``,
+    # where the bound goes flat while the count only falls, so no larger
+    # threshold forbids anything the ``tap_reach`` one does not.
+    #
+    # This is `_fits_below`'s own greedy and deliberately not a cruder flat
+    # ``tap_reach - gap`` cap: a corridor holds three lanes at a gap of 2 (spans
+    # 3, 2, 3) where the flat cap allows one, and charging that would split rows
+    # that pack perfectly well today.
+    #
+    # Gap is ``row_h[r] - height`` and ``row_h[r]`` is a variable, so each
+    # threshold is enforced under a REIFIED row height: in a row ``h`` tall,
+    # item ``i`` carries a gap of at least ``t`` exactly when some group no
+    # taller than ``h - t`` in that row taps it.  ``row_h[r]`` is only bounded
+    # from below, but the objective minimises it, and an over-large value only
+    # ever ADDS terms -- so the bound can be too strict for an assignment the
+    # solver was going to reject on height anyway, and never too loose.
+    heights = sorted({grp.height for grp in groups.values()})
+    # Only differences some pair of groups can actually realise.  A spec whose
+    # machines are all one height has none at all, and its model stays
+    # bit-for-bit the one that came before.
+    thresholds = sorted({min(b - a, tap_reach) for a in heights for b in heights if b > a})
+    if thresholds:
+        by_height: dict[str, dict[int, list[str]]] = defaultdict(lambda: defaultdict(list))
+        for k, grp in groups.items():
+            for item in set(grp.inputs) | set(grp.outputs):
+                by_height[item][grp.height].append(k)
+        for r in range(n):
+            #: ``(item, ceiling) -> does row r tap item through a group that
+            #: short?``  Keyed by the tallest height at or below the ceiling,
+            #: because the handful of ``h - t`` values collapse onto far fewer
+            #: distinct group sets and the literal is reusable across ``t``.
+            short_tap: dict[tuple[str, int], cp_model.IntVar] = {}
+            for h in heights:
+                #: Built on first use, so a height no threshold can bind at --
+                #: the shortest one, where nothing is shorter still -- costs the
+                #: model nothing.
+                is_h: cp_model.IntVar | None = None
+                for thr in thresholds:
+                    under = [x for x in heights if x <= h - thr]
+                    if not under:
+                        continue  # nothing in this spec is that much shorter
+                    ceiling = max(under)
+                    bound = tap_reach + max(0, tap_reach - thr)
+                    gapped = {
+                        item: short
+                        for item, holders in by_height.items()
+                        if (
+                            short := [
+                                k for hh, ks in holders.items() if hh <= ceiling for k in ks
+                            ]
+                        )
+                    }
+                    # Skip a threshold that cannot bind even if the row took
+                    # every gapped item in the spec.  On the small corpus specs
+                    # this is most of them, and the variables are never built.
+                    if sum(lane_copies.get(i, 1) for i in gapped) <= bound:
+                        continue
+                    gap_terms: list[cp_model.LinearExpr] = []
+                    for item, short in sorted(gapped.items()):
+                        v = short_tap.get((item, ceiling))
+                        if v is None:
+                            # A single holder needs no reification at all: its
+                            # `in_row` literal already IS "row r taps this item
+                            # through a group that short".  Measured, this is
+                            # most of the small specs and about a quarter of the
+                            # big ones -- `universe-matrix` (40 groups) drops
+                            # from 3,400 added Booleans to 2,600, and
+                            # `graphene` from 28 to 8.
+                            if len(short) == 1:
+                                v = in_row[short[0], r]
+                            else:
+                                v = model.new_bool_var(f"short_{r}_{ceiling}_{item}")
+                                model.add_max_equality(v, [in_row[k, r] for k in short])
+                            short_tap[item, ceiling] = v
+                        gap_terms.append(lane_copies.get(item, 1) * v)
+                    if is_h is None:
+                        is_h = model.new_bool_var(f"rowh_{r}_{h}")
+                        model.add(row_h[r] == h).only_enforce_if(is_h)
+                        model.add(row_h[r] != h).only_enforce_if(~is_h)
+                    model.add(sum(gap_terms) <= bound).only_enforce_if(is_h)
 
     # --- direct insertion --------------------------------------------------
     # A producer within sorter reach of its consumer is joined by a sorter alone,
