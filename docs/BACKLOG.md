@@ -196,20 +196,61 @@ sorter sees nothing, physically. Lanes always run east with taps placed at
 machine columns regardless of order. Predates risers, invisible to the
 validator.
 
-## `flow.conservation` is not junction-aware, deliberately
+## RESOLVED -- `flow.conservation` reads the placement, as a reachability cut
 
-It reads only the spec and never touches the placement. The junction-aware
-version would be a per-junction balance check, and on spine's *correct*
-magnetic-ring output junction 1639 shows downstream demand 12 against upstream
-supply 4 -- the supply side is under-counted because external input lanes have
-no sorter pushing onto them, and seeding that means guessing how a block's
-external rate divides across entry lanes. An untested WARNING that fires on
-correct builds is noise.
+The previous note said the junction-aware version could not be seeded soundly,
+citing junction 1639 showing downstream demand 12 against upstream supply 4. That
+reading was wrong on the facts: `magnetic-coil` is not an external input, so no
+seeding was involved -- the fixture genuinely runs 4 magnetic-coil machines at
+1/s against 12/s of demand, and the existing spec-arithmetic clause was already
+reporting it. The seeding problem was solvable too; `_entry_items` divides
+`external_inputs` across entry lanes in proportion to demand.
 
-## `belt.termination` warns too often to carry signal
+The per-junction form was then built, measured, and **rejected**: 15 lanes
+reported short across `processor` and `super-magnetic-ring`, every one a false
+positive. Three things in this model divide a rate evenly where DSP does not -- a
+splitter feeds whichever output has room, a machine with two output sorters fills
+whichever lane is not backed up, and a lane fed by two producers draws from
+whichever is not empty. All three self-balance under backpressure.
 
-12 of 25 spine runs and 13 of 17 freeform runs. Honest -- lanes are untrimmed,
-which is its own backlog item above -- but at that hit rate nobody will read it.
+What shipped instead is a **cut argument**, which backpressure cannot rescue:
+union-find everything an item can physically reach (lanes, junctions, transfer
+sorters, machines), and within each island production plus external supply must
+cover consumption. 10 findings over 512 belt runs of the corpus, every one on a
+build already refused by `machine.inputs_supplied`, none on a build that
+otherwise validates clean.
+
+### Known weakness: islands are undirected
+
+A producer joined DOWNSTREAM of its consumer's tap reads as connected. This is
+conservative on purpose -- it can hide a shortfall, never invent one -- but it is
+the direction to tighten if the check ever needs to be stronger.
+
+## RESOLVED -- `belt.termination` now measures overshoot, not tapping
+
+The rule was wrong rather than merely noisy. It asked whether the TAIL TILE was
+tapped, and both strategies end a lane a couple of tiles past its last consumer,
+so correct lanes failed while wasting 2 tiles in 50. It now measures the size of
+the overshoot against `SORTER_MAX_REACH`, and always reports a lane no sorter
+touches anywhere.
+
+Controlled on identical placements, old rule against new: hand-built fixtures 32
+of 123 runs to 3; corpus 127 of 535 to 74. The survivors carry their own
+justification -- median 8 dead tiles, tail of 44 -- and every finding names the
+tile count to cut.
+
+## RESOLVED -- transfer sorters were invisible to the flow graph
+
+Found while doing the above, and the same theme as every other hole in this file:
+a check that counted buildings instead of following connections.
+
+A sorter with a BELT ON BOTH ENDS -- how both strategies tap a trunk onto a
+branch without spending a splitter -- appeared in neither the successor/
+predecessor graph nor the sorter-flow table, because `_sorter_demand` returns
+`None` when neither end is a machine. So a trunk drained by a transfer sorter was
+charged **zero**, and `flow.belt_capacity` could not see load leaving a lane that
+way at all: a Mk.II belt carrying 20/s reported clean. Transfer sorters are now
+graph edges and the rate is derived rather than guessed.
 
 ## The hand-built `magnetic_ring_spec` fixtures are unbalanced
 

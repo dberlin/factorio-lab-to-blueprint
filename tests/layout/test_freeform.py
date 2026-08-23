@@ -860,13 +860,18 @@ class TestSortersCanCarryTheirDemand:
         assert not over, "\n".join(f.message for f in over)
 
 
-PROLIFERATED_PACK_GAP = pytest.mark.xfail(
-    strict=True,
-    reason="freeform's packer optimises width and wirelength with no model of "
-    "routability, so whether a pack can be wired varies with the CP-SAT solve "
-    "that produced it; the proliferated candidates of the super-magnetic-ring "
-    "chain route cleanly at some packs and not others. See docs/BACKLOG.md.",
-)
+#: The strict xfail that used to guard the three tests below is GONE, and
+#: deliberately not replaced with a softer marker.  It said the proliferated
+#: candidates of the super-magnetic-ring chain wired at some packs and not
+#: others, and the diagnosis attached to it -- congestion the packer should have
+#: modelled -- was wrong.  Classifying every routing failure showed empty A*
+#: frontiers outnumbering genuine search exhaustion about ten to one: the
+#: destination port had NO free neighbour before the search began, because a
+#: coater drop belt or an external input run had taken its one open side.  Ports
+#: now stake their access before either of those is placed, and lanes stop at
+#: their last sorter instead of running the full strip width, which both frees
+#: interior cells and moves the coater drop off the neighbouring strip's face.
+#: All 24 (URL, candidate) pairs of the trivial+small+mid corpus now lay out.
 
 
 class TestRealUrlCandidatesAreSupplied:
@@ -891,7 +896,6 @@ class TestRealUrlCandidatesAreSupplied:
         return list(build_candidates(load_vendored(), parse_url(url), count=3).candidates)
 
     @pytest.mark.slow
-    @PROLIFERATED_PACK_GAP
     def test_every_candidate_supplies_its_coaters(self) -> None:
         for spec in self._candidates():
             p = FreeformLayout(power=True).lay_out(spec, time_budget_s=0.5)
@@ -899,7 +903,6 @@ class TestRealUrlCandidatesAreSupplied:
             assert not bad, f"{spec.label}: " + "; ".join(f.message for f in bad)
 
     @pytest.mark.slow
-    @PROLIFERATED_PACK_GAP
     def test_every_candidate_respects_sorter_capacity(self) -> None:
         for spec in self._candidates():
             p = FreeformLayout(power=True).lay_out(spec, time_budget_s=0.5)
@@ -907,7 +910,6 @@ class TestRealUrlCandidatesAreSupplied:
             assert not bad, f"{spec.label}: " + "; ".join(f.message for f in bad)
 
     @pytest.mark.slow
-    @PROLIFERATED_PACK_GAP
     def test_belt_chains_are_genuinely_acyclic(self) -> None:
         """Computed directly, not via ``belt.acyclic``.
 

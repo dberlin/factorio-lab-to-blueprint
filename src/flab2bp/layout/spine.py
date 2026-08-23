@@ -1132,18 +1132,12 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
     #: Columns at which each lane is filled and drained, keyed by (corridor,
     #: depth) rather than by item, because a direction is a property of ONE lane
     #: and an item may hold two of them.  ``_lane_direction`` reads these.
-    fill_at: dict[tuple[int, int], tuple[int, int]] = {}
-    drain_at: dict[tuple[int, int], tuple[int, int]] = {}
+    fill_at: dict[tuple[int, int], list[tuple[int, int]]] = defaultdict(list)
+    drain_at: dict[tuple[int, int], list[tuple[int, int]]] = defaultdict(list)
 
     def _extend(c: int, item: str, lo: int, hi: int) -> None:
         cur = extents.get((c, item))
         extents[c, item] = (lo, hi) if cur is None else (min(cur[0], lo), max(cur[1], hi))
-
-    def _note_tap(side: dict[tuple[int, int], tuple[int, int]], tap: _Tap, lo: int, hi: int) -> None:
-        cur = side.get((tap.corridor, tap.depth))
-        side[tap.corridor, tap.depth] = (
-            (lo, hi) if cur is None else (min(cur[0], lo), max(cur[1], hi))
-        )
 
     for key, g in groups.items():
         xs = [buildings[i].x for i in machine_at[key]]
@@ -1168,7 +1162,7 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
             cols = g.width if pick is None else min(pick[1], g.width)
             lo, hi = min(xs), max(xs) + cols - 1
             _extend(tap.corridor, item, lo, hi)
-            _note_tap(drain_at if into else fill_at, tap, lo, hi)
+            (drain_at if into else fill_at)[tap.corridor, tap.depth].append((lo, hi))
 
     for c, order in enumerate(plan.lanes):
         for item in order:
@@ -1208,20 +1202,31 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
     # a duplicated item anchored on one belt and named another.
     lane_tiles: dict[tuple[int, int], list[int]] = {}
     lane_item_of: dict[tuple[int, int], str] = {}
+    starved_taps = 0
     for c, order in enumerate(plan.lanes):
         for depth_i, item in enumerate(order):
             y = corr_y[c] + depth_i
             lo, hi = extents.get((c, item), (0, content_w - 1))
+            fills = fill_at[c, depth_i]
+            drains = drain_at[c, depth_i]
             westward = _lane_direction(
                 (c, depth_i),
-                item,
                 fed_from_trunk=fed_from_trunk,
                 hands_to_trunk=hands_to_trunk,
                 pinned_west_edge=item in spec.external_inputs,
                 pinned_east_edge=item in leaving,
-                fill=fill_at.get((c, depth_i)),
-                drain=drain_at.get((c, depth_i)),
+                fills=fills,
+                drains=drains,
             )
+            # What the chosen direction still cannot serve.  A lane whose drains
+            # straddle its fills is unservable either way -- see the stat's note
+            # in the returned ``Placement``.
+            supply = list(fills)
+            if (c, depth_i) in fed_from_trunk:
+                supply.append((content_w - 1, content_w - 1))
+            if item in spec.external_inputs:
+                supply.append((0, 0))
+            starved_taps += _lane_flow_gaps(supply, drains, westward=westward)
             indices: list[int] = []
             for x in range(lo, hi + 1):
                 indices.append(len(buildings))
@@ -1453,6 +1458,16 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
             # within a supply radius of them was occupied. Non-zero means the
             # build is genuinely under-powered, and the validator will say so.
             "power_uncovered": float(uncovered),
+            # Sorters drawing from a lane that never carries anything past
+            # them, because the lane's producers all sit downstream of the
+            # consumer.  Non-zero means a machine pastes and silently does not
+            # run, and NOTHING else can see it: every link resolves, the sorter
+            # is in reach, the belt is continuous, so the validator reads the
+            # build as clean.  `_lane_direction` removes every case a direction
+            # can remove; what is left is a lane drained on both sides of where
+            # it is filled, which wants a second lane rather than a different
+            # arrow.
+            "starved_taps": float(starved_taps),
             "direct_inserts": float(len(plan.direct)),
             "corridor_tiles": float(sum(corridor_heights)),
             "height_waste": float(
@@ -1472,16 +1487,34 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
     )
 
 
+def _lane_flow_gaps(
+    fills: list[tuple[int, int]],
+    drains: list[tuple[int, int]],
+    *,
+    westward: bool,
+) -> int:
+    """Drain taps this direction leaves with nothing upstream of them.
+
+    Each range is one group's sorter columns on that lane.  A drain group is
+    served when some fill group starts at or before it in the direction of
+    travel; measuring at group granularity matches how the sorters are placed
+    (every machine of a group taps the same lane at its own column) and is what
+    makes the answer a small integer worth putting in ``stats``.
+    """
+    if westward:
+        return sum(1 for _lo, hi in drains if not any(f[1] >= hi for f in fills))
+    return sum(1 for lo, _hi in drains if not any(f[0] <= lo for f in fills))
+
+
 def _lane_direction(
     key: tuple[int, int],
-    item: str,
     *,
     fed_from_trunk: set[tuple[int, int]],
     hands_to_trunk: set[tuple[int, int]],
     pinned_west_edge: bool,
     pinned_east_edge: bool,
-    fill: tuple[int, int] | None,
-    drain: tuple[int, int] | None,
+    fills: list[tuple[int, int]],
+    drains: list[tuple[int, int]],
 ) -> bool:
     """Should this lane run east to west?  ``True`` for westward.
 
@@ -1503,28 +1536,25 @@ def _lane_direction(
     * an external input enters at ``x = 0``, the block's west edge;
     * a product leaves at the east edge.
 
-    Only the fifth case -- a lane whose taps are all local -- is free, and that
-    is where the choice is made: east if the westmost drain has a fill at or
-    west of it, west if the eastmost drain has one at or east of it.  Comparing
-    the extremes is enough, because every other drain is easier than the extreme
-    one on that side.
+    Only the fifth case -- a lane whose taps are all local -- is free, and there
+    the direction is whichever leaves fewer drains with nothing upstream, ties
+    going east so the common case is unchanged.
 
-    Measured over the 33 powered corpus runs: three lanes were being served the
-    wrong way round, on magnetic-coil, plastic and processor.  Rare, but each is
-    a machine that silently does not run.  Two of the three are free lanes and
-    this fixes them; ``plastic``'s is a lane with drains on BOTH sides of its
-    fills, which no single direction can serve -- see :func:`_split_lanes` for
-    why that one wants a second lane rather than a different arrow.
+    Measured over the 33 powered corpus runs: three lanes were served the wrong
+    way round, on magnetic-coil, plastic and processor.  Rare -- 3 of 656 lanes
+    -- but each one is a machine that silently does not run.  Two are free lanes
+    and this fixes them.  The third, ``plastic``'s refined-oil lane, is drained
+    at columns 1, 10 and 20 while being filled only at 4 and 7: no single
+    direction can serve drains on BOTH sides of the fills, so one tap stays
+    unserved and is counted in ``stats["starved_taps"]`` rather than hidden.
     """
     if key in fed_from_trunk:
         return True
     if key in hands_to_trunk or pinned_west_edge or pinned_east_edge:
         return False
-    if fill is None or drain is None:
-        return False  # nothing to order: one end or the other is not local
-    east_serves = fill[0] <= drain[0]
-    west_serves = fill[1] >= drain[1]
-    return west_serves and not east_serves
+    return _lane_flow_gaps(fills, drains, westward=True) < _lane_flow_gaps(
+        fills, drains, westward=False
+    )
 
 
 #: Altitude a riser's horizontal bridge rides at while it crosses the trunks of
@@ -1534,6 +1564,33 @@ def _lane_direction(
 #: bridge only ever crosses trunks, never another bridge -- two bridges would
 #: have to share a lane's ``y``, and a lane holds one item.
 _BRIDGE_Z = 1
+
+
+def _trunk_x(content_w: int, column: int) -> int:
+    """Where trunk ``column`` stands in the east margin.
+
+    Trunks are spaced two columns apart, with a free RAMP column west of each.
+    That gap is not decoration: ``catalog.RAMP_TILES_PER_LEVEL`` is 2, so a belt
+    needs a tile of level run-up before it changes altitude -- exactly what
+    ``freeform``'s A\\* reserves when it takes a ramp edge.  A bridge that leaves
+    a lane at ``z = 0`` and is already at ``z = 1`` on the next tile is climbing
+    twice as fast as a belt can, and the same on the way back down.
+
+    The gap has to be a whole column because both ends of a bridge need one and
+    they are at opposite ends:
+
+    * a bridge running EAST leaves the lane at ``z = 0``, so its run-up tile is
+      the one at ``content_w`` -- the ramp column west of trunk 0;
+    * a bridge running WEST leaves the trunk at ``z = 0``, so its run-up tile is
+      the one immediately west of that trunk -- which, without a gap, would be
+      the *previous trunk's* column and would collide with it at ``z = 0``.
+
+    Packing the trunks tightly and letting the bridges jump a level in one tile
+    is what this used to do.  ``geom.altitude_step`` permits it -- it only bounds
+    the step at one level per tile and knows nothing about run-up -- so the
+    validator was complicit and neither side of the build ever complained.
+    """
+    return content_w + 2 * column + 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -1653,7 +1710,7 @@ def _emit_risers(
     belts = 0
     junctions = 0
     for riser in risers:
-        xr = content_w + riser.column
+        xr = _trunk_x(content_w, riser.column)
         stops = {y: (c, d, src) for y, c, d, src in riser.taps}
         last_y = riser.taps[-1][0]
 
@@ -1749,21 +1806,35 @@ def _bridge(
     *,
     toward_trunk: bool,
 ) -> tuple[int, int, int]:
-    """Belts at :data:`_BRIDGE_Z` spanning ``content_w .. xr - 1`` at row ``y``.
+    """Belts spanning ``content_w .. xr - 1`` at row ``y``, ramped honestly.
 
     Returns ``(head, tail, count)`` in flow order: ``head`` is the tile the
-    upstream side hands to and ``tail`` the one that hands on.  The count is zero
-    when the trunk is already the first margin column, where the lane and the
-    trunk are adjacent and no bridge is needed at all.
+    upstream side hands to and ``tail`` the one that hands on.
 
-    A step of one altitude level per tile is what ``geom.altitude_step`` allows
-    and what this uses.  ``catalog.RAMP_TILES_PER_LEVEL`` says a real belt takes
-    two tiles to climb one level; spending them would need two margin columns
-    that carry nothing, and the margin's width is the entire area cost of
-    risering, so this rides the steeper grade the validator sanctions.
+    The altitude profile spends :data:`catalog.RAMP_TILES_PER_LEVEL` tiles on
+    every level change, which for a belt climbing half a level per tile means one
+    tile of RUN-UP at the old level before the tile that arrives at the new one.
+    Written from the flow's point of view, so it reverses with the flow:
+
+    * eastward (lane -> trunk) the run-up is the first tile, at ``z = 0``,
+      sitting in the ramp column west of trunk 0; everything after it rides at
+      :data:`_BRIDGE_Z`, and the last two of those are the run-out for the drop
+      onto the trunk;
+    * westward (trunk -> lane) the run-up is the LAST tile in ``x`` order -- the
+      one beside the trunk, in that trunk's own ramp column -- and the drop back
+      onto the lane runs out across the two tiles nearest ``content_w``.
+
+    A trunk in column 0 needs no bridge at altitude at all: there is nothing
+    between it and the lane to cross, so its single tile stays on the ground.
     """
     made: list[int] = []
-    for x in range(content_w, xr):
+    xs = list(range(content_w, xr))
+    if not xs:
+        return -1, -1, 0
+    #: The run-up tile stays on the ground; every other tile is over a trunk and
+    #: has to clear it.  A one-tile bridge is entirely run-up: flat, no crossing.
+    ramp_x = content_w if toward_trunk else xr - 1
+    for x in xs:
         made.append(len(buildings))
         buildings.append(
             PlacedBuilding(
@@ -1771,15 +1842,13 @@ def _bridge(
                 model_index=belt_model,
                 x=x,
                 y=y,
-                z=_BRIDGE_Z,
+                z=0 if (x == ramp_x or len(xs) == 1) else _BRIDGE_Z,
                 width=1,
                 height=1,
                 yaw=(Facing.EAST if toward_trunk else Facing.WEST).value,
                 carries_item=item,
             )
         )
-    if not made:
-        return -1, -1, 0
     order = made if toward_trunk else made[::-1]
     for a, b in zip(order, order[1:], strict=False):
         buildings[a] = _with_output(buildings[a], b)

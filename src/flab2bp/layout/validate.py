@@ -1034,21 +1034,25 @@ def _termination(ctx: Context) -> Iterable[Finding]:
     a WARNING, because wasted belt costs area and a dead junction means the items
     routed into it never arrive.
 
-    The warning half used to ask only whether the TAIL TILE was tapped, and
-    measured at 95 warnings over 130 belt runs across both strategies' fixtures
-    -- 73%, which is a warning nobody reads.  The question was wrong rather than
-    the answer: both strategies end a lane a couple of tiles past its last
-    consumer, so a correct lane fails a tail-tile test while wasting two tiles
-    out of fifty.  What is worth acting on is the SIZE of the overshoot, so that
-    is what is measured and reported, and lanes are judged against
-    :data:`_TERMINATION_SLACK`.
+    The warning half used to ask only whether the TAIL TILE was tapped, which is
+    not the same question as whether the lane wastes anything.  Both strategies
+    end a lane a couple of tiles past its last consumer, so a correct lane failed
+    a tail-tile test while wasting two tiles out of fifty, and the check reported
+    on 73% of belt runs across both strategies' fixtures -- a warning nobody
+    reads.  What is worth acting on is the SIZE of the overshoot, so that is what
+    is measured and reported, judged against :data:`_TERMINATION_SLACK`.
 
-    Re-measured on the same fixtures the rate falls to 7%, and the survivors are
-    the cases that deserved a reader all along: six 51-tile lanes on spine's
-    magnetic-ring output with no tap anywhere on them, and a
-    ``super-magnetic-ring`` lane running 44 tiles past its last consumer.  A lane
-    with no tap at all is always reported however short it is -- that is not an
-    overshoot, it is a lane serving nothing.
+    Measured as a controlled A/B, old rule against new on IDENTICAL placements:
+    26% -> 2% over 123 belt runs of the hand-built fixtures, and 23% -> 13% over
+    535 belt runs of the twelve-URL bake-off corpus.  (Both "before" figures are
+    lower than the 73% above because lane trimming landed in between; the rule
+    change and the trimming are separate wins and this is the rule change's
+    half.)  The survivors carry their own justification: a median of 8 dead tiles
+    and a tail of 44, with four lanes across the corpus that no sorter touches
+    anywhere.  Each finding names the number of tiles to cut.
+
+    A lane with no tap at all is always reported however short it is -- that is
+    not an overshoot, it is a lane serving nothing.
     """
     bs = ctx.placement.buildings
     touched: set[int] = set()
@@ -1864,14 +1868,15 @@ def _conservation(ctx: Context) -> Iterable[Finding]:
     This was previously declined on the reasoning that external input lanes have
     no sorter pushing onto them, so a per-junction balance could not be seeded
     without guessing how a block's external rate divides across its entry lanes.
-    The cited counter-example does not survive checking.  On
-    ``magnetic_ring_spec``, junction 1639 shows downstream demand 12 against
-    upstream supply 4 because that hand-built fixture runs 4 magnetic-coil
-    machines at 1/s against 8 electric-motor plus 4 electromagnetic-turbine
-    machines wanting 1/s each.  ``magnetic-coil`` is not an external input at
-    all, and the spec clause below has always reported it -- along with three
-    more items on the same fixture.  The reading was of a genuinely unbalanced
-    fixture, not of a correct build, and no seeding question was involved.
+    The cited counter-example does not survive checking.  Junction 1639 showed
+    downstream demand 12 against upstream supply 4 because the hand-built
+    ``magnetic_ring_spec`` runs 4 magnetic-coil machines at 1/s against 8
+    electric-motor plus 4 electromagnetic-turbine machines wanting 1/s each --
+    still visible in ``tests/layout/test_freeform.py``, where the spec clause
+    below reports ``magnetic-coil`` over-consumed by exactly 8/s along with
+    three more items on the same fixture.  ``magnetic-coil`` is not an external
+    input at all.  The reading was of a genuinely unbalanced fixture, not of a
+    correct build, and no seeding question was involved.
 
     (The seeding is nonetheless soluble and :func:`_entry_items` does it, since
     the placement clause needs to know which lanes the player fills.  What the
@@ -1883,6 +1888,11 @@ def _conservation(ctx: Context) -> Iterable[Finding]:
     the placement clause would restate one spec defect once per island --
     eight findings on ``magnetic_ring_spec`` saying what one already said.
     Routing is only a question worth asking once the arithmetic balances.
+
+    Measured across the twelve-URL bake-off corpus (both strategies, three
+    candidates each, 512 belt runs) the placement clause fires ten times, every
+    one of them on a build already refused by ``machine.inputs_supplied``, and
+    not once on a build that otherwise validates clean.
     """
     assert ctx.spec is not None
     net: dict[str, Fraction] = defaultdict(Fraction)

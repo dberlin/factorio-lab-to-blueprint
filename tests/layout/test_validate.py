@@ -1706,3 +1706,375 @@ def test_flow_lane_attribution_sees_items_arriving_through_a_junction() -> None:
     findings = r.by_check("flow.lane_attribution")
     assert findings, "the mixed lane is only visible by following items across the junction"
     assert 12 in findings[0].buildings
+
+
+# --- dead belt -------------------------------------------------------------
+#
+# `belt.termination` used to ask whether the TAIL TILE was tapped, which is not
+# the same question as whether the lane wastes anything: both strategies end a
+# lane a couple of tiles past its last consumer, so a correct lane failed while
+# wasting two tiles out of fifty.  Measured across both strategies' fixtures it
+# warned on 95 of 130 runs, and on the twelve-URL bake-off corpus on 380 of 517.
+# It now measures the SIZE of the overshoot, and those rates fall to 7% and 14%.
+
+
+def tapped_lane(length: int) -> Placement:
+    """A lane of ``length`` tiles whose FIRST tile feeds a machine."""
+    belts = [belt(0, y, out=y + 1 if y + 1 < length else None) for y in range(length)]
+    return place(
+        *belts,
+        machine(2, 0, recipe_id=6),
+        sorter(0, 0, 2, 0, inp=0, out=length),
+    )
+
+
+def test_belt_termination_ignores_a_short_overshoot() -> None:
+    """Two tiles past the last tap is the emitters' standard stub, not waste.
+
+    This is the load-bearing half of the tightening: under the old tail-tile
+    rule this lane warned, and so did nearly every correct lane either strategy
+    emits, which is how the check came to fire on 73% of runs and be worth
+    reading on none of them.
+    """
+    r = validate(tapped_lane(3))
+    assert Severity.WARNING not in severities(r, "belt.termination")
+
+
+def test_belt_termination_fires_on_a_long_dead_tail() -> None:
+    r = validate(tapped_lane(10))
+    findings = [f for f in r.by_check("belt.termination") if f.severity is Severity.WARNING]
+    assert findings, "nine tiles past the last tap is lane nobody can ever use"
+    assert findings[0].detail["dead"] == 9
+    assert findings[0].detail["length"] == 10
+
+
+def test_belt_termination_fires_on_a_lane_nothing_taps_at_all() -> None:
+    """No tap anywhere is not an overshoot; it is a lane serving nothing.
+
+    Reported however short it is, which is what catches spine's six 51-tile
+    magnetic-ring lanes that no sorter touches.
+    """
+    r = validate(place(belt(0, 0, out=1), belt(0, 1)))
+    findings = [f for f in r.by_check("belt.termination") if f.severity is Severity.WARNING]
+    assert findings
+    assert findings[0].detail["taps"] == 0
+    assert findings[0].detail["dead"] == 2
+
+
+# --- transfer sorters are edges, not dead ends -----------------------------
+#
+# A sorter with a belt on BOTH ends moves a lane's load onto another lane.  It
+# was invisible to the flow graph and to `_sorter_flows` alike, so a trunk
+# drained this way was charged ZERO and `flow.belt_capacity` could not see the
+# load leaving it at all.
+
+
+TRANSFER_IDS = IdMap(
+    recipes={"magnetic-coil": 6},
+    items={"assembling-machine-2": ASSEMBLER, "iron-ingot": IRON_ID, "magnetic-coil": 1101},
+)
+
+
+def transfer_spec() -> BuildSpec:
+    return BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id="magnetic-coil",
+                machine_item_id="assembling-machine-2",
+                count=1,
+                inputs_per_machine={"iron-ingot": Fraction(20)},
+                outputs_per_machine={"magnetic-coil": Fraction(1)},
+            ),
+        ),
+        external_inputs={"iron-ingot": Fraction(20)},
+        outputs={"magnetic-coil": Fraction(1)},
+        belt_item_id="conveyor-belt-2",
+        belt_items_per_second=Fraction(12),
+    )
+
+
+def transferred_load() -> Placement:
+    """A trunk whose whole load leaves it through a belt-to-belt sorter."""
+    return place(
+        belt(0, 0, out=1, carries="iron-ingot"),  # 0  trunk head
+        belt(0, 1, carries="iron-ingot"),  # 1  trunk tail
+        belt(2, 1, out=3, carries="iron-ingot"),  # 2  branch head
+        belt(2, 0, carries="iron-ingot"),  # 3  branch tail
+        machine(3, 0, recipe_id=6),  # 4  x 3..5, y 0..2
+        sorter(0, 1, 2, 1, inp=1, out=2, item_id=PILE),  # 5  the transfer
+        sorter(2, 0, 3, 0, inp=3, out=4, item_id=PILE),  # 6  branch -> machine
+        belt(6, 0, carries="magnetic-coil"),  # 7
+        sorter(5, 0, 6, 0, inp=4, out=7, item_id=PILE),  # 8  drain
+    )
+
+
+def test_flow_belt_capacity_follows_a_belt_to_belt_sorter() -> None:
+    """20/s leaves the trunk through a sorter, so the trunk carries 20/s.
+
+    The load-bearing test.  The trunk has no sorter of its own that a rate can
+    be read off -- ``_sorter_demand`` returns ``None`` when neither end of a
+    sorter is a machine -- so before the transfer was modelled as a graph edge
+    the trunk was charged nothing and a Mk.II belt carrying 20/s reported clean.
+    """
+    r = validate(transferred_load(), transfer_spec(), ids=TRANSFER_IDS)
+    charged = {b for f in r.by_check("flow.belt_capacity") for b in f.buildings}
+    assert {0, 1} <= charged, (
+        "the trunk carries the branch's whole load and must be judged against its tier"
+    )
+
+
+def test_flow_lane_sourced_clean_on_a_lane_fed_only_by_a_transfer() -> None:
+    r = validate(transferred_load(), transfer_spec(), ids=TRANSFER_IDS)
+    assert not fired(r, "flow.lane_sourced")
+
+
+# --- reachability balance --------------------------------------------------
+#
+# `flow.conservation`'s placement half.  The spec arithmetic balances, every
+# lane is sourced, every machine has its sorters, every belt is inside its tier
+# -- and half the machines still starve, because the ingots that would feed
+# them are on a lane with no path to them.
+
+
+SPLIT_ISLAND_IDS = IdMap(
+    recipes={"iron-ingot": 10, "gear": 20, "magnetic-coil": 6},
+    items={
+        "arc-smelter": SMELTER,
+        "assembling-machine-2": ASSEMBLER,
+        "iron-ore": 1001,
+        "iron-ingot": IRON_ID,
+        "gear": 1201,
+        "magnetic-coil": 1101,
+    },
+)
+
+
+def split_island_spec(gear_out: Fraction = Fraction(2)) -> BuildSpec:
+    """Two smelters at 1/s feeding two gear assemblers at 1/s.  It balances."""
+    return BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id="iron-ingot",
+                machine_item_id="arc-smelter",
+                count=2,
+                inputs_per_machine={"iron-ore": Fraction(1)},
+                outputs_per_machine={"iron-ingot": Fraction(1)},
+            ),
+            MachineGroup(
+                recipe_id="gear",
+                machine_item_id="assembling-machine-2",
+                count=2,
+                inputs_per_machine={"iron-ingot": Fraction(1)},
+                outputs_per_machine={"gear": Fraction(1)},
+            ),
+        ),
+        external_inputs={"iron-ore": Fraction(2)},
+        outputs={"gear": gear_out},
+        belt_item_id="conveyor-belt-2",
+        belt_items_per_second=Fraction(12),
+    )
+
+
+def _split_island_common() -> list[PlacedBuilding]:
+    return [
+        # iron-ore belted in from the west, feeding both smelters
+        belt(0, 0, out=1, carries="iron-ore"),  # 0
+        belt(0, 1, out=2, carries="iron-ore"),  # 1
+        belt(0, 2, out=3, carries="iron-ore"),  # 2
+        belt(0, 3, out=4, carries="iron-ore"),  # 3
+        belt(0, 4, carries="iron-ore"),  # 4
+        machine(2, 0, item_id=SMELTER, recipe_id=10),  # 5  smelter A, x 2..4, y 0..2
+        machine(2, 4, item_id=SMELTER, recipe_id=10),  # 6  smelter B, x 2..4, y 4..6
+        sorter(0, 0, 2, 0, inp=0, out=5),  # 7
+        sorter(0, 4, 2, 4, inp=4, out=6),  # 8
+        # the iron-ingot lane both gear assemblers draw from
+        belt(6, 0, out=10, carries="iron-ingot"),  # 9
+        belt(6, 1, out=11, carries="iron-ingot"),  # 10
+        belt(6, 2, out=12, carries="iron-ingot"),  # 11
+        belt(6, 3, out=13, carries="iron-ingot"),  # 12
+        belt(6, 4, carries="iron-ingot"),  # 13
+        sorter(4, 0, 6, 0, inp=5, out=9),  # 14  smelter A onto the lane
+        machine(8, 0, recipe_id=20),  # 15  gear 1, x 8..10, y 0..2
+        machine(8, 4, recipe_id=20),  # 16  gear 2, x 8..10, y 4..6
+        sorter(6, 0, 8, 0, inp=9, out=15),  # 17
+        sorter(6, 4, 8, 4, inp=13, out=16),  # 18
+        # gear belted out
+        belt(12, 0, out=20, carries="gear"),  # 19
+        belt(12, 1, out=21, carries="gear"),  # 20
+        belt(12, 2, out=22, carries="gear"),  # 21
+        belt(12, 3, out=23, carries="gear"),  # 22
+        belt(12, 4, carries="gear"),  # 23
+        sorter(10, 0, 12, 0, inp=15, out=19),  # 24
+        sorter(10, 4, 12, 4, inp=16, out=23),  # 25
+    ]
+
+
+def split_island_placement() -> Placement:
+    """Smelter B drains onto a lane with no path to either consumer.
+
+    Everything a building-counting check looks at is in order.  Both smelters
+    run, both are fed, both are drained; both assemblers have their one
+    ingredient sorter and their one product sorter; every lane has something
+    putting items onto it; no belt is near its tier.  The ingots smelter B makes
+    simply cannot get to a gear assembler, so the two of them share the 1/s
+    smelter A makes and the block produces half its rated gear for ever.
+    """
+    return place(
+        *_split_island_common(),
+        belt(2, 9, out=27, carries="iron-ingot"),  # 26
+        belt(3, 9, out=28, carries="iron-ingot"),  # 27
+        belt(4, 9, carries="iron-ingot"),  # 28
+        sorter(2, 6, 2, 9, inp=6, out=26),  # 29  smelter B onto the stranded lane
+    )
+
+
+def joined_island_placement() -> Placement:
+    """The same build with smelter B draining onto the lane that serves them."""
+    return place(*_split_island_common(), sorter(4, 4, 6, 4, inp=6, out=13))
+
+
+def test_flow_conservation_fires_when_a_producer_cannot_reach_its_consumers() -> None:
+    r = validate(
+        split_island_placement(), split_island_spec(), ids=SPLIT_ISLAND_IDS, expect_power=False
+    )
+    findings = [f for f in r.by_check("flow.conservation") if "net" not in f.detail]
+    assert findings, "half the ingots are stranded and both assemblers run at half rate"
+    (f,) = findings
+    assert f.detail == {
+        "item": "iron-ingot",
+        "demand": "2",
+        "supply": "1",
+        "shortfall": "1",
+        "starved": 2,
+        "lanes": [1],
+    }
+    assert set(f.buildings) == {15, 16}
+
+
+def test_nothing_else_catches_the_stranded_producer() -> None:
+    """The whole point of the check: no other error fires on this placement.
+
+    A build that under-produces for ever while every other check reports clean
+    is the worst outcome this project has, and it is exactly what wins a density
+    comparison -- the stranded lane is belts the winner did not have to route.
+    """
+    r = validate(
+        split_island_placement(), split_island_spec(), ids=SPLIT_ISLAND_IDS, expect_power=False
+    )
+    assert errors(r) == ["flow.conservation"], f"expected only the balance error, got {errors(r)}"
+
+
+def test_flow_conservation_clean_when_the_producer_can_reach_them() -> None:
+    r = validate(
+        joined_island_placement(), split_island_spec(), ids=SPLIT_ISLAND_IDS, expect_power=False
+    )
+    assert not r.errors, [f.message for f in r.errors]
+
+
+def test_flow_conservation_placement_half_defers_to_the_spec_half() -> None:
+    """One unbalanced recipe is one finding, not one per island.
+
+    When the arithmetic itself is short every island carrying the item is short,
+    and restating it per island says nothing new -- eight findings on the
+    magnetic-ring fixture where the spec clause already gave four.
+    """
+    r = validate(
+        split_island_placement(),
+        split_island_spec(gear_out=Fraction(5)),
+        ids=SPLIT_ISLAND_IDS,
+        expect_power=False,
+    )
+    findings = r.by_check("flow.conservation")
+    assert findings, "the spec clause must still fire"
+    assert all("net" in f.detail for f in findings), "no per-island restatement"
+
+
+# --- and it must not fire on the things that self-balance -------------------
+
+
+FAN_OUT_IDS = IdMap(
+    recipes={"iron-ingot": 10, "gear": 20, "magnetic-coil": 6},
+    items={
+        "arc-smelter": SMELTER,
+        "assembling-machine-2": ASSEMBLER,
+        "iron-ore": 1001,
+        "iron-ingot": IRON_ID,
+        "gear": 1201,
+        "magnetic-coil": 1101,
+    },
+)
+
+
+def fan_out_spec() -> BuildSpec:
+    """One smelter at 2/s feeding two consumers wanting 3/2 and 1/2."""
+    return BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id="iron-ingot",
+                machine_item_id="arc-smelter",
+                count=1,
+                inputs_per_machine={"iron-ore": Fraction(2)},
+                outputs_per_machine={"iron-ingot": Fraction(2)},
+            ),
+            MachineGroup(
+                recipe_id="gear",
+                machine_item_id="assembling-machine-2",
+                count=1,
+                inputs_per_machine={"iron-ingot": Fraction(3, 2)},
+                outputs_per_machine={"gear": Fraction(1)},
+            ),
+            MachineGroup(
+                recipe_id="magnetic-coil",
+                machine_item_id="assembling-machine-2",
+                count=1,
+                inputs_per_machine={"iron-ingot": Fraction(1, 2)},
+                outputs_per_machine={"magnetic-coil": Fraction(1)},
+            ),
+        ),
+        external_inputs={"iron-ore": Fraction(2)},
+        outputs={"gear": Fraction(1), "magnetic-coil": Fraction(1)},
+        belt_item_id="conveyor-belt-2",
+        belt_items_per_second=Fraction(12),
+    )
+
+
+def fan_out_placement() -> Placement:
+    """One smelter, two output sorters, two lanes with very unequal demand."""
+    return place(
+        belt(0, 2, out=1, carries="iron-ore"),  # 0
+        belt(0, 3, out=2, carries="iron-ore"),  # 1
+        belt(0, 4, carries="iron-ore"),  # 2
+        machine(2, 2, item_id=SMELTER, recipe_id=10),  # 3  x 2..4, y 2..4
+        sorter(0, 2, 2, 2, inp=0, out=3),  # 4
+        belt(6, 2, out=6, carries="iron-ingot"),  # 5  lane A, to the gear machine
+        belt(6, 1, out=7, carries="iron-ingot"),  # 6
+        belt(6, 0, carries="iron-ingot"),  # 7
+        sorter(4, 2, 6, 2, inp=3, out=5),  # 8
+        machine(8, 0, recipe_id=20),  # 9  gear, x 8..10, y 0..2
+        sorter(6, 0, 8, 0, inp=7, out=9),  # 10
+        belt(6, 4, out=12, carries="iron-ingot"),  # 11  lane B, to the coil machine
+        belt(6, 5, out=13, carries="iron-ingot"),  # 12
+        belt(6, 6, carries="iron-ingot"),  # 13
+        sorter(4, 4, 6, 4, inp=3, out=11),  # 14
+        machine(8, 5, recipe_id=6),  # 15  coil, x 8..10, y 5..7
+        sorter(6, 5, 8, 5, inp=12, out=15),  # 16
+        belt(12, 0, carries="gear"),  # 17
+        sorter(10, 0, 12, 0, inp=9, out=17),  # 18
+        belt(12, 5, carries="magnetic-coil"),  # 19
+        sorter(10, 5, 12, 5, inp=15, out=19),  # 20
+    )
+
+
+def test_flow_conservation_does_not_invent_a_shortfall_at_a_fan_out() -> None:
+    """A machine's two output sorters are not a fixed divider.
+
+    Whichever lane is not backed up gets the ingots, so 3/2 down one and 1/2
+    down the other is exactly what this build does.  A per-lane verdict computed
+    from an even split charges each lane 1/s and reports lane A starving -- which
+    is the shape that made the per-lane version report 15 lanes short across
+    ``processor`` and ``super-magnetic-ring`` with not one of them real.  The
+    same argument covers a splitter and a merge; all three self-balance, and the
+    cut this check makes is the one that cannot.
+    """
+    r = validate(fan_out_placement(), fan_out_spec(), ids=FAN_OUT_IDS, expect_power=False)
+    assert not r.errors, [f.message for f in r.errors]

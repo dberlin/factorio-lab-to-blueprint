@@ -1817,10 +1817,58 @@ def _source_for(canvas: _Canvas, first: int, net: _Net, own: set[int]) -> int:
             # matches -- and pointing at it makes a two-belt cycle, which
             # `belt.acyclic` then reports.
             continue
+        if who == net.dst.belt:
+            # Nor to the lane this net DELIVERS to. A short path that ends up
+            # beside its own destination satisfies "a belt carrying my item is
+            # next to my head" perfectly, and taking it makes the lane feed the
+            # branch that feeds the lane -- through the splitter `_tap_source`
+            # builds, so a link-following eye slides straight past it. This was
+            # the intermittent `belt.acyclic` on the magnetic-ring fixture:
+            # feeder 597 -> splitter -> stub -> branch 1192 -> 597.
+            continue
         other = canvas.buildings[who]
         if catalog.is_belt(other.item_id) and other.carries_item == net.item:
             return who
     return net.src.belt
+
+
+def _leads_back(canvas: _Canvas, start: int, own: set[int]) -> bool:
+    """Does flow leaving ``start`` come back to this path?
+
+    Merging into a neighbouring belt is only legal when that belt runs AWAY from
+    us.  Two nets that share a source lane and a destination lane end up beside
+    each other twice -- the second branches off the first to leave, and then
+    finds the first again at the far end -- and merging both ways closes the
+    loop.  The validator reports it as ``belt.acyclic``, and it is a real fault:
+    the game would run items round it forever.
+
+    Splitters are followed, not stopped at: they carry no ``output_obj`` of
+    their own, so a link-following walk misses exactly the loops a fan-out
+    router most easily builds.  Same rule as ``validate._belt_successors``, so
+    what this refuses to build is what that refuses to accept.
+    """
+    from_junction: dict[int, list[int]] = defaultdict(list)
+    for i, b in enumerate(canvas.buildings):
+        feed = b.input_obj
+        if feed is not None and 0 <= feed < len(canvas.buildings):
+            if canvas.buildings[feed].item_id == catalog.SPLITTER_ID:
+                from_junction[feed].append(i)
+
+    seen: set[int] = set()
+    stack = [start]
+    while stack:
+        i = stack.pop()
+        if i in own:
+            return True
+        if i in seen or not 0 <= i < len(canvas.buildings):
+            continue
+        seen.add(i)
+        b = canvas.buildings[i]
+        if b.item_id == catalog.SPLITTER_ID:
+            stack.extend(from_junction.get(i, ()))
+        elif catalog.is_belt(b.item_id) and b.output_obj is not None:
+            stack.append(b.output_obj)
+    return False
 
 
 def _sink_for(canvas: _Canvas, last: int, net: _Net, own: set[int]) -> int:
@@ -1849,6 +1897,8 @@ def _sink_for(canvas: _Canvas, last: int, net: _Net, own: set[int]) -> int:
             continue
         other = canvas.buildings[who]
         if catalog.is_belt(other.item_id) and other.carries_item == net.item:
+            if _leads_back(canvas, who, own):
+                continue  # merging here would close a loop
             return who
     # Nothing adjacent carries this item. Name the lane head anyway so the
     # failure is visible as `belt.link_adjacent` rather than as a belt that
