@@ -220,15 +220,42 @@ class Tally:
         return self.clean + self.refused + self.invalid + self.crashed + self.not_run
 
 
+def _slugs(raw: str, flag: str) -> set[str]:
+    """Parse a comma-separated ``url_id`` list, refusing ids the corpus lacks.
+
+    A typo must not quietly select nothing.  An audit of zero cells finds zero
+    faults, prints a clean tally and exits 0 -- the exact shape of a number that
+    lies, and this project has been burned by one before.  So an unknown id is a
+    hard error naming what is actually on offer.
+    """
+    known = {e.url_id for e in URL_CORPUS}
+    want = {s.strip() for s in raw.split(",") if s.strip()}
+    if not want:
+        raise SystemExit(f"{flag}: empty; give at least one url_id")
+    unknown = sorted(want - known)
+    if unknown:
+        raise SystemExit(
+            f"{flag}: no such url_id: {', '.join(unknown)}\n"
+            f"corpus has: {', '.join(sorted(known))}"
+        )
+    return want
+
+
 def build_jobs(
     strategies: list[str],
     tiers: set[Tier],
     budgets: list[float],
     candidates: int,
     workers: int,
+    only: set[str] | None = None,
+    skip: set[str] | None = None,
 ) -> list[Job]:
     """Every cell, hardest tier first so the pool does not end on a long tail."""
     entries = [e for e in URL_CORPUS if e.tier in tiers]
+    if only:
+        entries = [e for e in entries if e.url_id in only]
+    if skip:
+        entries = [e for e in entries if e.url_id not in skip]
     entries.sort(key=lambda e: _TIER_ORDER.index(e.tier), reverse=True)
     jobs = []
     for e in entries:
@@ -310,6 +337,18 @@ def main() -> int:
         "gate fails, because a truncated audit is not a clean one",
     )
     ap.add_argument(
+        "--only",
+        default="",
+        help="comma-separated url_ids to audit, e.g. universe-matrix,quantum-chip. "
+        "A six-cell question should not cost a seventy-two-cell run; an unknown "
+        "id is an error rather than an empty, vacuously clean audit.",
+    )
+    ap.add_argument(
+        "--skip",
+        default="",
+        help="comma-separated url_ids to leave out, applied after --only",
+    )
+    ap.add_argument(
         "--quiet", action="store_true", help="totals only, no per-cell miss list"
     )
     args = ap.parse_args()
@@ -322,10 +361,20 @@ def main() -> int:
     cores = _available_cores()
     jobs_n = args.jobs if args.jobs > 0 else max(1, cores // 4)
     per_cell_workers = max(1, cores // jobs_n)
-    jobs = build_jobs(names, tiers, budgets, args.candidates, per_cell_workers)
+    only = _slugs(args.only, "--only") if args.only else None
+    skip = _slugs(args.skip, "--skip") if args.skip else None
+    jobs = build_jobs(
+        names, tiers, budgets, args.candidates, per_cell_workers, only, skip
+    )
+    if not jobs:
+        raise SystemExit(
+            "no cells selected: --only and --skip between them left nothing to "
+            "audit, and an audit of nothing is not a clean audit"
+        )
 
+    selected = "" if only is None and skip is None else f" of {args.tier}"
     print(
-        f"{len(jobs)} cells, {jobs_n} at a time, {per_cell_workers} CP-SAT "
+        f"{len(jobs)} cells{selected}, {jobs_n} at a time, {per_cell_workers} CP-SAT "
         f"workers each, cap {args.max_seconds:g}s",
         flush=True,
     )
