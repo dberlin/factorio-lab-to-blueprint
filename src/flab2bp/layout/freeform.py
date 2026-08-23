@@ -2463,10 +2463,6 @@ def _build(
         coater_list = _place_coaters(
             canvas, spec, strips, strip_in_ports, belt_id, belt_model
         )
-        if coater_list and prolif_item is not None:
-            entry = _place_proliferator_entry(canvas, prolif_item, belt_id, belt_model)
-            if entry is not None:
-                nets.extend(_proliferator_nets(entry, coater_list, prolif_item))
     coaters = len(coater_list)
 
     # Again, now that the coater drops exist. A drop is a one-tile lane and the
@@ -2494,6 +2490,22 @@ def _build(
         unreachable = _route_external_inputs(
             canvas, spec, strip_in_ports, belt_id, belt_model, bounds
         )
+
+    # The proliferator entry goes in LAST, after the external runs have settled
+    # where the block's edge actually is.
+    #
+    # It is placed one tile west of everything, which is the boundary at the
+    # moment it is placed -- and then the external runs extend the block west
+    # past it, leaving it interior and walled in on all four sides. That was 11
+    # of the 26 unreachable entry lanes across the corpus. Routing it in the
+    # same pass as the others was tried and is WORSE (11 -> 17): every run
+    # targets a boundary computed before any of them move it, so adding another
+    # run just moves the edge again. Placing it once the edge has stopped moving
+    # is the fix that actually holds.
+    if coater_list and prolif_item is not None:
+        entry = _place_proliferator_entry(canvas, prolif_item, belt_id, belt_model)
+        if entry is not None:
+            nets.extend(_proliferator_nets(entry, coater_list, prolif_item))
 
     routed, failed, iterations = (0, 0, 0)
     if route and nets:

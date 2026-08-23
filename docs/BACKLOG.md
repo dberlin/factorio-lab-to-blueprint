@@ -67,13 +67,19 @@ machine top is `out_lanes + MARGIN + in_lanes + 1 >= 4` rows against a
 omit both lanes for that edge, which changes every strip height and therefore
 the pack. A test pins the arithmetic so it cannot go stale silently.
 
-## Trim lanes to their actual span
+## RESOLVED -- lanes are trimmed, and most of them should not have existed
 
-Lanes currently run the full content width, so belt *count* is high (1224-1925
-buildings on the magnetic-ring spec) even though bounding-box *area* is correct.
-Trimming each lane to the span it actually serves would cut building count
-substantially at no area cost, and makes the emitted blueprint much pleasanter to
-paste.
+The real finding was bigger than trimming. Risers made intermediate lane copies
+vestigial and nothing removed them: **321 of 975 spine lanes were joined to
+nothing at either end, holding 34,372 of 80,620 lane belt tiles**. A lane is also
+a tile of corridor height, so they cost AREA, not just buildings. `_lane_requirements`
+now gives a corridor exactly the lanes it is tapped for; extents stop at the
+columns sorters actually use. Dangling tails 595 -> 151, dead lanes 321 -> ~0.
+
+Freeform trims input lanes to their last sorter. Output lanes are deliberately
+left alone -- filled at every machine column, drained at the east end, so every
+tile carries flow. Building counts: processor 327 -> 248, graphene 208 -> 160,
+super-magnetic-ring 1309 -> 1147.
 
 ## RESOLVED -- `tile_to_local_offset` is correct
 
@@ -169,26 +175,34 @@ chain turned out to be taps that an earlier fix had itself moved mid-lane.
 If freeform's remaining refusals are to be fixed, they will be fixed by making
 ports reachable, not by making packs roomier.
 
-## Riser bridges climb a level per tile; the catalog says two
+## RESOLVED -- riser bridges spend the ramp tiles honestly
 
-`catalog.RAMP_TILES_PER_LEVEL` is 2 and `BELT_CLIMB_PER_TILE` is 1/2, but
-spine's `_bridge` climbs in one tile. `geom.altitude_step` permits it, so the
-validator is complicit. Spending the tiles honestly costs two margin columns,
-and the margin is the entire area cost of risering. Physical fidelity versus
-density -- worth a decision rather than a default.
+Bridges now spend `RAMP_TILES_PER_LEVEL` per level change, which needs a free
+ramp column beside each trunk, so the margin doubles. Isolated on the final
+tree: **+6.1% area overall, +9.1% on the median run, 6 of 66 runs pay nothing**.
+Worst case is magnetic-coil at +40%, a nine-machine spec whose block is narrower
+than its margin. Against a -21.5% total, fidelity won.
 
-## A riser carries an item's whole cross-corridor flow on one belt
+## RESOLVED -- risers split into parallel lanes, and it was NOT latent
 
-`flow.belt_capacity` passes on every corpus spec today, but there is no
-lane-splitting in the riser, so a spec whose inter-row flow exceeds one belt
-tier would bottleneck with no error until that check fires.
+This file claimed `flow.belt_capacity` passed on every corpus spec, so the
+single-belt trunk was only a future risk. Wrong: `quantum-chip` moves 48
+crude-oil/s and 48 refined-oil/s against a 30/s Mk.III belt -- **8
+`flow.belt_capacity` errors across the corpus**. `_lane_copies` sizes parallel
+lanes from the rate, machines deal round-robin across them, and each copy gets
+its own trunk. Isolated: **+2.3% area, 8 errors to 0**. Where splitting makes a
+corridor unwireable it is abandoned rather than the layout -- coverage outranks
+throughput.
 
-## Lane direction is approximate where a lane is filled and drained locally
+## RESOLVED -- lane direction is derived from the taps
 
-A lane filled by a producer and drained by a consumer WEST of it: the consumer's
-sorter sees nothing, physically. Lanes always run east with taps placed at
-machine columns regardless of order. Predates risers, invisible to the
-validator.
+Also measured against this file's guess, which was that it was pervasive: it is
+**3 of 656 lanes**, on magnetic-coil, plastic and processor. Real every time -- a
+machine that pastes and never runs -- and invisible to the validator.
+`_lane_direction` derives direction from the taps where physics leaves it free
+and forces it where it does not. 3 starved drains to 0 corpus-wide.
+`stats["starved_taps"]` counts the residue, because drains on BOTH sides of the
+fills cannot be served by any single direction and has no cheap fix.
 
 ## RESOLVED -- `flow.conservation` reads the placement, as a reachability cut
 
@@ -246,10 +260,37 @@ charged **zero**, and `flow.belt_capacity` could not see load leaving a lane tha
 way at all: a Mk.II belt carrying 20/s reported clean. Transfer sorters are now
 graph edges and the rate is derived rather than guessed.
 
-## The hand-built `magnetic_ring_spec` fixtures are unbalanced
+## RESOLVED -- the hand-built fixtures balance
 
-Both `tests/layout/test_spine.py` and `test_freeform.py` build a magnetic-ring
-shaped spec by hand with round numbers, and the rates do not balance: 4
-magnetic-coil/s supplying 12/s of demand, 17 items/s on a 12/s belt. Any test
-asserting flow-clean on them fails for reasons that have nothing to do with
-geometry. Real URL specs come from the rate solver and balance exactly.
+`magnetic_ring_spec` is now the exact stoichiometric solution at 2 rings/s: 9
+groups, 54 machines, supply equals demand for every item, Mk.III belt because
+iron-ore at 22/s does not fit on Mk.II. Both strategies use the same numbers, so
+they are compared on one spec rather than two. `two_stage_spec` was unbalanced
+as well. `balanced_pair_spec` is deleted -- balancing it made it identical to
+`two_stage_spec`, and dodging the imbalance was its only reason to exist.
+Arithmetic tests pin both so they cannot rot back.
+
+## OPEN -- freeform cannot supply proliferator to its coaters reliably
+
+The largest open defect. On the trivial+small+mid corpus freeform ships **14 of
+24 (URL, candidate) pairs**, and **15 of the 22 remaining errors are
+`proliferator-3` entry lanes that no belt can reach**.
+
+The proliferator entry is a single tile placed one column west of everything --
+the boundary at the moment it is placed. Then the external-input runs extend the
+block west past it and it is interior, walled in on four sides. Two fixes were
+tried and measured:
+
+* Routing it to the edge in the same pass as the other external inputs made it
+  **worse** (11 unreachable to 17): every run targets a boundary computed before
+  any of them move it, so adding a run just moves the edge again.
+* Placing it after the external runs have settled the edge helps (11 to 14 pairs
+  shipping, 26 errors to 22) but introduces a refusal on `graphene`/
+  `max-proliferation`, because the proliferator nets now do not exist when port
+  access is first staked.
+
+That second version is what is committed, on the measurement. The underlying
+problem is that the block's boundary MOVES during emission while several passes
+each assume it is fixed. The fix is probably to decide the final extent up front
+-- reserve the entry ring before anything routes -- rather than to re-order the
+passes again.

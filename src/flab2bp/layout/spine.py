@@ -961,12 +961,19 @@ def _pick_sorter(rate: Fraction, span: int, available: int) -> tuple[int, int] |
     return None
 
 
-def _share(machines: list[int], lanes: int, j: int) -> list[int]:
+def _share(machines: list[int], lanes: int, j: int, rota: int = 0) -> list[int]:
     """The machines of a group that use parallel lane ``j`` of ``lanes``.
 
     Dealt round-robin so each lane gets as near an equal share of the group's
     rate as the machine count allows -- which is what keeps every lane inside a
     belt once :func:`_lane_copies` has decided how many there are.
+
+    ``rota`` rotates where the deal STARTS, and it is what stops the remainders
+    stacking.  Five machines across two lanes is 3 and 2 whatever you do; if
+    every group starts at lane 0 then every remainder lands there, and a spec
+    with two five-machine consumer groups asks lane 0 for 6/s while lane 1
+    carries 4 -- ``flow.conservation``, on a spec whose totals balance exactly.
+    Rotating by the group's position spreads them instead.
 
     Dealing MACHINES rather than sorters is a deliberate limit: a group with
     fewer machines than lanes leaves the surplus lanes empty and puts its whole
@@ -974,7 +981,9 @@ def _share(machines: list[int], lanes: int, j: int) -> list[int]:
     machine's throughput is far below a belt's -- an item only needs parallel
     lanes when many machines share it.
     """
-    return machines[j::lanes] if lanes > 1 else list(machines)
+    if lanes <= 1:
+        return list(machines)
+    return machines[(j + rota) % lanes :: lanes]
 
 
 @dataclass(frozen=True, slots=True)
@@ -1023,6 +1032,37 @@ def _pack_row(
     return slots, x
 
 
+def _column_overlap(ax: int, aw: int, bx: int, bw: int) -> int | None:
+    """Leftmost column both footprints cover, or ``None``.
+
+    A DSP sorter runs in a straight line, so a direct insert is only physical
+    when the two machines share a column and both anchors sit in it.
+    """
+    lo, hi = max(ax, bx), min(ax + aw, bx + bw) - 1
+    return lo if lo <= hi else None
+
+
+def _every_machine_pairs(prod: list[int], w_src: int, cons: list[int], w_dst: int) -> bool:
+    """Does every producer AND every consumer have a partner in a shared column?
+
+    Both directions, which is the half that was missing.  The old test asked only
+    whether SOME consumer could be reached, and emission then paired each
+    consumer with a producer -- so when producers outnumbered consumers, or when
+    two consumers picked the same producer, the leftover producers got no sorter
+    at all.  Their belt lane had already been dropped, so they simply backed up:
+    ``machine.output_removed`` on plastic, processor, energy-matrix,
+    information-matrix and quantum-chip.
+
+    Dropping the insert instead restores the lane, which costs a tile of corridor
+    and drains every producer.
+    """
+    return all(
+        any(_column_overlap(p, w_src, c, w_dst) is not None for c in cons) for p in prod
+    ) and all(
+        any(_column_overlap(p, w_src, c, w_dst) is not None for p in prod) for c in cons
+    )
+
+
 def _realizable_direct(
     spec: BuildSpec,
     groups: dict[str, _Group],
@@ -1069,13 +1109,14 @@ def _realizable_direct(
             # floor understates the gap the sorter has to cross.
             dy = row_y[r_dst] - (row_y[r_src] + groups[src].height - 1)
             prod, cons = xs.get(src, []), xs.get(dst, [])
-            if not prod or not cons or dy < 1:
-                excess = reach + 1
-            else:
-                # At least one consumer must have a producer near enough in x, or
-                # the lane would vanish with nothing able to replace it.
-                best = min(min(abs(p - c) for p in prod) + dy for c in cons)
-                excess = best - reach
+            w_src, w_dst = groups[src].width, groups[dst].width
+            physical = (
+                prod
+                and cons
+                and 1 <= dy <= reach
+                and _every_machine_pairs(prod, w_src, cons, w_dst)
+            )
+            excess = dy - reach if physical else reach + 1
             if excess > 0 and (worst is None or excess > worst[0]):
                 worst = (excess, ek)
         if worst is None:
@@ -1247,6 +1288,9 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
     }
 
     taps: dict[tuple[str, str, bool], list[_Tap]] = {}
+    #: Where each group starts its round-robin deal across parallel lanes, so
+    #: two groups of the same size do not both hand their remainder to lane 0.
+    rota = {key: i for i, key in enumerate(groups)}
     for key, g in groups.items():
         r = at[key]
         for item, into in [(i, True) for i in g.inputs] + [(o, False) for o in g.outputs]:
@@ -1302,7 +1346,7 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
             # get used.
             rate = (g.inputs if into else g.outputs)[item]
             for j, tap in enumerate(found):
-                share = _share(machine_at[key], len(found), j)
+                share = _share(machine_at[key], len(found), j, rota[key])
                 if not share:
                     continue
                 xs = [buildings[i].x for i in share]
@@ -1330,7 +1374,7 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
     drained: set[tuple[int, int]] = set()
     for (key, _item, into), found in taps.items():
         for j, tap in enumerate(found):
-            if _share(machine_at[key], len(found), j):
+            if _share(machine_at[key], len(found), j, rota[key]):
                 (drained if into else filled).add((tap.corridor, tap.depth))
 
     risers = _plan_risers(
@@ -1439,21 +1483,35 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
         # (``|dx| + dy``) where the validator measures Chebyshev, so a pair
         # could pass here and fail there.  With dx pinned to 0 the two agree.
         pairs: list[tuple[int, int, int, int]] = []
+        span = abs(dy)
+
+        def _pair(a: int, others: list[int], span: int = span) -> tuple[int, int] | None:
+            ab = buildings[a]
+            if not 1 <= span <= CONSTANTS.sorter_max_reach:
+                return None
+            for b in sorted(others, key=lambda o: abs(buildings[o].x - ab.x)):
+                bb = buildings[b]
+                col = _column_overlap(ab.x, ab.width, bb.x, bb.width)
+                if col is not None:
+                    return b, col
+            return None
+
         for ci in cons:
-            cb = buildings[ci]
-            best: tuple[int, int, int, int] | None = None
-            for pi in sorted(prod, key=lambda p: abs(buildings[p].x - cb.x)):
-                pb = buildings[pi]
-                lo = max(pb.x, cb.x)
-                hi = min(pb.x + pb.width, cb.x + cb.width) - 1
-                if lo > hi:
-                    continue  # no shared column: unreachable in a straight line
-                span = abs(dy)
-                if 1 <= span <= CONSTANTS.sorter_max_reach:
-                    best = (pi, ci, span, lo)
-                    break
-            if best is not None:
-                pairs.append(best)
+            got = _pair(ci, prod)
+            if got is not None:
+                pairs.append((got[0], ci, span, got[1]))
+        # And every PRODUCER, not just every consumer.  A producer left out has
+        # no belt lane either -- the insert removed it -- so it backs up, which
+        # is what `machine.output_removed` was reporting on five corpus specs.
+        # Pairing it with a consumer it already shares a column with costs one
+        # more sorter and nothing else; the consumer simply gets fed twice.
+        wired = {pi for pi, _ci, _s, _c in pairs}
+        for pi in prod:
+            if pi in wired:
+                continue
+            got = _pair(pi, cons)
+            if got is not None:
+                pairs.append((pi, got[0], span, got[1]))
         rate = rate_of.get((src, dst, item), Fraction(0))
         if not pairs:
             raise ValueError(
@@ -1506,7 +1564,7 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
             if not found or not machine_at[key]:
                 continue
             for j, tap in enumerate(found):
-                machines = _share(machine_at[key], len(found), j)
+                machines = _share(machine_at[key], len(found), j, rota[key])
                 if not machines:
                     continue
                 # Size against THIS item's per-machine rate. `rate` here is the

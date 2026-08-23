@@ -824,15 +824,22 @@ class TestOneBeltIsNotEnough:
         }
         assert len(trunks) == 2, f"expected two trunk columns, got {sorted(trunks)}"
 
-    def test_no_belt_run_is_asked_to_carry_more_than_its_tier(self) -> None:
+    def test_the_split_spec_validates_clean(self) -> None:
+        """Not just belt capacity: splitting must not break anything else.
+
+        ``flow.conservation`` is the one that catches a lazy split.  Ten
+        producers deal 5 and 5, but two five-machine consumer groups both hand
+        their remainder to the same lane unless the deal is rotated -- 6/s asked
+        of a lane carrying 5, on a spec whose totals balance exactly.
+        """
         from flab2bp.pipeline import _id_map
 
         spec = wide_flow_spec()
         p = SpineLayout(power=False).lay_out(spec, time_budget_s=0.5)
-        report = validate.validate(
-            p, spec, ids=_id_map(spec), expect_power=False, only=["flow.belt_capacity"]
+        report = validate.validate(p, spec, ids=_id_map(spec), expect_power=False)
+        assert report.ok, "\n".join(
+            f"{f.check}: {f.message}" for f in report.errors[:5]
         )
-        assert report.ok, "\n".join(f.message for f in report.errors[:5])
 
     def test_splitting_is_given_up_rather_than_the_layout(self) -> None:
         """Coverage outranks density, and it outranks throughput too.
@@ -1040,6 +1047,41 @@ class TestDirectInsertion:
             fed = {b.output_obj for b in p.buildings if catalog.is_sorter(b.item_id)}
             for i in machines_of(p):
                 assert i in fed or not p.buildings[i].input_obj, f"machine {i} unfed"
+
+    def test_direct_insertion_never_leaves_a_producer_undrained(self) -> None:
+        """The mirror of the test above, and the half that was missing.
+
+        Emission paired each CONSUMER with a producer and stopped there.  When
+        producers outnumbered consumers -- or when two consumers picked the same
+        producer -- the leftover producers got no sorter, and their belt lane had
+        already been dropped by the insert, so they backed up.  Measured over the
+        66 solved corpus runs: ``machine.output_removed`` on plastic, processor,
+        energy-matrix, information-matrix and quantum-chip.
+        """
+        w = DETERMINISTIC_WORKERS
+        for spec_fn in (two_stage_spec, magnetic_ring_spec, wide_flow_spec):
+            p = SpineLayout(power=False, workers=w).lay_out(spec_fn(), time_budget_s=0.5)
+            drained = {b.input_obj for b in p.buildings if catalog.is_sorter(b.item_id)}
+            for i in machines_of(p):
+                assert i in drained, (
+                    f"machine {i} produces something nothing takes away; it backs up"
+                )
+
+    def test_a_pair_must_share_a_column_in_both_directions(self) -> None:
+        """The feasibility test the emission contract needs.
+
+        A sorter runs in a straight line, so an insert is only realizable when
+        every producer AND every consumer has a partner whose footprint overlaps
+        it in x.  Asking only about consumers is what let producers fall out.
+        """
+        from flab2bp.layout.spine import _column_overlap, _every_machine_pairs
+
+        assert _column_overlap(0, 3, 2, 3) == 2
+        assert _column_overlap(0, 3, 3, 3) is None
+        # Two producers, one consumer, and only one of the producers overlaps it.
+        assert not _every_machine_pairs([0, 3], 3, [3], 3)
+        # Both overlap: a 6-wide consumer straddles them.
+        assert _every_machine_pairs([0, 3], 3, [0], 6)
 
 
 class TestSolverBehaviour:
