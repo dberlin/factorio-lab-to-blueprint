@@ -56,6 +56,7 @@ Deliberate scope reductions, each documented where it appears:
 from __future__ import annotations
 
 import math
+import time
 from collections import defaultdict
 from dataclasses import dataclass, field, replace
 from fractions import Fraction
@@ -3391,6 +3392,27 @@ class SpineLayout:
         :data:`RETRY_BUDGET_S` before refusing.  Deterministic refusals -- no
         budget, empty spec, and a recipe no row can wire -- skip the retry:
         repeating them cannot change them.
+
+        ``time_budget_s`` bounds ALL the SEARCH in this call, not each solve
+        inside it.  It used to bound each one separately, so the phases summed:
+        a 4s budget bought 4s of search and then 15s more on the retry.  A
+        budget nothing enforces is not a budget, and a caller who cannot
+        predict how long this takes cannot build a gate out of it -- the full
+        audit ran 100 minutes and was killed twice before it finished.
+
+        The search ceiling is ``max(time_budget_s, RETRY_BUDGET_S)``: the retry
+        still happens, it just draws from the same clock as the first attempt
+        instead of starting a fresh one.
+
+        Emission and the self-check sit OUTSIDE that ceiling, because neither
+        is a search and neither can be abandoned half-done -- a partly
+        validated placement cannot be called clean.  They are proportional to
+        the result, not to the seconds allowed, and on the largest spec in the
+        corpus they are the whole overrun: ``universe-matrix`` at a 4s budget
+        measures 4.2s + 10.1s of search (correctly clamped -- the retry got
+        10.75s, not a fresh 15), then 0.3s to emit and 3.8s to check 92,907
+        tiles, for 18.4s total.  So expect roughly the ceiling plus a few
+        seconds on a big spec, and read a cell far above that as a defect.
         """
         if time_budget_s <= 0:
             raise NoValidLayout(
@@ -3399,6 +3421,7 @@ class SpineLayout:
                 budget_s=time_budget_s,
             )
 
+        deadline = time.monotonic() + max(time_budget_s, RETRY_BUDGET_S)
         budgets = [time_budget_s]
         if time_budget_s < RETRY_BUDGET_S:
             budgets.append(RETRY_BUDGET_S)
@@ -3407,6 +3430,13 @@ class SpineLayout:
         detail = ""
         spent = 0.0
         for budget in budgets:
+            # Never ask for more seconds than the call has left.  Clamping here
+            # rather than skipping the phase keeps the retry meaningful when the
+            # first attempt returned early, which is the common case.
+            budget = min(budget, deadline - time.monotonic())
+            if budget <= 0:
+                reason, detail = FALLBACK_NO_SOLUTION, "budget exhausted"
+                break
             spent = budget
             try:
                 plan, reason, detail = _solve_plan(
