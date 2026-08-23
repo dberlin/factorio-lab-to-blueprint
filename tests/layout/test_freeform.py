@@ -7,7 +7,8 @@ would let a rates regression masquerade as a layout one.
 
 from __future__ import annotations
 
-from collections import Counter
+import contextlib
+import time
 from fractions import Fraction as F
 
 import pytest
@@ -16,13 +17,13 @@ from flab2bp.dsp import catalog
 from flab2bp.layout import validate
 from flab2bp.layout.base import (
     DETERMINISTIC_WORKERS,
+    RETRY_BUDGET_S,
     NoValidLayout,
     PlacedBuilding,
     Placement,
 )
 from flab2bp.layout.freeform import (
     _ENTRY_RING,
-    _MAX_LANE_TAPS,
     _ROUTE_RING,
     MU_DIRECT,
     FreeformLayout,
@@ -30,17 +31,19 @@ from flab2bp.layout.freeform import (
     _Canvas,
     _claim_power_sites,
     _Coater,
+    _connect_short_cuts,
     _dests,
     _direct_net_candidates,
+    _greedy_pack,
     _height_seed,
     _merge_lanes,
     _Net,
     _pack,
+    _pair_lanes,
     _Port,
     _proliferator_nets,
     _reserve_port_access,
     _shard_sinks,
-    _staircase,
     fallback_placement,
     plan_strips,
     tie_break_cap,
@@ -1788,79 +1791,6 @@ class TestEveryShardDrainsEveryProduct:
         assert not backed_up, "\n".join(f.message for f in backed_up)
 
 
-def _islands_of(pairs: list[tuple[int, int]], n: int, m: int) -> int:
-    """Connected components of the producer/consumer bipartite graph."""
-    parent: dict[tuple[str, int], tuple[str, int]] = {("s", i): ("s", i) for i in range(n)}
-    parent.update({("d", j): ("d", j) for j in range(m)})
-
-    def find(k: tuple[str, int]) -> tuple[str, int]:
-        while parent[k] != k:
-            parent[k] = parent[parent[k]]
-            k = parent[k]
-        return k
-
-    for i, j in pairs:
-        a, b = find(("s", i)), find(("d", j))
-        if a != b:
-            parent[a] = b
-    return len({find(k) for k in parent})
-
-
-class TestLanePairingLeavesOneIsland:
-    """``flow.conservation``'s placement clause is a CUT argument.
-
-    Within every island an item can travel across, production must cover
-    consumption -- and a pairing that partitions producer lanes against consumer
-    lanes one-to-one partitions the flow graph into that many islands, each of
-    which then has to balance on its own.  It cannot: shard sizes and consumer
-    sizes are two independent integer partitions of two different totals.
-
-    Measured on ``quantum-chip``: the four-machine ``titanium-glass`` shard was
-    cyclically handed eleven of ``plane-filter``'s sixteen machines, needing
-    11/4 of a machine's output where seven machines covering sixteen can only
-    reach 16/7.
-    """
-
-    @pytest.mark.parametrize(
-        ("n", "m"),
-        [(1, 1), (1, 4), (4, 1), (2, 3), (3, 2), (5, 5), (2, 7), (7, 2), (3, 8)],
-    )
-    def test_the_pairing_is_a_spanning_tree(self, n: int, m: int) -> None:
-        pairs = _staircase([1] * n, [1] * m)
-        assert len(pairs) == n + m - 1, "fewer edges cannot connect n + m nodes"
-        assert _islands_of(pairs, n, m) == 1
-        assert {i for i, _ in pairs} == set(range(n)), "a producer lane went undrained"
-        assert {j for _, j in pairs} == set(range(m)), "a consumer lane went unfed"
-
-    @pytest.mark.parametrize(("n", "m"), [(1, 5), (5, 1), (1, 1)])
-    def test_a_single_lane_on_one_side_pairs_exactly_as_it_used_to(
-        self, n: int, m: int
-    ) -> None:
-        """Additive: the round-robin case this replaces is a special case of it."""
-        assert _staircase([1] * n, [1] * m) == [
-            (k % n, k % m) for k in range(max(n, m))
-        ]
-
-    def test_more_machines_behind_a_lane_take_more_consumers(self) -> None:
-        pairs = _staircase([6, 2], [1, 1, 1, 1])
-        big = [j for i, j in pairs if i == 0]
-        small = [j for i, j in pairs if i == 1]
-        assert len(big) > len(small), f"{pairs} ignores the machine counts"
-
-    def test_a_producer_lane_never_takes_more_taps_than_it_can_carry(self) -> None:
-        """A splitter has four sides; the fourth branch is refused, not built.
-
-        The bound is the larger of that and the even share, because ``n + m - 1``
-        taps across ``n`` lanes can exceed four however they are dealt.
-        """
-        for n, m in ((2, 4), (3, 5), (2, 10), (4, 12)):
-            pairs = _staircase([100, *([1] * (n - 1))], [1] * m)
-            share = -(-(n + m - 1) // n)
-            cap = max(_MAX_LANE_TAPS, share)
-            counts = Counter(i for i, _ in pairs)
-            assert max(counts.values()) <= cap, f"n={n} m={m}: {counts}"
-
-
 def one_machine_fan_out_spec(consumers: int = 4) -> BuildSpec:
     """A producer with FEWER MACHINES than the sorter reach needs shards.
 
@@ -2025,3 +1955,190 @@ class TestPowerClaimsItsGroundBeforeRouting:
         )
         report = validate.validate(p, only=["power.coverage", "power.connectivity"])
         assert report.ok, "\n".join(f.message for f in report.errors[:5])
+
+
+
+class TestTheShelfPackingIsTheLastResort:
+    """Density and routability pull in opposite directions.
+
+    ``_pack`` minimises width lexicographically, so more solver time buys a
+    tighter pack and a tighter pack leaves the router less to work with.
+    Measured on ``universe-matrix/max-proliferation``: a 4s budget produced packs
+    191 wide leaving 14 nets unrouted, a 30s budget packs 131 wide leaving 40.
+    Across the large tier the same trade shows up as whole cells -- 8 of 12
+    clean at 4s against 6 of 12 at the corpus's own 120s.
+
+    So the answer to a pack nothing can wire is LESS packing, not more solver.
+    """
+
+    def test_it_is_never_reached_when_a_solved_pack_wires(self) -> None:
+        """It must not be able to trade away a layout that already worked."""
+        p = FreeformLayout(power=True).lay_out(two_stage_spec(), time_budget_s=2.0)
+        assert p.stats["fallback_used"] == 0.0
+        assert p.stats["solver_status"] > 0.0
+
+    def test_what_it_returns_is_routed_rather_than_merely_constructed(self) -> None:
+        """The distinction ``fallback_placement`` does not make.
+
+        That one calls ``_build(route=False)`` -- it never attempts the wiring
+        it once claimed to guarantee. Everything this returns has been routed
+        with every net connected, which is the condition for returning it.
+        """
+        spec = magnetic_ring_spec()
+        strips = plan_strips(spec, strip_len=6)
+        loose = FreeformLayout(power=True)._loose_sweep(
+            spec, strips, time.monotonic() + 30.0
+        )
+        assert loose is not None, "the shelf packing must wire this fixture"
+        assert loose.stats["route_failures"] == 0.0
+        assert loose.stats["fallback_used"] == 1.0
+        report = validate.validate(loose, only=["belt.link_adjacent", "belt.acyclic"])
+        assert report.ok, "\n".join(f.message for f in report.errors[:5])
+
+
+def _lane(machines: int) -> _Port:
+    """A port standing in for a lane with ``machines`` machines behind it."""
+    return _Port(0, 0, 0, 0, 0, (), machines)
+
+
+class TestAnIslandThatCannotFeedItself:
+    """``flow.conservation``'s placement clause is a CUT argument.
+
+    Within every island an item can physically travel across, production must
+    cover consumption -- and a one-to-one pairing cuts the item's flow graph
+    into as many islands as it makes pairs.  Measured on ``quantum-chip``:
+    ``titanium-glass`` shards into a four-machine and a three-machine strip,
+    ``plane-filter`` into sixteen machines across three lanes, and the cyclic
+    pairing hands the four-machine shard eleven of them -- 11/4 of a machine's
+    output where seven machines covering sixteen reach only 16/7.
+    """
+
+    #: The quantum-chip shape: two producer shards, three consumer lanes.
+    SRCS = (4, 3)
+    SINKS = (6, 6, 4)
+    #: What the cyclic pairing makes of it.
+    CYCLIC = ((0, 0), (1, 1), (0, 2))
+
+    def _ports(self) -> tuple[list[_Port], list[_Port]]:
+        return [_lane(n) for n in self.SRCS], [_lane(n) for n in self.SINKS]
+
+    def test_islands_that_each_feed_themselves_are_left_alone(self) -> None:
+        """The join costs belts, so it is bought only where it is needed.
+
+        Connecting every sharded edge in the build was measured and thrown
+        away: it removed the one ``flow.conservation`` cell and cost four
+        others, 54 of 72 clean against 58.
+        """
+        srcs, sinks = self._ports()
+        assert _connect_short_cuts(srcs, sinks, self.CYCLIC, F(4), F(1)) == []
+
+    def test_a_short_island_is_joined_to_the_rest(self) -> None:
+        srcs, sinks = self._ports()
+        # 7/3 per machine against 1: the block balances (7 * 7/3 > 16), the
+        # four-machine island does not (4 * 7/3 < 10).
+        extra = _connect_short_cuts(srcs, sinks, self.CYCLIC, F(7, 3), F(1))
+        assert extra, "the starving island was left to starve"
+        merged = list(self.CYCLIC) + list(extra)
+        assert _one_island(merged, len(srcs), len(sinks)), (
+            f"{merged} still leaves the flow graph cut"
+        )
+
+    def test_a_single_lane_on_either_side_is_already_one_island(self) -> None:
+        assert _connect_short_cuts([_lane(1)], [_lane(9)], [(0, 0)], F(1), F(9)) == []
+        assert _connect_short_cuts([_lane(9)], [_lane(1)], [(0, 0)], F(1), F(9)) == []
+
+    def test_the_pairing_without_rates_is_exactly_cyclic(self) -> None:
+        """Additive: every caller that does not cost its islands is unchanged."""
+        srcs, sinks = self._ports()
+        assert _pair_lanes(srcs, sinks) == [
+            (srcs[k % len(srcs)], sinks[k % len(sinks)])
+            for k in range(max(len(srcs), len(sinks)))
+        ]
+
+
+def _one_island(pairs: list[tuple[int, int]], n: int, m: int) -> bool:
+    parent: dict[tuple[str, int], tuple[str, int]] = {}
+
+    def find(k: tuple[str, int]) -> tuple[str, int]:
+        parent.setdefault(k, k)
+        while parent[k] != k:
+            parent[k] = parent[parent[k]]
+            k = parent[k]
+        return k
+
+    for i in range(n):
+        find(("s", i))
+    for j in range(m):
+        find(("d", j))
+    for i, j in pairs:
+        a, b = find(("s", i)), find(("d", j))
+        if a != b:
+            parent[a] = b
+    return len({find(k) for k in list(parent)}) == 1
+
+
+class TestTheTimeBudgetIsAWall:
+    """``time_budget_s`` bounds the CALL, not just the packing.
+
+    It used to bound only the packer. The sweep spent it, the escalated retry
+    spent ``RETRY_BUDGET_S`` on top, ``_loose_sweep`` had a budget of its own,
+    and the routing inside every one of them was bounded by an expansion count
+    rather than by a clock. Every phase was bounded and nothing bounded their
+    sum, so a nominal 4 seconds measured at 34s on ``casimir-crystal``, 80s on
+    ``quantum-chip`` and over 400s on a refusing ``universe-matrix`` cell.
+    """
+
+    def test_a_refusal_cannot_outrun_the_ceiling(self) -> None:
+        """The worst case is the escalation ceiling, not a multiple of it.
+
+        ``magnetic_ring_spec`` wires easily, so this uses a budget small enough
+        that the ceiling is what bounds it and asserts the SHAPE: whatever
+        happens, it happens inside the ceiling plus slack for one A* window and
+        the emission that follows it.
+        """
+        spec = magnetic_ring_spec()
+        started = time.monotonic()
+        with contextlib.suppress(NoValidLayout):
+            FreeformLayout(power=True).lay_out(spec, time_budget_s=0.5)
+        spent = time.monotonic() - started
+        assert spent < RETRY_BUDGET_S * 2, (
+            f"a 0.5s call took {spent:.1f}s against a {RETRY_BUDGET_S:g}s ceiling"
+        )
+
+    def test_an_expired_deadline_refuses_and_says_so(self) -> None:
+        """A clock running down must be distinguishable from a spec that cannot
+        be laid out -- the first is our problem, the second is the spec's."""
+        spec = magnetic_ring_spec()
+        strips = plan_strips(spec, strip_len=6)
+        # A deadline already in the past: every phase must decline to start.
+        assert (
+            FreeformLayout(power=True)._sweep(spec, strips, 4.0, time.monotonic() - 1.0)
+            is None
+        )
+        assert (
+            FreeformLayout(power=True)._loose_sweep(
+                spec, strips, time.monotonic() - 1.0
+            )
+            is None
+        )
+
+    def test_running_out_of_clock_is_a_route_failure_never_a_thin_placement(
+        self,
+    ) -> None:
+        """The deadline is only ever read where the answer is "this net did not
+        route", and a pack with an unrouted net is discarded rather than
+        emitted. So a deadline can cost a placement and can never degrade one.
+        """
+        spec = magnetic_ring_spec()
+        strips = plan_strips(spec, strip_len=6)
+        pack = _greedy_pack(strips, _height_seed(strips))
+        placement, failed, _towers = _build(
+            spec,
+            strips,
+            pack,
+            power=True,
+            route=True,
+            deadline=time.monotonic() - 1.0,
+        )
+        assert failed > 0, "an expired build must report every net as unrouted"
+        assert placement.stats["routed"] == 0.0

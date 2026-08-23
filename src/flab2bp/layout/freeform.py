@@ -115,6 +115,15 @@ _MAX_EXPANSIONS = 200_000
 #: which is what actually runs away at scale.
 _ROUTING_BUDGET = 2_000_000
 
+#: A* expansions between wall-clock checks.
+#:
+#: ``time.monotonic()`` costs about as much as an expansion, so calling it on
+#: every one would be a measurable tax on the hot loop for a deadline that is
+#: seconds away.  Four thousand expansions is a few milliseconds of overshoot at
+#: the rates measured here (~180k expansions/second), which is nothing against a
+#: 15-second wall and cheap enough to disappear.
+_DEADLINE_CHECK_EVERY = 4096
+
 #: Rings of ground reserved around the packed block, decided BEFORE anything
 #: routes.
 #:
@@ -142,19 +151,23 @@ _ROUTING_BUDGET = 2_000_000
 _ROUTE_RING = 2
 _ENTRY_RING = _ROUTE_RING + 1
 
-#: Unrouted nets below which a failed height is worth rebuilding without the
-#: power lattice's claimed cells.  A handful of failures can be one tower
-#: standing in one corridor; thirty cannot.
-_POWER_RETRY_NETS = 3
-
-#: Consumer lanes one producer lane END can hand items to.
+#: The order :meth:`FreeformLayout._loose_sweep` takes candidate heights in.
 #:
-#: ``_tap_source`` builds a splitter on that tile and a splitter has
-#: :data:`junction.MAX_PORTS` sides: the lane feeding it, the belt carrying the
-#: lane onward past it, and one stub per branch.  Three branches fill it, and
-#: the fourth is reported as a failure rather than mis-linked -- so a pairing
-#: that asks for a fourth has already lost a net.
-_MAX_LANE_TAPS = junction.MAX_PORTS - 1
+#: Indices into :func:`_candidate_heights`, middle outwards.  The shelf packing
+#: is being tried because nothing else wired, and a square-ish block is where a
+#: shelf construction has the most room per shelf; the extremes are worth
+#: reaching but not worth reaching first, and under a deadline "first" is often
+#: all there is.
+_HEIGHT_ORDER = (2, 3, 1, 4, 0)
+
+#: Shelf margins :meth:`FreeformLayout._loose_sweep` tries, tightest first.
+#:
+#: Four is where it stops because that is where it stops paying: measured on
+#: ``casimir-crystal/no-proliferator``, one tile of margin wires at one height
+#: of five and leaves five sorters unpowered, two wires at one, three at three,
+#: four at four.  Past that the packing is mostly air and the area it costs buys
+#: nothing a wired build did not already have.
+_LOOSE_MARGINS = (1, 2, 3, 4)
 
 #: Tower lattice spacing.  A square lattice of spacing ``d`` leaves a worst-case
 #: distance of ``d/sqrt(2)`` to the nearest lattice point, so ``d`` must satisfy
@@ -172,6 +185,23 @@ _MAX_LANE_TAPS = junction.MAX_PORTS - 1
 #: distance.  Towers are placed after routing, so the extra ones cost buildings
 #: and nothing else.
 TOWER_SPACING = 9
+
+
+def _expired(deadline: float | None) -> bool:
+    """Has the caller's wall-clock deadline passed?
+
+    ``lay_out`` takes ONE deadline at the top of the call and threads it through
+    every phase, because every phase used to be bounded on its own and nothing
+    bounded their sum: the height sweep spent ``time_budget_s``, the escalated
+    retry spent ``RETRY_BUDGET_S`` again, the loose sweep had a budget of its
+    own, and the routing inside each of them was bounded by an expansion count
+    rather than a clock.  A nominal 4-second budget measured at 80 seconds on
+    ``quantum-chip`` and over 400 on a refusing ``universe-matrix`` cell.
+
+    ``None`` means no deadline, which is what a caller reaching into these
+    functions directly -- a test, a probe -- gets by default.
+    """
+    return deadline is not None and time.monotonic() >= deadline
 
 
 def lanes_for(rate: Fraction, capacity: Fraction) -> int:
@@ -938,13 +968,20 @@ def _nets_between(strips: list[Strip]) -> list[tuple[int, int]]:
     return sorted(nets)
 
 
-def _greedy_pack(strips: list[Strip], height: int) -> _Pack:
-    """Shelf packing -- always succeeds, and seeds the solver's upper bound."""
+def _greedy_pack(strips: list[Strip], height: int, *, margin: int = MARGIN) -> _Pack:
+    """Shelf packing -- always succeeds, and seeds the solver's upper bound.
+
+    ``margin`` is the free ground left on each strip's east and south faces.
+    It defaults to :data:`MARGIN`, which is what the solver's warm start wants:
+    a seed at a different spacing than the model uses is not a tighter hint, it
+    is a discarded one.  :meth:`FreeformLayout._loose_sweep` raises it, because
+    when nothing can be wired the thing to give the router is room.
+    """
     at: dict[int, tuple[int, int]] = {}
     shelf_x, shelf_y, shelf_h = 0, 0, 0
     width = 0
     for i, s in enumerate(strips):
-        w, h = s.width + MARGIN, s.height + MARGIN
+        w, h = s.width + margin, s.height + margin
         if shelf_y + h > height and shelf_h:
             shelf_x, shelf_y, shelf_h = width, 0, 0
         at[i] = (shelf_x, shelf_y)
@@ -1274,10 +1311,8 @@ class _Port:
     #: Machines behind this lane.
     #:
     #: A strip's lane carries its OWN machines' share of the group's rate, and
-    #: the shards of one group are rarely the same size.  Pairing producer lanes
-    #: against consumer lanes without knowing this is what let a four-machine
-    #: shard be handed eleven of a sixteen-machine consumer group -- see
-    #: :func:`_staircase`.
+    #: the shards of one group are rarely the same size.  ``_connect_short_cuts``
+    #: needs it to tell an island that balances from one that starves.
     machines: int = 1
 
     def columns(self) -> range:
@@ -1627,12 +1662,22 @@ def _astar(
     pressure: float,
     bounds: tuple[int, int, int, int],
     budget: dict[str, int] | None = None,
+    deadline: float | None = None,
 ) -> list[tuple[int, int, int]] | None:
     """Cheapest free-cell path, with congestion history folded into the cost.
 
     The history term is what makes rip-up-and-reroute converge: a cell that
     several nets have fought over becomes progressively more expensive, so they
     negotiate rather than oscillate.
+
+    ``deadline`` is the caller's wall clock, checked every
+    :data:`_DEADLINE_CHECK_EVERY` expansions.  A single hard net can spend
+    ``_MAX_EXPANSIONS`` nodes, which is seconds on its own, so a deadline that
+    only the callers looked at would be a deadline the router could sail past.
+    Running out of clock returns ``None``, which is already the route-failure
+    path -- and a route failure is a REFUSAL, since ``_sweep`` discards any pack
+    with an unrouted net.  A deadline can therefore cost a placement but can
+    never degrade one.
 
     ``bounds`` is the INCLUSIVE box the path may occupy.  It used to be the
     block's bounding box with two tiles of slack added here, which meant the
@@ -1659,7 +1704,7 @@ def _astar(
     # Exact min is best but costs O(|goals|) per node, so fall back to distance
     # to the goals' bounding box once that would dominate. The box distance is
     # still admissible (it under-estimates), just weaker.
-    if budget is not None and budget["left"] <= 0:
+    if (budget is not None and budget["left"] <= 0) or _expired(deadline):
         return None
     goal_list = list(goals)
     if len(goal_list) <= _EXACT_HEURISTIC_GOALS:
@@ -1701,6 +1746,8 @@ def _astar(
             continue
         expansions += 1
         if expansions > _MAX_EXPANSIONS:
+            return None
+        if expansions % _DEADLINE_CHECK_EVERY == 0 and _expired(deadline):
             return None
         if budget is not None:
             budget["left"] -= 1
@@ -1812,6 +1859,7 @@ def _route_all(
     belt_id: int,
     belt_model: int,
     bounds: tuple[int, int, int, int],
+    deadline: float | None = None,
 ) -> tuple[int, int, int]:
     """Route every net, negotiating congestion across iterations.
 
@@ -1819,6 +1867,20 @@ def _route_all(
     rather than raised: the caller decides whether to repair, and a silently
     swallowed failure is exactly the bug that made Strategy A ship a fallback
     wearing a solver's clothes.
+
+    THIS LOOP IS THE OVERRUN.  Up to :data:`RRR_MAX` rounds, each re-routing
+    every net, each net allowed :data:`_MAX_EXPANSIONS` nodes -- bounded in
+    expansions by :data:`_ROUTING_BUDGET` and, until now, not bounded in seconds
+    at all.  A caller asking for four seconds got ten of these per sweep and two
+    sweeps, which is how ``quantum-chip`` measured at 80 seconds against a
+    nominal 4.
+
+    So ``deadline`` is checked between rounds AND between nets, and running out
+    of it abandons the pass with every net counted failed.  That is deliberately
+    the harshest reading: an expired routing pass must not be able to hand back
+    a partially wired canvas that some later stage mistakes for a result.  The
+    caller discards any pack with a failure, so the deadline can cost a
+    placement and can never degrade one.
     """
     history: dict[tuple[int, int, int], float] = defaultdict(float)
     committed: list[list[tuple[int, int, int]]] = []
@@ -1912,6 +1974,8 @@ def _route_all(
         )
         paths: dict[int, list[tuple[int, int, int]]] = {}
         for i in order:
+            if _expired(deadline):
+                return 0, len(nets), iterations
             net = nets[i]
             # Claim this net's port reservations for the duration of its search,
             # so its own way in and out reads as free while every other port's
@@ -1943,7 +2007,9 @@ def _route_all(
             # one of those is reaching the lane.
             for cell in _merge_frontier(canvas, paths, dst_group.get(i, ())):
                 goals.add(cell)
-            routed = _astar(canvas, starts, goals, history, pressure, bounds, budget)
+            routed = _astar(
+                canvas, starts, goals, history, pressure, bounds, budget, deadline
+            )
             canvas.routing_ports = frozenset()
             if routed is None:
                 failed += 1
@@ -1976,7 +2042,12 @@ def _route_all(
         # round does: every further round would re-run every net against a
         # budget of zero and fail all of them, and the counters would read as
         # congestion rather than as work nobody had left to do.
-        if stale >= _RRR_STALE_ROUNDS or it == RRR_MAX - 1 or budget["left"] <= 0:
+        if (
+            stale >= _RRR_STALE_ROUNDS
+            or it == RRR_MAX - 1
+            or budget["left"] <= 0
+            or _expired(deadline)
+        ):
             break
     unlinked = _commit_paths(canvas, nets, best_paths, belt_id, belt_model)
     return len(best_paths) - unlinked, fewest_failed + unlinked, iterations
@@ -2357,10 +2428,13 @@ def _route_external_inputs(
     belt_id: int,
     belt_model: int,
     core: tuple[int, int, int, int],
+    deadline: float | None = None,
 ) -> int:
     """Run every outside input from the block edge to the lane that wants it.
 
-    Returns the number of lanes that could not be reached.
+    Returns the number of lanes that could not be reached.  A lane the
+    ``deadline`` ran out on counts as unreached, which is the same refusal any
+    other unreachable lane produces -- never a placement missing an entry run.
 
     Without this, an external input was just a lane wearing a marker icon.  On a
     packed build that lane is frequently WALLED IN -- above it another lane,
@@ -2426,7 +2500,12 @@ def _route_external_inputs(
         if item in spec.external_inputs
     }
     missed = 0
-    for belt, port in wanted.items():
+    for done, (belt, port) in enumerate(wanted.items()):
+        if _expired(deadline):
+            # Everything still to do is unreached. Counting them rather than
+            # returning what we have is the difference between a refusal and a
+            # placement whose remaining lanes silently have no way in.
+            return missed + len(wanted) - done
         item = carried[belt]
         # Spend exactly ONE of this lane's access reservations and leave the
         # rest held. Every other port's stays held too, so bringing one input in
@@ -2461,7 +2540,9 @@ def _route_external_inputs(
                 missed += 1
                 continue
             live = [c for c in starts if canvas.free(c)]
-            path = _astar(canvas, live, goals, history, 1.0, astar_bounds, budget)
+            path = _astar(
+                canvas, live, goals, history, 1.0, astar_bounds, budget, deadline
+            )
         if path is None:
             missed += 1
             continue
@@ -2683,9 +2764,17 @@ def _link_groups(
 
 
 def _pair_lanes(
-    srcs: Sequence[_Port], sinks: Sequence[_Port]
+    srcs: Sequence[_Port],
+    sinks: Sequence[_Port],
+    *,
+    out_rate: Fraction = Fraction(0),
+    in_rate: Fraction = Fraction(0),
 ) -> list[tuple[_Port, _Port]]:
     """Pair one item's producer lanes against its consumer lanes.
+
+    Pair the two sides cyclically so EVERY producer lane is drained and EVERY
+    consumer lane is filled, whichever side was sharded further.  One net per
+    side-pair; taking the cross product would emit needless belts.
 
     Every reuse of a lane stays on that lane's END TILE.  Walking inward was
     tried and is worse: a mid-lane tile is WALLED IN -- lane either side,
@@ -2706,90 +2795,102 @@ def _pair_lanes(
     lane cannot each reach it -- they converge instead, the first net routing to
     the head and the rest merging into that net's path, which is what belts do
     anyway.
+
+    ``out_rate`` and ``in_rate`` are the per-machine production and consumption
+    of this item, and they are what :func:`_connect_short_cuts` needs to tell an
+    island that balances from one that starves.  Omitting them keeps the pairing
+    exactly cyclic, which is what the unit tests of the pairing itself want.
     """
-    return [
-        (srcs[i], sinks[j])
-        for i, j in _staircase(
-            [p.machines for p in srcs], [p.machines for p in sinks]
-        )
+    pairs = [
+        (k % len(srcs), k % len(sinks))
+        for k in range(max(len(srcs), len(sinks)))
     ]
+    for i, j in _connect_short_cuts(srcs, sinks, pairs, out_rate, in_rate):
+        pairs.append((i, j))
+    return [(srcs[i], sinks[j]) for i, j in pairs]
 
 
-def _staircase(supply: Sequence[int], demand: Sequence[int]) -> list[tuple[int, int]]:
-    """A CONNECTED pairing of producer lanes to consumer lanes, by machine count.
+def _connect_short_cuts(
+    srcs: Sequence[_Port],
+    sinks: Sequence[_Port],
+    pairs: Sequence[tuple[int, int]],
+    out_rate: Fraction,
+    in_rate: Fraction,
+) -> list[tuple[int, int]]:
+    """Extra nets joining islands that cannot feed themselves.
 
-    Two properties, and the first is the one that makes ``flow.conservation``
-    hold structurally rather than by luck.
+    ``flow.conservation``'s placement clause is a CUT argument: within every
+    island an item can physically travel across, production must cover
+    consumption.  A one-to-one pairing cuts an item's flow graph into as many
+    islands as it makes pairs, and each island then has to balance on its own --
+    which two independent integer partitions cannot promise.  Measured on
+    ``quantum-chip``: ``titanium-glass`` shards into a four-machine and a
+    three-machine strip, ``plane-filter`` into sixteen machines across three
+    lanes, and the cyclic pairing hands the four-machine shard eleven of them.
+    That island needs 11/4 of a machine's output where seven machines covering
+    sixteen reach only 16/7, and no routing inside the block can make it up.
 
-    **Connected.**  ``flow.conservation``'s placement clause is a CUT argument:
-    within every ISLAND an item can travel across, production must cover
-    consumption.  A pairing that partitions the two sides into disjoint pairs
-    partitions the item's flow graph into that many islands, and each island
-    then has to balance on its own -- which a shard split cannot promise, since
-    the shard sizes and the consumer sizes are two independent integer
-    partitions of two different totals.  Measured on ``quantum-chip``: the
-    four-machine ``titanium-glass`` shard was cyclically handed eleven of
-    ``plane-filter``'s sixteen machines, needing 11/4 of a machine's output
-    where seven machines covering sixteen can only reach 16/7.
+    Connecting every such edge in full was built and measured and thrown away.
+    Joining ``n + m`` lanes takes ``n + m - 1`` edges against the pairing's
+    ``max(n, m)``, so doing it everywhere adds ``min(n, m) - 1`` nets to every
+    sharded edge in the build; over the whole corpus at a 4s budget that removed
+    the one ``flow.conservation`` cell and cost FOUR others -- 54 of 72 clean
+    against 58 -- because the extra belts crowd both the router and the power
+    lattice.
 
-    A staircase from ``(0, 0)`` to ``(n-1, m-1)`` uses ``n + m - 1`` pairs, which
-    is the fewest that can connect ``n + m`` nodes, so there is exactly ONE
-    island for the edge and the spec's own arithmetic decides it.  The cost is
-    ``min(n, m) - 1`` extra nets, and only where BOTH sides have more than one
-    lane -- when either side is a single lane the walk degenerates to exactly the
-    cyclic pairing this replaces, so nothing that already worked pays anything.
-
-    **Weighted.**  The step advances whichever side has fallen behind in
-    MACHINES, so a shard with twice the machines is handed roughly twice the
-    consumers.  Even round-robin was what let the imbalance above happen at all.
-
-    **Capped.**  ``_MAX_LANE_TAPS`` bounds how many consumer lanes hang off one
-    producer lane end: the splitter there has four sides and a fourth branch is
-    refused, so the walk moves on to the next producer lane rather than build a
-    tap ``_tap_source`` would reject.  Where the cap is arithmetically
-    unreachable -- ``n + m - 1`` taps across ``n`` lanes can exceed it however
-    they are dealt -- the walk spreads them evenly instead, which is the best
-    any pairing can do and no worse than the round-robin it replaces.
+    So the join is bought only where it is needed.  The islands the cyclic
+    pairing produced are costed against the actual per-machine rates, and if
+    every one of them can feed itself nothing is added at all.  If any cannot,
+    the islands are chained with one net apiece -- the whole edge becomes a
+    single island and the spec's own arithmetic decides it, which is the only
+    claim backpressure cannot rescue.
     """
-    n, m = len(supply), len(demand)
-    if n == 0 or m == 0:
+    if out_rate <= 0 or in_rate <= 0 or len(srcs) < 2 or len(sinks) < 2:
         return []
 
-    def prefix(ws: Sequence[int]) -> list[int]:
-        out, run = [], 0
-        for w in ws:
-            run += max(0, w)
-            out.append(run)
-        return out
+    parent: dict[tuple[str, int], tuple[str, int]] = {}
 
-    sup_pre, dem_pre = prefix(supply), prefix(demand)
-    sup_tot = sup_pre[-1] or 1
-    dem_tot = dem_pre[-1] or 1
+    def find(k: tuple[str, int]) -> tuple[str, int]:
+        parent.setdefault(k, k)
+        while parent[k] != k:
+            parent[k] = parent[parent[k]]
+            k = parent[k]
+        return k
 
-    # The walk lays n + m - 1 taps across n producer lanes, so a cap below
-    # their even share cannot be met by any dealing of them; take the larger.
-    cap = max(_MAX_LANE_TAPS, -(-(n + m - 1) // n))
+    for i in range(len(srcs)):
+        find(("s", i))
+    for j in range(len(sinks)):
+        find(("d", j))
+    for i, j in pairs:
+        a, b = find(("s", i)), find(("d", j))
+        if a != b:
+            parent[a] = b
 
-    i = j = 0
-    taps = 1
-    out = [(0, 0)]
-    while i < n - 1 or j < m - 1:
-        if j >= m - 1:
-            advance_src = True
-        elif i >= n - 1:
-            advance_src = False
-        else:
-            advance_src = taps >= cap or (
-                Fraction(sup_pre[i], sup_tot) <= Fraction(dem_pre[j], dem_tot)
-            )
-        if advance_src:
-            i += 1
-            taps = 1
-        else:
-            j += 1
-            taps += 1
-        out.append((i, j))
-    return out
+    islands: dict[tuple[str, int], tuple[list[int], list[int]]] = defaultdict(
+        lambda: ([], [])
+    )
+    for i in range(len(srcs)):
+        islands[find(("s", i))][0].append(i)
+    for j in range(len(sinks)):
+        islands[find(("d", j))][1].append(j)
+
+    short = any(
+        sum(srcs[i].machines for i in mine) * out_rate
+        < sum(sinks[j].machines for j in theirs) * in_rate
+        for mine, theirs in islands.values()
+    )
+    if not short or len(islands) < 2:
+        return []
+
+    order = sorted(islands)
+    extra: list[tuple[int, int]] = []
+    for a, b in zip(order, order[1:], strict=False):
+        producers, _ = islands[a]
+        _, consumers = islands[b]
+        if producers and consumers:
+            extra.append((producers[0], consumers[0]))
+    return extra
+
 
 
 def _build(
@@ -2800,7 +2901,16 @@ def _build(
     power: bool,
     route: bool,
     claim_power: bool = True,
+    deadline: float | None = None,
 ) -> tuple[Placement, int, int]:
+    """Emit, wire and power one pack.
+
+    Returns ``(placement, failed, towers)``.  ``failed`` is the number of nets
+    left unrouted, and every caller discards a placement with any -- which is
+    what makes ``deadline`` safe to thread in here.  Running out of clock is
+    reported as route failures, so it produces a REFUSAL upstream and can never
+    produce a placement missing its belts.
+    """
     belt_id = BELT_ITEM_IDS.get(spec.belt_item_id, 2001)
     belt_model = catalog.building(belt_id).model_index
     canvas = _Canvas()
@@ -2881,7 +2991,14 @@ def _build(
             sinks = in_ports.get((dest, item), [])
             if not srcs or not sinks:
                 continue
-            for port, sink in _pair_lanes(srcs, sinks):
+            # The per-machine rates on both sides, so the pairing can tell an
+            # island that feeds itself from one that starves.
+            for port, sink in _pair_lanes(
+                srcs,
+                sinks,
+                out_rate=per_item.get(src_key, ({}, {}))[1].get(item, Fraction(0)),
+                in_rate=per_item.get(dest, ({}, {}))[0].get(item, Fraction(0)),
+            ):
                 if (src_key, dest) in direct_keys and _bridge(
                     canvas, port, sink, rates, item
                 ):
@@ -2982,13 +3099,13 @@ def _build(
     unreachable = 0
     if route:
         unreachable = _route_external_inputs(
-            canvas, spec, strip_in_ports, belt_id, belt_model, core
+            canvas, spec, strip_in_ports, belt_id, belt_model, core, deadline
         )
 
     routed, failed, iterations = (0, 0, 0)
     if route and nets:
         routed, failed, iterations = _route_all(
-            canvas, nets, belt_id, belt_model, route_bounds
+            canvas, nets, belt_id, belt_model, route_bounds, deadline
         )
     failed += unreachable
 
@@ -3008,7 +3125,19 @@ def _build(
     for cell in [c for c, owner in canvas.blocked.items() if owner == -2]:
         del canvas.blocked[cell]
     canvas.keep_out.clear()
-    towers = _place_power(canvas, power_sites) if power else 0
+    # A build the clock ran out on is a build the caller will discard, so it
+    # does not pay for the power pass -- which is a full sweep of every powered
+    # tile against every tower and is seconds on a large block.
+    #
+    # Guarded on `failed`, never on the deadline alone. A build that WIRED is a
+    # real candidate whatever the time is, and returning one with no towers
+    # because the clock was short would be a `power.coverage` INVALID
+    # manufactured by a stopwatch -- the exact thing a deadline must not do.
+    towers = (
+        _place_power(canvas, power_sites)
+        if power and not (failed and _expired(deadline))
+        else 0
+    )
 
     placement = Placement(
         buildings=tuple(canvas.buildings),
@@ -3439,6 +3568,29 @@ class FreeformLayout:
 
         A sweep that produces no routable pack is retried ONCE at
         :data:`RETRY_BUDGET_S` before refusing.
+
+        ``time_budget_s`` IS A WALL-CLOCK DEADLINE FOR THE WHOLE CALL, not a
+        packing budget.  It used to be the latter, and the difference was
+        measured in minutes: the sweep spent it, the retry spent
+        ``RETRY_BUDGET_S`` on top, the shelf sweep had a budget of its own, and
+        the routing inside every one of them was bounded by an expansion count
+        rather than by a clock.  Every phase was bounded and nothing bounded
+        their sum, so a nominal 4 seconds measured at 34s on
+        ``casimir-crystal``, 80s on ``quantum-chip`` and over 400s on a refusing
+        ``universe-matrix`` cell -- which is what made a full corpus audit an
+        hour and a half.
+
+        The ceiling is ``max(time_budget_s, RETRY_BUDGET_S)``: the escalation to
+        fifteen seconds is a promise this keeps, so a caller asking for less
+        still gets the retry, and a caller asking for more gets what they asked
+        for.  Every phase takes what is left of it, and a phase that finds the
+        clock already spent is not started.
+
+        Running out of it RAISES.  A deadline may cost a placement -- and the
+        cells it costs are named in the commit message rather than bought back
+        by raising the ceiling -- but it can never return a degraded one: the
+        clock is only ever read where the answer is "this net did not route",
+        and a pack with an unrouted net is discarded, never emitted.
         """
         if time_budget_s <= 0:
             raise NoValidLayout(
@@ -3446,6 +3598,9 @@ class FreeformLayout:
                 spec_label=spec.label,
                 budget_s=time_budget_s,
             )
+
+        ceiling = max(time_budget_s, RETRY_BUDGET_S)
+        deadline = time.monotonic() + ceiling
 
         try:
             strips = plan_strips(spec, strip_len=self.strip_len)
@@ -3493,19 +3648,135 @@ class FreeformLayout:
             budgets.append(RETRY_BUDGET_S)
 
         for budget in budgets:
-            best = self._sweep(spec, strips, budget)
+            if _expired(deadline):
+                break
+            best = self._sweep(spec, strips, budget, deadline)
             if best is not None:
                 return best
 
+        # Nothing the PACKER found could be wired, so try the pack it was
+        # started from.  See :meth:`_loose_sweep` -- density and routability
+        # pull in opposite directions, and this is the end of that rope.  It
+        # shares the CALL's deadline rather than getting one of its own: a last
+        # resort with its own budget is how the phases came to be individually
+        # bounded and collectively unbounded.
+        loose = None if _expired(deadline) else self._loose_sweep(spec, strips, deadline)
+        if loose is not None:
+            return loose
+
+        if _expired(deadline):
+            raise NoValidLayout(
+                f"the {ceiling:g}s deadline passed with no wired packing of "
+                f"{len(strips)} strips; the sweep, the retry and the shelf "
+                "packings between them ran out of clock rather than out of "
+                "candidates, so this is a REFUSAL and not a verdict on the spec",
+                spec_label=spec.label,
+                budget_s=ceiling,
+            )
         raise NoValidLayout(
             f"no packing of {len(strips)} strips could be wired at any candidate "
-            "height; every pack the sweep produced left nets unrouted",
+            "height, and neither could the shelf packing they were seeded from; "
+            "every pack left nets unrouted",
             spec_label=spec.label,
             budget_s=budgets[-1],
         )
 
+    def _loose_sweep(
+        self, spec: BuildSpec, strips: list[Strip], deadline: float
+    ) -> Placement | None:
+        """The shelf packing, tried only once no solved pack could be wired.
+
+        DENSITY AND ROUTABILITY PULL IN OPPOSITE DIRECTIONS, and the measurement
+        is unambiguous.  ``_pack`` minimises width lexicographically, so more
+        solver time buys a tighter pack -- and a tighter pack leaves the router
+        less to work with.  On ``universe-matrix/max-proliferation`` a 4s budget
+        produced packs 191 wide that left 14 nets unrouted and a 30s budget
+        packs 131 wide that left 40.  Across the large tier the same trade shows
+        up as whole cells: 8 of 12 clean at the audit's 4s against 6 of 12 at
+        the corpus's own 120s, with ``information-matrix/free-proliferation``
+        clean at 4s and refusing at 120s.
+
+        So when every solved pack fails, the answer is not more solver time --
+        that makes it worse -- but LESS packing.  ``_greedy_pack`` is the shelf
+        construction ``_pack`` warm-starts from: feasible by construction, far
+        looser, and free, since nothing has to be solved to get it.
+
+        THE MARGIN IS WHAT DOES THE WORK, so it is swept before the height.  A
+        shelf packing at :data:`MARGIN` is loose BETWEEN shelves and as tight as
+        anything else WITHIN one, so it hands the router a one-tile corridor
+        down a column of stacked strips and the power lattice no free cell at
+        all: on ``casimir-crystal/no-proliferator`` the one-margin shelf wired at
+        exactly one height of five, and only by giving the lattice's ground up,
+        which shipped five sorters outside every tower's radius.  At three and
+        four tiles of margin the same strips wire at most heights AND cover, and
+        they come out SMALLER -- 8786 tiles against 10622 -- because room to
+        route beats a tight pack that has to be tall to work at all.
+
+        Attempts are therefore ordered margin-major: every margin's most
+        promising height first, then every margin's second, and so on.  That
+        reaches the margins that matter within four builds rather than after
+        fifteen, which is what makes a deadline survivable.
+
+        ``deadline`` is the CALL's, shared with every other phase rather than a
+        budget of this one's own -- a last resort with its own clock is how the
+        phases came to be individually bounded and collectively unbounded.  It
+        is checked between builds and inside the routing, and an attempt is not
+        started once it has passed; ``lay_out`` turns that into a refusal naming
+        the deadline, so a build that ran out of clock is never mistaken for a
+        spec that cannot be laid out.
+
+        The first fully routed placement wins.  Ranking them would be better
+        blueprints and a worse promise -- this is the last thing tried before
+        refusing, and a bounded last resort is worth more than an optimal one
+        that is still searching.
+
+        Note this is NOT :func:`fallback_placement`, which calls
+        ``_build(route=False)`` and so never attempts the wiring at all.  Every
+        placement returned here has been routed with every net connected; that
+        is the condition for returning it.
+        """
+        by_margin = {m: _candidate_heights(strips, margin=m) for m in _LOOSE_MARGINS}
+        ranks = max((len(h) for h in by_margin.values()), default=0)
+        attempts = [
+            (margin, by_margin[margin][rank])
+            for rank in _HEIGHT_ORDER[:ranks]
+            for margin in _LOOSE_MARGINS
+            if rank < len(by_margin[margin])
+        ]
+
+        for margin, height in attempts:
+            if _expired(deadline):
+                break
+            pack = _greedy_pack(strips, height, margin=margin)
+            # No `claim_power=False` retry here, and that is the point of
+            # sweeping the margin instead.  Giving the lattice's ground up to
+            # buy the last net or two is a trade worth making on a pack the
+            # solver squeezed, because there is nowhere else for the belt to go;
+            # on a shelf packing there is, one margin further out.  Taking it
+            # here bought exactly that: the one-margin shelf wired
+            # `casimir-crystal/no-proliferator` with no lattice at all and
+            # shipped five sorters outside every tower's radius -- an INVALID in
+            # place of a refusal, which is the wrong direction.  Let the attempt
+            # fail and let the margin fix it.
+            placement, failed, _towers = _build(
+                spec, strips, pack, power=self.power, route=True, deadline=deadline
+            )
+            if failed:
+                continue
+            placement.stats["solver_status"] = 0.0
+            placement.stats["hit_time_budget"] = 0.0
+            placement.stats["fallback_used"] = 1.0
+            placement.stats["direct_insert_candidates"] = 0.0
+            placement.stats["area"] = float(placement.area)
+            return placement
+        return None
+
     def _sweep(
-        self, spec: BuildSpec, strips: list[Strip], time_budget_s: float
+        self,
+        spec: BuildSpec,
+        strips: list[Strip],
+        time_budget_s: float,
+        deadline: float | None = None,
     ) -> Placement | None:
         """Try every candidate height, returning the best FULLY ROUTED placement.
 
@@ -3535,19 +3806,32 @@ class FreeformLayout:
         )
 
         heights = _candidate_heights(strips)
-        per_solve = max(0.1, time_budget_s / max(len(heights), 1))
-        deadline = time.monotonic() + time_budget_s
+        # This sweep's own share, never more than the CALL has left. A sweep
+        # asked for 15s when 3 remain must not spend 15.
+        left = time_budget_s if deadline is None else deadline - time.monotonic()
+        share = max(0.1, min(time_budget_s, max(left, 0.0)))
+        per_solve = max(0.1, share / max(len(heights), 1))
+        # This sweep's SOFT deadline, and the call's HARD one, and they are not
+        # the same rule.
+        soft = time.monotonic() + share
 
         best: Placement | None = None
         best_key: tuple[int, float] | None = None
         for height in heights:
-            # The deadline stops us IMPROVING, never FINDING. A refusal means
-            # the model could not lay the spec out; a clock must not be able to
-            # manufacture one. Breaking on time alone did exactly that: heights
-            # are tried shortest-first and the free-proliferation chain only
-            # wires at the tallest, so a 2s budget refused a spec that routes
-            # every net cleanly given the chance to reach it.
-            if best is not None and time.monotonic() >= deadline:
+            # The SOFT deadline stops us IMPROVING, never FINDING. A refusal
+            # means the model could not lay the spec out; a sweep's own clock
+            # must not be able to manufacture one. Breaking on time alone did
+            # exactly that: heights are tried shortest-first and the
+            # free-proliferation chain only wires at the tallest, so a 2s budget
+            # refused a spec that routes every net cleanly given the chance to
+            # reach it.
+            if best is not None and time.monotonic() >= soft:
+                break
+            # The HARD deadline is the call's, and it does stop us finding --
+            # that is what makes `time_budget_s` a wall rather than a suggestion.
+            # `lay_out` turns it into a refusal that names the deadline, so the
+            # distinction between "cannot" and "ran out" survives into the error.
+            if _expired(deadline):
                 break
             pack = _pack(
                 strips,
@@ -3561,23 +3845,28 @@ class FreeformLayout:
             if pack is None:
                 continue
             placement, failed, _towers = _build(
-                spec, strips, pack, power=self.power, route=True
+                spec, strips, pack, power=self.power, route=True, deadline=deadline
             )
-            if 0 < failed <= _POWER_RETRY_NETS and self.power:
-                # The power lattice claims its ground before the router runs,
-                # because taking what is left over on a dense block means taking
-                # nothing. Sometimes what it took was the one corridor a net
-                # needed. Preferring a covered pack and ACCEPTING an uncovered
-                # one is the right order: a build that cannot be wired is worth
-                # nothing, and coverage still has its repair pass to fall back
-                # on. Only a height that already failed pays for the retry, and
-                # only one that failed by a few nets: a pack that leaves thirty
-                # nets unrouted is not failing over one tower, and paying a
-                # second full build to find that out doubled the cost of every
-                # refusal on the stress tier.
-                placement, failed, _towers = _build(
-                    spec, strips, pack, power=self.power, route=True, claim_power=False
-                )
+            # There is no `claim_power=False` retry here any more, and what
+            # replaced it is `_loose_sweep`.
+            #
+            # The retry gave the WHOLE lattice claim up as soon as a pack left
+            # one to three nets unrouted, on the reasoning that a build which
+            # cannot be wired is worth nothing while coverage still has its
+            # repair pass. The second half of that does not hold: the repair
+            # pass needs free ground and a pack tight enough to strand a net has
+            # none, so what came back was a wired blueprint with buildings
+            # outside every tower's radius -- `power.coverage`, an INVALID, in
+            # place of a refusal that would have emitted nothing. It fired on
+            # `casimir-crystal/free-proliferation` and `information-matrix` at
+            # 4s, intermittently, which is exactly how a pack-dependent failure
+            # looks.
+            #
+            # A height that cannot be wired with the lattice in place is now
+            # simply discarded, and if no height survives, `_loose_sweep` tries
+            # shelf packings at progressively wider margins -- which gives the
+            # router its corridor AND the lattice its ground, rather than
+            # trading one for the other.
             if failed:
                 continue
             # Area, then belt count. Two packs of equal area are not equally
@@ -3596,15 +3885,15 @@ class FreeformLayout:
         return best
 
 
-def _height_seed(strips: list[Strip]) -> int:
-    area = sum((s.width + MARGIN) * (s.height + MARGIN) for s in strips)
-    tall = max((s.height + MARGIN for s in strips), default=1)
+def _height_seed(strips: list[Strip], *, margin: int = MARGIN) -> int:
+    area = sum((s.width + margin) * (s.height + margin) for s in strips)
+    tall = max((s.height + margin for s in strips), default=1)
     return max(tall, int(math.isqrt(max(1, area))))
 
 
-def _candidate_heights(strips: list[Strip]) -> list[int]:
+def _candidate_heights(strips: list[Strip], *, margin: int = MARGIN) -> list[int]:
     """Heights to sweep, since ``W * H`` is too weak a form to minimise directly."""
-    h0 = _height_seed(strips)
-    tall = max((s.height + MARGIN for s in strips), default=1)
+    h0 = _height_seed(strips, margin=margin)
+    tall = max((s.height + margin for s in strips), default=1)
     out = {max(tall, int(h0 * f)) for f in (0.6, 0.8, 1.0, 1.25, 1.6)}
     return sorted(out)
