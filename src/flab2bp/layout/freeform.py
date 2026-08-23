@@ -115,6 +115,22 @@ _MAX_EXPANSIONS = 200_000
 #: which is what actually runs away at scale.
 _ROUTING_BUDGET = 2_000_000
 
+#: Expansions the whole `lay_out` call may spend, per second of its ceiling.
+#:
+#: A BACKSTOP, not the binding constraint -- the wall clock is what bounds the
+#: call, and this exists so a re-run at the same budget explores the same
+#: number of nodes rather than however many the machine happened to manage.
+#:
+#: Sized well above what the clock can actually spend, and that margin is not
+#: slack, it is the whole point.  One shared `_ROUTING_BUDGET` was tried and it
+#: measured four cells WORSE: A* had just got 2.1x faster, so 2M expansions went
+#: from more than a 15s ceiling could reach to less, the second candidate height
+#: exhausted it, and every height after that got nothing.  A budget that binds
+#: before the clock does not bound the runaway the clock already bounds; it just
+#: silently deletes the back half of the sweep.  Four hundred thousand a second
+#: is roughly two and a half times the measured 155k/sec.
+_ROUTING_EXPANSIONS_PER_SECOND = 400_000
+
 #: A* expansions between wall-clock checks.
 #:
 #: ``time.monotonic()`` costs about as much as an expansion, so calling it on
@@ -150,6 +166,16 @@ _DEADLINE_CHECK_EVERY = 4096
 #: west and north faces, so the fix costs it no freedom there.
 _ROUTE_RING = 2
 _ENTRY_RING = _ROUTE_RING + 1
+
+#: Fraction of the call's wall clock held back for the shelf sweep.
+#:
+#: Measured per phase at a 4s budget on the large tier: the first sweep spends
+#: 5-12s, the escalated retry another 18-22s, and the shelf sweep 1.5-4.7s --
+#: and the shelf sweep is what wired three of those six candidates.  A third of
+#: fifteen seconds is several times what it has ever needed, and giving it none
+#: would spend the whole ceiling arriving one second short of the phase that
+#: works.
+_LOOSE_SHARE = 1.0 / 3.0
 
 #: The order :meth:`FreeformLayout._loose_sweep` takes candidate heights in.
 #:
@@ -1689,11 +1715,6 @@ def _astar(
     """
     if not goals:
         return None
-    min_x, min_y, max_x, max_y = bounds
-
-    def inside(cell: tuple[int, int, int]) -> bool:
-        return min_x <= cell[0] <= max_x and min_y <= cell[1] <= max_y
-
     # Heuristic: Manhattan distance to the NEAREST goal.
     #
     # This used to use the goals' centroid, which is not admissible when the
@@ -1707,11 +1728,24 @@ def _astar(
     if (budget is not None and budget["left"] <= 0) or _expired(deadline):
         return None
     goal_list = list(goals)
-    if len(goal_list) <= _EXACT_HEURISTIC_GOALS:
+    if len(goal_list) == 1:
+        # By far the commonest shape -- a port with one free neighbour -- and
+        # the generator, the `min` and the `float` around them were 17% of the
+        # profile between them. One goal needs none of the three.
+        only_x, only_y, _ = goal_list[0]
 
         def h(c: tuple[int, int, int]) -> float:
             x, y, _ = c
-            return float(min(abs(x - g[0]) + abs(y - g[1]) for g in goal_list))
+            dx = x - only_x
+            dy = y - only_y
+            return (dx if dx >= 0 else -dx) + (dy if dy >= 0 else -dy)
+
+    elif len(goal_list) <= _EXACT_HEURISTIC_GOALS:
+        flat = [(g[0], g[1]) for g in goal_list]
+
+        def h(c: tuple[int, int, int]) -> float:
+            x, y, _ = c
+            return float(min(abs(x - gx) + abs(y - gy) for gx, gy in flat))
 
     else:
         bx0 = min(g[0] for g in goal_list)
@@ -1725,6 +1759,44 @@ def _astar(
 
     expansions = 0
 
+    # THE INNER LOOP IS THE WHOLE COST, so everything it touches is bound once
+    # here.  Profiled on one `universe-matrix` routing pass: 1.19M expansions in
+    # 16.4s -- 72k/sec -- of which `_Canvas.free` was 16.0M calls and 25% of the
+    # time, `inside` 17.6M calls, and `dict.get` 29.2M calls.  heapq was 3.5%.
+    # The wall was the interpreter, not the algorithm, so the checks are inlined
+    # rather than called and every attribute lookup is hoisted out.
+    #
+    # Binding the CONTAINERS is safe where binding their contents would not be:
+    # `blocked` is mutated all through routing but never rebound, and
+    # `routing_ports` is rebound per net -- before this is called, never during.
+    blocked = canvas.blocked
+    solid = canvas.solid
+    keep_out = canvas.keep_out
+    reserved_get = canvas.reserved.get
+    routing_ports = canvas.routing_ports
+    heappush = heapq.heappush
+    hist_get = history.get
+    # Round one of rip-up has no history yet, and round one is the round that
+    # usually succeeds. Skipping the lookup and the multiply there costs one
+    # branch on the rounds that do have history.
+    negotiating = bool(history)
+
+    # `bounds` and `canvas.limit` are both inclusive boxes and a cell must sit
+    # in BOTH, so intersect them once instead of testing twice per neighbour.
+    # Start cells stay exempt from `bounds` -- an external input run begins on
+    # the entry ring, outside the routing box, and works inward -- so they are
+    # still tested by `canvas.free`, which applies `limit` and not `bounds`.
+    # NOT `bx0`/`by0`/... -- those names belong to the goal bounding box the
+    # many-goals heuristic closes over, and reassigning them here would leave
+    # that heuristic measuring distance to the ROUTING box instead. From a cell
+    # inside it that is zero, so A* would quietly become Dijkstra on exactly the
+    # searches with the most goals to sort through.
+    lo_x, lo_y, hi_x, hi_y = bounds
+    if canvas.limit is not None:
+        lim_x0, lim_y0, lim_x1, lim_y1 = canvas.limit
+        lo_x, lo_y = max(lo_x, lim_x0), max(lo_y, lim_y0)
+        hi_x, hi_y = min(hi_x, lim_x1), min(hi_y, lim_y1)
+
     open_heap: list[tuple[float, float, tuple[int, int, int]]] = []
     best: dict[tuple[int, int, int], float] = {}
     prev: dict[tuple[int, int, int], tuple[int, int, int] | None] = {}
@@ -1733,6 +1805,7 @@ def _astar(
     #: later ramp clobber a predecessor the normal step expansion already set --
     #: which can point a cell's chain back through itself and make ``prev`` cyclic.
     via: dict[tuple[int, int, int], tuple[int, int, int]] = {}
+    best_get = best.get
     for s in starts:
         if not canvas.free(s):
             continue
@@ -1773,14 +1846,40 @@ def _astar(
                 node = prev[node]
             return _cut_loops(list(reversed(path)))
         x, y, lvl = cur
+        # ONE pass over the four directions, doing the plain step and the two
+        # ramps that share its ground cell.
+        #
+        # A ramp's lower half IS the plain step's target -- both are
+        # ``(x + dx, y + dy, lvl)`` -- so the separate ramp loop was re-deriving
+        # and re-testing a cell the step loop had just tested, twice over for
+        # the two level changes.  That is why the profile showed 13.5 ``free``
+        # and 14.8 ``inside`` calls per expansion against four directions:
+        # ramps were four fifths of every neighbour check.  Fusing the loops
+        # tests each ground cell once and skips both its ramps the moment it is
+        # blocked, which on a dense pack is most of the time.
+        #
+        # Exactly equivalent, not merely close: a ramp lands on ``lvl +- 1`` and
+        # a step stays on ``lvl``, so no ramp and no step of one expansion ever
+        # touch the same cell, and interleaving them cannot change which of two
+        # equal-cost paths is recorded.
         for dx, dy in _STEPS:
-            nxt = (x + dx, y + dy, lvl)
-            if not inside(nxt):
+            nx, ny = x + dx, y + dy
+            if not (lo_x <= nx <= hi_x and lo_y <= ny <= hi_y):
                 continue
-            if not canvas.free(nxt):
+            nxt = (nx, ny, lvl)
+            if nxt in blocked:
                 continue
-            cost = g + 1.0 + history.get(nxt, 0.0) * pressure
-            if cost < best.get(nxt, math.inf):
+            xy = (nx, ny)
+            if xy in solid or xy in keep_out:
+                continue
+            held = reserved_get(nxt)
+            if held is not None and held not in routing_ports:
+                continue
+
+            cost = g + 1.0
+            if negotiating:
+                cost += hist_get(nxt, 0.0) * pressure
+            if cost < best_get(nxt, math.inf):
                 best[nxt] = cost
                 prev[nxt] = cur
                 # A plain step reaches `nxt` directly, so any ramp via-cell
@@ -1788,35 +1887,39 @@ def _astar(
                 # splices a cell that is not on the path into the result, which
                 # shows up as a belt linking diagonally across a level change.
                 via.pop(nxt, None)
-                heapq.heappush(open_heap, (cost + h(nxt), cost, nxt))
-        # A level change costs two tiles of run, because belts climb 0.5 per
-        # tile.  Both are reserved so the ramp physically exists.
-        for dx, dy in _STEPS:
-            for dl in (1, -1):
-                lvl2 = lvl + dl
+                heappush(open_heap, (cost + h(nxt), cost, nxt))
+
+            # A level change costs two tiles of run, because belts climb 0.5 per
+            # tile.  Both are reserved so the ramp physically exists -- and the
+            # lower one is `nxt`, already cleared above.
+            tx, ty = x + 2 * dx, y + 2 * dy
+            if not (lo_x <= tx <= hi_x and lo_y <= ty <= hi_y):
+                continue
+            txy = (tx, ty)
+            if txy in solid or txy in keep_out:
+                continue
+            for lvl2 in (lvl + 1, lvl - 1):
                 if not 0 <= lvl2 < LEVELS:
                     continue
-                run = (x + dx, y + dy, lvl)
-                top = (x + 2 * dx, y + 2 * dy, lvl2)
-                # Both halves of the ramp are bounds-checked, not just tested
-                # for freedom.  They were not, which let a ramp step two tiles
-                # clear of the routing box and put a belt in the margin the
-                # external entry runs rely on being empty.
-                if not inside(run) or not inside(top):
+                top = (tx, ty, lvl2)
+                if top in blocked:
                     continue
-                if not canvas.free(run) or not canvas.free(top):
+                held = reserved_get(top)
+                if held is not None and held not in routing_ports:
                     continue
-                cost = g + 3.0 + history.get(top, 0.0) * pressure
-                if cost < best.get(top, math.inf):
+                cost = g + 3.0
+                if negotiating:
+                    cost += hist_get(top, 0.0) * pressure
+                if cost < best_get(top, math.inf):
                     best[top] = cost
                     # The ramp is ONE edge cur -> top that happens to occupy an
-                    # extra cell.  Record `run` as a via, never as a node with
-                    # its own predecessor: `run` may already lie on another
-                    # cell's best path, and reassigning its predecessor is what
-                    # made `prev` cyclic.
+                    # extra cell.  Record `nxt` as a via, never as a node with
+                    # its own predecessor: it may already lie on another cell's
+                    # best path, and reassigning its predecessor is what made
+                    # `prev` cyclic.
                     prev[top] = cur
-                    via[top] = run
-                    heapq.heappush(open_heap, (cost + h(top), cost, top))
+                    via[top] = nxt
+                    heappush(open_heap, (cost + h(top), cost, top))
     return None
 
 
@@ -1860,6 +1963,7 @@ def _route_all(
     belt_model: int,
     bounds: tuple[int, int, int, int],
     deadline: float | None = None,
+    budget: dict[str, int] | None = None,
 ) -> tuple[int, int, int]:
     """Route every net, negotiating congestion across iterations.
 
@@ -1894,7 +1998,12 @@ def _route_all(
     # runs stay reproducible) and degrades honestly: an exhausted search returns
     # None, which is already the route-failure path the caller repairs from and
     # records in `route_failures`.
-    budget = {"left": _ROUTING_BUDGET}
+    # ONE budget for the whole `lay_out` call when the caller supplies it, so
+    # the sweep's ten-to-twenty routing passes cannot each spend
+    # `_ROUTING_BUDGET` afresh. A caller reaching in directly gets a pass of its
+    # own, which is what the tests and the probes want.
+    if budget is None:
+        budget = {"left": _ROUTING_BUDGET}
     fewest_failed = len(nets) + 1
     stale = 0
     #: The BEST round's paths, not the last round's.
@@ -2429,6 +2538,7 @@ def _route_external_inputs(
     belt_model: int,
     core: tuple[int, int, int, int],
     deadline: float | None = None,
+    budget: dict[str, int] | None = None,
 ) -> int:
     """Run every outside input from the block edge to the lane that wants it.
 
@@ -2479,7 +2589,8 @@ def _route_external_inputs(
         return 0
 
     history: dict[tuple[int, int, int], float] = defaultdict(float)
-    budget = {"left": _ROUTING_BUDGET}
+    if budget is None:
+        budget = {"left": _ROUTING_BUDGET}
     # Deduplicate: several strips of one group each want the same item, and each
     # of their lanes needs its own way in.
     # Keyed by LANE, not by item. `_seat_inputs` mixes two ingredients onto one
@@ -2902,6 +3013,7 @@ def _build(
     route: bool,
     claim_power: bool = True,
     deadline: float | None = None,
+    budget: dict[str, int] | None = None,
 ) -> tuple[Placement, int, int]:
     """Emit, wire and power one pack.
 
@@ -3099,13 +3211,13 @@ def _build(
     unreachable = 0
     if route:
         unreachable = _route_external_inputs(
-            canvas, spec, strip_in_ports, belt_id, belt_model, core, deadline
+            canvas, spec, strip_in_ports, belt_id, belt_model, core, deadline, budget
         )
 
     routed, failed, iterations = (0, 0, 0)
     if route and nets:
         routed, failed, iterations = _route_all(
-            canvas, nets, belt_id, belt_model, route_bounds, deadline
+            canvas, nets, belt_id, belt_model, route_bounds, deadline, budget
         )
     failed += unreachable
 
@@ -3600,7 +3712,31 @@ class FreeformLayout:
             )
 
         ceiling = max(time_budget_s, RETRY_BUDGET_S)
-        deadline = time.monotonic() + ceiling
+        started = time.monotonic()
+        deadline = started + ceiling
+        # The packing phases get the front of the wall and the shelf sweep is
+        # guaranteed the tail, because the two are not comparable in cost or in
+        # yield. Measured per phase at a 4s budget on the large tier: the first
+        # sweep spends 5-12s, the escalated retry another 18-22s, and the shelf
+        # sweep 1.5-4.7s -- and of the six candidates there, the shelf sweep is
+        # what wired three of them. Letting the packer take the whole wall would
+        # spend fifteen seconds to arrive one second short of the phase that
+        # actually works. This is not a bigger ceiling, it is the same ceiling
+        # spent where it pays.
+        pack_deadline = started + ceiling * (1.0 - _LOOSE_SHARE)
+        # ONE routing budget for the call. `_MAX_EXPANSIONS` bounds a single
+        # search and `_ROUTING_BUDGET` bounded one routing pass; nothing bounded
+        # the ten to twenty passes a sweep makes, so the packer could spend it
+        # over and over. The wall clock bounds them in seconds; this bounds them
+        # deterministically, which is what keeps a re-run reproducible -- and it
+        # is scaled to the ceiling so that it stays a backstop rather than
+        # becoming the thing that ends the sweep. See
+        # `_ROUTING_EXPANSIONS_PER_SECOND`.
+        budget = {
+            "left": max(
+                _ROUTING_BUDGET, int(_ROUTING_EXPANSIONS_PER_SECOND * ceiling)
+            )
+        }
 
         try:
             strips = plan_strips(spec, strip_len=self.strip_len)
@@ -3647,10 +3783,10 @@ class FreeformLayout:
         if time_budget_s < RETRY_BUDGET_S:
             budgets.append(RETRY_BUDGET_S)
 
-        for budget in budgets:
-            if _expired(deadline):
+        for sweep_s in budgets:
+            if _expired(pack_deadline):
                 break
-            best = self._sweep(spec, strips, budget, deadline)
+            best = self._sweep(spec, strips, sweep_s, pack_deadline, budget)
             if best is not None:
                 return best
 
@@ -3660,7 +3796,11 @@ class FreeformLayout:
         # shares the CALL's deadline rather than getting one of its own: a last
         # resort with its own budget is how the phases came to be individually
         # bounded and collectively unbounded.
-        loose = None if _expired(deadline) else self._loose_sweep(spec, strips, deadline)
+        loose = (
+            None
+            if _expired(deadline)
+            else self._loose_sweep(spec, strips, deadline, budget)
+        )
         if loose is not None:
             return loose
 
@@ -3682,7 +3822,11 @@ class FreeformLayout:
         )
 
     def _loose_sweep(
-        self, spec: BuildSpec, strips: list[Strip], deadline: float
+        self,
+        spec: BuildSpec,
+        strips: list[Strip],
+        deadline: float,
+        budget: dict[str, int] | None = None,
     ) -> Placement | None:
         """The shelf packing, tried only once no solved pack could be wired.
 
@@ -3759,7 +3903,13 @@ class FreeformLayout:
             # place of a refusal, which is the wrong direction.  Let the attempt
             # fail and let the margin fix it.
             placement, failed, _towers = _build(
-                spec, strips, pack, power=self.power, route=True, deadline=deadline
+                spec,
+                strips,
+                pack,
+                power=self.power,
+                route=True,
+                deadline=deadline,
+                budget=budget,
             )
             if failed:
                 continue
@@ -3777,6 +3927,7 @@ class FreeformLayout:
         strips: list[Strip],
         time_budget_s: float,
         deadline: float | None = None,
+        budget: dict[str, int] | None = None,
     ) -> Placement | None:
         """Try every candidate height, returning the best FULLY ROUTED placement.
 
@@ -3845,7 +3996,13 @@ class FreeformLayout:
             if pack is None:
                 continue
             placement, failed, _towers = _build(
-                spec, strips, pack, power=self.power, route=True, deadline=deadline
+                spec,
+                strips,
+                pack,
+                power=self.power,
+                route=True,
+                deadline=deadline,
+                budget=budget,
             )
             # There is no `claim_power=False` retry here any more, and what
             # replaced it is `_loose_sweep`.
