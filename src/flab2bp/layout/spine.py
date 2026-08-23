@@ -1353,6 +1353,27 @@ def _solve_one(
     # Multi-worker CP-SAT is not deterministic, and the bake-off compares
     # strategies -- reproducibility outweighs the speedup.
     solver.parameters.num_search_workers = workers
+    # Presolve PROBING is where this model's budget went, and it bought nothing.
+    #
+    # Measured on `universe-matrix` (40 groups, 68 edges, n=40, 64 workers,
+    # w=276, 15s):
+    #
+    #     default                      presolve 3.70s   first solution 4.97s
+    #     cp_model_probing_level = 0    presolve 0.67s   first solution 0.75s
+    #     symmetry_level = 0            presolve 3.64s   first solution 5.11s
+    #
+    # Probing is the whole of it; symmetry detection is free by comparison.  A
+    # sweep of six widths divides the call's budget six ways, so at the audit's
+    # 4s budget each solve got 0.5s -- and presolve had not finished, let alone
+    # started searching.  That is why every `universe-matrix` cell refused with
+    # "CP-SAT found no feasible row assignment at any candidate width": the
+    # model is feasible at every width and was never asked.
+    #
+    # Probing pays off on models where implications between Booleans are hidden.
+    # Here they are not: `in_row` is an explicit exactly-one, and every corridor
+    # and tap literal is already a reification the model states outright.  So the
+    # probe walks ~10,900 Booleans to rediscover what was written down.
+    solver.parameters.cp_model_probing_level = 0
     status = solver.solve(model)
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         return None, status == cp_model.INFEASIBLE
