@@ -143,10 +143,94 @@ OUTER_MAX = 3
 LAMBDA_HPWL = 1
 MU_DIRECT = 4
 
+#: How much of a sweep's clock CP-SAT may have, the rest belonging to the
+#: router.  See :meth:`FreeformLayout._sweep`, which is where the measurement
+#: that sets it is written down.
+_PACK_SHARE = 0.35
+
+#: What a repair search pays, per cell, to cross a belt that is already down.
+#:
+#: High enough that crossing is a last resort and low enough that it stays
+#: possible: a path of a hundred free cells costs about a hundred, so one
+#: crossed cell outweighs half a detour of that size.  See
+#: :func:`_route_all`'s repair pass.
+_REPAIR_CROSSING = 60.0
+
+#: How many settled paths one stranded net may displace before the repair
+#: declines the trade.  Measured across five `universe-matrix` packs, every one
+#: of 31 stranded nets crossed between 1 and 11 paths, so this refuses only the
+#: cases the census never produced -- where re-routing the victims would cost
+#: more than the round it is replacing.
+_REPAIR_MAX_VICTIMS = 16
+
+#: Repair sweeps per rip-up round.  Each is cheap (a crossing search is
+#: 0.001-0.025s against 3.1-4.0s for a round), and a displaced net that strands
+#: in turn is worth trying to place the same way -- but a pack where that keeps
+#: happening is one negotiation should price rather than one repair should churn.
+_REPAIR_PASSES = 4
+
 #: Above this many goals, the A* heuristic switches from exact
 #: distance-to-nearest-goal to distance-to-goal-bounding-box.  Both are
 #: admissible; the box is weaker but O(1) instead of O(|goals|) per node.
 _EXACT_HEURISTIC_GOALS = 64
+
+#: INFLATING THAT HEURISTIC WAS TRIED AND IS WORSE.  Kept because the diagnosis
+#: under it is right and only the remedy was wrong.
+#:
+#: The observation: the heuristic charges 1.0 per step, the cheapest an edge can
+#: be, while a negotiating step costs ``1 + level_toll + history * pressure``
+#: with ``pressure = 0.5 * 1.6**round``, so by the fifth round a contested cell
+#: costs four to twenty times what the heuristic assumes.  Expansions per net
+#: per round on `universe-matrix` climb accordingly, with micro-seconds per
+#: expansion FLAT at 4-6 across every round -- the search loses its guide, the
+#: loop does not get slower:
+#:
+#:   no-proliferator h=69 power=1   5295 -> 5344 -> 8315 -> 12507 -> 15078
+#:   no-proliferator h=69 power=0   3424 -> 3841 -> 6901 -> 7951
+#:   max-proliferation h=72 power=1 1365 -> 1688 -> 2413 -> 3742
+#:
+#: The remedy that does not work is multiplying the heuristic by a constant.  An
+#: inflated heuristic is INCONSISTENT, and this search re-opens a settled cell
+#: whenever a cheaper way to it turns up, so the re-expansions cost more than
+#: the guidance saves.  Measured on a fixed pack (deterministic CP-SAT, so the
+#: only difference is the weight), 30 height-cells at each weight:
+#:
+#:   weight 1.0 -- 12 of 30 wired, round times 2.5/3.6/5.3/6.1s
+#:   weight 1.5 --  3 of 30 wired, round times 2.8/4.4/12.6s, expansions UP
+#:   weight 2.5 --  3 of 30 wired, round times 2.5/6.7/3.9/9.9s, expansions UP
+#:
+#: The real gap is not the scale of the estimate, it is that Manhattan cannot
+#: see an obstacle: measured `exp/pathlen` is 50.7 median (p90 127) on
+#: no-proliferator h=69 and 77.5 median on h=185, with `_MAX_EXPANSIONS` never
+#: reached.  An 85-cell path costs 4322 expansions because A* settles every cell
+#: whose Manhattan estimate is under the true detour.  That wants a heuristic
+#: that knows where the machines are, not a bigger multiplier.  See
+#: :data:`_ALT_LANDMARKS`.
+
+#: Landmarks for the DIFFERENTIAL heuristic, which is what does know where the
+#: machines are.  Zero falls back to plain Manhattan.
+#:
+#: For a landmark ``L`` with known distances to every cell, the triangle
+#: inequality gives ``d(n, g) >= |d(L, n) - d(L, g)|`` -- a lower bound that
+#: costs two array reads and is large exactly where Manhattan is worst, because
+#: a wall between ``n`` and ``g`` moves them apart on some landmark's dial even
+#: though their coordinates are close.  Taking the max over several landmarks
+#: and over Manhattan keeps it admissible and can only tighten it.
+#:
+#: THE DISTANCES ARE ON THE 2D PROJECTION of the canvas, where a column is
+#: passable if any of its levels is, and they count STEPS rather than cost.
+#: That is what makes them a valid bound on a 3D search with ramps: a plain step
+#: moves one column and costs at least 1.0, a ramp moves two columns and costs
+#: 3.0, so cost is never below the number of columns crossed, and the projection
+#: is more permissive than any single level.  They are built from ``base`` --
+#: the occupancy before any path commits, with port reservations still open --
+#: so committing paths can only make the true distance longer, never shorter,
+#: and one build serves every round of the pass.
+#:
+#: Four, from farthest-point selection.  Each is one breadth-first sweep of the
+#: projection, ~26k columns on a `universe-matrix` canvas, and the whole build
+#: is paid ONCE per routing pass against the tens of seconds the pass costs.
+_ALT_LANDMARKS = 4
 
 #: Hard cap on A* node expansions for a single net.  Exceeding it returns
 #: ``None``, which the caller already treats as a route failure and handles by
@@ -1905,6 +1989,11 @@ class _Grid:
     reserved: tuple[tuple[int, tuple[int, int]], ...]
     #: Congestion history as a flat array, or ``None`` on a round that has none.
     hist: list[float] | None
+    #: Landmark distance fields over the 2D projection, indexed
+    #: ``(x - gx0) * gh + (y - gy0)``, with ``-1`` for a column the landmark
+    #: cannot reach.  Empty until :meth:`build_landmarks` is called, which only
+    #: :func:`_route_all` does -- see :data:`_ALT_LANDMARKS`.
+    alt: tuple[list[int], ...] = ()
 
     def index(self, cell: tuple[int, int, int]) -> int:
         x, y, lvl = cell
@@ -1918,6 +2007,84 @@ class _Grid:
         """Undo :meth:`block` -- back to whatever the cell was before routing."""
         at = self.index(cell)
         self.occ[at] = self.base[at]
+
+    def _passable_columns(self) -> bytearray:
+        """The 2D projection of ``base``: a column is open if any level is.
+
+        Built by OR-ing the ``LEVELS`` strided views of ``base`` together as one
+        big integer, because a Python loop over 26k columns is 15ms and this is
+        microseconds.  ``base`` is already zero outside the routing box and in
+        the two-cell pad, so the pad keeps ``p +- 1`` and ``p +- gh`` in range
+        for every passable column and no neighbour test needs a bounds check.
+        """
+        mv = memoryview(self.base)
+        acc = int.from_bytes(bytes(mv[0 :: LEVELS]), "big")
+        for lvl in range(1, LEVELS):
+            acc |= int.from_bytes(bytes(mv[lvl :: LEVELS]), "big")
+        npro = self.size // LEVELS
+        return bytearray(acc.to_bytes(npro, "big"))
+
+    def _sweep(self, source: int, passable: bytearray) -> list[int]:
+        """Breadth-first step distances from one column. ``-1`` is unreachable."""
+        gh = self.gh
+        dist = [-1] * len(passable)
+        dist[source] = 0
+        frontier = [source]
+        step = 0
+        while frontier:
+            step += 1
+            nxt: list[int] = []
+            push = nxt.append
+            for p in frontier:
+                for q in (p - 1, p + 1, p - gh, p + gh):
+                    if passable[q] and dist[q] < 0:
+                        dist[q] = step
+                        push(q)
+            frontier = nxt
+        return dist
+
+    def build_landmarks(self, count: int) -> None:
+        """Choose ``count`` landmarks farthest-point and sweep each one.
+
+        Farthest-point rather than corners: the point of a landmark is to sit
+        somewhere whose dial separates cells a wall separates, and the corners of
+        a rectangle mostly reproduce Manhattan.  Each round picks the column
+        farthest from everything chosen so far, which is the standard
+        construction and needs no knowledge of the pack.
+        """
+        if count <= 0:
+            return
+        passable = self._passable_columns()
+        seed = passable.find(1)
+        if seed < 0:
+            return
+        # One throwaway sweep first: starting farthest-point from an ARBITRARY
+        # column would put the first landmark wherever the pack's first free
+        # column happens to be.
+        far = self._sweep(seed, passable)
+        best_at, best_d = seed, 0
+        for p, d in enumerate(far):
+            if d > best_d:
+                best_at, best_d = p, d
+        fields: list[list[int]] = []
+        reach: list[int] = []
+        for _ in range(count):
+            field_ = self._sweep(best_at, passable)
+            fields.append(field_)
+            if not reach:
+                reach = field_[:]
+            else:
+                for p, d in enumerate(field_):
+                    prev = reach[p]
+                    if d >= 0 and (prev < 0 or d < prev):
+                        reach[p] = d
+            best_at, best_d = -1, -1
+            for p, d in enumerate(reach):
+                if d > best_d:
+                    best_at, best_d = p, d
+            if best_at < 0:
+                break
+        self.alt = tuple(fields)
 
     def refresh_history(self, history: Mapping[tuple[int, int, int], float]) -> None:
         """Re-flatten ``history``, which changes once per rip-up round."""
@@ -2195,6 +2362,53 @@ def _astar(
         def h(x: int, y: int) -> float:
             return float(max(0, bx0 - x, x - bx1) + max(0, by0 - y, y - by1))
 
+    # AND THE PART THAT KNOWS WHERE THE MACHINES ARE -- see `_ALT_LANDMARKS`.
+    #
+    # For each landmark, the goals occupy a band ``[lo, hi]`` on its dial, and a
+    # cell at ``d`` is at least ``lo - d`` or ``d - hi`` steps from the nearest
+    # of them.  Reducing the goal set to a band rather than taking a minimum per
+    # goal is what keeps this O(landmarks) instead of O(landmarks x goals): it
+    # is weaker, and it is the same weakening the bounding box above already
+    # makes.
+    #
+    # A landmark that cannot reach one of the goals is DROPPED, not clamped.
+    # Its band would then cover only the goals it can see, and a cell measured
+    # against that band could be charged more than its distance to the goal the
+    # band left out -- which is the one way this could stop being a lower bound.
+    bands: list[tuple[list[int], int, int]] = []
+    for field_ in flat.alt:
+        lo = hi = -1
+        for c in goal_list:
+            at = (c[0] - gx0) * gh + (c[1] - gy0)
+            dial = field_[at]
+            if dial < 0:
+                lo = -1
+                break
+            if lo < 0 or dial < lo:
+                lo = dial
+            if dial > hi:
+                hi = dial
+        if lo >= 0:
+            bands.append((field_, lo, hi))
+
+    if bands:
+        plain = h
+
+        def h(x: int, y: int) -> float:  # noqa: F811
+            far = plain(x, y)
+            at = x * gh + y
+            for field_, lo, hi in bands:
+                dial = field_[at]
+                if dial < 0:
+                    continue
+                gap = lo - dial
+                if gap > far:
+                    far = gap
+                gap = dial - hi
+                if gap > far:
+                    far = gap
+            return far
+
     goal_idx = {
         (c[0] - gx0) * xstep + (c[1] - gy0) * ystep + c[2] for c in goal_list
     }
@@ -2437,7 +2651,14 @@ def _route_all(
     placement and can never degrade one.
     """
     history: dict[tuple[int, int, int], float] = defaultdict(float)
-    committed: list[list[tuple[int, int, int]]] = []
+    #: The live routing -- net index to path -- and the same cells the other way
+    #: round.  ``owner`` is what makes a TARGETED rip-up possible: a repair
+    #: search that crosses a belt has to be able to say WHOSE belt it crossed.
+    #: They are staked and unstaked together, always through `_stake`/`_unstake`,
+    #: because `canvas.blocked`, `grid.occ` and `owner` disagreeing is a router
+    #: that quietly routes through a committed belt.
+    paths: dict[int, list[tuple[int, int, int]]] = {}
+    owner: dict[tuple[int, int, int], int] = {}
     iterations = 0
     # A TOTAL expansion budget across every net and every rip-up round.
     #
@@ -2484,13 +2705,17 @@ def _route_all(
     # they are part of what the flattening records.
     #
     # It is maintained at exactly two places, the same two that write
-    # `_TENTATIVE` into `canvas.blocked`: a path commits (`block`) and a round
-    # rips up (`restore`). History is re-flattened once per round. If a third
-    # writer to `blocked` ever appears inside this loop it must update the grid
-    # too -- an `occ` that disagrees with `blocked` is a router that quietly
-    # routes through a committed belt.
+    # `_TENTATIVE` into `canvas.blocked`: `_stake` when a path commits and
+    # `_unstake` when it is ripped up, whether by a round or by a repair.
+    # History is re-flattened once per round. Any further writer to `blocked`
+    # inside this loop must go through those two -- an `occ` that disagrees with
+    # `blocked` is a router that quietly routes through a committed belt.
     grid_box = _route_box(canvas, bounds)
     grid = _make_grid(canvas, grid_box, _canvas_span(canvas, grid_box), history)
+    # The landmark sweeps go here and NOT in `_make_grid`, because they are only
+    # worth their build to a caller that will make hundreds of searches against
+    # one grid.  Everybody else routes a handful of nets and gets Manhattan.
+    grid.build_landmarks(_ALT_LANDMARKS)
 
     # Nets that end at the same lane. Ordered, so "the ones before me" is
     # well defined however the router chooses to sequence a round.
@@ -2535,14 +2760,225 @@ def _route_all(
     # second. That leaves the chain a single linear run, which is the only shape
     # that is both correct and reachable.
 
+    def _stake(index: int, path: list[tuple[int, int, int]]) -> None:
+        """Put a path down: canvas, grid and ownership, in step."""
+        paths[index] = path
+        for cell in path:
+            canvas.blocked[cell] = _TENTATIVE
+            grid.block(cell)
+            owner[cell] = index
+
+    def _unstake(index: int) -> None:
+        """Take a path up again, leaving no trace in any of the three."""
+        for cell in paths.pop(index):
+            if canvas.blocked.get(cell, -1) == _TENTATIVE:
+                del canvas.blocked[cell]
+                grid.restore(cell)
+            if owner.get(cell) == index:
+                del owner[cell]
+
+    def _ends(index: int) -> tuple[
+        list[tuple[int, int, int]], set[tuple[int, int, int]]
+    ]:
+        """This net's start and goal cells, and its port claim as a side effect.
+
+        Factored out because the repair pass has to ask the SAME question the
+        round asks.  A repair that built its ends differently would find a path
+        the committer cannot attach at either end -- which is precisely the class
+        of bug `3f04239` and `00d1f78` were.  The caller clears
+        ``canvas.routing_ports`` once its search returns.
+        """
+        net = nets[index]
+        # Claim this net's port reservations for the duration of its search,
+        # so its own way in and out reads as free while every other port's
+        # stays held.
+        canvas.routing_ports = frozenset(
+            {(net.src.x, net.src.y), (net.dst.x, net.dst.y)}
+        )
+        starts = [
+            (net.src.x + dx, net.src.y + dy, 0)
+            for dx, dy in _STEPS
+            if canvas.free((net.src.x + dx, net.src.y + dy, 0))
+        ]
+        # Leaving from a sibling's belt is as good as leaving from the lane,
+        # and it is the only option when the lane is walled in. `_tap_source`
+        # turns the attachment into a splitter on that belt.
+        starts.extend(
+            sorted(_merge_frontier(canvas, paths, src_group.get(index, ())) - set(starts))
+        )
+        goals = {
+            (net.dst.x + dx, net.dst.y + dy, 0)
+            for dx, dy in _STEPS
+            if canvas.free((net.dst.x + dx, net.dst.y + dy, 0))
+        }
+        # A lane head has one way in. When several producers feed the same
+        # lane, only the first can use it; the rest MERGE into whatever
+        # already got there, which is what converging belts do in game. The
+        # goal set therefore grows to include the free cells beside every
+        # path already laid this round for the same destination -- reaching
+        # one of those is reaching the lane.
+        for cell in _merge_frontier(canvas, paths, dst_group.get(index, ())):
+            goals.add(cell)
+        return starts, goals
+
+    def _repair(
+        stranded: list[int], pressure: float, blame: dict[tuple[int, int, int], float]
+    ) -> list[int]:
+        """Place stranded nets by CROSSING settled belts and moving those.
+
+        A round is greedy sequential routing, so a net that reaches a full
+        corridor last simply fails, and the next round runs the same nets in the
+        same order against a map that differs only in price.  On
+        `universe-matrix` that costs 3.1-4.0s a round to shuffle one or two
+        failures about, and the sweep's whole ceiling buys three or four of them.
+
+        What the failure IS, every time it has been looked at, is contention and
+        never geometry.  Re-searching each stranded net on a grid where settled
+        belts are passable found a path for all 31 stranded nets across five
+        packs, in 0.001-0.025s each, and every one crossed between 1 and 11 of
+        the 93-140 paths already down.  So: take that path, rip up only the
+        handful it crosses, and send those looking again.  It is aimed at the
+        nets that are actually in the way rather than at all of them, and it is
+        roughly twenty-five times cheaper than the round it saves.
+
+        This is also the overuse signal negotiation never had here.  A settled
+        path is `blocked` rather than dear, so two nets never overlap and the
+        history term can only ever record that a cell was USED.  A crossing
+        search is the one place this router learns that a cell was WANTED by
+        somebody who could not have it.
+
+        Returns whatever is still stranded, which the caller counts as failed.
+        """
+        if not stranded:
+            return stranded
+        # A grid whose belts are passable but dear.  `base` is the occupancy
+        # before any path settled, so restoring it opens exactly the cells this
+        # pass has taken -- machines, keep-outs and the routing box stay shut.
+        open_grid = replace(grid, occ=bytearray(grid.base), hist=None)
+        # The crossing charge rides on the history array, so the repair search
+        # prices congestion exactly as the round does and adds a toll on top.
+        # `pressure` is folded in here and the search is given 1.0, which keeps
+        # the toll a fixed number of tiles rather than one that grows with the
+        # round number.
+        settled = grid.hist
+        crossing = (
+            [0.0] * grid.size if settled is None else [v * pressure for v in settled]
+        )
+        for cell in owner:
+            crossing[grid.index(cell)] += _REPAIR_CROSSING
+        open_grid.hist = crossing
+
+        def _leaning(on: set[int]) -> set[int]:
+            """Grow a victim set to everything that LEANS on it, transitively.
+
+            A net whose lane head is already taken merges instead: it ends
+            beside a sibling's belt and `_commit_paths` links it to that belt.
+            So moving a path can leave another path ending against nothing, and
+            `_commit_paths` counts that as unlinked -- a route failure by a
+            different name and just as fatal to the pack.
+
+            Measured, and it is not a corner: displacing victims without this,
+            every one of thirteen `universe-matrix` packs routed MORE nets and
+            then failed to link between 2 and 20 of them, against 0 or 1
+            unlinked with no repair at all.  The repair was trading a stranded
+            net for a stranded belt.
+
+            A leaner is found from the CURRENT arrangement rather than from what
+            was true when it routed, because `_commit_paths` also decides at the
+            end: whatever sits beside a path's ends now is what it will attach
+            to.
+            """
+            touch: dict[tuple[int, int, int], set[int]] = {}
+            for other, path in paths.items():
+                for end in (path[0], path[-1]):
+                    for dx, dy in _STEPS:
+                        touch.setdefault(
+                            (end[0] + dx, end[1] + dy, end[2]), set()
+                        ).add(other)
+            grown = set(on)
+            queue = list(on)
+            while queue and len(grown) <= _REPAIR_MAX_VICTIMS:
+                for cell in paths[queue.pop()]:
+                    for other in touch.get(cell, ()):
+                        if other not in grown:
+                            grown.add(other)
+                            queue.append(other)
+            return grown
+
+        still: list[int] = []
+        for index in stranded:
+            if _expired(deadline) or (budget is not None and budget["left"] <= 0):
+                still.append(index)
+                continue
+            starts, goals = _ends(index)
+            through = _astar(
+                canvas, starts, goals, history, 1.0, bounds, budget, deadline,
+                None, open_grid,
+            )
+            canvas.routing_ports = frozenset()
+            if through is None:
+                # Genuinely nowhere to go even with every belt open. That is a
+                # sealed pocket in the PACK, which repair cannot argue with and
+                # the next height can.
+                still.append(index)
+                continue
+            victims = _leaning({owner[cell] for cell in through if cell in owner})
+            victims.discard(index)
+            if len(victims) > _REPAIR_MAX_VICTIMS:
+                still.append(index)
+                continue
+            # ALL OR NOTHING, and this is the whole difference between a repair
+            # and a churn.
+            #
+            # Taken greedily -- displace the victims, keep whichever of them find
+            # a way round -- this LOSES nets: measured on
+            # `universe-matrix/no-proliferator` power=1 at h=185, a round that
+            # stranded ONE net came out of the greedy repair stranding TEN,
+            # because each swap cashed in a settled path for a chance. So the
+            # swap is a transaction. Every displaced net must find a new route
+            # or the whole thing is rolled back, which makes a repair pass
+            # monotone: it can place a net or decline, never subtract one.
+            saved = {hurt: paths[hurt] for hurt in victims}
+            for hurt in victims:
+                _unstake(hurt)
+            _stake(index, through)
+            # The displaced go looking for a way round, longest first for the
+            # same reason the round orders that way.
+            moved: list[int] = []
+            for hurt in sorted(
+                victims,
+                key=lambda i: -(
+                    abs(nets[i].src.x - nets[i].dst.x)
+                    + abs(nets[i].src.y - nets[i].dst.y)
+                ),
+            ):
+                starts, goals = _ends(hurt)
+                again = _astar(
+                    canvas, starts, goals, history, pressure, bounds, budget,
+                    deadline, blame, grid,
+                )
+                canvas.routing_ports = frozenset()
+                if again is None:
+                    break
+                _stake(hurt, again)
+                moved.append(hurt)
+            if len(moved) == len(victims):
+                continue
+            # Roll back to exactly the arrangement we found. The cells every
+            # saved path wants are free again the moment the nets that took
+            # them are lifted, because nothing outside this transaction moved.
+            for hurt in moved:
+                _unstake(hurt)
+            _unstake(index)
+            for hurt, was in saved.items():
+                _stake(hurt, was)
+            still.append(index)
+        return still
+
     for it in range(RRR_MAX):
         iterations = it + 1
-        for path in committed:
-            for cell in path:
-                if canvas.blocked.get(cell, -1) == _TENTATIVE:
-                    del canvas.blocked[cell]
-                    grid.restore(cell)
-        committed = []
+        for index in list(paths):
+            _unstake(index)
         # `history` gained a round's worth of use and blame at the end of the
         # last iteration, and the search reads it flattened.
         grid.refresh_history(history)
@@ -2579,60 +3015,41 @@ def _route_all(
                 abs(nets[i].src.x - nets[i].dst.x) + abs(nets[i].src.y - nets[i].dst.y)
             ),
         )
-        paths: dict[int, list[tuple[int, int, int]]] = {}
+        stranded: list[int] = []
         for i in order:
             if _expired(deadline):
                 return 0, len(nets), iterations
-            net = nets[i]
-            # Claim this net's port reservations for the duration of its search,
-            # so its own way in and out reads as free while every other port's
-            # stays held.
-            canvas.routing_ports = frozenset(
-                {(net.src.x, net.src.y), (net.dst.x, net.dst.y)}
-            )
-            starts = [
-                (net.src.x + dx, net.src.y + dy, 0)
-                for dx, dy in _STEPS
-                if canvas.free((net.src.x + dx, net.src.y + dy, 0))
-            ]
-            # Leaving from a sibling's belt is as good as leaving from the lane,
-            # and it is the only option when the lane is walled in. `_tap_source`
-            # turns the attachment into a splitter on that belt.
-            starts.extend(
-                sorted(_merge_frontier(canvas, paths, src_group.get(i, ())) - set(starts))
-            )
-            goals = {
-                (net.dst.x + dx, net.dst.y + dy, 0)
-                for dx, dy in _STEPS
-                if canvas.free((net.dst.x + dx, net.dst.y + dy, 0))
-            }
-            # A lane head has one way in. When several producers feed the same
-            # lane, only the first can use it; the rest MERGE into whatever
-            # already got there, which is what converging belts do in game. The
-            # goal set therefore grows to include the free cells beside every
-            # path already laid this round for the same destination -- reaching
-            # one of those is reaching the lane.
-            for cell in _merge_frontier(canvas, paths, dst_group.get(i, ())):
-                goals.add(cell)
+            starts, goals = _ends(i)
             routed = _astar(
                 canvas, starts, goals, history, pressure, bounds, budget, deadline,
                 blame, grid,
             )
             canvas.routing_ports = frozenset()
             if routed is None:
-                failed += 1
+                stranded.append(i)
                 continue
-            paths[i] = routed
-            for cell in routed:
-                canvas.blocked[cell] = _TENTATIVE
-                grid.block(cell)
-            committed.append(routed)
+            _stake(i, routed)
+        # AND THE REPAIR, before conceding the round.
+        #
+        # Repeated while it keeps placing nets, because a displaced net that
+        # strands in turn is the same problem one step along and answers to the
+        # same move. It stops the moment a pass places nobody, which is when the
+        # contention has stopped being local and negotiation should price it.
+        for _ in range(_REPAIR_PASSES):
+            if not stranded or _expired(deadline):
+                break
+            after = _repair(stranded, pressure, blame)
+            if len(after) >= len(stranded):
+                stranded = after
+                break
+            stranded = after
+        failed = len(stranded)
         if failed == 0:
             unlinked = _commit_paths(
                 canvas, nets, paths, belt_id, belt_model, src_group, dst_group
             )
             return len(paths) - unlinked, unlinked, iterations
-        for path in committed:
+        for path in paths.values():
             for cell in path:
                 history[cell] += 1.0
         # AND A SURCHARGE ON THE CELLS THAT CUT THE BOARD.
@@ -2675,7 +3092,11 @@ def _route_all(
         # because pressure grows geometrically and a late round can still break
         # a deadlock that earlier ones could not.
         if failed < fewest_failed:
-            fewest_failed, stale, best_paths = failed, 0, paths
+            # A COPY. `paths` used to be rebuilt every round, so keeping the
+            # reference kept a snapshot; it now persists across rounds and is
+            # mutated in place by the rip-up and by the repair, so keeping the
+            # reference would make "the best round" mean "the last one".
+            fewest_failed, stale, best_paths = failed, 0, dict(paths)
         else:
             stale += 1
         # An exhausted expansion budget ends the search as surely as a stale
@@ -4140,19 +4561,25 @@ def _build(
     for cell in [c for c, owner in canvas.blocked.items() if owner == _TENTATIVE]:
         del canvas.blocked[cell]
     canvas.keep_out.clear()
-    # A build the clock ran out on is a build the caller will discard, so it
+    # A build with an unrouted net is a build the caller will discard, so it
     # does not pay for the power pass -- which is a full sweep of every powered
     # tile against every tower and is seconds on a large block.
     #
-    # Guarded on `failed`, never on the deadline alone. A build that WIRED is a
-    # real candidate whatever the time is, and returning one with no towers
-    # because the clock was short would be a `power.coverage` INVALID
-    # manufactured by a stopwatch -- the exact thing a deadline must not do.
-    towers = (
-        _place_power(canvas, power_sites)
-        if power and not (failed and _expired(deadline))
-        else 0
-    )
+    # Guarded on `failed`, never on the deadline. A build that WIRED is a real
+    # candidate whatever the time is, and returning one with no towers because
+    # the clock was short would be a `power.coverage` INVALID manufactured by a
+    # stopwatch -- the exact thing a deadline must not do. But `failed` is not a
+    # stopwatch: `_sweep` discards any pack with one, unconditionally, so every
+    # second spent covering it is spent on something already thrown away.
+    #
+    # This used to also require the deadline to have passed, which meant a
+    # doomed build paid in full whenever it failed EARLY -- the worst case, since
+    # failing early is exactly when there was still clock to spend on the next
+    # height. Measured at a 15s ceiling on `universe-matrix/no-proliferator`
+    # power=1: routing conceded at 8.05s with ten nets short and the power pass
+    # then ran to 14.30s, so six of the remaining seven seconds went on a
+    # placement nothing was ever going to look at.
+    towers = _place_power(canvas, power_sites) if power and not failed else 0
 
     placement = Placement(
         buildings=tuple(canvas.buildings),
@@ -4799,12 +5226,53 @@ class FreeformLayout:
         # each pass costs 25-40 seconds against a ceiling of 15 or 120. All six
         # of its cells refuse at both budgets and they are named in the commit
         # message rather than bought back.
-        heights = _candidate_heights(strips)
+        # SO HERE IS THAT ORDER, AND IT DEPENDS ON THE STRIPS.
+        #
+        # Not "shortest", not "tallest": NARROWEST-PACK FIRST, measured on the
+        # greedy shelf pack each height gets as its warm start.  Routing cost is
+        # a function of how far a net has to travel and a pack's width is what
+        # sets that, so the cheapest height to WIRE is the one whose pack comes
+        # out narrowest -- whichever direction that happens to lie in.
+        #
+        # Measured on `universe-matrix/no-proliferator` power=0, one routing
+        # pass per height on a fixed pack, no routing clock:
+        #
+        #   h= 69  w=361  26.4s      h= 92  w=309  19.0s
+        #   h=116  w=255  28.5s      h=145  w=226  17.3s
+        #   h=185  w=188   7.5s
+        #
+        # Its tallest height is its NARROWEST and routes three times faster than
+        # the shortest, which the sweep used to try first and never get past.
+        # The note above says tall packs here are "both wider AND slower"; the
+        # second half is right and the first is backwards, which is how that
+        # experiment came out even.
+        #
+        # The greedy pack is already built per height as `_pack`'s seed, so
+        # building them all up front costs nothing and only moves the work.
+        seeds = {height: _greedy_pack(strips, height) for height in _candidate_heights(strips)}
+        heights = sorted(seeds, key=lambda height: (seeds[height].width, height))
         # This sweep's own share, never more than the CALL has left. A sweep
         # asked for 15s when 3 remain must not spend 15.
         left = time_budget_s if deadline is None else deadline - time.monotonic()
         share = max(0.1, min(time_budget_s, max(left, 0.0)))
-        per_solve = max(0.1, share / max(len(heights), 1))
+        # AND PACKING ONLY GETS PART OF IT.
+        #
+        # This was `share / len(heights)`, which hands CP-SAT the WHOLE ceiling
+        # -- five heights times a fifth of it each -- and leaves routing to run
+        # on whatever the deadline had not already spent.  It only ever looked
+        # affordable because the first height's routing overran and the other
+        # four were never packed.  Measured at a 15s ceiling on
+        # `universe-matrix`: one height packed at 3.18s, routed for 11.45s and
+        # hit the wall, and the sweep saw a single candidate.
+        #
+        # Routing is where the answer is, so packing is capped at a fraction and
+        # the rest belongs to the router.  Spending longer in CP-SAT is not even
+        # free of charge to routing: a longer solve returns a TIGHTER pack, and
+        # tighter is harder to wire.  Same 30 height-cells, pack budget varied,
+        # generous routing clock -- 0.5s wired 12 of 30, 3.0s wired 6 of 30, and
+        # the widths tell the story (`max-proliferation` h=90 power=1: w=134 and
+        # 2 nets unrouted at 0.5s, w=83 and 31 unrouted at 3.0s).
+        per_solve = max(0.1, share * _PACK_SHARE / max(len(heights), 1))
         # This sweep's SOFT deadline, and the call's HARD one, and they are not
         # the same rule.
         soft = time.monotonic() + share
@@ -4834,7 +5302,7 @@ class FreeformLayout:
                 time_budget_s=per_solve,
                 direct_candidates=net_candidates,
                 workers=self.workers,
-                seed=_greedy_pack(strips, height),
+                seed=seeds[height],
             )
             if pack is None:
                 continue
