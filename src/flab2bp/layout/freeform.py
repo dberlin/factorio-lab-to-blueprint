@@ -115,12 +115,54 @@ _MAX_EXPANSIONS = 200_000
 #: which is what actually runs away at scale.
 _ROUTING_BUDGET = 2_000_000
 
+#: Rings of ground reserved around the packed block, decided BEFORE anything
+#: routes.
+#:
+#: The block's boundary used to MOVE during emission while several passes each
+#: assumed it was fixed: the external input runs computed the edge, ran out to
+#: it and thereby moved it; the router was then free to lay belts two tiles
+#: beyond that, wrapping the runs that had just defined it; the proliferator
+#: entry was placed one tile west of whatever the edge happened to be at that
+#: moment.  Every entry lane the validator reported as walled in was a tile that
+#: had been on the boundary when it was placed and interior by the time the
+#: placement was finished.
+#:
+#: Fixing the extent up front removes the whole class.  ``_ENTRY_RING`` is the
+#: outermost ring anything may occupy, and only external entry belts -- the
+#: input runs and the proliferator entry -- are ever placed there.  Everything
+#: else, the router and the power lattice included, is confined to
+#: ``_ROUTE_RING`` by :attr:`_Canvas.limit`.  The ring one beyond
+#: ``_ENTRY_RING`` is therefore empty by construction, which is exactly the
+#: precondition ``flow.external_entry_reachable`` flood-fills for: a belt
+#: sitting on the outermost occupied ring always has open ground on its outward
+#: side.
+#:
+#: Two rings for the router rather than one: that is what it had before on the
+#: west and north faces, so the fix costs it no freedom there.
+_ROUTE_RING = 2
+_ENTRY_RING = _ROUTE_RING + 1
+
+#: Unrouted nets below which a failed height is worth rebuilding without the
+#: power lattice's claimed cells.  A handful of failures can be one tower
+#: standing in one corridor; thirty cannot.
+_POWER_RETRY_NETS = 3
+
 #: Tower lattice spacing.  A square lattice of spacing ``d`` leaves a worst-case
 #: distance of ``d/sqrt(2)`` to the nearest lattice point, so ``d`` must satisfy
-#: ``d <= R*sqrt(2)``.  12 clears the 10.5 radius with room to spare (8.49) and
-#: is comfortably inside the 22.5 link distance, so the lattice both covers and
-#: connects by construction.
-TOWER_SPACING = 12
+#: ``d <= R*sqrt(2)``.
+#:
+#: Nine, not the twelve the bare covering argument allows.  A lattice point
+#: routinely lands on a machine, and ``nearest_free`` then places the tower up
+#: to FOUR tiles away -- at which point the guarantee is 8.49 + 4 = 12.49
+#: against a 10.5 radius, and no longer a guarantee at all.  That is what the
+#: coverage repair pass is for, and on a dense block it has nothing to work
+#: with: measured on ``information-matrix``, a matrix lab with 349 tiles inside
+#: tower range had FOUR of them free.  At nine the worst case is 6.36 + 4 =
+#: 10.36, so the lattice still covers even when every point has to be displaced
+#: as far as displacement goes, and 9 is still comfortably inside the 22.5 link
+#: distance.  Towers are placed after routing, so the extra ones cost buildings
+#: and nothing else.
+TOWER_SPACING = 9
 
 
 def lanes_for(rate: Fraction, capacity: Fraction) -> int:
@@ -321,9 +363,21 @@ def _shard_sinks(
 ) -> list[list[tuple[str, str]]]:
     """Chunk output sinks so no strip carries more lanes than a sorter can span.
 
-    ``sinks`` arrives grouped by item, so sequential chunking keeps a single
-    item's destinations adjacent and avoids splitting one item's lanes across
-    more shards than necessary.
+    EVERY shard drains EVERY product.  One machine makes all of its recipe's
+    outputs at once, so a shard that carries lanes for only some of them has
+    machines that back up on the rest and stop -- and the strip looks perfectly
+    healthy, because the lanes it does have are all connected.  Sequential
+    chunking did exactly that: ``plasma-refining`` yields refined-oil and
+    hydrogen, its four destinations chunked into a shard of three and a shard of
+    one, and the second shard's five machines had nowhere to put their hydrogen.
+
+    So the split is per ITEM rather than across the flat list: each product's
+    destinations are divided between the shards, and a shard that would come out
+    with none of some product is given a repeat of one of that product's
+    destinations instead.  A repeat is not waste -- a sharded producer already
+    feeds one consumer from several strips, and the router merges them -- it is
+    the only way a shard can drain a product whose consumers are fewer than the
+    shards.
 
     ``cap`` is the room left on the south side once any overflow input lanes are
     seated there; it defaults to the full sorter reach.
@@ -331,7 +385,30 @@ def _shard_sinks(
     reach = catalog.SORTER_MAX_REACH if cap is None else cap
     if reach <= 0:
         raise ValueError("no room left on the south side for any output lane")
-    return [list(sinks[i : i + reach]) for i in range(0, len(sinks), reach)]
+
+    by_item: dict[str, list[str]] = {}
+    for item, dest in sinks:
+        by_item.setdefault(item, []).append(dest)
+    if not by_item:
+        return []
+    if len(by_item) > reach:
+        raise ValueError(
+            f"a machine yields {len(by_item)} distinct products but only {reach} "
+            f"output lane(s) fit inside the {catalog.SORTER_MAX_REACH}-tile sorter "
+            "reach, so one of them could never be drained"
+        )
+
+    n = 1
+    while sum(max(1, math.ceil(len(d) / n)) for d in by_item.values()) > reach:
+        n += 1
+
+    out: list[list[tuple[str, str]]] = [[] for _ in range(n)]
+    for item, dests in by_item.items():
+        per = math.ceil(len(dests) / n)
+        for s in range(n):
+            chunk = dests[s * per : (s + 1) * per] or [dests[s % len(dests)]]
+            out[s].extend((item, d) for d in chunk)
+    return out
 
 
 def _allocate_machines(
@@ -969,6 +1046,26 @@ class _Canvas:
     reserved: dict[tuple[int, int, int], tuple[int, int]] = field(default_factory=dict)
     #: Ports the net currently being routed owns; it may use their reservations.
     routing_ports: frozenset[tuple[int, int]] = frozenset()
+    #: ``(min_x, min_y, max_x, max_y)`` no building may leave, once the packed
+    #: block's extent is known.
+    #:
+    #: This is the one thing that makes the block's boundary hold still.  Every
+    #: later pass -- coater drops, the router, the external input runs, the
+    #: power lattice -- asks ``free`` before it places, so the final bounding box
+    #: is decided once, by the packer, instead of being pushed outward by
+    #: whichever pass ran last.  ``None`` while the extent is still being
+    #: established, which is exactly the window in which the strips are emitted.
+    limit: tuple[int, int, int, int] | None = None
+    #: Cells held for the tower lattice, at every level.
+    #:
+    #: Claimed before the router runs and released just before the towers go in.
+    #: Power used to take whatever was left over once every belt was laid, which
+    #: on a dense block is nothing: measured on ``casimir-crystal``, a matrix lab
+    #: had FOUR free cells among the 349 inside tower range, and thirteen
+    #: buildings shipped unpowered.  A lattice point is one cell in eighty-one;
+    #: the router can afford to path around it, and coverage cannot afford to be
+    #: whatever is left.
+    keep_out: set[tuple[int, int]] = field(default_factory=set)
 
     def add(self, b: PlacedBuilding, *, solid: bool = False) -> int:
         idx = len(self.buildings)
@@ -985,10 +1082,38 @@ class _Canvas:
 
     def free(self, cell: tuple[int, int, int]) -> bool:
         x, y, _ = cell
-        if cell in self.blocked or (x, y) in self.solid:
+        if cell in self.blocked or (x, y) in self.solid or (x, y) in self.keep_out:
             return False
+        if self.limit is not None:
+            min_x, min_y, max_x, max_y = self.limit
+            if not (min_x <= x <= max_x and min_y <= y <= max_y):
+                return False
         port = self.reserved.get(cell)
         return port is None or port in self.routing_ports
+
+
+def _core_bounds(canvas: _Canvas) -> tuple[int, int, int, int]:
+    """The INCLUSIVE tile box the packed block occupies.
+
+    Tile extents, not origins.  ``_build`` used to take ``max(b.x)`` and add the
+    pack width to it, which over-estimated the east face by a whole block and
+    under-estimated it by a machine's width -- so the router had a field to roam
+    in on one side and none on the other, and "the edge" meant something
+    different depending on which pass asked.
+    """
+    if not canvas.buildings:
+        return (0, 0, 0, 0)
+    return (
+        min(b.x for b in canvas.buildings),
+        min(b.y for b in canvas.buildings),
+        max(b.x + b.width - 1 for b in canvas.buildings),
+        max(b.y + b.height - 1 for b in canvas.buildings),
+    )
+
+
+def _grow(box: tuple[int, int, int, int], rings: int) -> tuple[int, int, int, int]:
+    x0, y0, x1, y1 = box
+    return (x0 - rings, y0 - rings, x1 + rings, y1 + rings)
 
 
 def _pick_sorter(rate: Fraction, span: int, machines: int) -> tuple[int, int]:
@@ -1368,10 +1493,21 @@ def _astar(
     The history term is what makes rip-up-and-reroute converge: a cell that
     several nets have fought over becomes progressively more expensive, so they
     negotiate rather than oscillate.
+
+    ``bounds`` is the INCLUSIVE box the path may occupy.  It used to be the
+    block's bounding box with two tiles of slack added here, which meant the
+    caller could not say where the router was allowed to go -- and the router
+    going two tiles past a boundary the caller had already promised to somebody
+    else is what walled in the external entry lanes.  Start cells are exempt:
+    an external input run begins on the entry ring, outside the routing box, and
+    works inward.
     """
     if not goals:
         return None
     min_x, min_y, max_x, max_y = bounds
+
+    def inside(cell: tuple[int, int, int]) -> bool:
+        return min_x <= cell[0] <= max_x and min_y <= cell[1] <= max_y
 
     # Heuristic: Manhattan distance to the NEAREST goal.
     #
@@ -1452,7 +1588,7 @@ def _astar(
         x, y, lvl = cur
         for dx, dy in _STEPS:
             nxt = (x + dx, y + dy, lvl)
-            if not (min_x - 2 <= nxt[0] <= max_x + 2 and min_y - 2 <= nxt[1] <= max_y + 2):
+            if not inside(nxt):
                 continue
             if not canvas.free(nxt):
                 continue
@@ -1475,6 +1611,12 @@ def _astar(
                     continue
                 run = (x + dx, y + dy, lvl)
                 top = (x + 2 * dx, y + 2 * dy, lvl2)
+                # Both halves of the ramp are bounds-checked, not just tested
+                # for freedom.  They were not, which let a ramp step two tiles
+                # clear of the routing box and put a belt in the margin the
+                # external entry runs rely on being empty.
+                if not inside(run) or not inside(top):
+                    continue
                 if not canvas.free(run) or not canvas.free(top):
                     continue
                 cost = g + 3.0 + history.get(top, 0.0) * pressure
@@ -1578,20 +1720,26 @@ def _route_all(
         i: tuple(g for g in same_src[net.src.y, net.src.x0] if g != i)
         for i, net in enumerate(nets)
     }
-    # Chained nets, which is what `_proliferator_nets` builds: net k leaves from
-    # the belt net k-1 delivers to. If that belt is walled in -- and a coater's
-    # drop belt usually is, being a lane tile with lanes above and machines
-    # below -- then k has nowhere to start and k-1 nowhere to finish, even
-    # though the two are the same point. Reaching the neighbouring net's PATH is
-    # reaching the belt, in both directions.
-    by_dst_belt: dict[int, list[int]] = defaultdict(list)
-    by_src_belt: dict[int, list[int]] = defaultdict(list)
-    for i, net in enumerate(nets):
-        by_dst_belt[net.dst.belt].append(i)
-        by_src_belt[net.src.belt].append(i)
-    for i, net in enumerate(nets):
-        src_group[i] += tuple(g for g in by_dst_belt.get(net.src.belt, ()) if g != i)
-        dst_group[i] += tuple(g for g in by_src_belt.get(net.dst.belt, ()) if g != i)
+    # Chained nets -- one net leaving the belt another delivers to, which is what
+    # `_proliferator_nets` builds -- used to be allowed to merge into each
+    # other's paths in both directions. Neither direction survives inspection.
+    #
+    # Arriving at a path that LEAVES a belt does not fill that belt: flow runs
+    # the other way. A net that "reached" its destination that way carried its
+    # items PAST the drop rather than into it, so the coater sprayed nothing and
+    # the drop read as an entry lane the player must fill, buried mid-block.
+    #
+    # Leaving from a path that ARRIVES at the belt does deliver the items, but
+    # it builds a SPLITTER on that path to do it, and a branch drawn off a
+    # splitter is a belt run of its own that nothing inside the blueprint fills
+    # -- the same unreachable entry lane by a different route.
+    #
+    # What both were standing in for is a drop with two ways in, one for the hop
+    # arriving and one for the hop leaving. `_reserve_port_access` holds both,
+    # and `_proliferator_nets` links neighbouring drops directly rather than
+    # routing between them, so a drop with only one free neighbour never needs a
+    # second. That leaves the chain a single linear run, which is the only shape
+    # that is both correct and reachable.
 
     for it in range(RRR_MAX):
         iterations = it + 1
@@ -1691,7 +1839,18 @@ def _reserve_port_access(
     second net a different cell it does not need and take it away from someone
     who does.
 
-    ``twice`` names ports that need TWO approaches rather than one, which is
+    A port that both RECEIVES and SENDS gets two cells without being asked for.
+    A coater's drop belt is one: the proliferator chain arrives at it from the
+    previous coater and leaves it for the next, so one access cell cannot serve
+    both -- whichever net routed first took it and built on it, and the other
+    found the drop walled in.  It did not fail loudly, because the router will
+    settle for merging into a sibling net's path; the belts that came out of
+    that merge carried proliferator PAST the drop instead of INTO it, leaving a
+    coater mounted on a belt nothing fills.  The drop then reads as an entry
+    lane the player must fill, buried inside the block -- which is exactly what
+    ``flow.external_entry_reachable`` was reporting.
+
+    ``twice`` names ports that need one MORE approach on top of that, which is
     what an input lane fed from both outside and inside is.  ``_seat_inputs``
     mixes two ingredients onto one lane when they will not fit one per lane, and
     one of them can be an external input while the other is produced internally;
@@ -1699,31 +1858,54 @@ def _reserve_port_access(
     internal net finds an empty goal set.  Both claims are legitimate and they
     are not the same cell, so both are staked.
 
-    Ports are served longest-lane-first.  A short lane's end tile usually has
-    three free neighbours and can spare one; a lane wedged against a strip
-    boundary may have exactly one, so it must not be the last to ask.
+    Ports are served shortest-lane-first within a round, which is arbitrary and
+    deliberately so: what decides whether a port gets an access cell at all is
+    the ROUND, not the position in it, and every port has taken its first before
+    any port asks for a second.
     """
     canvas.reserved.clear()
     ports: dict[tuple[int, int], int] = {}
+    roles: dict[tuple[int, int], set[str]] = defaultdict(set)
     for net in nets:
-        for port in (net.src, net.dst):
+        for role, port in (("src", net.src), ("dst", net.dst)):
             key = (port.x, port.y)
             ports[key] = max(ports.get(key, 0), len(port.columns()))
+            roles[key].add(role)
 
-    boxed_in = 0
-    for key in sorted(ports, key=lambda k: (ports[k], k)):
-        px, py = key
-        cells = [(px + dx, py + dy, 0) for dx, dy in _STEPS]
-        # `free` already refuses a cell reserved for another port, since
-        # `routing_ports` is empty here.
-        want = 2 if key in twice else 1
-        got = [c for c in cells if canvas.free(c)][:want]
-        if not got:
-            boxed_in += 1
-            continue
-        for cell in got:
-            canvas.reserved[cell] = key
-    return boxed_in
+    order = sorted(ports, key=lambda k: (ports[k], k))
+    wants = {k: len(roles[k]) + (1 if k in twice else 0) for k in order}
+    held: dict[tuple[int, int], int] = defaultdict(int)
+
+    # EVERY port gets its first cell before any port gets its second.
+    #
+    # One pass in want-order does not do this: ports are served shortest-lane
+    # first, a coater drop is a one-tile lane, and a drop wanting two cells would
+    # take both before a strip lane head -- which may have exactly one free
+    # neighbour in the world -- had asked for its first.  Losing that cell is not
+    # a worse route, it is an empty goal set and a net that cannot be routed at
+    # all; it turned four candidates from wrong into unbuildable.  Second claims
+    # are a convenience for a port that has two jobs, and they yield.
+    for round_no in range(max(wants.values(), default=0)):
+        for key in order:
+            if wants[key] <= round_no:
+                continue
+            px, py = key
+            # `free` already refuses a cell reserved for another port, since
+            # `routing_ports` is empty here.
+            got = next(
+                (
+                    c
+                    for c in ((px + dx, py + dy, 0) for dx, dy in _STEPS)
+                    if canvas.free(c)
+                ),
+                None,
+            )
+            if got is None:
+                continue
+            canvas.reserved[got] = key
+            held[key] += 1
+
+    return sum(1 for key in order if not held[key])
 
 
 def _commit_paths(
@@ -2016,7 +2198,7 @@ def _route_external_inputs(
     strip_in_ports: list[dict[str, _Port]],
     belt_id: int,
     belt_model: int,
-    bounds: tuple[int, int, int, int],
+    core: tuple[int, int, int, int],
 ) -> int:
     """Run every outside input from the block edge to the lane that wants it.
 
@@ -2036,8 +2218,20 @@ def _route_external_inputs(
     Belts flow INWARD here -- from the edge to the lane -- which is the opposite
     direction to every other net, so the path is committed head-first with the
     last belt feeding the lane.
+
+    Runs terminate on the ENTRY RING, the outermost ring anything may occupy.
+    That is what makes each of them reachable: nothing else can be placed
+    further out, so a run's head is on the finished bounding box and has open
+    ground on its outward side whatever the router does afterwards.  Running out
+    to "one tile past the current edge" -- which is what this did -- put the head
+    on a boundary that later passes moved, and the head then sat interior.
     """
+    bounds = _grow(core, _ENTRY_RING - 1)
     min_x, min_y, max_x, max_y = bounds
+    # The fallback search may travel ALONG the entry ring, which the straight
+    # runs already use; a cell on the outermost ring cannot wall anything in,
+    # because outward of it is ground no pass can reach.
+    astar_bounds = _grow(core, _ENTRY_RING)
     # One ring outside the block: where the player's belt meets ours.
     edge = [
         (x, y, 0)
@@ -2109,7 +2303,7 @@ def _route_external_inputs(
                 missed += 1
                 continue
             live = [c for c in starts if canvas.free(c)]
-            path = _astar(canvas, live, goals, history, 1.0, bounds, budget)
+            path = _astar(canvas, live, goals, history, 1.0, astar_bounds, budget)
         if path is None:
             missed += 1
             continue
@@ -2142,20 +2336,69 @@ def _route_external_inputs(
     return missed
 
 
-def _place_power(canvas: _Canvas) -> int:
-    """Towers on a covering lattice, then repaired until coverage really holds.
+def _nearest_free(canvas: _Canvas, cx: int, cy: int, limit: int) -> tuple[int, int] | None:
+    """The closest cell to ``(cx, cy)`` nothing stands on, within ``limit``."""
+    for r in range(limit + 1):
+        for dx in range(-r, r + 1):
+            for dy in (-r, r) if r else (0,):
+                for a, b in ((cx + dx, cy + dy), (cx + dy, cy + dx)):
+                    if canvas.free((a, b, 0)) and (a, b) not in canvas.solid:
+                        return (a, b)
+    return None
+
+
+def _claim_power_sites(canvas: _Canvas, core: tuple[int, int, int, int]) -> list[tuple[int, int]]:
+    """Hold a cell for every lattice point, BEFORE anything routes.
+
+    Power is the last pass, and on a dense block "last" means "gets nothing".
+    Every belt the router lays is a cell the lattice cannot use, and the coverage
+    repair then searches a full tower radius and finds the ground solid:
+    measured on ``casimir-crystal``, a matrix lab with 349 tiles inside range had
+    four of them free, and thirteen buildings shipped unpowered -- a blueprint
+    that pastes and then sits there.
+
+    So the lattice claims its ground while the ground is still empty, and the
+    router paths around one cell in eighty-one.  Only machines, sorters and
+    coaters draw power, and all of those are inside ``core``, so the lattice is
+    laid over the core rather than over the finished bounding box -- the entry
+    ring holds nothing but belts, which are unpowered.
+    """
+    min_x, min_y, max_x, max_y = core
+    half = TOWER_SPACING // 2
+    sites: list[tuple[int, int]] = []
+    y = min_y + half
+    while y <= max_y + half:
+        x = min_x + half
+        while x <= max_x + half:
+            spot = _nearest_free(canvas, x, y, 4)
+            # Strictly inside the core. A lattice point near the east or south
+            # face can be displaced onto the entry ring, and the ring belongs to
+            # the input runs: a tower standing in one would break the straight
+            # run out to it for no reason, when the machine it was covering has
+            # the whole block to be covered from.
+            if spot is not None and not (
+                min_x <= spot[0] <= max_x and min_y <= spot[1] <= max_y
+            ):
+                spot = None
+            if spot is not None:
+                sites.append(spot)
+                canvas.keep_out.add(spot)
+            x += TOWER_SPACING
+        y += TOWER_SPACING
+    return sites
+
+
+def _place_power(canvas: _Canvas, sites: Sequence[tuple[int, int]]) -> int:
+    """Towers on the claimed lattice, then repaired until coverage really holds.
 
     The lattice spacing already guarantees coverage and connectivity in open
-    ground; the repair passes exist because a lattice point can land on a
-    machine, and a tower that could not be placed is exactly the kind of gap
-    that would otherwise reach the game as a dead corner of the factory.
+    ground; the repair passes exist because a claim can still fail -- a lattice
+    point may have had no free cell within reach even before routing -- and a
+    tower that could not be placed is exactly the kind of gap that would
+    otherwise reach the game as a dead corner of the factory.
     """
     if not canvas.buildings:
         return 0
-    xs = [b.x for b in canvas.buildings] + [b.x + b.width - 1 for b in canvas.buildings]
-    ys = [b.y for b in canvas.buildings] + [b.y + b.height - 1 for b in canvas.buildings]
-    min_x, max_x, min_y, max_y = min(xs), max(xs), min(ys), max(ys)
-
     tower = catalog.building(catalog.TESLA_TOWER_ID)
     radius = tower.cover_radius
     link = tower.connect_distance
@@ -2184,25 +2427,8 @@ def _place_power(canvas: _Canvas) -> int:
         placed += 1
         return True
 
-    def nearest_free(cx: int, cy: int, limit: int) -> tuple[int, int] | None:
-        for r in range(limit + 1):
-            for dx in range(-r, r + 1):
-                for dy in (-r, r) if r else (0,):
-                    for a, b in ((cx + dx, cy + dy), (cx + dy, cy + dx)):
-                        if canvas.free((a, b, 0)) and (a, b) not in canvas.solid:
-                            return (a, b)
-        return None
-
-    half = TOWER_SPACING // 2
-    y = min_y + half
-    while y <= max_y + half:
-        x = min_x + half
-        while x <= max_x + half:
-            spot = nearest_free(x, y, 4)
-            if spot:
-                try_place(*spot)
-            x += TOWER_SPACING
-        y += TOWER_SPACING
+    for site in sites:
+        try_place(*site)
 
     def covered(px: Fraction, py: Fraction) -> bool:
         return any((px - cx) ** 2 + (py - cy) ** 2 <= radius**2 for cx, cy in centres)
@@ -2261,7 +2487,7 @@ def _place_power(canvas: _Canvas) -> int:
         ax, ay = centres[main[0]]
         bx, by = centres[other[0]]
         mx, my = int((ax + bx) / 2), int((ay + by) / 2)
-        spot = nearest_free(mx, my, 6)
+        spot = _nearest_free(canvas, mx, my, 6)
         if not spot or not try_place(*spot):
             break
     return placed
@@ -2305,6 +2531,7 @@ def _build(
     *,
     power: bool,
     route: bool,
+    claim_power: bool = True,
 ) -> tuple[Placement, int, int]:
     belt_id = BELT_ITEM_IDS.get(spec.belt_item_id, 2001)
     belt_model = catalog.building(belt_id).model_index
@@ -2465,18 +2692,47 @@ def _build(
         )
     coaters = len(coater_list)
 
-    # Again, now that the coater drops exist. A drop is a one-tile lane and the
-    # sink of a proliferator net, so it is a port like any other -- and it did
-    # not exist when the first claim was staked, which left it the one port the
-    # external runs were still free to wall in. That was the last refusal on the
-    # trivial+small+mid corpus: graphene's `max-proliferation`, boxed at three of
-    # five heights by exactly this.
+    # THE EXTENT IS DECIDED HERE, and nothing after this point may move it.
+    #
+    # Every pass that follows -- the proliferator entry, the external input
+    # runs, the router, the power lattice -- used to compute "the edge" for
+    # itself, from a canvas the previous pass had just extended. Each was
+    # correct about where the boundary was when it looked, and wrong by the time
+    # the placement was finished; the entry tiles the validator reports as
+    # walled in are precisely the ones that were on the boundary when placed.
+    #
+    # Reordering the passes cannot fix that, and two orderings were measured
+    # proving it. Fixing the box can: the strips and their coaters define the
+    # core, `_ENTRY_RING` rings of margin are reserved around it, and
+    # `canvas.limit` refuses any cell beyond. The ring one further out is then
+    # empty by construction, which is what makes an entry belt reachable from
+    # outside no matter what else the router does.
+    core = _core_bounds(canvas)
+    canvas.limit = _grow(core, _ENTRY_RING)
+    route_bounds = _grow(core, _ROUTE_RING)
+    power_sites = _claim_power_sites(canvas, core) if power and claim_power else []
+
+    # The proliferator entry is staked BEFORE the ports are held, not after the
+    # external runs have settled. It can be: its cell is reserved ground that no
+    # other pass can reach, so it no longer matters who runs first. Having its
+    # nets exist at reservation time is what the previous ordering gave up --
+    # the coater drops those nets sink into then went unheld, and the external
+    # runs walled them in instead.
+    if coater_list and prolif_item is not None:
+        entry = _place_proliferator_entry(
+            canvas, prolif_item, belt_id, belt_model, core
+        )
+        if entry is not None:
+            nets.extend(
+                _proliferator_nets(canvas, entry, coater_list, prolif_item)
+            )
+
+    # Again, now that every port exists -- strip lanes, coater drops and the
+    # proliferator entry alike. A drop is a one-tile lane and the sink of a
+    # proliferator net, so it is a port like any other, and it did not exist
+    # when the first claim was staked.
     if route:
         hold_ports()
-
-    xs = [b.x for b in canvas.buildings] or [0]
-    ys = [b.y for b in canvas.buildings] or [0]
-    bounds = (min(xs), min(ys), max(xs) + pack.width, max(ys) + pack.height)
 
     # Bring the outside inputs in FIRST. They have no alternative: an internal
     # net can be routed around an obstacle, but an external lane can only be
@@ -2488,31 +2744,33 @@ def _build(
     unreachable = 0
     if route:
         unreachable = _route_external_inputs(
-            canvas, spec, strip_in_ports, belt_id, belt_model, bounds
+            canvas, spec, strip_in_ports, belt_id, belt_model, core
         )
-
-    # The proliferator entry goes in LAST, after the external runs have settled
-    # where the block's edge actually is.
-    #
-    # It is placed one tile west of everything, which is the boundary at the
-    # moment it is placed -- and then the external runs extend the block west
-    # past it, leaving it interior and walled in on all four sides. That was 11
-    # of the 26 unreachable entry lanes across the corpus. Routing it in the
-    # same pass as the others was tried and is WORSE (11 -> 17): every run
-    # targets a boundary computed before any of them move it, so adding another
-    # run just moves the edge again. Placing it once the edge has stopped moving
-    # is the fix that actually holds.
-    if coater_list and prolif_item is not None:
-        entry = _place_proliferator_entry(canvas, prolif_item, belt_id, belt_model)
-        if entry is not None:
-            nets.extend(_proliferator_nets(entry, coater_list, prolif_item))
 
     routed, failed, iterations = (0, 0, 0)
     if route and nets:
-        routed, failed, iterations = _route_all(canvas, nets, belt_id, belt_model, bounds)
+        routed, failed, iterations = _route_all(
+            canvas, nets, belt_id, belt_model, route_bounds
+        )
     failed += unreachable
 
-    towers = _place_power(canvas) if power else 0
+    # Port access reservations are spent once the last net is committed. Holding
+    # them into the power pass costs coverage for nothing: a reserved cell reads
+    # as occupied to `free`, so the tower that would have covered a machine
+    # cannot be placed there, and the machine ships unpowered. That got sharply
+    # worse once a port with two jobs began holding two cells -- twenty coater
+    # drops became forty cells the lattice could not use, and the repair pass
+    # then failed to cover fourteen buildings on a block with room to spare.
+    canvas.reserved.clear()
+    # Tentative path markers outlive the round that made them: the round that
+    # succeeds commits and returns without clearing its own, and any cell
+    # `_commit_paths` decided not to build on keeps a marker with no building
+    # under it. `free` reads those as occupied, so the lattice treats empty
+    # ground as taken.
+    for cell in [c for c, owner in canvas.blocked.items() if owner == -2]:
+        del canvas.blocked[cell]
+    canvas.keep_out.clear()
+    towers = _place_power(canvas, power_sites) if power else 0
 
     placement = Placement(
         buildings=tuple(canvas.buildings),
@@ -2720,18 +2978,38 @@ def _proliferator_item(spec: BuildSpec) -> str | None:
 
 
 def _proliferator_nets(
-    entry: _Port, coaters: list[_Coater], item: str
+    canvas: _Canvas, entry: _Port, coaters: list[_Coater], item: str
 ) -> list[_Net]:
-    """Daisy-chain the coater drops instead of fanning out from the entry.
+    """Thread ONE belt from the entry through every coater drop in turn.
 
     Every coater needs the same item at a trivial rate (well under one item per
-    second in total, against a belt that carries twelve), so one chained lane
-    serves all of them and capacity never binds.
+    second in total, against a belt that carries twelve), so one lane serves all
+    of them and capacity never binds.
+
+    Chained rather than fanned out, for two independent reasons.
 
     Routing each drop separately from the entry costs far more: eleven paths all
-    radiating from one corner roughly doubled the bounding box.  Chaining
-    nearest-neighbour keeps each hop short, and DSP belts merge natively, so the
-    chain needs no splitters.
+    radiating from one corner roughly doubled the bounding box.
+
+    And a fan-out cannot be built without splitters, which is worse than
+    expensive.  A branch drawn off a splitter is a belt run of its own, fed by
+    the junction rather than by a belt, and nothing inside the blueprint fills
+    it -- so every branch reads as a separate lane the player must belt
+    proliferator into, buried in the middle of the block where no belt can
+    reach.  Measured: fanning out turned one entry lane into twenty unreachable
+    ones across the corpus.  A chain has no junctions at all; it is a single
+    linear run that starts at the entry belt, out on the reserved ring where the
+    player can get to it.
+
+    Nearest-neighbour order keeps each hop short, and a hop of length one is
+    LINKED RATHER THAN ROUTED.  Two coaters on neighbouring lanes of one strip
+    put their drops in the same margin column, one directly above the other, and
+    the lower one then has a single free neighbour in the world -- the margin is
+    one tile wide, the lane is west of it and a machine south.  A chain needs two
+    ways into such a drop, one for the hop arriving and one for the hop leaving,
+    and there is only ever one: whichever hop routed first took it and the other
+    was handed an empty goal set.  Linking the pair directly costs no cell at
+    all and leaves each of them needing exactly one.
     """
     remaining = list(coaters)
     src = entry
@@ -2739,26 +3017,44 @@ def _proliferator_nets(
     while remaining:
         nxt = min(remaining, key=lambda c: abs(c.x - src.x) + abs(c.y - src.y))
         remaining.remove(nxt)
-        nets.append(
-            _Net(src=src, dst=_Port(nxt.drop, nxt.x, nxt.y, nxt.x, nxt.x), item=item)
-        )
-        src = _Port(nxt.drop, nxt.x, nxt.y, nxt.x, nxt.x)
+        dst = _Port(nxt.drop, nxt.x, nxt.y, nxt.x, nxt.x)
+        if abs(nxt.x - src.x) + abs(nxt.y - src.y) == 1:
+            canvas.buildings[src.belt] = _relink(
+                canvas.buildings[src.belt], output_obj=dst.belt
+            )
+        else:
+            nets.append(_Net(src=src, dst=dst, item=item))
+        src = dst
     return nets
 
 
 def _place_proliferator_entry(
-    canvas: _Canvas, item: str, belt_id: int, belt_model: int
+    canvas: _Canvas,
+    item: str,
+    belt_id: int,
+    belt_model: int,
+    core: tuple[int, int, int, int],
 ) -> _Port | None:
-    """The block's proliferator input belt, west of everything else.
+    """The block's proliferator input belt, on the reserved entry ring.
 
     A single entry tile: the router fans out from here to each coater's drop,
     and DSP belts merge natively, so no splitter is needed.
+
+    It goes on the NORTH-WEST CORNER of the entry ring, and the corner is the
+    point.  Nothing else can ever be placed further out -- the router and the
+    power lattice are held inside ``_ROUTE_RING`` and the external input runs
+    stop on the entry ring itself -- so this tile is on the finished block's
+    bounding box in two directions at once and has open ground beside it by
+    construction.  It used to be placed one tile west of wherever the buildings
+    happened to reach at that moment, which was the boundary right up until the
+    next pass moved it; the tile then sat interior, walled in on four sides,
+    with an icon on it telling the player to belt proliferator into somewhere
+    they cannot reach.
+
+    A corner also keeps it clear of the straight input runs, which leave along
+    strip rows and columns and so never use one.
     """
-    xs = [b.x for b in canvas.buildings]
-    ys = [b.y for b in canvas.buildings]
-    if not xs:
-        return None
-    x, y = min(xs) - 1, min(ys)
+    x, y = core[0] - _ENTRY_RING, core[1] - _ENTRY_RING
     if not canvas.free((x, y, 0)):
         return None
     idx = canvas.add(
@@ -3029,6 +3325,21 @@ class FreeformLayout:
             placement, failed, _towers = _build(
                 spec, strips, pack, power=self.power, route=True
             )
+            if 0 < failed <= _POWER_RETRY_NETS and self.power:
+                # The power lattice claims its ground before the router runs,
+                # because taking what is left over on a dense block means taking
+                # nothing. Sometimes what it took was the one corridor a net
+                # needed. Preferring a covered pack and ACCEPTING an uncovered
+                # one is the right order: a build that cannot be wired is worth
+                # nothing, and coverage still has its repair pass to fall back
+                # on. Only a height that already failed pays for the retry, and
+                # only one that failed by a few nets: a pack that leaves thirty
+                # nets unrouted is not failing over one tower, and paying a
+                # second full build to find that out doubled the cost of every
+                # refusal on the stress tier.
+                placement, failed, _towers = _build(
+                    spec, strips, pack, power=self.power, route=True, claim_power=False
+                )
             if failed:
                 continue
             # Area, then belt count. Two packs of equal area are not equally

@@ -20,11 +20,22 @@ from flab2bp.layout.base import (
     Placement,
 )
 from flab2bp.layout.freeform import (
+    _ENTRY_RING,
+    _ROUTE_RING,
     MU_DIRECT,
     FreeformLayout,
     _build,
+    _Canvas,
+    _claim_power_sites,
+    _Coater,
     _direct_net_candidates,
+    _height_seed,
+    _Net,
     _pack,
+    _Port,
+    _proliferator_nets,
+    _reserve_port_access,
+    _shard_sinks,
     fallback_placement,
     plan_strips,
     tie_break_cap,
@@ -1493,3 +1504,333 @@ class TestShardedGroupsAreFedOnEveryShard:
         report = _full_report(p, spec, power=False)
         starved = [f for f in report.errors if f.check == "flow.lane_sourced"]
         assert not starved, "\n".join(f.message for f in starved)
+
+
+# --- the block's extent -----------------------------------------------------
+
+
+def _belt(x: int, y: int, *, item: str | None = None) -> PlacedBuilding:
+    return PlacedBuilding(
+        item_id=2001, model_index=35, x=x, y=y, width=1, height=1, carries_item=item
+    )
+
+
+class TestPortAccessIsReservedForEveryRole:
+    """A port with two jobs needs two ways in, and never at another's expense."""
+
+    def test_a_port_that_both_sends_and_receives_holds_two_cells(self) -> None:
+        """One cell cannot serve a hop arriving and a hop leaving.
+
+        A coater's drop belt is exactly this: the proliferator chain reaches it
+        from the previous coater and leaves it for the next.  With one access
+        cell the first net to route took it and built on it, and the second was
+        handed an empty goal set -- which the router papered over by merging
+        into a sibling path, carrying the item PAST the drop instead of into it.
+        """
+        canvas = _Canvas()
+        for x in (0, 4, 8):
+            canvas.add(_belt(x, 0))
+        a = _Port(0, 0, 0, 0, 0)
+        b = _Port(1, 4, 0, 4, 4)
+        c = _Port(2, 8, 0, 8, 8)
+        _reserve_port_access(canvas, [_Net(src=a, dst=b, item="x"), _Net(src=b, dst=c, item="x")])
+        held = {
+            key: sum(1 for k in canvas.reserved.values() if k == key)
+            for key in ((0, 0), (4, 0), (8, 0))
+        }
+        assert held[(4, 0)] == 2, (
+            f"the middle port both sends and receives but holds {held[(4, 0)]} cells"
+        )
+        assert held[(0, 0)] == 1 and held[(8, 0)] == 1, held
+
+    def test_a_second_cell_never_takes_another_port_s_only_one(self) -> None:
+        """Every port gets its first cell before any port gets its second.
+
+        ``q`` is served first (ties break on coordinates) and wants two.  Its
+        second choice is the one and only cell ``p`` can ever be reached
+        through, so taking it would not cost ``p`` a better route -- it would
+        cost ``p`` every route, and hand its net an empty goal set.
+        """
+        canvas = _Canvas()
+        canvas.add(_belt(0, 0))  # q, wants two: sends and receives
+        canvas.add(_belt(-2, 0))  # p, wants one
+        canvas.add(_belt(4, 0))  # somewhere for q to send to
+        for cell in ((0, 1), (0, -1), (-3, 0), (-2, 1), (-2, -1)):
+            canvas.add(_belt(*cell))
+        q = _Port(0, 0, 0, 0, 0)
+        p = _Port(1, -2, 0, -2, 0)
+        far = _Port(2, 4, 0, 4, 4)
+        _reserve_port_access(
+            canvas, [_Net(src=p, dst=q, item="x"), _Net(src=q, dst=far, item="x")]
+        )
+        assert canvas.reserved.get((-1, 0, 0)) == (-2, 0), (
+            "the only cell that reaches p was taken by q's second claim: "
+            f"{canvas.reserved.get((-1, 0, 0))}"
+        )
+
+
+class TestTheProliferatorChainIsOneLinearRun:
+    """No splitter may carry the proliferator, and no drop may be bypassed.
+
+    A branch drawn off a splitter is a belt run of its own that nothing inside
+    the blueprint fills, so the validator -- correctly -- reads every one of them
+    as another lane the player must belt proliferator into, buried in the middle
+    of the block where no belt can reach.  A chain has no junctions at all.
+    """
+
+    def test_neighbouring_drops_are_linked_rather_than_routed(self) -> None:
+        """Two drops one tile apart need no path between them, and no cell.
+
+        Two coaters on neighbouring lanes of one strip put their drops in the
+        same margin column, one directly above the other, and the lower one then
+        has a single free neighbour in the world.  Routing between them would
+        need two.
+        """
+        canvas = _Canvas()
+        entry = _Port(canvas.add(_belt(-9, -9)), -9, -9, -9, -9)
+        first = _Coater(coater=-1, drop=canvas.add(_belt(3, 0)), x=3, y=0)
+        second = _Coater(coater=-1, drop=canvas.add(_belt(3, 1)), x=3, y=1)
+        nets = _proliferator_nets(canvas, entry, [first, second], "proliferator-3")
+        assert [(n.src.x, n.src.y, n.dst.x, n.dst.y) for n in nets] == [
+            (-9, -9, 3, 0)
+        ], "the adjacent pair should have been linked, not routed"
+        assert canvas.buildings[first.drop].output_obj == second.drop, (
+            "the first drop must feed the second directly"
+        )
+
+    def test_no_splitter_carries_the_proliferator(self) -> None:
+        spec = proliferated_spec()
+        p = FreeformLayout(power=False, workers=DETERMINISTIC_WORKERS).lay_out(
+            spec, time_budget_s=1.0
+        )
+        prolif = {i for i in spec.external_inputs if i.startswith("proliferator")}
+        carriers = {
+            i
+            for i, b in enumerate(p.buildings)
+            if catalog.is_belt(b.item_id) and b.carries_item in prolif
+        }
+        assert carriers, "fixture must lay a proliferator lane"
+        splitters = {
+            i for i, b in enumerate(p.buildings) if b.item_id == catalog.SPLITTER_ID
+        }
+        attached = {
+            i
+            for i in carriers
+            if p.buildings[i].output_obj in splitters
+            or p.buildings[i].input_obj in splitters
+        }
+        assert not attached, (
+            f"belts {sorted(attached)} put the proliferator through a splitter; every "
+            "branch off it becomes an entry lane nobody can reach"
+        )
+
+
+class TestTheExtentIsDecidedBeforeAnythingRoutes:
+    """The boundary must not move while passes are still assuming it is fixed.
+
+    Every entry tile the validator used to report as walled in was on the
+    boundary when it was placed and interior by the time the placement finished:
+    the input runs computed the edge and ran out to it, the router then laid
+    belts two tiles past that, and the proliferator entry went one tile west of
+    whatever the edge happened to be at that moment.
+    """
+
+    def test_the_canvas_refuses_every_cell_beyond_the_reserved_extent(self) -> None:
+        """``_Canvas.limit`` is what actually holds the boundary still.
+
+        Every pass after the pack asks ``free`` before it places -- coater
+        drops, the router, the input runs, the power lattice -- so one check in
+        one place is what stops the block growing under passes that have already
+        committed to where its edge is.
+        """
+        canvas = _Canvas(limit=(0, 0, 4, 4))
+        assert canvas.free((0, 0, 0)) and canvas.free((4, 4, 0))
+        for cell in ((-1, 2, 0), (5, 2, 0), (2, -1, 0), (2, 5, 0)):
+            assert not canvas.free(cell), f"{cell} is outside the reserved extent"
+
+    def test_routing_never_reaches_the_ring_the_input_runs_land_on(self) -> None:
+        """The router gets ``_ROUTE_RING``; the input runs get one ring beyond.
+
+        Sharing would put the two in competition for the cells that decide
+        whether a lane can be belted into at all, and the router has alternatives
+        where an external lane has none.
+        """
+        assert _ROUTE_RING < _ENTRY_RING
+
+    @pytest.mark.parametrize("factory", ALL_SPEC_PARAMS)
+    def test_every_lane_the_player_must_fill_can_be_reached(
+        self, factory: SpecFactory
+    ) -> None:
+        spec = factory()  # type: ignore[operator]
+        p = FreeformLayout(power=False, workers=DETERMINISTIC_WORKERS).lay_out(
+            spec, time_budget_s=1.0
+        )
+        report = _full_report(p, spec)
+        walled = report.by_check("flow.external_entry_reachable")
+        assert not walled, "\n".join(f.message for f in walled)
+
+    def test_the_proliferator_entry_sits_on_the_block_boundary(self) -> None:
+        """It is placed on the reserved corner, not beside whatever exists yet.
+
+        Being on the corner is what makes it reachable: nothing else is ever
+        placed further out, so it is on the finished bounding box in two
+        directions at once.
+        """
+        spec = proliferated_spec()
+        p = FreeformLayout(power=False, workers=DETERMINISTIC_WORKERS).lay_out(
+            spec, time_budget_s=1.0
+        )
+        min_x, min_y, _, _ = p.bounds
+        entries = [
+            b
+            for b in p.buildings
+            if catalog.is_belt(b.item_id)
+            and b.carries_item == "proliferator-3"
+            and (b.x, b.y) == (min_x, min_y)
+        ]
+        assert entries, (
+            "no proliferator belt sits on the block's north-west corner "
+            f"{(min_x, min_y)}"
+        )
+
+
+
+class TestEveryShardDrainsEveryProduct:
+    """One machine makes all of its recipe's outputs at once.
+
+    A shard carrying lanes for only some of them has machines that fill up on
+    the rest and stop -- while looking perfectly healthy, because every lane it
+    does have is connected to something.
+    """
+
+    def test_a_two_product_recipe_keeps_both_lanes_on_every_shard(self) -> None:
+        """Chunking the flat list of destinations is what lost the second product.
+
+        ``plasma-refining`` yields refined-oil and hydrogen; sequential chunking
+        put its one hydrogen consumer and two of its three oil consumers in the
+        first shard and the last oil consumer alone in the second, so that
+        shard's machines had nowhere to put their hydrogen.
+        """
+        sinks = [
+            ("hydrogen", "casimir"),
+            ("refined-oil", "organic"),
+            ("refined-oil", "plastic"),
+            ("refined-oil", "sulfuric"),
+        ]
+        shards = _shard_sinks(sinks, cap=3)
+        assert len(shards) >= 2, "the fixture must need more than one shard"
+        for shard in shards:
+            assert {item for item, _ in shard} == {"hydrogen", "refined-oil"}, shard
+            assert len(shard) <= 3, shard
+
+    def test_a_shard_that_cannot_drain_every_product_is_refused(self) -> None:
+        """Better to say so than to emit machines that quietly jam."""
+        sinks = [("a", "x"), ("b", "x"), ("c", "x"), ("d", "x")]
+        with pytest.raises(ValueError, match="never be drained"):
+            _shard_sinks(sinks, cap=3)
+
+    def test_a_sharded_two_product_producer_has_both_products_drained(self) -> None:
+        spec = BuildSpec(
+            groups=(
+                group(
+                    "plasma-refining",
+                    "chemical-plant",
+                    8,
+                    {"crude-oil": F(2)},
+                    {"refined-oil": F(1), "hydrogen": F(1)},
+                ),
+                group(
+                    "plastic", "assembling-machine-2", 1,
+                    {"refined-oil": F(1)}, {"plastic": F(1)},
+                ),
+                group(
+                    "organic-crystal", "assembling-machine-2", 1,
+                    {"refined-oil": F(1)}, {"organic-crystal": F(1)},
+                ),
+                group(
+                    "sulfuric-acid", "chemical-plant", 1,
+                    {"refined-oil": F(1)}, {"sulfuric-acid": F(1)},
+                ),
+                group(
+                    "graphene", "chemical-plant", 1,
+                    {"hydrogen": F(1)}, {"graphene": F(1)},
+                ),
+            ),
+            external_inputs={"crude-oil": F(16)},
+            outputs={
+                "plastic": F(1),
+                "organic-crystal": F(1),
+                "sulfuric-acid": F(1),
+                "graphene": F(1),
+                "refined-oil": F(5),
+                "hydrogen": F(7),
+            },
+            belt_item_id="conveyor-belt-2",
+            belt_items_per_second=F(12),
+            label="two-product-producer",
+        )
+        strips = plan_strips(spec, strip_len=6)
+        refiners = [s for s in strips if s.group_key.startswith("plasma-refining")]
+        assert len(refiners) >= 2, "fixture must shard the refiner"
+        for s in refiners:
+            assert {item for item, _ in s.out_lanes} == {"refined-oil", "hydrogen"}, (
+                f"shard {s.out_lanes} cannot drain both products"
+            )
+        p = FreeformLayout(power=False, workers=DETERMINISTIC_WORKERS).lay_out(
+            spec, time_budget_s=1.0
+        )
+        backed_up = _full_report(p, spec).by_check("machine.output_removed")
+        assert not backed_up, "\n".join(f.message for f in backed_up)
+
+
+class TestPowerClaimsItsGroundBeforeRouting:
+    """Coverage cannot be whatever the router leaves behind.
+
+    Towers went in last, and on a dense block "last" means "nothing": measured
+    on ``casimir-crystal``, a matrix lab with 349 tiles inside tower range had
+    four of them free, and thirteen buildings shipped unpowered -- a blueprint
+    that pastes and then sits there.
+    """
+
+    def test_claimed_sites_are_closed_to_everything_else(self) -> None:
+        canvas = _Canvas(limit=(0, 0, 40, 40))
+        canvas.add(_belt(0, 0))
+        sites = _claim_power_sites(canvas, (0, 0, 40, 40))
+        assert sites, "a 41x41 core must want several lattice points"
+        for x, y in sites:
+            assert not canvas.free((x, y, 0)), f"{(x, y)} was claimed but reads free"
+            assert 0 <= x <= 40 and 0 <= y <= 40, (
+                f"{(x, y)} was displaced outside the core, onto ground the input "
+                "runs need"
+            )
+
+    def test_a_claim_that_blocks_the_router_is_given_up(self) -> None:
+        """A pack that cannot be wired is worth nothing; an uncovered one is not.
+
+        So the sweep prefers a covered pack and accepts an uncovered one --
+        which is what lets a spec whose only routable packing needs the lattice
+        cells still produce a blueprint instead of refusing.
+        """
+        spec = proliferated_spec()
+        pack_strips = plan_strips(spec, strip_len=6)
+        pack = _pack(
+            pack_strips,
+            height=_height_seed(pack_strips),
+            width_bound=64,
+            time_budget_s=1.0,
+            direct_candidates={},
+            workers=DETERMINISTIC_WORKERS,
+        )
+        assert pack is not None
+        _p, failed, towers = _build(
+            spec, pack_strips, pack, power=True, route=True, claim_power=False
+        )
+        assert towers > 0, "the fallback build must still place towers"
+        assert failed == 0
+
+    def test_towers_still_cover_when_the_lattice_claims_its_cells(self) -> None:
+        p = FreeformLayout(power=True, workers=DETERMINISTIC_WORKERS).lay_out(
+            proliferated_spec(), time_budget_s=1.0
+        )
+        report = validate.validate(p, only=["power.coverage", "power.connectivity"])
+        assert report.ok, "\n".join(f.message for f in report.errors[:5])
