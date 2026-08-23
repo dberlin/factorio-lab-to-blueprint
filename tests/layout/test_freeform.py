@@ -34,6 +34,7 @@ from flab2bp.layout.freeform import (
     _Canvas,
     _claim_power_sites,
     _Coater,
+    _commit_paths,
     _connect_short_cuts,
     _dests,
     _direct_net_candidates,
@@ -48,6 +49,7 @@ from flab2bp.layout.freeform import (
     _reserve_port_access,
     _shard_sinks,
     _sink_for,
+    _source_for,
     fallback_placement,
     plan_strips,
     tie_break_cap,
@@ -2304,3 +2306,113 @@ class TestAPathThatReachesNothingIsUnrouted:
             item="x",
         )
         assert _sink_for(canvas, tail, net, {tail}) == dst_belt
+
+
+class TestABranchLeavesFromItsOwnSource:
+    """A belt branch must carry the items of the net that built it.
+
+    ``_source_for`` took the first adjacent belt carrying the right item, and at
+    a merge point several do.  The router only ever starts a path away from its
+    own lane on a ``_merge_frontier`` cell of a net that SHARES THAT LANE
+    (``_route_all``'s ``src_group``), so any other belt beside the head belongs
+    to a different producer -- branching off it silently swaps one source for
+    another.
+
+    That is the whole of the intermittent ``flow.conservation`` on
+    ``quantum-chip/free-proliferation``.  ``titanium-glass`` shards into a
+    four-machine and a three-machine strip, ``plane-filter`` into lanes of
+    6/5/5, and the cyclic pairing hands the four-machine shard eleven consumers.
+    ``_connect_short_cuts`` prices that island, finds it starving, and buys ONE
+    extra net -- three-machine shard to the six-machine lane -- which is the only
+    thing joining the two islands.  Captured from a failing build: that net
+    routed to the single tile (80,25,1), and ``_source_for`` fed it from the
+    belt at (81,25,1), a tile of the FOUR-machine shard's own path into the same
+    lane.  One belt taking items off a lane and handing them straight back:
+    adjacent, acyclic, right item, worth nothing.  Both counters read success so
+    ``failed`` was 0, the sweep accepted the pack, and eleven machines were left
+    drawing 11/4 items/s of titanium-glass from the 16/7 four machines make.
+
+    Replayed on the five packs captured from 96 builds, every one of which
+    reported ``flow.conservation`` before and certifies clean after, with
+    ``failed`` still 0 -- so the join is now made rather than the pack refused.
+    """
+
+    @staticmethod
+    def _scene() -> tuple[_Canvas, int, int, int, _Net]:
+        """A head with a sibling to the west and a stranger to the EAST.
+
+        East is the first entry in ``_STEPS``, so a scan that merely preferred
+        siblings without excluding strangers would still pick the wrong one --
+        which is exactly the order the captured failure had.
+        """
+        canvas = _Canvas()
+        head = canvas.add(_belt(0, 0, item="x"))
+        stranger = canvas.add(_belt(1, 0, item="x"))
+        sibling = canvas.add(_belt(-1, 0, item="x"))
+        net = _Net(
+            src=_Port(canvas.add(_belt(0, 40, item="x")), 0, 40, 0, 40),
+            dst=_Port(canvas.add(_belt(0, 80, item="x")), 0, 80, 0, 80),
+            item="x",
+        )
+        return canvas, head, stranger, sibling, net
+
+    def test_the_sibling_wins_over_a_stranger_scanned_first(self) -> None:
+        canvas, head, stranger, sibling, net = self._scene()
+        assert _source_for(canvas, head, net, {head}, {(-1, 0, 0)}) == sibling, (
+            "the branch was fed from a belt of another producer's path merely "
+            "because it was the first neighbour scanned"
+        )
+        assert _source_for(canvas, head, net, {head}, {(-1, 0, 0)}) != stranger
+
+    def test_a_stranger_alone_beside_the_head_is_not_a_source(self) -> None:
+        """No sibling reachable means no branch, not a branch off anybody.
+
+        The fallback names the net's own lane belt, which is far from the head,
+        so the link is wrong in a way ``belt.link_adjacent`` reports and the
+        self-check refuses.  Wrong and REPORTED beats wrong and silent: the
+        stranger link passes every geometric check there is.
+        """
+        canvas, head, stranger, _sibling, net = self._scene()
+        assert _source_for(canvas, head, net, {head}, set()) != stranger
+
+    def test_an_empty_sibling_set_is_the_safe_default(self) -> None:
+        """``_commit_paths`` without ``src_group`` must not reopen the hole.
+
+        A missed call site would otherwise hand ``_source_for`` no record of the
+        siblings and restore the old any-belt-will-do scan.  Threading the
+        groups can only ever ADD legal branches, never permit a stranger.
+        """
+        # The head cell is left EMPTY for `_commit_paths` to build on. Seeding a
+        # belt there instead makes `canvas.free` reject the path, so nothing is
+        # linked at all and the assertion below holds without exercising
+        # anything -- which is how a first draft of this test read green against
+        # the very bug it is here to pin.
+        canvas = _Canvas()
+        stranger = canvas.add(_belt(1, 0, item="x"))
+        canvas.add(_belt(-1, 0, item="x"))
+        net = _Net(
+            src=_Port(canvas.add(_belt(0, 40, item="x")), 0, 40, 0, 40),
+            dst=_Port(canvas.add(_belt(0, 80, item="x")), 0, 80, 0, 80),
+            item="x",
+        )
+        head = len(canvas.buildings)  # the belt `_commit_paths` is about to lay
+        _commit_paths(canvas, [net], {0: [(0, 0, 0)]}, 2001, 35)
+        assert (canvas.buildings[head].x, canvas.buildings[head].y) == (0, 0), (
+            "the path was not built, so this test would prove nothing"
+        )
+        assert canvas.buildings[stranger].output_obj != head, (
+            "with no sibling record, a stranger beside the head was still made "
+            "its feeder"
+        )
+
+    def test_a_head_beside_its_own_lane_is_untouched(self) -> None:
+        """The common case never reaches the scan and must not change."""
+        canvas = _Canvas()
+        src_belt = canvas.add(_belt(0, 0, item="x"))
+        head = canvas.add(_belt(1, 0, item="x"))
+        net = _Net(
+            src=_Port(src_belt, 0, 0, 0, 0),
+            dst=_Port(canvas.add(_belt(0, 80, item="x")), 0, 80, 0, 80),
+            item="x",
+        )
+        assert _source_for(canvas, head, net, {head}, set()) == src_belt

@@ -52,7 +52,7 @@ import heapq
 import math
 import time
 from collections import defaultdict, deque
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence, Set
 from dataclasses import dataclass, field, replace
 from fractions import Fraction
 
@@ -2277,7 +2277,9 @@ def _route_all(
                 canvas.blocked[cell] = _TENTATIVE
             committed.append(routed)
         if failed == 0:
-            unlinked = _commit_paths(canvas, nets, paths, belt_id, belt_model)
+            unlinked = _commit_paths(
+                canvas, nets, paths, belt_id, belt_model, src_group
+            )
             return len(paths) - unlinked, unlinked, iterations
         for path in committed:
             for cell in path:
@@ -2362,7 +2364,9 @@ def _route_all(
             or _expired(deadline)
         ):
             break
-    unlinked = _commit_paths(canvas, nets, best_paths, belt_id, belt_model)
+    unlinked = _commit_paths(
+        canvas, nets, best_paths, belt_id, belt_model, src_group
+    )
     return len(best_paths) - unlinked, fewest_failed + unlinked, iterations
 
 
@@ -2489,10 +2493,19 @@ def _commit_paths(
     paths: dict[int, list[tuple[int, int, int]]],
     belt_id: int,
     belt_model: int,
+    src_group: Mapping[int, tuple[int, ...]] | None = None,
 ) -> int:
     """Turn reserved cells into real belts, forward-linked source to sink.
 
     Returns the number of routed nets that could NOT be linked to their source.
+
+    ``src_group`` is the router's own record of which nets share each net's
+    SOURCE LANE, and it is the only thing that can tell a legitimate branch from
+    a mis-link.  A path that starts away from its own lane started on a
+    ``_merge_frontier`` cell of one of these siblings and nowhere else, so
+    :func:`_source_for` is handed exactly those cells to attach to.  Omitting it
+    lets any adjacent belt of the right item stand in for the source, which is
+    how a short-cut net came to be fed by the very lane it was delivering to.
 
     A belt tile has ONE ``output_obj``.  When a lane serves several consumers,
     each of them taps a different tile of it (see ``_Port.at_tile``), and a tap
@@ -2543,7 +2556,12 @@ def _commit_paths(
             continue
         for a, b in zip(indices, indices[1:], strict=False):
             canvas.buildings[a] = _relink(canvas.buildings[a], output_obj=b)
-        feeder = _source_for(canvas, indices[0], net, set(indices))
+        kin = {
+            cell
+            for s in (src_group or {}).get(i, ())
+            for cell in paths.get(s, ())
+        }
+        feeder = _source_for(canvas, indices[0], net, set(indices), kin)
         if not _tap_source(canvas, feeder, indices[0], belt_id, belt_model):
             unlinked += 1
             continue
@@ -2561,12 +2579,43 @@ def _commit_paths(
     return unlinked
 
 
-def _source_for(canvas: _Canvas, first: int, net: _Net, own: set[int]) -> int:
+def _source_for(
+    canvas: _Canvas,
+    first: int,
+    net: _Net,
+    own: set[int],
+    kin: Set[tuple[int, int, int]],
+) -> int:
     """What this path actually left from: the lane tap, or a sibling to branch off.
 
     The mirror of :func:`_sink_for`.  A path that could not start beside its own
     lane was routed from a sibling's belt instead, and feeding it from
     ``net.src.belt`` regardless would name a building it is nowhere near.
+
+    ``kin`` IS THE SIBLING SET THE ROUTER ACTUALLY OFFERED -- the cells of the
+    paths in this net's ``src_group``, the nets that share its source lane --
+    and honouring it is what makes the branch carry THIS net's items.
+
+    Without it the scan took the first adjacent belt carrying the right item,
+    and at a merge point several do.  ``quantum-chip/free-proliferation``:
+    ``titanium-glass`` shards into a four-machine and a three-machine strip,
+    ``plane-filter`` into three lanes of 6/5/5, and the cyclic pairing gives the
+    four-machine shard eleven consumers.  :func:`_connect_short_cuts` sees that
+    island starve and buys exactly one extra net -- three-machine shard to the
+    six-machine lane -- which is the only thing joining the two islands.  That
+    net routed to a single tile beside its destination and was then fed from the
+    belt of the FOUR-machine shard's net, which already delivered there.  A
+    one-tile belt taking items from a lane and handing them back to the same
+    lane: linked, adjacent, acyclic, carrying the right item, and worth nothing.
+    Both source-side and sink-side counters read success, so ``failed`` was 0,
+    the sweep accepted the pack, and the island the short-cut was bought to
+    close stayed open -- 11 machines drawing 11/4 items/s of titanium-glass from
+    the 16/7 four machines make.  Roughly one build in twenty-five, since it
+    needs the pack to put the two paths side by side.
+
+    A branch off a belt that does not lead back to our own lane is not a
+    cheaper way to reach the source; it is a different source.  So the scan is
+    restricted rather than merely reordered.
     """
     head = canvas.buildings[first]
     src = canvas.buildings[net.src.belt]
@@ -2574,6 +2623,8 @@ def _source_for(canvas: _Canvas, first: int, net: _Net, own: set[int]) -> int:
         return net.src.belt
     for dx, dy in _STEPS:
         cell = (head.x + dx, head.y + dy, head.z)
+        if cell not in kin:
+            continue
         who = canvas.blocked.get(cell)
         if who is None or not 0 <= who < len(canvas.buildings) or who in own:
             # Never attach to a belt of THIS path. The cell before the one we
