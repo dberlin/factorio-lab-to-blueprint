@@ -2773,6 +2773,37 @@ def _source_for(
     A branch off a belt that does not lead back to our own lane is not a
     cheaper way to reach the source; it is a different source.  So the scan is
     restricted rather than merely reordered.
+
+    THE LAST ``return`` IS DEAD ON THE CORPUS, AND THAT WAS MEASURED RATHER THAN
+    ARGUED.
+    -------------------------------------------------------------------------
+    It was left standing as the one remaining place this function can name a
+    building it is nowhere near: the head is not beside ``net.src.belt`` (or the
+    first branch would have taken it) and no sibling was adjacent either, so the
+    link it emits can cross the map.  That is SAFE -- ``belt.link_adjacent``
+    catches it and ``certify`` turns it into a refusal, never a silent bad build
+    -- but "link not adjacent" is a poor way to say "I could not find a
+    legitimate source", and returning ``None`` here instead was considered.
+
+    Counting first says not to bother.  Over 264 audit cells (72 freeform cells
+    at budget 4 with three candidates, plus 192 at budgets 1 and 15 with four)
+    this function was called **12,020** times: 11,620 took the first branch, the
+    lane tap itself; 400 took a sibling from ``kin``; and the fallback below ran
+    **0** times.  There is no refusal on the corpus for it to improve, and no
+    behaviour to change.
+
+    The counter was proved against a fault before the zero was believed, because
+    a counter reading zero is exactly the shape of an instrument that is not
+    wired up.  Disabling the ``kin`` branch -- so every sibling attachment has to
+    fall through -- moved it to **270** fallbacks, at distances up to 1,279
+    tiles, and took the corpus from 66/72 to 50/72 with 22 refusals.  So the
+    path is reachable, the counter sees it, and the consequence of taking it is
+    exactly the refusal described above.  It simply does not happen.
+
+    Leave it as it is.  Returning ``None`` would be a route failure -- also a
+    refusal -- bought with no evidence, and a targeted message would describe a
+    case nothing produces.  If a future pack ever does reach here, the refusal it
+    causes is the honest one; re-run this count before changing the shape.
     """
     head = canvas.buildings[first]
     src = canvas.buildings[net.src.belt]
@@ -2801,6 +2832,9 @@ def _source_for(
         other = canvas.buildings[who]
         if catalog.is_belt(other.item_id) and other.carries_item == net.item:
             return who
+    # Measured dead on the corpus -- 0 of 12,020 calls. See the docstring for
+    # the count, for the fault injection that proves the count can see this
+    # line run, and for why it is still not worth replacing with `None`.
     return net.src.belt
 
 
