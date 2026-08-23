@@ -244,6 +244,58 @@ It only found that by running the test against the *unfixed* code. Do that every
      under the default `strategy="best"` the fourth candidate wins a race nobody runs. It
      gains **exactly 0.00%**, 9/9 reps. When comparing candidates, compare the way
      `pipeline.build` actually chooses: `min` over every *(candidate, strategy)* pair.
+2a. **`_connect_short_cuts` chains islands in arbitrary order — READY TO APPLY, patch below.**
+   A **latent correctness bug `flow.conservation` structurally cannot report.** It chains
+   islands in union-find root order, an implementation artefact, where `_join_shard_islands`
+   (`f346c50`) chains in descending balance so each edge runs surplus→deficit.
+   * **Not live today:** 10 firings across 36 specs, root order coincided with
+     descending-balance order in **10/10**.
+   * **Abundantly reachable:** over **8,620,618** reachable firing configurations (machine
+     vectors `plan_strips` can actually emit), **53.4% emit a backwards edge** and **83.5%
+     emit an edge out of a deficit island**. Smallest case: producer `machines=[1,1]`,
+     consumer strips `machines=[2,1]`, any rates.
+   * **Nothing catches it.** `validate._islands` (`validate.py:2082`) unions
+     `(s.input_obj, s.output_obj)` **without regard to direction**, so a backwards belt merges
+     exactly the same two islands and `flow.conservation` passes identically.
+   * **Physical consequence:** the belt runs from the starving island's producer into the
+     satisfied island's consumer. Backpressure makes it inert — the receiving consumer is
+     already fed — so the shortfall it was emitted to fix stays unfixed while the validator
+     reports clean.
+   * **Fix**, at `freeform.py` ~4135–4143 (function at 4071). Hoist the arithmetic the
+     `any(...)` already computes inline, then order by balance:
+     ```python
+     balance = {
+         r: sum(srcs[i].machines for i in mine) * out_rate
+         - sum(sinks[j].machines for j in theirs) * in_rate
+         for r, (mine, theirs) in islands.items()
+     }
+     if all(v >= 0 for v in balance.values()) or len(islands) < 2:
+         return []
+     order = sorted(islands, key=lambda r: (-balance[r], r))
+     ```
+   * **Risk, measured:** emitted pairs **identical on 36/36** cells, all 10 firings unchanged,
+     strip plans identical, 186 unit tests pass. Fault injection proves it is not a no-op —
+     on `srcs=[1,1] / sinks=[2,1]` the current code emits `(0,1)`, draining the starving
+     island; the fix emits `(1,0)`. **Pin it with a test on that shape**; it goes red against
+     the current code. Line numbers are against `f346c50` — re-locate before applying.
+
+2b. **`_shard_sinks` preferring `_merge_lanes` — MEASURED, DO NOT DO IT.** Proposed by the
+   agent that wrote `f346c50` as the cheaper answer to starved shards. It is not.
+   * **Zero slack is 99.2% of producers** (354 of 357), so "prefer merge when there is no
+     slack" is not a targeted rule — it is *stop sharding*, corpus-wide.
+   * **The "zero extra belts" claim is backwards.** One shard means every strip of the group
+     carries every lane: energetic-graphite's 21 machines go from 2 shards × (1+3) strips
+     carrying 8 lanes to 4 strips carrying 12. Measured **+82 to +114 nets (+10.9% to
+     +15.2%)** against 7 join nets saved.
+   * **It loses cells.** Interleaved A/B, 12 cells × 12 rounds: base **137/144** vs merge
+     **121/144**; worse in 8 rounds, better in **0**, sign test **p = 0.0078**. It fires on
+     `plasma-refining` in casimir-crystal and quantum-chip — URLs where
+     `_join_shard_islands` never fires, so they pay pure cost. 0 INVALID either arm; the
+     failure is `_merge_lanes` raising → REFUSED.
+   * It would make `_join_shard_islands` dead on the corpus — a **cost**, not a benefit:
+     deleting a proven guard (it bought `universe-matrix/no-proliferator`'s first clean
+     layout) for a preference that loses cells on URLs it does not help.
+
 3. **`_source_for`'s last fallback** still returns `net.src.belt` even when far from the head,
    emitting a cross-map link. Safe — `belt.link_adjacent` catches it and it becomes a refusal,
    never a silent bad build — but it is the one remaining place that function can name a
