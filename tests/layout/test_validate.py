@@ -24,7 +24,8 @@ SMELTER = 2302  # Arc Smelter, 3x3
 BELT2 = 2002  # Conveyor Belt Mk.II, 12/s
 SORTER3 = 2013  # Sorter Mk.III, 6/s at one tile
 SORTER1 = 2011  # Sorter Mk.I, 1.5/s at one tile
-TOWER = 2201  # Tesla Tower, cover radius 10.5
+TOWER = 2201  # Tesla Tower, cover radius 10.5, link distance 22.5
+WIRELESS_TOWER = 2202  # Wireless Power Tower, the long-reach node: link 45.5
 CHEM_PLANT = 2309  # Chemical Plant, 9x5 -- big enough to distinguish
                    # centre-based from tile-based power coverage
 BELT_REQUIRED = "prolif.belt_required_edges_not_direct_inserted"
@@ -347,6 +348,32 @@ def test_power_connectivity_fires_on_split_network() -> None:
 
 def test_power_connectivity_clean_when_towers_link() -> None:
     r = validate(place(tower(0, 0), tower(20, 0)))
+    assert not fired(r, "power.connectivity")
+
+
+def test_a_long_reach_node_pulls_a_short_reach_one_into_the_network() -> None:
+    """The pair test is ``max`` of the two reaches, not ``min``.
+
+    ``OnNodeAdded`` links when the separation is within
+    ``max(a.connDistance2, b.connDistance2)``, so a Wireless Power Tower (45.5)
+    reaches a Tesla Tower (22.5) at up to 45.5 -- read off Assembly-CSharp.dll
+    and recorded on ``catalog.TESLA_LINK_DISTANCE``.
+
+    This check used ``min`` and so under-reached.  It changed no verdict at the
+    time -- our own layouts place Tesla Towers only, where the two agree, and it
+    flips none of the four mixed-reach fixtures -- which is exactly why it
+    needed pinning rather than leaving to be noticed.
+
+    30 tiles is chosen to sit in the gap: beyond a Tesla pair's 22.5, inside the
+    Wireless tower's 45.5. Under ``min`` these are two stranded networks.
+    """
+    wireless = PlacedBuilding(item_id=WIRELESS_TOWER, model_index=45, x=0, y=0)
+    tesla = tower(30, 0)
+    a = catalog_building(WIRELESS_TOWER).connect_distance
+    b = catalog_building(TOWER).connect_distance
+    assert b < 30 < a, "the separation must lie between the two reaches"
+
+    r = validate(place(wireless, tesla))
     assert not fired(r, "power.connectivity")
 
 

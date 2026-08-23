@@ -1146,7 +1146,12 @@ def _connectivity(ctx: Context) -> Iterable[Finding]:
         for b in range(a + 1, n):
             _, ax, ay, _, alink = towers[a]
             _, bx, by, _, blink = towers[b]
-            reach = min(alink, blink)
+            # max, not min: OnNodeAdded links when the separation is within
+            # max(a.connDistance2, b.connDistance2), so a long-reach node pulls
+            # a short-reach one into its network -- a Wireless Power Tower
+            # (45.5) links to a Tesla Tower at up to 45.5, not 22.5.  See
+            # catalog.TESLA_LINK_DISTANCE, read off Assembly-CSharp.dll.
+            reach = max(alink, blink)
             if (ax - bx) ** 2 + (ay - by) ** 2 <= reach**2:
                 adj[a].append(b)
                 adj[b].append(a)
