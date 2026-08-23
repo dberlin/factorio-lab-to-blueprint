@@ -106,6 +106,20 @@ MARGIN = 1
 #: the ports actually need.
 WEST_CHANNEL = 1
 
+# A SECOND ROW on the south face was tried here and is not worth having.
+#
+# The reasoning was symmetric to `WEST_CHANNEL`: the corridor between two
+# vertically adjacent strips is one row tall, a strip's machine band blocks every
+# level, so that row is the only east-west way past a strip and one belt fills
+# it.  Widening it to two measured WORSE -- 59/72 clean at 4s against 60/72 --
+# because a row costs height on every strip in the pack, the canvas grows, A*
+# slows, and the sweep reaches fewer candidate heights inside the same deadline.
+# The channel it buys is not free and the heights it costs were paying more.
+#
+# The west channel is not the same trade and that is the point: it makes two
+# ports' access cells DISJOINT, which is a property the router cannot recover by
+# searching harder.  A wider corridor only makes an existing search easier.
+
 #: Levels available to the router.  Ground plus two stacked crossing levels,
 #: matching what the corpus shows real blueprints using.
 LEVELS = catalog.MAX_BELT_STACK_LEVELS
@@ -2125,6 +2139,26 @@ def _route_all(
         committed = []
         pressure = 0.5 * (1.6**it)
         failed = 0
+        # PROMOTING LAST ROUND'S FAILURES to the front was tried here and is not
+        # worth having.
+        #
+        # The reasoning was sound and the diagnosis behind it still is: a round
+        # is greedy sequential routing -- a committed path is `blocked`, not
+        # merely expensive -- so nets never overlap, the history term never sees
+        # the overuse that PathFinder prices, and every round runs the same nets
+        # in the same order against a slightly dearer map. A net that arrived
+        # last to a full corridor arrives last again.
+        #
+        # Routing the same fifteen packs both ways, so the ONLY difference was
+        # the order: five packs lost a failure, three gained one, seven were
+        # unchanged -- and one of the three turned a pack that routed every net
+        # into one that did not. Over the corpus it measured 60/72 clean at 4s,
+        # exactly what the plain order measures, with the refusals merely
+        # shuffled between cells. That is noise, not a fix, and an ordering rule
+        # that can strand a net which was routing is not noise worth carrying.
+        #
+        # Length still orders everything. A long net has the most ways to be
+        # obstructed and the fewest alternatives, so it goes first.
         order = sorted(
             range(len(nets)),
             key=lambda i: -(
@@ -3902,6 +3936,28 @@ class FreeformLayout:
             _direct_net_candidates(strips, spec) if self.direct_insert else {}
         )
 
+        # SHORTEST FIRST, and TALLEST-first was tried against it and reverted.
+        #
+        # The case for reversing was real. The scarce resource here is the
+        # east-west corridor: a strip's machine band blocks every level, so the
+        # only way past a strip is the one-row channel on its south face and one
+        # belt fills it, while the north-south corridors between columns are two
+        # wide (see `WEST_CHANNEL`) and have the levels above the lane rows
+        # besides. A wide pack asks its nets to cross the whole width through
+        # those one-row channels; a narrow one does not. Routing every candidate
+        # height of `quantum-chip/max-proliferation` with a 20M expansion budget
+        # and no clock says exactly that: h=30 w=104 left two nets unrouted,
+        # h=40 w=87 three, h=50 w=61 four, h=62 w=52 three, and h=80 w=39 routed
+        # EVERY net -- while shortest-first spent the whole ceiling on the four
+        # packs that cannot be wired and never reached the one that can.
+        #
+        # It measured 60/72 clean at 4s, which is what shortest-first measures,
+        # with the refusals shuffled between cells. The gain on `quantum-chip` is
+        # paid straight back on `universe-matrix`, whose tall packs are both
+        # wider AND slower to route, so the sweep reaches fewer of them. Reverted
+        # for want of a number, not for want of a reason: a height ORDER that
+        # depended on the strips rather than on a fixed direction is the shape
+        # this wants, and nobody has built one.
         heights = _candidate_heights(strips)
         # This sweep's own share, never more than the CALL has left. A sweep
         # asked for 15s when 3 remain must not spend 15.
