@@ -67,7 +67,6 @@ markers = [
     "network: hits the live FactorioLab dataset; gated on FLAB2BP_NETWORK_TESTS=1",
     "bun: cross-validates against the dsp-blueprint-viewer TypeScript decoder",
     "slow: solver-heavy; still runs by default -- deselect with `-m 'not slow'` if you must",
-    "packsolver: needs the optional PackingSolver binary; see scripts/build_packingsolver.sh",
     "uncached_layout: the solve itself is the subject; bypass the shared layout memo in tests/conftest.py",
 ]
 
