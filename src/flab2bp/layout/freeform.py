@@ -176,6 +176,11 @@ _ROUTING_BUDGET = 2_000_000
 #: is roughly two and a half times the measured 155k/sec.
 _ROUTING_EXPANSIONS_PER_SECOND = 400_000
 
+#: Owner recorded in :attr:`_Canvas.blocked` for a path laid THIS rip-up round
+#: and not yet committed.  It was the bare ``-2`` in four places, one of which
+#: is now a hot-loop comparison, so it is named once.
+_TENTATIVE = -2
+
 #: A* expansions between wall-clock checks.
 #:
 #: ``time.monotonic()`` costs about as much as an expansion, so calling it on
@@ -2134,7 +2139,7 @@ def _route_all(
         iterations = it + 1
         for path in committed:
             for cell in path:
-                if canvas.blocked.get(cell, -1) == -2:
+                if canvas.blocked.get(cell, -1) == _TENTATIVE:
                     del canvas.blocked[cell]
         committed = []
         pressure = 0.5 * (1.6**it)
@@ -2209,7 +2214,7 @@ def _route_all(
                 continue
             paths[i] = routed
             for cell in routed:
-                canvas.blocked[cell] = -2  # tentative reservation
+                canvas.blocked[cell] = _TENTATIVE
             committed.append(routed)
         if failed == 0:
             unlinked = _commit_paths(canvas, nets, paths, belt_id, belt_model)
@@ -2217,6 +2222,40 @@ def _route_all(
         for path in committed:
             for cell in path:
                 history[cell] += 1.0
+        # A SURCHARGE ON THE CELLS THAT SEALED SOMEBODY IN was tried here and is
+        # not worth having.
+        #
+        # The diagnosis behind it stands and is the sharpest thing known about
+        # this router. The point above says a cell was USED; it cannot say that
+        # using it cost another net its only way out, because a committed path is
+        # `blocked` rather than dear, so two nets never overlap and PathFinder's
+        # overuse signal -- the thing a history term is designed to carry -- is
+        # identically zero here. Every round re-runs the same nets in the same
+        # order against a map that is uniformly, uselessly dearer.
+        #
+        # The missing signal is recoverable. When `_astar`'s heap empties -- the
+        # one ending that proves no path exists, as against running out of cap,
+        # budget or clock -- the settled set IS the reachable pocket and its
+        # blocked neighbours ARE the wall. Charging the committed cells among
+        # them was built, and the instrument was checked before the effect was
+        # believed: of 26 failing searches on `quantum-chip/no-proliferator` at
+        # h=106, 25 named a wall, so coverage was not the problem.
+        #
+        # It measured nothing. Routing five identical packs -- one CP-SAT worker
+        # so the pack is the same object in both arms, the router the only
+        # difference -- `quantum-chip` went 18 unrouted nets to 16 and
+        # `casimir-crystal` went 9 to 9, with weights 4, 12 and 40 giving the
+        # same answer as each other, which is what a term that is not biting
+        # looks like. Over the corpus at 4s: 61/61/61 clean without it against
+        # 61/60/63 with it -- the same mean and more variance.
+        #
+        # Why it cannot bite is in the wall census. The median failing search
+        # reaches ONE CELL, an output lane's east port having exactly one access
+        # cell, and that cell's wall is 48% strip lane belt, 27% committed path,
+        # 12% another port's reservation. Making the one committed cell dear
+        # moves that net and the pocket stays sealed by the other three, which no
+        # pricing can move because no net owns them. This is geometry the packer
+        # hands the router, and the router cannot negotiate its way out of it.
         # Give up once raising the pressure has stopped buying anything.
         #
         # Rip-up-and-reroute converges by making contested cells progressively
@@ -2352,7 +2391,7 @@ def _commit_paths(
     belts nothing fed: real buildings, real area, no items.
     """
     for cell, owner in list(canvas.blocked.items()):
-        if owner == -2:
+        if owner == _TENTATIVE:
             del canvas.blocked[cell]
     # Release the port reservations. They exist to stop one net's path from
     # taking the last cell another net needs to leave its port, and routing is
@@ -3337,7 +3376,7 @@ def _build(
     # `_commit_paths` decided not to build on keeps a marker with no building
     # under it. `free` reads those as occupied, so the lattice treats empty
     # ground as taken.
-    for cell in [c for c, owner in canvas.blocked.items() if owner == -2]:
+    for cell in [c for c, owner in canvas.blocked.items() if owner == _TENTATIVE]:
         del canvas.blocked[cell]
     canvas.keep_out.clear()
     # A build the clock ran out on is a build the caller will discard, so it
