@@ -42,6 +42,15 @@ Deliberate scope reductions, each documented where it appears:
 * Machines sit at the top of their row, so a machine shorter than its row cannot
   always reach the corridor below it.  ``_lane_requirements`` allocates around
   that rather than moving the machine.
+* One item per lane -- **except** where that will not fit.  A row taps two
+  corridors and a sorter reaches 3 lanes into each, so six LANES is a hard cap;
+  ``universe-matrix`` takes five matrices plus antimatter and makes a product,
+  which is seven ITEMS.  Two items ride one lane with each tapping sorter
+  filtered to its own item, which cuts lanes without cutting items.  Tried only
+  after one-per-lane fails, so every spec that already fits keeps its exact
+  shape -- measured identical in area and building count on all 66 other corpus
+  cells.  See :func:`_shareable` for the terms and
+  :func:`_merge_shared_risers` for the trunk the two items have to share.
 """
 
 from __future__ import annotations
@@ -201,9 +210,40 @@ class _Plan:
 
     rows: list[list[str]]
     lanes: list[list[str]] = field(default_factory=list)
+    #: ``(corridor, depth) -> every item riding that lane``, for the lanes that
+    #: carry more than one.  ``lanes`` keeps the lane's PRIMARY item -- the label
+    #: the belt is emitted with -- so everything that only needs one name is
+    #: unchanged, and everything that has to know the truth asks
+    #: :func:`_lane_items`.  See :func:`_shareable` for why a lane may be shared
+    #: at all.
+    mixed: dict[tuple[int, int], tuple[str, ...]] = field(default_factory=dict)
     direct: set[tuple[str, str, str]] = field(default_factory=set)
     solver_status: str = "fallback"
     hit_budget: bool = False
+    #: True when this packing forced ``_lane_requirements`` to give up splitting
+    #: an over-capacity item across parallel lanes, so the build will ship with
+    #: an honest ``flow.belt_capacity`` error.  Still worth emitting -- a build
+    #: reported as too slow can be pasted and widened by hand and a build that
+    #: does not exist cannot -- but only when no other width kept the split, and
+    #: that comparison is what this flag is for.
+    degraded: bool = False
+
+
+def _lane_items(plan: _Plan, c: int, depth: int) -> tuple[str, ...]:
+    """Every item lane ``depth`` of corridor ``c`` carries, primary first."""
+    return plan.mixed.get((c, depth)) or (plan.lanes[c][depth],)
+
+
+def _share_column(plan: _Plan, c: int, depth: int, item: str) -> int:
+    """How far along a machine ``item``'s sorters start on this lane.
+
+    Zero for a lane with one item on it, which is every lane on every spec that
+    does not need sharing.  On a shared lane each item gets its own column, and
+    both the lane's extent and the sorter pass derive it from here so the two
+    cannot disagree about which column a sorter will stand in.
+    """
+    carried = _lane_items(plan, c, depth)
+    return carried.index(item) if len(carried) > 1 and item in carried else 0
 
 
 def _adapt(spec: BuildSpec) -> tuple[dict[str, _Group], list[_Edge]]:
@@ -339,6 +379,26 @@ def _lane_copies(
     items that overflow a belt at all -- one item in twelve corpus builds.
     """
     cap = belt_capacity(spec)
+    return {
+        item: max(1, math.ceil(rate / cap))
+        for item, rate in _item_flow(groups, edges, direct, spec).items()
+    }
+
+
+def _item_flow(
+    groups: dict[str, _Group],
+    edges: list[_Edge],
+    direct: set[tuple[str, str, str]],
+    spec: BuildSpec,
+) -> dict[str, Fraction]:
+    """Items/s each item has to move on belt, after direct inserts are removed.
+
+    The larger of supply and demand, because a lane has to carry whichever end
+    is bigger: a surplus still has to reach the edge and a shortfall still has
+    to reach the machines.  Shared by :func:`_lane_copies`, which turns it into
+    parallel lanes, and by :func:`_shareable`, which uses it to refuse a pairing
+    two items would overload one belt with.
+    """
     supply: dict[str, Fraction] = defaultdict(Fraction)
     demand: dict[str, Fraction] = defaultdict(Fraction)
     for g in groups.values():
@@ -356,9 +416,116 @@ def _lane_copies(
             supply[e.item] -= e.rate
             demand[e.item] -= e.rate
     return {
-        item: max(1, math.ceil(max(supply[item], demand.get(item, Fraction(0))) / cap))
+        item: max(supply[item], demand.get(item, Fraction(0)))
         for item in set(supply) | set(demand)
     }
+
+
+def _lane_filter(item: str) -> int:
+    """The DSP item id a sorter on a SHARED lane must filter to.
+
+    Raises rather than falling back to zero, exactly as freeform's namesake
+    does: an unfiltered sorter on a shared lane grabs whatever passes and
+    starves the machine that wanted the other item, and the blueprint still
+    pastes perfectly cleanly.  :func:`_shareable` refuses to pair an item this
+    would raise on, so reaching the raise is a bug rather than a spec's fault.
+    """
+    got = catalog.get_item_id(item)
+    if got is None:
+        raise KeyError(
+            f"{item!r} shares a belt lane but has no DSP item id, so its sorter "
+            f"cannot be filtered; it would take whatever passed instead"
+        )
+    return got
+
+
+def _shareable(
+    groups: dict[str, _Group],
+    edges: list[_Edge],
+    direct: set[tuple[str, str, str]],
+    spec: BuildSpec,
+    copies: dict[str, int],
+) -> dict[str, tuple[str, Fraction]]:
+    """Items that may ride a lane with a second item, and on what terms.
+
+    A row touches two corridors and a sorter reaches ``sorter_max_reach`` lanes
+    into each, so a machine can tap **six LANES** whatever is packed around it.
+    ``universe-matrix`` wants seven ITEMS.  Two items on one lane, each tapping
+    sorter filtered to its own item, cuts the lane count without cutting the
+    item count -- which is exactly the quantity that is over budget.  Freeform
+    has done this since ``six_input_spec`` and the validator already reads it:
+    ``_sorter_item`` trusts ``filter_id`` above every other source.
+
+    The value is ``(kind, flow)``.  ``kind`` is what the lane's ENDS look like
+    and whether a coater has to ride it, and only items whose kinds match may
+    share -- the ends are the only way anything gets onto the belt, and a coater
+    sprays everything that passes it rather than a chosen item:
+
+    * ``external`` -- the player feeds it at ``x = 0``.  Two external items on
+      one lane are two things the player puts on one belt, which is what
+      ``validate._entry_items`` was taught to expect.
+    * ``internal`` -- one producer group, one consumer group, so the item has
+      exactly one source lane and one destination lane and therefore exactly one
+      trunk.  Two such trunks that must deliver into the SAME lane are merged
+      into one by :func:`_merge_shared_risers`; more than one destination each
+      and the merged trunk would leak the other item onto a lane no sorter
+      filters it off, which stalls the belt with nothing to see it.
+    * the ``sprayed`` suffix keeps a proliferated item off a plain item's lane.
+      Two sprayed items share happily -- a coater on their lane is exactly what
+      they both wanted -- but pairing one with an unsprayed item would either
+      coat something the rate solve costed unproliferated or strand a coater.
+
+    Everything else is refused rather than reasoned about:
+
+    * an item needing parallel lanes -- ``_lane_copies`` already spent the
+      corridor on it, and pairing a split lane would make the trunk ranks
+      disagree at the two ends;
+    * the proliferator itself, whose lane is a pass-through utility that no
+      machine taps and that ``_cover_sprayed`` may duplicate at a band boundary;
+    * an item leaving the block, which owns its lane's east or west end;
+    * an item with no DSP id, which :func:`_lane_filter` could not filter.
+
+    Note this says which items MAY share, not which will.  The caller adds the
+    decisive restriction: only an item the seating row CONSUMES is ever put on a
+    shared lane, so a shared lane is only ever a trunk's destination.  A shared
+    SOURCE would need one trunk to serve two different destinations, and the
+    second item would arrive on a lane whose sorters filter it out.
+    """
+    prolif = proliferator_item(spec)
+    leaving = _leaving_items(groups, spec)
+    flow = _item_flow(groups, edges, direct, spec)
+    sprayed = set(spec.spray_lanes)
+    producers: dict[str, int] = defaultdict(int)
+    consumers: dict[str, int] = defaultdict(int)
+    for g in groups.values():
+        for item in g.outputs:
+            producers[item] += 1
+        for item in g.inputs:
+            consumers[item] += 1
+
+    out: dict[str, tuple[str, Fraction]] = {}
+    for item in set(producers) | set(consumers) | set(spec.external_inputs):
+        if copies.get(item, 1) != 1:
+            continue
+        if item == prolif or item in leaving:
+            continue
+        if catalog.get_item_id(item) is None:
+            continue
+        coat = ":sprayed" if item in sprayed else ""
+        rate = flow.get(item, Fraction(0))
+        if item in spec.external_inputs:
+            # An externally fed item that is ALSO sprayed keeps its own lane.
+            # A coater is found by the lane's primary item, and such an item has
+            # no second lane to find one on -- it enters at ``x = 0`` on the
+            # shared lane and nowhere else -- so riding along could leave it
+            # uncoated while the rate solve had costed it proliferated.  An
+            # internal one is safe: its source lane is unshared and carries the
+            # coater, so it arrives already sprayed.
+            if not coat:
+                out[item] = ("external", rate)
+        elif producers[item] == 1 and consumers[item] == 1:
+            out[item] = ("internal" + coat, rate)
+    return out
 
 
 def _lane_requirements(
@@ -367,7 +534,7 @@ def _lane_requirements(
     rows: list[list[str]],
     direct: set[tuple[str, str, str]],
     spec: BuildSpec,
-) -> tuple[list[list[str]], dict[str, int]]:
+) -> tuple[list[list[str]], dict[tuple[int, int], tuple[str, ...]], dict[str, int]]:
     """Corridor lanes, and how many parallel copies each item ended up with.
 
     Splitting an over-capacity item across parallel lanes deepens a corridor,
@@ -384,11 +551,14 @@ def _lane_requirements(
     wanted = _lane_copies(groups, edges, direct, spec)
     if any(v > 1 for v in wanted.values()):
         try:
-            return _allocate_lanes(groups, edges, rows, direct, spec, wanted), wanted
+            lanes, mixed = _allocate_lanes(groups, edges, rows, direct, spec, wanted)
         except ValueError:
             pass
+        else:
+            return lanes, mixed, wanted
     flat = dict.fromkeys(wanted, 1)
-    return _allocate_lanes(groups, edges, rows, direct, spec, flat), flat
+    lanes, mixed = _allocate_lanes(groups, edges, rows, direct, spec, flat)
+    return lanes, mixed, flat
 
 
 def _allocate_lanes(
@@ -398,7 +568,7 @@ def _allocate_lanes(
     direct: set[tuple[str, str, str]],
     spec: BuildSpec,
     copies: dict[str, int],
-) -> list[list[str]]:
+) -> tuple[list[list[str]], dict[tuple[int, int], tuple[str, ...]]]:
     """Which item occupies a lane in which corridor, ordered by sorter reach.
 
     Corridor ``c`` sits above row ``c``.  **A corridor holds exactly the lanes it
@@ -468,9 +638,15 @@ def _allocate_lanes(
     # preference plus two produced items spilling the other way, for five taps
     # against a reach of three -- so every width in the sweep raised and the
     # whole strategy silently degraded to its greedy fallback.
+    shareable = _shareable(groups, edges, direct, spec, copies)
+    cap = belt_capacity(spec)
+    #: ``(corridor, is_above_band) -> {host item: the item riding its lane}``.
+    #: Recorded per BAND because a corridor's top band is tapped only by the row
+    #: above it and its bottom band only by the row below, so a host name is
+    #: unambiguous within one band even when the same item holds a lane in both.
+    mix_by_band: dict[tuple[int, bool], dict[str, str]] = defaultdict(dict)
+
     for r in range(len(rows)):
-        slot_below: set[str] = set()  # corridor r, tapped from below by this row
-        slot_above: set[str] = set()  # corridor r + 1, tapped from above by it
         # Machines are pinned to the TOP of their row, and a row is as tall as
         # its tallest group, so a short group stops short of the row's bottom
         # edge -- a 3-tall smelter sharing a row with a 7-tall refinery ends four
@@ -496,29 +672,155 @@ def _allocate_lanes(
             prefers_above.setdefault(item, False)
         # Most constrained first: an item whose tapper is short has fewer places
         # it can go, so it has to choose before the ones that can go anywhere.
-        for item in sorted(prefers_above, key=lambda i: (-gaps.get(i, 0), i)):
-            top_ok = (
-                sum(copies.get(i, 1) for i in slot_below) + copies.get(item, 1) <= reach
-            )
-            bottom_ok = _fits_below(slot_above, item, gaps, reach, copies)
-            if prefers_above[item]:
-                target = slot_below if top_ok else (slot_above if bottom_ok else None)
-            else:
-                target = slot_above if bottom_ok else (slot_below if top_ok else None)
-            if target is None:
-                need = sum(copies.get(i, 1) for i in consumes[r] | produces[r])
-                who = "+".join(rows[r])
-                if need > 2 * reach:
-                    raise ValueError(
-                        f"row {r} ({who}) taps {need} lanes, more than the "
-                        f"{2 * reach} two corridors put within sorter reach"
-                    )
-                raise ValueError(
-                    f"row {r} ({who}) taps {need} lanes that no ordering of its two "
-                    f"corridors puts in reach; machine heights differ by up to "
-                    f"{max(gaps.values(), default=0)} tiles"
+        ordered_items = sorted(prefers_above, key=lambda i: (-gaps.get(i, 0), i))
+        # Every machine on this row needs its own anchor COLUMN per item it draws
+        # off a shared lane -- two sorters serving one machine from one belt
+        # cannot stand in the same column -- so the narrowest machine on the row
+        # bounds how much sharing is physical.  Two items per lane needs two.
+        widest_share = min((groups[k].width for k in rows[r]), default=1)
+
+        def _seat(
+            allow_mix: bool,
+            gap_first: bool,
+            items: list[str] = ordered_items,
+            prefers: dict[str, bool] = prefers_above,
+            gaps: dict[str, int] = gaps,
+            share_cap: int = widest_share,
+            drawn: frozenset[str] = frozenset(consumes[r] - produces[r]),
+        ) -> tuple[set[str], set[str], dict[str, str], dict[str, str]] | None:
+            """Seat every item this row taps, one per lane unless ``allow_mix``.
+
+            One item per lane is tried FIRST and mixing only opens what that
+            cannot reach, which is freeform's rule and worth copying for the
+            same reason: every spec that already fits keeps the exact shape it
+            had, so sharing can add territory but never trade any away.
+            """
+            below: set[str] = set()  # corridor r, tapped from below by this row
+            above: set[str] = set()  # corridor r + 1, tapped from above by it
+            rides_below: dict[str, str] = {}
+            rides_above: dict[str, str] = {}
+
+            def _room(item: str, slot: set[str]) -> bool:
+                if slot is below:
+                    return sum(copies.get(i, 1) for i in slot) + copies.get(item, 1) <= reach
+                return _fits_below(slot, item, gaps, reach, copies)
+
+            def _compatible(a: str, b: str) -> bool:
+                # Only an item this row DRAWS may share.  A lane the row fills is
+                # a trunk's source, and one trunk carrying two items has to
+                # deliver both to every stop it makes -- so a shared source would
+                # put the other item on a lane whose sorters filter it out, where
+                # it backs up behind them and stalls with nothing able to see it.
+                if a not in drawn or b not in drawn:
+                    return False
+                ka, kb = shareable.get(a), shareable.get(b)
+                # Equal gaps, because the two items end up at ONE depth: a lane
+                # the shorter machine can reach is the only lane the pair can
+                # take, and unequal gaps would put one of them out of reach of
+                # the very sorter the sharing exists to place.
+                return (
+                    ka is not None
+                    and kb is not None
+                    and ka[0] == kb[0]
+                    and ka[1] + kb[1] <= cap
+                    and gaps.get(a, 0) == gaps.get(b, 0)
                 )
-            target.add(item)
+
+            def _pair_off(slot: set[str], rides: dict[str, str]) -> bool:
+                """Move two of ``slot``'s items onto one lane, freeing a lane."""
+                taken = set(rides) | set(rides.values())
+                loose = sorted(i for i in slot if i not in taken)
+                for i, host in enumerate(loose):
+                    for rider in loose[i + 1 :]:
+                        if _compatible(host, rider):
+                            slot.discard(rider)
+                            rides[host] = rider
+                            return True
+                return False
+
+            def _squeeze(item: str, slot: set[str], rides: dict[str, str]) -> bool:
+                """Seat ``item`` in a full ``slot`` by sharing a lane somewhere.
+
+                Two moves, and the second is the one that matters: the item that
+                overflows is often not one that MAY share -- on
+                ``universe-matrix`` it is the product, which owns its lane's exit
+                -- while two of the ingredients already seated pair perfectly
+                well and free the lane it needs.  Trying only "can the newcomer
+                ride along" seats nothing on exactly the spec this exists for.
+                """
+                if share_cap < 2:
+                    return False
+                keep, kept = set(slot), dict(rides)
+                taken = set(rides) | set(rides.values())
+                if item not in taken:
+                    for host in sorted(slot):
+                        if host not in taken and _compatible(host, item):
+                            rides[host] = item
+                            return True
+                while _pair_off(slot, rides):
+                    if _room(item, slot):
+                        slot.add(item)
+                        return True
+                slot.clear()
+                slot |= keep
+                rides.clear()
+                rides.update(kept)
+                return False
+
+            for item in items:
+                # A machine is flush with the TOP of its row, so the corridor
+                # above it costs nothing however short the machine is, while
+                # every lane in the corridor below is the machine's gap further
+                # away.  Under ``gap_first`` an item carrying a gap therefore
+                # goes up whatever the flow would prefer: leaving it to the
+                # preference put two gapped items in one bottom band, where the
+                # second sits ``gap + 2`` tiles down and no sorter reaches it.
+                # Consume-above/produce-below is only a mild flow preference --
+                # `_find_taps` tries both sides anyway -- and reach is not
+                # negotiable, so where the two disagree reach wins.
+                if prefers[item] or (gap_first and gaps.get(item, 0) > 0):
+                    order = ((below, rides_below), (above, rides_above))
+                else:
+                    order = ((above, rides_above), (below, rides_below))
+                target = next((s for s, _rides in order if _room(item, s)), None)
+                if target is not None:
+                    target.add(item)
+                    continue
+                if not allow_mix or not any(_squeeze(item, *pair) for pair in order):
+                    return None
+            return below, above, rides_below, rides_above
+
+        # Four greedies, cheapest and most conservative first.  The first is the
+        # allocation this function has always made, so any row that used to seat
+        # still seats identically and the other three only ever open ground the
+        # first could not reach: a band preference that respects reach ahead of
+        # flow, and then lane sharing on top of each.
+        seated = next(
+            (
+                s
+                for mix, gap_first in ((0, 0), (0, 1), (1, 0), (1, 1))
+                if (s := _seat(allow_mix=bool(mix), gap_first=bool(gap_first))) is not None
+            ),
+            None,
+        )
+        if seated is None:
+            need = sum(copies.get(i, 1) for i in consumes[r] | produces[r])
+            who = "+".join(rows[r])
+            if need > 2 * reach:
+                raise ValueError(
+                    f"row {r} ({who}) taps {need} lanes, more than the "
+                    f"{2 * reach} two corridors put within sorter reach"
+                )
+            raise ValueError(
+                f"row {r} ({who}) taps {need} lanes that no ordering of its two "
+                f"corridors puts in reach; machine heights differ by up to "
+                f"{max(gaps.values(), default=0)} tiles"
+            )
+        slot_below, slot_above, rides_below, rides_above = seated
+        if 0 <= r < n_corr:
+            mix_by_band[r, False].update(rides_below)
+        if 0 <= r + 1 < n_corr:
+            mix_by_band[r + 1, True].update(rides_above)
         for c, slot_items in ((r, slot_below), (r + 1, slot_above)):
             if not 0 <= c < n_corr:
                 continue
@@ -549,6 +851,7 @@ def _allocate_lanes(
                 crossing[c].add(prolif)
 
     ordered: list[list[str]] = []
+    mixed: dict[tuple[int, int], tuple[str, ...]] = {}
     for c in range(n_corr):
         # Worst gap shallowest: a machine that stops two tiles above its row's
         # floor can only reach the corridor's first lane or two, so it takes one.
@@ -573,8 +876,21 @@ def _allocate_lanes(
             order = _cover_sprayed(
                 order, prolif, set(spec.spray_lanes), len(above), len(below), reach
             )
+        # Band position survives `_cover_sprayed`, which only ever inserts at a
+        # band BOUNDARY -- so the top band is still `order[:len(above)]` and the
+        # bottom band still `order[-len(below):]`, and a rider can be attached to
+        # its host's depth by name within its own band.
+        for band, span in (
+            (True, range(len(above))),
+            (False, range(len(order) - len(below), len(order))),
+        ):
+            riders = mix_by_band.get((c, band), {})
+            for d in span:
+                rider = riders.get(order[d])
+                if rider is not None:
+                    mixed[c, d] = (order[d], rider)
         ordered.append(order)
-    return ordered
+    return ordered, mixed
 
 
 def _cover_sprayed(
@@ -626,8 +942,8 @@ def fallback_plan(spec: BuildSpec) -> _Plan:
     """
     groups, edges = _adapt(spec)
     rows = _topological_rows(groups, edges)
-    lanes, _copies = _lane_requirements(groups, edges, rows, set(), spec)
-    return _Plan(rows=rows, lanes=lanes, solver_status="fallback")
+    lanes, mixed, _copies = _lane_requirements(groups, edges, rows, set(), spec)
+    return _Plan(rows=rows, lanes=lanes, mixed=mixed, solver_status="fallback")
 
 
 #: Why no solved plan was produced.  These began as fallback *reasons*, reported
@@ -718,8 +1034,16 @@ def _solve_plan(
         seed_error = str(exc)
 
     widths = _candidate_widths(groups)
+    # Two pools, because a packing that forced `_lane_requirements` to abandon a
+    # belt-capacity split is worth shipping but is not worth PREFERRING.  With
+    # one pool the smallest area won outright, so a width whose split survived
+    # could lose to a slightly narrower one that quietly put 46 items/s back on
+    # a 30/s belt -- `flow.belt_capacity` errors on `universe-matrix` that
+    # another width in the very same sweep did not have.
     best: _Plan | None = None
     best_area = math.inf
+    degraded: _Plan | None = None
+    degraded_area = math.inf
     per_solve = max(time_budget_s / max(len(widths), 1), 0.25)
     unroutable = 0
 
@@ -747,10 +1071,15 @@ def _solve_plan(
         if plan is None:
             continue
         area = _measure(spec, plan)
-        if area < best_area:
+        if plan.degraded:
+            if area < degraded_area:
+                degraded_area, degraded = area, plan
+        elif area < best_area:
             best_area, best = area, plan
     if best is not None:
         return best, FALLBACK_NONE, ""
+    if degraded is not None:
+        return degraded, FALLBACK_NONE, ""
     # Distinguish "packed rows nothing could wire" from "CP-SAT found nothing",
     # because they call for opposite fixes: the first is a structural limit in
     # the model, the second a search or feasibility problem.  A seed row that
@@ -845,6 +1174,22 @@ def _solve_one(
     for k, g in groups.items():
         for item in set(g.inputs) | set(g.outputs):
             tapped_by[item].append(k)
+
+    # Items the budget may count at HALF a lane, because two of them can share
+    # one -- see `_shareable`.  Deliberately narrowed to the items of a group
+    # that cannot be seated one-per-lane at all: those are the only groups
+    # `_allocate_lanes` will ever mix for, since it tries one item per lane
+    # first, so pricing anything else at a half would loosen the model where
+    # the allocator has not loosened to match and cost widths to packings it
+    # then refuses.  On every corpus spec but `universe-matrix` this set is
+    # empty and the constraint is bit-for-bit the one that came before.
+    over: set[str] = set()
+    for g in groups.values():
+        items = set(g.inputs) | set(g.outputs)
+        if sum(lane_copies.get(i, 1) for i in items) > 2 * tap_reach:
+            over |= items
+    can_share = set(_shareable(groups, edges, set(), spec, lane_copies)) & over
+
     for r in range(n):
         # Weighted by parallel-lane count, because the budget is LANES.  An item
         # that needs two lanes to carry its rate takes two of the row's slots,
@@ -853,10 +1198,20 @@ def _solve_one(
         # back on one belt.  Measured on quantum-chip, where crude-oil and
         # refined-oil each move 48/s against a 30/s belt.
         terms = []
+        shared = []
         for item, holders in tapped_by.items():
             t = model.new_bool_var(f"tap_{r}_{item}")
             model.add_max_equality(t, [in_row[k, r] for k in holders])
-            terms.append(lane_copies.get(item, 1) * t)
+            if item in can_share:
+                shared.append(t)
+            else:
+                terms.append(lane_copies.get(item, 1) * t)
+        if shared:
+            # ``ceil(shared / 2)`` lanes, expressed exactly: minimising height
+            # drives the variable down and the doubling pins it from below.
+            pairs = model.new_int_var(0, len(shared), f"shared_lanes_{r}")
+            model.add(2 * pairs >= sum(shared))
+            terms.append(pairs)
         if terms:
             model.add(sum(terms) <= 2 * tap_reach)
 
@@ -983,14 +1338,17 @@ def _solve_one(
         buckets[solver.value(row[k])].append(k)
     rows = [sorted(buckets[r]) for r in sorted(buckets)]
     direct = {ek for ek, d in di.items() if solver.value(d)}
-    lanes, _copies = _lane_requirements(groups, edges, rows, direct, spec)
+    lanes, mixed, got = _lane_requirements(groups, edges, rows, direct, spec)
+    wanted = _lane_copies(groups, edges, direct, spec)
     return (
         _Plan(
             rows=rows,
             lanes=lanes,
+            mixed=mixed,
             direct=direct,
             solver_status=solver.status_name(status),
             hit_budget=status == cp_model.FEASIBLE,
+            degraded=any(got.get(i, 1) < v for i, v in wanted.items()),
         ),
         False,
     )
@@ -1143,7 +1501,12 @@ def _realizable_direct(
     plan: _Plan,
     *,
     power: bool,
-) -> tuple[set[tuple[str, str, str]], list[list[str]], dict[str, int]]:
+) -> tuple[
+    set[tuple[str, str, str]],
+    list[list[str]],
+    dict[tuple[int, int], tuple[str, ...]],
+    dict[str, int],
+]:
     """Shrink ``plan.direct`` to the inserts real geometry can actually carry.
 
     The solver bounds the corridor between a direct-inserted pair, but it models
@@ -1160,7 +1523,7 @@ def _realizable_direct(
     reach = CONSTANTS.sorter_max_reach
     current = set(plan.direct)
     while True:
-        lanes, copies = _lane_requirements(groups, edges, plan.rows, current, spec)
+        lanes, mixed, copies = _lane_requirements(groups, edges, plan.rows, current, spec)
         row_heights = [max((groups[k].height for k in r), default=1) for r in plan.rows]
         corridor_heights = [len(c) for c in lanes]
         row_y, _corr_y, _h = band_offsets(row_heights, corridor_heights)
@@ -1193,7 +1556,7 @@ def _realizable_direct(
             if excess > 0 and (worst is None or excess > worst[0]):
                 worst = (excess, ek)
         if worst is None:
-            return current, lanes, copies
+            return current, lanes, mixed, copies
         # Drop ONE at a time, worst first. Removing an insert restores its lane,
         # which pushes every other pair further apart -- so discarding the whole
         # infeasible set at once cascades and can lose inserts that would have
@@ -1229,10 +1592,11 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
     belt_id = BELT_ITEM_IDS.get(spec.belt_item_id, 2001)
     belt_model = catalog.building(belt_id).model_index
 
-    direct, lanes, copies = _realizable_direct(spec, groups, edges, plan, power=power)
+    direct, lanes, mixed, copies = _realizable_direct(spec, groups, edges, plan, power=power)
     plan = _Plan(
         rows=plan.rows,
         lanes=lanes,
+        mixed=mixed,
         direct=direct,
         solver_status=plan.solver_status,
         hit_budget=plan.hit_budget,
@@ -1448,7 +1812,15 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
                 xs = [buildings[i].x for i in share]
                 pick = _pick_sorter(rate, tap.span, g.width)
                 cols = g.width if pick is None else min(pick[1], g.width)
-                lo, hi = min(xs), max(xs) + cols - 1
+                # A rider on a shared lane starts one column further along the
+                # machine, because two sorters serving one machine off one belt
+                # cannot stand in the same column.  Charged to the EXTENT as
+                # well as to the sorter pass: the lane is emitted from the taps
+                # it is charged for, so a rider whose column the lane never
+                # reached simply got no sorter -- `machine.inputs_supplied`, on
+                # the very spec the sharing exists for.
+                off = _share_column(plan, tap.corridor, tap.depth, item)
+                lo, hi = min(xs) + off, max(xs) + off + cols - 1
                 _extend(tap.corridor, tap.depth, lo, hi)
                 (drain_at if into else fill_at)[tap.corridor, tap.depth].append((lo, hi))
 
@@ -1496,14 +1868,16 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
     #: east while running it out to ``x = 0`` would fill the wrong end.
     exits_west: set[tuple[int, int]] = set()
     for c, order in enumerate(plan.lanes):
-        for depth_i, item in enumerate(order):
+        for depth_i in range(len(order)):
+            carried = _lane_items(plan, c, depth_i)
+            item = carried[0]
             # Only a lane something actually taps is run out to the boundary.
             # A copy with no taps has nothing to carry in or out, and reaching
             # the edge would make it look like an entry the player has to feed.
             tapped = extents.get((c, depth_i))
             if tapped is None:
                 continue
-            if item in spec.external_inputs:
+            if any(i in spec.external_inputs for i in carried):
                 _extend(c, depth_i, 0, 0)
             if item not in leaving:
                 continue
@@ -1532,7 +1906,10 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
     lane_item_of: dict[tuple[int, int], str] = {}
     starved_taps = 0
     for c, order in enumerate(plan.lanes):
-        for depth_i, item in enumerate(order):
+        for depth_i in range(len(order)):
+            carried = _lane_items(plan, c, depth_i)
+            item = carried[0]
+            external_here = any(i in spec.external_inputs for i in carried)
             y = corr_y[c] + depth_i
             reach_span = extents.get((c, depth_i)) or item_extents.get((c, item))
             lo, hi = reach_span if reach_span is not None else (0, content_w - 1)
@@ -1542,10 +1919,9 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
                 (c, depth_i),
                 fed_from_trunk=fed_from_trunk,
                 hands_to_trunk=hands_to_trunk,
-                pinned_west_edge=item in spec.external_inputs,
+                pinned_west_edge=external_here,
                 pinned_east_edge=item in leaving and (c, depth_i) not in exits_west,
-                exits_west=(c, depth_i) in exits_west
-                and item not in spec.external_inputs,
+                exits_west=(c, depth_i) in exits_west and not external_here,
                 fills=fills,
                 drains=drains,
             )
@@ -1555,7 +1931,7 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
             supply = list(fills)
             if (c, depth_i) in fed_from_trunk:
                 supply.append((content_w - 1, content_w - 1))
-            if item in spec.external_inputs:
+            if external_here:
                 supply.append((0, 0))
             starved_taps += _lane_flow_gaps(supply, drains, westward=westward)
             indices: list[int] = []
@@ -1686,6 +2062,10 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
     sorters += direct_sorters
 
     # --- sorters ----------------------------------------------------------
+    #: Anchor columns already spent on each lane, per machine.  Two items riding
+    #: one belt need one column each across the machine's width; without this the
+    #: second item's sorters landed on top of the first's.
+    lane_columns: dict[tuple[int, int], dict[int, set[int]]] = defaultdict(dict)
     for key, g in groups.items():
         connections = [(item, rate * g.count, True) for item, rate in g.inputs.items()]
         connections += [(item, rate * g.count, False) for item, rate in g.outputs.items()]
@@ -1711,15 +2091,20 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
                 if pick is None:
                     continue
                 tier, per_machine = pick
+                lane_key = (tap.corridor, tap.depth)
+                shared = len(_lane_items(plan, *lane_key)) > 1
                 sorters += _place_sorters(
                     buildings,
-                    lane_tiles[tap.corridor, tap.depth],
+                    lane_tiles[lane_key],
                     machines,
                     lane_y=tap.lane_y,
                     machine_y=tap.machine_y,
                     tier=tier,
                     per_machine=per_machine,
                     into_machine=into_machine,
+                    filter_id=_lane_filter(item) if shared else 0,
+                    column=_share_column(plan, *lane_key, item),
+                    reserved=lane_columns[lane_key] if shared else None,
                 )
 
     # --- spray coaters ----------------------------------------------------
@@ -2009,12 +2394,16 @@ def _plan_risers(
             run[item] = 0 if d and order[d - 1] != item else run[item]
             k = run[item] % max(copies.get(item, 1), 1)
             run[item] += 1
-            if item in external:
-                continue
             is_source = (c, d) in filled
             if not is_source and (c, d) not in drained:
                 continue
-            lanes_of[item, k].append((corr_y[c] + d, c, d, is_source))
+            # A rider on a shared lane always has ``copies == 1`` -- `_shareable`
+            # refuses to pair a split item -- so its rank is 0 and it needs none
+            # of the contiguity bookkeeping above.
+            for it, rank in ((item, k), *((x, 0) for x in _lane_items(plan, c, d)[1:])):
+                if it in external:
+                    continue
+                lanes_of[it, rank].append((corr_y[c] + d, c, d, is_source))
 
     risers: list[_Riser] = []
     for (item, _k), lanes in sorted(lanes_of.items()):
@@ -2028,7 +2417,74 @@ def _plan_risers(
         if last is None:
             continue  # every copy below the first source is itself a source
         risers.append(_Riser(item=item, taps=tuple(lanes[first : last + 1])))
-    return _assign_columns(risers)
+    return _assign_columns(_merge_shared_risers(risers))
+
+
+def _merge_shared_risers(risers: list[_Riser]) -> list[_Riser]:
+    """Join the trunks that have to deliver into the SAME lane.
+
+    Two items sharing one corridor lane each need their contents brought down to
+    it, and two independent trunks would both bridge across the margin *at that
+    lane's y* -- the same tiles claimed twice, which is an overlap the validator
+    reports and the game would refuse to paste.
+
+    One trunk collecting both sources and delivering once is the only geometry
+    that fits, and the riser model already expresses it: ``taps`` may hold
+    several sources, each merging into the column at its own y, and DSP merges
+    belts natively.  ``is_source`` is a property of the LANE rather than of the
+    item -- it says whether anything's sorters FILL that lane -- so the shared
+    destination arrives from both sides as the identical tuple and dedupes.
+
+    Merging is safe only because :func:`_shareable` pairs items with exactly one
+    destination each.  A merged trunk carries both items past every stop it
+    makes, so a second, unshared destination would silently take delivery of the
+    other item too, back up behind a sorter that filters it out, and stall.
+    """
+    if len(risers) < 2:
+        return risers
+    parent = list(range(len(risers)))
+
+    def find(a: int) -> int:
+        while parent[a] != a:
+            parent[a] = parent[parent[a]]
+            a = parent[a]
+        return a
+
+    owner: dict[tuple[int, int], int] = {}
+    for i, riser in enumerate(risers):
+        for _y, c, d, is_source in riser.taps:
+            if is_source:
+                continue
+            j = owner.setdefault((c, d), i)
+            parent[find(i)] = find(j)
+
+    members: dict[int, list[int]] = defaultdict(list)
+    for i in range(len(risers)):
+        members[find(i)].append(i)
+
+    out: list[_Riser] = []
+    for group in members.values():
+        if len(group) == 1:
+            out.append(risers[group[0]])
+            continue
+        taps = sorted({t for i in group for t in risers[i].taps})
+        first = next((i for i, t in enumerate(taps) if t[3]), None)
+        if first is None:
+            continue
+        last = next((i for i in range(len(taps) - 1, first, -1) if not taps[i][3]), None)
+        if last is None:
+            continue
+        # Named for one of the items it carries.  That is what a mixed belt can
+        # be labelled, and it is enough: every sorter drawing off the shared
+        # lane is FILTERED, and `validate._sorter_item` reads a filter before it
+        # reads any label.
+        out.append(
+            _Riser(
+                item=min(risers[i].item for i in group),
+                taps=tuple(taps[first : last + 1]),
+            )
+        )
+    return sorted(out, key=lambda r: (r.taps[0][0], r.item))
 
 
 def _assign_columns(risers: list[_Riser]) -> list[_Riser]:
@@ -2304,9 +2760,14 @@ def _find_taps(
     # corridor above.  Either is legal, so both are tried.
     order = [(r + 1, False), (r, True)] if out else [(r, True), (r + 1, False)]
     for c, from_corridor_above in order:
-        if c < 0 or c >= len(plan.lanes) or item not in plan.lanes[c]:
+        if c < 0 or c >= len(plan.lanes):
             continue
         lanes = plan.lanes[c]
+        # Not ``item in lanes``: a lane may carry a second item that ``lanes``
+        # does not name -- see :attr:`_Plan.mixed` -- and skipping the corridor
+        # on the label alone left the rider with no sorter at all.
+        if not any(item in _lane_items(plan, c, j) for j in range(len(lanes))):
+            continue
         found: list[_Tap] = []
         # An item may occupy SEVERAL lanes in one corridor -- deliberately, when
         # the corridor is tapped from both sides: a copy near the top serves the
@@ -2316,8 +2777,8 @@ def _find_taps(
         # copy regardless of which side was asking, so a row needing the bottom
         # copy was handed the top one at a span far beyond reach, failed the
         # test, and silently got no sorter for that ingredient at all.
-        for j, carried in enumerate(lanes):
-            if carried != item:
+        for j in range(len(lanes)):
+            if item not in _lane_items(plan, c, j):
                 continue
             lane_y = corr_y[c] + j
             if from_corridor_above:
@@ -2355,6 +2816,9 @@ def _place_sorters(
     tier: int,
     per_machine: int,
     into_machine: bool,
+    filter_id: int = 0,
+    column: int = 0,
+    reserved: dict[int, set[int]] | None = None,
 ) -> int:
     """Connect a lane to EVERY machine of a group, ``per_machine`` sorters each.
 
@@ -2362,12 +2826,20 @@ def _place_sorters(
     indices carry the real semantics -- which is how the game itself does it.
     Measured on real blueprints, a sorter's anchors never coincide with a belt
     *building*, so sorters are overlays and do not consume build tiles.
+
+    ``filter_id`` pins which item this sorter moves, mandatory on a shared lane
+    and left at zero on a plain one -- that zero-versus-set distinction is the
+    signal the validator uses to tell the two apart, so do not set one where
+    none is needed.  ``reserved`` carries the columns already spent on a lane
+    across CALLS, keyed by machine: two items on one belt cannot be drawn by two
+    sorters standing in the same column, and ``used`` alone only ever saw the
+    one item it was called for.
     """
     model_index = catalog.building(tier).model_index
     placed = 0
     for m_idx in machines:
         m = buildings[m_idx]
-        used: set[int] = set()
+        used: set[int] = set() if reserved is None else reserved.setdefault(m_idx, set())
         for i in range(per_machine):
             # ONE column for both anchors.  This sorter is vertical -- the lane
             # sits in a corridor above or below the machine row -- so the two
@@ -2376,7 +2848,7 @@ def _place_sorters(
             # bare ``m.x`` skewed every sorter after the first by exactly that
             # offset, which is why 100 of 118 came out diagonal with dx of only
             # ever 1 or 2.
-            x = _shared_column(buildings, lane, m, prefer=i, avoid=used)
+            x = _shared_column(buildings, lane, m, prefer=column + i, avoid=used)
             if x is None:
                 continue
             belt_idx = _lane_tile_at(buildings, lane, x)
@@ -2404,6 +2876,7 @@ def _place_sorters(
                     yaw2=Facing.SOUTH.value if lane_y < machine_y else Facing.NORTH.value,
                     input_obj=src,
                     output_obj=dst,
+                    filter_id=filter_id,
                 )
             )
             placed += 1
@@ -2768,9 +3241,20 @@ def _link_towers(buildings: list[PlacedBuilding], tower_model: int) -> int:
     covering a junction landed 24.2 tiles from its nearest neighbour against a
     22.5-tile link distance, so it powered the splitter and nothing powered it.
 
-    Repaired by stepping toward the network rather than by refusing: a tower
-    placed on the segment between the stranded one and its nearest linked
-    neighbour halves the gap, so a bounded number of steps always closes it.
+    Repaired by stepping toward the network rather than by refusing: a relay on
+    the segment between the stranded tower and its nearest linked neighbour
+    shortens the gap, so a bounded number of steps closes it.
+
+    The relay is placed within ``link`` of the LINKED end, not at the midpoint.
+    A midpoint only works while the gap is under twice the link distance; past
+    that the relay reaches neither end, so ``seen`` never grows, the next pass
+    picks the same stray tower and the same midpoint, and the loop spends its
+    whole bound piling unconnected towers on one spot.  Measured on
+    ``universe-matrix``, where a top-up tower in the riser margin landed 67
+    tiles from the network: 226 towers placed, 126 of them stray, against 110
+    towers and none stray on the runs that did not hit it.  Stepping from the
+    linked end instead makes every relay join the network as it is placed, so
+    each pass advances the frontier and the walk terminates.
     ``power.connectivity`` still judges the result.
     """
     link = float(CONSTANTS.link_distance)
@@ -2809,13 +3293,27 @@ def _link_towers(buildings: list[PlacedBuilding], tower_model: int) -> int:
         near = min(seen, key=lambda k: math.dist(towers[j], towers[k]))
         sx, sy = towers[j]
         nx, ny = towers[near]
+        gap = math.dist(towers[j], towers[near])
+        if not gap:
+            break  # two towers on one tile; nothing a relay can add
+        # Aim 60% of a link out from the linked end, and allow the search to
+        # drift up to 30% more.  The relay is then at most 90% of a link from
+        # the network -- connected for certain -- while still advancing the
+        # frontier by at least 30% of a link every pass.
+        along = min(0.5, link * 0.6 / gap)
         spot = _nearest_free(
-            int((sx + nx) / 2), int((sy + ny) / 2), occupied, link / 2
+            int(nx + (sx - nx) * along),
+            int(ny + (sy - ny) * along),
+            occupied,
+            link * 0.3,
         )
         if spot is None:
             break  # nowhere to stand; the validator reports the split network
+        centre = (spot[0] + 0.5, spot[1] + 0.5)
+        if math.dist(centre, towers[near]) > link:
+            break  # the relay would be stranded too; say so rather than pile up
         occupied.add(spot)
-        towers.append((spot[0] + 0.5, spot[1] + 0.5))
+        towers.append(centre)
         buildings.append(
             PlacedBuilding(
                 item_id=CONSTANTS.tesla_item_id,
@@ -2910,6 +3408,33 @@ class SpineLayout:
             placement.stats["solver_rejected"] = 0.0
             placement.stats["fallback_reason"] = FALLBACK_NONE
             return placement
+
+        # Last resort, once every budget is spent: the SEED, one group per row.
+        #
+        # This is not the old degradation coming back.  That one returned the
+        # seed on any miss, unexamined, and the whole point of removing it was
+        # that the seed had never been checked for routability and usually was
+        # not.  The check exists now and is exactly this call: `fallback_plan`
+        # runs the same lane allocation as any solved plan and RAISES when a row
+        # cannot be wired, so a plan that comes back is one whose every lane is
+        # within sorter reach.  Emission still judges it and this method still
+        # refuses when it raises, so the only outcome that changed is a refusal
+        # becoming a layout.
+        #
+        # Reached only after the retry, because it costs area: on
+        # `universe-matrix`/`free-proliferation`, where a long sweep can pack
+        # rows the allocator refuses at every candidate width, the seed measures
+        # 50,512 tiles against roughly 39,000 for a solved plan -- and validates
+        # clean at both power settings, where the alternative was no blueprint.
+        if reason in (FALLBACK_UNROUTABLE, FALLBACK_NO_SOLUTION, FALLBACK_EMISSION):
+            try:
+                placement = _emit(spec, fallback_plan(spec), power=self.power)
+            except (ValueError, KeyError):
+                pass
+            else:
+                placement.stats["solver_rejected"] = 1.0
+                placement.stats["fallback_reason"] = reason
+                return placement
 
         raise NoValidLayout(
             _refusal(reason, detail), spec_label=spec.label, budget_s=spent

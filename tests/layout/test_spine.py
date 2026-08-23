@@ -985,7 +985,7 @@ class TestOneBeltIsNotEnough:
         spec = wide_flow_spec()
         groups, edges = _adapt(spec)
         rows = _topological_rows(groups, edges)
-        lanes, copies = _lane_requirements(groups, edges, rows, set(), spec)
+        lanes, _mixed, copies = _lane_requirements(groups, edges, rows, set(), spec)
         assert copies["iron-ingot"] == 2
         assert sum(c.count("iron-ingot") for c in lanes) >= 4
 
@@ -1341,62 +1341,173 @@ def seven_item_spec() -> BuildSpec:
     )
 
 
-class TestARecipeWiderThanTwoCorridors:
-    """The one corpus spec this skeleton cannot hold, and why it says so.
+def six_item_spec() -> BuildSpec:
+    """:func:`seven_item_spec` with one ingredient removed, so it fits unshared."""
+    g = seven_item_spec().groups[0]
+    inputs = {k: v for k, v in g.inputs_per_machine.items() if k != "antimatter"}
+    return BuildSpec(
+        groups=(
+            group("universe-matrix", "matrix-lab", 1, inputs, dict(g.outputs_per_machine)),
+        ),
+        external_inputs=dict(inputs),
+        outputs={"universe-matrix": F(1)},
+        belt_item_id="conveyor-belt-3",
+        belt_items_per_second=F(30),
+        label="six-item",
+    )
+
+
+def two_lab_spec() -> BuildSpec:
+    """Two ``universe-matrix`` labs fed by six producers, so nothing may share.
+
+    Each ingredient now has TWO consuming groups, which is exactly the case
+    ``_shareable`` refuses: one trunk carrying two items has to deliver both to
+    every stop it makes, so an item with a second destination would arrive on a
+    lane whose sorters filter it out and silently back up behind them.  The row
+    is over the cap and sharing cannot rescue it, so the refusal survives -- and
+    survives naming the recipe and both numbers.
+    """
+    ingredients = tuple(seven_item_spec().groups[0].inputs_per_machine)
+    producers = tuple(
+        group(item, "assembling-machine-1", 1, {"iron-ore": F(1)}, {item: F(2)})
+        for item in ingredients
+    )
+    labs = tuple(
+        group(
+            f"universe-matrix-{n}",
+            "matrix-lab",
+            1,
+            dict.fromkeys(ingredients, F(1)),
+            {"universe-matrix": F(1)},
+        )
+        for n in (0, 1)
+    )
+    return BuildSpec(
+        groups=(*producers, *labs),
+        external_inputs={"iron-ore": F(6)},
+        outputs={"universe-matrix": F(2)},
+        belt_item_id="conveyor-belt-3",
+        belt_items_per_second=F(30),
+        label="two-lab",
+    )
+
+
+class TestASeventhItemRidesASharedLane:
+    """The recipe that is one item wider than two corridors, and how it fits.
 
     A row touches exactly two corridors and a sorter reaches
     ``SORTER_MAX_REACH`` lanes into each, so a machine can be wired to at most
-    ``2 * reach`` = 6 distinct lanes however the rows are packed around it.
+    ``2 * reach`` = 6 distinct LANES however the rows are packed around it.
     ``universe-matrix`` takes five matrices plus antimatter and makes one
-    product: 7.  It is the only group in the whole corpus over the cap.
+    product: 7 items.  It is the only group in the whole corpus over the cap,
+    and direct insertion cannot close the gap -- measured exhaustively, not
+    assumed: an insert needs the shared corridor no deeper than ``reach - 1``,
+    which cuts the row's own budget to 5 and so needs two inserts, which leaves
+    the producer row 3 lanes, and of the 15 producer pairs exactly one has a
+    union that small -- a pair an edge between them forbids from sharing a row.
 
-    Direct insertion is the only thing that removes a lane tap, and it cannot
-    close the gap here -- measured, not assumed:
+    What closes it is that the cap is on LANES and the overflow is in ITEMS.
+    Two items ride one lane with each tapping sorter filtered to its own item,
+    which is a mechanism freeform has shipped since ``six_input_spec`` and the
+    validator already reads: ``_sorter_item`` trusts ``filter_id`` above every
+    other source, so nothing in ``validate`` had to change for this.
+    """
 
-    * an insert from the row above needs the corridor between them no deeper
-      than ``reach - 1`` = 2, which cuts the row's own capacity from 3 + 3 to
-      2 + 3 = 5, so ``7 - k <= 5`` needs **k >= 2**;
-    * with both of that corridor's two lanes claimed from below, its upper band
-      is empty, so the producer row's whole budget is the corridor above it:
-      3 lanes;
-    * of the 15 pairs of ``universe-matrix``'s six producers, exactly one has a
-      union of 3 lanes or fewer -- ``energy-matrix`` (energetic-graphite,
-      hydrogen) with ``mass-energy-storage`` (critical-photon, hydrogen), which
-      share hydrogen. Every other pair needs 4.
-    * and that pair cannot share a row: ``mass-energy-storage`` *makes* the
-      hydrogen ``energy-matrix`` consumes, so an edge forces one strictly above
-      the other.
+    @staticmethod
+    def _filters(p: Placement) -> list[PlacedBuilding]:
+        return [b for b in p.buildings if b.filter_id]
 
-    So the refusal is real.  What these tests pin is that it is refused for the
-    RIGHT REASON.  It used to be reported as ``FALLBACK_EMISSION`` -- "a plan
-    solved but could not be emitted onto the grid" -- which was false twice
-    over: no plan had solved, and nothing had been emitted.  ``_solve_plan``
-    opened with ``fallback_plan``, whose lane allocation raised, and ``lay_out``
-    caught that as an emission failure before CP-SAT was asked anything at all.
+    @pytest.mark.parametrize("power", [True, False], ids=["power", "no-power"])
+    def test_it_lays_out_and_validates_clean(self, power: bool) -> None:
+        from flab2bp.pipeline import _id_map
+
+        spec = seven_item_spec()
+        p = SpineLayout(power=power).lay_out(spec, time_budget_s=0.5)
+        assert p.stats["fallback_reason"] == FALLBACK_NONE
+        report = validate.validate(p, spec, ids=_id_map(spec), expect_power=power)
+        assert report.ok, [f.message for f in report.errors]
+
+    def test_exactly_one_lane_carries_two_items(self) -> None:
+        """Seven items on six lanes is ONE shared lane, not seven halves."""
+        plan = fallback_plan(seven_item_spec())
+        assert sum(len(c) for c in plan.lanes) == 2 * catalog.SORTER_MAX_REACH
+        assert len(plan.mixed) == 1
+        (shared,) = plan.mixed.values()
+        assert len(shared) == 2
+        # The product owns its lane's exit, so it is never one of the pair.
+        assert "universe-matrix" not in shared
+
+    def test_both_sorters_on_the_shared_lane_are_filtered(self) -> None:
+        """An unfiltered sorter on a shared lane starves the other machine.
+
+        It grabs whatever passes, and the blueprint still pastes perfectly
+        cleanly -- which is why this is pinned rather than trusted.
+        """
+        spec = seven_item_spec()
+        plan = fallback_plan(spec)
+        (shared,) = plan.mixed.values()
+        p = SpineLayout(power=False).lay_out(spec, time_budget_s=0.5)
+        filtered = self._filters(p)
+        assert {b.filter_id for b in filtered} == {
+            catalog.get_item_id(i) for i in shared
+        }
+        # And no sorter anywhere else got a filter it does not need: the zero is
+        # the signal `validate` uses to tell a shared lane from a plain one.
+        assert len(filtered) == 2
+
+    def test_the_two_sorters_do_not_share_an_anchor_column(self) -> None:
+        """One column each, or the second sorter lands on top of the first."""
+        p = SpineLayout(power=False).lay_out(seven_item_spec(), time_budget_s=0.5)
+        columns = {b.x for b in self._filters(p)}
+        assert len(columns) == 2
+
+    def test_a_six_item_recipe_shares_nothing(self) -> None:
+        """One item per lane is tried FIRST, so a spec that fits keeps its shape.
+
+        Sharing opens new territory rather than trading any away, which is the
+        property that lets it land without re-measuring every other spec.
+        """
+        spec = six_item_spec()
+        plan = fallback_plan(spec)
+        assert plan.mixed == {}
+        p = SpineLayout(power=False).lay_out(spec, time_budget_s=0.5)
+        assert p.stats["fallback_reason"] == FALLBACK_NONE
+        assert self._filters(p) == []
+
+
+class TestARecipeThatStillCannotBeWired:
+    """Sharing has terms, and a row whose items fail them is still refused.
+
+    An item may only share when it has exactly one destination lane, because
+    the two trunks that must deliver into a shared lane are MERGED into one and
+    a merged trunk carries both items past every stop it makes.  A second
+    destination would take delivery of the other item too, back up behind a
+    sorter that filters it out, and stall where nothing can see it -- so the
+    layout refuses instead, and refuses for the right reason.
     """
 
     def test_it_refuses_rather_than_emitting_something_unwireable(self) -> None:
         with pytest.raises(NoValidLayout):
-            SpineLayout(power=False).lay_out(seven_item_spec(), time_budget_s=0.5)
+            SpineLayout(power=False).lay_out(two_lab_spec(), time_budget_s=0.5)
 
     @pytest.mark.parametrize("power", [True, False], ids=["power", "no-power"])
     def test_the_reason_names_the_recipe_and_both_numbers(self, power: bool) -> None:
         with pytest.raises(NoValidLayout) as exc:
-            SpineLayout(power=power).lay_out(seven_item_spec(), time_budget_s=0.5)
+            SpineLayout(power=power).lay_out(two_lab_spec(), time_budget_s=0.5)
         reason = exc.value.reason
         assert "universe-matrix" in reason
         assert "7 lanes" in reason
         assert str(2 * catalog.SORTER_MAX_REACH) in reason
 
     def test_it_is_not_reported_as_an_emission_failure(self) -> None:
-        """The regression this whole class exists for.
+        """The two failures call for opposite responses.
 
-        The two failures call for opposite responses -- a recipe too wide for the
-        skeleton is permanent, an emission failure is worth retrying under a
-        longer budget -- so conflating them cost a real diagnosis.
+        A recipe too wide for the skeleton is permanent; an emission failure is
+        worth retrying under a longer budget.  Conflating them cost a real
+        diagnosis once, on this very recipe.
         """
         with pytest.raises(NoValidLayout) as exc:
-            SpineLayout(power=False).lay_out(seven_item_spec(), time_budget_s=0.5)
+            SpineLayout(power=False).lay_out(two_lab_spec(), time_budget_s=0.5)
         assert "could not be emitted" not in exc.value.reason
         assert "cannot be wired even alone in its own row" in exc.value.reason
 
@@ -1410,32 +1521,234 @@ class TestARecipeWiderThanTwoCorridors:
         from flab2bp.layout.spine import FALLBACK_SEED_UNWIRABLE, _solve_plan
 
         with pytest.raises(ValueError, match="taps 7 lanes"):
-            fallback_plan(seven_item_spec())
+            fallback_plan(two_lab_spec())
 
         plan, reason, detail = _solve_plan(
-            seven_item_spec(), time_budget_s=0.5, workers=DETERMINISTIC_WORKERS
+            two_lab_spec(), time_budget_s=0.5, workers=DETERMINISTIC_WORKERS
         )
         assert plan is None
         assert reason == FALLBACK_SEED_UNWIRABLE
         assert "universe-matrix" in detail
 
-    def test_a_six_item_recipe_still_lays_out(self) -> None:
-        """The cap is 6, not 5: one fewer ingredient and the same spec ships."""
-        spec = seven_item_spec()
-        g = spec.groups[0]
-        inputs = {k: v for k, v in g.inputs_per_machine.items() if k != "antimatter"}
-        trimmed = BuildSpec(
+
+class TestWhatMayShareALane:
+    """``_shareable`` is the whole safety argument for lane sharing.
+
+    Every other piece assumes it: the riser merge assumes one destination each,
+    the coater pass assumes a lane's single item, and the sorter pass assumes a
+    filter id exists.  So the categories it refuses are pinned here rather than
+    left to the corpus to discover.
+    """
+
+    @staticmethod
+    def _shareable(spec: BuildSpec) -> dict[str, tuple[str, Fraction]]:
+        from flab2bp.layout.spine import _adapt, _lane_copies, _shareable
+
+        groups, edges = _adapt(spec)
+        return _shareable(
+            groups, edges, set(), spec, _lane_copies(groups, edges, set(), spec)
+        )
+
+    def test_an_item_leaving_the_block_may_not_share(self) -> None:
+        """It owns one end of its lane, which is where a product exits."""
+        assert "universe-matrix" not in self._shareable(seven_item_spec())
+
+    def test_external_inputs_may_share_with_each_other(self) -> None:
+        share = self._shareable(seven_item_spec())
+        assert {k: v[0] for k, v in share.items()} == dict.fromkeys(
+            seven_item_spec().groups[0].inputs_per_machine, "external"
+        )
+
+    def test_an_item_with_two_consumers_may_not_share(self) -> None:
+        """One trunk carrying two items delivers both at every stop it makes.
+
+        The six matrices each feed two labs here, so each has two destination
+        lanes and none of them may pair.  ``iron-ore`` still may: it is external,
+        so every copy of its lane is its own entry at ``x = 0`` and no trunk is
+        involved at all.
+        """
+        share = self._shareable(two_lab_spec())
+        assert set(share) == {"iron-ore"}
+
+    def test_an_externally_fed_sprayed_item_may_not_share(self) -> None:
+        """A coater is found by the lane's PRIMARY item.
+
+        An external item enters at ``x = 0`` on its lane and nowhere else, so a
+        sprayed one that rode along could end up on a lane whose coater search
+        never names it -- running unproliferated while the rate solve had costed
+        it sprayed, and looking perfectly healthy while it did.  An internal
+        item is safe: its source lane is unshared and carries the coater, so it
+        arrives already sprayed.
+        """
+        g = seven_item_spec().groups[0]
+        ingredients = dict(g.inputs_per_machine)
+        spec = BuildSpec(
             groups=(
-                group("universe-matrix", "matrix-lab", 1, inputs, dict(g.outputs_per_machine)),
+                group(
+                    "universe-matrix",
+                    "matrix-lab",
+                    1,
+                    ingredients,
+                    dict(g.outputs_per_machine),
+                ),
             ),
-            external_inputs=dict(inputs),
+            external_inputs={**ingredients, "proliferator-3": F(1)},
             outputs={"universe-matrix": F(1)},
+            spray_lanes={"antimatter": True},
             belt_item_id="conveyor-belt-3",
             belt_items_per_second=F(30),
-            label="six-item",
+            label="sprayed-entry",
         )
-        p = SpineLayout(power=False).lay_out(trimmed, time_budget_s=0.5)
-        assert p.stats["fallback_reason"] == FALLBACK_NONE
+        share = self._shareable(spec)
+        assert "antimatter" not in share
+        assert "gravity-matrix" in share
+
+    def test_a_split_item_may_not_share(self) -> None:
+        """``_lane_copies`` already spent the corridor on it."""
+        spec = wide_flow_spec()
+        share = self._shareable(spec)
+        from flab2bp.layout.spine import _adapt, _lane_copies
+
+        groups, edges = _adapt(spec)
+        copies = _lane_copies(groups, edges, set(), spec)
+        assert copies["iron-ingot"] > 1
+        assert "iron-ingot" not in share
+
+
+class TestTrunksThatDeliverIntoOneLane:
+    """Two items on one lane need ONE trunk, not two.
+
+    Each trunk reaches its lane by bridging across the riser margin at that
+    lane's y, so two of them would claim the same tiles -- an overlap the
+    validator reports and the game refuses to paste.  The riser model already
+    expresses the answer: ``taps`` may hold several sources.
+    """
+
+    def test_two_sources_and_a_shared_destination_become_one_trunk(self) -> None:
+        from flab2bp.layout.spine import _merge_shared_risers, _Riser
+
+        a = _Riser(item="a", taps=((1, 1, 0, True), (20, 9, 0, False)))
+        b = _Riser(item="b", taps=((5, 3, 0, True), (20, 9, 0, False)))
+        merged = _merge_shared_risers([a, b])
+        assert len(merged) == 1
+        assert merged[0].taps == ((1, 1, 0, True), (5, 3, 0, True), (20, 9, 0, False))
+
+    def test_trunks_that_share_nothing_are_left_alone(self) -> None:
+        from flab2bp.layout.spine import _merge_shared_risers, _Riser
+
+        risers = [
+            _Riser(item="a", taps=((1, 1, 0, True), (20, 9, 0, False))),
+            _Riser(item="b", taps=((5, 3, 0, True), (22, 9, 1, False))),
+        ]
+        assert _merge_shared_risers(risers) == sorted(
+            risers, key=lambda r: (r.taps[0][0], r.item)
+        )
+
+
+class TestLinkingATowerTheNetworkCannotReach:
+    """A relay has to JOIN the network, not land halfway to it.
+
+    A midpoint relay only links when the gap is under twice the link distance.
+    Past that it reaches neither end, so the flood fill never grows, the next
+    pass picks the same stray tower and the same midpoint, and the walk spends
+    its whole bound piling unconnected towers on one spot -- 226 towers with 126
+    stray on ``universe-matrix``, against 110 and none on the runs that missed
+    the case.
+    """
+
+    @staticmethod
+    def _towers(*ys: int) -> list[PlacedBuilding]:
+        from flab2bp.layout.spine import CONSTANTS
+
+        w, h = CONSTANTS.tower_size
+        model = catalog.building(CONSTANTS.tesla_item_id).model_index
+        return [
+            PlacedBuilding(
+                item_id=CONSTANTS.tesla_item_id,
+                model_index=model,
+                x=0,
+                y=y,
+                width=w,
+                height=h,
+            )
+            for y in ys
+        ]
+
+    @staticmethod
+    def _stray(buildings: list[PlacedBuilding]) -> int:
+        from flab2bp.layout.spine import CONSTANTS
+
+        link = float(CONSTANTS.link_distance)
+        centres = [
+            (b.x + b.width / 2, b.y + b.height / 2)
+            for b in buildings
+            if b.item_id == CONSTANTS.tesla_item_id
+        ]
+        seen, frontier = {0}, [0]
+        while frontier:
+            i = frontier.pop()
+            for j, t in enumerate(centres):
+                if j not in seen and math.dist(centres[i], t) <= link:
+                    seen.add(j)
+                    frontier.append(j)
+        return len(centres) - len(seen)
+
+    def test_a_gap_wider_than_two_links_is_walked(self) -> None:
+        from flab2bp.layout.spine import CONSTANTS, _link_towers
+
+        link = float(CONSTANTS.link_distance)
+        model = catalog.building(CONSTANTS.tesla_item_id).model_index
+        buildings = self._towers(0, 70)
+        assert math.dist((0, 0), (0, 70)) > 2 * link, "not the case under test"
+        added = _link_towers(buildings, model)
+        assert self._stray(buildings) == 0
+        # A walk, not a pile: 70 tiles at roughly two thirds of a link a step.
+        assert added <= 8
+
+    def test_a_gap_one_relay_can_close_still_costs_one(self) -> None:
+        from flab2bp.layout.spine import CONSTANTS, _link_towers
+
+        model = catalog.building(CONSTANTS.tesla_item_id).model_index
+        buildings = self._towers(0, 30)
+        assert _link_towers(buildings, model) == 1
+        assert self._stray(buildings) == 0
+
+
+class TestTheSeedIsTheLastResort:
+    """A checked seed beats a refusal, and only ever arrives after the retry.
+
+    This is not the old degradation: that returned the seed unexamined on any
+    miss, and the seed usually was not routable.  ``fallback_plan`` now runs the
+    same lane allocation as any solved plan and RAISES when a row cannot be
+    wired, so a seed that comes back has every lane within sorter reach.
+    """
+
+    def test_it_lays_out_when_every_width_was_refused(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from flab2bp.layout import spine
+
+        spec = magnetic_ring_spec()
+        monkeypatch.setattr(
+            spine, "_solve_plan", lambda *a, **k: (None, spine.FALLBACK_UNROUTABLE, "")
+        )
+        p = SpineLayout(power=False).lay_out(spec, time_budget_s=0.5)
+        assert p.stats["fallback_used"] == 1.0
+        assert p.stats["fallback_reason"] == spine.FALLBACK_UNROUTABLE
+
+    def test_a_recipe_no_row_can_wire_still_refuses(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The seed cannot rescue a recipe wider than two corridors, and does not try.
+
+        ``FALLBACK_SEED_UNWIRABLE`` says the seed itself failed to allocate, so
+        reaching for it again would only raise the same ValueError -- and would
+        report it as an emission failure, which is the mislabelling this
+        module's refusal codes exist to prevent.
+        """
+        with pytest.raises(NoValidLayout) as exc:
+            SpineLayout(power=False).lay_out(two_lab_spec(), time_budget_s=0.5)
+        assert "cannot be wired even alone in its own row" in exc.value.reason
 
 
 # --- real corpus specs -----------------------------------------------------
