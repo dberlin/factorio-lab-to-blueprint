@@ -147,11 +147,54 @@ def lanes_requiring_split(data: Dataset, spec: BuildSpec) -> frozenset[str]:
     return frozenset(split)
 
 
+def proliferator_from_request(request: LabRequest) -> ProliferatorTier | None:
+    """Which proliferator tier the URL asked for, if it asked for one.
+
+    ``ProliferatorTier.module_id`` builds exactly the ids FactorioLab carries --
+    ``proliferator-2-products`` and friends -- so this is that map inverted.
+
+    It has to be read from THREE places, because where FactorioLab puts it
+    depends on how the URL was written.  A bare URL carries ``mps=`` and lands
+    in ``proliferator_spray_id``; a compressed ``z=`` URL lands in ``modules``,
+    in each machine's own ``modules``, or both.  Reading only one form fixes
+    half the URLs and looks like a fix.
+
+    Three decisions, all deliberate.
+
+    *Absence is not a constraint.*  A URL with no proliferator returns ``None``
+    and the caller keeps its own default, because this tool exists to offer a
+    density frontier and most URLs never mention proliferation at all.  Only a
+    URL that names one is taken as pinning it.
+
+    *The tier is the maximum named, not the minimum.*  A tier is an availability
+    statement -- the sprayed item is belted in from outside, so asking for Mk.III
+    asks the player to supply Mk.III.  If they named it anywhere, they have it.
+
+    *The mode is not read.*  ``products`` versus ``speed`` is the frontier's own
+    optimisation dimension, and both consume the same sprayed item, so honouring
+    the tier costs the player nothing they did not authorise, while honouring
+    the mode would remove the exploration that finds the denser build.
+    """
+    named = [request.proliferator_spray_id]
+    named.extend(s.id for s in request.modules)
+    for machine in request.machines.values():
+        named.extend(s.id for s in machine.modules or ())
+
+    by_id = {
+        tier.module_id(mode): tier
+        for tier in ProliferatorTier
+        for mode in ProliferatorMode
+        if tier.module_id(mode) is not None
+    }
+    tiers = [by_id[n] for n in named if n in by_id]
+    return max(tiers, key=lambda t: int(t.value)) if tiers else None
+
+
 def build_candidates(
     data: Dataset,
     request: LabRequest,
     *,
-    tier: ProliferatorTier = ProliferatorTier.MK3,
+    tier: ProliferatorTier | None = None,
     count: int = DEFAULT_CANDIDATES,
     time_limit_s: float = 30.0,
 ) -> BuildSpecSet:
@@ -172,12 +215,18 @@ def build_candidates(
     real URL produced 515,396,248 machines this way, and the layout stage then
     sat trying to place them.
     """
+    # A URL that names a proliferator pins the tier; one that does not leaves
+    # the frontier free at Mk.III. The sprayed item is belted in from outside,
+    # so spending a tier the player did not ask for asks them to supply an item
+    # they may not have -- the plan would be valid and unbuildable.
+    chosen: ProliferatorTier = tier or proliferator_from_request(request) or ProliferatorTier.MK3
+
     baseline = solve(data, request, time_limit_s=time_limit_s)
     specs = [_to_build_spec(data, request, baseline, "no-proliferator")]
     baseline_machines = specs[0].machine_count
     dropped: list[str] = []
 
-    if tier is not ProliferatorTier.NONE and count > 1:
+    if chosen is not ProliferatorTier.NONE and count > 1:
         free, _costly = partition_recipes(data, request)
         plans: list[tuple[str, RateSolution]] = []
 
@@ -187,7 +236,7 @@ def build_candidates(
                 solve(
                     data,
                     request,
-                    tier=tier,
+                    tier=chosen,
                     proliferable=free,
                     time_limit_s=time_limit_s,
                 ),
@@ -195,7 +244,7 @@ def build_candidates(
         )
         if count > 2:
             plans.append(
-                ("max-proliferation", solve(data, request, tier=tier, time_limit_s=time_limit_s))
+                ("max-proliferation", solve(data, request, tier=chosen, time_limit_s=time_limit_s))
             )
         if count > 3:
             plans.append(
@@ -204,7 +253,7 @@ def build_candidates(
                     solve(
                         data,
                         request,
-                        tier=tier,
+                        tier=chosen,
                         allowed_modes=(ProliferatorMode.SPEED,),
                         time_limit_s=time_limit_s,
                     ),

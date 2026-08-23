@@ -14,6 +14,7 @@ from flab2bp.rates.candidates import (
     build_candidates,
     lanes_requiring_split,
     partition_recipes,
+    proliferator_from_request,
 )
 from flab2bp.spec import BuildSpecSet
 
@@ -273,3 +274,73 @@ def test_tier_none_yields_a_single_unproliferated_candidate(data: Dataset) -> No
     specs = build_candidates(data, parse_url(EXAMPLE_URL), tier=ProliferatorTier.NONE)
     assert len(specs.candidates) == 1
     assert not specs.candidates[0].is_proliferated
+
+
+# --- the URL's proliferator tier is a constraint, not a suggestion ----------
+
+
+BARE_MK2 = EXAMPLE_URL  # bare form: the tier arrives in `mps=`.
+
+#: The same request written the way FactorioLab's share button writes it. Here
+#: the tier arrives in `modules` and in each machine's own `modules` instead --
+#: reading only one of the two forms fixes half the URLs and looks like a fix.
+COMPRESSED_MK2 = (
+    "https://factoriolab.github.io/dsp/list?z=eJw1xrEKwkAQBNC.2WKqPYh208yR2IkJBLxWvULi"
+    "EQgo2uy3i4Wveisde7eVuqLbOZB-..xficEaBbfGArf7pVK21TdPKLhhwRM6QjN0hpbQA3mIfEAeI0.W"
+    "2sYSij5GezGlL0XsHqc_&v=11"
+)
+
+NO_PROLIFERATOR_NAMED = (
+    "https://factoriolab.github.io/dsp/list?o=processor*60&ibe=conveyor-belt-2"
+    "&mmr=arc-smelter~assembling-machine-2~chemical-plant~matrix-lab&v=11"
+)
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        pytest.param(BARE_MK2, ProliferatorTier.MK2, id="bare-mps"),
+        pytest.param(COMPRESSED_MK2, ProliferatorTier.MK2, id="compressed-modules"),
+        pytest.param(NO_PROLIFERATOR_NAMED, None, id="named-nowhere"),
+    ],
+)
+def test_the_tier_is_read_from_every_place_a_url_can_carry_it(
+    url: str, expected: ProliferatorTier | None
+) -> None:
+    assert proliferator_from_request(parse_url(url)) is expected
+
+
+def test_a_url_asking_for_mk2_does_not_get_handed_mk3(data: Dataset) -> None:
+    """The sprayed item is belted in, so the tier is an availability statement.
+
+    Spending Mk.III on a player who asked for Mk.II hands them a plan that is
+    perfectly valid and that they cannot build, because the blueprint's external
+    input belt calls for an item they may not have.  That is a worse failure
+    than refusing, since nothing about the output says it happened.
+    """
+    specs = build_candidates(data, parse_url(BARE_MK2), count=3).candidates
+    sprayed = {k for s in specs for k in s.external_inputs if k.startswith("proliferator-")}
+    assert sprayed == {"proliferator-2"}, sprayed
+
+
+def test_a_url_naming_no_proliferator_keeps_the_whole_frontier(data: Dataset) -> None:
+    """Absence is not a constraint.
+
+    Most URLs never mention proliferation, and reading that as "no proliferator"
+    would collapse the frontier to a single candidate and discard the density
+    this tool exists to find.
+    """
+    specs = build_candidates(data, parse_url(NO_PROLIFERATOR_NAMED), count=3).candidates
+    labels = [s.label for s in specs]
+    assert labels == ["no-proliferator", "free-proliferation", "max-proliferation"]
+    sprayed = {k for s in specs for k in s.external_inputs if k.startswith("proliferator-")}
+    assert sprayed == {"proliferator-3"}, sprayed
+
+
+def test_an_explicit_tier_still_overrides_the_url(data: Dataset) -> None:
+    """The argument wins, so callers that know better are not second-guessed."""
+    specs = build_candidates(
+        data, parse_url(BARE_MK2), tier=ProliferatorTier.MK3, count=3
+    ).candidates
+    sprayed = {k for s in specs for k in s.external_inputs if k.startswith("proliferator-")}
+    assert sprayed == {"proliferator-3"}, sprayed
