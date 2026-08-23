@@ -81,6 +81,27 @@ post-pass. Spine always did it; freeform gained it in `e1174f0` and that was cor
 a *looser* layout hides a defect; checking your own output *surfaces* one. Opposite things. An
 agent nearly removed it on that confusion.
 
+### The rule's other half: **unroutable anything is a bug**
+
+**Feasible = routable.** A spec the rate solver accepted is a spec that must lay out. Every
+refusal is a defect in OUR code — the packer, the router, or the net planning — and never a
+property of the spec or a fact about the world.
+
+This is stated because the language for describing failures keeps drifting into excuses, mine
+included. Watch for these, all of which appeared in this project's own prose today:
+
+* *"clock-bound"* — a cell that cannot route inside its deadline is a bug in the router or the
+  packer. The deadline is not a natural limit; it is a budget our code failed to work inside.
+  I wrote this one about `universe-matrix` and it reads like an acceptable outcome. It is not.
+* *"a structural limit in the row model"* — that was spine's refusal text for a bug fixed in
+  `57c3f3e`. The limit was a missing height term in a constraint, not structure.
+* *"the packer cannot feed this arrangement"* — then the packer is wrong.
+* *"this spec is hard"* — never an answer.
+
+A refusal is the correct *behaviour* when we cannot produce a valid layout — far better than a
+fallback — but it is never a correct *outcome*. Report it precisely enough that someone can
+fix it, and treat every one as open work.
+
 ---
 
 ## What changed today
@@ -212,7 +233,14 @@ It only found that by running the test against the *unfixed* code. Do that every
 5. **Regenerate `docs/AB_RESULTS.md` / `AB_COMPARISON.md`.** Still stale — they predate both
    fallback removals and everything today. **Do not quote them.** Cheap now, and
    cross-validation would finally make that column real.
-6. **A\* speed** — still open, in flight. `validate.certify` speed is **DONE**: see below.
+6. **A\* speed** — improved 1.8x tonight (`2d321b2`, `80e5086`), still open as a lever.
+   `validate.certify` speed is **DONE**: see below.
+   **Libraries are permitted here and `numpy` 2.5.2 is already installed;** `rustworkx`
+   can be added on request (the user has confirmed this). The 1.8x came from a
+   flat-int-index rewrite with no dependency, and the reasons a library may not fit are
+   in the previous handoff — 3D with two-cell ramps, per-cell costs that change every
+   rip-up round — but **do not hand-roll anything a library provides.** An agent wrote a
+   simplex today and it was thrown away; `sympy` is now a dependency because of it.
 
 ---
 
