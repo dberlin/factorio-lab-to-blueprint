@@ -222,11 +222,24 @@ class _Plan:
     solver_status: str = "fallback"
     hit_budget: bool = False
     #: True when this packing forced ``_lane_requirements`` to give up splitting
-    #: an over-capacity item across parallel lanes, so the build will ship with
-    #: an honest ``flow.belt_capacity`` error.  Still worth emitting -- a build
-    #: reported as too slow can be pasted and widened by hand and a build that
-    #: does not exist cannot -- but only when no other width kept the split, and
-    #: that comparison is what this flag is for.
+    #: an over-capacity item across parallel lanes.  It is a PREFERENCE ORDER,
+    #: nothing more: ``_solve_plan`` sorts degraded plans last so an undegraded
+    #: width always wins.
+    #:
+    #: This said "the build will ship with an honest ``flow.belt_capacity``
+    #: error.  Still worth emitting -- a build reported as too slow can be
+    #: pasted and widened by hand and a build that does not exist cannot."
+    #: That argument is dead, and it was self-defeating even when written:
+    #: ``flow.belt_capacity`` is ``Severity.ERROR``, ``_rejected`` returns
+    #: ``certify``'s errors, and ``lay_out`` turns any non-empty result into
+    #: ``FALLBACK_SELF_CHECK``.  A plan that really is over capacity is REFUSED,
+    #: not shipped -- so the trade it describes was never available.
+    #:
+    #: Giving up the split is still worth trying, because a looser allocation
+    #: often turns out to be under capacity after all and then certifies clean.
+    #: What is not on offer is emitting one that is not.  Do not restore the
+    #: reasoning above; it reads as sanctioning a fallback and the project has
+    #: deleted two of those.
     degraded: bool = False
 
 
@@ -540,14 +553,24 @@ def _lane_requirements(
 
     Splitting an over-capacity item across parallel lanes deepens a corridor,
     and a corridor deep enough to put a lane out of sorter reach cannot be wired
-    at all.  When that happens the split is given up rather than the spec: one
-    lane and an honest ``flow.belt_capacity`` error from the validator is worth
-    more than a refusal, because a build that is reported as too slow can still
-    be pasted and widened by hand, and a build that does not exist cannot.
+    at all.  When that happens the split is given up and the flatter allocation
+    is tried instead, because it is frequently under capacity anyway once the
+    lanes are actually laid out -- and then it certifies clean.
 
     Measured: without this retry, splitting ``quantum-chip``'s 48/s crude-oil and
     refined-oil onto two lanes each made the no-proliferator candidate refuse
-    outright -- trading two reported errors for a whole missing layout.
+    outright.
+
+    **This is not permission to emit an over-capacity build.**  The docstring
+    used to argue that "one lane and an honest ``flow.belt_capacity`` error is
+    worth more than a refusal, because a build reported as too slow can still be
+    pasted and widened by hand".  That trade does not exist:
+    ``flow.belt_capacity`` is ``Severity.ERROR``, ``_rejected`` returns
+    ``certify``'s errors, and ``lay_out`` refuses on any of them.  A flatter
+    allocation that is genuinely over capacity is refused exactly like the
+    unwirable one -- the retry buys the cases that turn out to FIT, and nothing
+    else.  ``_Plan.degraded`` records which happened so an undegraded width
+    always wins the sort.
     """
     wanted = _lane_copies(groups, edges, direct, spec)
     if any(v > 1 for v in wanted.values()):
