@@ -176,6 +176,31 @@ _ROUTING_BUDGET = 2_000_000
 #: is roughly two and a half times the measured 155k/sec.
 _ROUTING_EXPANSIONS_PER_SECOND = 400_000
 
+#: Toll a path pays per tile for occupying GROUND LEVEL.
+#:
+#: Only machines are solid at every altitude, so a belt at z=0 leaves z=1 and
+#: z=2 open above it -- but a plain step costs 1 and a ramp costs 3, so A* has
+#: no reason to climb and never does unless it is blocked.  The whole block
+#: therefore wires on one plane, and a route that crosses it CUTS that plane:
+#: ramping over a belt needs two free tiles of run on each side, and a dense
+#: pack has not got them.  Measured on ``universe-matrix`` at h=92, where 36% of
+#: every failed search's wall was another net's committed path and the largest
+#: sealed pocket held 35,105 cells -- half the canvas, walled off by belts.
+#:
+#: A toll on ground level makes altitude worth buying for THROUGH traffic while
+#: leaving it unattractive for short hops.  A run of length L pays L*(1+t) on
+#: the ground against roughly L+6 in the air, so it climbs once L exceeds 6/t
+#: and not before -- which is the trade wanted, because ports are on the ground
+#: and must stay reachable across it.
+#:
+#: The heuristic stays admissible: every step still costs AT LEAST one, so
+#: Manhattan distance is still a lower bound.
+_GROUND_TOLL = 0.25
+
+#: Per-level step surcharge, indexed by altitude.  Built once; the inner loop
+#: indexes it rather than branching.
+_LEVEL_TOLL = tuple(_GROUND_TOLL if lvl == 0 else 0.0 for lvl in range(LEVELS))
+
 #: Owner recorded in :attr:`_Canvas.blocked` for a path laid THIS rip-up round
 #: and not yet committed.  It was the bare ``-2`` in four places, one of which
 #: is now a hot-loop comparison, so it is named once.
@@ -1845,6 +1870,7 @@ def _astar(
     routing_ports = canvas.routing_ports
     heappush = heapq.heappush
     hist_get = history.get
+    level_toll = _LEVEL_TOLL
     # Round one of rip-up has no history yet, and round one is the round that
     # usually succeeds. Skipping the lookup and the multiply there costs one
     # branch on the rounds that do have history.
@@ -1915,6 +1941,8 @@ def _astar(
                 node = prev[node]
             return _cut_loops(list(reversed(path)))
         x, y, lvl = cur
+        # A plain step stays on `lvl`, so its toll is fixed for this expansion.
+        step_toll = 1.0 + level_toll[lvl]
         # ONE pass over the four directions, doing the plain step and the two
         # ramps that share its ground cell.
         #
@@ -1945,7 +1973,7 @@ def _astar(
             if held is not None and held not in routing_ports:
                 continue
 
-            cost = g + 1.0
+            cost = g + step_toll
             if negotiating:
                 cost += hist_get(nxt, 0.0) * pressure
             if cost < best_get(nxt, math.inf):
@@ -1976,7 +2004,7 @@ def _astar(
                 held = reserved_get(top)
                 if held is not None and held not in routing_ports:
                     continue
-                cost = g + 3.0
+                cost = g + 3.0 + level_toll[lvl2]
                 if negotiating:
                     cost += hist_get(top, 0.0) * pressure
                 if cost < best_get(top, math.inf):

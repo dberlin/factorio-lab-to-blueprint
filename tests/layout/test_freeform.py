@@ -24,9 +24,12 @@ from flab2bp.layout.base import (
 )
 from flab2bp.layout.freeform import (
     _ENTRY_RING,
+    _LEVEL_TOLL,
     _ROUTE_RING,
+    LEVELS,
     MU_DIRECT,
     FreeformLayout,
+    _astar,
     _build,
     _Canvas,
     _claim_power_sites,
@@ -2181,3 +2184,60 @@ class TestTheTimeBudgetIsAWall:
         )
         assert failed > 0, "an expired build must report every net as unrouted"
         assert placement.stats["routed"] == 0.0
+
+
+class TestThroughTrafficLeavesTheGround:
+    """Three altitudes exist, and wiring the whole block on one CUTS it.
+
+    Only machines are solid at every level, so a belt at z=0 leaves z=1 and z=2
+    open above it -- but a plain step costs 1 and a ramp costs 3, so A* had no
+    reason to climb and never did unless it was already blocked.  Every net
+    therefore wired on one plane, and a route crossing that plane walled off
+    whatever was behind it: ramping over a belt needs two free tiles of run each
+    side, and a dense pack has not got them.  Measured on ``universe-matrix``,
+    36% of every failed search's wall was another net's committed path and the
+    largest sealed pocket held 35,105 cells -- half the canvas, behind belts.
+    """
+
+    def test_a_long_run_climbs_and_a_short_one_does_not(self) -> None:
+        """The toll has to be worth paying for through traffic ONLY.
+
+        Ports sit on the ground and have to stay reachable across it, so a short
+        hop must not buy altitude it cannot use.  A run pays ``L * (1 + t)`` on
+        the ground against roughly ``L + 6`` in the air, so the crossover is
+        around ``6 / t`` tiles and both sides of it are checked here.
+        """
+        canvas = _Canvas()
+        canvas.limit = (-2, -2, 200, 20)
+        bounds = (-2, -2, 200, 20)
+
+        def levels_used(distance: int) -> set[int]:
+            path = _astar(
+                canvas,
+                [(0, 0, 0)],
+                {(distance, 0, 0)},
+                {},
+                1.0,
+                bounds,
+            )
+            assert path is not None, f"no path over {distance} tiles of empty ground"
+            return {lvl for _x, _y, lvl in path}
+
+        assert levels_used(4) == {0}, (
+            "a four-tile hop bought altitude it cannot pay back; ports are on "
+            "the ground and short links have to stay there"
+        )
+        assert levels_used(160) != {0}, (
+            "a 160-tile run stayed on the ground, so it cuts the one plane every "
+            "other net and every port has to cross"
+        )
+
+    def test_the_heuristic_stays_admissible(self) -> None:
+        """Every step still costs at least one, so Manhattan is still a bound.
+
+        A toll that made a step cheaper than a tile would make the A* heuristic
+        an OVER-estimate, and an inadmissible heuristic does not return the
+        cheapest path -- it returns whichever one it stumbled on, silently.
+        """
+        assert min(_LEVEL_TOLL) >= 0.0, _LEVEL_TOLL
+        assert len(_LEVEL_TOLL) == LEVELS, _LEVEL_TOLL
