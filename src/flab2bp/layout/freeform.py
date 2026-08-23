@@ -2887,20 +2887,55 @@ def _route_all(
             was true when it routed, because `_commit_paths` also decides at the
             end: whatever sits beside a path's ends now is what it will attach
             to.
+
+            TOUCHING IS NOT THE SAME AS DEPENDING, and the difference is worth
+            two tests rather than one.  Plain adjacency grew a displacement of 0
+            to 4 paths into a victim set of 10 to 21 -- past
+            `_REPAIR_MAX_VICTIMS`, so the repair spent its searches declining
+            and a routing pass cost three to seven times what it needed to.
+
+            A net is held up by a path it touches when EITHER of these holds:
+
+            * the path is a SIBLING, sharing its source lane or its destination
+              lane.  That is the only kind of path `_ends` offers it to merge
+              into and the only kind `_source_for` and `_sink_for` will accept,
+              so a belt merely running past somebody's elbow is not the thing
+              holding them up.
+            * the path is the ONLY one at that end of it.  Restricting to
+              siblings alone was measured and lets 1 to 4 nets per pack finish
+              beside nothing -- fast, and paying for the speed in exactly the
+              currency the repair exists to save.
+
+            Two narrow tests rather than one broad one: `unlinked` goes back to
+            zero and the victim sets stay small.
             """
             touch: dict[tuple[int, int, int], set[int]] = {}
+            #: Paths that are somebody's ONLY neighbour at one of their ends.
+            sole: dict[int, set[int]] = {}
             for other, path in paths.items():
                 for end in (path[0], path[-1]):
+                    near: set[int] = set()
                     for dx, dy in _STEPS:
-                        touch.setdefault(
-                            (end[0] + dx, end[1] + dy, end[2]), set()
-                        ).add(other)
+                        beside = (end[0] + dx, end[1] + dy, end[2])
+                        touch.setdefault(beside, set()).add(other)
+                        held = owner.get(beside)
+                        if held is not None and held != other:
+                            near.add(held)
+                    if len(near) == 1:
+                        sole.setdefault(other, set()).update(near)
             grown = set(on)
             queue = list(on)
             while queue and len(grown) <= _REPAIR_MAX_VICTIMS:
-                for cell in paths[queue.pop()]:
+                leant_on = queue.pop()
+                for cell in paths[leant_on]:
                     for other in touch.get(cell, ()):
-                        if other not in grown:
+                        if other in grown:
+                            continue
+                        if (
+                            leant_on in src_group.get(other, ())
+                            or leant_on in dst_group.get(other, ())
+                            or leant_on in sole.get(other, ())
+                        ):
                             grown.add(other)
                             queue.append(other)
             return grown
