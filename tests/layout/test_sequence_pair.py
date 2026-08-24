@@ -6,6 +6,13 @@ from typing import Any, cast
 
 import pytest
 
+from flab2bp.layout.base import DETERMINISTIC_WORKERS
+from flab2bp.layout.freeform import (
+    _direct_alignment_targets,
+    _direct_net_candidates,
+    _pack,
+    plan_strips,
+)
 from flab2bp.layout.route_feedback import (
     DetailedRouteResult,
     DetailedRouteStatus,
@@ -19,12 +26,14 @@ from flab2bp.layout.sequence_pair import (
     AnnealConfig,
     AnnealState,
     DecodedPlacement,
+    DirectInsertTarget,
     GapProfile,
     MoveKind,
     PlacementCostContext,
     PlacementProblem,
     SearchEnergy,
     SequencePair,
+    align_direct_inserts,
     anneal_stage,
     apply_move,
     cheap_energy,
@@ -32,6 +41,7 @@ from flab2bp.layout.sequence_pair import (
     derive_stage_seed,
     repair_neighbourhood,
 )
+from tests.layout.test_freeform import two_stage_spec
 
 
 def _boxes(
@@ -181,6 +191,153 @@ def test_outline_overflow_returns_infeasible_windows_for_scoring() -> None:
     assert decoded.y_windows == ((2, 1), (0, -1))
 
 
+def _direct_alignment_scene(
+    *, alignment_window: int = 3
+) -> tuple[PlacementProblem, DecodedPlacement, DirectInsertTarget]:
+    sizes = ((4, 2), (4, 2), (3, 2))
+    problem = PlacementProblem(
+        sizes=sizes,
+        nets=((0, 1),),
+        outline_height=4,
+        area_lower_bound=5,
+    )
+    decoded = decode_sequence_pair(
+        SequencePair((2, 1, 0), (0, 2, 1)),
+        GapProfile.zero(3),
+        sizes,
+        outline_height=problem.outline_height,
+        outline_width=7,
+    )
+    if alignment_window == 0:
+        decoded = DecodedPlacement(
+            x=decoded.x,
+            y=decoded.y,
+            width=decoded.width,
+            used_height=decoded.used_height,
+            x_windows=((decoded.x[0], decoded.x[0]), *decoded.x_windows[1:]),
+            y_windows=decoded.y_windows,
+            gap_area=decoded.gap_area,
+        )
+    target = DirectInsertTarget(
+        key=(0, 1),
+        producer=0,
+        consumer=1,
+        producer_row=1,
+        consumer_row=0,
+        producer_span=2,
+        consumer_span=2,
+    )
+    return problem, decoded, target
+
+
+def _separation_relations(
+    decoded: DecodedPlacement, sizes: tuple[tuple[int, int], ...]
+) -> tuple[tuple[bool, bool, bool, bool], ...]:
+    boxes = _boxes(decoded, sizes)
+    return tuple(
+        (
+            boxes[first][2] <= boxes[second][0],
+            boxes[second][2] <= boxes[first][0],
+            boxes[first][3] <= boxes[second][1],
+            boxes[second][3] <= boxes[first][1],
+        )
+        for first, second in combinations(range(len(sizes)), 2)
+    )
+
+
+def test_alignment_realizes_candidate_without_changing_relations() -> None:
+    problem, decoded, target = _direct_alignment_scene()
+
+    aligned = align_direct_inserts(problem, decoded, (target,))
+
+    assert target.key in aligned.direct
+    assert aligned.width <= decoded.width
+    assert _separation_relations(decoded, problem.sizes) == _separation_relations(
+        aligned, problem.sizes
+    )
+    _assert_no_overlap(aligned, problem.sizes)
+
+
+def test_alignment_leaves_candidate_when_window_is_too_small() -> None:
+    problem, decoded, target = _direct_alignment_scene(alignment_window=0)
+
+    aligned = align_direct_inserts(problem, decoded, (target,))
+    assert aligned is decoded
+    assert aligned == decoded
+    assert target.key not in aligned.direct
+
+
+def test_alignment_uses_stable_target_order() -> None:
+    sizes = ((4, 2), (4, 2), (4, 2))
+    problem = PlacementProblem(sizes, ((0, 1), (0, 2)), 8, 6)
+    decoded = DecodedPlacement(
+        x=(2, 0, 4),
+        y=(4, 6, 6),
+        width=8,
+        used_height=8,
+        x_windows=((0, 4), (0, 0), (4, 4)),
+        y_windows=((4, 4), (6, 6), (6, 6)),
+        gap_area=0,
+    )
+    first = DirectInsertTarget((0, 1), 0, 1, 1, 0, 1, 1)
+    second = DirectInsertTarget((0, 2), 0, 2, 1, 0, 1, 1)
+
+    forward = align_direct_inserts(problem, decoded, (first, second))
+    reverse = align_direct_inserts(problem, decoded, (second, first))
+
+    assert forward == reverse
+    assert forward.direct == frozenset({first.key})
+
+
+def test_two_stage_alignment_retains_cp_sat_direct_opportunity() -> None:
+    spec = two_stage_spec()
+    strips = plan_strips(spec, strip_len=6)
+    candidates = _direct_net_candidates(strips, spec)
+    height = sum(strip.height + 1 for strip in strips)
+    oracle = _pack(
+        strips,
+        height=height,
+        width_bound=max(strip.width + 1 for strip in strips) * 2,
+        time_budget_s=0.5,
+        direct_candidates=candidates,
+        workers=DETERMINISTIC_WORKERS,
+    )
+    assert oracle is not None
+    assert oracle.direct
+
+    targets = _direct_alignment_targets(candidates)
+    sizes = tuple((strip.width, strip.height) for strip in strips)
+    x = tuple(oracle.at[index][0] for index in range(len(strips)))
+    y = tuple(oracle.at[index][1] for index in range(len(strips)))
+    decoded = DecodedPlacement(
+        x=x,
+        y=y,
+        width=max(
+            coordinate + size[0]
+            for coordinate, size in zip(x, sizes, strict=True)
+        ),
+        used_height=max(
+            coordinate + size[1]
+            for coordinate, size in zip(y, sizes, strict=True)
+        ),
+        x_windows=tuple((coordinate, coordinate) for coordinate in x),
+        y_windows=tuple((coordinate, coordinate) for coordinate in y),
+        gap_area=0,
+    )
+    problem = PlacementProblem(
+        sizes=sizes,
+        nets=tuple(candidates),
+        outline_height=height,
+        area_lower_bound=sum(width * strip_height for width, strip_height in sizes),
+    )
+
+    aligned = align_direct_inserts(problem, decoded, targets)
+    retained = len(oracle.direct & aligned.direct)
+    missed = len(oracle.direct - aligned.direct)
+
+    assert (len(oracle.direct), retained, missed) == (1, 1, 0)
+
+
 def test_generated_cases_are_deterministic_legal_and_integer_only() -> None:
     for size in range(1, 8):
         sizes = tuple((1 + index % 4, 1 + (index * 3) % 5) for index in range(size))
@@ -210,6 +367,13 @@ def test_generated_cases_are_deterministic_legal_and_integer_only() -> None:
             assert first == second
             assert all(type(coordinate) is int for coordinate in first.x + first.y)
             _assert_no_overlap(first, sizes)
+
+
+def test_direct_insert_target_is_immutable() -> None:
+    target = DirectInsertTarget((0, 1), 0, 1, 1, 0, 2, 2)
+
+    with pytest.raises(FrozenInstanceError):
+        target.producer_span = 3  # type: ignore[misc]
 
 
 def test_sequence_pair_and_gap_profile_are_validated_and_immutable() -> None:

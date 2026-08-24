@@ -8,6 +8,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 
+from flab2bp.dsp import catalog
+
 _MAX_GAP = 4
 
 
@@ -92,8 +94,43 @@ class PlacementProblem:
 
 
 @dataclass(frozen=True, slots=True)
+class DirectInsertTarget:
+    """Immutable strip geometry for one direct-insertion opportunity."""
+
+    key: tuple[int, int]
+    producer: int
+    consumer: int
+    producer_row: int
+    consumer_row: int
+    producer_span: int
+    consumer_span: int
+
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.key, tuple)
+            or len(self.key) != 2
+            or any(type(part) is not int or part < 0 for part in self.key)
+        ):
+            raise ValueError("direct-insert key must contain two non-negative integers")
+        if any(
+            type(value) is not int or value < 0
+            for value in (
+                self.producer,
+                self.consumer,
+                self.producer_row,
+                self.consumer_row,
+            )
+        ):
+            raise ValueError("direct-insert indices and rows must be non-negative integers")
+        if self.producer == self.consumer:
+            raise ValueError("direct insert must connect distinct strips")
+        _validate_positive_integer(self.producer_span, "producer span")
+        _validate_positive_integer(self.consumer_span, "consumer span")
+
+
+@dataclass(frozen=True, slots=True)
 class DecodedPlacement:
-    """Earliest coordinates and legal coordinate windows for one sequence pair."""
+    """Placed coordinates, their legal windows, and realized direct inserts."""
 
     x: tuple[int, ...]
     y: tuple[int, ...]
@@ -102,6 +139,7 @@ class DecodedPlacement:
     x_windows: tuple[tuple[int, int], ...]
     y_windows: tuple[tuple[int, int], ...]
     gap_area: int
+    direct: frozenset[tuple[int, int]] = frozenset()
 
     def __post_init__(self) -> None:
         if not all(
@@ -120,16 +158,22 @@ class DecodedPlacement:
             for window in self.x_windows + self.y_windows
         ):
             raise ValueError("coordinate windows must contain integer pairs")
-        if any(
-            window[0] != coordinate
-            for coordinate, window in zip(self.x, self.x_windows, strict=True)
+        for coordinate, window, name in (
+            *((value, bounds, "x") for value, bounds in zip(self.x, self.x_windows, strict=True)),
+            *((value, bounds, "y") for value, bounds in zip(self.y, self.y_windows, strict=True)),
         ):
-            raise ValueError("x window earliest coordinates must match decoded x coordinates")
-        if any(
-            window[0] != coordinate
-            for coordinate, window in zip(self.y, self.y_windows, strict=True)
+            earliest, latest = window
+            if coordinate < earliest or (
+                earliest <= latest and coordinate > latest
+            ) or (earliest > latest and coordinate != earliest):
+                raise ValueError(f"decoded {name} coordinate must lie inside its legal window")
+        if not isinstance(self.direct, frozenset) or any(
+            not isinstance(key, tuple)
+            or len(key) != 2
+            or any(type(part) is not int or part < 0 for part in key)
+            for key in self.direct
         ):
-            raise ValueError("y window earliest coordinates must match decoded y coordinates")
+            raise ValueError("realized direct inserts must be an immutable set of integer pairs")
         for value, name in (
             (self.width, "decoded width"),
             (self.used_height, "decoded used height"),
@@ -352,6 +396,313 @@ def decode_sequence_pair(
         x_windows=tuple(zip(earliest_x, latest_x, strict=True)),
         y_windows=tuple(zip(earliest_y, latest_y, strict=True)),
         gap_area=gap_area,
+    )
+
+
+def align_direct_inserts(
+    problem: PlacementProblem,
+    decoded: DecodedPlacement,
+    targets: tuple[DirectInsertTarget, ...],
+) -> DecodedPlacement:
+    """Realize direct inserts by deterministic shifts inside decoded windows."""
+    if not isinstance(targets, tuple):
+        raise ValueError("direct-insert targets must be an immutable tuple")
+    if len(decoded.x) != problem.size:
+        raise ValueError("decoded placement size must match the placement problem")
+
+    current = decoded
+    # Every target replaces one belt net, so benefit is equal; the immutable
+    # geometry tuple is the stable tie-break independent of caller iteration.
+    ordered = sorted(
+        targets,
+        key=lambda target: (
+            target.key,
+            target.producer,
+            target.consumer,
+            target.producer_row,
+            target.consumer_row,
+            target.producer_span,
+            target.consumer_span,
+        ),
+    )
+    realized_targets: dict[tuple[int, int], DirectInsertTarget] = {}
+    for target in ordered:
+        if target.key in decoded.direct:
+            realized_targets.setdefault(target.key, target)
+    for target in ordered:
+        if not 0 <= target.producer < problem.size or not 0 <= target.consumer < problem.size:
+            raise ValueError("direct-insert target endpoints must identify placement strips")
+        producer_size = problem.sizes[target.producer]
+        consumer_size = problem.sizes[target.consumer]
+        if (
+            target.producer_row >= producer_size[1]
+            or target.consumer_row >= consumer_size[1]
+            or target.producer_span > producer_size[0]
+            or target.consumer_span > consumer_size[0]
+        ):
+            raise ValueError("direct-insert target geometry must lie inside its endpoint strips")
+        if target.key in current.direct:
+            continue
+        candidate = _align_direct_target(
+            problem,
+            current,
+            target,
+            outline=(decoded.width, decoded.used_height),
+        )
+        if candidate is None:
+            continue
+        if not _preserves_separations(decoded, candidate, problem.sizes):
+            continue
+        if not all(
+            _target_is_direct(candidate, accepted)
+            for accepted in (*realized_targets.values(), target)
+        ):
+            continue
+        current = candidate
+        realized_targets[target.key] = target
+    return current
+
+
+def _align_direct_target(
+    problem: PlacementProblem,
+    decoded: DecodedPlacement,
+    target: DirectInsertTarget,
+    *,
+    outline: tuple[int, int],
+) -> DecodedPlacement | None:
+    producer = target.producer
+    consumer = target.consumer
+    producer_width, producer_height = problem.sizes[producer]
+    consumer_width, consumer_height = problem.sizes[consumer]
+
+    producer_x_bounds = _relation_bounds(
+        decoded, problem.sizes, producer, consumer, axis=0
+    )
+    consumer_x_bounds = _relation_bounds(
+        decoded, problem.sizes, consumer, producer, axis=0
+    )
+    producer_y_bounds = _relation_bounds(
+        decoded, problem.sizes, producer, consumer, axis=1
+    )
+    consumer_y_bounds = _relation_bounds(
+        decoded, problem.sizes, consumer, producer, axis=1
+    )
+
+    x_difference = [-(target.consumer_span - 1), target.producer_span - 1]
+    y_difference = [
+        1 + target.producer_row - target.consumer_row,
+        catalog.SORTER_MAX_REACH + target.producer_row - target.consumer_row,
+    ]
+    _preserve_pair_relation(
+        decoded.x[producer],
+        producer_width,
+        decoded.x[consumer],
+        consumer_width,
+        x_difference,
+    )
+    _preserve_pair_relation(
+        decoded.y[producer],
+        producer_height,
+        decoded.y[consumer],
+        consumer_height,
+        y_difference,
+    )
+    x_pair = _closest_coordinate_pair(
+        decoded.x[producer],
+        producer_x_bounds,
+        decoded.x[consumer],
+        consumer_x_bounds,
+        x_difference,
+    )
+    y_pair = _closest_coordinate_pair(
+        decoded.y[producer],
+        producer_y_bounds,
+        decoded.y[consumer],
+        consumer_y_bounds,
+        y_difference,
+    )
+    if x_pair is None or y_pair is None:
+        return None
+
+    x = list(decoded.x)
+    y = list(decoded.y)
+    x[producer], x[consumer] = x_pair
+    y[producer], y[consumer] = y_pair
+    width = max(
+        coordinate + size[0] for coordinate, size in zip(x, problem.sizes, strict=True)
+    )
+    used_height = max(
+        coordinate + size[1] for coordinate, size in zip(y, problem.sizes, strict=True)
+    )
+    if width > outline[0] or used_height > outline[1]:
+        return None
+
+    candidate = DecodedPlacement(
+        x=tuple(x),
+        y=tuple(y),
+        width=width,
+        used_height=used_height,
+        x_windows=decoded.x_windows,
+        y_windows=decoded.y_windows,
+        gap_area=decoded.gap_area,
+        direct=decoded.direct | {target.key},
+    )
+    if not _no_overlaps(candidate, problem.sizes):
+        return None
+    return candidate
+
+
+def _relation_bounds(
+    decoded: DecodedPlacement,
+    sizes: tuple[tuple[int, int], ...],
+    moving: int,
+    other_moving: int,
+    *,
+    axis: int,
+) -> tuple[int, int]:
+    coordinates = decoded.x if axis == 0 else decoded.y
+    windows = decoded.x_windows if axis == 0 else decoded.y_windows
+    lower, upper = windows[moving]
+    moving_span = sizes[moving][axis]
+    for other, (coordinate, size) in enumerate(
+        zip(coordinates, sizes, strict=True)
+    ):
+        if other in (moving, other_moving):
+            continue
+        other_span = size[axis]
+        if coordinates[moving] + moving_span <= coordinate:
+            upper = min(upper, coordinate - moving_span)
+        if coordinate + other_span <= coordinates[moving]:
+            lower = max(lower, coordinate + other_span)
+    return lower, upper
+
+
+def _preserve_pair_relation(
+    first_coordinate: int,
+    first_span: int,
+    second_coordinate: int,
+    second_span: int,
+    difference: list[int],
+) -> None:
+    if first_coordinate + first_span <= second_coordinate:
+        difference[0] = max(difference[0], first_span)
+    if second_coordinate + second_span <= first_coordinate:
+        difference[1] = min(difference[1], -second_span)
+
+
+def _closest_coordinate_pair(
+    first: int,
+    first_bounds: tuple[int, int],
+    second: int,
+    second_bounds: tuple[int, int],
+    difference: list[int],
+) -> tuple[int, int] | None:
+    difference_low, difference_high = difference
+    first_low = max(first_bounds[0], second_bounds[0] - difference_high)
+    first_high = min(first_bounds[1], second_bounds[1] - difference_low)
+    if first_low > first_high or difference_low > difference_high:
+        return None
+
+    breakpoints = (
+        first_low,
+        first_high,
+        first,
+        second_bounds[0] - difference_low,
+        second_bounds[1] - difference_high,
+        second - difference_low,
+        second - difference_high,
+    )
+    candidates: list[tuple[int, int, int]] = []
+    for breakpoint in breakpoints:
+        first_candidate = min(first_high, max(first_low, breakpoint))
+        second_low = max(second_bounds[0], first_candidate + difference_low)
+        second_high = min(second_bounds[1], first_candidate + difference_high)
+        second_candidate = min(second_high, max(second_low, second))
+        candidates.append(
+            (
+                abs(first_candidate - first) + abs(second_candidate - second),
+                first_candidate,
+                second_candidate,
+            )
+        )
+    _, chosen_first, chosen_second = min(candidates)
+    return chosen_first, chosen_second
+
+
+def _preserves_separations(
+    original: DecodedPlacement,
+    candidate: DecodedPlacement,
+    sizes: tuple[tuple[int, int], ...],
+) -> bool:
+    original_boxes = _placement_boxes(original, sizes)
+    candidate_boxes = _placement_boxes(candidate, sizes)
+    for first in range(len(sizes)):
+        for second in range(first + 1, len(sizes)):
+            original_separations = _box_separations(
+                original_boxes[first], original_boxes[second]
+            )
+            candidate_separations = _box_separations(
+                candidate_boxes[first], candidate_boxes[second]
+            )
+            if any(
+                was_separate and not remains_separate
+                for was_separate, remains_separate in zip(
+                    original_separations, candidate_separations, strict=True
+                )
+            ):
+                return False
+    return True
+
+
+def _no_overlaps(
+    decoded: DecodedPlacement, sizes: tuple[tuple[int, int], ...]
+) -> bool:
+    boxes = _placement_boxes(decoded, sizes)
+    return all(
+        any(_box_separations(boxes[first], boxes[second]))
+        for first in range(len(sizes))
+        for second in range(first + 1, len(sizes))
+    )
+
+
+def _placement_boxes(
+    decoded: DecodedPlacement, sizes: tuple[tuple[int, int], ...]
+) -> tuple[tuple[int, int, int, int], ...]:
+    return tuple(
+        (x, y, x + width, y + height)
+        for x, y, (width, height) in zip(
+            decoded.x, decoded.y, sizes, strict=True
+        )
+    )
+
+
+def _box_separations(
+    first: tuple[int, int, int, int],
+    second: tuple[int, int, int, int],
+) -> tuple[bool, bool, bool, bool]:
+    return (
+        first[2] <= second[0],
+        second[2] <= first[0],
+        first[3] <= second[1],
+        second[3] <= first[1],
+    )
+
+
+def _target_is_direct(
+    decoded: DecodedPlacement, target: DirectInsertTarget
+) -> bool:
+    row_gap = (
+        decoded.y[target.consumer]
+        + target.consumer_row
+        - decoded.y[target.producer]
+        - target.producer_row
+    )
+    return (
+        1 <= row_gap <= catalog.SORTER_MAX_REACH
+        and decoded.x[target.producer]
+        <= decoded.x[target.consumer] + target.consumer_span - 1
+        and decoded.x[target.consumer]
+        <= decoded.x[target.producer] + target.producer_span - 1
     )
 
 

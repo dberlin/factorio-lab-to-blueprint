@@ -92,6 +92,7 @@ from flab2bp.layout.route_feedback import (
     NetRole,
     RouteFailureKind,
 )
+from flab2bp.layout.sequence_pair import DirectInsertTarget
 from flab2bp.layout.slots import SlotUndetermined, assign_sorter_slots
 from flab2bp.layout.spine import BELT_ITEM_IDS, MACHINE_ITEM_IDS, SORTER_TIERS
 from flab2bp.spec import BuildSpec
@@ -1760,6 +1761,26 @@ def _direct_net_candidates(
             cons_span=dst.input_lane_tiles(dst.lane_of_input(item)),
         )
     return out
+
+
+def _direct_alignment_targets(
+    candidates: Mapping[tuple[int, int], _DirectCandidate],
+) -> tuple[DirectInsertTarget, ...]:
+    """Expose candidate lane geometry as immutable placement-alignment inputs."""
+    return tuple(
+        DirectInsertTarget(
+            key=key,
+            producer=key[0],
+            consumer=key[1],
+            producer_row=candidate.prod_row,
+            consumer_row=candidate.cons_row,
+            producer_span=candidate.prod_span,
+            consumer_span=candidate.cons_span,
+        )
+        for key, candidate in sorted(candidates.items())
+    )
+
+
 
 
 def tie_break_cap(n_terms: int, *, width_bound: int, height: int, n_direct: int) -> int:
