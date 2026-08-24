@@ -256,6 +256,11 @@ class Context:
     #: depends on their vertical-construction unlocks -- so it is passed in,
     #: never read from a constant.
     max_belt_z: Fraction
+    #: Whether this save has the ``beltVerticalConstruction`` tech.  It
+    #: switches OFF the game's slope test entirely, so with it a belt may
+    #: climb straight up and without it nothing may exceed
+    #: ``MAX_BELT_SLOPE``.  A save property, declared, never inferred.
+    belt_vertical_construction: bool
     kinds: tuple[Kind, ...]
     #: cell -> building indices standing on it.  Sorters are absent by design:
     #: their anchors sit *on* the buildings they serve, and the tiles they span
@@ -538,6 +543,7 @@ def _context(
     ids: IdMap | None,
     soft_width: int,
     max_belt_z: Fraction,
+    belt_vertical_construction: bool,
 ) -> Context:
     kinds = tuple(_kind(b) for b in placement.buildings)
     occ: dict[tuple[int, int, Fraction], list[int]] = defaultdict(list)
@@ -572,6 +578,7 @@ def _context(
         ids=ids,
         soft_width=soft_width,
         max_belt_z=max_belt_z,
+        belt_vertical_construction=belt_vertical_construction,
         kinds=kinds,
         occupancy={k: tuple(v) for k, v in occ.items()},
         blocking={k: tuple(v) for k, v in blocking.items()},
@@ -730,53 +737,71 @@ def _altitude_range(ctx: Context) -> Iterable[Finding]:
 
 @check("geom.altitude_step")
 def _altitude_step(ctx: Context) -> Iterable[Finding]:
-    """Every altitude change is one of the two forms the game actually has.
+    """A belt's slope may not exceed what the game allows.
 
-    * **level** -- ``dz == 0``, any horizontal move;
-    * **ramp** -- ``|dz| == BELT_CLIMB_PER_TILE`` across exactly ONE tile of
-      horizontal movement;
-    * **vertical** -- ``|dz| == 1`` with ZERO horizontal movement, the belt
-      stacking straight up at one ``(x, y)``.
+    This is the game's own rule, from ``BuildTool_Path``::
 
-    Anything else is invalid, and what we shipped was precisely "anything
-    else": ``|dz| == 1`` across ONE horizontal tile, which is a ramp climbing at
-    twice the legal rate.  The old test was ``dz > 1``, so that case scored
-    ``dz == 1`` exactly and passed -- this is the check that should have caught
-    the bug and did not.
+        num25 = Mathf.Abs(Maths.SphericalSlopeRatio(a, b));
+        if (!history.beltVerticalConstruction && num25 > 0.8f)
+            buildPreview2.condition = EBuildCondition.TooSteep;
 
-    Both forms are evidenced.  Ramp: 118 of the 130 altitude-changing chain
-    steps in the fixture corpus.  Vertical: 38 consecutive ``dz = +1.0``,
-    ``dxy = 0`` steps in an in-game blueprint built at a save's maximum height,
-    plus 6 more in ``factory-heretical-smelter-block``.
+    ``SphericalSlopeRatio`` is ``(|b| - |a|) / horizontal distance`` -- WORLD
+    rise over run -- and blueprint z is ``3/4`` of world height, so a link's
+    slope is ``(dz / BELT_Z_PER_WORLD_UNIT) / dxy``.
 
-    A **splitter** also changes altitude in zero tiles, so this deliberately
-    looks only at belt -> belt links; a splitter target falls through the
-    ``Kind.BELT`` guard below.
+    Three earlier versions of this check were all wrong, in instructive ways:
+
+    * ``dz > 1`` let the shipped bug through, because a whole tile of height
+      across one tile of run scores exactly ``1``;
+    * ``dz > BELT_CLIMB_PER_TILE`` caught it but for the wrong reason, and
+      would have rejected legal steeper ramps;
+    * an enumeration of "ramp or vertical" was closer, but invented a
+      two-form rule the game does not have -- there is one rule, on slope, and
+      the vertical form is simply the case where the run is zero.
+
+    A zero run makes the slope infinite, which only ``beltVerticalConstruction``
+    permits.  That is a tech unlock and a property of the player's save, so it
+    is declared per run alongside the height ceiling, never assumed.
     """
     bs = ctx.placement.buildings
+    limit = cat.MAX_BELT_SLOPE
     for i, b in ctx.of_kind(Kind.BELT):
         o = b.output_obj
         if o is None or not (0 <= o < len(bs)) or ctx.kinds[o] is not Kind.BELT:
             continue
         nxt = bs[o]
         dz = nxt.z - b.z
-        dxy = abs(nxt.x - b.x) + abs(nxt.y - b.y)
         if dz == 0:
             continue
-        if abs(dz) == cat.BELT_CLIMB_PER_TILE and dxy == 1:
+        dxy = abs(nxt.x - b.x) + abs(nxt.y - b.y)
+        world_rise = abs(dz) / cat.BELT_Z_PER_WORLD_UNIT
+        if dxy == 0:
+            if not ctx.belt_vertical_construction:
+                yield Finding(
+                    "geom.altitude_step",
+                    Severity.ERROR,
+                    f"belt {i} rises {dz} to belt {o} without moving, which is "
+                    f"an infinite slope; only the beltVerticalConstruction "
+                    f"unlock permits that (pass --belt-vertical-construction "
+                    f"if this save has it)",
+                    (i, o),
+                    {"dz": dz, "dxy": dxy},
+                )
             continue
-        if abs(dz) == cat.VERTICAL_STEP and dxy == 0:
+        if ctx.belt_vertical_construction:
             continue
-        yield Finding(
-            "geom.altitude_step",
-            Severity.ERROR,
-            f"belt {i} changes altitude by {dz} across {dxy} tile(s) to belt "
-            f"{o}; the only legal changes are a ramp "
-            f"(+/-{cat.BELT_CLIMB_PER_TILE} across exactly 1 tile) and a "
-            f"vertical step (+/-{cat.VERTICAL_STEP} across 0 tiles)",
-            (i, o),
-            {"dz": dz, "dxy": dxy},
-        )
+        slope = world_rise / dxy
+        if slope > limit:
+            yield Finding(
+                "geom.altitude_step",
+                Severity.ERROR,
+                f"belt {i} climbs {dz} to belt {o} across {dxy} tile(s): a "
+                f"world slope of {float(slope):.3f}, over the {float(limit)} "
+                f"the game allows without the beltVerticalConstruction unlock "
+                f"(TooSteep)",
+                (i, o),
+                {"dz": dz, "dxy": dxy, "slope": float(slope)},
+            )
 
 
 @check("geom.bounds")
@@ -3117,6 +3142,7 @@ def validate(
     only: Iterable[str] | None = None,
     expect_power: bool = True,
     max_belt_z: Fraction = cat.DEFAULT_MAX_BELT_Z,
+    belt_vertical_construction: bool = False,
 ) -> Report:
     """Judge ``placement``, optionally against the ``spec`` it should realise.
 
@@ -3137,7 +3163,9 @@ def validate(
     the conservative one that needs none of them.
     """
     wanted = set(only) if only is not None else None
-    ctx = _context(placement, spec, ids, soft_width, max_belt_z)
+    ctx = _context(
+        placement, spec, ids, soft_width, max_belt_z, belt_vertical_construction
+    )
     have_spec = spec is not None and ids is not None
 
     findings: list[Finding] = []

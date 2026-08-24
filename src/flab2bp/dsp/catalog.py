@@ -121,74 +121,108 @@ BELT_RATE = {
     2003: Fraction(30),
 }
 
-#: A belt changes altitude in one of exactly TWO forms.  Both are in the
-#: evidence; neither is a special case of the other.
+#: Blueprint ``z`` per WORLD unit of height.  Blueprint z is not world height:
+#: the game's vertical pitches are 4 for a Matrix Lab, 8/3 for a Splitter and
+#: 4/3 for a belt, and the same three measure 3, 2 and 1 in blueprint z.  Two
+#: independent pitches agreeing on 3/4 is what pins it -- the lab spacing is
+#: visible in ``12-s-purple`` (120 labs, 10 columns of 12 at z = 0, 3, ... 33)
+#: and the belt spacing in the max-height blueprint (39 belts one z apart).
 #:
-#: **Ramp** -- ``+/-1/2`` of height per ONE tile of horizontal run.  118 of the
-#: 130 altitude-changing chain steps in the fixture corpus are this, and they
-#: are the only form that appears in an undistorted fixture.
+#: It matters because the game's slope limit is in WORLD units.  A blueprint
+#: rise of 1/2 over one tile is a world slope of 2/3, not 1/2.
+BELT_Z_PER_WORLD_UNIT = Fraction(3, 4)
+
+#: The steepest a belt may be built without the vertical-construction unlock,
+#: as ``world rise / horizontal run``.  Straight from ``BuildTool_Path``::
 #:
-#: **Vertical** -- ``+/-1`` of height per ZERO tiles of horizontal run: the belt
-#: stacks straight up at a single ``(x, y)``.  Settled by an in-game blueprint
-#: the user built at their save's maximum height (61 Conveyor Belt Mk.III):
-#: two ground tiles, then 38 consecutive ``dz = +1.0`` steps every one of which
-#: has ``dxy = 0.0``, then 22 tiles running level at ``z = 38``.  One column
-#: holds 39 belts.  Six more instances are in ``factory-heretical-smelter-block``.
+#:     if (!history.beltVerticalConstruction && num25 > 0.8f)
+#:         buildPreview2.condition = EBuildCondition.TooSteep;
 #:
-#: .. warning::
-#:    An earlier reading of this table called those six "coordinate collapse" in
-#:    a distorted fixture and concluded a level change ALWAYS costs two tiles of
-#:    run.  That was wrong, and wrong in the dangerous direction: a real
-#:    mechanic was explained away as measurement error because the fixture
-#:    carrying it was independently known to be distorted.  The max-height
-#:    blueprint settles it from outside the corpus.
+#: where ``num25`` is ``|Maths.SphericalSlopeRatio(a, b)|``, which is
+#: ``(|b| - |a|) / horizontal distance``.  With the unlock the test is skipped
+#: entirely -- there is then NO slope limit, which is what lets a belt climb
+#: straight up.
 #:
-#: What we emit today matches NEITHER form: ``+/-1`` of height across ONE
-#: horizontal tile, which is a ramp climbing twice as fast as a ramp may.
+#: This one number settles what the fixtures could not.  A blueprint rise of
+#: 1/2 across one tile is a world slope of ``(1/2)/(3/4) / 1 = 2/3``, inside
+#: the limit; the ``dz = 1`` across one tile we shipped is ``4/3``, outside it,
+#: and the game rejects it as ``TooSteep``.  The fix and the bug are both
+#: confirmed by the same line of the game's own code.
+MAX_BELT_SLOPE = Fraction(4, 5)
+
+#: A belt climbs this much per tile of run at the steepest slope the corpus
+#: uses.  NOT a cap: ``MAX_BELT_SLOPE`` allows up to ``3/5`` of blueprint z per
+#: tile, and with the unlock, any amount.  This is the value we EMIT, chosen
+#: because it lands altitudes on :data:`BELT_Z_QUANTUM` and because all 118
+#: clean ramp steps in the corpus use it.
 BELT_CLIMB_PER_TILE = Fraction(1, 2)
 RAMP_TILES_PER_LEVEL = 2
 
-#: Height gained by one VERTICAL step -- the form that costs no horizontal run.
-#: Every one of the 38 steps in the max-height blueprint is exactly this.
-#:
-#: Two things about this form are UNMEASURED and must not be assumed: whether a
-#: vertical step may start from a non-zero altitude, and whether a ramp can
-#: climb past ``BELT_CROSSING_CLEARANCE`` by continuing at
-#: ``BELT_CLIMB_PER_TILE`` per tile (the corpus only ever ramps to 1 and the
-#: max-height blueprint only ever goes vertical).  The model is written so that
-#: either answer slots in without a rewrite.
+#: Height gained by one step of the VERTICAL form, which costs no horizontal
+#: run and therefore has infinite slope.  It requires
+#: ``GameHistoryData.beltVerticalConstruction`` -- a tech unlock (upgrade case
+#: 42), ``false`` on a new save -- because that is the flag that switches off
+#: the ``MAX_BELT_SLOPE`` test.  Every one of the 38 steps in the user's
+#: max-height blueprint is exactly this.
 VERTICAL_STEP = Fraction(1)
 
-#: Height a belt must gain to pass OVER a ground-level obstruction.
-#:
-#: Half a level is not enough -- a belt at ``1/2`` still fouls one at ``0`` --
-#: so a crossing tile has to be a full ``1`` above what it crosses.  Reaching
-#: ``1`` by ramp takes :data:`RAMP_TILES_PER_LEVEL` tiles, so the climb must
-#: START two tiles before the obstacle, and both of those ramp tiles have to be
-#: clear: a ramp may not run into things any more than a level belt may.
-#:
-#: This is why the corpus profile reads ``0.0, 0.5, 1.0, ... 1.0, 0.5, 0.0``
-#: with the crossed belt under a ``1.0`` tile.  That shape is forced by
-#: clearance, not a habit of the builders.
+#: Height a belt must gain to pass OVER a ground-level obstruction, per the
+#: user: a belt at ``1/2`` still fouls one at ``0``, so a crossing tile has to
+#: be a full ``1`` above what it crosses and the climb has to start two tiles
+#: out.  That is why the corpus profile reads ``0, 1/2, 1, ... 1, 1/2, 0``.
 BELT_CROSSING_CLEARANCE = Fraction(1)
 
-#: Default ceiling on belt altitude, in tiles of height.
+#: A sloped belt may not TURN.  ``BuildTool_Path``::
 #:
-#: **The real ceiling is a property of the SAVE, not of the game**: it depends
-#: on which vertical-construction unlocks the player has, and the user's save
-#: reaches 38.  So this is only a default, overridable per run (``flab2bp
-#: --max-belt-height``); nothing in the layout model may treat it as a law.
+#:     if (num21 < 2.5f && num25 > 0.1f)
+#:         buildPreview2.condition = EBuildCondition.TooBendToLift;
 #:
-#: The default is deliberately the most conservative value that still lets a
-#: belt cross another belt -- :data:`BELT_CROSSING_CLEARANCE`.  Every crossing
-#: in all 7,502 corpus belt records stays within it, so a blueprint built to
-#: this default pastes for a player with no vertical-construction unlocks at
-#: all, and a player who has them can say so.
-DEFAULT_MAX_BELT_Z = BELT_CROSSING_CLEARANCE
+#: ``num21`` is the angle at this belt between its input and its output, in
+#: radians, so anything bending more than ``pi - 2.5 ~= 36 degrees`` off
+#: straight must be level.  Slopes below ``0.1`` do not count as sloped.
+BEND_MIN_ANGLE_WHEN_SLOPED_RAD = Fraction(5, 2)
+SLOPE_DEADZONE = Fraction(1, 10)
 
-#: Altitudes are multiples of this.  Both transition forms move in whole
-#: multiples of a half, and every one of the 7,502 corpus records lands on one
-#: once terrain jitter (max 0.0235) is denoised with ``round(z * 2) / 2``.
+#: Lab level on a NEW save, from ``GameHistoryData.Init``: ``labLevel = 3``.
+DEFAULT_LAB_LEVEL = 3
+
+
+def belt_max_z(lab_level: int = DEFAULT_LAB_LEVEL) -> Fraction:
+    """Highest blueprint ``z`` a belt may reach in a save at this lab level.
+
+    ``GameHistoryData.buildMaxHeight`` is the game's ceiling, in world units::
+
+        if (labLevel < 15) return labLevel * 4f - 0.6f;
+        return labLevel * 4f + 4f;
+
+    and every build is tested against it as
+    ``lpos.sqrMagnitude > (buildMaxHeight + 0.5 + radius)^2``.  Belts are NOT
+    subject to the separate per-building stack limit -- that one reads
+    ``isTank || isStorage || isLab || isSplitter`` and belts are none of them --
+    so this is the whole of what bounds a belt.
+
+    Converted into blueprint z by :data:`BELT_Z_PER_WORLD_UNIT`.  At the
+    starting lab level of 3 that is ``8.55``; the user's save reached ``z = 38``,
+    which needs lab level 13 (``3*13 - 0.45 = 38.55``) and is the independent
+    check that the conversion and the formula are both right.
+    """
+    if lab_level < 15:
+        world = Fraction(lab_level) * 4 - Fraction(3, 5)
+    else:
+        world = Fraction(lab_level) * 4 + 4
+    return world * BELT_Z_PER_WORLD_UNIT
+
+
+#: Default ceiling on belt altitude, in blueprint z.
+#:
+#: Derived from the game, not from the corpus.  The corpus said 1.0 and the
+#: game says 8.55 on a NEW save -- the fixtures were showing a habit of their
+#: builders, and reading a habit as a limit is what cost us a day.  A blueprint
+#: built to this default pastes on any save, because no save starts lower.
+DEFAULT_MAX_BELT_Z = belt_max_z()
+
+#: Altitudes are multiples of this.  Every one of the 7,502 corpus records lands
+#: on one once terrain jitter (max 0.0235) is denoised with ``round(z * 2) / 2``.
 BELT_Z_QUANTUM = BELT_CLIMB_PER_TILE
 
 #: There is NO useful bound on how many belts share one ``(x, y)``.

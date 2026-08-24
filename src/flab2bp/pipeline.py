@@ -123,6 +123,7 @@ def build(
     fetch_timeout_s: float = 90.0,
     browser: str | None = None,
     max_belt_z: Fraction = catalog.DEFAULT_MAX_BELT_Z,
+    belt_vertical_construction: bool = False,
 ) -> Build:
     """Turn a FactorioLab URL into a pasteable DSP blueprint.
 
@@ -230,6 +231,7 @@ def build(
                 ids=_id_map(spec),
                 expect_power=power,
                 max_belt_z=max_belt_z,
+                belt_vertical_construction=belt_vertical_construction,
             )
             attempts.append(Attempt(spec.label, sname, placement, report))
 

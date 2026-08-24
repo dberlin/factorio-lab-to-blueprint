@@ -146,13 +146,23 @@ def main(argv: list[str] | None = None) -> int:
         "--max-belt-height",
         type=Fraction,
         default=catalog.DEFAULT_MAX_BELT_Z,
-        metavar="TILES",
-        help="how high a belt may go, in tiles of height (default "
-        f"{catalog.DEFAULT_MAX_BELT_Z}). This is a property of YOUR SAVE, not "
-        "of the game: the ceiling depends on which vertical-construction "
-        "unlocks you have, and a save with them reaches at least 38. The "
-        "default is the lowest value that still lets a belt cross another "
-        "belt, so it pastes for a save with no such unlocks at all.",
+        metavar="Z",
+        help="how high a belt may go, in blueprint z (default "
+        f"{float(catalog.DEFAULT_MAX_BELT_Z)}). This is a property of YOUR "
+        "SAVE: the game's ceiling is buildMaxHeight = labLevel*4-0.6 world "
+        "units, which is 3*labLevel-0.45 in blueprint z. The default is the "
+        "starting lab level of 3, so it pastes on any save; at lab level 13 "
+        "the ceiling is 38.55.",
+    )
+    ap.add_argument(
+        "--belt-vertical-construction",
+        action="store_true",
+        help="declare that this save has the beltVerticalConstruction tech, "
+        "which removes the belt slope limit entirely and lets a belt climb "
+        "straight up. Off by default because it is off on a new save. The "
+        "generator does not currently need it -- it only ever ramps, at a "
+        "world slope of 2/3 against the 4/5 limit -- so this only widens what "
+        "the validator will accept.",
     )
     ap.add_argument("--budget", type=float, default=2.0, help="solver seconds per layout")
     ap.add_argument("-o", "--out", type=Path, help="write to a file instead of stdout")
@@ -179,6 +189,7 @@ def main(argv: list[str] | None = None) -> int:
             fetch_timeout_s=args.fetch_timeout,
             browser=args.browser,
             max_belt_z=args.max_belt_height,
+            belt_vertical_construction=args.belt_vertical_construction,
         )
     except NoValidLayout as exc:
         # Distinct exit code: "no layout exists" is a different outcome from

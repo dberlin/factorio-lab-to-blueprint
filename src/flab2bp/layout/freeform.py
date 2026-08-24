@@ -141,23 +141,23 @@ WEST_CHANNEL = 1
 #: ``RAMP_TILES_PER_LEVEL`` tiles to gain one.
 _LEVEL_HEIGHT = catalog.BELT_CLIMB_PER_TILE * catalog.RAMP_TILES_PER_LEVEL
 
-#: Levels this router's lattice offers: ground, plus enough to clear a
-#: ground-level obstruction once.
+#: Levels this router's lattice offers: ground plus two.
 #:
-#: **This is not the game's ceiling and must not be read as one.**  A belt goes
-#: as high as the player's vertical-construction unlocks allow -- the user's
-#: save reaches ``z = 38`` -- and ``--max-belt-height`` carries that number.
-#: This constant is smaller for a reason particular to THIS router: the only
-#: thing it ever climbs to do is cross a belt, that costs
+#: NOT the game's ceiling, which is ``catalog.belt_max_z`` -- 8.55 on a new save
+#: and 38.55 on the user's.  This is how much of it THIS router can use, and it
+#: is small for a reason particular to the router rather than to the game: the
+#: only thing it climbs for is to cross, that costs
 #: ``BELT_CROSSING_CLEARANCE``, and it treats machines as solid at every
-#: altitude, so a third level buys it nothing it can use.  Raising it without
-#: also letting belts cross machines just lets A* wander upward.
+#: altitude, so headroom beyond a crossing plus one buys it nothing it can
+#: spend.
 #:
-#: It was three, on a corpus count that never checked its three altitudes
-#: differed.  Three let the router emit ``z = 2`` reached by a step no belt can
-#: make: 11 of 157 belts on `electromagnetic-matrix` and 14 of 571 on
-#: `titanium-crystal`, in 3 of the 29 elevated runs between them.
-LEVELS = 1 + int(catalog.BELT_CROSSING_CLEARANCE / _LEVEL_HEIGHT)
+#: It was 1 + crossing clearance = 2 while the ceiling was believed to be 1.
+#: Measured at 2 the freeform suite failed 12, then 2, then 5 tests on
+#: different runs -- `magnetic-ring` wiring stochastically because one crossing
+#: plane leaves no slack.  At 3 the same suite is 0.  The game's slope rule
+#: says a ramp to z=2 is legal on any save (world slope 2/3 against a limit of
+#: 4/5), so the third level costs nothing in legality.
+LEVELS = 3
 
 #: Rip-up-and-reroute iterations before a placement is declared unroutable.
 RRR_MAX = 8
@@ -2180,44 +2180,37 @@ class TransitionForm(Enum):
 
 
 def transition_form(from_z: Fraction, to_z: Fraction) -> TransitionForm:
-    """Which form the game uses to get from ``from_z`` to ``to_z``.
+    """Which form to use to get from ``from_z`` to ``to_z``.
 
-    **THE SELECTION RULE IS NOT KNOWN, AND THIS IS THE ONE PLACE TO PUT IT.**
-    Every altitude decision in this module routes through here precisely so
-    that learning the rule is one function to change.
+    **The rule is now known, and it is not the two-form rule this once
+    guessed at.**  The game has ONE test, on slope, in ``BuildTool_Path``::
 
-    What is known is that the two forms are probably not a free choice.  The
-    user, on the max-height blueprint: *"Note that this one does not do a ramp.
-    At lower heights it does a ramp."*  That says the GAME picks, on height --
-    which would make emitting a vertical climb where a ramp is expected exactly
-    as invalid as the ``dz = 1`` across one tile we used to ship.  Choosing
-    "whichever is cheaper" would be a new bug wearing the shape of an
-    optimisation.
+        if (!history.beltVerticalConstruction && num25 > 0.8f)
+            buildPreview2.condition = EBuildCondition.TooSteep;
 
-    The evidence, on each side:
+    A ramp is any slope inside ``MAX_BELT_SLOPE``; the vertical form is simply
+    the case where the run is zero, which is infinite slope and needs the
+    ``beltVerticalConstruction`` unlock.  There is no height threshold
+    selecting between them, and no cap on how high a ramp may climb -- the only
+    ceiling is ``buildMaxHeight``, and ``catalog.belt_max_z`` carries it.
 
-    * **ramp** -- 118 of the 130 altitude-changing chain steps in the fixture
-      corpus, all at low heights, and the only form in any undistorted fixture.
-      Every clean one moves exactly one tile: 117 of 120 at Manhattan distance
-      1.
-    * **vertical** -- 38 consecutive ``dz = +1.0``, ``dxy = 0`` steps climbing
-      ``z = 0 -> 38`` in a blueprint the user built at their save's maximum
-      height, plus 6 instances in ``factory-heretical-smelter-block``.
+    So an earlier reading here -- that the game picks by height, from the user's
+    "at lower heights it does a ramp" -- described a consequence, not the rule:
+    at low heights a ramp is available and cheaper in materials, and above the
+    slope limit only the vertical form remains.  Both readings predict the same
+    blueprints; only the source distinguishes them.
 
-    Two heights bracket a threshold and nobody has the second yet, so until one
-    lands this returns the form with DIRECT evidence at the height in question.
-    At one level that is unambiguously the ramp -- it is what all 118 fixture
-    cases do -- and this router never climbs higher than
-    ``BELT_CROSSING_CLEARANCE``, so it never reaches the disputed range.
-
-    When the threshold arrives, this becomes a comparison against it and
-    nothing else in the module has to move.
+    This router emits RAMP always.  It never needs the unlock, because a
+    blueprint-z rise of ``BELT_CLIMB_PER_TILE`` over one tile is a world slope
+    of ``2/3``, inside the ``4/5`` limit, at ANY altitude.  Choosing the
+    vertical form would make our output depend on a tech the player may not
+    have, to save tiles we are not short of.
     """
-    del from_z, to_z  # the rule that would read them is not known yet
+    del from_z, to_z  # slope, not height, decides -- and ours is always legal
     return TransitionForm.RAMP
 
 
-def _altitude_profile(path: Sequence[tuple[int, int, int]]) -> list[Fraction]:
+def _altitude_profile(path: Sequence[tuple[int, int, int]]) -> list[Fraction] | None:
     r"""World altitude for every cell of a routed path, ramps materialised.
 
     **This is the level-index -> world-altitude boundary.**  The router walks an
@@ -2270,8 +2263,22 @@ def _altitude_profile(path: Sequence[tuple[int, int, int]]) -> list[Fraction]:
                 f"horizontal run -- but A* spent a tile on it, so the path and "
                 f"the profile disagree about the shape of this climb"
             )
-        # One tile of run buys exactly one tile's worth of climb, toward the
-        # level this cell hands on to.
+        # A ramp needs a FLAT cell to leave from, because the half-level this
+        # cell sits at is measured from the level it is departing.  Two changes
+        # back to back have none: levels `0, 1, 2` over three cells would read
+        # `1/2, 3/2, 2`, and `1/2 -> 3/2` is a whole tile of height across one
+        # tile of run -- the very step this module exists to stop emitting.
+        # Caught in the wild as `geom.altitude_step` on `magnetic-ring`, 5
+        # times over 12 layouts, after `LEVELS` rose to 3 and made consecutive
+        # ramps reachable at all.
+        #
+        # There is no altitude assignment that rescues such a path: the cells
+        # are already committed to their levels and the run between them is one
+        # tile, so the climb cannot be spread.  Saying so returns it to the
+        # router as an unrouted net, which is a failure it already knows how to
+        # retry, rather than emitting something the game refuses.
+        if j > 0 and levels[j - 1] != lvl:
+            return None
         step = catalog.BELT_CLIMB_PER_TILE if nxt > lvl else -catalog.BELT_CLIMB_PER_TILE
         out.append(lvl * _LEVEL_HEIGHT + step)
     return out
@@ -3968,6 +3975,9 @@ def _commit_paths(
         indices: list[int] = []
         ok = True
         altitudes = _altitude_profile(path)
+        if altitudes is None:
+            unlinked += 1
+            continue
         for (x, y, lvl), z in zip(path, altitudes, strict=True):
             if not canvas.free((x, y, lvl)) or not canvas.free_world(x, y, z):
                 ok = False
@@ -4491,7 +4501,11 @@ def _route_external_inputs(
             missed += 1
             continue
         indices: list[int] = []
-        for (x, y, lvl), z in zip(path, _altitude_profile(path), strict=True):
+        profile = _altitude_profile(path)
+        if profile is None:
+            missed += 1
+            continue
+        for (x, y, lvl), z in zip(path, profile, strict=True):
             if not canvas.free((x, y, lvl)) or not canvas.free_world(x, y, z):
                 break
             indices.append(

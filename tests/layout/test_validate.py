@@ -225,46 +225,56 @@ def test_geom_altitude_range_fires_between_quanta() -> None:
 
 
 def test_geom_altitude_step_fires_on_a_full_level_across_one_tile() -> None:
-    """The exact step that shipped red, and that ``dz > 1`` let through.
+    """The exact step that shipped red, refused by the game's own rule.
 
-    A belt gains a whole tile of height across ONE tile of run: twice the rate
-    a ramp climbs, and not the vertical form either because it moved.
+    A blueprint rise of 1 across one tile is a WORLD slope of 4/3 -- blueprint
+    z is 3/4 of world height -- against the 4/5 the game allows.  It is
+    `EBuildCondition.TooSteep`, and the old `dz > 1` test scored it exactly 1
+    and let it pass.
     """
     r = validate(place(belt(0, 0, 0, out=1), belt(1, 0, 1)))
     assert fired(r, "geom.altitude_step")
 
 
-def test_geom_altitude_step_allows_a_ramp() -> None:
-    """Half a tile of height per tile of run -- 118 of 130 corpus steps."""
+def test_geom_altitude_step_allows_the_ramp_we_emit() -> None:
+    """1/2 across one tile is a world slope of 2/3, inside the 4/5 limit."""
     r = validate(place(belt(0, 0, 0, out=1), belt(1, 0, Fraction(1, 2))))
     assert not fired(r, "geom.altitude_step")
 
 
-def test_geom_altitude_step_allows_a_vertical_step() -> None:
-    """A whole tile of height for no horizontal run at all.
+def test_geom_altitude_step_allows_a_ramp_at_any_height() -> None:
+    """There is no one-level cap: the rule is on SLOPE, not on altitude.
 
-    Evidenced by an in-game blueprint built at a save's maximum height: 38
-    consecutive ``dz = +1`` steps, every one with ``dxy = 0``.
+    This is what the fixtures could not tell us and the game's source did.
     """
     r = validate(
-        place(belt(0, 0, 0, out=1), belt(0, 0, 1)),
-        max_belt_z=Fraction(38),
+        place(belt(0, 0, 7, out=1), belt(1, 0, Fraction(15, 2))),
+        max_belt_z=Fraction(171, 20),
     )
     assert not fired(r, "geom.altitude_step")
 
 
-def test_geom_altitude_step_fires_on_a_half_step_that_does_not_move() -> None:
-    """A ramp has to travel; standing still is the vertical form's business."""
-    r = validate(place(belt(0, 0, 0, out=1), belt(0, 0, Fraction(1, 2))))
+def test_geom_altitude_step_fires_just_past_the_slope_limit() -> None:
+    """3/5 of blueprint z per tile is exactly 4/5 world; 7/10 is over it."""
+    ok = validate(place(belt(0, 0, 0, out=1), belt(1, 0, Fraction(3, 5))))
+    assert not fired(ok, "geom.altitude_step")
+    over = validate(place(belt(0, 0, 0, out=1), belt(1, 0, Fraction(7, 10))))
+    assert fired(over, "geom.altitude_step")
+
+
+def test_geom_altitude_step_refuses_a_vertical_climb_without_the_unlock() -> None:
+    """Zero run is infinite slope, which only beltVerticalConstruction allows."""
+    r = validate(place(belt(0, 0, 0, out=1), belt(0, 0, 1)))
     assert fired(r, "geom.altitude_step")
 
 
-def test_geom_altitude_step_fires_on_a_vertical_step_that_moves() -> None:
+def test_geom_altitude_step_allows_a_vertical_climb_with_the_unlock() -> None:
+    """With the tech the game skips the slope test entirely."""
     r = validate(
-        place(belt(0, 0, 0, out=1), belt(1, 0, 1)),
-        max_belt_z=Fraction(38),
+        place(belt(0, 0, 0, out=1), belt(0, 0, 1)),
+        belt_vertical_construction=True,
     )
-    assert fired(r, "geom.altitude_step")
+    assert not fired(r, "geom.altitude_step")
 
 
 def test_geom_bounds_warns_beyond_soft_width() -> None:

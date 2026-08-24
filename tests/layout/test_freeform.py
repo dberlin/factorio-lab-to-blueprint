@@ -2923,19 +2923,14 @@ class TestAPathThatReachesNothingIsUnrouted:
         )
         assert _sink_for(canvas, tail, net, {tail}, set()) == dst_belt
 
-    def test_a_tail_directly_above_its_lane_head_does_not_link_yet(self) -> None:
-        """The vertical form is legal in the GAME; we do not choose it here.
+    def test_a_tail_directly_above_its_lane_head_does_not_link(self) -> None:
+        """Climbing with no run is infinite slope, which needs a tech we do not assume.
 
-        A whole tile of height for no horizontal run is a real thing a belt
-        does -- 38 consecutive such steps carry the user's max-height blueprint
-        from z=0 to z=38.  But the user also reports that at lower heights the
-        game ramps instead, so the form appears to be selected BY HEIGHT and
-        the threshold is not known.  Taking the vertical form here because it
-        is free would be choosing a shape we have no evidence for at one level,
-        where all 118 fixture cases ramp.
-
-        So this join is refused for now, and `transition_form` is the single
-        place that changes when the threshold lands.
+        The game has one rule -- slope -- and zero horizontal run is the case
+        the `beltVerticalConstruction` unlock exists to permit.  It is off on a
+        new save, so a blueprint that relies on it would not paste for
+        everyone.  We ramp instead, which is legal at any height and needs no
+        unlock.
         """
         canvas = _Canvas()
         dst_belt = canvas.add(_belt(0, 0, item="x"))
@@ -3380,11 +3375,13 @@ class TestAltitudeProfile:
     def test_the_ramp_tile_is_one_the_router_already_reserved(self) -> None:
         """The profile adds no cells: it renames the altitude of existing ones."""
         path = [(0, 0, 0), (1, 0, 0), (2, 0, 1)]
-        assert len(freeform._altitude_profile(path)) == len(path)
+        prof = freeform._altitude_profile(path)
+        assert prof is not None and len(prof) == len(path)
 
     def test_every_step_is_a_legal_transition(self) -> None:
         path = [(0, 0, 0), (1, 0, 0), (2, 0, 1), (3, 0, 1), (4, 0, 0), (5, 0, 0)]
         prof = freeform._altitude_profile(path)
+        assert prof is not None
         for i in range(len(path) - 1):
             dz = prof[i + 1] - prof[i]
             dxy = abs(path[i + 1][0] - path[i][0]) + abs(path[i + 1][1] - path[i][1])
@@ -3393,6 +3390,26 @@ class TestAltitudeProfile:
                 or (abs(dz) == catalog.BELT_CLIMB_PER_TILE and dxy == 1)
                 or (abs(dz) == catalog.VERTICAL_STEP and dxy == 0)
             ), f"step {i}: dz={dz} dxy={dxy}"
+
+    def test_back_to_back_ramps_are_refused_rather_than_emitted(self) -> None:
+        """Two level changes with no flat cell between them cannot be ramped.
+
+        Levels `0, 1, 2` over three cells would read `1/2, 3/2, 2`, and
+        `1/2 -> 3/2` is a whole tile of height across one tile of run -- the
+        exact step this module exists to stop emitting.  The cells are already
+        committed to their levels, so no altitude assignment rescues it; the
+        path goes back to the router as unrouted.
+
+        Caught in the wild as `geom.altitude_step` on `magnetic-ring`, 5 times
+        over 12 layouts, once `LEVELS` rose to 3 and made consecutive ramps
+        reachable.
+        """
+        assert freeform._altitude_profile([(0, 0, 0), (1, 0, 1), (2, 0, 2)]) is None
+
+    def test_ramps_separated_by_a_flat_cell_are_fine(self) -> None:
+        path = [(0, 0, 0), (1, 0, 0), (2, 0, 1), (3, 0, 1), (4, 0, 2)]
+        prof = freeform._altitude_profile(path)
+        assert prof == [F(0), F(1, 2), F(1), F(3, 2), F(2)]
 
     def test_a_wider_jump_than_the_ramp_table_offers_is_refused(self) -> None:
         with pytest.raises(AssertionError, match="jumps 2 levels"):
