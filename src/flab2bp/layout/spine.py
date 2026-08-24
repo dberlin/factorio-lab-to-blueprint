@@ -153,8 +153,14 @@ class _Group:
     item_id: int
     model_index: int
     count: int
+    #: Grid extents AS BUILT -- already swapped when ``yaw`` is a quarter turn,
+    #: so nothing downstream has to remember to swap them.
     width: int
     height: int
+    #: Which way this machine is turned.  Chosen from its own insert poses by
+    #: :func:`flab2bp.layout.slots.lane_orientation`, because a building with no
+    #: pose facing the lane cannot be wired at all however it is packed.
+    yaw: float
     inputs: dict[str, Fraction]
     outputs: dict[str, Fraction]
     proliferated: bool
@@ -271,14 +277,17 @@ def _adapt(spec: BuildSpec) -> tuple[dict[str, _Group], list[_Edge]]:
             raise KeyError(f"no DSP building known for machine {mg.machine_item_id!r}")
         b = catalog.building(item_id)
         key = f"{mg.recipe_id}#{i}"
+        yaw = sorter_slots.lane_orientation(item_id)
+        w, h = catalog.oriented_footprint(item_id, yaw)
         groups[key] = _Group(
             key=key,
             recipe_id=mg.recipe_id,
             item_id=item_id,
             model_index=b.model_index,
             count=mg.count,
-            width=b.width,
-            height=b.height,
+            width=w,
+            height=h,
+            yaw=yaw,
             inputs=dict(mg.inputs_per_machine),
             outputs=dict(mg.outputs_per_machine),
             proliferated=mg.is_proliferated,
@@ -1866,6 +1875,7 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
                     y=row_y[r],
                     width=g.width,
                     height=g.height,
+                    yaw=g.yaw,
                     recipe_id=recipe_id,
                     parameters=parameters,
                 )
@@ -2008,9 +2018,23 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
                 share = _share(machine_at[key], len(found), j, rota[key])
                 if not share:
                     continue
-                xs = [buildings[i].x for i in share]
-                pick = _pick_sorter(rate, tap.span, g.width)
-                cols = g.width if pick is None else min(pick[1], g.width)
+                # The COLUMNS the sorter pass will actually use, from each
+                # machine's own insert poses -- not its left edge. A seven-wide
+                # Oil Refinery offers only its middle three and a nine-wide
+                # Chemical Plant four of nine, so a lane charged from the left
+                # edge stops short of the only columns that can be wired and the
+                # machine gets no sorter at all. That was `machine.inputs_supplied`
+                # on exactly one machine per group, which is what it looks like
+                # when a lane ends one machine early.
+                reachable = [
+                    sorted(sorter_slots.attachable_columns(buildings[i], tap.lane_y))
+                    for i in share
+                ]
+                reachable = [r for r in reachable if r]
+                if not reachable:
+                    continue
+                pick = _pick_sorter(rate, tap.span, max(len(r) for r in reachable))
+                cols = min(pick[1], max(len(r) for r in reachable)) if pick else 1
                 # A rider on a shared lane starts one column further along the
                 # machine, because two sorters serving one machine off one belt
                 # cannot stand in the same column.  Charged to the EXTENT as
@@ -2019,7 +2043,8 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
                 # reached simply got no sorter -- `machine.inputs_supplied`, on
                 # the very spec the sharing exists for.
                 off = _share_column(plan, tap.corridor, tap.depth, item)
-                lo, hi = min(xs) + off, max(xs) + off + cols - 1
+                lo = min(r[min(off, len(r) - 1)] for r in reachable)
+                hi = max(r[min(off + cols - 1, len(r) - 1)] for r in reachable)
                 _extend(tap.corridor, tap.depth, lo, hi)
                 (drain_at if into else fill_at)[tap.corridor, tap.depth].append((lo, hi))
 
@@ -2178,10 +2203,9 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
     sorters = 0
     direct_sorters = 0
     for src, dst, item in sorted(plan.direct):
-        r_src, r_dst = at[src], at[dst]
-        y_src = row_y[r_src] + groups[src].height - 1
-        y_dst = row_y[r_dst]
-        dy = y_dst - y_src
+        # The rows the two bands sit on are no longer where the sorter anchors:
+        # `direct_anchors` reads that off each machine's own slot table, and a
+        # Chemical Plant's is a row inside its footprint rather than its edge.
         prod, cons = machine_at[src], machine_at[dst]
         if not prod or not cons:
             continue
@@ -2192,43 +2216,63 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
         # produced diagonals; the span was also computed Manhattan
         # (``|dx| + dy``) where the validator measures Chebyshev, so a pair
         # could pass here and fail there.  With dx pinned to 0 the two agree.
-        pairs: list[tuple[int, int, int, int]] = []
-        span = abs(dy)
+        #: ``(producer, consumer, span, column, producer_row, consumer_row)``.
+        #: The two rows are the anchors the slot tables give, which are the
+        #: machines' edge rows only when they happen to be -- a Chemical Plant's
+        #: is a row inside its footprint.
+        pairs: list[tuple[int, int, int, int, int, int]] = []
 
-        def _pair(a: int, others: list[int], span: int = span) -> tuple[int, int] | None:
+        def _pair(
+            a: int, others: list[int], *, a_produces: bool
+        ) -> tuple[int, int, int, int] | None:
+            """A partner for ``a``, on a column BOTH can actually be wired on.
+
+            Every column of the footprint overlap is tried, not just its middle:
+            with the real tables an overlap can be wide and the attachable part
+            of it narrow, and a machine-to-machine sorter needs a column that
+            works at both ends at once.
+            """
             ab = buildings[a]
-            if not 1 <= span <= CONSTANTS.sorter_max_reach:
-                return None
             for b in sorted(others, key=lambda o: abs(buildings[o].x - ab.x)):
                 bb = buildings[b]
-                col = _column_overlap(ab.x, ab.width, bb.x, bb.width)
-                if col is not None:
-                    return b, col
+                lo = max(ab.x, bb.x)
+                hi = min(ab.x + ab.width, bb.x + bb.width) - 1
+                mid = (lo + hi) // 2
+                for col in sorted(range(lo, hi + 1), key=lambda c: (abs(c - mid), c)):
+                    src_b, dst_b = (ab, bb) if a_produces else (bb, ab)
+                    got = sorter_slots.direct_anchors(src_b, dst_b, col)
+                    if got is None:
+                        continue
+                    out_row, in_row = got[0].cell[1], got[1].cell[1]
+                    reach = abs(in_row - out_row)
+                    if not 1 <= reach <= CONSTANTS.sorter_max_reach:
+                        continue
+                    return b, col, out_row, in_row
             return None
 
         for ci in cons:
-            got = _pair(ci, prod)
+            got = _pair(ci, prod, a_produces=False)
             if got is not None:
-                pairs.append((got[0], ci, span, got[1]))
+                pairs.append((got[0], ci, abs(got[3] - got[2]), got[1], got[2], got[3]))
         # And every PRODUCER, not just every consumer.  A producer left out has
         # no belt lane either -- the insert removed it -- so it backs up, which
         # is what `machine.output_removed` was reporting on five corpus specs.
         # Pairing it with a consumer it already shares a column with costs one
         # more sorter and nothing else; the consumer simply gets fed twice.
-        wired = {pi for pi, _ci, _s, _c in pairs}
+        wired = {pi for pi, _ci, _s, _c, _oy, _iy in pairs}
         for pi in prod:
             if pi in wired:
                 continue
-            got = _pair(pi, cons)
+            got = _pair(pi, cons, a_produces=True)
             if got is not None:
-                pairs.append((pi, got[0], span, got[1]))
+                pairs.append((pi, got[0], abs(got[3] - got[2]), got[1], got[2], got[3]))
         rate = rate_of.get((src, dst, item), Fraction(0))
         if not pairs:
             raise ValueError(
                 f"direct insert {src} -> {dst} ({item}) has no machine pair within "
                 f"sorter reach {CONSTANTS.sorter_max_reach}"
             )
-        worst = max(s for _, _, s, _x in pairs)
+        worst = max(s for _, _, s, _x, _oy, _iy in pairs)
         tier = next(
             (t for t in SORTER_TIERS if catalog.sorter_rate(t, worst) * len(pairs) >= rate),
             None,
@@ -2239,17 +2283,17 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
                 f"{len(pairs)} sorters at span {worst} cannot carry it"
             )
         tier_model = catalog.building(tier).model_index
-        for pi, ci, _span, col in pairs:
+        for pi, ci, _span, col, out_row, in_row in pairs:
             buildings.append(
                 PlacedBuilding(
                     item_id=tier,
                     model_index=tier_model,
                     x=col,
-                    y=y_src,
+                    y=out_row,
                     width=1,
                     height=1,
                     x2=col,
-                    y2=y_dst,
+                    y2=in_row,
                     z2=Fraction(0),
                     yaw=Facing.SOUTH.value,
                     yaw2=Facing.SOUTH.value,

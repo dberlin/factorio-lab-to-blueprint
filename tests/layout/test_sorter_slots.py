@@ -483,6 +483,60 @@ def test_a_belt_addon_carries_the_pair_the_game_writes() -> None:
     assert dict(links) == {(-1, -1): 8}, "a coater is wired to nothing"
 
 
+def test_an_oil_refinery_is_turned_a_quarter_and_nothing_else_is() -> None:
+    """The one building whose upright orientation cannot be wired at all.
+
+    Nine poses and not one facing north, so a layout with east-west lanes can
+    only ever feed it from below -- which is why every Refinery spec refused.
+    Turned, it presents three poses to each side.  Everything else stays
+    upright: the rule prefers an orientation reachable from BOTH sides and
+    breaks ties toward zero, so nothing rotates without cause.
+    """
+    assert S.lane_orientation(2308) == 90.0  # Oil Refinery
+    assert S.lane_facing(2308, 0.0) == (False, True)
+    assert S.lane_facing(2308, 90.0) == (True, True)
+    for other in (2303, 2302, 2901, 2309, 2101):
+        assert S.lane_orientation(other) == 0.0, other
+
+
+def test_turning_a_refinery_makes_both_sides_reachable() -> None:
+    """The point of the rotation, stated as the thing that changed."""
+    upright = S.probe_building(2308, 0.0)
+    assert (upright.width, upright.height) == (3, 7)
+    assert S.attachable_columns(upright, upright.height) == {}
+
+    turned = S.probe_building(2308, 90.0)
+    assert (turned.width, turned.height) == (7, 3), "a quarter turn swaps the extents"
+    assert sorted(S.attachable_columns(turned, turned.height)) == [2, 3, 4]
+    assert sorted(S.attachable_columns(turned, -1)) == [2, 3, 4]
+
+
+def test_the_chosen_orientation_is_never_worse_than_the_other() -> None:
+    """Over the whole catalog, and it is the property the two keys exist for.
+
+    ``lane_orientation`` ranks by "reachable from both sides" and then by
+    "reachable from either".  Both keys are meaningful, but NO shipped building
+    tells their ORDER apart -- swapping them changes no answer, so no test can
+    witness the order and none pretends to.  What is witnessed is the property
+    that would actually break: the orientation chosen is at least as reachable
+    as the one rejected, on both counts.
+    """
+    for b in cat.all_buildings():
+        if not b.slot_poses:
+            continue
+        chosen = S.lane_orientation(b.item_id)
+        other = 90.0 if chosen == 0.0 else 0.0
+        cn, cs = S.lane_facing(b.item_id, chosen)
+        on, os_ = S.lane_facing(b.item_id, other)
+        assert (cn and cs) >= (on and os_), b.name
+        assert (cn or cs) >= (on or os_), b.name
+
+
+def test_a_building_with_no_poses_is_left_upright() -> None:
+    """No orientation helps a Ray Receiver, so none is claimed to."""
+    assert S.lane_orientation(2208) == 0.0
+
+
 def test_attachment_is_empty_for_a_building_that_takes_no_sorter() -> None:
     assert S.attachment(_at(2208), (4, -1)) is None  # Ray Receiver
     assert S.attachment(_at(2209), (4, -1)) is None  # Energy Exchanger

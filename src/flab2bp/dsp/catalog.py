@@ -919,5 +919,21 @@ def footprint(item_id: int) -> tuple[int, int]:
     return (b.width, b.height)
 
 
+def oriented_footprint(item_id: int, yaw: float) -> tuple[int, int]:
+    """Grid extents of ``item_id`` built at ``yaw``, in tiles.
+
+    A quarter turn swaps them.  DSP yaws are stored as floats and real
+    blueprints carry values like ``355.5`` and ``-6.7e-07`` for what is plainly
+    zero, so the turn is snapped rather than run through trigonometry -- the same
+    reasoning, and the same snap, as :func:`flab2bp.layout.slots.to_local`.
+
+    Both extents are odd for everything placeable (``derive_footprint`` can only
+    return odd, and both override entries are odd too), so a rotated building
+    still has a tile at its centre and ``tile_to_local_offset`` stays exact.
+    """
+    w, h = footprint(item_id)
+    return (h, w) if int(round(yaw / 90.0)) % 2 else (w, h)
+
+
 def all_buildings() -> tuple[Building, ...]:
     return tuple(_load().values())

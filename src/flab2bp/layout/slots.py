@@ -79,7 +79,10 @@ __all__ = [
     "assign_sorter_slots",
     "attachable_columns",
     "attachment",
+    "lane_facing",
+    "lane_orientation",
     "machine_slot",
+    "probe_building",
     "slot_forward",
     "slot_offset",
     "sorter_yaw",
@@ -356,6 +359,101 @@ def attachment(machine: PlacedBuilding, far: tuple[int, int]) -> Attachment | No
         if best_key is None or key < best_key:
             best_key, best = key, Attachment(cell, slot, span)
     return best
+
+
+def probe_building(item_id: int, yaw: float) -> PlacedBuilding:
+    """One machine of this type at the origin, for asking geometric questions.
+
+    :func:`attachment` and :func:`attachable_columns` answer about a PLACED
+    building, which is right for wiring but awkward for a planner that wants to
+    know what a type will offer before it has placed one.  This is the type-level
+    stand-in, with the footprint already oriented so its extents and its poses
+    agree.
+    """
+    w, h = cat.oriented_footprint(item_id, yaw)
+    return PlacedBuilding(
+        item_id=item_id,
+        model_index=cat.building(item_id).model_index,
+        x=0,
+        y=0,
+        width=w,
+        height=h,
+        yaw=yaw,
+    )
+
+
+def direct_anchors(
+    src: PlacedBuilding, dst: PlacedBuilding, column: int
+) -> tuple[Attachment, Attachment] | None:
+    """Both ends of a machine-to-machine sorter on ``column``, or ``None``.
+
+    A direct insert has no belt to anchor against, so each end has to be found
+    against the OTHER machine's anchor rather than against a fixed tile -- and
+    those two answers depend on each other.  Two passes settle it: the producer
+    is placed against the consumer's near edge, the consumer against that, and
+    the producer re-checked against the consumer's final cell.  A third pass
+    cannot move anything, because the second already fixed the only tile the
+    first was approximating.
+
+    ``None`` is a refusal.  Direct insertion is an optimisation -- the same
+    connection can go by belt -- so a caller that cannot get an answer here has
+    somewhere to go, unlike one wiring a lane.
+    """
+    near = dst.y if dst.y > src.y else dst.y + dst.height - 1
+    first = attachment(src, (column, near))
+    if first is None:
+        return None
+    second = attachment(dst, (column, first.cell[1]))
+    if second is None:
+        return None
+    settled = attachment(src, (column, second.cell[1]))
+    if settled is None:
+        return None
+    return (settled, second)
+
+
+def lane_facing(item_id: int, yaw: float) -> tuple[bool, bool]:
+    """Can a building at ``yaw`` be served from the north, and from the south?
+
+    Read off the poses: a lane can serve a face only if some pose there points
+    back at it.  Both strategies run their belts east-west, so these two are the
+    only directions that decide whether a machine can be wired at all.
+    """
+    north = south = False
+    for k in range(len(cat.building(item_id).slot_poses)):
+        _fx, fy, _fz = slot_forward(item_id, yaw, k)
+        north = north or fy >= SLOT_ALIGN_COS
+        south = south or fy <= -SLOT_ALIGN_COS
+    return (north, south)
+
+
+def lane_orientation(item_id: int) -> float:
+    """The yaw to build ``item_id`` at, for a layout whose lanes run east-west.
+
+    An Oil Refinery has nine poses and NOT ONE of them faces north, so upright
+    it can only ever be fed from below -- which is why every Refinery spec
+    refused.  Turned a quarter it presents three poses to each side, and its
+    3x7 becomes a 7x3 that suits a row band better as well.
+
+    The rule is read from the table, not tabulated per building: prefer an
+    orientation reachable from BOTH sides, then one reachable from either, and
+    break ties toward upright so nothing rotates without cause.  Only 0 and 90
+    are considered -- 180 and 270 are those two mirrored, and a face that has a
+    pose still has one after mirroring, so they can differ from the pair only in
+    which columns are offered and never in whether a side works at all.
+
+    Returns ``0.0`` for a building with no poses at all.  Nothing can be wired to
+    one, so no rotation improves it, and ``game.addon_supply`` or the caller's
+    own refusal is what reports that.
+    """
+    if not cat.building(item_id).slot_poses:
+        return 0.0
+    scored = []
+    for yaw in (0.0, 90.0):
+        north, south = lane_facing(item_id, yaw)
+        scored.append((-(north and south), -(north or south), yaw))
+    scored.sort()
+    return scored[0][2]
 
 
 def attachable_columns(

@@ -544,8 +544,14 @@ class _Group:
     item_id: int
     model_index: int
     count: int
+    #: Grid extents AS BUILT -- already swapped when ``yaw`` is a quarter turn,
+    #: so nothing downstream has to remember to swap them.
     width: int
     height: int
+    #: Which way this machine is turned, chosen from its own insert poses by
+    #: `slots.lane_orientation`. A building with no pose facing the lane cannot
+    #: be wired at all however it is packed.
+    yaw: float
     inputs: dict[str, Fraction]
     outputs: dict[str, Fraction]
     proliferated: bool
@@ -597,6 +603,9 @@ class Strip:
     machines: int
     mw: int
     mh: int
+    #: The machines' yaw, carried from the group so the emitted record and the
+    #: extents above cannot disagree about which way they are turned.
+    yaw: float
     #: Lanes arriving on the north side, ordered top-down.  Each lane holds one
     #: or more items; more than one means a shared lane whose sorters filter.
     in_above: tuple[tuple[str, ...], ...]
@@ -690,9 +699,31 @@ class Strip:
         Output lanes are NOT trimmable the same way: they are filled at every
         machine column and drained at the east end, so every tile between the
         first sorter and the port carries flow.
+
+        The columns come from the machine's own insert poses, not from
+        ``min(slot, mw - 1)``.  A seven-wide Oil Refinery offers only its middle
+        three and a nine-wide Chemical Plant four of nine, so a lane trimmed to
+        the left edge stopped short of every column that could be wired and the
+        last machine got no sorter at all.
+
+        The two sides are UNIONED rather than asked for separately.  Every
+        building we place offers the same columns above and below, so the union
+        is the same answer; where it would not be, it is the longer one, and a
+        tile of dead belt is a warning where a missing tile is an unfed machine.
         """
-        last_slot = min(len(lane) - 1, self.mw - 1)
+        cols = sorted(
+            set(self._attachable_columns(above=True))
+            | set(self._attachable_columns(above=False))
+        )
+        if not cols:
+            return 0
+        last_slot = cols[min(len(lane) - 1, len(cols) - 1)]
         return (self.machines - 1) * self.mw + last_slot + 1
+
+    def _attachable_columns(self, *, above: bool) -> tuple[int, ...]:
+        """Columns of ONE of this strip's machines a sorter can reach, from 0."""
+        probe = slots.probe_building(self.item_id, self.yaw)
+        return tuple(sorted(slots.attachable_columns(probe, -1 if above else self.mh)))
 
     def east_of_input(self, item: str) -> int:
         """Offset from the strip's west edge to the last tile of ``item``'s lane."""
@@ -955,14 +986,17 @@ def _adapt(spec: BuildSpec) -> dict[str, _Group]:
             item_id = resolved
             mode_params = ()
         b = catalog.building(item_id)
+        yaw = slots.lane_orientation(item_id)
+        gw, gh = catalog.oriented_footprint(item_id, yaw)
         groups[f"{mg.recipe_id}#{i}"] = _Group(
             key=f"{mg.recipe_id}#{i}",
             recipe_id=mg.recipe_id,
             item_id=item_id,
             model_index=b.model_index,
             count=mg.count,
-            width=b.width,
-            height=b.height,
+            width=gw,
+            height=gh,
+            yaw=yaw,
             inputs=dict(mg.inputs_per_machine),
             outputs=dict(mg.outputs_per_machine),
             proliferated=mg.is_proliferated,
@@ -1140,6 +1174,7 @@ def plan_strips(spec: BuildSpec, *, strip_len: int = 6) -> list[Strip]:
                         machines=n,
                         mw=g.width,
                         mh=g.height,
+                        yaw=g.yaw,
                         in_above=in_above,
                         in_below=in_below,
                         out_lanes=tuple(shard),
@@ -1972,6 +2007,7 @@ def _emit_strip(
                     y=machine_y,
                     width=s.mw,
                     height=s.mh,
+                    yaw=s.yaw,
                     # A mode-driven machine carries no recipe id at all: its job
                     # is the word in the parameter block. This was once
                     # `abs(hash(name)) % 30000`, which is not a DSP recipe id and
