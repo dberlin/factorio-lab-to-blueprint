@@ -40,6 +40,7 @@ from flab2bp.layout.freeform import (
     _TENTATIVE,
     LEVELS,
     MU_DIRECT,
+    CoaterSupplyPort,
     FreeformLayout,
     _astar,
     _bridge,
@@ -47,7 +48,6 @@ from flab2bp.layout.freeform import (
     _build_prepared,
     _Canvas,
     _canvas_span,
-    _Coater,
     _commit_paths,
     _connect_short_cuts,
     _dests,
@@ -308,6 +308,20 @@ def test_prepared_proliferator_ports_round_trip_elevated_level() -> None:
     ]
     assert proliferator_nets
     assert {net.dst.z for net in proliferator_nets} == {1}
+    assert prepared.coater_supply_ports
+    assert len(prepared.coater_supply_ports) == prepared.coaters
+    for port in prepared.coater_supply_ports:
+        host = prepared.building_templates[port.host_belt]
+        supply = prepared.building_templates[port.supply_belt]
+        assert port.item in spec.spray_lanes
+        assert (host.x, host.y, host.z) == (
+            port.host_x,
+            port.host_y,
+            F(port.host_z),
+        )
+        assert (supply.x, supply.y, supply.z) == (port.x, port.y, F(port.z))
+        assert supply.carries_item in spec.external_inputs
+        assert port.z == port.host_z + 1
     workspace = prepared.new_workspace()
     assert {
         net.dst.z
@@ -377,10 +391,54 @@ def test_detailed_route_terminates_at_elevated_port() -> None:
         (0, -2, 6, 2),
         budget={"left": 20_000},
     )
-
     assert result.status is DetailedRouteStatus.ROUTED
     assert result.routed == (net_id,)
     assert any(building.z > 0 for building in canvas.buildings[2:])
+
+
+def test_unreachable_elevated_port_returns_structured_failure_without_route() -> None:
+    canvas = _Canvas(limit=(0, -2, 6, 2))
+    source_index = canvas.add(
+        PlacedBuilding(2001, 35, 0, 0, carries_item="proliferator-3"),
+        level=0,
+    )
+    destination_index = canvas.add(
+        PlacedBuilding(
+            2001,
+            35,
+            6,
+            0,
+            z=F(1),
+            carries_item="proliferator-3",
+        ),
+        level=1,
+    )
+    for cell in ((5, 0, 1), (6, -1, 1), (6, 1, 1)):
+        canvas.blocked[cell] = -1
+    net_id = NetId(0, 1, "proliferator-3", NetRole.PROLIFERATOR, 0)
+    net = _Net(
+        src=_Port(source_index, 0, 0, 0, 0, z=0),
+        dst=_Port(destination_index, 6, 0, 6, 6, z=1),
+        item="proliferator-3",
+        net_id=net_id,
+    )
+    before = tuple(canvas.buildings)
+
+    result = _route_all(
+        canvas,
+        [net],
+        2001,
+        35,
+        (0, -2, 6, 2),
+        budget={"left": 20_000},
+    )
+
+    assert result.status is DetailedRouteStatus.STRANDED
+    assert result.routed == ()
+    assert result.failures
+    assert result.failures[0].net_id == net_id
+    assert tuple(canvas.buildings) == before
+
 
 
 def test_external_route_world_collision_commits_no_prefix(
@@ -3154,17 +3212,41 @@ class TestTheProliferatorChainIsOneLinearRun:
         entry = _Port(canvas.add(_belt(-9, -9)), -9, -9, -9, -9)
         first_drop = canvas.add(replace(_belt(3, 0), z=F(1)), level=1)
         second_drop = canvas.add(replace(_belt(3, 1), z=F(1)), level=1)
-        first = _Coater(coater=-1, drop=first_drop, x=3, y=0, z=1)
-        second = _Coater(coater=-1, drop=second_drop, x=3, y=1, z=1)
+        first = CoaterSupplyPort(
+            coater=-1,
+            host_belt=-1,
+            supply_belt=first_drop,
+            item="ore",
+            yaw=90.0,
+            host_x=2,
+            host_y=0,
+            host_z=0,
+            x=3,
+            y=0,
+            z=1,
+        )
+        second = CoaterSupplyPort(
+            coater=-1,
+            host_belt=-1,
+            supply_belt=second_drop,
+            item="ore",
+            yaw=90.0,
+            host_x=2,
+            host_y=1,
+            host_z=0,
+            x=3,
+            y=1,
+            z=1,
+        )
         nets = _proliferator_nets(canvas, entry, [first, second], "proliferator-3")
         assert [
             (n.source.x, n.source.y, n.dst.x, n.dst.y) for n in nets
         ] == [(-9, -9, 3, 0)], (
             "the adjacent pair should have been linked, not routed"
         )
-        assert canvas.buildings[first.drop].output_obj == second.drop, (
-            "the first drop must feed the second directly"
-        )
+        assert (
+            canvas.buildings[first.supply_belt].output_obj == second.supply_belt
+        ), "the first drop must feed the second directly"
 
     def test_no_splitter_carries_the_proliferator(self) -> None:
         spec = proliferated_spec()

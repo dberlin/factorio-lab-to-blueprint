@@ -4799,10 +4799,16 @@ def _feed_coater(
     if prolif is None:
         return 0, chain_from
     coater = buildings[coater_idx]
-    adx, ady, adz = catalog.building(coater.item_id).addon_areas[1]
-    wx, wy = sorter_slots.to_world((adx, ady), coater.yaw)
-    cell = (coater.x + round(wx), coater.y + round(wy))
-    level = Fraction(round(adz))
+    supply = sorter_slots.addon_supply_cell(
+        coater.item_id,
+        x=coater.x,
+        y=coater.y,
+        z=coater.z,
+        yaw=coater.yaw,
+        area=1,
+    )
+    cell = supply[:2]
+    level = Fraction(supply[2])
     if any(b.x == cell[0] and b.y == cell[1] and b.z == level for b in buildings):
         # Something already sits in the addon area.  If it is the chain's own
         # belt passing through, the coater is supplied by it and there is

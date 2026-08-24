@@ -773,6 +773,21 @@ class SlotPose:
     fz: float
 
 
+
+@dataclass(frozen=True, slots=True)
+class AddonSupplyPose:
+    """One game-extracted positional belt connection for an addon.
+
+    Horizontal offsets are in grid tiles and ``dz`` is in project altitude
+    levels.  Fractions keep routing decisions exact after the asset loader has
+    normalized Unity's rounded world-height value.
+    """
+
+    dx: Fraction
+    dy: Fraction
+    dz: Fraction
+    area: int
+
 @dataclass(frozen=True, slots=True)
 class Building:
     """One buildable thing, with the geometry the layout stage needs."""
@@ -815,9 +830,7 @@ class Building:
     #: also how the game's own checks read it: they skip a peer whose
     #: ``slotPoses.Length`` does not cover the index.
     slot_poses: tuple[SlotPose, ...]
-    #: Where a belt ADDON looks for the belts it attaches to, as ``(dx, dy, dz)``
-    #: offsets from the addon's own tile -- ``dx``/``dy`` in tiles, ``dz`` in
-    #: altitude levels.  ``PrefabDesc.addonAreaPoses``.
+    #: Where a belt ADDON looks for the belts it attaches to.
     #:
     #: This is how a Spray Coater is supplied, and it is not by sorter.  On
     #: build the game takes the nearest belt within 1.0 of each area and writes
@@ -826,7 +839,7 @@ class Building:
     #: at ``(0, 0, 0)`` -- the coater rides it.  Area 1 is the PROLIFERATOR
     #: supply, at ``(0, -1.25, 1)``: one tile and a quarter behind the coater
     #: and exactly one altitude level up.
-    addon_areas: tuple[tuple[float, float, float], ...]
+    addon_areas: tuple[AddonSupplyPose, ...]
     cover_radius: Fraction
     connect_distance: Fraction
     #: ``PrefabDesc.isPowerNode`` -- ``PowerDesc.node`` on the prefab, read by
@@ -1010,13 +1023,34 @@ def _port_poses_for(prefab: str, table: Mapping[str, Any]) -> tuple[SlotPose, ..
     )
 
 
+#: World units per altitude level, from the blueprint paste path::
+#:
+#:     lpos = dir * (localOffset_z * 1.3333333f + 0.2f + realRadius)
+#:
+#: Only :func:`_addon_areas_for` uses it, to turn the prefab's world-space addon
+#: offsets into the levels the rest of this project counts in.
+WORLD_UNITS_PER_LEVEL = Fraction(4, 3)
+
+
+def _asset_altitude_level(value: object) -> Fraction:
+    """Normalize the asset's rounded Unity height into project levels."""
+    level = Fraction(str(value)) / WORLD_UNITS_PER_LEVEL
+    nearest = round(level)
+    if abs(level - nearest) <= Fraction(1, 10_000):
+        return Fraction(nearest)
+    return level.limit_denominator(10_000)
 def _addon_areas_for(
     prefab: str, table: Mapping[str, Any]
-) -> tuple[tuple[float, float, float], ...]:
-    """``prefab``'s addon areas, in tiles across and altitude LEVELS up."""
+) -> tuple[AddonSupplyPose, ...]:
+    """``prefab``'s addon areas, in tiles across and altitude levels up."""
     return tuple(
-        (float(a[0]), float(a[2]), float(a[1]) / WORLD_UNITS_PER_LEVEL)
-        for a in (table.get(prefab) or {}).get("addonAreas", ())
+        AddonSupplyPose(
+            dx=Fraction(str(a[0])),
+            dy=Fraction(str(a[2])),
+            dz=_asset_altitude_level(a[1]),
+            area=area,
+        )
+        for area, a in enumerate((table.get(prefab) or {}).get("addonAreas", ()))
     )
 
 
@@ -1082,6 +1116,14 @@ def _load() -> dict[int, Building]:
             connect_distance=Fraction(0),
         )
     return out
+
+
+def addon_supply_pose(item_id: int, *, area: int = 1) -> AddonSupplyPose:
+    """Return one addon's authoritative positional belt connection."""
+    for pose in building(item_id).addon_areas:
+        if pose.area == area:
+            return pose
+    raise ValueError(f"building item {item_id} has no addon supply area {area}")
 
 
 def building(item_id: int) -> Building:

@@ -1248,14 +1248,14 @@ def test_two_assemblers_collide_at_pitch_3_and_clear_at_pitch_4() -> None:
     assert _cat.clearance(ASSEMBLER, 0.0)[0] == 4, "and needs a fourth"
 
 
-def _coater(x: int, y: int, z: Fraction | int = 0) -> PlacedBuilding:
+def _coater(
+    x: int, y: int, z: Fraction | int = 0, *, yaw: float = 90.0
+) -> PlacedBuilding:
     """A Spray Coater on the belt at ``(x, y)``.
 
-    ``z`` is converted the way ``belt`` and ``splitter`` above convert theirs.
-    Handing ``PlacedBuilding`` a bare ``int`` was not merely a type error: this
-    helper feeds ``game.addon_supply``, which measures a proliferator belt one
-    altitude LEVEL up against a 1.0-unit area, and altitudes are Fractions
-    because a level is not a whole tile.
+    It is deliberately represented as 1x1: a belt addon is anchored on its host
+    tile, while the catalog's 1x3 describes collider reach rather than an
+    origin-anchored footprint.
     """
     b = catalog_building(SPRAY_COATER)
     return PlacedBuilding(
@@ -1264,7 +1264,7 @@ def _coater(x: int, y: int, z: Fraction | int = 0) -> PlacedBuilding:
         x=x,
         y=y,
         z=Fraction(z),
-        yaw=90.0,  # Facing.EAST
+        yaw=yaw,
     )
 
 
@@ -1281,12 +1281,92 @@ def test_game_addon_supply_fires_when_a_coater_has_no_proliferator_belt() -> Non
     assert fired(r, "game.addon_supply")
 
 
-def test_game_addon_supply_clean_when_the_belt_is_where_the_game_looks() -> None:
-    """One level up and a tile behind: 0.25 from the area centre, well inside 1.0."""
-    r = validate(place(belt(0, 0), belt(-1, 0, 1), _coater(0, 0)))
-    assert not fired(r, "game.addon_supply"), [
-        f.message for f in r.by_check("game.addon_supply")
+@pytest.mark.parametrize(
+    ("yaw", "supply"),
+    [
+        (0.0, (0, -1)),
+        (90.0, (-1, 0)),
+        (180.0, (0, 1)),
+        (270.0, (1, 0)),
+    ],
+)
+def test_game_addon_supply_uses_rotated_elevated_pose(
+    yaw: float, supply: tuple[int, int]
+) -> None:
+    ground = validate(
+        place(belt(0, 0), belt(*supply, 0), _coater(0, 0, yaw=yaw)),
+        only={"game.addon_supply"},
+    )
+    assert fired(ground, "game.addon_supply")
+
+    elevated = validate(
+        place(belt(0, 0), belt(*supply, 1), _coater(0, 0, yaw=yaw)),
+        only={"game.addon_supply"},
+    )
+    assert not fired(elevated, "game.addon_supply"), [
+        f.message for f in elevated.by_check("game.addon_supply")
     ]
+
+
+COATER_SPEC = BuildSpec(
+    groups=(),
+    external_inputs={"proliferator-3": Fraction(1)},
+    spray_lanes={"ore": True},
+)
+
+
+def _coater_supply_report(
+    *, host_item: str | None = "ore", supply_item: str | None = "proliferator-3"
+) -> Report:
+    return validate(
+        place(
+            belt(0, 0, carries=host_item),
+            belt(-1, 0, 1, carries=supply_item),
+            _coater(0, 0),
+        ),
+        COATER_SPEC,
+        ids=IdMap(),
+        only={"prolif.coaters_are_supplied"},
+    )
+
+
+def test_spec_coater_supply_requires_the_declared_proliferator_item() -> None:
+    assert fired(
+        _coater_supply_report(supply_item="ore"),
+        "prolif.coaters_are_supplied",
+    )
+
+
+def test_spec_coater_host_requires_a_declared_sprayed_item() -> None:
+    assert fired(
+        _coater_supply_report(host_item="unsprayed"),
+        "prolif.coaters_are_supplied",
+    )
+
+
+def test_spec_coater_host_and_supply_items_validate_together() -> None:
+    report = _coater_supply_report()
+    assert not fired(report, "prolif.coaters_are_supplied"), [
+        finding.message
+        for finding in report.by_check("prolif.coaters_are_supplied")
+    ]
+
+
+def test_game_addon_supply_rejects_a_sorter_targeting_a_coater() -> None:
+    placement = place(
+        belt(0, 0, carries="ore"),
+        belt(-1, 0, 1, carries="proliferator-3"),
+        _coater(0, 0),
+        sorter(-1, 0, 0, 0, inp=1, out=2, z=1, z2=0),
+    )
+
+    report = validate(placement, only={"game.addon_supply"})
+
+    assert fired(report, "game.addon_supply")
+    assert any(
+        "sorter" in finding.message
+        for finding in report.by_check("game.addon_supply")
+    )
 
 
 def test_game_inserter_data_fires_on_a_far_column_of_a_wide_machine() -> None:

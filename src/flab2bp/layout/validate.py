@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import math
 from collections import defaultdict, deque
-from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum, StrEnum
 from fractions import Fraction
@@ -1940,6 +1940,37 @@ def _inserter_skew(ctx: Context) -> Iterable[Finding]:
 
 
 
+def _belts_in_addon_area(
+    ctx: Context,
+    addon: PlacedBuilding,
+    *,
+    area: int,
+    candidates: Collection[int] | None = None,
+) -> tuple[int, ...]:
+    """Belt indices the game's positional addon lookup can select."""
+    want = slots.addon_supply_position(
+        addon.item_id,
+        x=addon.x,
+        y=addon.y,
+        z=addon.z,
+        yaw=addon.yaw,
+        area=area,
+    )
+    allowed = set(candidates) if candidates is not None else None
+    return tuple(
+        i
+        for i, belt in enumerate(ctx.placement.buildings)
+        if ctx.kinds[i] is Kind.BELT
+        and (allowed is None or i in allowed)
+        and slots.world_gap(
+            float(want[0] - belt.x),
+            float(want[1] - belt.y),
+            float(want[2] - belt.z),
+        )
+        < _ADDON_AREA_RADIUS
+    )
+
+
 @check("game.addon_supply")
 def _addon_supply(ctx: Context) -> Iterable[Finding]:
     """A belt addon is fed by BELT, and the game finds that belt by position.
@@ -1964,30 +1995,55 @@ def _addon_supply(ctx: Context) -> Iterable[Finding]:
     on, and that co-location is already what places them.
     """
     bs = ctx.placement.buildings
-    belts = [(b.x, b.y, float(b.z)) for b in bs if cat.is_belt(b.item_id)]
+    addon_indices = {
+        i
+        for i, building in enumerate(bs)
+        if cat.building(building.item_id).is_belt_addon
+    }
+    for sorter_index, sorter in ctx.of_kind(Kind.SORTER):
+        targeted = tuple(
+            link
+            for link in (sorter.input_obj, sorter.output_obj)
+            if link in addon_indices
+        )
+        if targeted:
+            yield Finding(
+                "game.addon_supply",
+                Severity.ERROR,
+                f"sorter {sorter_index} targets belt addon(s) {list(targeted)}, "
+                "but addons have no sorter slots and connect to belts by position",
+                (sorter_index, *targeted),
+                {"targets": list(targeted)},
+            )
     for i, b in enumerate(bs):
         areas = cat.building(b.item_id).addon_areas
         if len(areas) < 2:
             continue
-        for n, (adx, ady, adz) in enumerate(areas):
-            if n == 0:
+        for pose in areas:
+            if _belts_in_addon_area(ctx, b, area=pose.area):
                 continue
-            wx, wy = slots.to_world((adx, ady), b.yaw)
-            want = (b.x + wx, b.y + wy, float(b.z) + adz)
-            if any(
-                rules.world_gap(want[0] - p[0], want[1] - p[1], want[2] - p[2])
-                < rules.ADDON_AREA_RADIUS
-                for p in belts
-            ):
-                continue
+            want = slots.addon_supply_position(
+                b.item_id,
+                x=b.x,
+                y=b.y,
+                z=b.z,
+                yaw=b.yaw,
+                area=pose.area,
+            )
             yield Finding(
                 "game.addon_supply",
                 Severity.ERROR,
                 f"{cat.building(b.item_id).name} {i} has no belt in its addon "
-                f"area {n}, at ({want[0]:.2f}, {want[1]:.2f}) one level up; the "
-                f"game supplies an addon from there and from nowhere else",
+                f"area {pose.area}, at ({float(want[0]):.2f}, "
+                f"{float(want[1]):.2f}, z={float(want[2]):.2f}); the game "
+                f"supplies an addon from there and from nowhere else",
                 (i,),
-                {"area": n, "x": round(want[0], 2), "y": round(want[1], 2)},
+                {
+                    "area": pose.area,
+                    "x": round(float(want[0]), 2),
+                    "y": round(float(want[1]), 2),
+                    "z": round(float(want[2]), 2),
+                },
             )
 
 
@@ -4051,51 +4107,47 @@ def _coaters_supplied(ctx: Context) -> Iterable[Finding]:
         for i, b in enumerate(ctx.placement.buildings)
         if ctx.kinds[i] is Kind.BELT and b.carries_item in prolif_items
     }
+    host_belts = {
+        i
+        for i, b in enumerate(ctx.placement.buildings)
+        if ctx.kinds[i] is Kind.BELT and b.carries_item in ctx.spec.spray_lanes
+    }
 
-    if prolif_items and not supplying_belts:
-        yield Finding(
-            "prolif.coaters_are_supplied",
-            Severity.ERROR,
-            f"{len(coaters)} spray coater(s) placed but no belt carries "
-            f"{sorted(prolif_items)}; they would spray nothing and every "
-            f"proliferated recipe would silently run unproliferated",
-            tuple(i for i, _ in coaters),
-            {"coaters": len(coaters), "proliferator_items": sorted(prolif_items)},
+    starved = [
+        i
+        for i, coater in coaters
+        if not _belts_in_addon_area(
+            ctx,
+            coater,
+            area=1,
+            candidates=supplying_belts,
         )
-        return
-
-    supply_at = [
-        (
-            ctx.placement.buildings[i].x,
-            ctx.placement.buildings[i].y,
-            float(ctx.placement.buildings[i].z),
-        )
-        for i in supplying_belts
     ]
-    starved = []
-    for i, b in coaters:
-        areas = cat.building(b.item_id).addon_areas
-        ok = False
-        for n, (adx, ady, adz) in enumerate(areas):
-            if n == 0:
-                continue
-            wx, wy = slots.to_world((adx, ady), b.yaw)
-            want = (b.x + wx, b.y + wy, float(b.z) + adz)
-            ok = ok or any(
-                rules.world_gap(want[0] - p[0], want[1] - p[1], want[2] - p[2])
-                < rules.ADDON_AREA_RADIUS
-                for p in supply_at
-            )
-        if not ok:
-            starved.append(i)
-    if starved:
+    wrong_hosts = [
+        i
+        for i, coater in coaters
+        if not _belts_in_addon_area(
+            ctx,
+            coater,
+            area=0,
+            candidates=host_belts,
+        )
+    ]
+    if starved or wrong_hosts:
+        affected = tuple(sorted(set(starved) | set(wrong_hosts)))
         yield Finding(
             "prolif.coaters_are_supplied",
             Severity.ERROR,
-            f"{len(starved)} of {len(coaters)} spray coaters have no proliferator "
-            f"belt in their addon area, a tile behind and one level up",
-            tuple(starved),
-            {"starved": len(starved), "total": len(coaters)},
+            f"{len(starved)} of {len(coaters)} spray coaters have no "
+            f"positionally attached belt carrying {sorted(prolif_items)}, and "
+            f"{len(wrong_hosts)} are not hosted on a belt carrying one of "
+            f"{sorted(ctx.spec.spray_lanes)}",
+            affected,
+            {
+                "starved": len(starved),
+                "wrong_hosts": len(wrong_hosts),
+                "total": len(coaters),
+            },
         )
 
 

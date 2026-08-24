@@ -2554,6 +2554,23 @@ class _PreparedPort:
     z: int = 0
 
 
+@dataclass(frozen=True, slots=True)
+class CoaterSupplyPort:
+    """A coater's host belt and positional elevated proliferator endpoint."""
+
+    coater: int
+    host_belt: int
+    supply_belt: int
+    item: str
+    yaw: float
+    host_x: int
+    host_y: int
+    host_z: int
+    x: int
+    y: int
+    z: int
+
+
 def _prepare_port(port: _Port) -> _PreparedPort:
     return _PreparedPort(
         belt_index=port.belt,
@@ -4386,17 +4403,24 @@ class _PreparedRoutingProblem:
     sorters: int
     coaters: int
     direct_inserts: int
+    coater_supply_ports: tuple[CoaterSupplyPort, ...] = ()
+    ramped: bool = False
+    world_taken: frozenset[tuple[int, int, Fraction]] = frozenset()
+    belt_ban: tuple[tuple[tuple[int, int], frozenset[int]], ...] = ()
 
     def new_workspace(self) -> _RoutingWorkspace:
         buildings = deepcopy(list(self.building_templates))
         canvas = _Canvas(
+            ramped=self.ramped,
             buildings=buildings,
             blocked=dict(self.blocked),
+            world_taken=set(self.world_taken),
             solid=set(self.solid),
             reserved=dict(self.reserved),
             routing_ports=frozenset(),
             limit=self.limit,
             keep_out=set(self.keep_out),
+            belt_ban={cell: set(levels) for cell, levels in self.belt_ban},
         )
         nets = [_bind_prepared_net(net, buildings) for net in self.nets]
         return _RoutingWorkspace(canvas=canvas, buildings=buildings, nets=nets)
@@ -7024,12 +7048,13 @@ def _prepare_routing_problem(
     pack: _Pack,
     *,
     power: bool,
+    ramped: bool = False,
     _reserve_ports: bool = True,
 ) -> _PreparedRoutingProblem:
     """Build immutable exact geometry shared by both routing engines."""
     belt_id = BELT_ITEM_IDS.get(spec.belt_item_id, 2001)
     belt_model = catalog.building(belt_id).model_index
-    canvas = _Canvas()
+    canvas = _Canvas(ramped=ramped)
 
     rates: dict[str, Fraction] = {}
     for g in _adapt(spec).values():
@@ -7212,7 +7237,7 @@ def _prepare_routing_problem(
     # routed to its drop belt. Placing them afterwards -- as this used to --
     # leaves them mounted on belts with nothing feeding them, so every
     # proliferated recipe silently runs unproliferated.
-    coater_list: list[_Coater] = []
+    coater_list: list[CoaterSupplyPort] = []
     prolif_item = _proliferator_item(spec)
     if spec.spray_lanes:
         coater_list = _place_coaters(
@@ -7220,11 +7245,14 @@ def _prepare_routing_problem(
         )
     coaters = len(coater_list)
     for coater in coater_list:
-        strip_of_belt[coater.drop] = next(
+        host = canvas.buildings[coater.coater]
+        strip_of_belt[coater.supply_belt] = next(
             i
             for i, ports in enumerate(strip_in_ports)
             if any(
-                port.y == coater.y and port.x1 + 1 == coater.x
+                port.x == host.x
+                and port.y == host.y
+                and port.z == int(host.z)
                 for port in ports.values()
             )
         )
@@ -7375,7 +7403,16 @@ def _prepare_routing_problem(
         power_sites=tuple(power_sites),
         sorters=sorters,
         coaters=coaters,
+        coater_supply_ports=tuple(coater_list),
         direct_inserts=direct_placed,
+        ramped=canvas.ramped,
+        world_taken=frozenset(canvas.world_taken),
+        belt_ban=tuple(
+            sorted(
+                (cell, frozenset(levels))
+                for cell, levels in canvas.belt_ban.items()
+            )
+        ),
     )
 
 
@@ -7393,6 +7430,7 @@ def _build(
     *,
     power: bool,
     route: bool,
+    ramped: bool = False,
     deadline: float | None = None,
     budget: dict[str, int] | None = None,
 ) -> _BuildResult:
@@ -7403,6 +7441,7 @@ def _build(
         pack,
         power=power,
         _reserve_ports=route,
+        ramped=ramped,
     )
     return _build_prepared(
         spec,
@@ -7616,16 +7655,6 @@ def _bridge(
     return False
 
 
-@dataclass(frozen=True, slots=True)
-class _Coater:
-    """A placed Spray Coater and the belt tile that will feed it proliferator."""
-
-    coater: int
-    #: A one-tile belt in the strip's east margin, the sink of a proliferator net.
-    drop: int
-    x: int
-    y: int
-    z: int
 
 
 def _coater_seat(canvas: _Canvas, port: _Port) -> tuple[int, int] | None:
@@ -7693,8 +7722,8 @@ def _place_coaters(
     ports: list[dict[str, _Port]],
     belt_id: int,
     belt_model: int,
-) -> list[_Coater]:
-    """One Spray Coater per sprayed input lane, each with a supply drop.
+) -> list[CoaterSupplyPort]:
+    """Place one Spray Coater per sprayed input lane and its supply belt.
 
     A coater is a belt addon: it consumes no grid tile, so proliferation costs
     almost nothing in area.  The real cost is that it forces its edge onto a
@@ -7729,7 +7758,7 @@ def _place_coaters(
     coater = catalog.building(catalog.SPRAY_COATER_ID)
     wanted = set(spec.spray_lanes)
     seen: set[str] = set()
-    out: list[_Coater] = []
+    out: list[CoaterSupplyPort] = []
 
     belt_at: dict[tuple[int, int, int], int] = {
         (b.x, b.y, int(b.z)): i
@@ -7755,22 +7784,21 @@ def _place_coaters(
                     f"with a lane tile on both sides of it to ride straight"
                 )
             cx, cy = seat
-            host = belt_at.get((cx, cy, 0))
-            # WHERE the proliferator belt has to be, from the coater's own addon
-            # area rather than from convenience. The game attaches an addon's
-            # belts positionally: area 0 is the cargo belt it rides, area 1 the
-            # proliferator supply, and for a coater that is `(0, -1.25, 1)` --
-            # a tile and a quarter BEHIND it and exactly one altitude level UP.
-            # A belt beside it at ground level, which is what this used to build
-            # and then run a sorter from, is in neither area and the game
-            # attaches nothing to it.
-            adx, ady, adz = catalog.building(catalog.SPRAY_COATER_ID).addon_areas[1]
-            wx, wy = slots.to_world((adx, ady), Facing.EAST.value)
-            drop_cell = (cx + round(wx), cy + round(wy), round(adz))
+            host_z = port.z
+            host = belt_at.get((cx, cy, host_z))
+            yaw = Facing.EAST.value
+            drop_cell = slots.addon_supply_cell(
+                catalog.SPRAY_COATER_ID,
+                x=cx,
+                y=cy,
+                z=Fraction(host_z),
+                yaw=yaw,
+                area=1,
+            )
             if host is None:
                 raise _Unseatable(
                     f"the {item} lane's seat ({cx}, {cy}) carries no belt at "
-                    f"ground level, so there is nothing for a coater to ride"
+                    f"level {host_z}, so there is nothing for a coater to ride"
                 )
             if not canvas.free(drop_cell):
                 raise _Unseatable(
@@ -7779,7 +7807,7 @@ def _place_coaters(
                     f"the game supplies an addon from its area and nowhere else"
                 )
 
-            drop = canvas.add(
+            supply_belt = canvas.add(
                 PlacedBuilding(
                     item_id=belt_id,
                     model_index=belt_model,
@@ -7789,18 +7817,20 @@ def _place_coaters(
                     width=1,
                     height=1,
                     carries_item=_proliferator_item(spec),
-                )
+                ),
+                level=drop_cell[2],
             )
-            idx = len(canvas.buildings)
+            coater_index = len(canvas.buildings)
             canvas.buildings.append(
                 PlacedBuilding(
                     item_id=catalog.SPRAY_COATER_ID,
                     model_index=coater.model_index,
                     x=cx,
                     y=cy,
+                    z=Fraction(host_z),
                     width=1,
                     height=1,
-                    yaw=Facing.EAST.value,
+                    yaw=yaw,
                 )
             )
             # NO sorter drop -> coater. That connection does not exist in the
@@ -7836,7 +7866,9 @@ def _place_coaters(
             # same question `validate.game.belt_crossing` asks of the result.
             pose = colliders.Placed(
                 coater.model_index,
-                *codec.tile_to_local_offset(cx, cy, Fraction(0), 1, 1),
+                *codec.tile_to_local_offset(
+                    cx, cy, Fraction(host_z), 1, 1
+                ),
                 Facing.EAST.value,
             )
             need = colliders.belt_crossing_height(coater.model_index)
@@ -7861,9 +7893,15 @@ def _place_coaters(
                         ):
                             canvas.belt_ban.setdefault(tile, set()).add(level)
             out.append(
-                _Coater(
-                    coater=idx,
-                    drop=drop,
+                CoaterSupplyPort(
+                    coater=coater_index,
+                    host_belt=host,
+                    supply_belt=supply_belt,
+                    item=item,
+                    yaw=yaw,
+                    host_x=cx,
+                    host_y=cy,
+                    host_z=host_z,
                     x=drop_cell[0],
                     y=drop_cell[1],
                     z=drop_cell[2],
@@ -7909,7 +7947,7 @@ def _proliferator_item(spec: BuildSpec) -> str | None:
 
 
 def _proliferator_nets(
-    canvas: _Canvas, entry: _Port, coaters: list[_Coater], item: str
+    canvas: _Canvas, entry: _Port, coaters: list[CoaterSupplyPort], item: str
 ) -> list[_Net]:
     """Thread ONE belt from the entry through every coater drop in turn.
 
@@ -7953,7 +7991,7 @@ def _proliferator_nets(
             ),
         )
         remaining.remove(nxt)
-        dst = _Port(nxt.drop, nxt.x, nxt.y, nxt.x, nxt.x, z=nxt.z)
+        dst = _Port(nxt.supply_belt, nxt.x, nxt.y, nxt.x, nxt.x, z=nxt.z)
         source_building = canvas.buildings[src.belt]
         destination_building = canvas.buildings[dst.belt]
         if _legal_link(

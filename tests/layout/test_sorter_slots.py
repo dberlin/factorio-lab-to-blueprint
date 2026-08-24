@@ -405,6 +405,28 @@ def test_yaw_rotates_the_ring(yaw: float) -> None:
         assert S.machine_slot(2303, yaw, turn(*offset), turn(*approach)) == expected
 
 
+@pytest.mark.parametrize(
+    ("yaw", "expected"),
+    [
+        (0.0, (10, 19, 3)),
+        (90.0, (9, 20, 3)),
+        (180.0, (10, 21, 3)),
+        (270.0, (11, 20, 3)),
+    ],
+)
+def test_coater_supply_cell_rotates_behind_host_at_next_level(
+    yaw: float, expected: tuple[int, int, int]
+) -> None:
+    assert S.addon_supply_cell(
+        cat.SPRAY_COATER_ID,
+        x=10,
+        y=20,
+        z=Fraction(2),
+        yaw=yaw,
+        area=1,
+    ) == expected
+
+
 def test_wide_side_clamps_to_its_end_slot() -> None:
     """A side has three slots however long it is, so a far column takes the end one.
 

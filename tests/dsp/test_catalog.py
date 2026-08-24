@@ -243,6 +243,23 @@ def test_spray_coater_occupies_no_tile() -> None:
     assert not coater.occupies_tiles
 
 
+def test_spray_coater_addon_supply_pose_is_authoritative_and_exact() -> None:
+    coater = catalog.building(catalog.SPRAY_COATER_ID)
+
+    assert coater.slot_poses == ()
+    assert catalog.addon_supply_pose(catalog.SPRAY_COATER_ID, area=0) == (
+        catalog.AddonSupplyPose(Fraction(0), Fraction(0), Fraction(0), area=0)
+    )
+    assert catalog.addon_supply_pose(catalog.SPRAY_COATER_ID, area=1) == (
+        catalog.AddonSupplyPose(
+            Fraction(0),
+            Fraction(-5, 4),
+            Fraction(1),
+            area=1,
+        )
+    )
+
+
 def test_splitter_is_belt_integrated() -> None:
     """Splitters sit ON the belt line -- measured at dx=0.00, dy=0.00 from a belt."""
     assert catalog.is_belt_integrated(catalog.SPLITTER_ID)
