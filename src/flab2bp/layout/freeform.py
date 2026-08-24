@@ -166,10 +166,12 @@ OUTER_MAX = 3
 #: having a routed pack to improve: they buy density where there is clock to
 #: spare and buy nothing at all where the deadline is the binding constraint.
 #:
-#: Three, because that is what the density measurement supports -- -1.51% area
-#: over six paired rounds -- and every further draw costs a CP-SAT solve and a
-#: routing pass.  ``1`` is the search as it stood before this existed and is the
-#: control the A/B compares against; see ``audit.py --arrangements``.
+#: Three, because that is what the density measurement supports -- -1.98% area
+#: over four paired rounds at the budget where arrangements are affordable, and
+#: -0.25 cells (95% CI [-1.40, +0.90]) over twelve at the budget where mostly
+#: they are not -- and every further draw costs a CP-SAT solve and a routing
+#: pass.  ``1`` is the search as it stood before this existed and is the control
+#: the A/B compares against; see ``audit.py --arrangements``.
 _ARRANGEMENTS = 3
 
 #: CP-SAT's random seed for arrangement 0 -- the constant this always used.
@@ -5850,7 +5852,21 @@ class FreeformLayout:
 
         best: Placement | None = None
         best_key: tuple[int, float] | None = None
+        #: The dearest candidate this sweep has COMPLETED, pack through validate.
+        #: What `_room_for_another` charges the next improvement arrangement.
+        dearest_candidate_s = 0.0
+        started_at: float | None = None
         for height, arrangement in candidate_packs:
+            # Charge the PREVIOUS candidate here, at the one place every path
+            # through the body reaches. The body leaves by five different
+            # routes -- no pack, unpowerable, unrouted, rejected, kept -- and a
+            # cost recorded at only some of them would systematically
+            # UNDER-estimate, since the expensive exits are the failures that run
+            # a full routing pass into the wall.
+            if started_at is not None:
+                dearest_candidate_s = max(
+                    dearest_candidate_s, time.monotonic() - started_at
+                )
             # A SECOND ARRANGEMENT IMPROVES; IT NEVER SEARCHES FOR THE FIRST.
             #
             # This is the whole shape of the feature and it was measured into
@@ -5883,10 +5899,61 @@ class FreeformLayout:
             # and density is the objective it is spent on.
             #
             # So the first pass over the heights is exactly what shipped before,
-            # and arrangements past it are gated on having something to improve.
-            # A spec that refuses sees the search it always saw; the clock it
-            # would have spent is left where the measurement says it belongs.
+            # and arrangements past it are gated TWICE: on having something to
+            # improve, and on being able to afford the improvement.
+            #
+            # `best is None` alone was not enough, and the number that says so
+            # was measured at the DEFAULT budget rather than at the budget the
+            # density win came from. Nine paired rounds at `--budget 4
+            # --jobs 16`, arrangements 3 against 1: -4, 0, 0, 0, 0, -1, +1, 0,
+            # -2, a mean of -0.67 cells. The -1.51% area is real and it is a
+            # `tier large --budget 60` number; shipping it unconditionally
+            # charges budget-4 cells for a budget-60 gain, which is the wrong way
+            # round because budget 4 is what the audit runs and what a user gets.
+            #
+            # THE AFFORDABILITY RULE, and it carries no tuned constant: an
+            # improvement arrangement may start only if as much clock remains as
+            # the most expensive candidate so far actually took. By the time
+            # `best` exists at least one candidate has been packed, routed,
+            # powered and validated, so its cost is MEASURED for this spec on
+            # this machine rather than guessed -- which is the only honest
+            # estimate of what the next one costs, and it self-calibrates across
+            # a corpus spanning 1 to 955 machines instead of asking a threshold
+            # to span it.
+            #
+            # It reads on both ends the way the diagnosis says it should. At
+            # budget 4 a `universe-matrix` candidate costs ten seconds or more
+            # against a sweep share of four, so no improvement arrangement ever
+            # starts and the stress cells get back the search they had. At budget
+            # 60 a tier-`large` candidate costs a second or two against a share
+            # of sixty, so they all run and the density win stands.
+            #
+            # Measured on both ends after the rule went in, paired and
+            # interleaved:
+            #
+            #   budget 4, jobs 16, full corpus, TWELVE rounds
+            #     -3 +1 0 +1 0 0 -1 +2 -4 +2 -1 0
+            #     mean -0.25 cells, 95% CI [-1.40, +0.90], median 0, and the
+            #     rounds split 4 better / 4 worse / 4 level. INVALID 0 over all
+            #     1728 cells. The two specs that carry every refusal are where
+            #     the rule has to work and it does: `universe-matrix` refuses 11
+            #     times against 10, and `quantum-chip` measured alone at jobs 6,
+            #     away from the audit's own CPU contention, is identical on six
+            #     of seven rounds.
+            #
+            #   tier large, budget 60, four rounds
+            #     -1.98% AREA, paired t = -5.41, denser in FOUR OF FOUR rounds,
+            #     60 of 60 clean in every run of both arms, per cell denser on 21
+            #     and larger on 2.
+            #
+            # So the default is the one both ends support, which is the thing the
+            # unconditional version got wrong: it was measured at budget 60 and
+            # shipped to budget 4.
             if arrangement and best is None:
+                break
+            if arrangement and not _room_for_another(
+                deadline, soft, dearest_candidate_s
+            ):
                 break
             # The SOFT deadline stops us IMPROVING, never FINDING. A refusal
             # means the model could not lay the spec out; a sweep's own clock
@@ -5903,6 +5970,7 @@ class FreeformLayout:
             # distinction between "cannot" and "ran out" survives into the error.
             if _expired(deadline):
                 break
+            started_at = time.monotonic()
             pack = _pack(
                 strips,
                 height=height,
@@ -6015,6 +6083,30 @@ class FreeformLayout:
                 placement.stats["area"] = float(placement.area)
                 best, best_key = placement, key
         return best
+
+
+def _room_for_another(deadline: float | None, soft: float, candidate_s: float) -> bool:
+    """Is there clock left to pack, route, power and validate one more candidate?
+
+    Both clocks have to allow it and they say different things.  ``soft`` is the
+    sweep's own share and is what stops it improving; ``deadline`` is the call's
+    wall and is what stops it entirely.  A candidate started against either one
+    with no room to finish is a candidate whose whole cost is wasted -- the sweep
+    already holds a routed placement, so an abandoned improvement buys nothing
+    and spends the clock a later spec-critical pass might have used.
+
+    ``candidate_s`` is the dearest candidate this sweep has actually completed,
+    which makes this a measurement rather than a threshold: see the note in
+    :meth:`FreeformLayout._sweep` for why a tuned constant could not span a
+    corpus running from 1 to 955 machines.
+
+    A ``deadline`` of ``None`` means a caller with no wall -- a test or a probe
+    -- and only the soft clock then applies.
+    """
+    now = time.monotonic()
+    if soft - now < candidate_s:
+        return False
+    return deadline is None or deadline - now >= candidate_s
 
 
 def _height_seed(strips: list[Strip]) -> int:

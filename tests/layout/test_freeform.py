@@ -58,6 +58,7 @@ from flab2bp.layout.freeform import (
     _proliferator_nets,
     _relink,
     _reserve_port_access,
+    _room_for_another,
     _shard_sinks,
     _sink_for,
     _source_for,
@@ -822,10 +823,37 @@ class TestArrangementsImproveButNeverSearch:
     constraint is the clock -- every stress refusal reads "the 15s deadline
     passed", 36 of 36 -- so another arrangement spends the clock rather than
     buying it, and paired runs put the difference at exactly 0.00 cells.  On a
-    spec that HAS wired and has clock left it is worth -1.51% area, paired
-    t = -5.26, denser in six of six rounds.  So the gate is the whole feature,
-    and these pin it.
+    spec that HAS wired and has clock left it is worth -1.98% area, paired
+    t = -5.41, denser in four of four rounds.  So the two gates ARE the feature,
+    and these pin both of them.
     """
+
+    def test_an_improvement_must_fit_in_the_sweeps_own_share(self) -> None:
+        """No room in ``soft`` means no improvement, however much wall remains."""
+        now = time.monotonic()
+        assert not _room_for_another(now + 600.0, now + 1.0, 5.0)
+        assert _room_for_another(now + 600.0, now + 30.0, 5.0)
+
+    def test_an_improvement_must_also_fit_inside_the_calls_wall(self) -> None:
+        """The two clocks say different things and BOTH have to allow it.
+
+        A sweep share far larger than the wall is the ordinary case on a retry:
+        ``share`` is capped at what the call has left, but a candidate that
+        overruns can still leave the wall shorter than the share implies.
+        """
+        now = time.monotonic()
+        assert not _room_for_another(now + 1.0, now + 600.0, 5.0)
+
+    def test_no_deadline_means_only_the_soft_clock_applies(self) -> None:
+        """A probe or a test calls in with no wall; that must not deny it."""
+        now = time.monotonic()
+        assert _room_for_another(None, now + 30.0, 5.0)
+        assert not _room_for_another(None, now + 1.0, 5.0)
+
+    def test_a_free_candidate_is_always_affordable(self) -> None:
+        """The first sweep charges nothing until a candidate has been completed."""
+        now = time.monotonic()
+        assert _room_for_another(now + 0.001, now + 0.001, 0.0)
 
     def test_arrangement_zero_is_the_seed_that_always_shipped(self) -> None:
         """Arrangement 0 must be bit-identical to the solve before this existed.
@@ -891,6 +919,78 @@ class TestArrangementsImproveButNeverSearch:
         assert max(asked) > 0, (
             "no arrangement past the first was ever tried, so the gate is not a "
             "gate but an off switch"
+        )
+
+    def _forced_affordability(
+        self, monkeypatch: pytest.MonkeyPatch, affordable: bool
+    ) -> tuple[list[int], list[float]]:
+        """Sweep with the affordability ANSWER forced; report asks and charges.
+
+        Forcing the answer rather than arranging a clock is what makes this
+        deterministic.  A test that tries to land the sweep in the narrow window
+        where the soft deadline still allows a candidate the affordability rule
+        declines is a test that passes or fails on how fast the box is -- and one
+        was written that way first, and caught neither of the two mutations that
+        matter.
+        """
+        import flab2bp.layout.freeform as ff
+
+        asked: list[int] = []
+        charged: list[float] = []
+        real_pack = ff._pack
+
+        def spy(strips: Any, **kw: Any) -> Any:
+            asked.append(int(kw["arrangement"]))
+            return real_pack(strips, **kw)
+
+        def forced(deadline: Any, soft: Any, candidate_s: float) -> bool:
+            charged.append(candidate_s)
+            return affordable
+
+        monkeypatch.setattr(ff, "_pack", spy)
+        monkeypatch.setattr(ff, "_room_for_another", forced)
+        FreeformLayout(power=False, workers=4, arrangements=3).lay_out(
+            magnetic_ring_spec(), time_budget_s=12.0
+        )
+        return asked, charged
+
+    def test_an_unaffordable_improvement_is_not_started(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The rule that stopped the corpus regression, pinned at its call site.
+
+        Without this, deleting the affordability check from ``_sweep`` leaves
+        every other test here green: on a spec small enough to run in a test the
+        soft deadline masks it.
+        """
+        asked, charged = self._forced_affordability(monkeypatch, affordable=False)
+        assert asked, "the spy never fired, so this test proves nothing"
+        assert charged, "the sweep never consulted the affordability rule at all"
+        assert set(asked) == {0}, (
+            f"an improvement started though nothing was affordable: {sorted(set(asked))}"
+        )
+
+    def test_an_affordable_improvement_is_started(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The other side, so the rule cannot degrade into an off switch."""
+        asked, _charged = self._forced_affordability(monkeypatch, affordable=True)
+        assert max(asked) > 0
+
+    def test_the_rule_is_charged_what_a_candidate_actually_cost(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A cost never accumulated makes every improvement look free.
+
+        This is the whole self-calibration: the estimate has to be a MEASUREMENT
+        of a completed candidate, so a sweep that always charges zero has quietly
+        reverted to the unconditional version this replaced.
+        """
+        _asked, charged = self._forced_affordability(monkeypatch, affordable=True)
+        assert charged, "the sweep never consulted the affordability rule at all"
+        assert max(charged) > 0.0, (
+            "every improvement was priced at zero seconds, so the affordability "
+            "rule could never decline one"
         )
 
     def test_one_arrangement_is_the_search_as_it_stood(
