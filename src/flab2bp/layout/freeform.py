@@ -660,6 +660,26 @@ class _Group:
 
 
 @dataclass(frozen=True, slots=True)
+class _LogicalStripPlan:
+    """One immutable rate/shard allocation before choosing physical geometry."""
+
+    group_key: str
+    shard_index: int
+    recipe_id: str
+    item_id: int
+    model_index: int
+    total_machine_count: int
+    in_above: tuple[tuple[str, ...], ...]
+    out_lanes: tuple[tuple[str, str], ...]
+    in_below: tuple[tuple[str, ...], ...]
+    mode_params: tuple[int, ...] = ()
+    #: The output leaves through per-machine east gap belts rather than a sorter
+    #: on the south face. Such families retain legacy Freeform emission but are
+    #: not exposed as pose variants until east-face attachments are modeled.
+    flank_outputs: bool = False
+
+
+@dataclass(frozen=True, slots=True)
 class Strip:
     """A run of machines of one recipe, with its lanes attached.
 
@@ -1483,70 +1503,52 @@ def _seat_inputs(
     )
 
 
-def plan_strips(spec: BuildSpec, *, strip_len: int = 6) -> list[Strip]:
-    """Split every group into strips and attach each strip's lanes.
+def _logical_strip_plans(spec: BuildSpec) -> tuple[_LogicalStripPlan, ...]:
+    """Allocate immutable logical lane shards without choosing a machine pose.
 
-    A strip carries one output lane per destination, which is what removes the
-    need for splitters, and a sorter spans at most ``SORTER_MAX_REACH`` tiles.
-    A producer feeding more destinations than that therefore cannot reach its
-    own bottom lane -- and real recipe graphs hit this routinely, ``copper-ingot``
-    feeding four consumers in the orbital-collector build.
+    A shard carries one output lane per destination, which is what removes the
+    need for splitters.  Machine ranges are deliberately absent here: a logical
+    shard owns its total count, while physical strip instances partition that
+    count later.
 
-    The group is SHARDED instead: its destinations are chunked to fit the reach
-    and its machines split between the chunks in proportion to the demand each
-    chunk serves.  That keeps the no-splitter invariant intact and stays a
-    planning change rather than a geometry one.
-
-    Note that raising ``strip_len`` cannot help here, though an earlier version
-    of this error advised exactly that: ``strip_len`` splits the PRODUCER into
-    sub-strips and hands each an identical copy of the lane set, so the lane
-    count is a property of how many consumer GROUPS the item feeds. Measured
-    from ``strip_len`` 2 to 10000, the failure was identical every time.
-
-    INPUTS are handled the other way about.  Sharding cannot help them: a machine
-    needs all its ingredients simultaneously, so splitting two ingredients into
-    one shard and two into another leaves both shards stalled.  Instead the strip
-    is fed from BOTH sides, and where two sides of single-item lanes still will
-    not fit, ingredients SHARE a lane and their sorters filter -- see
-    :func:`_seat_inputs`.
-
-    Raises rather than truncating: a silently dropped ingredient would produce a
-    blueprint that pastes cleanly and then stalls.
+    Inputs are fed from both sides.  Sharding cannot help a machine that needs
+    all ingredients simultaneously, so overflow ingredients share filtered
+    lanes according to :func:`_seat_inputs`.
     """
     groups = _adapt(spec)
 
     producers: dict[str, list[str]] = defaultdict(list)
-    for key, g in groups.items():
-        for item in g.outputs:
+    for key, group in groups.items():
+        for item in group.outputs:
             producers[item].append(key)
 
-    # Which groups consume each group's output, so an output lane can be
-    # dedicated per destination.
     consumers: dict[tuple[str, str], list[str]] = defaultdict(list)
-    for key, g in groups.items():
-        for item in g.inputs:
-            for src in producers.get(item, []):
-                if src != key:
-                    consumers[src, item].append(key)
+    for key, group in groups.items():
+        for item in group.inputs:
+            for source in producers.get(item, []):
+                if source != key:
+                    consumers[source, item].append(key)
 
-    strips: list[Strip] = []
-    for key, g in groups.items():
-        # How many lane rows THIS machine's poses actually reach, per side. Not
-        # `SORTER_MAX_REACH` on both: a Chemical Plant's north anchor is a row
-        # inside its footprint and an Assembling Machine's clearance pads its
-        # south, so one carries two lanes above and the other two below.
-        above_cap, below_cap = _side_lane_caps(g.item_id, g.yaw, g.pitch_h)
-        in_items = tuple(sorted(g.inputs))
-
+    plans: list[_LogicalStripPlan] = []
+    for key, group in groups.items():
+        # How many lane rows this machine's poses actually reach, per side.
+        above_cap, below_cap = _side_lane_caps(
+            group.item_id, group.yaw, group.pitch_h
+        )
+        input_items = tuple(sorted(group.inputs))
         sinks: list[tuple[str, str]] = []
-        for item in sorted(g.outputs):
-            dests = consumers.get((key, item), [])
-            sinks.extend((item, d) for d in dests)
-            if item in spec.outputs or not dests:
-                sinks.append((item, ""))  # leaves the build
+        for item in sorted(group.outputs):
+            destinations = consumers.get((key, item), [])
+            sinks.extend((item, destination) for destination in destinations)
+            if item in spec.outputs or not destinations:
+                sinks.append((item, ""))
 
         columns = (
-            len(slots.attachable_columns(slots.probe_building(g.item_id, g.yaw), -1))
+            len(
+                slots.attachable_columns(
+                    slots.probe_building(group.item_id, group.yaw), -1
+                )
+            )
             or 1
         )
         # THE EAST FACE IS THE SECOND ATTEMPT, NEVER THE FIRST.  Flanking buys a
@@ -1557,109 +1559,202 @@ def plan_strips(spec: BuildSpec, *, strip_len: int = 6) -> list[Strip]:
         flank = False
         try:
             in_above, in_below = _seat_inputs(
-                in_items,
+                input_items,
                 len(sinks),
                 above_cap,
                 below_cap,
-                max_per_lane=g.width,
+                max_per_lane=group.width,
                 columns=columns,
             )
         except ValueError as exc:
             # One sink, because one gap belt beside a machine carries one item.
-            # A producer feeding several destinations would need a gap column
-            # each, and the second one is not free the way the first is.
-            seat = _flank_seat(g.item_id, g.yaw, g.pitch_w) if len(sinks) == 1 else None
+            seat = (
+                _flank_seat(group.item_id, group.yaw, group.pitch_w)
+                if len(sinks) == 1
+                else None
+            )
             if seat is None:
-                raise ValueError(f"recipe {g.recipe_id!r}: {exc}") from None
+                raise ValueError(f"recipe {group.recipe_id!r}: {exc}") from None
             try:
                 in_above, in_below = _seat_inputs(
-                    in_items,
+                    input_items,
                     len(sinks),
                     above_cap,
                     below_cap,
-                    max_per_lane=g.width,
+                    max_per_lane=group.width,
                     columns=columns,
                     flank_outputs=True,
                 )
             except ValueError as flanked:
-                raise ValueError(f"recipe {g.recipe_id!r}: {flanked}") from None
+                raise ValueError(
+                    f"recipe {group.recipe_id!r}: {flanked}"
+                ) from None
             flank = True
 
-        # Output lanes share the south side with any overflow inputs, so the
-        # shard size is what is left after those are seated.
-        # Output lanes take columns on the south face too, so they are bounded
-        # by what the inputs seated there left as well as by the row cap.
-        #
-        # A machine with NO insert pose at all is left alone here: zero columns
-        # would bound this to zero and raise "no room on the south side", which
-        # is true but useless -- `_machines_without_poses` already refuses such
-        # a spec by name, and preempting it replaced a diagnosis with an
-        # arithmetic complaint.
+        # Output lanes share the south side with overflow inputs. They consume
+        # both row and machine-slot capacity unless the output leaves east.
         south_columns = len(
-            slots.attachable_columns(slots.probe_building(g.item_id, g.yaw), g.pitch_h)
+            slots.attachable_columns(
+                slots.probe_building(group.item_id, group.yaw), group.pitch_h
+            )
         )
-        out_cap = below_cap - len(in_below)
+        out_capacity = below_cap - len(in_below)
         if flank:
-            # A flanked output takes no south column, so `south_columns` does not
-            # bound it -- but one gap belt carries one item, so one lane is the
-            # whole allowance.
-            out_cap = min(out_cap, 1)
+            out_capacity = min(out_capacity, 1)
         elif south_columns:
-            out_cap = min(
-                out_cap, south_columns - sum(len(lane) for lane in in_below)
+            out_capacity = min(
+                out_capacity,
+                south_columns - sum(len(lane) for lane in in_below),
             )
         shards = (
-            _shard_sinks(sinks, cap=out_cap, max_shards=g.count) if sinks else [[]]
+            _shard_sinks(sinks, cap=out_capacity, max_shards=group.count)
+            if sinks
+            else [[]]
         )
         demand = {
-            (item, dest): _sink_demand(groups, spec, item, dest) for item, dest in sinks
+            (item, destination): _sink_demand(
+                groups,
+                spec,
+                item,
+                destination,
+            )
+            for item, destination in sinks
         }
         per_shard = (
-            _allocate_machines(g.count, shards, demand) if len(shards) > 1 else [g.count]
+            _allocate_machines(group.count, shards, demand)
+            if len(shards) > 1
+            else [group.count]
         )
-        # Machines bound the number of shards, so a producer that still has more
-        # destinations than lanes folds several of them onto one lane instead.
-        # Merging AFTER the allocation keeps `_allocate_machines` looking at the
-        # per-destination demand it was written against.
         try:
-            lanes = [
-                _merge_lanes(shard, out_cap, demand, spec.belt_items_per_second)
+            lane_shards = [
+                _merge_lanes(
+                    shard,
+                    out_capacity,
+                    demand,
+                    spec.belt_items_per_second,
+                )
                 for shard in shards
             ]
         except ValueError as exc:
-            raise ValueError(f"recipe {g.recipe_id!r}: {exc}") from None
+            raise ValueError(f"recipe {group.recipe_id!r}: {exc}") from None
 
-        for shard, machines in zip(lanes, per_shard, strict=True):
-            n_strips = max(1, math.ceil(machines / max(1, strip_len)))
-            base = machines // n_strips
-            extra = machines % n_strips
-            for s in range(n_strips):
-                n = base + (1 if s < extra else 0)
-                if n <= 0:
-                    continue
-                _check_shared_lane_capacity(g, in_above + in_below, n, spec)
-                strips.append(
-                    Strip(
-                        group_key=key,
-                        recipe_id=g.recipe_id,
-                        item_id=g.item_id,
-                        model_index=g.model_index,
-                        machines=n,
-                        mw=g.width,
-                        mh=g.height,
-                        yaw=g.yaw,
-                        # The gap belt's column is bought here, once: clearance
-                        # plus one, so the belt stands clear of the collider that
-                        # made the clearance necessary.
-                        pw=g.pitch_w + 1 if flank else g.pitch_w,
-                        ph=g.pitch_h,
-                        in_above=in_above,
-                        in_below=in_below,
-                        out_lanes=tuple(shard),
-                        mode_params=g.mode_params,
-                        flank_outputs=flank,
-                    )
+        for shard_index, (lane_shard, machine_count) in enumerate(
+            zip(lane_shards, per_shard, strict=True)
+        ):
+            if machine_count <= 0:
+                continue
+            plans.append(
+                _LogicalStripPlan(
+                    group_key=key,
+                    shard_index=shard_index,
+                    recipe_id=group.recipe_id,
+                    item_id=group.item_id,
+                    model_index=group.model_index,
+                    total_machine_count=machine_count,
+                    in_above=in_above,
+                    out_lanes=tuple(lane_shard),
+                    in_below=in_below,
+                    mode_params=group.mode_params,
+                    flank_outputs=flank,
                 )
+            )
+    return tuple(plans)
+
+
+def plan_strips(spec: BuildSpec, *, strip_len: int = 6) -> list[Strip]:
+    """Select each logical family's deterministic compatibility pose.
+
+    The legacy Freeform planner remains strip-based until the later atomic
+    variant cutover.  Logical rate/shard allocation and physical pose
+    generation now happen once; this adapter partitions only machine ordinals
+    and projects the selected pose back into the existing :class:`Strip`.
+    """
+    from flab2bp.layout.strip_variants import (
+        default_strip_variant,
+        generate_strip_families,
+        partition_strip_family,
+    )
+
+    groups = _adapt(spec)
+    strips: list[Strip] = []
+    for family in generate_strip_families(spec):
+        inputs_above = tuple(
+            lane.items
+            for lane in sorted(family.input_lanes, key=lambda lane: lane.side_index)
+            if lane.side == "south"
+        )
+        inputs_below = tuple(
+            lane.items
+            for lane in sorted(family.input_lanes, key=lambda lane: lane.side_index)
+            if lane.side == "north"
+        )
+        outputs = tuple(
+            (lane.items[0], DEST_SEP.join(lane.destination_group_keys))
+            for lane in sorted(family.output_lanes, key=lambda lane: lane.side_index)
+        )
+        group = groups[family.group_key]
+        if family.variants:
+            variant = default_strip_variant(family)
+            machine_counts = tuple(
+                instance.machine_count
+                for instance in partition_strip_family(
+                    family,
+                    max_machine_count=max(1, strip_len),
+                    variant_id=variant.variant_id,
+                )
+            )
+            footprint_width = variant.footprint_width
+            footprint_height = variant.footprint_height
+            yaw = variant.yaw
+            pitch_width = variant.pitch_x
+            pitch_height = variant.pitch_y
+        else:
+            # Compatibility only: a mode-driven building with no sorter poses
+            # still reaches emission, which owns the established structured
+            # refusal.  It has no physical StripVariant and must not be exposed
+            # to sequence search as though it did.
+            instance_count = max(
+                1,
+                math.ceil(family.total_machine_count / max(1, strip_len)),
+            )
+            base, extra = divmod(family.total_machine_count, instance_count)
+            machine_counts = tuple(
+                base + (1 if index < extra else 0)
+                for index in range(instance_count)
+            )
+            footprint_width = group.width
+            footprint_height = group.height
+            yaw = group.yaw
+            pitch_width = (
+                group.pitch_w + 1 if family.flank_outputs else group.pitch_w
+            )
+            pitch_height = group.pitch_h
+        for machine_count in machine_counts:
+            _check_shared_lane_capacity(
+                group,
+                inputs_above + inputs_below,
+                machine_count,
+                spec,
+            )
+            strips.append(
+                Strip(
+                    group_key=family.group_key,
+                    recipe_id=family.recipe_id,
+                    item_id=family.machine_item_id,
+                    model_index=family.model_index,
+                    machines=machine_count,
+                    mw=footprint_width,
+                    mh=footprint_height,
+                    yaw=yaw,
+                    pw=pitch_width,
+                    ph=pitch_height,
+                    in_above=inputs_above,
+                    out_lanes=outputs,
+                    in_below=inputs_below,
+                    mode_params=family.mode_params,
+                    flank_outputs=family.flank_outputs,
+                )
+            )
     return strips
 
 

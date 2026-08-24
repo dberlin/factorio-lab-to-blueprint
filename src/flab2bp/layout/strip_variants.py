@@ -1,0 +1,655 @@
+"""Immutable logical strip families and pose-valid physical variants.
+
+Logical rate/shard allocation remains independent of placement.  This module
+turns each logical shard into cardinal pose candidates using the same catalog
+and slot helpers used by validation.  Lane seating is intentionally the current
+Freeform seating; exhaustive alternative seating and emission from these plans
+belong to the next capability task.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Literal
+
+from flab2bp.dsp import catalog
+from flab2bp.layout import slots
+from flab2bp.layout.freeform import _dests, _logical_strip_plans, _LogicalStripPlan
+from flab2bp.spec import BuildSpec
+
+LaneKind = Literal["input", "output"]
+LaneSide = Literal["north", "south"]
+_CARDINAL_YAWS = (0.0, 90.0, 180.0, 270.0)
+
+
+@dataclass(frozen=True, slots=True)
+class MachinePlacementGeometry:
+    """Oriented occupied footprint and collider-derived exclusion pitch."""
+
+    footprint_width: int
+    footprint_height: int
+    pitch_x: int
+    pitch_y: int
+    west_halo: int
+    east_halo: int
+    north_halo: int
+    south_halo: int
+
+    def __post_init__(self) -> None:
+        if min(
+            self.footprint_width,
+            self.footprint_height,
+            self.pitch_x,
+            self.pitch_y,
+        ) <= 0:
+            raise ValueError("placement dimensions and pitches must be positive")
+        if min(
+            self.west_halo,
+            self.east_halo,
+            self.north_halo,
+            self.south_halo,
+        ) < 0:
+            raise ValueError("placement halos must be non-negative")
+        if self.west_halo + self.footprint_width + self.east_halo != self.pitch_x:
+            raise ValueError("horizontal halos must complete the collider pitch")
+        if self.north_halo + self.footprint_height + self.south_halo != self.pitch_y:
+            raise ValueError("vertical halos must complete the collider pitch")
+
+    @property
+    def identity(self) -> tuple[int, ...]:
+        return (
+            self.footprint_width,
+            self.footprint_height,
+            self.pitch_x,
+            self.pitch_y,
+            self.west_halo,
+            self.east_halo,
+            self.north_halo,
+            self.south_halo,
+        )
+
+
+@dataclass(frozen=True, order=True, slots=True)
+class StripFamilyId:
+    """Stable identity of one logical destination shard of a recipe group."""
+
+    group_key: str
+    shard_index: int
+
+    def __post_init__(self) -> None:
+        if not self.group_key:
+            raise ValueError("strip family group key must not be empty")
+        if self.shard_index < 0:
+            raise ValueError("strip family shard index must be non-negative")
+
+
+@dataclass(frozen=True, order=True, slots=True)
+class LaneSorterAttachment:
+    """One item's exact machine-side attachment relative to a machine origin."""
+
+    item: str
+    column: int
+    cell: tuple[int, int]
+    slot: int
+    span: int
+
+    def __post_init__(self) -> None:
+        if not self.item:
+            raise ValueError("lane attachment item must not be empty")
+        if self.column < 0 or self.span <= 0:
+            raise ValueError("lane attachment column and span must be positive geometry")
+        if self.span > catalog.SORTER_MAX_REACH:
+            raise ValueError("lane attachment exceeds sorter reach")
+
+
+@dataclass(frozen=True, order=True, slots=True)
+class LogicalLane:
+    """Placement-independent lane demand owned by a logical strip family."""
+
+    lane_id: str
+    kind: LaneKind
+    items: tuple[str, ...]
+    destination_group_keys: tuple[str, ...]
+    side: LaneSide
+    side_index: int
+
+    def __post_init__(self) -> None:
+        if not self.lane_id or not self.items or any(not item for item in self.items):
+            raise ValueError("logical lanes require an id and at least one named item")
+        if len(set(self.items)) != len(self.items):
+            raise ValueError("logical lane items must be unique")
+        if self.kind not in ("input", "output"):
+            raise ValueError("logical lane kind must be input or output")
+        if self.side not in ("north", "south"):
+            raise ValueError("logical lane side must be north or south")
+        if self.side_index < 0:
+            raise ValueError("logical lane side index must be non-negative")
+        if self.kind == "output" and len(self.items) != 1:
+            raise ValueError("an output lane carries exactly one produced item")
+        if self.kind == "input" and self.destination_group_keys:
+            raise ValueError("input lanes do not own destination group keys")
+
+
+@dataclass(frozen=True, order=True, slots=True)
+class LaneAttachmentPlan:
+    """Exact attachments serving one logical lane at its current relative row."""
+
+    lane: LogicalLane
+    lane_y: int
+    attachments: tuple[LaneSorterAttachment, ...]
+
+    def __post_init__(self) -> None:
+        if tuple(attachment.item for attachment in self.attachments) != self.lane.items:
+            raise ValueError("lane attachment items must match the logical lane")
+        columns = tuple(attachment.column for attachment in self.attachments)
+        if len(set(columns)) != len(columns):
+            raise ValueError("items sharing a lane need distinct attachment columns")
+        if any(attachment.cell[0] != attachment.column for attachment in self.attachments):
+            raise ValueError("attachment columns and machine-side cells must agree")
+
+    @property
+    def identity(self) -> tuple[str, int, tuple[LaneSorterAttachment, ...]]:
+        return (self.lane.lane_id, self.lane_y, self.attachments)
+
+
+@dataclass(frozen=True, order=True, slots=True)
+class LanePlan:
+    """Current logical lane assignment bound atomically to a machine pose."""
+
+    machine_row: int
+    lane_rows: tuple[tuple[str, int], ...]
+
+    def __post_init__(self) -> None:
+        if self.machine_row < 0:
+            raise ValueError("machine row must be inside the variant box")
+        lane_ids = tuple(lane_id for lane_id, _row in self.lane_rows)
+        if len(set(lane_ids)) != len(lane_ids):
+            raise ValueError("lane plan contains duplicate logical lanes")
+
+    def row_for(self, lane_id: str) -> int:
+        for candidate, row in self.lane_rows:
+            if candidate == lane_id:
+                return row
+        raise KeyError(lane_id)
+
+
+@dataclass(frozen=True, order=True, slots=True)
+class StripVariantId:
+    """Complete immutable physical identity of a strip variant."""
+
+    family_id: StripFamilyId
+    yaw_degrees: int
+    machine_origins_x: tuple[int, ...]
+    footprint: tuple[int, int]
+    placement_geometry: tuple[int, ...]
+    lane_rows: tuple[tuple[str, int], ...]
+    attachments: tuple[tuple[str, int, tuple[LaneSorterAttachment, ...]], ...]
+    box: tuple[int, int]
+
+
+@dataclass(frozen=True, slots=True)
+class StripVariant:
+    """One atomic pose, exclusion envelope, lane plan, and attachment plan."""
+
+    variant_id: StripVariantId
+    yaw: float
+    footprint_width: int
+    footprint_height: int
+    placement_geometry: MachinePlacementGeometry
+    lane_plan: LanePlan
+    box_width: int
+    box_height: int
+    attachment_plan: tuple[LaneAttachmentPlan, ...]
+    machine_origins_x: tuple[int, ...]
+
+    def __post_init__(self) -> None:
+        if self.yaw not in _CARDINAL_YAWS:
+            raise ValueError("strip variant yaw must be cardinal")
+        if self.box_width <= 0 or self.box_height <= 0:
+            raise ValueError("variant box dimensions must be positive")
+        if self.box_width % self.pitch_x:
+            raise ValueError("variant box width must contain whole collider pitches")
+        if (self.footprint_width, self.footprint_height) != (
+            self.placement_geometry.footprint_width,
+            self.placement_geometry.footprint_height,
+        ):
+            raise ValueError("variant footprint and placement geometry disagree")
+        expected_origins = tuple(range(0, self.box_width, self.pitch_x))
+        if not expected_origins or self.machine_origins_x != expected_origins:
+            raise ValueError("machine origins must advance by collider pitch")
+        planned_rows = dict(self.lane_plan.lane_rows)
+        if tuple(plan.lane.lane_id for plan in self.attachment_plan) != tuple(
+            lane_id for lane_id, _row in self.lane_plan.lane_rows
+        ):
+            raise ValueError("variant lane and attachment plans disagree")
+        if any(planned_rows[plan.lane.lane_id] != plan.lane_y for plan in self.attachment_plan):
+            raise ValueError("variant attachments must use their planned lane rows")
+        if self.variant_id != _variant_id(
+            self.variant_id.family_id,
+            self.yaw,
+            self.machine_origins_x,
+            self.placement_geometry,
+            self.lane_plan,
+            self.attachment_plan,
+            self.box_width,
+            self.box_height,
+        ):
+            raise ValueError("strip variant id does not describe its physical geometry")
+
+    @property
+    def pitch_x(self) -> int:
+        return self.placement_geometry.pitch_x
+
+    @property
+    def pitch_y(self) -> int:
+        return self.placement_geometry.pitch_y
+
+    @property
+    def sort_key(self) -> tuple[object, ...]:
+        return (
+            self.box_width * self.box_height,
+            self.yaw,
+            self.lane_plan.lane_rows,
+            tuple(plan.identity for plan in self.attachment_plan),
+            self.box_width,
+            self.box_height,
+            self.placement_geometry.identity,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class StripFamily:
+    """Placement-independent work and every feasible cardinal physical pose."""
+
+    family_id: StripFamilyId
+    group_key: str
+    recipe_id: str
+    machine_item_id: int
+    model_index: int
+    total_machine_count: int
+    input_lanes: tuple[LogicalLane, ...]
+    output_lanes: tuple[LogicalLane, ...]
+    variants: tuple[StripVariant, ...]
+    mode_params: tuple[int, ...] = ()
+    #: Emitted through east-side gap belts by legacy Freeform. East-face
+    #: attachments are not yet representable as cardinal lane variants.
+    flank_outputs: bool = False
+
+    def __post_init__(self) -> None:
+        if self.family_id.group_key != self.group_key:
+            raise ValueError("strip family id and group key disagree")
+        if self.total_machine_count <= 0:
+            raise ValueError("logical strip family machine count must be positive")
+        lanes = self.input_lanes + self.output_lanes
+        if len({lane.lane_id for lane in lanes}) != len(lanes):
+            raise ValueError("strip family logical lane ids must be unique")
+        for variant in self.variants:
+            if variant.variant_id.family_id != self.family_id:
+                raise ValueError("strip family contains a variant from another family")
+            if len(variant.machine_origins_x) != self.total_machine_count:
+                raise ValueError("strip family variant machine count is inconsistent")
+            if {plan.lane for plan in variant.attachment_plan} != set(lanes):
+                raise ValueError("strip family variant does not attach every logical lane")
+
+
+@dataclass(frozen=True, order=True, slots=True)
+class StripInstanceId:
+    """Stable half-open machine ordinal range within a logical family."""
+
+    family_id: StripFamilyId
+    machine_start: int
+    machine_count: int
+
+    def __post_init__(self) -> None:
+        if self.machine_start < 0 or self.machine_count <= 0:
+            raise ValueError("strip instance range must be non-negative and non-empty")
+
+
+@dataclass(frozen=True, slots=True)
+class StripInstance:
+    """A physical family range bound to one pose-valid variant."""
+
+    instance_id: StripInstanceId
+    machine_start: int
+    machine_count: int
+    variant_id: StripVariantId
+
+    def __post_init__(self) -> None:
+        if (self.machine_start, self.machine_count) != (
+            self.instance_id.machine_start,
+            self.instance_id.machine_count,
+        ):
+            raise ValueError("strip instance id and range disagree")
+        if self.variant_id.family_id != self.instance_id.family_id:
+            raise ValueError("strip instance variant belongs to another family")
+
+    @property
+    def family_id(self) -> StripFamilyId:
+        return self.instance_id.family_id
+
+    @property
+    def machine_stop(self) -> int:
+        return self.machine_start + self.machine_count
+
+
+def placement_geometry(machine_item_id: str | int, yaw: float) -> MachinePlacementGeometry:
+    """Return authoritative oriented footprint, pitch, and deterministic halos."""
+    item_id = (
+        catalog.item_id(machine_item_id)
+        if isinstance(machine_item_id, str)
+        else machine_item_id
+    )
+    footprint_width, footprint_height = catalog.oriented_footprint(item_id, yaw)
+    pitch_x, pitch_y = catalog.clearance(item_id, yaw)
+    extra_x = pitch_x - footprint_width
+    extra_y = pitch_y - footprint_height
+    west_halo = extra_x // 2
+    north_halo = extra_y // 2
+    return MachinePlacementGeometry(
+        footprint_width=footprint_width,
+        footprint_height=footprint_height,
+        pitch_x=pitch_x,
+        pitch_y=pitch_y,
+        west_halo=west_halo,
+        east_halo=extra_x - west_halo,
+        north_halo=north_halo,
+        south_halo=extra_y - north_halo,
+    )
+
+
+def _logical_lanes(
+    plan: _LogicalStripPlan,
+) -> tuple[tuple[LogicalLane, ...], tuple[LogicalLane, ...]]:
+    in_above = plan.in_above
+    out_lanes = plan.out_lanes
+    in_below = plan.in_below
+    inputs = tuple(
+        LogicalLane(
+            lane_id=f"input:south:{index}",
+            kind="input",
+            items=items,
+            destination_group_keys=(),
+            side="south",
+            side_index=index,
+        )
+        for index, items in enumerate(in_above)
+    ) + tuple(
+        LogicalLane(
+            lane_id=f"input:north:{index}",
+            kind="input",
+            items=items,
+            destination_group_keys=(),
+            side="north",
+            side_index=len(out_lanes) + index,
+        )
+        for index, items in enumerate(in_below)
+    )
+    outputs = tuple(
+        LogicalLane(
+            lane_id=f"output:north:{index}",
+            kind="output",
+            items=(item,),
+            destination_group_keys=_dests(destination),
+            side="north",
+            side_index=index,
+        )
+        for index, (item, destination) in enumerate(out_lanes)
+    )
+    return inputs, outputs
+
+
+def _lane_y(lane: LogicalLane, *, footprint_height: int, south_lane_count: int) -> int:
+    if lane.side == "south":
+        return lane.side_index - south_lane_count
+    return footprint_height + lane.side_index
+
+
+def _attachment_plans(
+    item_id: int,
+    yaw: float,
+    lanes: tuple[LogicalLane, ...],
+    *,
+    footprint_height: int,
+) -> tuple[LaneAttachmentPlan, ...] | None:
+    north, south = slots.lane_facing(item_id, yaw)
+    if (any(lane.side == "north" for lane in lanes) and not north) or (
+        any(lane.side == "south" for lane in lanes) and not south
+    ):
+        return None
+    probe = slots.probe_building(item_id, yaw)
+    south_lane_count = sum(lane.side == "south" for lane in lanes)
+    plans: list[LaneAttachmentPlan] = []
+    for lane in lanes:
+        lane_y = _lane_y(
+            lane,
+            footprint_height=footprint_height,
+            south_lane_count=south_lane_count,
+        )
+        reachable = slots.attachable_columns(probe, lane_y)
+        if len(reachable) < len(lane.items):
+            return None
+        selected = sorted(reachable.items())[: len(lane.items)]
+        plans.append(
+            LaneAttachmentPlan(
+                lane=lane,
+                lane_y=lane_y,
+                attachments=tuple(
+                    LaneSorterAttachment(
+                        item=item,
+                        column=column,
+                        cell=attachment.cell,
+                        slot=attachment.slot,
+                        span=attachment.span,
+                    )
+                    for item, (column, attachment) in zip(
+                        lane.items,
+                        selected,
+                        strict=True,
+                    )
+                ),
+            )
+        )
+    return tuple(sorted(plans, key=lambda candidate: (candidate.lane_y, candidate.lane.lane_id)))
+
+
+def _variant_id(
+    family_id: StripFamilyId,
+    yaw: float,
+    machine_origins_x: tuple[int, ...],
+    geometry: MachinePlacementGeometry,
+    lane_plan: LanePlan,
+    attachments: tuple[LaneAttachmentPlan, ...],
+    box_width: int,
+    box_height: int,
+) -> StripVariantId:
+    return StripVariantId(
+        family_id=family_id,
+        yaw_degrees=int(yaw),
+        machine_origins_x=machine_origins_x,
+        footprint=(geometry.footprint_width, geometry.footprint_height),
+        placement_geometry=geometry.identity,
+        lane_rows=lane_plan.lane_rows,
+        attachments=tuple(plan.identity for plan in attachments),
+        box=(box_width, box_height),
+    )
+
+
+def _variant(
+    family_id: StripFamilyId,
+    item_id: int,
+    machine_count: int,
+    lanes: tuple[LogicalLane, ...],
+    yaw: float,
+) -> StripVariant | None:
+    geometry = placement_geometry(item_id, yaw)
+    attachments = _attachment_plans(
+        item_id,
+        yaw,
+        lanes,
+        footprint_height=geometry.footprint_height,
+    )
+    if attachments is None:
+        return None
+    lane_rows = tuple((plan.lane.lane_id, plan.lane_y) for plan in attachments)
+    minimum_y = min(-geometry.north_halo, *(row for _lane_id, row in lane_rows))
+    maximum_y = max(
+        geometry.footprint_height + geometry.south_halo,
+        *(row + 1 for _lane_id, row in lane_rows),
+    )
+    lane_plan = LanePlan(machine_row=-minimum_y, lane_rows=lane_rows)
+    box_width = machine_count * geometry.pitch_x
+    box_height = maximum_y - minimum_y
+    machine_origins_x = tuple(
+        range(0, machine_count * geometry.pitch_x, geometry.pitch_x)
+    )
+    variant_id = _variant_id(
+        family_id,
+        yaw,
+        machine_origins_x,
+        geometry,
+        lane_plan,
+        attachments,
+        box_width,
+        box_height,
+    )
+    return StripVariant(
+        variant_id=variant_id,
+        yaw=yaw,
+        footprint_width=geometry.footprint_width,
+        footprint_height=geometry.footprint_height,
+        placement_geometry=geometry,
+        lane_plan=lane_plan,
+        box_width=box_width,
+        box_height=box_height,
+        attachment_plan=attachments,
+        machine_origins_x=machine_origins_x,
+    )
+
+
+def generate_strip_families(spec: BuildSpec) -> tuple[StripFamily, ...]:
+    """Generate deterministic pose-valid variants for every logical lane shard."""
+    families: list[StripFamily] = []
+    for plan in _logical_strip_plans(spec):
+        family_id = StripFamilyId(plan.group_key, plan.shard_index)
+        input_lanes, output_lanes = _logical_lanes(plan)
+        lanes = input_lanes + output_lanes
+        generated = (
+            ()
+            if plan.flank_outputs
+            else tuple(
+                candidate
+                for yaw in _CARDINAL_YAWS
+                if (
+                    candidate := _variant(
+                        family_id,
+                        plan.item_id,
+                        plan.total_machine_count,
+                        lanes,
+                        yaw,
+                    )
+                )
+                is not None
+            )
+        )
+        unique = {candidate.variant_id: candidate for candidate in generated}
+        variants = tuple(sorted(unique.values(), key=lambda candidate: candidate.sort_key))
+        families.append(
+            StripFamily(
+                family_id=family_id,
+                group_key=plan.group_key,
+                recipe_id=plan.recipe_id,
+                machine_item_id=plan.item_id,
+                model_index=plan.model_index,
+                total_machine_count=plan.total_machine_count,
+                input_lanes=input_lanes,
+                output_lanes=output_lanes,
+                variants=variants,
+                mode_params=plan.mode_params,
+                flank_outputs=plan.flank_outputs,
+            )
+        )
+    return tuple(families)
+
+
+def default_strip_variant(family: StripFamily) -> StripVariant:
+    """Choose the legacy Freeform pose, with deterministic physical tie-breaking."""
+    if not family.variants:
+        raise ValueError("logical strip family has no pose-valid default variant")
+    preferred_yaw = slots.lane_orientation(family.machine_item_id)
+    preferred = tuple(variant for variant in family.variants if variant.yaw == preferred_yaw)
+    return min(preferred or family.variants, key=lambda variant: variant.sort_key)
+
+
+def partition_strip_family(
+    family: StripFamily,
+    *,
+    max_machine_count: int,
+    variant_id: StripVariantId | None = None,
+) -> tuple[StripInstance, ...]:
+    """Create balanced initial physical ranges without mutating the logical family."""
+    if max_machine_count <= 0:
+        raise ValueError("maximum strip machine count must be positive")
+    chosen = variant_id or default_strip_variant(family).variant_id
+    if chosen not in {variant.variant_id for variant in family.variants}:
+        raise ValueError("strip instance variant does not belong to the family")
+    instance_count = max(
+        1,
+        (family.total_machine_count + max_machine_count - 1) // max_machine_count,
+    )
+    base, extra = divmod(family.total_machine_count, instance_count)
+    instances: list[StripInstance] = []
+    machine_start = 0
+    for index in range(instance_count):
+        machine_count = base + (1 if index < extra else 0)
+        instance_id = StripInstanceId(family.family_id, machine_start, machine_count)
+        instances.append(
+            StripInstance(
+                instance_id=instance_id,
+                machine_start=machine_start,
+                machine_count=machine_count,
+                variant_id=chosen,
+            )
+        )
+        machine_start += machine_count
+    result = tuple(instances)
+    validate_instance_partition(family, result)
+    return result
+
+
+def validate_instance_partition(
+    family: StripFamily,
+    instances: tuple[StripInstance, ...],
+) -> None:
+    """Require active physical ranges to cover ``0..total`` exactly once."""
+    expected_start = 0
+    valid_variants = {variant.variant_id for variant in family.variants}
+    for instance in sorted(instances, key=lambda candidate: candidate.machine_start):
+        if instance.family_id != family.family_id:
+            raise ValueError("strip instances do not partition one logical family")
+        if instance.variant_id not in valid_variants:
+            raise ValueError("strip instance uses a variant outside its family")
+        if instance.machine_start != expected_start:
+            raise ValueError("strip instance ranges do not partition the logical family")
+        expected_start = instance.machine_stop
+    if expected_start != family.total_machine_count:
+        raise ValueError("strip instance ranges do not partition the logical family")
+
+
+__all__ = [
+    "LaneAttachmentPlan",
+    "LanePlan",
+    "LaneSorterAttachment",
+    "LogicalLane",
+    "MachinePlacementGeometry",
+    "StripFamily",
+    "StripFamilyId",
+    "StripInstance",
+    "StripInstanceId",
+    "StripVariant",
+    "StripVariantId",
+    "default_strip_variant",
+    "generate_strip_families",
+    "partition_strip_family",
+    "placement_geometry",
+    "validate_instance_partition",
+]
