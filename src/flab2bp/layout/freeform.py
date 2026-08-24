@@ -298,6 +298,20 @@ _GROUND_TOLL = 0.25
 #: indexes it rather than branching.
 _LEVEL_TOLL = tuple(_GROUND_TOLL if lvl == 0 else 0.0 for lvl in range(LEVELS))
 
+#: The ramps a cell at each altitude may take: ``(level step, toll of the level
+#: it lands on)``.  The bottom and top levels have one apiece and every level
+#: between them has two, so the inner loop iterates exactly the legal moves
+#: instead of testing two candidates and discarding one -- 10M discarded
+#: comparisons in a `universe-matrix` routing pass.
+_RAMPS = tuple(
+    tuple(
+        (step, _LEVEL_TOLL[lvl + step])
+        for step in (1, -1)
+        if 0 <= lvl + step < LEVELS
+    )
+    for lvl in range(LEVELS)
+)
+
 #: Owner recorded in :attr:`_Canvas.blocked` for a path laid THIS rip-up round
 #: and not yet committed.  It was the bare ``-2`` in four places, one of which
 #: is now a hot-loop comparison, so it is named once.
@@ -2361,7 +2375,8 @@ def _astar(
         only_x = goal_list[0][0] - gx0
         only_y = goal_list[0][1] - gy0
 
-        def h(x: int, y: int) -> float:
+        def h(p: int) -> float:
+            x, y = divmod(p, gh)
             dx = x - only_x
             dy = y - only_y
             return (dx if dx >= 0 else -dx) + (dy if dy >= 0 else -dy)
@@ -2375,7 +2390,8 @@ def _astar(
         # list is deduplicated once instead.
         near = tuple({(c[0] - gx0, c[1] - gy0) for c in goal_list})
 
-        def h(x: int, y: int) -> float:
+        def h(p: int) -> float:
+            x, y = divmod(p, gh)
             best_d = 1 << 30
             for fx, fy in near:
                 dx = x - fx
@@ -2391,7 +2407,8 @@ def _astar(
         by0 = min(c[1] for c in goal_list) - gy0
         by1 = max(c[1] for c in goal_list) - gy0
 
-        def h(x: int, y: int) -> float:
+        def h(p: int) -> float:
+            x, y = divmod(p, gh)
             return float(max(0, bx0 - x, x - bx1) + max(0, by0 - y, y - by1))
 
     # AND THE PART THAT KNOWS WHERE THE MACHINES ARE -- see `_ALT_LANDMARKS`.
@@ -2432,11 +2449,12 @@ def _astar(
         # `universe-matrix/no-proliferator` power=1 at h=185, the composite ran
         # 2.71M times in one routing pass.  Identical values -- this is the same
         # expression, not an approximation of it.
-        def h(x: int, y: int) -> float:  # noqa: F811
+        def h(p: int) -> float:  # noqa: F811
+            x, y = divmod(p, gh)
             dx = x - only_x
             dy = y - only_y
             far: float = (dx if dx >= 0 else -dx) + (dy if dy >= 0 else -dy)
-            at = x * gh + y
+            at = p
             for field_, lo, hi in bands:
                 dial = field_[at]
                 if dial < 0:
@@ -2452,9 +2470,9 @@ def _astar(
     elif bands:
         plain = h
 
-        def h(x: int, y: int) -> float:  # noqa: F811
-            far = plain(x, y)
-            at = x * gh + y
+        def h(p: int) -> float:  # noqa: F811
+            far = plain(p)
+            at = p
             for field_, lo, hi in bands:
                 dial = field_[at]
                 if dial < 0:
@@ -2467,14 +2485,29 @@ def _astar(
                     far = gap
             return far
 
-    goal_idx = {
-        (c[0] - gx0) * xstep + (c[1] - gy0) * ystep + c[2] for c in goal_list
-    }
+    # A BYTE PER CELL rather than a set of cell indices: the goal test is on the
+    # expansion path, so it runs once per node popped, and a `bytearray(size)` is
+    # a 1.4us calloc against the 290us a list of that length costs.  Every goal
+    # index is inside the span -- the caller's grid was checked against it above,
+    # and a one-off grid is built from `_span_for`, which covers the goals.
+    goal_flag = bytearray(size)
+    for c in goal_list:
+        goal_flag[(c[0] - gx0) * xstep + (c[1] - gy0) * ystep + c[2]] = 1
 
-    # (dx, dy, one-step offset, two-step offset) -- the ramp's run cell is the
-    # plain step's target, so one pass over the four directions does both.
+    # (one-step cell offset, two-step cell offset, one-step column offset,
+    # two-step column offset) -- the ramp's run cell is the plain step's target,
+    # so one pass over the four directions does both, and the column offsets
+    # index `hcache` without re-deriving a column from a cell.  ``dx`` and
+    # ``dy`` are NOT carried: nothing in the loop wants them since `h` began
+    # taking a column, and unpacking two dead names four times per expansion is
+    # 5.6M unpackings in a `quantum-chip` pass.
     moves = tuple(
-        (dx, dy, dx * xstep + dy * ystep, 2 * (dx * xstep + dy * ystep))
+        (
+            dx * xstep + dy * ystep,
+            2 * (dx * xstep + dy * ystep),
+            dx * gh + dy,
+            2 * (dx * gh + dy),
+        )
         for dx, dy in _STEPS
     )
 
@@ -2483,6 +2516,45 @@ def _astar(
     heappop = heapq.heappop
     inf = math.inf
     level_toll = _LEVEL_TOLL
+    ramp_table = _RAMPS
+
+    # ONE COUNTER AND ONE COMPARE PER EXPANSION, where there were three guards
+    # and two dict operations.
+    #
+    # The cap, the deadline check and the shared budget all fire at expansion
+    # counts that are known in advance, so the soonest of the three is computed
+    # once and re-derived only when it is reached.  `budget` is read into a
+    # local and written back at every exit, because a `budget["left"] -= 1` is a
+    # hash, a lookup and a store on the hottest line in this router -- 1.25M of
+    # them in one `quantum-chip` routing pass.
+    #
+    # It is the same arithmetic, not an approximation of it.  The budget was
+    # charged for an expansion only AFTER the cap and the deadline had let that
+    # expansion through, so an exit on either of those has charged one fewer;
+    # that is why the two write-backs differ by one.  Get it wrong and the pass
+    # spends a different number of nodes on every later net.
+    start_left = budget["left"] if budget is not None else 1 << 62
+    checkpoint = _MAX_EXPANSIONS + 1
+    if _DEADLINE_CHECK_EVERY < checkpoint:
+        checkpoint = _DEADLINE_CHECK_EVERY
+    if start_left < checkpoint:
+        checkpoint = start_left
+
+    # THE HEURISTIC IS A FUNCTION OF THE COLUMN, so it is computed once per
+    # column and not once per push.
+    #
+    # `h` reads only `x` and `y`; the level never enters it.  A cell and the two
+    # above it therefore share an answer, and so does every later push to a cell
+    # whose cost improved.  Profiled on `quantum-chip` power=1, the four `h`
+    # variants ran 2.63M times against 1.25M expansions -- roughly two calls per
+    # node expanded, all but the first of them re-deriving a number already
+    # known.
+    #
+    # `-1.0` is safe as "not yet computed" because `h` is a distance and cannot
+    # be negative: the plain term is a Manhattan distance and the landmark bands
+    # only ever raise it.  Cached by COLUMN index, which is `cur // LEVELS`, so
+    # the table is a third the size of the search arrays.
+    hcache = [-1.0] * (size // LEVELS)
 
     open_heap: list[tuple[float, float, int]] = []
     best = [inf] * size
@@ -2499,22 +2571,36 @@ def _astar(
         si = (s[0] - gx0) * xstep + (s[1] - gy0) * ystep + s[2]
         best[si] = 0.0
         prev[si] = -1
-        heappush(open_heap, (h(s[0] - gx0, s[1] - gy0), 0.0, si))
+        heappush(
+            open_heap,
+            (h((s[0] - gx0) * gh + (s[1] - gy0)), 0.0, si),
+        )
 
     while open_heap:
         _, g, cur = heappop(open_heap)
         if g > best[cur]:
             continue
         expansions += 1
-        if expansions > _MAX_EXPANSIONS:
-            return None
-        if expansions % _DEADLINE_CHECK_EVERY == 0 and _expired(deadline):
-            return None
-        if budget is not None:
-            budget["left"] -= 1
-            if budget["left"] <= 0:
+        if expansions >= checkpoint:
+            if expansions > _MAX_EXPANSIONS:
+                if budget is not None:
+                    budget["left"] = start_left - expansions + 1
                 return None
-        if cur in goal_idx:
+            if expansions % _DEADLINE_CHECK_EVERY == 0 and _expired(deadline):
+                if budget is not None:
+                    budget["left"] = start_left - expansions + 1
+                return None
+            if expansions >= start_left:
+                if budget is not None:
+                    budget["left"] = start_left - expansions
+                return None
+            checkpoint = _MAX_EXPANSIONS + 1
+            due = (expansions // _DEADLINE_CHECK_EVERY + 1) * _DEADLINE_CHECK_EVERY
+            if due < checkpoint:
+                checkpoint = due
+            if start_left < checkpoint:
+                checkpoint = start_left
+        if goal_flag[cur]:
             path = []
             node = cur
             # ``prev`` must be acyclic; walking a cycle here previously spun at
@@ -2540,11 +2626,20 @@ def _astar(
                     px, py = divmod(q, gh)
                     path.append((px + gx0, py + gy0, lvl))
                 node = prev[node]
+            if budget is not None:
+                budget["left"] = start_left - expansions
             return _cut_loops(list(reversed(path)))
-        q, lvl = divmod(cur, LEVELS)
-        x, y = divmod(q, gh)
+        q = cur // LEVELS
+        lvl = cur - q * LEVELS
         # A plain step stays on `lvl`, so its toll is fixed for this expansion.
         step_toll = 1.0 + level_toll[lvl]
+        # And so is the pair of ramps this cell may take, and the base of their
+        # cost: `g + 3.0` is the same number for all eight ramp targets, and
+        # adding it once rather than eight times keeps the association order
+        # `g + 3.0 + toll` that the ramp cost has always used -- these are
+        # floats, so re-bracketing them is not free of consequences.
+        ramps = ramp_table[lvl]
+        run_base = g + 3.0
         # ONE pass over the four directions, doing the plain step and the two
         # ramps that share its ground cell.
         #
@@ -2558,7 +2653,7 @@ def _astar(
         # a step stays on ``lvl``, so no ramp and no step of one expansion ever
         # touch the same cell, and interleaving them cannot change which of two
         # equal-cost paths is recorded.
-        for dx, dy, one, two in moves:
+        for one, two, colone, coltwo in moves:
             nxt = cur + one
             if not flags[nxt]:
                 continue
@@ -2575,20 +2670,21 @@ def _astar(
                 # shows up as a belt linking diagonally across a level change.
                 if via:
                     via.pop(nxt, None)
-                heappush(open_heap, (cost + h(x + dx, y + dy), cost, nxt))
+                col = q + colone
+                far = hcache[col]
+                if far < 0.0:
+                    far = hcache[col] = h(col)
+                heappush(open_heap, (cost + far, cost, nxt))
 
             # A level change costs two tiles of run, because belts climb 0.5 per
             # tile.  Both are reserved so the ramp physically exists -- and the
             # lower one is `nxt`, already cleared above.
             run = cur + two
-            for step in (1, -1):
-                lvl2 = lvl + step
-                if not 0 <= lvl2 < LEVELS:
-                    continue
+            for step, toll2 in ramps:
                 top = run + step
                 if not flags[top]:
                     continue
-                cost = g + 3.0 + level_toll[lvl2]
+                cost = run_base + toll2
                 if negotiating:
                     cost += hist[top] * pressure
                 if cost < best[top]:
@@ -2600,10 +2696,11 @@ def _astar(
                     # `prev` cyclic.
                     prev[top] = cur
                     via[top] = nxt
-                    heappush(
-                        open_heap,
-                        (cost + h(x + 2 * dx, y + 2 * dy), cost, top),
-                    )
+                    col = q + coltwo
+                    far = hcache[col]
+                    if far < 0.0:
+                        far = hcache[col] = h(col)
+                    heappush(open_heap, (cost + far, cost, top))
 
     # THE HEAP EMPTIED, which is the one ending that proves no path exists -- the
     # `return None`s above are a spent cap, a spent budget or a spent clock, and
@@ -2612,6 +2709,8 @@ def _astar(
     # touching it are its wall. The ones a committed path put there are the only
     # wall cells any net owns, and `_route_all` charges them so the net holding
     # one pays to keep it.
+    if budget is not None:
+        budget["left"] = start_left - expansions
     if blame is not None:
         # `best` is a flat array rather than a dict now, so the pocket is
         # counted by scanning it. That scan only ever happens on the ending that
@@ -5534,10 +5633,17 @@ class FreeformLayout:
 
         #: Checks that threw a placement out AFTER it wired -- see `_sweep`.
         rejected: set[str] = set()
+        #: The unrouted-net count of every pack the sweep actually ROUTED.
+        #: Empty means no pack got that far.  It is what turns "the deadline
+        #: passed" from an assertion into a measurement -- see the refusal
+        #: below.
+        attempts: list[int] = []
         for sweep_s in budgets:
             if _expired(deadline):
                 break
-            best = self._sweep(spec, strips, sweep_s, deadline, budget, rejected)
+            best = self._sweep(
+                spec, strips, sweep_s, deadline, budget, rejected, attempts
+            )
             if best is not None:
                 return best
 
@@ -5556,11 +5662,50 @@ class FreeformLayout:
                 budget_s=budgets[-1],
             )
         if _expired(deadline):
+            # AND IT HAS TO SAY HOW CLOSE THE PACKS CAME, because the clock
+            # expiring is not evidence that the clock is what was missing.
+            #
+            # This message used to assert that the sweep "ran out of clock
+            # rather than out of candidates", and it asserted that on no
+            # evidence beyond `_expired(deadline)` -- so EVERY refusal whose
+            # ceiling elapsed read as a routing-throughput failure, whatever the
+            # packs had been doing.  That reading is what a whole line of work
+            # was aimed at, and it is not what the numbers say.
+            #
+            # `universe-matrix/no-proliferator` power=1 under the sequence-pair
+            # packer, given 240 seconds -- sixteen times its ceiling -- routed
+            # EIGHT packs in 7.0 to 28.4 seconds each and every one of them left
+            # between 39 and 138 of its nets unrouted.  Not one was a near miss.
+            # The same cell under freeform reaches a pack that wires with zero
+            # failures, but only as its FOURTH height, about eighty seconds in.
+            # Those two are opposite defects and the old message called them the
+            # same thing.
+            #
+            # So the counts go in the refusal.  A reader can then tell "the
+            # sweep never got to the candidate that works" from "every candidate
+            # it tried was nowhere near", and aim at the right half of the
+            # program.
+            tried = (
+                "1 pack was" if len(attempts) == 1 else f"{len(attempts)} packs were"
+            )
+            if not attempts:
+                note = "no pack finished routing inside it"
+            elif min(attempts) == 0:
+                note = (
+                    f"{tried} routed in that time and at least one wired every "
+                    "net, so the clock is what was missing"
+                )
+            else:
+                note = (
+                    f"{tried} routed in that time and the best of them still "
+                    f"left {min(attempts)} nets unrouted (worst "
+                    f"{max(attempts)}), so a longer clock alone would not have "
+                    "wired this spec"
+                )
             raise NoValidLayout(
                 f"the {ceiling:g}s deadline passed with no wired packing of "
-                f"{len(strips)} strips; the sweep and the retry between them ran "
-                "out of clock rather than out of candidates, so this is a "
-                "REFUSAL and not a verdict on the spec",
+                f"{len(strips)} strips; {note}. This is a REFUSAL and not a "
+                "verdict on the spec",
                 spec_label=spec.label,
                 budget_s=ceiling,
             )
@@ -5581,8 +5726,14 @@ class FreeformLayout:
         deadline: float | None = None,
         budget: dict[str, int] | None = None,
         rejected: set[str] | None = None,
+        attempts: list[int] | None = None,
     ) -> Placement | None:
         """Try every candidate height, returning the best FULLY ROUTED placement.
+
+        ``attempts`` collects the unrouted-net count of every pack this ROUTES,
+        so a caller that has to refuse can say how close the candidates came
+        rather than only that its clock expired.  See :meth:`lay_out`'s deadline
+        refusal, which used to assert the difference and now reports it.
 
         ``None`` means no height produced one -- which is a refusal, not a
         degraded answer.  Packs with unrouted nets are discarded here rather than
@@ -5792,6 +5943,8 @@ class FreeformLayout:
                 if rejected is not None:
                     rejected.add("power.coverage")
                 continue
+            if attempts is not None:
+                attempts.append(failed)
             if failed:
                 continue
             # AND THE PLACEMENT HAS TO PASS OUR OWN VALIDATOR BEFORE IT COUNTS.
