@@ -15,6 +15,7 @@ from flab2bp.layout.route_feedback import (
     update_feedback,
 )
 from flab2bp.layout.sequence_pair import (
+    DecodedPlacement,
     GapProfile,
     PlacementProblem,
     SequencePair,
@@ -186,3 +187,39 @@ def test_feedback_cost_context_matches_problem_dimensions_and_box_history() -> N
 
     assert context.net_weights == (3.0, 1.0)
     assert context.history_cost_by_net == (3.0, 6.0)
+
+
+def test_feedback_context_clips_fully_x_overflowed_net_box_to_zero() -> None:
+    problem = PlacementProblem(((2, 2), (2, 2)), ((0, 1),), 4, 8)
+    decoded = DecodedPlacement(
+        x=(7, 9),
+        y=(0, 0),
+        width=11,
+        used_height=2,
+        x_windows=((7, 7), (9, 9)),
+        y_windows=((0, 0), (0, 0)),
+        gap_area=0,
+    )
+    state = FeedbackState((4, 4), {}, {(0, 0, 0): 3.0})
+
+    context = feedback_cost_context(state, problem, decoded)
+
+    assert context.history_cost_by_net == (0.0,)
+
+
+def test_feedback_context_clips_fully_y_overflowed_net_box_to_zero() -> None:
+    problem = PlacementProblem(((2, 2), (2, 2)), ((0, 1),), 4, 8)
+    decoded = DecodedPlacement(
+        x=(0, 0),
+        y=(7, 9),
+        width=2,
+        used_height=11,
+        x_windows=((0, 0), (0, 0)),
+        y_windows=((7, 7), (9, 9)),
+        gap_area=0,
+    )
+    state = FeedbackState((4, 4), {}, {(0, 0, 0): 3.0})
+
+    context = feedback_cost_context(state, problem, decoded)
+
+    assert context.history_cost_by_net == (0.0,)

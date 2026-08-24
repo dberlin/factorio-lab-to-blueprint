@@ -645,9 +645,13 @@ def test_lns_neighbourhood_grows_one_sequence_ring_after_stagnation() -> None:
     grown = select_lns_neighbourhood(
         failure, pair, gaps, problem, decoded, stagnation=2, grow_after=2
     )
+    long_stagnation = select_lns_neighbourhood(
+        failure, pair, gaps, problem, decoded, stagnation=200, grow_after=2
+    )
 
     assert focused == frozenset({2, 3, 4})
     assert grown == frozenset({1, 2, 3, 4, 5})
+    assert long_stagnation == grown
 
 
 def test_lns_repair_preserves_exact_locked_order_and_locked_gaps() -> None:

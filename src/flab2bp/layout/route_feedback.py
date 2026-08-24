@@ -197,8 +197,8 @@ def feedback_cost_context(
     for source, destination in problem.nets:
         source_width, source_height = problem.sizes[source]
         destination_width, destination_height = problem.sizes[destination]
-        x0 = max(0, min(decoded.x[source], decoded.x[destination]))
-        y0 = max(0, min(decoded.y[source], decoded.y[destination]))
+        x0 = min(width, max(0, min(decoded.x[source], decoded.x[destination])))
+        y0 = min(height, max(0, min(decoded.y[source], decoded.y[destination])))
         x1 = min(
             width,
             max(
@@ -291,7 +291,7 @@ def select_lns_neighbourhood(
         ):
             neighbourhood.add(strip)
 
-    for _ in range(stagnation // grow_after):
+    if stagnation >= grow_after:
         neighbourhood.update(_sequence_neighbours(pair, neighbourhood))
     return frozenset(neighbourhood)
 
