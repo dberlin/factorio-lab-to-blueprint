@@ -1702,25 +1702,84 @@ def mode_driven_spec() -> BuildSpec:
 
 
 class TestModeDrivenMachines:
-    def test_it_lays_out(self) -> None:
+    """Some machines are configured by a MODE, not a recipe id.
+
+    An Energy Exchanger's charge/discharge lives in its parameter block while
+    ``recipe_id`` stays zero.  FactorioLab models these as ordinary recipes with
+    real item flow, so they plan like anything else -- only the emission and,
+    as it turns out, the WIRING differ.
+    """
+
+    def test_the_game_gives_an_exchanger_no_sorter_slot_at_all(self) -> None:
+        """Ground truth, and the reason for the refusal below.
+
+        ``slot_poses.json`` is extracted from the game's own prefabs and the
+        Energy Exchanger's ``slotPoses`` array is EMPTY, as is the Ray
+        Receiver's.  If a later extraction fills these in, this test fails first
+        and says so, rather than the refusal below quietly becoming wrong.
+        """
+        from flab2bp.layout import slots as sorter_slots
+
+        probe = sorter_slots.probe_building(catalog.ENERGY_EXCHANGER_ID, 0.0)
+        height = catalog.footprint(catalog.ENERGY_EXCHANGER_ID)[1]
+        offsets = [
+            *range(-catalog.SORTER_MAX_REACH, 0),
+            *range(height, height + catalog.SORTER_MAX_REACH),
+        ]
+        assert offsets, "the probe must ask about some row, or it proves nothing"
+        assert all(not sorter_slots.attachable_columns(probe, y) for y in offsets)
+
+    def test_it_refuses_the_machine_rather_than_shipping_it_unwired(self) -> None:
+        """THIS USED TO BE ``test_it_lays_out``, AND WHAT IT ASSERTED WAS FALSE.
+
+        It asserted ``p.buildings``, and it got them: measured on the spine side
+        of the same spec, two Energy Exchangers and **zero sorters in the whole
+        placement** -- neither machine joined to anything at either end -- and
+        the validator called that report ok.  Freeform's version was worse still
+        once the layout obeyed the slot tables: ``Strip.input_lane_tiles``
+        correctly returns 0 for a machine no sorter can reach, ``_emit_strip``
+        built that row as an empty lane, and ``feed`` indexed its head --
+        ``IndexError: list index out of range``.
+
+        A blueprint that pastes two idle exchangers is worse than a refusal, and
+        an IndexError is worse than both.  ``_machines_without_poses`` refuses
+        before the height sweep and names the prefab.  Whether the extraction is
+        incomplete is an open question for the extractor, recorded in
+        docs/BACKLOG.md -- not something the packer should paper over.
+        """
         spec = mode_driven_spec()
-        p = FreeformLayout(power=False).lay_out(spec, time_budget_s=0.5)
-        assert p.buildings
+        with pytest.raises(NoValidLayout) as exc:
+            FreeformLayout(power=False).lay_out(spec, time_budget_s=0.5)
+        assert "no insert pose on any face" in exc.value.reason
+        assert "Energy Exchanger" in exc.value.reason
 
     def test_the_machine_carries_the_mode_not_a_recipe(self) -> None:
-        """recipe_id stays zero; the mode rides in the parameter block."""
+        """Asked of the unit that decides it, since no placement reaches here.
+
+        This used to read the emitted buildings.  A refused spec has none, so
+        the question moves to where it is actually answered: the strip plan
+        carries the parameter block, and ``_emit_strip`` writes ``recipe_id=0``
+        for exactly those strips -- the rule asserted below on a strip that DOES
+        emit, so neither half of the branch is untested.
+        """
         from flab2bp.dsp import params
 
-        spec = mode_driven_spec()
-        p = FreeformLayout(power=False).lay_out(spec, time_budget_s=0.5)
-        exchangers = [
-            b for b in p.buildings if b.item_id == catalog.ENERGY_EXCHANGER_ID
-        ]
-        assert len(exchangers) == 2, f"expected 2 exchangers, got {len(exchangers)}"
-        want = params.parameters_for("accumulator-full")
-        for b in exchangers:
-            assert b.recipe_id == 0, "a mode-driven machine has no recipe id"
-            assert b.parameters == want, f"expected {want}, got {b.parameters}"
+        s = plan_strips(mode_driven_spec(), strip_len=6)[0]
+        assert s.item_id == catalog.ENERGY_EXCHANGER_ID
+        assert s.is_mode_driven, "a mode-driven strip must say so"
+        assert s.mode_params == params.parameters_for("accumulator-full")
+
+    def test_an_ordinary_recipe_still_carries_a_recipe_id(self) -> None:
+        """The mode path must not swallow normal machines.
+
+        The other half of ``_emit_strip``'s branch, on a spec that lays out --
+        without it, deleting the branch entirely would leave every assertion
+        above green.
+        """
+        p = FreeformLayout(power=False).lay_out(single_recipe_spec(), time_budget_s=0.5)
+        smelters = [b for b in p.buildings if b.recipe_id]
+        assert smelters, "the fixture must emit machines with a recipe id"
+        assert all(b.parameters == () for b in smelters)
 
     def test_charge_and_discharge_differ(self) -> None:
         """A guard on the poles: emitting the wrong one drains what it should fill."""

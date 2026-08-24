@@ -756,15 +756,15 @@ class Strip:
         the left edge stopped short of every column that could be wired and the
         last machine got no sorter at all.
 
-        The two sides are UNIONED rather than asked for separately.  Every
-        building we place offers the same columns above and below, so the union
-        is the same answer; where it would not be, it is the longer one, and a
-        tile of dead belt is a warning where a missing tile is an unfed machine.
+        ZERO IS A REAL ANSWER AND ITS CALLER MUST HAVE REFUSED ALREADY.  A
+        machine whose prefab ships no insert pose at all -- a Ray Receiver, an
+        Energy Exchanger -- offers no column on either side, so a lane serving it
+        needs no belt tiles because no sorter could ever draw from one.
+        ``_machines_without_poses`` refuses such a spec before the sweep starts;
+        emission may not be reached with one, because a zero-tile lane is an
+        empty ``lane_idx`` row and ``feed`` indexes its head.
         """
-        cols = sorted(
-            set(self._attachable_columns(above=True))
-            | set(self._attachable_columns(above=False))
-        )
+        cols = self.attachable_columns
         if not cols:
             return 0
         last_slot = cols[min(len(lane) - 1, len(cols) - 1)]
@@ -775,6 +775,26 @@ class Strip:
         probe = slots.probe_building(self.item_id, self.yaw)
         lane_y = -1 if above else self.band_rows
         return tuple(sorted(slots.attachable_columns(probe, lane_y)))
+
+    @property
+    def attachable_columns(self) -> tuple[int, ...]:
+        """Columns of one of this strip's machines ANY sorter could reach.
+
+        The two sides are UNIONED rather than asked for separately.  Every
+        building we place offers the same columns above and below, so the union
+        is the same answer; where it would not be, it is the longer one, and a
+        tile of dead belt is a warning where a missing tile is an unfed machine.
+
+        EMPTY MEANS NO SORTER CAN TOUCH THIS MACHINE ANYWHERE, which is a
+        different thing from a narrow choice and is what
+        ``_machines_without_poses`` refuses on.
+        """
+        return tuple(
+            sorted(
+                set(self._attachable_columns(above=True))
+                | set(self._attachable_columns(above=False))
+            )
+        )
 
     def east_of_input(self, item: str) -> int:
         """Offset from the strip's west edge to the last tile of ``item``'s lane."""
@@ -5999,6 +6019,52 @@ def _fanout_shortfall(strips: list[Strip]) -> list[str]:
     return out
 
 
+def _machines_without_poses(strips: list[Strip]) -> list[str]:
+    """Strips with lanes to wire and no insert pose to wire them to.
+
+    ``slots.attachment`` reads the game's own ``PrefabDesc.slotPoses``, and for
+    a Ray Receiver and an Energy Exchanger that array has LENGTH ZERO.
+    ``BuildTool_Inserter`` will not target a building with no pose, so no sorter
+    can attach to one on any face at any distance.
+
+    THIS IS A REFUSAL BECAUSE THE ALTERNATIVE WAS A CRASH AND, BEFORE THAT, A
+    LIE.  ``Strip.input_lane_tiles`` correctly returns 0 for such a machine --
+    no column can be wired, so no belt tile does any work -- and ``_emit_strip``
+    then built that row as an empty lane and indexed its head, which is
+    ``IndexError: list index out of range`` from ``feed``.  The OUTPUT side did
+    not even crash: ``_link_lane`` finds no usable column, places nothing, and
+    returns 0, so the machine shipped joined to nothing at either end.  That is
+    the shape spine measured on this same spec -- two Energy Exchangers and ZERO
+    sorters in the whole placement, which `validate` called ok.
+
+    A blueprint that pastes two idle exchangers is worse than a refusal, and a
+    refusal that names the prefab is worth more than either.  Whether the
+    extraction is incomplete -- these machines ARE fed in game, so they either
+    carry their slots in an array the extractor does not read or take items by
+    some other mechanism -- is a question for the extractor and has its own
+    backlog entry; until it is answered, refusing is the honest reading of the
+    data we have.
+
+    Returns one description per offending building, empty when every machine
+    with a lane can be reached.
+    """
+    seen: set[int] = set()
+    out: list[str] = []
+    for s in strips:
+        if s.item_id in seen or not (s.in_lanes or s.out_lanes):
+            continue
+        if s.attachable_columns:
+            continue
+        seen.add(s.item_id)
+        out.append(
+            f"{catalog.building(s.item_id).name} ({s.recipe_id}): the game's "
+            f"prefab gives it no insert pose on any face, so none of its "
+            f"{len(s.in_lanes)} ingredient lane(s) and {len(s.out_lanes)} "
+            f"output lane(s) can be joined to it by a sorter"
+        )
+    return out
+
+
 def fallback_placement(
     spec: BuildSpec, *, power: bool = True, ramped: bool = False
 ) -> Placement:
@@ -6184,6 +6250,20 @@ class FreeformLayout:
         # consumers taps a different tile for each and junctions there. What
         # remains unservable is a lane with fewer TILES than taps to make, since
         # two taps on one tile would need two splitters on one square.
+        # A machine no sorter can attach to is refused FIRST, because it is not
+        # a question about the packing at all: `_emit_strip` crashes on the
+        # empty lane it implies, so every later stage would be reporting a
+        # symptom of this one.
+        unreachable = _machines_without_poses(strips)
+        if unreachable:
+            raise NoValidLayout(
+                "a machine in this spec has lanes to wire and no insert pose to "
+                "wire them to, so it would paste joined to nothing. "
+                + "; ".join(unreachable[:3]),
+                spec_label=spec.label,
+                budget_s=0.0,
+            )
+
         shortfall = _fanout_shortfall(strips)
         if shortfall:
             raise NoValidLayout(
