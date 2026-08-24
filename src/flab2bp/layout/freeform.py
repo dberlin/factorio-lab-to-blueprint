@@ -5633,10 +5633,17 @@ class FreeformLayout:
 
         #: Checks that threw a placement out AFTER it wired -- see `_sweep`.
         rejected: set[str] = set()
+        #: The unrouted-net count of every pack the sweep actually ROUTED.
+        #: Empty means no pack got that far.  It is what turns "the deadline
+        #: passed" from an assertion into a measurement -- see the refusal
+        #: below.
+        attempts: list[int] = []
         for sweep_s in budgets:
             if _expired(deadline):
                 break
-            best = self._sweep(spec, strips, sweep_s, deadline, budget, rejected)
+            best = self._sweep(
+                spec, strips, sweep_s, deadline, budget, rejected, attempts
+            )
             if best is not None:
                 return best
 
@@ -5655,11 +5662,50 @@ class FreeformLayout:
                 budget_s=budgets[-1],
             )
         if _expired(deadline):
+            # AND IT HAS TO SAY HOW CLOSE THE PACKS CAME, because the clock
+            # expiring is not evidence that the clock is what was missing.
+            #
+            # This message used to assert that the sweep "ran out of clock
+            # rather than out of candidates", and it asserted that on no
+            # evidence beyond `_expired(deadline)` -- so EVERY refusal whose
+            # ceiling elapsed read as a routing-throughput failure, whatever the
+            # packs had been doing.  That reading is what a whole line of work
+            # was aimed at, and it is not what the numbers say.
+            #
+            # `universe-matrix/no-proliferator` power=1 under the sequence-pair
+            # packer, given 240 seconds -- sixteen times its ceiling -- routed
+            # EIGHT packs in 7.0 to 28.4 seconds each and every one of them left
+            # between 39 and 138 of its nets unrouted.  Not one was a near miss.
+            # The same cell under freeform reaches a pack that wires with zero
+            # failures, but only as its FOURTH height, about eighty seconds in.
+            # Those two are opposite defects and the old message called them the
+            # same thing.
+            #
+            # So the counts go in the refusal.  A reader can then tell "the
+            # sweep never got to the candidate that works" from "every candidate
+            # it tried was nowhere near", and aim at the right half of the
+            # program.
+            tried = (
+                "1 pack was" if len(attempts) == 1 else f"{len(attempts)} packs were"
+            )
+            if not attempts:
+                note = "no pack finished routing inside it"
+            elif min(attempts) == 0:
+                note = (
+                    f"{tried} routed in that time and at least one wired every "
+                    "net, so the clock is what was missing"
+                )
+            else:
+                note = (
+                    f"{tried} routed in that time and the best of them still "
+                    f"left {min(attempts)} nets unrouted (worst "
+                    f"{max(attempts)}), so a longer clock alone would not have "
+                    "wired this spec"
+                )
             raise NoValidLayout(
                 f"the {ceiling:g}s deadline passed with no wired packing of "
-                f"{len(strips)} strips; the sweep and the retry between them ran "
-                "out of clock rather than out of candidates, so this is a "
-                "REFUSAL and not a verdict on the spec",
+                f"{len(strips)} strips; {note}. This is a REFUSAL and not a "
+                "verdict on the spec",
                 spec_label=spec.label,
                 budget_s=ceiling,
             )
@@ -5680,8 +5726,14 @@ class FreeformLayout:
         deadline: float | None = None,
         budget: dict[str, int] | None = None,
         rejected: set[str] | None = None,
+        attempts: list[int] | None = None,
     ) -> Placement | None:
         """Try every candidate height, returning the best FULLY ROUTED placement.
+
+        ``attempts`` collects the unrouted-net count of every pack this ROUTES,
+        so a caller that has to refuse can say how close the candidates came
+        rather than only that its clock expired.  See :meth:`lay_out`'s deadline
+        refusal, which used to assert the difference and now reports it.
 
         ``None`` means no height produced one -- which is a refusal, not a
         degraded answer.  Packs with unrouted nets are discarded here rather than
@@ -5891,6 +5943,8 @@ class FreeformLayout:
                 if rejected is not None:
                     rejected.add("power.coverage")
                 continue
+            if attempts is not None:
+                attempts.append(failed)
             if failed:
                 continue
             # AND THE PLACEMENT HAS TO PASS OUR OWN VALIDATOR BEFORE IT COUNTS.

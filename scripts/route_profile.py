@@ -39,6 +39,14 @@ from flab2bp.layout.base import NoValidLayout  # noqa: E402
 from flab2bp.rates.candidates import build_candidates  # noqa: E402
 
 
+def _strategy(name: str):
+    if name == "freeform":
+        return freeform.FreeformLayout
+    from flab2bp.layout.seqpair import SeqPairLayout
+
+    return SeqPairLayout
+
+
 def _spec(url_id: str, index: int):
     entry = next(e for e in URL_CORPUS if e.url_id == url_id)
     cands = build_candidates(load_vendored(), parse_url(entry.url), count=4).candidates
@@ -162,6 +170,60 @@ def install(tally: Tally):
     return restore
 
 
+def heights(url_id: str, power: int, spec_index: int, workers: int,
+            ceiling: float, strategy: str = "freeform") -> int:
+    """What would EVERY candidate height do, given a clock it cannot spend?
+
+    The sweep tries heights in order and stops at the deadline, so a refusal
+    reads "one pass, one height" and says nothing about the four it never
+    reached.  This runs the same sweep with a ceiling far past what the router
+    can spend and prints the outcome of each height in the order the sweep
+    takes them -- which is the measurement that decides whether routing heights
+    IN PARALLEL would convert a refusal or merely reach more failures sooner.
+    """
+    spec = _spec(url_id, spec_index)
+    orig_build = freeform._build
+    seen: list[dict] = []
+
+    # INSTRUMENTED AT `_build` AND NOT AT `_pack`, because the two sweeps do not
+    # share a packer: `seqpair._sweep` runs its own arrangement search and never
+    # calls `_pack` at all.  Every sweep does hand `_build` a `_Pack`, and that
+    # carries the height and the width, so one shim covers both strategies.
+    def build(spec_, strips_, pack_, **kw):
+        t0 = time.perf_counter()
+        row = {"height": pack_.height, "width": pack_.width,
+               "failed": None, "route_s": None}
+        seen.append(row)
+        try:
+            out = orig_build(spec_, strips_, pack_, **kw)
+        except Exception as exc:  # noqa: BLE001
+            row["failed"] = type(exc).__name__
+            row["route_s"] = time.perf_counter() - t0
+            raise
+        row["failed"] = out[1]
+        row["route_s"] = time.perf_counter() - t0
+        return out
+
+    freeform._build = build
+    t0 = time.perf_counter()
+    verdict = "OK"
+    try:
+        _strategy(strategy)(power=power, workers=workers).lay_out(
+            spec, time_budget_s=ceiling
+        )
+    except NoValidLayout as exc:
+        verdict = f"REFUSED: {exc.reason[:80]}"
+    finally:
+        freeform._build = orig_build
+    print(f"=== {url_id} power={power} ceiling={ceiling}s  "
+          f"{time.perf_counter() - t0:.1f}s  {verdict}")
+    for i, row in enumerate(seen):
+        print(f"  #{i:<2} height {row['height']:>5}  w={str(row['width']):>5}  "
+              f"route {-1.0 if row['route_s'] is None else row['route_s']:6.1f}s "
+              f" failed {row['failed']}")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("url_id")
@@ -171,7 +233,13 @@ def main() -> int:
     ap.add_argument("--workers", type=int, default=8)
     ap.add_argument("--cprofile", action="store_true")
     ap.add_argument("--repeat", type=int, default=1)
+    ap.add_argument("--heights", action="store_true")
+    ap.add_argument("--strategy", default="freeform")
     args = ap.parse_args()
+
+    if args.heights:
+        return heights(args.url_id, args.power, args.spec_index,
+                       args.workers, args.budget, args.strategy)
 
     spec = _spec(args.url_id, args.spec_index)
     for run in range(args.repeat):
