@@ -3151,6 +3151,73 @@ def _route_all(
     return len(best_paths) - unlinked, fewest_failed + unlinked, iterations
 
 
+def _match_access(
+    order: Sequence[tuple[int, int]],
+    options: Mapping[tuple[int, int], Sequence[tuple[int, int, int]]],
+    wants: Mapping[tuple[int, int], int],
+) -> dict[tuple[int, int, int], tuple[int, int]]:
+    """Assign access cells to ports so that as many CLAIMS as possible are met.
+
+    A claim is one port's need for one cell: a port that both receives and sends
+    makes two, and :func:`_reserve_port_access` explains why they are not
+    interchangeable.  Returns ``cell -> port``.
+
+    This is a maximum bipartite matching between claims and cells, by augmenting
+    paths.  The greedy alternative -- walk the ports and take the first free
+    neighbour -- is not merely less tidy, it is *wrong*, because it never gives a
+    cell back: a port with two ways out can take the one cell some other port
+    has, and no later port can ask it to move.  An augmenting path is exactly the
+    request "move, and take your second choice", chained as far as it needs to
+    go.
+
+    ``order`` fixes the sequence claims are offered in, and it matters twice.
+    Priority: every port's FIRST claim is offered before any port's second, so a
+    port that wants two can never leave a port that wants one with nothing --
+    matchings only grow, so a rank-0 claim matched in the first pass stays
+    matched through every later augmentation.  And determinism: the same pack
+    must reserve the same cells, or a routing comparison measures the reservation
+    order instead of what it is trying to measure.
+    """
+    owner: dict[tuple[int, int, int], tuple[tuple[int, int], int]] = {}
+
+    def augment(start: tuple[tuple[int, int], int]) -> bool:
+        # Iterative, not recursive: an alternating path can run the length of
+        # the port list, and Python's stack limit is not a routing parameter.
+        seen: set[tuple[int, int, int]] = set()
+        #: claim -> (the claim that wants its cell, that cell).  This is the
+        #: path back to ``start``, and it is walked to hand the cells over only
+        #: once a free one has actually been found.
+        came_from: dict[
+            tuple[tuple[int, int], int], tuple[tuple[tuple[int, int], int], tuple[int, int, int]]
+        ] = {}
+        stack = [start]
+        while stack:
+            claim = stack.pop()
+            for cell in options[claim[0]]:
+                if cell in seen:
+                    continue
+                seen.add(cell)
+                holder = owner.get(cell)
+                if holder is None:
+                    owner[cell] = claim
+                    cur = claim
+                    while cur in came_from:
+                        parent, parent_cell = came_from[cur]
+                        owner[parent_cell] = parent
+                        cur = parent
+                    return True
+                if holder != start and holder not in came_from:
+                    came_from[holder] = (claim, cell)
+                    stack.append(holder)
+        return False
+
+    for rank in range(max(wants.values(), default=0)):
+        for key in order:
+            if wants[key] > rank:
+                augment((key, rank))
+    return {cell: claim[0] for cell, claim in owner.items()}
+
+
 def _reserve_port_access(
     canvas: _Canvas, nets: list[_Net], *, twice: Collection[tuple[int, int]] = ()
 ) -> int:
@@ -3203,34 +3270,45 @@ def _reserve_port_access(
     wants = {k: len(roles[k]) + (1 if k in twice else 0) for k in order}
     held: dict[tuple[int, int], int] = defaultdict(int)
 
-    # EVERY port gets its first cell before any port gets its second.
+    # EVERY port gets its first cell before any port gets its second, AND the
+    # ports that can only be served one way are served -- which taking the first
+    # free neighbour cannot promise, because it never gives a cell back.
     #
-    # One pass in want-order does not do this: ports are served shortest-lane
-    # first, a coater drop is a one-tile lane, and a drop wanting two cells would
-    # take both before a strip lane head -- which may have exactly one free
-    # neighbour in the world -- had asked for its first.  Losing that cell is not
-    # a worse route, it is an empty goal set and a net that cannot be routed at
-    # all; it turned four candidates from wrong into unbuildable.  Second claims
-    # are a convenience for a port that has two jobs, and they yield.
-    for round_no in range(max(wants.values(), default=0)):
-        for key in order:
-            if wants[key] <= round_no:
-                continue
-            px, py = key
-            # `free` already refuses a cell reserved for another port, since
-            # `routing_ports` is empty here.
-            got = next(
-                (
-                    c
-                    for c in ((px + dx, py + dy, 0) for dx, dy in _STEPS)
-                    if canvas.free(c)
-                ),
-                None,
-            )
-            if got is None:
-                continue
-            canvas.reserved[got] = key
-            held[key] += 1
+    # This used to be two nested loops: rounds outside so no port took a second
+    # cell before every port had a first, and inside them "the first neighbour
+    # `canvas.free` still likes".  The rounds are right and are kept.  The inner
+    # grab is not: it is first-come-first-served over a bipartite graph, so a
+    # port with two ways out can take the cell that is another port's ONLY way
+    # out, and nothing ever revisits that.
+    #
+    # Measured, and it is the whole of a refusal rather than a tidiness point.
+    # `universe-matrix/max-proliferation` at h=115 packs a coater drop at
+    # (66,8): a machine south, its own coater west, and exactly two free
+    # neighbours, (67,8) and (66,7).  It is mid-chain, so it both receives and
+    # sends and wants two.  Port (65,7) sorts earlier, has other options, and
+    # takes (66,7); the drop gets one cell, the hop arriving takes it, and the
+    # hop LEAVING is handed an empty start set.  A* returns `None` having
+    # expanded zero nodes, which no amount of rip-up can price -- a search that
+    # expands nothing registers no conflict -- so net 89 stranded in all seven
+    # rounds of three runs and was the ONLY failure on the pack.
+    #
+    # An assignment where every port gets what it wants exists on that pack; the
+    # greedy pass just cannot reach it.  So this is a maximum bipartite
+    # b-matching (`_match_access`), taken in the same round order, which finds
+    # one whenever one exists.  It costs ~200 ports of at most four options
+    # each, once per routing pass, against a CP-SAT solve and hundreds of A*
+    # searches.
+    options = {
+        key: [
+            c
+            for c in ((key[0] + dx, key[1] + dy, 0) for dx, dy in _STEPS)
+            if canvas.free(c)
+        ]
+        for key in order
+    }
+    for cell, key in _match_access(order, options, wants).items():
+        canvas.reserved[cell] = key
+        held[key] += 1
 
     # A THIRD claim: the one way OUT of an access cell that has only one.
     #

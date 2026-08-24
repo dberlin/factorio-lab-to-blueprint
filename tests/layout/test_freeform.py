@@ -1623,6 +1623,51 @@ class TestPortAccessIsReservedForEveryRole:
             f"{canvas.reserved.get((-1, 0, 0))}"
         )
 
+    def test_a_port_with_a_choice_is_moved_rather_than_starving_one_without(
+        self,
+    ) -> None:
+        """First-come-first-served is not good enough; this is a matching.
+
+        The shape is taken from the only net that stranded on
+        ``universe-matrix/max-proliferation`` at h=115, in all seven rip-up
+        rounds of three separate runs.  A coater drop sits mid-chain, so it both
+        receives and sends and wants two cells, and the packing leaves it
+        exactly two.  A neighbouring port sorts earlier, takes one of them, and
+        has somewhere else it could perfectly well have gone -- but a greedy pass
+        never asks it to move, so the drop got one cell, the arriving hop took
+        it, and the leaving hop was handed an EMPTY start set.  A\\* then returns
+        ``None`` having expanded no nodes, which rip-up cannot price, because a
+        search that expands nothing registers no conflict.
+
+        ``d`` is the drop: free to its east and north, walled west and south.
+        ``e`` is the neighbour: free into ``d``'s north cell and free further
+        west.  An assignment satisfying both exists, so both must be satisfied.
+        """
+        canvas = _Canvas()
+        canvas.add(_belt(0, 0))  # d, wants two
+        canvas.add(_belt(-1, -1))  # e, wants one
+        for cell in ((-1, 0), (0, 1), (-1, -2)):
+            canvas.add(_belt(*cell))  # the walls that leave d only two ways out
+        far = _Port(canvas.add(_belt(9, 0)), 9, 0, 9, 9)
+        d = _Port(0, 0, 0, 0, 0)
+        e = _Port(1, -1, -1, -1, -1)
+        _reserve_port_access(
+            canvas, [_Net(src=e, dst=d, item="x"), _Net(src=d, dst=far, item="x")]
+        )
+
+        held = {
+            key: sorted(c for c, k in canvas.reserved.items() if k == key)
+            for key in ((0, 0), (-1, -1))
+        }
+        assert len(held[(0, 0)]) == 2, (
+            "the drop both receives and sends but was left with "
+            f"{len(held[(0, 0)])} cell(s); e took one and was never asked to "
+            f"take its other option: {canvas.reserved}"
+        )
+        assert len(held[(-1, -1)]) == 1, (
+            f"e was moved off its cell and given nothing: {canvas.reserved}"
+        )
+
     def test_an_access_cell_with_one_way_out_keeps_that_way_out(self) -> None:
         """A cul-de-sac access cell is worth exactly as much as none at all.
 
