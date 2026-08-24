@@ -13,17 +13,28 @@ from pathlib import Path
 
 import pytest
 
-from flab2bp.dsp.catalog import GEOMETRY_SAFE_FIXTURES, TESLA_COVER_RADIUS
+from flab2bp.dsp import params
+from flab2bp.dsp.catalog import (
+    DEFAULT_MAX_BELT_Z,
+    ENERGY_EXCHANGER_ID,
+    GEOMETRY_SAFE_FIXTURES,
+    RAY_RECEIVER_ID,
+    TESLA_COVER_RADIUS,
+)
 from flab2bp.dsp.catalog import building as catalog_building
 from flab2bp.layout import junction
 from flab2bp.layout.base import PlacedBuilding, Placement
 from flab2bp.layout.slots import SlotUndetermined, assign_sorter_slots
 from flab2bp.layout.validate import (
     CHECKS,
+    NEEDS_GROUPS,
     Finding,
     IdMap,
+    Kind,
     Report,
     Severity,
+    _context,
+    _kind,
     validate,
 )
 from flab2bp.spec import BuildSpec, MachineGroup, ProliferatorMode
@@ -1098,6 +1109,477 @@ def test_machine_recipe_valid_fires_on_unset_recipe() -> None:
 
 def test_machine_recipe_valid_clean_when_set() -> None:
     assert not fired(validate(place(machine(0, 0, recipe_id=6))), "machine.recipe_valid")
+
+
+# --- mode-driven machines --------------------------------------------------
+#
+# An Energy Exchanger and a Ray Receiver are configured by a MODE in their
+# parameter block, with ``recipe_id`` left at zero, and DSP also gives both of
+# them a power cover radius.  Those two facts between them made a whole class of
+# machine invisible to this module: ``_kind`` sorted them as power nodes, so
+# ``of_kind(Kind.MACHINE)`` never yielded them, and ``group_for`` could not have
+# resolved them anyway because a mode has no DSP recipe id to look up.
+
+
+EXCHANGER = ENERGY_EXCHANGER_ID  # 2209, 9x9, cover radius 7
+ACCUMULATOR = 2206
+ACCUMULATOR_FULL = 2207
+CHARGE = params.parameters_for("accumulator-full")
+DISCHARGE = params.parameters_for("accumulator-discharge")
+
+
+def exchanger(
+    x: int, y: int, *, parameters: tuple[int, ...] = CHARGE
+) -> PlacedBuilding:
+    """An Energy Exchanger exactly as a strategy emits one.
+
+    ``recipe_id`` is zero and the mode rides in ``parameters``; see
+    ``spine._machine_config``, which owns that contract.
+    """
+    b = catalog_building(EXCHANGER)
+    return PlacedBuilding(
+        item_id=EXCHANGER,
+        model_index=b.model_index,
+        x=x,
+        y=y,
+        width=b.width,
+        height=b.height,
+        recipe_id=0,
+        parameters=parameters,
+    )
+
+
+#: What ``pipeline._id_map`` builds for a mode-driven spec.  ``recipes`` is
+#: EMPTY, and that is not an oversight: ``catalog.recipe_id`` raises for a mode,
+#: so there is no id for the map to carry and no id for the placement to hold.
+MODE_DRIVEN_IDS = IdMap(
+    recipes={},
+    items={
+        "energy-exchanger": EXCHANGER,
+        "accumulator": ACCUMULATOR,
+        "accumulator-full": ACCUMULATOR_FULL,
+    },
+)
+
+
+def mode_driven_spec(recipe: str = "accumulator-full") -> BuildSpec:
+    """Two Energy Exchangers charging accumulators belted in from outside."""
+    return BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id=recipe,
+                machine_item_id="energy-exchanger",
+                count=2,
+                inputs_per_machine={"accumulator": Fraction(1)},
+                outputs_per_machine={"accumulator-full": Fraction(1)},
+            ),
+        ),
+        external_inputs={"accumulator": Fraction(2)},
+        outputs={"accumulator-full": Fraction(2)},
+    )
+
+
+def unwired_exchangers() -> Placement:
+    """Two exchangers and NOT ONE SORTER anywhere in the build.
+
+    This is the placement the backlog measured: 2 Energy Exchangers, 0 sorters,
+    ``report.ok = True``, with ``machine.inputs_supplied`` and
+    ``machine.output_removed`` listed in ``checks_run``.  They ran and said
+    nothing, because neither machine was ever handed to them.
+    """
+    return place(exchanger(0, 0), exchanger(11, 0))
+
+
+def test_a_mode_driven_machine_is_classified_as_a_machine() -> None:
+    """The first of the two causes, asked of the function that decides it.
+
+    DSP gives an Energy Exchanger a cover radius of 7 and a Ray Receiver one of
+    10.5 -- they are power nodes as well as machines -- and ``_kind`` tested
+    that before anything else, so both fell out as ``Kind.POWER``.  Nothing
+    downstream that iterates ``Kind.MACHINE`` could see them, which is three
+    ERROR checks and ``machine.recipe_valid`` besides.
+    """
+    assert _kind(exchanger(0, 0)) is Kind.MACHINE
+    receiver = catalog_building(RAY_RECEIVER_ID)
+    assert receiver.cover_radius > 0, "the premise: it is a power node too"
+    assert (
+        _kind(
+            PlacedBuilding(
+                item_id=RAY_RECEIVER_ID,
+                model_index=receiver.model_index,
+                x=0,
+                y=0,
+                width=receiver.width,
+                height=receiver.height,
+                recipe_id=0,
+                parameters=params.parameters_for("critical-photon"),
+            )
+        )
+        is Kind.MACHINE
+    )
+
+
+def test_the_exchanger_still_supplies_the_power_it_supplies_in_game() -> None:
+    """Reclassifying it must not cost the power model what the game gives it.
+
+    An Energy Exchanger IS a power node: it covers a radius of 7 around itself
+    and links at 15.5.  So a lone exchanger powers its own 9x9 footprint --
+    corner tile centre to building centre is sqrt(32) = 5.66 -- and needs no
+    tower.  If the reclassification had dropped it out of ``_tower_centres``
+    this placement would report every one of its 81 tiles unpowered.
+    """
+    r = validate(place(exchanger(0, 0)), expect_power=True)
+    assert not fired(r, "power.coverage"), [f.message for f in r.findings]
+
+
+def test_the_set_of_power_nodes_is_unchanged_by_the_reclassification() -> None:
+    """The guard on the sentence above, stated over the whole catalog.
+
+    ``_tower_centres`` used to select ``Kind.POWER``; it now selects on the
+    catalog fact that made a building ``Kind.POWER`` in the first place, a
+    positive cover radius.  Those two are the same set only while nothing
+    ``_kind`` sorts EARLIER than the radius test -- a belt, a sorter, a
+    splitter -- carries one, so this asserts exactly that over the whole
+    catalog and fails if a future extraction gives one a radius.
+
+    A belt tier with no building entry at all (2004 is one) is covered too:
+    ``_supplies_power`` answers False for it, exactly as ``_kind`` answered
+    ``Kind.OTHER``.
+    """
+    from flab2bp.dsp import catalog as _cat
+    from flab2bp.layout.validate import _supplies_power
+
+    checked = 0
+    for item_id in (*_cat.BELT_IDS, *_cat.SORTER_IDS, _cat.SPLITTER_ID):
+        assert not _supplies_power(
+            PlacedBuilding(item_id=item_id, model_index=0, x=0, y=0)
+        ), item_id
+        checked += 1
+    assert checked >= 7, f"only {checked} belt-integrated ids checked"
+
+
+def test_two_exchangers_and_no_sorters_at_all_must_not_pass() -> None:
+    """The headline.  A build with no sorters cannot supply anything.
+
+    Both machines need one ingredient delivered and one product taken away, and
+    there is not a sorter in the placement to do either.
+    """
+    r = validate(
+        unwired_exchangers(), mode_driven_spec(), ids=MODE_DRIVEN_IDS, expect_power=False
+    )
+    assert not r.ok, "a build with zero sorters and two hungry machines passed"
+    assert fired(r, "machine.inputs_supplied"), errors(r)
+    assert fired(r, "machine.output_removed"), errors(r)
+
+
+def test_group_for_resolves_a_mode_driven_machine_by_its_parameter_block() -> None:
+    """Charge and discharge run on the same building and differ only in the block.
+
+    Resolving by ``item_id`` alone would hand a charging exchanger the
+    discharging group's item flow -- the two are opposites -- so the block is
+    part of the key, not a tie-break.
+    """
+    spec = BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id="accumulator-full",
+                machine_item_id="energy-exchanger",
+                count=1,
+                inputs_per_machine={"accumulator": Fraction(1)},
+                outputs_per_machine={"accumulator-full": Fraction(1)},
+            ),
+            MachineGroup(
+                recipe_id="accumulator-discharge",
+                machine_item_id="energy-exchanger",
+                count=1,
+                inputs_per_machine={"accumulator-full": Fraction(1)},
+                outputs_per_machine={"accumulator": Fraction(1)},
+            ),
+        ),
+    )
+    p = place(exchanger(0, 0, parameters=CHARGE), exchanger(11, 0, parameters=DISCHARGE))
+    ctx = _context(p, spec, MODE_DRIVEN_IDS, 256, DEFAULT_MAX_BELT_Z, True)
+    first, second = ctx.group_for(0), ctx.group_for(1)
+    assert first is not None and first.recipe_id == "accumulator-full"
+    assert second is not None and second.recipe_id == "accumulator-discharge"
+
+
+def test_machine_recipe_valid_accepts_a_mode_block_instead_of_a_recipe() -> None:
+    """It is configured, just not by a recipe id.  Firing here would be a lie."""
+    r = validate(place(exchanger(0, 0)))
+    assert not fired(r, "machine.recipe_valid"), [f.message for f in r.findings]
+
+
+def test_spec_machine_counts_counts_a_mode_driven_machine() -> None:
+    """Two demanded, two placed -- and the check has to be able to say so.
+
+    It keyed on the raw ``(recipe_id, item_id)`` pair, which for a mode is
+    ``(0, 2209)`` on the placement side and nothing at all on the spec side.
+    The result was "recipe 0 on machine 2209: spec demands 0, placement has 2"
+    for a spec demanding exactly 2.
+    """
+    r = validate(
+        unwired_exchangers(), mode_driven_spec(), ids=MODE_DRIVEN_IDS, expect_power=False
+    )
+    assert not fired(r, "spec.machine_counts"), [
+        f.message for f in r.by_check("spec.machine_counts")
+    ]
+
+
+def test_spec_machine_counts_still_fires_when_a_mode_driven_count_is_wrong() -> None:
+    """The control: the check above must not pass by having stopped counting."""
+    spec = BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id="accumulator-full",
+                machine_item_id="energy-exchanger",
+                count=3,
+                inputs_per_machine={"accumulator": Fraction(1)},
+                outputs_per_machine={"accumulator-full": Fraction(1)},
+            ),
+        ),
+    )
+    r = validate(unwired_exchangers(), spec, ids=MODE_DRIVEN_IDS, expect_power=False)
+    assert fired(r, "spec.machine_counts")
+
+
+def test_machine_recipe_valid_fires_on_a_mode_driven_machine_with_no_block() -> None:
+    """Half-configured is the failure ``_machine_config`` exists to prevent.
+
+    An exchanger with neither a recipe id nor a mode pastes and sits idle,
+    which is the same defect the check already names for everything else.
+    """
+    r = validate(place(exchanger(0, 0, parameters=())))
+    assert fired(r, "machine.recipe_valid")
+
+
+# --- a check that could not evaluate must not report as having run ---------
+
+
+def unresolvable_spec() -> BuildSpec:
+    """A spec that cannot single out which group either exchanger realises.
+
+    Charge and discharge both run on an Energy Exchanger; a placement whose
+    exchanger carries neither block matches neither group, and there is no
+    honest way to pick one.  This is the shape the two Ray Receiver photon
+    recipes take in the wild -- both emit the same block, because the Graviton
+    Lens that separates them is an item the receiver consumes.
+    """
+    return BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id="accumulator-full",
+                machine_item_id="energy-exchanger",
+                count=1,
+                inputs_per_machine={"accumulator": Fraction(1)},
+                outputs_per_machine={"accumulator-full": Fraction(1)},
+            ),
+        ),
+    )
+
+
+def ray_receiver(x: int, y: int) -> PlacedBuilding:
+    b = catalog_building(RAY_RECEIVER_ID)
+    return PlacedBuilding(
+        item_id=RAY_RECEIVER_ID,
+        model_index=b.model_index,
+        x=x,
+        y=y,
+        width=b.width,
+        height=b.height,
+        recipe_id=0,
+        parameters=params.parameters_for("critical-photon"),
+    )
+
+
+def test_an_unresolvable_machine_is_an_error_and_not_a_silence() -> None:
+    """The mode block does not match the one group, so nothing knows what it is.
+
+    ERROR and not a lesser severity: ``Report.ok`` reads severities, so anything
+    softer lets a build nothing could validate ship as validated.
+    """
+    p = place(exchanger(0, 0, parameters=DISCHARGE))
+    r = validate(p, unresolvable_spec(), ids=MODE_DRIVEN_IDS, expect_power=False)
+    found = r.by_check("machine.group_resolved")
+    assert found, "an unresolvable machine reported nothing at all"
+    assert [f.severity for f in found] == [Severity.ERROR]
+    assert found[0].buildings == (0,)
+
+
+def test_two_groups_the_placement_cannot_tell_apart_do_not_get_guessed() -> None:
+    """The real ambiguity, and the one the game actually produces.
+
+    FactorioLab splits a Ray Receiver's photon production into two recipes --
+    with and without a Graviton Lens -- but the lens is an ITEM the receiver
+    consumes, not a different setting, so both emit the SAME parameter block.
+    A placed receiver therefore carries nothing that says which group it
+    realises, and their ingredient lists differ.  Picking the first is a
+    fallback with a wrong answer in it; the honest result is "cannot tell",
+    reported as such.
+    """
+    assert params.parameters_for("critical-photon") == params.parameters_for(
+        "critical-photon-graviton"
+    ), "the premise: the two modes are indistinguishable in the placement"
+    spec = BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id="critical-photon",
+                machine_item_id="ray-receiver",
+                count=1,
+                outputs_per_machine={"critical-photon": Fraction(1)},
+            ),
+            MachineGroup(
+                recipe_id="critical-photon-graviton",
+                machine_item_id="ray-receiver",
+                count=1,
+                inputs_per_machine={"graviton-lens": Fraction(1)},
+                outputs_per_machine={"critical-photon": Fraction(1)},
+            ),
+        ),
+    )
+    ids = IdMap(recipes={}, items={"ray-receiver": RAY_RECEIVER_ID})
+    p = place(ray_receiver(0, 0))
+    ctx = _context(p, spec, ids, 256, DEFAULT_MAX_BELT_Z, True)
+    assert ctx.group_for(0) is None, "guessed between two indistinguishable groups"
+    r = validate(p, spec, ids=ids, expect_power=False)
+    assert [f.severity for f in r.by_check("machine.group_resolved")] == [Severity.ERROR]
+
+
+def test_a_check_that_could_not_evaluate_is_not_listed_as_having_run() -> None:
+    """The invariant, stated directly.
+
+    ``checks_run`` is a claim of coverage.  A check that met a machine it could
+    not resolve did not cover it, so it belongs in ``skipped`` -- where a reader
+    already knows silence means nothing -- and not in ``checks_run``, where
+    silence reads as a pass.
+    """
+    p = place(exchanger(0, 0, parameters=DISCHARGE))
+    r = validate(p, unresolvable_spec(), ids=MODE_DRIVEN_IDS, expect_power=False)
+    for cid in NEEDS_GROUPS:
+        assert cid not in r.checks_run, cid
+        assert cid in r.skipped, cid
+    assert "machine.group_resolved" in r.checks_run
+
+
+def test_the_same_checks_do_run_when_every_machine_resolves() -> None:
+    """The control, without which the assertion above is satisfied by nothing.
+
+    If these checks were absent from ``checks_run`` on a resolvable placement
+    too, the test above would pass for a reason that has nothing to do with
+    resolution.
+    """
+    r = validate(
+        unwired_exchangers(), mode_driven_spec(), ids=MODE_DRIVEN_IDS, expect_power=False
+    )
+    assert not r.by_check("machine.group_resolved")
+    for cid in NEEDS_GROUPS:
+        assert cid in r.checks_run, cid
+        assert cid not in r.skipped, cid
+
+
+def test_a_partly_evaluated_check_still_reports_what_it_did_find() -> None:
+    """Skipped-in-part is a claim about coverage, not a reason to drop findings.
+
+    Two machines, one resolvable and starving, one not resolvable at all.  The
+    starving one must still be reported -- suppressing it to keep the verdict
+    tidy would trade one silence for another.
+    """
+    spec = BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id="accumulator-full",
+                machine_item_id="energy-exchanger",
+                count=1,
+                inputs_per_machine={"accumulator": Fraction(1)},
+                outputs_per_machine={"accumulator-full": Fraction(1)},
+            ),
+        ),
+    )
+    p = place(exchanger(0, 0, parameters=CHARGE), exchanger(11, 0, parameters=DISCHARGE))
+    r = validate(p, spec, ids=MODE_DRIVEN_IDS, expect_power=False)
+    supplied = r.by_check("machine.inputs_supplied")
+    assert supplied, "the resolvable machine starves and must still be reported"
+    assert supplied[0].buildings == (0,)
+    assert "machine.inputs_supplied" in r.skipped
+
+
+def test_every_check_that_consults_group_for_declares_it() -> None:
+    """``NEEDS_GROUPS`` is the transitive closure, recomputed, not a hand list.
+
+    The defect report named three ERROR checks.  The call graph says TEN reach
+    ``Context.group_for``: three call it directly, five arrive through
+    ``_lane_balance``, ``_sorter_demand``, ``_run_demand`` or ``_sorter_item``
+    -- a hand-maintained list would have missed exactly those -- and two,
+    ``spec.machine_counts`` and
+    ``prolif.belt_required_edges_not_direct_inserted``, reach the same
+    resolution through ``Context.recipe_of``.
+
+    Recomputed here from the module's own source so the set cannot drift: add a
+    check that asks what a machine makes and forget to declare it, and this
+    fails naming it.
+    """
+    import ast
+    import collections
+    import inspect
+
+    from flab2bp.layout import validate as module
+
+    tree = ast.parse(inspect.getsource(module))
+    funcs: dict[str, ast.FunctionDef] = {}
+    check_of: dict[str, str] = {}
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef):
+            funcs[node.name] = node
+            for dec in node.decorator_list:
+                if isinstance(dec, ast.Call) and getattr(dec.func, "id", "") == "check":
+                    first = dec.args[0]
+                    assert isinstance(first, ast.Constant)
+                    check_of[node.name] = str(first.value)
+        elif isinstance(node, ast.ClassDef):
+            for member in node.body:
+                if isinstance(member, ast.FunctionDef):
+                    funcs.setdefault(member.name, member)
+
+    def calls(node: ast.AST) -> set[str]:
+        out: set[str] = set()
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Call):
+                fn = sub.func
+                if isinstance(fn, ast.Name):
+                    out.add(fn.id)
+                elif isinstance(fn, ast.Attribute):
+                    out.add(fn.attr)
+        return out & set(funcs)
+
+    graph = {name: calls(node) for name, node in funcs.items()}
+
+    def reaches(start: str, target: str) -> bool:
+        seen: set[str] = set()
+        queue = collections.deque([start])
+        while queue:
+            cur = queue.popleft()
+            if cur in seen:
+                continue
+            seen.add(cur)
+            for nxt in graph.get(cur, ()):
+                if nxt == target:
+                    return True
+                queue.append(nxt)
+        return False
+
+    computed = {
+        cid
+        for fn, cid in check_of.items()
+        if reaches(fn, "group_for") or reaches(fn, "recipe_of")
+    }
+    computed.discard("machine.group_resolved")  # it OWNS the inability
+    assert computed == NEEDS_GROUPS, (
+        f"declared {sorted(NEEDS_GROUPS)}, call graph says {sorted(computed)}"
+    )
+    assert len(computed) == 10, f"expected 10 dependent checks, found {len(computed)}"
+
+
+# --- machine conformance, continued ----------------------------------------
 
 
 def two_input_spec() -> BuildSpec:
