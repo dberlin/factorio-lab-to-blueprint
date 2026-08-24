@@ -3184,6 +3184,7 @@ def _emit(
     # A coater is a belt addon: it consumes no grid tile, which is what makes
     # proliferation nearly free in area.  The cost is the proliferator lane.
     coaters = 0
+    addon_supply_belts = 0
     spray = catalog.building(CONSTANTS.spray_item_id)
     prolif = proliferator_item(spec)
     #: The elevated proliferator belt's live end, carried between coaters so
@@ -3281,7 +3282,7 @@ def _emit(
             belt_vertical_construction=belt_vertical_construction,
             chain_from=prolif_tail,
         )
-        sorters += belts
+        addon_supply_belts += belts
 
     # --- coverage top-up --------------------------------------------------
     # The analytic reach model budgets a worst-case vertical offset, which is
@@ -3319,7 +3320,11 @@ def _emit(
         stats={
             "area": float(_bbox_area(buildings)),
             "machines": float(sum(g.count for g in groups.values())),
-            "belt_tiles": float(sum(len(v) for v in lane_tiles.values()) + riser_belts),
+            "belt_tiles": float(
+                sum(len(v) for v in lane_tiles.values())
+                + riser_belts
+                + addon_supply_belts
+            ),
             "risers": float(len(risers)),
             "riser_columns": float(max((r.column for r in risers), default=-1) + 1),
             "junctions": float(junctions),

@@ -321,6 +321,66 @@ def test_external_route_world_collision_commits_no_prefix(
     assert tuple(canvas.buildings) == before_buildings
     assert canvas.blocked == before_blocked
 
+
+def test_elevated_external_port_bypasses_ground_fast_path_and_routes_a_ramp(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def elevated_scene(limit: tuple[int, int, int, int]) -> tuple[_Canvas, _Net]:
+        canvas = _Canvas(ramped=True, limit=limit)
+        port_index = canvas.add(
+            PlacedBuilding(
+                item_id=2001,
+                model_index=35,
+                x=6,
+                y=0,
+                z=F(1),
+                carries_item="ore",
+            ),
+            level=1,
+        )
+        return canvas, _Net(
+            src=None,
+            dst=_Port(port_index, 6, 0, 6, 6, z=1),
+            item="ore",
+            net_id=NetId(None, 0, "ore", NetRole.EXTERNAL, 0),
+            boundary_goals=((0, 0, 0),),
+        )
+
+    monkeypatch.setattr(
+        freeform,
+        "_straight_to_edge",
+        lambda *_args, **_kwargs: pytest.fail(
+            "ground-only straight fast path used for elevated port"
+        ),
+    )
+    canvas, net = elevated_scene((0, -2, 7, 2))
+    routed = _route_external_inputs(
+        canvas,
+        [net],
+        2001,
+        35,
+        (1, -1, 6, 1),
+        budget={"left": 20_000},
+    )
+    assert routed.status is DetailedRouteStatus.ROUTED
+    assert any(
+        building.z.denominator == 2
+        for building in canvas.buildings
+        if catalog.is_belt(building.item_id)
+    )
+
+    blocked_canvas, blocked_net = elevated_scene((0, 0, 2, 0))
+    blocked = _route_external_inputs(
+        blocked_canvas,
+        [blocked_net],
+        2001,
+        35,
+        (0, 0, 2, 0),
+        budget={"left": 20_000},
+    )
+    assert blocked.status is DetailedRouteStatus.STRANDED
+    assert blocked.failures
+
 def magnetic_ring_spec() -> BuildSpec:
     """Shaped like the super-magnetic-ring chain, and RATE-BALANCED.
 

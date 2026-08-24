@@ -6164,9 +6164,13 @@ def _route_external_inputs(
             if mine is not None:
                 del canvas.reserved[mine]
 
-            # Straight runs keep parallel input lanes independent. Only a
-            # blocked straight run pays for A* along the entry ring.
-            path: Sequence[Cell] | None = _straight_to_edge(canvas, port, bounds)
+            # The straight fast path is ground-only. Elevated ports must use
+            # the shared z-aware search so the level transition is explicit.
+            path: Sequence[Cell] | None = (
+                _straight_to_edge(canvas, port, bounds)
+                if port.z == 0
+                else None
+            )
             if path is None:
                 goals = {
                     (port.x + dx, port.y + dy, port.z)

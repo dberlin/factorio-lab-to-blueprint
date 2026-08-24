@@ -3064,6 +3064,18 @@ class TestSprayCoatersAreFed:
                 or sorter.output_obj in coater_indices
             )
         ]
+        sorter_count = sum(
+            1
+            for building in placement.buildings
+            if catalog.is_sorter(building.item_id)
+        )
+        assert placement.stats["sorters"] == sorter_count
+        belt_count = sum(
+            1
+            for building in placement.buildings
+            if catalog.is_belt(building.item_id)
+        )
+        assert placement.stats["belt_tiles"] == belt_count
 
         _host, addon = catalog.building(catalog.SPRAY_COATER_ID).addon_areas
         for _index, coater in coaters:
