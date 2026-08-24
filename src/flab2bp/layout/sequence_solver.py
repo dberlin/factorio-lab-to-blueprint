@@ -359,17 +359,21 @@ class SequenceSolver[PreparedT]:
                 (run for run in height_state.restarts if run.stages < self.config.stages),
                 key=lambda run: (run.stages, run.restart),
             )
-            spent = self._run_stage(height_state, restart, allowance)
+            spent, cancelled = self._run_stage(height_state, restart, allowance)
             if discovery is not None:
                 self.budget.settle_discovery(height_state.height, spent)
             else:
                 self.budget.settle_shared(spent)
+            if cancelled:
+                termination = "cancelled"
+                break
 
         if self._incumbent is None:
             reason = {
                 "deadline": "deadline exhausted before finding an exact layout",
                 "budget": "expansion budget exhausted before finding an exact layout",
                 "candidates": "all scheduled candidates were exhausted",
+                "cancelled": "routing was cancelled before detailed emission",
                 "stage-limit": "no scheduled stage produced an exact layout",
             }[termination]
             raise NoValidLayout(reason)
@@ -386,7 +390,7 @@ class SequenceSolver[PreparedT]:
         height_state: _HeightState,
         restart: _RestartState,
         allowance: int,
-    ) -> int:
+    ) -> tuple[int, bool]:
         problem = height_state.problem
         current_decoded = decode_sequence_pair(
             restart.anneal.pair,
@@ -427,6 +431,8 @@ class SequenceSolver[PreparedT]:
             )
 
         selected = min(global_candidates, key=_global_priority)
+        if selected.result.cancelled:
+            return spent, True
         detailed = self.adapters.detailed_route(selected.prepared, allowance - spent)
         _check_spend(detailed.routing.expansions, allowance - spent)
         spent += detailed.routing.expansions
@@ -493,7 +499,7 @@ class SequenceSolver[PreparedT]:
                 validation_failures=validation_failures,
             )
         )
-        return spent
+        return spent, False
 
 
 def _lns_neighbourhood(
@@ -557,9 +563,10 @@ def _height_priority(height: _HeightState) -> tuple[int, int, int, int, int, int
 
 def _global_priority(
     candidate: _GlobalCandidate[Any],
-) -> tuple[int, int, int, int, int, int, tuple[int, ...], tuple[int, ...]]:
+) -> tuple[int, int, int, int, int, int, int, tuple[int, ...], tuple[int, ...]]:
     result = candidate.result
     return (
+        int(result.cancelled),
         int(result.exhausted_budget),
         result.unreachable_ports,
         result.total_overflow,
@@ -662,15 +669,18 @@ def _route_detailed_candidate(
     allowance: int,
 ) -> DetailedStageResult:
     """Route one exact prepared identity and withhold every partial build."""
-    built = _build_prepared(
-        spec,
-        strips,
-        prepared,
-        power=power,
-        route=True,
-        deadline=deadline,
-        budget={"left": allowance},
-    )
+    try:
+        built = _build_prepared(
+            spec,
+            strips,
+            prepared,
+            power=power,
+            route=True,
+            deadline=deadline,
+            budget={"left": allowance},
+        )
+    except _Unpowerable:
+        return _closed_detailed_result(DetailedRouteStatus.UNPOWERABLE)
     return DetailedStageResult(
         routing=built.routing,
         placement=(
@@ -797,13 +807,13 @@ def _production_run(
         if candidate.prepared is None:
             is_deadline = candidate.preparation_error == "deadline"
             return _empty_global_result(
-                exhausted=is_deadline,
+                exhausted=False,
                 cancelled=is_deadline,
             )
         routing_started = time.monotonic()
         try:
             if deadline_reached():
-                result = _empty_global_result(exhausted=True, cancelled=True)
+                result = _empty_global_result(exhausted=False, cancelled=True)
             else:
                 result = route_global(
                     candidate.prepared,

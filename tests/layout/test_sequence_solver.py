@@ -22,6 +22,7 @@ from flab2bp.layout.freeform import (
     _Pack,
     _prepare_routing_problem,
     _PreparedRoutingProblem,
+    _Unpowerable,
     plan_strips,
 )
 from flab2bp.layout.global_router import GlobalRouteResult, route_global
@@ -60,6 +61,8 @@ from flab2bp.layout.sequence_solver import (
     StageAdapters,
     ValidationVerdict,
     _decoded_pack,
+    _production_run,
+    _ProductionCandidate,
     _route_detailed_candidate,
 )
 from flab2bp.rates.candidates import build_candidates
@@ -119,7 +122,9 @@ def _routing(
     )
 
 
-def _global(*, overflow: int = 0, expansions: int = 0) -> GlobalRouteResult:
+def _global(
+    *, overflow: int = 0, expansions: int = 0, cancelled: bool = False
+) -> GlobalRouteResult:
     return GlobalRouteResult(
         net_results=(),
         paths={},
@@ -132,6 +137,7 @@ def _global(*, overflow: int = 0, expansions: int = 0) -> GlobalRouteResult:
         exhausted_budget=False,
         hot_cells=(),
         hot_regions=(),
+        cancelled=cancelled,
     )
 
 
@@ -304,6 +310,97 @@ def test_discovery_reservations_are_equal_and_unused_budget_is_shared_afterward(
     assert budget.final_reserved == 26
     assert fake.global_allowances[:3] == [25, 25, 25]
     assert fake.global_allowances[3] == 75
+
+
+def test_selected_global_cancellation_stops_before_detailed_or_feedback() -> None:
+    feedback_seen: list[FeedbackState] = []
+    detailed_calls = 0
+    budget = ExpansionBudget(100)
+
+    def global_route(
+        prepared: Prepared,
+        feedback: FeedbackState,
+        allowance: int,
+    ) -> GlobalRouteResult:
+        del prepared, allowance
+        feedback_seen.append(feedback)
+        return _global(expansions=3, cancelled=True)
+
+    def detailed_route(
+        prepared: Prepared,
+        allowance: int,
+    ) -> DetailedStageResult:
+        nonlocal detailed_calls
+        del prepared, allowance
+        detailed_calls += 1
+        raise AssertionError("cancelled global result reached detailed routing")
+
+    solver = SequenceSolver(
+        heights=(40,),
+        problem_for_height=lambda height: PlacementProblem(
+            sizes=((1, 1),),
+            nets=((0, 0),),
+            outline_height=height,
+            area_lower_bound=1,
+        ),
+        adapters=StageAdapters(
+            prepare=lambda height, decoded: (height, decoded),
+            global_route=global_route,
+            detailed_route=detailed_route,
+            validate=lambda _placement: ValidationVerdict(True, ()),
+        ),
+        expansion_budget=budget,
+        config=SequenceSolverConfig(
+            stages=1,
+            moves_per_stage=1,
+            restarts_per_height=1,
+            global_elites=1,
+        ),
+    )
+
+    with pytest.raises(NoValidLayout, match="routing was cancelled"):
+        solver.search(max_stages=1)
+
+    assert detailed_calls == 0
+    assert budget.spent == 3
+    assert len(feedback_seen) == 1
+    assert not feedback_seen[0].net_weight
+    assert not feedback_seen[0].cell_history
+
+
+def test_deadline_empty_global_is_cancelled_without_budget_exhaustion() -> None:
+    problem = PlacementProblem(((1, 1),), (), 1, 1)
+    state = AnnealState.initial(1, 1)
+    decoded = decode_sequence_pair(
+        state.pair,
+        state.gaps,
+        problem.sizes,
+        outline_height=problem.outline_height,
+    )
+    candidate = _ProductionCandidate(
+        height=1,
+        problem=problem,
+        decoded=decoded,
+        pack=_decoded_pack(1, decoded),
+        prepared=None,
+        preparation_error="deadline",
+    )
+    run = _production_run(
+        two_stage_spec(),
+        time_budget_s=2.0,
+        power=False,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+    )
+
+    result = run.solver.adapters.global_route(
+        candidate,
+        FeedbackState.empty((1, 1)),
+        0,
+    )
+
+    assert result.cancelled
+    assert not result.exhausted_budget
 
 
 def test_feedback_decays_once_then_adds_only_geometric_stage_evidence() -> None:
@@ -553,6 +650,38 @@ def test_detailed_candidate_reuses_prepared_problem_identity(
     assert seen == [prepared]
     assert result.routing.status is DetailedRouteStatus.ROUTED
     assert preparation_calls == 0
+
+
+def test_post_route_power_failure_is_an_honest_unpowerable_miss(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = two_stage_spec()
+    strips = plan_strips(spec, strip_len=6)
+    pack = _greedy_pack(strips, sum(_box(strip)[1] for strip in strips))
+    prepared = _prepare_routing_problem(spec, strips, pack, power=True)
+
+    def unpowerable_after_route(*args: object, **kwargs: object) -> object:
+        del args, kwargs
+        raise _Unpowerable
+
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "_build_prepared",
+        unpowerable_after_route,
+    )
+
+    result = _route_detailed_candidate(
+        spec,
+        strips,
+        prepared,
+        power=True,
+        deadline=None,
+        allowance=100_000,
+    )
+
+    assert result.routing.status is DetailedRouteStatus.UNPOWERABLE
+    assert result.routing.failed_count == 0
+    assert result.placement is None
 
 def test_powered_one_net_miss_feeds_lns_or_refuses_honestly(
     monkeypatch: pytest.MonkeyPatch,
