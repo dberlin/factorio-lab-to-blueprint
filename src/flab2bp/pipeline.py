@@ -160,7 +160,7 @@ def build(
     if selection is not None:
         request = pin_request(request, data, selection)
 
-    spec_set = build_candidates(data, request, count=candidates)
+    spec_set = build_candidates(data, request, count=candidates, flow=selection)
 
     # With a flow pinned, a candidate that belts in something FactorioLab's own
     # flow does not is not a legal candidate for this build -- the boundary rule

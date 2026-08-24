@@ -22,6 +22,7 @@ from __future__ import annotations
 import warnings
 from fractions import Fraction
 
+from flab2bp.lab.flow import FlowError, FlowSelection
 from flab2bp.lab.schema import Dataset
 from flab2bp.lab.url import LabRequest
 from flab2bp.rates.adjust import ProliferatorTier
@@ -227,6 +228,93 @@ def proliferator_from_request(request: LabRequest) -> ProliferatorTier | None:
     return max(tiers, key=lambda t: int(t.value)) if tiers else None
 
 
+def proliferation_from_flow(
+    flow: FlowSelection,
+) -> tuple[ProliferatorTier, tuple[ProliferatorMode, ...], frozenset[str]]:
+    """What FactorioLab's flow actually sprays: ``(tier, modes, recipes)``.
+
+    ``ProliferatorTier.module_id`` builds exactly the ids FactorioLab carries
+    (``proliferator-2-products`` and friends), so this is that map inverted --
+    the same inversion ``proliferator_from_request`` does for a URL, but reading
+    the solved flow, which is a statement of fact rather than of availability.
+
+    A flow that sprays nothing yields ``ProliferatorTier.NONE``, and that is the
+    case that matters most: it means no proliferator may be belted in at all.
+
+    Mixed tiers are refused.  The rate solver takes one tier for the whole
+    build, so a flow spraying Mk.I on one recipe and Mk.II on another cannot be
+    represented, and quietly picking one would change what the block consumes.
+    """
+    by_id = {
+        tier.module_id(mode): (tier, mode)
+        for tier in ProliferatorTier
+        for mode in ProliferatorMode
+        if tier.module_id(mode) is not None
+    }
+    sprayed: dict[str, tuple[ProliferatorTier, ProliferatorMode]] = {}
+    for recipe_id, module_id in flow.proliferator_modules().items():
+        known = by_id.get(module_id)
+        if known is None:
+            raise FlowError(
+                f"the flow sprays {module_id!r} on {recipe_id!r}, which is not a "
+                "proliferator module this dataset defines. Either the export came "
+                "from a different mod, or our vendored dataset is out of date."
+            )
+        sprayed[recipe_id] = known
+    if not sprayed:
+        return ProliferatorTier.NONE, (), frozenset()
+    tiers = {tier for tier, _ in sprayed.values()}
+    if len(tiers) > 1:
+        raise FlowError(
+            "the flow sprays more than one proliferator tier "
+            f"({sorted(t.value for t in tiers)}). This build takes a single tier, "
+            "so honouring the flow exactly is not possible; choosing one would "
+            "change what the block consumes."
+        )
+    return (
+        tiers.pop(),
+        tuple(sorted({mode for _, mode in sprayed.values()})),
+        frozenset(sprayed),
+    )
+
+
+def _pinned_candidates(
+    data: Dataset,
+    request: LabRequest,
+    flow: FlowSelection,
+    time_limit_s: float,
+) -> BuildSpecSet:
+    """The single build FactorioLab's flow describes.
+
+    One candidate, not a frontier.  The frontier exists to explore a choice the
+    rate stage cannot price; when the player has already made that choice there
+    is nothing to explore, and exploring anyway is how a proliferator input the
+    player never asked for gets added.  Measured live: against a flow whose
+    ``Modules`` column is empty, the frontier picked ``max-proliferation`` and
+    asked to belt in ``proliferator-3``.
+
+    A proliferator tier is an IMPLIED INPUT -- the sprayed item is belted in from
+    outside, so choosing a tier changes what the block consumes -- and the rule
+    is that the inputs FactorioLab chose may never be changed, implied ones
+    included.  ``proliferator_from_request`` reasons that an absent proliferator
+    in a URL "is not a constraint", which is right for a URL: it states what is
+    available, not what is used. A solved flow states what is used.
+    """
+    tier, modes, recipes = proliferation_from_flow(flow)
+    plan = solve(
+        data,
+        request,
+        tier=tier,
+        allowed_modes=modes or None,
+        proliferable=recipes if tier is not ProliferatorTier.NONE else None,
+        time_limit_s=time_limit_s,
+    )
+    label = "flow-pinned" if tier is ProliferatorTier.NONE else f"flow-pinned-mk{tier.value}"
+    specs = [_to_build_spec(data, request, plan, label)]
+    _assert_same_objective(data, request, specs)
+    return BuildSpecSet(candidates=tuple(specs))
+
+
 def build_candidates(
     data: Dataset,
     request: LabRequest,
@@ -234,6 +322,7 @@ def build_candidates(
     tier: ProliferatorTier | None = None,
     count: int = DEFAULT_CANDIDATES,
     time_limit_s: float = 30.0,
+    flow: FlowSelection | None = None,
 ) -> BuildSpecSet:
     """Emit an ordered frontier of complete, valid builds.
 
@@ -252,6 +341,11 @@ def build_candidates(
     real URL produced 515,396,248 machines this way, and the layout stage then
     sat trying to place them.
     """
+    if flow is not None:
+        # Everything below this line is the UNPINNED frontier and is reached
+        # only when no flow was supplied, so a build without one is unchanged.
+        return _pinned_candidates(data, request, flow, time_limit_s)
+
     # A URL that names a proliferator pins the tier; one that does not leaves
     # the frontier free at Mk.III. The sprayed item is belted in from outside,
     # so spending a tier the player did not ask for asks them to supply an item

@@ -270,6 +270,34 @@ class FlowSelection:
         """True when no numeric cell lost precision (a pristine download)."""
         return all(r.exact for r in self.rows)
 
+    def proliferator_modules(self) -> dict[str, str]:
+        """Recipe id -> the proliferator module FactorioLab sprays it with.
+
+        The ``Modules`` cell is ``<count> <module-id>`` pairs, comma separated,
+        but a real export writes ``"1 "`` -- a count with an EMPTY module id --
+        for a machine whose module slot is empty.  So this keys off the *token*
+        naming a proliferator rather than off position or on the cell being
+        non-blank, which makes it robust to that and to a bare id with no count.
+
+        Only proliferator modules are returned.  A recipe carrying two different
+        ones is refused rather than resolved: the export would be stating two
+        answers and picking one would be a guess about what the player sprayed.
+        """
+        out: dict[str, str] = {}
+        for row in self.rows:
+            if not row.recipe_id or not row.modules:
+                continue
+            found = {t for t in re.split(r"[,\s]+", row.modules) if "proliferator" in t}
+            if len(found) > 1:
+                raise FlowFormatError(
+                    f"{row.recipe_id!r} names more than one proliferator module "
+                    f"({sorted(found)}); the export states no single answer for "
+                    "what it sprays"
+                )
+            if found:
+                out[row.recipe_id] = found.pop()
+        return out
+
     @property
     def uses_proliferator(self) -> bool:
         """Does this flow spray at all?
