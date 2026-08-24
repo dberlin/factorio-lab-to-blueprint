@@ -1,5 +1,28 @@
 # Backlog
 
+## OPEN -- spine grows elevated lanes
+
+Spine refuses every proliferated spec, and the refusal names why: a Spray Coater
+is supplied by a BELT in its addon area, which the prefab puts at
+`(0, -1.25, 1)` -- a tile and a quarter behind the coater and exactly one
+altitude LEVEL up. So the supply has to be an elevated lane in the coater's OWN
+row, and spine runs lanes at ground level in a corridor. Freeform builds it, the
+pipeline runs both, so no user-visible capability is lost.
+
+What was found while trying: the drop belt must be fed by the proliferator
+lane's TAIL, not by any adjacent tile. Taking a mid-lane tile's output orphans
+everything downstream of it -- the lane stops there and its remaining sorters
+draw from a belt nothing fills, which reports as
+`flow.external_entry_reachable` rather than as anything about coaters.
+
+Freeform's out-lanes start immediately below the machine FOOTPRINT, which puts
+them inside the row a machine's collider needs; a junction on such a lane is
+illegal, and `junction.site_is_clear` refuses it. Moving lane rows to start
+after the clearance band is the obvious fix and is NOT the way in -- it took
+freeform from 9 test failures to 80, because the strip's row indices are
+consumed in several places that each assume lanes start at `mh`. Whatever fixes
+this has to change those together.
+
 ## OPEN -- two collider questions left, both deliberately unanswered
 
 `geom.collide` is a normal check now: 443 assembler-on-assembler pairs became 2,

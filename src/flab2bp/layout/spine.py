@@ -61,6 +61,7 @@ from collections import defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 from fractions import Fraction
+from functools import cache
 
 from ortools.sat.python import cp_model
 
@@ -189,6 +190,20 @@ class _Group:
     inputs: dict[str, Fraction]
     outputs: dict[str, Fraction]
     proliferated: bool
+
+    @property
+    def tap_height(self) -> int:
+        """Height as the TAP model should count it -- footprint minus the inset.
+
+        A machine's usable face is where its insert poses are, and that is not
+        always its edge: a Chemical Plant's southern poses sit a row INSIDE a
+        footprint five deep, so a sorter reaching one is a tile longer than the
+        gap to the lane suggests. That is indistinguishable, for reach purposes,
+        from a machine one tile shorter sitting flush -- which the tap model
+        already handles as a GAP. Expressing it as height means the whole Hall's
+        condition machinery covers it without a second concept.
+        """
+        return self.height - _anchor_inset(self.item_id, self.yaw, self.height)
 
     @property
     def block_width(self) -> int:
@@ -726,7 +741,7 @@ def _allocate_lanes(
         row_h = max((groups[k].pitch_h for k in rows[r]), default=1)
         gaps: dict[str, int] = {}
         for k in rows[r]:
-            gap = row_h - groups[k].height
+            gap = row_h - groups[k].tap_height
             for item in set(groups[k].inputs) | set(groups[k].outputs):
                 gaps[item] = max(gaps.get(item, 0), gap)
 
@@ -1376,7 +1391,7 @@ def _solve_one(
     # from below, but the objective minimises it, and an over-large value only
     # ever ADDS terms -- so the bound can be too strict for an assignment the
     # solver was going to reject on height anyway, and never too loose.
-    heights = sorted({grp.height for grp in groups.values()})
+    heights = sorted({grp.tap_height for grp in groups.values()})
     # Only differences some pair of groups can actually realise.  A spec whose
     # machines are all one height has none at all, and its model stays
     # bit-for-bit the one that came before.
@@ -1385,7 +1400,7 @@ def _solve_one(
         by_height: dict[str, dict[int, list[str]]] = defaultdict(lambda: defaultdict(list))
         for k, grp in groups.items():
             for item in set(grp.inputs) | set(grp.outputs):
-                by_height[item][grp.height].append(k)
+                by_height[item][grp.tap_height].append(k)
         for r in range(n):
             #: ``(item, ceiling) -> does row r tap item through a group that
             #: short?``  Keyed by the tallest height at or below the ceiling,
@@ -3090,6 +3105,24 @@ class _Tap:
     lane_y: int
     machine_y: int
     span: int
+
+
+@cache
+def _anchor_inset(item_id: int, yaw: float, mach_h: int) -> int:
+    """Tiles of extra span this building's poses cost at the nearest lane.
+
+    Zero for anything whose poses sit on its edge, which is most things. One for
+    a Chemical Plant, whose southern row of poses is a row in. Taken as the
+    WORST of the two sides, because the tap model has one number per group and
+    over-stating the cost refuses a lane that would have worked where
+    under-stating it emits a sorter that cannot reach.
+    """
+    worst = 0
+    for above in (True, False):
+        span = _anchor_span(item_id, yaw, mach_h, 1, above=above)
+        if span is not None:
+            worst = max(worst, span - 1)
+    return worst
 
 
 def _anchor_span(
