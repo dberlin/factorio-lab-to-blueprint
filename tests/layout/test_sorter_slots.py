@@ -268,8 +268,15 @@ def test_the_length_and_skew_ladder_reads_the_raw_blueprint() -> None:
                 continue
             if not 0.9 <= math.dist((s.x, s.y), (s.x2, s.y2)) <= 3.2:
                 continue
-            peers = [by_index.get(s.input_obj_idx), by_index.get(s.output_obj_idx)]
-            if any(p is None for p in peers) or any(p.item_id == ARTIFICIAL_STAR for p in peers):
+            # Narrowed in one step rather than guarded twice: the `or` below
+            # used to lean on short-circuiting to keep the second half from
+            # touching a None, which is correct at runtime and unreadable to a
+            # type checker -- and would stay "correct" if someone reordered it.
+            linked = [by_index.get(s.input_obj_idx), by_index.get(s.output_obj_idx)]
+            if any(p is None for p in linked):
+                continue
+            peers = [p for p in linked if p is not None]
+            if any(p.item_id == ARTIFICIAL_STAR for p in peers):
                 continue
             if any(_off_grid(p) for p in peers):
                 continue
@@ -486,8 +493,8 @@ def test_attachment_refuses_a_lane_further_than_a_sorter_reaches() -> None:
 
 def test_a_belt_addon_carries_the_pair_the_game_writes() -> None:
     """All eight corpus coaters: no connection, and ``(15, 14)`` on both ends."""
-    seen = collections.Counter()
-    links = collections.Counter()
+    seen: collections.Counter[tuple[int, int, int, int]] = collections.Counter()
+    links: collections.Counter[tuple[int, int]] = collections.Counter()
     for _name, bp in CORPUS:
         for b in bp.buildings:
             if b.item_id != cat.SPRAY_COATER_ID:

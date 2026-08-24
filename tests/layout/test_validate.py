@@ -18,7 +18,14 @@ from flab2bp.dsp.catalog import building as catalog_building
 from flab2bp.layout import junction
 from flab2bp.layout.base import PlacedBuilding, Placement
 from flab2bp.layout.slots import SlotUndetermined, assign_sorter_slots
-from flab2bp.layout.validate import CHECKS, IdMap, Report, Severity, validate
+from flab2bp.layout.validate import (
+    CHECKS,
+    Finding,
+    IdMap,
+    Report,
+    Severity,
+    validate,
+)
 from flab2bp.spec import BuildSpec, MachineGroup, ProliferatorMode
 
 ASSEMBLER = 2304  # Assembling Machine Mk.II, 4x4
@@ -144,6 +151,33 @@ def fired(report: Report, check: str) -> bool:
 
 def errors(report: Report) -> list[str]:
     return [f.check for f in report.findings if f.severity is Severity.ERROR]
+
+
+def measured(finding: Finding, key: str) -> float:
+    """The MEASUREMENT a finding reported under ``key``.
+
+    ``Finding.detail`` is ``Mapping[str, object]`` on purpose: one detail
+    carries a slot index, an end label and a measured distance side by side, and
+    there is no narrower type honest about all three.  So a test that wants to
+    compare a distance has to say that it expects a distance.
+
+    ``Fraction`` is accepted alongside the others because the module docstring
+    promises it: rates in a detail are exact Fractions.  Narrowing this to
+    ``float`` would fail a check that reported one, which is a real value and
+    not a defect.
+
+    Asserting rather than casting buys the diagnosis, not the catch.  Measured
+    with `game.inserter_data` mutated to report its gap as ``f"{gap:.3f}"``: a
+    ``cast`` leaves ``'3.263' > 1.6`` to raise ``TypeError`` from inside the
+    comparison, while this fails as "reported gap='3.263' (str), which is not a
+    measurement" and names the check that did it.
+    """
+    value = finding.detail[key]
+    assert isinstance(value, int | float | Fraction), (
+        f"{finding.check} reported {key}={value!r} ({type(value).__name__}), "
+        f"which is not a measurement"
+    )
+    return float(value)
 
 
 # --- registry --------------------------------------------------------------
@@ -530,7 +564,7 @@ def test_game_inserter_data_fires_when_the_machine_side_is_zeroed() -> None:
     r = validate(p)
     assert fired(r, "game.inserter_data")
     assert fired(r, "game.inserter_paste")
-    gap = r.by_check("game.inserter_data")[0].detail["gap"]
+    gap = measured(r.by_check("game.inserter_data")[0], "gap")
     assert gap > 1.6, gap
 
 
@@ -545,7 +579,7 @@ def test_game_inserter_data_fires_when_the_sorter_runs_into_the_slots_back() -> 
     r = validate(_retagged(_belt_to_machine(), 2, output_to_slot=10))
     dots = [f for f in r.by_check("game.inserter_data") if "dot" in f.detail]
     assert dots, [f.message for f in r.by_check("game.inserter_data")]
-    assert dots[0].detail["dot"] < 0
+    assert measured(dots[0], "dot") < 0
 
 
 def test_game_inserter_data_fires_on_a_reversed_own_slot_pairing() -> None:
@@ -578,7 +612,7 @@ def test_game_inserter_paste_allows_a_purely_radial_stretch() -> None:
     assert not fired(r, "game.inserter_paste"), [
         f.message for f in r.by_check("game.inserter_paste")
     ]
-    gaps = [f.detail["gap"] for f in r.by_check("game.inserter_data") if "gap" in f.detail]
+    gaps = [measured(f, "gap") for f in r.by_check("game.inserter_data") if "gap" in f.detail]
     assert gaps and 0.8 < gaps[0] <= 1.6, gaps
 
 
@@ -608,8 +642,8 @@ def test_game_inserter_paste_stops_a_radial_stretch_at_1_6() -> None:
     )
     snaps = [f for f in r.by_check("game.inserter_paste") if "snap" in f.detail]
     assert snaps, [f.message for f in r.by_check("game.inserter_paste")]
-    assert snaps[0].detail["lateral"] < 0.1
-    assert snaps[0].detail["snap"] > 1.6
+    assert measured(snaps[0], "lateral") < 0.1
+    assert measured(snaps[0], "snap") > 1.6
 
 
 def test_two_assemblers_collide_at_pitch_3_and_clear_at_pitch_4() -> None:
@@ -632,14 +666,22 @@ def test_two_assemblers_collide_at_pitch_3_and_clear_at_pitch_4() -> None:
     assert _cat.clearance(ASSEMBLER, 0.0)[0] == 4, "and needs a fourth"
 
 
-def _coater(x: int, y: int, z: int = 0) -> PlacedBuilding:
+def _coater(x: int, y: int, z: Fraction | int = 0) -> PlacedBuilding:
+    """A Spray Coater on the belt at ``(x, y)``.
+
+    ``z`` is converted the way ``belt`` and ``splitter`` above convert theirs.
+    Handing ``PlacedBuilding`` a bare ``int`` was not merely a type error: this
+    helper feeds ``game.addon_supply``, which measures a proliferator belt one
+    altitude LEVEL up against a 1.0-unit area, and altitudes are Fractions
+    because a level is not a whole tile.
+    """
     b = catalog_building(SPRAY_COATER)
     return PlacedBuilding(
         item_id=SPRAY_COATER,
         model_index=b.model_index,
         x=x,
         y=y,
-        z=z,
+        z=Fraction(z),
         yaw=90.0,  # Facing.EAST
     )
 
@@ -696,7 +738,7 @@ def test_game_inserter_skew_fires_on_a_yaw_across_the_run() -> None:
     r = validate(_retagged(_belt_to_machine(), 2, yaw=0.0))
     off = [f for f in r.by_check("game.inserter_skew") if "off_axis_deg" in f.detail]
     assert off, [f.message for f in r.by_check("game.inserter_skew")]
-    assert off[0].detail["off_axis_deg"] > 24.0
+    assert measured(off[0], "off_axis_deg") > 24.0
 
 
 def test_game_inserter_skew_fires_on_a_sorter_longer_than_the_game_allows() -> None:
@@ -717,7 +759,7 @@ def test_game_inserter_skew_fires_on_a_sorter_longer_than_the_game_allows() -> N
     )
     lengths = [f for f in r.by_check("game.inserter_skew") if "max" in f.detail]
     assert lengths, [f.message for f in r.by_check("game.inserter_skew")]
-    assert lengths[0].detail["length"] > 7.5
+    assert measured(lengths[0], "length") > 7.5
 
 
 # --- belts -----------------------------------------------------------------
