@@ -11,6 +11,7 @@ import contextlib
 import math
 import time
 from fractions import Fraction as F
+from typing import Any
 
 import pytest
 
@@ -24,9 +25,12 @@ from flab2bp.layout.base import (
     Placement,
 )
 from flab2bp.layout.freeform import (
+    _ARRANGEMENT_STRIDE,
+    _ARRANGEMENTS,
     _BLAME_MAX_WALL,
     _ENTRY_RING,
     _LEVEL_TOLL,
+    _PACK_RANDOM_SEED,
     _ROUTE_RING,
     _TENTATIVE,
     LEVELS,
@@ -809,6 +813,104 @@ class TestObjectiveStaysLexicographic:
         with_di = tie_break_cap(4, width_bound=20, height=10, n_direct=7)
         assert with_di > without
         assert with_di - without == MU_DIRECT * 7
+
+
+class TestArrangementsImproveButNeverSearch:
+    """A second arrangement is a draw at a DENSER pack, never a hunt for a first.
+
+    Measured both ways.  On a spec that has not wired anything the binding
+    constraint is the clock -- every stress refusal reads "the 15s deadline
+    passed", 36 of 36 -- so another arrangement spends the clock rather than
+    buying it, and paired runs put the difference at exactly 0.00 cells.  On a
+    spec that HAS wired and has clock left it is worth -1.51% area, paired
+    t = -5.26, denser in six of six rounds.  So the gate is the whole feature,
+    and these pin it.
+    """
+
+    def test_arrangement_zero_is_the_seed_that_always_shipped(self) -> None:
+        """Arrangement 0 must be bit-identical to the solve before this existed.
+
+        If the stride ever multiplied into arrangement 0, every previously
+        measured number in this file would silently be describing a different
+        search.
+        """
+        assert _PACK_RANDOM_SEED + _ARRANGEMENT_STRIDE * 0 == 20260822
+
+    def test_each_arrangement_asks_for_a_different_search(self) -> None:
+        seeds = {_PACK_RANDOM_SEED + _ARRANGEMENT_STRIDE * k for k in range(_ARRANGEMENTS)}
+        assert len(seeds) == _ARRANGEMENTS, "two arrangements sharing a seed are one arrangement"
+
+    def test_a_sweep_that_never_routes_never_asks_for_a_second_arrangement(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The clock a refusal has is not the sweep's to spend on diversity."""
+        import flab2bp.layout.freeform as ff
+
+        asked: list[int] = []
+        real_pack = ff._pack
+
+        def spy(strips: Any, **kw: Any) -> Any:
+            asked.append(int(kw["arrangement"]))
+            return real_pack(strips, **kw)
+
+        real_build = ff._build
+
+        def never_wires(*a: Any, **kw: Any) -> Any:
+            placement, _failed, towers = real_build(*a, **kw)
+            return placement, 99, towers
+
+        monkeypatch.setattr(ff, "_pack", spy)
+        monkeypatch.setattr(ff, "_build", never_wires)
+        with contextlib.suppress(NoValidLayout):
+            FreeformLayout(power=False, workers=4, arrangements=3).lay_out(
+                magnetic_ring_spec(), time_budget_s=4.0
+            )
+        assert asked, "the spy never fired, so this test proves nothing"
+        assert set(asked) == {0}, (
+            "a spec that has wired nothing spent its deadline on arrangements "
+            f"instead of on heights: {sorted(set(asked))}"
+        )
+
+    def test_a_sweep_that_routes_does_reach_a_later_arrangement(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The other half: the gate must not have disabled the feature."""
+        import flab2bp.layout.freeform as ff
+
+        asked: list[int] = []
+        real_pack = ff._pack
+
+        def spy(strips: Any, **kw: Any) -> Any:
+            asked.append(int(kw["arrangement"]))
+            return real_pack(strips, **kw)
+
+        monkeypatch.setattr(ff, "_pack", spy)
+        FreeformLayout(power=False, workers=4, arrangements=3).lay_out(
+            magnetic_ring_spec(), time_budget_s=12.0
+        )
+        assert max(asked) > 0, (
+            "no arrangement past the first was ever tried, so the gate is not a "
+            "gate but an off switch"
+        )
+
+    def test_one_arrangement_is_the_search_as_it_stood(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``arrangements=1`` is the A/B control and must stay one pass."""
+        import flab2bp.layout.freeform as ff
+
+        asked: list[int] = []
+        real_pack = ff._pack
+
+        def spy(strips: Any, **kw: Any) -> Any:
+            asked.append(int(kw["arrangement"]))
+            return real_pack(strips, **kw)
+
+        monkeypatch.setattr(ff, "_pack", spy)
+        FreeformLayout(power=False, workers=4, arrangements=1).lay_out(
+            magnetic_ring_spec(), time_budget_s=12.0
+        )
+        assert asked and set(asked) == {0}
 
 
 # --- solver quality --------------------------------------------------------

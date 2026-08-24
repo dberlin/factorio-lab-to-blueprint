@@ -116,6 +116,9 @@ class Job:
     budget: float
     power: bool
     workers: int
+    #: Arrangements per height for freeform, or ``None`` for its own default.
+    #: Only freeform has the notion, so it is passed only to freeform.
+    arrangements: int | None = None
 
     @property
     def label(self) -> str:
@@ -135,6 +138,13 @@ class Result:
     detail: str
     checks: tuple[str, ...]
     seconds: float
+    #: Bounding-box tiles of the emitted placement; 0.0 when nothing was emitted.
+    #:
+    #: Density is the objective, so a change that buys clean cells by making the
+    #: builds bigger has to be visible as such.  The tally alone cannot show it:
+    #: an arm can go green on more cells and ship a worse blueprint on every one
+    #: of them, which is exactly the trade a fallback makes.
+    area: float = 0.0
 
     @property
     def label(self) -> str:
@@ -174,8 +184,11 @@ def run_cell(job: Job) -> Result:
     label = spec.label  # type: ignore[attr-defined]
 
     cls = _STRATEGIES[job.strategy]
+    kwargs: dict[str, object] = {"power": job.power, "workers": job.workers}
+    if job.arrangements is not None and job.strategy == "freeform":
+        kwargs["arrangements"] = job.arrangements
     try:
-        placement = cls(power=job.power, workers=job.workers).lay_out(  # type: ignore[call-arg]
+        placement = cls(**kwargs).lay_out(  # type: ignore[call-arg,arg-type]
             spec,  # type: ignore[arg-type]
             time_budget_s=job.budget,
         )
@@ -201,10 +214,16 @@ def run_cell(job: Job) -> Result:
     )
     elapsed = time.monotonic() - t0
     if report.ok:
-        return Result(job, "CLEAN", label, "", (), elapsed)
+        return Result(job, "CLEAN", label, "", (), elapsed, float(placement.area))
     checks = tuple(sorted({f.check for f in report.errors}))
     return Result(
-        job, "INVALID", label, f"{len(report.errors)}e " + ",".join(checks)[:56], checks, elapsed
+        job,
+        "INVALID",
+        label,
+        f"{len(report.errors)}e " + ",".join(checks)[:56],
+        checks,
+        elapsed,
+        float(placement.area),
     )
 
 
@@ -293,6 +312,7 @@ def build_jobs(
     workers: int,
     only: set[str] | None = None,
     skip: set[str] | None = None,
+    arrangements: int | None = None,
 ) -> list[Job]:
     """Every cell, hardest tier first so the pool does not end on a long tail."""
     entries = [e for e in URL_CORPUS if e.tier in tiers]
@@ -318,6 +338,7 @@ def build_jobs(
                                 budget=budget,
                                 power=power,
                                 workers=workers,
+                                arrangements=arrangements,
                             )
                         )
     return jobs
@@ -337,7 +358,24 @@ def _available_cores() -> int:
     return os.cpu_count() or 4
 
 
+_JSONL: list[dict[str, object]] = []
+
+
 def record(tallies: dict[str, Tally], r: Result) -> None:
+    _JSONL.append(
+        {
+            "strategy": r.job.strategy,
+            "url_id": r.job.url_id,
+            "spec_index": r.job.spec_index,
+            "spec_label": r.spec_label,
+            "power": r.job.power,
+            "budget": r.job.budget,
+            "status": r.status,
+            "area": r.area,
+            "seconds": r.seconds,
+            "detail": r.detail,
+        }
+    )
     t = tallies[r.job.strategy]
     t.slowest.append((r.seconds, f"{r.job.strategy} {r.label}"))
     if r.status == "CLEAN":
@@ -393,7 +431,22 @@ def main() -> int:
         help="comma-separated url_ids to leave out, applied after --only",
     )
     ap.add_argument(
+        "--arrangements",
+        type=int,
+        default=None,
+        help="freeform only: arrangements per candidate height. Omit for the "
+        "measured default; 1 is the search as it stood before arrangements "
+        "existed, which is what an A/B compares against",
+    )
+    ap.add_argument(
         "--quiet", action="store_true", help="totals only, no per-cell miss list"
+    )
+    ap.add_argument(
+        "--json",
+        default="",
+        help="append one JSON record per cell to this file, so two arms can be "
+        "compared cell-by-cell and on area rather than on a tally that hides "
+        "which cells moved and what they cost",
     )
     args = ap.parse_args()
 
@@ -408,7 +461,14 @@ def main() -> int:
     only = _slugs(args.only, "--only") if args.only else None
     skip = _slugs(args.skip, "--skip") if args.skip else None
     jobs = build_jobs(
-        names, tiers, budgets, args.candidates, per_cell_workers, only, skip
+        names,
+        tiers,
+        budgets,
+        args.candidates,
+        per_cell_workers,
+        only,
+        skip,
+        args.arrangements,
     )
     if not jobs:
         raise SystemExit(
@@ -492,6 +552,12 @@ def main() -> int:
             print("    slowest: " + ", ".join(f"{s:.0f}s {lbl}" for s, lbl in slow))
 
     elapsed = time.monotonic() - t0
+    if args.json:
+        import json as _json
+
+        with open(args.json, "a", encoding="utf-8") as fh:
+            for rec in _JSONL:
+                fh.write(_json.dumps(rec) + "\n")
     print(f"\n{elapsed:.0f}s wall, {done}/{len(jobs)} cells")
     over = [s for t in tallies.values() for s in t.slowest if s[0] >= SLOW_CELL_S]
     if over:

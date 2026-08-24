@@ -151,6 +151,34 @@ _RRR_STALE_ROUNDS = 3
 #: Outer repair iterations before falling back.
 OUTER_MAX = 3
 
+#: How many ARRANGEMENTS of each height the sweep may ask CP-SAT for.
+#:
+#: One was the whole search until this was measured.  ROUTABILITY IS A PROPERTY
+#: OF ARRANGEMENT, not of how much room a pack has: over 270 packs really routed
+#: across `casimir-crystal`, `information-matrix`, `quantum-chip` and
+#: `universe-matrix`, 28 of 50 (spec, height) groups had CP-SAT seeds that
+#: DISAGREED on whether the pack wires, and 21 of those 50 disagreed at
+#: IDENTICAL WIDTH -- same height, same width, one arrangement wires and another
+#: does not.  Seed 0 wired 34 of 50 height-groups; some seed of five wired 48.
+#:
+#: That is a real property and it is NOT a licence to spend the clock on it. See
+#: :meth:`FreeformLayout._sweep`, which gates arrangements past the first on
+#: having a routed pack to improve: they buy density where there is clock to
+#: spare and buy nothing at all where the deadline is the binding constraint.
+#:
+#: Three, because that is what the density measurement supports -- -1.51% area
+#: over six paired rounds -- and every further draw costs a CP-SAT solve and a
+#: routing pass.  ``1`` is the search as it stood before this existed and is the
+#: control the A/B compares against; see ``audit.py --arrangements``.
+_ARRANGEMENTS = 3
+
+#: CP-SAT's random seed for arrangement 0 -- the constant this always used.
+_PACK_RANDOM_SEED = 20260822
+
+#: Gap between one arrangement's seed and the next.  Any coprime-ish stride does;
+#: what matters is that it is FIXED, so a re-run asks for the same arrangements.
+_ARRANGEMENT_STRIDE = 7919
+
 #: Objective weights.  ``λ`` pulls connected strips together (this is what makes
 #: routing tractable); ``μ`` rewards a direct insert, which deletes a whole net.
 LAMBDA_HPWL = 1
@@ -1261,6 +1289,7 @@ def _pack(
     direct_candidates: dict[tuple[int, int], _DirectCandidate],
     workers: int,
     seed: _Pack | None = None,
+    arrangement: int = 0,
 ) -> _Pack | None:
     """Minimise width at a fixed height with CP-SAT.
 
@@ -1274,6 +1303,13 @@ def _pack(
     one; and its width is a proven upper bound on ``w_var``, which cuts the
     domain the bound has to climb through.  This is the construction that used
     to be the fallback, put to the one use it is genuinely good for.
+
+    ``arrangement`` asks for a DIFFERENT optimum of the SAME model.  Nothing
+    about the model changes -- not the objective, not a cut, not the warm start
+    -- only which of many equally wide packings CP-SAT walks to.  ``0`` is the
+    constant this always used, so a caller that does not ask gets exactly the
+    solve it used to get.  See :meth:`FreeformLayout._sweep` for why a second
+    arrangement is worth a solve.
     """
     model = cp_model.CpModel()
     n = len(strips)
@@ -1342,6 +1378,43 @@ def _pack(
     # enforcing a necessary condition that correlates the wrong way inside a
     # spec costs more than it buys. What decides routability here is which cells
     # are free, not how many.
+    #
+    # AND NO CHEAP ESTIMATE OF "WHICH CELLS ARE FREE" PREDICTS IT EITHER. That
+    # was the open question the note above left, so it has now been measured
+    # rather than argued, because a cheap predictor is the hinge on which a whole
+    # class of redesign turns: replace CP-SAT with a sequence-pair search under
+    # annealing, score each arrangement with a fast global router instead of the
+    # real one, and search thousands of arrangements instead of five. All of that
+    # rests on the surrogate agreeing with `_route_all`.
+    #
+    # Four estimates were computed on the REAL canvas at the moment before
+    # routing -- 270 packs, really routed, on `casimir-crystal`,
+    # `information-matrix`, `quantum-chip` and `universe-matrix`, 55 of which
+    # failed -- and scored by AUC against what the router then did. AUC 0.5 is a
+    # coin flip. Pooled WITHIN (spec, candidate), which is the comparison that
+    # matters and the one the calibration above got wrong:
+    #
+    #   connectivity, nets whose ports are in different components   0.500
+    #   the same test on real 3D cells rather than a projection      0.500
+    #   coarse capacity-based global router, total overflow          0.535
+    #   the same router's worst single-edge overflow                 0.525
+    #   free-column fraction                                         0.491
+    #   cut-capacity slack -- THE CONTROL                            0.422
+    #
+    # The control is what makes the nulls trustworthy: cut slack comes out
+    # ANTI-correlated, independently reproducing the finding above, so the
+    # instrument could have detected a signal and there was none to detect. Hold
+    # the height fixed as well, so only arrangement varies, and every one of them
+    # sits between 0.495 and 0.513.
+    #
+    # The global router is genuinely fast -- 69ms against 13.5s of real routing
+    # on `universe-matrix`, some 200x -- and a 200x-faster oracle at AUC 0.51 is
+    # worth nothing. Emission alone is 0.108s there, which is the floor on ANY
+    # routability evaluation since you cannot know which cells are free without
+    # it, so such a search gets ~130 evaluations per 15s ceiling and not the
+    # thousands annealing wants. What survives the experiment is the opposite
+    # conclusion: arrangement decides routability and only the real router can
+    # tell you, which is what `_ARRANGEMENTS` spends its solves on.
 
     # Symmetry breaking between identical strips of the same recipe: without it
     # the search burns itself on permutations that differ by nothing.
@@ -1436,6 +1509,42 @@ def _pack(
     # non-negative -- a negative reward would let the tier range below zero and
     # a width increase could be bought back, which is exactly the blend this
     # ordering exists to prevent.
+    #
+    # A BACKWARD-NET PENALTY WAS BUILT HERE, MEASURED, AND TAKEN OUT -- and its
+    # numbers are worth keeping, because half of it was right.
+    #
+    # The argument: `dx` is an ABSOLUTE value, so a net running the wrong way
+    # costs exactly what the same net running the right way costs. But a net
+    # leaves its producer's output lane at the EAST end and arrives at its
+    # consumer's input lane at the WEST head, so a consumer placed west of its
+    # producer makes the belt wrap all the way around the producer. HPWL cannot
+    # see that. The term is `max(0, x_i + w_i - x_j)`, the overlap a net has to
+    # double back over -- one variable and one inequality per net, since a
+    # positive coefficient in a minimisation drives it to its floor unaided.
+    #
+    # It was tried in two positions, with `tie_break_cap` grown to cover it so
+    # width stayed lexicographically above it either way: inside this tie-break
+    # tier beside HPWL, and in a tier of its own between width and HPWL. Both
+    # move the quantity they aim at -- backward overlap on `super-magnetic-ring`
+    # h=29 fell 614 -> 205 -> 144 across off, tier and own-tier.
+    #
+    # AND BOTH COST CLEAN CELLS, dose-responsively, which is what says it is the
+    # term and not the encoding. Corpus at `--budget 4`, against 70.88 clean of
+    # 72 over eight runs: 69.00 in the tie-break tier (t = -3.49), 68.62 in its
+    # own tier (t = -3.89), and 68.00 when weighted eight times harder inside the
+    # tie-break tier (t = -8.21). The harder it is enforced the more it costs.
+    # An arrangement multi-start does not rescue it either -- paired against the
+    # same multi-start without it, still -1.25 cells.
+    #
+    # THE OTHER HALF IS REAL AND IS LEFT ON THE TABLE DELIBERATELY. On the 61
+    # cells clean in every run of every arm it is -2.40% AREA -- denser on 32
+    # cells, larger on 9, biggest wins `information-matrix/free-proliferation` at
+    # -572 and -450 tiles -- and the mechanism is plain enough: a belt that does
+    # not wrap around its producer does not push the bounding box out. So this is
+    # a DENSITY lever that is anti-correlated with routability at a fixed clock,
+    # not the routability fix it was proposed as. It belongs in a build that has
+    # cells to spare, and it does not belong in the objective while the binding
+    # constraint is still whether a pack wires at all.
     cap = tie_break_cap(
         len(terms), width_bound=width_bound, height=height, n_direct=len(direct_vars)
     )
@@ -1465,7 +1574,10 @@ def _pack(
     # Determinism is load-bearing for the bake-off: multi-worker CP-SAT would
     # make the A-vs-B comparison noise rather than measurement.
     solver.parameters.num_search_workers = workers
-    solver.parameters.random_seed = 20260822
+    # A FUNCTION of `arrangement`, never a clock or a counter: two runs of the
+    # same sweep must ask for the same arrangements in the same order, or the
+    # bake-off is comparing samples rather than strategies.
+    solver.parameters.random_seed = _PACK_RANDOM_SEED + _ARRANGEMENT_STRIDE * arrangement
     status = solver.Solve(model)
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         return None
@@ -5406,6 +5518,7 @@ class FreeformLayout:
         strip_len: int = 6,
         workers: int | None = None,
         direct_insert: bool = True,
+        arrangements: int | None = None,
     ) -> None:
         self.power = power
         self.strip_len = strip_len
@@ -5415,6 +5528,11 @@ class FreeformLayout:
         #: Off only for A/B measurement -- the feature is worth having, but
         #: proving it works means comparing against its own absence.
         self.direct_insert = direct_insert
+        #: Arrangements per candidate height. ``None`` takes
+        #: :data:`_ARRANGEMENTS`, which is the measured default; ``1`` is the
+        #: search as it stood before arrangements existed, and is what the A/B
+        #: compares against.
+        self.arrangements = _ARRANGEMENTS if arrangements is None else arrangements
 
     def lay_out(self, spec: BuildSpec, *, time_budget_s: float = 60.0) -> Placement:
         """Return the densest ROUTABLE ``Placement``, or raise :class:`NoValidLayout`.
@@ -5680,6 +5798,30 @@ class FreeformLayout:
         # building them all up front costs nothing and only moves the work.
         seeds = {height: _greedy_pack(strips, height) for height in _candidate_heights(strips)}
         heights = sorted(seeds, key=lambda height: (seeds[height].width, height))
+        # AND A CANDIDATE IS A (HEIGHT, ARRANGEMENT) PAIR, NOT A HEIGHT.
+        #
+        # The note above ends "the lever is the packer's arrangement, not the
+        # stopwatch", and this is that lever. The sweep used to try each height
+        # once, and when none of them wired, `lay_out`'s retry packed the SAME
+        # heights again -- more solver time on the same five arrangements, which
+        # the note above `per_solve` shows is actively counterproductive, since a
+        # longer solve returns a tighter pack and tighter is harder to wire.
+        #
+        # Measured instead: at ONE height and ONE WIDTH, two CP-SAT seeds give
+        # arrangements that differ in whether the router can wire them, on 21 of
+        # 50 height-groups. See `_ARRANGEMENTS` for that measurement, and the
+        # note at the top of the loop for what it is and is not worth.
+        #
+        # ARRANGEMENT-OUTER, so the first pass is exactly what shipped before it:
+        # every height at arrangement 0, in the same order, and only then a
+        # second arrangement of each. That ordering is what lets the loop stop
+        # dead at the first pair of arrangement 1 when nothing has wired -- every
+        # pair after it is also arrangement 1, so there is nothing to skip past.
+        candidate_packs = [
+            (height, arrangement)
+            for arrangement in range(max(1, self.arrangements))
+            for height in heights
+        ]
         # This sweep's own share, never more than the CALL has left. A sweep
         # asked for 15s when 3 remain must not spend 15.
         left = time_budget_s if deadline is None else deadline - time.monotonic()
@@ -5708,7 +5850,44 @@ class FreeformLayout:
 
         best: Placement | None = None
         best_key: tuple[int, float] | None = None
-        for height in heights:
+        for height, arrangement in candidate_packs:
+            # A SECOND ARRANGEMENT IMPROVES; IT NEVER SEARCHES FOR THE FIRST.
+            #
+            # This is the whole shape of the feature and it was measured into
+            # existence rather than designed. Extra arrangements were tried
+            # unconditionally first, and on a spec that has not wired anything
+            # they buy NOTHING: every refusal on the stress specs reads "the 15s
+            # deadline passed", 36 of 36 across ten runs, so the binding
+            # constraint there is the clock and another arrangement spends it
+            # rather than buying it. Paired, five rounds, `universe-matrix` and
+            # `quantum-chip` at budget 4: 8.4 of 12 clean either way, difference
+            # exactly 0.00.
+            #
+            # AND THE EARLIER NUMBER FOR THIS DID NOT SURVIVE THE POWER REWRITE,
+            # which is why the gate exists at all. Before `_power_plan` decided
+            # coverage in the solve, ungated arrangements measured +1.17 clean
+            # cells on the corpus (paired, six rounds, t = +3.80). Re-measured
+            # after it: -0.33 (t = -0.79). The rewrite lifted the baseline from
+            # 70.0 to 71.8 of 72 and took the headroom with it, so what was a
+            # routability lever is now purely a density one.
+            #
+            # Where they DO pay is on a spec that has already wired and has clock
+            # left, because the sweep keeps the best `(area, belt_tiles)` it has
+            # seen and a further arrangement is another draw at a denser one.
+            # Tier `large` at budget 60, six paired rounds, 60 of 60 clean in
+            # every run of both arms: -1.51% AREA, paired t = -5.26, denser in
+            # SIX OF SIX rounds, and per cell denser on 24 of 60 against larger
+            # on 1. That costs 2.6x the cell-seconds, which is the trade being
+            # made knowingly: `time_budget_s` is an allowance the caller has
+            # already agreed to spend, the sweep used to hand most of it back,
+            # and density is the objective it is spent on.
+            #
+            # So the first pass over the heights is exactly what shipped before,
+            # and arrangements past it are gated on having something to improve.
+            # A spec that refuses sees the search it always saw; the clock it
+            # would have spent is left where the measurement says it belongs.
+            if arrangement and best is None:
+                break
             # The SOFT deadline stops us IMPROVING, never FINDING. A refusal
             # means the model could not lay the spec out; a sweep's own clock
             # must not be able to manufacture one. Breaking on time alone did
@@ -5732,6 +5911,7 @@ class FreeformLayout:
                 direct_candidates=net_candidates,
                 workers=self.workers,
                 seed=seeds[height],
+                arrangement=arrangement,
             )
             if pack is None:
                 continue
