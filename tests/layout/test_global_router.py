@@ -199,6 +199,27 @@ def test_prepared_sibling_group_shares_one_logical_capacity_unit() -> None:
     assert result.overflow_cells == 0
 
 
+def test_capacity_sharing_does_not_merge_transitive_sibling_groups() -> None:
+    first = NetId(0, 1, "iron", NetRole.INTERNAL, 0)
+    bridge = NetId(0, 2, "iron", NetRole.INTERNAL, 0)
+    stranger = NetId(3, 2, "iron", NetRole.INTERNAL, 0)
+    problem = _problem(
+        (
+            (first, (0, 1), (4, 1), (), (bridge,), ()),
+            (bridge, (0, 1), (4, 1), (), (first,), (stranger,)),
+            (stranger, (0, 1), (4, 1), (), (), (bridge,)),
+        ),
+        bounds=(0, 0, 4, 2),
+        keep_out={(x, y) for x in range(5) for y in (0, 2)},
+    )
+
+    result = route_global_once(problem, _feedback(problem), budget=20_000)
+
+    assert result.paths[first] == result.paths[bridge] == result.paths[stranger]
+    assert result.total_overflow == len(result.paths[first])
+    assert result.overflow_cells == len(result.paths[first])
+
+
 def test_same_item_strangers_do_not_share_capacity() -> None:
     first = NetId(0, 1, "iron", NetRole.INTERNAL, 0)
     stranger = NetId(2, 3, "iron", NetRole.INTERNAL, 0)

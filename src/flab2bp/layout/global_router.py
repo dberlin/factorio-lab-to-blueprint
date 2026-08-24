@@ -72,9 +72,8 @@ class _CapacityLedger:
         if units is None:
             return 0
         shares = any(
-            owner in compatible
+            all(owner in compatible for owner in unit)
             for unit in units
-            for owner in unit
         )
         return max(0, len(units) - 1) if shares else len(units)
 
@@ -94,7 +93,7 @@ class _CapacityLedger:
                 (
                     unit
                     for unit in units
-                    if any(owner in compatible for owner in unit)
+                    if all(owner in compatible for owner in unit)
                 ),
                 None,
             )
