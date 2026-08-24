@@ -61,6 +61,7 @@ from flab2bp.layout.freeform import (
     _pair_lanes,
     _Port,
     _power_plan,
+    _prepare_routing_problem,
     _proliferator_nets,
     _relink,
     _reserve_port_access,
@@ -73,6 +74,7 @@ from flab2bp.layout.freeform import (
     plan_strips,
     tie_break_cap,
 )
+from flab2bp.layout.route_feedback import NetRole
 from flab2bp.layout.spine import MACHINE_ITEM_IDS
 from flab2bp.spec import BuildSpec, MachineGroup, ProliferatorMode
 
@@ -136,6 +138,48 @@ def two_stage_spec() -> BuildSpec:
         belt_items_per_second=F(12),
         label="two-stage",
     )
+
+
+def test_prepared_problem_creates_fresh_workspaces() -> None:
+    spec = two_stage_spec()
+    strips = plan_strips(spec, strip_len=6)
+    pack = _greedy_pack(strips, _height_seed(strips))
+    prepared = _prepare_routing_problem(spec, strips, pack, power=False)
+
+    first = prepared.new_workspace()
+    second = prepared.new_workspace()
+    second_item = second.nets[0].item
+
+    first.canvas.blocked[(999, 999, 0)] = -1
+    first.canvas.reserved[(999, 999, 0)] = (999, 999)
+    first.nets[0].item = "mutated-only-in-first"
+
+    assert (999, 999, 0) not in second.canvas.blocked
+    assert (999, 999, 0) not in second.canvas.reserved
+    assert second.nets[0].item == second_item
+    assert first.buildings is not second.buildings
+    assert first.nets[0] is not second.nets[0]
+
+
+def test_prepared_net_ids_are_stable() -> None:
+    spec = two_stage_spec()
+    strips = plan_strips(spec, strip_len=6)
+    pack = _greedy_pack(strips, _height_seed(strips))
+    a = _prepare_routing_problem(spec, strips, pack, power=False)
+    b = _prepare_routing_problem(spec, strips, pack, power=False)
+
+    assert tuple(net.net_id for net in a.nets) == tuple(net.net_id for net in b.nets)
+
+
+def test_prepared_net_ids_preserve_routing_roles() -> None:
+    spec = proliferated_spec()
+    strips = plan_strips(spec, strip_len=6)
+    pack = _greedy_pack(strips, _height_seed(strips))
+    prepared = _prepare_routing_problem(spec, strips, pack, power=False)
+
+    roles = {net.net_id.role for net in prepared.nets}
+    assert NetRole.EXTERNAL in roles
+    assert NetRole.PROLIFERATOR in roles
 
 
 def magnetic_ring_spec() -> BuildSpec:
@@ -2786,9 +2830,11 @@ class TestTheProliferatorChainIsOneLinearRun:
         first = _Coater(coater=-1, drop=canvas.add(_belt(3, 0)), x=3, y=0)
         second = _Coater(coater=-1, drop=canvas.add(_belt(3, 1)), x=3, y=1)
         nets = _proliferator_nets(canvas, entry, [first, second], "proliferator-3")
-        assert [(n.src.x, n.src.y, n.dst.x, n.dst.y) for n in nets] == [
-            (-9, -9, 3, 0)
-        ], "the adjacent pair should have been linked, not routed"
+        assert [
+            (n.source.x, n.source.y, n.dst.x, n.dst.y) for n in nets
+        ] == [(-9, -9, 3, 0)], (
+            "the adjacent pair should have been linked, not routed"
+        )
         assert canvas.buildings[first.drop].output_obj == second.drop, (
             "the first drop must feed the second directly"
         )
@@ -3995,7 +4041,7 @@ class TestABranchLeavesFromItsOwnSource:
         got = _source_for(canvas, head, net, {head}, set())
         assert got is None, (
             "a head with no sibling beside it was given a feeder anyway: "
-            f"{got} (the net's own lane belt is {net.src.belt})"
+            f"{got} (the net's own lane belt is {net.source.belt})"
         )
         assert got != stranger
 

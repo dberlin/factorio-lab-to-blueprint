@@ -65,6 +65,7 @@ import math
 import time
 from collections import defaultdict
 from collections.abc import Callable, Collection, Mapping, Sequence, Set
+from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from enum import Enum
 from fractions import Fraction
@@ -82,6 +83,7 @@ from flab2bp.layout.base import (
     PlacedBuilding,
     Placement,
 )
+from flab2bp.layout.route_feedback import NetId, NetRole
 from flab2bp.layout.slots import SlotUndetermined, assign_sorter_slots
 from flab2bp.layout.spine import BELT_ITEM_IDS, MACHINE_ITEM_IDS, SORTER_TIERS
 from flab2bp.spec import BuildSpec
@@ -2429,6 +2431,48 @@ class _Port:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class _PreparedPort:
+    belt_index: int
+    x: int
+    y: int
+    x0: int
+    x1: int
+    tiles: tuple[int, ...]
+    machines: int
+
+
+def _prepare_port(port: _Port) -> _PreparedPort:
+    return _PreparedPort(
+        belt_index=port.belt,
+        x=port.x,
+        y=port.y,
+        x0=port.x0,
+        x1=port.x1,
+        tiles=port.tiles,
+        machines=port.machines,
+    )
+
+
+def _bind_prepared_port(
+    port: _PreparedPort, buildings: list[PlacedBuilding]
+) -> _Port:
+    # Validate every index against this attempt's fresh building list.  _Port
+    # stores indices rather than objects, so no mutable template can leak in.
+    buildings[port.belt_index]
+    for tile_index in port.tiles:
+        buildings[tile_index]
+    return _Port(
+        belt=port.belt_index,
+        x=port.x,
+        y=port.y,
+        x0=port.x0,
+        x1=port.x1,
+        tiles=port.tiles,
+        machines=port.machines,
+    )
+
+
 def _lane_filter(item: str) -> int:
     """The DSP item id a sorter on a shared lane must filter to.
 
@@ -4110,9 +4154,83 @@ def _astar(
 
 @dataclass
 class _Net:
-    src: _Port
+    src: _Port | None
     dst: _Port
     item: str
+    net_id: NetId | None = None
+    boundary_goals: tuple[tuple[int, int, int], ...] = ()
+
+    @property
+    def source(self) -> _Port:
+        if self.src is None:
+            raise ValueError("external-input nets have no source port")
+        return self.src
+
+
+@dataclass(frozen=True, slots=True)
+class _PreparedNet:
+    net_id: NetId
+    src: _PreparedPort | None
+    dst: _PreparedPort
+    item: str
+    boundary_goals: tuple[tuple[int, int, int], ...] = ()
+
+
+@dataclass(slots=True)
+class _RoutingWorkspace:
+    canvas: _Canvas
+    buildings: list[PlacedBuilding]
+    nets: list[_Net]
+
+
+@dataclass(frozen=True, slots=True)
+class _PreparedRoutingProblem:
+    building_templates: tuple[PlacedBuilding, ...]
+    blocked: tuple[tuple[tuple[int, int, int], int], ...]
+    solid: frozenset[tuple[int, int]]
+    reserved: tuple[
+        tuple[tuple[int, int, int], tuple[int, int]],
+        ...,
+    ]
+    keep_out: frozenset[tuple[int, int]]
+    nets: tuple[_PreparedNet, ...]
+    core: tuple[int, int, int, int]
+    route_bounds: tuple[int, int, int, int]
+    limit: tuple[int, int, int, int] | None
+    power_sites: tuple[tuple[int, int], ...]
+    sorters: int
+    coaters: int
+    direct_inserts: int
+
+    def new_workspace(self) -> _RoutingWorkspace:
+        buildings = deepcopy(list(self.building_templates))
+        canvas = _Canvas(
+            buildings=buildings,
+            blocked=dict(self.blocked),
+            solid=set(self.solid),
+            reserved=dict(self.reserved),
+            routing_ports=frozenset(),
+            limit=self.limit,
+            keep_out=set(self.keep_out),
+        )
+        nets = [_bind_prepared_net(net, buildings) for net in self.nets]
+        return _RoutingWorkspace(canvas=canvas, buildings=buildings, nets=nets)
+
+
+def _bind_prepared_net(
+    net: _PreparedNet, buildings: list[PlacedBuilding]
+) -> _Net:
+    return _Net(
+        src=(
+            _bind_prepared_port(net.src, buildings)
+            if net.src is not None
+            else None
+        ),
+        dst=_bind_prepared_port(net.dst, buildings),
+        item=net.item,
+        net_id=net.net_id,
+        boundary_goals=net.boundary_goals,
+    )
 
 
 def _merge_frontier(
@@ -4333,9 +4451,9 @@ def _route_all(
     # port, because `at_tile` moves the port along the lane it belongs to.
     same_src: dict[tuple[int, int], list[int]] = defaultdict(list)
     for i, net in enumerate(nets):
-        same_src[net.src.y, net.src.x0].append(i)
+        same_src[net.source.y, net.source.x0].append(i)
     src_group = {
-        i: tuple(g for g in same_src[net.src.y, net.src.x0] if g != i)
+        i: tuple(g for g in same_src[net.source.y, net.source.x0] if g != i)
         for i, net in enumerate(nets)
     }
     # Chained nets -- one net leaving the belt another delivers to, which is what
@@ -4405,7 +4523,7 @@ def _route_all(
         # so its own way in and out reads as free while every other port's
         # stays held.
         canvas.routing_ports = frozenset(
-            {(net.src.x, net.src.y), (net.dst.x, net.dst.y)}
+            {(net.source.x, net.source.y), (net.dst.x, net.dst.y)}
         )
         # THE LANE TILE IS ONLY FREE FOR THE FIRST NET TO LEAVE IT.  Its port is
         # the lane's END, which has no onward link, so the first tap merely
@@ -4587,7 +4705,7 @@ def _route_all(
             """
             net = nets[index]
             for end, port, group, slack in (
-                (through[0], net.src, src_group, 0),
+                (through[0], net.source, src_group, 0),
                 (through[-1], net.dst, dst_group, 1),
             ):
                 if (
@@ -4675,8 +4793,8 @@ def _route_all(
             for hurt in sorted(
                 victims,
                 key=lambda i: -(
-                    abs(nets[i].src.x - nets[i].dst.x)
-                    + abs(nets[i].src.y - nets[i].dst.y)
+                    abs(nets[i].source.x - nets[i].dst.x)
+                    + abs(nets[i].source.y - nets[i].dst.y)
                 ),
             ):
                 starts, goals = _ends(hurt)
@@ -4739,7 +4857,8 @@ def _route_all(
         order = sorted(
             range(len(nets)),
             key=lambda i: -(
-                abs(nets[i].src.x - nets[i].dst.x) + abs(nets[i].src.y - nets[i].dst.y)
+                abs(nets[i].source.x - nets[i].dst.x)
+                + abs(nets[i].source.y - nets[i].dst.y)
             ),
         )
         stranded: list[int] = []
@@ -4955,6 +5074,8 @@ def _reserve_port_access(
     level: dict[tuple[int, int], int] = {}
     for net in nets:
         for role, port in (("src", net.src), ("dst", net.dst)):
+            if port is None:
+                continue
             key = (port.x, port.y)
             ports[key] = max(ports.get(key, 0), len(port.columns()))
             roles[key].add(role)
@@ -5634,8 +5755,7 @@ def _straight_to_edge(
 
 def _route_external_inputs(
     canvas: _Canvas,
-    spec: BuildSpec,
-    strip_in_ports: list[dict[str, _Port]],
+    nets: Sequence[_Net],
     belt_id: int,
     belt_model: int,
     core: tuple[int, int, int, int],
@@ -5671,47 +5791,26 @@ def _route_external_inputs(
     on a boundary that later passes moved, and the head then sat interior.
     """
     bounds = _grow(core, _ENTRY_RING - 1)
-    min_x, min_y, max_x, max_y = bounds
     # The fallback search may travel ALONG the entry ring, which the straight
     # runs already use; a cell on the outermost ring cannot wall anything in,
     # because outward of it is ground no pass can reach.
     astar_bounds = _grow(core, _ENTRY_RING)
-    # One ring outside the block: where the player's belt meets ours.
-    edge = [
-        (x, y, 0)
-        for x in range(min_x - 1, max_x + 2)
-        for y in (min_y - 1, max_y + 1)
-    ] + [
-        (x, y, 0)
-        for y in range(min_y, max_y + 1)
-        for x in (min_x - 1, max_x + 1)
-    ]
-    starts = [c for c in edge if canvas.free(c)]
+    starts = list(
+        dict.fromkeys(
+            cell
+            for net in nets
+            for cell in net.boundary_goals
+            if canvas.free(cell)
+        )
+    )
     if not starts:
         return 0
 
     history: dict[tuple[int, int, int], float] = defaultdict(float)
     if budget is None:
         budget = {"left": _ROUTING_BUDGET}
-    # Deduplicate: several strips of one group each want the same item, and each
-    # of their lanes needs its own way in.
-    # Keyed by LANE, not by item. `_seat_inputs` mixes two ingredients onto one
-    # lane when they will not fit one-per-lane, and both then report the same
-    # port. Routing per item would try to build a second run to a lane that
-    # already has one, find the cell taken, and count a miss -- which is what
-    # made the six-ingredient spec refuse outright. One lane needs one way in;
-    # what travels on it is the marker pass's business.
-    wanted: dict[int, _Port] = {}
-    for ports in strip_in_ports:
-        for item, port in sorted(ports.items()):
-            if item in spec.external_inputs:
-                wanted.setdefault(port.belt, port)
-    carried = {
-        port.belt: item
-        for ports in strip_in_ports
-        for item, port in sorted(ports.items(), reverse=True)
-        if item in spec.external_inputs
-    }
+    wanted = {net.dst.belt: net.dst for net in nets}
+    carried = {net.dst.belt: net.item for net in nets}
     missed = 0
     for done, (belt, port) in enumerate(wanted.items()):
         if _expired(deadline):
@@ -6501,29 +6600,18 @@ def _join_shard_islands(
     return extra
 
 
-
-def _build(
+def _prepare_routing_problem(
     spec: BuildSpec,
     strips: list[Strip],
     pack: _Pack,
     *,
     power: bool,
-    route: bool,
-    ramped: bool = False,
-    deadline: float | None = None,
-    budget: dict[str, int] | None = None,
-) -> tuple[Placement, int, int]:
-    """Emit, wire and power one pack.
-
-    Returns ``(placement, failed, towers)``.  ``failed`` is the number of nets
-    left unrouted, and every caller discards a placement with any -- which is
-    what makes ``deadline`` safe to thread in here.  Running out of clock is
-    reported as route failures, so it produces a REFUSAL upstream and can never
-    produce a placement missing its belts.
-    """
+    _reserve_ports: bool = True,
+) -> _PreparedRoutingProblem:
+    """Build immutable exact geometry shared by both routing engines."""
     belt_id = BELT_ITEM_IDS.get(spec.belt_item_id, 2001)
     belt_model = catalog.building(belt_id).model_index
-    canvas = _Canvas(ramped=ramped)
+    canvas = _Canvas()
 
     rates: dict[str, Fraction] = {}
     for g in _adapt(spec).values():
@@ -6575,6 +6663,7 @@ def _build(
     lane_supply: dict[str, dict[int, Fraction]] = defaultdict(dict)
     lane_demand: dict[str, dict[int, Fraction]] = defaultdict(dict)
     sibling_lanes: dict[str, list[tuple[int, int]]] = defaultdict(list)
+    strip_of_belt: dict[int, int] = {}
     sorters = 0
     for i, s in enumerate(strips):
         ox, oy = pack.at[i]
@@ -6591,6 +6680,8 @@ def _build(
         )
         sorters += placed
         strip_in_ports.append(ins)
+        for port in (*ins.values(), *outs.values()):
+            strip_of_belt[port.belt] = i
         for item, port in ins.items():
             in_ports[s.group_key, item].append(port)
         made = per_item.get(s.group_key, ({}, {}))[1]
@@ -6682,7 +6773,12 @@ def _build(
     def hold_ports() -> None:
         # A lane carrying an external ingredient AND an internally produced one
         # has two feeds to accept, not one, so it needs two ways in.
-        net_ports = {(p.x, p.y) for n in nets for p in (n.src, n.dst)}
+        net_ports = {
+            (p.x, p.y)
+            for n in nets
+            for p in (n.src, n.dst)
+            if p is not None
+        }
         shared_feed = {
             (port.x, port.y)
             for ports in strip_in_ports
@@ -6691,7 +6787,7 @@ def _build(
         } & net_ports
         _reserve_port_access(canvas, nets, twice=shared_feed)
 
-    if route:
+    if _reserve_ports:
         hold_ports()
 
     # Coaters go in BEFORE routing, because each one needs a proliferator net
@@ -6705,6 +6801,15 @@ def _build(
             canvas, spec, strips, strip_in_ports, belt_id, belt_model
         )
     coaters = len(coater_list)
+    for coater in coater_list:
+        strip_of_belt[coater.drop] = next(
+            i
+            for i, ports in enumerate(strip_in_ports)
+            if any(
+                port.y == coater.y and port.x1 + 1 == coater.x
+                for port in ports.values()
+            )
+        )
 
     # THE EXTENT IS DECIDED HERE, and nothing after this point may move it.
     #
@@ -6731,6 +6836,7 @@ def _build(
     # nets exist at reservation time is what the previous ordering gave up --
     # the coater drops those nets sink into then went unheld, and the external
     # runs walled them in instead.
+    internal_net_count = len(nets)
     if coater_list and prolif_item is not None:
         entry = _place_proliferator_entry(
             canvas, prolif_item, belt_id, belt_model, core
@@ -6744,7 +6850,7 @@ def _build(
     # proliferator entry alike. A drop is a one-tile lane and the sink of a
     # proliferator net, so it is a port like any other, and it did not exist
     # when the first claim was staked.
-    if route:
+    if _reserve_ports:
         hold_ports()
 
     # Power is decided AFTER the ports have claimed their ground, and before
@@ -6771,61 +6877,160 @@ def _build(
     # failure once the pack and the routing have both spent the ground.
     power_sites = _power_plan(canvas, core) if power else []
 
-    # Bring the outside inputs in FIRST. They have no alternative: an internal
-    # net can be routed around an obstacle, but an external lane can only be
-    # reached from beyond the block, and a strip's inner lanes have exactly one
-    # way in. Routing the internal nets first let them take those cells -- on
-    # the graphene chain two external lanes were walled in by belts that had a
-    # dozen other routes available. First claim goes to the side that has no
-    # second choice.
+    # External-input nets retain the existing lane-deduplication and item
+    # precedence, while exposing their shared boundary cells immutably.
+    wanted: dict[int, tuple[_Port, int]] = {}
+    carried: dict[int, str] = {}
+    for strip_index, ports in enumerate(strip_in_ports):
+        for item, port in sorted(ports.items()):
+            if item in spec.external_inputs:
+                wanted.setdefault(port.belt, (port, strip_index))
+        for item, port in sorted(ports.items(), reverse=True):
+            if item in spec.external_inputs:
+                carried[port.belt] = item
+
+    min_x, min_y, max_x, max_y = _grow(core, _ENTRY_RING - 1)
+    boundary = tuple(
+        cell
+        for cell in (
+            [
+                (x, y, 0)
+                for x in range(min_x - 1, max_x + 2)
+                for y in (min_y - 1, max_y + 1)
+            ]
+            + [
+                (x, y, 0)
+                for y in range(min_y, max_y + 1)
+                for x in (min_x - 1, max_x + 1)
+            ]
+        )
+        if canvas.free(cell)
+    )
+
+    tagged_nets = [
+        (
+            net,
+            NetRole.INTERNAL if i < internal_net_count else NetRole.PROLIFERATOR,
+        )
+        for i, net in enumerate(nets)
+    ]
+    tagged_nets.extend(
+        (
+            _Net(src=None, dst=port, item=carried[belt]),
+            NetRole.EXTERNAL,
+        )
+        for belt, (port, _strip_index) in wanted.items()
+    )
+
+    ordinals: dict[tuple[int | None, int | None, str, NetRole], int] = (
+        defaultdict(int)
+    )
+    prepared_nets: list[_PreparedNet] = []
+    for net, role in tagged_nets:
+        source_strip = (
+            strip_of_belt.get(net.src.belt) if net.src is not None else None
+        )
+        destination_strip = strip_of_belt.get(net.dst.belt)
+        identity = (source_strip, destination_strip, net.item, role)
+        net_id = NetId(*identity, ordinal=ordinals[identity])
+        ordinals[identity] += 1
+        prepared_nets.append(
+            _PreparedNet(
+                net_id=net_id,
+                src=_prepare_port(net.src) if net.src is not None else None,
+                dst=_prepare_port(net.dst),
+                item=net.item,
+                boundary_goals=boundary if role is NetRole.EXTERNAL else (),
+            )
+        )
+
+    return _PreparedRoutingProblem(
+        building_templates=tuple(deepcopy(canvas.buildings)),
+        blocked=tuple(sorted(canvas.blocked.items())),
+        solid=frozenset(canvas.solid),
+        reserved=tuple(sorted(canvas.reserved.items())),
+        keep_out=frozenset(canvas.keep_out),
+        nets=tuple(prepared_nets),
+        core=core,
+        route_bounds=route_bounds,
+        limit=canvas.limit,
+        power_sites=tuple(power_sites),
+        sorters=sorters,
+        coaters=coaters,
+        direct_inserts=direct_placed,
+    )
+
+
+def _build(
+    spec: BuildSpec,
+    strips: list[Strip],
+    pack: _Pack,
+    *,
+    power: bool,
+    route: bool,
+    deadline: float | None = None,
+    budget: dict[str, int] | None = None,
+) -> tuple[Placement, int, int]:
+    """Emit, wire and power one pack from a fresh prepared workspace."""
+    prepared = _prepare_routing_problem(
+        spec,
+        strips,
+        pack,
+        power=power,
+        _reserve_ports=route,
+    )
+    workspace = prepared.new_workspace()
+    canvas = workspace.canvas
+    belt_id = BELT_ITEM_IDS.get(spec.belt_item_id, 2001)
+    belt_model = catalog.building(belt_id).model_index
+    external_nets = [
+        net
+        for net in workspace.nets
+        if net.net_id is not None and net.net_id.role is NetRole.EXTERNAL
+    ]
+    route_nets = [
+        net
+        for net in workspace.nets
+        if net.net_id is not None and net.net_id.role is not NetRole.EXTERNAL
+    ]
+
+    # External inputs retain first claim on routing space.
     unreachable = 0
     if route:
         unreachable = _route_external_inputs(
-            canvas, spec, strip_in_ports, belt_id, belt_model, core, deadline, budget
+            canvas,
+            external_nets,
+            belt_id,
+            belt_model,
+            prepared.core,
+            deadline,
+            budget,
         )
 
     routed, failed, iterations = (0, 0, 0)
-    if route and nets:
+    if route and route_nets:
         routed, failed, iterations = _route_all(
-            canvas, nets, belt_id, belt_model, route_bounds, deadline, budget
+            canvas,
+            route_nets,
+            belt_id,
+            belt_model,
+            prepared.route_bounds,
+            deadline,
+            budget,
         )
     failed += unreachable
 
-    # Port access reservations are spent once the last net is committed. Holding
-    # them into the power pass costs coverage for nothing: a reserved cell reads
-    # as occupied to `free`, so the tower that would have covered a machine
-    # cannot be placed there, and the machine ships unpowered. That got sharply
-    # worse once a port with two jobs began holding two cells -- twenty coater
-    # drops became forty cells the lattice could not use, and the repair pass
-    # then failed to cover fourteen buildings on a block with room to spare.
+    # Reservations and tentative markers are attempt-local and are spent before
+    # the held power sites become buildings.
     canvas.reserved.clear()
-    # Tentative path markers outlive the round that made them: the round that
-    # succeeds commits and returns without clearing its own, and any cell
-    # `_commit_paths` decided not to build on keeps a marker with no building
-    # under it. `free` reads those as occupied, so the lattice treats empty
-    # ground as taken.
     for cell in [c for c, owner in canvas.blocked.items() if owner == _TENTATIVE]:
         del canvas.blocked[cell]
     canvas.keep_out.clear()
-    # A build with an unrouted net is a build the caller will discard, so it
-    # does not pay for the power pass -- which is a full sweep of every powered
-    # tile against every tower and is seconds on a large block.
-    #
-    # Guarded on `failed`, never on the deadline. A build that WIRED is a real
-    # candidate whatever the time is, and returning one with no towers because
-    # the clock was short would be a `power.coverage` INVALID manufactured by a
-    # stopwatch -- the exact thing a deadline must not do. But `failed` is not a
-    # stopwatch: `_sweep` discards any pack with one, unconditionally, so every
-    # second spent covering it is spent on something already thrown away.
-    #
-    # This used to also require the deadline to have passed, which meant a
-    # doomed build paid in full whenever it failed EARLY -- the worst case, since
-    # failing early is exactly when there was still clock to spend on the next
-    # height. Measured at a 15s ceiling on `universe-matrix/no-proliferator`
-    # power=1: routing conceded at 8.05s with ten nets short and the power pass
-    # then ran to 14.30s, so six of the remaining seven seconds went on a
-    # placement nothing was ever going to look at.
-    towers = _place_power(canvas, power_sites) if power and not failed else 0
+    towers = (
+        _place_power(canvas, prepared.power_sites)
+        if power and not failed
+        else 0
+    )
 
     # Slot indices are geometry, so they are derived here once rather than at
     # each of the several places a sorter gets created. Every sorter this
@@ -6850,17 +7055,17 @@ def _build(
         stats={
             "machines": float(spec.machine_count),
             "strips": float(len(strips)),
-            "sorters": float(sorters),
+            "sorters": float(prepared.sorters),
             "towers": float(towers),
-            "spray_coaters": float(coaters),
-            "nets": float(len(nets)),
+            "spray_coaters": float(prepared.coaters),
+            "nets": float(len(route_nets)),
             "routed": float(routed),
             "route_failures": float(failed),
             "repair_iterations": float(iterations),
             "belt_tiles": float(
                 sum(1 for b in canvas.buildings if catalog.is_belt(b.item_id))
             ),
-            "direct_inserts": float(direct_placed),
+            "direct_inserts": float(prepared.direct_inserts),
         },
     )
     return placement, failed, towers
