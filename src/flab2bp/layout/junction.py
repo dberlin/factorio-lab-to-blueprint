@@ -65,10 +65,39 @@ def site_is_clear(buildings: Sequence[PlacedBuilding], x: int, y: int) -> bool:
     Refusing the site is what a caller wants here -- routing has other tiles to
     try, and a tap that cannot be made is one the router works around rather
     than a build that fails.
+
+    BELTS, SPLITTERS AND SORTERS ARE NOT OBSTACLES, AND COUNTING THEM MADE THIS
+    PREDICATE REFUSE EVERY SITE A JUNCTION HAS.
+    -------------------------------------------------------------------------
+    This module's own docstring says it: "Because attachments share a tile, any
+    occupancy check must treat splitters and belts as overlays".  A junction is
+    CO-LOCATED with the belt it splits -- that is the corpus convention, a belt
+    running through a splitter recorded as two belts on the tile -- so the belt
+    at distance 0.0 was always there, and against a belt's clearance of 1 the
+    requirement is 2.0 tiles.  A junction could therefore never be built on a
+    belt, nor within two tiles of the next belt along the same lane, which is
+    every lane tile there is.  Sorters are the same story one tile out: one
+    stands between every lane and its machine, clearance 1, requirement 2.0.
+
+    MEASURED, and the control is the shipped predicate on the same specs in the
+    same process: with belts and sorters counted, `universe-matrix`'s
+    `no-proliferator` candidate refused at every candidate height -- 10 packs
+    routed, each losing exactly one or two nets, and every one of those losses
+    was `_tap_source` returning False here.  Without them it lays out and
+    validates clean.  Nothing else changed.
+
+    The scope now matches ``geom.collide``, which is the check this placement
+    will actually be judged by: it tests neither belts nor sorters, because the
+    game excuses a sorter against anything that is not a sorter and our belt
+    model over-reports on blueprints the game itself wrote.  A gate stricter
+    than the verdict it guards is not caution; it is a refusal the verdict
+    would never have made.
     """
     sw, sh = catalog.clearance(catalog.SPLITTER_ID, 0.0)
     mine = max(sw, sh)
     for b in buildings:
+        if catalog.is_belt_integrated(b.item_id) or catalog.is_sorter(b.item_id):
+            continue
         try:
             info = catalog.building(b.item_id)
         except KeyError:
