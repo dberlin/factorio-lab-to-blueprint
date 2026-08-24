@@ -251,16 +251,26 @@ class Context:
     spec: BuildSpec | None
     ids: IdMap | None
     soft_width: int
+    #: Ceiling on belt altitude for THIS run, in tiles of height.  A property
+    #: of the player's save rather than of the game -- how high a belt may go
+    #: depends on their vertical-construction unlocks -- so it is passed in,
+    #: never read from a constant.
+    max_belt_z: Fraction
+    #: Whether this save has the ``beltVerticalConstruction`` tech.  It
+    #: switches OFF the game's slope test entirely, so with it a belt may
+    #: climb straight up and without it nothing may exceed
+    #: ``MAX_BELT_SLOPE``.  A save property, declared, never inferred.
+    belt_vertical_construction: bool
     kinds: tuple[Kind, ...]
     #: cell -> building indices standing on it.  Sorters are absent by design:
     #: their anchors sit *on* the buildings they serve, and the tiles they span
     #: are not exclusively theirs in this model.  Belts and splitters ARE here,
     #: so sorter anchors and belt links can be resolved against them.
-    occupancy: Mapping[tuple[int, int, int], tuple[int, ...]]
+    occupancy: Mapping[tuple[int, int, Fraction], tuple[int, ...]]
     #: cell -> building indices that exclusively *reserve* it.  Belt-integrated
     #: buildings (belts, sorters, splitters) are absent; this is what
     #: ``geom.overlap`` judges.
-    blocking: Mapping[tuple[int, int, int], tuple[int, ...]]
+    blocking: Mapping[tuple[int, int, Fraction], tuple[int, ...]]
     runs: tuple[BeltRun, ...]
     run_of: Mapping[int, int]
     #: splitter index -> belts that FEED it (they name it as ``output_obj``).
@@ -388,7 +398,7 @@ class Context:
         return None
 
 
-def _occupied_tiles(b: PlacedBuilding, kind: Kind) -> list[tuple[int, int, int]]:
+def _occupied_tiles(b: PlacedBuilding, kind: Kind) -> list[tuple[int, int, Fraction]]:
     if kind is Kind.SORTER:
         return []
     try:
@@ -528,11 +538,16 @@ def _build_graph(
 
 
 def _context(
-    placement: Placement, spec: BuildSpec | None, ids: IdMap | None, soft_width: int
+    placement: Placement,
+    spec: BuildSpec | None,
+    ids: IdMap | None,
+    soft_width: int,
+    max_belt_z: Fraction,
+    belt_vertical_construction: bool,
 ) -> Context:
     kinds = tuple(_kind(b) for b in placement.buildings)
-    occ: dict[tuple[int, int, int], list[int]] = defaultdict(list)
-    blocking: dict[tuple[int, int, int], list[int]] = defaultdict(list)
+    occ: dict[tuple[int, int, Fraction], list[int]] = defaultdict(list)
+    blocking: dict[tuple[int, int, Fraction], list[int]] = defaultdict(list)
     for i, b in enumerate(placement.buildings):
         # One question about the building, not one per tile of it: a 9x5
         # chemical plant asked it 45 times and always got the same answer.
@@ -562,6 +577,8 @@ def _context(
         spec=spec,
         ids=ids,
         soft_width=soft_width,
+        max_belt_z=max_belt_z,
+        belt_vertical_construction=belt_vertical_construction,
         kinds=kinds,
         occupancy={k: tuple(v) for k, v in occ.items()},
         blocking={k: tuple(v) for k, v in blocking.items()},
@@ -663,12 +680,21 @@ def _belt_single(ctx: Context) -> Iterable[Finding]:
 
 @check("geom.machine_ground")
 def _machine_ground(ctx: Context) -> Iterable[Finding]:
+    """Machines this GENERATOR places sit on the ground.
+
+    Not a rule of the game: DSP stacks Matrix Labs, and the corpus has 120 of
+    them in 10 columns of 12 at ``z = 0, 3, 6, ... 33``.  This is our own
+    invariant -- nothing we emit stacks -- and it is scoped to machines so it
+    cannot be read as a claim about what the game permits.
+    """
     for i, b in ctx.of_kind(Kind.MACHINE):
         if b.z != 0:
             yield Finding(
                 "geom.machine_ground",
                 Severity.ERROR,
-                f"machine {i} sits at altitude {b.z}; only belts may leave the ground",
+                f"machine {i} sits at altitude {b.z}; this generator places every "
+                f"machine on the ground (the GAME does stack: real Matrix Labs "
+                f"reach z=33)",
                 (i,),
                 {"z": b.z},
             )
@@ -676,32 +702,105 @@ def _machine_ground(ctx: Context) -> Iterable[Finding]:
 
 @check("geom.altitude_range")
 def _altitude_range(ctx: Context) -> Iterable[Finding]:
-    for i, b in enumerate(ctx.placement.buildings):
-        if b.z < 0 or b.z >= cat.MAX_BELT_STACK_LEVELS:
+    """Belt altitudes are half-tile multiples, within the run's ceiling.
+
+    Scoped to BELTS.  It used to run over every building against
+    ``0 .. MAX_BELT_STACK_LEVELS - 1``, which both let a belt reach ``z = 2`` by
+    an illegal step and would have rejected a legal stacked machine.
+
+    The ceiling comes from :attr:`Context.max_belt_z`, not from a constant: how
+    high a belt may go is a property of the player's SAVE -- their
+    vertical-construction unlocks -- and the user's own save reaches 38.
+    """
+    ceiling = ctx.max_belt_z
+    for i, b in ctx.of_kind(Kind.BELT):
+        if b.z < 0 or b.z > ceiling:
             yield Finding(
                 "geom.altitude_range",
                 Severity.ERROR,
-                f"building {i} at altitude {b.z}, outside 0..{cat.MAX_BELT_STACK_LEVELS - 1}",
+                f"belt {i} at altitude {b.z}, outside 0..{ceiling} "
+                f"(raise --max-belt-height if this save's vertical-construction "
+                f"unlocks allow it)",
                 (i,),
-                {"z": b.z, "max": cat.MAX_BELT_STACK_LEVELS - 1},
+                {"z": b.z, "max": ceiling},
+            )
+        elif b.z % cat.BELT_Z_QUANTUM != 0:
+            yield Finding(
+                "geom.altitude_range",
+                Severity.ERROR,
+                f"belt {i} at altitude {b.z}, not a multiple of "
+                f"{cat.BELT_Z_QUANTUM}",
+                (i,),
+                {"z": b.z, "quantum": cat.BELT_Z_QUANTUM},
             )
 
 
 @check("geom.altitude_step")
 def _altitude_step(ctx: Context) -> Iterable[Finding]:
+    """A belt's slope may not exceed what the game allows.
+
+    This is the game's own rule, from ``BuildTool_Path``::
+
+        num25 = Mathf.Abs(Maths.SphericalSlopeRatio(a, b));
+        if (!history.beltVerticalConstruction && num25 > 0.8f)
+            buildPreview2.condition = EBuildCondition.TooSteep;
+
+    ``SphericalSlopeRatio`` is ``(|b| - |a|) / horizontal distance`` -- WORLD
+    rise over run -- and blueprint z is ``3/4`` of world height, so a link's
+    slope is ``(dz / BELT_Z_PER_WORLD_UNIT) / dxy``.
+
+    Three earlier versions of this check were all wrong, in instructive ways:
+
+    * ``dz > 1`` let the shipped bug through, because a whole tile of height
+      across one tile of run scores exactly ``1``;
+    * ``dz > BELT_CLIMB_PER_TILE`` caught it but for the wrong reason, and
+      would have rejected legal steeper ramps;
+    * an enumeration of "ramp or vertical" was closer, but invented a
+      two-form rule the game does not have -- there is one rule, on slope, and
+      the vertical form is simply the case where the run is zero.
+
+    A zero run makes the slope infinite, which only ``beltVerticalConstruction``
+    permits.  That is a tech unlock and a property of the player's save, so it
+    is declared per run alongside the height ceiling, never assumed.
+    """
     bs = ctx.placement.buildings
+    limit = cat.MAX_BELT_SLOPE
     for i, b in ctx.of_kind(Kind.BELT):
         o = b.output_obj
         if o is None or not (0 <= o < len(bs)) or ctx.kinds[o] is not Kind.BELT:
             continue
-        dz = abs(bs[o].z - b.z)
-        if dz > 1:
+        nxt = bs[o]
+        dz = nxt.z - b.z
+        if dz == 0:
+            continue
+        dxy = abs(nxt.x - b.x) + abs(nxt.y - b.y)
+        world_rise = abs(dz) / cat.BELT_Z_PER_WORLD_UNIT
+        if dxy == 0:
+            if not ctx.belt_vertical_construction:
+                yield Finding(
+                    "geom.altitude_step",
+                    Severity.ERROR,
+                    f"belt {i} rises {dz} to belt {o} without moving, which is "
+                    f"an infinite slope; only the beltVerticalConstruction "
+                    f"unlock permits that (pass --belt-vertical-construction "
+                    f"if this save has it)",
+                    (i, o),
+                    {"dz": dz, "dxy": dxy},
+                )
+            continue
+        if ctx.belt_vertical_construction:
+            continue
+        slope = world_rise / dxy
+        if slope > limit:
             yield Finding(
                 "geom.altitude_step",
                 Severity.ERROR,
-                f"belt {i} steps {dz} altitude levels to belt {o}; at most one per tile",
+                f"belt {i} climbs {dz} to belt {o} across {dxy} tile(s): a "
+                f"world slope of {float(slope):.3f}, over the {float(limit)} "
+                f"the game allows without the beltVerticalConstruction unlock "
+                f"(TooSteep)",
                 (i, o),
-                {"dz": dz},
+                {"dz": dz, "dxy": dxy, "slope": float(slope)},
             )
 
 
@@ -743,7 +842,9 @@ def _bounds(ctx: Context) -> Iterable[Finding]:
 # --- sorters ---------------------------------------------------------------
 
 
-def _anchors(b: PlacedBuilding) -> tuple[tuple[int, int, int], tuple[int, int, int]] | None:
+def _anchors(
+    b: PlacedBuilding,
+) -> tuple[tuple[int, int, Fraction], tuple[int, int, Fraction]] | None:
     if b.x2 is None or b.y2 is None or b.z2 is None:
         return None
     return ((b.x, b.y, b.z), (b.x2, b.y2, b.z2))
@@ -833,7 +934,7 @@ def _endpoints(ctx: Context) -> Iterable[Finding]:
                 )
 
 
-def _addon_at(ctx: Context, link: int, cell: tuple[int, int, int]) -> bool:
+def _addon_at(ctx: Context, link: int, cell: tuple[int, int, Fraction]) -> bool:
     """Is ``link`` a belt addon mounted at ``cell``?
 
     Belt addons -- the Spray Coater is the one that matters -- consume no grid
@@ -1906,7 +2007,7 @@ def _entry_items(ctx: Context) -> dict[int, set[str]]:
     return out
 
 
-def _reachable_from_outside(ctx: Context, level: int) -> set[tuple[int, int]]:
+def _reachable_from_outside(ctx: Context, level: Fraction) -> set[tuple[int, int]]:
     """Cells at altitude ``level`` a NEW belt could occupy, coming from outside.
 
     Flood fill from a ring one tile beyond the bounding box, through cells no
@@ -1960,7 +2061,7 @@ def _external_entry_reachable(ctx: Context) -> Iterable[Finding]:
     """
     assert ctx.spec is not None
     bs = ctx.placement.buildings
-    free: dict[int, set[tuple[int, int]]] = {}
+    free: dict[Fraction, set[tuple[int, int]]] = {}
     for item, runs in sorted(_entry_runs(ctx).items()):
         for r in runs:
             run = ctx.runs[r]
@@ -3040,6 +3141,8 @@ def validate(
     soft_width: int = 256,
     only: Iterable[str] | None = None,
     expect_power: bool = True,
+    max_belt_z: Fraction = cat.DEFAULT_MAX_BELT_Z,
+    belt_vertical_construction: bool = True,
 ) -> Report:
     """Judge ``placement``, optionally against the ``spec`` it should realise.
 
@@ -3053,9 +3156,22 @@ def validate(
     validator inferring it from "there are no towers" would make a dropped
     tower -- a real bug -- indistinguishable from a deliberate ``--no-power``
     build, and silently stop detecting it.
+
+    ``max_belt_z`` and ``belt_vertical_construction`` are how high a belt may go
+    in the SAVE this blueprint is for, and whether that save is under the
+    game's belt slope limit at all.  They are caller declarations for the same
+    reason: both are properties of the player's researched technologies.
+
+    ``belt_vertical_construction`` defaults to TRUE because an absent technology
+    set means every technology researched -- FactorioLab's own default, see
+    ``catalog.belt_rules_for_technologies``.  Defaulting it False would have the
+    validator judge by a rule most saves are not under, and reject geometry the
+    game accepts.
     """
     wanted = set(only) if only is not None else None
-    ctx = _context(placement, spec, ids, soft_width)
+    ctx = _context(
+        placement, spec, ids, soft_width, max_belt_z, belt_vertical_construction
+    )
     have_spec = spec is not None and ids is not None
 
     findings: list[Finding] = []

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import collections
 import pathlib
+from fractions import Fraction
 
 import pytest
 
@@ -274,3 +275,153 @@ def test_table_covers_every_recipe_real_blueprints_use() -> None:
     assert used, "no recipe ids found in the fixture corpus; the check is vacuous"
     unknown = sorted(used - known)
     assert not unknown, f"recipe ids in real blueprints but not in our table: {unknown}"
+
+
+class TestBeltAltitudeRulesComeFromTheGame:
+    """The altitude numbers are read out of `Assembly-CSharp`, not the corpus.
+
+    The corpus said the ceiling was 1.0, because that is what its builders
+    happened to do.  The game says a new save allows 8.55 and the user's allows
+    38.55.  Reading a habit as a limit is the mistake these tests exist to stop
+    from coming back.
+    """
+
+    def test_the_ceiling_is_the_games_formula_not_the_corpus_habit(self) -> None:
+        """``buildMaxHeight = labLevel*4 - 0.6`` world, times 3/4 for blueprint z."""
+        assert catalog.belt_max_z(3) == Fraction(171, 20)  # 8.55, a new save
+        assert catalog.belt_max_z(13) == Fraction(771, 20)  # 38.55
+        # At lab 15 the formula changes branch: labLevel*4 + 4.
+        assert catalog.belt_max_z(15) == Fraction(48)
+        assert catalog.belt_max_z(
+            catalog.DEFAULT_LAB_LEVEL
+        ) == catalog.DEFAULT_MAX_BELT_Z
+        assert catalog.DEFAULT_MAX_BELT_Z > 1, (
+            "a ceiling of 1 is the corpus habit, not the game's rule"
+        )
+
+    def test_the_user_max_height_blueprint_fits_its_save(self) -> None:
+        """The independent check on both the formula and the 3/4 conversion.
+
+        The user built to z=38.  That needs lab level 13 and no more, which is
+        the only reason to believe the world->blueprint factor is right.
+        """
+        assert catalog.belt_max_z(13) >= 38
+        assert catalog.belt_max_z(12) < 38
+
+    def test_the_ramp_we_emit_is_inside_the_games_slope_limit(self) -> None:
+        """0.5 of blueprint z per tile is a world slope of 2/3, against 4/5."""
+        ramp = catalog.BELT_CLIMB_PER_TILE / catalog.BELT_Z_PER_WORLD_UNIT
+        assert ramp == Fraction(2, 3)
+        assert ramp <= catalog.MAX_BELT_SLOPE
+
+    def test_the_step_we_shipped_is_outside_it(self) -> None:
+        """A whole level across one tile is 4/3, which the game calls TooSteep."""
+        shipped = Fraction(1) / catalog.BELT_Z_PER_WORLD_UNIT
+        assert shipped == Fraction(4, 3)
+        assert shipped > catalog.MAX_BELT_SLOPE
+
+
+class TestBeltRulesComeFromTheUrlsTechnologies:
+    """How high a belt may go is a property of the SAVE, so FactorioLab owns it.
+
+    It records the researched set in the URL already, and this project's rule is
+    that FactorioLab's answer is authoritative rather than re-derived or asked
+    for on the command line.
+    """
+
+    @staticmethod
+    def _all() -> set[str]:
+        from flab2bp.lab.data import load_vendored
+
+        return {i.id for i in load_vendored().items if i.technology is not None}
+
+    def test_absence_means_factoriolabs_default_not_a_new_save(self) -> None:
+        """`None` is "the URL said nothing", and FactorioLab answers that with
+        EVERY technology -- `computeSettings` starts from `data.technologyIds`
+        and only narrows when a set was supplied.
+
+        Reading absence as emptiness here refused 19 of 72 audit cells for want
+        of a slope unlock the player had.  Same defect as the stone bug in
+        `60d5f0f`.
+        """
+        r = catalog.belt_rules_for_technologies(None, self._all())
+        assert r.from_url is False
+        assert r.vertical_construction is True, (
+            "an absent tech set must not be read as a save with nothing researched"
+        )
+        assert r.lab_level > catalog.DEFAULT_LAB_LEVEL
+        assert r.max_z > catalog.belt_max_z(catalog.DEFAULT_LAB_LEVEL)
+
+    def test_an_explicit_empty_set_is_a_save_with_nothing_researched(self) -> None:
+        """Emptiness IS honoured -- it is only absence that means the default."""
+        r = catalog.belt_rules_for_technologies(set(), self._all())
+        assert r.from_url is True
+        assert r.vertical_construction is False
+        assert r.lab_level == catalog.DEFAULT_LAB_LEVEL
+        assert r.max_z == catalog.belt_max_z(catalog.DEFAULT_LAB_LEVEL)
+
+    def test_the_slope_unlock_is_super_magnetic_field_generator(self) -> None:
+        """From the locale: TooSteep hints "Need to unlock Super Magnetic Field
+        Generator", not Vertical Construction."""
+        without = catalog.belt_rules_for_technologies(
+            {"vertical-construction-1"}, self._all()
+        )
+        assert without.vertical_construction is False
+        with_it = catalog.belt_rules_for_technologies(
+            {"super-magnetic-field-generator"}, self._all()
+        )
+        assert with_it.vertical_construction is True
+
+    def test_vertical_construction_levels_raise_the_ceiling(self) -> None:
+        base = catalog.belt_rules_for_technologies(set(), self._all())
+        assert base.lab_level == 3
+        three = catalog.belt_rules_for_technologies(
+            {f"vertical-construction-{n}" for n in (1, 2, 3)}, self._all()
+        )
+        assert three.lab_level == 6
+        assert three.max_z > base.max_z
+        assert three.from_url is True
+
+    def test_a_real_url_technology_set_reaches_the_rules(self) -> None:
+        """The whole path: `tre=` in the URL -> decoded ids -> altitude rules.
+
+        The unit tests above would still pass if `parse_url` never decoded
+        `tre`, which it only does because `tre` is in `_SUBSET_KEYS` and that
+        makes it load the hash tables.  This asserts the join actually holds.
+        """
+        from flab2bp.lab import params as P
+        from flab2bp.lab.data import load_vendored_hash_index
+        from flab2bp.lab.url import parse_url
+
+        techs = load_vendored_hash_index().technologies
+        wanted = [
+            "super-magnetic-field-generator",
+            "vertical-construction-1",
+            "vertical-construction-2",
+        ]
+        tre = P.ZFIELDSEP.join(P.n_to_id(techs.index(t)) for t in wanted)
+        req = parse_url(
+            f"https://factoriolab.github.io/dsp/list?o=processor*60&tre={tre}&v=11"
+        )
+        assert req.researched_technology_ids == set(wanted)
+
+        rules = catalog.belt_rules_for_technologies(
+            req.researched_technology_ids, self._all()
+        )
+        assert rules.from_url is True
+        assert rules.vertical_construction is True
+        assert rules.lab_level == 5  # 3 base + 2 vertical-construction levels
+        assert rules.max_z == catalog.belt_max_z(5)
+
+    def test_a_corpus_url_without_tre_gets_the_full_tech_set(self) -> None:
+        """None of the 12 corpus URLs carry `tre`, and they must not be
+        penalised for it."""
+        from flab2bp.lab.url import parse_url
+
+        req = parse_url("https://factoriolab.github.io/dsp/list?o=processor*60&v=11")
+        assert req.researched_technology_ids is None
+        rules = catalog.belt_rules_for_technologies(
+            req.researched_technology_ids, self._all()
+        )
+        assert rules.from_url is False
+        assert rules.vertical_construction is True

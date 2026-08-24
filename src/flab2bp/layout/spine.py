@@ -2249,7 +2249,7 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
                     height=1,
                     x2=col,
                     y2=y_dst,
-                    z2=0,
+                    z2=Fraction(0),
                     yaw=Facing.SOUTH.value,
                     yaw2=Facing.SOUTH.value,
                     input_obj=pi,
@@ -2503,7 +2503,16 @@ def _lane_direction(
 #: building that may.  One level is enough for any number of trunks, because a
 #: bridge only ever crosses trunks, never another bridge -- two bridges would
 #: have to share a lane's ``y``, and a lane holds one item.
-_BRIDGE_Z = 1
+#: A bridge only ever crosses a ground-level trunk, so it needs exactly
+#: ``BELT_CROSSING_CLEARANCE`` and no more.  This is NOT the game's ceiling:
+#: a belt goes as high as the save's vertical-construction unlocks allow.
+_BRIDGE_Z = catalog.BELT_CROSSING_CLEARANCE
+
+#: Altitude of a bridge's run-up tile: one tile of run buys one tile's worth of
+#: climb, so the tile the change happens across sits at half a level.  This is
+#: the ``0.5`` that every real elevated run has and that both strategies used to
+#: omit.
+_RAMP_Z = catalog.BELT_CLIMB_PER_TILE
 
 
 def _trunk_x(content_w: int, column: int) -> int:
@@ -2863,9 +2872,18 @@ def _bridge(
     xs = list(range(content_w, xr))
     if not xs:
         return -1, -1, 0
-    #: The run-up tile stays on the ground; every other tile is over a trunk and
-    #: has to clear it.  A one-tile bridge is entirely run-up: flat, no crossing.
-    ramp_x = content_w if toward_trunk else xr - 1
+    #: BOTH ends of a bridge meet the ground -- a lane on one side, a trunk on
+    #: the other -- so both are run-up tiles and both sit half way up.  Only one
+    #: of them used to, which left the far end dropping a whole tile of height
+    #: across one tile of run: the same illegal step freeform emitted, and the
+    #: one ``geom.altitude_step`` now refuses.  The profile reads
+    #: ``0, 1/2, 1, ..., 1, 1/2, 0`` counting the ground at each end, exactly as
+    #: every elevated run in the corpus does.
+    #:
+    #: Both end tiles land in the free ramp column ``_trunk_x`` reserves, so a
+    #: run-up tile never has to clear anything -- which it could not do at half
+    #: height anyway.  A one-tile bridge is entirely run-up: flat, no crossing.
+    ramp_xs = {content_w, xr - 1}
     for x in xs:
         made.append(len(buildings))
         buildings.append(
@@ -2874,7 +2892,13 @@ def _bridge(
                 model_index=belt_model,
                 x=x,
                 y=y,
-                z=0 if (x == ramp_x or len(xs) == 1) else _BRIDGE_Z,
+                z=(
+                    Fraction(0)
+                    if len(xs) == 1
+                    else _RAMP_Z
+                    if x in ramp_xs
+                    else _BRIDGE_Z
+                ),
                 width=1,
                 height=1,
                 yaw=(Facing.EAST if toward_trunk else Facing.WEST).value,
@@ -3073,7 +3097,7 @@ def _place_sorters(
                     height=1,
                     x2=bx,
                     y2=by,
-                    z2=0,
+                    z2=Fraction(0),
                     yaw=Facing.SOUTH.value if lane_y < machine_y else Facing.NORTH.value,
                     yaw2=Facing.SOUTH.value if lane_y < machine_y else Facing.NORTH.value,
                     input_obj=src,
@@ -3181,7 +3205,7 @@ def _feed_coater(
                 height=1,
                 x2=coater.x,
                 y2=coater.y,
-                z2=0,
+                z2=Fraction(0),
                 yaw=Facing.SOUTH.value,
                 yaw2=Facing.SOUTH.value,
                 input_obj=source,

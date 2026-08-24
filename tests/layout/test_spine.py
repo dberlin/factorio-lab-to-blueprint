@@ -205,7 +205,7 @@ def mixed_height_spec() -> BuildSpec:
 # --- helpers ---------------------------------------------------------------
 
 
-def blocking_tiles(p: Placement) -> list[tuple[int, int, int]]:
+def blocking_tiles(p: Placement) -> list[tuple[int, int, Fraction]]:
     """Tiles that genuinely exclude another building.
 
     Belt-integrated buildings share tiles rather than consuming them: belts,
@@ -213,7 +213,7 @@ def blocking_tiles(p: Placement) -> list[tuple[int, int, int]]:
     Belt addons such as the Spray Coater occupy no grid tile at all.  Neither
     class may be counted as blocking, or every valid layout would fail.
     """
-    tiles: list[tuple[int, int, int]] = []
+    tiles: list[tuple[int, int, Fraction]] = []
     for b in p.buildings:
         if catalog.is_belt_integrated(b.item_id):
             continue
@@ -788,7 +788,7 @@ class TestRisersJoinTheCopies:
     def test_a_riser_never_stands_on_a_machine_or_a_lane(self) -> None:
         """The margin is east of everything; that is what makes it collision-free."""
         p = SpineLayout(power=False).lay_out(magnetic_ring_spec(), time_budget_s=0.5)
-        occupied: set[tuple[int, int, int]] = set()
+        occupied: set[tuple[int, int, Fraction]] = set()
         for b in p.buildings:
             if catalog.is_belt_integrated(b.item_id):
                 continue
@@ -812,9 +812,16 @@ class TestRisersClimbAtBeltSpeed:
     riser**.  The worst case is a nine-machine spec whose block is narrower than
     its margin (magnetic-coil, 90 -> 126 tiles).
 
-    Asserted as the physical rule -- no two consecutive links may both change
-    altitude -- rather than as a column count, so a different margin layout that
-    is equally honest still passes.
+    Asserted as the physical rule rather than as a column count, so a different
+    margin layout that is equally honest still passes.
+
+    The rule is NOT "no two consecutive links may both change altitude", which
+    is what this asserted while ``z`` held a level index.  A ramp climbs
+    ``BELT_CLIMB_PER_TILE`` on EVERY tile of its run, so ``0, 1/2, 1`` changes
+    altitude on two consecutive links and is exactly what the corpus shows.
+    What must not happen is a single link gaining more than a ramp can, which
+    is what the old reading let through: it accepted ``0 -> 1`` across one tile
+    as a single change and only objected to two of them in a row.
     """
 
     @pytest.mark.parametrize("power", [True, False], ids=["power", "no-power"])
@@ -836,15 +843,17 @@ class TestRisersClimbAtBeltSpeed:
         ]
         assert climbing, "the fixture is supposed to need bridges over trunks"
         for i in climbing:
-            prev = upstream.get(i)
-            assert prev is not None, (
-                f"belt {i} at ({bs[i].x},{bs[i].y},z={bs[i].z}) changes level with "
-                f"nothing feeding it, so it had no tile of run-up"
-            )
-            assert bs[prev].z == bs[i].z, (
-                f"belts {prev} -> {i} -> {bs[i].output_obj} change level on "
-                f"consecutive tiles; a belt needs "
-                f"{catalog.RAMP_TILES_PER_LEVEL} tiles per level"
+            b = bs[i]
+            nxt = bs[b.output_obj]  # type: ignore[index]
+            dz = nxt.z - b.z
+            dxy = abs(nxt.x - b.x) + abs(nxt.y - b.y)
+            ramp = abs(dz) == catalog.BELT_CLIMB_PER_TILE and dxy == 1
+            vertical = abs(dz) == catalog.VERTICAL_STEP and dxy == 0
+            assert ramp or vertical, (
+                f"belt {i} at ({b.x},{b.y},z={b.z}) changes altitude by {dz} "
+                f"across {dxy} tile(s) to belt {b.output_obj}; a belt climbs "
+                f"{catalog.BELT_CLIMB_PER_TILE} per tile of run, or a whole "
+                f"{catalog.VERTICAL_STEP} for no run at all"
             )
 
     def test_the_ramp_column_is_only_charged_when_a_trunk_exists(self) -> None:

@@ -7,12 +7,15 @@ serialise them.
 
 Coordinate system
 -----------------
-Layout works in **integer tile space**.  ``(x, y)`` is the *minimum corner* of a
-building's footprint, ``z`` is the altitude *level* (0 = ground).  Translating
-tile space into the float ``localOffset`` triple that DSP blueprints actually
-store -- including the centre-vs-corner convention and the half-tile offsets
-that differ between odd- and even-sized footprints -- is the encoder's job and
-happens in exactly one place.
+Layout works in **integer tile space** in ``x`` and ``y``: ``(x, y)`` is the
+*minimum corner* of a building's footprint.  ``z`` is NOT a level index -- it is
+the altitude in world units, tiles of height, exactly the number the game reads,
+and it is a ``Fraction`` because a belt on a ramp rests at ``1/2``.  A strategy
+that routes on an integer lattice converts at emission; see
+:attr:`PlacedBuilding.z`.  Translating tile space into the float ``localOffset``
+triple that DSP blueprints actually store -- including the centre-vs-corner
+convention and the half-tile offsets that differ between odd- and even-sized
+footprints -- is the encoder's job and happens in exactly one place.
 
 Connections
 -----------
@@ -29,6 +32,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
+from fractions import Fraction
 from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
@@ -94,7 +98,26 @@ class PlacedBuilding:
     model_index: int
     x: int
     y: int
-    z: int = 0
+
+    #: Altitude in blueprint WORLD units -- tiles of height, the number the game
+    #: reads.  **Never a level index.**  It is a multiple of
+    #: :data:`catalog.BELT_Z_QUANTUM`, so a belt halfway up a ramp is
+    #: ``Fraction(1, 2)`` and NOT the integer level it is climbing from.  How
+    #: high it may go is a property of the player's save, not a constant here.
+    #:
+    #: Writing a routing level index in here is what shipped belts the game drew
+    #: red: ``freeform`` routes on an integer lattice and used to hand the
+    #: lattice index straight to the encoder, so a belt went 0 -> 1 across ONE
+    #: horizontal tile -- which is neither of the two changes the game allows,
+    #: a ramp at half a tile of height per tile of run or a vertical step at a
+    #: whole one for no run at all.  The lattice is still integers; the
+    #: conversion is at emission and this field is what it converts INTO.
+    #:
+    #: ``Fraction`` rather than ``float`` so that ``1/2`` is exact and safe as a
+    #: dict key: occupancy is keyed on ``(x, y, z)`` throughout.  It is also
+    #: hash-compatible with ``int`` -- ``Fraction(0) == 0`` and the two hash
+    #: alike -- so integer ground cells and ``Fraction`` ones share a key.
+    z: Fraction = Fraction(0)
     width: int = 1
     height: int = 1
     yaw: float = 0.0
@@ -103,7 +126,7 @@ class PlacedBuilding:
     #: for everything else, in which case the encoder mirrors the first anchor.
     x2: int | None = None
     y2: int | None = None
-    z2: int | None = None
+    z2: Fraction | None = None
     yaw2: float | None = None
 
     recipe_id: int = 0
@@ -130,7 +153,7 @@ class PlacedBuilding:
     #: precisely because a ``Placement`` carried no lane labelling.
     carries_item: str | None = None
 
-    def tiles(self) -> list[tuple[int, int, int]]:
+    def tiles(self) -> list[tuple[int, int, Fraction]]:
         """Every grid cell this building's footprint occupies."""
         return [
             (self.x + dx, self.y + dy, self.z)

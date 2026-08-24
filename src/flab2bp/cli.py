@@ -58,6 +58,28 @@ def _report(build: pipeline.Build, *, verbose: bool) -> None:
             file=out,
         )
 
+    rules = build.belt_rules
+    if rules is not None:
+        if rules.from_url:
+            print(
+                f"  belt altitude ceiling {float(rules.max_z)} (lab level "
+                f"{rules.lab_level}), vertical belt construction "
+                f"{'YES' if rules.vertical_construction else 'no'} -- read from "
+                f"the URL's researched technologies",
+                file=out,
+            )
+        else:
+            print(
+                f"  WARNING: this URL carried no technology set, so a "
+                f"FULLY-RESEARCHED save is ASSUMED: belt ceiling "
+                f"{float(rules.max_z)} (lab level {rules.lab_level}), vertical "
+                f"belt construction "
+                f"{'YES' if rules.vertical_construction else 'no'}. A URL "
+                f"exported from FactorioLab normally does carry one; if yours "
+                f"did, the belts here may climb higher than your save allows.",
+                file=out,
+            )
+
     if build.refused:
         # A strategy that produced NO layout is invisible in `attempts`, so say
         # so. Silence here would read as "that combination was simply not the
@@ -179,8 +201,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if build.report.errors and not args.allow_invalid:
         print(
-            "flab2bp: refusing to emit an invalid blueprint; pass --allow-invalid "
-            "to override",
+            "flab2bp: refusing to emit an invalid blueprint; pass --allow-invalid to override",
             file=sys.stderr,
         )
         return 1

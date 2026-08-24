@@ -7,6 +7,7 @@ can *originate* bytes the game will accept.
 from __future__ import annotations
 
 import dataclasses
+from fractions import Fraction
 
 import pytest
 
@@ -44,7 +45,7 @@ def _tiny_placement() -> Placement:
                 y=1,
                 x2=4,
                 y2=1,
-                z2=0,
+                z2=Fraction(0),
                 yaw=90.0,
                 input_obj=0,
                 output_obj=2,

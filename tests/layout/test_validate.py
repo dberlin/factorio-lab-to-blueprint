@@ -37,7 +37,7 @@ BELT_REQUIRED = "prolif.belt_required_edges_not_direct_inserted"
 
 
 def machine(
-    x: int, y: int, *, item_id: int = ASSEMBLER, recipe_id: int = 1, z: int = 0
+    x: int, y: int, *, item_id: int = ASSEMBLER, recipe_id: int = 1, z: Fraction | int = 0
 ) -> PlacedBuilding:
     b = catalog_building(item_id)
     return PlacedBuilding(
@@ -45,7 +45,7 @@ def machine(
         model_index=b.model_index,
         x=x,
         y=y,
-        z=z,
+        z=Fraction(z),
         width=b.width,
         height=b.height,
         recipe_id=recipe_id,
@@ -55,7 +55,7 @@ def machine(
 def belt(
     x: int,
     y: int,
-    z: int = 0,
+    z: Fraction | int = 0,
     *,
     out: int | None = None,
     inp: int | None = None,
@@ -74,15 +74,17 @@ def belt(
         model_index=36,
         x=x,
         y=y,
-        z=z,
+        z=Fraction(z),
         output_obj=out,
         input_obj=inp,
         carries_item=carries,
     )
 
 
-def splitter(x: int, y: int, z: int = 0, *, carries: str | None = None) -> PlacedBuilding:
-    return junction.make_splitter(x, y, z, carries_item=carries)
+def splitter(
+    x: int, y: int, z: Fraction | int = 0, *, carries: str | None = None
+) -> PlacedBuilding:
+    return junction.make_splitter(x, y, Fraction(z), carries_item=carries)
 
 
 def sorter(
@@ -94,8 +96,8 @@ def sorter(
     inp: int | None = None,
     out: int | None = None,
     item_id: int = SORTER3,
-    z: int = 0,
-    z2: int = 0,
+    z: Fraction | int = 0,
+    z2: Fraction | int = 0,
     filter_id: int = 0,
 ) -> PlacedBuilding:
     return PlacedBuilding(
@@ -103,10 +105,10 @@ def sorter(
         model_index=43,
         x=x,
         y=y,
-        z=z,
+        z=Fraction(z),
         x2=x2,
         y2=y2,
-        z2=z2,
+        z2=Fraction(z2),
         input_obj=inp,
         output_obj=out,
         filter_id=filter_id,
@@ -184,7 +186,14 @@ def test_geom_belt_single_occupancy_fires_on_two_belts_in_one_cell() -> None:
 def test_geom_machine_ground_fires_on_elevated_machine() -> None:
     m = machine(0, 0)
     elevated = PlacedBuilding(
-        item_id=m.item_id, model_index=m.model_index, x=0, y=0, z=1, width=4, height=4, recipe_id=1
+        item_id=m.item_id,
+        model_index=m.model_index,
+        x=0,
+        y=0,
+        z=Fraction(1),
+        width=4,
+        height=4,
+        recipe_id=1,
     )
     r = validate(place(elevated))
     assert fired(r, "geom.machine_ground")
@@ -194,19 +203,89 @@ def test_geom_machine_ground_clean_at_z_zero() -> None:
     assert not fired(validate(place(machine(0, 0))), "geom.machine_ground")
 
 
-def test_geom_altitude_range_fires_above_max_stack() -> None:
+def test_geom_altitude_range_fires_above_the_runs_ceiling() -> None:
     r = validate(place(belt(0, 0, 9)))
     assert fired(r, "geom.altitude_range")
 
 
-def test_geom_altitude_step_fires_on_two_level_jump() -> None:
-    # belt 0 at z=0 links to belt 1 at z=2 -- a vertical teleport
-    r = validate(place(belt(0, 0, 0, out=1), belt(1, 0, 2)))
+def test_geom_altitude_range_allows_what_the_run_declares() -> None:
+    """The ceiling is the SAVE's, not a constant: say so and it is allowed.
+
+    The user's own save reaches z=38, so a fixed maximum here would reject
+    blueprints the game accepts.
+    """
+    high = place(belt(0, 0, 9))
+    assert fired(validate(high), "geom.altitude_range")
+    assert not fired(validate(high, max_belt_z=Fraction(38)), "geom.altitude_range")
+
+
+def test_geom_altitude_range_fires_between_quanta() -> None:
+    r = validate(place(belt(0, 0, Fraction(1, 3))), )
+    assert fired(r, "geom.altitude_range")
+
+
+def test_geom_altitude_step_fires_on_a_full_level_across_one_tile() -> None:
+    """The exact step that shipped red, refused by the game's own rule.
+
+    A blueprint rise of 1 across one tile is a WORLD slope of 4/3 -- blueprint
+    z is 3/4 of world height -- against the 4/5 the game allows.  It is
+    `EBuildCondition.TooSteep`, and the old `dz > 1` test scored it exactly 1
+    and let it pass.
+    """
+    r = validate(
+        place(belt(0, 0, 0, out=1), belt(1, 0, 1)),
+        belt_vertical_construction=False,
+    )
     assert fired(r, "geom.altitude_step")
 
 
-def test_geom_altitude_step_clean_on_single_level_ramp() -> None:
-    r = validate(place(belt(0, 0, 0, out=1), belt(1, 0, 1)))
+def test_geom_altitude_step_allows_the_ramp_we_emit() -> None:
+    """1/2 across one tile is a world slope of 2/3, inside the 4/5 limit."""
+    r = validate(place(belt(0, 0, 0, out=1), belt(1, 0, Fraction(1, 2))))
+    assert not fired(r, "geom.altitude_step")
+
+
+def test_geom_altitude_step_allows_a_ramp_at_any_height() -> None:
+    """There is no one-level cap: the rule is on SLOPE, not on altitude.
+
+    This is what the fixtures could not tell us and the game's source did.
+    """
+    r = validate(
+        place(belt(0, 0, 7, out=1), belt(1, 0, Fraction(15, 2))),
+        max_belt_z=Fraction(171, 20),
+    )
+    assert not fired(r, "geom.altitude_step")
+
+
+def test_geom_altitude_step_fires_just_past_the_slope_limit() -> None:
+    """3/5 of blueprint z per tile is exactly 4/5 world; 7/10 is over it."""
+    ok = validate(
+        place(belt(0, 0, 0, out=1), belt(1, 0, Fraction(3, 5))),
+        belt_vertical_construction=False,
+    )
+    assert not fired(ok, "geom.altitude_step")
+    over = validate(
+        place(belt(0, 0, 0, out=1), belt(1, 0, Fraction(7, 10))),
+        belt_vertical_construction=False,
+    )
+    assert fired(over, "geom.altitude_step")
+
+
+def test_geom_altitude_step_refuses_a_vertical_climb_without_the_unlock() -> None:
+    """Zero run is infinite slope, which only beltVerticalConstruction allows."""
+    r = validate(
+        place(belt(0, 0, 0, out=1), belt(0, 0, 1)),
+        belt_vertical_construction=False,
+    )
+    assert fired(r, "geom.altitude_step")
+
+
+def test_geom_altitude_step_allows_a_vertical_climb_with_the_unlock() -> None:
+    """With the tech the game skips the slope test entirely."""
+    r = validate(
+        place(belt(0, 0, 0, out=1), belt(0, 0, 1)),
+        belt_vertical_construction=True,
+    )
     assert not fired(r, "geom.altitude_step")
 
 
@@ -1104,7 +1183,7 @@ def decode_fixture_to_placement(name: str) -> Placement:
                 model_index=b.model_index,
                 x=round(b.x - info.width / 2 + 0.5),
                 y=round(b.y - info.height / 2 + 0.5),
-                z=round(b.z * 2),
+                z=Fraction(round(b.z * 2)),
                 width=info.width,
                 height=info.height,
             )

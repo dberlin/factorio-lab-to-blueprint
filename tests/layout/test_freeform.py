@@ -16,7 +16,7 @@ from typing import Any
 import pytest
 
 from flab2bp.dsp import catalog
-from flab2bp.layout import validate
+from flab2bp.layout import freeform, validate
 from flab2bp.layout.base import (
     DETERMINISTIC_WORKERS,
     RETRY_BUDGET_S,
@@ -259,7 +259,7 @@ ALL_SPEC_PARAMS = [pytest.param(f, id=f.__name__) for f in ALL_SPECS]
 # --- helpers ---------------------------------------------------------------
 
 
-def blocking_tiles(p: Placement) -> list[tuple[int, int, int]]:
+def blocking_tiles(p: Placement) -> list[tuple[int, int, F]]:
     """Tiles that genuinely exclude another building.
 
     Mirrors the validator's occupancy rule: belt-integrated buildings share
@@ -273,7 +273,7 @@ def blocking_tiles(p: Placement) -> list[tuple[int, int, int]]:
     game accepts. Belt-on-belt overlap is still checked, by
     ``geom.belt_single_occupancy``, which knows about junctions.
     """
-    tiles: list[tuple[int, int, int]] = []
+    tiles: list[tuple[int, int, F]] = []
     for b in p.buildings:
         if catalog.is_belt_integrated(b.item_id):
             continue
@@ -2877,17 +2877,25 @@ class TestAPathThatReachesNothingIsUnrouted:
         )
         assert _sink_for(canvas, tail, net, {tail}, set()) == dst_belt
 
-    def test_a_tail_one_level_above_its_lane_head_still_links(self) -> None:
-        """Belts climb half a tile at a time, so one level apart is a legal link.
+    def test_a_tail_one_level_above_its_lane_head_does_not_link(self) -> None:
+        """One level apart across one tile is the ILLEGAL step, not a legal link.
 
-        Through traffic leaves the ground now (see `_GROUND_TOLL`), so a path can
-        arrive on the tile above its lane head.  Requiring EQUAL altitude there
-        turned a perfectly good arrival into a route failure.
+        This test used to assert the opposite, on the reasoning that "belts
+        climb half a tile at a time, so one level apart is a legal link".  That
+        is exactly backwards: climbing half a tile at a time is precisely WHY a
+        whole tile of height cannot be gained in one tile of run.  The join
+        needs two tiles and a belt at ``1/2`` between them, or it needs not to
+        move at all -- and a tile diagonally adjacent in z is neither.
+
+        Asserting the defect was correct is worse than having no test here: this
+        one stood while `freeform` shipped the same step mid-path, and the
+        agreement between a wrong check and a wrong test is what made it look
+        settled.
         """
-        canvas = _Canvas()
+        canvas = _Canvas(ramped=True)  # the slope-limited path
         dst_belt = canvas.add(_belt(0, 0, item="x"))
         above = PlacedBuilding(
-            item_id=2001, model_index=35, x=0, y=1, z=1, width=1, height=1,
+            item_id=2001, model_index=35, x=0, y=1, z=F(1), width=1, height=1,
             carries_item="x",
         )
         tail = canvas.add(above)
@@ -2896,7 +2904,48 @@ class TestAPathThatReachesNothingIsUnrouted:
             dst=_Port(dst_belt, 0, 0, 0, 0),
             item="x",
         )
+        assert _sink_for(canvas, tail, net, {tail}, set()) is None
+
+    def test_a_tail_a_ramp_step_above_its_lane_head_links(self) -> None:
+        """Half a tile up and one tile along IS the ramp, so it joins."""
+        canvas = _Canvas()
+        dst_belt = canvas.add(_belt(0, 0, item="x"))
+        tail = canvas.add(
+            PlacedBuilding(
+                item_id=2001, model_index=35, x=0, y=1, z=F(1, 2),
+                width=1, height=1, carries_item="x",
+            )
+        )
+        net = _Net(
+            src=_Port(canvas.add(_belt(-9, -9, item="x")), -9, -9, -9, -9),
+            dst=_Port(dst_belt, 0, 0, 0, 0),
+            item="x",
+        )
         assert _sink_for(canvas, tail, net, {tail}, set()) == dst_belt
+
+    def test_a_tail_directly_above_its_lane_head_does_not_link(self) -> None:
+        """Climbing with no run is infinite slope, which needs a tech we do not assume.
+
+        The game has one rule -- slope -- and zero horizontal run is the case
+        the `beltVerticalConstruction` unlock exists to permit.  It is off on a
+        new save, so a blueprint that relies on it would not paste for
+        everyone.  We ramp instead, which is legal at any height and needs no
+        unlock.
+        """
+        canvas = _Canvas(ramped=True)  # the slope-limited path
+        dst_belt = canvas.add(_belt(0, 0, item="x"))
+        tail = canvas.add(
+            PlacedBuilding(
+                item_id=2001, model_index=35, x=0, y=0, z=F(1),
+                width=1, height=1, carries_item="x",
+            )
+        )
+        net = _Net(
+            src=_Port(canvas.add(_belt(-9, -9, item="x")), -9, -9, -9, -9),
+            dst=_Port(dst_belt, 0, 0, 0, 0),
+            item="x",
+        )
+        assert _sink_for(canvas, tail, net, {tail}, set()) is None
 
 
 class TestAMergeArrivesAtItsOwnDestination:
@@ -3302,3 +3351,128 @@ class TestTheFlatGridIsTheSameSearch:
         assert grid.hist[grid.index((2, 3, 0))] == 0.0
         grid.refresh_history({})
         assert grid.hist is None
+
+
+class TestAltitudeProfile:
+    """The level-index -> world-altitude boundary.
+
+    Handing a routing level index straight to the encoder is what shipped belts
+    the game drew red, so the conversion has its own tests rather than being
+    covered incidentally by a layout assertion.
+    """
+
+    def test_flat_path_stays_on_the_ground(self) -> None:
+        path = [(0, 0, 0), (1, 0, 0), (2, 0, 0)]
+        assert freeform._altitude_profile(path, ramped=True) == [F(0), F(0), F(0)]
+
+    def test_a_crossing_reads_exactly_as_the_corpus_does(self) -> None:
+        """``0, 1/2, 1, ..., 1, 1/2, 0`` -- the shape every real elevated run has."""
+        path = [(0, 0, 0), (1, 0, 0), (2, 0, 1), (3, 0, 1), (4, 0, 1), (5, 0, 0)]
+        assert freeform._altitude_profile(path, ramped=True) == [
+            F(0), F(1, 2), F(1), F(1), F(1, 2), F(0)
+        ]
+
+    def test_the_ramp_tile_is_one_the_router_already_reserved(self) -> None:
+        """The profile adds no cells: it renames the altitude of existing ones."""
+        path = [(0, 0, 0), (1, 0, 0), (2, 0, 1)]
+        prof = freeform._altitude_profile(path, ramped=True)
+        assert prof is not None and len(prof) == len(path)
+
+    def test_every_step_is_a_legal_transition(self) -> None:
+        path = [(0, 0, 0), (1, 0, 0), (2, 0, 1), (3, 0, 1), (4, 0, 0), (5, 0, 0)]
+        prof = freeform._altitude_profile(path, ramped=True)
+        assert prof is not None
+        for i in range(len(path) - 1):
+            dz = prof[i + 1] - prof[i]
+            dxy = abs(path[i + 1][0] - path[i][0]) + abs(path[i + 1][1] - path[i][1])
+            assert (
+                dz == 0
+                or (abs(dz) == catalog.BELT_CLIMB_PER_TILE and dxy == 1)
+                or (abs(dz) == catalog.VERTICAL_STEP and dxy == 0)
+            ), f"step {i}: dz={dz} dxy={dxy}"
+
+    def test_back_to_back_ramps_are_refused_rather_than_emitted(self) -> None:
+        """Two level changes with no flat cell between them cannot be ramped.
+
+        Levels `0, 1, 2` over three cells would read `1/2, 3/2, 2`, and
+        `1/2 -> 3/2` is a whole tile of height across one tile of run -- the
+        exact step this module exists to stop emitting.  The cells are already
+        committed to their levels, so no altitude assignment rescues it; the
+        path goes back to the router as unrouted.
+
+        Caught in the wild as `geom.altitude_step` on `magnetic-ring`, 5 times
+        over 12 layouts, once `LEVELS` rose to 3 and made consecutive ramps
+        reachable.
+        """
+        assert (
+            freeform._altitude_profile(
+                [(0, 0, 0), (1, 0, 1), (2, 0, 2)], ramped=True
+            )
+            is None
+        )
+
+    def test_ramps_separated_by_a_flat_cell_are_fine(self) -> None:
+        path = [(0, 0, 0), (1, 0, 0), (2, 0, 1), (3, 0, 1), (4, 0, 2)]
+        prof = freeform._altitude_profile(path, ramped=True)
+        assert prof == [F(0), F(1, 2), F(1), F(3, 2), F(2)]
+
+    def test_a_wider_jump_than_the_ramp_table_offers_is_refused(self) -> None:
+        with pytest.raises(AssertionError, match="jumps 2 levels"):
+            freeform._altitude_profile([(0, 0, 0), (1, 0, 2)], ramped=True)
+
+
+class TestTheSlopeLimitIsConditional:
+    """The game's slope test is gated on the save, so our emission is too.
+
+        if (!history.beltVerticalConstruction && num25 > 0.8f)
+            buildPreview2.condition = EBuildCondition.TooSteep;
+
+    WITH the tech there is no slope limit and a belt may gain a whole level in
+    one tile; WITHOUT it every step must stay inside 4/5 world slope, which
+    means a ramp.  Both paths are pinned, because the whole point is that the
+    behaviour is conditional -- a single test would let the other path rot.
+
+    Treating the limit as unconditional cost 19 of 72 audit cells against
+    master's 2.
+    """
+
+    LEVELS_PATH = [(0, 0, 0), (1, 0, 0), (2, 0, 1), (3, 0, 1), (4, 0, 0)]
+
+    def test_without_the_tech_we_ramp(self) -> None:
+        prof = freeform._altitude_profile(self.LEVELS_PATH, ramped=True)
+        assert prof == [F(0), F(1, 2), F(1), F(1, 2), F(0)]
+
+    def test_with_the_tech_we_emit_the_dense_form(self) -> None:
+        prof = freeform._altitude_profile(self.LEVELS_PATH, ramped=False)
+        assert prof == [F(0), F(0), F(1), F(1), F(0)]
+
+    def test_without_the_tech_no_step_exceeds_the_slope_limit(self) -> None:
+        """The ramped profile is legal on a save with NO technologies."""
+        prof = freeform._altitude_profile(self.LEVELS_PATH, ramped=True)
+        assert prof is not None
+        for i in range(len(prof) - 1):
+            a, b = self.LEVELS_PATH[i], self.LEVELS_PATH[i + 1]
+            dxy = abs(b[0] - a[0]) + abs(b[1] - a[1])
+            world = abs(prof[i + 1] - prof[i]) / catalog.BELT_Z_PER_WORLD_UNIT
+            assert dxy > 0, "a ramp has to travel"
+            assert world / dxy <= catalog.MAX_BELT_SLOPE
+
+    def test_with_the_tech_the_dense_form_would_break_that_limit(self) -> None:
+        """Which is exactly why it is gated rather than always used."""
+        prof = freeform._altitude_profile(self.LEVELS_PATH, ramped=False)
+        assert prof is not None
+        worst = max(
+            abs(prof[i + 1] - prof[i]) / catalog.BELT_Z_PER_WORLD_UNIT
+            for i in range(len(prof) - 1)
+        )
+        assert worst > catalog.MAX_BELT_SLOPE
+
+    def test_the_link_rule_follows_the_same_gate(self) -> None:
+        one_level_across_one_tile = (0, 0, F(0), 1, 0, F(1))
+        assert not freeform._legal_link(*one_level_across_one_tile, ramped=True)
+        assert freeform._legal_link(*one_level_across_one_tile, ramped=False)
+
+    def test_the_default_save_has_the_tech_so_is_not_ramped(self) -> None:
+        """An absent technology set means every technology researched."""
+        assert freeform.FreeformLayout().ramped is False
+        assert freeform.FreeformLayout(belt_vertical_construction=False).ramped is True

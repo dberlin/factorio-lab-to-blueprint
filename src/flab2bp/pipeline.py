@@ -106,6 +106,11 @@ class Build:
     flow_findings: tuple[str, ...] = field(default_factory=tuple)
     #: Whether a FactorioLab flow export pinned the recipe selection.
     flow_pinned: bool = False
+    #: The belt altitude rules this build was judged against, and whether
+    #: they were READ from the URL's technology set or assumed from a new
+    #: save.  Reported, because "we assumed" and "the URL said" are very
+    #: different claims about a ceiling.
+    belt_rules: catalog.BeltAltitudeRules | None = None
 
 
 def build(
@@ -137,6 +142,14 @@ def build(
     """
     data = dataset if dataset is not None else load_vendored()
     request = parse_url(url)
+    # How high a belt may go, and whether it may climb with no run at all, are
+    # properties of the player's SAVE -- so they come from the technologies
+    # FactorioLab already recorded in the URL, not from a flag whose default we
+    # would have to guess.
+    belt_rules = catalog.belt_rules_for_technologies(
+        request.researched_technology_ids,
+        {i.id for i in data.items if i.technology is not None},
+    )
 
     # A FactorioLab flow export pins WHICH recipe makes what, so we stop
     # re-deriving a decision the player already made. It is applied here, to the
@@ -210,7 +223,14 @@ def build(
     refused: list[str] = []
     for spec in spec_set.candidates:
         for sname in wanted:
-            layout = _STRATEGIES[sname](power=power)
+            # `freeform` chooses between the ramped and the dense form; the
+            # slope limit is conditional on the save's technologies.  `spine`
+            # always ramps: its bridges already reserve a ramp column, so the
+            # ramp costs it nothing and is legal either way.
+            kw: dict[str, object] = {"power": power}
+            if sname == "freeform":
+                kw["belt_vertical_construction"] = belt_rules.vertical_construction
+            layout = _STRATEGIES[sname](**kw)
             try:
                 placement = layout.lay_out(spec, time_budget_s=time_budget_s)
             except NoValidLayout as exc:
@@ -223,7 +243,12 @@ def build(
             # spec-dependent checks are skipped, and a build that never ran its
             # throughput or proliferator checks reads as clean.
             report = validate.validate(
-                placement, spec, ids=_id_map(spec), expect_power=power
+                placement,
+                spec,
+                ids=_id_map(spec),
+                expect_power=power,
+                max_belt_z=belt_rules.max_z,
+                belt_vertical_construction=belt_rules.vertical_construction,
             )
             attempts.append(Attempt(spec.label, sname, placement, report))
 
@@ -310,4 +335,5 @@ def build(
         refused=tuple(refused),
         flow_findings=findings + flow_dropped,
         flow_pinned=selection is not None,
+        belt_rules=belt_rules,
     )

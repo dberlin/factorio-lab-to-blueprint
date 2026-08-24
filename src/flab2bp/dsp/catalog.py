@@ -42,6 +42,7 @@ from __future__ import annotations
 import json
 import math
 import re
+from collections.abc import Set
 from dataclasses import dataclass
 from fractions import Fraction
 from functools import cache
@@ -121,16 +122,237 @@ BELT_RATE = {
     2003: Fraction(30),
 }
 
-#: Belts climb 0.5 per tile, so changing altitude by one level costs 2 tiles.
-#: Measured over 7,502 belt records: +/-0.5 appears 125 times along belt chains
-#: versus +/-1.0 only 7 times.  Levels themselves are spaced 1.0 apart.
+#: Blueprint ``z`` per WORLD unit of height.  Blueprint z is not world height:
+#: the game's vertical pitches are 4 for a Matrix Lab, 8/3 for a Splitter and
+#: 4/3 for a belt, and the same three measure 3, 2 and 1 in blueprint z.  Two
+#: independent pitches agreeing on 3/4 is what pins it -- the lab spacing is
+#: visible in ``12-s-purple`` (120 labs, 10 columns of 12 at z = 0, 3, ... 33)
+#: and the belt spacing in the max-height blueprint (39 belts one z apart).
+#:
+#: It matters because the game's slope limit is in WORLD units.  A blueprint
+#: rise of 1/2 over one tile is a world slope of 2/3, not 1/2.
+BELT_Z_PER_WORLD_UNIT = Fraction(3, 4)
+
+#: The steepest a belt may be built without the vertical-construction unlock,
+#: as ``world rise / horizontal run``.  Straight from ``BuildTool_Path``::
+#:
+#:     if (!history.beltVerticalConstruction && num25 > 0.8f)
+#:         buildPreview2.condition = EBuildCondition.TooSteep;
+#:
+#: where ``num25`` is ``|Maths.SphericalSlopeRatio(a, b)|``, which is
+#: ``(|b| - |a|) / horizontal distance``.  With the unlock the test is skipped
+#: entirely -- there is then NO slope limit, which is what lets a belt climb
+#: straight up.
+#:
+#: This one number settles what the fixtures could not.  A blueprint rise of
+#: 1/2 across one tile is a world slope of ``(1/2)/(3/4) / 1 = 2/3``, inside
+#: the limit; the ``dz = 1`` across one tile we shipped is ``4/3``, outside it,
+#: and the game rejects it as ``TooSteep``.  The fix and the bug are both
+#: confirmed by the same line of the game's own code.
+MAX_BELT_SLOPE = Fraction(4, 5)
+
+#: A belt climbs this much per tile of run at the steepest slope the corpus
+#: uses.  NOT a cap: ``MAX_BELT_SLOPE`` allows up to ``3/5`` of blueprint z per
+#: tile, and with the unlock, any amount.  This is the value we EMIT, chosen
+#: because it lands altitudes on :data:`BELT_Z_QUANTUM` and because all 118
+#: clean ramp steps in the corpus use it.
 BELT_CLIMB_PER_TILE = Fraction(1, 2)
 RAMP_TILES_PER_LEVEL = 2
 
-#: Up to three belts share one (x, y): 426 positions in the corpus carry 2 and
-#: 21 carry 3.  Terrain jitter of ~0.03 rides on top and must be denoised with
-#: ``round(z * 2) / 2``.
-MAX_BELT_STACK_LEVELS = 3
+#: Height gained by one step of the VERTICAL form, which costs no horizontal
+#: run and therefore has infinite slope.  It requires
+#: ``GameHistoryData.beltVerticalConstruction`` -- a tech unlock (upgrade case
+#: 42), ``false`` on a new save -- because that is the flag that switches off
+#: the ``MAX_BELT_SLOPE`` test.  Every one of the 38 steps in the user's
+#: max-height blueprint is exactly this.
+VERTICAL_STEP = Fraction(1)
+
+#: Height a belt must gain to pass OVER a ground-level obstruction, per the
+#: user: a belt at ``1/2`` still fouls one at ``0``, so a crossing tile has to
+#: be a full ``1`` above what it crosses and the climb has to start two tiles
+#: out.  That is why the corpus profile reads ``0, 1/2, 1, ... 1, 1/2, 0``.
+BELT_CROSSING_CLEARANCE = Fraction(1)
+
+#: A sloped belt may not TURN.  ``BuildTool_Path``::
+#:
+#:     if (num21 < 2.5f && num25 > 0.1f)
+#:         buildPreview2.condition = EBuildCondition.TooBendToLift;
+#:
+#: ``num21`` is the angle at this belt between its input and its output, in
+#: radians, so anything bending more than ``pi - 2.5 ~= 36 degrees`` off
+#: straight must be level.  Slopes below ``0.1`` do not count as sloped.
+BEND_MIN_ANGLE_WHEN_SLOPED_RAD = Fraction(5, 2)
+SLOPE_DEADZONE = Fraction(1, 10)
+
+#: Lab level on a NEW save, from ``GameHistoryData.Init``: ``labLevel = 3``.
+DEFAULT_LAB_LEVEL = 3
+
+
+def belt_max_z(lab_level: int = DEFAULT_LAB_LEVEL) -> Fraction:
+    """Highest blueprint ``z`` a belt may reach in a save at this lab level.
+
+    ``GameHistoryData.buildMaxHeight`` is the game's ceiling, in world units::
+
+        if (labLevel < 15) return labLevel * 4f - 0.6f;
+        return labLevel * 4f + 4f;
+
+    and every build is tested against it as
+    ``lpos.sqrMagnitude > (buildMaxHeight + 0.5 + radius)^2``.  Belts are NOT
+    subject to the separate per-building stack limit -- that one reads
+    ``isTank || isStorage || isLab || isSplitter`` and belts are none of them --
+    so this is the whole of what bounds a belt.
+
+    Converted into blueprint z by :data:`BELT_Z_PER_WORLD_UNIT`.  At the
+    starting lab level of 3 that is ``8.55``; the user's save reached ``z = 38``,
+    which needs lab level 13 (``3*13 - 0.45 = 38.55``) and is the independent
+    check that the conversion and the formula are both right.
+    """
+    if lab_level < 15:
+        world = Fraction(lab_level) * 4 - Fraction(3, 5)
+    else:
+        world = Fraction(lab_level) * 4 + 4
+    return world * BELT_Z_PER_WORLD_UNIT
+
+
+#: FactorioLab technology id that grants ``beltVerticalConstruction``.
+#:
+#: From the game's own locale, ``Locale/1033/base.txt``::
+#:
+#:     传送带坡度可升级   (Need to unlock Super Magnetic Field Generator)
+#:     解锁传送带坡度上限  Unlock slope limit when building Conveyor Belts
+#:
+#: which is the hint the build cursor shows on ``TooSteep``.  So the tech that
+#: removes the slope limit is Super Magnetic Field Generator -- NOT Vertical
+#: Construction, which the same locale says covers "Depots, Storage Tanks, and
+#: Matrix Labs".  Guessing that the two were the same line was tempting and
+#: would have been wrong.
+BELT_SLOPE_UNLOCK_TECH = "super-magnetic-field-generator"
+
+#: FactorioLab id prefix for the levelled Vertical Construction upgrade, which
+#: is what raises ``labLevel`` and so ``buildMaxHeight``.  ``UnlockTechFunction``
+#: case 25 is ``labLevel += num``.
+VERTICAL_CONSTRUCTION_PREFIX = "vertical-construction-"
+
+
+@dataclass(frozen=True, slots=True)
+class BeltAltitudeRules:
+    """What a particular SAVE allows a belt to do, vertically.
+
+    Both fields are properties of the player's researched technologies, which
+    is why they are derived from the FactorioLab URL rather than defaulted or
+    asked for on the command line.  FactorioLab already carries the researched
+    set, and this project's rule is that FactorioLab's answer is authoritative.
+    """
+
+    #: Highest blueprint z a belt may occupy.
+    max_z: Fraction
+    #: Whether the slope limit is lifted -- i.e. whether a belt may climb with
+    #: no horizontal run at all.
+    vertical_construction: bool
+    #: Lab level the ceiling was derived from, for error messages.
+    lab_level: int
+    #: False when the URL carried no technology set at all.  The values above
+    #: are then FactorioLab's own default -- every technology researched -- not
+    #: a guess of ours and not a new save.  Kept separate from an explicitly
+    #: empty set, which is a real save with nothing researched.
+    from_url: bool
+
+
+def belt_rules_for_technologies(
+    technology_ids: Set[str] | None,
+    all_technology_ids: Set[str],
+) -> BeltAltitudeRules:
+    """Derive the belt altitude rules from a FactorioLab researched-tech set.
+
+    **Absence is not emptiness.**  ``None`` means the URL said nothing about
+    technologies, and FactorioLab's answer to that is not "none researched" --
+    it is "all of them".  From ``settings-store.ts::computeSettings``::
+
+        const techIds =
+          state.researchedTechnologyIds ?? defaults?.researchedTechnologyIds;
+        let researchedTechnologyIds = new Set(data.technologyIds);
+        if (techIds != null && researchedTechnologyIds.size > 0) {
+          // Filter for only technologies that still exist in this data set
+          researchedTechnologyIds = new Set(filteredTechs);
+        }
+
+    It starts from the WHOLE dataset and only narrows when a set was actually
+    supplied.  ``initialSettingsState`` never sets the field, and the DSP mod
+    data carries no ``researchedTechnologies`` default, so a URL without ``tre``
+    lands on the unnarrowed set.  The mod defaults corroborate it: FactorioLab
+    ships ``maxBelt: conveyor-belt-3`` and a ``maxMachineRank`` of top-tier
+    machines, which a save with nothing researched could not build.
+
+    So ``None`` grants every technology, exactly as ``_excluded_recipes`` gives
+    ``None`` the mod's own defaults rather than the most restrictive reading.
+
+    .. note::
+       **This is a DECISION, not only a reading.**  The user settled it -- "I
+       think defaulting to all-researched is a fine default" -- and the
+       ``computeSettings`` quote above is why the decision is also the faithful
+       one.  Recorded as a decision so that nobody later "corrects" it back to
+       the restrictive reading on the grounds that our own evidence is
+       second-hand.  If it is ever revisited, revisit it as a product choice.
+
+    This is the THIRD instance today of one class of bug: a URL that is SILENT
+    about something read as a URL that FORBIDS it.  The others were recipe
+    exclusions (``60d5f0f``, which re-disabled recipes the player had enabled
+    and changed the blueprint's inputs) and this one, which refused 19 of 72
+    audit cells for want of a slope unlock the player had.  When a field is
+    optional, the question is never "what is the empty value" -- it is "what
+    does FactorioLab do when it is missing".
+
+    An explicit empty set still means a save with nothing researched, and is
+    honoured as such.
+
+    The lab level is the starting 3 plus one per researched Vertical
+    Construction level.  ``UnlockValues`` lives in the game's binary asset
+    protos and could not be read, so "one per level" is an ASSUMPTION -- its
+    checkable consequence is that FactorioLab models 6 levels, giving at most
+    lab 9 and a ceiling of 26.55, while the user's own save reaches 38.55 at
+    lab 13.  So it UNDER-estimates a developed save, which is the safe
+    direction: it refuses altitudes the save would allow and never emits one it
+    would not.
+    """
+    effective = all_technology_ids if technology_ids is None else technology_ids
+    levels = sum(1 for t in effective if t.startswith(VERTICAL_CONSTRUCTION_PREFIX))
+    lab_level = DEFAULT_LAB_LEVEL + levels
+    return BeltAltitudeRules(
+        max_z=belt_max_z(lab_level),
+        vertical_construction=BELT_SLOPE_UNLOCK_TECH in effective,
+        lab_level=lab_level,
+        from_url=technology_ids is not None,
+    )
+
+
+#: Default ceiling on belt altitude, in blueprint z.
+#:
+#: Derived from the game, not from the corpus.  The corpus said 1.0 and the
+#: game says 8.55 on a NEW save -- the fixtures were showing a habit of their
+#: builders, and reading a habit as a limit is what cost us a day.  A blueprint
+#: built to this default pastes on any save, because no save starts lower.
+DEFAULT_MAX_BELT_Z = belt_max_z()
+
+#: Altitudes are multiples of this.  Every one of the 7,502 corpus records lands
+#: on one once terrain jitter (max 0.0235) is denoised with ``round(z * 2) / 2``.
+BELT_Z_QUANTUM = BELT_CLIMB_PER_TILE
+
+#: There is NO useful bound on how many belts share one ``(x, y)``.
+#:
+#: This replaces ``MAX_BELT_STACK_LEVELS = 3``, whose stated evidence was "426
+#: positions in the corpus carry 2 and 21 carry 3".  That count never checked
+#: that the three z values DIFFERED: all 21 three-deep positions are
+#: ``(0.0, 0.0, 0.0)``, belts at the SAME altitude in polar and whole-planet
+#: fixtures where longitude is latitude-compressed and distinct tiles collapse
+#: onto one integer cell.  ``factory-endgame-distribution-hub`` has columns
+#: holding 21 belts, all at 0.0 -- a squashed coordinate system, not a
+#: 21-storey belt.
+#:
+#: Re-measuring on undistorted fixtures gave a maximum of 2 distinct altitudes
+#: per column, which looked like a rule and is not one either: the vertical form
+#: stacks 39 belts at one ``(x, y)`` in the max-height blueprint.  A column
+#: bound would have rejected that, so no constant replaces it.
+
 
 
 # --- power -----------------------------------------------------------------

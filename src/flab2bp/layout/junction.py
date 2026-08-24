@@ -29,6 +29,8 @@ belts as overlays -- which ``catalog.BELT_INTEGRATED_IDS`` already does.
 
 from __future__ import annotations
 
+from fractions import Fraction
+
 from flab2bp.dsp import catalog
 from flab2bp.layout.base import PlacedBuilding
 
@@ -46,7 +48,9 @@ class TooManyPorts(ValueError):
     """More belts attached to one junction than a splitter has sides."""
 
 
-def make_splitter(x: int, y: int, z: int = 0, *, carries_item: str | None = None) -> PlacedBuilding:
+def make_splitter(
+    x: int, y: int, z: Fraction = Fraction(0), *, carries_item: str | None = None
+) -> PlacedBuilding:
     """A junction at ``(x, y, z)``, ready for belts to attach to it.
 
     ``width``/``height`` are 1 rather than the catalog's derived ``3x1``.  The
