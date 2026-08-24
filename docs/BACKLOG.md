@@ -54,6 +54,128 @@ against a cap of two, and nothing downstream can undo it.
 Do not attempt the allocator half again on its own; it is measured, reverted, and
 recorded here precisely so the next attempt starts at the model.
 
+### THE MAP -- every place that computes or consumes a tap-capacity bound
+
+Enumerated before touching anything, in the form that worked for the strip's row
+layout. Twenty-four sites; four of them are silently WRONG rather than merely
+loose, and two of those four are in code that never says `inset`.
+
+**The truth, and the two numbers derived from it**
+
+| # | site | computes | side |
+| --- | --- | --- | --- |
+| 1 | `_anchor_span(id, yaw, h, gap, above=)` `spine.py:3128` | tiles a sorter must span from a lane `gap` clear, or `None` | PER SIDE, per gap -- the ground truth |
+| 2 | `_anchor_inset(id, yaw, h)` `spine.py:3111` | `max` over the two sides of `span(gap=1) - 1` | collapses (1) to ONE number; the asymmetry dies here |
+| 3 | `_Group.tap_height` `spine.py:195` | `height - _anchor_inset` | the only carrier of the inset into any model; three consumers |
+
+Measured from (1), every machine the corpus uses:
+
+    Chemical Plant, Quantum Chemical Plant   above 2  below 3   spans above [2,3,-,-] below [1,2,3,-]
+    Assembler Mk.II/III, Arc/Plane Smelter   above 3  below 3
+    Oil Refinery (yaw 90), Matrix Lab,
+      Miniature Particle Collider            above 3  below 3
+    Ray Receiver                             above 0  below 0   (no attachable pose either side)
+
+**The allocator, per row, after CP-SAT has chosen it**
+
+| # | site | computes | side |
+| --- | --- | --- | --- |
+| 4 | `_allocate_lanes:741-746` | `row_h = max pitch_h`; `gaps[item] = row_h - tap_height` | per item, used on ONE side only |
+| 5 | `_seat._room`, `slot is below` `:783` | `sum(copies) <= reach` for the corridor **above** the row | PER SIDE -- flat 3, no gap, no inset. **WRONG: 2 for a plant** |
+| 6 | `_seat._room` else -> `_fits_below` `:393,784` | `g + j + 1 <= reach` for the corridor **below** the row | PER SIDE -- charges the ABOVE-side inset. **WRONG: 2 where truth is 3** |
+| 7 | `_seat._compatible` `:804` | two items may share a lane only at equal `gaps` | the one-sided gap again |
+| 8 | `_seat` `gap_first` `:859` | an item with `gaps > 0` is seated UPWARD first | **pushes a plant's items at the side that cannot take them** |
+| 9 | `_allocate_lanes:887` | `need > 2 * reach` | AGGREGATE -- message only |
+| 10 | `_allocate_lanes:942-945` | above-the-row band sorted worst-gap-shallowest; the other band plain `sorted` | correct only while the above side costs nothing |
+| 11 | `lane_order` `geometry.py:111` | `len(band) <= max_reach`, both bands | PER SIDE, flat, cannot see the inset. Last gate before emission |
+| 12 | `_cover_sprayed` `:974` | proliferator-to-coater lane spacing | lane-to-lane, not machine reach -- unaffected |
+
+**CP-SAT, `_solve_one` -- what decides a plant may share a row at all**
+
+| # | site | computes | side |
+| --- | --- | --- | --- |
+| 13 | flat tap capacity `:1306-1351` | `sum(lane_copies * tapped) <= 2 * tap_reach` = 6 | AGGREGATE. Truth for a plant's row is 2 + 3 = 5 |
+| 14 | `over` / `can_share` `:1321-1326` | `sum(copies) > 2 * tap_reach` picks which items may be priced at half a lane | AGGREGATE, against the same overstated 6 |
+| 15 | Hall family `:1394-1457` | `lanes with gap >= t <= tap_reach + max(0, tap_reach - t)` | AGGREGATE -- the leading `tap_reach` is the upper corridor, assumed full, unconditionally |
+| 16 | `heights` `:1394` + `is_h: row_h[r] == h` `:1454` | reifies a PITCH-height variable against a set of TAP heights | **two different spaces** |
+| 17 | `thresholds` `:1398` | `{min(b - a, tap_reach)}` over TAP-height differences | **the real gap is `row_h(pitch) - tap_height`** |
+| 18 | `corridor_h[r+1] <= reach - 1` `:1558` | direct-insert span across a corridor | machine-to-machine, no inset |
+
+**Emission**
+
+| # | site | computes | side |
+| --- | --- | --- | --- |
+| 19 | `_realizable_direct:1845` | `dy` off `groups[src].height`, `1 <= dy <= reach` | no inset -- but `_emit`'s `_pair` re-checks with `direct_anchors` and RAISES, so it refuses rather than lying |
+| 20 | `_find_taps:3234` | asks (1) directly | correct |
+| 21 | `_emit:2413` `if not found ... continue` | -- | **the swallow point.** A refused tap becomes no sorter and no error |
+| 22 | `_pick_sorter(rate, tap.span, widest)` `:2443` | tier from `_anchor_span`'s span and `attachable_columns`' count | already inset-aware; NOT freeform's silent-tier bug |
+| 23 | `_place_sorters:3294` | `attachable_columns`, places nothing when empty | correct |
+| 24 | `_coater_lane_candidates:3363` | lane-to-lane proliferator reach | unaffected |
+
+**The four that produce a WRONG value rather than an infeasible model**
+
+* **(5)** under-charges the above side by one. This is the whole of the ten
+  failures. Traced on `casimir-crystal`: three refused taps, every one a Chemical
+  Plant reaching UP at a gap of 3 or more, `_anchor_span` returning `None`, and
+  each one swallowed by (21).
+* **(6)** over-charges the below side by one, because `tap_height` takes the
+  worse of the two sides and the plant's inset is on the other one.
+* **(5) and (6) cancel in the TOTAL.** The allocator believes 3 above + 2 below;
+  the truth is 2 above + 3 below. Both are 5. **That is why the aggregate check
+  cleared the model** -- the earlier "4 needed against 2 + 3 = 5" was not merely
+  the wrong bound, it was a bound the two errors had conspired to make look right.
+* **(16)/(17)** put the whole height-aware family in the wrong number space, and
+  neither mentions `inset`. `row_h` takes a PITCH height; `heights` are TAP
+  heights, so `is_h` is false whenever the row's tallest pitch is not also some
+  group's tap height. Measured over the twelve corpus specs: **9 of 12 have a
+  realizable `row_h` the reification can never match**, and against real gaps of
+  `pitch_h - tap_height` the threshold set is **absent in 3 specs and incomplete
+  in 6**. A row whose tallest machine is a Chemical Plant (`row_h` 5, tap heights
+  {3,4}) is exactly such a row -- so on `graphene` and `plastic`, the two specs
+  the reverted allocator regressed, the height-aware constraint never fires at
+  all and only the flat 6 applies. This is the strip's `mh`/`ph` bug, one module
+  over: right by accident for as long as clearance and footprint were the same
+  number, wrong since spacing made them differ.
+
+**Where the asymmetry has to enter, and what it costs**
+
+At (5) and (6) as two DIFFERENT numbers -- an `above_inset` and a `below_inset`
+in place of one `tap_height` -- and at (13)/(15) as a two-dimensional threshold
+family. Item `i`'s reachable lanes are a prefix of the corridor above of length
+`A_i = reach - above_inset(i)`, which is **row-independent** because a machine is
+flush with the top of its row, plus a prefix of the corridor below of length
+`B_i = reach - (row_h - height(i) + below_inset(i))`. Two nested prefix families,
+so Hall's condition is exactly
+
+    for all a, b in 0..reach:   #{lanes i : A_i <= a and B_i <= b}  <=  a + b
+
+and today's model is the single slice `a = reach` of it. Sixteen inequalities per
+row where there is now one family, most of them non-binding and skippable by the
+same "cannot bind even if the row took everything" test already at `:1433`.
+
+Note what this is NOT: no side-assignment variable, no new decision, the same
+`tapped_by` literals counted. **It is a tightened bound on the same feasibility
+question**, not a different question -- so it is a correctness fix, not a density
+decision, though it will refuse rows that pack today and the area cost has to be
+measured paired and interleaved.
+
+Not attempted here, and deliberately: it is three coupled changes (the allocator
+mirror that already regressed 10 -> 12 on its own, the height-space repair, and
+the `a` dimension), and the allocator half is measured-and-reverted precisely
+because doing one of the three alone is what fails.
+
+**One thing the map found that is not about the inset at all:** both tests in
+`TestTapCapacityIsHeightAware` fail on their own PREMISE, not on the model.
+`test_the_allocator_refuses_the_gapped_row` asserts
+`sorted({heights}) == [3, 7]` and gets `[3]`, because rotation (`69eddea`) turns
+the Oil Refinery a quarter turn and its 3x7 became a 7x3. `mixed_height_spec` is
+uniform-height now, so the fixture built to exercise the height-aware bound
+exercises nothing, and the whole family at `:1394-1457` has had **no test
+coverage since rotation landed** -- which is how (16) and (17) survived the
+spacing change. Repairing the fixture needs a real height gap out of what the
+catalog now offers (tap heights are 3, 4 and 5; pitches run to 8) and a mutation
+check that the repaired fixture fails with the constraint removed.
+
 ## OPEN -- spine grows elevated lanes
 
 Spine refuses every proliferated spec, and the refusal names why: a Spray Coater
