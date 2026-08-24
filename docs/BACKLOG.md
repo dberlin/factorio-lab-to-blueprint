@@ -1,8 +1,49 @@
 # Backlog
 
-## OPEN -- a corridor ABOVE an inset machine costs a tile, and nothing models it
+## OPEN -- spine refuses a Ray Receiver and an Energy Exchanger, and the slot table is why
 
-DIAGNOSED, not fixed. This is the whole of the remaining spine
+Surfaced by the per-side tap charge, not caused by it. `slot_poses.json`, which
+`scripts/extract_dsp_slot_poses.py` reads out of the game's own prefabs, gives
+**Ray Receiver and Energy Exchanger a `slotPoses` array of length zero**. Every
+other machine in the corpus offers columns from at least one face:
+
+    Chemical Plant, Quantum Chemical Plant   8 poses    above 2  below 3
+    Ray Receiver                             0 poses    above 0  below 0
+    Energy Exchanger                         0 poses    above 0  below 0
+
+The old tap model could not see it. `_anchor_inset` took the WORST of the two
+sides and skipped a side whose span was `None`, so a building with no reachable
+pose on either side scored zero -- indistinguishable from a machine whose poses
+sit on its edge. So the allocator seated lanes for it, `_find_taps` found no
+span, `_emit` swallowed the miss, and the placement shipped.
+
+MEASURED on the code before the change: `TestModeDrivenMachines`' two-exchanger
+spec emitted **2 Energy Exchangers and 0 sorters in the whole placement** --
+neither machine joined to anything at either end -- and `validate` called that
+report ok. Four tests asserted properties of that placement.
+
+Spine now refuses the spec and names the reason, which is the right end of the
+trade: a blueprint that pastes two idle exchangers is worse than a refusal.
+`_machine_config` still owns the charge/discharge parameter block and is tested
+directly, so that coverage did not go with it.
+
+WHAT IS OPEN is whether the extraction is incomplete. These machines are fed in
+game, so either they carry their slots in an array the extractor does not read
+-- `portPoses` and `addonAreas` are both extracted separately already, and a
+Spray Coater's supply lives in `addonAreaPoses` -- or they genuinely take items
+by some other mechanism. **That question belongs in the extractor, not in the tap
+model**, and until it is answered spine's refusal is the honest reading of the
+data we have. Note `validate` did not flag the unwired exchangers either; a
+`machine.inputs_supplied` check that misses a machine with no sorters at all is
+a second thing to look at.
+
+## RESOLVED -- the tap-capacity model is per side, and two errors cancelling hid it
+
+Fixed and measured; "WHAT LANDED" at the end of this entry has the numbers. The
+diagnosis and the map are kept as they were written, because they are the durable
+part and because the map is what corrected the diagnosis.
+
+DIAGNOSED, then fixed. This was the whole of the remaining spine
 `machine.inputs_supplied` failure -- ten tests, and every one of them a machine
 one ingredient short.
 
@@ -175,6 +216,65 @@ coverage since rotation landed** -- which is how (16) and (17) survived the
 spacing change. Repairing the fixture needs a real height gap out of what the
 catalog now offers (tap heights are 3, 4 and 5; pitches run to 8) and a mutation
 check that the repaired fixture fails with the constraint removed.
+
+### WHAT LANDED, AND WHAT IT COST
+
+Three changes, in one commit because each alone is measured to make things worse
+or nothing: the allocator mirror (10 -> 12 on its own, `35c4210`), the
+height-space repair, and the second Hall dimension.
+
+`_reach_charge(item_id, yaw, h, above=)` replaces `_anchor_inset`, and
+`above_charge` / `below_inset` replace `tap_height`. One rule now covers both
+corridors -- lane `j` of a band, counted from the nearest, is reachable when
+`charge + j + 1 <= reach` -- so `_fits_below` became `_fits_band` and serves
+both, and the corridor above is ordered worst-charge-nearest exactly as the one
+below always was. The CP-SAT family became
+
+    lanes with up >= s and down >= t   <=   (reach - s) + (reach - t)
+
+over both thresholds instead of the `s = 0` slice, keyed on PITCH heights, with
+`row_h[r]` restricted by `add_allowed_assignments` to the values it can actually
+take -- so the enumeration is exhaustive rather than hopeful.
+
+MEASURED:
+
+* **Suite 18 -> 9. Spine 10 -> 1**, and the one left is the Spray Coater
+  refusal, which is the separate entry below. Freeform's 8 are untouched and
+  cannot move: it imports three constant tables from spine and nothing else.
+* Newly laid out, at budget 15 on the non-proliferated candidate, validator
+  clean and no fallback: `casimir-crystal` REFUSED -> **20,328** tiles,
+  `information-matrix` REFUSED -> **7,031**.
+* **The density cost is real and here it is**: `graphene` 576 -> **600** tiles,
+  +4.2%, on a candidate that already laid out. `plastic` unchanged at 656.
+* Audit, tier mid (trivial+small+mid), budget 4, both arms interleaved, 3 runs
+  each: spine 20/48 and freeform 26/48 in BOTH arms, **INVALID 0, crashed 0**,
+  spine area **14,139 in both arms to the tile**, deterministic across runs.
+  Freeform's -0.19% is its own run-to-run noise -- one cell moves between
+  repeats within each arm, in both arms.
+
+**AND THE AUDIT COULD NOT HAVE SHOWN THIS FIX WORKING.** All 84 spine refusals
+across every tier up to mid are the Spray Coater; the corpus at those tiers
+contains none of the shape under test, because the candidates that carry it are
+sprayed and refused earlier for an unrelated reason. Reporting "audit unchanged"
+as confirmation would have been the fourth sampling error of this session. What
+the audit does say is the useful half: the tightened bound cost no density and no
+cell anywhere it can see.
+
+The fixtures are `pitch_gap_spec` and `inset_face_spec`, deliberate mirror
+images -- three Assembling Machines whose 4-tile clearance gaps every lane below
+them, and three Chemical Plants whose poses inset every lane above them. Both are
+red on the pre-fix source and green after, and three mutations discriminate:
+forcing `above_charge` to 0 kills only the inset tests, dropping the row gap from
+`_below_charge` kills only the clearance tests, and removing the CP-SAT family
+kills only the two packer tests while the four allocator and ground-truth tests
+stay green.
+
+Two fixtures were built and thrown away before these, both green for reasons that
+had nothing to do with the claim, and both worth naming: one asserted heights
+through `sorted({...})` over a SET, which deduplicated the thing it measured; the
+other chained its three groups producer-to-consumer, and `_solve_one` orders
+producers strictly above consumers, so the packer was never free to make the
+packing the test said it must refuse.
 
 ## OPEN -- spine grows elevated lanes
 

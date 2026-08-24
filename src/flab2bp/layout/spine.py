@@ -192,18 +192,25 @@ class _Group:
     proliferated: bool
 
     @property
-    def tap_height(self) -> int:
-        """Height as the TAP model should count it -- footprint minus the inset.
+    def above_charge(self) -> int:
+        """Lanes this group loses in the corridor ABOVE its row.
 
-        A machine's usable face is where its insert poses are, and that is not
-        always its edge: a Chemical Plant's southern poses sit a row INSIDE a
-        footprint five deep, so a sorter reaching one is a tile longer than the
-        gap to the lane suggests. That is indistinguishable, for reach purposes,
-        from a machine one tile shorter sitting flush -- which the tap model
-        already handles as a GAP. Expressing it as height means the whole Hall's
-        condition machinery covers it without a second concept.
+        ROW-INDEPENDENT, and that is the point: a machine is pinned flush with
+        the top of its row however short it is, so nothing the row does can move
+        this. It is purely what the group's own poses cost on that face -- one
+        tile for a Chemical Plant, none for anything whose poses sit on its edge.
         """
-        return self.height - _anchor_inset(self.item_id, self.yaw, self.height)
+        return _reach_charge(self.item_id, self.yaw, self.height, above=True)
+
+    @property
+    def below_inset(self) -> int:
+        """Lanes this group's own poses cost it in the corridor BELOW its row.
+
+        Row-dependent in use: the row adds the tiles this machine stops short of
+        its floor -- see :func:`_below_charge` -- and this is only the part that
+        travels with the building.
+        """
+        return _reach_charge(self.item_id, self.yaw, self.height, above=False)
 
     @property
     def block_width(self) -> int:
@@ -390,18 +397,34 @@ def _row_index(rows: list[list[str]]) -> dict[str, int]:
     return {key: r for r, row in enumerate(rows) for key in row}
 
 
-def _fits_below(
-    slot: set[str], item: str, gaps: dict[str, int], reach: int, copies: dict[str, int]
+def _below_charge(g: _Group, row_h: int) -> int:
+    """What the corridor below ``g``'s row costs it, in lanes.
+
+    Two tiles of cost, added: the tiles the machine stops short of its row's
+    floor, because a row is as tall as its tallest group and machines are pinned
+    to the top; and the tiles its own poses on that face sit inside the
+    footprint.  A sorter reaching lane ``j`` spans exactly
+    ``(row_h - height) + below_inset + j + 1``, so the two are the same tile
+    either way and add.
+    """
+    return (row_h - g.height) + g.below_inset
+
+
+def _fits_band(
+    slot: set[str], item: str, charge: dict[str, int], reach: int, copies: dict[str, int]
 ) -> bool:
-    """Could the corridor BELOW a row take ``item`` as well and stay tappable?
+    """Could this band of one corridor take ``item`` as well and stay tappable?
 
-    Lane ``j`` of the corridor below sits ``gap + j + 1`` tiles from a machine
-    whose bottom edge is ``gap`` above its row's floor.  The slot's lanes are
-    emitted worst-gap-first -- see ``_lane_requirements``, which sorts the
-    corridor's top band the same way -- so the shortest machine gets the shallow
-    lane and the check is exactly that greedy assignment being feasible.
+    Lane ``j`` of a band, counted from the lane NEAREST the tapping row, is
+    reachable when ``charge + j + 1 <= reach``.  Both corridors obey that rule --
+    they differ only in what goes into ``charge``, which is
+    :func:`_below_charge` below a row and the group's row-independent
+    ``above_charge`` above it.  The slot's lanes are emitted worst-charge-first
+    -- see ``_lane_requirements``, which sorts both of a corridor's bands to
+    match -- so the most constrained machine gets the shallow lane and this check
+    is exactly that greedy assignment being feasible.
 
-    Charging the worst gap to the whole slot instead would be far too strict: a
+    Charging the worst to the whole slot instead would be far too strict: a
     corridor happily holds three lanes for a gap of 2 (spans 3, 2, 3) where a
     flat ``reach - gap`` cap allows one.
 
@@ -411,10 +434,10 @@ def _fits_below(
     skipped rather than as anything nameable.
     """
     combined = sorted(
-        (gaps.get(i, 0) for i in {*slot, item} for _ in range(copies.get(i, 1))),
+        (charge.get(i, 0) for i in {*slot, item} for _ in range(copies.get(i, 1))),
         reverse=True,
     )
-    return all(g + j + 1 <= reach for j, g in enumerate(combined))
+    return all(c + j + 1 <= reach for j, c in enumerate(combined))
 
 
 def belt_capacity(spec: BuildSpec) -> Fraction:
@@ -674,11 +697,14 @@ def _allocate_lanes(
     crossing: list[set[str]] = [set() for _ in range(n_corr)]
     tap_above: list[set[str]] = [set() for _ in range(n_corr)]
     tap_below: list[set[str]] = [set() for _ in range(n_corr)]
-    #: How far the machine tapping corridor ``c`` from ABOVE stops short of its
-    #: row's floor.  Sets the order of the corridor's top band: worst gap gets
-    #: the shallowest lane, which is what ``_fits_below`` assumes when it decides
-    #: the band can hold one more.
-    above_gap: list[dict[str, int]] = [{} for _ in range(n_corr)]
+    #: What corridor ``c`` costs the machine tapping it from ABOVE, per item.
+    #: Sets the order of the corridor's top band: worst charge gets the
+    #: shallowest lane, which is what ``_fits_band`` assumes when it decides the
+    #: band can hold one more.
+    down_charge: list[dict[str, int]] = [{} for _ in range(n_corr)]
+    #: The same for the band tapped from BELOW, which pays a charge of its own
+    #: now that a machine's poses can sit a row inside the face looking up.
+    up_charge: list[dict[str, int]] = [{} for _ in range(n_corr)]
 
     # What each row consumes and produces.  There is deliberately no corridor
     # *span* here any more: a lane is needed where it is tapped and nowhere else,
@@ -738,19 +764,33 @@ def _allocate_lanes(
         # and the machine simply gets no sorter for that item at all.  That is
         # how graphene, plastic, energy-matrix and casimir-crystal each ended up
         # with a smelter nothing drained.
+        #
+        # The corridor ABOVE does not cost nothing, which is what this used to
+        # assume.  A machine is flush with the top of its row, so the ROW adds
+        # nothing there -- but the machine's own poses on that face can still sit
+        # a row inside its footprint, and a Chemical Plant's do.  Both sides now
+        # carry a charge; only the row's contribution is one-sided.
         row_h = max((groups[k].pitch_h for k in rows[r]), default=1)
-        gaps: dict[str, int] = {}
+        up: dict[str, int] = {}
+        down: dict[str, int] = {}
         for k in rows[r]:
-            gap = row_h - groups[k].tap_height
-            for item in set(groups[k].inputs) | set(groups[k].outputs):
-                gaps[item] = max(gaps.get(item, 0), gap)
+            g = groups[k]
+            for item in set(g.inputs) | set(g.outputs):
+                up[item] = max(up.get(item, 0), g.above_charge)
+                down[item] = max(down.get(item, 0), _below_charge(g, row_h))
 
         prefers_above: dict[str, bool] = dict.fromkeys(sorted(consumes[r]), True)
         for item in sorted(produces[r]):
             prefers_above.setdefault(item, False)
         # Most constrained first: an item whose tapper is short has fewer places
         # it can go, so it has to choose before the ones that can go anywhere.
-        ordered_items = sorted(prefers_above, key=lambda i: (-gaps.get(i, 0), i))
+        # Constrained means constrained on BOTH sides now -- an item cheap on one
+        # side and dear on the other has exactly one place it can go, which is
+        # more binding than one that is mildly dear everywhere.
+        ordered_items = sorted(
+            prefers_above,
+            key=lambda i: (-(up.get(i, 0) + down.get(i, 0)), -min(up.get(i, 0), down.get(i, 0)), i),
+        )
         # Every machine on this row needs its own anchor COLUMN per item it draws
         # off a shared lane -- two sorters serving one machine from one belt
         # cannot stand in the same column -- so the narrowest machine on the row
@@ -762,7 +802,8 @@ def _allocate_lanes(
             gap_first: bool,
             items: list[str] = ordered_items,
             prefers: dict[str, bool] = prefers_above,
-            gaps: dict[str, int] = gaps,
+            up: dict[str, int] = up,
+            down: dict[str, int] = down,
             share_cap: int = widest_share,
             drawn: frozenset[str] = frozenset(consumes[r] - produces[r]),
         ) -> tuple[set[str], set[str], dict[str, str], dict[str, str]] | None:
@@ -779,9 +820,14 @@ def _allocate_lanes(
             rides_above: dict[str, str] = {}
 
             def _room(item: str, slot: set[str]) -> bool:
-                if slot is below:
-                    return sum(copies.get(i, 1) for i in slot) + copies.get(item, 1) <= reach
-                return _fits_below(slot, item, gaps, reach, copies)
+                # ``below`` is the corridor ABOVE this row -- the row taps it
+                # from below -- and ``above`` the one under it.  Both are bands
+                # of a corridor and both are charged, only from different
+                # sources; a flat count here is what seated a Chemical Plant's
+                # third lane upward where it can only reach two.
+                return _fits_band(
+                    slot, item, up if slot is below else down, reach, copies
+                )
 
             def _compatible(a: str, b: str) -> bool:
                 # Only an item this row DRAWS may share.  A lane the row fills is
@@ -792,16 +838,20 @@ def _allocate_lanes(
                 if a not in drawn or b not in drawn:
                     return False
                 ka, kb = shareable.get(a), shareable.get(b)
-                # Equal gaps, because the two items end up at ONE depth: a lane
-                # the shorter machine can reach is the only lane the pair can
-                # take, and unequal gaps would put one of them out of reach of
-                # the very sorter the sharing exists to place.
+                # Equal charges on BOTH sides, because the two items end up at
+                # ONE depth: a lane the more constrained machine can reach is the
+                # only lane the pair can take, and an unequal charge would put
+                # one of them out of reach of the very sorter the sharing exists
+                # to place.  Checking one side only would pass a pair that agrees
+                # where it is seated and disagrees where it is not, and the four
+                # greedies do try the other side.
                 return (
                     ka is not None
                     and kb is not None
                     and ka[0] == kb[0]
                     and ka[1] + kb[1] <= cap
-                    and gaps.get(a, 0) == gaps.get(b, 0)
+                    and up.get(a, 0) == up.get(b, 0)
+                    and down.get(a, 0) == down.get(b, 0)
                 )
 
             def _pair_off(slot: set[str], rides: dict[str, str]) -> bool:
@@ -846,17 +896,26 @@ def _allocate_lanes(
                 return False
 
             for item in items:
-                # A machine is flush with the TOP of its row, so the corridor
-                # above it costs nothing however short the machine is, while
-                # every lane in the corridor below is the machine's gap further
-                # away.  Under ``gap_first`` an item carrying a gap therefore
-                # goes up whatever the flow would prefer: leaving it to the
-                # preference put two gapped items in one bottom band, where the
-                # second sits ``gap + 2`` tiles down and no sorter reaches it.
+                # Under ``gap_first`` an item goes to the side that costs it
+                # LESS, whatever the flow would prefer: leaving it to the
+                # preference put two charged items in one band, where the second
+                # sits a tile further than the first and no sorter reaches it.
                 # Consume-above/produce-below is only a mild flow preference --
                 # `_find_taps` tries both sides anyway -- and reach is not
                 # negotiable, so where the two disagree reach wins.
-                if prefers[item] or (gap_first and gaps.get(item, 0) > 0):
+                #
+                # This used to read "an item with a gap goes UP", which was the
+                # same rule under the assumption that up is always free.  It is
+                # not: a Chemical Plant pays a tile looking up and nothing
+                # looking down, so the old rule sent its items at the one side
+                # that could not take them.
+                cheaper_up = up.get(item, 0) < down.get(item, 0)
+                cheaper_down = down.get(item, 0) < up.get(item, 0)
+                if gap_first and (cheaper_up or cheaper_down):
+                    up_first = cheaper_up
+                else:
+                    up_first = prefers[item]
+                if up_first:
                     order = ((below, rides_below), (above, rides_above))
                 else:
                     order = ((above, rides_above), (below, rides_below))
@@ -892,7 +951,8 @@ def _allocate_lanes(
             raise ValueError(
                 f"row {r} ({who}) taps {need} lanes that no ordering of its two "
                 f"corridors puts in reach; machine heights differ by up to "
-                f"{max(gaps.values(), default=0)} tiles"
+                f"{max(down.values(), default=0)} tiles and the face looking up "
+                f"costs up to {max(up.values(), default=0)}"
             )
         slot_below, slot_above, rides_below, rides_above = seated
         if 0 <= r < n_corr:
@@ -905,9 +965,10 @@ def _allocate_lanes(
             for item in slot_items:
                 if c == r:
                     tap_below[c].add(item)
+                    up_charge[c][item] = up.get(item, 0)
                 else:
                     tap_above[c].add(item)
-                    above_gap[c][item] = gaps.get(item, 0)
+                    down_charge[c][item] = down.get(item, 0)
 
     for c in range(n_corr):
         crossing[c] |= tap_above[c] | tap_below[c]
@@ -939,10 +1000,18 @@ def _allocate_lanes(
         def _lanes(items: list[str]) -> list[str]:
             return [i for i in items for _ in range(copies.get(i, 1))]
 
+        # Both bands worst-charge-NEAREST, which is opposite orderings because
+        # the two bands are measured from opposite ends: `lane_order` lays the
+        # top band out from the corridor's top, where index 0 is nearest the row
+        # above, and the bottom band ends at the corridor's floor, where the LAST
+        # index is nearest the row below.  Sorting the bottom band the same way
+        # as the top would hand the most constrained machine the deepest lane.
         above = _lanes(
-            sorted(tap_above[c] & crossing[c], key=lambda i: (-above_gap[c].get(i, 0), i))
+            sorted(tap_above[c] & crossing[c], key=lambda i: (-down_charge[c].get(i, 0), i))
         )
-        below = _lanes(sorted(tap_below[c] & crossing[c]))
+        below = _lanes(
+            sorted(tap_below[c] & crossing[c], key=lambda i: (up_charge[c].get(i, 0), i))
+        )
         through = _lanes(sorted(crossing[c] - set(above) - set(below)))
         order = lane_order(above, below, through, reach)
         if order is None:
@@ -1350,111 +1419,125 @@ def _solve_one(
         if terms:
             model.add(sum(terms) <= 2 * tap_reach)
 
-    # --- tap capacity, height-aware ----------------------------------------
-    # The flat ``2 * tap_reach`` above is only the truth when every machine in
-    # the row is the same height.  Machines are pinned to the TOP of their row,
-    # so a group ``gap`` tiles shorter than the row's tallest is still flush
-    # with the corridor ABOVE it and sits ``gap`` further from the one BELOW:
-    # lane ``j`` of the lower corridor is ``gap + j + 1`` tiles away, so a
-    # gapped lane may only take one of that corridor's first ``tap_reach - gap``
-    # positions.  ``_fits_below`` is exactly that rule.
+    # --- tap capacity, per side --------------------------------------------
+    # The flat ``2 * tap_reach`` above is only the truth when both corridors are
+    # fully usable by everything in the row, and neither is in general.
     #
-    # Measured, on the URL this was found with: row
-    # ``energetic-graphite + iron-ingot + reforming-refine`` taps six lanes, and
-    # four of them are tapped by 3-tall arc smelters in a row a 7-tall oil
-    # refinery makes 7 tall.  A gap of 4 against a reach of 3 fits in the upper
-    # corridor or nowhere, and the upper corridor holds three -- so the row is
-    # unwirable, `_lane_requirements` said so, and every width in the sweep was
-    # skipped for it.  Six is exactly ``2 * tap_reach``, so the flat bound saw
-    # nothing wrong.
+    # A group is charged for the corridor BELOW it by the tiles it stops short of
+    # its row's floor -- machines are pinned to the TOP of their row, so a group
+    # shorter than the row's tallest sits that much further from the lower
+    # corridor -- plus whatever its own poses on that face cost.  It is charged
+    # for the corridor ABOVE it by its poses alone: one lane for a Chemical
+    # Plant, whose face looking up is a row inside its footprint, and the whole
+    # corridor for an Oil Refinery looking north, which has no pose there at all.
+    # The row cannot change that second number, which is what makes it usable
+    # here: ``above_charge`` is the same in every row the group could sit in.
     #
-    # Every lane may use any of the upper corridor's ``tap_reach`` slots plus a
-    # PREFIX of the lower corridor, and those prefixes NEST by gap.  A nested
-    # family needs Hall's condition checked only on the nesting, which is one
-    # inequality per gap threshold:
+    # Lane ``j`` of a band, counted from the tapping row, is reachable exactly
+    # when ``charge + j + 1 <= tap_reach`` -- `_fits_band`'s rule, and the same
+    # one on both sides.  So item ``i`` may take a PREFIX of length
+    # ``tap_reach - up_i`` of the corridor above and a prefix of length
+    # ``tap_reach - down_i`` of the one below.  Prefixes nest, so a family of two
+    # nested prefixes needs Hall's condition checked only on the nesting: one
+    # inequality per PAIR of thresholds,
     #
-    #     lanes with gap >= t   <=   tap_reach + max(0, tap_reach - t)
+    #     lanes with up >= s and down >= t   <=   (reach - s) + (reach - t)
     #
-    # ``t = 0`` is the constraint above.  Thresholds stop at ``tap_reach``,
-    # where the bound goes flat while the count only falls, so no larger
-    # threshold forbids anything the ``tap_reach`` one does not.
+    # of which ``s = t = 0`` is the flat constraint above.
     #
-    # This is `_fits_below`'s own greedy and deliberately not a cruder flat
-    # ``tap_reach - gap`` cap: a corridor holds three lanes at a gap of 2 (spans
-    # 3, 2, 3) where the flat cap allows one, and charging that would split rows
-    # that pack perfectly well today.
+    # THE MODEL THIS REPLACED WAS THE ``s = 0`` SLICE OF THIS AND NOTHING ELSE.
+    # It assumed the upper corridor was free for everything, which is the exact
+    # assumption a Chemical Plant breaks: the plant reaches two lanes up, the
+    # allocator seated three, `_find_taps` refused the third, and the machine
+    # got no sorter for that ingredient -- ten spine tests, every one of them a
+    # machine one ingredient short.
     #
-    # Gap is ``row_h[r] - height`` and ``row_h[r]`` is a variable, so each
-    # threshold is enforced under a REIFIED row height: in a row ``h`` tall,
-    # item ``i`` carries a gap of at least ``t`` exactly when some group no
-    # taller than ``h - t`` in that row taps it.  ``row_h[r]`` is only bounded
-    # from below, but the objective minimises it, and an over-large value only
-    # ever ADDS terms -- so the bound can be too strict for an assignment the
-    # solver was going to reject on height anyway, and never too loose.
-    heights = sorted({grp.tap_height for grp in groups.values()})
-    # Only differences some pair of groups can actually realise.  A spec whose
-    # machines are all one height has none at all, and its model stays
-    # bit-for-bit the one that came before.
-    thresholds = sorted({min(b - a, tap_reach) for a in heights for b in heights if b > a})
-    if thresholds:
-        by_height: dict[str, dict[int, list[str]]] = defaultdict(lambda: defaultdict(list))
-        for k, grp in groups.items():
-            for item in set(grp.inputs) | set(grp.outputs):
-                by_height[item][grp.tap_height].append(k)
-        for r in range(n):
-            #: ``(item, ceiling) -> does row r tap item through a group that
-            #: short?``  Keyed by the tallest height at or below the ceiling,
-            #: because the handful of ``h - t`` values collapse onto far fewer
-            #: distinct group sets and the literal is reusable across ``t``.
-            short_tap: dict[tuple[str, int], cp_model.IntVar] = {}
-            for h in heights:
-                #: Built on first use, so a height no threshold can bind at --
-                #: the shortest one, where nothing is shorter still -- costs the
-                #: model nothing.
-                is_h: cp_model.IntVar | None = None
-                for thr in thresholds:
-                    under = [x for x in heights if x <= h - thr]
-                    if not under:
-                        continue  # nothing in this spec is that much shorter
-                    ceiling = max(under)
-                    bound = tap_reach + max(0, tap_reach - thr)
-                    gapped = {
-                        item: short
-                        for item, holders in by_height.items()
-                        if (
-                            short := [
-                                k for hh, ks in holders.items() if hh <= ceiling for k in ks
-                            ]
-                        )
-                    }
-                    # Skip a threshold that cannot bind even if the row took
-                    # every gapped item in the spec.  On the small corpus specs
-                    # this is most of them, and the variables are never built.
-                    if sum(lane_copies.get(i, 1) for i in gapped) <= bound:
+    # It also compared the wrong two numbers.  ``row_h[r]`` is a PITCH height and
+    # the thresholds were differences of TAP heights, so ``row_h[r] == h`` was
+    # false on any row whose tallest pitch was not also some group's tap height
+    # -- 9 of the 12 corpus specs had such a row, and a row topped by a Chemical
+    # Plant (pitch 5, tap heights 3 and 4) is always one.  Both quantities are
+    # now in pitch space, `row_h[r]` is restricted to the values it can actually
+    # take, and the enumeration below is therefore exhaustive rather than
+    # hopeful.
+    #
+    # Deliberately not a cruder flat ``tap_reach - charge`` cap: a corridor holds
+    # three lanes at a gap of 2 (spans 3, 2, 3) where the flat cap allows one,
+    # and charging that would split rows that pack perfectly well.
+    taps_of = {k: set(g.inputs) | set(g.outputs) for k, g in groups.items()}
+    up_of = {k: min(g.above_charge, tap_reach) for k, g in groups.items()}
+    # A row is exactly as tall as its tallest member's pitch, or empty.  Saying
+    # so is what makes the enumeration below sound: `row_h[r]` is otherwise only
+    # bounded from BELOW, and a solution that stopped at the budget rather than
+    # at the optimum could park it on a value no reification matched and escape
+    # every constraint here.
+    pitch_heights = sorted({g.pitch_h for g in groups.values()})
+    for r in range(n):
+        model.add_allowed_assignments([row_h[r]], [(0,), *((h,) for h in pitch_heights)])
+    s_values = sorted({0, *up_of.values()})
+    for r in range(n):
+        #: ``frozenset of qualifying groups -> the literal for "row r taps this
+        #: item through one of them"``, shared across every (s, t) that lands on
+        #: the same set -- and they collapse hard, because the handful of
+        #: charges in any real spec generate far fewer distinct sets than pairs.
+        qual_tap: dict[tuple[str, frozenset[str]], cp_model.IntVar] = {}
+        for h in pitch_heights:
+            down_of = {
+                k: min(max(_below_charge(g, h), 0), tap_reach) for k, g in groups.items()
+            }
+            #: Tightest bound per qualifying set: several (s, t) pairs pick out
+            #: the same groups, and only the smallest bound among them binds.
+            tightest: dict[frozenset[str], int] = {}
+            for up_thr in s_values:
+                for down_thr in sorted({0, *down_of.values()}):
+                    if up_thr == 0 and down_thr == 0:
+                        continue  # the flat bound, already stated unconditionally
+                    qual = frozenset(
+                        k
+                        for k in keys
+                        if up_of[k] >= up_thr and down_of[k] >= down_thr
+                    )
+                    if not qual:
                         continue
-                    gap_terms: list[cp_model.LinearExpr] = []
-                    for item, short in sorted(gapped.items()):
-                        v = short_tap.get((item, ceiling))
-                        if v is None:
-                            # A single holder needs no reification at all: its
-                            # `in_row` literal already IS "row r taps this item
-                            # through a group that short".  Measured, this is
-                            # most of the small specs and about a quarter of the
-                            # big ones -- `universe-matrix` (40 groups) drops
-                            # from 3,400 added Booleans to 2,600, and
-                            # `graphene` from 28 to 8.
-                            if len(short) == 1:
-                                v = in_row[short[0], r]
-                            else:
-                                v = model.new_bool_var(f"short_{r}_{ceiling}_{item}")
-                                model.add_max_equality(v, [in_row[k, r] for k in short])
-                            short_tap[item, ceiling] = v
-                        gap_terms.append(lane_copies.get(item, 1) * v)
-                    if is_h is None:
-                        is_h = model.new_bool_var(f"rowh_{r}_{h}")
-                        model.add(row_h[r] == h).only_enforce_if(is_h)
-                        model.add(row_h[r] != h).only_enforce_if(~is_h)
-                    model.add(sum(gap_terms) <= bound).only_enforce_if(is_h)
+                    cap_st = (tap_reach - up_thr) + (tap_reach - down_thr)
+                    if cap_st < tightest.get(qual, cap_st + 1):
+                        tightest[qual] = cap_st
+            #: Built on first use, so a height at which nothing can bind costs
+            #: the model nothing.
+            is_h: cp_model.IntVar | None = None
+            for qual, cap_st in sorted(tightest.items(), key=lambda kv: sorted(kv[0])):
+                charged: dict[str, list[str]] = defaultdict(list)
+                for k in sorted(qual):
+                    for item in taps_of[k]:
+                        charged[item].append(k)
+                # Skip a pair that cannot bind even if the row took every
+                # charged item in the spec.  On the small corpus specs this is
+                # most of them, and the variables are never built.
+                if sum(lane_copies.get(i, 1) for i in charged) <= cap_st:
+                    continue
+                terms_h: list[cp_model.LinearExpr] = []
+                for item, holders in sorted(charged.items()):
+                    lit_key = (item, frozenset(holders))
+                    lit = qual_tap.get(lit_key)
+                    if lit is None:
+                        # A single holder needs no reification at all: its
+                        # `in_row` literal already IS "row r taps this item
+                        # through a group that pays".  Measured on the model this
+                        # replaced, that was most of the small specs and about a
+                        # quarter of the big ones -- `universe-matrix` (40
+                        # groups) dropped from 3,400 added Booleans to 2,600.
+                        if len(holders) == 1:
+                            lit = in_row[holders[0], r]
+                        else:
+                            lit = model.new_bool_var(f"charged_{r}_{h}_{item}")
+                            model.add_max_equality(lit, [in_row[k, r] for k in holders])
+                        qual_tap[lit_key] = lit
+                    terms_h.append(lane_copies.get(item, 1) * lit)
+                if is_h is None:
+                    is_h = model.new_bool_var(f"rowh_{r}_{h}")
+                    model.add(row_h[r] == h).only_enforce_if(is_h)
+                    model.add(row_h[r] != h).only_enforce_if(~is_h)
+                model.add(sum(terms_h) <= cap_st).only_enforce_if(is_h)
 
     # --- direct insertion --------------------------------------------------
     # A producer within sorter reach of its consumer is joined by a sorter alone,
@@ -3108,21 +3191,40 @@ class _Tap:
 
 
 @cache
-def _anchor_inset(item_id: int, yaw: float, mach_h: int) -> int:
-    """Tiles of extra span this building's poses cost at the nearest lane.
+@cache
+def _reach_charge(item_id: int, yaw: float, mach_h: int, *, above: bool) -> int:
+    """Lanes of ONE corridor this building's poses cost it, on that face alone.
 
-    Zero for anything whose poses sit on its edge, which is most things. One for
-    a Chemical Plant, whose southern row of poses is a row in. Taken as the
-    WORST of the two sides, because the tap model has one number per group and
-    over-stating the cost refuses a lane that would have worked where
-    under-stating it emits a sorter that cannot reach.
+    Zero for anything whose poses sit on the edge of that face, which is most
+    things. One for a Chemical Plant looking UP, whose poses on that face are a
+    row inside a footprint five deep, so a sorter reaching one is a tile longer
+    than the gap suggests. ``sorter_max_reach`` -- the whole corridor -- for a
+    face with no reachable pose at all, which is an Oil Refinery from the north
+    and a Ray Receiver from either side.
+
+    Deliberately PER SIDE. The single worst-of-both-sides number this replaced
+    was correct about neither: a Chemical Plant's cost is on the face looking
+    up, so charging it downward as well refused a lane that would have worked,
+    while the face that actually pays it was charged nothing at all and got a
+    sorter that could not reach. Those two errors cancel in the TOTAL -- 3 up
+    plus 2 down against a truth of 2 and 3 -- which is exactly why an aggregate
+    check cleared a model that was wrong on both sides.
+
+    Expressed as a CHARGE rather than a depth so both corridors obey one rule:
+    lane ``j`` of a band, counted from the nearest, is reachable exactly when
+    ``charge + j + 1 <= sorter_max_reach``. The corridor below adds the tiles
+    the machine stops short of its row's floor to this; the corridor above adds
+    nothing, because a machine is flush with the top of its row however short it
+    is.
     """
-    worst = 0
-    for above in (True, False):
-        span = _anchor_span(item_id, yaw, mach_h, 1, above=above)
-        if span is not None:
-            worst = max(worst, span - 1)
-    return worst
+    reach = CONSTANTS.sorter_max_reach
+    depth = 0
+    for gap in range(1, reach + 1):
+        span = _anchor_span(item_id, yaw, mach_h, gap, above=above)
+        if span is None or not 1 <= span <= reach:
+            break
+        depth = gap
+    return reach - depth
 
 
 def _anchor_span(

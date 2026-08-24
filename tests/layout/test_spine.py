@@ -168,54 +168,85 @@ def magnetic_ring_spec() -> BuildSpec:
     )
 
 
-def mixed_height_spec() -> BuildSpec:
-    """Two 3-tall arc smelters and a 5-tall Chemical Plant, tapping six lanes.
+def pitch_gap_spec() -> BuildSpec:
+    """Three Assembling Machines, one row, six lanes -- and every lane gapped.
 
-    The shape that finds a height-blind tap bound.  Six lanes is exactly
-    ``2 * sorter_max_reach``, so the flat bound sees nothing wrong -- but the
-    plant makes the row five tall, and a smelter's usable face stops two tiles
-    above that floor.  A corridor holds only ONE lane at a gap of 2
-    (``_fits_below``: 2 + 0 + 1 fits, 2 + 1 + 1 does not) and only two at a gap
-    of 1, so the row's six lanes want three positions above and at most two
-    below, and there is no sixth.
+    An assembler covers 3 tiles and RESERVES 4: its 3.82-unit collider does not
+    fit a 3-tile pitch.  So a row of nothing but assemblers is four tall while
+    every machine in it is three, and each one stops one tile above its row's
+    floor -- every lane of the corridor below is that tile further away.  A band
+    holds two such lanes (``_fits_band``: 1 + 0 + 1 and 1 + 1 + 1 fit, 1 + 2 + 1
+    does not), and the corridor above holds three, so six lanes do not go in
+    five places.
 
-    **No group here consumes another's output**, and that is load-bearing rather
-    than incidental: ``_solve_one`` orders producers strictly above consumers, so
-    a chain of three could never share a row at all and a test asserting the
-    packer refuses one would pass over a packing the packer was never free to
-    make.  Three independent externally-fed groups can share a row, so the
-    refusal is about height.
+    EVERY MACHINE HERE IS THE SAME HEIGHT, and that is the point.  The model this
+    fixture guards derived its thresholds from differences of TAP heights, of
+    which this spec has none, and reified them against ``row_h`` -- a PITCH
+    height, which is a different number entirely.  So it built no constraint at
+    all and authorised the row.  Measured over the twelve corpus specs at the
+    time: thresholds absent in 3 and incomplete in 6.
 
-    THE PLANT IS WHAT MAKES THIS BITE, and not because it is tall.  Its
-    ``tap_height`` is 4 against a ``pitch_h`` of 5 -- the poses on one face sit a
-    row inside the footprint -- so a row it tops has ``row_h == 5``, a value no
-    group's ``tap_height`` takes.  The model's height-aware family reifies
-    ``row_h[r] == h`` over the set of TAP heights, so on this row it cannot fire.
-    Written with an Oil Refinery, as this fixture was, it proves nothing:
-    rotation turned the refinery's 3x7 into a 7x3 and every machine in the spec
-    became the same height.  Written with a Matrix Lab it proves less than it
-    looks -- a lab's tap height IS 5, so the reification matches by luck and the
-    bug hides behind it.
-
-    Seven items per second on a twelve-per-second belt, deliberately: it keeps
+    Six items per second on a twelve-per-second belt, deliberately: it keeps
     every item to one lane while making every PAIR of them overflow, so
-    ``_shareable`` cannot pair two taps onto one lane and rescue the row.  At one
-    per second two of the gapped taps shared, the row seated in five lanes, and
-    the spec proved nothing.
+    ``_shareable`` cannot pair two taps onto one lane and rescue the row.
     """
     return BuildSpec(
         groups=(
-            group("iron-ingot", "arc-smelter", 1, {"iron-ore": F(7)}, {"iron-ingot": F(7)}),
+            group("gear", "assembling-machine-2", 1, {"iron-ingot": F(7)}, {"gear": F(7)}),
             group(
-                "energetic-graphite", "arc-smelter", 1, {"coal": F(7)}, {"graphite": F(7)}
+                "magnetic-coil", "assembling-machine-2", 1,
+                {"magnet": F(7)}, {"magnetic-coil": F(7)},
             ),
-            group("plastic", "chemical-plant", 1, {"refined-oil": F(7)}, {"plastic": F(7)}),
+            group(
+                "circuit-board", "assembling-machine-2", 1,
+                {"copper-ingot": F(7)}, {"circuit-board": F(7)},
+            ),
         ),
-        external_inputs={"iron-ore": F(7), "coal": F(7), "refined-oil": F(7)},
-        outputs={"iron-ingot": F(7), "graphite": F(7), "plastic": F(7)},
+        external_inputs={"iron-ingot": F(7), "magnet": F(7), "copper-ingot": F(7)},
+        outputs={"gear": F(7), "magnetic-coil": F(7), "circuit-board": F(7)},
         belt_item_id="conveyor-belt-2",
         belt_items_per_second=F(12),
-        label="mixed-height",
+        label="pitch-gap",
+    )
+
+
+def inset_face_spec() -> BuildSpec:
+    """Three Chemical Plants, one row, six lanes -- and every lane inset UPWARD.
+
+    A plant's poses on the face looking up sit a row INSIDE a footprint five
+    deep, so a sorter reaching the nearest lane above already spans two tiles and
+    the third lane up is out of reach entirely.  The corridor above holds two
+    such lanes, not three.  The corridor below holds three -- the plant's poses
+    on THAT face are on its edge and a row of plants is exactly as tall as one --
+    so six lanes want two places and three, and there is no sixth.
+
+    The asymmetry is the whole fixture.  A model carrying one number per group
+    and taking the worse of the two sides gets both halves wrong at once: it
+    charges the face looking down a tile it does not owe, and charges the face
+    looking up nothing.  The two errors cancel in the TOTAL -- 3 up and 2 down
+    against a truth of 2 and 3, five either way -- which is exactly why an
+    aggregate check cleared a model that was wrong on both sides.
+    """
+    return BuildSpec(
+        groups=(
+            group("plastic", "chemical-plant", 1, {"refined-oil": F(7)}, {"plastic": F(7)}),
+            group(
+                "sulfuric-acid", "chemical-plant", 1,
+                {"refined-oil-2": F(7)}, {"sulfuric-acid": F(7)},
+            ),
+            group(
+                "graphene", "chemical-plant", 1,
+                {"spiniform-stalagmite-crystal": F(7)}, {"graphene": F(7)},
+            ),
+        ),
+        external_inputs={
+            "refined-oil": F(7), "refined-oil-2": F(7),
+            "spiniform-stalagmite-crystal": F(7),
+        },
+        outputs={"plastic": F(7), "sulfuric-acid": F(7), "graphene": F(7)},
+        belt_item_id="conveyor-belt-2",
+        belt_items_per_second=F(12),
+        label="inset-face",
     )
 
 
@@ -1964,62 +1995,53 @@ class TestThereIsNoSeedFallback:
         assert "cannot be wired even alone in its own row" in exc.value.reason
 
 
-class TestTapCapacityIsHeightAware:
+class TestTapCapacityIsPerSide:
     """The packer may not authorise a row its own allocator then refuses.
 
-    Machines are pinned to the TOP of their row, so a group shorter than the
-    row's tallest is flush with the corridor above and gapped from the one
-    below.  ``_fits_below`` has always known that; the CP-SAT row model capped a
-    row at a flat ``2 * reach`` and did not.  So it packed rows
-    ``_lane_requirements`` could not wire, ``_solve_plan`` skipped those widths,
-    and a real URL's ``max-proliferation`` lost every width in its sweep.
+    A row taps two corridors and a sorter reaches ``sorter_max_reach`` lanes into
+    each -- but only when both corridors are fully usable, and neither is in
+    general.  A group is charged for the corridor BELOW by the tiles it stops
+    short of its row's floor plus what its own poses on that face cost, and for
+    the corridor ABOVE by its poses alone.  The two numbers are different and the
+    model has to carry both: charging one to both sides is wrong twice over, and
+    the two errors cancel in the total.
 
     Rejecting after the fact cannot fix this: routability is a property of the
     packing, so the packer has to know.
+
+    Two fixtures, deliberately mirror images -- `pitch_gap_spec` charges only the
+    corridor below and `inset_face_spec` only the one above.  Each fails if its
+    own half of the model is removed, which is what stops a single fixture from
+    passing on the strength of the other half.
     """
 
-    def test_the_allocator_refuses_the_gapped_row(self) -> None:
-        """Ground truth first, with no solver anywhere in it.
-
-        If this ever stops raising, the model below is guarding nothing and the
-        two should be re-derived together rather than one of them relaxed.
-        """
+    @staticmethod
+    def _refuses(spec: BuildSpec) -> None:
+        """The allocator will not seat this spec's groups in one row."""
         from flab2bp.layout.spine import _adapt, _allocate_lanes, _lane_copies
 
-        spec = mixed_height_spec()
         groups, edges = _adapt(spec)
         keys = list(groups)
         copies = dict.fromkeys(_lane_copies(groups, edges, set(), spec), 1)
-
-        # The fixture's own shape, asserted rather than assumed.  This is the
-        # check rotation would have tripped: it turned the Oil Refinery this
-        # spec used to carry from 3x7 into 7x3, every machine became the same
-        # height, and the two tests below went on passing over a spec that could
-        # no longer express what they were about.
-        assert sorted(groups[k].height for k in keys) == [3, 3, 5]
-        row_h = max(groups[k].pitch_h for k in keys)
-        assert row_h == 5
-        gaps = sorted(row_h - groups[k].tap_height for k in keys)
-        assert gaps == [1, 2, 2], gaps
-        assert len(copies) == 2 * catalog.SORTER_MAX_REACH, sorted(copies)
         # No edge between any two groups, so `_solve_one` is FREE to put all
-        # three in one row -- see the fixture's docstring.
+        # three in one row: it orders producers strictly above consumers, and a
+        # chain could never share a row whatever the tap model said.
         assert not edges, edges
-
-        with pytest.raises(ValueError, match="machine heights differ"):
+        assert len(copies) == 2 * catalog.SORTER_MAX_REACH, sorted(copies)
+        with pytest.raises(ValueError, match="no ordering of its two"):
             _allocate_lanes(groups, edges, [keys], set(), spec, copies)
+        # Split so each row's own charge fits, and the same six lanes wire fine
+        # -- which is what makes the refusal about REACH and not about lane count.
+        _allocate_lanes(groups, edges, [keys[:1], keys[1:2], keys[2:]], set(), spec, copies)
 
-        # Split so the gap disappears and the same six lanes wire fine, which is
-        # what makes the refusal above about HEIGHT and not about lane count.
-        _allocate_lanes(groups, edges, [keys[:2], keys[2:]], set(), spec, copies)
-
-    def test_the_packer_will_not_authorise_it(self) -> None:
+    @staticmethod
+    def _packer_will_not_take_it(spec: BuildSpec) -> None:
         """``_solve_one`` raises the allocator's ValueError, so this is the test.
 
         At the widest candidate width -- the densest one in the sweep -- one row
-        of all three groups costs 5 tiles of row plus two corridors, against
-        3 + 3 + 5 and four corridors for a row each.  A height-blind model takes
-        it every time, and then throws the width away.
+        of all three groups costs one row band and two corridors against three
+        bands and four corridors.  A model blind to either charge takes it every
+        time, and then throws the width away.
         """
         from flab2bp.layout.spine import (
             _adapt,
@@ -2028,7 +2050,6 @@ class TestTapCapacityIsHeightAware:
             _topological_rows,
         )
 
-        spec = mixed_height_spec()
         groups, edges = _adapt(spec)
         order = [row[0] for row in _topological_rows(groups, edges)]
         depth = {k: i for i, k in enumerate(order)}
@@ -2039,21 +2060,54 @@ class TestTapCapacityIsHeightAware:
         assert plan is not None
         assert not any(len(r) == 3 for r in plan.rows), plan.rows
 
-    def test_a_uniform_height_spec_still_packs_its_rows(self) -> None:
-        """The bound must not cost density where no machine is short.
+    def test_the_charges_are_what_the_slot_tables_say(self) -> None:
+        """Ground truth for both fixtures, asserted rather than assumed.
 
-        A flat ``reach - gap`` cap would have: it charges the whole corridor the
-        worst gap, where ``_fits_below`` charges lane by lane.  The nine
-        equal-height groups of ``magnetic_ring_spec`` build no gap variables at
-        all, so this is also the check that the common case is untouched.
+        This is the check rotation would have tripped: it turned the Oil Refinery
+        the old fixture carried from 3x7 into 7x3, every machine became the same
+        height, and the tests below went on passing over a spec that could no
+        longer express what they were about.
+        """
+        from flab2bp.layout.spine import _adapt, _below_charge
+
+        groups, _ = _adapt(pitch_gap_spec())
+        row_h = max(g.pitch_h for g in groups.values())
+        assert row_h == 4 and all(g.height == 3 for g in groups.values())
+        assert sorted(g.above_charge for g in groups.values()) == [0, 0, 0]
+        assert sorted(_below_charge(g, row_h) for g in groups.values()) == [1, 1, 1]
+
+        groups, _ = _adapt(inset_face_spec())
+        row_h = max(g.pitch_h for g in groups.values())
+        assert row_h == 5 and all(g.height == 5 for g in groups.values())
+        # A row of equal-height machines, so the row contributes NOTHING to the
+        # charge below -- every tile of it is the poses' own.
+        assert sorted(g.above_charge for g in groups.values()) == [1, 1, 1]
+        assert sorted(_below_charge(g, row_h) for g in groups.values()) == [0, 0, 0]
+
+    def test_the_allocator_refuses_the_clearance_gapped_row(self) -> None:
+        self._refuses(pitch_gap_spec())
+
+    def test_the_allocator_refuses_the_inset_face_row(self) -> None:
+        self._refuses(inset_face_spec())
+
+    def test_the_packer_will_not_authorise_the_clearance_gapped_row(self) -> None:
+        self._packer_will_not_take_it(pitch_gap_spec())
+
+    def test_the_packer_will_not_authorise_the_inset_face_row(self) -> None:
+        self._packer_will_not_take_it(inset_face_spec())
+
+    def test_a_spec_with_neither_charge_still_packs_its_rows(self) -> None:
+        """The bound must not cost density where nothing is charged.
+
+        A flat ``reach - charge`` cap would: it charges the whole corridor the
+        worst, where ``_fits_band`` charges lane by lane.  The nine equal-height
+        groups of ``magnetic_ring_spec`` build no charge variables at all, so
+        this is also the check that the common case is untouched.
         """
         spec = magnetic_ring_spec()
         p = SpineLayout(power=False).lay_out(spec, time_budget_s=0.5)
         assert p.stats["fallback_used"] == 0.0
         assert p.stats["rows"] < len(spec.groups)
-
-
-# --- real corpus specs -----------------------------------------------------
 
 
 class TestRealCorpusSpecsActuallySolve:
@@ -2432,18 +2486,54 @@ class TestModeDrivenMachines:
     def _exchangers(self, p: Placement) -> list[PlacedBuilding]:
         return [b for b in p.buildings if b.item_id == catalog.ENERGY_EXCHANGER_ID]
 
-    def test_a_mode_driven_group_lays_out_at_all(self) -> None:
-        """Before this, emission raised: no DSP recipe id exists for the mode."""
-        p = SpineLayout(power=False).lay_out(self._exchanger_spec(), time_budget_s=0.5)
-        assert len(self._exchangers(p)) == 2
+    def test_the_game_gives_an_exchanger_no_sorter_slot_at_all(self) -> None:
+        """Ground truth, and the reason for the refusal below.
+
+        ``slot_poses.json`` is extracted from the game's own prefabs, and the
+        Energy Exchanger's ``slotPoses`` array is EMPTY -- as is the Ray
+        Receiver's.  Every other machine in the corpus offers columns from at
+        least one face.  If a later extraction fills these in, this test fails
+        first and says so, rather than the refusal below quietly becoming wrong.
+        """
+        from flab2bp.layout import slots as sorter_slots
+
+        probe = sorter_slots.probe_building(catalog.ENERGY_EXCHANGER_ID, 0.0)
+        offsets = [*range(-catalog.SORTER_MAX_REACH, 0), *range(9, 9 + 4)]
+        assert all(not sorter_slots.attachable_columns(probe, y) for y in offsets)
+
+    def test_spine_refuses_the_machine_rather_than_shipping_it_unwired(self) -> None:
+        """What this used to assert was that the layout SUCCEEDED, and it did.
+
+        Measured on the code before the per-side tap charge: the spec emitted two
+        Energy Exchangers and **zero sorters in the whole placement** -- neither
+        exchanger joined to anything at either end -- and `test_the_placement_
+        validates` called that report ok.  The old tap model read a face with no
+        reachable pose as costing NOTHING, because it took the worst of two
+        sides and both sides were "unknown"; so the allocator seated lanes for
+        it, `_find_taps` found no span, and `_emit` swallowed the miss.
+
+        A blueprint that pastes two idle exchangers is worse than a refusal that
+        names the reason, so this now asserts the refusal.  See docs/BACKLOG.md
+        for the open question of whether the extraction is incomplete -- that is
+        where a fix belongs, not in the tap model.
+        """
+        with pytest.raises(NoValidLayout) as exc:
+            SpineLayout(power=False).lay_out(self._exchanger_spec(), time_budget_s=0.5)
+        assert "cannot be wired even alone in its own row" in exc.value.reason
 
     def test_the_machine_carries_the_mode_not_a_recipe(self) -> None:
-        from flab2bp.dsp import params
+        """Asked of the unit that decides it, since no placement reaches here.
 
-        p = SpineLayout(power=False).lay_out(self._exchanger_spec(), time_budget_s=0.5)
-        for b in self._exchangers(p):
-            assert b.recipe_id == 0, "a mode-driven machine must not claim a recipe id"
-            assert b.parameters == params.parameters_for("accumulator-full")
+        ``_machine_config`` is where the two kinds of machine part company, and
+        the contract -- exactly one of a recipe id or a parameter block, never
+        half of each -- is its own, not the packer's.
+        """
+        from flab2bp.dsp import params
+        from flab2bp.layout.spine import _machine_config
+
+        recipe_id, parameters = _machine_config("accumulator-full")
+        assert recipe_id == 0, "a mode-driven machine must not claim a recipe id"
+        assert parameters == params.parameters_for("accumulator-full")
 
     def test_the_two_poles_emit_different_blocks(self) -> None:
         """Charge and discharge are opposite words, not the same machine twice.
@@ -2452,15 +2542,11 @@ class TestModeDrivenMachines:
         wired to the same value, which is exactly the failure that drains a
         factory instead of filling it.
         """
-        charge = SpineLayout(power=False).lay_out(
-            self._exchanger_spec("accumulator-full"), time_budget_s=0.5
-        )
-        discharge = SpineLayout(power=False).lay_out(
-            self._exchanger_spec("accumulator-discharge"), time_budget_s=0.5
-        )
-        (c,) = {b.parameters for b in self._exchangers(charge)}
-        (d,) = {b.parameters for b in self._exchangers(discharge)}
-        assert c == (1,) and d == (-1,), f"charge={c} discharge={d}"
+        from flab2bp.layout.spine import _machine_config
+
+        charge = _machine_config("accumulator-full")
+        discharge = _machine_config("accumulator-discharge")
+        assert charge == (0, (1,)) and discharge == (0, (-1,)), f"{charge} {discharge}"
 
     def test_ordinary_recipes_still_carry_a_recipe_id(self) -> None:
         """The mode path must not swallow normal machines."""
@@ -2469,14 +2555,6 @@ class TestModeDrivenMachines:
         assert smelters
         assert all(b.recipe_id == catalog.recipe_id("iron-ingot") for b in smelters)
         assert all(b.parameters == () for b in smelters)
-
-    def test_the_placement_validates(self) -> None:
-        from flab2bp.pipeline import _id_map
-
-        spec = self._exchanger_spec()
-        p = SpineLayout(power=True).lay_out(spec, time_budget_s=0.5)
-        report = validate.validate(p, spec, ids=_id_map(spec), expect_power=True)
-        assert report.ok, "\n".join(f"{f.check}: {f.message}" for f in report.errors[:5])
 
 
 class TestSortersAreSizedPerItem:
