@@ -73,12 +73,8 @@ def fixture_samples(
     ]
 
 
-def manifest(
-    *, repeat: int = 3, candidates: int = 1, power: bool = False
-) -> PromotionManifest:
-    return PromotionManifest(
-        (RequiredCell("one-cell", 10.0, power, repeat, candidates),)
-    )
+def manifest(*, repeat: int = 3, candidates: int = 1, power: bool = False) -> PromotionManifest:
+    return PromotionManifest((RequiredCell("one-cell", 10.0, power, repeat, candidates),))
 
 
 def eligible_pair() -> tuple[list[Sample], list[Sample]]:
@@ -309,9 +305,7 @@ def test_invalid_nonshipping_candidate_cannot_hide_behind_a_valid_candidate() ->
 
 def test_candidate_refusal_is_compared_at_the_exact_raw_identity() -> None:
     baseline, candidate = eligible_pair()
-    candidate[1] = replace(
-        candidate[1], outcome=Outcome.REFUSED, metrics=None, buildings=0
-    )
+    candidate[1] = replace(candidate[1], outcome=Outcome.REFUSED, metrics=None, buildings=0)
 
     report = assess(baseline, candidate)
 
@@ -321,9 +315,7 @@ def test_candidate_refusal_is_compared_at_the_exact_raw_identity() -> None:
 
 def test_baseline_refusal_can_be_resolved_by_candidate() -> None:
     baseline, candidate = eligible_pair()
-    baseline[1] = replace(
-        baseline[1], outcome=Outcome.REFUSED, metrics=None, buildings=0
-    )
+    baseline[1] = replace(baseline[1], outcome=Outcome.REFUSED, metrics=None, buildings=0)
 
     report = assess(baseline, candidate)
 
@@ -431,9 +423,7 @@ def test_refused_legacy_null_buildings_is_accepted_as_zero() -> None:
 
 @pytest.mark.parametrize("field", ["url_id", "candidate", "strategy"])
 @pytest.mark.parametrize("bad", [None, 1, False, ""])
-def test_persisted_sample_identity_strings_are_strict(
-    field: str, bad: object
-) -> None:
+def test_persisted_sample_identity_strings_are_strict(field: str, bad: object) -> None:
     row = _persisted_row("valid")
     row[field] = bad
 
@@ -443,9 +433,7 @@ def test_persisted_sample_identity_strings_are_strict(
 
 @pytest.mark.parametrize("field", ["a", "b"])
 @pytest.mark.parametrize("bad", [None, 1, False, ""])
-def test_persisted_backend_names_are_strict(
-    tmp_path: Path, field: str, bad: object
-) -> None:
+def test_persisted_backend_names_are_strict(tmp_path: Path, field: str, bad: object) -> None:
     meta: dict[str, object] = {
         "a": "baseline",
         "b": "candidate",
@@ -476,6 +464,4 @@ def test_matching_malformed_baseline_and_candidate_rows_cannot_reach_the_gate() 
     candidate["strategy"] = "candidate"
 
     with pytest.raises(ValueError, match="url_id"):
-        samples_from_json(
-            {"meta": {"power": False}, "samples": [baseline, candidate]}
-        )
+        samples_from_json({"meta": {"power": False}, "samples": [baseline, candidate]})

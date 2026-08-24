@@ -126,9 +126,7 @@ class ExpansionBudget:
     def discovery_complete(self) -> bool:
         return self._configured and not self._unsettled_discovery
 
-    def configure(
-        self, heights: tuple[int, ...], reserve_fraction: Fraction
-    ) -> None:
+    def configure(self, heights: tuple[int, ...], reserve_fraction: Fraction) -> None:
         """Partition searchable expansions equally across first height stages."""
         if self._configured:
             if tuple(self.discovery_by_height) != heights:
@@ -439,10 +437,7 @@ class SequenceSolver[PreparedT]:
 
         exact_key: tuple[int, int] | None = None
         validation_failures: tuple[str, ...] = ()
-        if (
-            detailed.routing.status is DetailedRouteStatus.ROUTED
-            and detailed.placement is not None
-        ):
+        if detailed.routing.status is DetailedRouteStatus.ROUTED and detailed.placement is not None:
             verdict = self.adapters.validate(detailed.placement)
             validation_failures = verdict.failed_checks
             if verdict.ok:
@@ -627,9 +622,7 @@ class _ProductionRun:
     ceiling: float
 
 
-def _empty_global_result(
-    *, exhausted: bool, cancelled: bool = False
-) -> GlobalRouteResult:
+def _empty_global_result(*, exhausted: bool, cancelled: bool = False) -> GlobalRouteResult:
     return GlobalRouteResult(
         net_results=(),
         paths={},
@@ -691,11 +684,7 @@ def _route_detailed_candidate(
         )
     return DetailedStageResult(
         routing=built.routing,
-        placement=(
-            built.placement
-            if built.routing.status is DetailedRouteStatus.ROUTED
-            else None
-        ),
+        placement=(built.placement if built.routing.status is DetailedRouteStatus.ROUTED else None),
     )
 
 
@@ -710,8 +699,10 @@ def _production_run(
     started = time.monotonic()
     ceiling = max(time_budget_s, RETRY_BUDGET_S)
     deadline = started + ceiling
+
     def deadline_reached() -> bool:
         return time.monotonic() >= deadline
+
     telemetry = _ProductionTelemetry()
 
     planning_started = time.monotonic()
@@ -737,8 +728,7 @@ def _production_run(
         if shortfall:
             raise NoValidLayout(
                 "a producer lane has fewer tiles than the consumers it must tap, "
-                "so two junctions would have to share one tile. "
-                + "; ".join(shortfall[:3]),
+                "so two junctions would have to share one tile. " + "; ".join(shortfall[:3]),
                 spec_label=spec.label,
                 budget_s=0.0,
             )
@@ -748,13 +738,8 @@ def _production_run(
         sizes = tuple(_box(strip) for strip in strips)
         nets = tuple(_nets_between(strips))
         area_lower_bound = sum(width * height for width, height in sizes)
-        seeds = {
-            height: _greedy_pack(strips, height)
-            for height in _candidate_heights(strips)
-        }
-        heights = tuple(
-            sorted(seeds, key=lambda height: (seeds[height].width, height))
-        )
+        seeds = {height: _greedy_pack(strips, height) for height in _candidate_heights(strips)}
+        heights = tuple(sorted(seeds, key=lambda height: (seeds[height].width, height)))
         problems = {
             height: PlacementProblem(
                 sizes=sizes,
@@ -809,9 +794,7 @@ def _production_run(
     ) -> GlobalRouteResult:
         telemetry.global_routes += 1
         telemetry.feedback_nets = max(telemetry.feedback_nets, len(feedback.net_weight))
-        telemetry.feedback_cells = max(
-            telemetry.feedback_cells, len(feedback.cell_history)
-        )
+        telemetry.feedback_cells = max(telemetry.feedback_cells, len(feedback.cell_history))
         if candidate.prepared is None:
             is_deadline = candidate.preparation_error == "deadline"
             return _empty_global_result(
@@ -840,9 +823,7 @@ def _production_run(
         )
         return result
 
-    def detailed_route(
-        candidate: _ProductionCandidate, allowance: int
-    ) -> DetailedStageResult:
+    def detailed_route(candidate: _ProductionCandidate, allowance: int) -> DetailedStageResult:
         telemetry.detailed_routes += 1
         if candidate.preparation_error == "deadline" or deadline_reached():
             return _closed_detailed_result(DetailedRouteStatus.BUDGET)
@@ -913,9 +894,7 @@ def _decoded_pack(height: int, decoded: DecodedPlacement) -> _Pack:
     return _Pack(
         at={
             index: (x + WEST_CHANNEL, y)
-            for index, (x, y) in enumerate(
-                zip(decoded.x, decoded.y, strict=True)
-            )
+            for index, (x, y) in enumerate(zip(decoded.x, decoded.y, strict=True))
         },
         width=decoded.width,
         height=height,
@@ -958,9 +937,7 @@ class SequencePairLayout:
         self.strip_len = strip_len
         self.config = config or SequenceSolverConfig()
 
-    def lay_out(
-        self, spec: BuildSpec, *, time_budget_s: float = 60.0
-    ) -> Placement:
+    def lay_out(self, spec: BuildSpec, *, time_budget_s: float = 60.0) -> Placement:
         """Return only a detailed-routed, powered, validator-clean placement."""
         if time_budget_s <= 0:
             raise NoValidLayout(
@@ -1026,12 +1003,8 @@ def _with_observational_stats(
             "restarts": float(len(run.heights) * config.restarts_per_height),
             "stages": float(stage_count),
             "moves": float(stage_count * config.moves_per_stage),
-            "accepted_moves": float(
-                sum(stage.accepted_moves for stage in result.stages)
-            ),
-            "decoded_candidates": float(
-                sum(stage.global_routes for stage in result.stages)
-            ),
+            "accepted_moves": float(sum(stage.accepted_moves for stage in result.stages)),
+            "decoded_candidates": float(sum(stage.global_routes for stage in result.stages)),
             "global_routes": float(telemetry.global_routes),
             "detailed_routes": float(telemetry.detailed_routes),
             "best_overflow": float(telemetry.best_overflow or 0),

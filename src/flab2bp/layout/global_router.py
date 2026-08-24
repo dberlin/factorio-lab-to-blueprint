@@ -78,10 +78,7 @@ class _CapacityLedger:
         units = self.units.get(index)
         if units is None:
             return 0
-        shares = any(
-            all(owner in compatible for owner in unit)
-            for unit in units
-        )
+        shares = any(all(owner in compatible for owner in unit) for unit in units)
         return max(0, len(units) - 1) if shares else len(units)
 
     def occupy(
@@ -97,11 +94,7 @@ class _CapacityLedger:
             self.occupancy[index] = 1
         else:
             shared = next(
-                (
-                    unit
-                    for unit in units
-                    if all(owner in compatible for owner in unit)
-                ),
+                (unit for unit in units if all(owner in compatible for owner in unit)),
                 None,
             )
             if shared is None:
@@ -265,27 +258,21 @@ def _route_round(
         path = searched.path
         if path is None:
             unreachable += 1
-            net_results.append(
-                GlobalNetResult(net.net_id, 0, 0, 0, searched.expansions)
-            )
+            net_results.append(GlobalNetResult(net.net_id, 0, 0, 0, searched.expansions))
             if searched.cancelled:
                 unreachable += len(nets) - net_index - 1
                 was_cancelled = True
                 break
             continue
 
-        overflow = sum(
-            ledger.occupy(grid.index(cell), net.net_id, compatible)
-            for cell in path
-        )
+        overflow = sum(ledger.occupy(grid.index(cell), net.net_id, compatible) for cell in path)
         paths[net.net_id] = path
         net_results.append(
             GlobalNetResult(
                 net_id=net.net_id,
                 length=max(0, len(path) - 1),
                 level_changes=sum(
-                    before[2] != after[2]
-                    for before, after in zip(path, path[1:], strict=False)
+                    before[2] != after[2] for before, after in zip(path, path[1:], strict=False)
                 ),
                 overflow=overflow,
                 expansions=searched.expansions,
@@ -296,11 +283,7 @@ def _route_round(
         was_cancelled = cancelled()
 
     overflow_indices = tuple(
-        sorted(
-            index
-            for index, units in ledger.units.items()
-            if len(units) > 1
-        )
+        sorted(index for index, units in ledger.units.items() if len(units) > 1)
     )
     overflows = tuple(
         (_decode_cell(external_grid, index), ledger.occupancy[index] - 1)
@@ -345,10 +328,7 @@ def _estimated_length(net: _PreparedNet) -> int:
     if net.src is not None:
         return abs(net.src.x - destination[0]) + abs(net.src.y - destination[1])
     return min(
-        (
-            abs(x - destination[0]) + abs(y - destination[1])
-            for x, y, _level in net.boundary_goals
-        ),
+        (abs(x - destination[0]) + abs(y - destination[1]) for x, y, _level in net.boundary_goals),
         default=0,
     )
 

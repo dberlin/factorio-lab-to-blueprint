@@ -114,9 +114,7 @@ class FeedbackState:
         ):
             raise ValueError("feedback net weights must be finite values from 0 to 8")
         if any(
-            not _valid_cell(cell, width, height)
-            or not math.isfinite(value)
-            or value < 0.0
+            not _valid_cell(cell, width, height) or not math.isfinite(value) or value < 0.0
             for cell, value in cell_history.items()
         ):
             raise ValueError(
@@ -137,13 +135,9 @@ class FeedbackState:
         return FeedbackState(outline=outline, net_weight=self.net_weight, cell_history={})
 
 
-def update_feedback(
-    state: FeedbackState, result: DetailedRouteResult
-) -> FeedbackState:
+def update_feedback(state: FeedbackState, result: DetailedRouteResult) -> FeedbackState:
     """Add genuine geometric failure evidence without applying stage decay."""
-    geometric = tuple(
-        failure for failure in result.failures if failure.kind in _GEOMETRIC_FAILURES
-    )
+    geometric = tuple(failure for failure in result.failures if failure.kind in _GEOMETRIC_FAILURES)
     if not geometric:
         return state
 
@@ -151,9 +145,7 @@ def update_feedback(
     cell_history = dict(state.cell_history)
     width, height = state.outline
     for failure in geometric:
-        net_weight[failure.net_id] = min(
-            _MAX_NET_WEIGHT, net_weight.get(failure.net_id, 0.0) + 1.0
-        )
+        net_weight[failure.net_id] = min(_MAX_NET_WEIGHT, net_weight.get(failure.net_id, 0.0) + 1.0)
         for cell in failure.wall:
             if _valid_cell(cell, width, height):
                 cell_history[cell] = cell_history.get(cell, 0.0) + 1.0
@@ -217,8 +209,7 @@ def feedback_cost_context(
 
     return PlacementCostContext(
         net_weights=tuple(
-            1.0 + weight_by_endpoints.get(endpoints, 0.0)
-            for endpoints in problem.nets
+            1.0 + weight_by_endpoints.get(endpoints, 0.0) for endpoints in problem.nets
         ),
         history_cost_by_net=tuple(history_cost),
     )
@@ -246,9 +237,7 @@ def select_lns_neighbourhood(
     if type(grow_after) is not int or grow_after <= 0:
         raise ValueError("LNS growth interval must be a positive integer")
 
-    failures = tuple(
-        failure for failure in result.failures if failure.kind in _GEOMETRIC_FAILURES
-    )
+    failures = tuple(failure for failure in result.failures if failure.kind in _GEOMETRIC_FAILURES)
     if not failures:
         return frozenset()
 

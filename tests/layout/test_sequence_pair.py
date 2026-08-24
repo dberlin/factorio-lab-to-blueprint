@@ -53,9 +53,7 @@ def _boxes(
     )
 
 
-def _assert_no_overlap(
-    decoded: DecodedPlacement, sizes: tuple[tuple[int, int], ...]
-) -> None:
+def _assert_no_overlap(decoded: DecodedPlacement, sizes: tuple[tuple[int, int], ...]) -> None:
     boxes = _boxes(decoded, sizes)
     for first, second in combinations(range(len(sizes)), 2):
         ax0, ay0, ax1, ay1 = boxes[first]
@@ -74,9 +72,7 @@ def test_sequence_pair_relations_decode_to_expected_axes() -> None:
 
 def test_all_four_sequence_pair_relations_use_the_expected_direction() -> None:
     sizes = ((3, 2), (4, 5))
-    expected: dict[
-        tuple[tuple[int, int], tuple[int, int]], Callable[[DecodedPlacement], bool]
-    ] = {
+    expected: dict[tuple[tuple[int, int], tuple[int, int]], Callable[[DecodedPlacement], bool]] = {
         ((0, 1), (0, 1)): lambda decoded: decoded.x[1] >= decoded.x[0] + 3,
         ((1, 0), (1, 0)): lambda decoded: decoded.x[0] >= decoded.x[1] + 4,
         ((0, 1), (1, 0)): lambda decoded: decoded.y[0] >= decoded.y[1] + 5,
@@ -94,9 +90,7 @@ def test_all_four_sequence_pair_relations_use_the_expected_direction() -> None:
 
 def test_gap_profile_adds_explicit_channel_space() -> None:
     pair = SequencePair(positive=(0, 1), negative=(0, 1))
-    plain = decode_sequence_pair(
-        pair, GapProfile.zero(2), ((3, 2), (4, 2)), outline_height=6
-    )
+    plain = decode_sequence_pair(pair, GapProfile.zero(2), ((3, 2), (4, 2)), outline_height=6)
     gapped = decode_sequence_pair(
         pair,
         GapProfile(east=(2, 0), north=(0, 0)),
@@ -109,9 +103,7 @@ def test_gap_profile_adds_explicit_channel_space() -> None:
 
 def test_north_gap_is_added_to_outgoing_vertical_constraints() -> None:
     pair = SequencePair(positive=(0, 1), negative=(1, 0))
-    plain = decode_sequence_pair(
-        pair, GapProfile.zero(2), ((3, 2), (4, 3)), outline_height=8
-    )
+    plain = decode_sequence_pair(pair, GapProfile.zero(2), ((3, 2), (4, 3)), outline_height=8)
     gapped = decode_sequence_pair(
         pair,
         GapProfile(east=(0, 0), north=(0, 2)),
@@ -373,14 +365,8 @@ def test_two_stage_alignment_retains_cp_sat_direct_opportunity() -> None:
     decoded = DecodedPlacement(
         x=x,
         y=y,
-        width=max(
-            coordinate + size[0]
-            for coordinate, size in zip(x, sizes, strict=True)
-        ),
-        used_height=max(
-            coordinate + size[1]
-            for coordinate, size in zip(y, sizes, strict=True)
-        ),
+        width=max(coordinate + size[0] for coordinate, size in zip(x, sizes, strict=True)),
+        used_height=max(coordinate + size[1] for coordinate, size in zip(y, sizes, strict=True)),
         x_windows=tuple((coordinate, coordinate) for coordinate in x),
         y_windows=tuple((coordinate, coordinate) for coordinate in y),
         gap_area=0,
@@ -418,8 +404,7 @@ def test_generated_cases_are_deterministic_legal_and_integer_only() -> None:
             north=tuple((index * 2) % 5 for index in range(size)),
         )
         outline_height = sum(
-            height + gaps.north[index]
-            for index, (_width, height) in enumerate(sizes)
+            height + gaps.north[index] for index, (_width, height) in enumerate(sizes)
         )
         for positive, negative in sorted(generated):
             pair = SequencePair(positive, negative)
@@ -583,16 +568,12 @@ def test_swap_both_swaps_the_same_strip_ids_in_each_permutation() -> None:
 
     positive_strips = {
         before
-        for before, after in zip(
-            state.pair.positive, moved.pair.positive, strict=True
-        )
+        for before, after in zip(state.pair.positive, moved.pair.positive, strict=True)
         if before != after
     }
     negative_strips = {
         before
-        for before, after in zip(
-            state.pair.negative, moved.pair.negative, strict=True
-        )
+        for before, after in zip(state.pair.negative, moved.pair.negative, strict=True)
         if before != after
     }
     assert positive_strips == negative_strips
@@ -733,8 +714,7 @@ def test_anneal_stage_advances_once_and_retains_ordered_distinct_elites() -> Non
     assert result.incumbent == result.elites[0]
     result.final_state.pair.validate(problem.size)
     assert all(
-        0 <= gap <= 4
-        for gap in result.final_state.gaps.east + result.final_state.gaps.north
+        0 <= gap <= 4 for gap in result.final_state.gaps.east + result.final_state.gaps.north
     )
 
 
@@ -892,9 +872,7 @@ def test_lns_repair_preserves_exact_locked_order_and_locked_gaps() -> None:
         pair, gaps, neighbourhood, seed=9, strip_weights={3: 5.0, 4: 1.0}
     )
 
-    assert _locked_relative_order(repaired.pair, locked) == _locked_relative_order(
-        pair, locked
-    )
+    assert _locked_relative_order(repaired.pair, locked) == _locked_relative_order(pair, locked)
     assert tuple(repaired.gaps.east[index] for index in locked) == tuple(
         gaps.east[index] for index in locked
     )
@@ -910,12 +888,8 @@ def test_lns_repair_is_deterministic_for_seed_and_weights() -> None:
     neighbourhood = frozenset({2, 3, 4, 5})
     weights = {2: 1.0, 3: 2.0, 4: 4.0, 5: 8.0}
 
-    first = repair_neighbourhood(
-        pair, gaps, neighbourhood, seed=91, strip_weights=weights
-    )
-    second = repair_neighbourhood(
-        pair, gaps, neighbourhood, seed=91, strip_weights=weights
-    )
+    first = repair_neighbourhood(pair, gaps, neighbourhood, seed=91, strip_weights=weights)
+    second = repair_neighbourhood(pair, gaps, neighbourhood, seed=91, strip_weights=weights)
 
     assert first == second
     first.pair.validate(8)

@@ -100,9 +100,7 @@ def repository_manifest(
     return PromotionManifest(cells)
 
 
-def paired_bootstrap_ci_hi(
-    ratios: Sequence[float], *, seed: int, resamples: int = 10_000
-) -> float:
+def paired_bootstrap_ci_hi(ratios: Sequence[float], *, seed: int, resamples: int = 10_000) -> float:
     """Return a deterministic one-sided 95% upper bound over matched cell ratios."""
     if not ratios:
         raise ValueError("paired bootstrap needs at least one matched cell ratio")
@@ -114,8 +112,7 @@ def paired_bootstrap_ci_hi(
     rng = random.Random(seed)
     count = len(ratios)
     estimates = [
-        geometric_mean(ratios[rng.randrange(count)] for _ in range(count))
-        for _ in range(resamples)
+        geometric_mean(ratios[rng.randrange(count)] for _ in range(count)) for _ in range(resamples)
     ]
     estimates.sort()
     return estimates[math.ceil(0.95 * resamples) - 1]
@@ -148,9 +145,7 @@ def _preview(keys: Sequence[_CellKey | _RawKey | _TrialKey]) -> str:
     return shown + (", ..." if len(keys) > 3 else "")
 
 
-def _scope_reasons(
-    side: str, samples: Sequence[Sample], required: PromotionManifest
-) -> list[str]:
+def _scope_reasons(side: str, samples: Sequence[Sample], required: PromotionManifest) -> list[str]:
     reasons: list[str] = []
     by_cell: dict[_CellKey, list[Sample]] = {}
     for sample in samples:
@@ -160,13 +155,9 @@ def _scope_reasons(
     missing = sorted(required_keys - observed_keys)
     unexpected = sorted(observed_keys - required_keys)
     if missing:
-        reasons.append(
-            f"{side} missing {len(missing)} required cell(s): {_preview(missing)}"
-        )
+        reasons.append(f"{side} missing {len(missing)} required cell(s): {_preview(missing)}")
     if unexpected:
-        reasons.append(
-            f"{side} has {len(unexpected)} unexpected cell(s): {_preview(unexpected)}"
-        )
+        reasons.append(f"{side} has {len(unexpected)} unexpected cell(s): {_preview(unexpected)}")
 
     requirements = {cell.key: cell for cell in required.cells}
     for key in sorted(required_keys & observed_keys):
@@ -188,9 +179,7 @@ def _scope_reasons(
                     f"{side} {_label(key)} trial {trial} requires "
                     f"{expected.candidates} candidates, observed {len(candidates)}"
                 )
-        identities_vary = any(
-            candidates != candidate_sets[0] for candidates in candidate_sets[1:]
-        )
+        identities_vary = any(candidates != candidate_sets[0] for candidates in candidate_sets[1:])
         if candidate_sets and identities_vary:
             reasons.append(f"{side} {_label(key)} candidate identities vary by trial")
     return reasons
@@ -203,9 +192,7 @@ def _raw_reasons(baseline: Sequence[Sample], candidate: Sequence[Sample]) -> lis
     duplicate_baseline = sorted(key for key, count in baseline_counts.items() if count != 1)
     duplicate_candidate = sorted(key for key, count in candidate_counts.items() if count != 1)
     if duplicate_baseline:
-        reasons.append(
-            "baseline duplicate raw sample identities: " + _preview(duplicate_baseline)
-        )
+        reasons.append("baseline duplicate raw sample identities: " + _preview(duplicate_baseline))
     if duplicate_candidate:
         reasons.append(
             "candidate duplicate raw sample identities: " + _preview(duplicate_candidate)
@@ -260,9 +247,7 @@ def _median_quality(trials: Sequence[Trial], attribute: str) -> float | None:
     for trial in trials:
         if trial.metrics is None:
             continue
-        values.append(
-            trial.metrics.area if attribute == "area" else trial.metrics.belt_tiles
-        )
+        values.append(trial.metrics.area if attribute == "area" else trial.metrics.belt_tiles)
     return float(statistics.median(values)) if values else None
 
 
@@ -338,9 +323,7 @@ def assess_promotion(
             reasons.append(f"{_label(key)} lacks comparable positive runtime")
 
     complete_runtime = len(runtime_ratios) == len(required.cells) == len(matched)
-    runtime_ratio_geo_mean = (
-        geometric_mean(runtime_ratios) if complete_runtime else math.inf
-    )
+    runtime_ratio_geo_mean = geometric_mean(runtime_ratios) if complete_runtime else math.inf
     runtime_ratio_ci_hi = math.inf
     if complete_runtime:
         runtime_ratio_ci_hi = paired_bootstrap_ci_hi(
@@ -348,15 +331,12 @@ def assess_promotion(
         )
         if runtime_ratio_ci_hi >= 1.0:
             reasons.append(
-                f"runtime paired-bootstrap 95% upper bound is "
-                f"{runtime_ratio_ci_hi:.6g}, not < 1"
+                f"runtime paired-bootstrap 95% upper bound is {runtime_ratio_ci_hi:.6g}, not < 1"
             )
 
     baseline_wall = [trial.seconds for trial in baseline_trials]
     candidate_wall = [trial.seconds for trial in candidate_trials]
-    p95_ratio = _ratio(
-        _percentile(candidate_wall, 0.95), _percentile(baseline_wall, 0.95)
-    )
+    p95_ratio = _ratio(_percentile(candidate_wall, 0.95), _percentile(baseline_wall, 0.95))
     if p95_ratio > 1.0:
         reasons.append(f"p95 wall ratio is {p95_ratio:.6g}, worse than 1")
 
@@ -476,9 +456,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             expected_repeat = repeat
             expected_candidates = candidates
         elif (
-            pair != expected_pair
-            or repeat != expected_repeat
-            or candidates != expected_candidates
+            pair != expected_pair or repeat != expected_repeat or candidates != expected_candidates
         ):
             raise SystemExit(f"{path}: backend pair/repeat/candidates do not match prior runs")
         budgets.update(_budgets(meta))

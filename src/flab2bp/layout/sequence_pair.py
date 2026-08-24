@@ -163,9 +163,11 @@ class DecodedPlacement:
             *((value, bounds, "y") for value, bounds in zip(self.y, self.y_windows, strict=True)),
         ):
             earliest, latest = window
-            if coordinate < earliest or (
-                earliest <= latest and coordinate > latest
-            ) or (earliest > latest and coordinate != earliest):
+            if (
+                coordinate < earliest
+                or (earliest <= latest and coordinate > latest)
+                or (earliest > latest and coordinate != earliest)
+            ):
                 raise ValueError(f"decoded {name} coordinate must lie inside its legal window")
         if not isinstance(self.direct, frozenset) or any(
             not isinstance(key, tuple)
@@ -466,9 +468,7 @@ def align_direct_inserts(
     return current
 
 
-def _validate_direct_target(
-    problem: PlacementProblem, target: DirectInsertTarget
-) -> None:
+def _validate_direct_target(problem: PlacementProblem, target: DirectInsertTarget) -> None:
     if not 0 <= target.producer < problem.size or not 0 <= target.consumer < problem.size:
         raise ValueError("direct-insert target endpoints must identify placement strips")
     producer_size = problem.sizes[target.producer]
@@ -494,18 +494,10 @@ def _align_direct_target(
     producer_width, producer_height = problem.sizes[producer]
     consumer_width, consumer_height = problem.sizes[consumer]
 
-    producer_x_bounds = _relation_bounds(
-        decoded, problem.sizes, producer, consumer, axis=0
-    )
-    consumer_x_bounds = _relation_bounds(
-        decoded, problem.sizes, consumer, producer, axis=0
-    )
-    producer_y_bounds = _relation_bounds(
-        decoded, problem.sizes, producer, consumer, axis=1
-    )
-    consumer_y_bounds = _relation_bounds(
-        decoded, problem.sizes, consumer, producer, axis=1
-    )
+    producer_x_bounds = _relation_bounds(decoded, problem.sizes, producer, consumer, axis=0)
+    consumer_x_bounds = _relation_bounds(decoded, problem.sizes, consumer, producer, axis=0)
+    producer_y_bounds = _relation_bounds(decoded, problem.sizes, producer, consumer, axis=1)
+    consumer_y_bounds = _relation_bounds(decoded, problem.sizes, consumer, producer, axis=1)
 
     x_difference = [-(target.consumer_span - 1), target.producer_span - 1]
     y_difference = [
@@ -547,9 +539,7 @@ def _align_direct_target(
     y = list(decoded.y)
     x[producer], x[consumer] = x_pair
     y[producer], y[consumer] = y_pair
-    width = max(
-        coordinate + size[0] for coordinate, size in zip(x, problem.sizes, strict=True)
-    )
+    width = max(coordinate + size[0] for coordinate, size in zip(x, problem.sizes, strict=True))
     used_height = max(
         coordinate + size[1] for coordinate, size in zip(y, problem.sizes, strict=True)
     )
@@ -583,9 +573,7 @@ def _relation_bounds(
     windows = decoded.x_windows if axis == 0 else decoded.y_windows
     lower, upper = windows[moving]
     moving_span = sizes[moving][axis]
-    for other, (coordinate, size) in enumerate(
-        zip(coordinates, sizes, strict=True)
-    ):
+    for other, (coordinate, size) in enumerate(zip(coordinates, sizes, strict=True)):
         if other in (moving, other_moving):
             continue
         other_span = size[axis]
@@ -657,9 +645,7 @@ def _preserves_separations(
     candidate_boxes = _placement_boxes(candidate, sizes)
     for first in range(len(sizes)):
         for second in range(first + 1, len(sizes)):
-            original_separations = _box_separations(
-                original_boxes[first], original_boxes[second]
-            )
+            original_separations = _box_separations(original_boxes[first], original_boxes[second])
             candidate_separations = _box_separations(
                 candidate_boxes[first], candidate_boxes[second]
             )
@@ -673,9 +659,7 @@ def _preserves_separations(
     return True
 
 
-def _no_overlaps(
-    decoded: DecodedPlacement, sizes: tuple[tuple[int, int], ...]
-) -> bool:
+def _no_overlaps(decoded: DecodedPlacement, sizes: tuple[tuple[int, int], ...]) -> bool:
     boxes = _placement_boxes(decoded, sizes)
     return all(
         any(_box_separations(boxes[first], boxes[second]))
@@ -689,9 +673,7 @@ def _placement_boxes(
 ) -> tuple[tuple[int, int, int, int], ...]:
     return tuple(
         (x, y, x + width, y + height)
-        for x, y, (width, height) in zip(
-            decoded.x, decoded.y, sizes, strict=True
-        )
+        for x, y, (width, height) in zip(decoded.x, decoded.y, sizes, strict=True)
     )
 
 
@@ -707,9 +689,7 @@ def _box_separations(
     )
 
 
-def _target_is_direct(
-    decoded: DecodedPlacement, target: DirectInsertTarget
-) -> bool:
+def _target_is_direct(decoded: DecodedPlacement, target: DirectInsertTarget) -> bool:
     row_gap = (
         decoded.y[target.consumer]
         + target.consumer_row
@@ -718,10 +698,8 @@ def _target_is_direct(
     )
     return (
         1 <= row_gap <= catalog.SORTER_MAX_REACH
-        and decoded.x[target.producer]
-        <= decoded.x[target.consumer] + target.consumer_span - 1
-        and decoded.x[target.consumer]
-        <= decoded.x[target.producer] + target.producer_span - 1
+        and decoded.x[target.producer] <= decoded.x[target.consumer] + target.consumer_span - 1
+        and decoded.x[target.consumer] <= decoded.x[target.producer] + target.producer_span - 1
     )
 
 
@@ -786,9 +764,8 @@ def cheap_energy(
     """Compute the normalized routing-aware proxy objective."""
     if len(decoded.x) != problem.size:
         raise ValueError("decoded placement size must match the placement problem")
-    if (
-        len(context.net_weights) != len(problem.nets)
-        or len(context.history_cost_by_net) != len(problem.nets)
+    if len(context.net_weights) != len(problem.nets) or len(context.history_cost_by_net) != len(
+        problem.nets
     ):
         raise ValueError("placement cost context must match the problem net count")
     overflow = max(0, decoded.used_height - problem.outline_height)
@@ -848,9 +825,7 @@ def anneal_stage(
             current = candidate
             accepted_moves += 1
 
-    ordered_elites = tuple(
-        sorted(elites.values(), key=lambda elite: (elite.energy, elite.key))
-    )
+    ordered_elites = tuple(sorted(elites.values(), key=lambda elite: (elite.energy, elite.key)))
     final_state = AnnealState(
         pair=current.state.pair,
         gaps=current.state.gaps,
@@ -898,8 +873,7 @@ def repair_neighbourhood(
         sorted(
             sorted(neighbourhood),
             key=lambda strip: (
-                -math.log(max(rng.random(), float.fromhex("0x1p-1074")))
-                / weights.get(strip, 1.0),
+                -math.log(max(rng.random(), float.fromhex("0x1p-1074"))) / weights.get(strip, 1.0),
                 strip,
             ),
         )
@@ -990,24 +964,18 @@ def _accept_move(
     return delta <= 0.0 or rng.random() < math.exp(-delta / temperature)
 
 
-def _swap_permutation(
-    permutation: tuple[int, ...], rng: random.Random
-) -> tuple[int, ...]:
+def _swap_permutation(permutation: tuple[int, ...], rng: random.Random) -> tuple[int, ...]:
     first, second = rng.sample(range(len(permutation)), 2)
     return _swap_positions(permutation, first, second)
 
 
-def _swap_positions(
-    permutation: tuple[int, ...], first: int, second: int
-) -> tuple[int, ...]:
+def _swap_positions(permutation: tuple[int, ...], first: int, second: int) -> tuple[int, ...]:
     values = list(permutation)
     values[first], values[second] = values[second], values[first]
     return tuple(values)
 
 
-def _insert_permutation(
-    permutation: tuple[int, ...], rng: random.Random
-) -> tuple[int, ...]:
+def _insert_permutation(permutation: tuple[int, ...], rng: random.Random) -> tuple[int, ...]:
     source, destination = rng.sample(range(len(permutation)), 2)
     values = list(permutation)
     strip = values.pop(source)

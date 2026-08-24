@@ -129,12 +129,7 @@ def _detour_problem() -> tuple[_PreparedRoutingProblem, NetId, NetId]:
                 (long, (2, 0), (2, 4), (), (), ()),
             ),
             bounds=(0, 0, 4, 4),
-            keep_out={
-                (x, y)
-                for x in range(5)
-                for y in range(5)
-                if (x, y) not in open_cells
-            },
+            keep_out={(x, y) for x in range(5) for y in range(5) if (x, y) not in open_cells},
         ),
         short,
         long,
@@ -208,12 +203,7 @@ def test_one_pass_records_one_cell_overflow_instead_of_blocking() -> None:
     vertical = NetId(2, 3, "iron", NetRole.INTERNAL, 0)
     ports = {(0, 2), (4, 2), (2, 0), (2, 4)}
     open_cells = ports | {(1, 2), (2, 2), (3, 2), (2, 1), (2, 3)}
-    keep_out = {
-        (x, y)
-        for x in range(5)
-        for y in range(5)
-        if (x, y) not in open_cells
-    }
+    keep_out = {(x, y) for x in range(5) for y in range(5) if (x, y) not in open_cells}
     problem = _problem(
         (
             (horizontal, (0, 2), (4, 2), (), (), ()),
@@ -523,11 +513,7 @@ def test_detailed_feedback_history_changes_the_global_route_choice() -> None:
 
 def test_hot_cells_are_history_ordered_bounded_and_boxed_deterministically() -> None:
     problem = _problem((), bounds=(0, 0, 19, 19))
-    history = {
-        (x, y, 0): 1.0
-        for x in range(15)
-        for y in range(20)
-    }
+    history = {(x, y, 0): 1.0 for x in range(15) for y in range(20)}
     history[(14, 19, 0)] = 2.0
 
     first = route_global(problem, _feedback(problem, history), budget=0)

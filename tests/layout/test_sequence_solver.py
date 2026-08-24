@@ -282,9 +282,7 @@ def test_exact_incumbents_compare_only_area_then_belt_tiles() -> None:
 def test_validator_rejection_never_establishes_an_exact_incumbent() -> None:
     invalid = _placement(area=10, belt_tiles=2, valid=False)
     fake = _FakeRouting(
-        detailed_results=(
-            DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), invalid),
-        )
+        detailed_results=(DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), invalid),)
     )
     with pytest.raises(NoValidLayout):
         _solver(fake, heights=(40,)).search(max_stages=1)
@@ -443,9 +441,7 @@ def test_deterministic_configuration_reproduces_stage_trace_and_derived_seeds() 
     def run() -> tuple[SequenceSearchResult, list[int]]:
         exact = _placement(area=20, belt_tiles=4)
         fake = _FakeRouting(
-            detailed_results=(
-                DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), exact),
-            )
+            detailed_results=(DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), exact),)
         )
         result = _solver(fake, heights=(40, 60)).search(max_stages=5)
         return result, fake.stage_trace
@@ -594,8 +590,6 @@ def test_production_threads_global_rounds_and_hard_deadline(
     assert set(calls) == {(1, True)}
 
 
-
-
 def test_detailed_candidate_reuses_prepared_problem_identity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -726,6 +720,7 @@ def test_post_route_power_failure_charges_shared_spend_and_refuses(
     assert result.routing.failed_count == 0
     assert result.placement is None
     assert ledger.spent == 7
+
 
 def test_powered_one_net_miss_feeds_lns_or_refuses_honestly(
     monkeypatch: pytest.MonkeyPatch,
@@ -879,9 +874,7 @@ def test_powered_one_net_miss_feeds_lns_or_refuses_honestly(
     )
     prepared_calls = 0
 
-    def prepare(
-        height: int, decoded: DecodedPlacement
-    ) -> _PreparedRoutingProblem:
+    def prepare(height: int, decoded: DecodedPlacement) -> _PreparedRoutingProblem:
         nonlocal prepared_calls
         prepared_calls += 1
         if prepared_calls == 1:
@@ -999,6 +992,7 @@ def test_powered_one_net_miss_feeds_lns_or_refuses_honestly(
             expect_power=True,
         ).errors
 
+
 def test_lns_continues_from_the_proxy_selected_elite(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1099,9 +1093,7 @@ def test_lns_continues_from_the_proxy_selected_elite(
         )
         return _global(overflow=0 if decoded == selected_decoded else 10)
 
-    def detailed_route(
-        decoded: DecodedPlacement, allowance: int
-    ) -> DetailedStageResult:
+    def detailed_route(decoded: DecodedPlacement, allowance: int) -> DetailedStageResult:
         nonlocal detailed_calls
         del decoded, allowance
         detailed_calls += 1

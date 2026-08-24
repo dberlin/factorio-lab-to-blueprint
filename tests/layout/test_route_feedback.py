@@ -94,9 +94,7 @@ def test_genuine_geometric_failure_bumps_net_and_wall(
     assert state.cell_history == {}
 
 
-@pytest.mark.parametrize(
-    "kind", (RouteFailureKind.BUDGET, RouteFailureKind.STATIC_ACCESS)
-)
+@pytest.mark.parametrize("kind", (RouteFailureKind.BUDGET, RouteFailureKind.STATIC_ACCESS))
 def test_non_geometric_failure_is_an_exact_feedback_no_op(
     kind: RouteFailureKind,
 ) -> None:
