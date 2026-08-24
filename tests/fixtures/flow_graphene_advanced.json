@@ -1,0 +1,111 @@
+{
+ "nodes": [
+  {
+   "id": "i|graphene",
+   "name": "Graphene",
+   "text": "60/m",
+   "color": "#4d4d4d",
+   "stepId": "graphene",
+   "icon": {
+    "id": "graphene",
+    "color": "#4d4d4d"
+   }
+  },
+  {
+   "id": "o|graphene",
+   "name": "Graphene",
+   "text": "60/m",
+   "color": "var(--color-brand-400)",
+   "stepId": "graphene",
+   "icon": {
+    "id": "graphene",
+    "color": "#4d4d4d"
+   }
+  },
+  {
+   "id": "r|graphene-advanced",
+   "name": "Graphene (advanced)",
+   "text": "1",
+   "color": "#3d7ab5",
+   "stepId": "graphene",
+   "icon": {
+    "id": "chemical-plant",
+    "color": "#3d7ab5"
+   },
+   "recipeIcon": {
+    "id": "graphene-advanced",
+    "color": "#4d4d4d"
+   }
+  },
+  {
+   "id": "i|hydrogen",
+   "name": "Hydrogen",
+   "text": "30/m",
+   "color": "#71b1e0",
+   "stepId": "hydrogen",
+   "icon": {
+    "id": "hydrogen",
+    "color": "#71b1e0"
+   }
+  },
+  {
+   "id": "s|hydrogen",
+   "name": "Hydrogen",
+   "text": "30/m",
+   "color": "var(--color-complement-500)",
+   "stepId": "hydrogen",
+   "icon": {
+    "id": "hydrogen",
+    "color": "#71b1e0"
+   }
+  },
+  {
+   "id": "r|fire-ice-vein",
+   "name": "Fire Ice Vein",
+   "text": "0.75",
+   "color": "#8c8c8c",
+   "stepId": "fire-ice",
+   "icon": {
+    "id": "mining-machine",
+    "color": "#8c8c8c"
+   }
+  }
+ ],
+ "links": [
+  {
+   "source": "r|fire-ice-vein",
+   "target": "r|graphene-advanced",
+   "text": "60/m",
+   "color": "#7fd4ff",
+   "value": 6
+  },
+  {
+   "source": "r|graphene-advanced",
+   "target": "i|graphene",
+   "text": "60/m",
+   "color": "#4d4d4d",
+   "value": 60
+  },
+  {
+   "source": "i|graphene",
+   "target": "o|graphene",
+   "text": "60/m",
+   "color": "#4d4d4d",
+   "value": 60
+  },
+  {
+   "source": "r|graphene-advanced",
+   "target": "i|hydrogen",
+   "text": "30/m",
+   "color": "#71b1e0",
+   "value": 3
+  },
+  {
+   "source": "i|hydrogen",
+   "target": "s|hydrogen",
+   "text": "30/m",
+   "color": "#71b1e0",
+   "value": 3
+  }
+ ]
+}

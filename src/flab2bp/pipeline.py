@@ -10,10 +10,12 @@ touch it.
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 from typing import Literal
 
 from flab2bp.dsp import catalog, codec
 from flab2bp.lab.data import load_vendored
+from flab2bp.lab.flow import compare_selection, load_flow, pin_request
 from flab2bp.lab.schema import Dataset
 from flab2bp.lab.url import parse_url
 from flab2bp.layout import markers, validate
@@ -88,6 +90,13 @@ class Build:
     #: Strategy/candidate pairs that produced no layout at all, with the reason.
     #: Kept so a refusal is reported rather than silently absent from `attempts`.
     refused: tuple[str, ...] = field(default_factory=tuple)
+    #: Ways the chosen build's recipe set differs from the pinned flow's, if one
+    #: was supplied.  Empty when no flow was given OR when we reproduced it: the
+    #: CLI says which, because "no findings" and "nothing was checked" are very
+    #: different claims and only one of them is reassuring.
+    flow_findings: tuple[str, ...] = field(default_factory=tuple)
+    #: Whether a FactorioLab flow export pinned the recipe selection.
+    flow_pinned: bool = False
 
 
 def build(
@@ -99,6 +108,7 @@ def build(
     time_budget_s: float = 2.0,
     dataset: Dataset | None = None,
     name: str = "",
+    flow: Path | None = None,
 ) -> Build:
     """Turn a FactorioLab URL into a pasteable DSP blueprint.
 
@@ -115,6 +125,20 @@ def build(
     """
     data = dataset if dataset is not None else load_vendored()
     request = parse_url(url)
+
+    # A FactorioLab flow export pins WHICH recipe makes what, so we stop
+    # re-deriving a decision the player already made. It is applied here, to the
+    # request, because the rate solver already treats a request's exclusion set
+    # as authoritative -- so pinning needs no new concept downstream and a build
+    # without a flow file takes a byte-identical path.
+    #
+    # There is deliberately no fallback: `load_flow` and `pin_request` raise
+    # rather than shrug, because quietly re-deriving the selection is the exact
+    # behaviour this argument exists to remove.
+    selection = load_flow(flow) if flow is not None else None
+    if selection is not None:
+        request = pin_request(request, data, selection)
+
     spec_set = build_candidates(data, request, count=candidates)
 
     wanted = list(_STRATEGIES) if strategy == "best" else [strategy]
@@ -170,6 +194,19 @@ def build(
             f"{chosen_spec.machine_count} machines, {best.area} tiles"
         ),
     )
+    # Cross-check rather than trust. With the selection pinned this must be
+    # empty; anything it names is the pin leaking, and a named leak is worth far
+    # more than a silent one.
+    findings = (
+        compare_selection(
+            selection,
+            data,
+            built={g.recipe_id: g.machine_item_id for g in chosen_spec.groups},
+        )
+        if selection is not None
+        else ()
+    )
+
     blueprint = codec.encode(labelled)
     return Build(
         spec=chosen_spec,
@@ -179,4 +216,6 @@ def build(
         blueprint=blueprint,
         attempts=tuple(attempts),
         refused=tuple(refused),
+        flow_findings=findings,
+        flow_pinned=selection is not None,
     )

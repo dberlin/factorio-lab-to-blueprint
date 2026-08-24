@@ -39,6 +39,25 @@ def _report(build: pipeline.Build, *, verbose: bool) -> None:
         # unlabelled belt in game.
         print(f"  WARNING: no icon placed for {sorted(unmarked)}", file=out)
 
+    # Say whether the selection was pinned. "No findings" and "nothing was
+    # checked" read identically in silence, and only one of them is reassuring.
+    if build.flow_pinned:
+        if build.flow_findings:
+            print(
+                f"  {len(build.flow_findings)} difference(s) from the pinned flow:",
+                file=out,
+            )
+            for finding in build.flow_findings:
+                print(f"    {finding}", file=out)
+        else:
+            print("  recipe selection pinned to the supplied flow (no differences)", file=out)
+    else:
+        print(
+            "  recipe selection DERIVED, not pinned -- pass --flow to build "
+            "FactorioLab's own selection",
+            file=out,
+        )
+
     if build.refused:
         # A strategy that produced NO layout is invisible in `attempts`, so say
         # so. Silence here would read as "that combination was simply not the
@@ -93,6 +112,14 @@ def main(argv: list[str] | None = None) -> int:
         default=3,
         help="how many proliferation candidates the rate solver emits (default 3)",
     )
+    ap.add_argument(
+        "--flow",
+        type=Path,
+        help="FactorioLab flow export (the flow view's 'download as JSON'). Pins "
+        "the recipe selection to the one FactorioLab solved instead of "
+        "re-deriving it. Refuses on a file that cannot be this URL's flow; "
+        "there is no fallback to re-deriving.",
+    )
     ap.add_argument("--budget", type=float, default=2.0, help="solver seconds per layout")
     ap.add_argument("-o", "--out", type=Path, help="write to a file instead of stdout")
     ap.add_argument("-n", "--name", default="", help="blueprint short description")
@@ -113,6 +140,7 @@ def main(argv: list[str] | None = None) -> int:
             candidates=args.candidates,
             time_budget_s=args.budget,
             name=args.name,
+            flow=args.flow,
         )
     except NoValidLayout as exc:
         # Distinct exit code: "no layout exists" is a different outcome from
