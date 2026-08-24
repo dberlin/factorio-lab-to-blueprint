@@ -376,3 +376,78 @@ sorter behaviour, and `labLevel` gates the height ceiling. A rule recorded
 without its guard reads as universal, and the cost of that mistake is not a
 wrong blueprint -- it is a quietly worse one, everywhere, which is much harder
 to notice.
+
+
+## OPEN -- our footprints are a tile grid; the game's collision is not
+
+The fourth and last unexplained error from the first in-game paste,
+"Collide with other object" (`EBuildCondition.Collide = 34`), is ours colliding
+with ourselves. It is now extracted, modelled and measured; what is NOT done is
+the layout fix, which is why this entry is OPEN.
+
+**The rule.** `BuildTool_BlueprintPaste.CheckBuildConditions` (decompiled
+145712-145760) puts every preview's `PrefabDesc.buildColliders` into the live
+physics world -- `ActiveColliders` -> `BuildPreviewModel.SetCollider` -- and
+runs `Physics.OverlapBoxNonAlloc(collider.pos, collider.ext, ..., mask 395264)`
+per preview. Mask 395264 is layers 11, 17 and **18**, and layer 18 is
+"Build Preview" (confirmed from the TagManager), so previews test against each
+other. An un-excused hit is `condition = EBuildCondition.Collide` at 146071.
+Its guards, which narrow it a long way: a sorter is excused against anything
+that is not a sorter and vice versa; a machine is excused against a belt but
+**not** the reverse, because the clause tests `!A.isBelt`; belt-vs-belt is
+excused only when `dotsCursor > 1`, which a single paste is not.
+
+**Why our tile model cannot see it.** A tile is not one world unit. Rows are
+`GetLatitudeRadPerGrid = 2*pi/(segment*5)` apart, and `segment` tracks the
+planet radius, so the arc is `2*pi/5 = 1.2566` units on every planet. An
+Assembling Machine's build collider is 3.82 units across. Three tiles is 3.770.
+`catalog.derive_footprint` returns `2*ceil(box/2) - 1 = 3` for it, both
+strategies duly place assemblers three tiles apart, and the game refuses every
+one of those pastes. The corpus agrees and always did: across every fixture,
+assemblers appear at a pitch of 4 or more and NEVER at 3, Matrix Labs at 5 or
+more and never 4, Arc Smelters at 3. The extracted model reproduces each of
+those minimum pitches exactly.
+
+**Measured**, three runs, both strategies, every tier: 13 of 24 cells collide in
+every run. 443 of ~530 pairs are assembler-on-assembler; the rest are a Tesla
+Tower one tile from a Splitter.
+
+**What landed:** `dsp/data/colliders.json` (252 models of real
+`buildColliders`, from `scripts/extract_dsp_colliders.py`), `dsp/colliders.py`
+holding the predicate next to the C# it came from, and `geom.collide` in
+`layout/validate.py` -- an ERROR check, in `validate.OPT_IN` so it does not turn
+every build into a refusal before the footprints are fixed.
+
+**What is left, in order:**
+
+1. **Fix the footprints.** The right question is not "which tile centres does
+   this cover" but "how far apart must two of these be", which is
+   `ceil(blueprintBoxSize / GRID_ARC)` -- and that is EVEN for an Assembling
+   Machine (4). `derive_footprint`'s "always odd, as the corpus requires" is
+   wrong, and `tile_to_local_offset` has a half-tile branch for even footprints
+   that its own docstring calls unreachable. It is about to be reached.
+2. **`blueprintBoxSize` is the wrong field for this** even after that. The game
+   computes it FROM a collider (`ReadPrefab` 217456) and picks the LAST Build
+   box -- which, when a prefab has three or more, is exactly the one EXCLUDED
+   from `buildColliders`. Use the colliders. A Spray Coater's
+   `blueprintBoxSize` is 0.7 x 2.0; the box actually tested is 0.7 x 3.5, and it
+   turns with the building's yaw.
+3. **Belts are still unmodelled.** They ARE tested -- as a 0.23 sphere at
+   `lpos + lpos.normalized * 0.2`, and a belt hitting a machine is not excused
+   -- but that model flags belts three tiles from an Interstellar Logistics
+   Station in `12-s-purple-science`, which the game wrote. Something in it is
+   wrong; it is left out rather than shipped. So `geom.collide` is a LOWER bound
+   on what the game rejects.
+4. **Sorters likewise**, and for a known reason: a sorter's box is rebuilt from
+   the poses of the buildings it connects, which needs the `slotPoses` data this
+   repository had wrong.
+
+**Not a defect, and worth not re-discovering:** columns compress by `cos(lat)`
+away from the paste anchor, because the longitude step is fixed at the anchor's
+latitude (`RefreshBuildPreview` 179977). Two Matrix Labs five tiles apart are
+clear at the equator and collide 81 rows north of it. That is why a blueprint
+can paste in one place and not another, and it is a property of WHERE it lands,
+not of the blueprint -- so `geom.collide` evaluates on a flat grid at
+`GRID_ARC`, the loosest spacing any equatorial paste can give, and reports only
+what no paste can avoid. Asking the other question is `collisions(anchor_lat=)`.
+On one `information-matrix` layout the two differ by 5 pairs against 15.

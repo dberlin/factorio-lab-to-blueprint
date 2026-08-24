@@ -178,6 +178,61 @@ def test_geom_overlap_ignores_different_altitudes() -> None:
     assert not fired(r, "geom.overlap")
 
 
+COLLIDE = {"geom.overlap", "geom.collide"}
+
+
+def test_geom_collide_fires_where_geom_overlap_cannot() -> None:
+    """Two assemblers on adjacent 3x3 footprints, and the game still refuses it.
+
+    Their tiles are disjoint -- 0..2 and 3..5 -- so ``geom.overlap`` is clean.
+    But the game does not test tiles: it tests build colliders, an Assembling
+    Machine's is 3.82 world units across, and three tiles is 3 * 2 * pi / 5 =
+    3.770.  The 0.05-unit intersection is ``EBuildCondition.Collide``.
+
+    This is the pair that has to hold for the check to be worth having: if it
+    ever passes, ``geom.collide`` has collapsed into ``geom.overlap``.
+    """
+    r = validate(place(machine(0, 0), machine(3, 0)), only=COLLIDE)
+    assert not fired(r, "geom.overlap")
+    assert fired(r, "geom.collide")
+    assert not r.ok
+
+
+def test_geom_collide_clean_at_the_spacing_the_corpus_uses() -> None:
+    assert not fired(validate(place(machine(0, 0), machine(4, 0)), only=COLLIDE), "geom.collide")
+    assert not fired(validate(place(machine(0, 0), machine(0, 4)), only=COLLIDE), "geom.collide")
+
+
+def test_geom_collide_does_not_fire_on_a_tighter_building() -> None:
+    """The rule is per-collider, not a blanket "add a tile".
+
+    An Arc Smelter is 2.9 units across and three tiles is 3.770, so smelters at
+    the same spacing that breaks assemblers are fine -- and the corpus places
+    them exactly there.
+    """
+    r = validate(
+        place(machine(0, 0, item_id=SMELTER), machine(3, 0, item_id=SMELTER)), only=COLLIDE
+    )
+    assert not fired(r, "geom.collide")
+
+
+def test_geom_collide_is_opt_in_because_our_layout_fails_it() -> None:
+    """Records a defect, and is the thing that fails when the defect is fixed.
+
+    ``geom.collide`` is deliberately not in the default run: it fires on every
+    placement both strategies currently produce, so switching it on turns every
+    build into a refusal.  See ``validate.OPT_IN`` for the measurement.  When
+    the footprints are corrected, delete that set and this test with it.
+    """
+    from flab2bp.layout.validate import OPT_IN
+
+    assert {"geom.collide"} == OPT_IN
+    r = validate(place(machine(0, 0), machine(3, 0)))
+    assert "geom.collide" in r.skipped
+    assert "geom.collide" not in r.checks_run
+    assert not fired(r, "geom.collide"), "the default run must not report it"
+
+
 def test_geom_belt_single_occupancy_fires_on_two_belts_in_one_cell() -> None:
     r = validate(place(belt(0, 0), belt(0, 0)))
     assert fired(r, "geom.belt_single_occupancy")

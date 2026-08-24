@@ -29,6 +29,8 @@ from enum import Enum, StrEnum
 from fractions import Fraction
 
 from flab2bp.dsp import catalog as cat
+from flab2bp.dsp import codec
+from flab2bp.dsp import colliders as dsp_colliders
 from flab2bp.layout import junction as junc
 from flab2bp.layout import slots
 from flab2bp.layout.base import PlacedBuilding, Placement
@@ -598,6 +600,37 @@ CHECKS: dict[str, Check] = {}
 #: Check ids that require a ``BuildSpec`` and an ``IdMap``.
 NEEDS_SPEC: set[str] = set()
 
+#: Checks that are correct, tested, and NOT run unless a caller names them.
+#:
+#: There is exactly one, and why it is here is a finding rather than a caveat.
+#: ``geom.collide`` reproduces the game's own ``EBuildCondition.Collide`` and is
+#: validated to zero findings on every single-area blueprint the game itself
+#: wrote (``tests/dsp/test_colliders.py``).  It fails on OUR output.  Measured
+#: over three runs of the full corpus, both strategies, every tier -- 13 of the
+#: 24 cells collide, in every run, and the counts barely move between runs::
+#:
+#:     processor/freeform            [5, 5, 5]
+#:     super-magnetic-ring/spine     [13, 13, 13]
+#:     quantum-chip/freeform         [22, 22, 22]
+#:     universe-matrix/freeform      [55, 54, ...]
+#:
+#: 443 of the ~530 pairs are one defect: ``catalog.derive_footprint`` calls an
+#: Assembling Machine 3x3, so both strategies place them three tiles apart.  Its
+#: collider is 3.82 world units wide and three tiles is 3.770.  The rest are a
+#: Tesla Tower one tile from a Splitter (the Splitter's collider is 2.38 across,
+#: the Tower's 0.6, and one tile is 1.257).
+#:
+#: Running it by default would turn those builds into ``NoValidLayout``, since
+#: both strategies refuse a placement their own validator rejects.  Fixing the
+#: footprints is a layout change and a separate job.  Until then the check is
+#: available to anything that asks for it and is reported in ``Report.skipped``
+#: so a build that has not been through it can never read as one that has.
+#:
+#: When the layout is fixed, the change is to delete this set -- and
+#: ``test_geom_collide_is_opt_in_because_our_layout_fails_it`` is what will fail
+#: until someone does.
+OPT_IN: set[str] = {"geom.collide"}
+
 
 def check(cid: str, *, needs_spec: bool = False) -> Callable[[Check], Check]:
     def register(fn: Check) -> Check:
@@ -636,6 +669,67 @@ def _overlap(ctx: Context) -> Iterable[Finding]:
                 tuple(occupants),
                 {"cell": str(cell)},
             )
+
+
+@check("geom.collide")
+def _collide(ctx: Context) -> Iterable[Finding]:
+    """No two build colliders intersect -- the game's ``EBuildCondition.Collide``.
+
+    ``geom.overlap`` asks whether two buildings claim the same TILE.  The game
+    does not ask that.  It puts every preview's ``PrefabDesc.buildColliders``
+    into the physics world on layer 18 and runs
+    ``Physics.OverlapBoxNonAlloc(collider.pos, collider.ext, ..., mask 395264)``
+    per preview (``BuildTool_BlueprintPaste.CheckBuildConditions``, decompiled
+    lines 145712-145760); an un-excused hit is
+    ``buildPreview2.condition = EBuildCondition.Collide`` at line 146071.  The
+    two questions have different answers because a tile is 1.2566 world units
+    wide, not 1.0 -- see :mod:`flab2bp.dsp.colliders` for that derivation.
+
+    The consequence a tile model cannot see: an Assembling Machine's collider is
+    3.82 units across, three tiles is 3.770, so two of them three tiles apart
+    intersect by 0.05 units even though their 3x3 footprints do not share a cell.
+    Every real blueprint in the corpus spaces assemblers four tiles or more, and
+    none spaces them three.
+
+    Scope.  Belts and sorters are excluded, for reasons set out on
+    :func:`flab2bp.dsp.colliders.collisions`: the game excuses a sorter against
+    anything that is not a sorter, and the belt model -- which IS a real rule,
+    a 0.23 sphere that is not excused against machines -- still over-reports on
+    blueprints the game wrote, so it is not shipped.  This check is therefore a
+    lower bound on what the game will reject, never an upper one.
+    """
+    tested = [
+        (i, b)
+        for i, b in enumerate(ctx.placement.buildings)
+        if ctx.kinds[i] not in (Kind.BELT, Kind.SORTER)
+    ]
+    # `PlacedBuilding.x` is the footprint's minimum corner; the game stores and
+    # centres the collider on the CENTRE.  Going through the encoder's own
+    # conversion rather than a second copy of it means the check can never be
+    # testing a different building from the one that gets written out.
+    placed = [
+        dsp_colliders.Placed(b.model_index, *codec.tile_to_local_offset(
+            b.x, b.y, b.z, b.width, b.height
+        ), b.yaw)
+        for _i, b in tested
+    ]
+    for a, c in dsp_colliders.collisions(placed):
+        ia, ba = tested[a]
+        ic, bc = tested[c]
+        yield Finding(
+            "geom.collide",
+            Severity.ERROR,
+            f"build colliders intersect: {cat.building(ba.item_id).name} at "
+            f"({ba.x}, {ba.y}) and {cat.building(bc.item_id).name} at ({bc.x}, {bc.y}) "
+            f"-- {abs(bc.x - ba.x)} x {abs(bc.y - ba.y)} tiles apart",
+            (ia, ic),
+            {
+                "a": str((ba.x, ba.y, str(ba.z))),
+                "b": str((bc.x, bc.y, str(bc.z))),
+                "dx": str(bc.x - ba.x),
+                "dy": str(bc.y - ba.y),
+            },
+        )
 
 
 @check("geom.belt_single_occupancy")
@@ -3162,6 +3256,9 @@ def validate(
     game's belt slope limit at all.  They are caller declarations for the same
     reason: both are properties of the player's researched technologies.
 
+    Checks in :data:`OPT_IN` run only when ``only`` names them, and are listed in
+    ``Report.skipped`` otherwise.  See that set for the one member and why.
+
     ``belt_vertical_construction`` defaults to TRUE because an absent technology
     set means every technology researched -- FactorioLab's own default, see
     ``catalog.belt_rules_for_technologies``.  Defaulting it False would have the
@@ -3184,6 +3281,9 @@ def validate(
             skipped.append(cid)
             continue
         if cid in NEEDS_SPEC and not have_spec:
+            skipped.append(cid)
+            continue
+        if cid in OPT_IN and wanted is None:
             skipped.append(cid)
             continue
         ran.append(cid)
