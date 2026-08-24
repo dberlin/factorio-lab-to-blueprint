@@ -1,3 +1,4 @@
+import random
 from collections.abc import Callable
 from dataclasses import FrozenInstanceError
 from itertools import combinations, permutations
@@ -6,11 +7,20 @@ from typing import Any, cast
 import pytest
 
 from flab2bp.layout.sequence_pair import (
+    AnnealConfig,
+    AnnealState,
     DecodedPlacement,
     GapProfile,
+    MoveKind,
+    PlacementCostContext,
     PlacementProblem,
+    SearchEnergy,
     SequencePair,
+    anneal_stage,
+    apply_move,
+    cheap_energy,
     decode_sequence_pair,
+    derive_stage_seed,
 )
 
 
@@ -251,3 +261,256 @@ def test_placement_problem_validates_geometry_nets_and_bounds() -> None:
     for kwargs in invalid_kwargs:
         with pytest.raises(ValueError):
             PlacementProblem(**kwargs)
+
+
+def _tiny_placement_problem() -> PlacementProblem:
+    return PlacementProblem(
+        sizes=((3, 2), (2, 4), (4, 1), (1, 3)),
+        nets=((0, 1), (1, 2), (2, 3), (0, 3)),
+        outline_height=6,
+        area_lower_bound=20,
+    )
+
+
+def test_every_move_preserves_both_permutations_and_gap_bounds() -> None:
+    state = AnnealState.initial(size=8, seed=41)
+    for kind in MoveKind:
+        moved = apply_move(state, kind, random.Random(7))
+        moved.pair.validate(8)
+        assert all(0 <= gap <= 4 for gap in moved.gaps.east + moved.gaps.north)
+
+
+@pytest.mark.parametrize(
+    ("kind", "positive_changes", "negative_changes", "gap_changes"),
+    (
+        (MoveKind.SWAP_POSITIVE, True, False, False),
+        (MoveKind.SWAP_NEGATIVE, False, True, False),
+        (MoveKind.SWAP_BOTH, True, True, False),
+        (MoveKind.INSERT_POSITIVE, True, False, False),
+        (MoveKind.INSERT_NEGATIVE, False, True, False),
+        (MoveKind.GAP_STEP, False, False, True),
+    ),
+)
+def test_each_move_kind_mutates_only_its_owned_state(
+    kind: MoveKind,
+    positive_changes: bool,
+    negative_changes: bool,
+    gap_changes: bool,
+) -> None:
+    state = AnnealState(
+        pair=SequencePair(tuple(range(6)), tuple(range(6))),
+        gaps=GapProfile.zero(6),
+        base_seed=19,
+        stage_index=3,
+    )
+
+    moved = apply_move(state, kind, random.Random(7))
+
+    assert (moved.pair.positive != state.pair.positive) is positive_changes
+    assert (moved.pair.negative != state.pair.negative) is negative_changes
+    assert (moved.gaps != state.gaps) is gap_changes
+    assert moved.base_seed == state.base_seed
+    assert moved.stage_index == state.stage_index
+    if kind is MoveKind.SWAP_BOTH:
+        assert moved.pair.positive == moved.pair.negative
+
+
+def test_gap_move_is_one_bounded_step_including_at_both_bounds() -> None:
+    for initial_gap in (0, 2, 4):
+        state = AnnealState(
+            pair=SequencePair((0,), (0,)),
+            gaps=GapProfile((initial_gap,), (initial_gap,)),
+            base_seed=3,
+            stage_index=0,
+        )
+        for seed in range(20):
+            moved = apply_move(state, MoveKind.GAP_STEP, random.Random(seed))
+            deltas = tuple(
+                abs(after - before)
+                for after, before in zip(
+                    moved.gaps.east + moved.gaps.north,
+                    state.gaps.east + state.gaps.north,
+                    strict=True,
+                )
+            )
+            assert sum(deltas) == 1
+            assert all(0 <= gap <= 4 for gap in moved.gaps.east + moved.gaps.north)
+
+
+def test_swap_both_swaps_the_same_strip_ids_in_each_permutation() -> None:
+    state = AnnealState(
+        pair=SequencePair((0, 1, 2, 3), (3, 1, 0, 2)),
+        gaps=GapProfile.zero(4),
+        base_seed=7,
+    )
+
+    moved = apply_move(state, MoveKind.SWAP_BOTH, random.Random(7))
+
+    positive_strips = {
+        before
+        for before, after in zip(
+            state.pair.positive, moved.pair.positive, strict=True
+        )
+        if before != after
+    }
+    negative_strips = {
+        before
+        for before, after in zip(
+            state.pair.negative, moved.pair.negative, strict=True
+        )
+        if before != after
+    }
+    assert positive_strips == negative_strips
+
+
+def test_moves_are_legal_no_ops_for_empty_and_singleton_states() -> None:
+    for size in (0, 1):
+        state = AnnealState.initial(size=size, seed=5)
+        for kind in MoveKind:
+            moved = apply_move(state, kind, random.Random(11))
+            moved.pair.validate(size)
+            assert len(moved.gaps.east) == size
+
+
+def test_cheap_energy_uses_every_normalized_component() -> None:
+    problem = PlacementProblem(
+        sizes=((2, 3), (4, 1)),
+        nets=((0, 1),),
+        outline_height=5,
+        area_lower_bound=10,
+    )
+    decoded = DecodedPlacement(
+        x=(1, 4),
+        y=(2, 6),
+        width=7,
+        used_height=8,
+        x_windows=((1, 1), (4, 4)),
+        y_windows=((2, 2), (6, 6)),
+        gap_area=5,
+    )
+    context = PlacementCostContext(
+        net_weights=(2.0,),
+        history_cost_by_net=(3.0,),
+        missed_direct_inserts=1,
+    )
+
+    energy = cheap_energy(problem, decoded, context)
+
+    assert energy.hard_outline_overflow == 3
+    assert energy.scalar == pytest.approx(
+        3.5  # normalized width * outline height
+        + 0.35 * 1.4  # feedback-weighted HPWL
+        + 0.2 * 3.0  # history congestion
+        + 0.1 * 1.0  # missed direct inserts
+        + 0.05 * 0.5  # explicit gap area
+    )
+
+
+def test_cheap_energy_handles_zero_area_and_no_nets_without_zero_division() -> None:
+    problem = PlacementProblem(
+        sizes=(),
+        nets=(),
+        outline_height=5,
+        area_lower_bound=0,
+    )
+    decoded = decode_sequence_pair(
+        SequencePair((), ()),
+        GapProfile.zero(0),
+        (),
+        outline_height=5,
+    )
+
+    assert cheap_energy(problem, decoded, PlacementCostContext((), ())) == SearchEnergy(0, 0.0)
+
+
+def test_search_energy_orders_hard_outline_overflow_before_scalar() -> None:
+    assert SearchEnergy(0, 1_000_000.0) < SearchEnergy(1, -1_000_000.0)
+
+
+def test_cost_context_rejects_non_finite_or_negative_values() -> None:
+    invalid_calls: tuple[Callable[[], PlacementCostContext], ...] = (
+        lambda: PlacementCostContext((-1.0,), (0.0,)),
+        lambda: PlacementCostContext((float("inf"),), (0.0,)),
+        lambda: PlacementCostContext((1.0,), (float("nan"),)),
+        lambda: PlacementCostContext((1.0,), (0.0,), missed_direct_inserts=-1),
+    )
+    for call in invalid_calls:
+        with pytest.raises(ValueError):
+            call()
+
+
+def test_cost_context_must_match_problem_net_count() -> None:
+    problem = PlacementProblem(((1, 1),), ((0, 0),), 1, 1)
+    decoded = decode_sequence_pair(
+        SequencePair((0,), (0,)),
+        GapProfile.zero(1),
+        problem.sizes,
+        outline_height=1,
+    )
+    with pytest.raises(ValueError, match="net count"):
+        cheap_energy(problem, decoded, PlacementCostContext((), ()))
+
+
+def test_derived_stage_seeds_are_stable_and_stage_specific() -> None:
+    assert derive_stage_seed(123, 4) == derive_stage_seed(123, 4)
+    assert derive_stage_seed(123, 4) != derive_stage_seed(123, 5)
+    assert derive_stage_seed(123, 4) != derive_stage_seed(124, 4)
+
+
+def test_initial_states_are_seeded_reproducibly_for_multi_start() -> None:
+    assert AnnealState.initial(12, 17) == AnnealState.initial(12, 17)
+    assert AnnealState.initial(12, 17).pair != AnnealState.initial(12, 18).pair
+
+
+def test_fixed_seed_reproduces_stage_incumbent_and_accepted_move_count() -> None:
+    problem = _tiny_placement_problem()
+    config = AnnealConfig.test()
+
+    a = anneal_stage(problem, AnnealState.initial(problem.size, 17), config)
+    b = anneal_stage(problem, AnnealState.initial(problem.size, 17), config)
+
+    assert a.incumbent == b.incumbent
+    assert a.accepted_moves == b.accepted_moves
+    assert a.final_state == b.final_state
+    assert a.elites == b.elites
+
+
+def test_anneal_stage_advances_once_and_retains_ordered_distinct_elites() -> None:
+    problem = _tiny_placement_problem()
+    state = AnnealState.initial(problem.size, 29)
+    config = AnnealConfig(
+        moves_per_stage=80,
+        initial_temperature=1.5,
+        final_temperature=0.05,
+        elite_count=5,
+    )
+
+    result = anneal_stage(problem, state, config)
+
+    assert result.final_state.stage_index == state.stage_index + 1
+    assert result.final_state.base_seed == state.base_seed
+    assert 0 <= result.accepted_moves <= config.moves_per_stage
+    assert 1 <= len(result.elites) <= config.elite_count
+    assert len({elite.key for elite in result.elites}) == len(result.elites)
+    assert result.elites == tuple(
+        sorted(result.elites, key=lambda elite: (elite.energy, elite.key))
+    )
+    assert result.incumbent == result.elites[0]
+    result.final_state.pair.validate(problem.size)
+    assert all(
+        0 <= gap <= 4
+        for gap in result.final_state.gaps.east + result.final_state.gaps.north
+    )
+
+
+def test_anneal_config_rejects_invalid_schedule_values() -> None:
+    invalid_kwargs: tuple[dict[str, Any], ...] = (
+        {"moves_per_stage": 0},
+        {"initial_temperature": 0.0},
+        {"final_temperature": 0.0},
+        {"initial_temperature": 0.5, "final_temperature": 1.0},
+        {"elite_count": 0},
+    )
+    for kwargs in invalid_kwargs:
+        with pytest.raises(ValueError):
+            AnnealConfig(**kwargs)
