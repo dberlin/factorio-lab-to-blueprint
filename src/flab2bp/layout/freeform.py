@@ -55,6 +55,7 @@ from collections import defaultdict, deque
 from collections.abc import Collection, Mapping, Sequence, Set
 from dataclasses import dataclass, field, replace
 from fractions import Fraction
+from functools import lru_cache
 
 from ortools.sat.python import cp_model
 
@@ -2940,6 +2941,40 @@ def _route_all(
                             queue.append(other)
             return grown
 
+        def _stands_on(
+            index: int,
+            through: list[tuple[int, int, int]],
+            victims: Set[int],
+        ) -> bool:
+            """Does ``through`` attach only to paths this swap is about to move?
+
+            Asked at both ends and answered the way `_source_for` and
+            `_sink_for` will answer it at commit time: an end beside its OWN
+            lane needs nobody, and otherwise the only belts it may attach to are
+            its siblings' -- so if every sibling beside it is a victim, it will
+            end up beside nothing.  An end with no sibling beside it at all is
+            not this swap's doing and is left alone.
+            """
+            net = nets[index]
+            for end, port, group, slack in (
+                (through[0], net.src, src_group, 0),
+                (through[-1], net.dst, dst_group, 1),
+            ):
+                if (
+                    abs(end[0] - port.x) + abs(end[1] - port.y) <= 1
+                    and abs(end[2]) <= slack
+                ):
+                    continue
+                kin = set(group.get(index, ()))
+                beside = {
+                    who
+                    for dx, dy in _STEPS
+                    if (who := owner.get((end[0] + dx, end[1] + dy, end[2]))) is not None
+                } & kin
+                if beside and beside <= set(victims):
+                    return True
+            return False
+
         still: list[int] = []
         for index in stranded:
             if _expired(deadline) or (budget is not None and budget["left"] <= 0):
@@ -2960,6 +2995,33 @@ def _route_all(
             victims = _leaning({owner[cell] for cell in through if cell in owner})
             victims.discard(index)
             if len(victims) > _REPAIR_MAX_VICTIMS:
+                still.append(index)
+                continue
+            # AND IT MUST NOT SAW OFF THE BRANCH IT IS STANDING ON.
+            #
+            # `_leaning` protects every path that ends beside a victim -- except
+            # the one net it cannot see, which is the stranded net itself.
+            # `index` has no path yet, so it is in neither `paths` nor `owner`
+            # and nothing grows it into the victim set; but `_ends` offered it
+            # the free cells beside its SIBLINGS' paths as starts and goals, and
+            # `through` may well have taken one. Displace that sibling and the
+            # net we just placed ends beside nothing.
+            #
+            # Traced end to end on `universe-matrix/no-proliferator` power=1 at
+            # h=185, where it was the ONLY defect left and fired every run:
+            # net 46 settles ending at (81,99,2); net 49 strands, repairs, and
+            # its path starts at (80,99,2) -- merged onto 46 -- with 46 among
+            # its own victims; 46 is unstaked and comes back as a two-cell path
+            # at (68,105,1); and 49 is left with an empty neighbourhood. It is
+            # not counted as unrouted, because `_source_for`'s last resort still
+            # names `net.src.belt` -- so the pack wired, `failed` read 0, and the
+            # placement came back with a belt at (65,79,0) linking to one at
+            # (80,99,2): `belt.link_adjacent` and `geom.altitude_step`, refused
+            # by our own validator two layers later.
+            #
+            # Declining costs nothing this swap was going to keep. A repair that
+            # places a net by unlinking it has placed nothing.
+            if _stands_on(index, through, victims):
                 still.append(index)
                 continue
             # ALL OR NOTHING, and this is the whole difference between a repair
@@ -3430,6 +3492,9 @@ def _commit_paths(
             for cell in paths.get(s, ())
         }
         feeder = _source_for(canvas, indices[0], net, set(indices), kin)
+        if feeder is None:
+            unlinked += 1
+            continue
         if not _tap_source(canvas, feeder, indices[0], belt_id, belt_model):
             unlinked += 1
             continue
@@ -3458,7 +3523,7 @@ def _source_for(
     net: _Net,
     own: set[int],
     kin: Set[tuple[int, int, int]],
-) -> int:
+) -> int | None:
     """What this path actually left from: the lane tap, or a sibling to branch off.
 
     The mirror of :func:`_sink_for`.  A path that could not start beside its own
@@ -3490,36 +3555,29 @@ def _source_for(
     cheaper way to reach the source; it is a different source.  So the scan is
     restricted rather than merely reordered.
 
-    THE LAST ``return`` IS DEAD ON THE CORPUS, AND THAT WAS MEASURED RATHER THAN
-    ARGUED.
+    ``None`` MEANS THIS PATH LEAVES FROM NOTHING, exactly as it does for
+    :func:`_sink_for`, AND IT USED TO RETURN ``net.src.belt`` INSTEAD.
     -------------------------------------------------------------------------
-    It was left standing as the one remaining place this function can name a
-    building it is nowhere near: the head is not beside ``net.src.belt`` (or the
-    first branch would have taken it) and no sibling was adjacent either, so the
-    link it emits can cross the map.  That is SAFE -- ``belt.link_adjacent``
-    catches it and ``certify`` turns it into a refusal, never a silent bad build
-    -- but "link not adjacent" is a poor way to say "I could not find a
-    legitimate source", and returning ``None`` here instead was considered.
+    That fallback was kept because it was MEASURED DEAD -- over 264 audit cells
+    this function was called 12,020 times, 11,620 taking the lane tap, 400 a
+    sibling from ``kin``, and the fallback 0 -- and because the link it emits is
+    at least loud: it crosses the map, so ``belt.link_adjacent`` reports it and
+    ``certify`` turns the placement into a refusal rather than a bad build.
 
-    Counting first says not to bother.  Over 264 audit cells (72 freeform cells
-    at budget 4 with three candidates, plus 192 at budgets 1 and 15 with four)
-    this function was called **12,020** times: 11,620 took the first branch, the
-    lane tap itself; 400 took a sibling from ``kin``; and the fallback below ran
-    **0** times.  There is no refusal on the corpus for it to improve, and no
-    behaviour to change.
+    IT IS NOT DEAD ANY MORE, and the count was stale rather than wrong.  When
+    ``_repair`` displaced the very sibling a stranded net had just merged onto
+    (fixed in the same commit as this), the fallback ran on
+    ``universe-matrix/no-proliferator`` power=1 EVERY RUN, and the pack it broke
+    reported ``failed = 0``: the source side was linked, to a belt 15 tiles west
+    and two altitude levels down.  Refused two layers later by our own
+    validator, on ``belt.link_adjacent`` and ``geom.altitude_step``, with the
+    packer blamed for a pack that had wired perfectly well.
 
-    The counter was proved against a fault before the zero was believed, because
-    a counter reading zero is exactly the shape of an instrument that is not
-    wired up.  Disabling the ``kin`` branch -- so every sibling attachment has to
-    fall through -- moved it to **270** fallbacks, at distances up to 1,279
-    tiles, and took the corpus from 66/72 to 50/72 with 22 refusals.  So the
-    path is reachable, the counter sees it, and the consequence of taking it is
-    exactly the refusal described above.  It simply does not happen.
-
-    Leave it as it is.  Returning ``None`` would be a route failure -- also a
-    refusal -- bought with no evidence, and a targeted message would describe a
-    case nothing produces.  If a future pack ever does reach here, the refusal it
-    causes is the honest one; re-run this count before changing the shape.
+    So it fails closed.  A path that leaves from nothing is unrouted, saying so
+    counts it in ``unlinked``, and the router gets to try again inside the same
+    routing pass -- which is what happens for every other kind of routing
+    failure and what ``_sink_for`` has done since ``3f04239``.  The asymmetry
+    was the last of it.
     """
     head = canvas.buildings[first]
     src = canvas.buildings[net.src.belt]
@@ -3548,10 +3606,9 @@ def _source_for(
         other = canvas.buildings[who]
         if catalog.is_belt(other.item_id) and other.carries_item == net.item:
             return who
-    # Measured dead on the corpus -- 0 of 12,020 calls. See the docstring for
-    # the count, for the fault injection that proves the count can see this
-    # line run, and for why it is still not worth replacing with `None`.
-    return net.src.belt
+    # Nothing adjacent belongs to a net leaving where we leave, so this path
+    # leaves from nobody.
+    return None
 
 
 def _leads_back(canvas: _Canvas, start: int, own: set[int]) -> bool:
@@ -3998,6 +4055,26 @@ def _claim_power_sites(canvas: _Canvas, core: tuple[int, int, int, int]) -> list
     return sites
 
 
+@lru_cache(maxsize=8)
+def _RING_OFFSETS(limit: int) -> tuple[tuple[int, int], ...]:  # noqa: N802
+    """Offsets within ``limit`` tiles, nearest first, built once per radius.
+
+    :func:`_place_power`'s repair rebuilt and re-sorted this square for every
+    dark tile it found.  The radius is a constant of the tower, so the square is
+    the same one every time.
+    """
+    return tuple(
+        sorted(
+            (
+                (dx, dy)
+                for dx in range(-limit, limit + 1)
+                for dy in range(-limit, limit + 1)
+            ),
+            key=lambda d: (abs(d[0]) + abs(d[1]), d),
+        )
+    )
+
+
 def _place_power(canvas: _Canvas, sites: Sequence[tuple[int, int]]) -> int:
     """Towers on the claimed lattice, then repaired until coverage really holds.
 
@@ -4006,13 +4083,39 @@ def _place_power(canvas: _Canvas, sites: Sequence[tuple[int, int]]) -> int:
     point may have had no free cell within reach even before routing -- and a
     tower that could not be placed is exactly the kind of gap that would
     otherwise reach the game as a dead corner of the factory.
+
+    COORDINATES ARE DOUBLED INTEGERS, AND SO IS EVERY DISTANCE TEST.
+
+    A tower's centre falls on a half tile, which is why this used ``Fraction``.
+    It is the same predicate written twice the size: multiply both sides of
+    ``dx**2 + dy**2 <= r**2`` by four and every term is an integer, so the
+    comparison is ``dx2**2 + dy2**2 <= floor((2r)**2)`` -- exact, because the
+    left side cannot land between ``floor((2r)**2)`` and ``(2r)**2``.  This is
+    not a tolerance and there is no float anywhere near it.
+
+    It is worth the rewrite because this function ran INSIDE the layout
+    deadline and was the largest single thing in it.  Profiled on
+    `universe-matrix/no-proliferator` power=1 at h=185: `_build` 49.0s, of which
+    `_place_power` 28.6s against `_route_all`'s 19.2s -- 4.73 MILLION
+    ``Fraction.__pow__`` calls, because ``covered`` was a linear scan of every
+    tower, in exact rationals, once per tile of every powered building.  The
+    scan is now bucketed on a grid of the cover radius, so a tile looks at the
+    nine buckets that could possibly hold a tower covering it instead of at all
+    of them.
     """
     if not canvas.buildings:
         return 0
     tower = catalog.building(catalog.TESLA_TOWER_ID)
     radius = tower.cover_radius
     link = tower.connect_distance
-    centres: list[tuple[Fraction, Fraction]] = []
+    #: ``(2r)**2`` and ``(2d)**2``, floored -- see the docstring.
+    reach2 = math.floor((2 * radius) ** 2)
+    #: Doubled centres, integers: ``(2x + width, 2y + height)``.
+    centres: list[tuple[int, int]] = []
+    #: Doubled-centre buckets, side ``span``, so a covering tower is always in
+    #: one of the nine buckets around the tile being tested.
+    span = max(1, 2 * (int(radius) + 1))
+    buckets: dict[tuple[int, int], list[tuple[int, int]]] = defaultdict(list)
     placed = 0
 
     def try_place(cx: int, cy: int) -> bool:
@@ -4033,17 +4136,25 @@ def _place_power(canvas: _Canvas, sites: Sequence[tuple[int, int]]) -> int:
             ),
             solid=True,
         )
-        centres.append((Fraction(2 * cx + tower.width, 2), Fraction(2 * cy + tower.height, 2)))
+        centre = (2 * cx + tower.width, 2 * cy + tower.height)
+        centres.append(centre)
+        buckets[centre[0] // span, centre[1] // span].append(centre)
         placed += 1
         return True
 
     for site in sites:
         try_place(*site)
 
-    def covered(px: Fraction, py: Fraction) -> bool:
-        return any((px - cx) ** 2 + (py - cy) ** 2 <= radius**2 for cx, cy in centres)
+    def covered(px: int, py: int) -> bool:
+        bx, by = px // span, py // span
+        for ox in (-1, 0, 1):
+            for oy in (-1, 0, 1):
+                for cx, cy in buckets.get((bx + ox, by + oy), ()):
+                    if (px - cx) ** 2 + (py - cy) ** 2 <= reach2:
+                        return True
+        return False
 
-    def place_covering(px: Fraction, py: Fraction, tx: int, ty: int) -> bool:
+    def place_covering(px: int, py: int, tx: int, ty: int) -> bool:
         """Place a tower that GENUINELY covers ``(px, py)``, nearest first.
 
         The candidate must satisfy the coverage test before it is placed, not
@@ -4055,19 +4166,11 @@ def _place_power(canvas: _Canvas, sites: Sequence[tuple[int, int]]) -> int:
         CP-SAT started producing varied packs.
         """
         limit = int(radius)
-        offsets = sorted(
-            (
-                (dx, dy)
-                for dx in range(-limit, limit + 1)
-                for dy in range(-limit, limit + 1)
-            ),
-            key=lambda d: (abs(d[0]) + abs(d[1]), d),
-        )
-        for dx, dy in offsets:
+        for dx, dy in _RING_OFFSETS(limit):
             a, b = tx + dx, ty + dy
-            cx = Fraction(2 * a + tower.width, 2)
-            cy = Fraction(2 * b + tower.height, 2)
-            if (px - cx) ** 2 + (py - cy) ** 2 > radius**2:
+            cx = 2 * a + tower.width
+            cy = 2 * b + tower.height
+            if (px - cx) ** 2 + (py - cy) ** 2 > reach2:
                 continue
             if try_place(a, b):
                 return True
@@ -4080,7 +4183,7 @@ def _place_power(canvas: _Canvas, sites: Sequence[tuple[int, int]]) -> int:
         if catalog.is_belt(b.item_id) or b.item_id == catalog.TESLA_TOWER_ID:
             continue
         for tx, ty, _ in b.tiles():
-            px, py = Fraction(2 * tx + 1, 2), Fraction(2 * ty + 1, 2)
+            px, py = 2 * tx + 1, 2 * ty + 1
             if covered(px, py):
                 continue
             place_covering(px, py, tx, ty)
@@ -4089,23 +4192,32 @@ def _place_power(canvas: _Canvas, sites: Sequence[tuple[int, int]]) -> int:
     # the network in two pieces, which fails visibly in game rather than
     # silently, but fails all the same.
     for _ in range(4):
-        groups = _link_groups(centres, link)
+        groups = _link_groups(centres, math.floor((2 * link) ** 2))
         if len(groups) <= 1:
             break
         main = groups[0]
         other = groups[1]
         ax, ay = centres[main[0]]
         bx, by = centres[other[0]]
-        mx, my = int((ax + bx) / 2), int((ay + by) / 2)
+        # Doubled coordinates halve back to a tile by one more division by two.
+        # Truncated, not floored, because that is what this line always did and
+        # the block can start west of the origin once the router's ring grows.
+        # Four exact rationals per build is not a hot path.
+        mx, my = math.trunc(Fraction(ax + bx, 4)), math.trunc(Fraction(ay + by, 4))
         spot = _nearest_free(canvas, mx, my, 6)
         if not spot or not try_place(*spot):
             break
     return placed
 
 
-def _link_groups(
-    centres: list[tuple[Fraction, Fraction]], link: Fraction
-) -> list[list[int]]:
+def _link_groups(centres: list[tuple[int, int]], link2: int) -> list[list[int]]:
+    """Connected components of the tower network, largest first.
+
+    ``centres`` are DOUBLED integer coordinates and ``link2`` is ``floor((2d)**2)``
+    -- see :func:`_place_power` for why that comparison is exact rather than a
+    tolerance.  ``OnNodeAdded`` links on a distance, and on the LARGER of the
+    pair's reaches; every tower here is a Tesla Tower, so one constant serves.
+    """
     n = len(centres)
     seen: set[int] = set()
     groups: list[list[int]] = []
@@ -4116,13 +4228,12 @@ def _link_groups(
         seen.add(start)
         q = deque([start])
         while q:
-            cur = q.popleft()
+            ax, ay = centres[q.popleft()]
             for k in range(n):
                 if k in seen:
                     continue
-                ax, ay = centres[cur]
                 bx, by = centres[k]
-                if (ax - bx) ** 2 + (ay - by) ** 2 <= link**2:
+                if (ax - bx) ** 2 + (ay - by) ** 2 <= link2:
                     seen.add(k)
                     comp.append(k)
                     q.append(k)

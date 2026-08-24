@@ -8,6 +8,7 @@ would let a rates regression masquerade as a layout one.
 from __future__ import annotations
 
 import contextlib
+import math
 import time
 from fractions import Fraction as F
 
@@ -934,6 +935,39 @@ class TestSolverActuallyRuns:
 
 
 class TestPower:
+    def test_the_doubled_integer_reach_is_the_same_predicate(self) -> None:
+        """Not a tolerance: the identical test, written twice the size.
+
+        ``_place_power`` compares ``dx2**2 + dy2**2 <= floor((2r)**2)`` on
+        doubled integers where it used to compare ``dx**2 + dy**2 <= r**2`` on
+        exact rationals.  Those agree because the left side is an integer, so it
+        can never land strictly between ``floor((2r)**2)`` and ``(2r)**2``.  If
+        that ever stops being true this build ships dark machines, so it is
+        checked over every offset a tower could be tested at, including the ring
+        where the two forms would differ if the reasoning were wrong.
+        """
+        tower = catalog.building(catalog.TESLA_TOWER_ID)
+        radius = tower.cover_radius
+        reach2 = math.floor((2 * radius) ** 2)
+        assert radius.denominator != 1, (
+            "a whole-number radius would make this test vacuous"
+        )
+        span = int(radius) + 2
+        checked = 0
+        for dx in range(-2 * span, 2 * span + 1):
+            for dy in range(-2 * span, 2 * span + 1):
+                # Both a tile centre against a tower centre (offset by a half
+                # tile in each axis) and two tower centres, which is the other
+                # pairing the doubled form has to get right.
+                for half in (0, 1):
+                    exact = (
+                        F(dx, 2) + F(half, 2)
+                    ) ** 2 + (F(dy, 2) + F(half, 2)) ** 2 <= radius**2
+                    doubled = (dx + half) ** 2 + (dy + half) ** 2 <= reach2
+                    assert exact == doubled, (dx, dy, half)
+                    checked += 1
+        assert checked > 4000, checked
+
     def test_towers_appear_only_when_power_is_on(self) -> None:
         spec = two_stage_spec()
         on = FreeformLayout(power=True).lay_out(spec, time_budget_s=0.5)
@@ -2713,13 +2747,20 @@ class TestABranchLeavesFromItsOwnSource:
     def test_a_stranger_alone_beside_the_head_is_not_a_source(self) -> None:
         """No sibling reachable means no branch, not a branch off anybody.
 
-        The fallback names the net's own lane belt, which is far from the head,
-        so the link is wrong in a way ``belt.link_adjacent`` reports and the
-        self-check refuses.  Wrong and REPORTED beats wrong and silent: the
-        stranger link passes every geometric check there is.
+        And not the net's own lane belt either.  It is far from the head, so
+        naming it emits a link across the map -- reported by
+        ``belt.link_adjacent``, but only after the routing pass has already
+        counted the net as wired and the sweep has accepted the pack.  A path
+        that leaves from nothing is UNROUTED, which is what ``_sink_for``
+        already says about the other end.
         """
         canvas, head, stranger, _sibling, net = self._scene()
-        assert _source_for(canvas, head, net, {head}, set()) != stranger
+        got = _source_for(canvas, head, net, {head}, set())
+        assert got is None, (
+            "a head with no sibling beside it was given a feeder anyway: "
+            f"{got} (the net's own lane belt is {net.src.belt})"
+        )
+        assert got != stranger
 
     def test_an_empty_sibling_set_is_the_safe_default(self) -> None:
         """``_commit_paths`` without ``src_group`` must not reopen the hole.
