@@ -1,0 +1,333 @@
+from __future__ import annotations
+
+from collections.abc import Iterable
+
+import pytest
+
+from flab2bp.layout.base import PlacedBuilding
+from flab2bp.layout.freeform import (
+    LEVELS,
+    _PreparedNet,
+    _PreparedPort,
+    _PreparedRoutingProblem,
+    _with_sibling_groups,
+)
+from flab2bp.layout.global_router import GlobalRouteResult, route_global_once
+from flab2bp.layout.route_feedback import Cell, FeedbackState, NetId, NetRole
+
+NetSpec = tuple[
+    NetId,
+    tuple[int, int] | None,
+    tuple[int, int],
+    tuple[Cell, ...],
+    tuple[NetId, ...],
+    tuple[NetId, ...],
+]
+
+
+def _problem(
+    net_specs: Iterable[NetSpec],
+    *,
+    bounds: tuple[int, int, int, int],
+    blocked: Iterable[Cell] = (),
+    solid: Iterable[tuple[int, int]] = (),
+    reserved: Iterable[tuple[Cell, tuple[int, int]]] = (),
+    keep_out: Iterable[tuple[int, int]] = (),
+) -> _PreparedRoutingProblem:
+    specs = tuple(net_specs)
+    coordinates = sorted(
+        {
+            coordinate
+            for _net_id, source, destination, _boundary, _src_group, _dst_group in specs
+            for coordinate in (source, destination)
+            if coordinate is not None
+        }
+    )
+    index_of = {coordinate: index for index, coordinate in enumerate(coordinates)}
+    buildings = tuple(PlacedBuilding(2001, 35, x, y) for x, y in coordinates)
+
+    def port(coordinate: tuple[int, int]) -> _PreparedPort:
+        index = index_of[coordinate]
+        x, y = coordinate
+        return _PreparedPort(index, x, y, x, x, (index,), 1)
+
+    nets = tuple(
+        _PreparedNet(
+            net_id=net_id,
+            src=port(source) if source is not None else None,
+            dst=port(destination),
+            item=net_id.item,
+            boundary_goals=boundary,
+            src_group=src_group,
+            dst_group=dst_group,
+        )
+        for net_id, source, destination, boundary, src_group, dst_group in specs
+    )
+    blocked_cells = {cell: -1 for cell in blocked}
+    blocked_cells.update(
+        {(building.x, building.y, building.z): index for index, building in enumerate(buildings)}
+    )
+    return _PreparedRoutingProblem(
+        building_templates=buildings,
+        blocked=tuple(sorted(blocked_cells.items())),
+        solid=frozenset(solid),
+        reserved=tuple(sorted(reserved)),
+        keep_out=frozenset(keep_out),
+        nets=nets,
+        core=bounds,
+        route_bounds=bounds,
+        limit=bounds,
+        power_sites=(),
+        sorters=0,
+        coaters=0,
+        direct_inserts=0,
+    )
+
+
+def _feedback(
+    problem: _PreparedRoutingProblem, history: dict[Cell, float] | None = None
+) -> FeedbackState:
+    _x0, _y0, x1, y1 = problem.route_bounds
+    return FeedbackState((x1 + 1, y1 + 1), {}, history or {})
+
+
+def _one_net_problem() -> tuple[_PreparedRoutingProblem, NetId]:
+    net_id = NetId(0, 1, "iron", NetRole.INTERNAL, 0)
+    return (
+        _problem(
+            ((net_id, (0, 1), (4, 1), (), (), ()),),
+            bounds=(0, 0, 4, 2),
+        ),
+        net_id,
+    )
+
+
+def _assert_current_detailed_legal_walk(path: tuple[Cell, ...]) -> None:
+    for index, (before, after) in enumerate(zip(path, path[1:], strict=False)):
+        dx = after[0] - before[0]
+        dy = after[1] - before[1]
+        level_change = after[2] - before[2]
+        assert abs(dx) + abs(dy) == 1
+        assert abs(level_change) <= 1
+        if level_change:
+            assert index > 0
+            previous = path[index - 1]
+            assert before[2] == previous[2]
+            assert (before[0] - previous[0], before[1] - previous[1]) == (dx, dy)
+
+
+def test_global_router_uses_current_detailed_moves_deterministically() -> None:
+    net_id = NetId(0, 1, "iron", NetRole.INTERNAL, 0)
+    problem = _problem(
+        ((net_id, (0, 3), (13, 3), (), (), ()),),
+        bounds=(0, 0, 13, 6),
+        blocked=((6, y, 0) for y in range(7)),
+    )
+
+    first = route_global_once(problem, _feedback(problem), budget=20_000)
+    second = route_global_once(problem, _feedback(problem), budget=20_000)
+
+    path = first.paths[net_id]
+    assert max(level for _x, _y, level in path) > 0
+    _assert_current_detailed_legal_walk(path)
+    assert second.paths == first.paths
+    assert second.net_results == first.net_results
+    assert second.expansions == first.expansions
+
+
+def test_hard_solids_and_foreign_reserved_ports_remain_impassable() -> None:
+    net_id = NetId(0, 1, "iron", NetRole.INTERNAL, 0)
+    reserved = ((4, 2, 0), (99, 99))
+    problem = _problem(
+        ((net_id, (0, 2), (7, 2), (), (), ()),),
+        bounds=(0, 0, 7, 4),
+        solid=((3, 2),),
+        reserved=(reserved,),
+    )
+
+    result = route_global_once(problem, _feedback(problem), budget=20_000)
+
+    hard_cells = {(3, 2, level) for level in range(LEVELS)} | {reserved[0]}
+    assert set(result.paths[net_id]).isdisjoint(hard_cells)
+
+
+def test_one_pass_records_one_cell_overflow_instead_of_blocking() -> None:
+    horizontal = NetId(0, 1, "iron", NetRole.INTERNAL, 0)
+    vertical = NetId(2, 3, "iron", NetRole.INTERNAL, 0)
+    ports = {(0, 2), (4, 2), (2, 0), (2, 4)}
+    open_cells = ports | {(1, 2), (2, 2), (3, 2), (2, 1), (2, 3)}
+    keep_out = {
+        (x, y)
+        for x in range(5)
+        for y in range(5)
+        if (x, y) not in open_cells
+    }
+    problem = _problem(
+        (
+            (horizontal, (0, 2), (4, 2), (), (), ()),
+            (vertical, (2, 0), (2, 4), (), (), ()),
+        ),
+        bounds=(0, 0, 4, 4),
+        keep_out=keep_out,
+    )
+
+    result = route_global_once(problem, _feedback(problem), budget=20_000)
+
+    assert result.overflow_cells == 1
+    assert result.total_overflow == 1
+    assert result.max_overflow == 1
+    assert result.hot_cells == ((2, 2, 0),)
+    assert len(result.paths) == 2
+    assert sum(net.overflow for net in result.net_results) == 1
+
+
+def test_prepared_sibling_group_shares_one_logical_capacity_unit() -> None:
+    first = NetId(0, 1, "iron", NetRole.INTERNAL, 0)
+    sibling = NetId(0, 2, "iron", NetRole.INTERNAL, 1)
+    problem = _problem(
+        (
+            (first, (0, 1), (4, 1), (), (sibling,), ()),
+            (sibling, (0, 1), (4, 1), (), (first,), ()),
+        ),
+        bounds=(0, 0, 4, 2),
+    )
+
+    result = route_global_once(problem, _feedback(problem), budget=20_000)
+
+    assert result.paths[first] == result.paths[sibling]
+    assert result.total_overflow == 0
+    assert result.overflow_cells == 0
+
+
+def test_same_item_strangers_do_not_share_capacity() -> None:
+    first = NetId(0, 1, "iron", NetRole.INTERNAL, 0)
+    stranger = NetId(2, 3, "iron", NetRole.INTERNAL, 0)
+    problem = _problem(
+        (
+            (first, (0, 1), (4, 1), (), (), ()),
+            (stranger, (0, 1), (4, 1), (), (), ()),
+        ),
+        bounds=(0, 0, 4, 2),
+        keep_out={(x, y) for x in range(5) for y in (0, 2)},
+    )
+
+    result = route_global_once(problem, _feedback(problem), budget=20_000)
+
+    assert result.total_overflow == len(result.paths[first])
+    assert result.overflow_cells == len(result.paths[first])
+
+
+def test_preparation_groups_internal_siblings_but_never_external_nets() -> None:
+    first_id = NetId(0, 1, "iron", NetRole.INTERNAL, 0)
+    sibling_id = NetId(0, 2, "iron", NetRole.PROLIFERATOR, 0)
+    stranger_id = NetId(3, 1, "iron", NetRole.INTERNAL, 0)
+    external_id = NetId(None, 1, "iron", NetRole.EXTERNAL, 0)
+    first = _PreparedNet(
+        first_id,
+        _PreparedPort(0, 1, 1, 0, 3, (0,), 1),
+        _PreparedPort(1, 8, 1, 8, 8, (1,), 1),
+        "iron",
+    )
+    sibling = _PreparedNet(
+        sibling_id,
+        _PreparedPort(2, 2, 1, 0, 3, (2,), 1),
+        _PreparedPort(3, 9, 1, 9, 9, (3,), 1),
+        "iron",
+    )
+    stranger = _PreparedNet(
+        stranger_id,
+        _PreparedPort(4, 1, 2, 0, 3, (4,), 1),
+        _PreparedPort(5, 8, 1, 8, 8, (5,), 1),
+        "iron",
+    )
+    external = _PreparedNet(
+        external_id,
+        None,
+        first.dst,
+        "iron",
+        ((0, 1, 0),),
+        (first_id,),
+        (stranger_id,),
+    )
+
+    grouped = _with_sibling_groups((first, sibling, stranger, external))
+
+    assert grouped[0].src_group == (sibling_id,)
+    assert grouped[0].dst_group == (stranger_id,)
+    assert grouped[1].src_group == (first_id,)
+    assert grouped[2].src_group == ()
+    assert grouped[3].src_group == grouped[3].dst_group == ()
+
+
+def test_external_net_routes_inward_from_prepared_boundary_goals() -> None:
+    external = NetId(None, 1, "ore", NetRole.EXTERNAL, 0)
+    access = (3, 1, 0)
+    problem = _problem(
+        ((external, None, (4, 1), ((0, 1, 0),), (), ()),),
+        bounds=(0, 0, 4, 2),
+        reserved=((access, (4, 1)),),
+    )
+
+    result = route_global_once(problem, _feedback(problem), budget=20_000)
+
+    assert result.paths[external][0] == (0, 1, 0)
+    assert result.paths[external][-1] == access
+
+
+def test_feedback_history_prices_legal_cells_without_blocking_them() -> None:
+    net_id = NetId(0, 1, "iron", NetRole.INTERNAL, 0)
+    problem = _problem(
+        ((net_id, (0, 2), (4, 2), (), (), ()),),
+        bounds=(0, 0, 4, 4),
+        solid=((2, 2),),
+    )
+    upper = {(x, 1, 0): 10.0 for x in range(1, 4)}
+
+    result = route_global_once(problem, _feedback(problem, upper), budget=20_000)
+
+    assert set(result.paths[net_id]).isdisjoint(upper)
+    assert any(y == 3 for _x, y, _level in result.paths[net_id])
+
+
+def test_expansion_budget_is_exact_and_returns_partial_metrics() -> None:
+    problem, net_id = _one_net_problem()
+
+    exhausted = route_global_once(problem, _feedback(problem), budget=2)
+    exact = route_global_once(problem, _feedback(problem), budget=3)
+
+    assert exhausted.expansions == 2
+    assert exhausted.unreachable_ports == 1
+    assert net_id not in exhausted.paths
+    assert exact.expansions == 3
+    assert exact.unreachable_ports == 0
+    assert net_id in exact.paths
+
+
+def test_zero_budget_expands_nothing() -> None:
+    problem, _net_id = _one_net_problem()
+
+    result = route_global_once(problem, _feedback(problem), budget=0)
+
+    assert result.expansions == 0
+    assert result.unreachable_ports == 1
+    assert result.paths == {}
+    assert result.rounds == 1
+
+
+@pytest.mark.parametrize("budget", [-1, 1.5, True])
+def test_budget_requires_a_non_negative_plain_integer(budget: object) -> None:
+    problem, _net_id = _one_net_problem()
+    with pytest.raises(ValueError, match="budget"):
+        route_global_once(problem, _feedback(problem), budget=budget)  # type: ignore[arg-type]
+
+
+def test_results_are_immutable_metrics_without_acceptance_or_placement_surface() -> None:
+    problem, _net_id = _one_net_problem()
+
+    result = route_global_once(problem, _feedback(problem), budget=20_000)
+
+    assert isinstance(result, GlobalRouteResult)
+    assert not hasattr(result, "valid")
+    assert not hasattr(result, "placement")
+    with pytest.raises(TypeError):
+        result.paths[NetId(8, 9, "fake", NetRole.INTERNAL, 0)] = ()  # type: ignore[index]

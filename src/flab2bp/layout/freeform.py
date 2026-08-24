@@ -69,6 +69,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from enum import Enum
 from fractions import Fraction
+from functools import lru_cache
 
 import numpy as np
 from ortools.sat.python import cp_model
@@ -3161,6 +3162,43 @@ def _relink(
 
 _STEPS = ((1, 0), (-1, 0), (0, 1), (0, -1))
 
+_RoutingTransition = tuple[int, int, int, int, float]
+
+
+@lru_cache(maxsize=16)
+def _routing_transitions(
+    xstep: int,
+) -> tuple[tuple[_RoutingTransition, ...], ...]:
+    """Compile the current modeled movement graph for each source level.
+
+    A transition is ``(target offset, via offset, dx, dy, base cost)``.
+    ``via offset`` is zero for a flat step and names the occupied ramp-run cell
+    otherwise. Detailed and relaxed routing consume this same table so later
+    movement-model corrections have one boundary to replace.
+    """
+    ystep = LEVELS
+    by_level: list[tuple[_RoutingTransition, ...]] = []
+    for level in range(LEVELS):
+        transitions: list[_RoutingTransition] = []
+        for dx, dy in _STEPS:
+            one = dx * xstep + dy * ystep
+            two = 2 * one
+            transitions.append((one, 0, dx, dy, 1.0 + _LEVEL_TOLL[level]))
+            for level_step in (1, -1):
+                next_level = level + level_step
+                if 0 <= next_level < LEVELS:
+                    transitions.append(
+                        (
+                            two + level_step,
+                            one,
+                            2 * dx,
+                            2 * dy,
+                            3.0 + _LEVEL_TOLL[next_level],
+                        )
+                    )
+        by_level.append(tuple(transitions))
+    return tuple(by_level)
+
 
 def _cut_loops(path: list[tuple[int, int, int]]) -> list[tuple[int, int, int]]:
     """Remove any cell that appears twice, keeping the walk connected.
@@ -3680,6 +3718,20 @@ def _make_grid(
     grid.refresh_history(history)
     return grid
 
+def _routing_flags(
+    grid: _Grid,
+    *,
+    routing_ports: Collection[tuple[int, int]] = (),
+    released_reservations: Collection[int] = (),
+) -> bytearray:
+    """Return hard passability with only this search's reservations opened."""
+    flags = bytearray(grid.occ)
+    released = frozenset(released_reservations)
+    for at, port in grid.reserved:
+        if at not in released and port not in routing_ports:
+            flags[at] = 0
+    return flags
+
 
 @dataclass(frozen=True, slots=True)
 class _PathSearchResult:
@@ -3794,13 +3846,9 @@ def _astar(
     ystep = LEVELS
 
     # A private copy, because the reservations a net may use are its own and
-    # `routing_ports` is rebound per net.  Copying 84KB is a memcpy; rebuilding
-    # it from four containers is not.
-    flags = bytearray(flat.occ)
-    routing_ports = canvas.routing_ports
-    for at, port in flat.reserved:
-        if port not in routing_ports:
-            flags[at] = 0
+    # `routing_ports` is rebound per net. Copying is a memcpy; rebuilding it
+    # from the canvas obstacle containers is not.
+    flags = _routing_flags(flat, routing_ports=canvas.routing_ports)
 
     # Round one of rip-up has no history yet, and round one is the round that
     # usually succeeds. Skipping the array and the multiply there costs one
@@ -4120,7 +4168,6 @@ def _astar(
             nxt = cur + one
             if not flags[nxt]:
                 continue
-
             cost = g + step_toll
             if negotiating:
                 cost += hist[nxt] * pressure
@@ -4224,6 +4271,46 @@ class _PreparedNet:
     dst: _PreparedPort
     item: str
     boundary_goals: tuple[tuple[int, int, int], ...] = ()
+    src_group: tuple[NetId, ...] = ()
+    dst_group: tuple[NetId, ...] = ()
+
+
+def _with_sibling_groups(
+    nets: Sequence[_PreparedNet],
+) -> tuple[_PreparedNet, ...]:
+    """Freeze the detailed router's exact branch/merge groups onto each net."""
+    same_src: dict[tuple[int, int], list[NetId]] = defaultdict(list)
+    same_dst: dict[tuple[int, int], list[NetId]] = defaultdict(list)
+    for net in nets:
+        if net.net_id.role is NetRole.EXTERNAL:
+            continue
+        if net.src is None:
+            raise ValueError("non-external prepared nets require source ports")
+        same_src[net.src.y, net.src.x0].append(net.net_id)
+        same_dst[net.dst.x, net.dst.y].append(net.net_id)
+    grouped: list[_PreparedNet] = []
+    for net in nets:
+        if net.net_id.role is NetRole.EXTERNAL:
+            grouped.append(replace(net, src_group=(), dst_group=()))
+            continue
+        if net.src is None:
+            raise ValueError("non-external prepared nets require source ports")
+        grouped.append(
+            replace(
+                net,
+                src_group=tuple(
+                    sibling
+                    for sibling in same_src[net.src.y, net.src.x0]
+                    if sibling != net.net_id
+                ),
+                dst_group=tuple(
+                    sibling
+                    for sibling in same_dst[net.dst.x, net.dst.y]
+                    if sibling != net.net_id
+                ),
+            )
+        )
+    return tuple(grouped)
 
 
 @dataclass(slots=True)
@@ -7211,7 +7298,7 @@ def _prepare_routing_problem(
         solid=frozenset(canvas.solid),
         reserved=tuple(sorted(canvas.reserved.items())),
         keep_out=frozenset(canvas.keep_out),
-        nets=tuple(prepared_nets),
+        nets=_with_sibling_groups(prepared_nets),
         core=core,
         route_bounds=route_bounds,
         limit=canvas.limit,
