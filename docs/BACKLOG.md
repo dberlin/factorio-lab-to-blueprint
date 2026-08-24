@@ -1,5 +1,50 @@
 # Backlog
 
+## OPEN -- three ERROR checks silently skip every mode-driven machine
+
+A check that passes a build containing NO SORTERS AT ALL is not doing the job its
+name claims, and `machine.inputs_supplied` does exactly that today.
+
+MEASURED, on the code before the per-side tap charge, with the two-exchanger spec
+from `TestModeDrivenMachines`:
+
+    49 buildings, 2 Energy Exchangers, 0 sorters in the entire placement
+    report.ok = True, errors = []
+    machine.inputs_supplied  ran (it is in checks_run, not skipped) and did NOT fire
+    machine.output_removed   likewise
+
+The cause is one line, and it is not in the check. `Context._group_for` resolves
+a placed machine to its `MachineGroup` through `recipe_name(b.recipe_id)`. A
+mode-driven machine carries `recipe_id == 0` **by design** -- that is the whole
+point of `_machine_config`, the mode lives in the parameter block instead -- and
+`IdMap.recipes` has no entry for such a recipe at all, so there is not even a
+real id to resolve. `group_for` returns `None`, and every caller opens with
+`if g is None: continue`.
+
+So the machine is not judged leniently; it is not judged. Everything that routes
+through `group_for` skips it:
+
+    machine.inputs_supplied     ERROR check
+    machine.output_removed      ERROR check
+    flow.lane_sourced           ERROR check
+    _lane_balance, _sorter_demand, _sorter_item     helpers under other checks
+
+`catalog.MODE_DRIVEN_MACHINE` names the affected recipes -- an Energy Exchanger's
+charge/discharge, a Ray Receiver's photon/power -- so the blast radius is a
+CLASS of machine, not a fluke of this one spec. Any build containing one has
+three of its error checks quietly not applied to it.
+
+Not fixed here, and deliberately: the fix belongs in `validate.py`, which this
+branch does not own. Two shapes to weigh when it is picked up. `group_for` could
+fall back to matching a placed machine to a group by `item_id` plus parameter
+block when the recipe id is zero; or `_group_for` returning `None` for a building
+that IS a machine could itself be a finding, on the ground that "this check could
+not be evaluated here" is information the `skipped` field already exists to
+carry, and silence is the one answer that must not be available.
+
+Related but separate: the machines in the measurement above have no sorters
+because the game gives them no sorter slots -- see the entry below.
+
 ## OPEN -- spine refuses a Ray Receiver and an Energy Exchanger, and the slot table is why
 
 Surfaced by the per-side tap charge, not caused by it. `slot_poses.json`, which
@@ -27,15 +72,29 @@ trade: a blueprint that pastes two idle exchangers is worse than a refusal.
 `_machine_config` still owns the charge/discharge parameter block and is tested
 directly, so that coverage did not go with it.
 
-WHAT IS OPEN is whether the extraction is incomplete. These machines are fed in
-game, so either they carry their slots in an array the extractor does not read
--- `portPoses` and `addonAreas` are both extracted separately already, and a
-Spray Coater's supply lives in `addonAreaPoses` -- or they genuinely take items
-by some other mechanism. **That question belongs in the extractor, not in the tap
-model**, and until it is answered spine's refusal is the honest reading of the
-data we have. Note `validate` did not flag the unwired exchangers either; a
-`machine.inputs_supplied` check that misses a machine with no sorters at all is
-a second thing to look at.
+WHAT IS OPEN is whether the extraction is incomplete, and it is worth being
+precise about why that is genuinely undecided rather than merely unchecked.
+
+Both machines take items in game, so one of two things is true. Either they
+carry their attachment points in an array `scripts/extract_dsp_slot_poses.py`
+does not read -- `portPoses` and `addonAreas` are extracted separately already,
+and a Spray Coater's supply lives in `addonAreaPoses` rather than in `slotPoses`,
+so a third such array is not a hypothetical -- or these buildings genuinely take
+items by a mechanism that is not a sorter slot, the way a Logistics Station takes
+them through ports and a coater through an addon area.
+
+**That question belongs in the extractor, not in the tap model.** What decides it
+is reading the two prefabs in the decompiled source and seeing which array is
+populated; it is not decidable from our end of the pipeline, and it must not be
+guessed at by loosening a reach model, because a charge invented to make these
+two buildings wireable would be wrong for every building that is honestly
+unreachable on a face. Until it is answered, spine's refusal is the honest
+reading of the data we have.
+
+The other half of what the measurement showed -- that `validate` called that
+unwired placement clean -- is its own entry above, and is unrelated to the
+extraction: it would skip these machines just as silently if the slot table were
+complete.
 
 ## RESOLVED -- the tap-capacity model is per side, and two errors cancelling hid it
 
