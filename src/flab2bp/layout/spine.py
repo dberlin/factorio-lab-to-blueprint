@@ -74,6 +74,7 @@ from flab2bp.layout.base import (
     Placement,
 )
 from flab2bp.layout.geometry import band_offsets, height_waste, lane_order, reach_table
+from flab2bp.layout.slots import assign_sorter_slots
 from flab2bp.spec import BuildSpec, MachineGroup
 
 # --- lab id -> DSP item id -------------------------------------------------
@@ -2369,7 +2370,11 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
         towers += _link_towers(buildings, tower_model)
 
     return Placement(
-        buildings=tuple(buildings),
+        # Slot indices are geometry, so they are derived here once rather than
+        # at each of the several places a sorter gets created. Every sorter this
+        # strategy emitted before carried a defaulted zero in all four fields,
+        # which the game rejects outright.
+        buildings=assign_sorter_slots(buildings),
         description=f"flab2bp spine layout ({spec.label or 'default'})",
         short_desc=spec.label or "flab2bp",
         stats={

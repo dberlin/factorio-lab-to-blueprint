@@ -81,6 +81,7 @@ from flab2bp.layout.base import (
     PlacedBuilding,
     Placement,
 )
+from flab2bp.layout.slots import assign_sorter_slots
 from flab2bp.layout.spine import BELT_ITEM_IDS, MACHINE_ITEM_IDS, SORTER_TIERS
 from flab2bp.spec import BuildSpec
 
@@ -5224,7 +5225,11 @@ def _build(
     towers = _place_power(canvas, power_sites) if power and not failed else 0
 
     placement = Placement(
-        buildings=tuple(canvas.buildings),
+        # Slot indices are geometry, so they are derived here once rather than
+        # at each of the several places a sorter gets created. Every sorter this
+        # strategy emitted before carried a defaulted zero in all four fields,
+        # which the game rejects outright.
+        buildings=assign_sorter_slots(canvas.buildings),
         description=f"flab2bp freeform layout ({spec.label or 'default'})",
         short_desc=spec.label or "flab2bp",
         stats={
