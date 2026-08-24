@@ -5341,6 +5341,29 @@ class FreeformLayout:
             )
             if pack is None:
                 continue
+            # RATIONING THE CLOCK BETWEEN HEIGHTS WAS TRIED AND IS WORSE.
+            #
+            # The observation is real: a routing pass that will wire this pack
+            # does it in four to eleven seconds and one that will not runs to
+            # the wall, so the first candidate can spend a whole cell's ceiling
+            # on a pack that was never going to work. Eighteen runs at a 15s
+            # ceiling on `universe-matrix`: every refusal reads `f138@13.9s`,
+            # one pass, one height, while every success reads 4.0s, 5.6s, 5.7s,
+            # 10.7s, 10.8s, 10.9s.
+            #
+            # Capping a height at a share of what remains buys nothing, because
+            # the successes are spread right across the range the cap has to cut.
+            # `universe-matrix` at budget 15, three runs each: uncapped 3, 3, 3
+            # of 6; at 55% of the remaining clock 2, 2, 2; at 75%, 4, 3, 2 and
+            # 2, 3, 4 -- the same mean, more variance. And the corpus pays for
+            # it: 68, 69, 68 against 69, 70, 70, 68, 70.
+            #
+            # What that says is that the spread is not the sweep's to manage.
+            # Two solves of one height to the same width differ by seconds of
+            # routing and by whether they converge at all, so the clock is not
+            # being misallocated between heights -- it is being spent on a pack
+            # CP-SAT happened to return. The lever is the packer's arrangement,
+            # not the stopwatch.
             placement, failed, _towers = _build(
                 spec,
                 strips,
