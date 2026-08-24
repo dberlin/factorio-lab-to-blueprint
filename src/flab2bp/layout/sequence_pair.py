@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import random
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 
@@ -492,6 +493,71 @@ def anneal_stage(
         accepted_moves=accepted_moves,
         elites=ordered_elites,
     )
+
+
+def repair_neighbourhood(
+    pair: SequencePair,
+    gaps: GapProfile,
+    neighbourhood: frozenset[int],
+    *,
+    seed: int,
+    strip_weights: Mapping[int, float] | None = None,
+) -> AnnealState:
+    """Deterministically destroy and repair only selected sequence-pair strips."""
+    size = len(pair.positive)
+    if len(gaps.east) != size:
+        raise ValueError("LNS pair and gap profile sizes must match")
+    if not isinstance(neighbourhood, frozenset) or any(
+        type(strip) is not int or not 0 <= strip < size for strip in neighbourhood
+    ):
+        raise ValueError("LNS neighbourhood must be a frozen set of valid strip IDs")
+    if type(seed) is not int:
+        raise ValueError("LNS seed must be an integer")
+    weights = dict(strip_weights or {})
+    if any(
+        type(strip) is not int
+        or not 0 <= strip < size
+        or not math.isfinite(weight)
+        or weight <= 0.0
+        for strip, weight in weights.items()
+    ):
+        raise ValueError("LNS strip weights must be finite positive values")
+
+    rng = random.Random(derive_stage_seed(seed, 0))
+    order = tuple(
+        sorted(
+            sorted(neighbourhood),
+            key=lambda strip: (
+                -math.log(max(rng.random(), float.fromhex("0x1p-1074")))
+                / weights.get(strip, 1.0),
+                strip,
+            ),
+        )
+    )
+    positive = _repair_permutation(pair.positive, neighbourhood, order, rng)
+    negative = _repair_permutation(pair.negative, neighbourhood, order, rng)
+    east = list(gaps.east)
+    north = list(gaps.north)
+    for strip in order:
+        values = east if rng.randrange(2) == 0 else north
+        values[strip] = min(_MAX_GAP, max(0, values[strip] + rng.choice((-1, 1))))
+    return AnnealState(
+        pair=SequencePair(positive, negative),
+        gaps=GapProfile(tuple(east), tuple(north)),
+        base_seed=seed,
+    )
+
+
+def _repair_permutation(
+    permutation: tuple[int, ...],
+    neighbourhood: frozenset[int],
+    order: tuple[int, ...],
+    rng: random.Random,
+) -> tuple[int, ...]:
+    repaired = [strip for strip in permutation if strip not in neighbourhood]
+    for strip in order:
+        repaired.insert(rng.randrange(len(repaired) + 1), strip)
+    return tuple(repaired)
 
 
 def _score_state(

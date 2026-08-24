@@ -6,6 +6,15 @@ from typing import Any, cast
 
 import pytest
 
+from flab2bp.layout.route_feedback import (
+    DetailedRouteResult,
+    DetailedRouteStatus,
+    NetFailure,
+    NetId,
+    NetRole,
+    RouteFailureKind,
+    select_lns_neighbourhood,
+)
 from flab2bp.layout.sequence_pair import (
     AnnealConfig,
     AnnealState,
@@ -21,6 +30,7 @@ from flab2bp.layout.sequence_pair import (
     cheap_energy,
     decode_sequence_pair,
     derive_stage_seed,
+    repair_neighbourhood,
 )
 
 
@@ -514,3 +524,176 @@ def test_anneal_config_rejects_invalid_schedule_values() -> None:
     for kwargs in invalid_kwargs:
         with pytest.raises(ValueError):
             AnnealConfig(**kwargs)
+
+
+def _lns_failure(
+    net: NetId,
+    *,
+    kind: RouteFailureKind = RouteFailureKind.SEALED_POCKET,
+    wall: tuple[tuple[int, int, int], ...] = (),
+    blocking_nets: tuple[NetId, ...] = (),
+) -> DetailedRouteResult:
+    return DetailedRouteResult(
+        status=(
+            DetailedRouteStatus.BUDGET
+            if kind is RouteFailureKind.BUDGET
+            else DetailedRouteStatus.STRANDED
+        ),
+        routed=(),
+        failures=(NetFailure(net, kind, wall, blocking_nets, 10),),
+        iterations=1,
+        expansions=10,
+    )
+
+
+def _lns_geometry(
+    size: int,
+    *,
+    gaps: GapProfile | None = None,
+) -> tuple[SequencePair, GapProfile, PlacementProblem, DecodedPlacement]:
+    pair = SequencePair(tuple(range(size)), tuple(range(size)))
+    profile = gaps or GapProfile.zero(size)
+    problem = PlacementProblem(
+        sizes=((2, 2),) * size,
+        nets=(),
+        outline_height=4,
+        area_lower_bound=4 * size,
+    )
+    decoded = decode_sequence_pair(
+        pair,
+        profile,
+        problem.sizes,
+        outline_height=problem.outline_height,
+    )
+    return pair, profile, problem, decoded
+
+
+def _locked_relative_order(
+    pair: SequencePair, locked: frozenset[int]
+) -> tuple[tuple[int, ...], tuple[int, ...]]:
+    return (
+        tuple(strip for strip in pair.positive if strip in locked),
+        tuple(strip for strip in pair.negative if strip in locked),
+    )
+
+
+def test_lns_selects_stranded_blocking_endpoints_and_sequence_neighbours() -> None:
+    pair, gaps, problem, decoded = _lns_geometry(10)
+    stranded = NetId(3, 4, "iron", NetRole.INTERNAL, 0)
+    blocker = NetId(7, 7, "copper", NetRole.INTERNAL, 0)
+
+    neighbourhood = select_lns_neighbourhood(
+        _lns_failure(stranded, blocking_nets=(blocker,)),
+        pair,
+        gaps,
+        problem,
+        decoded,
+    )
+
+    assert neighbourhood == frozenset({2, 3, 4, 5, 6, 7, 8})
+
+
+def test_lns_selects_only_gap_strips_intersecting_failure_hot_boxes() -> None:
+    gaps = GapProfile(
+        east=(0, 2, 0),
+        north=(0, 0, 0),
+    )
+    pair, gaps, problem, decoded = _lns_geometry(3, gaps=gaps)
+    no_strip_net = NetId(None, None, "iron", NetRole.EXTERNAL, 0)
+
+    neighbourhood = select_lns_neighbourhood(
+        _lns_failure(no_strip_net, wall=((5, 1, 0),)),
+        pair,
+        gaps,
+        problem,
+        decoded,
+    )
+
+    assert neighbourhood == frozenset({1})
+
+
+def test_budget_failure_creates_no_lns_neighbourhood() -> None:
+    pair, gaps, problem, decoded = _lns_geometry(6)
+    failure = _lns_failure(
+        NetId(2, 3, "iron", NetRole.INTERNAL, 0),
+        kind=RouteFailureKind.BUDGET,
+        wall=((4, 1, 0),),
+        blocking_nets=(NetId(4, 5, "copper", NetRole.INTERNAL, 0),),
+    )
+
+    assert (
+        select_lns_neighbourhood(
+            failure,
+            pair,
+            gaps,
+            problem,
+            decoded,
+            stagnation=100,
+            grow_after=2,
+        )
+        == frozenset()
+    )
+
+
+def test_lns_neighbourhood_grows_one_sequence_ring_after_stagnation() -> None:
+    pair, gaps, problem, decoded = _lns_geometry(8)
+    failure = _lns_failure(NetId(3, 3, "iron", NetRole.INTERNAL, 0))
+
+    focused = select_lns_neighbourhood(
+        failure, pair, gaps, problem, decoded, stagnation=0, grow_after=2
+    )
+    grown = select_lns_neighbourhood(
+        failure, pair, gaps, problem, decoded, stagnation=2, grow_after=2
+    )
+
+    assert focused == frozenset({2, 3, 4})
+    assert grown == frozenset({1, 2, 3, 4, 5})
+
+
+def test_lns_repair_preserves_exact_locked_order_and_locked_gaps() -> None:
+    pair = SequencePair(tuple(range(8)), tuple(range(8)))
+    gaps = GapProfile(
+        east=(0, 1, 2, 3, 4, 3, 2, 1),
+        north=(1, 2, 3, 4, 3, 2, 1, 0),
+    )
+    neighbourhood = frozenset({3, 4})
+    locked = frozenset({0, 1, 2, 5, 6, 7})
+
+    repaired = repair_neighbourhood(
+        pair, gaps, neighbourhood, seed=9, strip_weights={3: 5.0, 4: 1.0}
+    )
+
+    assert _locked_relative_order(repaired.pair, locked) == _locked_relative_order(
+        pair, locked
+    )
+    assert tuple(repaired.gaps.east[index] for index in locked) == tuple(
+        gaps.east[index] for index in locked
+    )
+    assert tuple(repaired.gaps.north[index] for index in locked) == tuple(
+        gaps.north[index] for index in locked
+    )
+    assert all(0 <= gap <= 4 for gap in repaired.gaps.east + repaired.gaps.north)
+
+
+def test_lns_repair_is_deterministic_for_seed_and_weights() -> None:
+    pair = SequencePair(tuple(range(8)), tuple(reversed(range(8))))
+    gaps = GapProfile.zero(8)
+    neighbourhood = frozenset({2, 3, 4, 5})
+    weights = {2: 1.0, 3: 2.0, 4: 4.0, 5: 8.0}
+
+    first = repair_neighbourhood(
+        pair, gaps, neighbourhood, seed=91, strip_weights=weights
+    )
+    second = repair_neighbourhood(
+        pair, gaps, neighbourhood, seed=91, strip_weights=weights
+    )
+
+    assert first == second
+    first.pair.validate(8)
+    assert first != repair_neighbourhood(
+        pair,
+        gaps,
+        neighbourhood,
+        seed=91,
+        strip_weights={2: 8.0, 3: 4.0, 4: 2.0, 5: 1.0},
+    )
