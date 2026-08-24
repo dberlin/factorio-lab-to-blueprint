@@ -127,6 +127,18 @@ def test_coordinate_windows_use_forward_earliest_and_reverse_latest_paths() -> N
     assert vertical.y_windows == ((2, 4), (0, 2))
 
 
+def test_latest_windows_propagate_through_a_three_rectangle_chain() -> None:
+    decoded = decode_sequence_pair(
+        SequencePair((0, 1, 2), (0, 1, 2)),
+        GapProfile.zero(3),
+        ((2, 1), (3, 1), (4, 1)),
+        outline_height=2,
+        outline_width=12,
+    )
+    assert decoded.x == (0, 2, 5)
+    assert decoded.x_windows == ((0, 3), (2, 5), (5, 8))
+
+
 def test_default_outline_width_is_the_compacted_width() -> None:
     decoded = decode_sequence_pair(
         SequencePair((0, 1), (0, 1)),
