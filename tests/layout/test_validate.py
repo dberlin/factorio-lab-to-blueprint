@@ -7,6 +7,7 @@ than no validator at all, so the "trips it" half is the load-bearing one.
 
 from __future__ import annotations
 
+import dataclasses
 from fractions import Fraction
 from pathlib import Path
 
@@ -16,6 +17,7 @@ from flab2bp.dsp.catalog import GEOMETRY_SAFE_FIXTURES, TESLA_COVER_RADIUS
 from flab2bp.dsp.catalog import building as catalog_building
 from flab2bp.layout import junction
 from flab2bp.layout.base import PlacedBuilding, Placement
+from flab2bp.layout.slots import SlotUndetermined, assign_sorter_slots
 from flab2bp.layout.validate import CHECKS, IdMap, Report, Severity, validate
 from flab2bp.spec import BuildSpec, MachineGroup, ProliferatorMode
 
@@ -116,7 +118,22 @@ def tower(x: int, y: int) -> PlacedBuilding:
 
 
 def place(*buildings: PlacedBuilding) -> Placement:
-    return Placement(buildings=tuple(buildings))
+    """A placement with its sorter slots filled in, as a strategy would leave it.
+
+    Hand-written fixtures set no slot fields, so without this every one of them
+    would trip ``sorter.own_slots`` and ``sorter.peer_slots`` and drown the
+    finding each test actually exists to make.  Deriving them here is exactly
+    what both strategies do on the way out, so the fixtures stay faithful.
+
+    Fixtures whose sorters are deliberately malformed -- diagonal, unanchored,
+    pointing at nothing -- have no derivable slot, and those keep the bare
+    defaults: the check under test in each of them is the geometric one, and it
+    fires either way.
+    """
+    try:
+        return Placement(buildings=assign_sorter_slots(buildings))
+    except SlotUndetermined:
+        return Placement(buildings=tuple(buildings))
 
 
 def fired(report: Report, check: str) -> bool:
@@ -259,6 +276,124 @@ def test_sorter_endpoint_pair_fires_when_links_disagree_with_anchors() -> None:
     # output_obj names the machine, but the far anchor sits on the belt
     r = validate(place(machine(0, 0), belt(4, 0), sorter(3, 0, 4, 0, inp=0, out=0)))
     assert fired(r, "sorter.endpoint_pair")
+
+
+CHEMICAL_PLANT = 2309  # 9x5, and never a sorter peer anywhere in the corpus
+MATRIX_LAB = 2901  # 5x5, mirrored ring, handedness observed
+
+
+def _retagged(
+    p: Placement,
+    index: int,
+    *,
+    output_to_slot: int | None = None,
+    input_from_slot: int | None = None,
+    output_from_slot: int | None = None,
+    input_to_slot: int | None = None,
+) -> Placement:
+    """``p`` with one sorter's slot fields overwritten, to mutate a good build."""
+    b = p.buildings[index]
+    bs = list(p.buildings)
+    bs[index] = dataclasses.replace(
+        b,
+        output_to_slot=b.output_to_slot if output_to_slot is None else output_to_slot,
+        input_from_slot=b.input_from_slot if input_from_slot is None else input_from_slot,
+        output_from_slot=(
+            b.output_from_slot if output_from_slot is None else output_from_slot
+        ),
+        input_to_slot=b.input_to_slot if input_to_slot is None else input_to_slot,
+    )
+    return Placement(buildings=tuple(bs))
+
+
+def _belt_to_machine() -> Placement:
+    """Belt at (3,0) feeding a 3x3 assembler at (0,0) through its east side."""
+    return place(machine(0, 0), belt(3, 0), sorter(3, 0, 2, 0, inp=1, out=0))
+
+
+def test_sorter_own_slots_clean_on_a_derived_placement() -> None:
+    assert not fired(validate(_belt_to_machine()), "sorter.own_slots")
+
+
+def test_sorter_own_slots_fires_on_the_defaulted_zeros() -> None:
+    """The exact shape of the bug: every field left at the dataclass default."""
+    p = _retagged(_belt_to_machine(), 2, output_from_slot=0, input_to_slot=0)
+    assert fired(validate(p), "sorter.own_slots")
+
+
+def test_sorter_own_slots_fires_when_output_from_slot_moves() -> None:
+    p = _retagged(_belt_to_machine(), 2, output_from_slot=1)
+    assert fired(validate(p), "sorter.own_slots")
+
+
+def test_sorter_peer_slots_clean_on_a_derived_placement() -> None:
+    assert not fired(validate(_belt_to_machine()), "sorter.peer_slots")
+
+
+def test_sorter_peer_slots_fires_when_the_belt_side_is_not_minus_one() -> None:
+    p = _retagged(_belt_to_machine(), 2, input_from_slot=0)
+    assert fired(validate(p), "sorter.peer_slots")
+
+
+def test_sorter_peer_slots_fires_when_the_machine_side_is_zeroed() -> None:
+    """A machine end of 0 is right only at one corner, and this is not it.
+
+    The sorter enters the assembler's east side one tile north of its centre,
+    which is slot 5.  Zero is what the strategies used to emit everywhere.
+    """
+    good = _belt_to_machine()
+    assert good.buildings[2].output_to_slot == 5
+    assert fired(validate(_retagged(good, 2, output_to_slot=0)), "sorter.peer_slots")
+
+
+def test_sorter_peer_slots_fires_on_the_mirrored_slot() -> None:
+    """Off by exactly the handedness mirror is still wrong, and is caught.
+
+    Slot 5's mirror image is 9 -- same tile, opposite handedness -- which is
+    what a wrong :data:`flab2bp.layout.slots._MIRRORED` entry would emit here.
+    """
+    good = _belt_to_machine()
+    assert fired(validate(_retagged(good, 2, output_to_slot=9)), "sorter.peer_slots")
+
+
+def test_sorter_slot_reach_clean_on_a_three_wide_machine() -> None:
+    r = validate(place(machine(0, 0), belt(1, 3), sorter(1, 3, 1, 2, inp=1, out=0)))
+    assert not fired(r, "sorter.slot_reach")
+
+
+def test_sorter_slot_reach_fires_on_a_far_column_of_a_wide_machine() -> None:
+    """A 9-wide Chemical Plant still has three slots on its south side.
+
+    The sorter lands on the plant's leftmost column, four tiles from the side's
+    centre and beside no slot at all.
+    """
+    r = validate(
+        place(
+            machine(0, 0, item_id=CHEMICAL_PLANT),
+            belt(0, 5),
+            sorter(0, 5, 0, 4, inp=1, out=0),
+        )
+    )
+    assert fired(r, "sorter.slot_reach")
+
+
+def test_sorter_slot_handedness_warns_only_for_unobserved_buildings() -> None:
+    unobserved = validate(
+        place(
+            machine(0, 0, item_id=CHEMICAL_PLANT),
+            belt(4, 5),
+            sorter(4, 5, 4, 4, inp=1, out=0),
+        )
+    )
+    assert fired(unobserved, "sorter.slot_handedness")
+    observed = validate(
+        place(
+            machine(0, 0, item_id=MATRIX_LAB),
+            belt(2, 5),
+            sorter(2, 5, 2, 4, inp=1, out=0),
+        )
+    )
+    assert not fired(observed, "sorter.slot_handedness")
 
 
 # --- belts -----------------------------------------------------------------

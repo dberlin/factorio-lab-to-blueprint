@@ -30,6 +30,7 @@ from fractions import Fraction
 
 from flab2bp.dsp import catalog as cat
 from flab2bp.layout import junction as junc
+from flab2bp.layout import slots
 from flab2bp.layout.base import PlacedBuilding, Placement
 from flab2bp.spec import BuildSpec, MachineGroup
 
@@ -872,6 +873,207 @@ def _endpoint_pair(ctx: Context) -> Iterable[Finding]:
                     (i, link),
                     {"end": label, "named": link, "under_anchor": str(occupants)},
                 )
+
+
+@check("sorter.own_slots")
+def _own_slots(ctx: Context) -> Iterable[Finding]:
+    """``output_from_slot == 0`` and ``input_to_slot == 1``, on every sorter.
+
+    Constant on all 1288 sorters in the real corpus, with no exception at any
+    tier, span or orientation.  Both strategies used to leave both at the
+    dataclass default of ``0``, which made every sorter of the first build ever
+    pasted in game render red -- and this suite reported ``INVALID 0`` for it,
+    because nothing here looked at these fields at all.
+    """
+    for i, b in ctx.of_kind(Kind.SORTER):
+        if (b.output_from_slot, b.input_to_slot) != (
+            slots.OUTPUT_FROM_SLOT,
+            slots.INPUT_TO_SLOT,
+        ):
+            yield Finding(
+                "sorter.own_slots",
+                Severity.ERROR,
+                f"sorter {i} has (output_from_slot, input_to_slot) = "
+                f"({b.output_from_slot}, {b.input_to_slot}); the game writes "
+                f"({slots.OUTPUT_FROM_SLOT}, {slots.INPUT_TO_SLOT}) on all 1288 "
+                f"sorters in the corpus",
+                (i,),
+                {
+                    "output_from_slot": b.output_from_slot,
+                    "input_to_slot": b.input_to_slot,
+                },
+            )
+
+
+@check("sorter.peer_slots")
+def _peer_slots(ctx: Context) -> Iterable[Finding]:
+    """The slot a sorter names on each end matches what is standing there.
+
+    Two distinct failures, and both paste as a broken sorter:
+
+    * a BELT end must carry ``-1``.  All 1240 belt ends in the corpus do, and
+      none carries anything else.
+    * a MACHINE end must carry the perimeter slot its geometry implies.  A
+      wrong index here is the difference between a sorter attached to a machine
+      and one attached to nothing.
+    """
+    bs = ctx.placement.buildings
+    for i, b in ctx.of_kind(Kind.SORTER):
+        a = _anchors(b)
+        if a is None:
+            continue
+        (x1, y1, _), (x2, y2, _) = a
+        for label, link, recorded, end, other in (
+            ("input", b.input_obj, b.input_from_slot, (x1, y1), (x2, y2)),
+            ("output", b.output_obj, b.output_to_slot, (x2, y2), (x1, y1)),
+        ):
+            if link is None or not (0 <= link < len(bs)):
+                continue
+            peer = bs[link]
+            if cat.is_belt(peer.item_id):
+                if recorded != slots.BELT_SLOT:
+                    yield Finding(
+                        "sorter.peer_slots",
+                        Severity.ERROR,
+                        f"sorter {i}'s {label} end names belt {link} with slot "
+                        f"{recorded}; a belt end is always {slots.BELT_SLOT}",
+                        (i, link),
+                        {"end": label, "slot": recorded},
+                    )
+                continue
+            try:
+                want = slots.machine_slot(
+                    peer.item_id,
+                    peer.yaw,
+                    (
+                        end[0] - (peer.x + (peer.width - 1) / 2),
+                        end[1] - (peer.y + (peer.height - 1) / 2),
+                    ),
+                    (end[0] - other[0], end[1] - other[1]),
+                )
+            except slots.SlotUndetermined as exc:
+                yield Finding(
+                    "sorter.peer_slots",
+                    Severity.ERROR,
+                    f"sorter {i}'s {label} end names building {link} but no slot "
+                    f"could be derived for it: {exc}",
+                    (i, link),
+                    {"end": label, "slot": recorded},
+                )
+                continue
+            if recorded != want:
+                yield Finding(
+                    "sorter.peer_slots",
+                    Severity.ERROR,
+                    f"sorter {i}'s {label} end names building {link} "
+                    f"({cat.building(peer.item_id).name}) with slot {recorded}; its "
+                    f"geometry says {want}",
+                    (i, link),
+                    {"end": label, "slot": recorded, "expected": want},
+                )
+
+
+@check("sorter.slot_handedness")
+def _slot_handedness(ctx: Context) -> Iterable[Finding]:
+    """Say out loud when a machine's slot ring was inferred, not measured.
+
+    The corpus shows two mirrored ring handednesses and nothing in the game data
+    predicts which a building uses, so ``layout.slots`` extends the seven
+    observed buildings by footprint.  Every sorter touching a building outside
+    that set is carrying an inference, and a warning is the honest way to keep
+    that visible instead of letting it read as measured.  One per building type,
+    not per sorter, so a large build does not bury it.
+    """
+    bs = ctx.placement.buildings
+    seen: set[int] = set()
+    for _i, b in ctx.of_kind(Kind.SORTER):
+        for link in (b.input_obj, b.output_obj):
+            if link is None or not (0 <= link < len(bs)):
+                continue
+            peer = bs[link]
+            if cat.is_belt(peer.item_id) or slots.handedness_is_observed(peer.item_id):
+                continue
+            if peer.item_id in seen:
+                continue
+            seen.add(peer.item_id)
+            yield Finding(
+                "sorter.slot_handedness",
+                Severity.WARNING,
+                f"no real blueprint in the corpus attaches a sorter to a "
+                f"{cat.building(peer.item_id).name}, so its slot ring handedness is "
+                f"inferred from its footprint, not measured",
+                (link,),
+                {"item_id": peer.item_id, "mirrored": slots.ring_is_mirrored(peer.item_id)},
+            )
+
+
+@check("sorter.slot_reach")
+def _slot_reach(ctx: Context) -> Iterable[Finding]:
+    """A side has three slots however long it is, so a far column has none.
+
+    The three slots on a side sit ~0.8 tiles apart around its centre whatever
+    the footprint -- the Oil Refinery's seven-tile side carries three (its north
+    side is 6/7/8, so its east side can only be 3/4/5) and the Matrix Lab's
+    five-tile side carries three.  Anything more than one tile off a side's
+    centre therefore has no slot beside it, and
+    :func:`flab2bp.layout.slots.machine_slot` reports the nearest one instead.
+
+    Every one of the 1247 machine-side records in the real corpus is within that
+    one-tile band, so the game evidently does not place sorters outside it.  Our
+    layouts do: measured over both strategies and the whole URL corpus, 1127 of
+    5188 machine ends land further out -- every Chemical Plant, Quantum Chemical
+    Plant, Miniature Particle Collider and Ray Receiver end, and 498 of 558
+    Matrix Lab ends.
+
+    This is a WARNING and not an error only because no real blueprint in the
+    corpus attaches a sorter to a building wider than five tiles, so "a nine-wide
+    building still has just three slots per side" is an extrapolation from the
+    Refinery and the Lab rather than a measurement.  If it holds, this is a real
+    defect in how both strategies choose a sorter's column, it is very likely the
+    "Connection target cannot be laid" of the first in-game paste, and this check
+    should be promoted.  One finding per building type, with the count, so it
+    stays legible on a large build.
+    """
+    bs = ctx.placement.buildings
+    counts: dict[int, int] = defaultdict(int)
+    example: dict[int, int] = {}
+    for i, b in ctx.of_kind(Kind.SORTER):
+        a = _anchors(b)
+        if a is None:
+            continue
+        (x1, y1, _), (x2, y2, _) = a
+        for link, end, other in (
+            (b.input_obj, (x1, y1), (x2, y2)),
+            (b.output_obj, (x2, y2), (x1, y1)),
+        ):
+            if link is None or not (0 <= link < len(bs)):
+                continue
+            peer = bs[link]
+            if cat.is_belt(peer.item_id):
+                continue
+            off = slots.side_offset(
+                peer.item_id,
+                peer.yaw,
+                (
+                    end[0] - (peer.x + (peer.width - 1) / 2),
+                    end[1] - (peer.y + (peer.height - 1) / 2),
+                ),
+                (end[0] - other[0], end[1] - other[1]),
+            )
+            if off is None or abs(off) <= 1:
+                continue
+            counts[peer.item_id] += 1
+            example.setdefault(peer.item_id, i)
+    for item_id, n in sorted(counts.items()):
+        yield Finding(
+            "sorter.slot_reach",
+            Severity.WARNING,
+            f"{n} sorter end(s) sit more than one tile off the centre of a "
+            f"{cat.building(item_id).name} side, where that side has no slot; the "
+            f"nearest of its three was used instead (e.g. sorter {example[item_id]})",
+            (example[item_id],),
+            {"item_id": item_id, "count": n},
+        )
 
 
 @check("sorter.filter")
