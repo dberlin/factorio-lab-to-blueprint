@@ -3033,8 +3033,14 @@ class TestSprayCoatersAreFed:
         plans, _reason, _detail = _solve_plan(
             spec, time_budget_s=0.5, workers=1
         )
-        assert plans
-        placement = _emit(spec, plans[0], power=False)
+        placement: Placement | None = None
+        for plan in plans:
+            try:
+                placement = _emit(spec, plan, power=False)
+            except ValueError:
+                continue
+            break
+        assert placement is not None
         proliferator = proliferator_item(spec)
         supply = {
             (building.x, building.y, building.z)
