@@ -169,13 +169,33 @@ def magnetic_ring_spec() -> BuildSpec:
 
 
 def mixed_height_spec() -> BuildSpec:
-    """Two 3-tall arc smelters and a 7-tall oil refinery, tapping six lanes.
+    """Two 3-tall arc smelters and a 5-tall Chemical Plant, tapping six lanes.
 
-    The shape that found the height-blind tap bound.  Six lanes is exactly
-    ``2 * sorter_max_reach``, so the flat bound sees nothing wrong -- but four of
-    the six are tapped by the smelters, which stop four tiles above the floor of
-    a row the refinery makes seven tall.  A gap of 4 against a reach of 3 fits in
-    the corridor ABOVE the row or nowhere, and that corridor holds three.
+    The shape that finds a height-blind tap bound.  Six lanes is exactly
+    ``2 * sorter_max_reach``, so the flat bound sees nothing wrong -- but the
+    plant makes the row five tall, and a smelter's usable face stops two tiles
+    above that floor.  A corridor holds only ONE lane at a gap of 2
+    (``_fits_below``: 2 + 0 + 1 fits, 2 + 1 + 1 does not) and only two at a gap
+    of 1, so the row's six lanes want three positions above and at most two
+    below, and there is no sixth.
+
+    **No group here consumes another's output**, and that is load-bearing rather
+    than incidental: ``_solve_one`` orders producers strictly above consumers, so
+    a chain of three could never share a row at all and a test asserting the
+    packer refuses one would pass over a packing the packer was never free to
+    make.  Three independent externally-fed groups can share a row, so the
+    refusal is about height.
+
+    THE PLANT IS WHAT MAKES THIS BITE, and not because it is tall.  Its
+    ``tap_height`` is 4 against a ``pitch_h`` of 5 -- the poses on one face sit a
+    row inside the footprint -- so a row it tops has ``row_h == 5``, a value no
+    group's ``tap_height`` takes.  The model's height-aware family reifies
+    ``row_h[r] == h`` over the set of TAP heights, so on this row it cannot fire.
+    Written with an Oil Refinery, as this fixture was, it proves nothing:
+    rotation turned the refinery's 3x7 into a 7x3 and every machine in the spec
+    became the same height.  Written with a Matrix Lab it proves less than it
+    looks -- a lab's tap height IS 5, so the reification matches by luck and the
+    bug hides behind it.
 
     Seven items per second on a twelve-per-second belt, deliberately: it keeps
     every item to one lane while making every PAIR of them overflow, so
@@ -189,10 +209,7 @@ def mixed_height_spec() -> BuildSpec:
             group(
                 "energetic-graphite", "arc-smelter", 1, {"coal": F(7)}, {"graphite": F(7)}
             ),
-            group(
-                "reforming-refine", "oil-refinery", 1, {"refined-oil": F(7)},
-                {"plastic": F(7)},
-            ),
+            group("plastic", "chemical-plant", 1, {"refined-oil": F(7)}, {"plastic": F(7)}),
         ),
         external_inputs={"iron-ore": F(7), "coal": F(7), "refined-oil": F(7)},
         outputs={"iron-ingot": F(7), "graphite": F(7), "plastic": F(7)},
@@ -1972,8 +1989,22 @@ class TestTapCapacityIsHeightAware:
         spec = mixed_height_spec()
         groups, edges = _adapt(spec)
         keys = list(groups)
-        assert sorted({groups[k].height for k in keys}) == [3, 7]
         copies = dict.fromkeys(_lane_copies(groups, edges, set(), spec), 1)
+
+        # The fixture's own shape, asserted rather than assumed.  This is the
+        # check rotation would have tripped: it turned the Oil Refinery this
+        # spec used to carry from 3x7 into 7x3, every machine became the same
+        # height, and the two tests below went on passing over a spec that could
+        # no longer express what they were about.
+        assert sorted(groups[k].height for k in keys) == [3, 3, 5]
+        row_h = max(groups[k].pitch_h for k in keys)
+        assert row_h == 5
+        gaps = sorted(row_h - groups[k].tap_height for k in keys)
+        assert gaps == [1, 2, 2], gaps
+        assert len(copies) == 2 * catalog.SORTER_MAX_REACH, sorted(copies)
+        # No edge between any two groups, so `_solve_one` is FREE to put all
+        # three in one row -- see the fixture's docstring.
+        assert not edges, edges
 
         with pytest.raises(ValueError, match="machine heights differ"):
             _allocate_lanes(groups, edges, [keys], set(), spec, copies)
@@ -1986,9 +2017,9 @@ class TestTapCapacityIsHeightAware:
         """``_solve_one`` raises the allocator's ValueError, so this is the test.
 
         At the widest candidate width -- the densest one in the sweep -- one row
-        of all three groups costs 7 tiles of row plus two corridors, against
-        3 + 3 + 7 and four corridors for a row each.  The height-blind model took
-        it every time, and then threw the width away.
+        of all three groups costs 5 tiles of row plus two corridors, against
+        3 + 3 + 5 and four corridors for a row each.  A height-blind model takes
+        it every time, and then throws the width away.
         """
         from flab2bp.layout.spine import (
             _adapt,
