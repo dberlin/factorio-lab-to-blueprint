@@ -2761,7 +2761,15 @@ def _coaters_supplied(ctx: Context) -> Iterable[Finding]:
 
     Two separate ways to fail, reported separately because they have different
     fixes: no proliferator lane exists anywhere (the router never made one), or
-    a lane exists but some coater has no sorter drawing from it.
+    a lane exists but does not pass through some coater's addon area.
+
+    It used to look for a SORTER drawing from a proliferator belt.  That
+    connection does not exist in the game -- a coater ships zero insert poses and
+    `BuildTool_Inserter` will not target a building with none -- so the check was
+    asserting the presence of something that could never have worked.  What
+    supplies a coater is a belt inside its addon area, which is what
+    `game.addon_supply` measures; this adds only the part that needs the spec,
+    namely that the belt there carries PROLIFERATOR rather than just any cargo.
     """
     assert ctx.spec is not None
     coaters = [
@@ -2793,18 +2801,32 @@ def _coaters_supplied(ctx: Context) -> Iterable[Finding]:
         )
         return
 
-    fed = {
-        s.output_obj
-        for _, s in ctx.of_kind(Kind.SORTER)
-        if s.output_obj is not None and s.input_obj in supplying_belts
-    }
-    starved = [i for i, _ in coaters if i not in fed]
+    supply_at = [
+        (
+            ctx.placement.buildings[i].x,
+            ctx.placement.buildings[i].y,
+            ctx.placement.buildings[i].z * float(cat.WORLD_UNITS_PER_LEVEL),
+        )
+        for i in supplying_belts
+    ]
+    starved = []
+    for i, b in coaters:
+        areas = cat.building(b.item_id).addon_areas
+        ok = False
+        for n, (adx, ady, adz) in enumerate(areas):
+            if n == 0:
+                continue
+            wx, wy = slots.to_world((adx, ady), b.yaw)
+            want = (b.x + wx, b.y + wy, (b.z + adz) * float(cat.WORLD_UNITS_PER_LEVEL))
+            ok = ok or any(math.dist(want, p) < _ADDON_AREA_RADIUS for p in supply_at)
+        if not ok:
+            starved.append(i)
     if starved:
         yield Finding(
             "prolif.coaters_are_supplied",
             Severity.ERROR,
-            f"{len(starved)} of {len(coaters)} spray coaters have no sorter drawing "
-            f"proliferator from a supplying belt",
+            f"{len(starved)} of {len(coaters)} spray coaters have no proliferator "
+            f"belt in their addon area, a tile behind and one level up",
             tuple(starved),
             {"starved": len(starved), "total": len(coaters)},
         )

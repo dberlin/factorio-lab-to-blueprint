@@ -1949,6 +1949,8 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
                 corr_y,
                 row_y,
                 g.height,
+                item_id_of=g.item_id,
+                yaw_of=g.yaw,
                 out=not into,
                 want=copies.get(item, 1),
             )
@@ -3009,6 +3011,29 @@ class _Tap:
     span: int
 
 
+def _anchor_span(
+    item_id: int, yaw: float, mach_h: int, gap: int, *, above: bool
+) -> int | None:
+    """Tiles a sorter must span to reach ``item_id`` from a lane ``gap`` clear of it.
+
+    Not ``gap``: the anchor is wherever the insert pose is, and for a Chemical
+    Plant that is a row INSIDE the footprint.  ``None`` when no pose can be
+    reached from that side at all, which an Oil Refinery answers for a lane
+    above it.
+
+    Asked of a type rather than a placed machine, because taps are chosen while
+    planning, before anything has an address.  The shortest span over the
+    attachable columns is the answer, since the sorter pass is free to pick the
+    column and will pick one that works.
+    """
+    probe = sorter_slots.probe_building(item_id, yaw)
+    lane_y = -gap if above else (mach_h - 1) + gap
+    reachable = sorter_slots.attachable_columns(probe, lane_y)
+    if not reachable:
+        return None
+    return min(a.span for a in reachable.values())
+
+
 def _find_taps(
     plan: _Plan,
     r: int,
@@ -3017,6 +3042,8 @@ def _find_taps(
     row_y: list[int],
     mach_h: int,
     *,
+    item_id_of: int,
+    yaw_of: float,
     out: bool,
     want: int = 1,
 ) -> list[_Tap]:
@@ -3080,10 +3107,18 @@ def _find_taps(
                 continue
             lane_y = corr_y[c] + j
             if from_corridor_above:
-                span, machine_y = top - lane_y, top
+                machine_y, gap = top, top - lane_y
             else:
-                span, machine_y = lane_y - bottom, bottom
-            if 1 <= span <= CONSTANTS.sorter_max_reach:
+                machine_y, gap = bottom, lane_y - bottom
+            # The span is to the ANCHOR, not to the machine's edge. A Chemical
+            # Plant's southern poses sit a row inside a footprint five deep, so
+            # a sorter reaching one is a tile longer than the gap suggests and a
+            # lane three clear of the building is already past reach. Measuring
+            # from the edge accepted taps that then had no sorter placed, which
+            # is a wide machine's version of the smelter-in-a-tall-row bug the
+            # docstring above records: the same mistake, one layer further in.
+            span = _anchor_span(item_id_of, yaw_of, mach_h, gap, above=from_corridor_above)
+            if span is not None and 1 <= span <= CONSTANTS.sorter_max_reach:
                 found.append(
                     _Tap(
                         corridor=c,
@@ -3279,12 +3314,55 @@ def _feed_coater(
     agrees: every coater there has a belt one level above and one tile to the
     side.
 
-    Neither strategy can route an elevated lane to a chosen tile yet, so this
-    places nothing and ``game.addon_supply`` reports the coater as unsupplied,
-    which refuses the candidate.  Returning zero rather than emitting the sorter
-    is the point: the sorter looked like a feed and was not one.
+    So the feed is a BELT in that area, and this places it: one tile behind the
+    coater and one level up, linked from the nearest tile of the corridor's
+    proliferator lane.  That link is a single step of climb, which
+    ``beltVerticalConstruction`` makes free -- and where the save lacks it,
+    ``geom.altitude_step`` refuses the step and the candidate with it, rather
+    than this guessing a ramp it has no room for.
+
+    Returns the number of BELTS placed, not sorters.  A coater is wired to
+    nothing at all.
     """
+    if prolif is None:
+        return 0
+    coater = buildings[coater_idx]
+    adx, ady, adz = catalog.building(coater.item_id).addon_areas[1]
+    wx, wy = sorter_slots.to_world((adx, ady), coater.yaw)
+    cell = (coater.x + round(wx), coater.y + round(wy))
+    level = Fraction(round(adz))
+    if any(b.x == cell[0] and b.y == cell[1] and b.z == level for b in buildings):
+        return 0
+    # A source on the same corridor, orthogonally adjacent to the drop, so the
+    # climb is one tile of run and one level.
+    for (c, depth), indices in lane_tiles.items():
+        if c != corridor or lane_item_of.get((c, depth)) != prolif:
+            continue
+        for src in indices:
+            b = buildings[src]
+            if abs(b.x - cell[0]) + abs(b.y - cell[1]) != 1:
+                continue
+            drop = len(buildings)
+            buildings.append(
+                PlacedBuilding(
+                    item_id=b.item_id,
+                    model_index=b.model_index,
+                    x=cell[0],
+                    y=cell[1],
+                    z=level,
+                    width=1,
+                    height=1,
+                    carries_item=prolif,
+                )
+            )
+            buildings[src] = _relink_output(buildings[src], drop)
+            return 1
     return 0
+
+
+def _relink_output(b: PlacedBuilding, out: int) -> PlacedBuilding:
+    """``b`` forwarding to ``out``.  Uses ``replace`` so no field is dropped."""
+    return replace(b, output_obj=out)
 
 
 def _shared_column(

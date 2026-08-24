@@ -5735,7 +5735,17 @@ def _place_coaters(
             # East end of this lane: nearest the margin the drop belt lives in.
             cx, cy = port.x1, port.y
             host = belt_at.get((cx, cy, 0))
-            drop_cell = (cx + 1, cy, 0)
+            # WHERE the proliferator belt has to be, from the coater's own addon
+            # area rather than from convenience. The game attaches an addon's
+            # belts positionally: area 0 is the cargo belt it rides, area 1 the
+            # proliferator supply, and for a coater that is `(0, -1.25, 1)` --
+            # a tile and a quarter BEHIND it and exactly one altitude level UP.
+            # A belt beside it at ground level, which is what this used to build
+            # and then run a sorter from, is in neither area and the game
+            # attaches nothing to it.
+            adx, ady, adz = catalog.building(catalog.SPRAY_COATER_ID).addon_areas[1]
+            wx, wy = slots.to_world((adx, ady), Facing.EAST.value)
+            drop_cell = (cx + round(wx), cy + round(wy), round(adz))
             if host is None or not canvas.free(drop_cell):
                 continue
 
@@ -5745,6 +5755,7 @@ def _place_coaters(
                     model_index=belt_model,
                     x=drop_cell[0],
                     y=drop_cell[1],
+                    z=Fraction(drop_cell[2]),
                     width=1,
                     height=1,
                     carries_item=_proliferator_item(spec),
