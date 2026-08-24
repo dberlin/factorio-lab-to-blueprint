@@ -1,5 +1,40 @@
 # Backlog
 
+## OPEN -- a corridor ABOVE an inset machine costs a tile, and nothing models it
+
+DIAGNOSED, not fixed. This is the whole of the remaining spine
+`machine.inputs_supplied` failure -- ten tests, and every one of them a machine
+one ingredient short.
+
+`_allocate_lanes` already carries the right concept for the corridor BELOW a
+row. Its docstring states the failure exactly: "the lane is allocated below,
+`_find_tap` correctly refuses to wire something out of reach, and the machine
+simply gets no sorter for that item at all". A short machine in a tall row stops
+above the row's floor, so every lane below it is that gap further away, and
+`above_gap` / `_fits_below` order and cap the band to match.
+
+The same thing happens on the corridor ABOVE, for a different reason, and the
+model says that side "costs it nothing". A Chemical Plant's poses on that face
+sit a row INSIDE its five-deep footprint, so a sorter reaching one is a tile
+longer than the gap suggests. Measured, usable lane depths per corridor:
+
+    Chemical Plant, Quantum Chemical Plant    above 2    below 3
+    Assembler, Oil Refinery, Matrix Lab       above 3    below 3
+
+The model assumes 3 and 3 for everything. Every rejected tap in the failing
+specs was on the `above` side at a gap of 3 or more -- the third depth a plant
+cannot reach -- and `_find_taps` correctly refused each one after the allocator
+had already put the item there.
+
+Note the asymmetry, because it is why the first attempt missed. `_Group.tap_height`
+folds the inset into the gap model as if it applied to both sides, and it changed
+none of the ten failures: the gap thresholds are not the per-corridor DEPTH cap,
+and taking the worse side for both is not what the geometry says. The fix belongs
+in `_allocate_lanes`, as the mirror of `above_gap` -- a per-side, per-group depth
+cap of `SORTER_MAX_REACH - inset_on_that_side` -- not in the CP-SAT capacity
+model, where the per-group bound is not even binding (a plant needs 4 lanes and
+can reach 5).
+
 ## OPEN -- spine grows elevated lanes
 
 Spine refuses every proliferated spec, and the refusal names why: a Spray Coater
