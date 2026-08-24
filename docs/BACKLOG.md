@@ -315,3 +315,46 @@ problem is that the block's boundary MOVES during emission while several passes
 each assume it is fixed. The fix is probably to decide the final extent up front
 -- reserve the entry ring before anything routes -- rather than to re-order the
 passes again.
+
+## OPEN -- the game's own rules are scattered across three forms
+
+The first in-game paste (2026-08-24) turned a pile of inferred rules into
+extracted ones: the game is installed at `/home/dannyb/Dyson Sphere Program/`,
+`Assembly-CSharp.dll` decompiles with `ilspycmd`, and `Locale/1033/base.txt`
+(UTF-16LE, tab-separated) maps each Chinese condition key to the English text the
+build cursor shows. That ended a long run of guessing -- but the rules landed
+wherever each fix happened to need them, in three different FORMS:
+
+* **Extracted data** -- `dsp/data/slot_poses.json`, 35 buildings of real
+  `PrefabDesc.slotPoses`, produced by `scripts/extract_dsp_slot_poses.py`.
+* **Derived constants** -- in `dsp/catalog.py`: the 3/4 world-to-blueprint z
+  conversion, `BELT_CLIMB_PER_TILE`, `buildMaxHeight = labLevel*4 - 0.6`, the
+  technology ids behind `beltVerticalConstruction`.
+* **Ported predicates** -- in `layout/validate.py`: `CheckInserterDataLegal`
+  (the 0.8 slot-pose radius and the slot-forward dot product) and the
+  `TooSteep` slope rule.
+
+Nothing is wrong with any of them individually. The problem is that a reader
+asking "what does the game actually require?" has to know to look in three
+places, and the C# provenance lives in whichever docstring the author was
+writing at the time. That is exactly the condition under which somebody
+re-derives a rule from the corpus and gets it wrong -- which is how we arrived
+at a belt-height ceiling of 1.0 when the real answer, from the game, is
+`3*labLevel - 0.45` and reaches 38.55 on a developed save.
+
+The fix is a single module -- `flab2bp/dsp/gamerules.py` or similar -- holding
+each rule next to the C# it came from: the function name, the condition in
+`EBuildCondition`, and the decompiled snippet. Data files stay data files, but
+the module should own the loading and be the one import a caller needs.
+`catalog.py` keeps physical facts about buildings; `gamerules.py` owns what the
+game will REFUSE.
+
+Worth doing when the `game-rules` and `altitude-study` branches land, since both
+touch `catalog.py` and `validate.py` and will conflict anyway -- the
+consolidation is nearly free at merge time and expensive later.
+
+**Rules still unextracted**, and each is a place the guessing could resume:
+`NeedGround` ("Foundation required", still unexplained -- the game does not
+offer to auto-place foundation); `TooSkew` ("Deflection too much"); and whether
+a belt may cross over a building, and at what height -- deliberately left
+unanswered rather than inferred from the fixtures' silence.
