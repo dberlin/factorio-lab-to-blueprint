@@ -4957,6 +4957,12 @@ def _route_all(
                 canvas.routing_ports = frozenset()
                 expansions += again.expansions
                 if again.path is None:
+                    if again.kind is RouteFailureKind.BUDGET:
+                        # The transaction rolls back, so `index` remains the
+                        # stranded net. Its outcome is still unknown when a
+                        # displaced victim exhausted a per-search cap.
+                        search_failures[index] = again
+                        search_blockers[index] = ()
                     break
                 _stake(hurt, again.path)
                 moved.append(hurt)

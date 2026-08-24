@@ -4225,6 +4225,64 @@ class TestDetailedRoutingDiagnostics:
         assert failure.wall == ()
         assert failure.blocking_nets == ()
 
+    def test_displaced_net_search_cap_is_budget_unknown_after_crossing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        canvas = _Canvas()
+        bounds = (-8, -8, 8, 8)
+        canvas.limit = bounds
+        blocker_id = NetId(0, 1, "blocker", NetRole.INTERNAL, 0)
+        failed_id = NetId(2, 3, "target", NetRole.INTERNAL, 0)
+        blocker = self._net(canvas, (-6, -5), (-1, -5), blocker_id)
+        failed = self._net(canvas, (0, 1), (0, 3), failed_id)
+        wall = (0, -1, 0)
+        original_astar = _astar
+        calls = 0
+
+        def capped_victim_astar(
+            *args: object, **kwargs: object
+        ) -> _PathSearchResult:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return _PathSearchResult((wall,), None, (), 1)
+            if calls == 2:
+                return _PathSearchResult(
+                    None, RouteFailureKind.SEALED_POCKET, (wall,), 1
+                )
+            if calls == 3:
+                return _PathSearchResult((wall,), None, (), 1)
+            return original_astar(*args, **kwargs)  # type: ignore[arg-type]
+
+        shared_budget = {"left": 1000}
+        monkeypatch.setattr(
+            "flab2bp.layout.freeform._astar", capped_victim_astar
+        )
+        monkeypatch.setattr("flab2bp.layout.freeform._MAX_EXPANSIONS", 1)
+        monkeypatch.setattr("flab2bp.layout.freeform.RRR_MAX", 1)
+        monkeypatch.setattr("flab2bp.layout.freeform._REPAIR_PASSES", 1)
+        monkeypatch.setattr(
+            "flab2bp.layout.freeform._commit_paths",
+            lambda *_args, **_kwargs: (),
+        )
+
+        result = _route_all(
+            canvas,
+            [blocker, failed],
+            2001,
+            35,
+            bounds,
+            budget=shared_budget,
+        )
+
+        failure = next(f for f in result.failures if f.net_id == failed_id)
+        assert calls == 4
+        assert shared_budget["left"] > 0
+        assert result.status is DetailedRouteStatus.BUDGET
+        assert failure.kind is RouteFailureKind.BUDGET
+        assert failure.wall == ()
+        assert failure.blocking_nets == ()
+
     def test_budget_exhaustion_is_reported_as_unknown(self) -> None:
         canvas = _Canvas()
         bounds = (-4, -4, 8, 4)
