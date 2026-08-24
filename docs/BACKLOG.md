@@ -29,11 +29,30 @@ had already put the item there.
 Note the asymmetry, because it is why the first attempt missed. `_Group.tap_height`
 folds the inset into the gap model as if it applied to both sides, and it changed
 none of the ten failures: the gap thresholds are not the per-corridor DEPTH cap,
-and taking the worse side for both is not what the geometry says. The fix belongs
-in `_allocate_lanes`, as the mirror of `above_gap` -- a per-side, per-group depth
-cap of `SORTER_MAX_REACH - inset_on_that_side` -- not in the CP-SAT capacity
-model, where the per-group bound is not even binding (a plant needs 4 lanes and
-can reach 5).
+and taking the worse side for both is not what the geometry says.
+
+THE ALLOCATOR-ONLY FIX WAS BUILT AND IT MADE THINGS WORSE. Mirroring `above_gap`
+exactly -- a `below_inset`, the same `_fits_below` greedy with the inset in place
+of the gap, the band ordered worst-inset-first, and then the mirror of
+`gap_first` so an inset item prefers the side without one -- took spine from 10
+failures to 12. `graphene` regressed: a Chemical Plant running sulfuric-acid
+still ends one ingredient short, now because the allocator correctly refuses to
+seat a third item upward and cannot find room downward either.
+
+That result is worth more than the change was. It says the constraint is real and
+the allocator is not where it can be satisfied: if a row's plant can take only
+two lanes upward and its ingredients want three, no seating order fixes it --
+the ROW is wrong, and the row is chosen by CP-SAT. So the asymmetric per-side cap
+has to reach the tap-capacity model, which is what decides that a plant may share
+a row at all.
+
+The bound I checked earlier and dismissed was the wrong one: a group's TOTAL lane
+need (4) against its total reach (2 + 3 = 5) is not binding, but its need on ONE
+SIDE against that side's cap is. A row of items that all prefer upward puts three
+against a cap of two, and nothing downstream can undo it.
+
+Do not attempt the allocator half again on its own; it is measured, reverted, and
+recorded here precisely so the next attempt starts at the model.
 
 ## OPEN -- spine grows elevated lanes
 
