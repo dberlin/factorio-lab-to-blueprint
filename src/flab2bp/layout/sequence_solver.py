@@ -21,8 +21,7 @@ from flab2bp.layout.freeform import (
     WEST_CHANNEL,
     Strip,
     _box,
-    _build,
-    _BuildResult,
+    _build_prepared,
     _candidate_heights,
     _direct_alignment_targets,
     _direct_net_candidates,
@@ -621,7 +620,9 @@ class _ProductionRun:
     ceiling: float
 
 
-def _empty_global_result(*, exhausted: bool) -> GlobalRouteResult:
+def _empty_global_result(
+    *, exhausted: bool, cancelled: bool = False
+) -> GlobalRouteResult:
     return GlobalRouteResult(
         net_results=(),
         paths={},
@@ -634,6 +635,7 @@ def _empty_global_result(*, exhausted: bool) -> GlobalRouteResult:
         exhausted_budget=exhausted,
         hot_cells=(),
         hot_regions=(),
+        cancelled=cancelled,
     )
 
 
@@ -653,25 +655,22 @@ def _closed_detailed_result(status: DetailedRouteStatus) -> DetailedStageResult:
 def _route_detailed_candidate(
     spec: BuildSpec,
     strips: list[Strip],
-    pack: _Pack,
+    prepared: _PreparedRoutingProblem,
     *,
     power: bool,
     deadline: float | None,
     allowance: int,
 ) -> DetailedStageResult:
-    """Run real emission while withholding every partial or unpowerable build."""
-    try:
-        built: _BuildResult = _build(
-            spec,
-            strips,
-            pack,
-            power=power,
-            route=True,
-            deadline=deadline,
-            budget={"left": allowance},
-        )
-    except _Unpowerable:
-        return _closed_detailed_result(DetailedRouteStatus.UNPOWERABLE)
+    """Route one exact prepared identity and withhold every partial build."""
+    built = _build_prepared(
+        spec,
+        strips,
+        prepared,
+        power=power,
+        route=True,
+        deadline=deadline,
+        budget={"left": allowance},
+    )
     return DetailedStageResult(
         routing=built.routing,
         placement=(
@@ -796,15 +795,23 @@ def _production_run(
             telemetry.feedback_cells, len(feedback.cell_history)
         )
         if candidate.prepared is None:
+            is_deadline = candidate.preparation_error == "deadline"
             return _empty_global_result(
-                exhausted=candidate.preparation_error == "deadline"
+                exhausted=is_deadline,
+                cancelled=is_deadline,
             )
         routing_started = time.monotonic()
         try:
             if deadline_reached():
-                result = _empty_global_result(exhausted=True)
+                result = _empty_global_result(exhausted=True, cancelled=True)
             else:
-                result = route_global(candidate.prepared, feedback, allowance)
+                result = route_global(
+                    candidate.prepared,
+                    feedback,
+                    allowance,
+                    max_rounds=config.global_rounds,
+                    cancelled=deadline_reached,
+                )
         finally:
             telemetry.global_route_time_s += time.monotonic() - routing_started
         telemetry.global_expansions += result.expansions
@@ -821,12 +828,14 @@ def _production_run(
         telemetry.detailed_routes += 1
         if candidate.preparation_error == "deadline" or deadline_reached():
             return _closed_detailed_result(DetailedRouteStatus.BUDGET)
+        if candidate.prepared is None:
+            return _closed_detailed_result(DetailedRouteStatus.UNPOWERABLE)
         routing_started = time.monotonic()
         try:
             result = _route_detailed_candidate(
                 spec,
                 strips,
-                candidate.pack,
+                candidate.prepared,
                 power=power,
                 deadline=deadline,
                 allowance=allowance,

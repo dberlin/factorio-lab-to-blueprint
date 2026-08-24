@@ -7326,7 +7326,7 @@ def _build(
     deadline: float | None = None,
     budget: dict[str, int] | None = None,
 ) -> _BuildResult:
-    """Emit, wire and power one pack from a fresh prepared workspace."""
+    """Prepare one pack, then emit it through the reusable detailed entry point."""
     prepared = _prepare_routing_problem(
         spec,
         strips,
@@ -7334,6 +7334,28 @@ def _build(
         power=power,
         _reserve_ports=route,
     )
+    return _build_prepared(
+        spec,
+        strips,
+        prepared,
+        power=power,
+        route=route,
+        deadline=deadline,
+        budget=budget,
+    )
+
+
+def _build_prepared(
+    spec: BuildSpec,
+    strips: list[Strip],
+    prepared: _PreparedRoutingProblem,
+    *,
+    power: bool,
+    route: bool,
+    deadline: float | None = None,
+    budget: dict[str, int] | None = None,
+) -> _BuildResult:
+    """Emit, route, and power one already-prepared immutable problem."""
     workspace = prepared.new_workspace()
     canvas = workspace.canvas
     belt_id = BELT_ITEM_IDS.get(spec.belt_item_id, 2001)

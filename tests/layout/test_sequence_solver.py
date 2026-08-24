@@ -1,19 +1,30 @@
 from __future__ import annotations
 
+import contextlib
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import cast
 
 import pytest
 
+import flab2bp.layout.freeform as freeform_module
 import flab2bp.layout.sequence_solver as sequence_solver_module
 from flab2bp.bench.corpus import entry
 from flab2bp.lab.data import load_vendored
 from flab2bp.lab.url import parse_url
 from flab2bp.layout import validate
 from flab2bp.layout.base import NoValidLayout, PlacedBuilding, Placement
-from flab2bp.layout.freeform import _box, _nets_between, _Pack, plan_strips
-from flab2bp.layout.global_router import GlobalRouteResult
+from flab2bp.layout.freeform import (
+    _box,
+    _build_prepared,
+    _greedy_pack,
+    _nets_between,
+    _Pack,
+    _prepare_routing_problem,
+    _PreparedRoutingProblem,
+    plan_strips,
+)
+from flab2bp.layout.global_router import GlobalRouteResult, route_global
 from flab2bp.layout.route_feedback import (
     DetailedRouteResult,
     DetailedRouteStatus,
@@ -23,7 +34,6 @@ from flab2bp.layout.route_feedback import (
     NetRole,
     RouteFailureKind,
     select_lns_neighbourhood,
-    update_feedback,
 )
 from flab2bp.layout.sequence_pair import (
     AnnealIncumbent,
@@ -446,8 +456,107 @@ def test_sequence_backend_returns_only_certified_placements(power: bool) -> None
     } <= placement.stats.keys()
 
 
+def test_production_threads_global_rounds_and_hard_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original = route_global
+    calls: list[tuple[int | None, bool]] = []
 
-def test_powered_one_net_miss_feeds_lns_or_refuses_honestly() -> None:
+    def recording_global(
+        prepared: object,
+        feedback: FeedbackState,
+        allowance: int,
+        *,
+        max_rounds: int | None = None,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> GlobalRouteResult:
+        calls.append((max_rounds, cancelled is not None))
+        return original(
+            prepared,  # type: ignore[arg-type]
+            feedback,
+            allowance,
+            max_rounds=max_rounds or 5,
+            cancelled=cancelled,
+        )
+
+    monkeypatch.setattr(sequence_solver_module, "route_global", recording_global)
+    config = SequenceSolverConfig(
+        stages=1,
+        moves_per_stage=1,
+        restarts_per_height=1,
+        global_elites=1,
+        global_rounds=1,
+    )
+
+    SequencePairLayout(power=False, config=config).lay_out(
+        two_stage_spec(),
+        time_budget_s=2.0,
+    )
+
+    assert calls
+    assert set(calls) == {(1, True)}
+
+
+
+
+def test_detailed_candidate_reuses_prepared_problem_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = two_stage_spec()
+    strips = plan_strips(spec, strip_len=6)
+    pack = _greedy_pack(strips, sum(_box(strip)[1] for strip in strips))
+    prepared = _prepare_routing_problem(spec, strips, pack, power=False)
+    original = _build_prepared
+    preparation_calls = 0
+
+    def unexpected_prepare(*args: object, **kwargs: object) -> object:
+        nonlocal preparation_calls
+        del args, kwargs
+        preparation_calls += 1
+        return prepared
+
+    monkeypatch.setattr(
+        freeform_module,
+        "_prepare_routing_problem",
+        unexpected_prepare,
+    )
+    seen: list[object] = []
+
+    def recording_build(
+        build_spec: BuildSpec,
+        build_strips: list[object],
+        build_prepared: object,
+        **kwargs: object,
+    ) -> object:
+        seen.append(build_prepared)
+        return original(
+            build_spec,
+            build_strips,  # type: ignore[arg-type]
+            build_prepared,  # type: ignore[arg-type]
+            **kwargs,  # type: ignore[arg-type]
+        )
+
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "_build_prepared",
+        recording_build,
+    )
+    result = _route_detailed_candidate(
+        spec,
+        strips,
+        prepared,
+        power=False,
+        deadline=None,
+        allowance=100_000,
+    )
+
+    assert seen == [prepared]
+    assert result.routing.status is DetailedRouteStatus.ROUTED
+    assert preparation_calls == 0
+
+def test_powered_one_net_miss_feeds_lns_or_refuses_honestly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     quantum = entry("quantum-chip")
     spec = build_candidates(
         load_vendored(),
@@ -504,19 +613,12 @@ def test_powered_one_net_miss_feeds_lns_or_refuses_honestly() -> None:
         height=136,
         status="frozen-powered-one-net-miss",
     )
-
-    first = _route_detailed_candidate(
+    frozen_prepared = _prepare_routing_problem(
         spec,
         strips,
         frozen,
         power=True,
-        deadline=None,
-        allowance=3_000_000,
     )
-    assert first.routing.status is DetailedRouteStatus.STRANDED
-    assert first.routing.failed_count == 1
-    assert first.placement is None
-
     sizes = tuple(_box(strip) for strip in strips)
     problem = PlacementProblem(
         sizes=sizes,
@@ -524,29 +626,174 @@ def test_powered_one_net_miss_feeds_lns_or_refuses_honestly() -> None:
         outline_height=frozen.height,
         area_lower_bound=sum(width * height for width, height in sizes),
     )
-    pair = SequencePair(
+    east = [0] * len(strips)
+    east[11] = 1
+    selected_pair = SequencePair(
         positive=tuple(range(len(strips))),
-        negative=tuple(range(len(strips))),
+        negative=(
+            *range(16, -1, -1),
+            *range(27, 16, -1),
+            *range(39, 27, -1),
+        ),
     )
-    state = AnnealState(pair, GapProfile.zero(len(strips)), base_seed=20260824)
-    decoded = decode_sequence_pair(
-        state.pair,
-        state.gaps,
-        problem.sizes,
-        outline_height=problem.outline_height,
+    selected_holder: list[AnnealState] = []
+    anneal_inputs: list[AnnealState] = []
+
+    def incumbent(state: AnnealState) -> AnnealIncumbent:
+        decoded = decode_sequence_pair(
+            state.pair,
+            state.gaps,
+            problem.sizes,
+            outline_height=problem.outline_height,
+        )
+        return AnnealIncumbent(
+            state=state,
+            decoded=decoded,
+            energy=SearchEnergy(0, 0.0),
+            key=PlacementKey(
+                x=decoded.x,
+                y=decoded.y,
+                dimensions=problem.sizes,
+                east_gaps=state.gaps.east,
+                north_gaps=state.gaps.north,
+            ),
+        )
+
+    def frozen_anneal_stage(
+        stage_problem: PlacementProblem,
+        state: AnnealState,
+        config: object,
+        context: PlacementCostContext | None = None,
+    ) -> AnnealStageResult:
+        del stage_problem, config, context
+        anneal_inputs.append(state)
+        if not selected_holder:
+            selected = AnnealState(
+                selected_pair,
+                GapProfile(tuple(east), (0,) * len(strips)),
+                base_seed=state.base_seed,
+            )
+            selected_holder.append(selected)
+            elite = incumbent(selected)
+            return AnnealStageResult(
+                final_state=AnnealState(
+                    selected.pair,
+                    selected.gaps,
+                    selected.base_seed,
+                    stage_index=1,
+                ),
+                incumbent=elite,
+                accepted_moves=0,
+                elites=(elite,),
+            )
+        elite = incumbent(state)
+        return AnnealStageResult(
+            final_state=AnnealState(
+                state.pair,
+                state.gaps,
+                state.base_seed,
+                stage_index=state.stage_index + 1,
+            ),
+            incumbent=elite,
+            accepted_moves=0,
+            elites=(elite,),
+        )
+
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "anneal_stage",
+        frozen_anneal_stage,
     )
-    feedback = update_feedback(
-        FeedbackState.empty((sum(width for width, _height in sizes), frozen.height)),
-        first.routing,
+    prepared_calls = 0
+
+    def prepare(
+        height: int, decoded: DecodedPlacement
+    ) -> _PreparedRoutingProblem:
+        nonlocal prepared_calls
+        prepared_calls += 1
+        if prepared_calls == 1:
+            assert decoded == incumbent(selected_holder[0]).decoded
+            return frozen_prepared
+        return _prepare_routing_problem(
+            spec,
+            strips,
+            _decoded_pack(height, decoded),
+            power=True,
+        )
+
+    feedback_seen: list[FeedbackState] = []
+
+    def global_stage(
+        prepared: _PreparedRoutingProblem,
+        feedback: FeedbackState,
+        allowance: int,
+    ) -> GlobalRouteResult:
+        feedback_seen.append(feedback)
+        return route_global(
+            prepared,
+            feedback,
+            allowance,
+            max_rounds=1,
+        )
+
+    detailed_results: list[DetailedStageResult] = []
+
+    def detailed_stage(
+        prepared: _PreparedRoutingProblem,
+        allowance: int,
+    ) -> DetailedStageResult:
+        result = _route_detailed_candidate(
+            spec,
+            strips,
+            prepared,
+            power=True,
+            deadline=None,
+            allowance=allowance,
+        )
+        detailed_results.append(result)
+        return result
+
+    def certify(placement: Placement) -> ValidationVerdict:
+        report = validate.certify(placement, spec, expect_power=True)
+        failures = tuple(sorted({finding.check for finding in report.errors}))
+        return ValidationVerdict(not failures, failures)
+
+    solver = SequenceSolver(
+        heights=(frozen.height,),
+        problem_for_height=lambda _height: problem,
+        adapters=StageAdapters(
+            prepare=prepare,
+            global_route=global_stage,
+            detailed_route=detailed_stage,
+            validate=certify,
+        ),
+        expansion_budget=ExpansionBudget(8_000_000),
+        config=SequenceSolverConfig(
+            stages=2,
+            moves_per_stage=1,
+            restarts_per_height=1,
+            global_elites=1,
+            global_rounds=1,
+        ),
     )
+    with contextlib.suppress(NoValidLayout):
+        solver.search(max_stages=2)
+
+    first = detailed_results[0]
+    assert first.routing.status is DetailedRouteStatus.STRANDED
+    assert first.routing.failed_count == 1
+    assert first.placement is None
     failure = first.routing.failures[0]
-    assert failure.net_id in feedback.net_weight
+    assert failure.net_id in feedback_seen[1].net_weight
+
+    selected = selected_holder[0]
+    selected_decoded = incumbent(selected).decoded
     neighbourhood = select_lns_neighbourhood(
         first.routing,
-        state.pair,
-        state.gaps,
+        selected.pair,
+        selected.gaps,
         problem,
-        decoded,
+        selected_decoded,
     )
     expected = {
         endpoint
@@ -555,27 +802,20 @@ def test_powered_one_net_miss_feeds_lns_or_refuses_honestly() -> None:
         if endpoint is not None
     }
     assert expected <= neighbourhood
-
     repaired = repair_neighbourhood(
-        state.pair,
-        state.gaps,
+        selected.pair,
+        selected.gaps,
         neighbourhood,
-        seed=derive_stage_seed(state.base_seed, 1),
+        seed=derive_stage_seed(selected.base_seed, 1),
     )
-    next_decoded = decode_sequence_pair(
+    assert anneal_inputs[1] == AnnealState(
         repaired.pair,
         repaired.gaps,
-        problem.sizes,
-        outline_height=problem.outline_height,
+        selected.base_seed,
+        stage_index=1,
     )
-    second = _route_detailed_candidate(
-        spec,
-        strips,
-        _decoded_pack(frozen.height, next_decoded),
-        power=True,
-        deadline=None,
-        allowance=3_000_000,
-    )
+
+    second = detailed_results[1]
     if second.placement is None:
         assert second.routing.status is not DetailedRouteStatus.ROUTED
     else:

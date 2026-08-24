@@ -431,6 +431,40 @@ def test_impossible_overflow_reports_five_rounds_of_metrics() -> None:
     assert result.max_overflow > 0
 
 
+def test_global_routing_stops_when_the_hard_deadline_is_cancelled() -> None:
+    problem, _net_id = _one_net_problem()
+    checks = 0
+
+    def cancelled() -> bool:
+        nonlocal checks
+        checks += 1
+        return checks >= 3
+
+    result = route_global(
+        problem,
+        _feedback(problem),
+        budget=100_000,
+        cancelled=cancelled,
+    )
+
+    assert result.cancelled
+    assert result.rounds == 1
+    assert result.expansions < 3
+
+
+def test_global_negotiation_honours_configured_round_count() -> None:
+    problem = _impossible_overflow_problem()
+    feedback = FeedbackState.empty((5, 3))
+
+    once = route_global(problem, feedback, budget=100_000, max_rounds=1)
+    multi = route_global(problem, feedback, budget=100_000, max_rounds=3)
+
+    assert once.rounds == 1
+    assert multi.rounds == 3
+    assert once.total_overflow > 0
+    assert multi.total_overflow > 0
+
+
 def test_negotiation_spends_one_exact_shared_expansion_budget() -> None:
     problem = _impossible_overflow_problem()
     first_round = route_global_once(problem, _feedback(problem), budget=100_000)

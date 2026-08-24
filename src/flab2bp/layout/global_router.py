@@ -3,7 +3,7 @@ from __future__ import annotations
 import heapq
 import math
 from array import array
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from types import MappingProxyType
 
@@ -49,6 +49,7 @@ class GlobalRouteResult:
     exhausted_budget: bool
     hot_cells: tuple[Cell, ...]
     hot_regions: tuple[tuple[int, int, int, int], ...]
+    cancelled: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "paths", MappingProxyType(dict(self.paths)))
@@ -59,6 +60,7 @@ class _SearchResult:
     path: tuple[Cell, ...] | None
     expansions: int
     exhausted_budget: bool
+    cancelled: bool
 
 
 @dataclass(slots=True)
@@ -114,6 +116,8 @@ def route_global_once(
     problem: _PreparedRoutingProblem,
     feedback: FeedbackState,
     budget: int,
+    *,
+    cancelled: Callable[[], bool] | None = None,
 ) -> GlobalRouteResult:
     """Route all prepared nets once with relaxed provisional occupancy.
 
@@ -127,6 +131,7 @@ def route_global_once(
         feedback.cell_history,
         budget,
         problem.nets,
+        cancelled,
     )
     hot_cells, hot_regions = _hot_summary(dict(overflows), grid)
     return GlobalRouteResult(
@@ -141,6 +146,7 @@ def route_global_once(
         exhausted_budget=result.exhausted_budget,
         hot_cells=hot_cells,
         hot_regions=hot_regions,
+        cancelled=result.cancelled,
     )
 
 
@@ -148,21 +154,26 @@ def route_global(
     problem: _PreparedRoutingProblem,
     feedback: FeedbackState,
     budget: int,
+    *,
+    max_rounds: int = _MAX_ROUNDS,
+    cancelled: Callable[[], bool] | None = None,
 ) -> GlobalRouteResult:
     """Negotiate congestion for the whole prepared problem deterministically."""
     _check_budget(budget)
+    _check_max_rounds(max_rounds)
     history = dict(feedback.cell_history)
     nets = _routing_order(problem.nets)
     remaining = budget
     expansions = 0
 
-    for round_number in range(1, _MAX_ROUNDS + 1):
+    for round_number in range(1, max_rounds + 1):
         result, overflows, grid = _route_round(
             problem,
             feedback,
             history,
             remaining,
             nets,
+            cancelled,
         )
         remaining -= result.expansions
         expansions += result.expansions
@@ -181,8 +192,9 @@ def route_global(
             exhausted_budget=result.exhausted_budget,
             hot_cells=hot_cells,
             hot_regions=hot_regions,
+            cancelled=result.cancelled,
         )
-        if result.exhausted_budget or result.total_overflow == 0:
+        if result.cancelled or result.exhausted_budget or result.total_overflow == 0:
             return negotiated
 
     return negotiated
@@ -193,12 +205,18 @@ def _check_budget(budget: int) -> None:
         raise ValueError("global routing budget must be a non-negative integer")
 
 
+def _check_max_rounds(max_rounds: int) -> None:
+    if type(max_rounds) is not int or max_rounds <= 0:
+        raise ValueError("global routing rounds must be a positive integer")
+
+
 def _route_round(
     problem: _PreparedRoutingProblem,
     feedback: FeedbackState,
     history: Mapping[Cell, float],
     budget: int,
     nets: Sequence[_PreparedNet],
+    cancelled: Callable[[], bool] | None,
 ) -> tuple[GlobalRouteResult, tuple[tuple[Cell, int], ...], _Grid]:
     workspace = problem.new_workspace()
     canvas = workspace.canvas
@@ -219,8 +237,13 @@ def _route_round(
     expansions = 0
     unreachable = 0
     exhausted_budget = False
+    was_cancelled = False
 
-    for net in nets:
+    for net_index, net in enumerate(nets):
+        if cancelled is not None and cancelled():
+            unreachable += len(nets) - net_index
+            was_cancelled = True
+            break
         grid = external_grid if net.net_id.role is NetRole.EXTERNAL else internal_grid
         flags, starts, goals = _route_ends(net, grid)
         compatible = frozenset((*net.src_group, *net.dst_group))
@@ -234,6 +257,7 @@ def _route_round(
             feedback,
             net.net_id,
             remaining,
+            cancelled,
         )
         remaining -= searched.expansions
         expansions += searched.expansions
@@ -244,6 +268,10 @@ def _route_round(
             net_results.append(
                 GlobalNetResult(net.net_id, 0, 0, 0, searched.expansions)
             )
+            if searched.cancelled:
+                unreachable += len(nets) - net_index - 1
+                was_cancelled = True
+                break
             continue
 
         overflow = sum(
@@ -263,6 +291,9 @@ def _route_round(
                 expansions=searched.expansions,
             )
         )
+
+    if not was_cancelled and cancelled is not None:
+        was_cancelled = cancelled()
 
     overflow_indices = tuple(
         sorted(
@@ -291,6 +322,7 @@ def _route_round(
             exhausted_budget=exhausted_budget,
             hot_cells=(),
             hot_regions=(),
+            cancelled=was_cancelled,
         ),
         overflows,
         external_grid,
@@ -447,11 +479,14 @@ def _search_relaxed(
     feedback: FeedbackState,
     net_id: NetId,
     budget: int,
+    cancelled: Callable[[], bool] | None,
 ) -> _SearchResult:
+    if cancelled is not None and cancelled():
+        return _SearchResult(None, 0, False, True)
     if not starts or not goals:
-        return _SearchResult(None, 0, False)
+        return _SearchResult(None, 0, False, False)
     if budget <= 0:
-        return _SearchResult(None, 0, True)
+        return _SearchResult(None, 0, True, False)
 
     goal_set = frozenset(goals)
     goal_coordinates = tuple(_local_xy(grid, goal) for goal in sorted(goal_set))
@@ -486,16 +521,19 @@ def _search_relaxed(
 
     expansions = 0
     while open_heap:
+        if cancelled is not None and cancelled():
+            return _SearchResult(None, expansions, False, True)
         _estimated, cost, current = heapq.heappop(open_heap)
         if cost > best[current]:
             continue
         if expansions >= budget:
-            return _SearchResult(None, expansions, True)
+            return _SearchResult(None, expansions, True, False)
         expansions += 1
         if current in goal_set:
             return _SearchResult(
                 _reconstruct(grid, current, predecessor, via),
                 expansions,
+                False,
                 False,
             )
 
@@ -523,7 +561,7 @@ def _search_relaxed(
                 (next_cost + heuristic(target), next_cost, target),
             )
 
-    return _SearchResult(None, expansions, False)
+    return _SearchResult(None, expansions, False, False)
 
 
 def _reconstruct(
