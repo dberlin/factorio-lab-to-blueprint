@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 
 import pytest
 
+import flab2bp.layout.sequence_solver as sequence_solver_module
 from flab2bp.layout.base import NoValidLayout, PlacedBuilding, Placement
 from flab2bp.layout.global_router import GlobalRouteResult
 from flab2bp.layout.route_feedback import (
@@ -15,8 +16,23 @@ from flab2bp.layout.route_feedback import (
     NetId,
     NetRole,
     RouteFailureKind,
+    select_lns_neighbourhood,
 )
-from flab2bp.layout.sequence_pair import DecodedPlacement, PlacementProblem
+from flab2bp.layout.sequence_pair import (
+    AnnealIncumbent,
+    AnnealStageResult,
+    AnnealState,
+    DecodedPlacement,
+    GapProfile,
+    PlacementCostContext,
+    PlacementKey,
+    PlacementProblem,
+    SearchEnergy,
+    SequencePair,
+    decode_sequence_pair,
+    derive_stage_seed,
+    repair_neighbourhood,
+)
 from flab2bp.layout.sequence_solver import (
     DetailedStageResult,
     ExpansionBudget,
@@ -357,3 +373,176 @@ def test_audit_layout_surface_uses_injected_solver_factory() -> None:
     spec = two_stage_spec()
     assert layout.lay_out(spec, time_budget_s=2.5) is exact
     assert calls == [(spec, 2.5, True, 7, config)]
+
+
+def test_lns_continues_from_the_proxy_selected_elite(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    problem = PlacementProblem(
+        sizes=((1, 1),) * 4,
+        nets=((0, 1),),
+        outline_height=4,
+        area_lower_bound=4,
+    )
+    anneal_inputs: list[AnnealState] = []
+    selected_states: list[AnnealState] = []
+
+    def incumbent(state: AnnealState, scalar: float) -> AnnealIncumbent:
+        decoded = decode_sequence_pair(
+            state.pair,
+            state.gaps,
+            problem.sizes,
+            outline_height=problem.outline_height,
+        )
+        return AnnealIncumbent(
+            state=state,
+            decoded=decoded,
+            energy=SearchEnergy(0, scalar),
+            key=PlacementKey(
+                x=decoded.x,
+                y=decoded.y,
+                dimensions=problem.sizes,
+                east_gaps=state.gaps.east,
+                north_gaps=state.gaps.north,
+            ),
+        )
+
+    def fake_anneal_stage(
+        stage_problem: PlacementProblem,
+        state: AnnealState,
+        config: object,
+        context: PlacementCostContext | None = None,
+    ) -> AnnealStageResult:
+        del stage_problem, config, context
+        anneal_inputs.append(state)
+        if len(anneal_inputs) == 1:
+            selected = AnnealState(
+                pair=SequencePair((0, 1, 2, 3), (0, 1, 2, 3)),
+                gaps=GapProfile((1, 0, 0, 0), (0, 0, 0, 0)),
+                base_seed=state.base_seed,
+                stage_index=state.stage_index,
+            )
+            final = AnnealState(
+                pair=SequencePair((2, 0, 3, 1), (1, 0, 2, 3)),
+                gaps=GapProfile.zero(4),
+                base_seed=state.base_seed,
+                stage_index=state.stage_index + 1,
+            )
+            selected_states.append(selected)
+            final_elite = incumbent(final, 0.0)
+            selected_elite = incumbent(selected, 1.0)
+            return AnnealStageResult(
+                final_state=final,
+                incumbent=final_elite,
+                accepted_moves=1,
+                elites=(final_elite, selected_elite),
+            )
+        only = incumbent(state, 0.0)
+        return AnnealStageResult(
+            final_state=AnnealState(
+                pair=state.pair,
+                gaps=state.gaps,
+                base_seed=state.base_seed,
+                stage_index=state.stage_index + 1,
+            ),
+            incumbent=only,
+            accepted_moves=0,
+            elites=(only,),
+        )
+
+    monkeypatch.setattr(sequence_solver_module, "anneal_stage", fake_anneal_stage)
+    failure = NetFailure(
+        net_id=NetId(0, None, "item", NetRole.INTERNAL, 0),
+        kind=RouteFailureKind.CONGESTION_WALL,
+        wall=((0, 0, 0),),
+        blocking_nets=(),
+        expansions=0,
+    )
+    detailed_calls = 0
+
+    def global_route(
+        decoded: DecodedPlacement,
+        feedback: FeedbackState,
+        allowance: int,
+    ) -> GlobalRouteResult:
+        del feedback, allowance
+        selected = selected_states[0]
+        selected_decoded = decode_sequence_pair(
+            selected.pair,
+            selected.gaps,
+            problem.sizes,
+            outline_height=problem.outline_height,
+        )
+        return _global(overflow=0 if decoded == selected_decoded else 10)
+
+    def detailed_route(
+        decoded: DecodedPlacement, allowance: int
+    ) -> DetailedStageResult:
+        nonlocal detailed_calls
+        del decoded, allowance
+        detailed_calls += 1
+        if detailed_calls == 1:
+            return DetailedStageResult(
+                DetailedRouteResult(
+                    status=DetailedRouteStatus.STRANDED,
+                    routed=(),
+                    failures=(failure,),
+                    iterations=1,
+                    expansions=0,
+                ),
+                None,
+            )
+        return DetailedStageResult(_routing(DetailedRouteStatus.BUDGET), None)
+
+    solver = SequenceSolver(
+        heights=(4,),
+        problem_for_height=lambda _height: problem,
+        adapters=StageAdapters(
+            prepare=lambda _height, decoded: decoded,
+            global_route=global_route,
+            detailed_route=detailed_route,
+            validate=lambda _placement: ValidationVerdict(False, ("unreachable",)),
+        ),
+        expansion_budget=ExpansionBudget(100),
+        config=SequenceSolverConfig(
+            stages=2,
+            moves_per_stage=1,
+            restarts_per_height=1,
+            global_elites=2,
+        ),
+    )
+    with pytest.raises(NoValidLayout):
+        solver.search(max_stages=2)
+
+    selected = selected_states[0]
+    selected_decoded = decode_sequence_pair(
+        selected.pair,
+        selected.gaps,
+        problem.sizes,
+        outline_height=problem.outline_height,
+    )
+    neighbourhood = select_lns_neighbourhood(
+        DetailedRouteResult(
+            status=DetailedRouteStatus.STRANDED,
+            routed=(),
+            failures=(failure,),
+            iterations=1,
+            expansions=0,
+        ),
+        selected.pair,
+        selected.gaps,
+        problem,
+        selected_decoded,
+    )
+    repaired = repair_neighbourhood(
+        selected.pair,
+        selected.gaps,
+        neighbourhood,
+        seed=derive_stage_seed(anneal_inputs[0].base_seed, 1),
+    )
+    assert anneal_inputs[1] == AnnealState(
+        pair=repaired.pair,
+        gaps=repaired.gaps,
+        base_seed=anneal_inputs[0].base_seed,
+        stage_index=1,
+    )

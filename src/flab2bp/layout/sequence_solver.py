@@ -25,7 +25,6 @@ from flab2bp.layout.route_feedback import (
 )
 from flab2bp.layout.sequence_pair import (
     AnnealConfig,
-    AnnealStageResult,
     AnnealState,
     DecodedPlacement,
     PlacementProblem,
@@ -254,6 +253,7 @@ class _HeightState:
 @dataclass(frozen=True, slots=True)
 class _GlobalCandidate[PreparedT]:
     prepared: PreparedT
+    state: AnnealState
     decoded: DecodedPlacement
     result: GlobalRouteResult
 
@@ -398,6 +398,7 @@ class SequenceSolver[PreparedT]:
             global_candidates.append(
                 _GlobalCandidate(
                     prepared=prepared,
+                    state=elite.state,
                     decoded=elite.decoded,
                     result=global_result,
                 )
@@ -430,12 +431,12 @@ class SequenceSolver[PreparedT]:
         next_anneal = annealed.final_state
         if 0 < detailed.routing.failed_count <= 3:
             neighbourhood = _lns_neighbourhood(
-                detailed.routing, annealed, problem, selected.decoded
+                detailed.routing, selected.state, problem, selected.decoded
             )
             if neighbourhood:
                 repaired = repair_neighbourhood(
-                    annealed.final_state.pair,
-                    annealed.final_state.gaps,
+                    selected.state.pair,
+                    selected.state.gaps,
                     neighbourhood,
                     seed=derive_stage_seed(restart.seed, annealed.final_state.stage_index),
                 )
@@ -475,14 +476,14 @@ class SequenceSolver[PreparedT]:
 
 def _lns_neighbourhood(
     detailed: DetailedRouteResult,
-    annealed: AnnealStageResult,
+    selected_state: AnnealState,
     problem: PlacementProblem,
     decoded: DecodedPlacement,
 ) -> frozenset[int]:
     return select_lns_neighbourhood(
         detailed,
-        annealed.final_state.pair,
-        annealed.final_state.gaps,
+        selected_state.pair,
+        selected_state.gaps,
         problem,
         decoded,
     )
