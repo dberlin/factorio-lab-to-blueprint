@@ -18,6 +18,7 @@ from flab2bp.layout.strip_variants import (
     partition_strip_family,
     placement_geometry,
     validate_instance_partition,
+    variants_for_count,
 )
 from flab2bp.spec import BuildSpec, MachineGroup
 
@@ -183,6 +184,72 @@ def test_instance_ranges_must_partition_the_logical_family_exactly() -> None:
         validate_instance_partition(family, instances[1:])
     with pytest.raises(ValueError, match="partition"):
         validate_instance_partition(family, instances + (instances[-1],))
+
+
+def test_partition_realizes_each_instance_variant_at_its_exact_machine_count() -> None:
+    family = _family(_single_machine_spec("assembling-machine-1", count=3))
+    template = default_strip_variant(family)
+    first, second = partition_strip_family(family, max_machine_count=2)
+
+    assert (first.machine_count, second.machine_count) == (2, 1)
+    assert first.variant.machine_origins_x == (0, 4)
+    assert first.variant.box_width == 8
+    assert second.variant.machine_origins_x == (0,)
+    assert second.variant.box_width == 4
+    assert first.variant.template_key == second.variant.template_key == template.template_key
+
+    per_machine = sum(len(plan.attachments) for plan in template.attachment_plan)
+    for instance in (first, second):
+        repeated = tuple(
+            (
+                machine_ordinal,
+                plan.lane.lane_id,
+                attachment.item,
+                origin + attachment.cell[0],
+                attachment.cell[1],
+            )
+            for machine_ordinal, origin in enumerate(
+                instance.variant.machine_origins_x,
+                start=instance.machine_start,
+            )
+            for plan in instance.variant.attachment_plan
+            for attachment in plan.attachments
+        )
+        assert len(repeated) == instance.machine_count * per_machine
+        assert {ordinal for ordinal, *_rest in repeated} == set(
+            range(instance.machine_start, instance.machine_stop)
+        )
+    validate_instance_partition(family, (first, second))
+
+
+def test_realized_variant_order_and_geometry_are_stable_for_every_count() -> None:
+    family = _family(_single_machine_spec("assembling-machine-1", count=7))
+    template_keys = tuple(variant.template_key for variant in family.variants)
+
+    for machine_count in range(1, family.total_machine_count + 1):
+        variants = variants_for_count(family, machine_count)
+        assert tuple(variant.template_key for variant in variants) == template_keys
+        assert len({variant.variant_id for variant in variants}) == len(variants)
+        assert all(
+            variant.machine_origins_x
+            == tuple(range(0, machine_count * variant.pitch_x, variant.pitch_x))
+            and variant.box_width == machine_count * variant.pitch_x
+            for variant in variants
+        )
+
+    for max_machine_count in range(1, family.total_machine_count + 1):
+        instances = partition_strip_family(
+            family,
+            max_machine_count=max_machine_count,
+        )
+        validate_instance_partition(family, instances)
+        assert sum(instance.machine_count for instance in instances) == 7
+        assert all(
+            len(instance.variant.machine_origins_x) == instance.machine_count
+            and instance.variant.box_width
+            == instance.machine_count * instance.variant.pitch_x
+            for instance in instances
+        )
 
 
 def test_ranges_live_only_on_instances_and_variants_have_no_direct_targets() -> None:

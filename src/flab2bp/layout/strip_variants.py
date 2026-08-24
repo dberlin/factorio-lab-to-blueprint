@@ -245,6 +245,20 @@ class StripVariant:
         return self.placement_geometry.pitch_y
 
     @property
+    def template_key(self) -> tuple[object, ...]:
+        """Count-independent identity of the pose choice this realizes."""
+        return (
+            self.variant_id.family_id,
+            self.yaw,
+            self.footprint_width,
+            self.footprint_height,
+            self.placement_geometry.identity,
+            self.lane_plan,
+            self.attachment_plan,
+            self.box_height,
+        )
+
+    @property
     def sort_key(self) -> tuple[object, ...]:
         return (
             self.box_width * self.box_height,
@@ -312,7 +326,7 @@ class StripInstance:
     instance_id: StripInstanceId
     machine_start: int
     machine_count: int
-    variant_id: StripVariantId
+    variant: StripVariant
 
     def __post_init__(self) -> None:
         if (self.machine_start, self.machine_count) != (
@@ -320,12 +334,20 @@ class StripInstance:
             self.instance_id.machine_count,
         ):
             raise ValueError("strip instance id and range disagree")
-        if self.variant_id.family_id != self.instance_id.family_id:
+        if self.variant.variant_id.family_id != self.instance_id.family_id:
             raise ValueError("strip instance variant belongs to another family")
+        if len(self.variant.machine_origins_x) != self.machine_count:
+            raise ValueError("strip instance variant must realize its exact machine count")
+        if self.variant.box_width != self.machine_count * self.variant.pitch_x:
+            raise ValueError("strip instance variant box must realize its exact range")
 
     @property
     def family_id(self) -> StripFamilyId:
         return self.instance_id.family_id
+
+    @property
+    def variant_id(self) -> StripVariantId:
+        return self.variant.variant_id
 
     @property
     def machine_stop(self) -> int:
@@ -580,6 +602,47 @@ def default_strip_variant(family: StripFamily) -> StripVariant:
     return min(preferred or family.variants, key=lambda variant: variant.sort_key)
 
 
+def _variant_for_count(template: StripVariant, machine_count: int) -> StripVariant:
+    if machine_count <= 0:
+        raise ValueError("realized strip variant machine count must be positive")
+    machine_origins_x = tuple(
+        range(0, machine_count * template.pitch_x, template.pitch_x)
+    )
+    box_width = machine_count * template.pitch_x
+    variant_id = _variant_id(
+        template.variant_id.family_id,
+        template.yaw,
+        machine_origins_x,
+        template.placement_geometry,
+        template.lane_plan,
+        template.attachment_plan,
+        box_width,
+        template.box_height,
+    )
+    return StripVariant(
+        variant_id=variant_id,
+        yaw=template.yaw,
+        footprint_width=template.footprint_width,
+        footprint_height=template.footprint_height,
+        placement_geometry=template.placement_geometry,
+        lane_plan=template.lane_plan,
+        box_width=box_width,
+        box_height=template.box_height,
+        attachment_plan=template.attachment_plan,
+        machine_origins_x=machine_origins_x,
+    )
+
+
+def variants_for_count(
+    family: StripFamily,
+    machine_count: int,
+) -> tuple[StripVariant, ...]:
+    """Realize every family pose in stable family order for ``machine_count``."""
+    return tuple(
+        _variant_for_count(template, machine_count) for template in family.variants
+    )
+
+
 def partition_strip_family(
     family: StripFamily,
     *,
@@ -589,9 +652,13 @@ def partition_strip_family(
     """Create balanced initial physical ranges without mutating the logical family."""
     if max_machine_count <= 0:
         raise ValueError("maximum strip machine count must be positive")
-    chosen = variant_id or default_strip_variant(family).variant_id
-    if chosen not in {variant.variant_id for variant in family.variants}:
-        raise ValueError("strip instance variant does not belong to the family")
+    chosen_id = variant_id or default_strip_variant(family).variant_id
+    try:
+        template = next(
+            variant for variant in family.variants if variant.variant_id == chosen_id
+        )
+    except StopIteration:
+        raise ValueError("strip instance variant does not belong to the family") from None
     instance_count = max(
         1,
         (family.total_machine_count + max_machine_count - 1) // max_machine_count,
@@ -607,7 +674,7 @@ def partition_strip_family(
                 instance_id=instance_id,
                 machine_start=machine_start,
                 machine_count=machine_count,
-                variant_id=chosen,
+                variant=_variant_for_count(template, machine_count),
             )
         )
         machine_start += machine_count
@@ -622,11 +689,11 @@ def validate_instance_partition(
 ) -> None:
     """Require active physical ranges to cover ``0..total`` exactly once."""
     expected_start = 0
-    valid_variants = {variant.variant_id for variant in family.variants}
+    valid_templates = {variant.template_key for variant in family.variants}
     for instance in sorted(instances, key=lambda candidate: candidate.machine_start):
         if instance.family_id != family.family_id:
             raise ValueError("strip instances do not partition one logical family")
-        if instance.variant_id not in valid_variants:
+        if instance.variant.template_key not in valid_templates:
             raise ValueError("strip instance uses a variant outside its family")
         if instance.machine_start != expected_start:
             raise ValueError("strip instance ranges do not partition the logical family")
@@ -652,4 +719,5 @@ __all__ = [
     "partition_strip_family",
     "placement_geometry",
     "validate_instance_partition",
+    "variants_for_count",
 ]
