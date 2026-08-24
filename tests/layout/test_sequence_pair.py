@@ -267,7 +267,12 @@ def test_alignment_leaves_candidate_when_window_is_too_small() -> None:
     assert target.key not in aligned.direct
 
 
-def test_alignment_uses_stable_target_order() -> None:
+def _conflicting_alignment_scene() -> tuple[
+    PlacementProblem,
+    DecodedPlacement,
+    DirectInsertTarget,
+    DirectInsertTarget,
+]:
     sizes = ((4, 2), (4, 2), (4, 2))
     problem = PlacementProblem(sizes, ((0, 1), (0, 2)), 8, 6)
     decoded = DecodedPlacement(
@@ -281,12 +286,68 @@ def test_alignment_uses_stable_target_order() -> None:
     )
     first = DirectInsertTarget((0, 1), 0, 1, 1, 0, 1, 1)
     second = DirectInsertTarget((0, 2), 0, 2, 1, 0, 1, 1)
+    return problem, decoded, first, second
+
+
+def test_alignment_uses_stable_target_order() -> None:
+    problem, decoded, first, second = _conflicting_alignment_scene()
 
     forward = align_direct_inserts(problem, decoded, (first, second))
     reverse = align_direct_inserts(problem, decoded, (second, first))
 
     assert forward == reverse
     assert forward.direct == frozenset({first.key})
+
+
+def test_alignment_requires_geometry_for_every_carried_direct_key() -> None:
+    problem, decoded, first, second = _conflicting_alignment_scene()
+    aligned_first = align_direct_inserts(problem, decoded, (first,))
+
+    with pytest.raises(ValueError, match="carried direct"):
+        align_direct_inserts(problem, aligned_first, (second,))
+
+
+def test_alignment_rejects_duplicate_geometry_for_a_carried_direct_key() -> None:
+    problem, decoded, first, second = _conflicting_alignment_scene()
+    aligned_first = align_direct_inserts(problem, decoded, (first,))
+
+    with pytest.raises(ValueError, match="duplicate carried direct"):
+        align_direct_inserts(problem, aligned_first, (first, first, second))
+
+
+def test_alignment_revalidates_carried_targets_before_shared_endpoint_shift() -> None:
+    problem, decoded, first, second = _conflicting_alignment_scene()
+    aligned_first = align_direct_inserts(problem, decoded, (first,))
+
+    aligned_both = align_direct_inserts(problem, aligned_first, (first, second))
+
+    assert aligned_both.direct == frozenset({first.key})
+    assert aligned_both.x[first.producer] == aligned_both.x[first.consumer]
+    assert (
+        aligned_both.y[first.consumer]
+        + first.consumer_row
+        - aligned_both.y[first.producer]
+        - first.producer_row
+        == 1
+    )
+
+
+def test_alignment_rejects_a_carried_key_whose_geometry_is_already_broken() -> None:
+    problem, decoded, first, second = _conflicting_alignment_scene()
+    aligned_first = align_direct_inserts(problem, decoded, (first,))
+    broken = DecodedPlacement(
+        x=(4, *aligned_first.x[1:]),
+        y=aligned_first.y,
+        width=aligned_first.width,
+        used_height=aligned_first.used_height,
+        x_windows=aligned_first.x_windows,
+        y_windows=aligned_first.y_windows,
+        gap_area=aligned_first.gap_area,
+        direct=aligned_first.direct,
+    )
+
+    with pytest.raises(ValueError, match="not realized"):
+        align_direct_inserts(problem, broken, (first, second))
 
 
 def test_two_stage_alignment_retains_cp_sat_direct_opportunity() -> None:

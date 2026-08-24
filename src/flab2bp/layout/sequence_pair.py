@@ -411,6 +411,22 @@ def align_direct_inserts(
         raise ValueError("decoded placement size must match the placement problem")
 
     current = decoded
+    targets_by_key: dict[tuple[int, int], list[DirectInsertTarget]] = {}
+    for target in targets:
+        targets_by_key.setdefault(target.key, []).append(target)
+    carried_targets: dict[tuple[int, int], DirectInsertTarget] = {}
+    for key in sorted(decoded.direct):
+        matching = targets_by_key.get(key, [])
+        if not matching:
+            raise ValueError(f"target geometry is required for carried direct key {key}")
+        if len(matching) > 1:
+            raise ValueError(f"duplicate carried direct target geometry for key {key}")
+        carried = matching[0]
+        _validate_direct_target(problem, carried)
+        if not _target_is_direct(decoded, carried):
+            raise ValueError(f"carried direct target geometry is not realized for key {key}")
+        carried_targets[key] = carried
+
     # Every target replaces one belt net, so benefit is equal; the immutable
     # geometry tuple is the stable tie-break independent of caller iteration.
     ordered = sorted(
@@ -425,22 +441,9 @@ def align_direct_inserts(
             target.consumer_span,
         ),
     )
-    realized_targets: dict[tuple[int, int], DirectInsertTarget] = {}
+    realized_targets = carried_targets.copy()
     for target in ordered:
-        if target.key in decoded.direct:
-            realized_targets.setdefault(target.key, target)
-    for target in ordered:
-        if not 0 <= target.producer < problem.size or not 0 <= target.consumer < problem.size:
-            raise ValueError("direct-insert target endpoints must identify placement strips")
-        producer_size = problem.sizes[target.producer]
-        consumer_size = problem.sizes[target.consumer]
-        if (
-            target.producer_row >= producer_size[1]
-            or target.consumer_row >= consumer_size[1]
-            or target.producer_span > producer_size[0]
-            or target.consumer_span > consumer_size[0]
-        ):
-            raise ValueError("direct-insert target geometry must lie inside its endpoint strips")
+        _validate_direct_target(problem, target)
         if target.key in current.direct:
             continue
         candidate = _align_direct_target(
@@ -461,6 +464,22 @@ def align_direct_inserts(
         current = candidate
         realized_targets[target.key] = target
     return current
+
+
+def _validate_direct_target(
+    problem: PlacementProblem, target: DirectInsertTarget
+) -> None:
+    if not 0 <= target.producer < problem.size or not 0 <= target.consumer < problem.size:
+        raise ValueError("direct-insert target endpoints must identify placement strips")
+    producer_size = problem.sizes[target.producer]
+    consumer_size = problem.sizes[target.consumer]
+    if (
+        target.producer_row >= producer_size[1]
+        or target.consumer_row >= consumer_size[1]
+        or target.producer_span > producer_size[0]
+        or target.consumer_span > consumer_size[0]
+    ):
+        raise ValueError("direct-insert target geometry must lie inside its endpoint strips")
 
 
 def _align_direct_target(
