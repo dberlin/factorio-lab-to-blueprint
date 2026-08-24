@@ -3625,6 +3625,45 @@ def _nearest_free(
     return None
 
 
+def _tower_keep_out(buildings: list[PlacedBuilding]) -> set[tuple[int, int]]:
+    """Cells a Tesla Tower may not stand on, footprints AND clearance halos.
+
+    Footprints alone are not enough, and a Splitter is why.  It is
+    belt-integrated, so it reports no occupied tile at all -- but its collider is
+    a CROSS whose arms reach 1.19 world units, and a tower reaches 0.3, which is
+    more than the 1.2566 units in one tile.  A tower placed on the tile next to a
+    junction intersects it, and `geom.collide` refuses the whole placement for
+    that one pair.
+
+    So every building contributes a halo of the separation its clearance
+    requires against a tower's, measured centre to centre in tiles.  For a
+    Splitter that is 1.5, which takes out the four neighbours and the four
+    diagonals; for a machine the halo is inside its own footprint and adds
+    nothing.
+    """
+    tower_cl = max(catalog.clearance(CONSTANTS.tesla_item_id, 0.0))
+    out: set[tuple[int, int]] = set()
+    for b in buildings:
+        try:
+            info = catalog.building(b.item_id)
+        except KeyError:
+            continue
+        need = (max(catalog.clearance(b.item_id, b.yaw)) + tower_cl) / 2.0
+        reach = math.ceil(need - 1e-9) - 1
+        tiles = (
+            [(b.x + dx, b.y + dy) for dx in range(b.width) for dy in range(b.height)]
+            if info.occupies_tiles
+            else [(b.x, b.y)]
+        )
+        for tx, ty in tiles:
+            out.add((tx, ty))
+            for hx in range(tx - reach, tx + reach + 1):
+                for hy in range(ty - reach, ty + reach + 1):
+                    if math.hypot(hx - tx, hy - ty) < need:
+                        out.add((hx, hy))
+    return out
+
+
 def _top_up_coverage(buildings: list[PlacedBuilding], tower_model: int) -> tuple[int, int]:
     """Add towers until every powered building is genuinely inside a supply radius.
 
@@ -3644,16 +3683,7 @@ def _top_up_coverage(buildings: list[PlacedBuilding], tower_model: int) -> tuple
     ``fallback_reason`` exists to prevent.
     """
     radius = float(CONSTANTS.supply_radius)
-    occupied: set[tuple[int, int]] = set()
-    for b in buildings:
-        try:
-            if not catalog.building(b.item_id).occupies_tiles:
-                continue
-        except KeyError:
-            continue
-        for dx in range(b.width):
-            for dy in range(b.height):
-                occupied.add((b.x + dx, b.y + dy))
+    occupied = _tower_keep_out(buildings)
 
     towers = [(b.x, b.y) for b in buildings if b.item_id == CONSTANTS.tesla_item_id]
 
@@ -3721,16 +3751,9 @@ def _link_towers(buildings: list[PlacedBuilding], tower_model: int) -> int:
     ``power.connectivity`` still judges the result.
     """
     link = float(CONSTANTS.link_distance)
-    occupied: set[tuple[int, int]] = set()
-    for b in buildings:
-        try:
-            if not catalog.building(b.item_id).occupies_tiles:
-                continue
-        except KeyError:
-            continue
-        for dx in range(b.width):
-            for dy in range(b.height):
-                occupied.add((b.x + dx, b.y + dy))
+    # The same halo the coverage pass uses: a relay tower next to a junction
+    # collides with it exactly as a coverage tower does.
+    occupied = _tower_keep_out(buildings)
 
     towers = [
         (b.x + b.width / 2, b.y + b.height / 2)
