@@ -1,56 +1,72 @@
-"""FactorioLab's own solved flow, read from its JSON export.
+"""FactorioLab's own solved flow, read from its CSV export.
 
-FactorioLab's flow view has a "download as JSON" button (``Exporter.flowToJson``
-in ``src/exporter/exporter.ts``).  It writes the graph FactorioLab solved, and
-the thing we take from it is the **recipe selection**: which recipe the player's
-own settings chose to make each item.  That decision is theirs, and re-deriving
-it is what this module exists to stop.  Measured on the corpus, 17 items have
-more than one permitted producer and **16 of those choices move the blueprint's
-input/output boundary** -- which is how a flow containing no stone produced a
-blueprint asking the player to belt stone in.
+FactorioLab's list view has a "download as CSV" button (``Exporter.stepsToCsv``
+in ``src/exporter/exporter.ts``).  It writes the flow it solved: one row per
+step, naming the RECIPE it chose for each item.  Consuming that selection is the
+whole point of this module.  We re-derive nothing about *which* recipe makes
+what -- that decision is the player's, made in FactorioLab's UI.  Measured on
+the corpus, 17 items have more than one permitted producer and **16 of those
+choices move the blueprint's input/output boundary**, which is how a flow
+containing no stone produced a blueprint asking the player to belt stone in.
 
 What the file actually is
 -------------------------
 
-Read off FactorioLab's own source (``src/flow/flow-builder.ts``,
-``FlowBuilder.buildGraph``) rather than inferred from a sample::
+Read off FactorioLab's own exporter source, not inferred from a sample:
 
-    {"nodes": [{"id": "r|graphene-advanced", "name": ..., "text": "1", ...},
-               {"id": "i|fire-ice", ...}],
-     "links": [{"source": "i|fire-ice", "target": "r|graphene-advanced",
-                "text": "60/m", "value": 5, "color": ...}]}
+* **Line 1 is** ``"<window.location.href>"`` -- the source URL, wrapped in
+  double quotes.  It is the provenance record :func:`verify_provenance` checks.
+* **Line 2 is a header of column names** drawn from a fixed vocabulary
+  (``StepKeys``), but *only the columns some row fills* are emitted.  The header
+  therefore varies between downloads, so columns are read by NAME, never by
+  position.
+* **Rows are comma-joined.**  The fields that can contain commas -- ``Inputs``,
+  ``Outputs``, ``Targets``, ``Modules``, ``Beacons`` -- are written pre-quoted by
+  the exporter, so the file is ordinary RFC4180 CSV.  Rows are ragged: a row
+  stops at its last filled column.
+* **Every numeric cell is** ``"=" + Rational.toString()``.  The leading ``=``
+  exists so a spreadsheet evaluates the cell.  ``Rational.toString()`` emits a
+  plain decimal *only* when the value survives ``toFixed(3)`` unchanged, and an
+  exact ``p/q`` otherwise -- so **a pristine download is exact throughout**,
+  including ``Machines`` and ``Items``.
 
-Node ids are ``<kind>|<id>`` with five kinds: ``i`` an item, ``r`` a recipe,
-``m`` a recipe *objective*, ``s`` an item's surplus, ``o`` an item's output.
+Everything parsed here becomes a ``Fraction``.  No value in this module is ever
+a float: belts are sized from these rates and the validator checks capacity
+exactly, so a float in this path ships a blueprint that quietly misses its rate,
+which is the worst failure mode this program has.
 
-**Only the recipe nodes are trustworthy, and only as a set of ids.**  Everything
-else in this file is a Sankey diagram, and the diagram is not the flow:
+Why not the JSON export
+-----------------------
 
-* ``link.value`` is a **float** -- ``Rational.toNumber()`` -- and it is not even
-  a rate.  It is scaled to 1/10 for fluids, floored at ``MIN_LINK_VALUE = 1e-10``
-  when it would be zero, and its *meaning* is whatever the viewer's ``linkSize``
-  preference says: items, belts, machines, or a percentage.
-* ``node.text`` and ``link.text`` are **display strings**:
-  ``toLocaleString(precision)``, rounded to the viewer's column-precision
-  preference, locale-formatted, with a rate suffix appended.
+FactorioLab's flow view also offers "download as JSON" (``flowToJson``), and it
+looks like the better-structured choice.  It is not, and the reasoning is worth
+keeping because it is not visible from the outside -- both files describe the
+same solve, and the JSON is the one that loses information:
+
+* ``flowToJson`` writes ``JSON.stringify(flowData)`` where ``flowData`` is the
+  **Sankey diagram model** (``src/flow/flow-builder.ts``), not the solve.
+* ``link.value`` is a **float** via ``Rational.toNumber()``, and is not even a
+  rate: it is scaled to 1/10 for fluids, floored at ``MIN_LINK_VALUE = 1e-10``,
+  and its *meaning* is whatever the viewer's ``linkSize`` preference says --
+  items, belts, machines, or a percentage.
+* ``node.text`` and ``link.text`` are display strings: ``toLocaleString``,
+  rounded to the viewer's column-precision preference and locale-formatted.
 * **Item nodes are deleted.**  ``buildGraph`` prunes any item node with a single
-  source or a single target and re-points the links around it, so the item set
-  in the file is incomplete by design -- an external input feeding one recipe is
-  exactly the shape that gets pruned.  The ``hideExcluded`` preference removes
-  more.  Recipe nodes are never pruned (the filter tests ``id.startsWith('i')``),
-  which is why the selection survives when nothing else does.
-* **There is no URL in the file.**  ``flowToJson`` writes
-  ``JSON.stringify(flowData)`` and nothing else, so unlike the CSV export --
-  whose first line is ``window.location.href`` -- this file carries no record of
-  what produced it.  :func:`verify_against_request` substitutes what provenance
-  can still be established structurally; see its docstring for what that does
-  and does not catch.
+  source or a single target and re-points the links around it -- exactly the
+  shape of an external input feeding one recipe -- so its item set is incomplete
+  by construction.  The ``hideExcluded`` preference removes more.
+* **It contains no URL**, so a stale export whose selection still parses cannot
+  be detected at all.
 
-So: **the selection comes from this file and every magnitude is re-derived
-exactly.**  Every rate in this program is a ``Fraction`` because belts are sized
-from them and the validator checks capacity exactly; a float in that path ships
-a blueprint that quietly misses its rate, which is the worst failure available
-here.  Nothing numeric from this file is ever used as a rate.
+The decimals in the CSV that look lossy are an artefact of opening the file in a
+spreadsheet: ``=25/56`` is a formula, and Excel evaluates it to ``0.446428571``.
+The tell is that the *quoted* text cells in the same file keep their fractions
+(``coal:2161/3571``) while only the ``=``-prefixed cells lose them.  Verified on
+the real sample: ``0.083333333 = 1/12``, ``0.208333333 = 5/24``,
+``0.446428571 = 25/56``, each truncated to nine places.  Such a file is still
+accepted -- it is what a user is most likely to hand over -- but its mangled
+values are flagged :attr:`FlowRow.exact` ``False`` and the cross-check says so
+rather than reporting spurious disagreements.
 
 How the selection is applied
 ----------------------------
@@ -61,39 +77,45 @@ FactorioLab did not choose".  That is the existing, well-understood lever --
 authoritative, "the state of FactorioLab's UI, not a delta" -- so pinning
 introduces no new concept in the rate solver, and nothing changes at all for a
 build that supplies no flow file.  An item whose only chosen producer is
-mining-flagged still falls out as an external input, for the reason it always
+mining-flagged still falls out as an external input for the reason it always
 did: ``_buildable_producers`` cuts the 22 mining recipes because extraction
 happens outside the blueprint.
 
-There is no fallback.  Absent, malformed, inconsistent with the URL, or naming a
-recipe we cannot build: this module raises.  Silently re-deriving the selection
-is the behaviour it exists to remove.
+There is no fallback.  Absent, malformed, for the wrong URL, or naming a recipe
+we cannot build: this module raises.  Silently re-deriving the selection is the
+behaviour it exists to remove.
 """
 
 from __future__ import annotations
 
-import json
+import csv
+import io
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
+from fractions import Fraction
 from pathlib import Path
-from typing import Any, Final
+from typing import Final
+from urllib.parse import parse_qsl, urlsplit
 
 from flab2bp.lab.schema import Dataset
-from flab2bp.lab.url import LabRequest, ObjectiveType
+from flab2bp.lab.url import DisplayRate, LabRequest, ObjectiveType
 
 __all__ = [
     "FlowError",
     "FlowFormatError",
-    "FlowNode",
     "FlowProvenanceError",
+    "FlowRow",
     "FlowSelection",
     "FlowSelectionError",
-    "compare_selection",
+    "cross_check",
     "load_flow",
-    "parse_flow_json",
+    "parse_flow_csv",
     "pin_request",
     "pinned_exclusions",
+    "unsupplied_inputs",
     "verify_against_request",
+    "verify_provenance",
 ]
 
 
@@ -107,198 +129,393 @@ class FlowError(ValueError):
 
 
 class FlowFormatError(FlowError):
-    """The file is not a FactorioLab flow export, or is damaged."""
+    """The file is not a FactorioLab step export, or is damaged."""
 
 
 class FlowProvenanceError(FlowError):
-    """The flow cannot have come from the URL being built."""
+    """The export was generated from a different URL than the one requested."""
 
 
 class FlowSelectionError(FlowError):
     """The flow names a recipe this program cannot build."""
 
 
-#: ``i`` item, ``r`` recipe, ``m`` recipe objective, ``s`` surplus, ``o`` output.
-#: From ``FlowBuilder.buildGraph``; a node id outside this set means the format
-#: has moved and every id we read out of the file is a guess.
-_KINDS: Final = frozenset({"i", "r", "m", "s", "o"})
+#: FactorioLab's ``StepKeys``, verbatim and in emission order.  A header naming
+#: anything outside this set is not a step export.
+STEP_KEYS: Final = (
+    "Item",
+    "Items",
+    "Surplus",
+    "Inputs",
+    "Outputs",
+    "Targets",
+    "Belts",
+    "Belt",
+    "Wagons",
+    "Wagon",
+    "Rockets",
+    "Recipe",
+    "Machines",
+    "Machine",
+    "Modules",
+    "Beacons",
+    "Power",
+    "Pollution",
+)
 
-#: The two kinds that name a recipe.  ``m`` is a recipe *objective* -- the player
-#: asked for N machines of it directly -- and it is as much a selection as ``r``.
-_RECIPE_KINDS: Final = frozenset({"r", "m"})
+#: Numeric columns, so a row can record whether ANY of its values lost precision
+#: without every caller re-deciding which cells are numbers.
+_NUMERIC: Final = (
+    "Items",
+    "Surplus",
+    "Belts",
+    "Wagons",
+    "Rockets",
+    "Machines",
+    "Power",
+    "Pollution",
+)
+
+#: Route segments that select a VIEW of the same solved state.  The download
+#: button sits on more than one of them, so the view a player happened to be
+#: looking at must not make their own export read as someone else's.
+_VIEWS: Final = frozenset({"list", "flow", "wizard", "data"})
+
+#: Mirrors ``rates.solve._SECONDS_PER_PERIOD``.  Duplicated rather than imported
+#: to keep ``lab`` free of a dependency on ``rates``; three exact constants that
+#: are facts about clocks, not about either module.
+_SECONDS_PER_PERIOD: Final[Mapping[DisplayRate, Fraction]] = {
+    DisplayRate.PerSecond: Fraction(1),
+    DisplayRate.PerMinute: Fraction(60),
+    DisplayRate.PerHour: Fraction(3600),
+}
+
+_FRACTION = re.compile(r"\A(-?\d+)\s*/\s*(\d+)\Z")
+_MIXED = re.compile(r"\A(-?\d+)\s*\+\s*(\d+)\s*/\s*(\d+)\Z")
+_DECIMAL = re.compile(r"\A-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?\Z")
 
 
 @dataclass(frozen=True, slots=True)
-class FlowNode:
-    """One node of the exported Sankey graph."""
+class FlowRow:
+    """One step of FactorioLab's flow.
 
-    kind: str
-    #: The item or recipe id, i.e. the node id with its ``<kind>|`` prefix off.
-    ref_id: str
-    #: The node's DISPLAY label -- rounded, locale-formatted, suffixed.  Kept so
-    #: a report can quote what FactorioLab showed the player.  Never a rate.
-    text: str = ""
-    #: ``icon.id``, which for a recipe node with a machine set is that machine's
-    #: item id and otherwise is the recipe's own id.  Only trusted when it
-    #: resolves to a machine in our dataset; see :meth:`FlowSelection.machines`.
-    icon_id: str = ""
+    ``item_id`` and ``recipe_id`` are both optional in the source format: a row
+    may carry either or both.
+    """
+
+    item_id: str = ""
+    recipe_id: str = ""
+    machine_item_id: str = ""
+    belt_item_id: str = ""
+    #: ``step.items - step.surplus``: the amount actually CONSUMED by the flow,
+    #: in the URL's display rate.  Zero means nothing draws on this item, which
+    #: is how a pure byproduct presents.  ``None`` means the column was blank.
+    items: Fraction | None = None
+    #: ``step.surplus``: produced and unused.  Never a demand.
+    surplus: Fraction | None = None
+    #: FactorioLab's FRACTIONAL machine count.  Ours is this, rounded up.
+    machines: Fraction | None = None
+    #: The ``Modules`` cell verbatim.  Deliberately unparsed: nothing here acts
+    #: on it, and the one real sample carries a bare ``1`` where the exporter's
+    #: own format says ``<count> <module-id>``, so any structure imposed on it
+    #: would be a guess that could refuse a valid file.
+    modules: str = ""
+    #: False when any numeric cell in this row lost precision, which happens
+    #: when the file has been round-tripped through a spreadsheet.
+    exact: bool = True
 
     @property
-    def node_id(self) -> str:
-        return f"{self.kind}|{self.ref_id}"
+    def is_demand(self) -> bool:
+        """Does anything in the flow actually draw on this item?
+
+        ``Items 0 / Surplus 125`` is a byproduct nobody consumes.  Reading that
+        as a demand would put a belt of hydrogen into the blueprint's inputs.
+        """
+        return self.items is not None and self.items > 0
 
 
 @dataclass(frozen=True, slots=True)
 class FlowSelection:
-    """A parsed FactorioLab flow export.
+    """A parsed FactorioLab CSV: the flow FactorioLab solved."""
 
-    Deliberately holds no magnitudes.  The file's numbers are display values and
-    render sizes, and promoting one of them to a rate is the single thing this
-    module must never do.
-    """
-
-    nodes: tuple[FlowNode, ...]
-    #: ``(source node id, target node id)`` pairs, for reporting only.
-    links: tuple[tuple[str, str], ...] = ()
+    #: The URL from line 1, exactly as FactorioLab wrote it.
+    source_url: str
+    rows: tuple[FlowRow, ...]
+    #: The header actually present, so a report can say what the file carried.
+    columns: tuple[str, ...] = ()
 
     @property
     def chosen_recipe_ids(self) -> frozenset[str]:
         """Every recipe FactorioLab's flow runs.
 
-        A SET, deliberately, not an item->recipe map.  A recipe is drawn at the
-        node for the item it is keyed to, but it also produces that node's
+        A SET, deliberately, not an item->recipe map.  A recipe is keyed to the
+        row of the item it primarily makes, but it also produces that row's
         byproducts -- ``graphene-advanced`` makes graphene *and* hydrogen, and
-        hydrogen has no recipe node of its own.  Pinning per item would strike
+        the hydrogen row names no recipe at all.  Pinning per item would strike
         out the recipe that supplies the byproduct.
         """
-        return frozenset(n.ref_id for n in self.nodes if n.kind in _RECIPE_KINDS)
+        return frozenset(r.recipe_id for r in self.rows if r.recipe_id)
 
     @property
-    def item_ids(self) -> frozenset[str]:
-        """Items with a node.
+    def by_item(self) -> Mapping[str, FlowRow]:
+        return {r.item_id: r for r in self.rows if r.item_id}
 
-        **Incomplete by design** -- ``buildGraph`` prunes item nodes that have a
-        single source or a single target, which is precisely the shape of an
-        external input feeding one recipe.  Never test membership of this set to
-        decide whether an item is absent from the flow; a miss proves nothing.
+    @property
+    def by_recipe(self) -> Mapping[str, FlowRow]:
+        return {r.recipe_id: r for r in self.rows if r.recipe_id}
+
+    @property
+    def is_exact(self) -> bool:
+        """True when no numeric cell lost precision (a pristine download)."""
+        return all(r.exact for r in self.rows)
+
+    def external_items(self, data: Dataset) -> dict[str, Fraction]:
+        """Items the flow draws on that are NOT made inside the blueprint.
+
+        Two ways an item gets here, and both are FactorioLab's own statement
+        rather than our inference:
+
+        * The row names **no recipe** -- an ``Input`` objective, declared by the
+          player as arriving from outside.
+        * The row names a recipe we do not build: **mining-flagged** (orbital
+          collectors, mining machines, oil extractors, water pumps -- exactly
+          the 22 recipes ``solve._buildable_producers`` cuts) or a technology
+          recipe, which consumes goods to advance research.
+
+        Byproducts are excluded: an item with no recipe and no demand is
+        surplus, and belting it in would be inventing an input.
         """
-        return frozenset(n.ref_id for n in self.nodes if n.kind == "i")
-
-    @property
-    def surplus_item_ids(self) -> frozenset[str]:
-        """Items produced and not consumed.  A byproduct is never a demand."""
-        return frozenset(n.ref_id for n in self.nodes if n.kind == "s")
-
-    @property
-    def output_item_ids(self) -> frozenset[str]:
-        """Items the flow delivers to an objective."""
-        return frozenset(n.ref_id for n in self.nodes if n.kind == "o")
-
-    def machines(self, data: Dataset) -> dict[str, str]:
-        """Recipe id -> the machine FactorioLab drew it in, where recoverable.
-
-        ``buildGraph`` sets a recipe node's icon to the *machine's* icon when a
-        machine is set and to the recipe's own icon otherwise, so ``icon.id`` is
-        a machine id or a recipe id and there is no flag saying which.  Rather
-        than guess, this accepts the value only when the dataset resolves it as
-        a machine -- self-verifying, and simply empty when it cannot be
-        established.  Used for reporting; the machine we build in comes from
-        ``select_machine``.
-        """
-        out: dict[str, str] = {}
-        for node in self.nodes:
-            if node.kind not in _RECIPE_KINDS or not node.icon_id:
+        out: dict[str, Fraction] = {}
+        for row in self.rows:
+            if not row.item_id or not row.is_demand:
                 continue
-            if node.icon_id != node.ref_id and data.get_machine(node.icon_id) is not None:
-                out[node.ref_id] = node.icon_id
+            assert row.items is not None  # is_demand
+            if not row.recipe_id:
+                out[row.item_id] = row.items
+                continue
+            recipe = data.get_recipe(row.recipe_id)
+            if recipe is not None and (recipe.is_mining or recipe.is_technology):
+                out[row.item_id] = row.items
         return out
 
 
-def _node_id(raw: object, where: str) -> tuple[str, str]:
-    if not isinstance(raw, str) or "|" not in raw:
-        raise FlowFormatError(
-            f"{where}: node id {raw!r} is not '<kind>|<id>'. FactorioLab writes "
-            "'i|<item>', 'r|<recipe>', 'm|<recipe>', 's|<item>' or 'o|<item>'."
-        )
-    kind, _, ref = raw.partition("|")
-    if kind not in _KINDS:
-        raise FlowFormatError(
-            f"{where}: node id {raw!r} has kind {kind!r}, which FactorioLab's "
-            f"flow export does not emit. Known kinds are {sorted(_KINDS)}."
-        )
-    if not ref:
-        raise FlowFormatError(f"{where}: node id {raw!r} names nothing after the '|'")
-    return kind, ref
+def _split_lines(text: str) -> list[str]:
+    return text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
 
 
-def _text(raw: object) -> str:
-    return raw if isinstance(raw, str) else ""
+def _delimiter(header: str) -> str:
+    """Comma for a pristine download, tab for a spreadsheet round-trip.
 
-
-def parse_flow_json(text: str) -> FlowSelection:
-    """Parse a FactorioLab flow export.  Raises :class:`FlowFormatError`.
-
-    Nothing here is lenient about structure.  A file whose shape is not the one
-    documented above is refused rather than parsed as far as it goes: if the
-    format has moved, every id read out of it is a guess, and a guessed recipe
-    selection is exactly the silent wrong answer this module removes.
+    Decided from the header line, where the field names are known and contain
+    neither character, so the choice is unambiguous rather than sniffed.
     """
-    try:
-        raw: Any = json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise FlowFormatError(f"not valid JSON: {exc}") from exc
-    if not isinstance(raw, dict):
+    if "\t" in header:
+        return "\t"
+    if "," in header:
+        return ","
+    raise FlowFormatError(
+        f"the header row {header!r} has no comma or tab, so it names a single "
+        "column; this is not a FactorioLab step export"
+    )
+
+
+def _number(raw: str, column: str) -> tuple[Fraction, bool] | None:
+    """Parse one numeric cell into ``(value, exact)``, or ``None`` if blank.
+
+    Always a ``Fraction``; never a float.  The exactness flag is FactorioLab's
+    own rule, read off ``Rational.toString()``: it emits a decimal only when the
+    value survives ``toFixed(3)`` unchanged, and an exact ``p/q`` otherwise.  So
+    a value finer than a thousandth cannot have come from the exporter -- a
+    spreadsheet evaluated an ``=p/q`` formula and wrote the float back.
+    """
+    text = raw.strip().lstrip("=").strip()
+    if not text:
+        return None
+    if (m := _FRACTION.match(text)) is not None:
+        if int(m.group(2)) == 0:
+            raise FlowFormatError(f"{column}: {raw!r} divides by zero")
+        return Fraction(int(m.group(1)), int(m.group(2))), True
+    if (m := _MIXED.match(text)) is not None:
+        whole, num, den = (int(g) for g in m.groups())
+        if den == 0:
+            raise FlowFormatError(f"{column}: {raw!r} divides by zero")
+        sign = -1 if whole < 0 else 1
+        return Fraction(abs(whole)) * sign + Fraction(num, den) * sign, True
+    if _DECIMAL.match(text) is not None:
+        value = Fraction(text)  # exact: Fraction parses the decimal, float never touches it
+        return value, (value * 1000).denominator == 1
+    raise FlowFormatError(
+        f"{column}: {raw!r} is not a number FactorioLab writes. Expected an "
+        "integer, a short decimal, or an exact 'p/q'."
+    )
+
+
+def parse_flow_csv(text: str) -> FlowSelection:
+    """Parse a FactorioLab step export.  Raises :class:`FlowFormatError`.
+
+    Nothing here is lenient about structure.  A file missing its URL line, or
+    whose header names a column FactorioLab does not emit, is refused rather
+    than parsed as far as it goes -- if the shape is not what we believe it is,
+    every value read out of it is a guess.
+    """
+    lines = _split_lines(text)
+    while lines and not lines[-1].strip():
+        lines.pop()
+    if len(lines) < 2:
         raise FlowFormatError(
-            f"expected a JSON object with 'nodes' and 'links', got {type(raw).__name__}"
-        )
-    if not isinstance(raw.get("nodes"), list):
-        raise FlowFormatError(
-            "no 'nodes' array. FactorioLab's flow export is "
-            '{"nodes": [...], "links": [...]}; this is a different file.'
+            "expected at least a URL line and a header row; a FactorioLab CSV "
+            "starts with the URL it was generated from"
         )
 
-    nodes: list[FlowNode] = []
-    for index, entry in enumerate(raw["nodes"]):
-        where = f"nodes[{index}]"
-        if not isinstance(entry, dict):
-            raise FlowFormatError(f"{where} is not an object")
-        kind, ref = _node_id(entry.get("id"), where)
-        icon = entry.get("icon")
-        nodes.append(
-            FlowNode(
-                kind=kind,
-                ref_id=ref,
-                text=_text(entry.get("text")),
-                icon_id=_text(icon.get("id")) if isinstance(icon, dict) else "",
+    url = lines[0].strip()
+    if len(url) >= 2 and url.startswith('"') and url.endswith('"'):
+        url = url[1:-1]
+    if not url.lower().startswith(("http://", "https://")):
+        raise FlowFormatError(
+            f"line 1 is {lines[0]!r}, not a URL. FactorioLab writes the page's "
+            "own address there, and it is the only provenance this file "
+            "carries; without it the flow cannot be attributed to a URL at all."
+        )
+
+    reader = csv.reader(io.StringIO("\n".join(lines[1:])), delimiter=_delimiter(lines[1]))
+    header = next(reader, None)
+    if header is None:  # pragma: no cover - len(lines) >= 2 guarantees a row
+        raise FlowFormatError("no header row")
+    columns = tuple(c.strip() for c in header)
+    unknown = [c for c in columns if c not in STEP_KEYS]
+    if unknown:
+        raise FlowFormatError(
+            f"header names {unknown!r}, which FactorioLab's step export does "
+            f"not emit. Known columns are {list(STEP_KEYS)}."
+        )
+    if "Item" not in columns and "Recipe" not in columns:
+        raise FlowFormatError(
+            "header carries neither 'Item' nor 'Recipe', so the file states no "
+            "recipe selection and there is nothing to pin"
+        )
+
+    rows: list[FlowRow] = []
+    for lineno, record in enumerate(reader, start=3):
+        if not any(field.strip() for field in record):
+            continue
+        if len(record) > len(columns):
+            raise FlowFormatError(
+                f"line {lineno} has {len(record)} fields but the header has {len(columns)}"
+            )
+        # Rows are ragged by design: the exporter stops at the last filled
+        # column, so a short row is normal and pads with blanks.
+        cell = dict(zip(columns, record, strict=False))
+        parsed = {
+            name: _number(cell.get(name, ""), f"line {lineno}, column {name}")
+            for name in _NUMERIC
+        }
+        rows.append(
+            FlowRow(
+                item_id=cell.get("Item", "").strip(),
+                recipe_id=cell.get("Recipe", "").strip(),
+                machine_item_id=cell.get("Machine", "").strip(),
+                belt_item_id=cell.get("Belt", "").strip(),
+                items=None if parsed["Items"] is None else parsed["Items"][0],
+                surplus=None if parsed["Surplus"] is None else parsed["Surplus"][0],
+                machines=None if parsed["Machines"] is None else parsed["Machines"][0],
+                modules=cell.get("Modules", "").strip(),
+                exact=all(got[1] for got in parsed.values() if got is not None),
             )
         )
 
-    links: list[tuple[str, str]] = []
-    for index, entry in enumerate(raw.get("links") or []):
-        where = f"links[{index}]"
-        if not isinstance(entry, dict):
-            raise FlowFormatError(f"{where} is not an object")
-        _node_id(entry.get("source"), where)
-        _node_id(entry.get("target"), where)
-        links.append((str(entry["source"]), str(entry["target"])))
+    if not rows:
+        raise FlowFormatError("the export has a header but no steps")
 
-    selection = FlowSelection(nodes=tuple(nodes), links=tuple(links))
-    if not selection.chosen_recipe_ids:
-        raise FlowFormatError(
-            "the export contains no recipe nodes, so it states no recipe "
-            "selection and there is nothing to pin. Download the JSON from the "
-            "flow view after it has finished solving."
+    seen: dict[str, int] = {}
+    for index, row in enumerate(rows):
+        if not row.item_id:
+            continue
+        if row.item_id in seen:
+            raise FlowFormatError(
+                f"item {row.item_id!r} appears on two rows ({seen[row.item_id] + 3} "
+                f"and {index + 3}). FactorioLab emits one step per item, so the "
+                "selection this file states is ambiguous."
+            )
+        seen[row.item_id] = index
+    return FlowSelection(source_url=url, rows=tuple(rows), columns=columns)
+
+
+def _url_state(url: str) -> tuple[str, str, tuple[tuple[str, str], ...]]:
+    """The part of a FactorioLab URL that determines the flow.
+
+    Returns ``(origin, mod path, sorted query pairs)``.  The trailing route
+    segment is dropped when it names a view: ``/dsp/list?...`` and
+    ``/dsp/flow?...`` are the same solved state seen two ways and the download
+    button is reachable from both, so treating them as different would refuse a
+    player their own export.  Everything else -- host, mod, and every query
+    parameter -- must match.  Parameters are compared as a sorted multiset
+    because Angular's router reorders them.
+    """
+    parts = urlsplit(url.strip())
+    query, fragment, path = parts.query, parts.fragment, parts.path
+    if not query and "?" in fragment:  # legacy hash routing
+        hash_path, _, query = fragment.partition("?")
+        path = hash_path.lstrip("#") or path
+    segments = [s for s in path.split("/") if s]
+    if segments and segments[-1].lower() in _VIEWS:
+        segments.pop()
+    return (
+        f"{parts.scheme.lower()}://{parts.netloc.lower()}",
+        "/".join(segments),
+        tuple(sorted(parse_qsl(query, keep_blank_values=True))),
+    )
+
+
+def verify_provenance(flow: FlowSelection, url: str) -> None:
+    """Refuse an export generated from a different URL.
+
+    Laying out someone else's flow, or a download taken before the player
+    changed their settings, produces a blueprint that is internally consistent
+    and answers the wrong question -- the silent-wrong-answer class this program
+    exists to avoid.  Line 1 is the only direct evidence that the export and the
+    URL agree, and it closes the hole a structural check cannot reach: a stale
+    export whose recipe selection still happens to parse against the new URL.
+    A mismatch names exactly what differs.
+    """
+    if not url.strip():
+        raise FlowProvenanceError(
+            "no URL to check this export against, so its provenance cannot be "
+            "established; refusing rather than assuming it is the right flow"
         )
-    return selection
+    want_origin, want_mod, want_query = _url_state(url)
+    got_origin, got_mod, got_query = _url_state(flow.source_url)
+    problems: list[str] = []
+    if want_origin != got_origin:
+        problems.append(f"origin {got_origin!r} != {want_origin!r}")
+    if want_mod != got_mod:
+        problems.append(f"mod path {got_mod!r} != {want_mod!r}")
+    if want_query != got_query:
+        want, got = dict(want_query), dict(got_query)
+        problems.extend(
+            f"parameter {key!r}: export has {got.get(key)!r}, URL has {want.get(key)!r}"
+            for key in sorted(set(want) | set(got))
+            if want.get(key) != got.get(key)
+        )
+    if problems:
+        raise FlowProvenanceError(
+            "this export is for a different URL.\n"
+            f"  export line 1: {flow.source_url}\n"
+            f"  requested:     {url}\n"
+            "  differs in:    " + "; ".join(problems) + "\n"
+            "Re-download the CSV from the URL you are building, or pass the URL "
+            "the export came from."
+        )
 
 
-def load_flow(path: Path) -> FlowSelection:
-    """Read and parse a FactorioLab flow export."""
+def load_flow(path: Path, *, url: str) -> FlowSelection:
+    """Read a FactorioLab CSV and verify it was generated from ``url``."""
     try:
         text = path.read_text(encoding="utf-8-sig")
     except OSError as exc:
         raise FlowFormatError(f"cannot read flow export {str(path)!r}: {exc}") from exc
-    return parse_flow_json(text)
+    flow = parse_flow_csv(text)
+    verify_provenance(flow, url)
+    return flow
 
 
 def pinned_exclusions(data: Dataset, flow: FlowSelection) -> frozenset[str]:
@@ -323,37 +540,24 @@ def pinned_exclusions(data: Dataset, flow: FlowSelection) -> frozenset[str]:
 
 
 def verify_against_request(flow: FlowSelection, data: Dataset, request: LabRequest) -> None:
-    """Establish, as far as the file allows, that this flow is the URL's flow.
+    """Structural agreement between the flow and the URL's settings.
 
-    **The JSON export carries no URL.**  The CSV export's first line is
-    ``window.location.href``; ``flowToJson`` writes the graph and nothing else.
-    So the direct provenance check -- "this file says it came from a different
-    address" -- is not available here, and what follows is a structural
-    substitute.
+    Complements :func:`verify_provenance` rather than replacing it: the URL
+    check proves the export came from this address, and these prove the export
+    is internally consistent with what the address asks for.  Refuses a flow
+    running a recipe the URL EXPLICITLY excludes, one that cannot make what the
+    URL asks for, or one that builds an item the URL declares as an ``Input``.
 
-    What it catches:
-
-    * a flow running a recipe the URL's own settings **forbid**, which is what a
-      stale export looks like after the player toggles a recipe off;
-    * a flow that cannot make what the URL **asks for**, which is what a stale
-      export looks like after the player changes the objective;
-    * a flow that **builds** an item the URL declares as an ``Input``, i.e. one
-      the player supplies from outside.
-
-    What it cannot catch: any settings change that leaves the recipe selection
-    intact -- a different belt, a different machine rank, a different objective
-    *rate*.  Those alter the blueprint without altering this file, and no check
-    on this file can see them.  The CSV export is the one that carries the URL.
+    The mod's DEFAULT exclusions are deliberately not consulted.  Absence is not
+    emptiness: a URL that says nothing about recipes leaves us falling back to
+    the defaults, and those are our guess at the player's state, not the state
+    itself.  The export IS that state, so it outranks the defaults -- and it
+    must, since ``graphene-advanced`` and ``fire-ice-vein`` are both
+    default-excluded in DSP and both are ordinary player choices.  Checking
+    against the defaults here re-created ``60d5f0f`` exactly: our defaults
+    overruling a selection the player had made.
     """
     chosen = flow.chosen_recipe_ids
-    # Only an EXPLICIT exclusion set can contradict the flow.  Absence is not
-    # emptiness: a URL that says nothing about recipes leaves us falling back to
-    # the mod's defaults, and those are our guess at the player's state, not the
-    # player's state.  The flow export IS that state, so it outranks the
-    # defaults -- and it must, since `graphene-advanced` and `fire-ice-vein` are
-    # both default-excluded in DSP and both are ordinary player choices.
-    # Checking against the defaults here re-created `60d5f0f` exactly: our
-    # defaults overruling a selection the player had made.
     if request.excluded_recipe_ids is not None:
         forbidden = sorted(chosen & frozenset(request.excluded_recipe_ids))
         if forbidden:
@@ -406,35 +610,135 @@ def pin_request(request: LabRequest, data: Dataset, flow: FlowSelection) -> LabR
     return replace(request, excluded_recipe_ids=set(pinned_exclusions(data, flow)))
 
 
-def compare_selection(
+def unsupplied_inputs(
+    flow: FlowSelection,
+    data: Dataset,
+    external_inputs: Mapping[str, Fraction],
+    *,
+    exempt: frozenset[str] = frozenset(),
+) -> tuple[str, ...]:
+    """Items we would ask the player to belt in that FactorioLab does not.
+
+    The rule this enforces is the hard one: the inputs and outputs FactorioLab
+    chose may never be changed, real or implied.  A blueprint demanding an input
+    that appears nowhere in the player's flow is the exact failure that motivated
+    pinning -- a flow containing no stone whose blueprint asked for stone.  With
+    the selection pinned this must be empty; if it is not, the pin is leaking and
+    the caller must refuse rather than ship the belt.
+    """
+    return tuple(sorted(set(external_inputs) - set(flow.external_items(data)) - exempt))
+
+
+def cross_check(
     flow: FlowSelection,
     data: Dataset,
     *,
-    built: Mapping[str, str],
+    machines: Mapping[str, int],
+    machine_items: Mapping[str, str],
+    external_inputs: Mapping[str, Fraction],
+    outputs: Mapping[str, Fraction] | None = None,
+    display_rate: DisplayRate = DisplayRate.PerMinute,
 ) -> tuple[str, ...]:
-    """Name every way our build's recipe set differs from FactorioLab's.
+    """Compare our exact solve against FactorioLab's exact numbers.
 
-    ``built`` maps recipe id to the machine item id we chose.  With the request
-    pinned this should return nothing, so anything it does return is a leak in
-    the pin and is worth reporting rather than absorbing.
+    This is the check the JSON export could not support, and it is the reason
+    the CSV is the supported path: both sides are exact rationals, so a
+    disagreement is a real disagreement rather than a rounding artefact.  It is
+    a diagnostic and not a gate -- it exists so a divergence gets *named*
+    instead of papered over -- with one exception handled by
+    :func:`unsupplied_inputs`, which refuses.
 
-    Machine *counts* are deliberately not compared.  The export carries them
-    only as rounded display text, and a check against a rounded number either
-    passes vacuously or raises a false alarm -- neither is worth having.  The
-    machine *choice* is compared where the export makes it recoverable.
+    Compared:
+
+    * **machine counts**, our integer against ``ceil(Machines)``.  Rounding up is
+      where FactorioLab's fractional count and ours must meet.
+    * **the machine chosen**, ours against the ``Machine`` column.
+    * **external input rates** and **output rates**, converted out of the URL's
+      display rate into items per second.
+
+    Machine counts legitimately differ between our proliferation candidates, so
+    the caller must say which candidate it is comparing.  When a row has been
+    through a spreadsheet its value is no longer exact, and the comparison says
+    so rather than reporting a difference the file cannot actually support.
     """
     findings: list[str] = []
-    chosen = flow.chosen_recipe_ids
-    for recipe_id in sorted(set(built) - chosen):
-        findings.append(f"{recipe_id}: we build it; the flow does not run it")
-    for recipe_id in sorted(chosen - set(built)):
+    per_second = _SECONDS_PER_PERIOD[display_rate]
+    by_recipe = flow.by_recipe
+
+    for recipe_id, count in sorted(machines.items()):
+        row = by_recipe.get(recipe_id)
+        if row is None:
+            findings.append(f"{recipe_id}: we build {count} machine(s); the flow has no such step")
+            continue
+        if row.machines is not None:
+            want = -((-row.machines.numerator) // row.machines.denominator)  # ceil, exactly
+            if want != count:
+                findings.append(
+                    f"{recipe_id}: {count} machine(s) here, ceil({row.machines}) = "
+                    f"{want} in the flow"
+                )
+        got = machine_items.get(recipe_id, "")
+        if row.machine_item_id and got and row.machine_item_id != got:
+            findings.append(
+                f"{recipe_id}: built in {got!r} here, {row.machine_item_id!r} in the flow"
+            )
+    for recipe_id in sorted(set(by_recipe) - set(machines)):
         recipe = data.get_recipe(recipe_id)
         if recipe is not None and (recipe.is_mining or recipe.is_technology):
             continue  # extraction happens outside; its output is an input belt
-        findings.append(f"{recipe_id}: the flow runs it; we build none")
-    drawn = flow.machines(data)
-    for recipe_id, machine_id in sorted(built.items()):
-        want = drawn.get(recipe_id)
-        if want is not None and want != machine_id:
-            findings.append(f"{recipe_id}: built in {machine_id!r} here, {want!r} in the flow")
+        findings.append(
+            f"{recipe_id}: the flow runs {by_recipe[recipe_id].machines} machine(s); "
+            "we build none"
+        )
+
+    supplied = flow.external_items(data)
+    findings.extend(
+        _rate_findings(flow, supplied, external_inputs, per_second, "belt in", "uses")
+    )
+    for item_id in sorted(set(supplied) - set(external_inputs)):
+        findings.append(
+            f"{item_id}: the flow belts in {supplied[item_id]} but this build needs none"
+        )
+    if outputs is not None:
+        wanted = {
+            r.item_id: r.items
+            for r in flow.rows
+            if r.item_id and r.items is not None and r.item_id in outputs
+        }
+        findings.extend(_rate_findings(flow, wanted, outputs, per_second, "deliver", "delivers"))
     return tuple(findings)
+
+
+def _rate_findings(
+    flow: FlowSelection,
+    theirs: Mapping[str, Fraction],
+    ours: Mapping[str, Fraction],
+    per_second: Fraction,
+    verb: str,
+    their_verb: str,
+) -> list[str]:
+    """Name each item whose rate we and the flow disagree on.
+
+    Exact when the row survived intact.  A row a spreadsheet has mangled cannot
+    settle a disagreement either way, so it is reported as unverifiable rather
+    than compared -- a check that silently degrades to "close enough" is how a
+    rate defect ships.
+    """
+    out: list[str] = []
+    for item_id, period_rate in sorted(theirs.items()):
+        mine = ours.get(item_id)
+        if mine is None:
+            continue
+        want = period_rate / per_second
+        if want == mine:
+            continue
+        row = flow.by_item.get(item_id)
+        if row is not None and not row.exact:
+            out.append(
+                f"{item_id}: we {verb} {mine}/s against ~{want}/s in the flow, but that "
+                "row lost precision in a spreadsheet, so the difference cannot be "
+                "confirmed from this file"
+            )
+        else:
+            out.append(f"{item_id}: we {verb} {mine}/s; the flow {their_verb} {want}/s")
+    return out

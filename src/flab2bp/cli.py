@@ -115,7 +115,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument(
         "--flow",
         type=Path,
-        help="FactorioLab flow export (the flow view's 'download as JSON'). Pins "
+        help="FactorioLab CSV export (the list view's 'download as CSV'). Pins "
         "the recipe selection to the one FactorioLab solved instead of "
         "re-deriving it. Refuses on a file that cannot be this URL's flow; "
         "there is no fallback to re-deriving.",

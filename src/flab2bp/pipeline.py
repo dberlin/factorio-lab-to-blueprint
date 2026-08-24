@@ -15,7 +15,7 @@ from typing import Literal
 
 from flab2bp.dsp import catalog, codec
 from flab2bp.lab.data import load_vendored
-from flab2bp.lab.flow import compare_selection, load_flow, pin_request
+from flab2bp.lab.flow import FlowError, cross_check, load_flow, pin_request, unsupplied_inputs
 from flab2bp.lab.schema import Dataset
 from flab2bp.lab.url import parse_url
 from flab2bp.layout import markers, validate
@@ -135,7 +135,7 @@ def build(
     # There is deliberately no fallback: `load_flow` and `pin_request` raise
     # rather than shrug, because quietly re-deriving the selection is the exact
     # behaviour this argument exists to remove.
-    selection = load_flow(flow) if flow is not None else None
+    selection = load_flow(flow, url=url) if flow is not None else None
     if selection is not None:
         request = pin_request(request, data, selection)
 
@@ -197,15 +197,36 @@ def build(
     # Cross-check rather than trust. With the selection pinned this must be
     # empty; anything it names is the pin leaking, and a named leak is worth far
     # more than a silent one.
-    findings = (
-        compare_selection(
+    findings: tuple[str, ...] = ()
+    if selection is not None:
+        # The boundary rule is a REFUSAL, not a finding: an input FactorioLab's
+        # flow does not contain is the stone bug itself, and shipping the belt
+        # would change the inputs the player chose. Proliferator is the one
+        # known exemption -- FactorioLab builds it, we belt it in, and removing
+        # that asymmetry is separate work that moves the layout stage.
+        stray = unsupplied_inputs(
             selection,
             data,
-            built={g.recipe_id: g.machine_item_id for g in chosen_spec.groups},
+            chosen_spec.external_inputs,
+            exempt=frozenset(
+                i for i in chosen_spec.external_inputs if i.startswith("proliferator")
+            ),
         )
-        if selection is not None
-        else ()
-    )
+        if stray:
+            raise FlowError(
+                f"this build would ask for {list(stray)}, which the supplied flow "
+                "does not belt in. FactorioLab's chosen inputs may not be changed, "
+                "so refusing rather than emitting a blueprint that demands them."
+            )
+        findings = cross_check(
+            selection,
+            data,
+            machines={g.recipe_id: g.count for g in chosen_spec.groups},
+            machine_items={g.recipe_id: g.machine_item_id for g in chosen_spec.groups},
+            external_inputs=chosen_spec.external_inputs,
+            outputs=chosen_spec.outputs,
+            display_rate=request.display_rate,
+        )
 
     blueprint = codec.encode(labelled)
     return Build(

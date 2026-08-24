@@ -1,0 +1,5 @@
+"https://factoriolab.github.io/dsp/list?o=graphene*60&ibe=conveyor-belt-2&mmr=arc-smelter~assembling-machine-2~chemical-plant~matrix-lab&v=11"
+Item,Items,Surplus,Inputs,Outputs,Targets,Belts,Belt,Recipe,Machines,Machine
+graphene,=60,,"fire-ice:1","graphene:1,hydrogen:1",,=1/12,conveyor-belt-2,graphene-advanced,=1,chemical-plant
+fire-ice,=60,,,"fire-ice:1","graphene-advanced:1",=1/12,conveyor-belt-2,fire-ice-vein,=3/4,mining-machine
+hydrogen,=0,=30,,,,=1/24,conveyor-belt-2

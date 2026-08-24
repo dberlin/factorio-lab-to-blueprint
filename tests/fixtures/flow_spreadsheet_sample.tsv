@@ -1,0 +1,8 @@
+https://factoriolab.github.io/dsp/flow?z=eJxFyLsKwkAQQNG...&v=11
+Item	Items	Surplus	Inputs	Outputs	Targets	Belts	Belt	Recipe	Machines	Machine	Modules	Power
+information-matrix	60		particle-broadband:1,processor:1	information-matrix:1		0.083333333	conveyor-belt-2	information-matrix	10	matrix-lab	1	4800
+graphene	150		fire-ice:1	graphene:1,hydrogen:0.6	carbon-nanotube:1	0.208333333	conveyor-belt-2	graphene-advanced	2.5	chemical-plant	1	1812
+fire-ice	150			fire-ice:1	graphene-advanced:1	0.208333333	conveyor-belt-2	ice-giant-gas-hydrate	0.446428571	orbital-collector
+titanium-ingot	450				carbon-nanotube:1/9	0.625	conveyor-belt-2
+energetic-graphite	109.5841785		coal:2161/3571,proliferator-2:10805/121824	energetic-graphite:1	plastic:986/2161,diamond:1175/2161	0.152200248	conveyor-belt-2	energetic-graphite	3.044004958	arc-smelter	1 proliferator-2-products	1874.402975
+hydrogen	0	125				0.173611111	conveyor-belt-2
