@@ -2349,10 +2349,23 @@ def _astar(
             return (dx if dx >= 0 else -dx) + (dy if dy >= 0 else -dy)
 
     elif len(goal_list) <= _EXACT_HEURISTIC_GOALS:
-        near = [(c[0] - gx0, c[1] - gy0) for c in goal_list]
+        # A LOOP, not `min` over a generator.  Same value, and the generator was
+        # measured at 3.1s of a 15.8s routing pass for 996k calls -- 3.1us each,
+        # against 0.9us for the composite that wraps it.  Building and draining
+        # a generator frame per NODE is most of that; the goal set here is a
+        # handful of cells and duplicates in x or y are pointless work, so the
+        # list is deduplicated once instead.
+        near = tuple({(c[0] - gx0, c[1] - gy0) for c in goal_list})
 
         def h(x: int, y: int) -> float:
-            return float(min(abs(x - fx) + abs(y - fy) for fx, fy in near))
+            best_d = 1 << 30
+            for fx, fy in near:
+                dx = x - fx
+                dy = y - fy
+                d = (dx if dx >= 0 else -dx) + (dy if dy >= 0 else -dy)
+                if d < best_d:
+                    best_d = d
+            return best_d
 
     else:
         bx0 = min(c[0] for c in goal_list) - gx0
@@ -2392,7 +2405,33 @@ def _astar(
         if lo >= 0:
             bands.append((field_, lo, hi))
 
-    if bands:
+    if bands and len(goal_list) == 1:
+        # THE SINGLE-GOAL DISTANCE IS INLINED HERE, and only here.
+        #
+        # One goal is by far the commonest shape and it is the case the wrapper
+        # cost the most, because the whole body it was calling is four
+        # subtractions: a Python frame per node to save nothing.  Profiled on
+        # `universe-matrix/no-proliferator` power=1 at h=185, the composite ran
+        # 2.71M times in one routing pass.  Identical values -- this is the same
+        # expression, not an approximation of it.
+        def h(x: int, y: int) -> float:  # noqa: F811
+            dx = x - only_x
+            dy = y - only_y
+            far: float = (dx if dx >= 0 else -dx) + (dy if dy >= 0 else -dy)
+            at = x * gh + y
+            for field_, lo, hi in bands:
+                dial = field_[at]
+                if dial < 0:
+                    continue
+                gap = lo - dial
+                if gap > far:
+                    far = gap
+                gap = dial - hi
+                if gap > far:
+                    far = gap
+            return far
+
+    elif bands:
         plain = h
 
         def h(x: int, y: int) -> float:  # noqa: F811
