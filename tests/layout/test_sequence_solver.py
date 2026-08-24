@@ -37,16 +37,19 @@ from flab2bp.layout.route_feedback import (
     select_lns_neighbourhood,
 )
 from flab2bp.layout.sequence_pair import (
+    AnnealConfig,
     AnnealIncumbent,
     AnnealStageResult,
     AnnealState,
     DecodedPlacement,
+    DirectInsertTarget,
     GapProfile,
     PlacementCostContext,
     PlacementKey,
     PlacementProblem,
     SearchEnergy,
     SequencePair,
+    anneal_stage,
     decode_sequence_pair,
     derive_stage_seed,
     repair_neighbourhood,
@@ -286,6 +289,57 @@ def test_validator_rejection_never_establishes_an_exact_incumbent() -> None:
     )
     with pytest.raises(NoValidLayout):
         _solver(fake, heights=(40,)).search(max_stages=1)
+
+
+def test_sequence_stage_context_supplies_history_and_direct_targets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = DirectInsertTarget((0, 1), 0, 1, 0, 0, 1, 1)
+    contexts: list[PlacementCostContext] = []
+    real_anneal_stage = anneal_stage
+
+    def capture_context(
+        problem: PlacementProblem,
+        state: AnnealState,
+        config: AnnealConfig,
+        context: PlacementCostContext | None = None,
+    ) -> AnnealStageResult:
+        assert context is not None
+        contexts.append(context)
+        return real_anneal_stage(problem, state, config, context)
+
+    monkeypatch.setattr(sequence_solver_module, "anneal_stage", capture_context)
+    fake = _FakeRouting()
+    solver = SequenceSolver(
+        heights=(2,),
+        problem_for_height=lambda height: PlacementProblem(
+            sizes=((1, 1), (1, 1)),
+            nets=((0, 1),),
+            outline_height=height,
+            area_lower_bound=1,
+        ),
+        adapters=fake.adapters(),
+        expansion_budget=ExpansionBudget(100),
+        config=SequenceSolverConfig(
+            stages=1,
+            moves_per_stage=1,
+            restarts_per_height=1,
+            global_elites=1,
+        ),
+        initial_feedback=lambda _problem: FeedbackState(
+            outline=(2, 2),
+            net_weight={},
+            cell_history={(0, 0, 0): 2.5},
+        ),
+        direct_targets=(target,),
+    )
+
+    with pytest.raises(NoValidLayout):
+        solver.search(max_stages=1)
+
+    assert len(contexts) == 1
+    assert contexts[0].direct_targets == (target,)
+    assert contexts[0].history_summed_area[-1] == 2.5
 
 
 def test_stage_routes_cannot_spend_final_twenty_five_percent() -> None:

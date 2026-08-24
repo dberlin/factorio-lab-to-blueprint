@@ -12,7 +12,15 @@ from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from flab2bp.bench.ab import Outcome, Sample, Trial, samples_from_json, trials_from
+from flab2bp.bench.ab import (
+    CrossSummary,
+    Outcome,
+    Sample,
+    Trial,
+    cross_summary_from_json,
+    samples_from_json,
+    trials_from,
+)
 from flab2bp.bench.corpus import URL_CORPUS
 from flab2bp.bench.scoring import geometric_mean
 
@@ -279,11 +287,36 @@ def _ratio(numerator: float, denominator: float) -> float:
     return numerator / denominator
 
 
+def _cross_validation_reasons(
+    cross: CrossSummary,
+    samples: Sequence[Sample],
+) -> list[str]:
+    expected = sum(sample.outcome is Outcome.VALID for sample in samples) + len(cross.demoted)
+    reasons: list[str] = []
+    if not cross.available:
+        reasons.append(
+            "cross-validation is unavailable" + (f": {cross.reason}" if cross.reason else "")
+        )
+    if not cross.complete or cross.checked != expected:
+        reasons.append(
+            "cross-validation is incomplete: "
+            f"checked {cross.checked} of {expected} persisted valid blueprints"
+        )
+    if cross.passed != cross.checked:
+        reasons.append(
+            f"cross-validation passed {cross.passed} of {cross.checked} checked blueprints"
+        )
+    if cross.demoted:
+        reasons.append(f"cross-validation demoted {len(cross.demoted)} valid blueprints")
+    return reasons
+
+
 def assess_promotion(
     baseline: Sequence[Sample],
     candidate: Sequence[Sample],
     *,
     required: PromotionManifest,
+    cross: CrossSummary,
     bootstrap_seed: int = 0,
     bootstrap_resamples: int = 10_000,
 ) -> PromotionReport:
@@ -291,6 +324,7 @@ def assess_promotion(
     reasons = _scope_reasons("baseline", baseline, required)
     reasons += _scope_reasons("candidate", candidate, required)
     reasons += _raw_reasons(baseline, candidate)
+    reasons += _cross_validation_reasons(cross, (*baseline, *candidate))
 
     baseline_trials = trials_from(baseline)
     candidate_trials = trials_from(candidate)
@@ -402,9 +436,11 @@ def _backend_name(meta: Mapping[str, object], key: str, default: str) -> str:
 def _positive_integer(meta: Mapping[str, object], key: str) -> int:
     value = meta.get(key)
     if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ValueError(f"result JSON meta {key!r} must be numeric")
+        raise ValueError(f"result JSON meta {key!r} must be a positive integer")
+    if isinstance(value, float) and (not math.isfinite(value) or not value.is_integer()):
+        raise ValueError(f"result JSON meta {key!r} must be a positive integer")
     number = int(value)
-    if number <= 0 or number != value:
+    if number <= 0:
         raise ValueError(f"result JSON meta {key!r} must be a positive integer")
     return number
 
@@ -431,6 +467,23 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def _combine_cross_summaries(summaries: Sequence[CrossSummary]) -> CrossSummary:
+    if not summaries:
+        return CrossSummary(
+            available=False,
+            complete=False,
+            reason="cross-validation evidence missing",
+        )
+    return CrossSummary(
+        available=all(summary.available for summary in summaries),
+        checked=sum(summary.checked for summary in summaries),
+        passed=sum(summary.passed for summary in summaries),
+        demoted=tuple(item for summary in summaries for item in summary.demoted),
+        reason="; ".join(summary.reason for summary in summaries if summary.reason),
+        complete=all(summary.complete for summary in summaries),
+    )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parse_args(argv)
     baseline: list[Sample] = []
@@ -438,6 +491,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     expected_pair: tuple[str, str] | None = None
     expected_repeat: int | None = None
     expected_candidates: int | None = None
+    cross_summaries: list[CrossSummary] = []
     budgets: set[float] = set()
     for path in args.results:
         raw = json.loads(path.read_text())
@@ -461,6 +515,20 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise SystemExit(f"{path}: backend pair/repeat/candidates do not match prior runs")
         budgets.update(_budgets(meta))
         samples = samples_from_json(document)
+        cross = cross_summary_from_json(document)
+        expected_checked = sum(sample.outcome is Outcome.VALID for sample in samples) + len(
+            cross.demoted
+        )
+        cross_summaries.append(
+            CrossSummary(
+                available=cross.available,
+                checked=cross.checked,
+                passed=cross.passed,
+                demoted=cross.demoted,
+                reason=cross.reason,
+                complete=cross.complete and cross.checked == expected_checked,
+            )
+        )
         baseline.extend(sample for sample in samples if sample.strategy == pair[0])
         candidate.extend(sample for sample in samples if sample.strategy == pair[1])
 
@@ -475,6 +543,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         baseline,
         candidate,
         required=required,
+        cross=_combine_cross_summaries(cross_summaries),
         bootstrap_seed=args.bootstrap_seed,
     )
     print(json.dumps(report.to_json(), sort_keys=True))

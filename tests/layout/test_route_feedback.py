@@ -19,6 +19,7 @@ from flab2bp.layout.sequence_pair import (
     GapProfile,
     PlacementProblem,
     SequencePair,
+    cheap_energy,
     decode_sequence_pair,
 )
 
@@ -181,10 +182,49 @@ def test_feedback_cost_context_matches_problem_dimensions_and_box_history() -> N
         cell_history={(0, 0, 0): 1.0, (3, 1, 2): 2.0, (4, 0, 0): 4.0},
     )
 
-    context = feedback_cost_context(state, problem, decoded)
+    context = feedback_cost_context(state, problem)
+    empty = feedback_cost_context(FeedbackState.empty(state.outline), problem)
 
     assert context.net_weights == (3.0, 1.0)
-    assert context.history_cost_by_net == (3.0, 6.0)
+    assert context.net_pairs == problem.nets
+    assert context.history_outline == state.outline
+    assert context.history_summed_area[-1] == 7.0
+    assert cheap_energy(problem, decoded, context) > cheap_energy(problem, decoded, empty)
+
+
+def test_history_cost_changes_when_candidate_moves_across_hot_region() -> None:
+    problem = PlacementProblem(
+        sizes=((1, 1), (1, 1)),
+        nets=((0, 1),),
+        outline_height=2,
+        area_lower_bound=2,
+    )
+    near = DecodedPlacement(
+        x=(1, 3),
+        y=(0, 0),
+        width=8,
+        used_height=1,
+        x_windows=((1, 1), (3, 3)),
+        y_windows=((0, 0), (0, 0)),
+        gap_area=0,
+    )
+    far = DecodedPlacement(
+        x=(5, 7),
+        y=(0, 0),
+        width=8,
+        used_height=1,
+        x_windows=((5, 5), (7, 7)),
+        y_windows=((0, 0), (0, 0)),
+        gap_area=0,
+    )
+    feedback = FeedbackState(
+        outline=(8, 2),
+        net_weight={},
+        cell_history={(2, 0, 0): 4.0},
+    )
+    context = feedback_cost_context(feedback, problem)
+
+    assert cheap_energy(problem, near, context) > cheap_energy(problem, far, context)
 
 
 def test_feedback_context_clips_fully_x_overflowed_net_box_to_zero() -> None:
@@ -200,9 +240,10 @@ def test_feedback_context_clips_fully_x_overflowed_net_box_to_zero() -> None:
     )
     state = FeedbackState((4, 4), {}, {(0, 0, 0): 3.0})
 
-    context = feedback_cost_context(state, problem, decoded)
+    context = feedback_cost_context(state, problem)
+    empty = feedback_cost_context(FeedbackState.empty(state.outline), problem)
 
-    assert context.history_cost_by_net == (0.0,)
+    assert cheap_energy(problem, decoded, context) == cheap_energy(problem, decoded, empty)
 
 
 def test_feedback_context_clips_fully_y_overflowed_net_box_to_zero() -> None:
@@ -218,6 +259,7 @@ def test_feedback_context_clips_fully_y_overflowed_net_box_to_zero() -> None:
     )
     state = FeedbackState((4, 4), {}, {(0, 0, 0): 3.0})
 
-    context = feedback_cost_context(state, problem, decoded)
+    context = feedback_cost_context(state, problem)
+    empty = feedback_cost_context(FeedbackState.empty(state.outline), problem)
 
-    assert context.history_cost_by_net == (0.0,)
+    assert cheap_energy(problem, decoded, context) == cheap_energy(problem, decoded, empty)

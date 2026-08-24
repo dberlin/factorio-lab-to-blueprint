@@ -8,7 +8,15 @@ from typing import cast
 
 import pytest
 
-from flab2bp.bench.ab import Outcome, Sample, samples_from_json
+from flab2bp.bench.ab import (
+    CrossSummary,
+    Outcome,
+    RunMeta,
+    Sample,
+    cross_summary_from_json,
+    samples_from_json,
+    to_json,
+)
 from flab2bp.bench.corpus import URL_CORPUS
 from flab2bp.bench.promotion import (
     PromotionManifest,
@@ -90,6 +98,11 @@ def eligible_pair() -> tuple[list[Sample], list[Sample]]:
     return baseline, candidate
 
 
+def _complete_cross(*groups: list[Sample]) -> CrossSummary:
+    checked = sum(sample.outcome is Outcome.VALID for group in groups for sample in group)
+    return CrossSummary(available=True, checked=checked, passed=checked)
+
+
 def assess(
     baseline: list[Sample],
     candidate: list[Sample],
@@ -100,6 +113,7 @@ def assess(
         baseline,
         candidate,
         required=required or manifest(),
+        cross=_complete_cross(baseline, candidate),
         bootstrap_seed=7,
         bootstrap_resamples=2_000,
     )
@@ -112,6 +126,7 @@ def test_promotion_requires_strict_runtime_ci_and_nonworse_quality() -> None:
         baseline,
         candidate,
         required=manifest(),
+        cross=_complete_cross(baseline, candidate),
         bootstrap_seed=7,
     )
 
@@ -121,6 +136,77 @@ def test_promotion_requires_strict_runtime_ci_and_nonworse_quality() -> None:
     assert report.p95_ratio <= 1.0
     assert report.cpu_ratio <= 1.0
     assert report.rss_ratio <= 1.0
+
+
+@pytest.mark.parametrize(
+    "cross",
+    [
+        CrossSummary(available=False),
+        CrossSummary(available=True, checked=6, passed=5),
+        CrossSummary(
+            available=True,
+            checked=6,
+            passed=6,
+            demoted=("one-cell/default/candidate: fixture",),
+        ),
+    ],
+)
+def test_promotion_requires_complete_successful_crossvalidation(cross: CrossSummary) -> None:
+    baseline, candidate = eligible_pair()
+
+    report = assess_promotion(
+        baseline,
+        candidate,
+        required=manifest(),
+        cross=cross,
+        bootstrap_seed=7,
+    )
+
+    assert not report.eligible
+    assert any("cross-validation" in reason for reason in report.reasons)
+
+
+def test_complete_successful_crossvalidation_can_pass_unit_gate() -> None:
+    baseline, candidate = eligible_pair()
+
+    report = assess_promotion(
+        baseline,
+        candidate,
+        required=manifest(),
+        cross=CrossSummary(available=True, checked=6, passed=6),
+        bootstrap_seed=7,
+    )
+
+    assert report.eligible
+
+
+def test_promotion_cli_threads_persisted_crossvalidation(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    baseline, candidate = eligible_pair()
+    document = to_json(
+        [*baseline, *candidate],
+        RunMeta(
+            tiers=("fixture",),
+            budgets=(10.0,),
+            repeat=3,
+            candidates=1,
+            power=False,
+            urls=1,
+            a_name="baseline",
+            b_name="candidate",
+        ),
+        CrossSummary(available=False, reason="fixture unavailable"),
+    )
+    path = tmp_path / "result.json"
+    path.write_text(json.dumps(document))
+
+    assert promotion_main([str(path)]) == 0
+    result = json.loads(capsys.readouterr().out)
+
+    assert not result["eligible"]
+    assert any("cross-validation" in reason for reason in result["reasons"])
 
 
 def test_one_cell_fractional_area_regression_blocks_promotion() -> None:
@@ -144,6 +230,7 @@ def test_one_cell_fractional_area_regression_blocks_promotion() -> None:
         baseline,
         candidate,
         required=manifest(repeat=2),
+        cross=_complete_cross(baseline, candidate),
         bootstrap_seed=7,
     )
 
@@ -172,6 +259,7 @@ def test_fractional_belt_regression_blocks_promotion() -> None:
         baseline,
         candidate,
         required=manifest(repeat=2),
+        cross=_complete_cross(baseline, candidate),
         bootstrap_seed=7,
     )
 
@@ -241,6 +329,7 @@ def test_every_strict_gate_failure_is_reported(mutation: str, reason: str) -> No
         baseline,
         candidate,
         required=manifest(),
+        cross=_complete_cross(baseline, candidate),
         bootstrap_seed=7,
     )
 
@@ -296,6 +385,7 @@ def test_invalid_nonshipping_candidate_cannot_hide_behind_a_valid_candidate() ->
         baseline,
         candidate,
         required=manifest(candidates=2),
+        cross=_complete_cross(baseline, candidate),
         bootstrap_seed=7,
     )
 
@@ -357,6 +447,7 @@ def test_old_json_null_buildings_and_missing_metrics_parses_but_cannot_pass() ->
         baseline,
         candidate,
         required=manifest(),
+        cross=_complete_cross(baseline, candidate),
         bootstrap_seed=7,
     )
 
@@ -396,6 +487,52 @@ def _persisted_row(outcome: str) -> dict[str, object]:
     }
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("trial", 0.9),
+        ("trial", -1),
+        ("trial", float("nan")),
+        ("trial", float("inf")),
+        ("trial", True),
+        ("area", 100.5),
+        ("area", -1),
+        ("used_tiles", -1),
+        ("belt_tiles", -1.2),
+        ("direct_inserts", float("nan")),
+        ("machines", float("inf")),
+        ("buildings", 1.9),
+        ("buildings", -1),
+    ],
+)
+def test_persisted_integer_metrics_reject_fractional_or_negative(field: str, value: object) -> None:
+    row = _persisted_row("valid")
+    row[field] = value
+
+    with pytest.raises(ValueError, match=field):
+        samples_from_json({"meta": {"power": False}, "samples": [row]})
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "trial",
+        "area",
+        "used_tiles",
+        "belt_tiles",
+        "direct_inserts",
+        "machines",
+        "buildings",
+    ],
+)
+def test_required_persisted_integer_evidence_cannot_be_omitted(field: str) -> None:
+    row = _persisted_row("valid")
+    del row[field]
+
+    with pytest.raises(ValueError, match=field):
+        samples_from_json({"meta": {"power": False}, "samples": [row]})
+
+
 def test_null_trial_identity_is_rejected() -> None:
     row = _persisted_row("valid")
     row["trial"] = None
@@ -421,6 +558,49 @@ def test_refused_legacy_null_buildings_is_accepted_as_zero() -> None:
     assert samples[0].buildings == 0
 
 
+def test_mathematically_integral_persisted_metrics_are_accepted() -> None:
+    row = _persisted_row("valid")
+    for field in (
+        "trial",
+        "area",
+        "used_tiles",
+        "belt_tiles",
+        "direct_inserts",
+        "machines",
+        "buildings",
+    ):
+        row[field] = float(cast(int, row[field]))
+
+    samples = samples_from_json({"meta": {"power": False}, "samples": [row]})
+
+    assert samples[0].trial == 0
+    assert samples[0].area == 100
+    assert samples[0].buildings == 1
+
+
+@pytest.mark.parametrize("field", ["checked", "passed"])
+@pytest.mark.parametrize("bad", [0.5, -1, float("nan"), float("inf"), True, None])
+def test_persisted_crossvalidation_counts_are_strict(
+    field: str,
+    bad: object,
+) -> None:
+    document: dict[str, object] = {
+        "crossvalidation": {
+            "available": True,
+            "complete": True,
+            "checked": 1,
+            "passed": 1,
+            "demoted": [],
+            "reason": "",
+        }
+    }
+    cross = cast(dict[str, object], document["crossvalidation"])
+    cross[field] = bad
+
+    with pytest.raises(ValueError, match=field):
+        cross_summary_from_json(document)
+
+
 @pytest.mark.parametrize("field", ["url_id", "candidate", "strategy"])
 @pytest.mark.parametrize("bad", [None, 1, False, ""])
 def test_persisted_sample_identity_strings_are_strict(field: str, bad: object) -> None:
@@ -444,6 +624,29 @@ def test_persisted_backend_names_are_strict(tmp_path: Path, field: str, bad: obj
     }
     meta[field] = bad
     path = tmp_path / "bad.json"
+    path.write_text(json.dumps({"meta": meta, "samples": []}))
+
+    with pytest.raises(ValueError, match=field):
+        promotion_main([str(path)])
+
+
+@pytest.mark.parametrize("field", ["repeat", "candidates"])
+@pytest.mark.parametrize("bad", [0.5, -1, float("nan"), float("inf"), True, None])
+def test_persisted_run_counts_are_finite_positive_integers(
+    tmp_path: Path,
+    field: str,
+    bad: object,
+) -> None:
+    meta: dict[str, object] = {
+        "a": "baseline",
+        "b": "candidate",
+        "repeat": 1,
+        "candidates": 1,
+        "budgets": [10.0],
+        "power": False,
+    }
+    meta[field] = bad
+    path = tmp_path / "bad-count.json"
     path.write_text(json.dumps({"meta": meta, "samples": []}))
 
     with pytest.raises(ValueError, match=field):

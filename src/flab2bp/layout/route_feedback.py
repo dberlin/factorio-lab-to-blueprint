@@ -8,6 +8,7 @@ from types import MappingProxyType
 
 from .sequence_pair import (
     DecodedPlacement,
+    DirectInsertTarget,
     GapProfile,
     PlacementCostContext,
     PlacementProblem,
@@ -170,12 +171,9 @@ def decay_feedback(state: FeedbackState) -> FeedbackState:
 def feedback_cost_context(
     state: FeedbackState,
     problem: PlacementProblem,
-    decoded: DecodedPlacement,
+    direct_targets: tuple[DirectInsertTarget, ...] = (),
 ) -> PlacementCostContext:
-    """Build per-net weights and summed-area congestion-box integrals."""
-    if len(decoded.x) != problem.size:
-        raise ValueError("decoded placement must match the placement problem size")
-
+    """Build immutable candidate-independent feedback scoring inputs."""
     weight_by_endpoints: dict[tuple[int, int], float] = {}
     for net, weight in state.net_weight.items():
         if net.source_strip is None or net.destination_strip is None:
@@ -183,35 +181,14 @@ def feedback_cost_context(
         endpoints = (net.source_strip, net.destination_strip)
         weight_by_endpoints[endpoints] = weight_by_endpoints.get(endpoints, 0.0) + weight
 
-    table, stride = _summed_area_table(state)
-    width, height = state.outline
-    history_cost: list[float] = []
-    for source, destination in problem.nets:
-        source_width, source_height = problem.sizes[source]
-        destination_width, destination_height = problem.sizes[destination]
-        x0 = min(width, max(0, min(decoded.x[source], decoded.x[destination])))
-        y0 = min(height, max(0, min(decoded.y[source], decoded.y[destination])))
-        x1 = min(
-            width,
-            max(
-                decoded.x[source] + source_width,
-                decoded.x[destination] + destination_width,
-            ),
-        )
-        y1 = min(
-            height,
-            max(
-                decoded.y[source] + source_height,
-                decoded.y[destination] + destination_height,
-            ),
-        )
-        history_cost.append(_rectangle_sum(table, stride, x0, y0, x1, y1))
-
     return PlacementCostContext(
         net_weights=tuple(
             1.0 + weight_by_endpoints.get(endpoints, 0.0) for endpoints in problem.nets
         ),
-        history_cost_by_net=tuple(history_cost),
+        net_pairs=problem.nets,
+        history_outline=state.outline,
+        history_summed_area=_summed_area_table(state),
+        direct_targets=direct_targets,
     )
 
 
@@ -296,7 +273,7 @@ def _valid_cell(cell: object, width: int, height: int) -> bool:
     )
 
 
-def _summed_area_table(state: FeedbackState) -> tuple[list[float], int]:
+def _summed_area_table(state: FeedbackState) -> tuple[float, ...]:
     width, height = state.outline
     stride = width + 1
     table = [0.0] * (stride * (height + 1))
@@ -309,23 +286,7 @@ def _summed_area_table(state: FeedbackState) -> tuple[list[float], int]:
         for x in range(1, width + 1):
             running += table[row + x]
             table[row + x] = running + table[prior_row + x]
-    return table, stride
-
-
-def _rectangle_sum(
-    table: list[float],
-    stride: int,
-    x0: int,
-    y0: int,
-    x1: int,
-    y1: int,
-) -> float:
-    return (
-        table[y1 * stride + x1]
-        - table[y0 * stride + x1]
-        - table[y1 * stride + x0]
-        + table[y0 * stride + x0]
-    )
+    return tuple(table)
 
 
 def _add_net_endpoints(strips: set[int], net: NetId, size: int) -> None:

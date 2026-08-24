@@ -38,6 +38,7 @@ the aggregation logic is unit-testable without running CP-SAT.
 
 from __future__ import annotations
 
+import math
 import multiprocessing
 import resource
 import statistics
@@ -167,6 +168,7 @@ def _peak_rss_mb() -> float:
     """Return process peak RSS in MiB on the platforms supported by the harness."""
     raw = float(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
     return raw / (1024 * 1024) if sys.platform == "darwin" else raw / 1024
+
 
 @dataclass(frozen=True, slots=True)
 class MeasuredAttempt:
@@ -299,7 +301,6 @@ def sample_measured(
     )
 
 
-
 def sample_once(
     *,
     url_id: str,
@@ -339,6 +340,23 @@ class CrossSummary:
     passed: int = 0
     demoted: tuple[str, ...] = ()
     reason: str = ""
+    complete: bool = True
+
+    def __post_init__(self) -> None:
+        if type(self.available) is not bool:
+            raise ValueError("cross-validation availability must be a bool")
+        if type(self.complete) is not bool:
+            raise ValueError("cross-validation completeness must be a bool")
+        if any(type(value) is not int or value < 0 for value in (self.checked, self.passed)):
+            raise ValueError("cross-validation counts must be non-negative integers")
+        if self.passed > self.checked:
+            raise ValueError("cross-validation passes cannot exceed checked blueprints")
+        if not isinstance(self.demoted, tuple) or any(
+            not isinstance(item, str) or not item for item in self.demoted
+        ):
+            raise ValueError("cross-validation demotions must be non-empty strings in a tuple")
+        if not isinstance(self.reason, str):
+            raise ValueError("cross-validation reason must be a string")
 
     def summary(self) -> str:
         if not self.available:
@@ -470,11 +488,19 @@ def ship(samples: Sequence[Sample]) -> Trial:
     if winners:
         best = min(winners, key=lambda s: s.metrics.area if s.metrics else 0)
         return Trial(
-            first.url_id, first.strategy, first.budget_s, first.trial,
-            Outcome.VALID, best.candidate, total,
-            metrics=best.metrics, buildings=best.buildings,
-            candidates_valid=len(winners), candidates_total=len(samples),
-            cpu_seconds=cpu_seconds, peak_rss_mb=peak_rss_mb,
+            first.url_id,
+            first.strategy,
+            first.budget_s,
+            first.trial,
+            Outcome.VALID,
+            best.candidate,
+            total,
+            metrics=best.metrics,
+            buildings=best.buildings,
+            candidates_valid=len(winners),
+            candidates_total=len(samples),
+            cpu_seconds=cpu_seconds,
+            peak_rss_mb=peak_rss_mb,
             power=first.power,
         )
 
@@ -484,10 +510,18 @@ def ship(samples: Sequence[Sample]) -> Trial:
             worst = by_outcome[outcome]
             details = sorted({s.detail for s in samples if s.outcome is outcome and s.detail})
             return Trial(
-                first.url_id, first.strategy, first.budget_s, first.trial,
-                outcome, worst.candidate, total, detail="; ".join(details),
-                candidates_valid=0, candidates_total=len(samples),
-                cpu_seconds=cpu_seconds, peak_rss_mb=peak_rss_mb,
+                first.url_id,
+                first.strategy,
+                first.budget_s,
+                first.trial,
+                outcome,
+                worst.candidate,
+                total,
+                detail="; ".join(details),
+                candidates_valid=0,
+                candidates_total=len(samples),
+                cpu_seconds=cpu_seconds,
+                peak_rss_mb=peak_rss_mb,
                 power=first.power,
             )
     raise AssertionError(f"unreachable: no outcome among {[s.outcome for s in samples]}")
@@ -1000,9 +1034,7 @@ class RunMeta:
         ]
 
 
-def render_markdown(
-    comparisons: Sequence[Comparison], meta: RunMeta, cross: CrossSummary
-) -> str:
+def render_markdown(comparisons: Sequence[Comparison], meta: RunMeta, cross: CrossSummary) -> str:
     """The generated results section, for pasting into a docs report."""
     out = ["# A/B density comparison (generated)", ""]
     out += [f"- {line}" for line in meta.lines()]
@@ -1034,9 +1066,7 @@ def render_markdown(
     return "\n".join(out)
 
 
-def to_json(
-    samples: Sequence[Sample], meta: RunMeta, cross: CrossSummary
-) -> dict[str, object]:
+def to_json(samples: Sequence[Sample], meta: RunMeta, cross: CrossSummary) -> dict[str, object]:
     """Machine-readable dump.  Blueprints are omitted -- they are large and the
     verdict must not depend on re-reading them."""
     return {
@@ -1054,6 +1084,7 @@ def to_json(
         },
         "crossvalidation": {
             "available": cross.available,
+            "complete": cross.complete,
             "checked": cross.checked,
             "passed": cross.passed,
             "demoted": list(cross.demoted),
@@ -1107,11 +1138,69 @@ def _required_number(row: Mapping[str, object], key: str) -> float:
     return value
 
 
-def _integer(row: Mapping[str, object], key: str, default: int = 0) -> int:
-    value = row.get(key, default)
+def _nonnegative_integer(value: object, label: str) -> int:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ValueError(f"sample {key!r} must be numeric")
-    return int(value)
+        raise ValueError(f"{label} must be a non-negative integer")
+    if isinstance(value, float):
+        if not math.isfinite(value) or not value.is_integer():
+            raise ValueError(f"{label} must be a non-negative integer")
+        number = int(value)
+    else:
+        number = value
+    if number < 0:
+        raise ValueError(f"{label} must be a non-negative integer")
+    return number
+
+
+_MISSING = object()
+
+
+def _integer(
+    row: Mapping[str, object],
+    key: str,
+    default: object = _MISSING,
+) -> int:
+    value = row.get(key, default)
+    if value is _MISSING:
+        raise ValueError(f"sample {key!r} must be a non-negative integer")
+    return _nonnegative_integer(value, f"sample {key!r}")
+
+
+def cross_summary_from_json(document: Mapping[str, object]) -> CrossSummary:
+    """Parse independent decoder evidence without treating absence as success."""
+    raw = document.get("crossvalidation")
+    if raw is None:
+        return CrossSummary(available=False, reason="cross-validation evidence missing")
+    if not isinstance(raw, dict):
+        raise ValueError("result JSON crossvalidation must be an object")
+    available = raw.get("available")
+    if type(available) is not bool:
+        raise ValueError("cross-validation 'available' must be a boolean")
+    complete = raw.get("complete", True)
+    if type(complete) is not bool:
+        raise ValueError("cross-validation 'complete' must be a boolean")
+    demoted = raw.get("demoted", [])
+    if not isinstance(demoted, list) or any(
+        not isinstance(item, str) or not item for item in demoted
+    ):
+        raise ValueError("cross-validation 'demoted' must be a list of non-empty strings")
+    reason = raw.get("reason", "")
+    if not isinstance(reason, str):
+        raise ValueError("cross-validation 'reason' must be a string")
+    return CrossSummary(
+        available=available,
+        complete=complete,
+        checked=_nonnegative_integer(
+            raw.get("checked", 0),
+            "cross-validation 'checked'",
+        ),
+        passed=_nonnegative_integer(
+            raw.get("passed", 0),
+            "cross-validation 'passed'",
+        ),
+        demoted=tuple(demoted),
+        reason=reason,
+    )
 
 
 def _parsed_buildings(row: Mapping[str, object], outcome: Outcome) -> int:
@@ -1145,21 +1234,22 @@ def samples_from_json(document: Mapping[str, object]) -> list[Sample]:
         row: Mapping[str, object] = raw
         try:
             outcome = Outcome(str(row["outcome"]))
-            area = _number(row, "area", required=False)
+            raw_area = row.get("area")
+            area = None if raw_area is None else _nonnegative_integer(raw_area, "sample 'area'")
             metrics = None
             if outcome is Outcome.VALID:
                 if area is None:
                     raise ValueError("a persisted VALID sample must carry area")
                 metrics = Metrics(
-                    area=int(area),
+                    area=area,
                     used_tiles=_integer(row, "used_tiles"),
-                    width=_integer(row, "width", int(area)),
+                    width=_integer(row, "width", area),
                     height=_integer(row, "height", 1),
                     machines=_integer(row, "machines"),
                     belt_tiles=_integer(row, "belt_tiles"),
-                    sorters=_integer(row, "sorters"),
+                    sorters=_integer(row, "sorters", 0),
                     direct_inserts=_integer(row, "direct_inserts"),
-                    towers=_integer(row, "towers"),
+                    towers=_integer(row, "towers", 0),
                     altitude_levels=_integer(row, "altitude_levels", 1),
                 )
             samples.append(

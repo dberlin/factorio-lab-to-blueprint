@@ -232,24 +232,47 @@ class AnnealConfig:
 
 @dataclass(frozen=True, slots=True)
 class PlacementCostContext:
-    """Per-net feedback inputs used by cheap placement scoring."""
+    """Candidate-independent inputs used by cheap placement scoring."""
 
     net_weights: tuple[float, ...]
-    history_cost_by_net: tuple[float, ...]
-    missed_direct_inserts: int = 0
+    net_pairs: tuple[tuple[int, int], ...]
+    history_outline: tuple[int, int]
+    history_summed_area: tuple[float, ...]
+    direct_targets: tuple[DirectInsertTarget, ...] = ()
 
     def __post_init__(self) -> None:
-        if not isinstance(self.net_weights, tuple) or not isinstance(
-            self.history_cost_by_net, tuple
+        if not isinstance(self.net_weights, tuple) or any(
+            not math.isfinite(value) or value < 0.0 for value in self.net_weights
         ):
-            raise ValueError("placement cost context values must be immutable tuples")
-        if any(
-            not math.isfinite(value) or value < 0.0
-            for value in self.net_weights + self.history_cost_by_net
+            raise ValueError("placement net weights must be a finite non-negative tuple")
+        if not isinstance(self.net_pairs, tuple) or any(
+            not isinstance(pair, tuple)
+            or len(pair) != 2
+            or any(type(endpoint) is not int or endpoint < 0 for endpoint in pair)
+            for pair in self.net_pairs
         ):
-            raise ValueError("placement cost context values must be finite and non-negative")
-        if type(self.missed_direct_inserts) is not int or self.missed_direct_inserts < 0:
-            raise ValueError("missed direct inserts must be a non-negative integer")
+            raise ValueError("placement net pairs must contain non-negative integer endpoints")
+        if len(self.net_weights) != len(self.net_pairs):
+            raise ValueError("placement net weights must match the logical net pairs")
+        if (
+            not isinstance(self.history_outline, tuple)
+            or len(self.history_outline) != 2
+            or any(type(value) is not int or value < 0 for value in self.history_outline)
+        ):
+            raise ValueError("history outline must contain non-negative integer dimensions")
+        width, height = self.history_outline
+        if (
+            not isinstance(self.history_summed_area, tuple)
+            or len(self.history_summed_area) != (width + 1) * (height + 1)
+            or any(not math.isfinite(value) or value < 0.0 for value in self.history_summed_area)
+        ):
+            raise ValueError(
+                "history summed-area data must be finite, non-negative, and match its outline"
+            )
+        if not isinstance(self.direct_targets, tuple) or any(
+            not isinstance(target, DirectInsertTarget) for target in self.direct_targets
+        ):
+            raise ValueError("direct-insert targets must be an immutable tuple")
 
 
 @dataclass(frozen=True, order=True, slots=True)
@@ -764,10 +787,13 @@ def cheap_energy(
     """Compute the normalized routing-aware proxy objective."""
     if len(decoded.x) != problem.size:
         raise ValueError("decoded placement size must match the placement problem")
-    if len(context.net_weights) != len(problem.nets) or len(context.history_cost_by_net) != len(
-        problem.nets
-    ):
-        raise ValueError("placement cost context must match the problem net count")
+    if context.net_pairs != problem.nets:
+        raise ValueError("placement cost context must match the problem net identities")
+    if context.history_outline[1] != problem.outline_height:
+        raise ValueError("placement cost context must match the problem outline height")
+    for target in context.direct_targets:
+        _validate_direct_target(problem, target)
+
     overflow = max(0, decoded.used_height - problem.outline_height)
     area_ratio = decoded.width * problem.outline_height / max(problem.area_lower_bound, 1)
     weighted_hpwl = sum(
@@ -776,11 +802,15 @@ def cheap_energy(
             abs(decoded.x[source] - decoded.x[destination])
             + abs(decoded.y[source] - decoded.y[destination])
         )
-        for index, (source, destination) in enumerate(problem.nets)
+        for index, (source, destination) in enumerate(context.net_pairs)
     )
     hpwl_ratio = weighted_hpwl / max(problem.area_lower_bound, 1)
-    history_ratio = sum(context.history_cost_by_net) / max(len(problem.nets), 1)
-    direct_ratio = context.missed_direct_inserts / max(len(problem.nets), 1)
+    history_ratio = _candidate_history_cost(problem, decoded, context) / max(
+        len(context.net_pairs), 1
+    )
+    direct_ratio = sum(
+        not _target_is_direct(decoded, target) for target in context.direct_targets
+    ) / max(len(context.net_pairs), 1)
     gap_ratio = decoded.gap_area / max(problem.area_lower_bound, 1)
     return SearchEnergy(
         hard_outline_overflow=overflow,
@@ -792,6 +822,43 @@ def cheap_energy(
             + 0.05 * gap_ratio
         ),
     )
+
+
+def _candidate_history_cost(
+    problem: PlacementProblem,
+    decoded: DecodedPlacement,
+    context: PlacementCostContext,
+) -> float:
+    width, height = context.history_outline
+    stride = width + 1
+    table = context.history_summed_area
+    total = 0.0
+    for source, destination in context.net_pairs:
+        source_width, source_height = problem.sizes[source]
+        destination_width, destination_height = problem.sizes[destination]
+        x0 = min(width, max(0, min(decoded.x[source], decoded.x[destination])))
+        y0 = min(height, max(0, min(decoded.y[source], decoded.y[destination])))
+        x1 = min(
+            width,
+            max(
+                decoded.x[source] + source_width,
+                decoded.x[destination] + destination_width,
+            ),
+        )
+        y1 = min(
+            height,
+            max(
+                decoded.y[source] + source_height,
+                decoded.y[destination] + destination_height,
+            ),
+        )
+        total += (
+            table[y1 * stride + x1]
+            - table[y0 * stride + x1]
+            - table[y1 * stride + x0]
+            + table[y0 * stride + x0]
+        )
+    return total
 
 
 def anneal_stage(
@@ -807,7 +874,9 @@ def anneal_stage(
     if context is None:
         context = PlacementCostContext(
             net_weights=(1.0,) * len(problem.nets),
-            history_cost_by_net=(0.0,) * len(problem.nets),
+            net_pairs=problem.nets,
+            history_outline=(0, problem.outline_height),
+            history_summed_area=(0.0,) * (problem.outline_height + 1),
         )
 
     rng = random.Random(derive_stage_seed(state.base_seed, state.stage_index))

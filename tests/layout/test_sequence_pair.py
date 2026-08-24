@@ -16,10 +16,12 @@ from flab2bp.layout.freeform import (
 from flab2bp.layout.route_feedback import (
     DetailedRouteResult,
     DetailedRouteStatus,
+    FeedbackState,
     NetFailure,
     NetId,
     NetRole,
     RouteFailureKind,
+    feedback_cost_context,
     select_lns_neighbourhood,
 )
 from flab2bp.layout.sequence_pair import (
@@ -604,10 +606,16 @@ def test_cheap_energy_uses_every_normalized_component() -> None:
         y_windows=((2, 2), (6, 6)),
         gap_area=5,
     )
-    context = PlacementCostContext(
-        net_weights=(2.0,),
-        history_cost_by_net=(3.0,),
-        missed_direct_inserts=1,
+    target = DirectInsertTarget((0, 1), 0, 1, 0, 0, 1, 1)
+    weighted = NetId(0, 1, "iron-ingot", NetRole.INTERNAL, 0)
+    context = feedback_cost_context(
+        FeedbackState(
+            outline=(7, 5),
+            net_weight={weighted: 1.0},
+            cell_history={(2, 2, 0): 3.0},
+        ),
+        problem,
+        (target,),
     )
 
     energy = cheap_energy(problem, decoded, context)
@@ -620,6 +628,41 @@ def test_cheap_energy_uses_every_normalized_component() -> None:
         + 0.1 * 1.0  # missed direct inserts
         + 0.05 * 0.5  # explicit gap area
     )
+
+
+def test_missed_direct_insert_penalty_depends_on_candidate_geometry() -> None:
+    problem = PlacementProblem(
+        sizes=((2, 1), (2, 1)),
+        nets=((0, 1),),
+        outline_height=2,
+        area_lower_bound=4,
+    )
+    aligned = DecodedPlacement(
+        x=(0, 0),
+        y=(0, 1),
+        width=2,
+        used_height=2,
+        x_windows=((0, 0), (0, 0)),
+        y_windows=((0, 0), (1, 1)),
+        gap_area=0,
+    )
+    separated = DecodedPlacement(
+        x=(0, 0),
+        y=(1, 0),
+        width=2,
+        used_height=2,
+        x_windows=((0, 0), (0, 0)),
+        y_windows=((1, 1), (0, 0)),
+        gap_area=0,
+    )
+    target = DirectInsertTarget((0, 1), 0, 1, 0, 0, 2, 2)
+    context = feedback_cost_context(
+        FeedbackState.empty((2, problem.outline_height)),
+        problem,
+        (target,),
+    )
+
+    assert cheap_energy(problem, aligned, context) < cheap_energy(problem, separated, context)
 
 
 def test_cheap_energy_handles_zero_area_and_no_nets_without_zero_division() -> None:
@@ -636,7 +679,8 @@ def test_cheap_energy_handles_zero_area_and_no_nets_without_zero_division() -> N
         outline_height=5,
     )
 
-    assert cheap_energy(problem, decoded, PlacementCostContext((), ())) == SearchEnergy(0, 0.0)
+    context = feedback_cost_context(FeedbackState.empty((0, 5)), problem)
+    assert cheap_energy(problem, decoded, context) == SearchEnergy(0, 0.0)
 
 
 def test_search_energy_orders_hard_outline_overflow_before_scalar() -> None:
@@ -645,10 +689,10 @@ def test_search_energy_orders_hard_outline_overflow_before_scalar() -> None:
 
 def test_cost_context_rejects_non_finite_or_negative_values() -> None:
     invalid_calls: tuple[Callable[[], PlacementCostContext], ...] = (
-        lambda: PlacementCostContext((-1.0,), (0.0,)),
-        lambda: PlacementCostContext((float("inf"),), (0.0,)),
-        lambda: PlacementCostContext((1.0,), (float("nan"),)),
-        lambda: PlacementCostContext((1.0,), (0.0,), missed_direct_inserts=-1),
+        lambda: PlacementCostContext((-1.0,), ((0, 0),), (0, 0), (0.0,)),
+        lambda: PlacementCostContext((float("inf"),), ((0, 0),), (0, 0), (0.0,)),
+        lambda: PlacementCostContext((1.0,), ((0, 0),), (0, 0), (float("nan"),)),
+        lambda: PlacementCostContext((1.0,), ((-1, 0),), (0, 0), (0.0,)),
     )
     for call in invalid_calls:
         with pytest.raises(ValueError):
@@ -663,8 +707,12 @@ def test_cost_context_must_match_problem_net_count() -> None:
         problem.sizes,
         outline_height=1,
     )
-    with pytest.raises(ValueError, match="net count"):
-        cheap_energy(problem, decoded, PlacementCostContext((), ()))
+    with pytest.raises(ValueError, match="net identities"):
+        cheap_energy(
+            problem,
+            decoded,
+            PlacementCostContext((), (), (0, 1), (0.0, 0.0)),
+        )
 
 
 def test_derived_stage_seeds_are_stable_and_stage_specific() -> None:

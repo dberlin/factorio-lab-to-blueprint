@@ -48,10 +48,10 @@ from flab2bp.layout.sequence_pair import (
     AnnealConfig,
     AnnealState,
     DecodedPlacement,
+    DirectInsertTarget,
     PlacementProblem,
     align_direct_inserts,
     anneal_stage,
-    decode_sequence_pair,
     derive_stage_seed,
     repair_neighbourhood,
 )
@@ -291,6 +291,7 @@ class SequenceSolver[PreparedT]:
         config: SequenceSolverConfig | None = None,
         deadline_reached: Callable[[], bool] | None = None,
         initial_feedback: Callable[[PlacementProblem], FeedbackState] | None = None,
+        direct_targets: tuple[DirectInsertTarget, ...] = (),
     ) -> None:
         if (
             not isinstance(heights, tuple)
@@ -303,6 +304,9 @@ class SequenceSolver[PreparedT]:
         self.adapters = adapters
         self.budget = expansion_budget
         self.deadline_reached = deadline_reached or (lambda: False)
+        if not isinstance(direct_targets, tuple):
+            raise ValueError("direct-insert targets must be an immutable tuple")
+        self.direct_targets = direct_targets
         self.budget.configure(heights, self.config.final_reserve_fraction)
         feedback_factory = initial_feedback or _default_feedback
         self._heights = [
@@ -390,13 +394,11 @@ class SequenceSolver[PreparedT]:
         allowance: int,
     ) -> tuple[int, bool]:
         problem = height_state.problem
-        current_decoded = decode_sequence_pair(
-            restart.anneal.pair,
-            restart.anneal.gaps,
-            problem.sizes,
-            outline_height=problem.outline_height,
+        context = feedback_cost_context(
+            height_state.feedback,
+            problem,
+            self.direct_targets,
         )
-        context = feedback_cost_context(height_state.feedback, problem, current_decoded)
         annealed = anneal_stage(
             problem,
             restart.anneal,
@@ -878,6 +880,7 @@ def _production_run(
         expansion_budget=ExpansionBudget(expansion_total),
         config=config,
         deadline_reached=deadline_reached,
+        direct_targets=direct_targets,
     )
     return _ProductionRun(
         solver=solver,
