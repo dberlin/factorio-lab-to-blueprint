@@ -10,6 +10,7 @@ touch it.
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+from fractions import Fraction
 from pathlib import Path
 from typing import Literal
 
@@ -121,6 +122,7 @@ def build(
     fetch_flow: bool = False,
     fetch_timeout_s: float = 90.0,
     browser: str | None = None,
+    max_belt_z: Fraction = catalog.DEFAULT_MAX_BELT_Z,
 ) -> Build:
     """Turn a FactorioLab URL into a pasteable DSP blueprint.
 
@@ -223,7 +225,11 @@ def build(
             # spec-dependent checks are skipped, and a build that never ran its
             # throughput or proliferator checks reads as clean.
             report = validate.validate(
-                placement, spec, ids=_id_map(spec), expect_power=power
+                placement,
+                spec,
+                ids=_id_map(spec),
+                expect_power=power,
+                max_belt_z=max_belt_z,
             )
             attempts.append(Attempt(spec.label, sname, placement, report))
 

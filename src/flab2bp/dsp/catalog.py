@@ -121,16 +121,92 @@ BELT_RATE = {
     2003: Fraction(30),
 }
 
-#: Belts climb 0.5 per tile, so changing altitude by one level costs 2 tiles.
-#: Measured over 7,502 belt records: +/-0.5 appears 125 times along belt chains
-#: versus +/-1.0 only 7 times.  Levels themselves are spaced 1.0 apart.
+#: A belt changes altitude in one of exactly TWO forms.  Both are in the
+#: evidence; neither is a special case of the other.
+#:
+#: **Ramp** -- ``+/-1/2`` of height per ONE tile of horizontal run.  118 of the
+#: 130 altitude-changing chain steps in the fixture corpus are this, and they
+#: are the only form that appears in an undistorted fixture.
+#:
+#: **Vertical** -- ``+/-1`` of height per ZERO tiles of horizontal run: the belt
+#: stacks straight up at a single ``(x, y)``.  Settled by an in-game blueprint
+#: the user built at their save's maximum height (61 Conveyor Belt Mk.III):
+#: two ground tiles, then 38 consecutive ``dz = +1.0`` steps every one of which
+#: has ``dxy = 0.0``, then 22 tiles running level at ``z = 38``.  One column
+#: holds 39 belts.  Six more instances are in ``factory-heretical-smelter-block``.
+#:
+#: .. warning::
+#:    An earlier reading of this table called those six "coordinate collapse" in
+#:    a distorted fixture and concluded a level change ALWAYS costs two tiles of
+#:    run.  That was wrong, and wrong in the dangerous direction: a real
+#:    mechanic was explained away as measurement error because the fixture
+#:    carrying it was independently known to be distorted.  The max-height
+#:    blueprint settles it from outside the corpus.
+#:
+#: What we emit today matches NEITHER form: ``+/-1`` of height across ONE
+#: horizontal tile, which is a ramp climbing twice as fast as a ramp may.
 BELT_CLIMB_PER_TILE = Fraction(1, 2)
 RAMP_TILES_PER_LEVEL = 2
 
-#: Up to three belts share one (x, y): 426 positions in the corpus carry 2 and
-#: 21 carry 3.  Terrain jitter of ~0.03 rides on top and must be denoised with
-#: ``round(z * 2) / 2``.
-MAX_BELT_STACK_LEVELS = 3
+#: Height gained by one VERTICAL step -- the form that costs no horizontal run.
+#: Every one of the 38 steps in the max-height blueprint is exactly this.
+#:
+#: Two things about this form are UNMEASURED and must not be assumed: whether a
+#: vertical step may start from a non-zero altitude, and whether a ramp can
+#: climb past ``BELT_CROSSING_CLEARANCE`` by continuing at
+#: ``BELT_CLIMB_PER_TILE`` per tile (the corpus only ever ramps to 1 and the
+#: max-height blueprint only ever goes vertical).  The model is written so that
+#: either answer slots in without a rewrite.
+VERTICAL_STEP = Fraction(1)
+
+#: Height a belt must gain to pass OVER a ground-level obstruction.
+#:
+#: Half a level is not enough -- a belt at ``1/2`` still fouls one at ``0`` --
+#: so a crossing tile has to be a full ``1`` above what it crosses.  Reaching
+#: ``1`` by ramp takes :data:`RAMP_TILES_PER_LEVEL` tiles, so the climb must
+#: START two tiles before the obstacle, and both of those ramp tiles have to be
+#: clear: a ramp may not run into things any more than a level belt may.
+#:
+#: This is why the corpus profile reads ``0.0, 0.5, 1.0, ... 1.0, 0.5, 0.0``
+#: with the crossed belt under a ``1.0`` tile.  That shape is forced by
+#: clearance, not a habit of the builders.
+BELT_CROSSING_CLEARANCE = Fraction(1)
+
+#: Default ceiling on belt altitude, in tiles of height.
+#:
+#: **The real ceiling is a property of the SAVE, not of the game**: it depends
+#: on which vertical-construction unlocks the player has, and the user's save
+#: reaches 38.  So this is only a default, overridable per run (``flab2bp
+#: --max-belt-height``); nothing in the layout model may treat it as a law.
+#:
+#: The default is deliberately the most conservative value that still lets a
+#: belt cross another belt -- :data:`BELT_CROSSING_CLEARANCE`.  Every crossing
+#: in all 7,502 corpus belt records stays within it, so a blueprint built to
+#: this default pastes for a player with no vertical-construction unlocks at
+#: all, and a player who has them can say so.
+DEFAULT_MAX_BELT_Z = BELT_CROSSING_CLEARANCE
+
+#: Altitudes are multiples of this.  Both transition forms move in whole
+#: multiples of a half, and every one of the 7,502 corpus records lands on one
+#: once terrain jitter (max 0.0235) is denoised with ``round(z * 2) / 2``.
+BELT_Z_QUANTUM = BELT_CLIMB_PER_TILE
+
+#: There is NO useful bound on how many belts share one ``(x, y)``.
+#:
+#: This replaces ``MAX_BELT_STACK_LEVELS = 3``, whose stated evidence was "426
+#: positions in the corpus carry 2 and 21 carry 3".  That count never checked
+#: that the three z values DIFFERED: all 21 three-deep positions are
+#: ``(0.0, 0.0, 0.0)``, belts at the SAME altitude in polar and whole-planet
+#: fixtures where longitude is latitude-compressed and distinct tiles collapse
+#: onto one integer cell.  ``factory-endgame-distribution-hub`` has columns
+#: holding 21 belts, all at 0.0 -- a squashed coordinate system, not a
+#: 21-storey belt.
+#:
+#: Re-measuring on undistorted fixtures gave a maximum of 2 distinct altitudes
+#: per column, which looked like a rule and is not one either: the vertical form
+#: stacks 39 belts at one ``(x, y)`` in the max-height blueprint.  A column
+#: bound would have rejected that, so no constant replaces it.
+
 
 
 # --- power -----------------------------------------------------------------

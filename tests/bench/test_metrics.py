@@ -7,6 +7,8 @@ neither of them owns.
 
 from __future__ import annotations
 
+from fractions import Fraction
+
 from flab2bp.bench.metrics import measure
 from flab2bp.layout.base import PlacedBuilding, Placement
 
@@ -29,8 +31,10 @@ def _assembler(x: int, y: int, *, recipe: int = 1) -> PlacedBuilding:
     )
 
 
-def _belt(x: int, y: int, *, z: int = 0, out: int | None = None) -> PlacedBuilding:
-    return PlacedBuilding(item_id=2002, model_index=36, x=x, y=y, z=z, output_obj=out)
+def _belt(
+    x: int, y: int, *, z: Fraction | int = 0, out: int | None = None
+) -> PlacedBuilding:
+    return PlacedBuilding(item_id=2002, model_index=36, x=x, y=y, z=Fraction(z), output_obj=out)
 
 
 def _sorter(x: int, y: int, *, inp: int | None, out: int | None) -> PlacedBuilding:
@@ -41,7 +45,7 @@ def _sorter(x: int, y: int, *, inp: int | None, out: int | None) -> PlacedBuildi
         y=y,
         x2=x,
         y2=y + 1,
-        z2=0,
+        z2=Fraction(0),
         input_obj=inp,
         output_obj=out,
     )

@@ -37,7 +37,7 @@ BELT_REQUIRED = "prolif.belt_required_edges_not_direct_inserted"
 
 
 def machine(
-    x: int, y: int, *, item_id: int = ASSEMBLER, recipe_id: int = 1, z: int = 0
+    x: int, y: int, *, item_id: int = ASSEMBLER, recipe_id: int = 1, z: Fraction | int = 0
 ) -> PlacedBuilding:
     b = catalog_building(item_id)
     return PlacedBuilding(
@@ -45,7 +45,7 @@ def machine(
         model_index=b.model_index,
         x=x,
         y=y,
-        z=z,
+        z=Fraction(z),
         width=b.width,
         height=b.height,
         recipe_id=recipe_id,
@@ -55,7 +55,7 @@ def machine(
 def belt(
     x: int,
     y: int,
-    z: int = 0,
+    z: Fraction | int = 0,
     *,
     out: int | None = None,
     inp: int | None = None,
@@ -74,15 +74,17 @@ def belt(
         model_index=36,
         x=x,
         y=y,
-        z=z,
+        z=Fraction(z),
         output_obj=out,
         input_obj=inp,
         carries_item=carries,
     )
 
 
-def splitter(x: int, y: int, z: int = 0, *, carries: str | None = None) -> PlacedBuilding:
-    return junction.make_splitter(x, y, z, carries_item=carries)
+def splitter(
+    x: int, y: int, z: Fraction | int = 0, *, carries: str | None = None
+) -> PlacedBuilding:
+    return junction.make_splitter(x, y, Fraction(z), carries_item=carries)
 
 
 def sorter(
@@ -94,8 +96,8 @@ def sorter(
     inp: int | None = None,
     out: int | None = None,
     item_id: int = SORTER3,
-    z: int = 0,
-    z2: int = 0,
+    z: Fraction | int = 0,
+    z2: Fraction | int = 0,
     filter_id: int = 0,
 ) -> PlacedBuilding:
     return PlacedBuilding(
@@ -103,10 +105,10 @@ def sorter(
         model_index=43,
         x=x,
         y=y,
-        z=z,
+        z=Fraction(z),
         x2=x2,
         y2=y2,
-        z2=z2,
+        z2=Fraction(z2),
         input_obj=inp,
         output_obj=out,
         filter_id=filter_id,
@@ -184,7 +186,14 @@ def test_geom_belt_single_occupancy_fires_on_two_belts_in_one_cell() -> None:
 def test_geom_machine_ground_fires_on_elevated_machine() -> None:
     m = machine(0, 0)
     elevated = PlacedBuilding(
-        item_id=m.item_id, model_index=m.model_index, x=0, y=0, z=1, width=4, height=4, recipe_id=1
+        item_id=m.item_id,
+        model_index=m.model_index,
+        x=0,
+        y=0,
+        z=Fraction(1),
+        width=4,
+        height=4,
+        recipe_id=1,
     )
     r = validate(place(elevated))
     assert fired(r, "geom.machine_ground")
@@ -194,20 +203,68 @@ def test_geom_machine_ground_clean_at_z_zero() -> None:
     assert not fired(validate(place(machine(0, 0))), "geom.machine_ground")
 
 
-def test_geom_altitude_range_fires_above_max_stack() -> None:
+def test_geom_altitude_range_fires_above_the_runs_ceiling() -> None:
     r = validate(place(belt(0, 0, 9)))
     assert fired(r, "geom.altitude_range")
 
 
-def test_geom_altitude_step_fires_on_two_level_jump() -> None:
-    # belt 0 at z=0 links to belt 1 at z=2 -- a vertical teleport
-    r = validate(place(belt(0, 0, 0, out=1), belt(1, 0, 2)))
+def test_geom_altitude_range_allows_what_the_run_declares() -> None:
+    """The ceiling is the SAVE's, not a constant: say so and it is allowed.
+
+    The user's own save reaches z=38, so a fixed maximum here would reject
+    blueprints the game accepts.
+    """
+    high = place(belt(0, 0, 9))
+    assert fired(validate(high), "geom.altitude_range")
+    assert not fired(validate(high, max_belt_z=Fraction(38)), "geom.altitude_range")
+
+
+def test_geom_altitude_range_fires_between_quanta() -> None:
+    r = validate(place(belt(0, 0, Fraction(1, 3))), )
+    assert fired(r, "geom.altitude_range")
+
+
+def test_geom_altitude_step_fires_on_a_full_level_across_one_tile() -> None:
+    """The exact step that shipped red, and that ``dz > 1`` let through.
+
+    A belt gains a whole tile of height across ONE tile of run: twice the rate
+    a ramp climbs, and not the vertical form either because it moved.
+    """
+    r = validate(place(belt(0, 0, 0, out=1), belt(1, 0, 1)))
     assert fired(r, "geom.altitude_step")
 
 
-def test_geom_altitude_step_clean_on_single_level_ramp() -> None:
-    r = validate(place(belt(0, 0, 0, out=1), belt(1, 0, 1)))
+def test_geom_altitude_step_allows_a_ramp() -> None:
+    """Half a tile of height per tile of run -- 118 of 130 corpus steps."""
+    r = validate(place(belt(0, 0, 0, out=1), belt(1, 0, Fraction(1, 2))))
     assert not fired(r, "geom.altitude_step")
+
+
+def test_geom_altitude_step_allows_a_vertical_step() -> None:
+    """A whole tile of height for no horizontal run at all.
+
+    Evidenced by an in-game blueprint built at a save's maximum height: 38
+    consecutive ``dz = +1`` steps, every one with ``dxy = 0``.
+    """
+    r = validate(
+        place(belt(0, 0, 0, out=1), belt(0, 0, 1)),
+        max_belt_z=Fraction(38),
+    )
+    assert not fired(r, "geom.altitude_step")
+
+
+def test_geom_altitude_step_fires_on_a_half_step_that_does_not_move() -> None:
+    """A ramp has to travel; standing still is the vertical form's business."""
+    r = validate(place(belt(0, 0, 0, out=1), belt(0, 0, Fraction(1, 2))))
+    assert fired(r, "geom.altitude_step")
+
+
+def test_geom_altitude_step_fires_on_a_vertical_step_that_moves() -> None:
+    r = validate(
+        place(belt(0, 0, 0, out=1), belt(1, 0, 1)),
+        max_belt_z=Fraction(38),
+    )
+    assert fired(r, "geom.altitude_step")
 
 
 def test_geom_bounds_warns_beyond_soft_width() -> None:
@@ -1104,7 +1161,7 @@ def decode_fixture_to_placement(name: str) -> Placement:
                 model_index=b.model_index,
                 x=round(b.x - info.width / 2 + 0.5),
                 y=round(b.y - info.height / 2 + 0.5),
-                z=round(b.z * 2),
+                z=Fraction(round(b.z * 2)),
                 width=info.width,
                 height=info.height,
             )

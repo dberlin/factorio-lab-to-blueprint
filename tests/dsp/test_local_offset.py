@@ -40,6 +40,7 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Callable
+from fractions import Fraction
 from functools import cache
 
 import pytest
@@ -202,7 +203,7 @@ def _round_trip_by_footprint() -> dict[str, Counter[str]]:
             if _dev(tx) > TOL or _dev(ty) > TOL:
                 bucket["non-integer-tile"] += 1
                 continue
-            rx, ry, rz = tile_to_local_offset(round(tx), round(ty), round(b.z), w, h)
+            rx, ry, rz = tile_to_local_offset(round(tx), round(ty), Fraction(round(b.z)), w, h)
             near = abs(rx - b.x) <= TOL and abs(ry - b.y) <= TOL
             bucket["agree" if near else "reapply-mismatch"] += 1
     return per
@@ -386,7 +387,7 @@ def test_no_catalog_footprint_is_even() -> None:
 
 @pytest.mark.parametrize("width", [1, 3, 5, 7, 9, 11])
 def test_odd_footprints_stay_on_whole_coordinates(width: int) -> None:
-    x, y, z = tile_to_local_offset(4, 7, 2, width, width)
+    x, y, z = tile_to_local_offset(4, 7, Fraction(2), width, width)
     assert x == float(4 + (width - 1) // 2)
     assert y == float(7 + (width - 1) // 2)
     assert z == 2.0
@@ -394,7 +395,7 @@ def test_odd_footprints_stay_on_whole_coordinates(width: int) -> None:
 
 def test_altitude_passes_through_unchanged() -> None:
     for z in (-3, 0, 1, 5):
-        assert tile_to_local_offset(0, 0, z, 3, 3)[2] == float(z)
+        assert tile_to_local_offset(0, 0, Fraction(z), 3, 3)[2] == float(z)
 
 
 def test_anchor_is_the_minimum_corner_matching_placement_occupancy() -> None:
@@ -406,16 +407,16 @@ def test_anchor_is_the_minimum_corner_matching_placement_occupancy() -> None:
     half a footprint off with nothing else failing.
     """
     for w, h in ((1, 1), (3, 3), (5, 5), (3, 7)):
-        cx, cy, _ = tile_to_local_offset(10, 20, 0, w, h)
+        cx, cy, _ = tile_to_local_offset(10, 20, Fraction(0), w, h)
         assert cx - (w - 1) / 2 == 10.0
         assert cy - (h - 1) / 2 == 20.0
 
 
 def test_a_building_and_its_neighbour_do_not_overlap_after_conversion() -> None:
     """Two 3x3s placed edge to edge in tile space stay edge to edge in world space."""
-    a = tile_to_local_offset(0, 0, 0, 3, 3)
-    b = tile_to_local_offset(3, 0, 0, 3, 3)
+    a = tile_to_local_offset(0, 0, Fraction(0), 3, 3)
+    b = tile_to_local_offset(3, 0, Fraction(0), 3, 3)
     assert b[0] - a[0] == 3.0
     # And a 1x1 belt in the gap column sits exactly one tile past the 3x3's edge.
-    belt = tile_to_local_offset(3, 0, 0, 1, 1)
+    belt = tile_to_local_offset(3, 0, Fraction(0), 1, 1)
     assert belt[0] - a[0] == 2.0

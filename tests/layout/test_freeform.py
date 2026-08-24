@@ -16,7 +16,7 @@ from typing import Any
 import pytest
 
 from flab2bp.dsp import catalog
-from flab2bp.layout import validate
+from flab2bp.layout import freeform, validate
 from flab2bp.layout.base import (
     DETERMINISTIC_WORKERS,
     RETRY_BUDGET_S,
@@ -259,7 +259,7 @@ ALL_SPEC_PARAMS = [pytest.param(f, id=f.__name__) for f in ALL_SPECS]
 # --- helpers ---------------------------------------------------------------
 
 
-def blocking_tiles(p: Placement) -> list[tuple[int, int, int]]:
+def blocking_tiles(p: Placement) -> list[tuple[int, int, F]]:
     """Tiles that genuinely exclude another building.
 
     Mirrors the validator's occupancy rule: belt-integrated buildings share
@@ -273,7 +273,7 @@ def blocking_tiles(p: Placement) -> list[tuple[int, int, int]]:
     game accepts. Belt-on-belt overlap is still checked, by
     ``geom.belt_single_occupancy``, which knows about junctions.
     """
-    tiles: list[tuple[int, int, int]] = []
+    tiles: list[tuple[int, int, F]] = []
     for b in p.buildings:
         if catalog.is_belt_integrated(b.item_id):
             continue
@@ -2887,7 +2887,7 @@ class TestAPathThatReachesNothingIsUnrouted:
         canvas = _Canvas()
         dst_belt = canvas.add(_belt(0, 0, item="x"))
         above = PlacedBuilding(
-            item_id=2001, model_index=35, x=0, y=1, z=1, width=1, height=1,
+            item_id=2001, model_index=35, x=0, y=1, z=F(1), width=1, height=1,
             carries_item="x",
         )
         tail = canvas.add(above)
@@ -3302,3 +3302,44 @@ class TestTheFlatGridIsTheSameSearch:
         assert grid.hist[grid.index((2, 3, 0))] == 0.0
         grid.refresh_history({})
         assert grid.hist is None
+
+
+class TestAltitudeProfile:
+    """The level-index -> world-altitude boundary.
+
+    Handing a routing level index straight to the encoder is what shipped belts
+    the game drew red, so the conversion has its own tests rather than being
+    covered incidentally by a layout assertion.
+    """
+
+    def test_flat_path_stays_on_the_ground(self) -> None:
+        path = [(0, 0, 0), (1, 0, 0), (2, 0, 0)]
+        assert freeform._altitude_profile(path) == [F(0), F(0), F(0)]
+
+    def test_a_crossing_reads_exactly_as_the_corpus_does(self) -> None:
+        """``0, 1/2, 1, ..., 1, 1/2, 0`` -- the shape every real elevated run has."""
+        path = [(0, 0, 0), (1, 0, 0), (2, 0, 1), (3, 0, 1), (4, 0, 1), (5, 0, 0)]
+        assert freeform._altitude_profile(path) == [
+            F(0), F(1, 2), F(1), F(1), F(1, 2), F(0)
+        ]
+
+    def test_the_ramp_tile_is_one_the_router_already_reserved(self) -> None:
+        """The profile adds no cells: it renames the altitude of existing ones."""
+        path = [(0, 0, 0), (1, 0, 0), (2, 0, 1)]
+        assert len(freeform._altitude_profile(path)) == len(path)
+
+    def test_every_step_is_a_legal_transition(self) -> None:
+        path = [(0, 0, 0), (1, 0, 0), (2, 0, 1), (3, 0, 1), (4, 0, 0), (5, 0, 0)]
+        prof = freeform._altitude_profile(path)
+        for i in range(len(path) - 1):
+            dz = prof[i + 1] - prof[i]
+            dxy = abs(path[i + 1][0] - path[i][0]) + abs(path[i + 1][1] - path[i][1])
+            assert (
+                dz == 0
+                or (abs(dz) == catalog.BELT_CLIMB_PER_TILE and dxy == 1)
+                or (abs(dz) == catalog.VERTICAL_STEP and dxy == 0)
+            ), f"step {i}: dz={dz} dxy={dxy}"
+
+    def test_a_wider_jump_than_the_ramp_table_offers_is_refused(self) -> None:
+        with pytest.raises(AssertionError, match="jumps 2 levels"):
+            freeform._altitude_profile([(0, 0, 0), (1, 0, 2)])

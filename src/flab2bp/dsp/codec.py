@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from fractions import Fraction
 
 from flab2bp.dsp.envelope import (
     BlueprintFormatError,
@@ -143,7 +144,7 @@ def encode_blueprint(bp: Blueprint) -> str:
 
 
 def tile_to_local_offset(
-    x: int, y: int, z: int, width: int, height: int
+    x: int, y: int, z: Fraction, width: int, height: int
 ) -> tuple[float, float, float]:
     """Convert an integer tile-space anchor to DSP's float ``localOffset``.
 
@@ -214,7 +215,9 @@ def placement_to_blueprint(
         if b.x2 is None:
             x2, y2, z2 = x, y, z
         else:
-            x2, y2, z2 = tile_to_local_offset(b.x2, b.y2 or 0, b.z2 or 0, 1, 1)
+            x2, y2, z2 = tile_to_local_offset(
+                b.x2, b.y2 or 0, b.z2 if b.z2 is not None else Fraction(0), 1, 1
+            )
         buildings.append(
             BlueprintBuilding(
                 # Path == index selects the simplest record shape, which every

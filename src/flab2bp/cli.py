@@ -11,9 +11,11 @@ from __future__ import annotations
 import argparse
 import sys
 from collections import Counter
+from fractions import Fraction
 from pathlib import Path
 
 from flab2bp import pipeline
+from flab2bp.dsp import catalog
 from flab2bp.layout import markers
 from flab2bp.layout.base import NoValidLayout
 
@@ -140,6 +142,18 @@ def main(argv: list[str] | None = None) -> int:
         help="path to the Chromium or Chrome executable --fetch-flow should drive "
         "(default: search the usual locations, or $FLAB2BP_BROWSER)",
     )
+    ap.add_argument(
+        "--max-belt-height",
+        type=Fraction,
+        default=catalog.DEFAULT_MAX_BELT_Z,
+        metavar="TILES",
+        help="how high a belt may go, in tiles of height (default "
+        f"{catalog.DEFAULT_MAX_BELT_Z}). This is a property of YOUR SAVE, not "
+        "of the game: the ceiling depends on which vertical-construction "
+        "unlocks you have, and a save with them reaches at least 38. The "
+        "default is the lowest value that still lets a belt cross another "
+        "belt, so it pastes for a save with no such unlocks at all.",
+    )
     ap.add_argument("--budget", type=float, default=2.0, help="solver seconds per layout")
     ap.add_argument("-o", "--out", type=Path, help="write to a file instead of stdout")
     ap.add_argument("-n", "--name", default="", help="blueprint short description")
@@ -164,6 +178,7 @@ def main(argv: list[str] | None = None) -> int:
             fetch_flow=args.fetch_flow,
             fetch_timeout_s=args.fetch_timeout,
             browser=args.browser,
+            max_belt_z=args.max_belt_height,
         )
     except NoValidLayout as exc:
         # Distinct exit code: "no layout exists" is a different outcome from
@@ -179,8 +194,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if build.report.errors and not args.allow_invalid:
         print(
-            "flab2bp: refusing to emit an invalid blueprint; pass --allow-invalid "
-            "to override",
+            "flab2bp: refusing to emit an invalid blueprint; pass --allow-invalid to override",
             file=sys.stderr,
         )
         return 1

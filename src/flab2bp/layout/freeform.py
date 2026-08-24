@@ -134,9 +134,29 @@ WEST_CHANNEL = 1
 # ports' access cells DISJOINT, which is a property the router cannot recover by
 # searching harder.  A wider corridor only makes an existing search easier.
 
-#: Levels available to the router.  Ground plus two stacked crossing levels,
-#: matching what the corpus shows real blueprints using.
-LEVELS = catalog.MAX_BELT_STACK_LEVELS
+#: Height of one routing level, in blueprint world units.  Derived rather than
+#: written as ``1`` so it stays tied to the two measured constants it is made
+#: of: a belt climbs ``BELT_CLIMB_PER_TILE`` per tile and a ramp spends
+#: ``RAMP_TILES_PER_LEVEL`` tiles to gain one.
+_LEVEL_HEIGHT = catalog.BELT_CLIMB_PER_TILE * catalog.RAMP_TILES_PER_LEVEL
+
+#: Levels this router's lattice offers: ground, plus enough to clear a
+#: ground-level obstruction once.
+#:
+#: **This is not the game's ceiling and must not be read as one.**  A belt goes
+#: as high as the player's vertical-construction unlocks allow -- the user's
+#: save reaches ``z = 38`` -- and ``--max-belt-height`` carries that number.
+#: This constant is smaller for a reason particular to THIS router: the only
+#: thing it ever climbs to do is cross a belt, that costs
+#: ``BELT_CROSSING_CLEARANCE``, and it treats machines as solid at every
+#: altitude, so a third level buys it nothing it can use.  Raising it without
+#: also letting belts cross machines just lets A* wander upward.
+#:
+#: It was three, on a corpus count that never checked its three altitudes
+#: differed.  Three let the router emit ``z = 2`` reached by a step no belt can
+#: make: 11 of 157 belts on `electromagnetic-matrix` and 14 of 571 on
+#: `titanium-crystal`, in 3 of the 29 elevated runs between them.
+LEVELS = 1 + int(catalog.BELT_CROSSING_CLEARANCE / _LEVEL_HEIGHT)
 
 #: Rip-up-and-reroute iterations before a placement is declared unroutable.
 RRR_MAX = 8
@@ -1620,6 +1640,13 @@ class _Canvas:
 
     buildings: list[PlacedBuilding] = field(default_factory=list)
     #: ``(x, y, level)`` -> building index, for cells that block routing.
+    #: Lattice cell -> index of the building holding it.  The altitude is a
+    #: LEVEL INDEX when the router writes it and a world altitude when a caller
+    #: looks a :class:`PlacedBuilding` up by ``(x, y, b.z)`` -- the two agree
+    #: because ``Fraction(0) == 0`` and the two hash alike, so a belt resting on
+    #: a level is found either way.  A ramp tile at ``1/2`` is deliberately NOT
+    #: a lattice cell: it reserves the level it climbs from (see
+    #: :meth:`_Canvas.add`) and a world-altitude lookup for it finds nothing.
     blocked: dict[tuple[int, int, int], int] = field(default_factory=dict)
     #: Cells a machine occupies, which block *every* level.
     solid: set[tuple[int, int]] = field(default_factory=set)
@@ -1659,9 +1686,45 @@ class _Canvas:
     #: whatever is left.
     keep_out: set[tuple[int, int]] = field(default_factory=set)
 
-    def add(self, b: PlacedBuilding, *, solid: bool = False) -> int:
+    def add(self, b: PlacedBuilding, *, solid: bool = False, level: int | None = None) -> int:
+        """Place ``b`` and mark the lattice cells it takes out of play.
+
+        ``level`` is the integer ROUTING level to reserve, for callers whose
+        building sits at a world altitude that is not a lattice value -- a ramp
+        tile rests at ``1/2`` but occupies the lattice cell it is climbing from,
+        and reserving ``(x, y, 1/2)`` would leave that cell free for the next
+        net to route straight through the ramp.  Defaults to ``b.z``, which is
+        correct for everything that rests on a level: ``Fraction(0)`` and
+        ``Fraction(1)`` hash equal to ``0`` and ``1``, so they share a key with
+        the integer cells the router walks.
+        """
         idx = len(self.buildings)
         self.buildings.append(b)
+        if level is not None:
+            cell_z = level
+        elif b.z.denominator == 1:
+            cell_z = int(b.z)
+        else:
+            raise AssertionError(
+                f"building at altitude {b.z} is between routing levels, so the "
+                f"lattice cell it occupies is ambiguous; pass `level=` to say "
+                f"which one it takes out of play"
+            )
+        #: A ramp tile spans the two levels it climbs between, so it takes BOTH
+        #: out of play.  Reserving only the one it leaves let two ramps crossing
+        #: the same tile in opposite directions each keep their own level while
+        #: both emitted ``z = 1/2`` -- two belts on one cell, which
+        #: ``geom.belt_single_occupancy`` caught once the altitudes became real.
+        #: An ascent reserves the level below and a descent the level above, so
+        #: without this the two never noticed each other.
+        #: Derived from the ALTITUDE, not from `level`: an ascent passes the
+        #: level below the ramp and a descent the level above, so using
+        #: `level` would reserve the wrong pair going down.
+        held = (
+            (cell_z,)
+            if b.z.denominator == 1
+            else (math.floor(b.z), math.floor(b.z) + 1)
+        )
         if solid:
             for x, y, _ in b.tiles():
                 self.solid.add((x, y))
@@ -1669,7 +1732,9 @@ class _Canvas:
                     self.blocked[x, y, lvl] = idx
         else:
             for x, y, _ in b.tiles():
-                self.blocked[x, y, b.z] = idx
+                for lvl in held:
+                    if 0 <= lvl < LEVELS:
+                        self.blocked[x, y, lvl] = idx
         return idx
 
     def free(self, cell: tuple[int, int, int]) -> bool:
@@ -2014,7 +2079,7 @@ def _link_lane(
                 height=1,
                 x2=bx,
                 y2=by,
-                z2=0,
+                z2=Fraction(0),
                 yaw=facing,
                 yaw2=facing,
                 input_obj=src,
@@ -2085,6 +2150,94 @@ def _cut_loops(path: list[tuple[int, int, int]]) -> list[tuple[int, int, int]]:
         first[cell] = len(out)
         out.append(cell)
     return out
+
+
+def _altitude_profile(path: Sequence[tuple[int, int, int]]) -> list[Fraction]:
+    """World altitude for every cell of a routed path, ramps included.
+
+    **This is the level-index -> world-altitude boundary.**  The router walks an
+    integer lattice; :class:`PlacedBuilding` stores tiles of height.  Handing a
+    lattice index straight to the encoder is what shipped belts the game drew
+    red -- a chain that read ``0, 0, 1, 1`` climbed a whole tile of height in
+    one tile of run, twice as fast as a belt can, with no tile at ``1/2`` where
+    every real elevated run has one.
+
+    A level change already costs the router two tiles: the A\\* ramp edge
+    reserves a *via* cell one step along, at the OLD level, before landing on
+    the new level two steps along.  Both are already in ``path``, so materialising
+    the ramp costs **no extra tiles** -- the via cell's altitude was wrong, not
+    its existence.  The cell that needs the half value is the one whose
+    successor sits on a different level, which is exactly that via cell::
+
+        levels    0     0     0     0     1     1     1     0     0
+        altitude  0     0     0    1/2    1     1    1/2    0     0
+                              ^ via              ^ via
+
+    Matching the corpus, where every elevated run reads
+    ``0.0, 0.5, 1.0, ... 1.0, 0.5, 0.0`` and all 117 clean half-steps move
+    exactly one tile.
+
+    Note that ``1/2`` is a legal RESTING altitude too, not only a ramp tile --
+    the corpus has runs up to 23 tiles long at that height -- so a profile is
+    not required to pass straight through it.
+    """
+    levels = [lvl for _, _, lvl in path]
+    out: list[Fraction] = []
+    for j, lvl in enumerate(levels):
+        nxt = levels[j + 1] if j + 1 < len(levels) else lvl
+        if nxt == lvl:
+            out.append(lvl * _LEVEL_HEIGHT)
+            continue
+        if abs(nxt - lvl) != 1:
+            raise AssertionError(
+                f"path step {j} jumps {abs(nxt - lvl)} levels at {path[j]} -> "
+                f"{path[j + 1]}; the ramp table offers +/-1 only, and a wider "
+                f"jump has no defined altitude profile"
+            )
+        # One tile of run buys exactly one tile's worth of climb, toward the
+        # level this cell hands on to.
+        step = catalog.BELT_CLIMB_PER_TILE if nxt > lvl else -catalog.BELT_CLIMB_PER_TILE
+        out.append(lvl * _LEVEL_HEIGHT + step)
+    return out
+
+
+def _legal_link(
+    ax: int, ay: int, az: Fraction, bx: int, by: int, bz: Fraction
+) -> bool:
+    """May a belt at ``a`` hand on to one at ``b``?
+
+    The two ends of a routed path get joined to whatever lane belt they reach,
+    and "close enough" is not the test -- the JOIN is a belt-to-belt link like
+    any other, so it has to be one of the game's two altitude changes or no
+    change at all.  The old test here was ``dxy <= 1 and |dz| <= 1``, which
+    admits ``dz = 1`` across one tile: a ramp at twice the legal climb, the
+    very step that shipped red.  ``geom.altitude_step`` now catches it, and
+    this stops producing it.
+    """
+    dxy = abs(bx - ax) + abs(by - ay)
+    dz = bz - az
+    if dz == 0:
+        return dxy <= 1
+    if abs(dz) == catalog.BELT_CLIMB_PER_TILE:
+        return dxy == 1
+    if abs(dz) == catalog.VERTICAL_STEP:
+        return dxy == 0
+    return False
+
+
+def _lattice_cell(x: int, y: int, z: Fraction) -> tuple[int, int, int] | None:
+    """The routing-lattice cell a building at world altitude ``z`` occupies.
+
+    ``None`` when ``z`` is between levels, which means a ramp tile: it rests at
+    ``1/2`` and reserves the level it climbs FROM (see :meth:`_Canvas.add`), so
+    there is no single lattice cell that "is" it.  Callers looking a neighbour
+    up by its world altitude want to skip those rather than round them, because
+    rounding would claim a cell the ramp does not hold.
+
+    This is the inverse of :func:`_altitude_profile` and the only other place
+    the two coordinate systems meet.
+    """
+    return (x, y, int(z)) if z.denominator == 1 else None
 
 
 @dataclass
@@ -3734,7 +3887,8 @@ def _commit_paths(
         net = nets[i]
         indices: list[int] = []
         ok = True
-        for x, y, lvl in path:
+        altitudes = _altitude_profile(path)
+        for (x, y, lvl), z in zip(path, altitudes, strict=True):
             if not canvas.free((x, y, lvl)):
                 ok = False
                 break
@@ -3745,11 +3899,12 @@ def _commit_paths(
                         model_index=belt_model,
                         x=x,
                         y=y,
-                        z=lvl,
+                        z=z,
                         width=1,
                         height=1,
                         carries_item=net.item,
-                    )
+                    ),
+                    level=lvl,
                 )
             )
         if not ok or not indices:
@@ -3852,10 +4007,15 @@ def _source_for(
     """
     head = canvas.buildings[first]
     src = canvas.buildings[net.src.belt]
-    if abs(src.x - head.x) + abs(src.y - head.y) <= 1 and src.z == head.z:
+    if _legal_link(src.x, src.y, src.z, head.x, head.y, head.z):
         return net.src.belt
+    # `head` rests on a level, so it has a lattice cell; a ramp tile would
+    # not, and `_lattice_cell` says so rather than rounding it onto one.
+    at = _lattice_cell(head.x, head.y, head.z)
     for dx, dy in _STEPS:
-        cell = (head.x + dx, head.y + dy, head.z)
+        if at is None:
+            break
+        cell = (at[0] + dx, at[1] + dy, at[2])
         if cell not in kin:
             continue
         who = canvas.blocked.get(cell)
@@ -3993,10 +4153,15 @@ def _sink_for(
     """
     tail = canvas.buildings[last]
     dst = canvas.buildings[net.dst.belt]
-    if abs(dst.x - tail.x) + abs(dst.y - tail.y) <= 1 and abs(dst.z - tail.z) <= 1:
+    if _legal_link(tail.x, tail.y, tail.z, dst.x, dst.y, dst.z):
         return net.dst.belt
+    # `tail` rests on a level, so it has a lattice cell; a ramp tile would
+    # not, and `_lattice_cell` says so rather than rounding it onto one.
+    at = _lattice_cell(tail.x, tail.y, tail.z)
     for dx, dy in _STEPS:
-        cell = (tail.x + dx, tail.y + dy, tail.z)
+        if at is None:
+            break
+        cell = (at[0] + dx, at[1] + dy, at[2])
         if cell not in kin:
             continue
         who = canvas.blocked.get(cell)
@@ -4246,7 +4411,7 @@ def _route_external_inputs(
             missed += 1
             continue
         indices: list[int] = []
-        for x, y, lvl in path:
+        for (x, y, lvl), z in zip(path, _altitude_profile(path), strict=True):
             if not canvas.free((x, y, lvl)):
                 break
             indices.append(
@@ -4256,11 +4421,12 @@ def _route_external_inputs(
                         model_index=belt_model,
                         x=x,
                         y=y,
-                        z=lvl,
+                        z=z,
                         width=1,
                         height=1,
                         carries_item=item,
-                    )
+                    ),
+                    level=lvl,
                 )
             )
         if not indices:
@@ -5299,7 +5465,7 @@ def _bridge(
             height=1,
             x2=column,
             y2=dst.y,
-            z2=0,
+            z2=Fraction(0),
             yaw=Facing.SOUTH.value,
             yaw2=Facing.SOUTH.value,
             input_obj=src_belt,
@@ -5355,9 +5521,9 @@ def _place_coaters(
     out: list[_Coater] = []
 
     belt_at: dict[tuple[int, int, int], int] = {
-        (b.x, b.y, b.z): i
+        (b.x, b.y, int(b.z)): i
         for i, b in enumerate(canvas.buildings)
-        if catalog.is_belt(b.item_id)
+        if catalog.is_belt(b.item_id) and b.z.denominator == 1
     }
 
     for s, in_ports in zip(strips, ports, strict=True):
@@ -5410,7 +5576,7 @@ def _place_coaters(
                     height=1,
                     x2=cx,
                     y2=cy,
-                    z2=0,
+                    z2=Fraction(0),
                     yaw=Facing.WEST.value,
                     yaw2=Facing.WEST.value,
                     input_obj=drop,

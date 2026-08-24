@@ -14,6 +14,7 @@ that omits one is perfectly legal.  So the guard is a test, not a type.
 from __future__ import annotations
 
 import dataclasses
+from fractions import Fraction
 
 from flab2bp.layout.base import Facing, PlacedBuilding, Placement
 
@@ -25,13 +26,13 @@ def fully_populated() -> PlacedBuilding:
         model_index=36,
         x=3,
         y=4,
-        z=1,
+        z=Fraction(1),
         width=2,
         height=5,
         yaw=90.0,
         x2=7,
         y2=8,
-        z2=1,
+        z2=Fraction(1),
         yaw2=270.0,
         recipe_id=103,
         filter_id=1001,
