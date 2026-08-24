@@ -2515,6 +2515,26 @@ class TestTapCapacityIsPerSide:
     own half of the model is removed, which is what stops a single fixture from
     passing on the strength of the other half.
     """
+    def test_row_height_cannot_escape_to_nonreal_pitch(self) -> None:
+        from ortools.sat.python import cp_model
+
+        from flab2bp.layout.spine import _exact_row_height
+
+        model = cp_model.CpModel()
+        pitch_three = model.new_bool_var("pitch_three")
+        pitch_five = model.new_bool_var("pitch_five")
+        model.add(pitch_three == 1)
+        model.add(pitch_five == 0)
+        row_height = _exact_row_height(
+            model,
+            "row_height",
+            [(3, pitch_three), (5, pitch_five)],
+            5,
+        )
+        model.add(row_height == 4)
+
+        assert cp_model.CpSolver().solve(model) == cp_model.INFEASIBLE
+
 
     @staticmethod
     def _refuses(spec: BuildSpec) -> None:

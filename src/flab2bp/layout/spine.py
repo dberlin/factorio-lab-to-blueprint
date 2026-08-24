@@ -1731,6 +1731,21 @@ def _candidate_widths(groups: dict[str, _Group]) -> list[int]:
     return out
 
 
+def _exact_row_height(
+    model: cp_model.CpModel,
+    name: str,
+    assignments: list[tuple[int, cp_model.IntVar]],
+    max_height: int,
+) -> cp_model.IntVar:
+    """Exact maximum assigned pitch, or zero when the row is empty."""
+    height = model.new_int_var(0, max_height, name)
+    model.add_max_equality(
+        height,
+        [pitch * assigned for pitch, assigned in assignments],
+    )
+    return height
+
+
 def _solve_one(
     spec: BuildSpec,
     groups: dict[str, _Group],
@@ -1780,9 +1795,12 @@ def _solve_one(
                 for k in keys
             )
         )
-        hh = model.new_int_var(0, max_h, f"hh_{r}")
-        for k in keys:
-            model.add(hh >= groups[k].pitch_h * in_row[k, r])
+        hh = _exact_row_height(
+            model,
+            f"hh_{r}",
+            [(groups[k].pitch_h, in_row[k, r]) for k in keys],
+            max_h,
+        )
         row_w.append(ww)
         row_h.append(hh)
 
