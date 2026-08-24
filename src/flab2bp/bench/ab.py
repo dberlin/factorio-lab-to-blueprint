@@ -1093,6 +1093,13 @@ def _number(row: Mapping[str, object], key: str, *, required: bool = True) -> fl
     return float(value)
 
 
+def _required_string(row: Mapping[str, object], key: str) -> str:
+    value = row.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"sample {key!r} must be a nonempty string")
+    return value
+
+
 def _required_number(row: Mapping[str, object], key: str) -> float:
     value = _number(row, key)
     if value is None:  # ``required=True`` makes this defensive, and narrows the type.
@@ -1157,9 +1164,9 @@ def samples_from_json(document: Mapping[str, object]) -> list[Sample]:
                 )
             samples.append(
                 Sample(
-                    url_id=str(row["url_id"]),
-                    candidate=str(row["candidate"]),
-                    strategy=str(row["strategy"]),
+                    url_id=_required_string(row, "url_id"),
+                    candidate=_required_string(row, "candidate"),
+                    strategy=_required_string(row, "strategy"),
                     budget_s=_required_number(row, "budget_s"),
                     trial=_integer(row, "trial"),
                     outcome=outcome,

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import json
 import math
 from dataclasses import replace
+from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -15,6 +18,7 @@ from flab2bp.bench.promotion import (
     paired_bootstrap_ci_hi,
     repository_manifest,
 )
+from flab2bp.bench.promotion import main as promotion_main
 from flab2bp.bench.types import Metrics
 
 
@@ -423,3 +427,55 @@ def test_refused_legacy_null_buildings_is_accepted_as_zero() -> None:
 
     assert samples[0].outcome is Outcome.REFUSED
     assert samples[0].buildings == 0
+
+
+@pytest.mark.parametrize("field", ["url_id", "candidate", "strategy"])
+@pytest.mark.parametrize("bad", [None, 1, False, ""])
+def test_persisted_sample_identity_strings_are_strict(
+    field: str, bad: object
+) -> None:
+    row = _persisted_row("valid")
+    row[field] = bad
+
+    with pytest.raises(ValueError, match=field):
+        samples_from_json({"meta": {"power": False}, "samples": [row]})
+
+
+@pytest.mark.parametrize("field", ["a", "b"])
+@pytest.mark.parametrize("bad", [None, 1, False, ""])
+def test_persisted_backend_names_are_strict(
+    tmp_path: Path, field: str, bad: object
+) -> None:
+    meta: dict[str, object] = {
+        "a": "baseline",
+        "b": "candidate",
+        "repeat": 1,
+        "candidates": 1,
+        "budgets": [10.0],
+        "power": False,
+    }
+    meta[field] = bad
+    path = tmp_path / "bad.json"
+    path.write_text(json.dumps({"meta": meta, "samples": []}))
+
+    with pytest.raises(ValueError, match=field):
+        promotion_main([str(path)])
+
+
+@pytest.mark.parametrize("bad", [None, 1, False, ""])
+def test_manifest_url_identity_is_a_nonempty_string(bad: object) -> None:
+    with pytest.raises(ValueError, match="url_id"):
+        RequiredCell(cast(str, bad), 10.0, False, 1, 1)
+
+
+def test_matching_malformed_baseline_and_candidate_rows_cannot_reach_the_gate() -> None:
+    baseline = _persisted_row("valid")
+    candidate = _persisted_row("valid")
+    baseline["url_id"] = None
+    candidate["url_id"] = None
+    candidate["strategy"] = "candidate"
+
+    with pytest.raises(ValueError, match="url_id"):
+        samples_from_json(
+            {"meta": {"power": False}, "samples": [baseline, candidate]}
+        )

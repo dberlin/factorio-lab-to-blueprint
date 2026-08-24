@@ -33,8 +33,8 @@ class RequiredCell:
     candidates: int
 
     def __post_init__(self) -> None:
-        if not self.url_id:
-            raise ValueError("required cell url_id must not be empty")
+        if not isinstance(self.url_id, str) or not self.url_id.strip():
+            raise ValueError("required cell url_id must be a nonempty string")
         if not math.isfinite(self.budget_s) or self.budget_s <= 0:
             raise ValueError("required cell budget must be finite and positive")
         if self.repeat <= 0 or self.candidates <= 0:
@@ -412,6 +412,13 @@ def _meta(document: Mapping[str, object]) -> Mapping[str, object]:
     return meta
 
 
+def _backend_name(meta: Mapping[str, object], key: str, default: str) -> str:
+    value = meta.get(key, default)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"result JSON meta {key!r} must be a nonempty string")
+    return value
+
+
 def _positive_integer(meta: Mapping[str, object], key: str) -> int:
     value = meta.get(key)
     if isinstance(value, bool) or not isinstance(value, (int, float)):
@@ -458,7 +465,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise SystemExit(f"{path}: result JSON must be an object")
         document: Mapping[str, object] = raw
         meta = _meta(document)
-        pair = (str(meta.get("a", "spine")), str(meta.get("b", "freeform")))
+        pair = (
+            _backend_name(meta, "a", "spine"),
+            _backend_name(meta, "b", "freeform"),
+        )
         repeat = _positive_integer(meta, "repeat")
         candidates = _positive_integer(meta, "candidates")
         if expected_pair is None:
