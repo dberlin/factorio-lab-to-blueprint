@@ -378,3 +378,48 @@ def test_repository_manifest_is_full_corpus_for_both_power_modes() -> None:
     assert len(required.cells) == len(URL_CORPUS) * 2
     assert {cell.power for cell in required.cells} == {False, True}
     assert all(cell.repeat == 2 and cell.candidates == 1 for cell in required.cells)
+
+
+def _persisted_row(outcome: str) -> dict[str, object]:
+    valid = outcome == "valid"
+    return {
+        "url_id": "one-cell",
+        "candidate": "default",
+        "strategy": "baseline",
+        "budget_s": 10.0,
+        "trial": 0,
+        "outcome": outcome,
+        "seconds": 1.0,
+        "area": 100 if valid else None,
+        "used_tiles": 100 if valid else None,
+        "buildings": 1 if valid else None,
+        "belt_tiles": 50 if valid else None,
+        "direct_inserts": 0 if valid else None,
+        "machines": 1 if valid else None,
+        "detail": "",
+    }
+
+
+def test_null_trial_identity_is_rejected() -> None:
+    row = _persisted_row("valid")
+    row["trial"] = None
+
+    with pytest.raises(ValueError, match="trial"):
+        samples_from_json({"meta": {"power": False}, "samples": [row]})
+
+
+def test_valid_null_belt_tiles_is_rejected_instead_of_becoming_zero() -> None:
+    row = _persisted_row("valid")
+    row["belt_tiles"] = None
+
+    with pytest.raises(ValueError, match="belt_tiles"):
+        samples_from_json({"meta": {"power": False}, "samples": [row]})
+
+
+def test_refused_legacy_null_buildings_is_accepted_as_zero() -> None:
+    row = _persisted_row("refused")
+
+    samples = samples_from_json({"meta": {"power": False}, "samples": [row]})
+
+    assert samples[0].outcome is Outcome.REFUSED
+    assert samples[0].buildings == 0

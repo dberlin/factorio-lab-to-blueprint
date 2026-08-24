@@ -1102,11 +1102,18 @@ def _required_number(row: Mapping[str, object], key: str) -> float:
 
 def _integer(row: Mapping[str, object], key: str, default: int = 0) -> int:
     value = row.get(key, default)
-    if value is None:
-        return default
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(f"sample {key!r} must be numeric")
     return int(value)
+
+
+def _parsed_buildings(row: Mapping[str, object], outcome: Outcome) -> int:
+    if row.get("buildings") is None:
+        if outcome is Outcome.VALID:
+            raise ValueError("sample 'buildings' must be numeric")
+        return 0
+    return _integer(row, "buildings")
+
 
 def _boolean(row: Mapping[str, object], key: str, default: bool) -> bool:
     value = row.get(key, default)
@@ -1158,7 +1165,7 @@ def samples_from_json(document: Mapping[str, object]) -> list[Sample]:
                     outcome=outcome,
                     seconds=_required_number(row, "seconds"),
                     metrics=metrics,
-                    buildings=_integer(row, "buildings"),
+                    buildings=_parsed_buildings(row, outcome),
                     detail=str(row.get("detail", "")),
                     cpu_seconds=_number(row, "cpu_seconds", required=False),
                     peak_rss_mb=_number(row, "peak_rss_mb", required=False),
