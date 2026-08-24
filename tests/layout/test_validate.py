@@ -232,7 +232,10 @@ def test_geom_altitude_step_fires_on_a_full_level_across_one_tile() -> None:
     `EBuildCondition.TooSteep`, and the old `dz > 1` test scored it exactly 1
     and let it pass.
     """
-    r = validate(place(belt(0, 0, 0, out=1), belt(1, 0, 1)))
+    r = validate(
+        place(belt(0, 0, 0, out=1), belt(1, 0, 1)),
+        belt_vertical_construction=False,
+    )
     assert fired(r, "geom.altitude_step")
 
 
@@ -256,15 +259,24 @@ def test_geom_altitude_step_allows_a_ramp_at_any_height() -> None:
 
 def test_geom_altitude_step_fires_just_past_the_slope_limit() -> None:
     """3/5 of blueprint z per tile is exactly 4/5 world; 7/10 is over it."""
-    ok = validate(place(belt(0, 0, 0, out=1), belt(1, 0, Fraction(3, 5))))
+    ok = validate(
+        place(belt(0, 0, 0, out=1), belt(1, 0, Fraction(3, 5))),
+        belt_vertical_construction=False,
+    )
     assert not fired(ok, "geom.altitude_step")
-    over = validate(place(belt(0, 0, 0, out=1), belt(1, 0, Fraction(7, 10))))
+    over = validate(
+        place(belt(0, 0, 0, out=1), belt(1, 0, Fraction(7, 10))),
+        belt_vertical_construction=False,
+    )
     assert fired(over, "geom.altitude_step")
 
 
 def test_geom_altitude_step_refuses_a_vertical_climb_without_the_unlock() -> None:
     """Zero run is infinite slope, which only beltVerticalConstruction allows."""
-    r = validate(place(belt(0, 0, 0, out=1), belt(0, 0, 1)))
+    r = validate(
+        place(belt(0, 0, 0, out=1), belt(0, 0, 1)),
+        belt_vertical_construction=False,
+    )
     assert fired(r, "geom.altitude_step")
 
 

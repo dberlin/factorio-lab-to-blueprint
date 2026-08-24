@@ -3142,7 +3142,7 @@ def validate(
     only: Iterable[str] | None = None,
     expect_power: bool = True,
     max_belt_z: Fraction = cat.DEFAULT_MAX_BELT_Z,
-    belt_vertical_construction: bool = False,
+    belt_vertical_construction: bool = True,
 ) -> Report:
     """Judge ``placement``, optionally against the ``spec`` it should realise.
 
@@ -3157,10 +3157,16 @@ def validate(
     tower -- a real bug -- indistinguishable from a deliberate ``--no-power``
     build, and silently stop detecting it.
 
-    ``max_belt_z`` is how high a belt may go in the SAVE this blueprint is for.
-    It is a caller declaration for the same reason: the ceiling depends on the
-    player's vertical-construction unlocks, not on the game, and the default is
-    the conservative one that needs none of them.
+    ``max_belt_z`` and ``belt_vertical_construction`` are how high a belt may go
+    in the SAVE this blueprint is for, and whether that save is under the
+    game's belt slope limit at all.  They are caller declarations for the same
+    reason: both are properties of the player's researched technologies.
+
+    ``belt_vertical_construction`` defaults to TRUE because an absent technology
+    set means every technology researched -- FactorioLab's own default, see
+    ``catalog.belt_rules_for_technologies``.  Defaulting it False would have the
+    validator judge by a rule most saves are not under, and reject geometry the
+    game accepts.
     """
     wanted = set(only) if only is not None else None
     ctx = _context(

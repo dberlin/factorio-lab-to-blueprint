@@ -223,7 +223,14 @@ def build(
     refused: list[str] = []
     for spec in spec_set.candidates:
         for sname in wanted:
-            layout = _STRATEGIES[sname](power=power)
+            # `freeform` chooses between the ramped and the dense form; the
+            # slope limit is conditional on the save's technologies.  `spine`
+            # always ramps: its bridges already reserve a ramp column, so the
+            # ramp costs it nothing and is legal either way.
+            kw: dict[str, object] = {"power": power}
+            if sname == "freeform":
+                kw["belt_vertical_construction"] = belt_rules.vertical_construction
+            layout = _STRATEGIES[sname](**kw)
             try:
                 placement = layout.lay_out(spec, time_budget_s=time_budget_s)
             except NoValidLayout as exc:

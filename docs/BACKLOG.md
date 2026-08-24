@@ -358,3 +358,21 @@ consolidation is nearly free at merge time and expensive later.
 offer to auto-place foundation); `TooSkew` ("Deflection too much"); and whether
 a belt may cross over a building, and at what height -- deliberately left
 unanswered rather than inferred from the fixtures' silence.
+
+**And when it lands, `gamerules.py` must carry each rule's GUARD, not just its
+threshold.** The belt slope rule is not `slope <= 0.8`; it is
+
+    if (!history.beltVerticalConstruction && num25 > 0.8f)
+
+and the guard is the whole point. `altitude-study` extracted the threshold
+correctly, then applied it unconditionally, and paid 19 of 72 audit cells
+against master's 2 -- every net spending two tiles per level change under a
+constraint that most saves, including the user's, do not carry. Gating it on
+the technology returned the audit to master's 2/0/1 exactly.
+
+The same shape is waiting in the others: `TooSteep` has a second, tighter form
+guarded by the same flag, `inserterBidirectional` and `inserterStackInput` gate
+sorter behaviour, and `labLevel` gates the height ceiling. A rule recorded
+without its guard reads as universal, and the cost of that mistake is not a
+wrong blueprint -- it is a quietly worse one, everywhere, which is much harder
+to notice.

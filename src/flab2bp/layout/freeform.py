@@ -1639,6 +1639,15 @@ def _pack(
 class _Canvas:
     """Buildings under construction, plus what occupies each cell."""
 
+    #: Whether this save is under the game's belt SLOPE limit, and so needs
+    #: ramps.  The game's test is
+    #: ``!history.beltVerticalConstruction && num25 > 0.8f``, so the limit
+    #: applies only WITHOUT the tech; with it there is no slope limit at all
+    #: and a belt may step a whole level in one tile.  Default ``False``
+    #: because an absent technology set means every technology researched --
+    #: see :func:`catalog.belt_rules_for_technologies`.
+    ramped: bool = False
+
     buildings: list[PlacedBuilding] = field(default_factory=list)
     #: ``(x, y, level)`` -> building index, for cells that block routing.
     #: Lattice cell -> index of the building holding it.  The altitude is a
@@ -2226,7 +2235,9 @@ def transition_form(from_z: Fraction, to_z: Fraction) -> TransitionForm:
     return TransitionForm.RAMP
 
 
-def _altitude_profile(path: Sequence[tuple[int, int, int]]) -> list[Fraction] | None:
+def _altitude_profile(
+    path: Sequence[tuple[int, int, int]], *, ramped: bool
+) -> list[Fraction] | None:
     r"""World altitude for every cell of a routed path, ramps materialised.
 
     **This is the level-index -> world-altitude boundary.**  The router walks an
@@ -2260,6 +2271,14 @@ def _altitude_profile(path: Sequence[tuple[int, int, int]]) -> list[Fraction] | 
     this function's.
     """
     levels = [lvl for _, _, lvl in path]
+    if not ramped:
+        # The slope limit is CONDITIONAL and this save is not under it, so a
+        # level change needs no ramp: the belt simply steps up.  See `ramped`
+        # in the docstring -- with `beltVerticalConstruction` the game skips
+        # the `TooSteep` test entirely, so a whole tile of height across one
+        # tile of run is legal, and spending a second tile on it would cost
+        # routability for nothing.
+        return [lvl * _LEVEL_HEIGHT for lvl in levels]
     out: list[Fraction] = []
     for j, lvl in enumerate(levels):
         nxt = levels[j + 1] if j + 1 < len(levels) else lvl
@@ -2301,7 +2320,7 @@ def _altitude_profile(path: Sequence[tuple[int, int, int]]) -> list[Fraction] | 
 
 
 def _legal_link(
-    ax: int, ay: int, az: Fraction, bx: int, by: int, bz: Fraction
+    ax: int, ay: int, az: Fraction, bx: int, by: int, bz: Fraction, *, ramped: bool
 ) -> bool:
     """May a belt at ``a`` hand on to one at ``b``?
 
@@ -2315,6 +2334,9 @@ def _legal_link(
     """
     dxy = abs(bx - ax) + abs(by - ay)
     dz = bz - az
+    if not ramped:
+        # No slope limit on this save, so the only question is adjacency.
+        return dxy <= 1 and abs(dz) <= catalog.VERTICAL_STEP
     if dz == 0:
         return dxy <= 1
     # Only the form `transition_form` would choose for this climb.  The
@@ -3990,7 +4012,7 @@ def _commit_paths(
         net = nets[i]
         indices: list[int] = []
         ok = True
-        altitudes = _altitude_profile(path)
+        altitudes = _altitude_profile(path, ramped=canvas.ramped)
         if altitudes is None:
             unlinked += 1
             continue
@@ -4113,7 +4135,9 @@ def _source_for(
     """
     head = canvas.buildings[first]
     src = canvas.buildings[net.src.belt]
-    if _legal_link(src.x, src.y, src.z, head.x, head.y, head.z):
+    if _legal_link(
+        src.x, src.y, src.z, head.x, head.y, head.z, ramped=canvas.ramped
+    ):
         return net.src.belt
     # `head` rests on a level, so it has a lattice cell; a ramp tile would
     # not, and `_lattice_cell` says so rather than rounding it onto one.
@@ -4259,7 +4283,9 @@ def _sink_for(
     """
     tail = canvas.buildings[last]
     dst = canvas.buildings[net.dst.belt]
-    if _legal_link(tail.x, tail.y, tail.z, dst.x, dst.y, dst.z):
+    if _legal_link(
+        tail.x, tail.y, tail.z, dst.x, dst.y, dst.z, ramped=canvas.ramped
+    ):
         return net.dst.belt
     # `tail` rests on a level, so it has a lattice cell; a ramp tile would
     # not, and `_lattice_cell` says so rather than rounding it onto one.
@@ -4517,7 +4543,7 @@ def _route_external_inputs(
             missed += 1
             continue
         indices: list[int] = []
-        profile = _altitude_profile(path)
+        profile = _altitude_profile(path, ramped=canvas.ramped)
         if profile is None:
             missed += 1
             continue
@@ -5189,6 +5215,7 @@ def _build(
     *,
     power: bool,
     route: bool,
+    ramped: bool = False,
     deadline: float | None = None,
     budget: dict[str, int] | None = None,
 ) -> tuple[Placement, int, int]:
@@ -5202,7 +5229,7 @@ def _build(
     """
     belt_id = BELT_ITEM_IDS.get(spec.belt_item_id, 2001)
     belt_model = catalog.building(belt_id).model_index
-    canvas = _Canvas()
+    canvas = _Canvas(ramped=ramped)
 
     rates: dict[str, Fraction] = {}
     for g in _adapt(spec).values():
@@ -5850,7 +5877,9 @@ def _fanout_shortfall(strips: list[Strip]) -> list[str]:
     return out
 
 
-def fallback_placement(spec: BuildSpec, *, power: bool = True) -> Placement:
+def fallback_placement(
+    spec: BuildSpec, *, power: bool = True, ramped: bool = False
+) -> Placement:
     """One strip per group, stacked vertically.  NOT a usable layout.
 
     It cannot fail to *construct*, which is a different and much weaker property
@@ -5874,7 +5903,9 @@ def fallback_placement(spec: BuildSpec, *, power: bool = True) -> Placement:
         y += s.height + MARGIN
     width = max((s.width for s in strips), default=1) + MARGIN
     pack = _Pack(at=at, width=width, height=y, status="fallback")
-    placement, _failed, _towers = _build(spec, strips, pack, power=power, route=False)
+    placement, _failed, _towers = _build(
+        spec, strips, pack, power=power, route=False, ramped=ramped
+    )
     placement.stats["fallback_used"] = 1.0
     placement.stats["solver_status"] = 0.0
     # The fallback stacks strips vertically without ever asking whether two of
@@ -5901,8 +5932,20 @@ class FreeformLayout:
         workers: int | None = None,
         direct_insert: bool = True,
         arrangements: int | None = None,
+        belt_vertical_construction: bool = True,
     ) -> None:
         self.power = power
+        #: Whether ramps are REQUIRED.  The game's slope limit is conditional --
+        #: ``!history.beltVerticalConstruction && num25 > 0.8f`` -- so a save
+        #: WITH the tech has no slope limit and a belt may gain a whole level in
+        #: one tile.  Defaults to having it, because an absent technology set in
+        #: the URL means every technology researched.
+        #:
+        #: Treating the limit as unconditional cost 19 of 72 audit cells against
+        #: master's 2, and made the one test class built from a real corpus URL
+        #: fail 2 runs in 3: every net paid two tiles per level change and a
+        #: stricter join rule, under a constraint these saves do not carry.
+        self.ramped = not belt_vertical_construction
         self.strip_len = strip_len
         #: CP-SAT search workers. ``None`` takes the module default (all
         #: cores); the bake-off pins ``DETERMINISTIC_WORKERS``.
@@ -6465,6 +6508,7 @@ class FreeformLayout:
                     pack,
                     power=self.power,
                     route=True,
+                    ramped=self.ramped,
                     deadline=deadline,
                     budget=budget,
                 )
