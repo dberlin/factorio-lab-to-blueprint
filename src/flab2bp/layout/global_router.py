@@ -324,11 +324,20 @@ def _routing_order(nets: Sequence[_PreparedNet]) -> tuple[_PreparedNet, ...]:
 
 
 def _estimated_length(net: _PreparedNet) -> int:
-    destination = (net.dst.x, net.dst.y)
+    destination = (net.dst.x, net.dst.y, net.dst.z)
     if net.src is not None:
-        return abs(net.src.x - destination[0]) + abs(net.src.y - destination[1])
+        return (
+            abs(net.src.x - destination[0])
+            + abs(net.src.y - destination[1])
+            + abs(net.src.z - destination[2])
+        )
     return min(
-        (abs(x - destination[0]) + abs(y - destination[1]) for x, y, _level in net.boundary_goals),
+        (
+            abs(x - destination[0])
+            + abs(y - destination[1])
+            + abs(level - destination[2])
+            for x, y, level in net.boundary_goals
+        ),
         default=0,
     )
 
@@ -387,9 +396,9 @@ def _route_ends(
     net: _PreparedNet,
     grid: _Grid,
 ) -> tuple[bytearray, tuple[int, ...], frozenset[int]]:
-    destination = (net.dst.x, net.dst.y)
+    destination = (net.dst.x, net.dst.y, net.dst.z)
     released: tuple[int, ...] = ()
-    routing_ports: Collection[tuple[int, int]] = ()
+    routing_ports: Collection[tuple[int, int, int]] = ()
     if net.net_id.role is NetRole.EXTERNAL:
         released_index = next(
             (at for at, owner in grid.reserved if owner == destination),
@@ -398,7 +407,7 @@ def _route_ends(
         if released_index is not None:
             released = (released_index,)
     elif net.src is not None:
-        routing_ports = ((net.src.x, net.src.y), destination)
+        routing_ports = ((net.src.x, net.src.y, net.src.z), destination)
 
     flags = _routing_flags(
         grid,
@@ -407,7 +416,7 @@ def _route_ends(
     )
     goals = frozenset(
         index
-        for cell in _adjacent_ground(destination)
+        for cell in _adjacent_port(destination)
         if (index := _live_index(grid, flags, cell)) is not None
     )
     if net.net_id.role is NetRole.EXTERNAL:
@@ -425,7 +434,9 @@ def _route_ends(
             sorted(
                 {
                     index
-                    for cell in _adjacent_ground((net.src.x, net.src.y))
+                    for cell in _adjacent_port(
+                        (net.src.x, net.src.y, net.src.z)
+                    )
                     if (index := _live_index(grid, flags, cell)) is not None
                 }
             )
@@ -435,9 +446,9 @@ def _route_ends(
     return flags, starts, goals
 
 
-def _adjacent_ground(port: tuple[int, int]) -> tuple[Cell, ...]:
-    x, y = port
-    return tuple((x + dx, y + dy, 0) for dx, dy in _STEPS)
+def _adjacent_port(port: tuple[int, int, int]) -> tuple[Cell, ...]:
+    x, y, level = port
+    return tuple((x + dx, y + dy, level) for dx, dy in _STEPS)
 
 
 def _live_index(grid: _Grid, flags: bytearray, cell: Cell) -> int | None:

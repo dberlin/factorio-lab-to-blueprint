@@ -2212,7 +2212,7 @@ class _Canvas:
     #: says nothing about altitude.
     solid: set[tuple[int, int]] = field(default_factory=set)
 
-    #: ``cell -> port (x, y)``: one way in or out, held for that port's nets.
+    #: ``cell -> port (x, y, level)``: one way in or out, held for that port's nets.
     #:
     #: A port is a lane's end tile, so it has at most three free neighbours and
     #: often one.  Without a reservation an earlier net's path takes the last
@@ -2223,9 +2223,11 @@ class _Canvas:
     #: conflict for the history term to price.  Measured on the magnetic-ring
     #: spec: 48 of 128 searches failed at zero expansions, at every candidate
     #: height, with two thirds of the routing budget still unspent.
-    reserved: dict[tuple[int, int, int], tuple[int, int]] = field(default_factory=dict)
+    reserved: dict[tuple[int, int, int], tuple[int, int, int]] = field(
+        default_factory=dict
+    )
     #: Ports the net currently being routed owns; it may use their reservations.
-    routing_ports: frozenset[tuple[int, int]] = frozenset()
+    routing_ports: frozenset[tuple[int, int, int]] = frozenset()
     #: ``(min_x, min_y, max_x, max_y)`` no building may leave, once the packed
     #: block's extent is known.
     #:
@@ -2471,6 +2473,7 @@ class _PreparedPort:
     x1: int
     tiles: tuple[int, ...]
     machines: int
+    z: int = 0
 
 
 def _prepare_port(port: _Port) -> _PreparedPort:
@@ -2482,6 +2485,7 @@ def _prepare_port(port: _Port) -> _PreparedPort:
         x1=port.x1,
         tiles=port.tiles,
         machines=port.machines,
+        z=port.z,
     )
 
 
@@ -2501,6 +2505,7 @@ def _bind_prepared_port(
         x1=port.x1,
         tiles=port.tiles,
         machines=port.machines,
+        z=port.z,
     )
 
 
@@ -3468,7 +3473,7 @@ class _Grid:
     base: bytes
     occ: bytearray
     #: ``(index, port)`` for every reserved cell inside the box.
-    reserved: tuple[tuple[int, tuple[int, int]], ...]
+    reserved: tuple[tuple[int, tuple[int, int, int]], ...]
     #: Congestion history as a flat array, or ``None`` on a round that has none.
     hist: list[float] | None
     #: Landmark distance fields over the 2D projection, indexed
@@ -3721,7 +3726,7 @@ def _make_grid(
 def _routing_flags(
     grid: _Grid,
     *,
-    routing_ports: Collection[tuple[int, int]] = (),
+    routing_ports: Collection[tuple[int, int, int]] = (),
     released_reservations: Collection[int] = (),
 ) -> bytearray:
     """Return hard passability with only this search's reservations opened."""
@@ -4279,15 +4284,15 @@ def _with_sibling_groups(
     nets: Sequence[_PreparedNet],
 ) -> tuple[_PreparedNet, ...]:
     """Freeze the detailed router's exact branch/merge groups onto each net."""
-    same_src: dict[tuple[int, int], list[NetId]] = defaultdict(list)
-    same_dst: dict[tuple[int, int], list[NetId]] = defaultdict(list)
+    same_src: dict[tuple[int, int, int], list[NetId]] = defaultdict(list)
+    same_dst: dict[tuple[int, int, int], list[NetId]] = defaultdict(list)
     for net in nets:
         if net.net_id.role is NetRole.EXTERNAL:
             continue
         if net.src is None:
             raise ValueError("non-external prepared nets require source ports")
-        same_src[net.src.y, net.src.x0].append(net.net_id)
-        same_dst[net.dst.x, net.dst.y].append(net.net_id)
+        same_src[net.src.y, net.src.x0, net.src.z].append(net.net_id)
+        same_dst[net.dst.x, net.dst.y, net.dst.z].append(net.net_id)
     grouped: list[_PreparedNet] = []
     for net in nets:
         if net.net_id.role is NetRole.EXTERNAL:
@@ -4300,12 +4305,12 @@ def _with_sibling_groups(
                 net,
                 src_group=tuple(
                     sibling
-                    for sibling in same_src[net.src.y, net.src.x0]
+                    for sibling in same_src[net.src.y, net.src.x0, net.src.z]
                     if sibling != net.net_id
                 ),
                 dst_group=tuple(
                     sibling
-                    for sibling in same_dst[net.dst.x, net.dst.y]
+                    for sibling in same_dst[net.dst.x, net.dst.y, net.dst.z]
                     if sibling != net.net_id
                 ),
             )
@@ -4326,7 +4331,7 @@ class _PreparedRoutingProblem:
     blocked: tuple[tuple[tuple[int, int, int], int], ...]
     solid: frozenset[tuple[int, int]]
     reserved: tuple[
-        tuple[tuple[int, int, int], tuple[int, int]],
+        tuple[tuple[int, int, int], tuple[int, int, int]],
         ...,
     ]
     keep_out: frozenset[tuple[int, int]]
@@ -4681,11 +4686,11 @@ def _route_all(
 
     # Nets that end at the same lane. Ordered, so "the ones before me" is
     # well defined however the router chooses to sequence a round.
-    same_dst: dict[tuple[int, int], list[int]] = defaultdict(list)
+    same_dst: dict[tuple[int, int, int], list[int]] = defaultdict(list)
     for i, net in enumerate(nets):
-        same_dst[net.dst.x, net.dst.y].append(i)
+        same_dst[net.dst.x, net.dst.y, net.dst.z].append(i)
     dst_group = {
-        i: tuple(g for g in same_dst[net.dst.x, net.dst.y] if g != i)
+        i: tuple(g for g in same_dst[net.dst.x, net.dst.y, net.dst.z] if g != i)
         for i, net in enumerate(nets)
     }
     # The same story on the producer side, and it needs the same answer. An
@@ -4694,11 +4699,15 @@ def _route_all(
     # BRANCH instead: leave from a sibling's path, which becomes a splitter on
     # that path at commit time. Keyed by the LANE (row and west edge), not the
     # port, because `at_tile` moves the port along the lane it belongs to.
-    same_src: dict[tuple[int, int], list[int]] = defaultdict(list)
+    same_src: dict[tuple[int, int, int], list[int]] = defaultdict(list)
     for i, net in enumerate(nets):
-        same_src[net.source.y, net.source.x0].append(i)
+        same_src[net.source.y, net.source.x0, net.source.z].append(i)
     src_group = {
-        i: tuple(g for g in same_src[net.source.y, net.source.x0] if g != i)
+        i: tuple(
+            g
+            for g in same_src[net.source.y, net.source.x0, net.source.z]
+            if g != i
+        )
         for i, net in enumerate(nets)
     }
     # Chained nets -- one net leaving the belt another delivers to, which is what
@@ -4768,7 +4777,10 @@ def _route_all(
         # so its own way in and out reads as free while every other port's
         # stays held.
         canvas.routing_ports = frozenset(
-            {(net.source.x, net.source.y), (net.dst.x, net.dst.y)}
+            {
+                (net.source.x, net.source.y, net.source.z),
+                (net.dst.x, net.dst.y, net.dst.z),
+            }
         )
         # THE LANE TILE IS ONLY FREE FOR THE FIRST NET TO LEAVE IT.  Its port is
         # the lane's END, which has no onward link, so the first tap merely
@@ -5249,10 +5261,10 @@ def _route_all(
 
 
 def _match_access(
-    order: Sequence[tuple[int, int]],
-    options: Mapping[tuple[int, int], Sequence[tuple[int, int, int]]],
-    wants: Mapping[tuple[int, int], int],
-) -> dict[tuple[int, int, int], tuple[int, int]]:
+    order: Sequence[tuple[int, int, int]],
+    options: Mapping[tuple[int, int, int], Sequence[tuple[int, int, int]]],
+    wants: Mapping[tuple[int, int, int], int],
+) -> dict[tuple[int, int, int], tuple[int, int, int]]:
     """Assign access cells to ports so that as many CLAIMS as possible are met.
 
     A claim is one port's need for one cell: a port that both receives and sends
@@ -5275,9 +5287,11 @@ def _match_access(
     must reserve the same cells, or a routing comparison measures the reservation
     order instead of what it is trying to measure.
     """
-    owner: dict[tuple[int, int, int], tuple[tuple[int, int], int]] = {}
+    owner: dict[
+        tuple[int, int, int], tuple[tuple[int, int, int], int]
+    ] = {}
 
-    def augment(start: tuple[tuple[int, int], int]) -> bool:
+    def augment(start: tuple[tuple[int, int, int], int]) -> bool:
         # Iterative, not recursive: an alternating path can run the length of
         # the port list, and Python's stack limit is not a routing parameter.
         seen: set[tuple[int, int, int]] = set()
@@ -5285,7 +5299,11 @@ def _match_access(
         #: path back to ``start``, and it is walked to hand the cells over only
         #: once a free one has actually been found.
         came_from: dict[
-            tuple[tuple[int, int], int], tuple[tuple[tuple[int, int], int], tuple[int, int, int]]
+            tuple[tuple[int, int, int], int],
+            tuple[
+                tuple[tuple[int, int, int], int],
+                tuple[int, int, int],
+            ],
         ] = {}
         stack = [start]
         while stack:
@@ -5316,7 +5334,10 @@ def _match_access(
 
 
 def _reserve_port_access(
-    canvas: _Canvas, nets: list[_Net], *, twice: Collection[tuple[int, int]] = ()
+    canvas: _Canvas,
+    nets: list[_Net],
+    *,
+    twice: Collection[tuple[int, int, int]] = (),
 ) -> int:
     """Hold a cell next to every port, so no net can be walled in by another.
 
@@ -5355,24 +5376,22 @@ def _reserve_port_access(
     any port asks for a second.
     """
     canvas.reserved.clear()
-    ports: dict[tuple[int, int], int] = {}
-    roles: dict[tuple[int, int], set[str]] = defaultdict(set)
-    level: dict[tuple[int, int], int] = {}
+    ports: dict[tuple[int, int, int], int] = {}
+    roles: dict[tuple[int, int, int], set[str]] = defaultdict(set)
     for net in nets:
         for role, port in (("src", net.src), ("dst", net.dst)):
             if port is None:
                 continue
-            key = (port.x, port.y)
+            key = (port.x, port.y, port.z)
             ports[key] = max(ports.get(key, 0), len(port.columns()))
             roles[key].add(role)
             # A port's access is in the port's OWN plane. A coater drop sits one
             # level up, and looking for its free neighbour at level 0 finds the
             # lane belts underneath it and calls the port boxed in.
-            level[key] = max(level.get(key, 0), port.z)
 
     order = sorted(ports, key=lambda k: (ports[k], k))
     wants = {k: len(roles[k]) + (1 if k in twice else 0) for k in order}
-    held: dict[tuple[int, int], int] = defaultdict(int)
+    held: dict[tuple[int, int, int], int] = defaultdict(int)
 
     # EVERY port gets its first cell before any port gets its second, AND the
     # ports that can only be served one way are served -- which taking the first
@@ -5404,11 +5423,12 @@ def _reserve_port_access(
     # searches.
     options = {
         key: [
-            c
-            for c in (
-                (key[0] + dx, key[1] + dy, level.get(key, 0)) for dx, dy in _STEPS
+            cell
+            for cell in (
+                (key[0] + dx, key[1] + dy, key[2])
+                for dx, dy in _STEPS
             )
-            if canvas.free(c)
+            if canvas.free(cell)
         ]
         for key in order
     }
@@ -5434,7 +5454,7 @@ def _reserve_port_access(
     # Only where there is exactly ONE onward move. Two or more and the cell is
     # not a cul-de-sac, and holding ground a port does not need is how a
     # reservation pass starts costing more than it buys.
-    exits: list[tuple[tuple[int, int], tuple[int, int, int]]] = []
+    exits: list[tuple[tuple[int, int, int], tuple[int, int, int]]] = []
     for cell, key in canvas.reserved.items():
         cx, cy, lvl = cell
         onward = [
@@ -6137,7 +6157,7 @@ def _route_external_inputs(
                 (
                     cell
                     for cell, key in canvas.reserved.items()
-                    if key == (port.x, port.y)
+                    if key == (port.x, port.y, port.z)
                 ),
                 None,
             )
@@ -6149,9 +6169,9 @@ def _route_external_inputs(
             path: Sequence[Cell] | None = _straight_to_edge(canvas, port, bounds)
             if path is None:
                 goals = {
-                    (port.x + dx, port.y + dy, 0)
+                    (port.x + dx, port.y + dy, port.z)
                     for dx, dy in _STEPS
-                    if canvas.free((port.x + dx, port.y + dy, 0))
+                    if canvas.free((port.x + dx, port.y + dy, port.z))
                 }
                 if not goals:
                     failures.append(
@@ -6189,32 +6209,35 @@ def _route_external_inputs(
                     )
                 )
                 continue
-            indices: list[int] = []
-            for (x, y, lvl), z in zip(path, profile, strict=True):
-                if not canvas.free((x, y, lvl)) or not canvas.free_world(x, y, z):
-                    break
-                indices.append(
-                    canvas.add(
-                        PlacedBuilding(
-                            item_id=belt_id,
-                            model_index=belt_model,
-                            x=x,
-                            y=y,
-                            z=z,
-                            width=1,
-                            height=1,
-                            carries_item=item,
-                        ),
-                        level=lvl,
-                    )
-                )
-            if not indices:
+            route_cells = tuple(zip(path, profile, strict=True))
+            if any(
+                not canvas.free((x, y, level))
+                or not canvas.free_world(x, y, altitude)
+                for (x, y, level), altitude in route_cells
+            ):
                 failures.append(
                     NetFailure(
                         net_id(net), RouteFailureKind.COMMIT_LINK, (), (), 0
                     )
                 )
                 continue
+
+            indices = [
+                canvas.add(
+                    PlacedBuilding(
+                        item_id=belt_id,
+                        model_index=belt_model,
+                        x=x,
+                        y=y,
+                        z=altitude,
+                        width=1,
+                        height=1,
+                        carries_item=item,
+                    ),
+                    level=level,
+                )
+                for (x, y, level), altitude in route_cells
+            ]
             for a, b in zip(indices, indices[1:], strict=False):
                 canvas.buildings[a] = _relink(canvas.buildings[a], output_obj=b)
             canvas.buildings[indices[-1]] = _relink(
@@ -7122,13 +7145,13 @@ def _prepare_routing_problem(
         # A lane carrying an external ingredient AND an internally produced one
         # has two feeds to accept, not one, so it needs two ways in.
         net_ports = {
-            (p.x, p.y)
+            (p.x, p.y, p.z)
             for n in nets
             for p in (n.src, n.dst)
             if p is not None
         }
         shared_feed = {
-            (port.x, port.y)
+            (port.x, port.y, port.z)
             for ports in strip_in_ports
             for item, port in ports.items()
             if item in spec.external_inputs
@@ -7555,6 +7578,7 @@ class _Coater:
     drop: int
     x: int
     y: int
+    z: int
 
 
 def _coater_seat(canvas: _Canvas, port: _Port) -> tuple[int, int] | None:
@@ -7789,7 +7813,15 @@ def _place_coaters(
                             [probe], [pose], directly_over_only=True
                         ):
                             canvas.belt_ban.setdefault(tile, set()).add(level)
-            out.append(_Coater(coater=idx, drop=drop, x=drop_cell[0], y=drop_cell[1]))
+            out.append(
+                _Coater(
+                    coater=idx,
+                    drop=drop,
+                    x=drop_cell[0],
+                    y=drop_cell[1],
+                    z=drop_cell[2],
+                )
+            )
             seen.add(item)
 
     # EVERY drop is exempt from EVERY ban, not just its own coater's.  Coaters
@@ -7867,17 +7899,27 @@ def _proliferator_nets(
     src = entry
     nets: list[_Net] = []
     while remaining:
-        nxt = min(remaining, key=lambda c: abs(c.x - src.x) + abs(c.y - src.y))
-        remaining.remove(nxt)
-        # The drop is one altitude LEVEL up -- see `_Port.z`. Saying so here is
-        # what lets the reservation and the router look for its access cell in
-        # the plane the drop is actually in.
-        dst = _Port(
-            nxt.drop, nxt.x, nxt.y, nxt.x, nxt.x, (), 1, int(canvas.buildings[nxt.drop].z)
+        nxt = min(
+            remaining,
+            key=lambda c: (
+                abs(c.x - src.x) + abs(c.y - src.y) + abs(c.z - src.z)
+            ),
         )
-        if abs(nxt.x - src.x) + abs(nxt.y - src.y) == 1:
+        remaining.remove(nxt)
+        dst = _Port(nxt.drop, nxt.x, nxt.y, nxt.x, nxt.x, z=nxt.z)
+        source_building = canvas.buildings[src.belt]
+        destination_building = canvas.buildings[dst.belt]
+        if _legal_link(
+            source_building.x,
+            source_building.y,
+            source_building.z,
+            destination_building.x,
+            destination_building.y,
+            destination_building.z,
+            ramped=canvas.ramped,
+        ):
             canvas.buildings[src.belt] = _relink(
-                canvas.buildings[src.belt], output_obj=dst.belt
+                source_building, output_obj=dst.belt
             )
         else:
             nets.append(_Net(src=src, dst=dst, item=item))

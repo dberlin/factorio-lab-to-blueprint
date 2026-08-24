@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from dataclasses import replace
 
 import pytest
 
@@ -37,7 +38,7 @@ def _problem(
     bounds: tuple[int, int, int, int],
     blocked: Iterable[Cell] = (),
     solid: Iterable[tuple[int, int]] = (),
-    reserved: Iterable[tuple[Cell, tuple[int, int]]] = (),
+    reserved: Iterable[tuple[Cell, tuple[int, int, int]]] = (),
     keep_out: Iterable[tuple[int, int]] = (),
 ) -> _PreparedRoutingProblem:
     specs = tuple(net_specs)
@@ -106,6 +107,23 @@ def _one_net_problem() -> tuple[_PreparedRoutingProblem, NetId]:
         ),
         net_id,
     )
+
+
+def test_global_route_terminates_at_elevated_prepared_port() -> None:
+    problem, net_id = _one_net_problem()
+    net = problem.nets[0]
+    elevated = replace(net, dst=replace(net.dst, z=1))
+    elevated_problem = replace(problem, nets=(elevated,))
+
+    result = route_global_once(
+        elevated_problem,
+        _feedback(elevated_problem),
+        budget=20_000,
+    )
+
+    path = result.paths[net_id]
+    assert path[0][2] == 0
+    assert path[-1][2] == 1
 
 
 def _detour_problem() -> tuple[_PreparedRoutingProblem, NetId, NetId]:
@@ -184,7 +202,7 @@ def test_global_router_uses_current_detailed_moves_deterministically() -> None:
 
 def test_hard_solids_and_foreign_reserved_ports_remain_impassable() -> None:
     net_id = NetId(0, 1, "iron", NetRole.INTERNAL, 0)
-    reserved = ((4, 2, 0), (99, 99))
+    reserved = ((4, 2, 0), (99, 99, 0))
     problem = _problem(
         ((net_id, (0, 2), (7, 2), (), (), ()),),
         bounds=(0, 0, 7, 4),
@@ -328,7 +346,7 @@ def test_external_net_routes_inward_from_prepared_boundary_goals() -> None:
     problem = _problem(
         ((external, None, (4, 1), ((0, 1, 0),), (), ()),),
         bounds=(0, 0, 4, 2),
-        reserved=((access, (4, 1)),),
+        reserved=((access, (4, 1, 0)),),
     )
 
     result = route_global_once(problem, _feedback(problem), budget=20_000)

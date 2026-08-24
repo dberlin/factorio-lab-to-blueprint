@@ -44,6 +44,7 @@ from flab2bp.layout.freeform import (
     _astar,
     _bridge,
     _build,
+    _build_prepared,
     _Canvas,
     _canvas_span,
     _Coater,
@@ -69,6 +70,7 @@ from flab2bp.layout.freeform import (
     _reserve_port_access,
     _room_for_another,
     _route_all,
+    _route_external_inputs,
     _shard_sinks,
     _sink_for,
     _source_for,
@@ -159,7 +161,7 @@ def test_prepared_problem_creates_fresh_workspaces() -> None:
     second_item = second.nets[0].item
 
     first.canvas.blocked[(999, 999, 0)] = -1
-    first.canvas.reserved[(999, 999, 0)] = (999, 999)
+    first.canvas.reserved[(999, 999, 0)] = (999, 999, 0)
     first.nets[0].item = "mutated-only-in-first"
 
     assert (999, 999, 0) not in second.canvas.blocked
@@ -189,6 +191,135 @@ def test_prepared_net_ids_preserve_routing_roles() -> None:
     assert NetRole.EXTERNAL in roles
     assert NetRole.PROLIFERATOR in roles
 
+
+def test_prepared_proliferator_ports_round_trip_elevated_level() -> None:
+    spec = proliferated_spec()
+    strips = plan_strips(spec, strip_len=6)
+    pack = _greedy_pack(strips, _height_seed(strips))
+    prepared = _prepare_routing_problem(spec, strips, pack, power=False)
+
+    proliferator_nets = [
+        net for net in prepared.nets if net.net_id.role is NetRole.PROLIFERATOR
+    ]
+    assert proliferator_nets
+    assert {net.dst.z for net in proliferator_nets} == {1}
+    workspace = prepared.new_workspace()
+    assert {
+        net.dst.z
+        for net in workspace.nets
+        if net.net_id is not None and net.net_id.role is NetRole.PROLIFERATOR
+    } == {1}
+
+
+def test_slope_limited_prepared_coater_routing_is_structured() -> None:
+    spec = proliferated_spec()
+    strips = plan_strips(spec, strip_len=6)
+    pack = _greedy_pack(strips, _height_seed(strips))
+    prepared = _prepare_routing_problem(
+        spec,
+        strips,
+        pack,
+        power=False,
+        ramped=True,
+    )
+    result = _build_prepared(
+        spec,
+        strips,
+        prepared,
+        power=False,
+        route=True,
+        budget={"left": 2_000_000},
+    )
+
+    assert prepared.ramped
+    assert result.routing.status in {
+        DetailedRouteStatus.ROUTED,
+        DetailedRouteStatus.STRANDED,
+        DetailedRouteStatus.BUDGET,
+    }
+    if result.routing.status is DetailedRouteStatus.ROUTED:
+        assert not validate.certify(
+            result.placement, spec, expect_power=False
+        ).errors
+    else:
+        assert result.routing.failures
+
+
+
+def test_detailed_route_terminates_at_elevated_port() -> None:
+    canvas = _Canvas(limit=(0, -2, 6, 2))
+    source_index = canvas.add(
+        PlacedBuilding(2001, 35, 0, 0, carries_item="ore"),
+        level=0,
+    )
+    destination_index = canvas.add(
+        PlacedBuilding(2001, 35, 6, 0, z=F(1), carries_item="ore"),
+        level=1,
+    )
+    net_id = NetId(0, 1, "ore", NetRole.PROLIFERATOR, 0)
+    net = _Net(
+        src=_Port(source_index, 0, 0, 0, 0, z=0),
+        dst=_Port(destination_index, 6, 0, 6, 6, z=1),
+        item="ore",
+        net_id=net_id,
+    )
+
+    result = _route_all(
+        canvas,
+        [net],
+        2001,
+        35,
+        (0, -2, 6, 2),
+        budget={"left": 20_000},
+    )
+
+    assert result.status is DetailedRouteStatus.ROUTED
+    assert result.routed == (net_id,)
+    assert any(building.z > 0 for building in canvas.buildings[2:])
+
+
+def test_external_route_world_collision_commits_no_prefix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    canvas = _Canvas()
+    port_index = canvas.add(
+        PlacedBuilding(
+            item_id=2001,
+            model_index=35,
+            x=2,
+            y=0,
+            carries_item="ore",
+        )
+    )
+    net_id = NetId(None, 0, "ore", NetRole.EXTERNAL, 0)
+    net = _Net(
+        src=None,
+        dst=_Port(port_index, 2, 0, 2, 2),
+        item="ore",
+        net_id=net_id,
+        boundary_goals=((0, 0, 0),),
+    )
+    canvas.world_taken.add((1, 0, F(0)))
+    before_buildings = tuple(canvas.buildings)
+    before_blocked = dict(canvas.blocked)
+    monkeypatch.setattr(
+        freeform,
+        "_straight_to_edge",
+        lambda _canvas, _port, _bounds: [(0, 0, 0), (1, 0, 0)],
+    )
+
+    result = _route_external_inputs(
+        canvas,
+        [net],
+        2001,
+        35,
+        (0, 0, 2, 0),
+    )
+
+    assert result.status is DetailedRouteStatus.STRANDED
+    assert result.failures[0].kind is RouteFailureKind.COMMIT_LINK
+    assert tuple(canvas.buildings) == before_buildings
+    assert canvas.blocked == before_blocked
 
 def magnetic_ring_spec() -> BuildSpec:
     """Shaped like the super-magnetic-ring chain, and RATE-BALANCED.
@@ -1906,6 +2037,26 @@ class TestRealUrlCandidatesAreSupplied:
                     ) else None
                 assert cur is None, f"{spec.label}: real cycle reachable from belt {i}"
 
+    @pytest.mark.slow
+    def test_pose_requiring_candidates_never_emit_invalid_placements(self) -> None:
+        candidates = self._candidates()[1:]
+        assert {spec.label for spec in candidates} == {
+            "free-proliferation",
+            "max-proliferation",
+        }
+        emitted = 0
+        for spec in candidates:
+            try:
+                placement = FreeformLayout(power=True).lay_out(
+                    spec, time_budget_s=0.5
+                )
+            except NoValidLayout:
+                continue
+            emitted += 1
+            assert not _full_report(
+                placement, spec, power=True
+            ).errors
+        assert emitted >= 1
 
 def _real_consumers_of(item: str, wanted: int) -> list[str]:
     """Real DSP recipes that consume ``item`` and have a known DSP recipe id.
@@ -2690,12 +2841,13 @@ class TestPortAccessIsReservedForEveryRole:
         _reserve_port_access(canvas, [_Net(src=a, dst=b, item="x"), _Net(src=b, dst=c, item="x")])
         held = {
             key: sum(1 for k in canvas.reserved.values() if k == key)
-            for key in ((0, 0), (4, 0), (8, 0))
+            for key in ((0, 0, 0), (4, 0, 0), (8, 0, 0))
         }
-        assert held[(4, 0)] == 2, (
-            f"the middle port both sends and receives but holds {held[(4, 0)]} cells"
+        assert held[(4, 0, 0)] == 2, (
+            "the middle port both sends and receives but holds "
+            f"{held[(4, 0, 0)]} cells"
         )
-        assert held[(0, 0)] == 1 and held[(8, 0)] == 1, held
+        assert held[(0, 0, 0)] == 1 and held[(8, 0, 0)] == 1, held
 
     def test_a_second_cell_never_takes_another_port_s_only_one(self) -> None:
         """Every port gets its first cell before any port gets its second.
@@ -2717,7 +2869,7 @@ class TestPortAccessIsReservedForEveryRole:
         _reserve_port_access(
             canvas, [_Net(src=p, dst=q, item="x"), _Net(src=q, dst=far, item="x")]
         )
-        assert canvas.reserved.get((-1, 0, 0)) == (-2, 0), (
+        assert canvas.reserved.get((-1, 0, 0)) == (-2, 0, 0), (
             "the only cell that reaches p was taken by q's second claim: "
             f"{canvas.reserved.get((-1, 0, 0))}"
         )
@@ -2756,14 +2908,14 @@ class TestPortAccessIsReservedForEveryRole:
 
         held = {
             key: sorted(c for c, k in canvas.reserved.items() if k == key)
-            for key in ((0, 0), (-1, -1))
+            for key in ((0, 0, 0), (-1, -1, 0))
         }
-        assert len(held[(0, 0)]) == 2, (
+        assert len(held[(0, 0, 0)]) == 2, (
             "the drop both receives and sends but was left with "
-            f"{len(held[(0, 0)])} cell(s); e took one and was never asked to "
+            f"{len(held[(0, 0, 0)])} cell(s); e took one and was never asked to "
             f"take its other option: {canvas.reserved}"
         )
-        assert len(held[(-1, -1)]) == 1, (
+        assert len(held[(-1, -1, 0)]) == 1, (
             f"e was moved off its cell and given nothing: {canvas.reserved}"
         )
 
@@ -2787,10 +2939,10 @@ class TestPortAccessIsReservedForEveryRole:
         port = _Port(0, 0, 0, 0, 0)
         _reserve_port_access(canvas, [_Net(src=port, dst=far, item="x")])
 
-        assert canvas.reserved.get((1, 0, 0)) == (0, 0), (
+        assert canvas.reserved.get((1, 0, 0)) == (0, 0, 0), (
             f"the port did not hold its access cell: {canvas.reserved}"
         )
-        assert canvas.reserved.get((2, 0, 0)) == (0, 0), (
+        assert canvas.reserved.get((2, 0, 0)) == (0, 0, 0), (
             "the access cell's ONE onward move was left for anyone to take, so "
             f"the port's only route out is not held: {canvas.reserved}"
         )
@@ -2810,7 +2962,7 @@ class TestPortAccessIsReservedForEveryRole:
 
         # The port has four free neighbours, so whichever it took has three
         # onward moves of its own and nothing further is held for it.
-        for_port = [c for c, k in canvas.reserved.items() if k == (0, 0)]
+        for_port = [c for c, k in canvas.reserved.items() if k == (0, 0, 0)]
         assert len(for_port) == 1, (
             f"an unobstructed port held {len(for_port)} cells: {for_port}"
         )
@@ -2835,8 +2987,10 @@ class TestTheProliferatorChainIsOneLinearRun:
         """
         canvas = _Canvas()
         entry = _Port(canvas.add(_belt(-9, -9)), -9, -9, -9, -9)
-        first = _Coater(coater=-1, drop=canvas.add(_belt(3, 0)), x=3, y=0)
-        second = _Coater(coater=-1, drop=canvas.add(_belt(3, 1)), x=3, y=1)
+        first_drop = canvas.add(replace(_belt(3, 0), z=F(1)), level=1)
+        second_drop = canvas.add(replace(_belt(3, 1), z=F(1)), level=1)
+        first = _Coater(coater=-1, drop=first_drop, x=3, y=0, z=1)
+        second = _Coater(coater=-1, drop=second_drop, x=3, y=1, z=1)
         nets = _proliferator_nets(canvas, entry, [first, second], "proliferator-3")
         assert [
             (n.source.x, n.source.y, n.dst.x, n.dst.y) for n in nets
@@ -4593,7 +4747,7 @@ class TestTheFlatGridIsTheSameSearch:
             canvas.solid.add((13, y))
         canvas.keep_out.add((9, 1))
         canvas.blocked[3, 0, 0] = _TENTATIVE
-        canvas.reserved[10, 2, 0] = (10, 3)
+        canvas.reserved[10, 2, 0] = (10, 3, 0)
         return canvas, bounds
 
     def test_the_index_orders_cells_the_way_tuples_did(self) -> None:
@@ -4623,7 +4777,7 @@ class TestTheFlatGridIsTheSameSearch:
 
     def test_a_caller_grid_finds_the_identical_path(self) -> None:
         canvas, bounds = self._maze()
-        canvas.routing_ports = frozenset({(10, 3)})
+        canvas.routing_ports = frozenset({(10, 3, 0)})
         alone = _astar(canvas, [(0, 0, 0)], {(20, 0, 0)}, {}, 1.0, bounds).path
         grid = _make_grid(canvas, bounds, _canvas_span(canvas, bounds), {})
         shared = _astar(

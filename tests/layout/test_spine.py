@@ -3022,6 +3022,55 @@ class TestSprayCoatersAreFed:
         unsprayed = report.by_check("prolif.sprayed_cargo_reaches_machines")
         assert not unsprayed, [f.message for f in unsprayed]
         assert report.ok, sorted({f.check for f in report.errors})
+    @pytest.mark.slow
+    def test_every_coater_has_elevated_positional_supply_without_sorter(
+        self,
+    ) -> None:
+        from flab2bp.layout import slots
+        from flab2bp.layout.spine import _emit, _solve_plan, proliferator_item
+
+        spec = self._prolif_spec()
+        plans, _reason, _detail = _solve_plan(
+            spec, time_budget_s=0.5, workers=1
+        )
+        assert plans
+        placement = _emit(spec, plans[0], power=False)
+        proliferator = proliferator_item(spec)
+        supply = {
+            (building.x, building.y, building.z)
+            for building in placement.buildings
+            if catalog.is_belt(building.item_id)
+            and building.carries_item == proliferator
+        }
+        coaters = [
+            (index, building)
+            for index, building in enumerate(placement.buildings)
+            if building.item_id == catalog.SPRAY_COATER_ID
+        ]
+        assert coaters, "expected coaters on a max-proliferation spec"
+        coater_indices = {index for index, _building in coaters}
+        assert not [
+            sorter
+            for sorter in placement.buildings
+            if catalog.is_sorter(sorter.item_id)
+            and (
+                sorter.input_obj in coater_indices
+                or sorter.output_obj in coater_indices
+            )
+        ]
+
+        _host, addon = catalog.building(catalog.SPRAY_COATER_ID).addon_areas
+        for _index, coater in coaters:
+            dx, dy = slots.to_world((addon[0], addon[1]), coater.yaw)
+            target = (
+                coater.x + round(dx),
+                coater.y + round(dy),
+                coater.z + F(round(addon[2])),
+            )
+            assert target in supply, (
+                f"coater at {(coater.x, coater.y, coater.z)} has no "
+                f"proliferator belt at elevated addon target {target}"
+            )
 
     def test_a_spur_may_cross_a_machine_only_at_that_machine_s_own_height(
         self,
