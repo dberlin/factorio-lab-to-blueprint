@@ -15,6 +15,7 @@ from flab2bp.layout.strip_variants import (
     StripVariant,
     default_strip_variant,
     generate_strip_families,
+    lane_reach_profiles,
     partition_strip_family,
     placement_geometry,
     validate_instance_partition,
@@ -101,6 +102,59 @@ def test_equal_footprints_can_require_different_machine_pitch() -> None:
     assert smelter.pitch_x == 3
     assert assembler.pitch_x == 4
 
+
+
+def test_lane_profiles_exclude_collider_halo_rows() -> None:
+    geometry = placement_geometry("assembling-machine-1", yaw=0.0)
+    profiles = lane_reach_profiles("assembling-machine-1", yaw=0.0)
+
+    excluded = range(
+        -geometry.north_halo,
+        geometry.footprint_height + geometry.south_halo,
+    )
+    assert geometry.footprint_height in excluded, "fixture needs a south collider halo"
+    assert all(profile.lane_y not in excluded for profile in profiles)
+    assert geometry.footprint_height + geometry.south_halo in {
+        profile.lane_y for profile in profiles
+    }
+
+
+def test_variants_expand_one_pose_into_exact_alternative_seatings() -> None:
+    family = _family(_single_machine_spec("assembling-machine-1"))
+    upright = _at_yaw(family, 0.0)
+
+    assert len(upright) > 1
+    assert len({variant.lane_plan.lane_rows for variant in upright}) == len(upright)
+    for variant in upright:
+        geometry = variant.placement_geometry
+        assert all(
+            plan.lane_y < -geometry.north_halo
+            or plan.lane_y
+            >= geometry.footprint_height + geometry.south_halo
+            for plan in variant.attachment_plan
+        )
+
+
+def test_shared_lane_items_receive_distinct_authoritative_columns() -> None:
+    family = _family(
+        _single_machine_spec(
+            "chemical-plant",
+            inputs=tuple(f"ingredient-{index}" for index in range(7)),
+        )
+    )
+    shared = tuple(
+        plan
+        for variant in family.variants
+        for plan in variant.attachment_plan
+        if len(plan.lane.items) > 1
+    )
+
+    assert shared
+    for plan in shared:
+        assert len(plan.attachments) == len(plan.lane.items)
+        assert len({attachment.column for attachment in plan.attachments}) == len(
+            plan.attachments
+        )
 
 def test_machine_row_origins_advance_by_pitch_and_reserve_edge_halo() -> None:
     variant = default_strip_variant(

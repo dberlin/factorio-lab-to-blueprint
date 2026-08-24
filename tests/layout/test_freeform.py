@@ -52,6 +52,7 @@ from flab2bp.layout.freeform import (
     _connect_short_cuts,
     _dests,
     _direct_net_candidates,
+    _emit_strip,
     _greedy_pack,
     _height_seed,
     _join_shard_islands,
@@ -194,6 +195,95 @@ def test_prepared_net_ids_are_stable() -> None:
     b = _prepare_routing_problem(spec, strips, pack, power=False)
 
     assert tuple(net.net_id for net in a.nets) == tuple(net.net_id for net in b.nets)
+
+
+def test_strip_emission_reproduces_every_precomputed_attachment() -> None:
+    spec = two_stage_spec()
+    strip = next(strip for strip in plan_strips(spec) if strip.recipe_id == "gear")
+    canvas = _Canvas()
+    belt_id = catalog.item_id(spec.belt_item_id)
+    ox, oy = 11, 7
+
+    _inputs, _outputs, sorter_count = _emit_strip(
+        canvas,
+        strip,
+        ox,
+        oy,
+        belt_id,
+        catalog.building(belt_id).model_index,
+        {},
+    )
+    wired = slots.assign_sorter_slots(canvas.buildings)
+
+    expected = []
+    machine_y = oy + strip.machine_row
+    for machine_x in (ox + index * strip.pw for index in range(strip.machines)):
+        for plan in strip.attachment_plan:
+            for attachment in plan.attachments:
+                lane_cell = (
+                    machine_x + attachment.column,
+                    machine_y + plan.lane_y,
+                )
+                machine_cell = (
+                    machine_x + attachment.cell[0],
+                    machine_y + attachment.cell[1],
+                )
+                if plan.lane.kind == "input":
+                    expected.append(
+                        (lane_cell, machine_cell, attachment.span, attachment.slot, "input")
+                    )
+                else:
+                    expected.append(
+                        (machine_cell, lane_cell, attachment.span, attachment.slot, "output")
+                    )
+
+    actual = []
+    for sorter in (building for building in wired if catalog.is_sorter(building.item_id)):
+        assert sorter.x2 is not None and sorter.y2 is not None
+        head = (sorter.x, sorter.y)
+        tail = (sorter.x2, sorter.y2)
+        span = max(abs(sorter.x - sorter.x2), abs(sorter.y - sorter.y2))
+        if (
+            sorter.output_obj is not None
+            and wired[sorter.output_obj].item_id == strip.item_id
+        ):
+            actual.append((head, tail, span, sorter.output_to_slot, "input"))
+        else:
+            assert (
+                sorter.input_obj is not None
+                and wired[sorter.input_obj].item_id == strip.item_id
+            )
+            actual.append((head, tail, span, sorter.input_from_slot, "output"))
+
+    assert sorter_count == len(expected)
+    assert sorted(actual) == sorted(expected)
+
+
+def test_strip_emission_refuses_an_attachment_that_no_longer_reproduces() -> None:
+    spec = two_stage_spec()
+    strip = next(strip for strip in plan_strips(spec) if strip.recipe_id == "gear")
+    plan = strip.attachment_plan[0]
+    bad_attachment = replace(plan.attachments[0], slot=plan.attachments[0].slot + 100)
+    bad_plan = replace(
+        plan,
+        attachments=(bad_attachment, *plan.attachments[1:]),
+    )
+    bad_strip = replace(
+        strip,
+        attachment_plan=(bad_plan, *strip.attachment_plan[1:]),
+    )
+    belt_id = catalog.item_id(spec.belt_item_id)
+
+    with pytest.raises(NoValidLayout, match="precomputed attachment"):
+        _emit_strip(
+            _Canvas(),
+            bad_strip,
+            0,
+            0,
+            belt_id,
+            catalog.building(belt_id).model_index,
+            {},
+        )
 
 
 def test_prepared_net_ids_preserve_routing_roles() -> None:

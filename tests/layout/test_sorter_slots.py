@@ -498,6 +498,29 @@ def test_attachment_refuses_a_lane_further_than_a_sorter_reaches() -> None:
     assert S.attachment(plant, (4, -3)) is None
 
 
+def test_chemical_lane_three_clear_is_past_real_slot_reach() -> None:
+    """The inner north-side pose makes the apparent third clear row too far."""
+    plant = _at(2309)
+    lane_y = plant.y - cat.SORTER_MAX_REACH
+
+    assert S.attachable_columns(plant, lane_y) == {}
+
+
+def test_chemical_lane_closer_uses_real_inner_anchor() -> None:
+    """One row closer reaches the pose without a machine-name spacing rule."""
+    plant = _at(2309)
+    lane_y = plant.y - cat.SORTER_MAX_REACH + 1
+    attachments = S.attachable_columns(plant, lane_y)
+
+    assert attachments
+    assert {attachment.cell[1] for attachment in attachments.values()} == {
+        plant.y + 1
+    }
+    assert max(attachment.span for attachment in attachments.values()) <= (
+        cat.SORTER_MAX_REACH
+    )
+
+
 def test_a_belt_addon_carries_the_pair_the_game_writes() -> None:
     """All eight corpus coaters: no connection, and ``(15, 14)`` on both ends."""
     seen: collections.Counter[tuple[int, int, int, int]] = collections.Counter()

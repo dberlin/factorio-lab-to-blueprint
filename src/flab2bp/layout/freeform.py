@@ -70,6 +70,7 @@ from dataclasses import dataclass, field, replace
 from enum import Enum
 from fractions import Fraction
 from functools import lru_cache
+from typing import TYPE_CHECKING
 
 import numpy as np
 from ortools.sat.python import cp_model
@@ -97,6 +98,13 @@ from flab2bp.layout.sequence_pair import DirectInsertTarget
 from flab2bp.layout.slots import SlotUndetermined, assign_sorter_slots
 from flab2bp.layout.spine import BELT_ITEM_IDS, MACHINE_ITEM_IDS, SORTER_TIERS
 from flab2bp.spec import BuildSpec
+
+if TYPE_CHECKING:
+    from flab2bp.layout.strip_variants import (
+        LaneAttachmentPlan,
+        LanePlan,
+        LaneSorterAttachment,
+    )
 
 #: Free tiles reserved on a strip's east and south faces.  One is enough for a
 #: belt to pass; the router uses upper levels when one is not.
@@ -687,23 +695,12 @@ class Strip:
     what makes a strip individually routable and keeps phase 1 from producing a
     machine nothing can feed.
 
-    Vertical layout, top to bottom::
-
-        in_above      (len(in_above) rows, one belt lane each)
-        machines      (mh rows)
-        out_lanes     (len(out_lanes) rows)
-        in_below      (len(in_below) rows)
-
-    Inputs are fed from BOTH sides.  A sorter spans ``SORTER_MAX_REACH`` tiles,
-    so the limit is three lanes per *side*, not three per strip -- lanes above
-    and below are reached by different sorters.  Stacking every input above
-    made a four-ingredient recipe unbuildable, and four ingredients is ordinary:
-    ``orbital-collector`` takes accumulator-full, interstellar-logistics-station,
-    reinforced-thruster and super-magnetic-ring.
-
-    Outputs sit immediately below the machines and the overflow inputs below
-    them, so when ``in_below`` is empty every row index is exactly what it was
-    when inputs were above-only.  That is what keeps the change additive.
+    ``in_above``, ``out_lanes``, and ``in_below`` preserve the logical routing
+    roles and ordering.  Their physical rows do not come from those tuple
+    lengths: ``lane_plan`` seats each row outside the selected pose's collider
+    envelope, and ``attachment_plan`` fixes every legal column, machine anchor,
+    slot, and span.  Emission must reproduce that plan or refuse the candidate;
+    it may not clamp a column or choose another pose.
 
     An input LANE carries one or more items.  One item per lane is our
     simplification, not a DSP rule -- belts carry mixed items natively and a
@@ -746,7 +743,13 @@ class Strip:
     out_lanes: tuple[tuple[str, str], ...]
     #: Lanes arriving on the south side, below ``out_lanes``.  Non-empty only
     #: when a recipe has more ingredients than one side can reach.
-    in_below: tuple[tuple[str, ...], ...] = ()
+    in_below: tuple[tuple[str, ...], ...]
+    #: The selected variant's exact lane rows and machine offset in this box.
+    lane_plan: LanePlan | None
+    #: The exact machine-side anchor, slot, and span for every lane item.
+    attachment_plan: tuple[LaneAttachmentPlan, ...]
+    #: Exact selected variant box height, including collider halos and lanes.
+    box_height: int
     #: Parameter block for a machine configured by a MODE rather than a recipe
     #: (Energy Exchanger, Ray Receiver).  Empty for an ordinary craft.
     mode_params: tuple[int, ...] = ()
@@ -781,7 +784,7 @@ class Strip:
 
     @property
     def height(self) -> int:
-        return len(self.in_above) + self.ph + len(self.out_lanes) + len(self.in_below)
+        return self.box_height
 
     @property
     def band_rows(self) -> int:
@@ -852,7 +855,12 @@ class Strip:
     @property
     def machine_row(self) -> int:
         """Row index of the machine band's top edge, relative to the strip."""
-        return len(self.in_above)
+        if self.lane_plan is not None:
+            return self.lane_plan.machine_row
+        if self.flank_outputs:
+            return len(self.in_above)
+        name = catalog.building(self.item_id).name
+        raise NoValidLayout(f"{name} has no legal slot pose for its lanes")
 
     @property
     def takes_belt_ports(self) -> bool:
@@ -887,140 +895,101 @@ class Strip:
         """
         return len(self.lane_of_input(item)) > 1
 
-    def slot_of_input(self, item: str) -> int:
-        """Position within its lane, which fixes the sorter's column.
+    def _input_attachment_plan(self, item: str) -> LaneAttachmentPlan:
+        for plan in self.attachment_plan:
+            if plan.lane.kind == "input" and item in plan.lane.items:
+                return plan
+        if not self.flank_outputs:
+            raise KeyError(f"{item!r} is not an ingredient of {self.recipe_id!r}")
 
-        Two sorters serving one machine from one lane cannot share an anchor, so
-        each item on a shared lane takes its own column across the machine's
-        width.  That caps a lane at ``mw`` items.
-        """
-        return self.lane_of_input(item).index(item)
+        from flab2bp.layout.strip_variants import (
+            LaneAttachmentPlan,
+            LaneSorterAttachment,
+            LogicalLane,
+        )
+
+        lane = self.lane_of_input(item)
+        if lane in self.in_above:
+            index = self.in_above.index(lane)
+            row = index
+            side = "south"
+            side_index = index
+            offset = sum(len(other) for other in self.in_above[:index])
+        else:
+            index = self.in_below.index(lane)
+            row = self.first_row_below_band + len(self.out_lanes) + index
+            side = "north"
+            side_index = len(self.out_lanes) + index
+            offset = sum(len(other) for other in self.in_below[:index])
+        lane_y = row - self.machine_row
+        reachable = sorted(
+            slots.attachable_columns(
+                slots.probe_building(self.item_id, self.yaw), lane_y
+            ).items()
+        )
+        selected = reachable[offset : offset + len(lane)]
+        if len(selected) != len(lane):
+            name = catalog.building(self.item_id).name
+            raise NoValidLayout(
+                f"{name} has no legal slot pose for input lane {lane!r}"
+            )
+        logical = LogicalLane(
+            lane_id=f"input:{side}:{side_index}",
+            kind="input",
+            items=lane,
+            destination_group_keys=(),
+            side=side,
+            side_index=side_index,
+        )
+        return LaneAttachmentPlan(
+            lane=logical,
+            lane_y=lane_y,
+            attachments=tuple(
+                LaneSorterAttachment(
+                    item=lane_item,
+                    column=column,
+                    cell=attachment.cell,
+                    slot=attachment.slot,
+                    span=attachment.span,
+                )
+                for lane_item, (column, attachment) in zip(
+                    lane, selected, strict=True
+                )
+            ),
+        )
+
+    def _output_attachment_plan(self, k: int) -> LaneAttachmentPlan:
+        for plan in self.attachment_plan:
+            if plan.lane.kind == "output" and plan.lane.side_index == k:
+                return plan
+        raise IndexError(f"output lane {k} is not planned for {self.recipe_id!r}")
+
+    def attachment_of_input(self, item: str) -> LaneSorterAttachment:
+        """The selected exact attachment for one ingredient."""
+        plan = self._input_attachment_plan(item)
+        return next(attachment for attachment in plan.attachments if attachment.item == item)
+
+    def slot_of_input(self, item: str) -> int:
+        """Authoritative relative column selected for this ingredient."""
+        return self.attachment_of_input(item).column
 
     def row_of_input(self, item: str) -> int:
         """Row index carrying ``item``, relative to the strip's top."""
-        for j, lane in enumerate(self.in_above):
-            if item in lane:
-                return j
-        for j, lane in enumerate(self.in_below):
-            if item in lane:
-                return self.first_row_below_band + len(self.out_lanes) + j
-        raise KeyError(f"{item!r} is not an ingredient of {self.recipe_id!r}")
+        return self.machine_row + self._input_attachment_plan(item).lane_y
 
     def row_of_output(self, k: int) -> int:
-        """Row index of the ``k``-th output lane, relative to the strip's top.
-
-        Counted from the machine FOOTPRINT, not the clearance band. Moving it to
-        `ph` was tried, to keep a lane out of the row a machine's collider needs
-        so that a junction on it would be legal -- it took freeform from 9
-        failures to 80, because the strip's row indices are consumed in several
-        places that each assume lanes start at `mh`. The junction constraint is
-        real; solving it by moving lane rows is not the way in.
-        """
-        return self.first_row_below_band + k
-
-    def column_offset(self, lane: tuple[str, ...]) -> int:
-        """The first machine column this input lane may use.
-
-        A MACHINE SLOT HOLDS ONE CONNECTION.  The game stores connections as
-        ``entityConnPool[objId * 16 + slot]`` and ``WriteObjectConn`` evicts the
-        sitting tenant rather than refusing, so two sorters on one slot paste
-        with one of them unwired and both standing on the same tile --
-        ``validate.game.slot_occupancy``.
-
-        Columns therefore have to be rationed across every lane on the same
-        FACE, not just across the items sharing one lane.  Each lane consumes
-        one column per item it carries, and this returns how many the lanes
-        before it have already taken.  North is ``in_above`` in order; south is
-        the output lanes -- one column each -- and then ``in_below``.
-
-        Before this existed, every lane started at column 0 and the surplus was
-        clamped onto the last reachable column.  Measured on a pristine tree at
-        budget 4, that put two or more sorters on one slot in 54 of 60 freeform
-        corpus cells (1412 shared slots), and all 60 validated CLEAN.
-        """
-        seen = 0
-        for other in self.in_above:
-            if other is lane or other == lane:
-                return seen
-            seen += len(other)
-        # A flanked output takes no south column at all -- its sorters leave by
-        # the east face -- so the ingredients below start at zero.  Charging them
-        # for it would ration away the very column the flank exists to free.
-        seen = 0 if self.flank_outputs else len(self.out_lanes)
-        for other in self.in_below:
-            if other is lane or other == lane:
-                return seen
-            seen += len(other)
-        raise KeyError(f"{lane!r} is not an input lane of {self.recipe_id!r}")
+        """Row index of the ``k``-th output lane, relative to the strip's top."""
+        if self.flank_outputs:
+            return self.first_row_below_band + k
+        return self.machine_row + self._output_attachment_plan(k).lane_y
 
     def input_lane_tiles(self, lane: tuple[str, ...]) -> int:
-        """Belt tiles an INPUT lane actually needs, counted from its west end.
-
-        An input lane is fed at its head and flows east, and every tile past the
-        last sorter drawing from it carries items nothing will ever take -- dead
-        belt, one building each to paste and one more cell the router has to path
-        around.  ``_link_lane`` puts a sorter at ``machine.x + min(slot, mw - 1)``
-        for each machine, so the last tile that does any work is the last
-        machine's column plus the highest slot on this lane.
-
-        Output lanes are NOT trimmable the same way: they are filled at every
-        machine column and drained at the east end, so every tile between the
-        first sorter and the port carries flow.
-
-        The columns come from the machine's own insert poses, not from
-        ``min(slot, mw - 1)``.  A seven-wide Oil Refinery offers only its middle
-        three and a nine-wide Chemical Plant four of nine, so a lane trimmed to
-        the left edge stopped short of every column that could be wired and the
-        last machine got no sorter at all.
-
-        ZERO IS A REAL ANSWER AND ITS CALLER MUST HAVE REFUSED ALREADY.  A
-        machine whose prefab ships no insert pose at all -- a Ray Receiver, an
-        Energy Exchanger -- offers no column on either side, so a lane serving it
-        needs no belt tiles because no sorter could ever draw from one.
-        ``_machines_without_poses`` refuses such a spec before the sweep starts;
-        emission may not be reached with one, because a zero-tile lane is an
-        empty ``lane_idx`` row and ``feed`` indexes its head.
-
-        The lane's own items are not the whole story: it starts at
-        :meth:`column_offset`, because the lanes before it on the same face have
-        already claimed columns and a slot takes one connection.  A lane trimmed
-        as if it began at column 0 stops short of the column it is actually
-        given, and the machine goes unfed -- which is how the first version of
-        the slot rationing turned six ``magnetic-coil`` cells from invalid into
-        refused rather than into correct.
-        """
-        cols = self.attachable_columns
-        if not cols:
-            return 0
-        first = self.column_offset(lane)
-        last_slot = cols[min(first + len(lane) - 1, len(cols) - 1)]
-        return (self.machines - 1) * self.pw + last_slot + 1
-
-    def _attachable_columns(self, *, above: bool) -> tuple[int, ...]:
-        """Columns of ONE of this strip's machines a sorter can reach, from 0."""
-        probe = slots.probe_building(self.item_id, self.yaw)
-        lane_y = -1 if above else self.band_rows
-        return tuple(sorted(slots.attachable_columns(probe, lane_y)))
-
-    @property
-    def attachable_columns(self) -> tuple[int, ...]:
-        """Columns of one of this strip's machines ANY sorter could reach.
-
-        The two sides are UNIONED rather than asked for separately.  Every
-        building we place offers the same columns above and below, so the union
-        is the same answer; where it would not be, it is the longer one, and a
-        tile of dead belt is a warning where a missing tile is an unfed machine.
-
-        EMPTY MEANS NO SORTER CAN TOUCH THIS MACHINE ANYWHERE, which is a
-        different thing from a narrow choice and is what
-        ``_machines_without_poses`` refuses on.
-        """
-        return tuple(
-            sorted(
-                set(self._attachable_columns(above=True))
-                | set(self._attachable_columns(above=False))
-            )
-        )
+        """Belt tiles an input lane needs through its last planned attachment."""
+        plan = self._input_attachment_plan(lane[0])
+        if plan.lane.items != lane:
+            raise ValueError("input lane does not match the selected attachment plan")
+        last_column = max(attachment.column for attachment in plan.attachments)
+        return (self.machines - 1) * self.pw + last_column + 1
 
     def east_of_input(self, item: str) -> int:
         """Offset from the strip's west edge to the last tile of ``item``'s lane."""
@@ -1708,6 +1677,9 @@ def plan_strips(spec: BuildSpec, *, strip_len: int = 6) -> list[Strip]:
             yaw = variant.yaw
             pitch_width = variant.pitch_x
             pitch_height = variant.pitch_y
+            lane_plan = variant.lane_plan
+            attachment_plan = variant.attachment_plan
+            box_height = variant.box_height
         else:
             # Compatibility only: a mode-driven building with no sorter poses
             # still reaches emission, which owns the established structured
@@ -1729,6 +1701,14 @@ def plan_strips(spec: BuildSpec, *, strip_len: int = 6) -> list[Strip]:
                 group.pitch_w + 1 if family.flank_outputs else group.pitch_w
             )
             pitch_height = group.pitch_h
+            lane_plan = None
+            attachment_plan = ()
+            box_height = (
+                len(inputs_above)
+                + pitch_height
+                + len(outputs)
+                + len(inputs_below)
+            )
         for machine_count in machine_counts:
             _check_shared_lane_capacity(
                 group,
@@ -1751,6 +1731,9 @@ def plan_strips(spec: BuildSpec, *, strip_len: int = 6) -> list[Strip]:
                     in_above=inputs_above,
                     out_lanes=outputs,
                     in_below=inputs_below,
+                    lane_plan=lane_plan,
+                    attachment_plan=attachment_plan,
+                    box_height=box_height,
                     mode_params=family.mode_params,
                     flank_outputs=family.flank_outputs,
                 )
@@ -2660,7 +2643,7 @@ def _emit_strip(
     in_ports: dict[str, _Port] = {}
     out_ports: dict[tuple[str, str], _Port] = {}
     width = s.width
-    n_above = len(s.in_above)
+    machine_row = s.machine_row
 
     # Row -> the item that row's belt is labelled with. On a shared lane this is
     # the FIRST item; the authoritative set is the sorters' filters, which is
@@ -2727,8 +2710,10 @@ def _emit_strip(
     lane_idx: dict[int, list[int]] = {}
     for row in range(s.height):
         y = oy + row
-        if n_above <= row < s.first_row_below_band:
-            continue  # machine band, clearance rows included
+        if machine_row <= row < machine_row + s.mh:
+            continue  # machine band
+        if row not in lane_tiles_of:
+            continue  # collider-pitch padding is reserved, not a belt lane
         indices = []
         start = -1 if row in lane_starts_west else 0
         for k in range(start, lane_tiles_of.get(row, width)):
@@ -2750,7 +2735,7 @@ def _emit_strip(
             canvas.buildings[a] = _relink(canvas.buildings[a], output_obj=b)
         lane_idx[row] = indices
 
-    machine_y = oy + n_above
+    machine_y = oy + machine_row
     machines: list[int] = []
     for k in range(s.machines):
         machines.append(
@@ -2775,7 +2760,6 @@ def _emit_strip(
             )
         )
 
-    bottom = machine_y + s.mh - 1
     sorters = 0
     # Machine index -> the slot indices already spoken for on it. ONE dict for
     # the whole strip, because the two faces of a machine are served by
@@ -2791,26 +2775,21 @@ def _emit_strip(
             return got
         return rates.get(item, Fraction(1))
 
-    def feed(lane: tuple[str, ...], row: int, span: int, near_edge: int) -> int:
-        """One filtered sorter per (item, machine) for this lane.
-
-        The column each sorter asks for is the lane's own
-        ``Strip.column_offset`` plus the item's position within it -- NOT the
-        position alone.  A machine slot holds one connection, so the columns are
-        rationed across every lane on the face, and this has to be the same
-        arithmetic ``Strip.input_lane_tiles`` trimmed the lane with or the
-        sorter asks for a column with no belt under it.
-        """
+    def feed(plan: LaneAttachmentPlan) -> int:
+        """Emit the preplanned filtered sorter for every (item, machine)."""
+        lane = plan.lane.items
+        row = machine_row + plan.lane_y
+        lane_indices = lane_idx[row]
+        if not lane_indices:
+            name = catalog.building(s.item_id).name
+            raise NoValidLayout(
+                f"{name} has no legal slot pose for input lane {lane!r}"
+            )
         placed = 0
         shared = len(lane) > 1
-        offset = s.column_offset(lane)
-        for slot, item in enumerate(lane):
-            # The port is the lane's OWN first tile, read off the canvas rather
-            # than assumed to be `ox`.  A sprayed lane starts one column west,
-            # and a port that named `ox` would have the router sink its net into
-            # the coater's tile instead of the head -- giving that tile a second
-            # input, which the game refuses an addon on outright
-            # (`GetBeltInputCount(num19) < 2`, decompiled 145812).
+        for attachment in plan.attachments:
+            item = attachment.item
+            # Read the real lane head: sprayed lanes begin west of the strip.
             head = canvas.buildings[lane_idx[row][0]]
             in_ports[item] = _Port(
                 lane_idx[row][0],
@@ -2827,21 +2806,19 @@ def _emit_strip(
                 lane_idx[row],
                 machines,
                 oy + row,
-                near_edge,
-                tier,
+                attachment,
+                item_rate(item, in_rates),
                 into_machine=True,
                 claimed=claimed,
                 filter_id=_lane_filter(item) if shared else 0,
-                column=offset + slot,
             )
         return placed
 
-    for j, lane in enumerate(s.in_above):
-        sorters += feed(lane, row=j, span=s.sorter_span(j), near_edge=machine_y)
+    for lane in s.in_above:
+        sorters += feed(s._input_attachment_plan(lane[0]))
 
     for j, (item, dest) in enumerate(s.out_lanes):
         row = s.row_of_output(j)
-        span = s.sorter_span(row)
         out_ports[item, dest] = _Port(
             lane_idx[row][-1],
             ox + width - 1,
@@ -2881,24 +2858,20 @@ def _emit_strip(
                 claimed,
             )
             continue
-        tier, _count = _pick_sorter(item_rate(item, out_rates), span, 1)
+        plan = s._output_attachment_plan(j)
         sorters += _link_lane(
             canvas,
             lane_idx[row],
             machines,
             oy + row,
-            bottom,
-            tier,
+            plan.attachments[0],
+            item_rate(item, out_rates),
             into_machine=False,
             claimed=claimed,
-            column=j,
         )
 
-    # Overflow ingredients, seated below the output lanes and reaching up to the
-    # machine band's south edge.
     for lane in s.in_below:
-        row = s.row_of_input(lane[0])
-        sorters += feed(lane, row=row, span=s.sorter_span(row), near_edge=bottom)
+        sorters += feed(s._input_attachment_plan(lane[0]))
 
     return in_ports, out_ports, sorters
 
@@ -3132,100 +3105,75 @@ def _link_lane(
     lane: list[int],
     machines: list[int],
     lane_y: int,
-    machine_y: int,
-    tier: int,
+    planned: LaneSorterAttachment,
+    rate: Fraction,
     *,
     into_machine: bool,
     claimed: dict[int, set[int]],
     filter_id: int = 0,
-    column: int = 0,
 ) -> int:
-    """One sorter per machine, between the lane and the machine's near edge.
-
-    Anchors sit *on* the two buildings and the connection indices carry the
-    semantics, which is how the game itself represents this -- a sorter consumes
-    no grid cell of its own.
-
-    ``column`` offsets the sorter across the machine's width so several items
-    sharing one lane each get their own anchor; ``filter_id`` pins which item
-    this sorter moves, which is mandatory on a shared lane and left at zero on a
-    plain one.  That zero-versus-set distinction is the signal the validator
-    uses to tell the two apart, so do not set a filter where none is needed.
-
-    ``claimed`` is machine index -> the slot indices already spoken for on it,
-    and it is what stops two sorters landing on one.  A MACHINE SLOT HOLDS
-    EXACTLY ONE CONNECTION -- the game stores it as
-    ``entityConnPool[objId * 16 + slot]``, and ``WriteObjectConn`` evicts the
-    sitting tenant rather than refusing -- so a second sorter on one slot pastes
-    with the first silently unwired and the two of them standing on each other.
-    ``validate.game.slot_occupancy`` is the check; this is where it is honoured.
-
-    ``column`` used to be a per-LANE index into ``usable``, and
-    ``usable[min(column, len(usable) - 1)]`` clamped.  Both halves put two
-    sorters on one slot: two stacked lanes each asked for column 0 and got the
-    same one, and a lane with more items than the machine has reachable columns
-    clamped its surplus onto the last.  Measured on a pristine tree before this
-    change, at budget 4: 54 of 60 freeform corpus cells carried at least one
-    shared slot, 1412 in all, and every one of the 60 validated CLEAN.
-
-    ``column`` is now a PREFERENCE, not an index: the search starts there and
-    rotates through the rest.  When every reachable column of a machine is
-    already spoken for, this machine gets no sorter from this lane -- the same
-    answer, and the same silence, that a machine with no reachable column at all
-    has always got.  It is not a fallback that hides anything: an unfed machine
-    is what ``machine.inputs_supplied`` and the flow checks convict, so the
-    placement is refused rather than emitted.
-    """
-    model_index = catalog.building(tier).model_index
-    facing = Facing.SOUTH.value if lane_y < machine_y else Facing.NORTH.value  # placeholder
+    """Emit one sorter per machine only at the exact precomputed attachment."""
     placed = 0
-    for m_idx in machines:
-        m = canvas.buildings[m_idx]
-        # WHICH column, and WHERE on the machine, from the machine's own insert
-        # poses. The near edge row is right for a 3x3 and wrong for most else: a
-        # Chemical Plant's southern slots are a row inside its footprint, an Oil
-        # Refinery has none at all on its north face, and a Matrix Lab offers
-        # only its middle three columns. `column` still spreads successive
-        # sorters across the machine, but only over columns that HAVE a pose --
-        # clamping to `m.width - 1` picked column 0 of a Matrix Lab, which has
-        # none, and left the machine unfed.
-        reachable = slots.attachable_columns(m, lane_y)
-        lane_xs = {canvas.buildings[i].x for i in lane}
-        usable = sorted(c for c in reachable if c in lane_xs)
-        if not usable:
-            continue
-        taken = claimed.setdefault(m_idx, set())
-        start = min(column, len(usable) - 1)
-        order = usable[start:] + usable[:start]
-        x = next((c for c in order if reachable[c].slot not in taken), None)
-        if x is None:
-            continue
-        belt_idx = next((i for i in lane if canvas.buildings[i].x == x), None)
-        if belt_idx is None:
-            continue
-        taken.add(reachable[x].slot)
-        anchor_y = reachable[x].cell[1]
+    lane_by_x = {canvas.buildings[index].x: index for index in lane}
+    for machine_index in machines:
+        machine = canvas.buildings[machine_index]
+        column = machine.x + planned.column
+        expected_cell = (
+            machine.x + planned.cell[0],
+            machine.y + planned.cell[1],
+        )
+        exact = slots.attachable_columns(machine, lane_y).get(column)
+        if (
+            exact is None
+            or exact.cell != expected_cell
+            or exact.slot != planned.slot
+            or exact.span != planned.span
+        ):
+            name = catalog.building(machine.item_id).name
+            raise NoValidLayout(
+                f"{name} cannot reproduce precomputed attachment for "
+                f"{planned.item!r} at lane row {lane_y}"
+            )
+        taken = claimed.setdefault(machine_index, set())
+        if planned.slot in taken:
+            name = catalog.building(machine.item_id).name
+            raise NoValidLayout(
+                f"{name} slot {planned.slot} is claimed by more than one sorter"
+            )
+        taken.add(planned.slot)
+        belt_index = lane_by_x.get(column)
+        if belt_index is None:
+            raise NoValidLayout(
+                f"lane for {planned.item!r} omits precomputed column {column}"
+            )
+        tier, _count = _pick_sorter(rate, planned.span, 1)
+        model_index = catalog.building(tier).model_index
+        facing = (
+            Facing.SOUTH.value
+            if lane_y < expected_cell[1]
+            else Facing.NORTH.value
+        )
         if into_machine:
-            src, dst = belt_idx, m_idx
-            ax, ay, bx, by = x, lane_y, x, anchor_y
+            source, destination = belt_index, machine_index
+            head, tail = (column, lane_y), expected_cell
         else:
-            src, dst = m_idx, belt_idx
-            ax, ay, bx, by = x, anchor_y, x, lane_y
+            source, destination = machine_index, belt_index
+            head, tail = expected_cell, (column, lane_y)
         canvas.buildings.append(
             PlacedBuilding(
                 item_id=tier,
                 model_index=model_index,
-                x=ax,
-                y=ay,
+                x=head[0],
+                y=head[1],
                 width=1,
                 height=1,
-                x2=bx,
-                y2=by,
+                x2=tail[0],
+                y2=tail[1],
                 z2=Fraction(0),
                 yaw=facing,
                 yaw2=facing,
-                input_obj=src,
-                output_obj=dst,
+                input_obj=source,
+                output_obj=destination,
                 filter_id=filter_id,
             )
         )

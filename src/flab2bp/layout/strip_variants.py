@@ -2,14 +2,15 @@
 
 Logical rate/shard allocation remains independent of placement.  This module
 turns each logical shard into cardinal pose candidates using the same catalog
-and slot helpers used by validation.  Lane seating is intentionally the current
-Freeform seating; exhaustive alternative seating and emission from these plans
-belong to the next capability task.
+and slot helpers used by validation.  Every variant seats lanes outside the
+collider exclusion envelope and carries the exact slot attachments emission
+must reproduce.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from itertools import combinations, product
 from typing import Literal
 
 from flab2bp.dsp import catalog
@@ -67,6 +68,32 @@ class MachinePlacementGeometry:
             self.north_halo,
             self.south_halo,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class LaneReachProfile:
+    """Every authoritative attachment offered by one legal lane row."""
+
+    side: LaneSide
+    lane_y: int
+    attachments: tuple[tuple[int, slots.Attachment], ...]
+
+    def __post_init__(self) -> None:
+        if self.side not in ("north", "south"):
+            raise ValueError("lane reach profile side must be north or south")
+        columns = tuple(column for column, _attachment in self.attachments)
+        if not columns or columns != tuple(sorted(set(columns))):
+            raise ValueError("lane reach profile columns must be non-empty and distinct")
+        if any(
+            attachment.cell[0] != column
+            or not 1 <= attachment.span <= catalog.SORTER_MAX_REACH
+            for column, attachment in self.attachments
+        ):
+            raise ValueError("lane reach profile contains invalid attachment geometry")
+
+    @property
+    def attachable_columns(self) -> tuple[int, ...]:
+        return tuple(column for column, _attachment in self.attachments)
 
 
 @dataclass(frozen=True, order=True, slots=True)
@@ -224,6 +251,20 @@ class StripVariant:
             raise ValueError("variant lane and attachment plans disagree")
         if any(planned_rows[plan.lane.lane_id] != plan.lane_y for plan in self.attachment_plan):
             raise ValueError("variant attachments must use their planned lane rows")
+        lane_ys = tuple(plan.lane_y for plan in self.attachment_plan)
+        envelope_top = -self.placement_geometry.north_halo
+        envelope_bottom = (
+            self.footprint_height + self.placement_geometry.south_halo
+        )
+        if any(envelope_top <= lane_y < envelope_bottom for lane_y in lane_ys):
+            raise ValueError("variant lane enters the collider exclusion envelope")
+        minimum_y = min(envelope_top, *lane_ys)
+        maximum_y = max(envelope_bottom, *(lane_y + 1 for lane_y in lane_ys))
+        if (
+            self.lane_plan.machine_row != -minimum_y
+            or self.box_height != maximum_y - minimum_y
+        ):
+            raise ValueError("variant box does not exactly contain lanes and collider")
         if self.variant_id != _variant_id(
             self.variant_id.family_id,
             self.yaw,
@@ -379,6 +420,50 @@ def placement_geometry(machine_item_id: str | int, yaw: float) -> MachinePlaceme
     )
 
 
+def lane_reach_profiles(
+    machine_item_id: str | int,
+    yaw: float,
+) -> tuple[LaneReachProfile, ...]:
+    """Enumerate exact reachable rows outside one pose's collider envelope."""
+    item_id = (
+        catalog.item_id(machine_item_id)
+        if isinstance(machine_item_id, str)
+        else machine_item_id
+    )
+    geometry = placement_geometry(item_id, yaw)
+    probe = slots.probe_building(item_id, yaw)
+    candidate_rows: tuple[tuple[LaneSide, range], ...] = (
+        (
+            "south",
+            range(
+                -geometry.north_halo - 1,
+                -catalog.SORTER_MAX_REACH - 1,
+                -1,
+            ),
+        ),
+        (
+            "north",
+            range(
+                geometry.footprint_height + geometry.south_halo,
+                geometry.footprint_height + catalog.SORTER_MAX_REACH,
+            ),
+        ),
+    )
+    profiles: list[LaneReachProfile] = []
+    for side, rows in candidate_rows:
+        for lane_y in rows:
+            reachable = slots.attachable_columns(probe, lane_y)
+            if reachable:
+                profiles.append(
+                    LaneReachProfile(
+                        side=side,
+                        lane_y=lane_y,
+                        attachments=tuple(sorted(reachable.items())),
+                    )
+                )
+    return tuple(profiles)
+
+
 def _logical_lanes(
     plan: _LogicalStripPlan,
 ) -> tuple[tuple[LogicalLane, ...], tuple[LogicalLane, ...]]:
@@ -420,58 +505,73 @@ def _logical_lanes(
     return inputs, outputs
 
 
-def _lane_y(lane: LogicalLane, *, footprint_height: int, south_lane_count: int) -> int:
-    if lane.side == "south":
-        return lane.side_index - south_lane_count
-    return footprint_height + lane.side_index
+def _lane_attachment(
+    lane: LogicalLane,
+    profile: LaneReachProfile,
+) -> LaneAttachmentPlan | None:
+    if len(profile.attachments) < len(lane.items):
+        return None
+    selected = profile.attachments[: len(lane.items)]
+    return LaneAttachmentPlan(
+        lane=lane,
+        lane_y=profile.lane_y,
+        attachments=tuple(
+            LaneSorterAttachment(
+                item=item,
+                column=column,
+                cell=attachment.cell,
+                slot=attachment.slot,
+                span=attachment.span,
+            )
+            for item, (column, attachment) in zip(
+                lane.items,
+                selected,
+                strict=True,
+            )
+        ),
+    )
 
 
-def _attachment_plans(
+def _side_seatings(
+    lanes: tuple[LogicalLane, ...],
+    profiles: tuple[LaneReachProfile, ...],
+    side: LaneSide,
+) -> tuple[tuple[LaneAttachmentPlan, ...], ...]:
+    side_lanes = tuple(sorted(
+        (lane for lane in lanes if lane.side == side),
+        key=lambda lane: (lane.side_index, lane.lane_id),
+    ))
+    if not side_lanes:
+        return ((),)
+    side_profiles = tuple(profile for profile in profiles if profile.side == side)
+    seatings: list[tuple[LaneAttachmentPlan, ...]] = []
+    for selected in combinations(side_profiles, len(side_lanes)):
+        ordered = tuple(sorted(selected, key=lambda profile: profile.lane_y))
+        plans = tuple(
+            plan
+            for lane, profile in zip(side_lanes, ordered, strict=True)
+            if (plan := _lane_attachment(lane, profile)) is not None
+        )
+        if len(plans) == len(side_lanes):
+            seatings.append(plans)
+    return tuple(seatings)
+
+
+def _attachment_plan_seatings(
     item_id: int,
     yaw: float,
     lanes: tuple[LogicalLane, ...],
-    *,
-    footprint_height: int,
-) -> tuple[LaneAttachmentPlan, ...] | None:
-    north, south = slots.lane_facing(item_id, yaw)
-    if (any(lane.side == "north" for lane in lanes) and not north) or (
-        any(lane.side == "south" for lane in lanes) and not south
-    ):
-        return None
-    probe = slots.probe_building(item_id, yaw)
-    south_lane_count = sum(lane.side == "south" for lane in lanes)
-    plans: list[LaneAttachmentPlan] = []
-    for lane in lanes:
-        lane_y = _lane_y(
-            lane,
-            footprint_height=footprint_height,
-            south_lane_count=south_lane_count,
-        )
-        reachable = slots.attachable_columns(probe, lane_y)
-        if len(reachable) < len(lane.items):
-            return None
-        selected = sorted(reachable.items())[: len(lane.items)]
-        plans.append(
-            LaneAttachmentPlan(
-                lane=lane,
-                lane_y=lane_y,
-                attachments=tuple(
-                    LaneSorterAttachment(
-                        item=item,
-                        column=column,
-                        cell=attachment.cell,
-                        slot=attachment.slot,
-                        span=attachment.span,
-                    )
-                    for item, (column, attachment) in zip(
-                        lane.items,
-                        selected,
-                        strict=True,
-                    )
-                ),
-            )
-        )
-    return tuple(sorted(plans, key=lambda candidate: (candidate.lane_y, candidate.lane.lane_id)))
+) -> tuple[tuple[LaneAttachmentPlan, ...], ...]:
+    profiles = lane_reach_profiles(item_id, yaw)
+    south = _side_seatings(lanes, profiles, "south")
+    north = _side_seatings(lanes, profiles, "north")
+    return tuple(
+        tuple(sorted(
+            south_plans + north_plans,
+            key=lambda plan: (plan.lane_y, plan.lane.lane_id),
+        ))
+        for south_plans, north_plans in product(south, north)
+    )
 
 
 def _variant_id(
@@ -496,56 +596,53 @@ def _variant_id(
     )
 
 
-def _variant(
+def _variants(
     family_id: StripFamilyId,
     item_id: int,
     machine_count: int,
     lanes: tuple[LogicalLane, ...],
     yaw: float,
-) -> StripVariant | None:
+) -> tuple[StripVariant, ...]:
     geometry = placement_geometry(item_id, yaw)
-    attachments = _attachment_plans(
-        item_id,
-        yaw,
-        lanes,
-        footprint_height=geometry.footprint_height,
-    )
-    if attachments is None:
-        return None
-    lane_rows = tuple((plan.lane.lane_id, plan.lane_y) for plan in attachments)
-    minimum_y = min(-geometry.north_halo, *(row for _lane_id, row in lane_rows))
-    maximum_y = max(
-        geometry.footprint_height + geometry.south_halo,
-        *(row + 1 for _lane_id, row in lane_rows),
-    )
-    lane_plan = LanePlan(machine_row=-minimum_y, lane_rows=lane_rows)
-    box_width = machine_count * geometry.pitch_x
-    box_height = maximum_y - minimum_y
-    machine_origins_x = tuple(
-        range(0, machine_count * geometry.pitch_x, geometry.pitch_x)
-    )
-    variant_id = _variant_id(
-        family_id,
-        yaw,
-        machine_origins_x,
-        geometry,
-        lane_plan,
-        attachments,
-        box_width,
-        box_height,
-    )
-    return StripVariant(
-        variant_id=variant_id,
-        yaw=yaw,
-        footprint_width=geometry.footprint_width,
-        footprint_height=geometry.footprint_height,
-        placement_geometry=geometry,
-        lane_plan=lane_plan,
-        box_width=box_width,
-        box_height=box_height,
-        attachment_plan=attachments,
-        machine_origins_x=machine_origins_x,
-    )
+    variants: list[StripVariant] = []
+    for attachments in _attachment_plan_seatings(item_id, yaw, lanes):
+        lane_rows = tuple((plan.lane.lane_id, plan.lane_y) for plan in attachments)
+        minimum_y = min(-geometry.north_halo, *(row for _lane_id, row in lane_rows))
+        maximum_y = max(
+            geometry.footprint_height + geometry.south_halo,
+            *(row + 1 for _lane_id, row in lane_rows),
+        )
+        lane_plan = LanePlan(machine_row=-minimum_y, lane_rows=lane_rows)
+        box_width = machine_count * geometry.pitch_x
+        box_height = maximum_y - minimum_y
+        machine_origins_x = tuple(
+            range(0, machine_count * geometry.pitch_x, geometry.pitch_x)
+        )
+        variant_id = _variant_id(
+            family_id,
+            yaw,
+            machine_origins_x,
+            geometry,
+            lane_plan,
+            attachments,
+            box_width,
+            box_height,
+        )
+        variants.append(
+            StripVariant(
+                variant_id=variant_id,
+                yaw=yaw,
+                footprint_width=geometry.footprint_width,
+                footprint_height=geometry.footprint_height,
+                placement_geometry=geometry,
+                lane_plan=lane_plan,
+                box_width=box_width,
+                box_height=box_height,
+                attachment_plan=attachments,
+                machine_origins_x=machine_origins_x,
+            )
+        )
+    return tuple(variants)
 
 
 def generate_strip_families(spec: BuildSpec) -> tuple[StripFamily, ...]:
@@ -561,16 +658,13 @@ def generate_strip_families(spec: BuildSpec) -> tuple[StripFamily, ...]:
             else tuple(
                 candidate
                 for yaw in _CARDINAL_YAWS
-                if (
-                    candidate := _variant(
-                        family_id,
-                        plan.item_id,
-                        plan.total_machine_count,
-                        lanes,
-                        yaw,
-                    )
+                for candidate in _variants(
+                    family_id,
+                    plan.item_id,
+                    plan.total_machine_count,
+                    lanes,
+                    yaw,
                 )
-                is not None
             )
         )
         unique = {candidate.variant_id: candidate for candidate in generated}
@@ -705,6 +799,7 @@ def validate_instance_partition(
 __all__ = [
     "LaneAttachmentPlan",
     "LanePlan",
+    "LaneReachProfile",
     "LaneSorterAttachment",
     "LogicalLane",
     "MachinePlacementGeometry",
@@ -716,6 +811,7 @@ __all__ = [
     "StripVariantId",
     "default_strip_variant",
     "generate_strip_families",
+    "lane_reach_profiles",
     "partition_strip_family",
     "placement_geometry",
     "validate_instance_partition",
