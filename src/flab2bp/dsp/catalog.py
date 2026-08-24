@@ -251,46 +251,77 @@ class BeltAltitudeRules:
     vertical_construction: bool
     #: Lab level the ceiling was derived from, for error messages.
     lab_level: int
-    #: False when the URL carried no technology set at all, so the values above
-    #: are new-save assumptions rather than this save's.
+    #: False when the URL carried no technology set at all.  The values above
+    #: are then FactorioLab's own default -- every technology researched -- not
+    #: a guess of ours and not a new save.  Kept separate from an explicitly
+    #: empty set, which is a real save with nothing researched.
     from_url: bool
 
 
 def belt_rules_for_technologies(
     technology_ids: Set[str] | None,
+    all_technology_ids: Set[str],
 ) -> BeltAltitudeRules:
     """Derive the belt altitude rules from a FactorioLab researched-tech set.
 
-    ``None`` means the URL said nothing about technologies, in which case a NEW
-    SAVE is assumed -- lab level 3, no slope unlock.  That is the conservative
-    end: every save allows at least this much, so a blueprint built to it
-    pastes for anyone.  It is not silent; callers surface it.
+    **Absence is not emptiness.**  ``None`` means the URL said nothing about
+    technologies, and FactorioLab's answer to that is not "none researched" --
+    it is "all of them".  From ``settings-store.ts::computeSettings``::
+
+        const techIds =
+          state.researchedTechnologyIds ?? defaults?.researchedTechnologyIds;
+        let researchedTechnologyIds = new Set(data.technologyIds);
+        if (techIds != null && researchedTechnologyIds.size > 0) {
+          // Filter for only technologies that still exist in this data set
+          researchedTechnologyIds = new Set(filteredTechs);
+        }
+
+    It starts from the WHOLE dataset and only narrows when a set was actually
+    supplied.  ``initialSettingsState`` never sets the field, and the DSP mod
+    data carries no ``researchedTechnologies`` default, so a URL without ``tre``
+    lands on the unnarrowed set.  The mod defaults corroborate it: FactorioLab
+    ships ``maxBelt: conveyor-belt-3`` and a ``maxMachineRank`` of top-tier
+    machines, which a save with nothing researched could not build.
+
+    So ``None`` grants every technology, exactly as ``_excluded_recipes`` gives
+    ``None`` the mod's own defaults rather than the most restrictive reading.
+
+    .. note::
+       **This is a DECISION, not only a reading.**  The user settled it -- "I
+       think defaulting to all-researched is a fine default" -- and the
+       ``computeSettings`` quote above is why the decision is also the faithful
+       one.  Recorded as a decision so that nobody later "corrects" it back to
+       the restrictive reading on the grounds that our own evidence is
+       second-hand.  If it is ever revisited, revisit it as a product choice.
+
+    This is the THIRD instance today of one class of bug: a URL that is SILENT
+    about something read as a URL that FORBIDS it.  The others were recipe
+    exclusions (``60d5f0f``, which re-disabled recipes the player had enabled
+    and changed the blueprint's inputs) and this one, which refused 19 of 72
+    audit cells for want of a slope unlock the player had.  When a field is
+    optional, the question is never "what is the empty value" -- it is "what
+    does FactorioLab do when it is missing".
+
+    An explicit empty set still means a save with nothing researched, and is
+    honoured as such.
 
     The lab level is the starting 3 plus one per researched Vertical
     Construction level.  ``UnlockValues`` lives in the game's binary asset
-    protos and could not be read, so "one per level" is an ASSUMPTION -- the
+    protos and could not be read, so "one per level" is an ASSUMPTION -- its
     checkable consequence is that FactorioLab models 6 levels, giving at most
     lab 9 and a ceiling of 26.55, while the user's own save reaches 38.55 at
-    lab 13.  So this UNDER-estimates a well-developed save, which is the safe
-    direction: it refuses altitudes the save would actually allow, and never
-    emits one it would not.
+    lab 13.  So it UNDER-estimates a developed save, which is the safe
+    direction: it refuses altitudes the save would allow and never emits one it
+    would not.
     """
-    if technology_ids is None:
-        return BeltAltitudeRules(
-            max_z=belt_max_z(DEFAULT_LAB_LEVEL),
-            vertical_construction=False,
-            lab_level=DEFAULT_LAB_LEVEL,
-            from_url=False,
-        )
-    levels = sum(
-        1 for t in technology_ids if t.startswith(VERTICAL_CONSTRUCTION_PREFIX)
-    )
+    effective = all_technology_ids if technology_ids is None else technology_ids
+    levels = sum(1 for t in effective if t.startswith(VERTICAL_CONSTRUCTION_PREFIX))
     lab_level = DEFAULT_LAB_LEVEL + levels
     return BeltAltitudeRules(
         max_z=belt_max_z(lab_level),
-        vertical_construction=BELT_SLOPE_UNLOCK_TECH in technology_ids,
+        vertical_construction=BELT_SLOPE_UNLOCK_TECH in effective,
         lab_level=lab_level,
-        from_url=True,
+        from_url=technology_ids is not None,
     )
 
 

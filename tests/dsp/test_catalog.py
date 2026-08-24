@@ -329,36 +329,58 @@ class TestBeltRulesComeFromTheUrlsTechnologies:
     for on the command line.
     """
 
-    def test_no_technology_set_assumes_a_new_save_and_says_so(self) -> None:
-        r = catalog.belt_rules_for_technologies(None)
+    @staticmethod
+    def _all() -> set[str]:
+        from flab2bp.lab.data import load_vendored
+
+        return {i.id for i in load_vendored().items if i.technology is not None}
+
+    def test_absence_means_factoriolabs_default_not_a_new_save(self) -> None:
+        """`None` is "the URL said nothing", and FactorioLab answers that with
+        EVERY technology -- `computeSettings` starts from `data.technologyIds`
+        and only narrows when a set was supplied.
+
+        Reading absence as emptiness here refused 19 of 72 audit cells for want
+        of a slope unlock the player had.  Same defect as the stone bug in
+        `60d5f0f`.
+        """
+        r = catalog.belt_rules_for_technologies(None, self._all())
+        assert r.from_url is False
+        assert r.vertical_construction is True, (
+            "an absent tech set must not be read as a save with nothing researched"
+        )
+        assert r.lab_level > catalog.DEFAULT_LAB_LEVEL
+        assert r.max_z > catalog.belt_max_z(catalog.DEFAULT_LAB_LEVEL)
+
+    def test_an_explicit_empty_set_is_a_save_with_nothing_researched(self) -> None:
+        """Emptiness IS honoured -- it is only absence that means the default."""
+        r = catalog.belt_rules_for_technologies(set(), self._all())
+        assert r.from_url is True
+        assert r.vertical_construction is False
         assert r.lab_level == catalog.DEFAULT_LAB_LEVEL
         assert r.max_z == catalog.belt_max_z(catalog.DEFAULT_LAB_LEVEL)
-        assert r.vertical_construction is False
-        assert r.from_url is False, "a guess must be distinguishable from a reading"
 
     def test_the_slope_unlock_is_super_magnetic_field_generator(self) -> None:
         """From the locale: TooSteep hints "Need to unlock Super Magnetic Field
         Generator", not Vertical Construction."""
-        without = catalog.belt_rules_for_technologies({"vertical-construction-1"})
+        without = catalog.belt_rules_for_technologies(
+            {"vertical-construction-1"}, self._all()
+        )
         assert without.vertical_construction is False
         with_it = catalog.belt_rules_for_technologies(
-            {"super-magnetic-field-generator"}
+            {"super-magnetic-field-generator"}, self._all()
         )
         assert with_it.vertical_construction is True
 
     def test_vertical_construction_levels_raise_the_ceiling(self) -> None:
-        base = catalog.belt_rules_for_technologies(set())
+        base = catalog.belt_rules_for_technologies(set(), self._all())
         assert base.lab_level == 3
         three = catalog.belt_rules_for_technologies(
-            {f"vertical-construction-{n}" for n in (1, 2, 3)}
+            {f"vertical-construction-{n}" for n in (1, 2, 3)}, self._all()
         )
         assert three.lab_level == 6
         assert three.max_z > base.max_z
         assert three.from_url is True
-
-    def test_an_empty_set_is_a_reading_not_a_guess(self) -> None:
-        """A URL that lists no technologies HAS told us something."""
-        assert catalog.belt_rules_for_technologies(set()).from_url is True
 
     def test_a_real_url_technology_set_reaches_the_rules(self) -> None:
         """The whole path: `tre=` in the URL -> decoded ids -> altitude rules.
@@ -383,17 +405,23 @@ class TestBeltRulesComeFromTheUrlsTechnologies:
         )
         assert req.researched_technology_ids == set(wanted)
 
-        rules = catalog.belt_rules_for_technologies(req.researched_technology_ids)
+        rules = catalog.belt_rules_for_technologies(
+            req.researched_technology_ids, self._all()
+        )
         assert rules.from_url is True
         assert rules.vertical_construction is True
         assert rules.lab_level == 5  # 3 base + 2 vertical-construction levels
         assert rules.max_z == catalog.belt_max_z(5)
 
-    def test_a_url_without_a_technology_set_is_the_assumed_case(self) -> None:
+    def test_a_corpus_url_without_tre_gets_the_full_tech_set(self) -> None:
+        """None of the 12 corpus URLs carry `tre`, and they must not be
+        penalised for it."""
         from flab2bp.lab.url import parse_url
 
         req = parse_url("https://factoriolab.github.io/dsp/list?o=processor*60&v=11")
         assert req.researched_technology_ids is None
-        assert catalog.belt_rules_for_technologies(
-            req.researched_technology_ids
-        ).from_url is False
+        rules = catalog.belt_rules_for_technologies(
+            req.researched_technology_ids, self._all()
+        )
+        assert rules.from_url is False
+        assert rules.vertical_construction is True

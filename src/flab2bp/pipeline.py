@@ -146,7 +146,10 @@ def build(
     # properties of the player's SAVE -- so they come from the technologies
     # FactorioLab already recorded in the URL, not from a flag whose default we
     # would have to guess.
-    belt_rules = catalog.belt_rules_for_technologies(request.researched_technology_ids)
+    belt_rules = catalog.belt_rules_for_technologies(
+        request.researched_technology_ids,
+        {i.id for i in data.items if i.technology is not None},
+    )
 
     # A FactorioLab flow export pins WHICH recipe makes what, so we stop
     # re-deriving a decision the player already made. It is applied here, to the

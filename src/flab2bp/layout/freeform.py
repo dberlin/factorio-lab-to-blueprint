@@ -2180,7 +2180,7 @@ class TransitionForm(Enum):
 
 
 def transition_form(from_z: Fraction, to_z: Fraction) -> TransitionForm:
-    """Which form to use to get from ``from_z`` to ``to_z``.
+    r"""Which form to use to get from ``from_z`` to ``to_z``.
 
     **The rule is now known, and it is not the two-form rule this once
     guessed at.**  The game has ONE test, on slope, in ``BuildTool_Path``::
@@ -2200,11 +2200,27 @@ def transition_form(from_z: Fraction, to_z: Fraction) -> TransitionForm:
     slope limit only the vertical form remains.  Both readings predict the same
     blueprints; only the source distinguishes them.
 
-    This router emits RAMP always.  It never needs the unlock, because a
-    blueprint-z rise of ``BELT_CLIMB_PER_TILE`` over one tile is a world slope
-    of ``2/3``, inside the ``4/5`` limit, at ANY altitude.  Choosing the
-    vertical form would make our output depend on a tech the player may not
-    have, to save tiles we are not short of.
+    This router emits RAMP always.  A blueprint-z rise of
+    ``BELT_CLIMB_PER_TILE`` over one tile is a world slope of ``2/3``, inside
+    the ``4/5`` limit, at ANY altitude, so the ramp needs no unlock and is
+    always available.
+
+    .. note::
+       **The vertical form is a real density lever and is deliberately NOT
+       built.**  With ``beltVerticalConstruction`` a level change costs ZERO
+       horizontal tiles instead of ``RAMP_TILES_PER_LEVEL``, and the user's own
+       save has the tech -- their max-height blueprint climbs ``z = 0 -> 38`` in
+       38 steps, none of which moves.  Every crossing this router makes
+       currently spends two tiles going up and two coming down; on the vertical
+       form that is four tiles returned per crossing, and there were 8 to 28
+       level changes per generated blueprint.
+
+       Not built here because it is a ROUTING change -- A\* would need a
+       zero-run move, and the reservation and profile both assume a climb
+       occupies tiles -- and this branch is already carrying the emission fix,
+       the slope rule and the technology plumbing.  It also only applies to
+       saves that have the tech, so it cannot replace the ramp, only beat it
+       where available.  Measure it separately when the router work resumes.
     """
     del from_z, to_z  # slope, not height, decides -- and ours is always legal
     return TransitionForm.RAMP

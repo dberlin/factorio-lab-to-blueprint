@@ -70,11 +70,13 @@ def _report(build: pipeline.Build, *, verbose: bool) -> None:
             )
         else:
             print(
-                f"  WARNING: this URL carried NO technology set, so a NEW SAVE "
-                f"was assumed: belt ceiling {float(rules.max_z)} (lab level "
-                f"{rules.lab_level}), no vertical belt construction. A more "
-                f"developed save allows more, and belts were kept lower than "
-                f"they needed to be.",
+                f"  WARNING: this URL carried no technology set, so a "
+                f"FULLY-RESEARCHED save is ASSUMED: belt ceiling "
+                f"{float(rules.max_z)} (lab level {rules.lab_level}), vertical "
+                f"belt construction "
+                f"{'YES' if rules.vertical_construction else 'no'}. A URL "
+                f"exported from FactorioLab normally does carry one; if yours "
+                f"did, the belts here may climb higher than your save allows.",
                 file=out,
             )
 
