@@ -2649,7 +2649,7 @@ def _astar(
     # spends a different number of nodes on every later net.
     start_left = budget["left"] if budget is not None else 1 << 62
     checkpoint = _MAX_EXPANSIONS + 1
-    if _DEADLINE_CHECK_EVERY < checkpoint:
+    if checkpoint > _DEADLINE_CHECK_EVERY:
         checkpoint = _DEADLINE_CHECK_EVERY
     if start_left < checkpoint:
         checkpoint = start_left
