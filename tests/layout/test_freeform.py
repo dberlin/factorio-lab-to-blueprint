@@ -2877,12 +2877,20 @@ class TestAPathThatReachesNothingIsUnrouted:
         )
         assert _sink_for(canvas, tail, net, {tail}, set()) == dst_belt
 
-    def test_a_tail_one_level_above_its_lane_head_still_links(self) -> None:
-        """Belts climb half a tile at a time, so one level apart is a legal link.
+    def test_a_tail_one_level_above_its_lane_head_does_not_link(self) -> None:
+        """One level apart across one tile is the ILLEGAL step, not a legal link.
 
-        Through traffic leaves the ground now (see `_GROUND_TOLL`), so a path can
-        arrive on the tile above its lane head.  Requiring EQUAL altitude there
-        turned a perfectly good arrival into a route failure.
+        This test used to assert the opposite, on the reasoning that "belts
+        climb half a tile at a time, so one level apart is a legal link".  That
+        is exactly backwards: climbing half a tile at a time is precisely WHY a
+        whole tile of height cannot be gained in one tile of run.  The join
+        needs two tiles and a belt at ``1/2`` between them, or it needs not to
+        move at all -- and a tile diagonally adjacent in z is neither.
+
+        Asserting the defect was correct is worse than having no test here: this
+        one stood while `freeform` shipped the same step mid-path, and the
+        agreement between a wrong check and a wrong test is what made it look
+        settled.
         """
         canvas = _Canvas()
         dst_belt = canvas.add(_belt(0, 0, item="x"))
@@ -2896,7 +2904,53 @@ class TestAPathThatReachesNothingIsUnrouted:
             dst=_Port(dst_belt, 0, 0, 0, 0),
             item="x",
         )
+        assert _sink_for(canvas, tail, net, {tail}, set()) is None
+
+    def test_a_tail_a_ramp_step_above_its_lane_head_links(self) -> None:
+        """Half a tile up and one tile along IS the ramp, so it joins."""
+        canvas = _Canvas()
+        dst_belt = canvas.add(_belt(0, 0, item="x"))
+        tail = canvas.add(
+            PlacedBuilding(
+                item_id=2001, model_index=35, x=0, y=1, z=F(1, 2),
+                width=1, height=1, carries_item="x",
+            )
+        )
+        net = _Net(
+            src=_Port(canvas.add(_belt(-9, -9, item="x")), -9, -9, -9, -9),
+            dst=_Port(dst_belt, 0, 0, 0, 0),
+            item="x",
+        )
         assert _sink_for(canvas, tail, net, {tail}, set()) == dst_belt
+
+    def test_a_tail_directly_above_its_lane_head_does_not_link_yet(self) -> None:
+        """The vertical form is legal in the GAME; we do not choose it here.
+
+        A whole tile of height for no horizontal run is a real thing a belt
+        does -- 38 consecutive such steps carry the user's max-height blueprint
+        from z=0 to z=38.  But the user also reports that at lower heights the
+        game ramps instead, so the form appears to be selected BY HEIGHT and
+        the threshold is not known.  Taking the vertical form here because it
+        is free would be choosing a shape we have no evidence for at one level,
+        where all 118 fixture cases ramp.
+
+        So this join is refused for now, and `transition_form` is the single
+        place that changes when the threshold lands.
+        """
+        canvas = _Canvas()
+        dst_belt = canvas.add(_belt(0, 0, item="x"))
+        tail = canvas.add(
+            PlacedBuilding(
+                item_id=2001, model_index=35, x=0, y=0, z=F(1),
+                width=1, height=1, carries_item="x",
+            )
+        )
+        net = _Net(
+            src=_Port(canvas.add(_belt(-9, -9, item="x")), -9, -9, -9, -9),
+            dst=_Port(dst_belt, 0, 0, 0, 0),
+            item="x",
+        )
+        assert _sink_for(canvas, tail, net, {tail}, set()) is None
 
 
 class TestAMergeArrivesAtItsOwnDestination:
