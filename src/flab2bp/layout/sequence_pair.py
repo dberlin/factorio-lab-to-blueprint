@@ -4,11 +4,19 @@ from __future__ import annotations
 
 import math
 import random
-from collections.abc import Mapping
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, replace
 from enum import Enum
+from typing import TYPE_CHECKING
 
 from flab2bp.dsp import catalog
+
+if TYPE_CHECKING:
+    from flab2bp.layout.strip_variants import (
+        StripInstanceId,
+        StripVariant,
+        StripVariantId,
+    )
 
 _MAX_GAP = 4
 
@@ -65,12 +73,14 @@ class GapProfile:
 
 @dataclass(frozen=True, slots=True)
 class PlacementProblem:
-    """Fixed rectangle geometry and net endpoints for placement search."""
+    """Fixed strip identities, pose variants, and net endpoints for placement search."""
 
     sizes: tuple[tuple[int, int], ...]
     nets: tuple[tuple[int, int], ...]
     outline_height: int
     area_lower_bound: int
+    instance_ids: tuple[StripInstanceId, ...] = ()
+    variant_tables: tuple[tuple[StripVariant, ...], ...] = ()
 
     def __post_init__(self) -> None:
         _validate_sizes(self.sizes)
@@ -87,10 +97,90 @@ class PlacementProblem:
         _validate_positive_integer(self.outline_height, "outline height")
         if type(self.area_lower_bound) is not int or self.area_lower_bound < 0:
             raise ValueError("area lower bound must be a non-negative integer")
+        if not isinstance(self.instance_ids, tuple) or not isinstance(
+            self.variant_tables, tuple
+        ):
+            raise ValueError("strip instances and variant tables must be immutable tuples")
+        if bool(self.instance_ids) != bool(self.variant_tables):
+            raise ValueError("strip instances and variant tables must be supplied together")
+        if self.variant_tables:
+            if len(self.instance_ids) != size or len(self.variant_tables) != size:
+                raise ValueError("variant-aware problems require one instance and table per strip")
+            for strip, (instance_id, variants) in enumerate(
+                zip(self.instance_ids, self.variant_tables, strict=True)
+            ):
+                if not isinstance(variants, tuple) or not variants:
+                    raise ValueError("every strip variant table must be a non-empty tuple")
+                if any(
+                    variant.variant_id.family_id != instance_id.family_id
+                    or len(variant.machine_origins_x) != instance_id.machine_count
+                    for variant in variants
+                ):
+                    raise ValueError(
+                        "strip variants must realize the exact owning instance"
+                    )
+                if self.sizes[strip] != (
+                    variants[0].box_width,
+                    variants[0].box_height,
+                ):
+                    raise ValueError(
+                        "problem default sizes must match variant index zero"
+                    )
 
     @property
     def size(self) -> int:
         return len(self.sizes)
+
+    def variant(self, strip: int, variant: int) -> StripVariant:
+        """Return one exact pose variant after validating both indices."""
+        if type(strip) is not int or not 0 <= strip < self.size:
+            raise ValueError("strip index must identify a placement strip")
+        if not self.variant_tables:
+            raise ValueError("the placement problem has no strip variant tables")
+        table = self.variant_tables[strip]
+        if type(variant) is not int or not 0 <= variant < len(table):
+            raise ValueError("variant index must identify a pose-valid strip variant")
+        return table[variant]
+
+    def selected_sizes(
+        self, variant_indices: tuple[int, ...]
+    ) -> tuple[tuple[int, int], ...]:
+        """Return box dimensions for one complete immutable selection."""
+        indices = self._validate_variant_indices(variant_indices)
+        if not self.variant_tables:
+            return self.sizes
+        return tuple(
+            (self.variant(strip, variant).box_width, self.variant(strip, variant).box_height)
+            for strip, variant in enumerate(indices)
+        )
+
+    def selected_variant_ids(
+        self, variant_indices: tuple[int, ...]
+    ) -> tuple[StripVariantId, ...]:
+        """Return the exact physical identities in one complete selection."""
+        indices = self._validate_variant_indices(variant_indices)
+        if not self.variant_tables:
+            return ()
+        return tuple(
+            self.variant(strip, variant).variant_id
+            for strip, variant in enumerate(indices)
+        )
+
+    def _validate_variant_indices(
+        self, variant_indices: tuple[int, ...]
+    ) -> tuple[int, ...]:
+        if not isinstance(variant_indices, tuple):
+            raise ValueError("variant indices must be an immutable tuple")
+        if not self.variant_tables and not variant_indices:
+            return ()
+        if len(variant_indices) != self.size:
+            raise ValueError("selection must contain one variant index per strip")
+        if self.variant_tables:
+            for strip, variant in enumerate(variant_indices):
+                self.variant(strip, variant)
+        elif any(type(variant) is not int or variant != 0 for variant in variant_indices):
+            raise ValueError("fixed-size strips only accept variant index zero")
+        return variant_indices
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,6 +230,7 @@ class DecodedPlacement:
     y_windows: tuple[tuple[int, int], ...]
     gap_area: int
     direct: frozenset[tuple[int, int]] = frozenset()
+    variant_indices: tuple[int, ...] = ()
 
     def __post_init__(self) -> None:
         if not all(
@@ -176,6 +267,17 @@ class DecodedPlacement:
             for key in self.direct
         ):
             raise ValueError("realized direct inserts must be an immutable set of integer pairs")
+        if (
+            not isinstance(self.variant_indices, tuple)
+            or (
+                self.variant_indices
+                and len(self.variant_indices) != size
+            )
+            or any(type(variant) is not int or variant < 0 for variant in self.variant_indices)
+        ):
+            raise ValueError(
+                "decoded placement must carry one non-negative variant index per strip"
+            )
         for value, name in (
             (self.width, "decoded width"),
             (self.used_height, "decoded used height"),
@@ -194,6 +296,7 @@ class MoveKind(Enum):
     INSERT_POSITIVE = "insert_positive"
     INSERT_NEGATIVE = "insert_negative"
     GAP_STEP = "gap_step"
+    CHANGE_VARIANT = "change_variant"
 
 
 @dataclass(frozen=True, slots=True)
@@ -285,16 +388,29 @@ class SearchEnergy:
 
 @dataclass(frozen=True, slots=True)
 class AnnealState:
-    """Immutable sequence-pair state and deterministic multi-stage seed ownership."""
+    """Immutable sequence-pair, variant selection, and deterministic stage seed."""
 
     pair: SequencePair
     gaps: GapProfile
     base_seed: int
     stage_index: int = 0
+    variant_indices: tuple[int, ...] = ()
 
     def __post_init__(self) -> None:
-        if len(self.gaps.east) != len(self.pair.positive):
+        size = len(self.pair.positive)
+        if len(self.gaps.east) != size:
             raise ValueError("annealing pair and gap profile sizes must match")
+        if (
+            not isinstance(self.variant_indices, tuple)
+            or (
+                self.variant_indices
+                and len(self.variant_indices) != size
+            )
+            or any(type(variant) is not int or variant < 0 for variant in self.variant_indices)
+        ):
+            raise ValueError(
+                "annealing state must carry one variant index per strip, all non-negative"
+            )
         if type(self.base_seed) is not int:
             raise ValueError("annealing base seed must be an integer")
         if type(self.stage_index) is not int or self.stage_index < 0:
@@ -302,7 +418,7 @@ class AnnealState:
 
     @classmethod
     def initial(cls, size: int, seed: int) -> AnnealState:
-        """Create a reproducible independently shuffled sequence-pair start."""
+        """Create a reproducible independently shuffled fixed-cardinality start."""
         if type(size) is not int or size < 0:
             raise ValueError("annealing state size must be a non-negative integer")
         if type(seed) is not int:
@@ -316,18 +432,21 @@ class AnnealState:
             pair=SequencePair(tuple(positive), tuple(negative)),
             gaps=GapProfile.zero(size),
             base_seed=seed,
+            variant_indices=(0,) * size,
         )
 
 
 @dataclass(frozen=True, order=True, slots=True)
 class PlacementKey:
-    """Exact immutable identity for retaining distinct decoded placements."""
+    """Exact instance, variant, and geometry identity retained by search."""
 
     x: tuple[int, ...]
     y: tuple[int, ...]
     dimensions: tuple[tuple[int, int], ...]
     east_gaps: tuple[int, ...]
     north_gaps: tuple[int, ...]
+    instance_ids: tuple[StripInstanceId, ...] = ()
+    variant_ids: tuple[StripVariantId, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -424,6 +543,31 @@ def decode_sequence_pair(
     )
 
 
+def decode_state(problem: PlacementProblem, state: AnnealState) -> DecodedPlacement:
+    """Decode one complete pose selection using only its selected box geometry."""
+    state.pair.validate(problem.size)
+    if len(state.gaps.east) != problem.size:
+        raise ValueError("annealing state size must match the placement problem")
+    sizes = problem.selected_sizes(state.variant_indices)
+    decoded = decode_sequence_pair(
+        state.pair,
+        state.gaps,
+        sizes,
+        outline_height=problem.outline_height,
+    )
+    return DecodedPlacement(
+        x=decoded.x,
+        y=decoded.y,
+        width=decoded.width,
+        used_height=decoded.used_height,
+        x_windows=decoded.x_windows,
+        y_windows=decoded.y_windows,
+        gap_area=decoded.gap_area,
+        direct=decoded.direct,
+        variant_indices=state.variant_indices,
+    )
+
+
 def align_direct_inserts(
     problem: PlacementProblem,
     decoded: DecodedPlacement,
@@ -434,6 +578,7 @@ def align_direct_inserts(
         raise ValueError("direct-insert targets must be an immutable tuple")
     if len(decoded.x) != problem.size:
         raise ValueError("decoded placement size must match the placement problem")
+    sizes = problem.selected_sizes(decoded.variant_indices)
 
     current = decoded
     targets_by_key: dict[tuple[int, int], list[DirectInsertTarget]] = {}
@@ -447,7 +592,7 @@ def align_direct_inserts(
         if len(matching) > 1:
             raise ValueError(f"duplicate carried direct target geometry for key {key}")
         carried = matching[0]
-        _validate_direct_target(problem, carried)
+        _validate_direct_target(problem, decoded, carried)
         if not _target_is_direct(decoded, carried):
             raise ValueError(f"carried direct target geometry is not realized for key {key}")
         carried_targets[key] = carried
@@ -468,7 +613,7 @@ def align_direct_inserts(
     )
     realized_targets = carried_targets.copy()
     for target in ordered:
-        _validate_direct_target(problem, target)
+        _validate_direct_target(problem, current, target)
         if target.key in current.direct:
             continue
         candidate = _align_direct_target(
@@ -479,7 +624,7 @@ def align_direct_inserts(
         )
         if candidate is None:
             continue
-        if not _preserves_separations(decoded, candidate, problem.sizes):
+        if not _preserves_separations(decoded, candidate, sizes):
             continue
         if not all(
             _target_is_direct(candidate, accepted)
@@ -491,11 +636,16 @@ def align_direct_inserts(
     return current
 
 
-def _validate_direct_target(problem: PlacementProblem, target: DirectInsertTarget) -> None:
+def _validate_direct_target(
+    problem: PlacementProblem,
+    decoded: DecodedPlacement,
+    target: DirectInsertTarget,
+) -> None:
     if not 0 <= target.producer < problem.size or not 0 <= target.consumer < problem.size:
         raise ValueError("direct-insert target endpoints must identify placement strips")
-    producer_size = problem.sizes[target.producer]
-    consumer_size = problem.sizes[target.consumer]
+    sizes = problem.selected_sizes(decoded.variant_indices)
+    producer_size = sizes[target.producer]
+    consumer_size = sizes[target.consumer]
     if (
         target.producer_row >= producer_size[1]
         or target.consumer_row >= consumer_size[1]
@@ -512,15 +662,16 @@ def _align_direct_target(
     *,
     outline: tuple[int, int],
 ) -> DecodedPlacement | None:
+    sizes = problem.selected_sizes(decoded.variant_indices)
     producer = target.producer
     consumer = target.consumer
-    producer_width, producer_height = problem.sizes[producer]
-    consumer_width, consumer_height = problem.sizes[consumer]
+    producer_width, producer_height = sizes[producer]
+    consumer_width, consumer_height = sizes[consumer]
 
-    producer_x_bounds = _relation_bounds(decoded, problem.sizes, producer, consumer, axis=0)
-    consumer_x_bounds = _relation_bounds(decoded, problem.sizes, consumer, producer, axis=0)
-    producer_y_bounds = _relation_bounds(decoded, problem.sizes, producer, consumer, axis=1)
-    consumer_y_bounds = _relation_bounds(decoded, problem.sizes, consumer, producer, axis=1)
+    producer_x_bounds = _relation_bounds(decoded, sizes, producer, consumer, axis=0)
+    consumer_x_bounds = _relation_bounds(decoded, sizes, consumer, producer, axis=0)
+    producer_y_bounds = _relation_bounds(decoded, sizes, producer, consumer, axis=1)
+    consumer_y_bounds = _relation_bounds(decoded, sizes, consumer, producer, axis=1)
 
     x_difference = [-(target.consumer_span - 1), target.producer_span - 1]
     y_difference = [
@@ -562,9 +713,9 @@ def _align_direct_target(
     y = list(decoded.y)
     x[producer], x[consumer] = x_pair
     y[producer], y[consumer] = y_pair
-    width = max(coordinate + size[0] for coordinate, size in zip(x, problem.sizes, strict=True))
+    width = max(coordinate + size[0] for coordinate, size in zip(x, sizes, strict=True))
     used_height = max(
-        coordinate + size[1] for coordinate, size in zip(y, problem.sizes, strict=True)
+        coordinate + size[1] for coordinate, size in zip(y, sizes, strict=True)
     )
     if width > outline[0] or used_height > outline[1]:
         return None
@@ -578,8 +729,9 @@ def _align_direct_target(
         y_windows=decoded.y_windows,
         gap_area=decoded.gap_area,
         direct=decoded.direct | {target.key},
+        variant_indices=decoded.variant_indices,
     )
-    if not _no_overlaps(candidate, problem.sizes):
+    if not _no_overlaps(candidate, sizes):
         return None
     return candidate
 
@@ -739,12 +891,43 @@ def derive_stage_seed(base_seed: int, stage_index: int) -> int:
     return value ^ (value >> 31)
 
 
-def apply_move(state: AnnealState, kind: MoveKind, rng: random.Random) -> AnnealState:
+def apply_variant_move(
+    problem: PlacementProblem,
+    state: AnnealState,
+    *,
+    strip: int,
+    variant: int,
+) -> AnnealState:
+    """Atomically select one exact pose, box, lane, and attachment plan."""
+    problem.selected_sizes(state.variant_indices)
+    problem.variant(strip, variant)
+    if state.variant_indices[strip] == variant:
+        return state
+    selected = list(state.variant_indices)
+    selected[strip] = variant
+    return AnnealState(
+        pair=state.pair,
+        gaps=state.gaps,
+        base_seed=state.base_seed,
+        stage_index=state.stage_index,
+        variant_indices=tuple(selected),
+    )
+
+
+def apply_move(
+    state: AnnealState,
+    kind: MoveKind,
+    rng: random.Random,
+    *,
+    problem: PlacementProblem | None = None,
+) -> AnnealState:
     """Apply one legal local move while preserving immutable state ownership."""
     if not isinstance(kind, MoveKind):
         raise ValueError("unknown annealing move kind")
     size = len(state.pair.positive)
-    if size == 0 or (size == 1 and kind is not MoveKind.GAP_STEP):
+    if size == 0 or (
+        size == 1 and kind not in (MoveKind.GAP_STEP, MoveKind.CHANGE_VARIANT)
+    ):
         return state
 
     positive = state.pair.positive
@@ -768,6 +951,23 @@ def apply_move(state: AnnealState, kind: MoveKind, rng: random.Random) -> Anneal
         positive = _insert_permutation(positive, rng)
     elif kind is MoveKind.INSERT_NEGATIVE:
         negative = _insert_permutation(negative, rng)
+    elif kind is MoveKind.CHANGE_VARIANT:
+        if problem is None or not problem.variant_tables:
+            return state
+        problem.selected_sizes(state.variant_indices)
+        mutable = tuple(
+            strip
+            for strip, variants in enumerate(problem.variant_tables)
+            if len(variants) > 1
+        )
+        if not mutable:
+            return state
+        strip = rng.choice(mutable)
+        current = state.variant_indices[strip]
+        variant = rng.randrange(len(problem.variant_tables[strip]) - 1)
+        if variant >= current:
+            variant += 1
+        return apply_variant_move(problem, state, strip=strip, variant=variant)
     else:
         gaps = _step_gap(gaps, rng)
 
@@ -776,6 +976,7 @@ def apply_move(state: AnnealState, kind: MoveKind, rng: random.Random) -> Anneal
         gaps=gaps,
         base_seed=state.base_seed,
         stage_index=state.stage_index,
+        variant_indices=state.variant_indices,
     )
 
 
@@ -792,7 +993,7 @@ def cheap_energy(
     if context.history_outline[1] != problem.outline_height:
         raise ValueError("placement cost context must match the problem outline height")
     for target in context.direct_targets:
-        _validate_direct_target(problem, target)
+        _validate_direct_target(problem, decoded, target)
 
     overflow = max(0, decoded.used_height - problem.outline_height)
     area_ratio = decoded.width * problem.outline_height / max(problem.area_lower_bound, 1)
@@ -833,9 +1034,10 @@ def _candidate_history_cost(
     stride = width + 1
     table = context.history_summed_area
     total = 0.0
+    sizes = problem.selected_sizes(decoded.variant_indices)
     for source, destination in context.net_pairs:
-        source_width, source_height = problem.sizes[source]
-        destination_width, destination_height = problem.sizes[destination]
+        source_width, source_height = sizes[source]
+        destination_width, destination_height = sizes[destination]
         x0 = min(width, max(0, min(decoded.x[source], decoded.x[destination])))
         y0 = min(height, max(0, min(decoded.y[source], decoded.y[destination])))
         x1 = min(
@@ -866,11 +1068,17 @@ def anneal_stage(
     state: AnnealState,
     config: AnnealConfig,
     context: PlacementCostContext | None = None,
+    *,
+    direct_targets_for_state: Callable[
+        [PlacementProblem, AnnealState], tuple[DirectInsertTarget, ...]
+    ]
+    | None = None,
 ) -> AnnealStageResult:
     """Run exactly one reproducible linearly cooled block of cheap SA moves."""
     state.pair.validate(problem.size)
     if len(state.gaps.east) != problem.size:
         raise ValueError("annealing state size must match the placement problem")
+    problem.selected_sizes(state.variant_indices)
     if context is None:
         context = PlacementCostContext(
             net_weights=(1.0,) * len(problem.nets),
@@ -880,26 +1088,39 @@ def anneal_stage(
         )
 
     rng = random.Random(derive_stage_seed(state.base_seed, state.stage_index))
-    current = _score_state(problem, state, context)
+    current = _score_state(problem, state, context, direct_targets_for_state)
     elites: dict[PlacementKey, AnnealIncumbent] = {current.key: current}
     accepted_moves = 0
     move_kinds = tuple(MoveKind)
 
     for move_index in range(config.moves_per_stage):
-        candidate_state = apply_move(state=current.state, kind=rng.choice(move_kinds), rng=rng)
-        candidate = _score_state(problem, candidate_state, context)
+        candidate_state = apply_move(
+            state=current.state,
+            kind=rng.choice(move_kinds),
+            rng=rng,
+            problem=problem,
+        )
+        candidate = _score_state(
+            problem,
+            candidate_state,
+            context,
+            direct_targets_for_state,
+        )
         _retain_elite(elites, candidate, config.elite_count)
         temperature = _linear_temperature(config, move_index)
         if _accept_move(current.energy, candidate.energy, temperature, rng):
             current = candidate
             accepted_moves += 1
 
-    ordered_elites = tuple(sorted(elites.values(), key=lambda elite: (elite.energy, elite.key)))
+    ordered_elites = tuple(
+        sorted(elites.values(), key=lambda elite: (elite.energy, elite.key))
+    )
     final_state = AnnealState(
         pair=current.state.pair,
         gaps=current.state.gaps,
         base_seed=state.base_seed,
         stage_index=state.stage_index + 1,
+        variant_indices=current.state.variant_indices,
     )
     return AnnealStageResult(
         final_state=final_state,
@@ -916,6 +1137,7 @@ def repair_neighbourhood(
     *,
     seed: int,
     strip_weights: Mapping[int, float] | None = None,
+    variant_indices: tuple[int, ...] = (),
 ) -> AnnealState:
     """Deterministically destroy and repair only selected sequence-pair strips."""
     size = len(pair.positive)
@@ -958,6 +1180,7 @@ def repair_neighbourhood(
         pair=SequencePair(positive, negative),
         gaps=GapProfile(tuple(east), tuple(north)),
         base_seed=seed,
+        variant_indices=variant_indices,
     )
 
 
@@ -972,28 +1195,37 @@ def _repair_permutation(
         repaired.insert(rng.randrange(len(repaired) + 1), strip)
     return tuple(repaired)
 
-
 def _score_state(
     problem: PlacementProblem,
     state: AnnealState,
     context: PlacementCostContext,
+    direct_targets_for_state: Callable[
+        [PlacementProblem, AnnealState], tuple[DirectInsertTarget, ...]
+    ]
+    | None = None,
 ) -> AnnealIncumbent:
-    decoded = decode_sequence_pair(
-        state.pair,
-        state.gaps,
-        problem.sizes,
-        outline_height=problem.outline_height,
+    decoded = decode_state(problem, state)
+    dimensions = problem.selected_sizes(state.variant_indices)
+    candidate_context = (
+        replace(
+            context,
+            direct_targets=direct_targets_for_state(problem, state),
+        )
+        if direct_targets_for_state is not None
+        else context
     )
     return AnnealIncumbent(
         state=state,
         decoded=decoded,
-        energy=cheap_energy(problem, decoded, context),
+        energy=cheap_energy(problem, decoded, candidate_context),
         key=PlacementKey(
             x=decoded.x,
             y=decoded.y,
-            dimensions=problem.sizes,
+            dimensions=dimensions,
             east_gaps=state.gaps.east,
             north_gaps=state.gaps.north,
+            instance_ids=problem.instance_ids,
+            variant_ids=problem.selected_variant_ids(state.variant_indices),
         ),
     )
 

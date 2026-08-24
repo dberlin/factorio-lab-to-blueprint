@@ -38,12 +38,16 @@ from flab2bp.layout.sequence_pair import (
     align_direct_inserts,
     anneal_stage,
     apply_move,
+    apply_variant_move,
     cheap_energy,
     decode_sequence_pair,
+    decode_state,
     derive_stage_seed,
     repair_neighbourhood,
 )
+from flab2bp.layout.strip_variants import StripInstanceId
 from tests.layout.test_freeform import two_stage_spec
+from tests.layout.test_strip_variants import _family, _single_machine_spec
 
 
 def _boxes(
@@ -492,6 +496,142 @@ def _tiny_placement_problem() -> PlacementProblem:
         outline_height=6,
         area_lower_bound=20,
     )
+
+
+def _refinery_variant_problem(
+    *,
+    variant_count: int = 2,
+) -> tuple[PlacementProblem, AnnealState]:
+    family = _family(_single_machine_spec("oil-refinery"))
+    variants = (family.variants[0], family.variants[4])[:variant_count]
+    problem = PlacementProblem(
+        sizes=((variants[0].box_width, variants[0].box_height),),
+        nets=(),
+        outline_height=12,
+        area_lower_bound=min(
+            variant.box_width * variant.box_height for variant in variants
+        ),
+        instance_ids=(StripInstanceId(family.family_id, 0, 1),),
+        variant_tables=(variants,),
+    )
+    return problem, AnnealState.initial(problem.size, seed=17)
+
+
+def test_variant_move_changes_refinery_pose_box_lane_and_attachments_atomically() -> None:
+    problem, state = _refinery_variant_problem()
+    original = problem.variant(0, 0)
+    selected = problem.variant(0, 1)
+
+    moved = apply_variant_move(problem, state, strip=0, variant=1)
+
+    assert moved.variant_indices == (1,)
+    assert selected.yaw != original.yaw
+    assert (selected.box_width, selected.box_height) != (
+        original.box_width,
+        original.box_height,
+    )
+    assert selected.lane_plan != original.lane_plan
+    assert selected.attachment_plan != original.attachment_plan
+    assert decode_state(problem, moved).used_height != decode_state(
+        problem, state
+    ).used_height
+
+
+def test_variant_selection_rejects_wrong_cardinality_and_invalid_indices() -> None:
+    problem, state = _refinery_variant_problem()
+
+    with pytest.raises(ValueError, match="one variant index per strip"):
+        AnnealState(
+            pair=state.pair,
+            gaps=state.gaps,
+            variant_indices=(0, 1),
+            base_seed=state.base_seed,
+        )
+    with pytest.raises(ValueError, match="variant index"):
+        apply_variant_move(problem, state, strip=0, variant=2)
+    with pytest.raises(ValueError, match="variant index"):
+        decode_state(
+            problem,
+            AnnealState(
+                pair=state.pair,
+                gaps=state.gaps,
+                variant_indices=(2,),
+                base_seed=state.base_seed,
+            ),
+        )
+
+
+def test_change_variant_is_a_no_op_only_when_every_strip_has_one_variant() -> None:
+    problem, state = _refinery_variant_problem(variant_count=1)
+
+    assert apply_move(
+        state,
+        MoveKind.CHANGE_VARIANT,
+        random.Random(7),
+        problem=problem,
+    ) == state
+
+
+def test_change_variant_move_selects_another_valid_variant_and_nothing_else() -> None:
+    problem, state = _refinery_variant_problem()
+
+    moved = apply_move(
+        state,
+        MoveKind.CHANGE_VARIANT,
+        random.Random(7),
+        problem=problem,
+    )
+
+    assert moved.variant_indices == (1,)
+    assert moved.pair == state.pair
+    assert moved.gaps == state.gaps
+    assert moved.base_seed == state.base_seed
+    assert moved.stage_index == state.stage_index
+
+
+def test_selected_variant_dimensions_and_identity_reach_decode_and_elite_keys() -> None:
+    problem, state = _refinery_variant_problem()
+    selected = apply_variant_move(problem, state, strip=0, variant=1)
+
+    decoded = decode_state(problem, selected)
+    result = anneal_stage(
+        problem,
+        selected,
+        AnnealConfig(
+            moves_per_stage=30,
+            initial_temperature=1.0,
+            final_temperature=0.1,
+            elite_count=4,
+        ),
+    )
+
+    assert decoded.variant_indices == (1,)
+    assert decoded.used_height == problem.variant(0, 1).box_height
+    assert all(
+        elite.key.instance_ids == problem.instance_ids
+        and elite.key.variant_ids
+        == problem.selected_variant_ids(elite.state.variant_indices)
+        and elite.key.dimensions == problem.selected_sizes(elite.state.variant_indices)
+        for elite in result.elites
+    )
+
+
+def test_fixed_seed_reproduces_variant_trace() -> None:
+    problem, state = _refinery_variant_problem()
+    config = AnnealConfig(
+        moves_per_stage=60,
+        initial_temperature=1.5,
+        final_temperature=0.05,
+        elite_count=5,
+    )
+
+    first = anneal_stage(problem, state, config)
+    second = anneal_stage(problem, state, config)
+
+    assert tuple(elite.state.variant_indices for elite in first.elites) == tuple(
+        elite.state.variant_indices for elite in second.elites
+    )
+    assert first.final_state.variant_indices == second.final_state.variant_indices
 
 
 def test_every_move_preserves_both_permutations_and_gap_bounds() -> None:

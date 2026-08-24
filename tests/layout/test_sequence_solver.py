@@ -50,7 +50,9 @@ from flab2bp.layout.sequence_pair import (
     SearchEnergy,
     SequencePair,
     anneal_stage,
+    apply_variant_move,
     decode_sequence_pair,
+    decode_state,
     derive_stage_seed,
     repair_neighbourhood,
 )
@@ -67,6 +69,9 @@ from flab2bp.layout.sequence_solver import (
     _production_run,
     _ProductionCandidate,
     _route_detailed_candidate,
+    _selected_direct_targets,
+    _selected_strips,
+    _variant_search_inputs,
 )
 from flab2bp.rates.candidates import build_candidates
 from flab2bp.spec import BuildSpec
@@ -540,6 +545,144 @@ def test_audit_layout_surface_uses_injected_solver_factory() -> None:
     spec = two_stage_spec()
     assert layout.lay_out(spec, time_budget_s=2.5) is exact
     assert calls == [(spec, 2.5, True, 7, config)]
+
+
+def _two_stage_variant_problem() -> tuple[
+    BuildSpec,
+    list[freeform_module.Strip],
+    PlacementProblem,
+]:
+    spec = two_stage_spec()
+    strips = plan_strips(spec, strip_len=6)
+    instance_ids, variant_tables = _variant_search_inputs(
+        spec,
+        strips,
+        strip_len=6,
+    )
+    sizes = tuple(
+        (variants[0].box_width, variants[0].box_height)
+        for variants in variant_tables
+    )
+    return (
+        spec,
+        strips,
+        PlacementProblem(
+            sizes=sizes,
+            nets=tuple(_nets_between(strips)),
+            outline_height=20,
+            area_lower_bound=sum(
+                min(variant.box_width * variant.box_height for variant in variants)
+                for variants in variant_tables
+            ),
+            instance_ids=instance_ids,
+            variant_tables=variant_tables,
+        ),
+    )
+
+
+def test_direct_targets_derive_geometry_from_both_selected_endpoint_variants() -> None:
+    spec, strips, problem = _two_stage_variant_problem()
+    default = (0,) * problem.size
+    baseline = _selected_direct_targets(spec, strips, problem, default)
+    assert len(baseline) == 1
+    target = baseline[0]
+
+    producer_selection = next(
+        selection
+        for variant in range(1, len(problem.variant_tables[target.producer]))
+        if (
+            selection := tuple(
+                variant if strip == target.producer else 0
+                for strip in range(problem.size)
+            )
+        )
+        and _selected_direct_targets(spec, strips, problem, selection)[0].producer_row
+        != target.producer_row
+    )
+    consumer_selection = tuple(
+        4 if strip == target.consumer else 0 for strip in range(problem.size)
+    )
+
+    producer_changed = _selected_direct_targets(
+        spec, strips, problem, producer_selection
+    )[0]
+    consumer_plans = _selected_strips(strips, problem, consumer_selection)
+    consumer_changed = _selected_direct_targets(
+        spec, strips, problem, consumer_selection
+    )[0]
+    assert producer_changed.producer_row != target.producer_row
+    assert producer_changed.consumer_row == target.consumer_row
+    assert (
+        consumer_plans[target.consumer].lane_plan
+        != _selected_strips(strips, problem, default)[target.consumer].lane_plan
+    )
+    assert consumer_changed == freeform_module._direct_alignment_targets(
+        freeform_module._direct_net_candidates(consumer_plans, spec)
+    )[0]
+    assert consumer_changed.producer_row == target.producer_row
+
+
+def test_production_preparation_receives_the_complete_selected_physical_plan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = two_stage_spec()
+    run = _production_run(
+        spec,
+        time_budget_s=2.0,
+        power=False,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+    )
+    height_state = run.solver._heights[0]
+    problem = height_state.problem
+    state = AnnealState.initial(problem.size, seed=7)
+    state = apply_variant_move(problem, state, strip=0, variant=4)
+    state = apply_variant_move(problem, state, strip=1, variant=4)
+    decoded = decode_state(problem, state)
+    captured: list[list[freeform_module.Strip]] = []
+
+    def capture(
+        spec: BuildSpec,
+        selected: list[freeform_module.Strip],
+        pack: _Pack,
+        *,
+        power: bool,
+    ) -> _PreparedRoutingProblem:
+        del spec, pack, power
+        captured.append(selected)
+        raise freeform_module._Unpowerable
+
+    monkeypatch.setattr(sequence_solver_module, "_prepare_routing_problem", capture)
+    candidate = run.solver.adapters.prepare(height_state.height, decoded)
+
+    assert candidate.preparation_error == "unpowerable"
+    assert len(captured) == 1
+    selected = captured[0]
+    assert selected == _selected_strips(
+        plan_strips(spec, strip_len=6),
+        problem,
+        state.variant_indices,
+    )
+    for strip, variant_index, physical in zip(
+        selected,
+        state.variant_indices,
+        range(problem.size),
+        strict=True,
+    ):
+        variant = problem.variant(physical, variant_index)
+        assert (
+            strip.yaw,
+            strip.width,
+            strip.height,
+            strip.lane_plan,
+            strip.attachment_plan,
+        ) == (
+            variant.yaw,
+            variant.box_width,
+            variant.box_height,
+            variant.lane_plan,
+            variant.attachment_plan,
+        )
 
 
 @pytest.mark.parametrize("power", [False, True])

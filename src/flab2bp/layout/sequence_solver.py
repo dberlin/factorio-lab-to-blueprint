@@ -55,6 +55,14 @@ from flab2bp.layout.sequence_pair import (
     derive_stage_seed,
     repair_neighbourhood,
 )
+from flab2bp.layout.strip_variants import (
+    StripInstanceId,
+    StripVariant,
+    default_strip_variant,
+    generate_strip_families,
+    partition_strip_family,
+    variants_for_count,
+)
 from flab2bp.spec import BuildSpec
 
 
@@ -292,6 +300,10 @@ class SequenceSolver[PreparedT]:
         deadline_reached: Callable[[], bool] | None = None,
         initial_feedback: Callable[[PlacementProblem], FeedbackState] | None = None,
         direct_targets: tuple[DirectInsertTarget, ...] = (),
+        direct_targets_for_state: Callable[
+            [PlacementProblem, AnnealState], tuple[DirectInsertTarget, ...]
+        ]
+        | None = None,
     ) -> None:
         if (
             not isinstance(heights, tuple)
@@ -307,6 +319,7 @@ class SequenceSolver[PreparedT]:
         if not isinstance(direct_targets, tuple):
             raise ValueError("direct-insert targets must be an immutable tuple")
         self.direct_targets = direct_targets
+        self.direct_targets_for_state = direct_targets_for_state
         self.budget.configure(heights, self.config.final_reserve_fraction)
         feedback_factory = initial_feedback or _default_feedback
         self._heights = [
@@ -399,15 +412,25 @@ class SequenceSolver[PreparedT]:
             problem,
             self.direct_targets,
         )
-        annealed = anneal_stage(
-            problem,
-            restart.anneal,
-            AnnealConfig(
-                moves_per_stage=self.config.moves_per_stage,
-                elite_count=max(self.config.global_elites, 1),
-            ),
-            context,
+        stage_config = AnnealConfig(
+            moves_per_stage=self.config.moves_per_stage,
+            elite_count=max(self.config.global_elites, 1),
         )
+        if self.direct_targets_for_state is None:
+            annealed = anneal_stage(
+                problem,
+                restart.anneal,
+                stage_config,
+                context,
+            )
+        else:
+            annealed = anneal_stage(
+                problem,
+                restart.anneal,
+                stage_config,
+                context,
+                direct_targets_for_state=self.direct_targets_for_state,
+            )
 
         spent = 0
         global_candidates: list[_GlobalCandidate[PreparedT]] = []
@@ -464,12 +487,14 @@ class SequenceSolver[PreparedT]:
                     selected.state.gaps,
                     neighbourhood,
                     seed=derive_stage_seed(restart.seed, annealed.final_state.stage_index),
+                    variant_indices=selected.state.variant_indices,
                 )
                 next_anneal = AnnealState(
                     pair=repaired.pair,
                     gaps=repaired.gaps,
                     base_seed=restart.seed,
                     stage_index=annealed.final_state.stage_index,
+                    variant_indices=repaired.variant_indices,
                 )
 
         restart.anneal = next_anneal
@@ -515,8 +540,12 @@ def _lns_neighbourhood(
 
 
 def _default_feedback(problem: PlacementProblem) -> FeedbackState:
-    width = sum(width for width, _height in problem.sizes) + 4 * problem.size
-    return FeedbackState.empty((width, problem.outline_height))
+    widths = (
+        tuple(max(variant.box_width for variant in table) for table in problem.variant_tables)
+        if problem.variant_tables
+        else tuple(width for width, _height in problem.sizes)
+    )
+    return FeedbackState.empty((sum(widths) + 4 * problem.size, problem.outline_height))
 
 
 def _new_height_state(
@@ -587,6 +616,93 @@ def _exact_key(placement: Placement) -> tuple[int, int]:
     return placement.area, int(belt_tiles)
 
 
+def _variant_search_inputs(
+    spec: BuildSpec,
+    strips: list[Strip],
+    *,
+    strip_len: int,
+) -> tuple[
+    tuple[StripInstanceId, ...],
+    tuple[tuple[StripVariant, ...], ...],
+]:
+    """Match legacy strip order to exact instance identities and variant tables."""
+    instance_ids: list[StripInstanceId] = []
+    variant_tables: list[tuple[StripVariant, ...]] = []
+    strip_index = 0
+    for family in generate_strip_families(spec):
+        if not family.variants:
+            return (), ()
+        default = default_strip_variant(family)
+        instances = partition_strip_family(
+            family,
+            max_machine_count=max(1, strip_len),
+            variant_id=default.variant_id,
+        )
+        for instance in instances:
+            if strip_index >= len(strips):
+                raise ValueError("physical strip plan ended before its variant instances")
+            strip = strips[strip_index]
+            if (
+                strip.group_key != family.group_key
+                or strip.recipe_id != family.recipe_id
+                or strip.machines != instance.machine_count
+            ):
+                raise ValueError("physical strip plan and variant instance order disagree")
+            realized = variants_for_count(family, instance.machine_count)
+            variants = (instance.variant,) + tuple(
+                variant
+                for variant in realized
+                if variant.variant_id != instance.variant.variant_id
+            )
+            instance_ids.append(instance.instance_id)
+            variant_tables.append(variants)
+            strip_index += 1
+    if strip_index != len(strips):
+        raise ValueError("physical strip plan contains unmatched compatibility strips")
+    return tuple(instance_ids), tuple(variant_tables)
+
+
+def _selected_strips(
+    strips: list[Strip],
+    problem: PlacementProblem,
+    variant_indices: tuple[int, ...],
+) -> list[Strip]:
+    """Project one complete search selection into exact Freeform physical plans."""
+    problem.selected_sizes(variant_indices)
+    if not problem.variant_tables:
+        return list(strips)
+    if len(strips) != problem.size:
+        raise ValueError("physical strip plan size must match the placement problem")
+    selected: list[Strip] = []
+    for index, strip in enumerate(strips):
+        variant = problem.variant(index, variant_indices[index])
+        selected.append(
+            replace(
+                strip,
+                mw=variant.footprint_width,
+                mh=variant.footprint_height,
+                yaw=variant.yaw,
+                pw=variant.pitch_x,
+                ph=variant.pitch_y,
+                lane_plan=variant.lane_plan,
+                attachment_plan=variant.attachment_plan,
+                box_height=variant.box_height,
+            )
+        )
+    return selected
+
+
+def _selected_direct_targets(
+    spec: BuildSpec,
+    strips: list[Strip],
+    problem: PlacementProblem,
+    variant_indices: tuple[int, ...],
+) -> tuple[DirectInsertTarget, ...]:
+    """Derive pair geometry only after both complete endpoint variants are selected."""
+    selected = _selected_strips(strips, problem, variant_indices)
+    return _direct_alignment_targets(_direct_net_candidates(selected, spec))
+
+
 @dataclass(frozen=True, slots=True)
 class _ProductionCandidate:
     height: int
@@ -595,6 +711,7 @@ class _ProductionCandidate:
     pack: _Pack
     prepared: _PreparedRoutingProblem | None
     preparation_error: str | None = None
+    selected_strips: tuple[Strip, ...] = ()
 
 
 @dataclass(slots=True)
@@ -709,11 +826,13 @@ def _production_run(
 
     planning_started = time.monotonic()
     try:
+        planned_strip_len = strip_len
         try:
-            strips = plan_strips(spec, strip_len=strip_len)
+            strips = plan_strips(spec, strip_len=planned_strip_len)
         except (KeyError, ValueError) as exc:
             try:
-                strips = plan_strips(spec, strip_len=max(1, spec.machine_count))
+                planned_strip_len = max(1, spec.machine_count)
+                strips = plan_strips(spec, strip_len=planned_strip_len)
             except (KeyError, ValueError):
                 raise NoValidLayout(
                     f"the spec cannot be split into strips: {exc}",
@@ -735,11 +854,30 @@ def _production_run(
                 budget_s=0.0,
             )
 
+        instance_ids, variant_tables = _variant_search_inputs(
+            spec,
+            strips,
+            strip_len=planned_strip_len,
+        )
         direct_candidates = _direct_net_candidates(strips, spec)
         direct_targets = _direct_alignment_targets(direct_candidates)
-        sizes = tuple(_box(strip) for strip in strips)
+        sizes = (
+            tuple(
+                (variants[0].box_width, variants[0].box_height)
+                for variants in variant_tables
+            )
+            if variant_tables
+            else tuple(_box(strip) for strip in strips)
+        )
         nets = tuple(_nets_between(strips))
-        area_lower_bound = sum(width * height for width, height in sizes)
+        area_lower_bound = (
+            sum(
+                min(variant.box_width * variant.box_height for variant in variants)
+                for variants in variant_tables
+            )
+            if variant_tables
+            else sum(width * height for width, height in sizes)
+        )
         seeds = {height: _greedy_pack(strips, height) for height in _candidate_heights(strips)}
         heights = tuple(sorted(seeds, key=lambda height: (seeds[height].width, height)))
         problems = {
@@ -748,44 +886,91 @@ def _production_run(
                 nets=nets,
                 outline_height=height,
                 area_lower_bound=area_lower_bound,
+                instance_ids=instance_ids,
+                variant_tables=variant_tables,
             )
             for height in heights
         }
     finally:
         telemetry.planning_time_s += time.monotonic() - planning_started
+    selected_cache: dict[tuple[int, ...], tuple[Strip, ...]] = {}
+    direct_cache: dict[tuple[int, ...], tuple[DirectInsertTarget, ...]] = {}
+
+    def selected_strips(
+        problem: PlacementProblem,
+        variant_indices: tuple[int, ...],
+    ) -> tuple[Strip, ...]:
+        selected = selected_cache.get(variant_indices)
+        if selected is None:
+            selected = tuple(_selected_strips(strips, problem, variant_indices))
+            selected_cache[variant_indices] = selected
+        return selected
+
+    def selected_direct_targets(
+        problem: PlacementProblem,
+        variant_indices: tuple[int, ...],
+    ) -> tuple[DirectInsertTarget, ...]:
+        targets = direct_cache.get(variant_indices)
+        if targets is None:
+            selected = selected_strips(problem, variant_indices)
+            targets = _direct_alignment_targets(
+                _direct_net_candidates(list(selected), spec)
+            )
+            direct_cache[variant_indices] = targets
+        return targets
+
+    def direct_targets_for_state(
+        problem: PlacementProblem,
+        state: AnnealState,
+    ) -> tuple[DirectInsertTarget, ...]:
+        return selected_direct_targets(problem, state.variant_indices)
 
     def prepare(height: int, decoded: DecodedPlacement) -> _ProductionCandidate:
         preparation_started = time.monotonic()
         try:
             problem = problems[height]
-            aligned = align_direct_inserts(problem, decoded, direct_targets)
+            selected = selected_strips(problem, decoded.variant_indices)
+            selected_targets = selected_direct_targets(
+                problem,
+                decoded.variant_indices,
+            )
+            aligned = align_direct_inserts(problem, decoded, selected_targets)
             pack = _decoded_pack(height, aligned)
             if deadline_reached():
                 return _ProductionCandidate(
-                    height,
-                    problem,
-                    aligned,
-                    pack,
-                    None,
-                    "deadline",
+                    height=height,
+                    problem=problem,
+                    decoded=aligned,
+                    pack=pack,
+                    prepared=None,
+                    preparation_error="deadline",
+                    selected_strips=selected,
                 )
             try:
                 prepared = _prepare_routing_problem(
                     spec,
-                    strips,
+                    list(selected),
                     pack,
                     power=power,
                 )
             except _Unpowerable:
                 return _ProductionCandidate(
-                    height,
-                    problem,
-                    aligned,
-                    pack,
-                    None,
-                    "unpowerable",
+                    height=height,
+                    problem=problem,
+                    decoded=aligned,
+                    pack=pack,
+                    prepared=None,
+                    preparation_error="unpowerable",
+                    selected_strips=selected,
                 )
-            return _ProductionCandidate(height, problem, aligned, pack, prepared)
+            return _ProductionCandidate(
+                height=height,
+                problem=problem,
+                decoded=aligned,
+                pack=pack,
+                prepared=prepared,
+                selected_strips=selected,
+            )
         finally:
             telemetry.preparation_time_s += time.monotonic() - preparation_started
 
@@ -835,7 +1020,7 @@ def _production_run(
         try:
             result = _route_detailed_candidate(
                 spec,
-                strips,
+                list(candidate.selected_strips) if candidate.selected_strips else strips,
                 candidate.prepared,
                 power=power,
                 deadline=deadline,
@@ -881,6 +1066,7 @@ def _production_run(
         config=config,
         deadline_reached=deadline_reached,
         direct_targets=direct_targets,
+        direct_targets_for_state=direct_targets_for_state,
     )
     return _ProductionRun(
         solver=solver,
