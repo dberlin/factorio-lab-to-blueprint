@@ -36,7 +36,6 @@ from flab2bp.layout.freeform import (
     _build,
     _Canvas,
     _canvas_span,
-    _claim_power_sites,
     _Coater,
     _commit_paths,
     _connect_short_cuts,
@@ -51,12 +50,14 @@ from flab2bp.layout.freeform import (
     _pack,
     _pair_lanes,
     _Port,
+    _power_plan,
     _proliferator_nets,
     _relink,
     _reserve_port_access,
     _shard_sinks,
     _sink_for,
     _source_for,
+    _Unpowerable,
     fallback_placement,
     plan_strips,
     tie_break_cap,
@@ -2087,43 +2088,86 @@ class TestPowerClaimsItsGroundBeforeRouting:
     that pastes and then sits there.
     """
 
-    def test_claimed_sites_are_closed_to_everything_else(self) -> None:
+    def _machine(self, x: int, y: int) -> PlacedBuilding:
+        """A 3x3 powered building -- an assembler, as far as coverage cares."""
+        return PlacedBuilding(
+            item_id=2303, model_index=65, x=x, y=y, width=3, height=3
+        )
+
+    def test_planned_sites_are_closed_to_everything_else(self) -> None:
         canvas = _Canvas(limit=(0, 0, 40, 40))
-        canvas.add(_belt(0, 0))
-        sites = _claim_power_sites(canvas, (0, 0, 40, 40))
-        assert sites, "a 41x41 core must want several lattice points"
+        canvas.add(self._machine(10, 10), solid=True)
+        sites = _power_plan(canvas, (0, 0, 40, 40))
+        assert sites, "a powered building must be given at least one tower"
         for x, y in sites:
-            assert not canvas.free((x, y, 0)), f"{(x, y)} was claimed but reads free"
+            assert not canvas.free((x, y, 0)), f"{(x, y)} was planned but reads free"
             assert 0 <= x <= 40 and 0 <= y <= 40, (
-                f"{(x, y)} was displaced outside the core, onto ground the input "
+                f"{(x, y)} was placed outside the core, onto ground the input "
                 "runs need"
             )
 
-    def test_a_claim_that_blocks_the_router_is_given_up(self) -> None:
-        """A pack that cannot be wired is worth nothing; an uncovered one is not.
+    def test_every_powered_tile_is_covered_by_the_plan(self) -> None:
+        """The guarantee, checked as a guarantee rather than as an outcome.
 
-        So the sweep prefers a covered pack and accepts an uncovered one --
-        which is what lets a spec whose only routable packing needs the lattice
-        cells still produce a blueprint instead of refusing.
+        This is the whole reason the repair pass is gone: the plan either covers
+        every tile or refuses the pack, so there is never a dark tile left for a
+        later pass to go looking for ground for.
         """
-        spec = proliferated_spec()
-        pack_strips = plan_strips(spec, strip_len=6)
-        pack = _pack(
-            pack_strips,
-            height=_height_seed(pack_strips),
-            width_bound=64,
-            time_budget_s=1.0,
-            direct_candidates={},
-            workers=DETERMINISTIC_WORKERS,
-        )
-        assert pack is not None
-        _p, failed, towers = _build(
-            spec, pack_strips, pack, power=True, route=True, claim_power=False
-        )
-        assert towers > 0, "the fallback build must still place towers"
-        assert failed == 0
+        canvas = _Canvas(limit=(0, 0, 60, 60))
+        for x in range(2, 50, 6):
+            for y in range(2, 50, 6):
+                canvas.add(self._machine(x, y), solid=True)
+        sites = _power_plan(canvas, (0, 0, 60, 60))
+        tower = catalog.building(catalog.TESLA_TOWER_ID)
+        reach2 = math.floor((2 * tower.cover_radius) ** 2)
+        centres = [(2 * x + 1, 2 * y + 1) for x, y in sites]
+        for b in canvas.buildings:
+            if b.item_id == catalog.TESLA_TOWER_ID:
+                continue
+            for tx, ty, _z in b.tiles():
+                px, py = 2 * tx + 1, 2 * ty + 1
+                assert any(
+                    (px - cx) ** 2 + (py - cy) ** 2 <= reach2 for cx, cy in centres
+                ), f"tile {(tx, ty)} is outside every tower's radius"
 
-    def test_towers_still_cover_when_the_lattice_claims_its_cells(self) -> None:
+    def test_a_pack_that_cannot_be_powered_is_refused_not_repaired(self) -> None:
+        """Feasible means powerable, so an unpowerable pack is not a pack.
+
+        Ground is solid for a full tower radius around the machine, so no cell
+        can cover it.  The old code placed what it could, left the tile dark and
+        let `power.coverage` catch it after a whole routing pass had been paid
+        for; there is nothing to repair here and it says so instead.
+        """
+        canvas = _Canvas(limit=(0, 0, 40, 40))
+        for x in range(0, 41):
+            for y in range(0, 41):
+                canvas.add(_belt(x, y))
+        canvas.add(self._machine(20, 20), solid=True)
+        with pytest.raises(_Unpowerable):
+            _power_plan(canvas, (0, 0, 40, 40))
+
+    def test_covering_by_need_beats_covering_by_grid(self) -> None:
+        """Fewer towers is the density win, and it is the point.
+
+        A tower reaches 10.5 in every direction, so it covers a 346-tile disc;
+        a point every nine tiles ignores that and lays down one per 81.  The
+        grid this replaced would put 5x5 = 25 points over a 41x41 core, and the
+        area argument says 41*41 / 346 = 5 is the most that can ever be needed.
+
+        Asserted against the GRID's count rather than an absolute, so the test
+        keeps meaning what it says if the radius or the core ever change.
+        """
+        canvas = _Canvas(limit=(0, 0, 40, 40))
+        for x in range(15, 24, 3):
+            for y in range(15, 24, 3):
+                canvas.add(self._machine(x, y), solid=True)
+        sites = _power_plan(canvas, (0, 0, 40, 40))
+        lattice = len(range(4, 41, 9)) ** 2
+        assert 0 < len(sites) < lattice, (
+            f"covering by need took {len(sites)}, the 9-spaced grid took {lattice}"
+        )
+
+    def test_towers_still_cover_when_the_plan_claims_its_cells(self) -> None:
         p = FreeformLayout(power=True, workers=DETERMINISTIC_WORKERS).lay_out(
             proliferated_spec(), time_budget_s=1.0
         )

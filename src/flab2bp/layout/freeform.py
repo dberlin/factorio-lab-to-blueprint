@@ -40,10 +40,22 @@ lanes that pads were meant to reach are already part of the strip.
 The spec's §5.3 made the tower lattice a fixed blockage set inside phase 1.  That
 encoding fights the objective: the lattice extent depends on the final width,
 which is the variable being minimised, so fixing it either inflates the bounding
-box or under-covers the result.  Towers are therefore placed after packing, into
-the margin cells the packing already reserved, and then *verified* -- coverage
-and connectivity are both repaired greedily until they hold.  The guarantee is
-the same; only the mechanism is post-hoc.
+box or under-covers the result.
+
+Towers are therefore placed between packing and routing, by :func:`_power_plan`,
+which covers by NEED rather than by grid: every powered tile must have a free
+cell within the tower radius, that condition is checked exactly, and a pack that
+fails it is refused as infeasible before a belt is laid.  A pack that passes gets
+a placement built greedily against the same condition, connected as it grows, and
+held in ``keep_out`` so the router paths around it.
+
+This replaced a lattice with a coverage repair behind it, and the repair is the
+part that mattered: it ran AFTER routing, so it searched ground the packing and
+the router had already spent, and when it found none it returned quietly and the
+candidate died on `power.coverage` having paid for a full routing pass first.
+The guarantee is now genuinely structural rather than post-hoc -- and covering by
+need measured 2-4x fewer towers than the grid it replaced, which is density
+rather than tidiness.
 """
 
 from __future__ import annotations
@@ -51,12 +63,12 @@ from __future__ import annotations
 import heapq
 import math
 import time
-from collections import defaultdict, deque
+from collections import defaultdict
 from collections.abc import Collection, Mapping, Sequence, Set
 from dataclasses import dataclass, field, replace
 from fractions import Fraction
-from functools import lru_cache
 
+import numpy as np
 from ortools.sat.python import cp_model
 
 from flab2bp.dsp import catalog, params
@@ -401,22 +413,28 @@ _ENTRY_RING = _ROUTE_RING + 1
 # number, and the fix belongs in the PACKER -- routability as a constraint the
 # model respects, not a post-hoc test with a rescue behind it.
 
-#: Tower lattice spacing.  A square lattice of spacing ``d`` leaves a worst-case
-#: distance of ``d/sqrt(2)`` to the nearest lattice point, so ``d`` must satisfy
-#: ``d <= R*sqrt(2)``.
-#:
-#: Nine, not the twelve the bare covering argument allows.  A lattice point
-#: routinely lands on a machine, and ``nearest_free`` then places the tower up
-#: to FOUR tiles away -- at which point the guarantee is 8.49 + 4 = 12.49
-#: against a 10.5 radius, and no longer a guarantee at all.  That is what the
-#: coverage repair pass is for, and on a dense block it has nothing to work
-#: with: measured on ``information-matrix``, a matrix lab with 349 tiles inside
-#: tower range had FOUR of them free.  At nine the worst case is 6.36 + 4 =
-#: 10.36, so the lattice still covers even when every point has to be displaced
-#: as far as displacement goes, and 9 is still comfortably inside the 22.5 link
-#: distance.  Towers are placed after routing, so the extra ones cost buildings
-#: and nothing else.
-TOWER_SPACING = 9
+# AND THERE IS NO TOWER LATTICE HERE EITHER, FOR THE SAME REASON.
+#
+# Power used to be a square lattice of spacing 9, each point dragged to the
+# nearest free cell within four, with a coverage repair after routing for every
+# tile the result left dark. The spacing was justified exactly: 9/sqrt(2) = 6.36
+# to the worst-placed tile, plus 4 of displacement, is 10.36 against a 10.5
+# radius. The repair was not justified at all, and it is the half that decided
+# whether a build shipped.
+#
+# A dark tile is repairable only if some cell of its 346-cell radius is still
+# free, and by the time the repair runs the packing and the router have both had
+# the ground. When they have taken all of it the repair searches, finds nothing,
+# and returns quietly -- so the placement fails `power.coverage` and the whole
+# candidate is discarded, having paid for a pack AND a full routing pass first.
+# Measured on `information-matrix`: a matrix lab with 349 tiles inside tower
+# range had FOUR of them free.
+#
+# A solution that cannot be powered is not feasible. So `_power_plan` decides
+# coverage BEFORE anything routes, refuses the pack outright when no placement
+# exists, and covers by need rather than by grid -- which is also 2-4x fewer
+# towers, because a lattice point every nine tiles ignores that a tower reaches
+# 10.5 in every direction.
 
 
 def _expired(deadline: float | None) -> bool:
@@ -1216,7 +1234,7 @@ def _greedy_pack(strips: list[Strip], height: int) -> _Pack:
 
     A SEED, and only a seed.  It bounds `_pack`'s width from above and hints its
     variables; it is never returned as a layout.  Returning it was tried twice
-    and deleted twice -- see the note by :data:`TOWER_SPACING`.
+    and deleted twice -- see the note above ``_ENTRY_RING``.
     """
     at: dict[int, tuple[int, int]] = {}
     shelf_x, shelf_y, shelf_h = 0, 0, 0
@@ -4042,110 +4060,276 @@ def _route_external_inputs(
     return missed
 
 
-def _nearest_free(canvas: _Canvas, cx: int, cy: int, limit: int) -> tuple[int, int] | None:
-    """The closest cell to ``(cx, cy)`` nothing stands on, within ``limit``."""
-    for r in range(limit + 1):
-        for dx in range(-r, r + 1):
-            for dy in (-r, r) if r else (0,):
-                for a, b in ((cx + dx, cy + dy), (cx + dy, cy + dx)):
-                    if canvas.free((a, b, 0)) and (a, b) not in canvas.solid:
-                        return (a, b)
-    return None
+class _Unpowerable(Exception):
+    """This pack cannot be powered, so it is not a feasible pack.
 
-
-def _claim_power_sites(canvas: _Canvas, core: tuple[int, int, int, int]) -> list[tuple[int, int]]:
-    """Hold a cell for every lattice point, BEFORE anything routes.
-
-    Power is the last pass, and on a dense block "last" means "gets nothing".
-    Every belt the router lays is a cell the lattice cannot use, and the coverage
-    repair then searches a full tower radius and finds the ground solid:
-    measured on ``casimir-crystal``, a matrix lab with 349 tiles inside range had
-    four of them free, and thirteen buildings shipped unpowered -- a blueprint
-    that pastes and then sits there.
-
-    So the lattice claims its ground while the ground is still empty, and the
-    router paths around one cell in eighty-one.  Only machines, sorters and
-    coaters draw power, and all of those are inside ``core``, so the lattice is
-    laid over the core rather than over the finished bounding box -- the entry
-    ring holds nothing but belts, which are unpowered.
-
-    THE LATTICE IS CLAMPED TO THE CORE, and that is the whole of the east and
-    south edge story.  The walk has to pass ``max`` to cover the last strip of
-    tiles -- stopping at the last point at or before it would leave a band up to
-    ``TOWER_SPACING`` deep closer to the edge than to any point -- so it steps
-    to ``max + half``.  It used to place the point THERE and then discard it
-    when ``_nearest_free`` could not drag it back inside the core, which is a
-    point that never had a chance: it is generated outside, searched from
-    outside, and rejected for being outside.  Measured across the four hardest
-    specs, that phantom row and column was about FOUR FIFTHS of every lattice
-    point the claim failed to place -- and each one is a hole the coverage
-    repair then had to fill after routing, from whatever ground was left.
-
-    Clamping asks for the same coverage at a point that can actually be claimed.
-    It only ever moves a point INWARD, so the spacing to its neighbour shrinks
-    and the covering argument in ``TOWER_SPACING`` holds a fortiori; the last
-    row can land close to the one before it, which costs a tower and buys an
-    edge that is covered by construction instead of by repair.
+    Raised by :func:`_power_plan` before anything routes, and by
+    :func:`_place_power` if a held site was taken anyway.  The sweep discards
+    the height and moves on, exactly as it does for a pack that cannot be
+    wired: coverage is not a nice-to-have that a build can ship without, so a
+    placement that cannot have it is not a placement.
     """
-    min_x, min_y, max_x, max_y = core
-    half = TOWER_SPACING // 2
+
+
+def _power_plan(canvas: _Canvas, core: tuple[int, int, int, int]) -> list[tuple[int, int]]:
+    """Where every tower goes, decided BEFORE anything routes.
+
+    Raises :class:`_Unpowerable` when this pack cannot be powered at all, which
+    is a property of the PACK and makes it infeasible.  Otherwise it returns a
+    placement that covers every powered tile and is connected, and the cells are
+    held in ``canvas.keep_out`` so the router paths around them.
+
+    WHY THIS IS A PLAN AND NOT A LATTICE WITH A REPAIR BEHIND IT
+    ------------------------------------------------------------
+    This used to lay a fixed square lattice of spacing ``TOWER_SPACING``, drag
+    each point to the nearest free cell, and then, after routing, hunt for
+    somewhere to stand for every tile the result had left dark.  That last pass
+    is the problem, and it cannot be fixed where it stands: a dark tile is
+    repairable only if some cell of its radius is still free, and by then the
+    packing and the routing have both had the ground.  When they have taken all
+    of it the repair searches its 346 cells, finds none, and silently gives up
+    -- the placement then fails ``power.coverage`` and the whole candidate is
+    thrown away, having paid for a pack AND a full routing pass first.
+
+    A solution that cannot be powered is not feasible, so the question is asked
+    HERE, where the answer is still cheap and still true:
+
+    * **Feasibility is a test, not a hope.**  A cover exists if and only if
+      every powered tile has at least one free cell within the radius.  That is
+      checked directly, first, and a pack that fails it is refused before a
+      single belt is routed.
+    * **Greedy attains it whenever it holds.**  Every round places a tower on
+      the free cell that covers the most still-dark tiles, so every round makes
+      progress, and the loop ends only when nothing is dark.  There is no case
+      where it stops early with work left over, which is precisely the case the
+      repair pass existed to mop up.
+    * **Connectivity is built in.**  After the first tower every candidate must
+      lie within ``connect_distance`` of one already placed, so the network is
+      connected at every step rather than stitched together afterwards.  When
+      nothing in range covers anything new, a RELAY is placed -- the in-range
+      cell closest to what is still dark.  That is the network walking to the
+      far side of the block, not a repair of a network that failed.
+
+    It is also much smaller than the lattice it replaces, which is a density
+    win rather than a tidiness one.  A lattice point every nine tiles ignores
+    that a tower reaches 10.5 in every direction; covering by need instead of by
+    grid measured 75 towers against 350 on ``universe-matrix``
+    /free-proliferation, 106 against 407 on its ``no-proliferator``, and 16-27
+    against 32-72 across five ``casimir-crystal`` packs.  Every tower deleted is
+    a building the player does not paste AND a cell the router gets back.
+
+    The tie-break is deliberate: among cells that cover equally many dark tiles,
+    the one with the FEWEST free neighbours wins.  Coverage alone likes open
+    ground, and open ground is exactly the corridor the router wants; a fixed
+    lattice spread that cost blindly, and this spreads it on purpose.
+    """
+    tower = catalog.building(catalog.TESLA_TOWER_ID)
+    reach2 = math.floor((2 * tower.cover_radius) ** 2)
+    link2 = math.floor((2 * tower.connect_distance) ** 2)
+    core_x0, core_y0, core_x1, core_y1 = core
+    # A TOWER MAY STAND OUTSIDE THE CORE. WHAT IT COVERS MAY NOT.
+    #
+    # Standing ground is the whole canvas, the entry ring included, because on a
+    # small dense build the core is packed SOLID -- every cell a machine or a
+    # lane -- and a tower restricted to it would have nowhere at all to go. The
+    # old lattice was restricted to the core and its repair pass was not
+    # (`try_place` never checked), so towers in the ring are what that build was
+    # relying on all along, without anybody saying so.
+    #
+    # It is a second choice, not a free one: the ring is where the external
+    # input runs come in, and a tower in one breaks the straight run out to it.
+    # So the core is searched first and the ring is reached into only for tiles
+    # the core cannot cover -- see `in_core` at the placement loop.
+    min_x, min_y, max_x, max_y = canvas.limit or core
+    min_x, min_y = min(min_x, core_x0), min(min_y, core_y0)
+    max_x, max_y = max(max_x, core_x1), max(max_y, core_y1)
+    width, height = max_x - min_x + 1, max_y - min_y + 1
+    if core_x1 < core_x0 or core_y1 < core_y0:
+        return []
+
+    # Padded so a disc or link stamp near an edge needs no clipping. The stamps
+    # reach `link` and are read `reach` further out, so the margin covers both.
+    reach = int(tower.cover_radius) + 1
+    link = int(tower.connect_distance) + 1
+    pad = link + reach + 1
+    shape = (width + 2 * pad, height + 2 * pad)
+
+    free = np.zeros(shape, dtype=bool)
+    for x in range(min_x, max_x + 1):
+        for y in range(min_y, max_y + 1):
+            if not canvas.free((x, y, 0)) or (x, y) in canvas.solid:
+                continue
+            if any((x, y, lvl) in canvas.blocked for lvl in range(LEVELS)):
+                continue
+            free[x - min_x + pad, y - min_y + pad] = True
+
+    in_core = np.zeros(shape, dtype=bool)
+    in_core[
+        core_x0 - min_x + pad : core_x1 - min_x + pad + 1,
+        core_y0 - min_y + pad : core_y1 - min_y + pad + 1,
+    ] = True
+
+    # WHAT HAS TO BE COVERED IS THE CORE, NOT THE BUILDINGS STANDING IN IT.
+    #
+    # This runs BEFORE routing, and routing is what places the sorters and the
+    # spray coaters -- both of which draw power. Covering the buildings that
+    # exist right now leaves every one of those dark, and the placement then
+    # fails `power.coverage` at certify having looked perfectly correct here.
+    # Measured, and it is not a corner case: covering only the machines refused
+    # `universe-matrix` at free-proliferation and max-proliferation on every
+    # height, in three audits out of four.
+    #
+    # The core is the region powered buildings are allowed to occupy -- the
+    # entry ring outside it holds belts, which are unpowered -- so covering all
+    # of it is the condition that does not depend on what has been placed yet.
+    # It is still need-based rather than a grid: a tower covers a 346-tile disc
+    # and the core is covered by discs, not by a point every nine tiles.
+    dark = in_core.copy()
+    for b in canvas.buildings:
+        if catalog.is_belt(b.item_id) or b.item_id == catalog.TESLA_TOWER_ID:
+            continue
+        for tx, ty, _ in b.tiles():
+            gx, gy = tx - min_x + pad, ty - min_y + pad
+            # A powered building the core does not contain still has to be
+            # covered -- refusing here would call a build unpowerable for
+            # standing somewhere the core happens not to reach.
+            if 0 <= gx < shape[0] and 0 <= gy < shape[1]:
+                dark[gx, gy] = True
+
+    #: Offsets a tower covers, and the offsets that can link to one. Both are
+    #: DOUBLED-integer comparisons -- see :func:`_place_power` for why that is
+    #: exact rather than a tolerance.
+    disc = [
+        (dx, dy)
+        for dx in range(-reach, reach + 1)
+        for dy in range(-reach, reach + 1)
+        if (2 * dx) ** 2 + (2 * dy) ** 2 <= reach2
+    ]
+    disc_stamp = np.zeros((2 * reach + 1, 2 * reach + 1), dtype=bool)
+    for dx, dy in disc:
+        disc_stamp[dx + reach, dy + reach] = True
+    link_stamp = np.zeros((2 * link + 1, 2 * link + 1), dtype=bool)
+    for dx in range(-link, link + 1):
+        for dy in range(-link, link + 1):
+            if (2 * dx) ** 2 + (2 * dy) ** 2 <= link2:
+                link_stamp[dx + link, dy + link] = True
+
+    def spread(mask: np.ndarray) -> np.ndarray:
+        """Cells within tower reach of anything in ``mask``."""
+        out = np.zeros(shape, dtype=bool)
+        for dx, dy in disc:
+            out[
+                max(0, dx) : shape[0] + min(0, dx), max(0, dy) : shape[1] + min(0, dy)
+            ] |= mask[
+                max(0, -dx) : shape[0] + min(0, -dx), max(0, -dy) : shape[1] + min(0, -dy)
+            ]
+        return out
+
+    # FEASIBILITY, asked first and answered exactly: a powered tile with no free
+    # cell in reach can never be covered, by this or any other placement.
+    orphans = int(np.count_nonzero(dark & ~spread(free)))
+    if orphans:
+        raise _Unpowerable(f"{orphans} powered tiles have no free cell within tower reach")
+
+    # How many free neighbours each cell has, for the tie-break. Taken once, on
+    # the ground as packed: a tie-break does not need to track its own effects.
+    openness = np.zeros(shape, dtype=np.int32)
+    for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+        openness[
+            max(0, dx) : shape[0] + min(0, dx), max(0, dy) : shape[1] + min(0, dy)
+        ] += free[
+            max(0, -dx) : shape[0] + min(0, -dx), max(0, -dy) : shape[1] + min(0, -dy)
+        ]
+
+    remaining = dark.copy()
+    # `score` is maintained incrementally. Rebuilding it every round is the same
+    # answer and was measured at 0.9s on `universe-matrix`, which is real money
+    # against a 15s deadline; only the cells within two radii of a new tower can
+    # change, so only those are touched.
+    score = np.zeros(shape, dtype=np.int32)
+    for dx, dy in disc:
+        score[
+            max(0, dx) : shape[0] + min(0, dx), max(0, dy) : shape[1] + min(0, dy)
+        ] += remaining[
+            max(0, -dx) : shape[0] + min(0, -dx), max(0, -dy) : shape[1] + min(0, -dy)
+        ]
+
+    linked = np.zeros(shape, dtype=bool)
     sites: list[tuple[int, int]] = []
-    seen: set[tuple[int, int]] = set()
-    y = min_y + half
-    while y <= max_y + half:
-        x = min_x + half
-        while x <= max_x + half:
-            # Clamped, not clipped. See the docstring: a point past the face is
-            # asking for the edge to be covered, and the edge is inside.
-            spot = _nearest_free(canvas, min(x, max_x), min(y, max_y), 4)
-            # Strictly inside the core. A lattice point near the east or south
-            # face can be displaced onto the entry ring, and the ring belongs to
-            # the input runs: a tower standing in one would break the straight
-            # run out to it for no reason, when the machine it was covering has
-            # the whole block to be covered from.
-            if spot is not None and not (
-                min_x <= spot[0] <= max_x and min_y <= spot[1] <= max_y
-            ):
-                spot = None
-            if spot is not None and spot not in seen:
-                seen.add(spot)
-                sites.append(spot)
-                canvas.keep_out.add(spot)
-            x += TOWER_SPACING
-        y += TOWER_SPACING
+    # A cap, not a schedule: every round consumes one free cell, so a placement
+    # that has not finished by then is not converging and says so.
+    for _ in range(int(np.count_nonzero(free)) + 1):
+        if not remaining.any():
+            break
+        # WHERE a tower stands costs the router, and coverage alone picks the
+        # worst cells available: a tower is held in `keep_out` until routing
+        # finishes, and the cell covering the most dark tiles is, almost by
+        # construction, the one in open ground -- which is the corridor a belt
+        # wanted. So enclosure breaks ties, cheaply.
+        #
+        # PREFERRING enclosure outright was built and MEASURED and is worse. As
+        # tiers on `openness <= 1, 2, 4`, taking the best-covering cell in the
+        # tightest non-empty tier, the corpus went 67/67/68/67 to 66/63/64: an
+        # enclosed cell covers fewer tiles, so it takes more towers, so it holds
+        # more cells, and the router ends up worse off than it started. The
+        # slack is real but it is much smaller than the coverage term, and
+        # spending the coverage term to get it is a bad trade.
+        key = score * 5 + (4 - openness)
+        reachable_now = free if not sites else (free & linked)
+        # The core first, and the ring only for what the core cannot reach.
+        # Widening is per ROUND rather than once and for all, so a build that
+        # needs one ring cell takes one, not a placement's worth.
+        gx = gy = -1
+        for allowed in (reachable_now & in_core, reachable_now):
+            flat = int(np.where(allowed, key, -1).argmax())
+            cx, cy = divmod(flat, shape[1])
+            if allowed[cx, cy] and score[cx, cy] > 0:
+                gx, gy = cx, cy
+                break
+        if gx < 0:
+            # Nothing in range covers anything new, so walk: the in-range free
+            # cell closest to a tile still dark.
+            cand = np.argwhere(reachable_now)
+            if not len(cand):
+                raise _Unpowerable("the tower network cannot reach the rest of the block")
+            target = np.argwhere(remaining)[0]
+            gx, gy = cand[np.argmin(((cand - target) ** 2).sum(axis=1))].tolist()
+        sites.append((gx - pad + min_x, gy - pad + min_y))
+        free[gx, gy] = False
+        linked[
+            gx - link : gx + link + 1, gy - link : gy + link + 1
+        ] |= link_stamp
+        win = (slice(gx - reach, gx + reach + 1), slice(gy - reach, gy + reach + 1))
+        newly = remaining[win] & disc_stamp
+        if newly.any():
+            remaining[win] &= ~disc_stamp
+            covered = np.zeros(shape, dtype=bool)
+            covered[win] = newly
+            lo_x, hi_x = gx - 2 * reach, gx + 2 * reach + 1
+            lo_y, hi_y = gy - 2 * reach, gy + 2 * reach + 1
+            for dx, dy in disc:
+                score[lo_x:hi_x, lo_y:hi_y] -= covered[
+                    lo_x + dx : hi_x + dx, lo_y + dy : hi_y + dy
+                ]
+    else:
+        raise _Unpowerable("tower placement did not converge")
+
+    for site in sites:
+        canvas.keep_out.add(site)
     return sites
 
 
-@lru_cache(maxsize=8)
-def _RING_OFFSETS(limit: int) -> tuple[tuple[int, int], ...]:  # noqa: N802
-    """Offsets within ``limit`` tiles, nearest first, built once per radius.
-
-    :func:`_place_power`'s repair rebuilt and re-sorted this square for every
-    dark tile it found.  The radius is a constant of the tower, so the square is
-    the same one every time.
-    """
-    return tuple(
-        sorted(
-            (
-                (dx, dy)
-                for dx in range(-limit, limit + 1)
-                for dy in range(-limit, limit + 1)
-            ),
-            key=lambda d: (abs(d[0]) + abs(d[1]), d),
-        )
-    )
-
-
 def _place_power(canvas: _Canvas, sites: Sequence[tuple[int, int]]) -> int:
-    """Towers on the claimed lattice, then repaired until coverage really holds.
+    """Stand a tower on every cell :func:`_power_plan` chose.
 
-    The lattice spacing already guarantees coverage and connectivity in open
-    ground; the repair passes exist because a claim can still fail -- a lattice
-    point may have had no free cell within reach even before routing -- and a
-    tower that could not be placed is exactly the kind of gap that would
-    otherwise reach the game as a dead corner of the factory.
+    There is no repair here any more, and that is the point rather than a
+    simplification.  Coverage and connectivity were decided before routing, on
+    ground that was still free, and the cells have been held in
+    ``canvas.keep_out`` ever since; a pass that went looking for somewhere to
+    stand AFTER the router had the ground was working with whatever was left,
+    which on a dense block is nothing.
 
-    COORDINATES ARE DOUBLED INTEGERS, AND SO IS EVERY DISTANCE TEST.
+    COORDINATES ARE DOUBLED INTEGERS WHEREVER A DISTANCE IS TESTED.
 
     A tower's centre falls on a half tile, which is why this used ``Fraction``.
     It is the same predicate written twice the size: multiply both sides of
@@ -4154,38 +4338,17 @@ def _place_power(canvas: _Canvas, sites: Sequence[tuple[int, int]]) -> int:
     left side cannot land between ``floor((2r)**2)`` and ``(2r)**2``.  This is
     not a tolerance and there is no float anywhere near it.
 
-    It is worth the rewrite because this function ran INSIDE the layout
-    deadline and was the largest single thing in it.  Profiled on
-    `universe-matrix/no-proliferator` power=1 at h=185: `_build` 49.0s, of which
-    `_place_power` 28.6s against `_route_all`'s 19.2s -- 4.73 MILLION
-    ``Fraction.__pow__`` calls, because ``covered`` was a linear scan of every
-    tower, in exact rationals, once per tile of every powered building.  The
-    scan is now bucketed on a grid of the cover radius, so a tile looks at the
-    nine buckets that could possibly hold a tower covering it instead of at all
-    of them.
+    A site that is no longer free is a ``keep_out`` that did not hold, which is
+    a bug in the reservation rather than a tile to be covered from somewhere
+    else, so it takes the pack down instead of being quietly skipped.
     """
     if not canvas.buildings:
         return 0
     tower = catalog.building(catalog.TESLA_TOWER_ID)
-    radius = tower.cover_radius
-    link = tower.connect_distance
-    #: ``(2r)**2`` and ``(2d)**2``, floored -- see the docstring.
-    reach2 = math.floor((2 * radius) ** 2)
-    #: Doubled centres, integers: ``(2x + width, 2y + height)``.
-    centres: list[tuple[int, int]] = []
-    #: Doubled-centre buckets, side ``span``, so a covering tower is always in
-    #: one of the nine buckets around the tile being tested.
-    span = max(1, 2 * (int(radius) + 1))
-    buckets: dict[tuple[int, int], list[tuple[int, int]]] = defaultdict(list)
     placed = 0
-
-    def try_place(cx: int, cy: int) -> bool:
-        nonlocal placed
+    for cx, cy in sites:
         if not canvas.free((cx, cy, 0)) or (cx, cy) in canvas.solid:
-            return False
-        for lvl in range(LEVELS):
-            if (cx, cy, lvl) in canvas.blocked:
-                return False
+            raise _Unpowerable(f"planned tower site {(cx, cy)} was taken during routing")
         canvas.add(
             PlacedBuilding(
                 item_id=catalog.TESLA_TOWER_ID,
@@ -4197,110 +4360,8 @@ def _place_power(canvas: _Canvas, sites: Sequence[tuple[int, int]]) -> int:
             ),
             solid=True,
         )
-        centre = (2 * cx + tower.width, 2 * cy + tower.height)
-        centres.append(centre)
-        buckets[centre[0] // span, centre[1] // span].append(centre)
         placed += 1
-        return True
-
-    for site in sites:
-        try_place(*site)
-
-    def covered(px: int, py: int) -> bool:
-        bx, by = px // span, py // span
-        for ox in (-1, 0, 1):
-            for oy in (-1, 0, 1):
-                for cx, cy in buckets.get((bx + ox, by + oy), ()):
-                    if (px - cx) ** 2 + (py - cy) ** 2 <= reach2:
-                        return True
-        return False
-
-    def place_covering(px: int, py: int, tx: int, ty: int) -> bool:
-        """Place a tower that GENUINELY covers ``(px, py)``, nearest first.
-
-        The candidate must satisfy the coverage test before it is placed, not
-        merely be free and roughly nearby.  The previous repair searched up to
-        ``radius`` tiles away in one axis and then up to 2 more in the other, so
-        it could place a tower 11 tiles from a 10.5-radius target and stop --
-        having "repaired" a tile that was still dark.  That surfaced as an
-        intermittent validator failure (about 1 run in 18) once multi-worker
-        CP-SAT started producing varied packs.
-        """
-        limit = int(radius)
-        for dx, dy in _RING_OFFSETS(limit):
-            a, b = tx + dx, ty + dy
-            cx = 2 * a + tower.width
-            cy = 2 * b + tower.height
-            if (px - cx) ** 2 + (py - cy) ** 2 > reach2:
-                continue
-            if try_place(a, b):
-                return True
-        return False
-
-    # Coverage repair.  Conservative on purpose: every tile of a powered
-    # building, not merely its centre, because being wrong here means a machine
-    # that pastes fine and never runs.
-    for b in list(canvas.buildings):
-        if catalog.is_belt(b.item_id) or b.item_id == catalog.TESLA_TOWER_ID:
-            continue
-        for tx, ty, _ in b.tiles():
-            px, py = 2 * tx + 1, 2 * ty + 1
-            if covered(px, py):
-                continue
-            place_covering(px, py, tx, ty)
-
-    # Connectivity repair: a stranded tower powers its neighbourhood but leaves
-    # the network in two pieces, which fails visibly in game rather than
-    # silently, but fails all the same.
-    for _ in range(4):
-        groups = _link_groups(centres, math.floor((2 * link) ** 2))
-        if len(groups) <= 1:
-            break
-        main = groups[0]
-        other = groups[1]
-        ax, ay = centres[main[0]]
-        bx, by = centres[other[0]]
-        # Doubled coordinates halve back to a tile by one more division by two.
-        # Truncated, not floored, because that is what this line always did and
-        # the block can start west of the origin once the router's ring grows.
-        # Four exact rationals per build is not a hot path.
-        mx, my = math.trunc(Fraction(ax + bx, 4)), math.trunc(Fraction(ay + by, 4))
-        spot = _nearest_free(canvas, mx, my, 6)
-        if not spot or not try_place(*spot):
-            break
     return placed
-
-
-def _link_groups(centres: list[tuple[int, int]], link2: int) -> list[list[int]]:
-    """Connected components of the tower network, largest first.
-
-    ``centres`` are DOUBLED integer coordinates and ``link2`` is ``floor((2d)**2)``
-    -- see :func:`_place_power` for why that comparison is exact rather than a
-    tolerance.  ``OnNodeAdded`` links on a distance, and on the LARGER of the
-    pair's reaches; every tower here is a Tesla Tower, so one constant serves.
-    """
-    n = len(centres)
-    seen: set[int] = set()
-    groups: list[list[int]] = []
-    for start in range(n):
-        if start in seen:
-            continue
-        comp = [start]
-        seen.add(start)
-        q = deque([start])
-        while q:
-            ax, ay = centres[q.popleft()]
-            for k in range(n):
-                if k in seen:
-                    continue
-                bx, by = centres[k]
-                if (ax - bx) ** 2 + (ay - by) ** 2 <= link2:
-                    seen.add(k)
-                    comp.append(k)
-                    q.append(k)
-        groups.append(comp)
-    groups.sort(key=len, reverse=True)
-    return groups
 
 
 # --- assembly --------------------------------------------------------------
@@ -4585,7 +4646,6 @@ def _build(
     *,
     power: bool,
     route: bool,
-    claim_power: bool = True,
     deadline: float | None = None,
     budget: dict[str, int] | None = None,
 ) -> tuple[Placement, int, int]:
@@ -4817,25 +4877,29 @@ def _build(
     if route:
         hold_ports()
 
-    # The tower lattice claims its ground AFTER the ports have claimed theirs,
-    # and before anything routes.
+    # Power is decided AFTER the ports have claimed their ground, and before
+    # anything routes.
     #
-    # Both halves of that matter and they used to be one. The lattice claimed
-    # first, on the argument that power is otherwise handed whatever a dense
-    # block has left, which is nothing -- that argument is right and the claim
-    # stays ahead of the router. But it also ran ahead of the SECOND
-    # `hold_ports`, which is the one that sees the coater drops and the
-    # proliferator entry, and `_reserve_port_access` clears and re-stakes every
-    # reservation when it runs. So a lattice point could sit on a port's one
-    # open side and the re-stake would find it gone.
+    # Both halves of that matter and they used to be one. Power claimed first,
+    # on the argument that it is otherwise handed whatever a dense block has
+    # left, which is nothing -- that argument is right and the claim stays ahead
+    # of the router. But it also ran ahead of the SECOND `hold_ports`, which is
+    # the one that sees the coater drops and the proliferator entry, and
+    # `_reserve_port_access` clears and re-stakes every reservation when it
+    # runs. So a tower cell could sit on a port's one open side and the re-stake
+    # would find it gone.
     #
     # Measured on `casimir-crystal/max-proliferation`: twelve ports boxed in,
-    # every one of them by a machine, two lane belts and a lattice keep-out
-    # cell. The two claims are not symmetric -- a displaced lattice point has a
-    # whole tower radius of ground to be displaced INTO, and `_place_power`
-    # repairs coverage besides, while a port with no free neighbour has no
-    # second option at all and takes its net down with it.
-    power_sites = _claim_power_sites(canvas, core) if power and claim_power else []
+    # every one of them by a machine, two lane belts and a tower keep-out cell.
+    # The two claims are not symmetric -- a tower has a whole radius of ground
+    # to stand in and `_power_plan` picks from all of it, while a port with no
+    # free neighbour has no second option at all and takes its net down with it.
+    #
+    # `_power_plan` RAISES when the pack cannot be powered, which is the whole
+    # of the change: an unpowerable pack is infeasible, so it is refused here --
+    # before a single belt is routed -- rather than emerging as a coverage
+    # failure once the pack and the routing have both spent the ground.
+    power_sites = _power_plan(canvas, core) if power else []
 
     # Bring the outside inputs in FIRST. They have no alternative: an internal
     # net can be routed around an obstacle, but an external lane can only be
@@ -5641,33 +5705,40 @@ class FreeformLayout:
             # being misallocated between heights -- it is being spent on a pack
             # CP-SAT happened to return. The lever is the packer's arrangement,
             # not the stopwatch.
-            placement, failed, _towers = _build(
-                spec,
-                strips,
-                pack,
-                power=self.power,
-                route=True,
-                deadline=deadline,
-                budget=budget,
-            )
-            # There is no `claim_power=False` retry here any more.
+            # A pack that cannot be POWERED is discarded exactly like a pack
+            # that cannot be WIRED, and for the same reason: it is not a
+            # feasible packing, so there is nothing here to rescue.
             #
-            # The retry gave the WHOLE lattice claim up as soon as a pack left
-            # one to three nets unrouted, on the reasoning that a build which
-            # cannot be wired is worth nothing while coverage still has its
-            # repair pass. The second half of that does not hold: the repair
-            # pass needs free ground and a pack tight enough to strand a net has
-            # none, so what came back was a wired blueprint with buildings
-            # outside every tower's radius -- `power.coverage`, an INVALID, in
-            # place of a refusal that would have emitted nothing. It fired on
-            # `casimir-crystal/free-proliferation` and `information-matrix` at
-            # 4s, intermittently, which is exactly how a pack-dependent failure
-            # looks.
+            # There is no `claim_power=False` retry, and there is no coverage
+            # repair behind this either. The retry gave the whole power claim up
+            # as soon as a pack left one to three nets unrouted, on the
+            # reasoning that a build which cannot be wired is worth nothing
+            # while coverage still had a repair pass to fall back on. The second
+            # half of that never held: the repair needed free ground and a pack
+            # tight enough to strand a net has none, so what came back was a
+            # wired blueprint with buildings outside every tower's radius --
+            # `power.coverage`, an INVALID, in place of a refusal that would
+            # have emitted nothing.
             #
-            # A height that cannot be wired with the lattice in place is simply
-            # discarded, and if no height survives the spec is REFUSED. Trading
+            # `_power_plan` now decides coverage before routing and says so when
+            # it cannot, which costs a pack rather than a pack plus a full
+            # routing pass. If no height survives, the spec is REFUSED. Trading
             # coverage for the last net or two, like trading density for it, is
             # buying a green cell with something the build needed.
+            try:
+                placement, failed, _towers = _build(
+                    spec,
+                    strips,
+                    pack,
+                    power=self.power,
+                    route=True,
+                    deadline=deadline,
+                    budget=budget,
+                )
+            except _Unpowerable:
+                if rejected is not None:
+                    rejected.add("power.coverage")
+                continue
             if failed:
                 continue
             # AND THE PLACEMENT HAS TO PASS OUR OWN VALIDATOR BEFORE IT COUNTS.
