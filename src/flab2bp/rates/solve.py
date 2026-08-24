@@ -204,6 +204,38 @@ def supplied_rates(data: Dataset, request: LabRequest) -> dict[str, Fraction]:
     return out
 
 
+def _excluded_recipes(data: Dataset, request: LabRequest) -> frozenset[str]:
+    """Which recipes the player has turned off.
+
+    A URL that carries an exclusion set carries the WHOLE of it, and it is
+    authoritative.  FactorioLab's UI is where recipe choice is made; the set in
+    the URL is the state of that UI, not a delta against the mod's defaults.
+
+    This used to union ``data.default_recipe_excluded`` on top, which silently
+    re-disabled every recipe the player had deliberately ENABLED.  Measured on a
+    real user URL: the set carried 14 recipes and the defaults carried 14, but
+    they were not the same 14 --
+
+        enabled by the player, re-excluded by us:  graphene-advanced, ice-giant
+        disabled by the player, not in defaults:   gas-giant-deuterium,
+                                                   gas-giant-hydrogen
+
+    -- so the URL is provably not a delta, since a delta would not need to list
+    the twelve it shares with the defaults.  Killing ``graphene-advanced`` left
+    only ``graphene`` (energetic-graphite + sulfuric-acid), and the build then
+    asked the player to belt in STONE for a flow that contains none.  The player
+    had chosen fire ice from an ice giant; we overrode that and changed the
+    blueprint's inputs, which is exactly the thing that may never happen.
+
+    Absence is different from emptiness.  ``None`` means the URL said nothing,
+    so the mod's defaults are the player's state and are used.  An empty set
+    means the player turned everything on, and is honoured as such.
+    """
+    if request.excluded_recipe_ids is None:
+        return frozenset(data.default_recipe_excluded)
+    return frozenset(request.excluded_recipe_ids)
+
+
 def _buildable_producers(
     data: Dataset, item_id: str, excluded: frozenset[str]
 ) -> tuple[Recipe, ...]:
@@ -214,11 +246,23 @@ def _buildable_producers(
     line -- exactly 22 recipes carry it, covering mining machines, the water
     pump, the oil extractor and the orbital collectors uniformly.  Heuristics
     based on ``totalRecipe`` or producer names miss most of those.
+
+    Technology recipes consume items to advance research rather than producing
+    goods, so they are never a way to make something.
+
+    Reads the NEUTRAL index and applies ``excluded`` itself, rather than calling
+    ``craftable_recipes_producing`` -- which drops the dataset's defaults
+    internally.  That was the second of two layers applying the same defaults,
+    and it survived a fix to the first: the player's own exclusion set reached
+    this function intact and was then overruled one call deeper.  ``excluded``
+    is the player's set; nothing else may narrow it.
     """
     return tuple(
         recipe
-        for recipe in data.craftable_recipes_producing(item_id)
-        if "mining" not in recipe.flags and recipe.id not in excluded
+        for recipe in data.recipes_producing(item_id)
+        if "mining" not in recipe.flags
+        and not recipe.is_technology
+        and recipe.id not in excluded
     )
 
 
@@ -555,7 +599,7 @@ def solve(
     """
     targets = target_rates(data, request)
     supplied = supplied_rates(data, request)
-    excluded = frozenset(request.excluded_recipe_ids or ()) | data.default_recipe_excluded
+    excluded = _excluded_recipes(data, request)
     producers, external = _resolve_chain(data, targets, excluded, frozenset(supplied))
     internal_items = sorted(producers)
     columns = _columns(data, producers, request, tier, allowed_modes, proliferable)

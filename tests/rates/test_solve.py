@@ -14,7 +14,9 @@ from flab2bp.rates.adjust import AdjustedRecipe, ProliferatorTier
 from flab2bp.rates.solve import (
     InfeasibleError,
     RateSolution,
+    _buildable_producers,
     _exact_rates,
+    _excluded_recipes,
     solve,
     target_rates,
 )
@@ -556,3 +558,70 @@ def test_a_solve_that_returns_nothing_usable_still_raises(
 
     with pytest.raises(InfeasibleError, match="did not reach optimality"):
         solve(data, parse_url(TRIVIAL_URL), tier=ProliferatorTier.MK3)
+
+
+# --- the player's recipe choices are the player's ---------------------------
+
+
+REX_URL = (
+    "https://factoriolab.github.io/dsp/flow?z=eJxFyLsKwkAQQNG.meJWs8FHNc0sxk6MoLitmkLiEggo2sy3"
+    "iyjYHc5oykJlND8zmyukj19.L2n0xwPNd3ujlWqOSrWCyvXUm8vUP21L4cLAHd.ge.yID-E3cht5Te4i76TWyUp4"
+    "rKKTh6X0BpZLI18_&v=11"
+)
+
+
+def test_a_urls_exclusion_set_is_authoritative(data: Dataset) -> None:
+    """The URL carries the WHOLE set, not a delta against the mod's defaults.
+
+    Proof it is not a delta: this URL lists ``gas-giant-deuterium`` and
+    ``gas-giant-hydrogen``, which are NOT in the defaults, while omitting
+    ``graphene-advanced`` and ``ice-giant``, which are. A delta would not need
+    to restate the twelve it shares.
+
+    This used to union the defaults on top, which silently re-disabled every
+    recipe the player had turned ON. Downstream that removed the fire-ice route
+    to graphene and left only the sulfuric-acid one, so the build asked the
+    player to belt in STONE for a flow containing none -- changing the
+    blueprint's inputs, which may never happen.
+    """
+    request = parse_url(REX_URL)
+    assert request.excluded_recipe_ids is not None
+    assert _excluded_recipes(data, request) == frozenset(request.excluded_recipe_ids)
+
+    enabled = set(data.default_recipe_excluded) - set(request.excluded_recipe_ids)
+    assert enabled, "this URL must differ from the defaults or it proves nothing"
+    assert not (enabled & _excluded_recipes(data, request)), (
+        f"recipes the player enabled were re-excluded: {sorted(enabled)}"
+    )
+
+
+def test_a_recipe_the_player_enabled_survives_to_the_solver(data: Dataset) -> None:
+    """The second layer: `_buildable_producers` must not re-apply the defaults.
+
+    A fix to `_excluded_recipes` alone was not enough -- the player's set
+    reached that function intact and was overruled one call deeper, because
+    `craftable_recipes_producing` drops the dataset defaults internally.
+    """
+    request = parse_url(REX_URL)
+    excluded = _excluded_recipes(data, request)
+    routes = {r.id for r in _buildable_producers(data, "graphene", excluded)}
+
+    assert "graphene-advanced" in routes, (
+        "the player enabled graphene-advanced (fire ice); it must reach the solver"
+    )
+    assert "graphene" in routes, "the sulfuric-acid route is not excluded either"
+
+
+def test_no_exclusion_set_means_the_mods_defaults(data: Dataset) -> None:
+    """Absence is not emptiness.
+
+    A URL that says nothing leaves the player on the mod's defaults -- which is
+    every URL in the corpus, so this is what keeps them unchanged. An EMPTY set
+    is a player who turned everything on, and is honoured as such.
+    """
+    bare = parse_url(
+        "https://factoriolab.github.io/dsp/list?o=processor*60&ibe=conveyor-belt-2"
+        "&mmr=arc-smelter~assembling-machine-2~chemical-plant~matrix-lab&v=11"
+    )
+    assert bare.excluded_recipe_ids is None
+    assert _excluded_recipes(data, bare) == frozenset(data.default_recipe_excluded)
