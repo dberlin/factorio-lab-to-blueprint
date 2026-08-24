@@ -2048,7 +2048,15 @@ class TestRealCorpusSpecsActuallySolve:
         candidates = build_candidates(
             load_vendored(), parse_url(entry(url_id).url), count=3
         ).candidates
-        return min(candidates, key=lambda s: s.machine_count)
+        # The SMALLEST SPINE CAN BUILD, which is not simply the smallest.
+        # Proliferation cuts machine count, so `min` picks a sprayed candidate --
+        # and spine refuses those: a Spray Coater is supplied by an elevated belt
+        # in its own row and spine runs lanes at ground level in a corridor. That
+        # gap is documented in docs/BACKLOG.md and asserted by
+        # `test_spine_refuses_rather_than_shipping_an_unfed_coater`; handing it to
+        # a test about the SOLVER measures the wrong thing.
+        buildable = [c for c in candidates if not c.spray_lanes] or list(candidates)
+        return min(buildable, key=lambda s: s.machine_count)
 
     @pytest.mark.slow
     @pytest.mark.parametrize(
@@ -2097,7 +2105,15 @@ class TestPowerCoverageOnRealSpecs:
         candidates = build_candidates(
             load_vendored(), parse_url(entry(url_id).url), count=3
         ).candidates
-        return min(candidates, key=lambda s: s.machine_count)
+        # The SMALLEST SPINE CAN BUILD, which is not simply the smallest.
+        # Proliferation cuts machine count, so `min` picks a sprayed candidate --
+        # and spine refuses those: a Spray Coater is supplied by an elevated belt
+        # in its own row and spine runs lanes at ground level in a corridor. That
+        # gap is documented in docs/BACKLOG.md and asserted by
+        # `test_spine_refuses_rather_than_shipping_an_unfed_coater`; handing it to
+        # a test about the SOLVER measures the wrong thing.
+        buildable = [c for c in candidates if not c.spray_lanes] or list(candidates)
+        return min(buildable, key=lambda s: s.machine_count)
 
     @staticmethod
     def _report(spec: BuildSpec, placement: Placement) -> validate.Report:
@@ -2281,7 +2297,15 @@ class TestRealSpecsValidateClean:
         candidates = build_candidates(
             load_vendored(), parse_url(entry(url_id).url), count=3
         ).candidates
-        return min(candidates, key=lambda s: s.machine_count)
+        # The SMALLEST SPINE CAN BUILD, which is not simply the smallest.
+        # Proliferation cuts machine count, so `min` picks a sprayed candidate --
+        # and spine refuses those: a Spray Coater is supplied by an elevated belt
+        # in its own row and spine runs lanes at ground level in a corridor. That
+        # gap is documented in docs/BACKLOG.md and asserted by
+        # `test_spine_refuses_rather_than_shipping_an_unfed_coater`; handing it to
+        # a test about the SOLVER measures the wrong thing.
+        buildable = [c for c in candidates if not c.spray_lanes] or list(candidates)
+        return min(buildable, key=lambda s: s.machine_count)
 
     @pytest.mark.slow
     @pytest.mark.parametrize(
