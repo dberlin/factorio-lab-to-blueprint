@@ -23,6 +23,8 @@ from flab2bp.layout.freeform import (
 from flab2bp.layout.route_feedback import Cell, FeedbackState, NetId, NetRole
 
 _PRESENT_COST = 1.0
+_MAX_ROUNDS = 5
+_HOT_CELL_LIMIT = 256
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,7 +46,9 @@ class GlobalRouteResult:
     unreachable_ports: int
     rounds: int
     expansions: int
+    exhausted_budget: bool
     hot_cells: tuple[Cell, ...]
+    hot_regions: tuple[tuple[int, int, int, int], ...]
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "paths", MappingProxyType(dict(self.paths)))
@@ -54,6 +58,7 @@ class GlobalRouteResult:
 class _SearchResult:
     path: tuple[Cell, ...] | None
     expansions: int
+    exhausted_budget: bool
 
 
 @dataclass(slots=True)
@@ -115,19 +120,96 @@ def route_global_once(
     This is deliberately a metrics-and-paths pass. It never emits buildings,
     mutates the production canvas, constructs a Placement, or implies validity.
     """
+    _check_budget(budget)
+    result, overflows, grid = _route_round(
+        problem,
+        feedback,
+        feedback.cell_history,
+        budget,
+        problem.nets,
+    )
+    hot_cells, hot_regions = _hot_summary(dict(overflows), grid)
+    return GlobalRouteResult(
+        net_results=result.net_results,
+        paths=result.paths,
+        overflow_cells=result.overflow_cells,
+        total_overflow=result.total_overflow,
+        max_overflow=result.max_overflow,
+        unreachable_ports=result.unreachable_ports,
+        rounds=1,
+        expansions=result.expansions,
+        exhausted_budget=result.exhausted_budget,
+        hot_cells=hot_cells,
+        hot_regions=hot_regions,
+    )
+
+
+def route_global(
+    problem: _PreparedRoutingProblem,
+    feedback: FeedbackState,
+    budget: int,
+) -> GlobalRouteResult:
+    """Negotiate congestion for the whole prepared problem deterministically."""
+    _check_budget(budget)
+    history = dict(feedback.cell_history)
+    nets = _routing_order(problem.nets)
+    remaining = budget
+    expansions = 0
+
+    for round_number in range(1, _MAX_ROUNDS + 1):
+        result, overflows, grid = _route_round(
+            problem,
+            feedback,
+            history,
+            remaining,
+            nets,
+        )
+        remaining -= result.expansions
+        expansions += result.expansions
+        for cell, overflow in overflows:
+            history[cell] = history.get(cell, 0.0) + overflow
+        hot_cells, hot_regions = _hot_summary(history, grid)
+        negotiated = GlobalRouteResult(
+            net_results=result.net_results,
+            paths=result.paths,
+            overflow_cells=result.overflow_cells,
+            total_overflow=result.total_overflow,
+            max_overflow=result.max_overflow,
+            unreachable_ports=result.unreachable_ports,
+            rounds=round_number,
+            expansions=expansions,
+            exhausted_budget=result.exhausted_budget,
+            hot_cells=hot_cells,
+            hot_regions=hot_regions,
+        )
+        if result.exhausted_budget or result.total_overflow == 0:
+            return negotiated
+
+    return negotiated
+
+
+def _check_budget(budget: int) -> None:
     if type(budget) is not int or budget < 0:
         raise ValueError("global routing budget must be a non-negative integer")
 
+
+def _route_round(
+    problem: _PreparedRoutingProblem,
+    feedback: FeedbackState,
+    history: Mapping[Cell, float],
+    budget: int,
+    nets: Sequence[_PreparedNet],
+) -> tuple[GlobalRouteResult, tuple[tuple[Cell, int], ...], _Grid]:
     workspace = problem.new_workspace()
     canvas = workspace.canvas
     internal_box = _route_box(canvas, problem.route_bounds)
     external_box = _route_box(canvas, problem.limit or problem.route_bounds)
     span = _canvas_span(canvas, external_box)
-    external_grid = _make_grid(canvas, external_box, span, feedback.cell_history)
+    external_grid = _make_grid(canvas, external_box, span, history)
     internal_grid = (
         external_grid
         if internal_box == external_box
-        else _make_grid(canvas, internal_box, span, feedback.cell_history)
+        else _make_grid(canvas, internal_box, span, history)
     )
 
     ledger = _CapacityLedger(external_grid.size)
@@ -136,8 +218,9 @@ def route_global_once(
     remaining = budget
     expansions = 0
     unreachable = 0
+    exhausted_budget = False
 
-    for net in problem.nets:
+    for net in nets:
         grid = external_grid if net.net_id.role is NetRole.EXTERNAL else internal_grid
         flags, starts, goals = _route_ends(net, grid)
         compatible = frozenset((*net.src_group, *net.dst_group))
@@ -154,6 +237,7 @@ def route_global_once(
         )
         remaining -= searched.expansions
         expansions += searched.expansions
+        exhausted_budget = exhausted_budget or searched.exhausted_budget
         path = searched.path
         if path is None:
             unreachable += 1
@@ -180,26 +264,111 @@ def route_global_once(
             )
         )
 
-    hot_indices = tuple(
+    overflow_indices = tuple(
         sorted(
             index
             for index, units in ledger.units.items()
             if len(units) > 1
         )
     )
-    hot_cells = tuple(_decode_cell(external_grid, index) for index in hot_indices)
-    overflows = tuple(ledger.occupancy[index] - 1 for index in hot_indices)
-    return GlobalRouteResult(
-        net_results=tuple(net_results),
-        paths=paths,
-        overflow_cells=len(hot_indices),
-        total_overflow=sum(overflows),
-        max_overflow=max(overflows, default=0),
-        unreachable_ports=unreachable,
-        rounds=1,
-        expansions=expansions,
-        hot_cells=hot_cells,
+    overflows = tuple(
+        (_decode_cell(external_grid, index), ledger.occupancy[index] - 1)
+        for index in overflow_indices
     )
+    return (
+        GlobalRouteResult(
+            net_results=tuple(net_results),
+            paths=paths,
+            overflow_cells=len(overflows),
+            total_overflow=sum(overflow for _cell, overflow in overflows),
+            max_overflow=max(
+                (overflow for _cell, overflow in overflows),
+                default=0,
+            ),
+            unreachable_ports=unreachable,
+            rounds=1,
+            expansions=expansions,
+            exhausted_budget=exhausted_budget,
+            hot_cells=(),
+            hot_regions=(),
+        ),
+        overflows,
+        external_grid,
+    )
+
+
+def _routing_order(nets: Sequence[_PreparedNet]) -> tuple[_PreparedNet, ...]:
+    indexed = enumerate(nets)
+    return tuple(
+        net
+        for _index, net in sorted(
+            indexed,
+            key=lambda pair: (-_estimated_length(pair[1]), pair[0]),
+        )
+    )
+
+
+def _estimated_length(net: _PreparedNet) -> int:
+    destination = (net.dst.x, net.dst.y)
+    if net.src is not None:
+        return abs(net.src.x - destination[0]) + abs(net.src.y - destination[1])
+    return min(
+        (
+            abs(x - destination[0]) + abs(y - destination[1])
+            for x, y, _level in net.boundary_goals
+        ),
+        default=0,
+    )
+
+
+def _hot_summary(
+    history: Mapping[Cell, float],
+    grid: _Grid,
+) -> tuple[tuple[Cell, ...], tuple[tuple[int, int, int, int], ...]]:
+    x0, y0, x1, y1 = grid.box
+    hot_cells = tuple(
+        sorted(
+            (
+                cell
+                for cell, value in history.items()
+                if value > 0.0
+                and x0 <= cell[0] <= x1
+                and y0 <= cell[1] <= y1
+                and 0 <= cell[2] < LEVELS
+            ),
+            key=lambda cell: (-history[cell], grid.index(cell)),
+        )[:_HOT_CELL_LIMIT]
+    )
+    return hot_cells, _hot_regions(hot_cells)
+
+
+def _hot_regions(
+    hot_cells: Sequence[Cell],
+) -> tuple[tuple[int, int, int, int], ...]:
+    remaining = {(x, y) for x, y, _level in hot_cells}
+    regions: list[tuple[int, int, int, int]] = []
+    while remaining:
+        seed = min(remaining)
+        remaining.remove(seed)
+        component = [seed]
+        pending = [seed]
+        while pending:
+            x, y = pending.pop()
+            for neighbour in ((x - 1, y), (x, y - 1), (x, y + 1), (x + 1, y)):
+                if neighbour not in remaining:
+                    continue
+                remaining.remove(neighbour)
+                component.append(neighbour)
+                pending.append(neighbour)
+        regions.append(
+            (
+                min(x for x, _y in component),
+                min(y for _x, y in component),
+                max(x for x, _y in component) + 1,
+                max(y for _x, y in component) + 1,
+            )
+        )
+    return tuple(sorted(regions))
 
 
 def _route_ends(
@@ -279,8 +448,10 @@ def _search_relaxed(
     net_id: NetId,
     budget: int,
 ) -> _SearchResult:
-    if budget <= 0 or not starts or not goals:
-        return _SearchResult(None, 0)
+    if not starts or not goals:
+        return _SearchResult(None, 0, False)
+    if budget <= 0:
+        return _SearchResult(None, 0, True)
 
     goal_set = frozenset(goals)
     goal_coordinates = tuple(_local_xy(grid, goal) for goal in sorted(goal_set))
@@ -319,12 +490,13 @@ def _search_relaxed(
         if cost > best[current]:
             continue
         if expansions >= budget:
-            return _SearchResult(None, expansions)
+            return _SearchResult(None, expansions, True)
         expansions += 1
         if current in goal_set:
             return _SearchResult(
                 _reconstruct(grid, current, predecessor, via),
                 expansions,
+                False,
             )
 
         _column, level = divmod(current, LEVELS)
@@ -351,7 +523,7 @@ def _search_relaxed(
                 (next_cost + heuristic(target), next_cost, target),
             )
 
-    return _SearchResult(None, expansions)
+    return _SearchResult(None, expansions, False)
 
 
 def _reconstruct(

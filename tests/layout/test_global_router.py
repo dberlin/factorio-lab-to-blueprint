@@ -4,6 +4,8 @@ from collections.abc import Iterable
 
 import pytest
 
+from flab2bp import spec
+from flab2bp.layout import validate
 from flab2bp.layout.base import PlacedBuilding
 from flab2bp.layout.freeform import (
     LEVELS,
@@ -12,7 +14,11 @@ from flab2bp.layout.freeform import (
     _PreparedRoutingProblem,
     _with_sibling_groups,
 )
-from flab2bp.layout.global_router import GlobalRouteResult, route_global_once
+from flab2bp.layout.global_router import (
+    GlobalRouteResult,
+    route_global,
+    route_global_once,
+)
 from flab2bp.layout.route_feedback import Cell, FeedbackState, NetId, NetRole
 
 NetSpec = tuple[
@@ -99,6 +105,52 @@ def _one_net_problem() -> tuple[_PreparedRoutingProblem, NetId]:
             bounds=(0, 0, 4, 2),
         ),
         net_id,
+    )
+
+
+def _detour_problem() -> tuple[_PreparedRoutingProblem, NetId, NetId]:
+    short = NetId(None, 1, "iron", NetRole.EXTERNAL, 0)
+    long = NetId(2, 3, "iron", NetRole.INTERNAL, 0)
+    open_cells = {
+        (1, 2),
+        (3, 2),
+        (2, 0),
+        (2, 4),
+        (2, 1),
+        (2, 2),
+        (2, 3),
+        (1, 1),
+        (1, 3),
+    }
+    return (
+        _problem(
+            (
+                (short, None, (3, 2), ((2, 2, 0),), (), ()),
+                (long, (2, 0), (2, 4), (), (), ()),
+            ),
+            bounds=(0, 0, 4, 4),
+            keep_out={
+                (x, y)
+                for x in range(5)
+                for y in range(5)
+                if (x, y) not in open_cells
+            },
+        ),
+        short,
+        long,
+    )
+
+
+def _impossible_overflow_problem() -> _PreparedRoutingProblem:
+    first = NetId(0, 1, "iron", NetRole.INTERNAL, 0)
+    second = NetId(2, 3, "iron", NetRole.INTERNAL, 0)
+    return _problem(
+        (
+            (first, (0, 1), (4, 1), (), (), ()),
+            (second, (0, 1), (4, 1), (), (), ()),
+        ),
+        bounds=(0, 0, 4, 2),
+        keep_out={(x, y) for x in range(5) for y in (0, 2)},
     )
 
 
@@ -352,3 +404,144 @@ def test_results_are_immutable_metrics_without_acceptance_or_placement_surface()
     assert not hasattr(result, "placement")
     with pytest.raises(TypeError):
         result.paths[NetId(8, 9, "fake", NetRole.INTERNAL, 0)] = ()  # type: ignore[index]
+
+
+def test_negotiation_moves_the_long_net_onto_the_available_detour() -> None:
+    problem, short, long = _detour_problem()
+
+    result = route_global(problem, _feedback(problem), budget=100_000)
+
+    assert result.total_overflow == 0
+    assert result.rounds >= 2
+    assert (2, 2, 0) in result.paths[short]
+    assert (2, 2, 0) not in result.paths[long]
+
+
+def test_impossible_overflow_reports_five_rounds_of_metrics() -> None:
+    result = route_global(
+        _impossible_overflow_problem(),
+        FeedbackState.empty((5, 3)),
+        budget=100_000,
+    )
+
+    assert result.rounds == 5
+    assert not result.exhausted_budget
+    assert result.overflow_cells > 0
+    assert result.total_overflow > 0
+    assert result.max_overflow > 0
+
+
+def test_negotiation_spends_one_exact_shared_expansion_budget() -> None:
+    problem = _impossible_overflow_problem()
+    first_round = route_global_once(problem, _feedback(problem), budget=100_000)
+    shared_budget = first_round.expansions + 1
+
+    result = route_global(problem, _feedback(problem), budget=shared_budget)
+
+    assert result.rounds == 2
+    assert result.exhausted_budget
+    assert result.expansions == shared_budget
+
+
+def test_global_route_is_deterministic_and_longest_first() -> None:
+    problem, short, long = _detour_problem()
+
+    first = route_global(problem, _feedback(problem), budget=100_000)
+    second = route_global(problem, _feedback(problem), budget=100_000)
+
+    assert first == second
+    assert tuple(result.net_id for result in first.net_results) == (long, short)
+    assert tuple(first.paths) == (long, short)
+
+
+def test_external_length_order_uses_its_closest_boundary_goal() -> None:
+    external = NetId(None, 1, "ore", NetRole.EXTERNAL, 0)
+    internal = NetId(2, 3, "iron", NetRole.INTERNAL, 0)
+    problem = _problem(
+        (
+            (external, None, (8, 1), ((0, 1, 0), (7, 1, 0)), (), ()),
+            (internal, (0, 3), (6, 3), (), (), ()),
+        ),
+        bounds=(0, 0, 8, 4),
+    )
+
+    result = route_global(problem, _feedback(problem), budget=20_000)
+
+    assert tuple(net.net_id for net in result.net_results) == (internal, external)
+
+
+def test_detailed_feedback_history_changes_the_global_route_choice() -> None:
+    net_id = NetId(0, 1, "iron", NetRole.INTERNAL, 0)
+    problem = _problem(
+        ((net_id, (0, 2), (4, 2), (), (), ()),),
+        bounds=(0, 0, 4, 4),
+        solid=((2, 2),),
+    )
+    upper = {(x, 1, 0): 10.0 for x in range(1, 4)}
+
+    baseline = route_global(problem, _feedback(problem), budget=20_000)
+    changed = route_global(problem, _feedback(problem, upper), budget=20_000)
+
+    assert any(y == 1 for _x, y, _level in baseline.paths[net_id])
+    assert set(changed.paths[net_id]).isdisjoint(upper)
+    assert changed.paths[net_id] != baseline.paths[net_id]
+
+
+def test_hot_cells_are_history_ordered_bounded_and_boxed_deterministically() -> None:
+    problem = _problem((), bounds=(0, 0, 19, 19))
+    history = {
+        (x, y, 0): 1.0
+        for x in range(15)
+        for y in range(20)
+    }
+    history[(14, 19, 0)] = 2.0
+
+    first = route_global(problem, _feedback(problem, history), budget=0)
+    second = route_global(problem, _feedback(problem, history), budget=0)
+
+    assert first.hot_cells == second.hot_cells
+    assert first.hot_regions == second.hot_regions
+    assert len(first.hot_cells) == 256
+    assert first.hot_cells[0] == (14, 19, 0)
+    assert first.hot_regions == ((0, 0, 13, 20), (14, 19, 15, 20))
+
+
+def test_hot_regions_merge_projected_adjacent_cells_across_levels() -> None:
+    problem = _problem((), bounds=(0, 0, 9, 9))
+    history = {
+        (5, 5, 0): 3.0,
+        (1, 1, 0): 2.0,
+        (1, 2, 0): 2.0,
+        (1, 2, 1): 2.0,
+        (8, 8, 0): 2.0,
+    }
+
+    result = route_global(problem, _feedback(problem, history), budget=0)
+
+    assert result.hot_cells == (
+        (5, 5, 0),
+        (1, 1, 0),
+        (1, 2, 0),
+        (1, 2, 1),
+        (8, 8, 0),
+    )
+    assert result.hot_regions == (
+        (1, 1, 2, 3),
+        (5, 5, 6, 6),
+        (8, 8, 9, 9),
+    )
+
+
+def test_zero_overflow_proxy_cannot_be_certified_as_a_placement() -> None:
+    problem, _net_id = _one_net_problem()
+    result = route_global(problem, _feedback(problem), budget=20_000)
+
+    assert result.total_overflow == 0
+    assert not hasattr(result, "valid")
+    assert not hasattr(result, "placement")
+    with pytest.raises(AttributeError):
+        validate.certify(
+            result,  # type: ignore[arg-type]
+            spec.BuildSpec(groups=()),
+            expect_power=False,
+        )
