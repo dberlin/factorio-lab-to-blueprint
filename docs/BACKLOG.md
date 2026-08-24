@@ -1,5 +1,53 @@
 # Backlog
 
+## OPEN -- sorters may only touch a machine where the game says they may
+
+The game's own predicates are now ported (`game.inserter_data`,
+`game.inserter_paste`, `game.inserter_skew` in `layout/validate.py`), and the
+real `PrefabDesc.slotPoses` table is extracted from the game's prefabs
+(`scripts/extract_dsp_slot_poses.py` -> `dsp/data/slot_poses.json`). They agree
+with the game on all 1142 usable machine-side sorter records in the fixture
+corpus and disagree with **us** on four building types and three whole classes
+of connection. None of this was visible before, because nothing here had the
+table.
+
+Measured over both strategies and the whole URL corpus (`--time-budget 1`,
+one candidate each): **8 of 22 placements are clean; the other 14 carry 5,946
+findings, and every single one of them touches an Oil Refinery (2,247), a
+Chemical Plant (504), a Quantum Chemical Plant (236) or a Matrix Lab (228).**
+Not one 3x3 machine is implicated. Three separate defects:
+
+1. **A face wider than three tiles has no slot out at its ends.** A Matrix Lab
+   is five wide and its slots sit at `x in {-1, 0, 1}`; the Oil Refinery's
+   seven-deep sides carry three. Both strategies choose the machine-side column
+   from the belt's position, so a wide machine gets sorters where no slot is.
+2. **The Chemical Plant is not a ring at all.** Eight slots: four along the
+   north face at `x in {-1, 0, 1, 2}`, and four at `z = -0.9`, which is one row
+   INSIDE a footprint five deep. Neither long side takes a sorter anywhere, and
+   the south attachment is not on the edge tile.
+3. **The Oil Refinery's south face sits 0.6 tiles outside its last tile row**,
+   so a one-tile sorter from it is 0.4 long once the game snaps the end onto the
+   pose -- under the 0.6 minimum. Those need a two-tile sorter.
+
+Three building types accept **no sorter at all** -- Spray Coater, Energy
+Exchanger and both logistics stations ship zero insert poses, and
+`BuildTool_Inserter` will not even let a sorter target a building with none.
+They are fed by BELT. Both strategies wire a sorter into a Spray Coater, so
+every proliferated candidate now refuses rather than emitting a connection the
+game cannot make. That is the correct failure and it is also a real capability
+loss: proliferation needs a belt-fed coater.
+
+**83 tests in `test_spine.py` and `test_freeform.py` fail as a result**, all of
+them of the form "this spec lays out and validates clean" for a spec containing
+one of the four buildings, or a spray-coater spec. They are the checks working.
+The audit stays at **INVALID 0** across three runs (tier `small`, budget 4s:
+8/30 clean, 22 refused, 0 invalid, 0 crashed, identical all three times) --
+refusing emits nothing, which is the failure mode this project prefers.
+
+Fixing it is a layout change and was deliberately left out of the branch that
+found it: the machine-side column has to come from the target's slot table
+rather than from the belt, and the coater has to be belt-fed.
+
 ## RESOLVED -- layout solver speed
 
 *Kept as a record of what the numbers actually said, because the first diagnosis

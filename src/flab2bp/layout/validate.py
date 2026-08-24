@@ -22,6 +22,7 @@ they are reported in ``Report.skipped`` rather than silently passing.
 
 from __future__ import annotations
 
+import math
 from collections import defaultdict, deque
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -1168,107 +1169,436 @@ def _peer_slots(ctx: Context) -> Iterable[Finding]:
                 )
 
 
-@check("sorter.slot_handedness")
-def _slot_handedness(ctx: Context) -> Iterable[Finding]:
-    """Say out loud when a machine's slot ring was inferred, not measured.
+# --- the game's own build conditions ---------------------------------------
+#
+# Everything under `game.` is a port of a predicate in the decompiled
+# Assembly-CSharp, named in each docstring, rather than a rule inferred from the
+# fixture corpus.  They exist because inference kept being wrong in ways only an
+# in-game paste revealed: a slot ring extrapolated from seven buildings, a
+# "three slots per side" rule the Chemical Plant's eight-slot two-row table
+# disproves, and four separate hypotheses burned against the same paste error.
+#
+# Where the game works on the sphere and we work on a plane, the docstring says
+# so.  Distances are float because the game's are -- these are Unity
+# `Vector3.magnitude` comparisons against literal `0.8f`/`1.6f` thresholds, and
+# rounding them to rationals would not make them more true.
+#
+# THREE CONDITIONS WERE READ AND DELIBERATELY NOT PORTED
+#
+# `NeedGround` (23, "Foundation required") is NOT a property of a blueprint and
+# no check here can predict it.  In `BuildTool_BlueprintPaste` it is a terrain
+# raycast: for every `landPoint` of the footprint the game casts 18 m down and
+# refuses when the hit is below `-0.3 - landOffset` of the planet radius, or
+# when the ground and the water layer differ by more than `0.27 + landOffset`,
+# or when nothing is hit at all.  It means "the ground you are pasting onto is
+# not flat, or is water" -- the same blueprint pastes fine one tile away.  It
+# does not auto-foundation because reform is a separate, opt-in pass
+# (`ComputeReform`), and it is answered by levelling the ground, not by us.
+#
+# `OutOfVerticalConstructionHeight` (40) on the paste path applies ONLY to
+# stacked Tanks, Storages, Labs and Splitters: it compares the stack level
+# implied by the building's altitude against `history.labLevel` /
+# `history.storageLevel`, which are tech unlocks.  We never stack any of the
+# four.  The belt-height ceiling that carries the same message comes from
+# `BuildTool_Path` and `BuildTool_Click`, where it is `history.buildMaxHeight`
+# -- also an unlock, so a blueprint legal for one save is not for another, and
+# a fixed number here would be wrong for somebody.
+#
+# `Collide`, `TooClose` and `TooFar` for non-sorters need the near-collider
+# index of a live planet (`GetOverlappedObjectsNonAlloc` against what is already
+# built), which a blueprint does not carry.  `geom.overlap` covers the part that
+# is intrinsic to the placement; the rest is a property of where it is pasted.
 
-    The corpus shows two mirrored ring handednesses and nothing in the game data
-    predicts which a building uses, so ``layout.slots`` extends the seven
-    observed buildings by footprint.  Every sorter touching a building outside
-    that set is carrying an inference, and a warning is the honest way to keep
-    that visible instead of letting it read as measured.  One per building type,
-    not per sorter, so a large build does not bury it.
+
+def _slot_pose_of(
+    ctx: Context, link: int, slot: int
+) -> tuple[tuple[float, float, float], tuple[float, float, float]] | None:
+    """World position and forward of ``slot`` on building ``link``.
+
+    ``None`` exactly where the game skips its own geometry test -- no peer, a
+    BELT peer (``!prefabDesc2.isBelt``), or a slot the peer's ``slotPoses`` does
+    not cover (``slotPoses.Length > otherSlot``).  That last one is not a
+    formality: it is why blueprints of ours with plainly wrong slots still
+    pasted, and why any check built on it is silent rather than wrong for a
+    Storage Tank or a Fractionator, neither of which defines a sorter slot.
+
+    A negative index is skipped too.  In C# ``slotPoses[-1]`` throws; in Python
+    it would quietly return the last slot, which is the sort of difference that
+    turns a port into fiction.
     """
     bs = ctx.placement.buildings
-    seen: set[int] = set()
-    for _i, b in ctx.of_kind(Kind.SORTER):
-        for link in (b.input_obj, b.output_obj):
-            if link is None or not (0 <= link < len(bs)):
-                continue
-            peer = bs[link]
-            if cat.is_belt(peer.item_id) or slots.handedness_is_observed(peer.item_id):
-                continue
-            if peer.item_id in seen:
-                continue
-            seen.add(peer.item_id)
-            yield Finding(
-                "sorter.slot_handedness",
-                Severity.WARNING,
-                f"no real blueprint in the corpus attaches a sorter to a "
-                f"{cat.building(peer.item_id).name}, so its slot ring handedness is "
-                f"inferred from its footprint, not measured",
-                (link,),
-                {"item_id": peer.item_id, "mirrored": slots.ring_is_mirrored(peer.item_id)},
-            )
+    if not 0 <= link < len(bs):
+        return None
+    peer = bs[link]
+    if cat.is_belt(peer.item_id):
+        return None
+    if not 0 <= slot < len(cat.building(peer.item_id).slot_poses):
+        return None
+    dx, dy, dz = slots.slot_offset(peer.item_id, peer.yaw, slot)
+    centre_x = peer.x + (peer.width - 1) / 2
+    centre_y = peer.y + (peer.height - 1) / 2
+    return (
+        (centre_x + dx, centre_y + dy, peer.z + dz),
+        slots.slot_forward(peer.item_id, peer.yaw, slot),
+    )
 
 
-@check("sorter.slot_reach")
-def _slot_reach(ctx: Context) -> Iterable[Finding]:
-    """A side has three slots however long it is, so a far column has none.
+def _unit(
+    to: tuple[float, float, float], frm: tuple[float, float, float]
+) -> tuple[float, float, float]:
+    """``(to - frm).normalized``.  Unity returns zero for a zero vector."""
+    vx, vy, vz = to[0] - frm[0], to[1] - frm[1], to[2] - frm[2]
+    n = math.sqrt(vx * vx + vy * vy + vz * vz)
+    return (0.0, 0.0, 0.0) if n == 0.0 else (vx / n, vy / n, vz / n)
 
-    The three slots on a side sit ~0.8 tiles apart around its centre whatever
-    the footprint -- the Oil Refinery's seven-tile side carries three (its north
-    side is 6/7/8, so its east side can only be 3/4/5) and the Matrix Lab's
-    five-tile side carries three.  Anything more than one tile off a side's
-    centre therefore has no slot beside it, and
-    :func:`flab2bp.layout.slots.machine_slot` reports the nearest one instead.
 
-    Every one of the 1247 machine-side records in the real corpus is within that
-    one-tile band, so the game evidently does not place sorters outside it.  Our
-    layouts do: measured over both strategies and the whole URL corpus, 1127 of
-    5188 machine ends land further out -- every Chemical Plant, Quantum Chemical
-    Plant, Miniature Particle Collider and Ray Receiver end, and 498 of 558
-    Matrix Lab ends.
+def _dot(a: tuple[float, float, float], b: tuple[float, float, float]) -> float:
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 
-    This is a WARNING and not an error only because no real blueprint in the
-    corpus attaches a sorter to a building wider than five tiles, so "a nine-wide
-    building still has just three slots per side" is an extrapolation from the
-    Refinery and the Lab rather than a measurement.  If it holds, this is a real
-    defect in how both strategies choose a sorter's column, it is very likely the
-    "Connection target cannot be laid" of the first in-game paste, and this check
-    should be promoted.  One finding per building type, with the count, so it
-    stays legible on a large build.
+
+@check("game.inserter_data")
+def _inserter_data(ctx: Context) -> Iterable[Finding]:
+    """Port of ``BuildTool_BlueprintCopy.CheckInserterDataLegal(int _objId)``.
+
+    The game's own answer to "is this sorter's data legal".  It runs when a
+    blueprint is COPIED and again over every selected object before one is
+    saved, and a sorter that fails it is drawn red with
+    ``EBuildCondition.ErrorInserterData`` -- the "Sorter data error" of every
+    failed in-game paste this project has produced.
+
+    The C#, with our field names beside it::
+
+        ReadObjectConn(_objId, 0, out isOutput,  out otherObjId,  out otherSlot)
+        ReadObjectConn(_objId, 1, out isOutput2, out otherObjId2, out otherSlot2)
+
+        if (otherObjId  != 0 && !isOutput) return false;   # own slot 0 = output
+        if ((otherObjId2 != 0) & isOutput2) return false;  # own slot 1 = input
+
+        # for the slot-0 peer, against objectPose2 (our x2/y2/z2 anchor):
+        if (!isBelt && slotPoses.Length > otherSlot):
+            transformedBy = slotPoses[otherSlot].GetTransformedBy(peer pose)
+            if ((objectPose2.position - transformedBy.position).magnitude > 0.8f)
+                return false;
+            if (Dot(transformedBy.forward,
+                    (objectPose.position - objectPose2.position).normalized) < 0f)
+                return false;
+        # ... and symmetrically for the slot-1 peer against objectPose.
+
+    ``objectPose`` is the anchor a sorter draws FROM and ``objectPose2`` the one
+    it feeds INTO, which is exactly our ``(x, y, z)`` and ``(x2, y2, z2)``.
+
+    The first two tests overlap ``sorter.own_slots``, deliberately: that check
+    states a corpus regularity, this one states the predicate the game applies,
+    and they are allowed to arrive at the same place by different routes.
+
+    The game measures on the sphere and we measure on the plane.  Over the 1206
+    machine-side records in the fixture corpus the two agree on every record
+    outside the latitude-compressed regions, so the difference is not what
+    decides any of our builds -- see ``test_game_slot_poses``.
     """
-    bs = ctx.placement.buildings
-    counts: dict[int, int] = defaultdict(int)
-    example: dict[int, int] = {}
     for i, b in ctx.of_kind(Kind.SORTER):
-        a = _anchors(b)
-        if a is None:
+        anchors = _anchors(b)
+        if anchors is None:
             continue
-        (x1, y1, _), (x2, y2, _) = a
-        for link, end, other in (
-            (b.input_obj, (x1, y1), (x2, y2)),
-            (b.output_obj, (x2, y2), (x1, y1)),
-        ):
-            if link is None or not (0 <= link < len(bs)):
-                continue
-            peer = bs[link]
-            if cat.is_belt(peer.item_id):
-                continue
-            off = slots.side_offset(
-                peer.item_id,
-                peer.yaw,
-                (
-                    end[0] - (peer.x + (peer.width - 1) / 2),
-                    end[1] - (peer.y + (peer.height - 1) / 2),
-                ),
-                (end[0] - other[0], end[1] - other[1]),
+        pose, pose2 = anchors
+
+        if b.output_obj is not None and b.output_from_slot != slots.OUTPUT_FROM_SLOT:
+            yield Finding(
+                "game.inserter_data",
+                Severity.ERROR,
+                f"sorter {i} has something connected at its own slot "
+                f"{b.output_from_slot} that is not its output; the game requires "
+                f"own slot 0 to be the output",
+                (i,),
+                {"output_from_slot": b.output_from_slot},
             )
-            if off is None or abs(off) <= 1:
+        if b.input_obj is not None and b.input_to_slot != slots.INPUT_TO_SLOT:
+            yield Finding(
+                "game.inserter_data",
+                Severity.ERROR,
+                f"sorter {i} has its input at its own slot {b.input_to_slot}; the "
+                f"game requires own slot 1 to be the input",
+                (i,),
+                {"input_to_slot": b.input_to_slot},
+            )
+
+        for label, link, slot, end, far in (
+            ("output", b.output_obj, b.output_to_slot, pose2, pose),
+            ("input", b.input_obj, b.input_from_slot, pose, pose2),
+        ):
+            if link is None:
                 continue
-            counts[peer.item_id] += 1
-            example.setdefault(peer.item_id, i)
-    for item_id, n in sorted(counts.items()):
-        yield Finding(
-            "sorter.slot_reach",
-            Severity.WARNING,
-            f"{n} sorter end(s) sit more than one tile off the centre of a "
-            f"{cat.building(item_id).name} side, where that side has no slot; the "
-            f"nearest of its three was used instead (e.g. sorter {example[item_id]})",
-            (example[item_id],),
-            {"item_id": item_id, "count": n},
-        )
+            got = _slot_pose_of(ctx, link, slot)
+            if got is None:
+                continue
+            slot_pos, slot_fwd = got
+            gap = math.dist(end, slot_pos)
+            if gap > slots.SLOT_REACH:
+                yield Finding(
+                    "game.inserter_data",
+                    Severity.ERROR,
+                    f"sorter {i}'s {label} end is {gap:.2f} tiles from slot {slot} "
+                    f"of building {link} "
+                    f"({cat.building(ctx.placement.buildings[link].item_id).name}), "
+                    f"over the game's {slots.SLOT_REACH} limit",
+                    (i, link),
+                    {"end": label, "slot": slot, "gap": round(gap, 3)},
+                )
+            if _dot(slot_fwd, _unit(far, end)) < 0.0:
+                yield Finding(
+                    "game.inserter_data",
+                    Severity.ERROR,
+                    f"sorter {i} runs into the back of slot {slot} of building "
+                    f"{link}: the slot faces the other way",
+                    (i, link),
+                    {
+                        "end": label,
+                        "slot": slot,
+                        "dot": round(_dot(slot_fwd, _unit(far, end)), 3),
+                    },
+                )
+
+
+#: The paste path's allowances, in tiles.  ``num40``/``num41`` in the source.
+#:
+#: ``_PASTE_LATERAL`` is UNREACHABLE for anything but a silo, and it is here
+#: anyway.  Its branch runs only when ``snap`` is already over ``_PASTE_SNAP``,
+#: and at that point a lateral of ``_PASTE_LATERAL_EPS`` or more is refused by
+#: the third branch and a lateral below it never reaches the first -- so no
+#: input can distinguish 0.5 from any larger value.  Dropping it would make the
+#: ladder shorter and the port a paraphrase.
+_PASTE_SNAP = 0.8
+_PASTE_LATERAL = 0.5
+_PASTE_RADIAL = 1.6
+_PASTE_LATERAL_EPS = 0.1
+
+
+@check("game.inserter_paste")
+def _inserter_paste(ctx: Context) -> Iterable[Finding]:
+    """Port of the ``ErrorInserterData`` ladder in ``BlueprintData`` (paste).
+
+    A different predicate from ``game.inserter_data`` and the one that actually
+    fires on a paste, which is what our users do with what we emit.  Pasting
+    does not merely test a sorter's end -- it SNAPS it onto the slot pose::
+
+        transformedBy = slotPoses[inputFromSlot].GetTransformedBy(input pose)
+        zero          = transformedBy.position - lpos    # the correction
+        lpos          = transformedBy.position
+        num38         = CalcLocalGridSize(...)           # one tile
+        num40         = zero.magnitude / num38
+        num41         = Abs(Dot(transformedBy.right, zero))
+        if (num40 > 0.8f) {
+            if      (num41 >  0.5f)                 -> ErrorInserterData
+            else if (num41 <  0.1f && num40 > 1.6f) -> ErrorInserterData
+            else if (num41 >= 0.1f && num40 > 0.8f) -> ErrorInserterData
+        }
+        if (Dot(transformedBy.forward, (lpos2 - lpos).normalized) < 0f)
+                                                    -> ErrorInserterData
+
+    So the paste is *looser* than the copy check in one band and identical
+    everywhere else: a correction that is purely radial -- straight out of the
+    machine's face, ``num41`` under a tenth of a tile -- is tolerated out to 1.6
+    tiles, and anything with real sideways slide is capped at 0.5.  This is the
+    band that decides real pastes.  Measured on our own output: with every
+    machine-side slot forced to 0, 41 of 60 ends landed 1.87 tiles out and the
+    game reported "Sorter data error"; with the slot the geometry implies they
+    land 0.24 and it does not.  1.87 is over ``_PASTE_RADIAL`` however square the
+    approach, which is why forcing 0 could never have worked.
+
+    ``transformedBy.right`` is reconstructed as the slot's forward turned a
+    quarter turn in the build plane.  Unity's ``right`` is ``Cross(up, forward)``
+    and every slot pose is upright to within a degree, so the two agree to
+    better than the ``0.1`` the ladder discriminates on -- and the ladder takes
+    an absolute value, so the sign the axis mapping flips does not matter.
+
+    The silo branch (``isSilo``, 2.5/2.4) is not ported: we never emit a Vertical
+    Launching Silo, and porting a branch with no way to test it is how the last
+    round of guesses got in.
+    """
+    for i, b in ctx.of_kind(Kind.SORTER):
+        anchors = _anchors(b)
+        if anchors is None:
+            continue
+        # The input end is snapped and tested first, against the output end as
+        # the blueprint still holds it; only then is the output end snapped and
+        # tested against the already-snapped input.  That is the game's order,
+        # and it is the reason the two ends are not symmetrical here.
+        lpos: tuple[float, float, float] = anchors[0]
+        lpos2: tuple[float, float, float] = anchors[1]
+        for label, link, slot in (
+            ("input", b.input_obj, b.input_from_slot),
+            ("output", b.output_obj, b.output_to_slot),
+        ):
+            if link is None:
+                continue
+            got = _slot_pose_of(ctx, link, slot)
+            if got is None:
+                continue
+            slot_pos, slot_fwd = got
+            end = lpos if label == "input" else lpos2
+            name = cat.building(ctx.placement.buildings[link].item_id).name
+
+            zero = (slot_pos[0] - end[0], slot_pos[1] - end[1], slot_pos[2] - end[2])
+            snap = math.sqrt(zero[0] ** 2 + zero[1] ** 2 + zero[2] ** 2)
+            right = (slot_fwd[1], -slot_fwd[0], 0.0)
+            lateral = abs(_dot(right, zero))
+            if snap > _PASTE_SNAP and (
+                lateral > _PASTE_LATERAL
+                or (lateral < _PASTE_LATERAL_EPS and snap > _PASTE_RADIAL)
+                or (lateral >= _PASTE_LATERAL_EPS and snap > _PASTE_SNAP)
+            ):
+                yield Finding(
+                    "game.inserter_paste",
+                    Severity.ERROR,
+                    f"pasting sorter {i} would drag its {label} end {snap:.2f} tiles "
+                    f"({lateral:.2f} of it sideways) onto slot {slot} of building "
+                    f"{link} ({name}); the game refuses that as a sorter data error",
+                    (i, link),
+                    {
+                        "end": label,
+                        "slot": slot,
+                        "snap": round(snap, 3),
+                        "lateral": round(lateral, 3),
+                    },
+                )
+
+            if label == "input":
+                lpos = slot_pos
+            else:
+                lpos2 = slot_pos
+            far = lpos2 if label == "input" else lpos
+            near = lpos if label == "input" else lpos2
+            if _dot(slot_fwd, _unit(far, near)) < 0.0:
+                yield Finding(
+                    "game.inserter_paste",
+                    Severity.ERROR,
+                    f"after snapping, sorter {i} runs into the back of slot {slot} of "
+                    f"building {link} ({name})",
+                    (i, link),
+                    {"end": label, "slot": slot},
+                )
+
+
+#: ``(minLength, maxLength)`` a pasted sorter is allowed, in tiles, keyed by how
+#: many of its two ends land on a BELT.  ``num132``/``num131`` in the source.
+_SORTER_LENGTH = {2: (0.4, 5.0), 1: (0.6, 5.5), 0: (0.9, 7.5)}
+
+#: Degrees.  ``Quaternion.Angle(lrot, lrot2) > 30f`` and the pair of
+#: ``Acos(Abs(Dot(axis, forward))) > 24f`` tests, both reporting TooSkew.
+_SKEW_PAIR_DEG = 30.0
+_SKEW_AXIS_DEG = 24.0
+
+
+@check("game.inserter_skew")
+def _inserter_skew(ctx: Context) -> Iterable[Finding]:
+    """Port of the sorter length and skew ladder in ``BuildTool_BlueprintPaste``.
+
+    Runs after the paste has snapped each machine-side end onto its slot pose,
+    which is why it lives beside ``game.inserter_paste`` and reuses the same
+    snapping.  ``EBuildCondition.TooSkew`` is "Deflection too much"
+    (``偏角太大``, condition 15 -- NOT ``TooBend``/``弯曲过度``)::
+
+        magnitude = (lpos2 - lpos).magnitude
+        if (magnitude > num131) -> TooFar
+        if (magnitude < num132) -> TooClose
+        ...
+        if (Quaternion.Angle(lrot, lrot2) > 30f) -> TooSkew
+        normalized4 = (lpos2 - lpos).normalized
+        num135 = Acos(Abs(Dot(normalized4, lrot .Forward()))) in degrees
+        num136 = Acos(Abs(Dot(normalized4, lrot2.Forward()))) in degrees
+        if (num135 > 24f || num136 > 24f) -> TooSkew
+
+    The thresholds move with how many ends are on a belt, which is the
+    ``flag21``/``flag22`` pair: belt-to-belt is the tightest at 0.4..5.0,
+    machine-to-machine the loosest at 0.9..7.5.
+
+    A snapped end's rotation is the slot's, so its forward is the slot's forward
+    -- negated on the output side, where the game applies
+    ``Quaternion.Euler(0f, 180f, 0f)``.  An end that stayed put keeps the yaw we
+    emitted.  ``Quaternion.Angle`` between two rotations that share an up axis is
+    the angle between their forwards, and every rotation here is upright, so the
+    30-degree test is done on forwards.
+
+    Two of the game's tests are NOT ported, both because they need the planet's
+    grid rather than ours: ``CalcSegmentsAcross`` counts the grid segments a
+    sorter crosses, which is a function of latitude, and the combined
+    ``sqrt(segments^2 + altitude^2)`` minimum built on it.  Our sorters never
+    change level (``sorter.altitude``) and sit on a uniform grid, where the
+    length test above is the same statement; near a pole it would not be, and
+    nothing we emit goes near one.
+    """
+    bs = ctx.placement.buildings
+    for i, b in ctx.of_kind(Kind.SORTER):
+        anchors = _anchors(b)
+        if anchors is None:
+            continue
+        lpos: tuple[float, float, float] = anchors[0]
+        lpos2: tuple[float, float, float] = anchors[1]
+        yaw2 = b.yaw if b.yaw2 is None else b.yaw2
+        fwd = (math.sin(math.radians(b.yaw)), math.cos(math.radians(b.yaw)), 0.0)
+        fwd2 = (math.sin(math.radians(yaw2)), math.cos(math.radians(yaw2)), 0.0)
+
+        belts = 0
+        for link in (b.input_obj, b.output_obj):
+            if link is not None and 0 <= link < len(bs) and cat.is_belt(bs[link].item_id):
+                belts += 1
+
+        if b.input_obj is not None:
+            got = _slot_pose_of(ctx, b.input_obj, b.input_from_slot)
+            if got is not None:
+                lpos, fwd = got[0], got[1]
+        if b.output_obj is not None:
+            got = _slot_pose_of(ctx, b.output_obj, b.output_to_slot)
+            if got is not None:
+                lpos2 = got[0]
+                fwd2 = (-got[1][0], -got[1][1], -got[1][2])
+
+        low, high = _SORTER_LENGTH[belts]
+        length = math.dist(lpos, lpos2)
+        if length > high:
+            yield Finding(
+                "game.inserter_skew",
+                Severity.ERROR,
+                f"sorter {i} is {length:.2f} tiles end to end after snapping, over "
+                f"the {high} the game allows with {belts} belt end(s)",
+                (i,),
+                {"length": round(length, 3), "max": high, "belt_ends": belts},
+            )
+        if length < low:
+            yield Finding(
+                "game.inserter_skew",
+                Severity.ERROR,
+                f"sorter {i} is only {length:.2f} tiles end to end after snapping, "
+                f"under the {low} the game allows with {belts} belt end(s)",
+                (i,),
+                {"length": round(length, 3), "min": low, "belt_ends": belts},
+            )
+        if length == 0.0:
+            continue
+
+        pair = math.degrees(math.acos(max(-1.0, min(1.0, _dot(fwd, fwd2)))))
+        if pair > _SKEW_PAIR_DEG:
+            yield Finding(
+                "game.inserter_skew",
+                Severity.ERROR,
+                f"sorter {i}'s two ends face {pair:.0f} degrees apart, over the "
+                f"{_SKEW_PAIR_DEG:.0f} the game allows (deflection too much)",
+                (i,),
+                {"pair_deg": round(pair, 1)},
+            )
+        axis = _unit(lpos2, lpos)
+        for label, f in (("input", fwd), ("output", fwd2)):
+            off = math.degrees(math.acos(min(1.0, abs(_dot(axis, f)))))
+            if off > _SKEW_AXIS_DEG:
+                yield Finding(
+                    "game.inserter_skew",
+                    Severity.ERROR,
+                    f"sorter {i}'s {label} end faces {off:.0f} degrees off the line "
+                    f"it runs along, over the {_SKEW_AXIS_DEG:.0f} the game allows "
+                    f"(deflection too much)",
+                    (i,),
+                    {"end": label, "off_axis_deg": round(off, 1)},
+                )
 
 
 @check("sorter.filter")

@@ -42,13 +42,15 @@ from __future__ import annotations
 import json
 import math
 import re
-from collections.abc import Set
+from collections.abc import Mapping, Set
 from dataclasses import dataclass
 from fractions import Fraction
 from functools import cache
 from pathlib import Path
+from typing import Any
 
 _DATA = Path(__file__).parent / "data" / "buildings.json"
+_SLOT_POSES = Path(__file__).parent / "data" / "slot_poses.json"
 
 
 # --- id ranges -------------------------------------------------------------
@@ -687,6 +689,39 @@ def belt_marker(dsp_item_id: int) -> tuple[int, int]:
 
 
 @dataclass(frozen=True, slots=True)
+class SlotPose:
+    """One sorter attachment point, in the building's own unrotated frame.
+
+    This is ``PrefabDesc.slotPoses[i]`` -- the array the game indexes with a
+    sorter's ``inputFromSlot`` / ``outputToSlot`` -- with Unity's model axes
+    mapped onto our tile grid.
+
+    The mapping is ``dx = model.x``, ``dy = model.z``, ``dz = model.y``: Unity
+    puts ``+z`` forward and ``+y`` up, our grid puts ``+y`` north and ``z``
+    up.  It is not a guess.  ``test_game_slot_poses`` scores all eight
+    axis-permutations against the 1206 machine-side sorter records the game
+    itself wrote and this is the only one that lands every end beside the slot
+    it names; the next best leaves 779 of them further than a tile away.
+
+    ``fx, fy, fz`` is ``Pose.forward``, in the same frame -- the direction the
+    game requires a sorter's approach to agree with.  Near-unit and very nearly
+    horizontal; the tiny ``fz`` is the model's own build-in tilt, kept rather
+    than zeroed because the game dots against it unrounded.
+
+    All six are floats because the game's are: these are Unity ``Transform``
+    world coordinates inside a prefab, on a 0.1-tile lattice that no exact
+    rational reconstruction would improve.
+    """
+
+    dx: float
+    dy: float
+    dz: float
+    fx: float
+    fy: float
+    fz: float
+
+
+@dataclass(frozen=True, slots=True)
 class Building:
     """One buildable thing, with the geometry the layout stage needs."""
 
@@ -699,10 +734,18 @@ class Building:
     #: 0 = normal building. 1 = belt addon: occupies NO grid tile of its own and
     #: mounts onto a belt (this is what makes the Spray Coater nearly free).
     addon_type: int
-    #: Explicit I/O slots, when the building defines any.  Most production
-    #: buildings define none at all, which is why a sorter may attach anywhere
-    #: on their perimeter.  The Fractionator is the exception that matters.
+    #: Belt and fluid PORT poses -- ``PrefabDesc.portPoses``, which is
+    #: ``SlotConfig.slotPoses`` in the prefab.  The name is the game's and it is
+    #: a trap: these are where a belt or a pipe meets the building, and they are
+    #: NOT what a sorter's slot index means.  See :attr:`slot_poses`.
     slots: tuple[dict[str, float], ...]
+    #: Where a sorter may attach -- ``PrefabDesc.slotPoses``, which is
+    #: ``SlotConfig.insertPoses`` in the prefab, indexed exactly as a sorter's
+    #: ``inputFromSlot`` / ``outputToSlot``.  Empty for a building that accepts
+    #: no sorter at all (Storage Tank, Fractionator, Splitter, belts), which is
+    #: also how the game's own checks read it: they skip a peer whose
+    #: ``slotPoses.Length`` does not cover the index.
+    slot_poses: tuple[SlotPose, ...]
     cover_radius: Fraction
     connect_distance: Fraction
 
@@ -766,9 +809,25 @@ _BELT_ENTRIES = {
 }
 
 
+def _slot_poses_for(prefab: str, table: Mapping[str, Any]) -> tuple[SlotPose, ...]:
+    """``prefab``'s sorter slots, with Unity's model axes mapped onto the grid."""
+    return tuple(
+        SlotPose(
+            dx=float(p["pos"][0]),
+            dy=float(p["pos"][2]),
+            dz=float(p["pos"][1]),
+            fx=float(p["fwd"][0]),
+            fy=float(p["fwd"][2]),
+            fz=float(p["fwd"][1]),
+        )
+        for p in (table.get(prefab) or {}).get("slotPoses", ())
+    )
+
+
 @cache
 def _load() -> dict[int, Building]:
     raw = json.loads(_DATA.read_text())
+    poses = json.loads(_SLOT_POSES.read_text())
     out: dict[int, Building] = {}
     for row in raw:
         item_id = row.get("itemId")
@@ -792,6 +851,7 @@ def _load() -> dict[int, Building]:
             height=int(h),
             addon_type=row.get("addonType", 0),
             slots=tuple(row.get("slots") or ()),
+            slot_poses=_slot_poses_for(row["prefab"], poses),
             cover_radius=Fraction(power.get("coverRadius") or 0).limit_denominator(100),
             connect_distance=Fraction(power.get("connectDistance") or 0).limit_denominator(100),
         )
@@ -807,6 +867,7 @@ def _load() -> dict[int, Building]:
             height=1,
             addon_type=0,
             slots=(),
+            slot_poses=(),
             cover_radius=Fraction(0),
             connect_distance=Fraction(0),
         )

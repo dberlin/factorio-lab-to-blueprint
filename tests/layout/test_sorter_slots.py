@@ -12,6 +12,7 @@ than a rule hole -- see :func:`test_only_artificial_star_is_excluded`.
 from __future__ import annotations
 
 import collections
+import math
 from collections.abc import Callable
 from pathlib import Path
 
@@ -150,11 +151,12 @@ def test_latitude_compressed_records_are_bounded() -> None:
     """The off-grid remainder is small, named, and does not grow silently.
 
     41 machine-side records sit on machines the polar projection pushed off the
-    tile grid.  36 of them still come out right; the 5 that do not are all Depot
-    Mk.I in ``factory-endgame-distribution-hub``, where the sorter's whole x
-    extent has been squashed to ~0.1 tiles and the approach direction can no
-    longer be read off it.  That is the coordinate system failing, not the ring
-    rule -- but it is a hole, so it is counted rather than hidden.
+    tile grid.  The few that do not come out right are all Depot Mk.I in
+    ``factory-endgame-distribution-hub``, where the sorter's whole x extent has
+    been squashed to ~0.1 tiles and the approach direction can no longer be read
+    off it.  That is the coordinate system failing, not the slot table -- but it
+    is a hole, so it is counted rather than hidden.  Reading the game's own slot
+    poses instead of an inferred ring took it from 5 to 3.
     """
     total = 0
     wrong: list[tuple[str, str]] = []
@@ -174,60 +176,52 @@ def test_latitude_compressed_records_are_bounded() -> None:
             if got != slot:
                 wrong.append((name, cat.building(peer.item_id).name))
     assert total == 41
-    assert wrong == [("factory-endgame-distribution-hub.txt", "Depot Mk.I")] * 5
+    assert wrong == [("factory-endgame-distribution-hub.txt", "Depot Mk.I")] * 3
 
 
-def test_slot_handedness_matches_corpus() -> None:
-    """Every entry in the handedness table is what the corpus actually shows.
+def test_the_slot_poses_are_what_the_corpus_lands_on() -> None:
+    """The game's table, not a ring: every real end is beside the pose it names.
 
-    Flipping any entry has to break :func:`test_machine_slots_reproduce_the_corpus`,
-    or the table is decoration.  This asserts that directly, per building, so a
-    wrong entry names the building instead of failing as one number.
+    ``test_machine_slots_reproduce_the_corpus`` shows the *selection* rule picks
+    the game's index.  This shows the *table* is the game's, by measuring each
+    real sorter end against the pose its recorded index resolves to and holding
+    it to the game's own ``0.8`` and its own facing test.  A wrong axis mapping
+    -- Unity's ``(x, y, z)`` onto our ``(x, z, y)`` -- puts 779 of these ends a
+    tile or more from the slot they name, so it is not a formality.
+
+    The two filters are the same latitude-compression exclusion used everywhere
+    else: near a pole a tile of longitude collapses, and neither the sorter's
+    length nor the machine's position is in tiles any more.
     """
-    observed: set[int] = set()
-    disagrees: collections.Counter[int] = collections.Counter()
+    checked = 0
+    worst_gap = 0.0
+    worst_dot = 1.0
     for _name, bp in CORPUS:
-        for _s, peer, slot, end, other in _sorter_sides(bp):
-            if peer is None or cat.is_belt(peer.item_id):
+        for s, peer, slot, end, other in _sorter_sides(bp):
+            if peer is None or cat.is_belt(peer.item_id) or peer.item_id == ARTIFICIAL_STAR:
                 continue
-            if peer.item_id == ARTIFICIAL_STAR:
+            # Tighter than `_off_grid`: measuring a 0.8-tile tolerance needs the
+            # machine ON the grid, not merely near it. At the 0.2 the slot-index
+            # tests use, six more records come in from the compressed band and
+            # one of them reads 0.909 -- a machine two tenths of a tile out
+            # cannot be held to a tenth-of-a-tile margin.
+            if max(abs(peer.x - round(peer.x)), abs(peer.y - round(peer.y))) > 0.02:
                 continue
-            observed.add(peer.item_id)
-            flipped = _slot_with_handedness(
-                peer.item_id, peer, end, other, not S.ring_is_mirrored(peer.item_id)
+            if not 0.9 <= math.dist((s.x, s.y), (s.x2, s.y2)) <= 3.2:
+                continue
+            dx, dy, dz = S.slot_offset(peer.item_id, peer.yaw, slot)
+            gap = math.dist(
+                (end[0], end[1], 0.0), (peer.x + dx, peer.y + dy, peer.z + dz)
             )
-            if flipped != slot:
-                disagrees[peer.item_id] += 1
-
-    assert observed == set(S._MIRRORED), "table covers exactly the observed buildings"
-    for item_id in sorted(observed):
-        assert disagrees[item_id] > 0, (
-            f"{cat.building(item_id).name}: the opposite handedness fits every one of "
-            f"its records too, so this entry is not evidenced by the corpus"
-        )
-
-
-def _slot_with_handedness(
-    item_id: int,
-    peer: BlueprintBuilding,
-    end: tuple[float, float],
-    other: tuple[float, float],
-    mirrored: bool,
-) -> int:
-    original = S._MIRRORED.get(item_id)
-    S._MIRRORED[item_id] = mirrored
-    try:
-        return S.machine_slot(
-            item_id,
-            peer.yaw,
-            (end[0] - peer.x, end[1] - peer.y),
-            (end[0] - other[0], end[1] - other[1]),
-        )
-    finally:
-        if original is None:
-            del S._MIRRORED[item_id]
-        else:
-            S._MIRRORED[item_id] = original
+            fx, fy, _fz = S.slot_forward(peer.item_id, peer.yaw, slot)
+            away = (other[0] - end[0], other[1] - end[1])
+            n = math.hypot(*away) or 1.0
+            checked += 1
+            worst_gap = max(worst_gap, gap)
+            worst_dot = min(worst_dot, (fx * away[0] + fy * away[1]) / n)
+    assert checked == 1142
+    assert worst_gap <= S.SLOT_REACH, f"worst gap {worst_gap}"
+    assert worst_dot >= 0.0, f"worst dot {worst_dot}"
 
 
 def test_only_artificial_star_is_excluded() -> None:
@@ -325,27 +319,56 @@ def test_yaw_rotates_the_ring(yaw: float) -> None:
         assert S.machine_slot(2303, yaw, turn(*offset), turn(*approach)) == expected
 
 
-def test_wide_side_clamps_to_its_three_slots() -> None:
+def test_wide_side_clamps_to_its_end_slot() -> None:
     """A side has three slots however long it is, so a far column takes the end one.
 
-    The Matrix Lab's south side is five tiles but slots 0/1/2 sit ~0.8 apart
-    around its centre, so nothing on that side is further out than one tile.
+    The Matrix Lab's north side is five tiles but carries slots only at
+    ``x in {-1, 0, 1}``, so a column further out has no slot beside it and the
+    nearest one on that face is named instead.  ``game.inserter_data`` is what
+    reports that end as too far to paste; this only pins which slot it lands on.
     """
     assert S.machine_slot(2901, 0.0, (4, 2), (0, -1)) == 0
     assert S.machine_slot(2901, 0.0, (-4, 2), (0, -1)) == 2
 
 
-def test_diagonal_approach_is_refused() -> None:
+def test_a_diagonal_approach_now_resolves() -> None:
+    """It used to be refused; with real poses there is nothing left to refuse on.
+
+    The old ring needed the approach to name a side, so an exactly diagonal one
+    was ambiguous.  A pose table is not ambiguous: slot 2 is the nearest slot
+    the sorter runs towards, whatever mixture of x and y it arrived by.
+    """
+    assert S.machine_slot(2303, 0.0, (1, 1), (-1, -1)) == 2
+
+
+def test_a_building_with_no_sorter_slots_is_refused() -> None:
+    """Storage Tank: four belt PORTS, and not one insert pose.
+
+    This is the distinction ``buildings.json`` blurred -- its ``slots`` field is
+    the port table -- and naming a slot on a building that has none is the shape
+    of guess this module exists to stop.
+    """
+    assert cat.building(2106).slots, "Storage Tank does have belt ports"
+    assert not cat.building(2106).slot_poses
     with pytest.raises(S.SlotUndetermined):
-        S.machine_slot(2303, 0.0, (1, 1), (-1, -1))
+        S.machine_slot(2106, 0.0, (0, 3), (0, 1))
 
 
-def test_handedness_is_flagged_as_inferred_for_unobserved_buildings() -> None:
-    assert S.handedness_is_observed(2303)
-    assert S.handedness_is_observed(2901)
-    # Chemical Plant: never a sorter peer anywhere in the corpus.
-    assert not S.handedness_is_observed(2309)
-    assert S.ring_is_mirrored(2309) is True
-    # Assembling Machine Mk.II is 3x3, like the two that were observed.
-    assert not S.handedness_is_observed(2304)
-    assert S.ring_is_mirrored(2304) is False
+def test_the_chemical_plant_table_is_the_games_and_not_a_ring() -> None:
+    """Eight slots in two rows, and neither long side takes a sorter at all.
+
+    The building this project kept getting wrong.  Nine tiles wide and five
+    deep, but a sorter may only meet it at ``x in {-1, 0, 1, 2}`` on the north
+    face, or on the row one tile INSIDE the south edge.  No ring rule produces
+    that, and the ring rule this module used to carry predicted twelve slots on
+    a mirrored ring -- which is why a three-building blueprint with a Chemical
+    Plant in it pasted as "Sorter data error" while the same shape built from
+    3x3 assemblers pasted clean.
+    """
+    poses = cat.building(2309).slot_poses
+    assert len(poses) == 8
+    assert sorted({round(p.dy, 2) for p in poses}) == [-0.9, 2.1]
+    assert sorted(round(p.dx, 2) for p in poses if p.dy > 0) == [-1.0, 0.0, 1.0, 2.0]
+    # The north face slots face north, the inner row faces south.
+    assert all(p.fy > 0.9 for p in poses if p.dy > 0)
+    assert all(p.fy < -0.9 for p in poses if p.dy < 0)

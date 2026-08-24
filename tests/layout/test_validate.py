@@ -413,7 +413,8 @@ def test_sorter_endpoint_pair_fires_when_links_disagree_with_anchors() -> None:
 
 
 CHEMICAL_PLANT = 2309  # 9x5, and never a sorter peer anywhere in the corpus
-MATRIX_LAB = 2901  # 5x5, mirrored ring, handedness observed
+MATRIX_LAB = 2901  # 5x5, and its slot ring runs the opposite way round
+OIL_REFINERY = 2308  # 3x7, nine slots, and none at all on its north face
 
 
 def _retagged(
@@ -424,8 +425,9 @@ def _retagged(
     input_from_slot: int | None = None,
     output_from_slot: int | None = None,
     input_to_slot: int | None = None,
+    yaw: float | None = None,
 ) -> Placement:
-    """``p`` with one sorter's slot fields overwritten, to mutate a good build."""
+    """``p`` with one sorter's slot fields or yaw overwritten, to mutate a good build."""
     b = p.buildings[index]
     bs = list(p.buildings)
     bs[index] = dataclasses.replace(
@@ -436,6 +438,8 @@ def _retagged(
             b.output_from_slot if output_from_slot is None else output_from_slot
         ),
         input_to_slot=b.input_to_slot if input_to_slot is None else input_to_slot,
+        yaw=b.yaw if yaw is None else yaw,
+        yaw2=b.yaw2 if yaw is None else yaw,
     )
     return Placement(buildings=tuple(bs))
 
@@ -495,11 +499,115 @@ def test_sorter_slot_reach_clean_on_a_three_wide_machine() -> None:
     assert not fired(r, "sorter.slot_reach")
 
 
-def test_sorter_slot_reach_fires_on_a_far_column_of_a_wide_machine() -> None:
-    """A 9-wide Chemical Plant still has three slots on its south side.
+# --- the game's own build conditions ----------------------------------------
 
-    The sorter lands on the plant's leftmost column, four tiles from the side's
-    centre and beside no slot at all.
+
+def test_game_inserter_data_clean_on_a_derived_placement() -> None:
+    """The negative control for all three: a legal sorter fires nothing.
+
+    Without this the checks below could pass by firing on everything.  The wider
+    negative control is ``test_the_slot_poses_are_what_the_corpus_lands_on``,
+    which runs the same predicate over 1142 sorters the game itself wrote.
+    """
+    r = validate(_belt_to_machine())
+    assert not fired(r, "game.inserter_data")
+    assert not fired(r, "game.inserter_paste")
+    assert not fired(r, "game.inserter_skew")
+
+
+def test_game_inserter_data_fires_when_the_machine_side_is_zeroed() -> None:
+    """Slot 0 on a sorter entering from the east: the defect we shipped.
+
+    Slot 0 of an assembler is the west end of its NORTH face, so an end on the
+    east face lands 2.02 tiles from it -- over the 0.8 of
+    ``CheckInserterDataLegal``, and over the 1.6 the paste path allows even a
+    perfectly radial correction.  Measured in game at 1.87 on a real build with
+    every machine-side slot forced to 0, against 0.24 with the right one.
+    """
+    p = _retagged(_belt_to_machine(), 2, output_to_slot=0)
+    r = validate(p)
+    assert fired(r, "game.inserter_data")
+    assert fired(r, "game.inserter_paste")
+    gap = r.by_check("game.inserter_data")[0].detail["gap"]
+    assert gap > 1.6, gap
+
+
+def test_game_inserter_data_fires_when_the_sorter_runs_into_the_slots_back() -> None:
+    """Slot 10 is the assembler's west face; this sorter arrives from the east.
+
+    The predicate has two halves and they catch different things, so the second
+    one needs its own witness.  A slot square across the sorter is NOT caught
+    here -- the game's test is ``< 0f``, and a right angle dots to zero -- which
+    is why the corner case belongs to ``game.inserter_skew`` instead.
+    """
+    r = validate(_retagged(_belt_to_machine(), 2, output_to_slot=10))
+    dots = [f for f in r.by_check("game.inserter_data") if "dot" in f.detail]
+    assert dots, [f.message for f in r.by_check("game.inserter_data")]
+    assert dots[0].detail["dot"] < 0
+
+
+def test_game_inserter_data_fires_on_a_reversed_own_slot_pairing() -> None:
+    """``ReadObjectConn(objId, 0)`` must be the output, ``1`` the input."""
+    p = _retagged(_belt_to_machine(), 2, output_from_slot=1, input_to_slot=0)
+    assert fired(validate(p), "game.inserter_data")
+
+
+def test_game_inserter_paste_allows_a_purely_radial_stretch() -> None:
+    """1.1 tiles straight out of the face is legal on paste, and only there.
+
+    The paste ladder tolerates ``num40`` up to 1.6 when ``num41`` -- the sideways
+    part -- is under 0.1, and caps everything else at 0.8.  The Chemical Plant
+    needs exactly that: its south row of slots sits at ``z = -0.9``, one row
+    inside a five-deep footprint, so a sorter on the south edge tile is 1.1 out
+    with no sideways slide at all.  ``game.inserter_data`` still reports it,
+    because the COPY predicate has no such allowance -- the two disagree here and
+    the port keeps them apart rather than averaging them.
+    """
+    p = place(
+        machine(0, 0, item_id=CHEMICAL_PLANT),
+        belt(4, -1),
+        sorter(4, -1, 4, 0, inp=1, out=0),
+    )
+    r = validate(p)
+    assert not fired(r, "game.inserter_paste"), [
+        f.message for f in r.by_check("game.inserter_paste")
+    ]
+    assert fired(r, "game.inserter_data")
+
+
+def test_game_inserter_paste_stops_a_radial_stretch_at_1_6() -> None:
+    """Two tiles out from the same face is refused; 1.1 was not.
+
+    The pair with :func:`test_game_inserter_paste_allows_a_purely_radial_stretch`
+    is what pins ``_PASTE_RADIAL``: one test on each side of the threshold, both
+    with the sideways part at zero, so only that constant separates them.
+
+    ``_PASTE_LATERAL`` has no such pair and cannot get one -- with ``snap``
+    already over 0.8, a lateral of 0.1 or more is refused by the ladder's third
+    branch whatever the first says, and a lateral under 0.1 never reaches the
+    first.  The branch is unreachable for anything that is not a silo.  It is
+    ported anyway, because a port that quietly drops a branch is not one.
+    """
+    r = validate(
+        place(
+            machine(0, 0, item_id=CHEMICAL_PLANT),
+            belt(4, -3),
+            sorter(4, -3, 4, -1, inp=1, out=0),
+        )
+    )
+    snaps = [f for f in r.by_check("game.inserter_paste") if "snap" in f.detail]
+    assert snaps, [f.message for f in r.by_check("game.inserter_paste")]
+    assert snaps[0].detail["lateral"] < 0.1
+    assert snaps[0].detail["snap"] > 1.6
+
+
+def test_game_inserter_data_fires_on_a_far_column_of_a_wide_machine() -> None:
+    """A Chemical Plant is nine wide and takes a sorter on four of its columns.
+
+    The sorter lands on the plant's leftmost column, where the real slot table
+    has nothing, and the nearest slot on that face is three tiles away.  This is
+    the class of defect the old ``sorter.slot_reach`` warning could only guess
+    at, and the game's own numbers make it an error.
     """
     r = validate(
         place(
@@ -508,26 +616,43 @@ def test_sorter_slot_reach_fires_on_a_far_column_of_a_wide_machine() -> None:
             sorter(0, 5, 0, 4, inp=1, out=0),
         )
     )
-    assert fired(r, "sorter.slot_reach")
+    assert fired(r, "game.inserter_data")
+    assert fired(r, "game.inserter_paste")
 
 
-def test_sorter_slot_handedness_warns_only_for_unobserved_buildings() -> None:
-    unobserved = validate(
+def test_game_inserter_skew_fires_on_a_backwards_yaw() -> None:
+    """A sorter's yaw points from the end it draws from to the end it feeds.
+
+    All 1250 real sorters do.  Reversed, the machine end is re-rotated to the
+    slot's pose on paste while the belt end keeps the blueprint's yaw, and the
+    two end up 180 degrees apart -- ``TooSkew``, "deflection too much".  Both
+    strategies emitted exactly this on every belt-to-machine sorter until
+    ``assign_sorter_slots`` started deriving the yaw.
+    """
+    p = _retagged(_belt_to_machine(), 2, yaw=90.0)
+    r = validate(p)
+    assert fired(r, "game.inserter_skew")
+    assert any(f.detail.get("pair_deg", 0) > 30 for f in r.by_check("game.inserter_skew"))
+
+
+def test_game_inserter_skew_fires_when_snapping_makes_a_sorter_too_short() -> None:
+    """The Oil Refinery's south face sits 0.6 tiles outside its last tile row.
+
+    A one-tile sorter from that face to the belt beside it is 0.4 long once the
+    machine end snaps onto the slot, under the 0.6 the game allows a sorter with
+    one belt end.  Nothing about the slot INDEX is wrong here, which is why the
+    length half of the ladder has to be ported too.
+    """
+    r = validate(
         place(
-            machine(0, 0, item_id=CHEMICAL_PLANT),
-            belt(4, 5),
-            sorter(4, 5, 4, 4, inp=1, out=0),
+            machine(0, 0, item_id=OIL_REFINERY),
+            belt(1, -1),
+            sorter(1, 0, 1, -1, inp=0, out=1),
         )
     )
-    assert fired(unobserved, "sorter.slot_handedness")
-    observed = validate(
-        place(
-            machine(0, 0, item_id=MATRIX_LAB),
-            belt(2, 5),
-            sorter(2, 5, 2, 4, inp=1, out=0),
-        )
-    )
-    assert not fired(observed, "sorter.slot_handedness")
+    lengths = [f for f in r.by_check("game.inserter_skew") if "min" in f.detail]
+    assert lengths, [f.message for f in r.by_check("game.inserter_skew")]
+    assert lengths[0].detail["length"] < 0.6
 
 
 # --- belts -----------------------------------------------------------------

@@ -74,7 +74,7 @@ from flab2bp.layout.base import (
     Placement,
 )
 from flab2bp.layout.geometry import band_offsets, height_waste, lane_order, reach_table
-from flab2bp.layout.slots import assign_sorter_slots
+from flab2bp.layout.slots import SlotUndetermined, assign_sorter_slots
 from flab2bp.spec import BuildSpec, MachineGroup
 
 # --- lab id -> DSP item id -------------------------------------------------
@@ -2369,12 +2369,24 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
         towers += extra
         towers += _link_towers(buildings, tower_model)
 
+    # Slot indices are geometry, so they are derived here once rather than at
+    # each of the several places a sorter gets created. Every sorter this
+    # strategy emitted before carried a defaulted zero in all four fields, which
+    # the game rejects outright.
+    #
+    # A sorter whose slot cannot be derived is a REFUSAL, not a crash and not a
+    # guess. The one case that reaches this today is a Spray Coater: it ships
+    # zero slot poses, and `BuildTool_Inserter` will not even let a sorter
+    # target a building with none, so the connection this strategy wants does
+    # not exist in the game. Refusing says so; emitting an index the game never
+    # writes would not.
+    try:
+        slotted = assign_sorter_slots(buildings)
+    except SlotUndetermined as exc:
+        raise NoValidLayout(f"a sorter's slot could not be derived: {exc}") from exc
+
     return Placement(
-        # Slot indices are geometry, so they are derived here once rather than
-        # at each of the several places a sorter gets created. Every sorter this
-        # strategy emitted before carried a defaulted zero in all four fields,
-        # which the game rejects outright.
-        buildings=assign_sorter_slots(buildings),
+        buildings=slotted,
         description=f"flab2bp spine layout ({spec.label or 'default'})",
         short_desc=spec.label or "flab2bp",
         stats={
