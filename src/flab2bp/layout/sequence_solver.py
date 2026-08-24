@@ -1,19 +1,41 @@
 """Deterministic staged orchestration for sequence-pair routing search.
 
-This module owns scheduling and accounting only.  Task 11 binds the production
-preparer, routers, and validator; keeping those adapters injected here makes a
-proxy result incapable of becoming an exact incumbent by construction.
+The generic scheduler keeps proxy placement, relaxed routing, detailed
+emission, and exact acceptance separate.  The public layout binds those stages
+to the current freeform geometry, routers, power planner, and validator.
 """
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from fractions import Fraction
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
-from flab2bp.layout.base import NoValidLayout, Placement
-from flab2bp.layout.global_router import GlobalRouteResult
+from flab2bp.layout import validate
+from flab2bp.layout.base import RETRY_BUDGET_S, NoValidLayout, Placement
+from flab2bp.layout.freeform import (
+    _ROUTING_BUDGET,
+    _ROUTING_EXPANSIONS_PER_SECOND,
+    WEST_CHANNEL,
+    Strip,
+    _box,
+    _build,
+    _BuildResult,
+    _candidate_heights,
+    _direct_alignment_targets,
+    _direct_net_candidates,
+    _fanout_shortfall,
+    _greedy_pack,
+    _nets_between,
+    _Pack,
+    _prepare_routing_problem,
+    _PreparedRoutingProblem,
+    _Unpowerable,
+    plan_strips,
+)
+from flab2bp.layout.global_router import GlobalRouteResult, route_global
 from flab2bp.layout.route_feedback import (
     DetailedRouteResult,
     DetailedRouteStatus,
@@ -28,6 +50,7 @@ from flab2bp.layout.sequence_pair import (
     AnnealState,
     DecodedPlacement,
     PlacementProblem,
+    align_direct_inserts,
     anneal_stage,
     decode_sequence_pair,
     derive_stage_seed,
@@ -561,6 +584,319 @@ def _exact_key(placement: Placement) -> tuple[int, int]:
     return placement.area, int(belt_tiles)
 
 
+@dataclass(frozen=True, slots=True)
+class _ProductionCandidate:
+    height: int
+    problem: PlacementProblem
+    decoded: DecodedPlacement
+    pack: _Pack
+    prepared: _PreparedRoutingProblem | None
+    preparation_error: str | None = None
+
+
+@dataclass(slots=True)
+class _ProductionTelemetry:
+    planning_time_s: float = 0.0
+    preparation_time_s: float = 0.0
+    global_route_time_s: float = 0.0
+    detailed_route_time_s: float = 0.0
+    validation_time_s: float = 0.0
+    global_routes: int = 0
+    detailed_routes: int = 0
+    global_expansions: int = 0
+    detailed_expansions: int = 0
+    best_overflow: int | None = None
+    best_stranded: int | None = None
+    feedback_nets: int = 0
+    feedback_cells: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class _ProductionRun:
+    solver: SequenceSolver[_ProductionCandidate]
+    telemetry: _ProductionTelemetry
+    heights: tuple[int, ...]
+    direct_candidates: int
+    started: float
+    ceiling: float
+
+
+def _empty_global_result(*, exhausted: bool) -> GlobalRouteResult:
+    return GlobalRouteResult(
+        net_results=(),
+        paths={},
+        overflow_cells=0,
+        total_overflow=0,
+        max_overflow=0,
+        unreachable_ports=1,
+        rounds=0,
+        expansions=0,
+        exhausted_budget=exhausted,
+        hot_cells=(),
+        hot_regions=(),
+    )
+
+
+def _closed_detailed_result(status: DetailedRouteStatus) -> DetailedStageResult:
+    return DetailedStageResult(
+        routing=DetailedRouteResult(
+            status=status,
+            routed=(),
+            failures=(),
+            iterations=0,
+            expansions=0,
+        ),
+        placement=None,
+    )
+
+
+def _route_detailed_candidate(
+    spec: BuildSpec,
+    strips: list[Strip],
+    pack: _Pack,
+    *,
+    power: bool,
+    deadline: float | None,
+    allowance: int,
+) -> DetailedStageResult:
+    """Run real emission while withholding every partial or unpowerable build."""
+    try:
+        built: _BuildResult = _build(
+            spec,
+            strips,
+            pack,
+            power=power,
+            route=True,
+            deadline=deadline,
+            budget={"left": allowance},
+        )
+    except _Unpowerable:
+        return _closed_detailed_result(DetailedRouteStatus.UNPOWERABLE)
+    return DetailedStageResult(
+        routing=built.routing,
+        placement=(
+            built.placement
+            if built.routing.status is DetailedRouteStatus.ROUTED
+            else None
+        ),
+    )
+
+
+def _production_run(
+    spec: BuildSpec,
+    *,
+    time_budget_s: float,
+    power: bool,
+    strip_len: int,
+    config: SequenceSolverConfig,
+) -> _ProductionRun:
+    started = time.monotonic()
+    ceiling = max(time_budget_s, RETRY_BUDGET_S)
+    deadline = started + ceiling
+    def deadline_reached() -> bool:
+        return time.monotonic() >= deadline
+    telemetry = _ProductionTelemetry()
+
+    planning_started = time.monotonic()
+    try:
+        try:
+            strips = plan_strips(spec, strip_len=strip_len)
+        except (KeyError, ValueError) as exc:
+            try:
+                strips = plan_strips(spec, strip_len=max(1, spec.machine_count))
+            except (KeyError, ValueError):
+                raise NoValidLayout(
+                    f"the spec cannot be split into strips: {exc}",
+                    spec_label=spec.label,
+                    budget_s=time_budget_s,
+                ) from exc
+        if not strips:
+            raise NoValidLayout(
+                "the spec contains no machine groups",
+                spec_label=spec.label,
+                budget_s=time_budget_s,
+            )
+        shortfall = _fanout_shortfall(strips)
+        if shortfall:
+            raise NoValidLayout(
+                "a producer lane has fewer tiles than the consumers it must tap, "
+                "so two junctions would have to share one tile. "
+                + "; ".join(shortfall[:3]),
+                spec_label=spec.label,
+                budget_s=0.0,
+            )
+
+        direct_candidates = _direct_net_candidates(strips, spec)
+        direct_targets = _direct_alignment_targets(direct_candidates)
+        sizes = tuple(_box(strip) for strip in strips)
+        nets = tuple(_nets_between(strips))
+        area_lower_bound = sum(width * height for width, height in sizes)
+        seeds = {
+            height: _greedy_pack(strips, height)
+            for height in _candidate_heights(strips)
+        }
+        heights = tuple(
+            sorted(seeds, key=lambda height: (seeds[height].width, height))
+        )
+        problems = {
+            height: PlacementProblem(
+                sizes=sizes,
+                nets=nets,
+                outline_height=height,
+                area_lower_bound=area_lower_bound,
+            )
+            for height in heights
+        }
+    finally:
+        telemetry.planning_time_s += time.monotonic() - planning_started
+
+    def prepare(height: int, decoded: DecodedPlacement) -> _ProductionCandidate:
+        preparation_started = time.monotonic()
+        try:
+            problem = problems[height]
+            aligned = align_direct_inserts(problem, decoded, direct_targets)
+            pack = _decoded_pack(height, aligned)
+            if deadline_reached():
+                return _ProductionCandidate(
+                    height,
+                    problem,
+                    aligned,
+                    pack,
+                    None,
+                    "deadline",
+                )
+            try:
+                prepared = _prepare_routing_problem(
+                    spec,
+                    strips,
+                    pack,
+                    power=power,
+                )
+            except _Unpowerable:
+                return _ProductionCandidate(
+                    height,
+                    problem,
+                    aligned,
+                    pack,
+                    None,
+                    "unpowerable",
+                )
+            return _ProductionCandidate(height, problem, aligned, pack, prepared)
+        finally:
+            telemetry.preparation_time_s += time.monotonic() - preparation_started
+
+    def global_route(
+        candidate: _ProductionCandidate,
+        feedback: FeedbackState,
+        allowance: int,
+    ) -> GlobalRouteResult:
+        telemetry.global_routes += 1
+        telemetry.feedback_nets = max(telemetry.feedback_nets, len(feedback.net_weight))
+        telemetry.feedback_cells = max(
+            telemetry.feedback_cells, len(feedback.cell_history)
+        )
+        if candidate.prepared is None:
+            return _empty_global_result(
+                exhausted=candidate.preparation_error == "deadline"
+            )
+        routing_started = time.monotonic()
+        try:
+            if deadline_reached():
+                result = _empty_global_result(exhausted=True)
+            else:
+                result = route_global(candidate.prepared, feedback, allowance)
+        finally:
+            telemetry.global_route_time_s += time.monotonic() - routing_started
+        telemetry.global_expansions += result.expansions
+        telemetry.best_overflow = (
+            result.total_overflow
+            if telemetry.best_overflow is None
+            else min(telemetry.best_overflow, result.total_overflow)
+        )
+        return result
+
+    def detailed_route(
+        candidate: _ProductionCandidate, allowance: int
+    ) -> DetailedStageResult:
+        telemetry.detailed_routes += 1
+        if candidate.preparation_error == "deadline" or deadline_reached():
+            return _closed_detailed_result(DetailedRouteStatus.BUDGET)
+        routing_started = time.monotonic()
+        try:
+            result = _route_detailed_candidate(
+                spec,
+                strips,
+                candidate.pack,
+                power=power,
+                deadline=deadline,
+                allowance=allowance,
+            )
+        finally:
+            telemetry.detailed_route_time_s += time.monotonic() - routing_started
+        telemetry.detailed_expansions += result.routing.expansions
+        telemetry.best_stranded = (
+            result.routing.failed_count
+            if telemetry.best_stranded is None
+            else min(telemetry.best_stranded, result.routing.failed_count)
+        )
+        return result
+
+    def certify(placement: Placement) -> ValidationVerdict:
+        validation_started = time.monotonic()
+        try:
+            if deadline_reached():
+                return ValidationVerdict(False, ("deadline",))
+            report = validate.certify(placement, spec, expect_power=power)
+            if deadline_reached():
+                return ValidationVerdict(False, ("deadline",))
+            failures = tuple(sorted({finding.check for finding in report.errors}))
+            return ValidationVerdict(not failures, failures)
+        finally:
+            telemetry.validation_time_s += time.monotonic() - validation_started
+
+    expansion_total = max(
+        _ROUTING_BUDGET,
+        int(_ROUTING_EXPANSIONS_PER_SECOND * ceiling),
+    )
+    solver = SequenceSolver(
+        heights=heights,
+        problem_for_height=problems.__getitem__,
+        adapters=StageAdapters(
+            prepare=prepare,
+            global_route=global_route,
+            detailed_route=detailed_route,
+            validate=certify,
+        ),
+        expansion_budget=ExpansionBudget(expansion_total),
+        config=config,
+        deadline_reached=deadline_reached,
+    )
+    return _ProductionRun(
+        solver=solver,
+        telemetry=telemetry,
+        heights=heights,
+        direct_candidates=len(direct_candidates),
+        started=started,
+        ceiling=ceiling,
+    )
+
+
+def _decoded_pack(height: int, decoded: DecodedPlacement) -> _Pack:
+    """Convert decoded box origins to freeform content origins exactly once."""
+    return _Pack(
+        at={
+            index: (x + WEST_CHANNEL, y)
+            for index, (x, y) in enumerate(
+                zip(decoded.x, decoded.y, strict=True)
+            )
+        },
+        width=decoded.width,
+        height=height,
+        status="sequence-pair",
+        direct=decoded.direct,
+    )
+
+
 class _SolverFactory(Protocol):
     def __call__(
         self,
@@ -574,15 +910,17 @@ class _SolverFactory(Protocol):
 
 
 class SequencePairLayout:
-    """Audit-only layout surface; production adapters are bound in Task 11."""
+    """Audit-only closed-loop sequence-pair layout backend."""
+
+    name = "sequence-pair"
 
     def __init__(
         self,
         *,
-        solver_factory: _SolverFactory,
         power: bool = False,
         strip_len: int = 6,
         config: SequenceSolverConfig | None = None,
+        solver_factory: _SolverFactory | None = None,
     ) -> None:
         if type(power) is not bool:
             raise ValueError("power mode must be a bool")
@@ -593,15 +931,116 @@ class SequencePairLayout:
         self.strip_len = strip_len
         self.config = config or SequenceSolverConfig()
 
-    def lay_out(self, spec: BuildSpec, *, time_budget_s: float) -> Placement:
-        """Run the injected audit backend without registering it for production."""
+    def lay_out(
+        self, spec: BuildSpec, *, time_budget_s: float = 60.0
+    ) -> Placement:
+        """Return only a detailed-routed, powered, validator-clean placement."""
         if time_budget_s <= 0:
-            raise ValueError("time budget must be positive")
-        solver = self._solver_factory(
+            raise NoValidLayout(
+                "no time budget was given, so the sequence search was never asked",
+                spec_label=spec.label,
+                budget_s=time_budget_s,
+            )
+        if self._solver_factory is not None:
+            solver = self._solver_factory(
+                spec,
+                time_budget_s=time_budget_s,
+                power=self.power,
+                strip_len=self.strip_len,
+                config=self.config,
+            )
+            return solver.search().placement
+
+        run = _production_run(
             spec,
             time_budget_s=time_budget_s,
             power=self.power,
             strip_len=self.strip_len,
             config=self.config,
         )
-        return solver.search().placement
+        try:
+            result = run.solver.search()
+        except NoValidLayout as exc:
+            raise NoValidLayout(
+                exc.reason,
+                spec_label=spec.label,
+                budget_s=run.ceiling,
+            ) from exc
+        return _with_observational_stats(result, run, self.power, self.config)
+
+
+def _with_observational_stats(
+    result: SequenceSearchResult,
+    run: _ProductionRun,
+    power: bool,
+    config: SequenceSolverConfig,
+) -> Placement:
+    placement = result.placement
+    telemetry = run.telemetry
+    total_time_s = time.monotonic() - run.started
+    adapter_time_s = (
+        telemetry.planning_time_s
+        + telemetry.preparation_time_s
+        + telemetry.global_route_time_s
+        + telemetry.detailed_route_time_s
+        + telemetry.validation_time_s
+    )
+    stage_count = len(result.stages)
+    lns_sizes = tuple(stage.lns_size for stage in result.stages)
+    belt_tiles = _exact_key(placement)[1]
+    stats: dict[str, object] = dict(placement.stats)
+    stats.update(
+        {
+            "backend": "sequence-pair",
+            "accelerator": "python",
+            "seed": float(config.seed),
+            "seeds": float(len({stage.seed for stage in result.stages})),
+            "heights": float(len(run.heights)),
+            "restarts": float(len(run.heights) * config.restarts_per_height),
+            "stages": float(stage_count),
+            "moves": float(stage_count * config.moves_per_stage),
+            "accepted_moves": float(
+                sum(stage.accepted_moves for stage in result.stages)
+            ),
+            "decoded_candidates": float(
+                sum(stage.global_routes for stage in result.stages)
+            ),
+            "global_routes": float(telemetry.global_routes),
+            "detailed_routes": float(telemetry.detailed_routes),
+            "best_overflow": float(telemetry.best_overflow or 0),
+            "best_stranded": float(telemetry.best_stranded or 0),
+            "lns_invocations": float(sum(size > 0 for size in lns_sizes)),
+            "lns_total_size": float(sum(lns_sizes)),
+            "lns_max_size": float(max(lns_sizes, default=0)),
+            "feedback_nets": float(telemetry.feedback_nets),
+            "feedback_cells": float(telemetry.feedback_cells),
+            "feedback_decays": float(stage_count),
+            "planning_time_s": telemetry.planning_time_s,
+            "placement_time_s": max(0.0, total_time_s - adapter_time_s),
+            "preparation_time_s": telemetry.preparation_time_s,
+            "global_route_time_s": telemetry.global_route_time_s,
+            "detailed_route_time_s": telemetry.detailed_route_time_s,
+            "validation_time_s": telemetry.validation_time_s,
+            "compilation_time_s": 0.0,
+            "total_time_s": total_time_s,
+            "global_expansions": float(telemetry.global_expansions),
+            "detailed_expansions": float(telemetry.detailed_expansions),
+            "expansions": float(run.solver.budget.spent),
+            "expansion_allowance": float(run.solver.budget.total),
+            "final_reserved": float(run.solver.budget.final_reserved),
+            "cache_hits": 0.0,
+            "direct_candidates": float(run.direct_candidates),
+            "direct_inserts": float(placement.stats.get("direct_inserts", 0.0)),
+            "area": float(placement.area),
+            "belt_tiles": float(belt_tiles),
+            "power": float(power),
+            "termination": result.termination,
+            "termination_cause": result.termination,
+            "validation_clean": 1.0,
+            "validation_status": "clean",
+        }
+    )
+    # Placement predates string-valued audit dimensions.  Keep the public
+    # runtime contract required by the audit backend without widening the shared
+    # production type in this audit-only task.
+    return replace(placement, stats=cast(dict[str, float], stats))

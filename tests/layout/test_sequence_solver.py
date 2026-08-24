@@ -2,11 +2,17 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import cast
 
 import pytest
 
 import flab2bp.layout.sequence_solver as sequence_solver_module
+from flab2bp.bench.corpus import entry
+from flab2bp.lab.data import load_vendored
+from flab2bp.lab.url import parse_url
+from flab2bp.layout import validate
 from flab2bp.layout.base import NoValidLayout, PlacedBuilding, Placement
+from flab2bp.layout.freeform import _box, _nets_between, _Pack, plan_strips
 from flab2bp.layout.global_router import GlobalRouteResult
 from flab2bp.layout.route_feedback import (
     DetailedRouteResult,
@@ -17,6 +23,7 @@ from flab2bp.layout.route_feedback import (
     NetRole,
     RouteFailureKind,
     select_lns_neighbourhood,
+    update_feedback,
 )
 from flab2bp.layout.sequence_pair import (
     AnnealIncumbent,
@@ -42,7 +49,10 @@ from flab2bp.layout.sequence_solver import (
     SequenceSolverConfig,
     StageAdapters,
     ValidationVerdict,
+    _decoded_pack,
+    _route_detailed_candidate,
 )
+from flab2bp.rates.candidates import build_candidates
 from flab2bp.spec import BuildSpec
 from tests.layout.test_freeform import two_stage_spec
 
@@ -374,6 +384,207 @@ def test_audit_layout_surface_uses_injected_solver_factory() -> None:
     assert layout.lay_out(spec, time_budget_s=2.5) is exact
     assert calls == [(spec, 2.5, True, 7, config)]
 
+
+@pytest.mark.parametrize("power", [False, True])
+def test_sequence_backend_returns_only_certified_placements(power: bool) -> None:
+    spec = two_stage_spec()
+    placement = SequencePairLayout(
+        power=power,
+        config=SequenceSolverConfig.test(),
+    ).lay_out(spec, time_budget_s=2.0)
+
+    assert not validate.certify(placement, spec, expect_power=power).errors
+    assert cast(object, placement.stats["backend"]) == "sequence-pair"
+    assert placement.stats["detailed_routes"] >= 1.0
+    assert placement.stats["direct_candidates"] == 1.0
+    assert 0.0 <= placement.stats["direct_inserts"] <= 1.0
+    assert placement.stats["power"] == float(power)
+    assert (placement.stats["towers"] > 0.0) is power
+    assert {
+        "seeds",
+        "seed",
+        "accelerator",
+        "heights",
+        "restarts",
+        "stages",
+        "moves",
+        "accepted_moves",
+        "decoded_candidates",
+        "global_routes",
+        "detailed_routes",
+        "best_overflow",
+        "best_stranded",
+        "lns_invocations",
+        "lns_total_size",
+        "feedback_nets",
+        "feedback_cells",
+        "lns_max_size",
+        "feedback_decays",
+        "placement_time_s",
+        "preparation_time_s",
+        "global_route_time_s",
+        "planning_time_s",
+        "detailed_route_time_s",
+        "validation_time_s",
+        "compilation_time_s",
+        "total_time_s",
+        "global_expansions",
+        "detailed_expansions",
+        "expansions",
+        "expansion_allowance",
+        "final_reserved",
+        "cache_hits",
+        "direct_candidates",
+        "direct_inserts",
+        "area",
+        "belt_tiles",
+        "power",
+        "termination_cause",
+        "termination",
+        "validation_clean",
+        "validation_status",
+    } <= placement.stats.keys()
+
+
+
+def test_powered_one_net_miss_feeds_lns_or_refuses_honestly() -> None:
+    quantum = entry("quantum-chip")
+    spec = build_candidates(
+        load_vendored(),
+        parse_url(quantum.url),
+        count=1,
+    ).candidates[0]
+    strips = plan_strips(spec, strip_len=6)
+    frozen_at = (
+        (1, 0),
+        (1, 8),
+        (1, 15),
+        (1, 22),
+        (1, 29),
+        (1, 36),
+        (1, 42),
+        (1, 51),
+        (1, 57),
+        (1, 63),
+        (1, 69),
+        (1, 76),
+        (1, 86),
+        (1, 93),
+        (1, 100),
+        (1, 107),
+        (1, 119),
+        (58, 0),
+        (58, 12),
+        (58, 24),
+        (58, 36),
+        (58, 48),
+        (58, 60),
+        (58, 72),
+        (58, 83),
+        (58, 94),
+        (58, 105),
+        (58, 116),
+        (78, 0),
+        (78, 11),
+        (78, 22),
+        (78, 33),
+        (78, 42),
+        (78, 49),
+        (79, 56),
+        (78, 66),
+        (78, 73),
+        (78, 81),
+        (78, 89),
+        (78, 96),
+    )
+    assert len(strips) == len(frozen_at) == 40
+    frozen = _Pack(
+        at=dict(enumerate(frozen_at)),
+        width=134,
+        height=136,
+        status="frozen-powered-one-net-miss",
+    )
+
+    first = _route_detailed_candidate(
+        spec,
+        strips,
+        frozen,
+        power=True,
+        deadline=None,
+        allowance=3_000_000,
+    )
+    assert first.routing.status is DetailedRouteStatus.STRANDED
+    assert first.routing.failed_count == 1
+    assert first.placement is None
+
+    sizes = tuple(_box(strip) for strip in strips)
+    problem = PlacementProblem(
+        sizes=sizes,
+        nets=tuple(_nets_between(strips)),
+        outline_height=frozen.height,
+        area_lower_bound=sum(width * height for width, height in sizes),
+    )
+    pair = SequencePair(
+        positive=tuple(range(len(strips))),
+        negative=tuple(range(len(strips))),
+    )
+    state = AnnealState(pair, GapProfile.zero(len(strips)), base_seed=20260824)
+    decoded = decode_sequence_pair(
+        state.pair,
+        state.gaps,
+        problem.sizes,
+        outline_height=problem.outline_height,
+    )
+    feedback = update_feedback(
+        FeedbackState.empty((sum(width for width, _height in sizes), frozen.height)),
+        first.routing,
+    )
+    failure = first.routing.failures[0]
+    assert failure.net_id in feedback.net_weight
+    neighbourhood = select_lns_neighbourhood(
+        first.routing,
+        state.pair,
+        state.gaps,
+        problem,
+        decoded,
+    )
+    expected = {
+        endpoint
+        for net_id in (failure.net_id, *failure.blocking_nets)
+        for endpoint in (net_id.source_strip, net_id.destination_strip)
+        if endpoint is not None
+    }
+    assert expected <= neighbourhood
+
+    repaired = repair_neighbourhood(
+        state.pair,
+        state.gaps,
+        neighbourhood,
+        seed=derive_stage_seed(state.base_seed, 1),
+    )
+    next_decoded = decode_sequence_pair(
+        repaired.pair,
+        repaired.gaps,
+        problem.sizes,
+        outline_height=problem.outline_height,
+    )
+    second = _route_detailed_candidate(
+        spec,
+        strips,
+        _decoded_pack(frozen.height, next_decoded),
+        power=True,
+        deadline=None,
+        allowance=3_000_000,
+    )
+    if second.placement is None:
+        assert second.routing.status is not DetailedRouteStatus.ROUTED
+    else:
+        assert second.routing.status is DetailedRouteStatus.ROUTED
+        assert not validate.certify(
+            second.placement,
+            spec,
+            expect_power=True,
+        ).errors
 
 def test_lns_continues_from_the_proxy_selected_elite(
     monkeypatch: pytest.MonkeyPatch,
