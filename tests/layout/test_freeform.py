@@ -2100,6 +2100,35 @@ class TestAnIslandThatCannotFeedItself:
             f"{merged} still leaves the flow graph cut"
         )
 
+    def test_the_join_runs_surplus_to_deficit(self) -> None:
+        """The belt points from the island with spare output to the one short.
+
+        Direction is invisible to the check that motivated this function.
+        ``validate._islands`` unions ``(input_obj, output_obj)`` without regard
+        to which way the belt points, so a backwards edge merges exactly the
+        same two islands and ``flow.conservation`` passes identically. It is not
+        invisible to the factory: a backwards edge runs from the STARVING
+        island's producer into the SATISFIED island's consumer, backpressure
+        makes it inert because that consumer is already fed, and the shortfall
+        stays unfixed while we report clean.
+
+        This is the smallest shape that shows it. Two producer lanes of one
+        machine, consumer lanes of two and one, cyclic pairing ``[(0,0),(1,1)]``:
+        island 0 is short by one machine's output, island 1 balances exactly. So
+        the edge must leave island 1 and arrive at island 0.
+
+        Ordering by union-find root -- whichever key won the path-compression
+        race -- emits ``(0, 0)``, draining the island that is already starving.
+        """
+        srcs = [_lane(1), _lane(1)]
+        sinks = [_lane(2), _lane(1)]
+        extra = _connect_short_cuts(srcs, sinks, [(0, 0), (1, 1)], F(1), F(1))
+
+        assert extra == [(1, 0)], (
+            f"expected the surplus island's producer (1) to feed the starving "
+            f"island's consumer (0), got {extra}"
+        )
+
     def test_a_single_lane_on_either_side_is_already_one_island(self) -> None:
         assert _connect_short_cuts([_lane(1)], [_lane(9)], [(0, 0)], F(1), F(9)) == []
         assert _connect_short_cuts([_lane(9)], [_lane(1)], [(0, 0)], F(1), F(9)) == []

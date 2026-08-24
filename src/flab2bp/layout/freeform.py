@@ -4167,15 +4167,42 @@ def _connect_short_cuts(
     for j in range(len(sinks)):
         islands[find(("d", j))][1].append(j)
 
-    short = any(
-        sum(srcs[i].machines for i in mine) * out_rate
-        < sum(sinks[j].machines for j in theirs) * in_rate
-        for mine, theirs in islands.values()
-    )
-    if not short or len(islands) < 2:
+    # Chained in DESCENDING BALANCE, so every edge runs surplus -> deficit.
+    #
+    # This used to sort on the union-find root, which is an implementation
+    # artefact -- whichever key happened to win the path-compression race. That
+    # is sound for `flow.conservation`, whose island cut is UNDIRECTED
+    # (`validate._islands` unions `(input_obj, output_obj)` without regard to
+    # which way the belt points), so a backwards edge merges exactly the same
+    # two islands and the check passes identically. It is not sound for a belt.
+    #
+    # A backwards edge runs from the STARVING island's producer into the
+    # SATISFIED island's consumer. Backpressure then makes it inert -- the
+    # receiving consumer is already fed, so the belt backs up and carries
+    # nothing -- and the shortfall it was emitted to fix stays unfixed while the
+    # validator reports clean. A latent defect the validator structurally cannot
+    # see, which is why it survived.
+    #
+    # Not live when found: 10 firings across 36 corpus specs, and root order
+    # happened to match descending balance in 10/10. But over 8,620,618
+    # REACHABLE firing configurations (machine vectors `plan_strips` can
+    # actually emit), 53.4% emit a backwards edge and 83.5% emit an edge out of
+    # a deficit island. Smallest case: srcs machines [1,1], sinks [2,1], any
+    # rates -- the old order emits (0,1), draining the starving island.
+    #
+    # The balances are hoisted rather than added: the `any(...)` below computed
+    # exactly these two sums inline. Emitted pairs are identical on 36/36 corpus
+    # cells; this changes nothing today and closes the case that it would.
+    # Matches `_join_shard_islands`, which has ordered this way since f346c50.
+    balance = {
+        r: sum(srcs[i].machines for i in mine) * out_rate
+        - sum(sinks[j].machines for j in theirs) * in_rate
+        for r, (mine, theirs) in islands.items()
+    }
+    if all(v >= 0 for v in balance.values()) or len(islands) < 2:
         return []
 
-    order = sorted(islands)
+    order = sorted(islands, key=lambda r: (-balance[r], r))
     extra: list[tuple[int, int]] = []
     for a, b in zip(order, order[1:], strict=False):
         producers, _ = islands[a]
