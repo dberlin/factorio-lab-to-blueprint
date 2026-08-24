@@ -5085,7 +5085,7 @@ def _tower_keep_out(buildings: list[PlacedBuilding]) -> set[tuple[int, int]]:
     radius restated here, so this and ``validate.game.power_too_close`` cannot
     disagree.
     """
-    tower_cl = max(catalog.clearance(CONSTANTS.tesla_item_id, 0.0))
+    tower_cl = max(catalog.collider_span(CONSTANTS.tesla_item_id, 0.0))
     tower_node = catalog.building(CONSTANTS.tesla_item_id).power_node
     # Memoised per CALL rather than globally: the projection is a triple loop
     # over the rule and a big build carries 141 towers, but a module-level cache
@@ -5097,19 +5097,19 @@ def _tower_keep_out(buildings: list[PlacedBuilding]) -> set[tuple[int, int]]:
             info = catalog.building(b.item_id)
         except KeyError:
             continue
-        need = (max(catalog.clearance(b.item_id, b.yaw)) + tower_cl) / 2.0
-        reach = math.ceil(need - 1e-9) - 1
+        need = (max(catalog.collider_span(b.item_id, b.yaw)) + tower_cl) / 2.0
         tiles = (
             [(b.x + dx, b.y + dy) for dx in range(b.width) for dy in range(b.height)]
             if info.occupies_tiles
             else [(b.x, b.y)]
         )
-        for tx, ty in tiles:
-            out.add((tx, ty))
-            for hx in range(tx - reach, tx + reach + 1):
-                for hy in range(ty - reach, ty + reach + 1):
-                    if math.hypot(hx - tx, hy - ty) < need:
-                        out.add((hx, hy))
+        out.update(tiles)
+        centre_x = b.x + (b.width - 1) / 2.0
+        centre_y = b.y + (b.height - 1) / 2.0
+        for hx in range(math.floor(centre_x - need), math.ceil(centre_x + need) + 1):
+            for hy in range(math.floor(centre_y - need), math.ceil(centre_y + need) + 1):
+                if math.hypot(hx - centre_x, hy - centre_y) < need:
+                    out.add((hx, hy))
         if info.is_power_node:
             # Keyed on the OTHER node's flags as well as the tower's, so a Ray
             # Receiver, an Energy Exchanger or a future Wind Turbine gets its own

@@ -5973,7 +5973,7 @@ def _tap_source(
         # A junction's collider reaches further than the tile it shares, so a
         # site beside a machine is one the game refuses. The router has other
         # tiles; refusing here costs a tap, not a build.
-        if not junction.site_is_clear(canvas.buildings, b.x, b.y):
+        if b.z == 0 and not junction.site_is_clear(canvas.buildings, b.x, b.y):
             return False
         # And the same collider reaches a tile of BELT, which is the half this
         # could not ask until every belt was staked first -- see `_commit_paths`.

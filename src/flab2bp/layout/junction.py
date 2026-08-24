@@ -129,8 +129,7 @@ def site_is_clear(buildings: Sequence[PlacedBuilding], x: int, y: int) -> bool:
     than the verdict it guards is not caution; it is a refusal the verdict
     would never have made.
     """
-    sw, sh = catalog.clearance(catalog.SPLITTER_ID, 0.0)
-    mine = max(sw, sh)
+    mine = max(catalog.collider_span(catalog.SPLITTER_ID, 0.0))
     for b in buildings:
         if catalog.is_belt_integrated(b.item_id) or catalog.is_sorter(b.item_id):
             continue
@@ -140,11 +139,11 @@ def site_is_clear(buildings: Sequence[PlacedBuilding], x: int, y: int) -> bool:
             continue
         if not info.occupies_tiles:
             continue
-        need = (mine + max(catalog.clearance(b.item_id, b.yaw))) / 2.0
-        for dx in range(b.width):
-            for dy in range(b.height):
-                if math.hypot(x - (b.x + dx), y - (b.y + dy)) < need:
-                    return False
+        need = (mine + max(catalog.collider_span(b.item_id, b.yaw))) / 2.0
+        centre_x = b.x + (b.width - 1) / 2.0
+        centre_y = b.y + (b.height - 1) / 2.0
+        if math.hypot(x - centre_x, y - centre_y) < need:
+            return False
     return True
 
 

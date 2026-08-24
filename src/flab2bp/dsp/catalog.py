@@ -1097,6 +1097,43 @@ def footprint(item_id: int) -> tuple[int, int]:
 
 
 @cache
+def collider_span(item_id: int, yaw: float) -> tuple[float, float]:
+    """Oriented collider span in grid tiles, measured about the building centre.
+
+    Falls back to the oriented footprint when collider data is unavailable.
+    Unlike :func:`clearance`, this is not rounded up; pairwise center-distance
+    checks need the actual half-span sum rather than two independently rounded
+    reservation pitches.
+    """
+    from flab2bp.dsp import colliders
+
+    fw, fh = oriented_footprint(item_id, yaw)
+    try:
+        boxes = colliders.build_colliders(building(item_id).model_index)
+    except Exception:  # noqa: BLE001 - preserve footprint fallback
+        return (float(fw), float(fh))
+    if not boxes:
+        return (float(fw), float(fh))
+    half_turn = math.radians(yaw) * 0.5
+    spin = (0.0, math.sin(half_turn), 0.0, math.cos(half_turn))
+    ex = ez = 0.0
+    for centre, half, rot in boxes:
+        turned = colliders._qmul(spin, rot)
+        rotated_centre = colliders._qrot(spin, centre)
+        for sx in (-1.0, 1.0):
+            for sy in (-1.0, 1.0):
+                for sz in (-1.0, 1.0):
+                    local = (sx * half[0], sy * half[1], sz * half[2])
+                    spun = colliders._qrot(turned, local)
+                    ex = max(ex, abs(rotated_centre[0] + spun[0]))
+                    ez = max(ez, abs(rotated_centre[2] + spun[2]))
+    return (
+        ex * 2 / colliders.GRID_ARC,
+        ez * 2 / colliders.GRID_ARC,
+    )
+
+
+@cache
 def clearance(item_id: int, yaw: float) -> tuple[int, int]:
     """Tiles to RESERVE for ``item_id`` at ``yaw`` so nothing collides with it.
 
@@ -1123,8 +1160,6 @@ def clearance(item_id: int, yaw: float) -> tuple[int, int]:
     geometry -- it is the previous behaviour, unchanged, for a building we have
     no collider data for.
     """
-    from flab2bp.dsp import colliders
-
     fw, fh = oriented_footprint(item_id, yaw)
     try:
         ex, ez = colliders.own_centre_extent(building(item_id).model_index, yaw)

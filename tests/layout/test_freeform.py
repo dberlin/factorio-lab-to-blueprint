@@ -110,6 +110,21 @@ def group(
     )
 
 
+def test_junction_clearance_uses_building_centre_at_exact_boundary() -> None:
+    item_id = catalog.item_id("assembling-machine-2")
+    machine = PlacedBuilding(
+        item_id=item_id,
+        model_index=catalog.building(item_id).model_index,
+        x=0,
+        y=0,
+        width=3,
+        height=3,
+    )
+
+    assert not junction.site_is_clear([machine], 3, 1)
+    assert junction.site_is_clear([machine], 4, 1)
+
+
 def single_recipe_spec() -> BuildSpec:
     return BuildSpec(
         groups=(group("iron-ingot", "arc-smelter", 4, {"iron-ore": F(1)}, {"iron-ingot": F(1)}),),

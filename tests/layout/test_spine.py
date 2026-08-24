@@ -275,6 +275,25 @@ def blocking_tiles(p: Placement) -> list[tuple[int, int, Fraction]]:
     return tiles
 
 
+def test_tower_clearance_uses_centre_and_keeps_exact_boundary_legal() -> None:
+    from flab2bp.layout.spine import _nearest_free, _tower_keep_out
+
+    item_id = catalog.item_id("assembling-machine-2")
+    machine = PlacedBuilding(
+        item_id=item_id,
+        model_index=catalog.building(item_id).model_index,
+        x=0,
+        y=0,
+        width=3,
+        height=3,
+    )
+    keep_out = _tower_keep_out([machine])
+
+    assert (2, 1) in keep_out
+    assert (3, 1) not in keep_out
+    assert _nearest_free(3, 1, keep_out, radius=0.0) == (3, 1)
+
+
 def machines_of(p: Placement) -> list[int]:
     return [
         i
@@ -2504,6 +2523,7 @@ class TestTapCapacityIsPerSide:
 
         groups, edges = _adapt(spec)
         keys = list(groups)
+
         copies = dict.fromkeys(_lane_copies(groups, edges, set(), spec), 1)
         # No edge between any two groups, so `_solve_one` is FREE to put all
         # three in one row: it orders producers strictly above consumers, and a
