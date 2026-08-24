@@ -1,0 +1,6 @@
+"https://factoriolab.github.io/dsp/list?o=graphene*60&ibe=conveyor-belt-2&mmr=arc-smelter~assembling-machine-2~chemical-plant~matrix-lab&v=11"
+Item,Items,Inputs,Outputs,Targets,Belts,Belt,Recipe,Machines,Machine,Modules,Power
+graphene,=60,"energetic-graphite:1,sulfuric-acid:1","graphene:1","",=1/12,conveyor-belt-2,graphene,=1.5,chemical-plant,"1 ",=1092
+energetic-graphite,=90,"coal:1","energetic-graphite:1","graphene:1",=0.125,conveyor-belt-2,energetic-graphite,=3,arc-smelter,"1 ",=1080
+coal,=180,,"coal:1","energetic-graphite:1",=0.25,conveyor-belt-2,coal-vein,=6,mining-machine,,
+sulfuric-acid,=30,,"sulfuric-acid:1","graphene:1",=1/24,conveyor-belt-2,sulphuric-acid-vein,=0.6,water-pump,,=184.8

@@ -109,6 +109,7 @@ __all__ = [
     "FlowSelection",
     "FlowSelectionError",
     "cross_check",
+    "flow_from_text",
     "load_flow",
     "parse_flow_csv",
     "pin_request",
@@ -268,6 +269,30 @@ class FlowSelection:
     def is_exact(self) -> bool:
         """True when no numeric cell lost precision (a pristine download)."""
         return all(r.exact for r in self.rows)
+
+    @property
+    def uses_proliferator(self) -> bool:
+        """Does this flow spray at all?
+
+        Decides whether belting proliferator in is a boundary CHANGE or the
+        known asymmetry.  FactorioLab builds ``proliferator-2`` from diamond and
+        ``proliferator-1``; we belt it in because a spray coater has to be fed
+        and we never build it.  That asymmetry is accepted, separately tracked
+        work.  But when a flow sprays *nothing*, adding a proliferator input is
+        us inventing a demand the player never chose -- a different thing
+        entirely, and forbidden.
+
+        Read from the ``Modules`` text rather than from its mere presence: a
+        real export writes ``"1 "`` -- a count with an EMPTY module id -- for a
+        machine with a module slot and nothing in it.  Testing "is this cell
+        non-empty" would read that as proliferated.
+        """
+        return any(
+            "proliferator" in r.modules
+            or r.item_id.startswith("proliferator")
+            or r.recipe_id.startswith("proliferator")
+            for r in self.rows
+        )
 
     def external_items(self, data: Dataset) -> dict[str, Fraction]:
         """Items the flow draws on that are NOT made inside the blueprint.
@@ -507,15 +532,27 @@ def verify_provenance(flow: FlowSelection, url: str) -> None:
         )
 
 
+def flow_from_text(text: str, *, url: str) -> FlowSelection:
+    """Parse a FactorioLab CSV and verify it was generated from ``url``.
+
+    Parsing and provenance are paired in one function so that no caller can
+    acquire a :class:`FlowSelection` without the URL check having run.  A
+    captured export goes through exactly the same door as a file the user
+    downloaded by hand -- driving the browser ourselves is not a reason to trust
+    the bytes any less.
+    """
+    flow = parse_flow_csv(text)
+    verify_provenance(flow, url)
+    return flow
+
+
 def load_flow(path: Path, *, url: str) -> FlowSelection:
     """Read a FactorioLab CSV and verify it was generated from ``url``."""
     try:
         text = path.read_text(encoding="utf-8-sig")
     except OSError as exc:
         raise FlowFormatError(f"cannot read flow export {str(path)!r}: {exc}") from exc
-    flow = parse_flow_csv(text)
-    verify_provenance(flow, url)
-    return flow
+    return flow_from_text(text, url=url)
 
 
 def pinned_exclusions(data: Dataset, flow: FlowSelection) -> frozenset[str]:

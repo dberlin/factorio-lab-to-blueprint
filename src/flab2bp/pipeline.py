@@ -14,8 +14,17 @@ from pathlib import Path
 from typing import Literal
 
 from flab2bp.dsp import catalog, codec
+from flab2bp.lab.capture import capture_flow_csv
 from flab2bp.lab.data import load_vendored
-from flab2bp.lab.flow import FlowError, cross_check, load_flow, pin_request, unsupplied_inputs
+from flab2bp.lab.flow import (
+    FlowError,
+    FlowSelection,
+    cross_check,
+    flow_from_text,
+    load_flow,
+    pin_request,
+    unsupplied_inputs,
+)
 from flab2bp.lab.schema import Dataset
 from flab2bp.lab.url import parse_url
 from flab2bp.layout import markers, validate
@@ -23,7 +32,7 @@ from flab2bp.layout.base import NoValidLayout, Placement
 from flab2bp.layout.freeform import FreeformLayout
 from flab2bp.layout.spine import SpineLayout
 from flab2bp.rates.candidates import build_candidates
-from flab2bp.spec import BuildSpec
+from flab2bp.spec import BuildSpec, BuildSpecSet
 
 StrategyName = Literal["spine", "freeform", "best"]
 
@@ -109,6 +118,9 @@ def build(
     dataset: Dataset | None = None,
     name: str = "",
     flow: Path | None = None,
+    fetch_flow: bool = False,
+    fetch_timeout_s: float = 90.0,
+    browser: str | None = None,
 ) -> Build:
     """Turn a FactorioLab URL into a pasteable DSP blueprint.
 
@@ -135,11 +147,62 @@ def build(
     # There is deliberately no fallback: `load_flow` and `pin_request` raise
     # rather than shrug, because quietly re-deriving the selection is the exact
     # behaviour this argument exists to remove.
-    selection = load_flow(flow, url=url) if flow is not None else None
+    # `--flow` wins over `--fetch-flow`: a file the user chose to hand us is a
+    # deliberate act, and silently going to the network instead would be
+    # surprising. Both routes end at the same `verify_provenance`.
+    selection: FlowSelection | None = None
+    if flow is not None:
+        selection = load_flow(flow, url=url)
+    elif fetch_flow:
+        selection = flow_from_text(
+            capture_flow_csv(url, timeout_s=fetch_timeout_s, browser=browser), url=url
+        )
     if selection is not None:
         request = pin_request(request, data, selection)
 
     spec_set = build_candidates(data, request, count=candidates)
+
+    # With a flow pinned, a candidate that belts in something FactorioLab's own
+    # flow does not is not a legal candidate for this build -- the boundary rule
+    # outranks density, and this is where it bites. The frontier trades machines
+    # for proliferation, and proliferator arrives on a belt: against an
+    # unproliferated flow, choosing `max-proliferation` would quietly add an
+    # input the player never asked for. Caught by the first real capture, which
+    # picked exactly that candidate and asked for proliferator-3 against a flow
+    # whose Modules column is empty.
+    #
+    # Filtered rather than refused outright: the unproliferated candidate is
+    # legal and present, so dropping the illegal ones keeps the build while
+    # honouring the boundary. If NONE survive we refuse, naming each.
+    if selection is not None:
+        exempt = (
+            frozenset(
+                i
+                for spec in spec_set.candidates
+                for i in spec.external_inputs
+                if i.startswith("proliferator")
+            )
+            if selection.uses_proliferator
+            else frozenset()
+        )
+        legal: list[tuple[BuildSpec, tuple[str, ...]]] = []
+        illegal: list[tuple[BuildSpec, tuple[str, ...]]] = []
+        for spec in spec_set.candidates:
+            stray = unsupplied_inputs(selection, data, spec.external_inputs, exempt=exempt)
+            (legal if not stray else illegal).append((spec, stray))
+        if not legal:
+            raise FlowError(
+                "every candidate would ask for inputs the supplied flow does not "
+                "belt in, so none can be built without changing the inputs "
+                "FactorioLab chose: "
+                + "; ".join(f"{spec.label} wants {list(stray)}" for spec, stray in illegal)
+            )
+        spec_set = BuildSpecSet(candidates=tuple(spec for spec, _ in legal))
+        flow_dropped = tuple(
+            f"{spec.label}: dropped, would belt in {list(stray)}" for spec, stray in illegal
+        )
+    else:
+        flow_dropped = ()
 
     wanted = list(_STRATEGIES) if strategy == "best" else [strategy]
 
@@ -204,12 +267,20 @@ def build(
         # would change the inputs the player chose. Proliferator is the one
         # known exemption -- FactorioLab builds it, we belt it in, and removing
         # that asymmetry is separate work that moves the layout stage.
+        # A post-condition on what we actually chose. The candidate filter above
+        # should have made this unreachable; it is here because "should have" is
+        # not a guarantee, and shipping the belt is the failure we cannot take
+        # back.
         stray = unsupplied_inputs(
             selection,
             data,
             chosen_spec.external_inputs,
-            exempt=frozenset(
-                i for i in chosen_spec.external_inputs if i.startswith("proliferator")
+            exempt=(
+                frozenset(
+                    i for i in chosen_spec.external_inputs if i.startswith("proliferator")
+                )
+                if selection.uses_proliferator
+                else frozenset()
             ),
         )
         if stray:
@@ -237,6 +308,6 @@ def build(
         blueprint=blueprint,
         attempts=tuple(attempts),
         refused=tuple(refused),
-        flow_findings=findings,
+        flow_findings=findings + flow_dropped,
         flow_pinned=selection is not None,
     )

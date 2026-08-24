@@ -53,8 +53,8 @@ def _report(build: pipeline.Build, *, verbose: bool) -> None:
             print("  recipe selection pinned to the supplied flow (no differences)", file=out)
     else:
         print(
-            "  recipe selection DERIVED, not pinned -- pass --flow to build "
-            "FactorioLab's own selection",
+            "  recipe selection DERIVED, not pinned -- pass --flow or --fetch-flow "
+            "to build FactorioLab's own selection",
             file=out,
         )
 
@@ -120,6 +120,26 @@ def main(argv: list[str] | None = None) -> int:
         "re-deriving it. Refuses on a file that cannot be this URL's flow; "
         "there is no fallback to re-deriving.",
     )
+    ap.add_argument(
+        "--fetch-flow",
+        action="store_true",
+        help="fetch the CSV export ourselves by driving a headless browser to the "
+        "URL. FactorioLab solves in the page, so this runs it and waits for the "
+        "solve to finish. Off by default: a build should not silently need a "
+        "browser or the network.",
+    )
+    ap.add_argument(
+        "--fetch-timeout",
+        type=float,
+        default=90.0,
+        metavar="SECONDS",
+        help="how long to wait for FactorioLab to finish solving (default 90)",
+    )
+    ap.add_argument(
+        "--browser",
+        help="path to the Chromium or Chrome executable --fetch-flow should drive "
+        "(default: search the usual locations, or $FLAB2BP_BROWSER)",
+    )
     ap.add_argument("--budget", type=float, default=2.0, help="solver seconds per layout")
     ap.add_argument("-o", "--out", type=Path, help="write to a file instead of stdout")
     ap.add_argument("-n", "--name", default="", help="blueprint short description")
@@ -141,6 +161,9 @@ def main(argv: list[str] | None = None) -> int:
             time_budget_s=args.budget,
             name=args.name,
             flow=args.flow,
+            fetch_flow=args.fetch_flow,
+            fetch_timeout_s=args.fetch_timeout,
+            browser=args.browser,
         )
     except NoValidLayout as exc:
         # Distinct exit code: "no layout exists" is a different outcome from
