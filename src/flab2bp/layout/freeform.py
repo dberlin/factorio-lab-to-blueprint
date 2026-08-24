@@ -649,6 +649,39 @@ class Strip:
         return len(self.in_above) + self.ph + len(self.out_lanes) + len(self.in_below)
 
     @property
+    def band_rows(self) -> int:
+        """Rows the machine band RESERVES -- clearance, not footprint.
+
+        THE strip row map lives on these three members and nothing else may
+        compute a row from `mh`. `mh` is how tall the machines are; `ph` is how
+        much room their colliders need, and lanes have to start after the second
+        or a junction on them is illegal against the machine beside it.
+
+        The two were the same number until spacing landed, so every consumer
+        that wanted "the first row after the band" wrote `mh` and was right by
+        accident. There are SEVEN of them -- `row_of_output`, `row_of_input`'s
+        `in_below` branch, the band skip in emission, the probe lane in
+        `_attachable_columns`, and the two SPAN expressions that size sorters
+        from the machine's bottom edge -- and moving a subset is what took this
+        module from 9 failing tests to 80, twice. They move together or not at
+        all, which is what this exists to make possible.
+        """
+        return self.ph
+
+    @property
+    def first_row_below_band(self) -> int:
+        """Row index of the first lane under the machine band."""
+        return self.machine_row + self.band_rows
+
+    def rows_below_machines(self, row: int) -> int:
+        """Tiles from the machines' bottom EDGE to ``row`` -- a sorter's span.
+
+        From the footprint edge, not the band's, because that is where the
+        sorter anchors. The two differ by exactly the clearance rows.
+        """
+        return row - (self.machine_row + self.mh - 1)
+
+    @property
     def machine_row(self) -> int:
         """Row index of the machine band's top edge, relative to the strip."""
         return len(self.in_above)
@@ -688,7 +721,7 @@ class Strip:
                 return j
         for j, lane in enumerate(self.in_below):
             if item in lane:
-                return len(self.in_above) + self.mh + len(self.out_lanes) + j
+                return self.first_row_below_band + len(self.out_lanes) + j
         raise KeyError(f"{item!r} is not an ingredient of {self.recipe_id!r}")
 
     def row_of_output(self, k: int) -> int:
@@ -701,7 +734,7 @@ class Strip:
         places that each assume lanes start at `mh`. The junction constraint is
         real; solving it by moving lane rows is not the way in.
         """
-        return len(self.in_above) + self.mh + k
+        return self.first_row_below_band + k
 
     def input_lane_tiles(self, lane: tuple[str, ...]) -> int:
         """Belt tiles an INPUT lane actually needs, counted from its west end.
@@ -740,7 +773,8 @@ class Strip:
     def _attachable_columns(self, *, above: bool) -> tuple[int, ...]:
         """Columns of ONE of this strip's machines a sorter can reach, from 0."""
         probe = slots.probe_building(self.item_id, self.yaw)
-        return tuple(sorted(slots.attachable_columns(probe, -1 if above else self.mh)))
+        lane_y = -1 if above else self.band_rows
+        return tuple(sorted(slots.attachable_columns(probe, lane_y)))
 
     def east_of_input(self, item: str) -> int:
         """Offset from the strip's west edge to the last tile of ``item``'s lane."""
@@ -1995,8 +2029,8 @@ def _emit_strip(
     lane_idx: dict[int, list[int]] = {}
     for row in range(s.height):
         y = oy + row
-        if n_above <= row < n_above + s.mh:
-            continue  # machine band
+        if n_above <= row < s.first_row_below_band:
+            continue  # machine band, clearance rows included
         indices = []
         for k in range(lane_tiles_of.get(row, width)):
             indices.append(
@@ -2085,7 +2119,7 @@ def _emit_strip(
 
     for j, (item, dest) in enumerate(s.out_lanes):
         row = s.row_of_output(j)
-        span = j + 1
+        span = s.rows_below_machines(row)
         out_ports[item, dest] = _Port(
             lane_idx[row][-1],
             ox + width - 1,
@@ -2102,11 +2136,9 @@ def _emit_strip(
 
     # Overflow ingredients, seated below the output lanes and reaching up to the
     # machine band's south edge.
-    for j, lane in enumerate(s.in_below):
+    for lane in s.in_below:
         row = s.row_of_input(lane[0])
-        sorters += feed(
-            lane, row=row, span=len(s.out_lanes) + j + 1, near_edge=bottom
-        )
+        sorters += feed(lane, row=row, span=s.rows_below_machines(row), near_edge=bottom)
 
     return in_ports, out_ports, sorters
 
