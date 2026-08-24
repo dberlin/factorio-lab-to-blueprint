@@ -4525,7 +4525,13 @@ def _route_all(
         )
         status = (
             DetailedRouteStatus.BUDGET
-            if budget_exhausted
+            if (
+                budget_exhausted
+                or any(
+                    failure.kind is RouteFailureKind.BUDGET
+                    for failure in ordered_failures
+                )
+            )
             else (
                 DetailedRouteStatus.STRANDED
                 if ordered_failures
@@ -4872,10 +4878,15 @@ def _route_all(
             canvas.routing_ports = frozenset()
             expansions += through.expansions
             if through.path is None:
-                # Keep the primary search's wall and ownership snapshot. This
-                # crossing search made settled paths passable, so its census
-                # cannot reassign historical blame and may prove only that the
-                # static pocket behind them is still sealed.
+                if through.kind is RouteFailureKind.BUDGET:
+                    # A per-search cap is unknown even while the shared pass
+                    # budget and deadline remain. It supersedes the primary
+                    # pocket diagnosis and carries no hard blocker evidence.
+                    search_failures[index] = through
+                    search_blockers[index] = ()
+                # A genuinely exhausted crossing search made settled paths
+                # passable, so keep the primary wall/ownership snapshot rather
+                # than reassigning historical blame from its empty census.
                 still.append(index)
                 continue
             through_path = through.path
