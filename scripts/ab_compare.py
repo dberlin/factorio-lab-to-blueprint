@@ -50,6 +50,7 @@ import json
 import sys
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
@@ -67,9 +68,10 @@ from flab2bp.bench.ab import (  # noqa: E402
     budget_flip,
     compare,
     crossvalidate_samples,
+    isolated_attempt,
     render_markdown,
     render_text,
-    sample_once,
+    sample_measured,
     to_json,
     trials_from,
 )
@@ -108,6 +110,22 @@ STRATEGIES: dict[str, Callable[[bool, bool], LayoutStrategy]] = {
 }
 
 Judge = Callable[[Placement], tuple[bool, tuple[str, ...]]]
+
+@dataclass(frozen=True, slots=True)
+class _LayoutCall:
+    """Picklable solve request executed inside one fresh measurement process."""
+
+    strategy: str
+    power: bool
+    vertical: bool
+    spec: BuildSpec
+    budget_s: float
+
+    def __call__(self) -> Placement:
+        return STRATEGIES[self.strategy](self.power, self.vertical).lay_out(
+            self.spec, time_budget_s=self.budget_s
+        )
+
 
 
 def specs_for(entry: CorpusEntry, candidates: int) -> tuple[BuildSpec, ...]:
@@ -202,6 +220,7 @@ def collect(
                         Sample(
                             entry.url_id, "-", name, budget, trial,
                             Outcome.ERROR, 0.0, detail=spec_errors[entry.url_id],
+                            power=power,
                         )
                         for name in strategy_names
                     )
@@ -211,19 +230,19 @@ def collect(
                     encode = partial(encode_with, spec)
                     vertical = belt_rules_for_url(entry.url).vertical_construction
                     for name in strategy_names:
-                        strategy = STRATEGIES[name](power, vertical)
                         samples.append(
-                            sample_once(
+                            sample_measured(
                                 url_id=entry.url_id,
                                 candidate=spec.label or "default",
                                 strategy=name,
                                 budget_s=budget,
                                 trial=trial,
-                                lay_out=partial(
-                                    strategy.lay_out, spec, time_budget_s=budget
+                                attempt=isolated_attempt(
+                                    _LayoutCall(name, power, vertical, spec, budget)
                                 ),
                                 judge=judge,
                                 encode=encode,
+                                power=power,
                             )
                         )
                 print(

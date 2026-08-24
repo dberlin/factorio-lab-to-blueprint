@@ -1,14 +1,19 @@
 from __future__ import annotations
 
 import math
+from dataclasses import replace
 
 import pytest
 
-from flab2bp.bench.ab import Outcome, Trial
+from flab2bp.bench.ab import Outcome, Sample, samples_from_json
+from flab2bp.bench.corpus import URL_CORPUS
 from flab2bp.bench.promotion import (
+    PromotionManifest,
+    PromotionReport,
+    RequiredCell,
     assess_promotion,
     paired_bootstrap_ci_hi,
-    trials_from_json,
+    repository_manifest,
 )
 from flab2bp.bench.types import Metrics
 
@@ -28,7 +33,7 @@ def _metrics(area: int, belts: int) -> Metrics:
     )
 
 
-def fixture_trials(
+def fixture_samples(
     *,
     url_id: str = "one-cell",
     strategy: str = "baseline",
@@ -39,22 +44,24 @@ def fixture_trials(
     rss: tuple[float | None, ...] = (100.0, 101.0, 99.0),
     outcome: Outcome = Outcome.VALID,
     budget_s: float = 10.0,
-) -> list[Trial]:
+    candidate: str = "default",
+    power: bool = False,
+) -> list[Sample]:
     assert len(seconds) == len(area) == len(belts) == len(cpu) == len(rss)
     return [
-        Trial(
+        Sample(
             url_id=url_id,
+            candidate=candidate,
             strategy=strategy,
             budget_s=budget_s,
             trial=index,
             outcome=outcome,
-            candidate="default",
             seconds=wall,
             metrics=_metrics(cell_area, belt_tiles) if outcome is Outcome.VALID else None,
+            buildings=int(outcome is Outcome.VALID),
             cpu_seconds=cpu_seconds,
             peak_rss_mb=peak_rss_mb,
-            candidates_valid=int(outcome is Outcome.VALID),
-            candidates_total=1,
+            power=power,
         )
         for index, (wall, cell_area, belt_tiles, cpu_seconds, peak_rss_mb) in enumerate(
             zip(seconds, area, belts, cpu, rss, strict=True)
@@ -62,9 +69,17 @@ def fixture_trials(
     ]
 
 
-def _eligible_pair() -> tuple[list[Trial], list[Trial]]:
-    baseline = fixture_trials()
-    candidate = fixture_trials(
+def manifest(
+    *, repeat: int = 3, candidates: int = 1, power: bool = False
+) -> PromotionManifest:
+    return PromotionManifest(
+        (RequiredCell("one-cell", 10.0, power, repeat, candidates),)
+    )
+
+
+def eligible_pair() -> tuple[list[Sample], list[Sample]]:
+    baseline = fixture_samples()
+    candidate = fixture_samples(
         strategy="candidate",
         seconds=(8.0, 8.2, 7.9),
         area=(100, 99, 100),
@@ -75,10 +90,30 @@ def _eligible_pair() -> tuple[list[Trial], list[Trial]]:
     return baseline, candidate
 
 
-def test_promotion_requires_strict_runtime_ci_and_nonworse_quality() -> None:
-    baseline, candidate = _eligible_pair()
+def assess(
+    baseline: list[Sample],
+    candidate: list[Sample],
+    *,
+    required: PromotionManifest | None = None,
+) -> PromotionReport:
+    return assess_promotion(
+        baseline,
+        candidate,
+        required=required or manifest(),
+        bootstrap_seed=7,
+        bootstrap_resamples=2_000,
+    )
 
-    report = assess_promotion(baseline=baseline, candidate=candidate, bootstrap_seed=7)
+
+def test_promotion_requires_strict_runtime_ci_and_nonworse_quality() -> None:
+    baseline, candidate = eligible_pair()
+
+    report = assess_promotion(
+        baseline,
+        candidate,
+        required=manifest(),
+        bootstrap_seed=7,
+    )
 
     assert report.eligible
     assert report.reasons == ()
@@ -88,21 +123,60 @@ def test_promotion_requires_strict_runtime_ci_and_nonworse_quality() -> None:
     assert report.rss_ratio <= 1.0
 
 
-def test_one_cell_quality_regression_blocks_promotion() -> None:
-    baseline, candidate = _eligible_pair()
-    candidate = fixture_trials(
+def test_one_cell_fractional_area_regression_blocks_promotion() -> None:
+    baseline = fixture_samples(
+        seconds=(10.0, 10.0),
+        area=(100, 100),
+        belts=(50, 50),
+        cpu=(8.0, 8.0),
+        rss=(100.0, 100.0),
+    )
+    candidate = fixture_samples(
         strategy="candidate",
-        seconds=(7.0, 7.1, 6.9),
-        area=(101, 101, 101),
-        belts=(50, 50, 50),
-        cpu=(6.0, 6.1, 5.9),
-        rss=(90.0, 91.0, 89.0),
+        seconds=(8.0, 8.0),
+        area=(100, 101),
+        belts=(50, 50),
+        cpu=(6.0, 6.0),
+        rss=(90.0, 90.0),
     )
 
-    report = assess_promotion(baseline=baseline, candidate=candidate, bootstrap_seed=7)
+    report = assess_promotion(
+        baseline,
+        candidate,
+        required=manifest(repeat=2),
+        bootstrap_seed=7,
+    )
 
     assert not report.eligible
-    assert any("area" in reason for reason in report.reasons)
+    assert any("100.5" in reason and "area" in reason for reason in report.reasons)
+
+
+def test_fractional_belt_regression_blocks_promotion() -> None:
+    baseline = fixture_samples(
+        seconds=(10.0, 10.0),
+        area=(100, 100),
+        belts=(50, 50),
+        cpu=(8.0, 8.0),
+        rss=(100.0, 100.0),
+    )
+    candidate = fixture_samples(
+        strategy="candidate",
+        seconds=(8.0, 8.0),
+        area=(100, 100),
+        belts=(50, 51),
+        cpu=(6.0, 6.0),
+        rss=(90.0, 90.0),
+    )
+
+    report = assess_promotion(
+        baseline,
+        candidate,
+        required=manifest(repeat=2),
+        bootstrap_seed=7,
+    )
+
+    assert not report.eligible
+    assert any("50.5" in reason and "belts" in reason for reason in report.reasons)
 
 
 def test_paired_bootstrap_is_deterministic() -> None:
@@ -122,18 +196,16 @@ def test_paired_bootstrap_is_deterministic() -> None:
         ("refusal", "refusal"),
         ("error", "error"),
         ("crossfail", "crossfail"),
-        ("belts", "belts"),
         ("runtime", "runtime"),
         ("p95", "p95"),
         ("cpu", "CPU"),
         ("rss", "RSS"),
         ("missing-cpu", "CPU metric"),
         ("missing-rss", "RSS metric"),
-        ("unmatched", "unmatched"),
     ],
 )
 def test_every_strict_gate_failure_is_reported(mutation: str, reason: str) -> None:
-    baseline, candidate = _eligible_pair()
+    baseline, candidate = eligible_pair()
     if mutation in {"invalid", "refusal", "error", "crossfail"}:
         outcome = {
             "invalid": Outcome.INVALID,
@@ -141,120 +213,120 @@ def test_every_strict_gate_failure_is_reported(mutation: str, reason: str) -> No
             "error": Outcome.ERROR,
             "crossfail": Outcome.CROSSFAIL,
         }[mutation]
-        candidate = fixture_trials(
-            strategy="candidate",
-            seconds=(8.0, 8.2, 7.9),
-            area=(100, 100, 100),
-            belts=(50, 50, 50),
-            cpu=(6.0, 6.1, 5.9),
-            rss=(90.0, 91.0, 89.0),
+        candidate[0] = replace(
+            candidate[0],
             outcome=outcome,
-        )
-    elif mutation == "belts":
-        candidate = fixture_trials(
-            strategy="candidate",
-            seconds=(8.0, 8.2, 7.9),
-            area=(100, 100, 100),
-            belts=(51, 51, 51),
-            cpu=(6.0, 6.1, 5.9),
-            rss=(90.0, 91.0, 89.0),
+            metrics=None,
+            buildings=0,
+            detail=mutation,
         )
     elif mutation == "runtime":
-        candidate = fixture_trials(
-            strategy="candidate",
-            seconds=(10.1, 10.3, 9.9),
-            cpu=(6.0, 6.1, 5.9),
-            rss=(90.0, 91.0, 89.0),
-        )
+        candidate = [replace(sample, seconds=sample.seconds + 3.0) for sample in baseline]
     elif mutation == "p95":
-        candidate = fixture_trials(
-            strategy="candidate",
-            seconds=(1.0, 1.0, 20.0),
-            cpu=(6.0, 6.1, 5.9),
-            rss=(90.0, 91.0, 89.0),
-        )
+        candidate = [
+            replace(candidate[0], seconds=1.0),
+            replace(candidate[1], seconds=1.0),
+            replace(candidate[2], seconds=20.0),
+        ]
     elif mutation == "cpu":
-        candidate = fixture_trials(
-            strategy="candidate",
-            seconds=(8.0, 8.2, 7.9),
-            cpu=(9.0, 9.1, 8.9),
-            rss=(90.0, 91.0, 89.0),
-        )
+        candidate = [replace(sample, cpu_seconds=9.0) for sample in candidate]
     elif mutation == "rss":
-        candidate = fixture_trials(
-            strategy="candidate",
-            seconds=(8.0, 8.2, 7.9),
-            cpu=(6.0, 6.1, 5.9),
-            rss=(110.0, 111.0, 109.0),
-        )
+        candidate = [replace(sample, peak_rss_mb=110.0) for sample in candidate]
     elif mutation == "missing-cpu":
-        candidate = fixture_trials(
-            strategy="candidate",
-            seconds=(8.0, 8.2, 7.9),
-            cpu=(None, None, None),
-            rss=(90.0, 91.0, 89.0),
-        )
-    elif mutation == "missing-rss":
-        candidate = fixture_trials(
-            strategy="candidate",
-            seconds=(8.0, 8.2, 7.9),
-            cpu=(6.0, 6.1, 5.9),
-            rss=(None, None, None),
-        )
+        candidate = [replace(sample, cpu_seconds=None) for sample in candidate]
     else:
-        candidate = fixture_trials(
-            url_id="different-cell",
-            strategy="candidate",
-            seconds=(8.0, 8.2, 7.9),
-            cpu=(6.0, 6.1, 5.9),
-            rss=(90.0, 91.0, 89.0),
-        )
+        candidate = [replace(sample, peak_rss_mb=None) for sample in candidate]
 
-    report = assess_promotion(baseline=baseline, candidate=candidate, bootstrap_seed=7)
+    report = assess_promotion(
+        baseline,
+        candidate,
+        required=manifest(),
+        bootstrap_seed=7,
+    )
 
     assert not report.eligible
     assert any(reason in item for item in report.reasons)
 
 
-def test_baseline_refusals_do_not_block_when_candidate_has_no_additional_refusal() -> None:
-    baseline, candidate = _eligible_pair()
-    baseline.append(
-        Trial(
-            url_id="one-cell",
-            strategy="baseline",
-            budget_s=10.0,
-            trial=3,
-            outcome=Outcome.REFUSED,
-            candidate="default",
-            seconds=10.0,
-            cpu_seconds=8.0,
-            peak_rss_mb=100.0,
-            candidates_total=1,
-        )
-    )
-    candidate.append(
-        Trial(
-            url_id="one-cell",
-            strategy="candidate",
-            budget_s=10.0,
-            trial=3,
-            outcome=Outcome.VALID,
-            candidate="default",
-            seconds=8.0,
-            metrics=_metrics(100, 50),
-            cpu_seconds=6.0,
-            peak_rss_mb=90.0,
-            candidates_valid=1,
-            candidates_total=1,
-        )
+def test_identically_truncated_repeats_are_ineligible() -> None:
+    baseline, candidate = eligible_pair()
+    baseline.pop()
+    candidate.pop()
+
+    report = assess(baseline, candidate)
+
+    assert not report.eligible
+    assert any("required trials" in reason for reason in report.reasons)
+
+
+def test_power_scope_is_part_of_the_raw_and_trial_identity() -> None:
+    baseline, candidate = eligible_pair()
+    candidate = [replace(sample, power=True) for sample in candidate]
+
+    report = assess(baseline, candidate)
+
+    assert not report.eligible
+    assert any("raw sample identities" in reason for reason in report.reasons)
+    assert any("required cell" in reason for reason in report.reasons)
+
+
+def test_missing_or_additional_raw_candidate_is_ineligible() -> None:
+    baseline, candidate = eligible_pair()
+    candidate.pop()
+
+    report = assess(baseline, candidate)
+
+    assert not report.eligible
+    assert any("raw sample identities" in reason for reason in report.reasons)
+
+
+def test_invalid_nonshipping_candidate_cannot_hide_behind_a_valid_candidate() -> None:
+    baseline, candidate = eligible_pair()
+    baseline += fixture_samples(candidate="other")
+    candidate += fixture_samples(strategy="candidate", candidate="other")
+    candidate[-1] = replace(
+        candidate[-1],
+        outcome=Outcome.INVALID,
+        metrics=None,
+        buildings=0,
+        detail="invalid hidden candidate",
     )
 
-    report = assess_promotion(baseline=baseline, candidate=candidate, bootstrap_seed=7)
+    report = assess_promotion(
+        baseline,
+        candidate,
+        required=manifest(candidates=2),
+        bootstrap_seed=7,
+    )
+
+    assert not report.eligible
+    assert any("invalid" in reason for reason in report.reasons)
+
+
+def test_candidate_refusal_is_compared_at_the_exact_raw_identity() -> None:
+    baseline, candidate = eligible_pair()
+    candidate[1] = replace(
+        candidate[1], outcome=Outcome.REFUSED, metrics=None, buildings=0
+    )
+
+    report = assess(baseline, candidate)
+
+    assert not report.eligible
+    assert any("additional refusal" in reason for reason in report.reasons)
+
+
+def test_baseline_refusal_can_be_resolved_by_candidate() -> None:
+    baseline, candidate = eligible_pair()
+    baseline[1] = replace(
+        baseline[1], outcome=Outcome.REFUSED, metrics=None, buildings=0
+    )
+
+    report = assess(baseline, candidate)
 
     assert report.eligible
 
 
-def test_old_json_without_cpu_or_rss_parses_but_cannot_pass() -> None:
+def test_old_json_null_buildings_and_missing_metrics_parses_but_cannot_pass() -> None:
     document: dict[str, object] = {
         "meta": {"a": "baseline", "b": "candidate", "power": False},
         "samples": [
@@ -264,26 +336,45 @@ def test_old_json_without_cpu_or_rss_parses_but_cannot_pass() -> None:
                 "strategy": strategy,
                 "budget_s": 10.0,
                 "trial": trial,
-                "outcome": "valid",
+                "outcome": outcome,
                 "seconds": seconds,
-                "area": 100,
-                "used_tiles": 100,
-                "buildings": 1,
-                "belt_tiles": 50,
-                "direct_inserts": 0,
-                "machines": 1,
-                "detail": "",
+                "area": 100 if outcome == "valid" else None,
+                "used_tiles": 100 if outcome == "valid" else None,
+                "buildings": 1 if outcome == "valid" else None,
+                "belt_tiles": 50 if outcome == "valid" else None,
+                "direct_inserts": 0 if outcome == "valid" else None,
+                "machines": 1 if outcome == "valid" else None,
+                "detail": "legacy refusal" if outcome == "refused" else "",
             }
-            for strategy, seconds in (("baseline", 10.0), ("candidate", 8.0))
+            for strategy, seconds, outcome in (
+                ("baseline", 10.0, "valid"),
+                ("candidate", 8.0, "refused"),
+            )
             for trial in range(3)
         ],
     }
 
-    baseline, candidate = trials_from_json(document)
-    report = assess_promotion(baseline=baseline, candidate=candidate, bootstrap_seed=7)
+    loaded = samples_from_json(document)
+    baseline = [sample for sample in loaded if sample.strategy == "baseline"]
+    candidate = [sample for sample in loaded if sample.strategy == "candidate"]
+    report = assess_promotion(
+        baseline,
+        candidate,
+        required=manifest(),
+        bootstrap_seed=7,
+    )
 
-    assert all(trial.cpu_seconds is None for trial in baseline + candidate)
-    assert all(trial.peak_rss_mb is None for trial in baseline + candidate)
+    assert all(sample.buildings == 0 for sample in candidate)
+    assert all(sample.cpu_seconds is None for sample in loaded)
+    assert all(sample.peak_rss_mb is None for sample in loaded)
     assert not report.eligible
     assert any("CPU metric" in reason for reason in report.reasons)
     assert any("RSS metric" in reason for reason in report.reasons)
+
+
+def test_repository_manifest_is_full_corpus_for_both_power_modes() -> None:
+    required = repository_manifest(budgets=(10.0,), repeat=2, candidates=1)
+
+    assert len(required.cells) == len(URL_CORPUS) * 2
+    assert {cell.power for cell in required.cells} == {False, True}
+    assert all(cell.repeat == 2 and cell.candidates == 1 for cell in required.cells)

@@ -6,15 +6,57 @@ import argparse
 import json
 import math
 import random
+import statistics
+from collections import Counter
 from collections.abc import Mapping, Sequence
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from flab2bp.bench.ab import Cell, Outcome, Trial, samples_from_json, trials_from
+from flab2bp.bench.ab import Outcome, Sample, Trial, samples_from_json, trials_from
+from flab2bp.bench.corpus import URL_CORPUS
 from flab2bp.bench.scoring import geometric_mean
 
-_CellKey = tuple[str, float]
+_CellKey = tuple[str, float, bool]
+_RawKey = tuple[str, str, float, int, bool]
+_TrialKey = tuple[str, float, int, bool]
 _INVALID_OUTCOMES = (Outcome.INVALID, Outcome.ERROR, Outcome.CROSSFAIL)
+
+
+@dataclass(frozen=True, slots=True, order=True)
+class RequiredCell:
+    """Exact expected run shape for one URL, budget, and power mode."""
+
+    url_id: str
+    budget_s: float
+    power: bool
+    repeat: int
+    candidates: int
+
+    def __post_init__(self) -> None:
+        if not self.url_id:
+            raise ValueError("required cell url_id must not be empty")
+        if not math.isfinite(self.budget_s) or self.budget_s <= 0:
+            raise ValueError("required cell budget must be finite and positive")
+        if self.repeat <= 0 or self.candidates <= 0:
+            raise ValueError("required cell repeat and candidates must be positive")
+
+    @property
+    def key(self) -> _CellKey:
+        return (self.url_id, self.budget_s, self.power)
+
+
+@dataclass(frozen=True, slots=True)
+class PromotionManifest:
+    """Repository or fixture scope that persisted samples must cover exactly."""
+
+    cells: tuple[RequiredCell, ...]
+
+    def __post_init__(self) -> None:
+        keys = [cell.key for cell in self.cells]
+        if len(set(keys)) != len(keys):
+            raise ValueError("promotion manifest cells must be unique")
+        if not keys:
+            raise ValueError("promotion manifest must require at least one cell")
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,6 +87,19 @@ class PromotionReport:
         return result
 
 
+def repository_manifest(
+    *, budgets: Sequence[float], repeat: int, candidates: int
+) -> PromotionManifest:
+    """Require the entire repository corpus at every budget and both power modes."""
+    cells = tuple(
+        RequiredCell(entry.url_id, budget, power, repeat, candidates)
+        for entry in URL_CORPUS
+        for budget in budgets
+        for power in (False, True)
+    )
+    return PromotionManifest(cells)
+
+
 def paired_bootstrap_ci_hi(
     ratios: Sequence[float], *, seed: int, resamples: int = 10_000
 ) -> float:
@@ -66,18 +121,153 @@ def paired_bootstrap_ci_hi(
     return estimates[math.ceil(0.95 * resamples) - 1]
 
 
-def _cells(trials: Sequence[Trial]) -> dict[_CellKey, Cell]:
-    grouped: dict[_CellKey, list[Trial]] = {}
-    for trial in trials:
-        grouped.setdefault((trial.url_id, trial.budget_s), []).append(trial)
-    return {
-        key: Cell(key[0], values[0].strategy, key[1], tuple(values))
-        for key, values in grouped.items()
-    }
+def _raw_key(sample: Sample) -> _RawKey:
+    return (
+        sample.url_id,
+        sample.candidate,
+        sample.budget_s,
+        sample.trial,
+        sample.power,
+    )
+
+
+def _trial_key(trial: Trial) -> _TrialKey:
+    return (trial.url_id, trial.budget_s, trial.trial, trial.power)
+
+
+def _cell_key(sample: Sample | Trial) -> _CellKey:
+    return (sample.url_id, sample.budget_s, sample.power)
 
 
 def _label(key: _CellKey) -> str:
-    return f"{key[0]}@{key[1]:g}s"
+    return f"{key[0]}@{key[1]:g}s/power={int(key[2])}"
+
+
+def _preview(keys: Sequence[_CellKey | _RawKey | _TrialKey]) -> str:
+    shown = ", ".join(str(key) for key in keys[:3])
+    return shown + (", ..." if len(keys) > 3 else "")
+
+
+def _scope_reasons(
+    side: str, samples: Sequence[Sample], required: PromotionManifest
+) -> list[str]:
+    reasons: list[str] = []
+    by_cell: dict[_CellKey, list[Sample]] = {}
+    for sample in samples:
+        by_cell.setdefault(_cell_key(sample), []).append(sample)
+    required_keys = {cell.key for cell in required.cells}
+    observed_keys = set(by_cell)
+    missing = sorted(required_keys - observed_keys)
+    unexpected = sorted(observed_keys - required_keys)
+    if missing:
+        reasons.append(
+            f"{side} missing {len(missing)} required cell(s): {_preview(missing)}"
+        )
+    if unexpected:
+        reasons.append(
+            f"{side} has {len(unexpected)} unexpected cell(s): {_preview(unexpected)}"
+        )
+
+    requirements = {cell.key: cell for cell in required.cells}
+    for key in sorted(required_keys & observed_keys):
+        expected = requirements[key]
+        rows = by_cell[key]
+        trials = {sample.trial for sample in rows}
+        wanted_trials = set(range(expected.repeat))
+        if trials != wanted_trials:
+            reasons.append(
+                f"{side} {_label(key)} required trials {sorted(wanted_trials)}, "
+                f"observed {sorted(trials)}"
+            )
+        candidate_sets: list[set[str]] = []
+        for trial in sorted(trials):
+            candidates = {sample.candidate for sample in rows if sample.trial == trial}
+            candidate_sets.append(candidates)
+            if len(candidates) != expected.candidates:
+                reasons.append(
+                    f"{side} {_label(key)} trial {trial} requires "
+                    f"{expected.candidates} candidates, observed {len(candidates)}"
+                )
+        identities_vary = any(
+            candidates != candidate_sets[0] for candidates in candidate_sets[1:]
+        )
+        if candidate_sets and identities_vary:
+            reasons.append(f"{side} {_label(key)} candidate identities vary by trial")
+    return reasons
+
+
+def _raw_reasons(baseline: Sequence[Sample], candidate: Sequence[Sample]) -> list[str]:
+    reasons: list[str] = []
+    baseline_counts = Counter(_raw_key(sample) for sample in baseline)
+    candidate_counts = Counter(_raw_key(sample) for sample in candidate)
+    duplicate_baseline = sorted(key for key, count in baseline_counts.items() if count != 1)
+    duplicate_candidate = sorted(key for key, count in candidate_counts.items() if count != 1)
+    if duplicate_baseline:
+        reasons.append(
+            "baseline duplicate raw sample identities: " + _preview(duplicate_baseline)
+        )
+    if duplicate_candidate:
+        reasons.append(
+            "candidate duplicate raw sample identities: " + _preview(duplicate_candidate)
+        )
+
+    baseline_keys = set(baseline_counts)
+    candidate_keys = set(candidate_counts)
+    missing = sorted(baseline_keys - candidate_keys)
+    additional = sorted(candidate_keys - baseline_keys)
+    if missing:
+        reasons.append(
+            f"candidate missing {len(missing)} raw sample identities: {_preview(missing)}"
+        )
+    if additional:
+        reasons.append(
+            f"candidate has {len(additional)} additional raw sample identities: "
+            f"{_preview(additional)}"
+        )
+
+    for side, samples in (("baseline", baseline), ("candidate", candidate)):
+        for outcome in _INVALID_OUTCOMES:
+            bad = sorted(_raw_key(sample) for sample in samples if sample.outcome is outcome)
+            if bad:
+                reasons.append(
+                    f"{side} has {len(bad)} raw {outcome.value} output(s): {_preview(bad)}"
+                )
+
+    baseline_refusals = {
+        _raw_key(sample) for sample in baseline if sample.outcome is Outcome.REFUSED
+    }
+    candidate_refusals = {
+        _raw_key(sample) for sample in candidate if sample.outcome is Outcome.REFUSED
+    }
+    additional_refusals = sorted(candidate_refusals - baseline_refusals)
+    if additional_refusals:
+        reasons.append(
+            f"candidate has {len(additional_refusals)} additional refusal(s): "
+            f"{_preview(additional_refusals)}"
+        )
+    return reasons
+
+
+def _group_trials(trials: Sequence[Trial]) -> dict[_CellKey, list[Trial]]:
+    grouped: dict[_CellKey, list[Trial]] = {}
+    for trial in trials:
+        grouped.setdefault(_cell_key(trial), []).append(trial)
+    return grouped
+
+
+def _median_quality(trials: Sequence[Trial], attribute: str) -> float | None:
+    values: list[int] = []
+    for trial in trials:
+        if trial.metrics is None:
+            continue
+        values.append(
+            trial.metrics.area if attribute == "area" else trial.metrics.belt_tiles
+        )
+    return float(statistics.median(values)) if values else None
+
+
+def _median_seconds(trials: Sequence[Trial]) -> float:
+    return statistics.median(trial.seconds for trial in trials) if trials else 0.0
 
 
 def _percentile(values: Sequence[float], quantile: float) -> float:
@@ -104,102 +294,74 @@ def _ratio(numerator: float, denominator: float) -> float:
     return numerator / denominator
 
 
-def _quality_median(cell: Cell, attribute: str) -> int | None:
-    if attribute == "area":
-        return cell.median_area
-    return cell.median_of(
-        lambda trial: trial.metrics.belt_tiles if trial.metrics is not None else 0
-    )
-
-
 def assess_promotion(
-    baseline: Sequence[Trial],
-    candidate: Sequence[Trial],
+    baseline: Sequence[Sample],
+    candidate: Sequence[Sample],
     *,
+    required: PromotionManifest,
     bootstrap_seed: int = 0,
     bootstrap_resamples: int = 10_000,
 ) -> PromotionReport:
-    """Apply every strict gate to matched ``(url, budget)`` trial cells."""
-    reasons: list[str] = []
-    baseline_cells = _cells(baseline)
-    candidate_cells = _cells(candidate)
-    baseline_keys = set(baseline_cells)
-    candidate_keys = set(candidate_cells)
-    baseline_only = sorted(baseline_keys - candidate_keys)
-    candidate_only = sorted(candidate_keys - baseline_keys)
-    if baseline_only:
-        reasons.append(
-            "unmatched baseline cells: " + ", ".join(_label(key) for key in baseline_only)
-        )
-    if candidate_only:
-        reasons.append(
-            "unmatched candidate cells: " + ", ".join(_label(key) for key in candidate_only)
-        )
+    """Apply every strict gate after verifying the complete raw sample matrix."""
+    reasons = _scope_reasons("baseline", baseline, required)
+    reasons += _scope_reasons("candidate", candidate, required)
+    reasons += _raw_reasons(baseline, candidate)
 
-    matched = sorted(baseline_keys & candidate_keys)
-    if not matched:
-        reasons.append("no matched cells")
+    baseline_trials = trials_from(baseline)
+    candidate_trials = trials_from(candidate)
+    baseline_trial_keys = {_trial_key(trial) for trial in baseline_trials}
+    candidate_trial_keys = {_trial_key(trial) for trial in candidate_trials}
+    if baseline_trial_keys != candidate_trial_keys:
+        reasons.append("matched trial identities differ after candidate shipping")
 
+    before_cells = _group_trials(baseline_trials)
+    after_cells = _group_trials(candidate_trials)
+    matched = sorted(set(before_cells) & set(after_cells))
     runtime_ratios: list[float] = []
     for key in matched:
-        before = baseline_cells[key]
-        after = candidate_cells[key]
-        for side, cell in (("baseline", before), ("candidate", after)):
-            for outcome in _INVALID_OUTCOMES:
-                count = cell.count(outcome)
-                if count:
-                    reasons.append(
-                        f"{side} {_label(key)} has {count} {outcome.value} output(s)"
-                    )
-        extra_refusals = after.count(Outcome.REFUSED) - before.count(Outcome.REFUSED)
-        if extra_refusals > 0:
-            reasons.append(
-                f"candidate {_label(key)} has {extra_refusals} additional refusal(s)"
-            )
-
+        before = before_cells[key]
+        after = after_cells[key]
         for attribute in ("area", "belts"):
-            before_value = _quality_median(before, attribute)
-            after_value = _quality_median(after, attribute)
+            before_value = _median_quality(before, attribute)
+            after_value = _median_quality(after, attribute)
             if before_value is None or after_value is None:
                 reasons.append(f"{_label(key)} lacks comparable median {attribute}")
             elif after_value > before_value:
                 reasons.append(
                     f"candidate {_label(key)} median {attribute} regressed "
-                    f"from {before_value} to {after_value}"
+                    f"from {before_value:g} to {after_value:g}"
                 )
-
-        runtime_ratio = _ratio(after.median_seconds, before.median_seconds)
+        runtime_ratio = _ratio(_median_seconds(after), _median_seconds(before))
         if math.isfinite(runtime_ratio) and runtime_ratio > 0:
             runtime_ratios.append(runtime_ratio)
         else:
             reasons.append(f"{_label(key)} lacks comparable positive runtime")
 
-    all_runtime_cells = len(runtime_ratios) == len(matched) and bool(matched)
+    complete_runtime = len(runtime_ratios) == len(required.cells) == len(matched)
     runtime_ratio_geo_mean = (
-        geometric_mean(runtime_ratios) if all_runtime_cells else math.inf
+        geometric_mean(runtime_ratios) if complete_runtime else math.inf
     )
     runtime_ratio_ci_hi = math.inf
-    if len(runtime_ratios) == len(matched) and matched:
+    if complete_runtime:
         runtime_ratio_ci_hi = paired_bootstrap_ci_hi(
             runtime_ratios, seed=bootstrap_seed, resamples=bootstrap_resamples
         )
         if runtime_ratio_ci_hi >= 1.0:
             reasons.append(
-                f"runtime paired-bootstrap 95% upper bound is {runtime_ratio_ci_hi:.6g}, not < 1"
+                f"runtime paired-bootstrap 95% upper bound is "
+                f"{runtime_ratio_ci_hi:.6g}, not < 1"
             )
 
-    baseline_wall = [trial.seconds for key in matched for trial in baseline_cells[key].trials]
-    candidate_wall = [trial.seconds for key in matched for trial in candidate_cells[key].trials]
-    p95_ratio = _ratio(_percentile(candidate_wall, 0.95), _percentile(baseline_wall, 0.95))
+    baseline_wall = [trial.seconds for trial in baseline_trials]
+    candidate_wall = [trial.seconds for trial in candidate_trials]
+    p95_ratio = _ratio(
+        _percentile(candidate_wall, 0.95), _percentile(baseline_wall, 0.95)
+    )
     if p95_ratio > 1.0:
         reasons.append(f"p95 wall ratio is {p95_ratio:.6g}, worse than 1")
 
-    baseline_cpu = [
-        trial.cpu_seconds for key in matched for trial in baseline_cells[key].trials
-    ]
-    candidate_cpu = [
-        trial.cpu_seconds for key in matched for trial in candidate_cells[key].trials
-    ]
+    baseline_cpu = [trial.cpu_seconds for trial in baseline_trials]
+    candidate_cpu = [trial.cpu_seconds for trial in candidate_trials]
     if (
         any(value is None for value in baseline_cpu + candidate_cpu)
         or not baseline_cpu
@@ -215,12 +377,8 @@ def assess_promotion(
         if cpu_ratio > 1.0:
             reasons.append(f"CPU ratio is {cpu_ratio:.6g}, worse than 1")
 
-    baseline_rss = [
-        trial.peak_rss_mb for key in matched for trial in baseline_cells[key].trials
-    ]
-    candidate_rss = [
-        trial.peak_rss_mb for key in matched for trial in candidate_cells[key].trials
-    ]
+    baseline_rss = [trial.peak_rss_mb for trial in baseline_trials]
+    candidate_rss = [trial.peak_rss_mb for trial in candidate_trials]
     if (
         any(value is None for value in baseline_rss + candidate_rss)
         or not baseline_rss
@@ -254,30 +412,46 @@ def _meta(document: Mapping[str, object]) -> Mapping[str, object]:
     return meta
 
 
-def trials_from_json(document: Mapping[str, object]) -> tuple[list[Trial], list[Trial]]:
-    """Load baseline/candidate trials from current or legacy persisted A/B JSON."""
-    meta = _meta(document)
-    a_name = str(meta.get("a", "spine"))
-    b_name = str(meta.get("b", "freeform"))
-    trials = trials_from(samples_from_json(document))
-    return (
-        [trial for trial in trials if trial.strategy == a_name],
-        [trial for trial in trials if trial.strategy == b_name],
-    )
+def _positive_integer(meta: Mapping[str, object], key: str) -> int:
+    value = meta.get(key)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"result JSON meta {key!r} must be numeric")
+    number = int(value)
+    if number <= 0 or number != value:
+        raise ValueError(f"result JSON meta {key!r} must be a positive integer")
+    return number
+
+
+def _budgets(meta: Mapping[str, object]) -> tuple[float, ...]:
+    raw = meta.get("budgets")
+    if not isinstance(raw, list) or not raw:
+        raise ValueError("result JSON meta 'budgets' must be a non-empty list")
+    budgets: list[float] = []
+    for value in raw:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError("result JSON budgets must be numeric")
+        budget = float(value)
+        if not math.isfinite(budget) or budget <= 0:
+            raise ValueError("result JSON budgets must be finite and positive")
+        budgets.append(budget)
+    return tuple(budgets)
 
 
 def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("results", nargs="+", type=Path)
-    parser.add_argument("--bootstrap-seed", type=int, default=0)
+    _ = parser.add_argument("results", nargs="+", type=Path)
+    _ = parser.add_argument("--bootstrap-seed", type=int, default=0)
     return parser.parse_args(argv)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parse_args(argv)
-    baseline: list[Trial] = []
-    candidate: list[Trial] = []
+    baseline: list[Sample] = []
+    candidate: list[Sample] = []
     expected_pair: tuple[str, str] | None = None
+    expected_repeat: int | None = None
+    expected_candidates: int | None = None
+    budgets: set[float] = set()
     for path in args.results:
         raw = json.loads(path.read_text())
         if not isinstance(raw, dict):
@@ -285,21 +459,34 @@ def main(argv: Sequence[str] | None = None) -> int:
         document: Mapping[str, object] = raw
         meta = _meta(document)
         pair = (str(meta.get("a", "spine")), str(meta.get("b", "freeform")))
+        repeat = _positive_integer(meta, "repeat")
+        candidates = _positive_integer(meta, "candidates")
         if expected_pair is None:
             expected_pair = pair
-        elif pair != expected_pair:
-            raise SystemExit(
-                f"{path}: backend pair {pair[0]}/{pair[1]} does not match "
-                f"{expected_pair[0]}/{expected_pair[1]}"
-            )
-        before, after = trials_from_json(document)
-        scope = f"power={int(bool(meta.get('power', False)))}:"
-        baseline.extend(replace(trial, url_id=scope + trial.url_id) for trial in before)
-        candidate.extend(replace(trial, url_id=scope + trial.url_id) for trial in after)
+            expected_repeat = repeat
+            expected_candidates = candidates
+        elif (
+            pair != expected_pair
+            or repeat != expected_repeat
+            or candidates != expected_candidates
+        ):
+            raise SystemExit(f"{path}: backend pair/repeat/candidates do not match prior runs")
+        budgets.update(_budgets(meta))
+        samples = samples_from_json(document)
+        baseline.extend(sample for sample in samples if sample.strategy == pair[0])
+        candidate.extend(sample for sample in samples if sample.strategy == pair[1])
 
+    if expected_repeat is None or expected_candidates is None:
+        raise SystemExit("no result JSON supplied")
+    required = repository_manifest(
+        budgets=tuple(sorted(budgets)),
+        repeat=expected_repeat,
+        candidates=expected_candidates,
+    )
     report = assess_promotion(
         baseline,
         candidate,
+        required=required,
         bootstrap_seed=args.bootstrap_seed,
     )
     print(json.dumps(report.to_json(), sort_keys=True))

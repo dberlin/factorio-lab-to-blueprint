@@ -38,11 +38,13 @@ the aggregation logic is unit-testable without running CP-SAT.
 
 from __future__ import annotations
 
+import multiprocessing
 import resource
 import statistics
 import sys
 import time
 from collections.abc import Callable, Mapping, Sequence
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field, replace
 from enum import Enum
 
@@ -127,6 +129,8 @@ class Sample:
     cpu_seconds: float | None = None
     #: Process peak resident set after this attempt, in MiB. ``None`` for legacy JSON.
     peak_rss_mb: float | None = None
+    #: Power mode is part of the persisted sample identity.
+    power: bool = False
 
     def __post_init__(self) -> None:
         valid = self.outcome is Outcome.VALID
@@ -164,6 +168,137 @@ def _peak_rss_mb() -> float:
     raw = float(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
     return raw / (1024 * 1024) if sys.platform == "darwin" else raw / 1024
 
+@dataclass(frozen=True, slots=True)
+class MeasuredAttempt:
+    """A layout result measured inside the process that performed the solve."""
+
+    placement: Placement | None
+    failure: Outcome | None
+    detail: str
+    seconds: float
+    cpu_seconds: float
+    peak_rss_mb: float
+
+
+def measure_attempt(lay_out: Callable[[], Placement]) -> MeasuredAttempt:
+    """Measure one solve in the current process, excluding caller overhead."""
+    started = time.perf_counter()
+    cpu_started = time.process_time()
+    try:
+        placement = lay_out()
+    except NoValidLayout as exc:
+        return MeasuredAttempt(
+            None,
+            Outcome.REFUSED,
+            exc.reason,
+            time.perf_counter() - started,
+            time.process_time() - cpu_started,
+            _peak_rss_mb(),
+        )
+    except Exception as exc:  # noqa: BLE001 - one bad cell must not kill the sweep
+        return MeasuredAttempt(
+            None,
+            Outcome.ERROR,
+            f"{type(exc).__name__}: {exc}",
+            time.perf_counter() - started,
+            time.process_time() - cpu_started,
+            _peak_rss_mb(),
+        )
+    return MeasuredAttempt(
+        placement,
+        None,
+        "",
+        time.perf_counter() - started,
+        time.process_time() - cpu_started,
+        _peak_rss_mb(),
+    )
+
+
+def isolated_attempt(lay_out: Callable[[], Placement]) -> MeasuredAttempt:
+    """Measure one attempt in a newly spawned process with an uncontaminated RSS."""
+    context = multiprocessing.get_context("spawn")
+    with ProcessPoolExecutor(max_workers=1, mp_context=context) as pool:
+        return pool.submit(measure_attempt, lay_out).result()
+
+
+def sample_measured(
+    *,
+    url_id: str,
+    candidate: str,
+    strategy: str,
+    budget_s: float,
+    trial: int,
+    attempt: MeasuredAttempt,
+    judge: Callable[[Placement], tuple[bool, tuple[str, ...]]],
+    encode: Callable[[Placement], str],
+    power: bool = False,
+) -> Sample:
+    """Grade a measured attempt without changing its child-process resource data."""
+    if attempt.failure is not None:
+        return Sample(
+            url_id,
+            candidate,
+            strategy,
+            budget_s,
+            trial,
+            attempt.failure,
+            attempt.seconds,
+            detail=attempt.detail,
+            cpu_seconds=attempt.cpu_seconds,
+            peak_rss_mb=attempt.peak_rss_mb,
+            power=power,
+        )
+    placement = attempt.placement
+    if placement is None:
+        raise AssertionError("a successful measured attempt must carry a placement")
+    ok, checks = judge(placement)
+    if not ok:
+        return Sample(
+            url_id,
+            candidate,
+            strategy,
+            budget_s,
+            trial,
+            Outcome.INVALID,
+            attempt.seconds,
+            detail=",".join(checks) or "unknown check",
+            cpu_seconds=attempt.cpu_seconds,
+            peak_rss_mb=attempt.peak_rss_mb,
+            power=power,
+        )
+    try:
+        blueprint = encode(placement)
+    except Exception as exc:  # noqa: BLE001
+        return Sample(
+            url_id,
+            candidate,
+            strategy,
+            budget_s,
+            trial,
+            Outcome.CROSSFAIL,
+            attempt.seconds,
+            detail=f"encode: {type(exc).__name__}: {exc}",
+            cpu_seconds=attempt.cpu_seconds,
+            peak_rss_mb=attempt.peak_rss_mb,
+            power=power,
+        )
+    return Sample(
+        url_id,
+        candidate,
+        strategy,
+        budget_s,
+        trial,
+        Outcome.VALID,
+        attempt.seconds,
+        metrics=measure(placement),
+        buildings=len(placement.buildings),
+        blueprint=blueprint,
+        cpu_seconds=attempt.cpu_seconds,
+        peak_rss_mb=attempt.peak_rss_mb,
+        power=power,
+    )
+
+
 
 def sample_once(
     *,
@@ -175,68 +310,19 @@ def sample_once(
     lay_out: Callable[[], Placement],
     judge: Callable[[Placement], tuple[bool, tuple[str, ...]]],
     encode: Callable[[Placement], str],
+    power: bool = False,
 ) -> Sample:
-    """Run one attempt and grade it.
-
-    The three callables are injected rather than imported so the grading logic
-    can be tested without CP-SAT, and so the driver decides what "valid" means
-    (in particular whether the ``BuildSpec`` and id map are passed to the
-    validator -- without them nine spec-conformance checks silently skip, and a
-    build that never ran its throughput checks reads as clean).
-    """
-    started = time.perf_counter()
-    cpu_started = time.process_time()
-    try:
-        placement = lay_out()
-    except NoValidLayout as exc:
-        return Sample(
-            url_id, candidate, strategy, budget_s, trial,
-            Outcome.REFUSED, time.perf_counter() - started, detail=exc.reason,
-            cpu_seconds=time.process_time() - cpu_started,
-            peak_rss_mb=_peak_rss_mb(),
-        )
-    except Exception as exc:  # noqa: BLE001 - one bad cell must not kill the sweep
-        return Sample(
-            url_id, candidate, strategy, budget_s, trial,
-            Outcome.ERROR, time.perf_counter() - started,
-            detail=f"{type(exc).__name__}: {exc}",
-            cpu_seconds=time.process_time() - cpu_started,
-            peak_rss_mb=_peak_rss_mb(),
-        )
-    elapsed = time.perf_counter() - started
-    cpu_elapsed = time.process_time() - cpu_started
-    peak_rss_mb = _peak_rss_mb()
-
-    ok, checks = judge(placement)
-    if not ok:
-        return Sample(
-            url_id, candidate, strategy, budget_s, trial,
-            Outcome.INVALID, elapsed, detail=",".join(checks) or "unknown check",
-            cpu_seconds=cpu_elapsed,
-            peak_rss_mb=peak_rss_mb,
-        )
-
-    # An encode failure on a placement the validator accepted is the same class
-    # of news as a decoder rejection -- we believed it was shippable and it is
-    # not -- so it is graded the same way rather than as a crash.
-    try:
-        blueprint = encode(placement)
-    except Exception as exc:  # noqa: BLE001
-        return Sample(
-            url_id, candidate, strategy, budget_s, trial,
-            Outcome.CROSSFAIL, elapsed, detail=f"encode: {type(exc).__name__}: {exc}",
-            cpu_seconds=cpu_elapsed,
-            peak_rss_mb=peak_rss_mb,
-        )
-
-    return Sample(
-        url_id, candidate, strategy, budget_s, trial,
-        Outcome.VALID, elapsed,
-        metrics=measure(placement),
-        buildings=len(placement.buildings),
-        blueprint=blueprint,
-        cpu_seconds=cpu_elapsed,
-        peak_rss_mb=peak_rss_mb,
+    """Measure and grade one attempt in the current process."""
+    return sample_measured(
+        url_id=url_id,
+        candidate=candidate,
+        strategy=strategy,
+        budget_s=budget_s,
+        trial=trial,
+        attempt=measure_attempt(lay_out),
+        judge=judge,
+        encode=encode,
+        power=power,
     )
 
 
@@ -357,6 +443,7 @@ class Trial:
     cpu_seconds: float | None = None
     #: Largest candidate process peak RSS. ``None`` for legacy samples.
     peak_rss_mb: float | None = None
+    power: bool = False
 
     @property
     def area(self) -> int | None:
@@ -388,6 +475,7 @@ def ship(samples: Sequence[Sample]) -> Trial:
             metrics=best.metrics, buildings=best.buildings,
             candidates_valid=len(winners), candidates_total=len(samples),
             cpu_seconds=cpu_seconds, peak_rss_mb=peak_rss_mb,
+            power=first.power,
         )
 
     by_outcome = {s.outcome: s for s in reversed(samples)}
@@ -400,6 +488,7 @@ def ship(samples: Sequence[Sample]) -> Trial:
                 outcome, worst.candidate, total, detail="; ".join(details),
                 candidates_valid=0, candidates_total=len(samples),
                 cpu_seconds=cpu_seconds, peak_rss_mb=peak_rss_mb,
+                power=first.power,
             )
     raise AssertionError(f"unreachable: no outcome among {[s.outcome for s in samples]}")
 
@@ -767,11 +856,18 @@ def compare(
 
 
 def trials_from(samples: Sequence[Sample]) -> list[Trial]:
-    """Group samples by ``(url, strategy, budget, trial)`` and ship each group."""
-    groups: dict[tuple[str, str, float, int], list[Sample]] = {}
-    for s in samples:
-        groups.setdefault((s.url_id, s.strategy, s.budget_s, s.trial), []).append(s)
-    return [ship(g) for g in groups.values()]
+    """Group samples by ``(url, strategy, budget, trial, power)`` and ship."""
+    groups: dict[tuple[str, str, float, int, bool], list[Sample]] = {}
+    for sample in samples:
+        key = (
+            sample.url_id,
+            sample.strategy,
+            sample.budget_s,
+            sample.trial,
+            sample.power,
+        )
+        groups.setdefault(key, []).append(sample)
+    return [ship(group) for group in groups.values()]
 
 
 def _belts(t: Trial) -> int:
@@ -971,6 +1067,7 @@ def to_json(
                 "budget_s": s.budget_s,
                 "trial": s.trial,
                 "outcome": s.outcome.value,
+                "power": s.power,
                 "seconds": round(s.seconds, 3),
                 "cpu_seconds": round(s.cpu_seconds, 6) if s.cpu_seconds is not None else None,
                 "peak_rss_mb": round(s.peak_rss_mb, 3) if s.peak_rss_mb is not None else None,
@@ -1005,9 +1102,17 @@ def _required_number(row: Mapping[str, object], key: str) -> float:
 
 def _integer(row: Mapping[str, object], key: str, default: int = 0) -> int:
     value = row.get(key, default)
+    if value is None:
+        return default
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(f"sample {key!r} must be numeric")
     return int(value)
+
+def _boolean(row: Mapping[str, object], key: str, default: bool) -> bool:
+    value = row.get(key, default)
+    if not isinstance(value, bool):
+        raise ValueError(f"sample {key!r} must be a boolean")
+    return value
 
 
 def samples_from_json(document: Mapping[str, object]) -> list[Sample]:
@@ -1015,6 +1120,10 @@ def samples_from_json(document: Mapping[str, object]) -> list[Sample]:
     raw_samples = document.get("samples")
     if not isinstance(raw_samples, list):
         raise ValueError("result JSON must contain a samples list")
+    raw_meta = document.get("meta", {})
+    if not isinstance(raw_meta, dict):
+        raise ValueError("result JSON meta must be an object")
+    meta_power = _boolean(raw_meta, "power", False)
     samples: list[Sample] = []
     for raw in raw_samples:
         if not isinstance(raw, dict):
@@ -1053,6 +1162,7 @@ def samples_from_json(document: Mapping[str, object]) -> list[Sample]:
                     detail=str(row.get("detail", "")),
                     cpu_seconds=_number(row, "cpu_seconds", required=False),
                     peak_rss_mb=_number(row, "peak_rss_mb", required=False),
+                    power=_boolean(row, "power", meta_power),
                 )
             )
         except KeyError as exc:

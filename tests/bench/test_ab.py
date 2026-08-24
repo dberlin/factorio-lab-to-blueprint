@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from runpy import run_path
 from typing import cast
@@ -34,6 +35,7 @@ from flab2bp.bench.ab import (
     compare,
     cross_verdict,
     crossvalidate_samples,
+    isolated_attempt,
     render_markdown,
     render_text,
     sample_once,
@@ -516,6 +518,25 @@ def test_a_blueprint_the_decoder_rejects_stops_contributing_an_area(
 
 def _placement() -> Placement:
     return Placement(buildings=(PlacedBuilding(item_id=2304, model_index=66, x=0, y=0),))
+
+@dataclass(frozen=True)
+class _MemoryLayout:
+    megabytes: int
+
+    def __call__(self) -> Placement:
+        payload = bytearray(self.megabytes * 1024 * 1024)
+        placement = _placement()
+        assert payload
+        return placement
+
+
+def test_isolated_attempt_peak_rss_is_not_contaminated_by_a_prior_attempt() -> None:
+    large = isolated_attempt(_MemoryLayout(48))
+    small = isolated_attempt(_MemoryLayout(1))
+
+    assert large.peak_rss_mb > small.peak_rss_mb + 24
+
+
 
 
 def _grade(
