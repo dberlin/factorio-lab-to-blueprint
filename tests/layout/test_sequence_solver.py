@@ -652,7 +652,7 @@ def test_detailed_candidate_reuses_prepared_problem_identity(
     assert preparation_calls == 0
 
 
-def test_post_route_power_failure_is_an_honest_unpowerable_miss(
+def test_post_route_power_failure_charges_shared_spend_and_refuses(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     spec = two_stage_spec()
@@ -661,7 +661,12 @@ def test_post_route_power_failure_is_an_honest_unpowerable_miss(
     prepared = _prepare_routing_problem(spec, strips, pack, power=True)
 
     def unpowerable_after_route(*args: object, **kwargs: object) -> object:
-        del args, kwargs
+        del args
+        attempt_budget = kwargs["budget"]
+        assert isinstance(attempt_budget, dict)
+        left = attempt_budget["left"]
+        assert isinstance(left, int)
+        attempt_budget["left"] = left - 7
         raise _Unpowerable
 
     monkeypatch.setattr(
@@ -669,19 +674,58 @@ def test_post_route_power_failure_is_an_honest_unpowerable_miss(
         "_build_prepared",
         unpowerable_after_route,
     )
+    detailed_results: list[DetailedStageResult] = []
 
-    result = _route_detailed_candidate(
-        spec,
-        strips,
-        prepared,
-        power=True,
-        deadline=None,
-        allowance=100_000,
+    def detailed_route(
+        candidate: _PreparedRoutingProblem,
+        allowance: int,
+    ) -> DetailedStageResult:
+        result = _route_detailed_candidate(
+            spec,
+            strips,
+            candidate,
+            power=True,
+            deadline=None,
+            allowance=allowance,
+        )
+        detailed_results.append(result)
+        return result
+
+    ledger = ExpansionBudget(100)
+    solver = SequenceSolver(
+        heights=(1,),
+        problem_for_height=lambda _height: PlacementProblem(
+            ((1, 1),),
+            (),
+            1,
+            1,
+        ),
+        adapters=StageAdapters(
+            prepare=lambda _height, _decoded: prepared,
+            global_route=lambda _prepared, _feedback, _allowance: _global(),
+            detailed_route=detailed_route,
+            validate=lambda _placement: ValidationVerdict(True, ()),
+        ),
+        expansion_budget=ledger,
+        config=SequenceSolverConfig(
+            stages=1,
+            moves_per_stage=1,
+            restarts_per_height=1,
+            global_elites=1,
+        ),
     )
 
+    with pytest.raises(NoValidLayout) as exc:
+        solver.search(max_stages=1)
+
+    assert exc.value.reason == "no scheduled stage produced an exact layout"
+    assert len(detailed_results) == 1
+    result = detailed_results[0]
     assert result.routing.status is DetailedRouteStatus.UNPOWERABLE
+    assert result.routing.expansions == 7
     assert result.routing.failed_count == 0
     assert result.placement is None
+    assert ledger.spent == 7
 
 def test_powered_one_net_miss_feeds_lns_or_refuses_honestly(
     monkeypatch: pytest.MonkeyPatch,

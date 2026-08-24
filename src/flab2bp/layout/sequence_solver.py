@@ -646,14 +646,16 @@ def _empty_global_result(
     )
 
 
-def _closed_detailed_result(status: DetailedRouteStatus) -> DetailedStageResult:
+def _closed_detailed_result(
+    status: DetailedRouteStatus, *, expansions: int = 0
+) -> DetailedStageResult:
     return DetailedStageResult(
         routing=DetailedRouteResult(
             status=status,
             routed=(),
             failures=(),
             iterations=0,
-            expansions=0,
+            expansions=expansions,
         ),
         placement=None,
     )
@@ -669,6 +671,7 @@ def _route_detailed_candidate(
     allowance: int,
 ) -> DetailedStageResult:
     """Route one exact prepared identity and withhold every partial build."""
+    attempt_budget = {"left": allowance}
     try:
         built = _build_prepared(
             spec,
@@ -677,10 +680,15 @@ def _route_detailed_candidate(
             power=power,
             route=True,
             deadline=deadline,
-            budget={"left": allowance},
+            budget=attempt_budget,
         )
     except _Unpowerable:
-        return _closed_detailed_result(DetailedRouteStatus.UNPOWERABLE)
+        expansions = allowance - attempt_budget["left"]
+        _check_spend(expansions, allowance)
+        return _closed_detailed_result(
+            DetailedRouteStatus.UNPOWERABLE,
+            expansions=expansions,
+        )
     return DetailedStageResult(
         routing=built.routing,
         placement=(
