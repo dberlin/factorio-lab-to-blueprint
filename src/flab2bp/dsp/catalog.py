@@ -919,6 +919,65 @@ def footprint(item_id: int) -> tuple[int, int]:
     return (b.width, b.height)
 
 
+@cache
+def clearance(item_id: int, yaw: float) -> tuple[int, int]:
+    """Tiles to RESERVE for ``item_id`` at ``yaw`` so nothing collides with it.
+
+    Not the same as :func:`oriented_footprint`, and the difference is the whole
+    point.  A footprint is the tiles whose centres the building covers; a
+    clearance is how much room it needs before the next one.  An Assembling
+    Machine covers 3 but its collider is 3.82 world units, and a tile is
+    ``colliders.GRID_ARC`` = 1.2566 of them -- so 3 tiles is 3.77 and two of
+    them at that pitch INTERSECT.  ``geom.collide`` reported 443 such pairs.
+
+    Reserving ``ceil(extent / GRID_ARC)`` per building and keeping the
+    reservations disjoint gives a centre-to-centre distance of at least
+    ``(cl_a + cl_b) / 2``, which is at least the ``(ext_a + ext_b) / (2 *
+    GRID_ARC)`` the colliders actually require -- for any PAIR, not just two of
+    a kind.  It over-reserves by less than a tile per pair, which wastes space
+    and can never collide; the reverse trade is what shipped red.
+
+    The extent is measured on the ROTATED collider, not by swapping the two
+    numbers: the tested box turns with the building, and a box that is not
+    square about its own centre does not have swappable extents.
+
+    Buildings whose colliders cannot be read fall back to the footprint, which
+    is what the packer used before this existed.  That is not a guess about
+    geometry -- it is the previous behaviour, unchanged, for a building we have
+    no collider data for.
+    """
+    from flab2bp.dsp import colliders
+
+    fw, fh = oriented_footprint(item_id, yaw)
+    try:
+        boxes = colliders.build_colliders(building(item_id).model_index)
+    except Exception:  # noqa: BLE001 - an unreadable model must not stop a layout
+        return (fw, fh)
+    if not boxes:
+        return (fw, fh)
+    # The smallest box about the building's OWN centre that contains every
+    # collider, after turning. Taken over the eight corners of each box rather
+    # than by composing rotation matrices: a corner sweep is the same answer and
+    # is obviously the same answer, which matters more here than being clever.
+    half_turn = math.radians(yaw) * 0.5
+    spin = (0.0, math.sin(half_turn), 0.0, math.cos(half_turn))
+    ex = ez = 0.0
+    for centre, half, rot in boxes:
+        turned = colliders._qmul(spin, rot)
+        for sx in (-1.0, 1.0):
+            for sy in (-1.0, 1.0):
+                for sz in (-1.0, 1.0):
+                    local = (sx * half[0], sy * half[1], sz * half[2])
+                    corner = colliders._qrot(spin, centre)
+                    spun = colliders._qrot(turned, local)
+                    ex = max(ex, abs(corner[0] + spun[0]))
+                    ez = max(ez, abs(corner[2] + spun[2]))
+    return (
+        max(fw, math.ceil(ex * 2 / colliders.GRID_ARC)),
+        max(fh, math.ceil(ez * 2 / colliders.GRID_ARC)),
+    )
+
+
 def oriented_footprint(item_id: int, yaw: float) -> tuple[int, int]:
     """Grid extents of ``item_id`` built at ``yaw``, in tiles.
 

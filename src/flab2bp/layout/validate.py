@@ -1625,6 +1625,12 @@ def _inserter_skew(ctx: Context) -> Iterable[Finding]:
 #: How near a belt must pass an addon area for the game to attach it, and how
 #: near the area's centre must be to the belt's own line.  ``sqrMagnitude < 1f``
 #: and ``Maths.DistancePointLine(...) < 0.3f`` in ``PlanetFactory``.
+#:
+#: WORLD units, like every other literal the game compares a ``Vector3`` with.
+#: Both checks below reach it through ``slots.world_gap``: this file once
+#: compared a tile distance with ``0.8f`` the same way, and getting the frames
+#: wrong there cost a retraction, so there is exactly one conversion and both
+#: callers use it.
 _ADDON_AREA_RADIUS = 1.0
 
 
@@ -1655,11 +1661,7 @@ def _addon_supply(ctx: Context) -> Iterable[Finding]:
     on, and that co-location is already what places them.
     """
     bs = ctx.placement.buildings
-    belts = [
-        (b.x, b.y, b.z * float(cat.WORLD_UNITS_PER_LEVEL))
-        for b in bs
-        if cat.is_belt(b.item_id)
-    ]
+    belts = [(b.x, b.y, float(b.z)) for b in bs if cat.is_belt(b.item_id)]
     for i, b in enumerate(bs):
         areas = cat.building(b.item_id).addon_areas
         if len(areas) < 2:
@@ -1668,12 +1670,12 @@ def _addon_supply(ctx: Context) -> Iterable[Finding]:
             if n == 0:
                 continue
             wx, wy = slots.to_world((adx, ady), b.yaw)
-            want = (
-                b.x + wx,
-                b.y + wy,
-                (b.z + adz) * float(cat.WORLD_UNITS_PER_LEVEL),
-            )
-            if any(math.dist(want, p) < _ADDON_AREA_RADIUS for p in belts):
+            want = (b.x + wx, b.y + wy, float(b.z) + adz)
+            if any(
+                slots.world_gap(want[0] - p[0], want[1] - p[1], want[2] - p[2])
+                < _ADDON_AREA_RADIUS
+                for p in belts
+            ):
                 continue
             yield Finding(
                 "game.addon_supply",
@@ -2807,7 +2809,7 @@ def _coaters_supplied(ctx: Context) -> Iterable[Finding]:
         (
             ctx.placement.buildings[i].x,
             ctx.placement.buildings[i].y,
-            ctx.placement.buildings[i].z * float(cat.WORLD_UNITS_PER_LEVEL),
+            float(ctx.placement.buildings[i].z),
         )
         for i in supplying_belts
     ]
@@ -2819,8 +2821,12 @@ def _coaters_supplied(ctx: Context) -> Iterable[Finding]:
             if n == 0:
                 continue
             wx, wy = slots.to_world((adx, ady), b.yaw)
-            want = (b.x + wx, b.y + wy, (b.z + adz) * float(cat.WORLD_UNITS_PER_LEVEL))
-            ok = ok or any(math.dist(want, p) < _ADDON_AREA_RADIUS for p in supply_at)
+            want = (b.x + wx, b.y + wy, float(b.z) + adz)
+            ok = ok or any(
+                slots.world_gap(want[0] - p[0], want[1] - p[1], want[2] - p[2])
+                < _ADDON_AREA_RADIUS
+                for p in supply_at
+            )
         if not ok:
             starved.append(i)
     if starved:

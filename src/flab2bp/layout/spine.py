@@ -161,13 +161,20 @@ class _Group:
     #: :func:`flab2bp.layout.slots.lane_orientation`, because a building with no
     #: pose facing the lane cannot be wired at all however it is packed.
     yaw: float
+    #: Tiles to RESERVE per machine, from the rotated collider -- see
+    #: `catalog.clearance`.  An Assembling Machine covers 3 tiles and needs 4,
+    #: because its 3.82-unit collider does not fit a 3-tile pitch at 1.2566
+    #: units per tile.  Packing uses these; everything geometric uses
+    #: `width`/`height`, which stay the tiles the building actually covers.
+    pitch_w: int
+    pitch_h: int
     inputs: dict[str, Fraction]
     outputs: dict[str, Fraction]
     proliferated: bool
 
     @property
     def block_width(self) -> int:
-        return self.width * self.count
+        return self.pitch_w * self.count
 
 
 def proliferator_item(spec: BuildSpec) -> str | None:
@@ -279,6 +286,7 @@ def _adapt(spec: BuildSpec) -> tuple[dict[str, _Group], list[_Edge]]:
         key = f"{mg.recipe_id}#{i}"
         yaw = sorter_slots.lane_orientation(item_id)
         w, h = catalog.oriented_footprint(item_id, yaw)
+        pw, ph = catalog.clearance(item_id, yaw)
         groups[key] = _Group(
             key=key,
             recipe_id=mg.recipe_id,
@@ -288,6 +296,8 @@ def _adapt(spec: BuildSpec) -> tuple[dict[str, _Group], list[_Edge]]:
             width=w,
             height=h,
             yaw=yaw,
+            pitch_w=pw,
+            pitch_h=ph,
             inputs=dict(mg.inputs_per_machine),
             outputs=dict(mg.outputs_per_machine),
             proliferated=mg.is_proliferated,
@@ -695,7 +705,7 @@ def _allocate_lanes(
         # and the machine simply gets no sorter for that item at all.  That is
         # how graphene, plastic, energy-matrix and casimir-crystal each ended up
         # with a smelter nothing drained.
-        row_h = max((groups[k].height for k in rows[r]), default=1)
+        row_h = max((groups[k].pitch_h for k in rows[r]), default=1)
         gaps: dict[str, int] = {}
         for k in rows[r]:
             gap = row_h - groups[k].height
@@ -1224,14 +1234,14 @@ def _solve_one(
             flags.append(b)
         model.add_exactly_one(flags)
 
-    max_h = max(g.height for g in groups.values())
+    max_h = max(g.pitch_h for g in groups.values())
     row_w, row_h = [], []
     for r in range(n):
         ww = model.new_int_var(0, w_cap, f"ww_{r}")
         model.add(ww == sum(groups[k].block_width * in_row[k, r] for k in keys))
         hh = model.new_int_var(0, max_h, f"hh_{r}")
         for k in keys:
-            model.add(hh >= groups[k].height * in_row[k, r])
+            model.add(hh >= groups[k].pitch_h * in_row[k, r])
         row_w.append(ww)
         row_h.append(hh)
 
@@ -1564,7 +1574,7 @@ def _solve_one(
 
 def _measure(spec: BuildSpec, plan: _Plan) -> int:
     groups, _ = _adapt(spec)
-    heights = [max((groups[k].height for k in r), default=0) for r in plan.rows]
+    heights = [max((groups[k].pitch_h for k in r), default=0) for r in plan.rows]
     widths = [sum(groups[k].block_width for k in r) for r in plan.rows]
     h = sum(heights) + sum(len(c) for c in plan.lanes)
     return max(widths, default=1) * h
@@ -1660,8 +1670,8 @@ def _pack_row(
                 covered_to = x + tw - 1 + hr
                 x += tw
                 next_tower = x + 2 * hr
-            slots.append(_Slot(key, x, g.width))
-            x += g.width
+            slots.append(_Slot(key, x, g.pitch_w))
+            x += g.pitch_w
     # The greedy pass covers left to right; a trailing block may extend past the
     # last tower's reach, so close the gap explicitly.
     while power and covered_to < x - 1:
@@ -1732,7 +1742,7 @@ def _realizable_direct(
     current = set(plan.direct)
     while True:
         lanes, mixed, copies = _lane_requirements(groups, edges, plan.rows, current, spec)
-        row_heights = [max((groups[k].height for k in r), default=1) for r in plan.rows]
+        row_heights = [max((groups[k].pitch_h for k in r), default=1) for r in plan.rows]
         corridor_heights = [len(c) for c in lanes]
         row_y, _corr_y, _h = band_offsets(row_heights, corridor_heights)
 
@@ -1810,7 +1820,7 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
         hit_budget=plan.hit_budget,
     )
 
-    row_heights = [max((groups[k].height for k in r), default=1) for r in plan.rows]
+    row_heights = [max((groups[k].pitch_h for k in r), default=1) for r in plan.rows]
     corridor_heights = [len(c) for c in plan.lanes]
     row_y, corr_y, total_h = band_offsets(row_heights, corridor_heights)
 
@@ -2482,7 +2492,10 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
                 sum(
                     height_waste(
                         row_heights[r],
-                        [(groups[k].width, groups[k].height, groups[k].count) for k in row],
+                        [
+                            (groups[k].pitch_w, groups[k].pitch_h, groups[k].count)
+                            for k in row
+                        ],
                     )
                     for r, row in enumerate(plan.rows)
                 )

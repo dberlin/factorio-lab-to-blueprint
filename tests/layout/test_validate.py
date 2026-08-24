@@ -611,6 +611,26 @@ def test_game_inserter_paste_stops_a_radial_stretch_at_1_6() -> None:
     assert snaps[0].detail["snap"] > 1.6
 
 
+def test_two_assemblers_collide_at_pitch_3_and_clear_at_pitch_4() -> None:
+    """The end-to-end statement of what spacing is for.
+
+    `geom.collide` is the game's own test, on real collider boxes, and it
+    reported 443 assembler-on-assembler pairs on our output before this. The
+    footprint said 3 and the collider needs 4; both numbers are here so that
+    changing either one has to break this.
+    """
+    tight = place(machine(0, 0), machine(3, 0))
+    assert fired(validate(tight, only={"geom.collide"}), "geom.collide")
+
+    clear = place(machine(0, 0), machine(4, 0))
+    assert not fired(validate(clear, only={"geom.collide"}), "geom.collide")
+
+    assert catalog_building(ASSEMBLER).width == 3, "covers three tiles"
+    from flab2bp.dsp import catalog as _cat
+
+    assert _cat.clearance(ASSEMBLER, 0.0)[0] == 4, "and needs a fourth"
+
+
 def _coater(x: int, y: int, z: int = 0) -> PlacedBuilding:
     b = catalog_building(SPRAY_COATER)
     return PlacedBuilding(

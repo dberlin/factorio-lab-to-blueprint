@@ -552,6 +552,9 @@ class _Group:
     #: `slots.lane_orientation`. A building with no pose facing the lane cannot
     #: be wired at all however it is packed.
     yaw: float
+    #: Tiles to reserve per machine, from the rotated collider.
+    pitch_w: int
+    pitch_h: int
     inputs: dict[str, Fraction]
     outputs: dict[str, Fraction]
     proliferated: bool
@@ -606,6 +609,12 @@ class Strip:
     #: The machines' yaw, carried from the group so the emitted record and the
     #: extents above cannot disagree about which way they are turned.
     yaw: float
+    #: Tiles to RESERVE per machine, from the rotated collider -- see
+    #: `catalog.clearance`. An Assembling Machine covers `mw` = 3 and needs 4:
+    #: its 3.82-unit collider does not fit a 3-tile pitch at 1.2566 units per
+    #: tile. Spacing and the pack use these; anchors and slots use `mw`/`mh`.
+    pw: int
+    ph: int
     #: Lanes arriving on the north side, ordered top-down.  Each lane holds one
     #: or more items; more than one means a shared lane whose sorters filter.
     in_above: tuple[tuple[str, ...], ...]
@@ -633,11 +642,11 @@ class Strip:
 
     @property
     def width(self) -> int:
-        return self.machines * self.mw
+        return self.machines * self.pw
 
     @property
     def height(self) -> int:
-        return len(self.in_above) + self.mh + len(self.out_lanes) + len(self.in_below)
+        return len(self.in_above) + self.ph + len(self.out_lanes) + len(self.in_below)
 
     @property
     def machine_row(self) -> int:
@@ -718,7 +727,7 @@ class Strip:
         if not cols:
             return 0
         last_slot = cols[min(len(lane) - 1, len(cols) - 1)]
-        return (self.machines - 1) * self.mw + last_slot + 1
+        return (self.machines - 1) * self.pw + last_slot + 1
 
     def _attachable_columns(self, *, above: bool) -> tuple[int, ...]:
         """Columns of ONE of this strip's machines a sorter can reach, from 0."""
@@ -988,6 +997,7 @@ def _adapt(spec: BuildSpec) -> dict[str, _Group]:
         b = catalog.building(item_id)
         yaw = slots.lane_orientation(item_id)
         gw, gh = catalog.oriented_footprint(item_id, yaw)
+        pw, ph = catalog.clearance(item_id, yaw)
         groups[f"{mg.recipe_id}#{i}"] = _Group(
             key=f"{mg.recipe_id}#{i}",
             recipe_id=mg.recipe_id,
@@ -997,6 +1007,8 @@ def _adapt(spec: BuildSpec) -> dict[str, _Group]:
             width=gw,
             height=gh,
             yaw=yaw,
+            pitch_w=pw,
+            pitch_h=ph,
             inputs=dict(mg.inputs_per_machine),
             outputs=dict(mg.outputs_per_machine),
             proliferated=mg.is_proliferated,
@@ -1175,6 +1187,8 @@ def plan_strips(spec: BuildSpec, *, strip_len: int = 6) -> list[Strip]:
                         mw=g.width,
                         mh=g.height,
                         yaw=g.yaw,
+                        pw=g.pitch_w,
+                        ph=g.pitch_h,
                         in_above=in_above,
                         in_below=in_below,
                         out_lanes=tuple(shard),
@@ -2003,7 +2017,7 @@ def _emit_strip(
                 PlacedBuilding(
                     item_id=s.item_id,
                     model_index=s.model_index,
-                    x=ox + k * s.mw,
+                    x=ox + k * s.pw,
                     y=machine_y,
                     width=s.mw,
                     height=s.mh,
