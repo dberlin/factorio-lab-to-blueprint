@@ -13,6 +13,7 @@ import functools
 import itertools
 import math
 import time
+from dataclasses import replace
 from fractions import Fraction as F
 from typing import Any
 
@@ -59,6 +60,7 @@ from flab2bp.layout.freeform import (
     _Net,
     _pack,
     _pair_lanes,
+    _PathSearchResult,
     _Port,
     _power_plan,
     _prepare_routing_problem,
@@ -4174,6 +4176,143 @@ class TestDetailedRoutingDiagnostics:
         assert result.failures[0].kind is RouteFailureKind.BUDGET
         assert result.failures[0].wall == ()
         assert result.failures[0].blocking_nets == ()
+    def test_empty_live_starts_take_precedence_over_budget(self) -> None:
+        canvas = _Canvas()
+        bounds = (-2, -2, 2, 2)
+        canvas.limit = bounds
+
+        result = _astar(
+            canvas,
+            [],
+            {(1, 0, 0)},
+            {},
+            1.0,
+            bounds,
+            budget={"left": 0},
+        )
+
+        assert result.kind is RouteFailureKind.DYNAMIC_ACCESS
+        assert result.expansions == 0
+
+    def test_repair_open_grid_excludes_passable_paths_from_the_wall(self) -> None:
+        canvas = _Canvas()
+        bounds = (-4, -4, 4, 4)
+        canvas.limit = bounds
+        self._block(
+            canvas,
+            {(1, 0), (-1, 0), (0, 1), (0, -2), (1, -1), (-1, -1)},
+        )
+        grid = _make_grid(canvas, bounds, _canvas_span(canvas, bounds), {})
+        wall = (0, -1, 0)
+        canvas.blocked[wall] = _TENTATIVE
+        grid.block(wall)
+        open_grid = replace(grid, occ=bytearray(grid.base), hist=None)
+        blame: dict[tuple[int, int, int], float] = {}
+
+        result = _astar(
+            canvas,
+            [(0, 0, 0)],
+            {(3, 3, 0)},
+            {},
+            1.0,
+            bounds,
+            blame=blame,
+            grid=open_grid,
+        )
+
+        assert result.path is None
+        assert result.kind is RouteFailureKind.SEALED_POCKET
+        assert result.wall == ()
+        assert blame == {}
+
+    def test_blocking_owners_are_snapshotted_when_the_search_fails(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        canvas = _Canvas()
+        bounds = (-8, -8, 8, 8)
+        canvas.limit = bounds
+        original_id = NetId(0, 1, "original", NetRole.INTERNAL, 0)
+        failed_id = NetId(2, 3, "failed", NetRole.INTERNAL, 0)
+        replacement_id = NetId(4, 5, "replacement", NetRole.INTERNAL, 0)
+        nets = [
+            self._net(canvas, (-4, -4), (-2, -4), original_id),
+            self._net(canvas, (-4, 0), (-2, 0), failed_id),
+            self._net(canvas, (-4, 4), (-2, 4), replacement_id),
+        ]
+        wall = (5, 5, 0)
+        searches = iter(
+            (
+                _PathSearchResult((wall,), None, (), 1),
+                _PathSearchResult(
+                    None, RouteFailureKind.SEALED_POCKET, (wall,), 1
+                ),
+                _PathSearchResult((wall,), None, (), 1),
+            )
+        )
+
+        def scripted_astar(*_args: object, **_kwargs: object) -> _PathSearchResult:
+            return next(searches)
+
+        monkeypatch.setattr("flab2bp.layout.freeform._astar", scripted_astar)
+        monkeypatch.setattr("flab2bp.layout.freeform.RRR_MAX", 1)
+        monkeypatch.setattr("flab2bp.layout.freeform._REPAIR_PASSES", 0)
+        monkeypatch.setattr(
+            "flab2bp.layout.freeform._commit_paths",
+            lambda *_args, **_kwargs: (),
+        )
+
+        result = _route_all(canvas, nets, 2001, 35, bounds)
+
+        failure = next(f for f in result.failures if f.net_id == failed_id)
+        assert failure.blocking_nets == (original_id,)
+
+    def test_mixed_internal_and_proliferator_owners_have_total_order(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        canvas = _Canvas()
+        bounds = (-8, -8, 8, 8)
+        canvas.limit = bounds
+        proliferator_id = NetId(
+            None, 1, "spray", NetRole.PROLIFERATOR, 0
+        )
+        internal_id = NetId(2, 3, "internal", NetRole.INTERNAL, 0)
+        failed_id = NetId(4, 5, "failed", NetRole.INTERNAL, 0)
+        nets = [
+            self._net(canvas, (-4, -4), (-2, -4), proliferator_id),
+            self._net(canvas, (-4, 0), (-2, 0), internal_id),
+            self._net(canvas, (-4, 4), (-2, 4), failed_id),
+        ]
+        first_wall = (5, 4, 0)
+        second_wall = (5, 5, 0)
+        searches = iter(
+            (
+                _PathSearchResult((first_wall,), None, (), 1),
+                _PathSearchResult((second_wall,), None, (), 1),
+                _PathSearchResult(
+                    None,
+                    RouteFailureKind.SEALED_POCKET,
+                    (first_wall, second_wall),
+                    1,
+                ),
+            )
+        )
+
+        def scripted_astar(*_args: object, **_kwargs: object) -> _PathSearchResult:
+            return next(searches)
+
+        monkeypatch.setattr("flab2bp.layout.freeform._astar", scripted_astar)
+        monkeypatch.setattr("flab2bp.layout.freeform.RRR_MAX", 1)
+        monkeypatch.setattr("flab2bp.layout.freeform._REPAIR_PASSES", 0)
+        monkeypatch.setattr(
+            "flab2bp.layout.freeform._commit_paths",
+            lambda *_args, **_kwargs: (),
+        )
+
+        result = _route_all(canvas, nets, 2001, 35, bounds)
+
+        failure = next(f for f in result.failures if f.net_id == failed_id)
+        assert failure.blocking_nets == (proliferator_id, internal_id)
+
 
 
 class TestAFailedSearchNamesTheWallThatCutIt:

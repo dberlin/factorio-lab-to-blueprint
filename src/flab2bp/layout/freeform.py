@@ -3725,6 +3725,13 @@ def _astar(
     """
     if not goals:
         return _PathSearchResult(None, RouteFailureKind.DYNAMIC_ACCESS, (), 0)
+    has_live_start = False
+    for start in starts:
+        if canvas.free(start):
+            has_live_start = True
+            break
+    if not has_live_start:
+        return _PathSearchResult(None, RouteFailureKind.DYNAMIC_ACCESS, (), 0)
     if (budget is not None and budget["left"] <= 0) or _expired(deadline):
         return _PathSearchResult(None, RouteFailureKind.BUDGET, (), 0)
 
@@ -4160,7 +4167,10 @@ def _astar(
             by += gy0
             for dx, dy in _STEPS:
                 cell = (bx + dx, by + dy, blvl)
-                if blocked_get(cell) == _TENTATIVE:
+                if (
+                    blocked_get(cell) == _TENTATIVE
+                    and not flags[flat.index(cell)]
+                ):
                     wall.add(cell)
         if len(wall) <= _BLAME_MAX_WALL:
             wall_cells = tuple(sorted(wall))
@@ -4437,21 +4447,28 @@ def _route_all(
             raise ValueError("detailed routing requires stable net IDs")
         return net_id
 
-    def _failure(index: int, search: _PathSearchResult) -> NetFailure:
-        blocking = tuple(
-            sorted(
-                {
-                    _net_id(blocker)
-                    for cell in search.wall
-                    if (blocker := owner.get(cell)) is not None
-                }
-            )
+    def _blocking_nets(wall: Sequence[Cell]) -> tuple[NetId, ...]:
+        # Sort transient integer indices, which have a total order. NetId's
+        # optional strip fields deliberately do not compare across None/int.
+        blocker_indices = sorted(
+            {
+                blocker
+                for cell in wall
+                if (blocker := owner.get(cell)) is not None
+            }
         )
+        return tuple(_net_id(blocker) for blocker in blocker_indices)
+
+    def _failure(
+        index: int,
+        search: _PathSearchResult,
+        blocking_nets: tuple[NetId, ...],
+    ) -> NetFailure:
         return NetFailure(
             net_id=_net_id(index),
             kind=search.kind or RouteFailureKind.DYNAMIC_ACCESS,
             wall=search.wall,
-            blocking_nets=blocking,
+            blocking_nets=blocking_nets,
             expansions=search.expansions,
         )
 
@@ -4689,6 +4706,7 @@ def _route_all(
         pressure: float,
         blame: dict[Cell, float],
         search_failures: dict[int, _PathSearchResult],
+        search_blockers: dict[int, tuple[NetId, ...]],
     ) -> list[int]:
         """Place stranded nets by CROSSING settled belts and moving those.
 
@@ -4854,10 +4872,10 @@ def _route_all(
             canvas.routing_ports = frozenset()
             expansions += through.expansions
             if through.path is None:
-                # Genuinely nowhere to go even with every belt open. That is a
-                # sealed pocket in the PACK, which repair cannot argue with and
-                # the next height can.
-                search_failures[index] = through
+                # Keep the primary search's wall and ownership snapshot. This
+                # crossing search made settled paths passable, so its census
+                # cannot reassign historical blame and may prove only that the
+                # static pocket behind them is still sealed.
                 still.append(index)
                 continue
             through_path = through.path
@@ -4933,6 +4951,7 @@ def _route_all(
                 moved.append(hurt)
             if len(moved) == len(victims):
                 search_failures.pop(index, None)
+                search_blockers.pop(index, None)
                 continue
             # Roll back to exactly the arrangement we found. The cells every
             # saved path wants are free again the moment the nets that took
@@ -4955,6 +4974,7 @@ def _route_all(
         pressure = 0.5 * (1.6**it)
         failed = 0
         search_failures: dict[int, _PathSearchResult] = {}
+        search_blockers: dict[int, tuple[NetId, ...]] = {}
         #: Cells that CUT the board this round, and how many nets each cut off.
         #:
         #: Fresh every round, because a wall only exists while the path that
@@ -5000,6 +5020,7 @@ def _route_all(
             expansions += searched.expansions
             if searched.path is None:
                 search_failures[i] = searched
+                search_blockers[i] = _blocking_nets(searched.wall)
                 stranded.append(i)
                 continue
             _stake(i, searched.path)
@@ -5012,7 +5033,13 @@ def _route_all(
         for _ in range(_REPAIR_PASSES):
             if not stranded or _expired(deadline):
                 break
-            after = _repair(stranded, pressure, blame, search_failures)
+            after = _repair(
+                stranded,
+                pressure,
+                blame,
+                search_failures,
+                search_blockers,
+            )
             if len(after) >= len(stranded):
                 stranded = after
                 break
@@ -5069,7 +5096,11 @@ def _route_all(
             # reference would make "the best round" mean "the last one".
             fewest_failed, stale, best_paths = failed, 0, dict(paths)
             best_failures = {
-                index: _failure(index, search_failures[index])
+                index: _failure(
+                    index,
+                    search_failures[index],
+                    search_blockers[index],
+                )
                 for index in stranded
             }
         else:
