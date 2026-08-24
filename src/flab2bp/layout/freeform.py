@@ -692,7 +692,15 @@ class Strip:
         raise KeyError(f"{item!r} is not an ingredient of {self.recipe_id!r}")
 
     def row_of_output(self, k: int) -> int:
-        """Row index of the ``k``-th output lane, relative to the strip's top."""
+        """Row index of the ``k``-th output lane, relative to the strip's top.
+
+        Counted from the machine FOOTPRINT, not the clearance band. Moving it to
+        `ph` was tried, to keep a lane out of the row a machine's collider needs
+        so that a junction on it would be legal -- it took freeform from 9
+        failures to 80, because the strip's row indices are consumed in several
+        places that each assume lanes start at `mh`. The junction constraint is
+        real; solving it by moving lane rows is not the way in.
+        """
         return len(self.in_above) + self.mh + k
 
     def input_lane_tiles(self, lane: tuple[str, ...]) -> int:

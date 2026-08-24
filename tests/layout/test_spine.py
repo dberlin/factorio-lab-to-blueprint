@@ -1096,14 +1096,27 @@ class TestPower:
 
 
 class TestProliferation:
-    def test_spray_coater_consumes_no_grid_tile(self) -> None:
+    def test_spine_refuses_a_proliferated_spec_and_says_why(self) -> None:
+        """It used to assert spine laid this out. That assertion was false.
+
+        What it checked was that a coater consumes no grid tile, on a placement
+        whose coaters were fed by a SORTER -- a connection the game cannot make.
+        A Spray Coater ships zero insert poses and `BuildTool_Inserter` will not
+        target a building with none; all eight coaters in the fixture corpus
+        carry no connection at all. The game supplies an addon from a belt in
+        its addon area, which for a coater is one tile behind and one altitude
+        LEVEL up.
+
+        That needs an elevated lane in the coater's own row, and spine runs
+        lanes at ground level in a corridor. Freeform builds it, the pipeline
+        runs both, so no capability is lost -- and a strategy that cannot build
+        something and says so is worth more than one that emits a sorter the
+        game deletes. The refusal has to NAME the missing capability, which is
+        what this pins.
+        """
         spec = two_stage_spec()
         prolif = BuildSpec(
             groups=spec.groups,
-            # Proliferator has to be belted in. This test used to omit it, and
-            # the layout it then produced had coaters with nothing feeding them
-            # -- it passed only because the test asked whether a coater consumes
-            # a grid tile, never whether it could spray.
             external_inputs={**spec.external_inputs, "proliferator-3": F(1) / 2},
             outputs=spec.outputs,
             belt_item_id=spec.belt_item_id,
@@ -1111,12 +1124,19 @@ class TestProliferation:
             spray_lanes={"iron-ingot": False},
             label="prolif",
         )
-        p = SpineLayout(power=False).lay_out(prolif, time_budget_s=0.5)
-        coaters = [b for b in p.buildings if b.item_id == catalog.SPRAY_COATER_ID]
-        assert coaters
+        with pytest.raises(NoValidLayout) as exc:
+            SpineLayout(power=False).lay_out(prolif, time_budget_s=0.5)
+        assert "elevated lane" in str(exc.value), str(exc.value)
+
+    def test_a_coater_still_consumes_no_grid_tile(self) -> None:
+        """The half of the old test that was about geometry, kept.
+
+        A coater being a belt addon is a fact about the catalog and is what
+        makes proliferation nearly free in area. It never needed a placement to
+        demonstrate it, which is why the old test could pass while the placement
+        it built was unbuildable.
+        """
         assert not catalog.building(catalog.SPRAY_COATER_ID).occupies_tiles
-        tiles = blocking_tiles(p)
-        assert len(tiles) == len(set(tiles))
 
     def test_belt_required_edges_are_never_direct_inserted(self) -> None:
         spec = two_stage_spec()
@@ -2300,42 +2320,26 @@ class TestSprayCoatersAreFed:
         return next(c for c in cands if c.label == "max-proliferation")
 
     @pytest.mark.slow
-    def test_a_proliferator_lane_exists(self) -> None:
-        from flab2bp.layout.spine import proliferator_item
+    def test_spine_refuses_rather_than_shipping_an_unfed_coater(self) -> None:
+        """Both of the tests this replaces asserted the same false thing.
 
+        One asked that a proliferator lane exist; the other that every coater
+        have "a sorter drawing proliferator" from it. That sorter cannot exist:
+        a Spray Coater has no insert pose for one to name, and the game supplies
+        an addon positionally from a belt in its addon area -- one tile behind
+        and one LEVEL up. Both tests passed for years on placements the game
+        would not have built.
+
+        Spine cannot route an elevated lane into a coater's own row, so it
+        refuses and names that. Freeform can, and `TestRealUrlCandidatesAreSupplied`
+        holds it to the real geometry.
+        """
         spec = self._prolif_spec()
-        p = SpineLayout(power=False).lay_out(spec, time_budget_s=0.5)
-        prolif = proliferator_item(spec)
-        assert prolif is not None
-        carried = {b.carries_item for b in p.buildings if catalog.is_belt(b.item_id)}
-        assert prolif in carried, (
-            f"no belt carries {prolif}; carried={sorted(x for x in carried if x)}"
-        )
-
-    @pytest.mark.slow
-    def test_every_coater_has_a_sorter_drawing_proliferator(self) -> None:
-        from flab2bp.layout.spine import proliferator_item
-
-        spec = self._prolif_spec()
-        p = SpineLayout(power=False).lay_out(spec, time_budget_s=0.5)
-        prolif = proliferator_item(spec)
-        supply = {
-            i
-            for i, b in enumerate(p.buildings)
-            if catalog.is_belt(b.item_id) and b.carries_item == prolif
-        }
-        fed = {
-            b.output_obj
-            for b in p.buildings
-            if catalog.is_sorter(b.item_id) and b.input_obj in supply
-        }
-        coaters = [
-            i for i, b in enumerate(p.buildings) if b.item_id == catalog.SPRAY_COATER_ID
-        ]
-        assert coaters, "expected coaters on a max-proliferation spec"
-        starved = [i for i in coaters if i not in fed]
-        assert not starved, f"{len(starved)} of {len(coaters)} coaters unfed"
-
+        with pytest.raises(NoValidLayout) as exc:
+            SpineLayout(power=False).lay_out(spec, time_budget_s=0.5)
+        message = str(exc.value)
+        assert "Spray Coater" in message, message
+        assert "elevated lane" in message, message
 
 class TestModeDrivenMachines:
     """Some machines are configured by a MODE, not a recipe id.

@@ -3444,7 +3444,14 @@ def _feed_coater(
             )
             buildings[src] = _relink_output(buildings[src], drop)
             return 1
-    return 0
+    raise NoValidLayout(
+        "spine cannot supply a Spray Coater: the game takes an addon's "
+        "proliferator from a belt in its addon area, which is one tile behind "
+        "the coater and one altitude LEVEL up -- so the supply has to be an "
+        "elevated lane in the coater's OWN row, and this strategy can only run "
+        "lanes at ground level in a corridor. Freeform builds it; see "
+        "docs/BACKLOG.md, 'spine grows elevated lanes'."
+    )
 
 
 def _relink_output(b: PlacedBuilding, out: int) -> PlacedBuilding:
