@@ -1,0 +1,359 @@
+from __future__ import annotations
+
+from collections.abc import Callable
+from dataclasses import dataclass, field
+
+import pytest
+
+from flab2bp.layout.base import NoValidLayout, PlacedBuilding, Placement
+from flab2bp.layout.global_router import GlobalRouteResult
+from flab2bp.layout.route_feedback import (
+    DetailedRouteResult,
+    DetailedRouteStatus,
+    FeedbackState,
+    NetFailure,
+    NetId,
+    NetRole,
+    RouteFailureKind,
+)
+from flab2bp.layout.sequence_pair import DecodedPlacement, PlacementProblem
+from flab2bp.layout.sequence_solver import (
+    DetailedStageResult,
+    ExpansionBudget,
+    SequencePairLayout,
+    SequenceSearchResult,
+    SequenceSolver,
+    SequenceSolverConfig,
+    StageAdapters,
+    ValidationVerdict,
+)
+from flab2bp.spec import BuildSpec
+from tests.layout.test_freeform import two_stage_spec
+
+Prepared = tuple[int, DecodedPlacement]
+
+
+def _placement(*, area: int, belt_tiles: int, valid: bool = True) -> Placement:
+    return Placement(
+        buildings=(
+            PlacedBuilding(
+                item_id=1,
+                model_index=1,
+                x=0,
+                y=0,
+                width=area,
+                height=1,
+            ),
+        ),
+        stats={
+            "belt_tiles": float(belt_tiles),
+            "validator_clean": float(valid),
+        },
+    )
+
+
+def _routing(
+    status: DetailedRouteStatus,
+    *,
+    expansions: int = 0,
+    geometric_failure: bool = False,
+) -> DetailedRouteResult:
+    failures: tuple[NetFailure, ...] = ()
+    if status is not DetailedRouteStatus.ROUTED:
+        net = NetId(0, 0, "item", NetRole.INTERNAL, 0)
+        failures = (
+            NetFailure(
+                net_id=net,
+                kind=(
+                    RouteFailureKind.CONGESTION_WALL
+                    if geometric_failure
+                    else RouteFailureKind.BUDGET
+                ),
+                wall=((0, 0, 0),) if geometric_failure else (),
+                blocking_nets=(),
+                expansions=expansions,
+            ),
+        )
+    return DetailedRouteResult(
+        status=status,
+        routed=(),
+        failures=failures,
+        iterations=1,
+        expansions=expansions,
+    )
+
+
+def _global(*, overflow: int = 0, expansions: int = 0) -> GlobalRouteResult:
+    return GlobalRouteResult(
+        net_results=(),
+        paths={},
+        overflow_cells=overflow,
+        total_overflow=overflow,
+        max_overflow=overflow,
+        unreachable_ports=0,
+        rounds=1,
+        expansions=expansions,
+        exhausted_budget=False,
+        hot_cells=(),
+        hot_regions=(),
+    )
+
+
+@dataclass
+class _FakeRouting:
+    detailed_results: tuple[DetailedStageResult, ...] = ()
+    spend_allowance: bool = False
+    stage_trace: list[int] = field(default_factory=list)
+    global_allowances: list[int] = field(default_factory=list)
+    detailed_allowances: list[int] = field(default_factory=list)
+    feedback_seen: list[FeedbackState] = field(default_factory=list)
+    _detailed_index: int = 0
+
+    def prepare(self, height: int, decoded: DecodedPlacement) -> Prepared:
+        self.stage_trace.append(height)
+        return height, decoded
+
+    def global_route(
+        self, prepared: Prepared, feedback: FeedbackState, allowance: int
+    ) -> GlobalRouteResult:
+        del prepared
+        self.feedback_seen.append(feedback)
+        self.global_allowances.append(allowance)
+        return _global(expansions=allowance if self.spend_allowance else 0)
+
+    def detailed_route(self, prepared: Prepared, allowance: int) -> DetailedStageResult:
+        del prepared
+        self.detailed_allowances.append(allowance)
+        if not self.detailed_results:
+            result = DetailedStageResult(_routing(DetailedRouteStatus.BUDGET), None)
+        else:
+            result = self.detailed_results[
+                min(self._detailed_index, len(self.detailed_results) - 1)
+            ]
+        self._detailed_index += 1
+        if self.spend_allowance:
+            result = DetailedStageResult(
+                routing=DetailedRouteResult(
+                    status=result.routing.status,
+                    routed=result.routing.routed,
+                    failures=result.routing.failures,
+                    iterations=result.routing.iterations,
+                    expansions=allowance,
+                ),
+                placement=result.placement,
+            )
+        return result
+
+    def validate(self, placement: Placement) -> ValidationVerdict:
+        if placement.stats.get("validator_clean") == 1.0:
+            return ValidationVerdict(ok=True, failed_checks=())
+        return ValidationVerdict(ok=False, failed_checks=("fake.invalid",))
+
+    def adapters(self) -> StageAdapters[Prepared]:
+        return StageAdapters(
+            prepare=self.prepare,
+            global_route=self.global_route,
+            detailed_route=self.detailed_route,
+            validate=self.validate,
+        )
+
+
+def _solver(
+    fake: _FakeRouting,
+    *,
+    heights: tuple[int, ...] = (40, 60, 80),
+    budget: ExpansionBudget | None = None,
+    config: SequenceSolverConfig | None = None,
+    deadline_reached: Callable[[], bool] | None = None,
+) -> SequenceSolver[Prepared]:
+    return SequenceSolver(
+        heights=heights,
+        problem_for_height=lambda height: PlacementProblem(
+            sizes=((1, 1),),
+            nets=((0, 0),),
+            outline_height=height,
+            area_lower_bound=1,
+        ),
+        adapters=fake.adapters(),
+        expansion_budget=budget or ExpansionBudget(total=1_000),
+        config=config
+        or SequenceSolverConfig(
+            stages=6,
+            moves_per_stage=1,
+            restarts_per_height=2,
+            global_elites=1,
+        ),
+        deadline_reached=deadline_reached or (lambda: False),
+    )
+
+
+def test_every_height_gets_one_stage_before_any_second_stage() -> None:
+    fake = _FakeRouting()
+    with pytest.raises(NoValidLayout):
+        _solver(fake).search(max_stages=4)
+    assert fake.stage_trace[:3] == [40, 60, 80]
+
+
+def test_every_stage_ends_with_exactly_one_detailed_route() -> None:
+    fake = _FakeRouting()
+    with pytest.raises(NoValidLayout):
+        _solver(fake, heights=(40,)).search(max_stages=3)
+    assert len(fake.detailed_allowances) == 3
+
+
+def test_detailed_route_still_runs_when_global_spends_the_stage_allowance() -> None:
+    fake = _FakeRouting(spend_allowance=True)
+    with pytest.raises(NoValidLayout):
+        _solver(fake, heights=(40,), budget=ExpansionBudget(total=100)).search(max_stages=3)
+    assert fake.detailed_allowances == [0]
+
+
+def test_proxy_candidate_cannot_displace_exact_incumbent() -> None:
+    exact = _placement(area=100, belt_tiles=50)
+    proxy = _placement(area=90, belt_tiles=20)
+    fake = _FakeRouting(
+        detailed_results=(
+            DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), exact),
+            DetailedStageResult(_routing(DetailedRouteStatus.STRANDED), proxy),
+        )
+    )
+    result = _solver(fake, heights=(40,)).search(max_stages=2)
+    assert result.placement is exact
+    assert result.exact_key == (100, 50)
+
+
+def test_exact_incumbents_compare_only_area_then_belt_tiles() -> None:
+    first = _placement(area=100, belt_tiles=50)
+    better_belts = _placement(area=100, belt_tiles=40)
+    worse_area = _placement(area=101, belt_tiles=1)
+    fake = _FakeRouting(
+        detailed_results=tuple(
+            DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), placement)
+            for placement in (first, better_belts, worse_area)
+        )
+    )
+    result = _solver(fake, heights=(40,)).search(max_stages=3)
+    assert result.placement is better_belts
+    assert result.exact_key == (100, 40)
+
+
+def test_validator_rejection_never_establishes_an_exact_incumbent() -> None:
+    invalid = _placement(area=10, belt_tiles=2, valid=False)
+    fake = _FakeRouting(
+        detailed_results=(
+            DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), invalid),
+        )
+    )
+    with pytest.raises(NoValidLayout):
+        _solver(fake, heights=(40,)).search(max_stages=1)
+
+
+def test_stage_routes_cannot_spend_final_twenty_five_percent() -> None:
+    budget = ExpansionBudget(total=100)
+    fake = _FakeRouting(spend_allowance=True)
+    with pytest.raises(NoValidLayout):
+        _solver(fake, heights=(40,), budget=budget).search(max_stages=20)
+    assert budget.final_reserved == 25
+    assert budget.spent == 75
+    assert max(fake.global_allowances) == 75
+    assert sum(fake.global_allowances) + sum(fake.detailed_allowances) == 75
+
+
+def test_discovery_reservations_are_equal_and_unused_budget_is_shared_afterward() -> None:
+    budget = ExpansionBudget(total=101)
+    fake = _FakeRouting()
+    with pytest.raises(NoValidLayout):
+        _solver(fake, budget=budget).search(max_stages=4)
+    assert budget.discovery_by_height == {40: 25, 60: 25, 80: 25}
+    assert budget.final_reserved == 26
+    assert fake.global_allowances[:3] == [25, 25, 25]
+    assert fake.global_allowances[3] == 75
+
+
+def test_feedback_decays_once_then_adds_only_geometric_stage_evidence() -> None:
+    geometric = DetailedStageResult(
+        _routing(DetailedRouteStatus.STRANDED, geometric_failure=True), None
+    )
+    budget_only = DetailedStageResult(_routing(DetailedRouteStatus.BUDGET), None)
+    fake = _FakeRouting(detailed_results=(geometric, budget_only, budget_only))
+    with pytest.raises(NoValidLayout):
+        _solver(fake, heights=(40,)).search(max_stages=3)
+    net = NetId(0, 0, "item", NetRole.INTERNAL, 0)
+    assert [state.net_weight.get(net, 0.0) for state in fake.feedback_seen] == [
+        0.0,
+        1.0,
+        pytest.approx(0.85),
+    ]
+
+
+def test_deadline_returns_an_existing_exact_incumbent() -> None:
+    exact = _placement(area=20, belt_tiles=4)
+    checks = iter((False, True))
+    fake = _FakeRouting(
+        detailed_results=(DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), exact),)
+    )
+    result = _solver(
+        fake,
+        heights=(40,),
+        deadline_reached=lambda: next(checks),
+    ).search(max_stages=5)
+    assert result.placement is exact
+    assert result.termination == "deadline"
+
+
+def test_deadline_without_an_exact_incumbent_raises() -> None:
+    with pytest.raises(NoValidLayout, match="deadline exhausted"):
+        _solver(_FakeRouting(), deadline_reached=lambda: True).search(max_stages=5)
+
+
+def test_deterministic_configuration_reproduces_stage_trace_and_derived_seeds() -> None:
+    def run() -> tuple[SequenceSearchResult, list[int]]:
+        exact = _placement(area=20, belt_tiles=4)
+        fake = _FakeRouting(
+            detailed_results=(
+                DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), exact),
+            )
+        )
+        result = _solver(fake, heights=(40, 60)).search(max_stages=5)
+        return result, fake.stage_trace
+
+    first, first_trace = run()
+    second, second_trace = run()
+    assert first_trace == second_trace
+    assert first.stages == second.stages
+    assert len({stage.seed for stage in first.stages}) > 1
+
+
+def test_audit_layout_surface_uses_injected_solver_factory() -> None:
+    exact = _placement(area=20, belt_tiles=4)
+    fake = _FakeRouting(
+        detailed_results=(DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), exact),)
+    )
+    calls: list[tuple[BuildSpec, float, bool, int, SequenceSolverConfig]] = []
+
+    def factory(
+        spec: BuildSpec,
+        *,
+        time_budget_s: float,
+        power: bool,
+        strip_len: int,
+        config: SequenceSolverConfig,
+    ) -> SequenceSolver[Prepared]:
+        calls.append((spec, time_budget_s, power, strip_len, config))
+        return _solver(fake, heights=(40,), config=config)
+
+    config = SequenceSolverConfig(
+        stages=1,
+        moves_per_stage=1,
+        restarts_per_height=1,
+        global_elites=1,
+    )
+    layout = SequencePairLayout(
+        solver_factory=factory,
+        power=True,
+        strip_len=7,
+        config=config,
+    )
+    spec = two_stage_spec()
+    assert layout.lay_out(spec, time_budget_s=2.5) is exact
+    assert calls == [(spec, 2.5, True, 7, config)]
