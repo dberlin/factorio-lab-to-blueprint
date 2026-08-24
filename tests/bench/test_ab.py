@@ -13,6 +13,12 @@ stay at ~21s and a bake-off belongs behind a script entry point.
 
 from __future__ import annotations
 
+import argparse
+from collections.abc import Callable
+from pathlib import Path
+from runpy import run_path
+from typing import cast
+
 import pytest
 
 from flab2bp.bench.ab import (
@@ -31,13 +37,15 @@ from flab2bp.bench.ab import (
     render_markdown,
     render_text,
     sample_once,
+    samples_from_json,
     ship,
     to_json,
     trials_from,
 )
 from flab2bp.bench.crossvalidate import CrossCheck
 from flab2bp.bench.types import Metrics
-from flab2bp.layout.base import NoValidLayout, PlacedBuilding, Placement
+from flab2bp.layout.base import LayoutStrategy, NoValidLayout, PlacedBuilding, Placement
+from flab2bp.layout.freeform import FreeformLayout
 
 
 def _metrics(area: int, *, belts: int = 0, direct: int = 0) -> Metrics:
@@ -575,6 +583,8 @@ def test_an_accepted_placement_is_measured_not_asked() -> None:
     assert s.area == 16
     assert s.buildings == 1
     assert s.blueprint == "H4sI"
+    assert s.cpu_seconds is not None and s.cpu_seconds >= 0
+    assert s.peak_rss_mb is not None and s.peak_rss_mb > 0
 
 
 # --------------------------------------------------------------------------
@@ -652,3 +662,103 @@ def test_the_json_dump_never_carries_an_area_for_a_failure() -> None:
     assert rows[0]["area"] == 1000
     assert rows[1]["area"] is None
     assert rows[1]["outcome"] == "invalid"
+
+
+def test_cpu_and_peak_rss_survive_json_and_shipping() -> None:
+    sample = Sample(
+        url_id="u",
+        candidate="c",
+        strategy="freeform",
+        budget_s=1.0,
+        trial=0,
+        outcome=Outcome.VALID,
+        seconds=0.5,
+        metrics=_metrics(100),
+        buildings=1,
+        cpu_seconds=0.25,
+        peak_rss_mb=123.5,
+    )
+    meta = RunMeta(
+        ("small",),
+        (1.0,),
+        repeat=1,
+        candidates=1,
+        power=False,
+        urls=1,
+        a_name="freeform",
+        b_name="sequence-pair",
+    )
+
+    dumped = to_json([sample], meta, CrossSummary(available=False, reason="test"))
+    loaded = samples_from_json(dumped)
+    trial = trials_from(loaded)[0]
+
+    dumped_meta = dumped["meta"]
+    dumped_rows = dumped["samples"]
+    assert isinstance(dumped_meta, dict)
+    assert isinstance(dumped_rows, list)
+    assert dumped_meta["a"] == "freeform"
+    assert dumped_meta["b"] == "sequence-pair"
+    assert dumped_rows[0]["cpu_seconds"] == 0.25
+    assert dumped_rows[0]["peak_rss_mb"] == 123.5
+    assert trial.cpu_seconds == pytest.approx(0.25)
+    assert trial.peak_rss_mb == pytest.approx(123.5)
+
+
+def test_old_json_without_resource_metrics_still_parses() -> None:
+    dumped = to_json(
+        [_sample(Outcome.VALID, area=100, buildings=1)],
+        RunMeta(("small",), (1.0,), repeat=1, candidates=1, power=False, urls=1),
+        CrossSummary(available=False, reason="test"),
+    )
+    rows = dumped["samples"]
+    assert isinstance(rows, list)
+    row = rows[0]
+    del row["cpu_seconds"]
+    del row["peak_rss_mb"]
+
+    loaded = samples_from_json(dumped)
+
+    assert loaded[0].cpu_seconds is None
+    assert loaded[0].peak_rss_mb is None
+
+
+def test_audit_and_ab_strategy_tables_use_constructor_factories() -> None:
+    root = Path(__file__).parents[2]
+    audit_symbols = run_path(str(root / "scripts" / "audit.py"))
+    ab_symbols = run_path(str(root / "scripts" / "ab_compare.py"))
+    audit_strategies = cast(
+        dict[str, Callable[[bool, int], LayoutStrategy]],
+        audit_symbols["_STRATEGIES"],
+    )
+    ab_strategies = cast(
+        dict[str, Callable[[bool], LayoutStrategy]],
+        ab_symbols["STRATEGIES"],
+    )
+
+    audit_sequence = audit_strategies["sequence-pair"](False, 7)
+    ab_sequence = ab_strategies["sequence-pair"](False)
+
+    assert audit_sequence.name == "sequence-pair"
+    assert ab_sequence.name == "sequence-pair"
+    freeform = audit_strategies["freeform"](False, 7)
+    assert isinstance(freeform, FreeformLayout)
+    assert freeform.workers == 7
+
+
+def test_ab_cli_keeps_defaults_and_accepts_an_explicit_backend_pair() -> None:
+    root = Path(__file__).parents[2]
+    symbols = run_path(str(root / "scripts" / "ab_compare.py"))
+    parse_args = cast(
+        Callable[[list[str] | None], argparse.Namespace],
+        symbols["_parse_args"],
+    )
+    defaults = parse_args([])
+    selected = parse_args(
+        ["--a", "freeform", "--b", "sequence-pair", "--power", "--json", "out.json"]
+    )
+
+    assert (defaults.a, defaults.b) == ("spine", "freeform")
+    assert (selected.a, selected.b) == ("freeform", "sequence-pair")
+    assert selected.power
+    assert selected.json == Path("out.json")

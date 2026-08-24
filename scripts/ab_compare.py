@@ -79,6 +79,7 @@ from flab2bp.lab.techs import belt_rules_for_url  # noqa: E402
 from flab2bp.layout import markers, validate  # noqa: E402
 from flab2bp.layout.base import LayoutStrategy, Placement  # noqa: E402
 from flab2bp.layout.freeform import FreeformLayout  # noqa: E402
+from flab2bp.layout.sequence_solver import SequencePairLayout  # noqa: E402
 from flab2bp.layout.spine import SpineLayout  # noqa: E402
 from flab2bp.pipeline import _id_map  # noqa: E402
 from flab2bp.spec import BuildSpec  # noqa: E402
@@ -92,13 +93,16 @@ B_NAME = "freeform"
 #: constructors happening to share a signature.
 #:
 #: The second argument is the save's slope rule, taken from the entry's URL.
-#: Both arms must get the SAME one or the comparison is measuring the
+#: Both arms must get the same one or the comparison is measuring the
 #: technology set rather than the strategies.
 STRATEGIES: dict[str, Callable[[bool, bool], LayoutStrategy]] = {
     A_NAME: lambda power, vertical: SpineLayout(
         power=power, belt_vertical_construction=vertical
     ),
     B_NAME: lambda power, vertical: FreeformLayout(
+        power=power, belt_vertical_construction=vertical
+    ),
+    "sequence-pair": lambda power, vertical: SequencePairLayout(
         power=power, belt_vertical_construction=vertical
     ),
 }
@@ -166,6 +170,8 @@ def collect(
     repeat: int,
     candidates: int,
     power: bool,
+    a_name: str = A_NAME,
+    b_name: str = B_NAME,
 ) -> list[Sample]:
     """Run the whole matrix.
 
@@ -174,6 +180,7 @@ def collect(
     throttling, other load, and any drift over a long sweep move both of them
     together instead of landing on whichever ran second.
     """
+    strategy_names = (a_name, b_name)
     specs: dict[str, tuple[BuildSpec, ...]] = {}
     spec_errors: dict[str, str] = {}
     for entry in entries:
@@ -196,15 +203,15 @@ def collect(
                             entry.url_id, "-", name, budget, trial,
                             Outcome.ERROR, 0.0, detail=spec_errors[entry.url_id],
                         )
-                        for name in STRATEGIES
+                        for name in strategy_names
                     )
                     continue
                 for spec in specs[entry.url_id]:
                     judge: Judge = partial(judge_with, spec, _id_map(spec), power)
                     encode = partial(encode_with, spec)
                     vertical = belt_rules_for_url(entry.url).vertical_construction
-                    for name, make in STRATEGIES.items():
-                        strategy = make(power, vertical)
+                    for name in strategy_names:
+                        strategy = STRATEGIES[name](power, vertical)
                         samples.append(
                             sample_once(
                                 url_id=entry.url_id,
@@ -230,6 +237,8 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
+    ap.add_argument("--a", default=A_NAME, choices=tuple(STRATEGIES))
+    ap.add_argument("--b", default=B_NAME, choices=tuple(STRATEGIES))
     ap.add_argument("--tier", default="small", choices=[t.value for t in _TIER_ORDER])
     ap.add_argument(
         "--budget",
@@ -259,6 +268,9 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
+    if args.a == args.b:
+        print("--a and --b must select different strategies", file=sys.stderr)
+        return 2
 
     budgets = [float(b) for b in str(args.budget).split(",") if b.strip()]
     cutoff = _TIER_ORDER.index(Tier(args.tier))
@@ -279,6 +291,8 @@ def main(argv: list[str] | None = None) -> int:
         repeat=args.repeat,
         candidates=args.candidates,
         power=bool(args.power),
+        a_name=args.a,
+        b_name=args.b,
     )
 
     if args.no_crossvalidate:
@@ -295,6 +309,8 @@ def main(argv: list[str] | None = None) -> int:
         urls=len(entries),
         started=started,
         seconds=round(time.perf_counter() - t0, 1),
+        a_name=args.a,
+        b_name=args.b,
     )
 
     trials = trials_from(samples)
@@ -302,8 +318,8 @@ def main(argv: list[str] | None = None) -> int:
     comparisons: list[Comparison] = [
         compare(
             trials,
-            a_name=A_NAME,
-            b_name=B_NAME,
+            a_name=args.a,
+            b_name=args.b,
             budget_s=b,
             url_ids=url_ids,
             cross=cross,

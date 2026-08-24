@@ -38,9 +38,11 @@ the aggregation logic is unit-testable without running CP-SAT.
 
 from __future__ import annotations
 
+import resource
 import statistics
+import sys
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from enum import Enum
 
@@ -121,6 +123,10 @@ class Sample:
     blueprint: str = ""
     #: Refusal reason, failing checks, or exception text.  Empty when VALID.
     detail: str = ""
+    #: Process CPU consumed by this attempt. ``None`` only for legacy JSON.
+    cpu_seconds: float | None = None
+    #: Process peak resident set after this attempt, in MiB. ``None`` for legacy JSON.
+    peak_rss_mb: float | None = None
 
     def __post_init__(self) -> None:
         valid = self.outcome is Outcome.VALID
@@ -153,6 +159,12 @@ class Sample:
         )
 
 
+def _peak_rss_mb() -> float:
+    """Return process peak RSS in MiB on the platforms supported by the harness."""
+    raw = float(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+    return raw / (1024 * 1024) if sys.platform == "darwin" else raw / 1024
+
+
 def sample_once(
     *,
     url_id: str,
@@ -173,26 +185,35 @@ def sample_once(
     build that never ran its throughput checks reads as clean).
     """
     started = time.perf_counter()
+    cpu_started = time.process_time()
     try:
         placement = lay_out()
     except NoValidLayout as exc:
         return Sample(
             url_id, candidate, strategy, budget_s, trial,
             Outcome.REFUSED, time.perf_counter() - started, detail=exc.reason,
+            cpu_seconds=time.process_time() - cpu_started,
+            peak_rss_mb=_peak_rss_mb(),
         )
     except Exception as exc:  # noqa: BLE001 - one bad cell must not kill the sweep
         return Sample(
             url_id, candidate, strategy, budget_s, trial,
             Outcome.ERROR, time.perf_counter() - started,
             detail=f"{type(exc).__name__}: {exc}",
+            cpu_seconds=time.process_time() - cpu_started,
+            peak_rss_mb=_peak_rss_mb(),
         )
     elapsed = time.perf_counter() - started
+    cpu_elapsed = time.process_time() - cpu_started
+    peak_rss_mb = _peak_rss_mb()
 
     ok, checks = judge(placement)
     if not ok:
         return Sample(
             url_id, candidate, strategy, budget_s, trial,
             Outcome.INVALID, elapsed, detail=",".join(checks) or "unknown check",
+            cpu_seconds=cpu_elapsed,
+            peak_rss_mb=peak_rss_mb,
         )
 
     # An encode failure on a placement the validator accepted is the same class
@@ -204,6 +225,8 @@ def sample_once(
         return Sample(
             url_id, candidate, strategy, budget_s, trial,
             Outcome.CROSSFAIL, elapsed, detail=f"encode: {type(exc).__name__}: {exc}",
+            cpu_seconds=cpu_elapsed,
+            peak_rss_mb=peak_rss_mb,
         )
 
     return Sample(
@@ -212,6 +235,8 @@ def sample_once(
         metrics=measure(placement),
         buildings=len(placement.buildings),
         blueprint=blueprint,
+        cpu_seconds=cpu_elapsed,
+        peak_rss_mb=peak_rss_mb,
     )
 
 
@@ -328,6 +353,10 @@ class Trial:
     #: frontier is to have alternatives when one of them will not lay out.
     candidates_valid: int = 0
     candidates_total: int = 0
+    #: Sum of candidate CPU times. ``None`` when loaded legacy samples lack it.
+    cpu_seconds: float | None = None
+    #: Largest candidate process peak RSS. ``None`` for legacy samples.
+    peak_rss_mb: float | None = None
 
     @property
     def area(self) -> int | None:
@@ -340,6 +369,16 @@ def ship(samples: Sequence[Sample]) -> Trial:
         raise ValueError("ship() needs at least one sample")
     first = samples[0]
     total = sum(s.seconds for s in samples)
+    cpu_seconds = (
+        sum(s.cpu_seconds for s in samples if s.cpu_seconds is not None)
+        if all(s.cpu_seconds is not None for s in samples)
+        else None
+    )
+    peak_rss_mb = (
+        max(s.peak_rss_mb for s in samples if s.peak_rss_mb is not None)
+        if all(s.peak_rss_mb is not None for s in samples)
+        else None
+    )
     winners = [s for s in samples if s.outcome is Outcome.VALID and s.metrics is not None]
     if winners:
         best = min(winners, key=lambda s: s.metrics.area if s.metrics else 0)
@@ -348,6 +387,7 @@ def ship(samples: Sequence[Sample]) -> Trial:
             Outcome.VALID, best.candidate, total,
             metrics=best.metrics, buildings=best.buildings,
             candidates_valid=len(winners), candidates_total=len(samples),
+            cpu_seconds=cpu_seconds, peak_rss_mb=peak_rss_mb,
         )
 
     by_outcome = {s.outcome: s for s in reversed(samples)}
@@ -359,6 +399,7 @@ def ship(samples: Sequence[Sample]) -> Trial:
                 first.url_id, first.strategy, first.budget_s, first.trial,
                 outcome, worst.candidate, total, detail="; ".join(details),
                 candidates_valid=0, candidates_total=len(samples),
+                cpu_seconds=cpu_seconds, peak_rss_mb=peak_rss_mb,
             )
     raise AssertionError(f"unreachable: no outcome among {[s.outcome for s in samples]}")
 
@@ -850,6 +891,8 @@ class RunMeta:
     urls: int
     started: str = ""
     seconds: float = 0.0
+    a_name: str = "spine"
+    b_name: str = "freeform"
 
     def lines(self) -> list[str]:
         return [
@@ -910,6 +953,8 @@ def to_json(
             "urls": meta.urls,
             "started": meta.started,
             "seconds": meta.seconds,
+            "a": meta.a_name,
+            "b": meta.b_name,
         },
         "crossvalidation": {
             "available": cross.available,
@@ -927,6 +972,8 @@ def to_json(
                 "trial": s.trial,
                 "outcome": s.outcome.value,
                 "seconds": round(s.seconds, 3),
+                "cpu_seconds": round(s.cpu_seconds, 6) if s.cpu_seconds is not None else None,
+                "peak_rss_mb": round(s.peak_rss_mb, 3) if s.peak_rss_mb is not None else None,
                 "area": s.area,
                 "used_tiles": s.metrics.used_tiles if s.metrics else None,
                 "buildings": s.buildings or None,
@@ -938,3 +985,76 @@ def to_json(
             for s in samples
         ],
     }
+
+
+def _number(row: Mapping[str, object], key: str, *, required: bool = True) -> float | None:
+    value = row.get(key)
+    if value is None and not required:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"sample {key!r} must be numeric")
+    return float(value)
+
+
+def _required_number(row: Mapping[str, object], key: str) -> float:
+    value = _number(row, key)
+    if value is None:  # ``required=True`` makes this defensive, and narrows the type.
+        raise ValueError(f"sample {key!r} must be numeric")
+    return value
+
+
+def _integer(row: Mapping[str, object], key: str, default: int = 0) -> int:
+    value = row.get(key, default)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"sample {key!r} must be numeric")
+    return int(value)
+
+
+def samples_from_json(document: Mapping[str, object]) -> list[Sample]:
+    """Parse persisted samples, accepting documents written before CPU/RSS metrics."""
+    raw_samples = document.get("samples")
+    if not isinstance(raw_samples, list):
+        raise ValueError("result JSON must contain a samples list")
+    samples: list[Sample] = []
+    for raw in raw_samples:
+        if not isinstance(raw, dict):
+            raise ValueError("every persisted sample must be an object")
+        row: Mapping[str, object] = raw
+        try:
+            outcome = Outcome(str(row["outcome"]))
+            area = _number(row, "area", required=False)
+            metrics = None
+            if outcome is Outcome.VALID:
+                if area is None:
+                    raise ValueError("a persisted VALID sample must carry area")
+                metrics = Metrics(
+                    area=int(area),
+                    used_tiles=_integer(row, "used_tiles"),
+                    width=_integer(row, "width", int(area)),
+                    height=_integer(row, "height", 1),
+                    machines=_integer(row, "machines"),
+                    belt_tiles=_integer(row, "belt_tiles"),
+                    sorters=_integer(row, "sorters"),
+                    direct_inserts=_integer(row, "direct_inserts"),
+                    towers=_integer(row, "towers"),
+                    altitude_levels=_integer(row, "altitude_levels", 1),
+                )
+            samples.append(
+                Sample(
+                    url_id=str(row["url_id"]),
+                    candidate=str(row["candidate"]),
+                    strategy=str(row["strategy"]),
+                    budget_s=_required_number(row, "budget_s"),
+                    trial=_integer(row, "trial"),
+                    outcome=outcome,
+                    seconds=_required_number(row, "seconds"),
+                    metrics=metrics,
+                    buildings=_integer(row, "buildings"),
+                    detail=str(row.get("detail", "")),
+                    cpu_seconds=_number(row, "cpu_seconds", required=False),
+                    peak_rss_mb=_number(row, "peak_rss_mb", required=False),
+                )
+            )
+        except KeyError as exc:
+            raise ValueError(f"persisted sample lacks {exc.args[0]!r}") from exc
+    return samples

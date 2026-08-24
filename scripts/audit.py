@@ -70,6 +70,7 @@ import os
 import sys
 import time
 from collections import Counter
+from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -90,14 +91,29 @@ from flab2bp.layout.base import (  # noqa: E402
     NoValidLayout,
 )
 from flab2bp.layout.freeform import FreeformLayout  # noqa: E402
+from flab2bp.layout.sequence_solver import SequencePairLayout  # noqa: E402
 from flab2bp.layout.spine import SpineLayout  # noqa: E402
 from flab2bp.rates.candidates import build_candidates  # noqa: E402
 
 _TIER_ORDER = (Tier.TRIVIAL, Tier.SMALL, Tier.MID, Tier.LARGE, Tier.STRESS)
-_STRATEGIES: dict[str, type[LayoutStrategy]] = {
-    "spine": SpineLayout,
-    "freeform": FreeformLayout,
+_StrategyFactory = Callable[[bool, int, bool], LayoutStrategy]
+_STRATEGIES: dict[str, _StrategyFactory] = {
+    "spine": lambda power, workers, vertical: SpineLayout(
+        power=power,
+        workers=workers,
+        belt_vertical_construction=vertical,
+    ),
+    "freeform": lambda power, workers, vertical: FreeformLayout(
+        power=power,
+        workers=workers,
+        belt_vertical_construction=vertical,
+    ),
+    "sequence-pair": lambda power, _workers, vertical: SequencePairLayout(
+        power=power,
+        belt_vertical_construction=vertical,
+    ),
 }
+_DEFAULT_STRATEGIES = ("spine", "freeform")
 
 #: A cell slower than this is worth NAMING in the summary even when it passes.
 #: This is a reporting threshold, not a defect threshold: see :func:`_slow_note`
@@ -202,16 +218,20 @@ def run_cell(job: Job) -> Result:
     label = spec.label  # type: ignore[attr-defined]
 
     belt_rules = _belt_rules_for(job.url)
-    cls = _STRATEGIES[job.strategy]
-    kwargs: dict[str, object] = {
-        "power": job.power,
-        "workers": job.workers,
-        "belt_vertical_construction": belt_rules.vertical_construction,
-    }
-    if job.arrangements is not None and job.strategy == "freeform":
-        kwargs["arrangements"] = job.arrangements
+    make_strategy = _STRATEGIES[job.strategy]
     try:
-        placement = cls(**kwargs).lay_out(  # type: ignore[call-arg,arg-type]
+        if job.arrangements is not None and job.strategy == "freeform":
+            strategy = FreeformLayout(
+                power=job.power,
+                workers=job.workers,
+                arrangements=job.arrangements,
+                belt_vertical_construction=belt_rules.vertical_construction,
+            )
+        else:
+            strategy = make_strategy(
+                job.power, job.workers, belt_rules.vertical_construction
+            )
+        placement = strategy.lay_out(
             spec,  # type: ignore[arg-type]
             time_budget_s=job.budget,
         )
@@ -428,7 +448,11 @@ def main() -> int:
         help="comma-separated solver budgets in seconds; sweeping is the point",
     )
     ap.add_argument("--candidates", type=int, default=3)
-    ap.add_argument("--strategy", default="both", choices=("both", "spine", "freeform"))
+    ap.add_argument(
+        "--strategy",
+        default="both",
+        choices=("both", "spine", "freeform", "sequence-pair"),
+    )
     ap.add_argument(
         "--jobs",
         type=int,
@@ -478,7 +502,7 @@ def main() -> int:
     cutoff = _TIER_ORDER.index(Tier(args.tier))
     tiers = set(_TIER_ORDER[: cutoff + 1])
     budgets = [float(b) for b in args.budget.split(",")]
-    names = list(_STRATEGIES) if args.strategy == "both" else [args.strategy]
+    names = list(_DEFAULT_STRATEGIES) if args.strategy == "both" else [args.strategy]
 
     cores = _available_cores()
     jobs_n = args.jobs if args.jobs > 0 else max(1, cores // 4)
