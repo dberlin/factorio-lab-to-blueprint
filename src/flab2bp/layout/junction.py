@@ -29,6 +29,8 @@ belts as overlays -- which ``catalog.BELT_INTEGRATED_IDS`` already does.
 
 from __future__ import annotations
 
+import math
+from collections.abc import Sequence
 from fractions import Fraction
 
 from flab2bp.dsp import catalog
@@ -46,6 +48,39 @@ MAX_PORTS = 4
 
 class TooManyPorts(ValueError):
     """More belts attached to one junction than a splitter has sides."""
+
+
+def site_is_clear(buildings: Sequence[PlacedBuilding], x: int, y: int) -> bool:
+    """May a junction stand at ``(x, y)`` without its collider hitting anything?
+
+    A splitter is belt-integrated and reports no occupied tile, so nothing in
+    the packer or the router knows it is there -- but its collider is a CROSS
+    whose arms reach 1.19 world units, and a tile is 1.2566.  Against an
+    Assembling Machine reaching 1.91 that is 2.47 units of separation required,
+    which is THREE tiles centre to centre.  A lane runs directly beside a
+    machine band by design, so a junction taken on such a lane sits two tiles
+    from the machine's centre and intersects it: 21 of the 25 collisions left on
+    our output were exactly this.
+
+    Refusing the site is what a caller wants here -- routing has other tiles to
+    try, and a tap that cannot be made is one the router works around rather
+    than a build that fails.
+    """
+    sw, sh = catalog.clearance(catalog.SPLITTER_ID, 0.0)
+    mine = max(sw, sh)
+    for b in buildings:
+        try:
+            info = catalog.building(b.item_id)
+        except KeyError:
+            continue
+        if not info.occupies_tiles:
+            continue
+        need = (mine + max(catalog.clearance(b.item_id, b.yaw))) / 2.0
+        for dx in range(b.width):
+            for dy in range(b.height):
+                if math.hypot(x - (b.x + dx), y - (b.y + dy)) < need:
+                    return False
+    return True
 
 
 def make_splitter(

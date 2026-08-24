@@ -4409,6 +4409,11 @@ def _tap_source(
     if canvas.buildings[onward].item_id == catalog.SPLITTER_ID:
         junction_idx = onward
     else:
+        # A junction's collider reaches further than the tile it shares, so a
+        # site beside a machine is one the game refuses. The router has other
+        # tiles; refusing here costs a tap, not a build.
+        if not junction.site_is_clear(canvas.buildings, b.x, b.y):
+            return False
         junction_idx = canvas.add(
             junction.make_splitter(b.x, b.y, b.z, carries_item=b.carries_item)
         )

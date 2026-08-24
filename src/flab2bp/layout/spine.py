@@ -3415,12 +3415,18 @@ def _feed_coater(
     if any(b.x == cell[0] and b.y == cell[1] and b.z == level for b in buildings):
         return 0
     # A source on the same corridor, orthogonally adjacent to the drop, so the
-    # climb is one tile of run and one level.
+    # climb is one tile of run and one level -- and it must be the lane's TAIL.
+    # Taking a mid-lane tile's output for the drop orphans everything downstream
+    # of it: the lane stops there, its remaining sorters draw from a belt nothing
+    # fills, and `flow.external_entry_reachable` reports the proliferator as
+    # unreachable. A tail has no output to steal.
     for (c, depth), indices in lane_tiles.items():
         if c != corridor or lane_item_of.get((c, depth)) != prolif:
             continue
         for src in indices:
             b = buildings[src]
+            if b.output_obj is not None:
+                continue
             if abs(b.x - cell[0]) + abs(b.y - cell[1]) != 1:
                 continue
             drop = len(buildings)
