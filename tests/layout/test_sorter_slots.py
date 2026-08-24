@@ -19,6 +19,7 @@ from pathlib import Path
 import pytest
 
 from flab2bp.dsp import catalog as cat
+from flab2bp.dsp import colliders
 from flab2bp.dsp.codec import decode
 from flab2bp.dsp.envelope import BlueprintFormatError
 from flab2bp.dsp.records import Blueprint, BlueprintBuilding
@@ -212,9 +213,7 @@ def test_the_slot_poses_are_what_the_corpus_lands_on() -> None:
             if not 0.9 <= math.dist((s.x, s.y), (s.x2, s.y2)) <= 3.2:
                 continue
             dx, dy, dz = S.slot_offset(peer.item_id, peer.yaw, slot)
-            gap = math.dist(
-                (end[0], end[1], 0.0), (peer.x + dx, peer.y + dy, peer.z + dz)
-            )
+            gap = S.world_gap(peer.x + dx - end[0], peer.y + dy - end[1], dz)
             fx, fy, _fz = S.slot_forward(peer.item_id, peer.yaw, slot)
             away = (other[0] - end[0], other[1] - end[1])
             n = math.hypot(*away) or 1.0
@@ -222,8 +221,28 @@ def test_the_slot_poses_are_what_the_corpus_lands_on() -> None:
             worst_gap = max(worst_gap, gap)
             worst_dot = min(worst_dot, (fx * away[0] + fy * away[1]) / n)
     assert checked == 1142
-    assert worst_gap <= S.SLOT_REACH, f"worst gap {worst_gap}"
+    # 0.113, not "just inside 0.8". The first version of this test compared a
+    # TILE distance with a WORLD limit and reported 0.774 -- inside, and cited
+    # as proof. It proved nothing: 0.8 is loose enough that the wrong scale
+    # passes too, so the control could not tell the two apart. Held to a tenth
+    # of the limit it can: at the wrong scale this reads 0.774 and fails.
+    assert worst_gap <= S.SLOT_REACH / 5.0, f"worst gap {worst_gap}"
     assert worst_dot >= 0.0, f"worst dot {worst_dot}"
+
+
+def test_world_gap_scales_tiles_and_levels_differently() -> None:
+    """A tile and a level are different sizes, and neither is 1.
+
+    The game's 0.8 is a Unity ``Vector3.magnitude``, so a grid-frame offset has
+    to be scaled before it is compared with one.  Both axes, because a corpus
+    whose worst record happens to lie along x cannot tell you whether y is
+    scaled at all.
+    """
+    assert S.world_gap(1.0, 0.0) == pytest.approx(colliders.GRID_ARC)
+    assert S.world_gap(0.0, 1.0) == pytest.approx(colliders.GRID_ARC)
+    assert S.world_gap(0.0, 0.0, 1.0) == pytest.approx(cat.WORLD_UNITS_PER_LEVEL)
+    assert pytest.approx(1.2566, abs=1e-4) == colliders.GRID_ARC
+    assert S.world_gap(1.0, 1.0) == pytest.approx(colliders.GRID_ARC * math.sqrt(2))
 
 
 def test_the_length_and_skew_ladder_reads_the_raw_blueprint() -> None:

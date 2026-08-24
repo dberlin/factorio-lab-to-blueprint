@@ -30,7 +30,7 @@ from enum import Enum, StrEnum
 from fractions import Fraction
 
 from flab2bp.dsp import catalog as cat
-from flab2bp.dsp import codec
+from flab2bp.dsp import codec, colliders
 from flab2bp.dsp import colliders as dsp_colliders
 from flab2bp.layout import junction as junc
 from flab2bp.layout import slots
@@ -1345,7 +1345,9 @@ def _inserter_data(ctx: Context) -> Iterable[Finding]:
             if got is None:
                 continue
             slot_pos, slot_fwd = got
-            gap = math.dist(end, slot_pos)
+            gap = slots.world_gap(
+                slot_pos[0] - end[0], slot_pos[1] - end[1], slot_pos[2] - end[2]
+            )
             if gap > slots.SLOT_REACH:
                 yield Finding(
                     "game.inserter_data",
@@ -1452,9 +1454,9 @@ def _inserter_paste(ctx: Context) -> Iterable[Finding]:
             name = cat.building(ctx.placement.buildings[link].item_id).name
 
             zero = (slot_pos[0] - end[0], slot_pos[1] - end[1], slot_pos[2] - end[2])
-            snap = math.sqrt(zero[0] ** 2 + zero[1] ** 2 + zero[2] ** 2)
+            snap = slots.world_gap(*zero)
             right = (slot_fwd[1], -slot_fwd[0], 0.0)
-            lateral = abs(_dot(right, zero))
+            lateral = abs(_dot(right, zero)) * colliders.GRID_ARC
             if snap > _PASTE_SNAP and (
                 lateral > _PASTE_LATERAL
                 or (lateral < _PASTE_LATERAL_EPS and snap > _PASTE_RADIAL)

@@ -554,30 +554,39 @@ def test_game_inserter_data_fires_on_a_reversed_own_slot_pairing() -> None:
 
 
 def test_game_inserter_paste_allows_a_purely_radial_stretch() -> None:
-    """1.1 tiles straight out of the face is legal on paste, and only there.
+    """0.90 world units straight out of the face is legal on paste, not on copy.
 
     The paste ladder tolerates ``num40`` up to 1.6 when ``num41`` -- the sideways
-    part -- is under 0.1, and caps everything else at 0.8.  The Chemical Plant
-    needs exactly that: its south row of slots sits at ``z = -0.9``, one row
-    inside a five-deep footprint, so a sorter on the south edge tile is 1.1 out
-    with no sideways slide at all.  ``game.inserter_data`` still reports it,
-    because the COPY predicate has no such allowance -- the two disagree here and
-    the port keeps them apart rather than averaging them.
+    part -- is under 0.1, and caps everything else at 0.8.  This is the band
+    where the two predicates genuinely disagree, and the port keeps them apart
+    rather than averaging them.
+
+    The numbers are WORLD units, and that distinction is the whole reason this
+    test moved: a tile is 1.2566 of them.  Anchored on the Chemical Plant's
+    south EDGE row the gap is 0.90 and lands in the band; on the row its pose
+    actually sits over it is 0.357 and legal for both.  The earlier version of
+    this test called that same edge-row case "1.1 tiles" and put it in the band
+    by treating tiles as world units.
     """
     p = place(
         machine(0, 0, item_id=CHEMICAL_PLANT),
         belt(4, -1),
-        sorter(4, -1, 4, 0, inp=1, out=0),
+        sorter(4, -1, 4, 2, inp=1, out=0),
     )
     r = validate(p)
     assert not fired(r, "game.inserter_paste"), [
         f.message for f in r.by_check("game.inserter_paste")
     ]
-    assert fired(r, "game.inserter_data")
+    gaps = [f.detail["gap"] for f in r.by_check("game.inserter_data") if "gap" in f.detail]
+    assert gaps and 0.8 < gaps[0] <= 1.6, gaps
 
 
 def test_game_inserter_paste_stops_a_radial_stretch_at_1_6() -> None:
-    """Two tiles out from the same face is refused; 1.1 was not.
+    """The plant's south EDGE row is 1.61 world units out and refused; 0.90 was not.
+
+    Its poses sit over the row INSIDE that edge, so anchoring on the edge itself
+    is further from the pose than anchoring a row deeper in -- which is exactly
+    the shape that makes a wide machine want to be packed closer, not further.
 
     The pair with :func:`test_game_inserter_paste_allows_a_purely_radial_stretch`
     is what pins ``_PASTE_RADIAL``: one test on each side of the threshold, both
@@ -592,8 +601,8 @@ def test_game_inserter_paste_stops_a_radial_stretch_at_1_6() -> None:
     r = validate(
         place(
             machine(0, 0, item_id=CHEMICAL_PLANT),
-            belt(4, -3),
-            sorter(4, -3, 4, -1, inp=1, out=0),
+            belt(4, -2),
+            sorter(4, -2, 4, 0, inp=1, out=0),
         )
     )
     snaps = [f for f in r.by_check("game.inserter_paste") if "snap" in f.detail]

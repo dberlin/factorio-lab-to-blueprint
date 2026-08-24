@@ -65,6 +65,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, replace
 
 from flab2bp.dsp import catalog as cat
+from flab2bp.dsp import colliders
 from flab2bp.layout.base import PlacedBuilding
 
 __all__ = [
@@ -86,6 +87,7 @@ __all__ = [
     "slot_forward",
     "slot_offset",
     "sorter_yaw",
+    "world_gap",
     "to_local",
     "to_world",
 ]
@@ -108,10 +110,22 @@ BELT_SLOT = -1
 ADDON_FROM_SLOT = 15
 ADDON_TO_SLOT = 14
 
-#: How far a sorter end may sit from the slot pose it names, in tiles.
+#: How far a sorter end may sit from the slot pose it names, in WORLD UNITS.
 #:
 #: ``0.8f`` in ``BuildTool_BlueprintCopy.CheckInserterDataLegal`` and again in
-#: the blueprint-paste path.  A game constant, not one of ours.
+#: the blueprint-paste path.  A game constant, not one of ours -- and a
+#: ``Vector3.magnitude`` in Unity world space, which is NOT tiles.
+#:
+#: A tile is ``colliders.GRID_ARC`` = 1.2566 world units, so a distance in tiles
+#: has to be scaled before it is compared with this.  The first version of this
+#: module compared them directly and reported the corpus's worst gap as 0.774
+#: against 0.8 -- "just inside", and cited as evidence the port was right.  It
+#: was evidence of nothing: 0.8 is loose enough that BOTH readings pass, so the
+#: control could not tell them apart.  Read correctly the worst real gap is
+#: **0.113**, which is what it should look like when the game snaps a sorter end
+#: onto a pose.  What settled it was not the corpus but the collider work: an
+#: Assembling Machine's 3.82-wide box does not fit a 3-tile pitch at 1.2566 per
+#: tile, and real blueprints never pack one at 3.
 SLOT_REACH = 0.8
 
 #: How far off a slot's facing a sorter may run, in degrees, and the cosine of
@@ -159,16 +173,39 @@ def to_world(local: tuple[float, float], yaw: float) -> tuple[float, float]:
 
 
 def slot_offset(item_id: int, yaw: float, slot: int) -> tuple[float, float, float]:
-    """Slot ``slot``'s position relative to the building's centre, in world tiles.
+    """Slot ``slot``'s position relative to the building's centre.
 
-    This is the game's ``slotPoses[slot].GetTransformedBy(objectPose)``, minus
-    the building's own position: the pose is rotated by the building's yaw and
-    left where the caller can add the centre to it.  ``z`` is the pose's own
-    height above the build plane and is not affected by yaw.
+    ``(tiles east, tiles north, altitude LEVELS)`` -- the grid frame the rest of
+    this project counts in, NOT the world units the prefab stores.  The pose
+    comes out of Unity in world units; a tile is ``GRID_ARC`` = 1.2566 of them
+    and a level is ``WORLD_UNITS_PER_LEVEL`` = 4/3, so both are divided out
+    here, once, rather than at each of the several places that add this to a
+    tile coordinate.
+
+    This is the game's ``slotPoses[slot].GetTransformedBy(objectPose)`` minus
+    the building's own position, rotated by its yaw.  Height is not affected by
+    yaw.
     """
     p = _pose(item_id, slot)
     wx, wy = to_world((p.dx, p.dy), yaw)
-    return (wx, wy, p.dz)
+    return (
+        wx / colliders.GRID_ARC,
+        wy / colliders.GRID_ARC,
+        p.dz / cat.WORLD_UNITS_PER_LEVEL,
+    )
+
+
+def world_gap(dx: float, dy: float, dz: float = 0.0) -> float:
+    """A grid-frame offset as the world distance the game would measure.
+
+    Tiles and levels have different sizes in world units, so a bare Euclidean
+    distance over the grid frame is not a distance at all.  Every comparison
+    against :data:`SLOT_REACH` goes through this.
+    """
+    ex = dx * colliders.GRID_ARC
+    ey = dy * colliders.GRID_ARC
+    ez = dz * cat.WORLD_UNITS_PER_LEVEL
+    return math.sqrt(ex * ex + ey * ey + ez * ez)
 
 
 def slot_forward(item_id: int, yaw: float, slot: int) -> tuple[float, float, float]:
@@ -347,7 +384,7 @@ def attachment(machine: PlacedBuilding, far: tuple[int, int]) -> Attachment | No
         )
         sx, sy, sz = slot_offset(machine.item_id, machine.yaw, slot)
         pose = (cx + sx, cy + sy)
-        reach = ((pose[0] - cell[0]) ** 2 + (pose[1] - cell[1]) ** 2 + sz * sz) ** 0.5
+        reach = world_gap(pose[0] - cell[0], pose[1] - cell[1], sz)
         if reach > SLOT_REACH:
             continue
         wx, wy, _wz = slot_forward(machine.item_id, machine.yaw, slot)
