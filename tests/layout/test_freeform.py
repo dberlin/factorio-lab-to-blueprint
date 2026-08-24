@@ -393,6 +393,17 @@ class TestPlanStrips:
         Three fit above; the fourth goes below alongside the output lane. Every
         prior test used recipes with three inputs or fewer, which is why this
         stayed broken until a real URL was tried.
+
+        THE HEIGHT ASSERTION USED TO READ ``3 + s.mh + 2``, AND THAT IS FALSE.
+        It believed a machine band costs as many rows as the machines are tall,
+        which held only while a tile was 1.0 world units.  An Assembling Machine
+        COVERS three tiles and NEEDS four -- its collider is 3.82 units against
+        a 1.2566 tile -- so the band reserves ``s.ph``, and every lane below it
+        begins after the CLEARANCE rather than after the footprint.  This strip
+        is 9 rows, not 8, and the missing row was the one a junction beside a
+        machine needs.  ``Strip.band_rows`` is the single owner of that number
+        (see its docstring for the seven consumers that move together), so the
+        test asks it instead of restating a literal that was right by accident.
         """
         spec = BuildSpec(
             groups=(
@@ -416,7 +427,12 @@ class TestPlanStrips:
         # Every lane still reachable: three above, two below (one in, one out).
         assert len(s.in_above) <= catalog.SORTER_MAX_REACH
         assert len(s.in_below) + len(s.out_lanes) <= catalog.SORTER_MAX_REACH
-        assert s.height == 3 + s.mh + 2
+        # The fixture must be a machine whose clearance EXCEEDS its footprint,
+        # or the corrected reading and the false one are the same number and
+        # this assertion could not tell them apart.
+        assert (s.mh, s.ph) == (3, 4), "fixture must be a machine that pads"
+        assert s.band_rows == s.ph, "the band reserves clearance, not footprint"
+        assert s.height == 3 + s.band_rows + 2 == 9
 
     def test_a_four_input_recipe_lays_out_and_validates(self) -> None:
         """Planning it is not enough -- it has to emit and pass the neutral judge.
