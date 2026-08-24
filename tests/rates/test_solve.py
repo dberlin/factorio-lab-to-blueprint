@@ -332,11 +332,21 @@ def test_derivation_ignores_solver_float_noise(data: Dataset) -> None:
 # --- recipe cycles ---------------------------------------------------------
 
 
-#: The one URL in hand that activates both members of DSP's only recipe cycle.
-#: It names ``proliferator-2-products``, so it solves at Mk.II -- and Mk.II is
-#: the only tier where the MILP finds it worth running ``reforming-refine``
-#: alongside ``plasma-refining``.  At Mk.I and Mk.III it activates one or the
-#: other, and the cycle never closes.
+#: The URL a user reported, kept as end-to-end cover for the rate solve.
+#:
+#: It USED to activate both members of DSP's only recipe cycle, and these tests
+#: were named for that.  It no longer does, and the reason is worth knowing:
+#: ``60d5f0f`` stopped us unioning the mod's default recipe exclusions over the
+#: player's own set, which restored ``graphene-advanced``.  The chain now takes
+#: fire ice to graphene and never needs the refined-oil loop, so
+#: ``reforming-refine`` is absent and the total fell 49 -> 41 machines.
+#:
+#: **No corpus URL at any tier activates a self-consuming recipe** -- I checked
+#: all twelve across Mk.I/II/III.  So the divergence guard cannot live on a real
+#: URL, and it does not: it lives in the synthetic ``_exact_rates`` tests below,
+#: which build self-loops directly and are the real cover for the fixed-point
+#: iteration that once reported 732,268 machines.  Do not re-point these at a
+#: URL and assume the cycle is covered; check that the recipe is actually used.
 CYCLE_URL = (
     "https://factoriolab.github.io/dsp/list?z=eJw1xrEKwkAQBNC.2WKqPYh208yR2IkJBLxWvULiEQgo2"
     "uy3i4Wveisde7eVuqLbOZB-..xficEaBbfGArf7pVK21TdPKLhhwRM6QjN0hpbQA3mIfEAeI0.W2sYSij5Ge"
@@ -349,35 +359,50 @@ def cycle(data: Dataset) -> RateSolution:
     return solve(data, parse_url(CYCLE_URL), tier=ProliferatorTier.MK2)
 
 
-def test_recipe_cycle_does_not_run_away(cycle: RateSolution) -> None:
-    """``reforming-refine`` feeding itself must not compound.
+def test_a_real_url_does_not_run_away(cycle: RateSolution) -> None:
+    """Magnitudes stay the right order of magnitude on a real chain.
 
-    Two refined oil into three, with ``plasma-refining`` also yielding refined
-    oil and the hydrogen to drive the reformer: refined-oil demand reaches back
-    round to itself.  A fixed-point iteration walked that loop with gain two and
-    reported wherever it stopped -- 732,268 machines at one bound, and exactly
-    four times that for every two further iterations, up to 46,862,330.
+    The band is what matters, not the literal.  A fixed-point iteration once
+    walked a recipe loop with gain two and reported wherever it stopped --
+    732,268 machines at one bound, and exactly four times that for every two
+    further iterations, up to 46,862,330.  Any answer in the hundreds here is
+    already a bug.
 
-    The band is deliberately loose and the point is the order of magnitude: the
-    same URL solves to 60 machines at Mk.I and 41 at Mk.III, and Mk.II carries
-    more productivity than Mk.I, so any answer in the hundreds is already a bug.
+    The exact figure moved 49 -> 41 when ``60d5f0f`` restored the player's
+    ``graphene-advanced``; see the note on ``CYCLE_URL``.  It is pinned as well
+    as banded so a silent drift is caught, but **the band is the guarantee** --
+    if this literal fails and the band holds, check whether the chain changed
+    for a good reason before editing it.
     """
-    assert cycle.machine_count == 49
-    assert Fraction(41) <= cycle.machine_count <= Fraction(60)
+    assert Fraction(30) <= cycle.machine_count <= Fraction(80)
+    assert cycle.machine_count == 41
 
 
-def test_recipe_cycle_agrees_with_the_machines_the_milp_bought(
+def test_derived_counts_agree_with_the_machines_the_milp_bought(
     cycle: RateSolution,
 ) -> None:
-    """The two members of the cycle, at the counts the MILP chose all along.
+    """Every group's machine count is the exact ceiling of its own requirement.
 
-    This is the tell that the derivation and the MILP are describing the same
-    plan.  While the iteration diverged these two read 292,889 and 439,334
-    against the solver's 3 and 1.
+    This is the tell that the derivation and the MILP describe the same plan,
+    and it is asserted as the INVARIANT rather than as two literals, which is
+    what the previous version did -- it pinned ``plasma-refining == 3`` and
+    ``reforming-refine == 1``, and went stale the moment the chain legitimately
+    changed, taking the guarantee with it.
+
+    While the iteration diverged, those two groups read 292,889 and 439,334
+    against the solver's 3 and 1, so a ceiling relation that holds group-by-group
+    would have caught it on any chain, not only on the one URL that happened to
+    close a loop.
     """
-    counts = {g.recipe_id: g.machines for g in cycle.groups}
-    assert counts["plasma-refining"] == 3
-    assert counts["reforming-refine"] == 1
+    assert cycle.groups
+    for group in cycle.groups:
+        exact = group.exact_machines
+        ceiling = -((-exact.numerator) // exact.denominator)
+        assert group.machines == ceiling, (
+            f"{group.recipe_id}: {group.machines} machines against an exact "
+            f"requirement of {exact}"
+        )
+        assert group.machines >= 1
 
 
 def test_recipe_cycle_balances_exactly(cycle: RateSolution) -> None:
