@@ -2167,6 +2167,42 @@ class TestPowerClaimsItsGroundBeforeRouting:
             f"covering by need took {len(sites)}, the 9-spaced grid took {lattice}"
         )
 
+    def test_a_tie_is_broken_towards_open_ground_not_into_a_channel(self) -> None:
+        """The tie-break points away from the corridors, and that is the point.
+
+        A tower cell is held in ``keep_out`` for the whole of routing, so where
+        it stands is the router's problem.  The scarce thing is the ONE-ROW
+        CHANNEL between two strips -- a machine band is solid at every level, so
+        that row is the only way past -- and a cell in one has free neighbours
+        on a single axis.  A cell in the middle of a wide field has four and
+        cutting it out disconnects nothing.
+
+        Built so the choice is PURELY the tie-break: the core is small enough
+        that one tower covers all of it from many cells, so every one of those
+        scores identically and only the second key can separate them.  Rows 4
+        and 6 are walled off, which makes row 5 a one-row channel whose cells
+        cover exactly as much as the open ground at row 1 does.
+
+        This is the regression that cost three corpus cells: the tie-break used
+        to prefer the ENCLOSED cell and aimed every tower at a channel.
+        """
+        canvas = _Canvas(limit=(0, 0, 10, 10))
+        for x in range(11):
+            for y in (4, 6):
+                canvas.add(_belt(x, y))
+        sites = _power_plan(canvas, (0, 0, 10, 10))
+        assert len(sites) == 1, f"one tower covers this core, not {len(sites)}"
+        x, y = sites[0]
+        neighbours = sum(
+            canvas.free((x + dx, y + dy, 0))
+            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1))
+        )
+        assert neighbours == 4, (
+            f"the plan stood at {(x, y)}, which has {neighbours} free "
+            "neighbours, when a cell covering exactly as much was free in the "
+            "open; a tower in a one-row channel plugs the only way through it"
+        )
+
     def test_towers_still_cover_when_the_plan_claims_its_cells(self) -> None:
         p = FreeformLayout(power=True, workers=DETERMINISTIC_WORKERS).lay_out(
             proliferated_spec(), time_budget_s=1.0

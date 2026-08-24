@@ -4118,10 +4118,12 @@ def _power_plan(canvas: _Canvas, core: tuple[int, int, int, int]) -> list[tuple[
     against 32-72 across five ``casimir-crystal`` packs.  Every tower deleted is
     a building the player does not paste AND a cell the router gets back.
 
-    The tie-break is deliberate: among cells that cover equally many dark tiles,
-    the one with the FEWEST free neighbours wins.  Coverage alone likes open
-    ground, and open ground is exactly the corridor the router wants; a fixed
-    lattice spread that cost blindly, and this spreads it on purpose.
+    The tie-break is deliberate and it points AWAY from the router's corridors:
+    among cells that cover equally many dark tiles, the one with the MOST free
+    neighbours wins, because a cell in the middle of a wide field can be taken
+    without disconnecting anything while a cell in a one-row channel cannot.
+    It used to point the other way, which is measured at three corpus cells --
+    see the tie-break itself, where the numbers are.
     """
     tower = catalog.building(catalog.TESLA_TOWER_ID)
     reach2 = math.floor((2 * tower.cover_radius) ** 2)
@@ -4261,20 +4263,71 @@ def _power_plan(canvas: _Canvas, core: tuple[int, int, int, int]) -> list[tuple[
     for _ in range(int(np.count_nonzero(free)) + 1):
         if not remaining.any():
             break
-        # WHERE a tower stands costs the router, and coverage alone picks the
-        # worst cells available: a tower is held in `keep_out` until routing
-        # finishes, and the cell covering the most dark tiles is, almost by
-        # construction, the one in open ground -- which is the corridor a belt
-        # wanted. So enclosure breaks ties, cheaply.
+        # WHERE a tower stands costs the router, because a tower cell is held in
+        # `keep_out` for the whole of routing.  Among cells that cover equally
+        # many dark tiles, take the one with the MOST free neighbours.
         #
-        # PREFERRING enclosure outright was built and MEASURED and is worse. As
+        # THIS TIE-BREAK POINTED THE WRONG WAY AND IT COST THREE CORPUS CELLS.
+        #
+        # It used to be `4 - openness`, on the argument that coverage alone
+        # likes "open ground, and open ground is exactly the corridor a belt
+        # wanted".  That sentence conflates two opposite things.  The scarce
+        # routing resource here is the ONE-ROW CHANNEL on a strip's south face
+        # -- a strip's machine band is solid at every level, so that row is the
+        # only way past it (see `_sweep`, and `WEST_CHANNEL`).  A cell in such a
+        # channel has free neighbours east and west and blocked ones north and
+        # south: `openness == 2`.  A cell in the middle of a wide field has
+        # `openness == 4` and cutting it out disconnects nothing.  Preferring
+        # enclosure therefore aimed the towers straight at the channels, and
+        # every cell it plugged was a passage with no alternative.
+        #
+        # Measured on the SAME pack -- `universe-matrix`/free-proliferation,
+        # h=164 w=177, 133 nets, a 15s ceiling:
+        #
+        #   master's lattice, 351 towers held   routed 133/133 in  7.0s
+        #   `4 - openness`,   176 towers held   routed   0/133, wall at 14.2s
+        #   `openness`,       172 towers held   routed 133/133 in  8.0s
+        #
+        # Half as many held cells routing twice as slowly is not congestion, it
+        # is placement: the greedy was choosing the cells the router could least
+        # afford, and the lattice's virtue was never its uniformity but that a
+        # blind 9-grid plugs a channel only by accident.
+        #
+        # Corpus at `--budget 4 --jobs 16`, clean cells out of 72, one figure
+        # per audit run, because these are nondeterministic:
+        #
+        #   master (lattice + repair)  n=12  mean 70.75
+        #     69,70,70,70,70,70,71,71,72,72,72,72
+        #   `4 - openness`             n=4   mean 67.75
+        #     67,67,68,69
+        #   `openness`                 n=17  mean 71.0
+        #     70,70,70,70,70,71,71,71,71,71,71,71,72,72,72,72,72
+        #
+        # `INVALID 0` in every one of those runs, on every variant, and no
+        # `power.coverage` refusal anywhere: the tie-break moves which cells the
+        # router has to path around, never whether the block ends up powered.
+        #
+        # THREE OTHER DIRECTIONS WERE BUILT AND MEASURED AND NONE BEATS IT.
+        # All of them fix the regression -- the sign was the whole of it -- and
+        # none is worth the extra code:
+        #
+        #   no tie-break at all (`argmax` falls to the lowest index)  n=3   70.67
+        #   penalise only 1-wide channel cells (free on exactly one
+        #     axis, both sides -- the cells whose removal cuts a run)  n=8   70.5
+        #   penalise local articulation points (8-ring crossing
+        #     number >= 2, so bends as well as straight runs)          n=4   70.0
+        #   ...and that same articulation test with `openness` under
+        #     it as a second key                                       n=13  71.0
+        #
+        # The last one ties `openness` exactly and needs eight shifted masks and
+        # a crossing number to do it, so the plain neighbour count stays.
+        #
+        # PREFERRING enclosure OUTRIGHT was measured too, and is worse still. As
         # tiers on `openness <= 1, 2, 4`, taking the best-covering cell in the
-        # tightest non-empty tier, the corpus went 67/67/68/67 to 66/63/64: an
-        # enclosed cell covers fewer tiles, so it takes more towers, so it holds
-        # more cells, and the router ends up worse off than it started. The
-        # slack is real but it is much smaller than the coverage term, and
-        # spending the coverage term to get it is a bad trade.
-        key = score * 5 + (4 - openness)
+        # tightest non-empty tier, the corpus went 67/67/68/67 to 66/63/64: it
+        # is the wrong direction pushed harder, and it also costs towers, since
+        # an enclosed cell covers fewer tiles and so more of them are needed.
+        key = score * 5 + openness
         reachable_now = free if not sites else (free & linked)
         # The core first, and the ring only for what the core cannot reach.
         # Widening is per ROUND rather than once and for all, so a build that
