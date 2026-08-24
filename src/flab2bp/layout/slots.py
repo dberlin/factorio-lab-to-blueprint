@@ -62,18 +62,23 @@ from __future__ import annotations
 
 import math
 from collections.abc import Sequence
-from dataclasses import replace
+from dataclasses import dataclass, replace
 
 from flab2bp.dsp import catalog as cat
 from flab2bp.layout.base import PlacedBuilding
 
 __all__ = [
+    "ADDON_FROM_SLOT",
+    "ADDON_TO_SLOT",
     "BELT_SLOT",
     "INPUT_TO_SLOT",
     "OUTPUT_FROM_SLOT",
     "SLOT_REACH",
+    "Attachment",
     "SlotUndetermined",
     "assign_sorter_slots",
+    "attachable_columns",
+    "attachment",
     "machine_slot",
     "slot_forward",
     "slot_offset",
@@ -88,6 +93,17 @@ INPUT_TO_SLOT = 1
 
 #: What the belt side of a connection carries.  Also constant on all 1288.
 BELT_SLOT = -1
+
+#: What a belt ADDON carries in all four of its slot fields.
+#:
+#: A Spray Coater is not wired to anything.  All eight in the corpus record
+#: ``input_obj = output_obj = -1`` with ``(15, 14)`` on both ends, and nothing
+#: anywhere names one as a connection.  The game writes the same pair in
+#: ``BuildTool_Addon`` (``outputToSlot = 14; inputFromSlot = 15``) and again in
+#: the blueprint paste path.  It rides the belt it sits on; the association is
+#: positional, and there is no sorter in it.
+ADDON_FROM_SLOT = 15
+ADDON_TO_SLOT = 14
 
 #: How far a sorter end may sit from the slot pose it names, in tiles.
 #:
@@ -248,6 +264,117 @@ def machine_slot(
     return min(range(len(poses)), key=rank)
 
 
+@dataclass(frozen=True, slots=True)
+class Attachment:
+    """Where a sorter may meet a machine, and what the game will read there.
+
+    ``cell`` is the grid tile the sorter's machine-side end must occupy -- NOT
+    necessarily a tile on the machine's outer edge.  A Chemical Plant's southern
+    slots sit at ``z = -0.9`` in a footprint five deep, so their anchor is one
+    row INSIDE the building and the sorter is two tiles long instead of one.
+    ``slot`` is what :func:`machine_slot` will derive for that geometry, so a
+    caller that anchors here and lets :func:`assign_sorter_slots` fill the
+    fields in gets this index by construction.
+    """
+
+    cell: tuple[int, int]
+    slot: int
+    span: int
+
+
+def attachment(machine: PlacedBuilding, far: tuple[int, int]) -> Attachment | None:
+    """Where a straight sorter between ``far`` and ``machine`` must anchor.
+
+    ``None`` means the game allows no such sorter, and the caller's only honest
+    responses are to try another column or to refuse.  There is no nearest-legal
+    answer to fall back on: a sorter anchored where no insert pose is within
+    reach is rejected on paste, which is the whole class of defect this exists
+    to stop.
+
+    What is checked, and where each rule comes from:
+
+    * the run is axis-aligned and ``far`` is off the footprint -- ours, and what
+      ``sorter.reach`` already requires;
+    * the anchor is a tile of ``machine``, so the end lands on the building it
+      names (``sorter.endpoint_pair``);
+    * the end is within :data:`SLOT_REACH` of the pose -- the game's
+      ``CheckInserterDataLegal``, and the paste path's ladder with it;
+    * the slot faces back along the run to within :data:`SLOT_ALIGN_DEG` -- the
+      game's ``TooSkew``, and the sign half of ``CheckInserterDataLegal``;
+    * the span is within ``catalog.SORTER_MAX_REACH``.
+
+    The game's LENGTH window is deliberately not applied.  Its loosest floor is
+    0.9 and its tightest ceiling 5.0, while an axis-aligned sorter on a tile
+    grid is 1, 2 or 3 tiles long -- it cannot bind on anything expressible here,
+    and ``game.inserter_skew`` covers the case a hand-built fixture reaches.
+
+    Ties are broken by the shortest span, then by the closest pose, then by the
+    lowest slot index, so the result is deterministic.
+    """
+    if not cat.building(machine.item_id).slot_poses:
+        # A building that takes no sorter anywhere answers "nowhere" rather than
+        # raising. `machine_slot` still raises for one that has been wired up
+        # regardless -- that is a sorter already built on a false premise, and a
+        # different thing from a planner asking whether it could be.
+        return None
+    fx, fy = far
+    cx, cy = _centre(machine)
+    xs = range(machine.x, machine.x + machine.width)
+    ys = range(machine.y, machine.y + machine.height)
+
+    cells: list[tuple[int, int]] = []
+    if fx in xs and fy not in ys:
+        cells = [(fx, y) for y in ys]
+    elif fy in ys and fx not in xs:
+        cells = [(x, fy) for x in xs]
+    if not cells:
+        return None
+
+    best: Attachment | None = None
+    best_key: tuple[int, float, int] | None = None
+    for cell in cells:
+        span = max(abs(cell[0] - fx), abs(cell[1] - fy))
+        if not 1 <= span <= cat.SORTER_MAX_REACH:
+            continue
+        slot = machine_slot(
+            machine.item_id,
+            machine.yaw,
+            (cell[0] - cx, cell[1] - cy),
+            (cell[0] - fx, cell[1] - fy),
+        )
+        sx, sy, sz = slot_offset(machine.item_id, machine.yaw, slot)
+        pose = (cx + sx, cy + sy)
+        reach = ((pose[0] - cell[0]) ** 2 + (pose[1] - cell[1]) ** 2 + sz * sz) ** 0.5
+        if reach > SLOT_REACH:
+            continue
+        wx, wy, _wz = slot_forward(machine.item_id, machine.yaw, slot)
+        ax, ay = fx - pose[0], fy - pose[1]
+        n = (ax * ax + ay * ay) ** 0.5
+        if n == 0.0 or (wx * ax + wy * ay) / n < SLOT_ALIGN_COS:
+            continue
+        key = (span, reach, slot)
+        if best_key is None or key < best_key:
+            best_key, best = key, Attachment(cell, slot, span)
+    return best
+
+
+def attachable_columns(
+    machine: PlacedBuilding, lane_y: int
+) -> dict[int, Attachment]:
+    """Every column of ``machine`` a sorter from a lane at ``lane_y`` can use.
+
+    Empty is a real answer and a common one.  An Oil Refinery has no insert pose
+    on its northern face at all, so a lane above it can serve none of its
+    columns however close it sits; a Matrix Lab is five wide and offers three.
+    """
+    out: dict[int, Attachment] = {}
+    for x in range(machine.x, machine.x + machine.width):
+        got = attachment(machine, (x, lane_y))
+        if got is not None:
+            out[x] = got
+    return out
+
+
 def _centre(b: PlacedBuilding) -> tuple[float, float]:
     """A placed building's footprint centre, in tiles.
 
@@ -315,6 +442,26 @@ def assign_sorter_slots(
     """
     out: list[PlacedBuilding] = []
     for b in buildings:
+        if cat.building(b.item_id).is_belt_addon:
+            # A belt addon carries the same constant pair on all four fields and
+            # is wired to nothing. Setting it here rather than at the one place
+            # a coater is created keeps every "what does the game read in these
+            # fields" answer in this module.
+            if b.input_obj is not None or b.output_obj is not None:
+                raise SlotUndetermined(
+                    f"belt addon (item {b.item_id}) has a connection; the game "
+                    f"wires addons to nothing and will not let a sorter target one"
+                )
+            out.append(
+                replace(
+                    b,
+                    output_to_slot=ADDON_TO_SLOT,
+                    input_from_slot=ADDON_FROM_SLOT,
+                    output_from_slot=ADDON_FROM_SLOT,
+                    input_to_slot=ADDON_TO_SLOT,
+                )
+            )
+            continue
         if not cat.is_sorter(b.item_id):
             out.append(b)
             continue

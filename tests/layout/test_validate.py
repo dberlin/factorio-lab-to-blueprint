@@ -412,6 +412,7 @@ def test_sorter_endpoint_pair_fires_when_links_disagree_with_anchors() -> None:
     assert fired(r, "sorter.endpoint_pair")
 
 
+SPRAY_COATER = 2313  # a belt addon: no insert pose, fed by belt from its addon area
 CHEMICAL_PLANT = 2309  # 9x5, and never a sorter peer anywhere in the corpus
 MATRIX_LAB = 2901  # 5x5, and its slot ring runs the opposite way round
 OIL_REFINERY = 2308  # 3x7, nine slots, and none at all on its north face
@@ -601,6 +602,39 @@ def test_game_inserter_paste_stops_a_radial_stretch_at_1_6() -> None:
     assert snaps[0].detail["snap"] > 1.6
 
 
+def _coater(x: int, y: int, z: int = 0) -> PlacedBuilding:
+    b = catalog_building(SPRAY_COATER)
+    return PlacedBuilding(
+        item_id=SPRAY_COATER,
+        model_index=b.model_index,
+        x=x,
+        y=y,
+        z=z,
+        yaw=90.0,  # Facing.EAST
+    )
+
+
+def test_game_addon_supply_fires_when_a_coater_has_no_proliferator_belt() -> None:
+    """A Spray Coater is fed from one place and it is not a sorter.
+
+    The belt the coater rides is at its own tile; the proliferator belt has to
+    be in addon area 1, a tile and a quarter behind it and one altitude level
+    UP.  A belt beside it at ground level -- which is what both strategies used
+    to build, with a sorter running from it -- is not in the area and the game
+    attaches nothing.
+    """
+    r = validate(place(belt(0, 0), belt(1, 0), _coater(0, 0)))
+    assert fired(r, "game.addon_supply")
+
+
+def test_game_addon_supply_clean_when_the_belt_is_where_the_game_looks() -> None:
+    """One level up and a tile behind: 0.25 from the area centre, well inside 1.0."""
+    r = validate(place(belt(0, 0), belt(-1, 0, 1), _coater(0, 0)))
+    assert not fired(r, "game.addon_supply"), [
+        f.message for f in r.by_check("game.addon_supply")
+    ]
+
+
 def test_game_inserter_data_fires_on_a_far_column_of_a_wide_machine() -> None:
     """A Chemical Plant is nine wide and takes a sorter on four of its columns.
 
@@ -620,39 +654,40 @@ def test_game_inserter_data_fires_on_a_far_column_of_a_wide_machine() -> None:
     assert fired(r, "game.inserter_paste")
 
 
-def test_game_inserter_skew_fires_on_a_backwards_yaw() -> None:
-    """A sorter's yaw points from the end it draws from to the end it feeds.
+def test_game_inserter_skew_fires_on_a_yaw_across_the_run() -> None:
+    """A sorter facing across the line it runs along is "deflection too much".
 
-    All 1250 real sorters do.  Reversed, the machine end is re-rotated to the
-    slot's pose on paste while the belt end keeps the blueprint's yaw, and the
-    two end up 180 degrees apart -- ``TooSkew``, "deflection too much".  Both
-    strategies emitted exactly this on every belt-to-machine sorter until
-    ``assign_sorter_slots`` started deriving the yaw.
+    Turned a quarter, the axis test reads 90 degrees against a limit of 24.  A
+    yaw turned a HALF is not caught -- the game takes an absolute value, and
+    both ends carry the same blueprint yaw whichever way it points -- which is
+    why `assign_sorter_slots` derives the yaw from the corpus rule rather than
+    leaning on this check to notice.
     """
-    p = _retagged(_belt_to_machine(), 2, yaw=90.0)
-    r = validate(p)
-    assert fired(r, "game.inserter_skew")
-    assert any(f.detail.get("pair_deg", 0) > 30 for f in r.by_check("game.inserter_skew"))
+    r = validate(_retagged(_belt_to_machine(), 2, yaw=0.0))
+    off = [f for f in r.by_check("game.inserter_skew") if "off_axis_deg" in f.detail]
+    assert off, [f.message for f in r.by_check("game.inserter_skew")]
+    assert off[0].detail["off_axis_deg"] > 24.0
 
 
-def test_game_inserter_skew_fires_when_snapping_makes_a_sorter_too_short() -> None:
-    """The Oil Refinery's south face sits 0.6 tiles outside its last tile row.
+def test_game_inserter_skew_fires_on_a_sorter_longer_than_the_game_allows() -> None:
+    """Eight tiles between two machines, against a 7.5 ceiling.
 
-    A one-tile sorter from that face to the belt beside it is 0.4 long once the
-    machine end snaps onto the slot, under the 0.6 the game allows a sorter with
-    one belt end.  Nothing about the slot INDEX is wrong here, which is why the
-    length half of the ladder has to be ported too.
+    The ceiling is the only half of the length window an integer grid can reach.
+    The FLOOR cannot bind on anything we could emit -- the loosest of the three
+    is 0.9 and the shortest sorter on a tile grid is 1.0 -- so it is ported and
+    left without a witness rather than given a fabricated one.  ``sorter.reach``
+    fires here too; this asserts only on the game's own ladder.
     """
     r = validate(
         place(
-            machine(0, 0, item_id=OIL_REFINERY),
-            belt(1, -1),
-            sorter(1, 0, 1, -1, inp=0, out=1),
+            machine(0, 0),
+            machine(0, 11),
+            sorter(1, 2, 1, 10, inp=0, out=1),
         )
     )
-    lengths = [f for f in r.by_check("game.inserter_skew") if "min" in f.detail]
+    lengths = [f for f in r.by_check("game.inserter_skew") if "max" in f.detail]
     assert lengths, [f.message for f in r.by_check("game.inserter_skew")]
-    assert lengths[0].detail["length"] < 0.6
+    assert lengths[0].detail["length"] > 7.5
 
 
 # --- belts -----------------------------------------------------------------

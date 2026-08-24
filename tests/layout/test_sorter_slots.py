@@ -23,6 +23,8 @@ from flab2bp.dsp.codec import decode
 from flab2bp.dsp.envelope import BlueprintFormatError
 from flab2bp.dsp.records import Blueprint, BlueprintBuilding
 from flab2bp.layout import slots as S
+from flab2bp.layout import validate as V
+from flab2bp.layout.base import PlacedBuilding
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
 
@@ -224,6 +226,63 @@ def test_the_slot_poses_are_what_the_corpus_lands_on() -> None:
     assert worst_dot >= 0.0, f"worst dot {worst_dot}"
 
 
+def test_the_length_and_skew_ladder_reads_the_raw_blueprint() -> None:
+    """923 real sorters clear the game's length and TooSkew ladder, read RAW.
+
+    This test exists because the first port of that ladder read it against the
+    SNAPPED positions and the corpus threw it out: 11 Oil Refinery records in
+    ``factory-quick-start-step-3-red-cube``, a blueprint the game ships, come
+    out 0.45 tiles long and 29.9 degrees off axis that way.  Read as the
+    blueprint carries them, the tightest record clears its length minimum by
+    0.511 and the worst end is 9.9 degrees off against a limit of 24.
+
+    Margins, not just a pass, because "everything passes" is also what a check
+    that reads nothing would report.
+    """
+    checked = 0
+    slack = 9.9
+    worst_pair = worst_axis = 0.0
+    for _name, bp in CORPUS:
+        by_index = {b.index: b for b in bp.buildings}
+        for s in bp.buildings:
+            if not cat.is_sorter(s.item_id):
+                continue
+            if not 0.9 <= math.dist((s.x, s.y), (s.x2, s.y2)) <= 3.2:
+                continue
+            peers = [by_index.get(s.input_obj_idx), by_index.get(s.output_obj_idx)]
+            if any(p is None for p in peers) or any(p.item_id == ARTIFICIAL_STAR for p in peers):
+                continue
+            if any(_off_grid(p) for p in peers):
+                continue
+            belts = sum(1 for p in peers if cat.is_belt(p.item_id))
+            length = math.dist((s.x, s.y), (s.x2, s.y2))
+            low, high = V._SORTER_LENGTH[belts]
+            assert length <= high, f"{length} over {high}"
+            slack = min(slack, length - low)
+            f1 = _forward(s.yaw)
+            f2 = _forward(s.yaw2)
+            axis = _forward(math.degrees(math.atan2(s.x2 - s.x, s.y2 - s.y)))
+            worst_pair = max(worst_pair, _angle(f1, f2))
+            worst_axis = max(worst_axis, max(_off_axis(axis, f1), _off_axis(axis, f2)))
+            checked += 1
+    assert checked == 940
+    assert slack >= 0.5, f"tightest length clears its floor by only {slack}"
+    assert worst_pair <= V._SKEW_PAIR_DEG, worst_pair
+    assert worst_axis <= V._SKEW_AXIS_DEG, worst_axis
+
+
+def _forward(yaw: float) -> tuple[float, float]:
+    return (math.sin(math.radians(yaw)), math.cos(math.radians(yaw)))
+
+
+def _angle(a: tuple[float, float], b: tuple[float, float]) -> float:
+    return math.degrees(math.acos(max(-1.0, min(1.0, a[0] * b[0] + a[1] * b[1]))))
+
+
+def _off_axis(axis: tuple[float, float], f: tuple[float, float]) -> float:
+    return math.degrees(math.acos(min(1.0, abs(axis[0] * f[0] + axis[1] * f[1]))))
+
+
 def test_only_artificial_star_is_excluded() -> None:
     """The one exclusion is a broken *record*, not a building we cannot model.
 
@@ -339,6 +398,94 @@ def test_a_diagonal_approach_now_resolves() -> None:
     the sorter runs towards, whatever mixture of x and y it arrived by.
     """
     assert S.machine_slot(2303, 0.0, (1, 1), (-1, -1)) == 2
+
+
+def _at(item_id: int, x: int = 0, y: int = 0) -> PlacedBuilding:
+    b = cat.building(item_id)
+    return PlacedBuilding(
+        item_id=item_id, model_index=b.model_index, x=x, y=y, width=b.width, height=b.height
+    )
+
+
+def test_attachment_puts_a_3x3_sorter_on_the_edge_row() -> None:
+    """The easy case, and the one every wrong rule also got right."""
+    m = _at(2303)  # 3x3 at (0,0), so rows 0..2
+    got = S.attachment(m, (1, 3))
+    assert got is not None
+    assert got.cell == (1, 2)
+    assert got.span == 1
+
+
+def test_attachment_reaches_a_chemical_plants_inner_row() -> None:
+    """Its southern slots are a row INSIDE a footprint five deep.
+
+    So the sorter is two tiles long and its machine end is not on the edge --
+    the single fact that made every Chemical Plant blueprint we shipped paste
+    with "Sorter data error".
+    """
+    m = _at(2309)  # 9x5 at (0,0): columns 0..8, rows 0..4
+    got = S.attachment(m, (4, -1))
+    assert got is not None
+    assert got.cell == (4, 1), "one row in from the southern edge"
+    assert got.span == 2
+
+
+def test_attachable_columns_are_the_ones_the_table_has() -> None:
+    """Four of a Chemical Plant's nine columns, three of a Matrix Lab's five."""
+    plant = _at(2309)
+    assert sorted(S.attachable_columns(plant, -1)) == [3, 4, 5, 6]
+    assert sorted(S.attachable_columns(plant, 5)) == [3, 4, 5, 6]
+    lab = _at(2901)
+    assert sorted(S.attachable_columns(lab, -1)) == [1, 2, 3]
+
+
+def test_an_oil_refinery_cannot_be_served_from_the_north_at_all() -> None:
+    """Nine slots, none of them on that face.
+
+    Not a clamp and not a near miss -- there is no pose to be near.  A layout
+    that runs its lanes east-west can only serve a Refinery from below, and
+    saying so is the point: the alternative is a sorter the game deletes.
+    """
+    refinery = _at(2308)  # 3x7
+    assert S.attachable_columns(refinery, 7) == {}
+    assert sorted(S.attachable_columns(refinery, -1)) == [0, 1, 2]
+
+
+def test_attachment_refuses_a_lane_further_than_a_sorter_reaches() -> None:
+    """A Chemical Plant's inner row costs a tile of span before anything else.
+
+    Its only southern pose anchors on row 1 of a five-deep footprint, so a lane
+    three tiles clear of the building is already a four-tile sorter -- past
+    ``SORTER_MAX_REACH`` -- and there is no second pose further out to fall back
+    to.  A wide machine is not merely awkward to serve, it is served from
+    CLOSER than a 3x3 needs to be.
+    """
+    plant = _at(2309)  # rows 0..4
+    assert S.attachment(plant, (4, -2)) is not None, "three tiles is still legal"
+    assert S.attachment(plant, (4, -3)) is None
+
+
+def test_a_belt_addon_carries_the_pair_the_game_writes() -> None:
+    """All eight corpus coaters: no connection, and ``(15, 14)`` on both ends."""
+    seen = collections.Counter()
+    links = collections.Counter()
+    for _name, bp in CORPUS:
+        for b in bp.buildings:
+            if b.item_id != cat.SPRAY_COATER_ID:
+                continue
+            seen[
+                (b.output_from_slot, b.output_to_slot, b.input_from_slot, b.input_to_slot)
+            ] += 1
+            links[(b.output_obj_idx, b.input_obj_idx)] += 1
+    assert dict(seen) == {
+        (S.ADDON_FROM_SLOT, S.ADDON_TO_SLOT, S.ADDON_FROM_SLOT, S.ADDON_TO_SLOT): 8
+    }
+    assert dict(links) == {(-1, -1): 8}, "a coater is wired to nothing"
+
+
+def test_attachment_is_empty_for_a_building_that_takes_no_sorter() -> None:
+    assert S.attachment(_at(2208), (4, -1)) is None  # Ray Receiver
+    assert S.attachment(_at(2209), (4, -1)) is None  # Energy Exchanger
 
 
 def test_a_building_with_no_sorter_slots_is_refused() -> None:

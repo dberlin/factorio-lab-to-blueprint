@@ -191,7 +191,7 @@ def main() -> int:
         tree = obj.read_typetree(nodes)
         inserts = tree.get("insertPoses") or []
         ports = tree.get("slotPoses") or []
-        if not inserts and not ports:
+        if not inserts and not ports and not tree.get("addonAreaCenter"):
             continue
         holder = objs.get(tree["m_GameObject"]["m_PathID"])
         if holder is None:
@@ -226,7 +226,22 @@ def main() -> int:
                 )
             return out
 
-        entry = {"slotPoses": poses(inserts), "portPoses": poses(ports)}
+        # `addonAreaCenter` is a plain Vector3[] on the component, and
+        # `PrefabDesc.addonAreaPoses[n]` is built straight from it. It is where
+        # the game LOOKS for the belts an addon attaches to: on build it takes
+        # the nearest belt within 1.0 of each area and writes the connection
+        # itself, which is why a Spray Coater in a blueprint carries no
+        # connection of its own. Area 0 is the cargo belt it sprays, area 1 the
+        # proliferator supply.
+        areas = [
+            [round(v, 4) for v in (a["x"], a["y"], a["z"])]
+            for a in (tree.get("addonAreaCenter") or [])
+        ]
+        entry = {
+            "slotPoses": poses(inserts),
+            "portPoses": poses(ports),
+            "addonAreas": areas,
+        }
         prev = found.get(name)
         if prev is not None and prev != entry:
             # Every building prefab carries exactly ONE SlotConfig, on its root,

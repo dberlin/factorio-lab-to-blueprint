@@ -1243,6 +1243,19 @@ def _slot_pose_of(
     )
 
 
+def _fpoint(p: tuple[int, int, Fraction]) -> tuple[float, float, float]:
+    """A tile anchor as the float triple the game's own arithmetic uses.
+
+    Altitude is an exact ``Fraction`` everywhere else here, and deliberately so.
+    It stops being exact at this boundary and only at it: every predicate below
+    is a Unity ``Vector3.magnitude`` or ``Vector3.Dot`` compared against a
+    literal ``0.8f`` / ``1.6f`` / ``24f``, so carrying rationals into them would
+    be precision the comparison cannot use and a claim of exactness the game
+    does not make.
+    """
+    return (float(p[0]), float(p[1]), float(p[2]))
+
+
 def _unit(
     to: tuple[float, float, float], frm: tuple[float, float, float]
 ) -> tuple[float, float, float]:
@@ -1300,7 +1313,7 @@ def _inserter_data(ctx: Context) -> Iterable[Finding]:
         anchors = _anchors(b)
         if anchors is None:
             continue
-        pose, pose2 = anchors
+        pose, pose2 = _fpoint(anchors[0]), _fpoint(anchors[1])
 
         if b.output_obj is not None and b.output_from_slot != slots.OUTPUT_FROM_SLOT:
             yield Finding(
@@ -1423,8 +1436,8 @@ def _inserter_paste(ctx: Context) -> Iterable[Finding]:
         # the blueprint still holds it; only then is the output end snapped and
         # tested against the already-snapped input.  That is the game's order,
         # and it is the reason the two ends are not symmetrical here.
-        lpos: tuple[float, float, float] = anchors[0]
-        lpos2: tuple[float, float, float] = anchors[1]
+        lpos: tuple[float, float, float] = _fpoint(anchors[0])
+        lpos2: tuple[float, float, float] = _fpoint(anchors[1])
         for label, link, slot in (
             ("input", b.input_obj, b.input_from_slot),
             ("output", b.output_obj, b.output_to_slot),
@@ -1493,10 +1506,29 @@ _SKEW_AXIS_DEG = 24.0
 def _inserter_skew(ctx: Context) -> Iterable[Finding]:
     """Port of the sorter length and skew ladder in ``BuildTool_BlueprintPaste``.
 
-    Runs after the paste has snapped each machine-side end onto its slot pose,
-    which is why it lives beside ``game.inserter_paste`` and reuses the same
-    snapping.  ``EBuildCondition.TooSkew`` is "Deflection too much"
-    (``偏角太大``, condition 15 -- NOT ``TooBend``/``弯曲过度``)::
+    It runs on the anchors and yaws the BLUEPRINT carries, NOT on the snapped
+    ones ``game.inserter_paste`` works with.  That was measured, after a first
+    version assumed the opposite and the corpus threw it out: of 923 real
+    sorters, the snapped reading rejects 11 -- every one an Oil Refinery in
+    ``factory-quick-start-step-3-red-cube``, a blueprint the game ships -- on
+    both the length test and the 24-degree one, and adding the belt-end lateral
+    shift the paste path also applies fixes the angle and leaves the length.
+    Read raw, all 923 pass with room: the tightest length clears its minimum by
+    0.511 tiles and the worst end sits 9.9 degrees off its axis against a limit
+    of 24.
+
+    That has a consequence worth stating plainly, because an earlier commit
+    message here claimed the opposite: **a backwards sorter yaw is NOT rejected
+    by this**.  Read raw, ``lrot`` and ``lrot2`` are both the blueprint's own
+    yaw, so their angle is zero however the sorter is turned, and the axis test
+    takes an absolute value, so a reversal reads as zero too.  The yaw is still
+    derived from the geometry in ``assign_sorter_slots`` -- 1250 of 1250 real
+    sorters point from the end they draw from to the end they feed, and we were
+    writing 69 of 125 backwards -- but that rests on the corpus being unanimous,
+    not on any ported predicate refusing it.
+
+    ``EBuildCondition.TooSkew`` is "Deflection too much" (``偏角太大``,
+    condition 15 -- NOT ``TooBend``/``弯曲过度``)::
 
         magnitude = (lpos2 - lpos).magnitude
         if (magnitude > num131) -> TooFar
@@ -1512,12 +1544,9 @@ def _inserter_skew(ctx: Context) -> Iterable[Finding]:
     ``flag21``/``flag22`` pair: belt-to-belt is the tightest at 0.4..5.0,
     machine-to-machine the loosest at 0.9..7.5.
 
-    A snapped end's rotation is the slot's, so its forward is the slot's forward
-    -- negated on the output side, where the game applies
-    ``Quaternion.Euler(0f, 180f, 0f)``.  An end that stayed put keeps the yaw we
-    emitted.  ``Quaternion.Angle`` between two rotations that share an up axis is
-    the angle between their forwards, and every rotation here is upright, so the
-    30-degree test is done on forwards.
+    ``Quaternion.Angle`` between two rotations that share an up axis is the angle
+    between their forwards, and both of ours are upright, so the 30-degree test
+    is done on forwards.
 
     Two of the game's tests are NOT ported, both because they need the planet's
     grid rather than ours: ``CalcSegmentsAcross`` counts the grid segments a
@@ -1532,8 +1561,8 @@ def _inserter_skew(ctx: Context) -> Iterable[Finding]:
         anchors = _anchors(b)
         if anchors is None:
             continue
-        lpos: tuple[float, float, float] = anchors[0]
-        lpos2: tuple[float, float, float] = anchors[1]
+        lpos: tuple[float, float, float] = _fpoint(anchors[0])
+        lpos2: tuple[float, float, float] = _fpoint(anchors[1])
         yaw2 = b.yaw if b.yaw2 is None else b.yaw2
         fwd = (math.sin(math.radians(b.yaw)), math.cos(math.radians(b.yaw)), 0.0)
         fwd2 = (math.sin(math.radians(yaw2)), math.cos(math.radians(yaw2)), 0.0)
@@ -1543,24 +1572,14 @@ def _inserter_skew(ctx: Context) -> Iterable[Finding]:
             if link is not None and 0 <= link < len(bs) and cat.is_belt(bs[link].item_id):
                 belts += 1
 
-        if b.input_obj is not None:
-            got = _slot_pose_of(ctx, b.input_obj, b.input_from_slot)
-            if got is not None:
-                lpos, fwd = got[0], got[1]
-        if b.output_obj is not None:
-            got = _slot_pose_of(ctx, b.output_obj, b.output_to_slot)
-            if got is not None:
-                lpos2 = got[0]
-                fwd2 = (-got[1][0], -got[1][1], -got[1][2])
-
         low, high = _SORTER_LENGTH[belts]
         length = math.dist(lpos, lpos2)
         if length > high:
             yield Finding(
                 "game.inserter_skew",
                 Severity.ERROR,
-                f"sorter {i} is {length:.2f} tiles end to end after snapping, over "
-                f"the {high} the game allows with {belts} belt end(s)",
+                f"sorter {i} is {length:.2f} tiles end to end, over the {high} the "
+                f"game allows with {belts} belt end(s)",
                 (i,),
                 {"length": round(length, 3), "max": high, "belt_ends": belts},
             )
@@ -1568,8 +1587,8 @@ def _inserter_skew(ctx: Context) -> Iterable[Finding]:
             yield Finding(
                 "game.inserter_skew",
                 Severity.ERROR,
-                f"sorter {i} is only {length:.2f} tiles end to end after snapping, "
-                f"under the {low} the game allows with {belts} belt end(s)",
+                f"sorter {i} is only {length:.2f} tiles end to end, under the {low} "
+                f"the game allows with {belts} belt end(s)",
                 (i,),
                 {"length": round(length, 3), "min": low, "belt_ends": belts},
             )
@@ -1599,6 +1618,70 @@ def _inserter_skew(ctx: Context) -> Iterable[Finding]:
                     (i,),
                     {"end": label, "off_axis_deg": round(off, 1)},
                 )
+
+
+#: How near a belt must pass an addon area for the game to attach it, and how
+#: near the area's centre must be to the belt's own line.  ``sqrMagnitude < 1f``
+#: and ``Maths.DistancePointLine(...) < 0.3f`` in ``PlanetFactory``.
+_ADDON_AREA_RADIUS = 1.0
+
+
+@check("game.addon_supply")
+def _addon_supply(ctx: Context) -> Iterable[Finding]:
+    """A belt addon is fed by BELT, and the game finds that belt by position.
+
+    Port of the addon-connection pass in ``PlanetFactory``::
+
+        Pose pose = prefabDesc.addonAreaPoses[i];
+        Pose transformedBy = pose.GetTransformedBy(entity pose);
+        if (sqrMagnitude < 1f && DistancePointLine(...) < 0.3f) -> nearest belt
+        WriteObjectConn(entityId, i, isOutput: true, num2, 13);
+
+    So a Spray Coater carries no connection of its own -- all eight in the
+    fixture corpus have ``input_obj`` and ``output_obj`` unset -- and is
+    supplied entirely by where the belts are.  Area 0 is the cargo belt it
+    rides; area 1 is the proliferator, at ``(0, -1.25, 1)``: a tile and a
+    quarter behind and one altitude LEVEL up.
+
+    This is the check that replaced a sorter both strategies used to run into a
+    coater.  That sorter could never have worked, and nothing here could see it:
+    the coater has no ``slotPoses``, so ``CheckInserterDataLegal`` skips the
+    geometry entirely and every one of them passed.
+
+    An addon with only the one area is not checked -- a Traffic Monitor and the
+    turrets each carry a single area at the origin, which is the belt they sit
+    on, and that co-location is already what places them.
+    """
+    bs = ctx.placement.buildings
+    belts = [
+        (b.x, b.y, b.z * float(cat.WORLD_UNITS_PER_LEVEL))
+        for b in bs
+        if cat.is_belt(b.item_id)
+    ]
+    for i, b in enumerate(bs):
+        areas = cat.building(b.item_id).addon_areas
+        if len(areas) < 2:
+            continue
+        for n, (adx, ady, adz) in enumerate(areas):
+            if n == 0:
+                continue
+            wx, wy = slots.to_world((adx, ady), b.yaw)
+            want = (
+                b.x + wx,
+                b.y + wy,
+                (b.z + adz) * float(cat.WORLD_UNITS_PER_LEVEL),
+            )
+            if any(math.dist(want, p) < _ADDON_AREA_RADIUS for p in belts):
+                continue
+            yield Finding(
+                "game.addon_supply",
+                Severity.ERROR,
+                f"{cat.building(b.item_id).name} {i} has no belt in its addon "
+                f"area {n}, at ({want[0]:.2f}, {want[1]:.2f}) one level up; the "
+                f"game supplies an addon from there and from nowhere else",
+                (i,),
+                {"area": n, "x": round(want[0], 2), "y": round(want[1], 2)},
+            )
 
 
 @check("sorter.filter")

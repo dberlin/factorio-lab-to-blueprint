@@ -73,7 +73,7 @@ import numpy as np
 from ortools.sat.python import cp_model
 
 from flab2bp.dsp import catalog, params
-from flab2bp.layout import junction, validate
+from flab2bp.layout import junction, slots, validate
 from flab2bp.layout.base import (
     DEFAULT_SEARCH_WORKERS,
     RETRY_BUDGET_S,
@@ -2078,20 +2078,34 @@ def _link_lane(
     uses to tell the two apart, so do not set a filter where none is needed.
     """
     model_index = catalog.building(tier).model_index
-    facing = Facing.SOUTH.value if lane_y < machine_y else Facing.NORTH.value
+    facing = Facing.SOUTH.value if lane_y < machine_y else Facing.NORTH.value  # placeholder
     placed = 0
     for m_idx in machines:
         m = canvas.buildings[m_idx]
-        x = m.x + min(column, m.width - 1)
+        # WHICH column, and WHERE on the machine, from the machine's own insert
+        # poses. The near edge row is right for a 3x3 and wrong for most else: a
+        # Chemical Plant's southern slots are a row inside its footprint, an Oil
+        # Refinery has none at all on its north face, and a Matrix Lab offers
+        # only its middle three columns. `column` still spreads successive
+        # sorters across the machine, but only over columns that HAVE a pose --
+        # clamping to `m.width - 1` picked column 0 of a Matrix Lab, which has
+        # none, and left the machine unfed.
+        reachable = slots.attachable_columns(m, lane_y)
+        lane_xs = {canvas.buildings[i].x for i in lane}
+        usable = sorted(c for c in reachable if c in lane_xs)
+        if not usable:
+            continue
+        x = usable[min(column, len(usable) - 1)]
         belt_idx = next((i for i in lane if canvas.buildings[i].x == x), None)
         if belt_idx is None:
             continue
+        anchor_y = reachable[x].cell[1]
         if into_machine:
             src, dst = belt_idx, m_idx
-            ax, ay, bx, by = x, lane_y, x, machine_y
+            ax, ay, bx, by = x, lane_y, x, anchor_y
         else:
             src, dst = m_idx, belt_idx
-            ax, ay, bx, by = x, machine_y, x, lane_y
+            ax, ay, bx, by = x, anchor_y, x, lane_y
         canvas.buildings.append(
             PlacedBuilding(
                 item_id=tier,
@@ -5712,26 +5726,16 @@ def _place_coaters(
                     yaw=Facing.EAST.value,
                 )
             )
-            # Sorter drop -> coater, span 1. Anchors sit on the two buildings;
-            # the connection indices carry the semantics.
-            sorter = SORTER_TIERS[0]
-            canvas.buildings.append(
-                PlacedBuilding(
-                    item_id=sorter,
-                    model_index=catalog.building(sorter).model_index,
-                    x=drop_cell[0],
-                    y=drop_cell[1],
-                    width=1,
-                    height=1,
-                    x2=cx,
-                    y2=cy,
-                    z2=Fraction(0),
-                    yaw=Facing.WEST.value,
-                    yaw2=Facing.WEST.value,
-                    input_obj=drop,
-                    output_obj=idx,
-                )
-            )
+            # NO sorter drop -> coater. That connection does not exist in the
+            # game: a coater ships zero insert poses, `BuildTool_Inserter` will
+            # not target a building with none, and all eight coaters in the
+            # fixture corpus carry no connection at all. The game attaches the
+            # belts positionally instead, from `PrefabDesc.addonAreaPoses` --
+            # area 1, the proliferator supply, sits at `(0, -1.25, 1)`: a tile
+            # and a quarter behind the coater and one altitude level UP. The
+            # drop belt above is at the right x and the wrong LEVEL, so
+            # `game.addon_supply` reports the coater unsupplied and the
+            # candidate is refused rather than shipped looking fed.
             out.append(_Coater(coater=idx, drop=drop, x=drop_cell[0], y=drop_cell[1]))
     return out
 

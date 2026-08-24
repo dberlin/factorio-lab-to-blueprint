@@ -1,53 +1,82 @@
 # Backlog
 
-## OPEN -- sorters may only touch a machine where the game says they may
+## OPEN -- the layout obeys the slot tables now; what it cannot serve is geometry
 
-The game's own predicates are now ported (`game.inserter_data`,
-`game.inserter_paste`, `game.inserter_skew` in `layout/validate.py`), and the
-real `PrefabDesc.slotPoses` table is extracted from the game's prefabs
-(`scripts/extract_dsp_slot_poses.py` -> `dsp/data/slot_poses.json`). They agree
-with the game on all 1142 usable machine-side sorter records in the fixture
-corpus and disagree with **us** on four building types and three whole classes
-of connection. None of this was visible before, because nothing here had the
-table.
+The game's own predicates are ported (`game.inserter_data`,
+`game.inserter_paste`, `game.inserter_skew`, `game.addon_supply` in
+`layout/validate.py`), the real `PrefabDesc.slotPoses` and `addonAreaPoses`
+tables are extracted from the game's prefabs
+(`scripts/extract_dsp_slot_poses.py` -> `dsp/data/slot_poses.json`), and both
+strategies now choose a sorter's machine-side anchor from those tables via
+`slots.attachment`. **Every placement either serves a machine where the game
+has a pose, or does not serve it: zero `game.*` findings on everything that
+lays out.**
 
-Measured over both strategies and the whole URL corpus (`--time-budget 1`,
-one candidate each): **8 of 22 placements are clean; the other 14 carry 5,946
-findings, and every single one of them touches an Oil Refinery (2,247), a
-Chemical Plant (504), a Quantum Chemical Plant (236) or a Matrix Lab (228).**
-Not one 3x3 machine is implicated. Three separate defects:
+The cost is coverage, not density. Paired and interleaved over the cells both
+arms lay out, constraining the anchor moved total area by **-0.28%** (6494 vs
+6512); the 3x3-machine cells are identical to the tile, because for a 3x3 the
+table says exactly what the old edge-row assumption said.
 
-1. **A face wider than three tiles has no slot out at its ends.** A Matrix Lab
-   is five wide and its slots sit at `x in {-1, 0, 1}`; the Oil Refinery's
-   seven-deep sides carry three. Both strategies choose the machine-side column
-   from the belt's position, so a wide machine gets sorters where no slot is.
-2. **The Chemical Plant is not a ring at all.** Eight slots: four along the
-   north face at `x in {-1, 0, 1, 2}`, and four at `z = -0.9`, which is one row
-   INSIDE a footprint five deep. Neither long side takes a sorter anywhere, and
-   the south attachment is not on the edge tile.
-3. **The Oil Refinery's south face sits 0.6 tiles outside its last tile row**,
-   so a one-tile sorter from it is 0.4 long once the game snaps the end onto the
-   pose -- under the 0.6 minimum. Those need a two-tile sorter.
+WHAT STILL CANNOT BE LAID OUT, AND WHY
 
-Three building types accept **no sorter at all** -- Spray Coater, Energy
-Exchanger and both logistics stations ship zero insert poses, and
-`BuildTool_Inserter` will not even let a sorter target a building with none.
-They are fed by BELT. Both strategies wire a sorter into a Spray Coater, so
-every proliferated candidate now refuses rather than emitting a connection the
-game cannot make. That is the correct failure and it is also a real capability
-loss: proliferation needs a belt-fed coater.
+`attachable_columns` for a lane one row clear of the machine, both sides:
 
-**83 tests in `test_spine.py` and `test_freeform.py` fail as a result**, all of
-them of the form "this spec lays out and validates clean" for a spec containing
-one of the four buildings, or a spray-coater spec. They are the checks working.
-The audit stays at **INVALID 0** across three runs (tier `small`, budget 4s:
-8/30 clean, 22 refused, 0 invalid, 0 crashed, identical all three times) --
-refusing emits nothing, which is the failure mode this project prefers.
+| building | footprint | from above | from below |
+| --- | --- | --- | --- |
+| Assembling Machine, Smelter, Depot | 3x3 | 0,1,2 | 0,1,2 |
+| Matrix Lab | 5x5 | 1,2,3 | 1,2,3 |
+| Chemical Plant, Quantum Chemical Plant | 9x5 | 3,4,5,6 | 3,4,5,6 |
+| Miniature Particle Collider | 9x5 | 1,2,3 | 1,2,3 |
+| **Oil Refinery** | 3x7 | **none** | 0,1,2 |
+| Ray Receiver, Energy Exchanger, Spray Coater | -- | **none** | **none** |
 
-Fixing it is a layout change and was deliberately left out of the branch that
-found it: the machine-side column has to come from the target's slot table
-rather than from the belt, and the coater has to be belt-fed.
+Three structural consequences, each a packer problem rather than a validator
+one:
 
+1. **An Oil Refinery cannot be served from the north.** Its nine poses are
+   0-2 east, 3-5 west, 6-8 on the south face; there is no pose on the north
+   face to be near. A layout that runs its lanes east-west can only feed a
+   Refinery from below. The fix is either to rotate it a quarter turn -- at
+   yaw 90 its east and west faces become north and south, and its 3x7 becomes
+   a 7x3 that suits a row band better -- or to route both of its connections
+   from the same side. Neither strategy can rotate a machine today.
+2. **A wide machine offers fewer columns than its width**, so fewer parallel
+   sorters fit. `_pick_sorter` is now sized against the attachable count rather
+   than the footprint width, which buys back capacity by raising the tier, but
+   a Chemical Plant still tops out at four sorters per lane.
+3. **A Chemical Plant's southern anchor is a row INSIDE its footprint**, so the
+   sorter is two tiles long before anything else -- and a lane three tiles clear
+   of it is already past `SORTER_MAX_REACH`. Wide machines must be packed
+   CLOSER to their lanes than 3x3s, not further.
+
+**51 tests in `test_spine.py` and `test_freeform.py` fail**, all of the form
+"this spec lays out and validates clean" for a spec containing an Oil Refinery,
+a Chemical Plant or a Spray Coater. They are the diagnosis, not the disease; the
+failure mode is `machine.inputs_supplied` / `machine.output_removed` /
+`flow.sorter_capacity`, never an invalid blueprint. The audit holds **INVALID 0
+and crashed 0** across three runs (tier `small`, budget 4s: 8/30 clean, 22
+refused, identical all three times).
+
+### Spray Coaters are belt-fed, and the belt goes one level UP
+
+Both strategies used to run a sorter into a coater. That connection does not
+exist: a coater ships zero insert poses, `BuildTool_Inserter` refuses to target
+a building with none, and all eight coaters in the corpus carry no connection at
+all -- `input_obj` and `output_obj` unset, `(15, 14)` in their four slot fields.
+The game attaches an addon's belts positionally, from
+`PrefabDesc.addonAreaPoses`, and for a coater area 1 -- the proliferator supply
+-- is at `(0, -1.25, 1)`: a tile and a quarter behind it and **exactly one
+altitude level up**. The corpus confirms it: every coater there has a belt one
+level above and one tile to the side.
+
+So proliferation needs an ELEVATED proliferator lane whose tiles land in each
+coater's addon area. Neither strategy can route one, so `game.addon_supply`
+reports the coater unsupplied and every proliferated candidate refuses. That is
+a real capability loss and it is the right one: the sorter it replaces looked
+like a feed and was not one, and nothing could see that because a coater has no
+`slotPoses` for `CheckInserterDataLegal` to check.
+
+## OPEN -- the game's own rules are scattered across three forms
 ## RESOLVED -- layout solver speed
 
 *Kept as a record of what the numbers actually said, because the first diagnosis
@@ -364,7 +393,9 @@ each assume it is fixed. The fix is probably to decide the final extent up front
 -- reserve the entry ring before anything routes -- rather than to re-order the
 passes again.
 
-## OPEN -- the game's own rules are scattered across three forms
+*The consolidation item below is the same concern seen from the other side: the
+rules above now live in a data file, a catalog dataclass, four validator checks
+and a layout primitive, and the argument for one module is stronger for it.*
 
 The first in-game paste (2026-08-24) turned a pile of inferred rules into
 extracted ones: the game is installed at `/home/dannyb/Dyson Sphere Program/`,
@@ -402,10 +433,35 @@ touch `catalog.py` and `validate.py` and will conflict anyway -- the
 consolidation is nearly free at merge time and expensive later.
 
 **Rules still unextracted**, and each is a place the guessing could resume:
-`NeedGround` ("Foundation required", still unexplained -- the game does not
-offer to auto-place foundation); `TooSkew` ("Deflection too much"); and whether
-a belt may cross over a building, and at what height -- deliberately left
-unanswered rather than inferred from the fixtures' silence.
+whether a belt may cross over a building, and at what height -- deliberately
+left unanswered rather than inferred from the fixtures' silence.
+
+Two that were on this list are now answered, and both are recorded in
+`layout/validate.py`'s comments rather than as checks, because neither can be
+one:
+
+* **`NeedGround`** ("Foundation required") is not a property of a blueprint at
+  all. In `BuildTool_BlueprintPaste` it is a terrain raycast per `landPoint`:
+  18 m down, refused when the hit is below `-0.3 - landOffset` of the planet
+  radius, or when the ground and water layers differ by more than
+  `0.27 + landOffset`, or when nothing is hit. The same blueprint pastes one
+  tile away. It does not offer to auto-foundation because reform is a separate
+  opt-in pass (`ComputeReform`). No offline check can predict it; levelling the
+  ground answers it.
+* **`TooSkew`** ("Deflection too much", `偏角太大`, condition 15 -- NOT
+  `TooBend`/`弯曲过度`) is ported as `game.inserter_skew`. It reads the
+  blueprint's own anchors and yaws, not the snapped ones: 30 degrees between the
+  two end rotations, 24 degrees between each end's forward and the line the
+  sorter runs along, plus a length window that varies with how many ends are on
+  a belt. On an integer grid the window cannot bind -- its loosest floor is 0.9
+  and the shortest sorter is 1.0.
+
+A third is worth recording because it was got WRONG first and the corpus caught
+it: the skew ladder does **not** run on the snapped positions. Reading it that
+way rejects 11 Oil Refinery sorters in `factory-quick-start-step-3-red-cube`, a
+blueprint the game ships. It also means a backwards sorter yaw is not rejected
+by anything ported here -- the yaw is derived from the geometry because 1250 of
+1250 real sorters agree on it, not because a predicate refuses the alternative.
 
 **And when it lands, `gamerules.py` must carry each rule's GUARD, not just its
 threshold.** The belt slope rule is not `slope <= 0.8`; it is

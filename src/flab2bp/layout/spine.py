@@ -65,6 +65,7 @@ from ortools.sat.python import cp_model
 
 from flab2bp.dsp import catalog, params
 from flab2bp.layout import junction, validate
+from flab2bp.layout import slots as sorter_slots
 from flab2bp.layout.base import (
     DEFAULT_SEARCH_WORKERS,
     RETRY_BUDGET_S,
@@ -2285,7 +2286,22 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
                 # machine.  Sizing against the machine's average across its
                 # ingredients under-provisions whichever one is hot -- see
                 # _pick_sorter.
-                pick = _pick_sorter(rate / g.count, tap.span, g.width)
+                # How many sorters will FIT, which is the count of columns this
+                # machine's insert poses reach from this lane -- not its width.
+                # A Matrix Lab is five wide and offers three; a Chemical Plant
+                # nine and offers four; an Oil Refinery served from above offers
+                # none. Sizing against the width asked for more sorters than
+                # there were columns, and the surplus was silently dropped by
+                # `_place_sorters` -- a capacity shortfall that looked like a
+                # routing problem. Fewer columns simply means a higher tier.
+                widest = max(
+                    (len(sorter_slots.attachable_columns(buildings[m], tap.lane_y))
+                     for m in machines),
+                    default=0,
+                )
+                if widest == 0:
+                    continue
+                pick = _pick_sorter(rate / g.count, tap.span, widest)
                 if pick is None:
                     continue
                 tier, per_machine = pick
@@ -3078,6 +3094,11 @@ def _place_sorters(
     for m_idx in machines:
         m = buildings[m_idx]
         used: set[int] = set() if reserved is None else reserved.setdefault(m_idx, set())
+        # The columns this machine can be served on FROM THIS LANE, computed
+        # once. An Oil Refinery served from above yields none at all -- it has
+        # no insert pose on that face -- and the loop below then places nothing
+        # rather than anchoring where the game has no slot.
+        reachable = sorter_slots.attachable_columns(m, lane_y)
         for i in range(per_machine):
             # ONE column for both anchors.  This sorter is vertical -- the lane
             # sits in a corridor above or below the machine row -- so the two
@@ -3086,19 +3107,26 @@ def _place_sorters(
             # bare ``m.x`` skewed every sorter after the first by exactly that
             # offset, which is why 100 of 118 came out diagonal with dx of only
             # ever 1 or 2.
-            x = _shared_column(buildings, lane, m, prefer=column + i, avoid=used)
+            x = _shared_column(
+                buildings, lane, m, prefer=column + i, avoid=used, allowed=set(reachable)
+            )
             if x is None:
                 continue
             belt_idx = _lane_tile_at(buildings, lane, x)
             if belt_idx is None:
                 continue
+            # WHERE on the machine, from the machine's own insert poses. The
+            # near edge row is right for a 3x3 and wrong for most else: a
+            # Chemical Plant's southern slots are a row inside its footprint.
+            att = reachable[x]
             used.add(x)
+            anchor_y = att.cell[1]
             if into_machine:
                 src, dst = belt_idx, m_idx
-                ax, ay, bx, by = x, lane_y, x, machine_y
+                ax, ay, bx, by = x, lane_y, x, anchor_y
             else:
                 src, dst = m_idx, belt_idx
-                ax, ay, bx, by = x, machine_y, x, lane_y
+                ax, ay, bx, by = x, anchor_y, x, lane_y
             buildings.append(
                 PlacedBuilding(
                     item_id=tier,
@@ -3110,8 +3138,11 @@ def _place_sorters(
                     x2=bx,
                     y2=by,
                     z2=Fraction(0),
-                    yaw=Facing.SOUTH.value if lane_y < machine_y else Facing.NORTH.value,
-                    yaw2=Facing.SOUTH.value if lane_y < machine_y else Facing.NORTH.value,
+                    # `assign_sorter_slots` derives the real yaw from the two
+                    # anchors on the way out; this is a placeholder that keeps
+                    # the record well-formed until it does.
+                    yaw=Facing.SOUTH.value if lane_y < anchor_y else Facing.NORTH.value,
+                    yaw2=Facing.SOUTH.value if lane_y < anchor_y else Facing.NORTH.value,
                     input_obj=src,
                     output_obj=dst,
                     filter_id=filter_id,
@@ -3186,45 +3217,29 @@ def _feed_coater(
     corr_y: list[int],
     prolif: str | None,
 ) -> int:
-    """Run a sorter from the corridor's proliferator lane into a coater.
+    """A Spray Coater is fed by BELT, and this cannot yet build the belt.
 
-    Both ends sit in the same corridor, so the span is the difference in lane
-    depth and the sorter stays vertical -- which it must, since sorters cannot
-    change altitude and cannot run diagonally.  Returns the number placed (0 or
-    1) rather than raising: a corridor with no proliferator lane in reach is
-    reported by the validator, which is more useful than aborting the layout.
+    It used to run a sorter from the corridor's proliferator lane into the
+    coater.  That connection does not exist in the game.  A coater ships zero
+    insert poses, ``BuildTool_Inserter`` refuses to target a building with none,
+    and all eight coaters in the fixture corpus carry no connection at all --
+    ``input_obj`` and ``output_obj`` both unset, with the addon pair ``(15, 14)``
+    in their four slot fields.
+
+    What the game does instead is positional.  On build it reads
+    ``PrefabDesc.addonAreaPoses`` and attaches the nearest belt within 1.0 of
+    each: area 0 is the cargo belt the coater rides, area 1 the proliferator
+    supply, and for a coater area 1 is at
+    :attr:`~flab2bp.dsp.catalog.Building.addon_areas` ``(0, -1.25, 1)`` -- a tile
+    and a quarter behind it and exactly one altitude level UP.  The corpus
+    agrees: every coater there has a belt one level above and one tile to the
+    side.
+
+    Neither strategy can route an elevated lane to a chosen tile yet, so this
+    places nothing and ``game.addon_supply`` reports the coater as unsupplied,
+    which refuses the candidate.  Returning zero rather than emitting the sorter
+    is the point: the sorter looked like a feed and was not one.
     """
-    if prolif is None:
-        return 0
-    coater = buildings[coater_idx]
-    for (c, depth), indices in lane_tiles.items():
-        if c != corridor or lane_item_of.get((c, depth)) != prolif or not indices:
-            continue
-        span = abs(depth - coater_depth)
-        if not 1 <= span <= CONSTANTS.sorter_max_reach:
-            continue
-        source = _lane_tile_at(buildings, indices, coater.x)
-        if source is None:
-            continue
-        tier = SORTER_TIERS[0]  # rate is negligible; cheapest tier suffices
-        buildings.append(
-            PlacedBuilding(
-                item_id=tier,
-                model_index=catalog.building(tier).model_index,
-                x=coater.x,
-                y=corr_y[c] + depth,
-                width=1,
-                height=1,
-                x2=coater.x,
-                y2=coater.y,
-                z2=Fraction(0),
-                yaw=Facing.SOUTH.value,
-                yaw2=Facing.SOUTH.value,
-                input_obj=source,
-                output_obj=coater_idx,
-            )
-        )
-        return 1
     return 0
 
 
@@ -3235,13 +3250,18 @@ def _shared_column(
     *,
     prefer: int,
     avoid: set[int] | None = None,
+    allowed: set[int] | None = None,
 ) -> int | None:
     """An x covered by both the machine's footprint and the lane.
 
     A straight-line sorter needs one column, not two.  ``prefer`` spreads
     successive sorters across the machine's width and ``avoid`` keeps two
-    sorters on the same machine off the same column.  Returns ``None`` rather
-    than emitting a sorter whose ends do not line up.
+    sorters on the same machine off the same column.  ``allowed`` narrows the
+    choice to the columns the machine's insert poses actually reach -- the
+    middle three of a Matrix Lab's five, four of a Chemical Plant's nine -- so a
+    wide machine is served on a column it HAS rather than skipped on one it does
+    not.  Returns ``None`` rather than emitting a sorter whose ends do not line
+    up, or one anchored where the game has no slot.
     """
     lane_xs = {buildings[i].x for i in lane}
     if not lane_xs:
@@ -3250,7 +3270,9 @@ def _shared_column(
     covered = [
         machine.x + d
         for d in range(machine.width)
-        if machine.x + d in lane_xs and machine.x + d not in taken
+        if machine.x + d in lane_xs
+        and machine.x + d not in taken
+        and (allowed is None or machine.x + d in allowed)
     ]
     if not covered:
         return None

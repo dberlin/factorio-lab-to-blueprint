@@ -746,6 +746,18 @@ class Building:
     #: also how the game's own checks read it: they skip a peer whose
     #: ``slotPoses.Length`` does not cover the index.
     slot_poses: tuple[SlotPose, ...]
+    #: Where a belt ADDON looks for the belts it attaches to, as ``(dx, dy, dz)``
+    #: offsets from the addon's own tile -- ``dx``/``dy`` in tiles, ``dz`` in
+    #: altitude levels.  ``PrefabDesc.addonAreaPoses``.
+    #:
+    #: This is how a Spray Coater is supplied, and it is not by sorter.  On
+    #: build the game takes the nearest belt within 1.0 of each area and writes
+    #: the connection itself, which is why all eight coaters in the corpus carry
+    #: no connection of their own.  Area 0 is the cargo belt it sprays and sits
+    #: at ``(0, 0, 0)`` -- the coater rides it.  Area 1 is the PROLIFERATOR
+    #: supply, at ``(0, -1.25, 1)``: one tile and a quarter behind the coater
+    #: and exactly one altitude level up.
+    addon_areas: tuple[tuple[float, float, float], ...]
     cover_radius: Fraction
     connect_distance: Fraction
 
@@ -824,6 +836,25 @@ def _slot_poses_for(prefab: str, table: Mapping[str, Any]) -> tuple[SlotPose, ..
     )
 
 
+#: World units per altitude level, from the blueprint paste path::
+#:
+#:     lpos = dir * (localOffset_z * 1.3333333f + 0.2f + realRadius)
+#:
+#: Only :func:`_addon_areas_for` uses it, to turn the prefab's world-space addon
+#: offsets into the levels the rest of this project counts in.
+WORLD_UNITS_PER_LEVEL = 4.0 / 3.0
+
+
+def _addon_areas_for(
+    prefab: str, table: Mapping[str, Any]
+) -> tuple[tuple[float, float, float], ...]:
+    """``prefab``'s addon areas, in tiles across and altitude LEVELS up."""
+    return tuple(
+        (float(a[0]), float(a[2]), float(a[1]) / WORLD_UNITS_PER_LEVEL)
+        for a in (table.get(prefab) or {}).get("addonAreas", ())
+    )
+
+
 @cache
 def _load() -> dict[int, Building]:
     raw = json.loads(_DATA.read_text())
@@ -852,6 +883,7 @@ def _load() -> dict[int, Building]:
             addon_type=row.get("addonType", 0),
             slots=tuple(row.get("slots") or ()),
             slot_poses=_slot_poses_for(row["prefab"], poses),
+            addon_areas=_addon_areas_for(row["prefab"], poses),
             cover_radius=Fraction(power.get("coverRadius") or 0).limit_denominator(100),
             connect_distance=Fraction(power.get("connectDistance") or 0).limit_denominator(100),
         )
@@ -868,6 +900,7 @@ def _load() -> dict[int, Building]:
             addon_type=0,
             slots=(),
             slot_poses=(),
+            addon_areas=(),
             cover_radius=Fraction(0),
             connect_distance=Fraction(0),
         )
