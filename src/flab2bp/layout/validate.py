@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import math
 from collections import defaultdict, deque
-from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum, StrEnum
 from fractions import Fraction
@@ -1940,14 +1940,13 @@ def _inserter_skew(ctx: Context) -> Iterable[Finding]:
 
 
 
-def _belts_in_addon_area(
+def _belt_in_addon_area(
     ctx: Context,
     addon: PlacedBuilding,
     *,
     area: int,
-    candidates: Collection[int] | None = None,
-) -> tuple[int, ...]:
-    """Belt indices the game's positional addon lookup can select."""
+) -> int | None:
+    """Nearest belt the game selects, breaking exact distance ties by index."""
     want = slots.addon_supply_position(
         addon.item_id,
         x=addon.x,
@@ -1956,19 +1955,38 @@ def _belts_in_addon_area(
         yaw=addon.yaw,
         area=area,
     )
-    allowed = set(candidates) if candidates is not None else None
-    return tuple(
-        i
-        for i, belt in enumerate(ctx.placement.buildings)
-        if ctx.kinds[i] is Kind.BELT
-        and (allowed is None or i in allowed)
-        and slots.world_gap(
+    candidates = []
+    for i, belt in enumerate(ctx.placement.buildings):
+        if ctx.kinds[i] is not Kind.BELT:
+            continue
+        distance = slots.world_gap(
             float(want[0] - belt.x),
             float(want[1] - belt.y),
             float(want[2] - belt.z),
         )
-        < _ADDON_AREA_RADIUS
-    )
+        if distance < _ADDON_AREA_RADIUS:
+            candidates.append((distance, i))
+    return min(candidates)[1] if candidates else None
+
+
+def _expected_addon_items(
+    ctx: Context,
+    addon: PlacedBuilding,
+    *,
+    area: int,
+) -> frozenset[str] | None:
+    """Spec item semantics for a Spray Coater addon area, when available."""
+    if ctx.spec is None or addon.item_id != cat.SPRAY_COATER_ID:
+        return None
+    if area == 0:
+        return frozenset(ctx.spec.spray_lanes)
+    if area == 1:
+        return frozenset(
+            item
+            for item in ctx.spec.external_inputs
+            if item.startswith("proliferator")
+        )
+    return None
 
 
 @check("game.addon_supply")
@@ -2020,31 +2038,49 @@ def _addon_supply(ctx: Context) -> Iterable[Finding]:
         if len(areas) < 2:
             continue
         for pose in areas:
-            if _belts_in_addon_area(ctx, b, area=pose.area):
+            selected = _belt_in_addon_area(ctx, b, area=pose.area)
+            if selected is None:
+                want = slots.addon_supply_position(
+                    b.item_id,
+                    x=b.x,
+                    y=b.y,
+                    z=b.z,
+                    yaw=b.yaw,
+                    area=pose.area,
+                )
+                yield Finding(
+                    "game.addon_supply",
+                    Severity.ERROR,
+                    f"{cat.building(b.item_id).name} {i} has no belt in its addon "
+                    f"area {pose.area}, at ({float(want[0]):.2f}, "
+                    f"{float(want[1]):.2f}, z={float(want[2]):.2f}); the game "
+                    f"supplies an addon from there and from nowhere else",
+                    (i,),
+                    {
+                        "area": pose.area,
+                        "x": round(float(want[0]), 2),
+                        "y": round(float(want[1]), 2),
+                        "z": round(float(want[2]), 2),
+                    },
+                )
                 continue
-            want = slots.addon_supply_position(
-                b.item_id,
-                x=b.x,
-                y=b.y,
-                z=b.z,
-                yaw=b.yaw,
-                area=pose.area,
-            )
-            yield Finding(
-                "game.addon_supply",
-                Severity.ERROR,
-                f"{cat.building(b.item_id).name} {i} has no belt in its addon "
-                f"area {pose.area}, at ({float(want[0]):.2f}, "
-                f"{float(want[1]):.2f}, z={float(want[2]):.2f}); the game "
-                f"supplies an addon from there and from nowhere else",
-                (i,),
-                {
-                    "area": pose.area,
-                    "x": round(float(want[0]), 2),
-                    "y": round(float(want[1]), 2),
-                    "z": round(float(want[2]), 2),
-                },
-            )
+            expected = _expected_addon_items(ctx, b, area=pose.area)
+            selected_item = bs[selected].carries_item
+            if expected is not None and selected_item not in expected:
+                yield Finding(
+                    "game.addon_supply",
+                    Severity.ERROR,
+                    f"{cat.building(b.item_id).name} {i}'s nearest belt in addon "
+                    f"area {pose.area} carries {selected_item!r}, not one of "
+                    f"{sorted(expected)}",
+                    (i, selected),
+                    {
+                        "area": pose.area,
+                        "belt": selected,
+                        "carries_item": selected_item,
+                        "expected_items": sorted(expected),
+                    },
+                )
 
 
 def _addon_rides(
@@ -4102,36 +4138,22 @@ def _coaters_supplied(ctx: Context) -> Iterable[Finding]:
     prolif_items = {
         item for item in ctx.spec.external_inputs if item.startswith("proliferator")
     }
-    supplying_belts = {
-        i
-        for i, b in enumerate(ctx.placement.buildings)
-        if ctx.kinds[i] is Kind.BELT and b.carries_item in prolif_items
-    }
-    host_belts = {
-        i
-        for i, b in enumerate(ctx.placement.buildings)
-        if ctx.kinds[i] is Kind.BELT and b.carries_item in ctx.spec.spray_lanes
-    }
+
+    def selected_item(coater: PlacedBuilding, area: int) -> str | None:
+        selected = _belt_in_addon_area(ctx, coater, area=area)
+        if selected is None:
+            return None
+        return ctx.placement.buildings[selected].carries_item
 
     starved = [
         i
         for i, coater in coaters
-        if not _belts_in_addon_area(
-            ctx,
-            coater,
-            area=1,
-            candidates=supplying_belts,
-        )
+        if selected_item(coater, 1) not in prolif_items
     ]
     wrong_hosts = [
         i
         for i, coater in coaters
-        if not _belts_in_addon_area(
-            ctx,
-            coater,
-            area=0,
-            candidates=host_belts,
-        )
+        if selected_item(coater, 0) not in ctx.spec.spray_lanes
     ]
     if starved or wrong_hosts:
         affected = tuple(sorted(set(starved) | set(wrong_hosts)))

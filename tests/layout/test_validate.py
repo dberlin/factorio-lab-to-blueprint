@@ -1352,6 +1352,24 @@ def test_spec_coater_host_and_supply_items_validate_together() -> None:
     ]
 
 
+def test_nearest_addon_belt_wins_before_item_semantics() -> None:
+    placement = place(
+        belt(0, 0, carries="ore"),
+        belt(-1, 0, 1, carries="wrong-item"),
+        belt(-2, 0, 1, carries="proliferator-3"),
+        _coater(0, 0),
+    )
+    report = validate(
+        placement,
+        COATER_SPEC,
+        ids=IdMap(),
+        only={"game.addon_supply", "prolif.coaters_are_supplied"},
+    )
+
+    assert fired(report, "game.addon_supply")
+    assert fired(report, "prolif.coaters_are_supplied")
+
+
 def test_game_addon_supply_rejects_a_sorter_targeting_a_coater() -> None:
     placement = place(
         belt(0, 0, carries="ore"),
