@@ -11,11 +11,9 @@ from __future__ import annotations
 import argparse
 import sys
 from collections import Counter
-from fractions import Fraction
 from pathlib import Path
 
 from flab2bp import pipeline
-from flab2bp.dsp import catalog
 from flab2bp.layout import markers
 from flab2bp.layout.base import NoValidLayout
 
@@ -59,6 +57,26 @@ def _report(build: pipeline.Build, *, verbose: bool) -> None:
             "to build FactorioLab's own selection",
             file=out,
         )
+
+    rules = build.belt_rules
+    if rules is not None:
+        if rules.from_url:
+            print(
+                f"  belt altitude ceiling {float(rules.max_z)} (lab level "
+                f"{rules.lab_level}), vertical belt construction "
+                f"{'YES' if rules.vertical_construction else 'no'} -- read from "
+                f"the URL's researched technologies",
+                file=out,
+            )
+        else:
+            print(
+                f"  WARNING: this URL carried NO technology set, so a NEW SAVE "
+                f"was assumed: belt ceiling {float(rules.max_z)} (lab level "
+                f"{rules.lab_level}), no vertical belt construction. A more "
+                f"developed save allows more, and belts were kept lower than "
+                f"they needed to be.",
+                file=out,
+            )
 
     if build.refused:
         # A strategy that produced NO layout is invisible in `attempts`, so say
@@ -142,28 +160,6 @@ def main(argv: list[str] | None = None) -> int:
         help="path to the Chromium or Chrome executable --fetch-flow should drive "
         "(default: search the usual locations, or $FLAB2BP_BROWSER)",
     )
-    ap.add_argument(
-        "--max-belt-height",
-        type=Fraction,
-        default=catalog.DEFAULT_MAX_BELT_Z,
-        metavar="Z",
-        help="how high a belt may go, in blueprint z (default "
-        f"{float(catalog.DEFAULT_MAX_BELT_Z)}). This is a property of YOUR "
-        "SAVE: the game's ceiling is buildMaxHeight = labLevel*4-0.6 world "
-        "units, which is 3*labLevel-0.45 in blueprint z. The default is the "
-        "starting lab level of 3, so it pastes on any save; at lab level 13 "
-        "the ceiling is 38.55.",
-    )
-    ap.add_argument(
-        "--belt-vertical-construction",
-        action="store_true",
-        help="declare that this save has the beltVerticalConstruction tech, "
-        "which removes the belt slope limit entirely and lets a belt climb "
-        "straight up. Off by default because it is off on a new save. The "
-        "generator does not currently need it -- it only ever ramps, at a "
-        "world slope of 2/3 against the 4/5 limit -- so this only widens what "
-        "the validator will accept.",
-    )
     ap.add_argument("--budget", type=float, default=2.0, help="solver seconds per layout")
     ap.add_argument("-o", "--out", type=Path, help="write to a file instead of stdout")
     ap.add_argument("-n", "--name", default="", help="blueprint short description")
@@ -188,8 +184,6 @@ def main(argv: list[str] | None = None) -> int:
             fetch_flow=args.fetch_flow,
             fetch_timeout_s=args.fetch_timeout,
             browser=args.browser,
-            max_belt_z=args.max_belt_height,
-            belt_vertical_construction=args.belt_vertical_construction,
         )
     except NoValidLayout as exc:
         # Distinct exit code: "no layout exists" is a different outcome from

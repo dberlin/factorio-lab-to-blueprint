@@ -319,3 +319,81 @@ class TestBeltAltitudeRulesComeFromTheGame:
         shipped = Fraction(1) / catalog.BELT_Z_PER_WORLD_UNIT
         assert shipped == Fraction(4, 3)
         assert shipped > catalog.MAX_BELT_SLOPE
+
+
+class TestBeltRulesComeFromTheUrlsTechnologies:
+    """How high a belt may go is a property of the SAVE, so FactorioLab owns it.
+
+    It records the researched set in the URL already, and this project's rule is
+    that FactorioLab's answer is authoritative rather than re-derived or asked
+    for on the command line.
+    """
+
+    def test_no_technology_set_assumes_a_new_save_and_says_so(self) -> None:
+        r = catalog.belt_rules_for_technologies(None)
+        assert r.lab_level == catalog.DEFAULT_LAB_LEVEL
+        assert r.max_z == catalog.belt_max_z(catalog.DEFAULT_LAB_LEVEL)
+        assert r.vertical_construction is False
+        assert r.from_url is False, "a guess must be distinguishable from a reading"
+
+    def test_the_slope_unlock_is_super_magnetic_field_generator(self) -> None:
+        """From the locale: TooSteep hints "Need to unlock Super Magnetic Field
+        Generator", not Vertical Construction."""
+        without = catalog.belt_rules_for_technologies({"vertical-construction-1"})
+        assert without.vertical_construction is False
+        with_it = catalog.belt_rules_for_technologies(
+            {"super-magnetic-field-generator"}
+        )
+        assert with_it.vertical_construction is True
+
+    def test_vertical_construction_levels_raise_the_ceiling(self) -> None:
+        base = catalog.belt_rules_for_technologies(set())
+        assert base.lab_level == 3
+        three = catalog.belt_rules_for_technologies(
+            {f"vertical-construction-{n}" for n in (1, 2, 3)}
+        )
+        assert three.lab_level == 6
+        assert three.max_z > base.max_z
+        assert three.from_url is True
+
+    def test_an_empty_set_is_a_reading_not_a_guess(self) -> None:
+        """A URL that lists no technologies HAS told us something."""
+        assert catalog.belt_rules_for_technologies(set()).from_url is True
+
+    def test_a_real_url_technology_set_reaches_the_rules(self) -> None:
+        """The whole path: `tre=` in the URL -> decoded ids -> altitude rules.
+
+        The unit tests above would still pass if `parse_url` never decoded
+        `tre`, which it only does because `tre` is in `_SUBSET_KEYS` and that
+        makes it load the hash tables.  This asserts the join actually holds.
+        """
+        from flab2bp.lab import params as P
+        from flab2bp.lab.data import load_vendored_hash_index
+        from flab2bp.lab.url import parse_url
+
+        techs = load_vendored_hash_index().technologies
+        wanted = [
+            "super-magnetic-field-generator",
+            "vertical-construction-1",
+            "vertical-construction-2",
+        ]
+        tre = P.ZFIELDSEP.join(P.n_to_id(techs.index(t)) for t in wanted)
+        req = parse_url(
+            f"https://factoriolab.github.io/dsp/list?o=processor*60&tre={tre}&v=11"
+        )
+        assert req.researched_technology_ids == set(wanted)
+
+        rules = catalog.belt_rules_for_technologies(req.researched_technology_ids)
+        assert rules.from_url is True
+        assert rules.vertical_construction is True
+        assert rules.lab_level == 5  # 3 base + 2 vertical-construction levels
+        assert rules.max_z == catalog.belt_max_z(5)
+
+    def test_a_url_without_a_technology_set_is_the_assumed_case(self) -> None:
+        from flab2bp.lab.url import parse_url
+
+        req = parse_url("https://factoriolab.github.io/dsp/list?o=processor*60&v=11")
+        assert req.researched_technology_ids is None
+        assert catalog.belt_rules_for_technologies(
+            req.researched_technology_ids
+        ).from_url is False

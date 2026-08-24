@@ -10,7 +10,6 @@ touch it.
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
-from fractions import Fraction
 from pathlib import Path
 from typing import Literal
 
@@ -107,6 +106,11 @@ class Build:
     flow_findings: tuple[str, ...] = field(default_factory=tuple)
     #: Whether a FactorioLab flow export pinned the recipe selection.
     flow_pinned: bool = False
+    #: The belt altitude rules this build was judged against, and whether
+    #: they were READ from the URL's technology set or assumed from a new
+    #: save.  Reported, because "we assumed" and "the URL said" are very
+    #: different claims about a ceiling.
+    belt_rules: catalog.BeltAltitudeRules | None = None
 
 
 def build(
@@ -122,8 +126,6 @@ def build(
     fetch_flow: bool = False,
     fetch_timeout_s: float = 90.0,
     browser: str | None = None,
-    max_belt_z: Fraction = catalog.DEFAULT_MAX_BELT_Z,
-    belt_vertical_construction: bool = False,
 ) -> Build:
     """Turn a FactorioLab URL into a pasteable DSP blueprint.
 
@@ -140,6 +142,11 @@ def build(
     """
     data = dataset if dataset is not None else load_vendored()
     request = parse_url(url)
+    # How high a belt may go, and whether it may climb with no run at all, are
+    # properties of the player's SAVE -- so they come from the technologies
+    # FactorioLab already recorded in the URL, not from a flag whose default we
+    # would have to guess.
+    belt_rules = catalog.belt_rules_for_technologies(request.researched_technology_ids)
 
     # A FactorioLab flow export pins WHICH recipe makes what, so we stop
     # re-deriving a decision the player already made. It is applied here, to the
@@ -230,8 +237,8 @@ def build(
                 spec,
                 ids=_id_map(spec),
                 expect_power=power,
-                max_belt_z=max_belt_z,
-                belt_vertical_construction=belt_vertical_construction,
+                max_belt_z=belt_rules.max_z,
+                belt_vertical_construction=belt_rules.vertical_construction,
             )
             attempts.append(Attempt(spec.label, sname, placement, report))
 
@@ -318,4 +325,5 @@ def build(
         refused=tuple(refused),
         flow_findings=findings + flow_dropped,
         flow_pinned=selection is not None,
+        belt_rules=belt_rules,
     )

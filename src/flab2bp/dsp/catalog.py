@@ -42,6 +42,7 @@ from __future__ import annotations
 import json
 import math
 import re
+from collections.abc import Set
 from dataclasses import dataclass
 from fractions import Fraction
 from functools import cache
@@ -211,6 +212,86 @@ def belt_max_z(lab_level: int = DEFAULT_LAB_LEVEL) -> Fraction:
     else:
         world = Fraction(lab_level) * 4 + 4
     return world * BELT_Z_PER_WORLD_UNIT
+
+
+#: FactorioLab technology id that grants ``beltVerticalConstruction``.
+#:
+#: From the game's own locale, ``Locale/1033/base.txt``::
+#:
+#:     传送带坡度可升级   (Need to unlock Super Magnetic Field Generator)
+#:     解锁传送带坡度上限  Unlock slope limit when building Conveyor Belts
+#:
+#: which is the hint the build cursor shows on ``TooSteep``.  So the tech that
+#: removes the slope limit is Super Magnetic Field Generator -- NOT Vertical
+#: Construction, which the same locale says covers "Depots, Storage Tanks, and
+#: Matrix Labs".  Guessing that the two were the same line was tempting and
+#: would have been wrong.
+BELT_SLOPE_UNLOCK_TECH = "super-magnetic-field-generator"
+
+#: FactorioLab id prefix for the levelled Vertical Construction upgrade, which
+#: is what raises ``labLevel`` and so ``buildMaxHeight``.  ``UnlockTechFunction``
+#: case 25 is ``labLevel += num``.
+VERTICAL_CONSTRUCTION_PREFIX = "vertical-construction-"
+
+
+@dataclass(frozen=True, slots=True)
+class BeltAltitudeRules:
+    """What a particular SAVE allows a belt to do, vertically.
+
+    Both fields are properties of the player's researched technologies, which
+    is why they are derived from the FactorioLab URL rather than defaulted or
+    asked for on the command line.  FactorioLab already carries the researched
+    set, and this project's rule is that FactorioLab's answer is authoritative.
+    """
+
+    #: Highest blueprint z a belt may occupy.
+    max_z: Fraction
+    #: Whether the slope limit is lifted -- i.e. whether a belt may climb with
+    #: no horizontal run at all.
+    vertical_construction: bool
+    #: Lab level the ceiling was derived from, for error messages.
+    lab_level: int
+    #: False when the URL carried no technology set at all, so the values above
+    #: are new-save assumptions rather than this save's.
+    from_url: bool
+
+
+def belt_rules_for_technologies(
+    technology_ids: Set[str] | None,
+) -> BeltAltitudeRules:
+    """Derive the belt altitude rules from a FactorioLab researched-tech set.
+
+    ``None`` means the URL said nothing about technologies, in which case a NEW
+    SAVE is assumed -- lab level 3, no slope unlock.  That is the conservative
+    end: every save allows at least this much, so a blueprint built to it
+    pastes for anyone.  It is not silent; callers surface it.
+
+    The lab level is the starting 3 plus one per researched Vertical
+    Construction level.  ``UnlockValues`` lives in the game's binary asset
+    protos and could not be read, so "one per level" is an ASSUMPTION -- the
+    checkable consequence is that FactorioLab models 6 levels, giving at most
+    lab 9 and a ceiling of 26.55, while the user's own save reaches 38.55 at
+    lab 13.  So this UNDER-estimates a well-developed save, which is the safe
+    direction: it refuses altitudes the save would actually allow, and never
+    emits one it would not.
+    """
+    if technology_ids is None:
+        return BeltAltitudeRules(
+            max_z=belt_max_z(DEFAULT_LAB_LEVEL),
+            vertical_construction=False,
+            lab_level=DEFAULT_LAB_LEVEL,
+            from_url=False,
+        )
+    levels = sum(
+        1 for t in technology_ids if t.startswith(VERTICAL_CONSTRUCTION_PREFIX)
+    )
+    lab_level = DEFAULT_LAB_LEVEL + levels
+    return BeltAltitudeRules(
+        max_z=belt_max_z(lab_level),
+        vertical_construction=BELT_SLOPE_UNLOCK_TECH in technology_ids,
+        lab_level=lab_level,
+        from_url=True,
+    )
 
 
 #: Default ceiling on belt altitude, in blueprint z.
