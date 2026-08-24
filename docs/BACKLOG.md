@@ -1,5 +1,37 @@
 # Backlog
 
+## OPEN -- two collider questions left, both deliberately unanswered
+
+`geom.collide` is a normal check now: 443 assembler-on-assembler pairs became 2,
+and turning it on cost no coverage. The two that remain are both real and
+neither is guessable from where we stand.
+
+**A Chemical Plant is packed too LOOSE.** Its collider needs 7x5 where
+`derive_footprint` says 9x5, so there is density to win back --
+`catalog.clearance` clamps to at least the footprint and leaves it. Taking it
+means trusting the collider over `blueprintBoxSize` for tile OCCUPANCY, not just
+for spacing, and those are different questions: occupancy decides which tiles a
+sorter anchor may sit on and where a belt may run, and the slot poses are the
+authority there rather than either box. Settling it needs the same treatment
+spacing got -- a measurement against real blueprints -- not an inference from
+the collider being smaller.
+
+**A Splitter one tile from a Tesla Tower collides**, and so does an elevated
+Splitter diagonally over an Assembling Machine. The first is a plain pitch
+requirement: a splitter is a CROSS of two boxes reaching 1.19 units from its
+centre, a tower reaches 0.3, and 1.19 + 0.3 is more than one tile of 1.2566. The
+second is not about splitters at all -- it is a belt at level 1 passing over a
+machine 5 tiles tall, which is the "may a belt cross a building, and at what
+height" question this file already records as unextracted. Both are refusals
+today rather than shipped defects, which is the right place for them until the
+crossing rule is read out of the game rather than inferred.
+
+Note also that `catalog.clearance` takes an AABB over every collider box, so a
+cross-shaped building like the Splitter reserves its empty corners too.
+`geom.collide` tests the real boxes and knows better; the clearance is the
+conservative one, and where the two disagree it is the clearance that
+over-reserves.
+
 ## OPEN -- the layout obeys the slot tables now; what it cannot serve is geometry
 
 The game's own predicates are ported (`game.inserter_data`,

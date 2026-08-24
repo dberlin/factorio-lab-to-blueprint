@@ -58,6 +58,7 @@ from __future__ import annotations
 import math
 import time
 from collections import defaultdict
+from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 from fractions import Fraction
 
@@ -137,6 +138,23 @@ class LayoutConstants:
         b = catalog.building(self.tesla_item_id)
         return (b.width, b.height)
 
+
+#: Pack every machine in a row at the row's widest clearance, or at each type's
+#: own?  Set by measurement -- see the note beside it where it is read.
+UNIFORM_ROW_PITCH = False
+
+
+def _charged_pitch(groups: dict[str, _Group], key: str) -> int:
+    """The pitch the width model charges ``key``, matching what `_pack_row` does.
+
+    Under uniform pitch a row's width depends on WHICH types share it, which is
+    not linear in the row-membership variables CP-SAT has -- so the model is
+    charged the widest pitch in the build. That over-states a row of narrow
+    machines and never under-states one, which is the safe direction for a bound.
+    """
+    if not UNIFORM_ROW_PITCH:
+        return groups[key].pitch_w
+    return max((g.pitch_w for g in groups.values()), default=1)
 
 CONSTANTS = LayoutConstants()
 
@@ -1183,8 +1201,13 @@ def _solve_plan(
 
 def _candidate_widths(groups: dict[str, _Group]) -> list[int]:
     """Descending widths to sweep, seeded from the fallback's own width."""
-    widest = max((g.block_width for g in groups.values()), default=1)
-    total = sum(g.block_width for g in groups.values())
+    widest = max(
+        (g.block_width for g in groups.values()),
+        default=1,
+    )
+    total = sum(
+        g.block_width for g in groups.values()
+    )
     seed = max(widest, total)
     out: list[int] = []
     w = seed
@@ -1238,7 +1261,13 @@ def _solve_one(
     row_w, row_h = [], []
     for r in range(n):
         ww = model.new_int_var(0, w_cap, f"ww_{r}")
-        model.add(ww == sum(groups[k].block_width * in_row[k, r] for k in keys))
+        model.add(
+            ww
+            == sum(
+                groups[k].block_width * in_row[k, r]
+                for k in keys
+            )
+        )
         hh = model.new_int_var(0, max_h, f"hh_{r}")
         for k in keys:
             model.add(hh >= groups[k].pitch_h * in_row[k, r])
@@ -1575,7 +1604,10 @@ def _solve_one(
 def _measure(spec: BuildSpec, plan: _Plan) -> int:
     groups, _ = _adapt(spec)
     heights = [max((groups[k].pitch_h for k in r), default=0) for r in plan.rows]
-    widths = [sum(groups[k].block_width for k in r) for r in plan.rows]
+    widths = [
+        sum(groups[k].block_width for k in r)
+        for r in plan.rows
+    ]
     h = sum(heights) + sum(len(c) for c in plan.lanes)
     return max(widths, default=1) * h
 
@@ -1644,8 +1676,39 @@ class _Slot:
     width: int
 
 
+def _insert_pitch(
+    groups: dict[str, _Group], direct: Iterable[tuple[str, str, str]]
+) -> dict[str, int]:
+    """Effective pitch per group, raised so direct-insert partners stay aligned.
+
+    A machine-to-machine sorter runs in a straight line, so machine ``i`` of the
+    producer has to share a COLUMN with machine ``i`` of the consumer.  Two
+    groups packed at different pitches drift by their difference each machine:
+    an Arc Smelter at 3 and an Assembling Machine at 4 line up for the first
+    three pairs and miss on the fourth, which loses the insert for the whole
+    edge.
+
+    Raising the narrower partner to the wider pitch fixes it and costs width
+    only on the groups that are actually paired.  The alternative measured worse:
+    one pitch per ROW cost 14.68% area over seven specs and bought no inserts at
+    all -- see the note above `_pack_row`.
+    """
+    pitch = {k: g.pitch_w for k, g in groups.items()}
+    for src, dst, _item in direct:
+        if src not in pitch or dst not in pitch:
+            continue
+        want = max(pitch[src], pitch[dst])
+        pitch[src] = pitch[dst] = want
+    return pitch
+
+
 def _pack_row(
-    row: list[str], groups: dict[str, _Group], *, hr: int, power: bool
+    row: list[str],
+    groups: dict[str, _Group],
+    *,
+    hr: int,
+    power: bool,
+    pitch_of: dict[str, int] | None = None,
 ) -> tuple[list[_Slot], int]:
     """Lay one row out left to right, interleaving towers among the machines.
 
@@ -1664,14 +1727,15 @@ def _pack_row(
     covered_to = -1
     for key in row:
         g = groups[key]
+        pitch = g.pitch_w if pitch_of is None else pitch_of.get(key, g.pitch_w)
         for _ in range(g.count):
             if power and x >= next_tower:
                 slots.append(_Slot(None, x, tw))
                 covered_to = x + tw - 1 + hr
                 x += tw
                 next_tower = x + 2 * hr
-            slots.append(_Slot(key, x, g.pitch_w))
-            x += g.pitch_w
+            slots.append(_Slot(key, x, pitch))
+            x += pitch
     # The greedy pass covers left to right; a trailing block may extend past the
     # last tower's reach, so close the gap explicitly.
     while power and covered_to < x - 1:
@@ -1749,7 +1813,9 @@ def _realizable_direct(
         xs: dict[str, list[int]] = defaultdict(list)
         for r, row in enumerate(plan.rows):
             hr = _horizontal_reach(r, row_heights, corridor_heights) if power else 0
-            slots, _w = _pack_row(row, groups, hr=hr, power=power)
+            slots, _w = _pack_row(
+                row, groups, hr=hr, power=power, pitch_of=_insert_pitch(groups, current)
+            )
             for s in slots:
                 if s.key is not None:
                     xs[s.key].append(s.x)
@@ -1851,7 +1917,9 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
     row_widths: list[int] = []
     for r, row in enumerate(plan.rows):
         hr = _horizontal_reach(r, row_heights, corridor_heights) if power else 0
-        slots, width = _pack_row(row, groups, hr=hr, power=power)
+        slots, width = _pack_row(
+            row, groups, hr=hr, power=power, pitch_of=_insert_pitch(groups, plan.direct)
+        )
         for s in slots:
             if s.key is None:
                 buildings.append(

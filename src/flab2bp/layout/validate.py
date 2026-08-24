@@ -603,34 +603,17 @@ NEEDS_SPEC: set[str] = set()
 
 #: Checks that are correct, tested, and NOT run unless a caller names them.
 #:
-#: There is exactly one, and why it is here is a finding rather than a caveat.
-#: ``geom.collide`` reproduces the game's own ``EBuildCondition.Collide`` and is
-#: validated to zero findings on every single-area blueprint the game itself
-#: wrote (``tests/dsp/test_colliders.py``).  It fails on OUR output.  Measured
-#: over three runs of the full corpus, both strategies, every tier -- 13 of the
-#: 24 cells collide, in every run, and the counts barely move between runs::
+#: EMPTY, and that is the finding.  ``geom.collide`` was here because it fired on
+#: almost everything we produced: 443 of the ~530 pairs were one defect, an
+#: Assembling Machine packed three tiles apart when its 3.82-unit collider needs
+#: four at 1.2566 units per tile.  Spacing fixed that, the count went to 2, and
+#: turning the check on cost NO coverage -- both strategies lay out exactly the
+#: same 7 of 12 specs with it on as with it off.  So it runs by default now, and
+#: the two remaining pairs are refusals rather than shipped defects.
 #:
-#:     processor/freeform            [5, 5, 5]
-#:     super-magnetic-ring/spine     [13, 13, 13]
-#:     quantum-chip/freeform         [22, 22, 22]
-#:     universe-matrix/freeform      [55, 54, ...]
-#:
-#: 443 of the ~530 pairs are one defect: ``catalog.derive_footprint`` calls an
-#: Assembling Machine 3x3, so both strategies place them three tiles apart.  Its
-#: collider is 3.82 world units wide and three tiles is 3.770.  The rest are a
-#: Tesla Tower one tile from a Splitter (the Splitter's collider is 2.38 across,
-#: the Tower's 0.6, and one tile is 1.257).
-#:
-#: Running it by default would turn those builds into ``NoValidLayout``, since
-#: both strategies refuse a placement their own validator rejects.  Fixing the
-#: footprints is a layout change and a separate job.  Until then the check is
-#: available to anything that asks for it and is reported in ``Report.skipped``
-#: so a build that has not been through it can never read as one that has.
-#:
-#: When the layout is fixed, the change is to delete this set -- and
-#: ``test_geom_collide_is_opt_in_because_our_layout_fails_it`` is what will fail
-#: until someone does.
-OPT_IN: set[str] = {"geom.collide"}
+#: Anything put back in here needs the same shape of evidence: a measurement of
+#: what it costs to leave on, not a note that it is inconvenient.
+OPT_IN: set[str] = set()
 
 
 def check(cid: str, *, needs_spec: bool = False) -> Callable[[Check], Check]:

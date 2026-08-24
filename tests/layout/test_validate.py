@@ -216,21 +216,22 @@ def test_geom_collide_does_not_fire_on_a_tighter_building() -> None:
     assert not fired(r, "geom.collide")
 
 
-def test_geom_collide_is_opt_in_because_our_layout_fails_it() -> None:
-    """Records a defect, and is the thing that fails when the defect is fixed.
+def test_geom_collide_runs_by_default_now_that_the_layout_passes_it() -> None:
+    """The inverse of the test this replaces, which asked to be deleted.
 
-    ``geom.collide`` is deliberately not in the default run: it fires on every
-    placement both strategies currently produce, so switching it on turns every
-    build into a refusal.  See ``validate.OPT_IN`` for the measurement.  When
-    the footprints are corrected, delete that set and this test with it.
+    ``geom.collide`` was opt-in because it fired on almost everything we made --
+    443 assembler-on-assembler pairs, one defect. Spacing fixed that and turning
+    it on cost no coverage, so it is a normal check and a collision is a refusal.
+    Nothing may go back into ``OPT_IN`` without a measurement of what leaving it
+    on would cost.
     """
     from flab2bp.layout.validate import OPT_IN
 
-    assert {"geom.collide"} == OPT_IN
+    assert set() == OPT_IN
     r = validate(place(machine(0, 0), machine(3, 0)))
-    assert "geom.collide" in r.skipped
-    assert "geom.collide" not in r.checks_run
-    assert not fired(r, "geom.collide"), "the default run must not report it"
+    assert "geom.collide" in r.checks_run
+    assert "geom.collide" not in r.skipped
+    assert fired(r, "geom.collide"), "three tiles apart is a collision"
 
 
 def test_geom_belt_single_occupancy_fires_on_two_belts_in_one_cell() -> None:
