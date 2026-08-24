@@ -66,6 +66,7 @@ from flab2bp.layout.freeform import (
     _relink,
     _reserve_port_access,
     _room_for_another,
+    _route_all,
     _shard_sinks,
     _sink_for,
     _source_for,
@@ -74,7 +75,12 @@ from flab2bp.layout.freeform import (
     plan_strips,
     tie_break_cap,
 )
-from flab2bp.layout.route_feedback import NetRole
+from flab2bp.layout.route_feedback import (
+    DetailedRouteStatus,
+    NetId,
+    NetRole,
+    RouteFailureKind,
+)
 from flab2bp.layout.spine import MACHINE_ITEM_IDS
 from flab2bp.spec import BuildSpec, MachineGroup, ProliferatorMode
 
@@ -929,8 +935,8 @@ class TestDirectInsertion:
             workers=DETERMINISTIC_WORKERS,
         )
         assert pack is not None
-        placement, _failed, _towers = _build(spec, strips, pack, power=False, route=True)
-        return placement, pack
+        result = _build(spec, strips, pack, power=False, route=True)
+        return result.placement, pack
 
     def test_the_bridge_is_a_lane_to_lane_transfer_not_a_machine_pair(self) -> None:
         """What freeform emits, stated plainly, because a counter disagrees.
@@ -3720,7 +3726,7 @@ class TestTheTimeBudgetIsAWall:
         spec = magnetic_ring_spec()
         strips = plan_strips(spec, strip_len=6)
         pack = _greedy_pack(strips, _height_seed(strips))
-        placement, failed, _towers = _build(
+        result = _build(
             spec,
             strips,
             pack,
@@ -3728,8 +3734,10 @@ class TestTheTimeBudgetIsAWall:
             route=True,
             deadline=time.monotonic() - 1.0,
         )
-        assert failed > 0, "an expired build must report every net as unrouted"
-        assert placement.stats["routed"] == 0.0
+        assert result.routing.failed_count > 0, (
+            "an expired build must report every net as unrouted"
+        )
+        assert result.placement.stats["routed"] == 0.0
 
 
 class TestThroughTrafficLeavesTheGround:
@@ -3765,7 +3773,7 @@ class TestThroughTrafficLeavesTheGround:
                 {},
                 1.0,
                 bounds,
-            )
+            ).path
             assert path is not None, f"no path over {distance} tiles of empty ground"
             return {lvl for _x, _y, lvl in path}
 
@@ -4088,6 +4096,86 @@ class TestABranchLeavesFromItsOwnSource:
         assert _source_for(canvas, head, net, {head}, set()) == src_belt
 
 
+class TestDetailedRoutingDiagnostics:
+    @staticmethod
+    def _net(
+        canvas: _Canvas,
+        src: tuple[int, int],
+        dst: tuple[int, int],
+        net_id: NetId,
+    ) -> _Net:
+        src_belt = canvas.add(_belt(*src, item=net_id.item))
+        dst_belt = canvas.add(_belt(*dst, item=net_id.item))
+        return _Net(
+            src=_Port(src_belt, *src, src[0], src[0]),
+            dst=_Port(dst_belt, *dst, dst[0], dst[0]),
+            item=net_id.item,
+            net_id=net_id,
+        )
+
+    @staticmethod
+    def _block(canvas: _Canvas, cells: set[tuple[int, int]]) -> None:
+        for x, y in cells:
+            canvas.solid.add((x, y))
+            for level in range(LEVELS):
+                canvas.blocked[x, y, level] = 0
+
+    def test_a_sealed_pocket_reports_the_failed_net_and_blocking_owner(
+        self,
+    ) -> None:
+        canvas = _Canvas()
+        bounds = (-6, -6, 6, 6)
+        canvas.limit = bounds
+        blocker_id = NetId(0, 1, "blocker", NetRole.INTERNAL, 0)
+        failed_id = NetId(2, 3, "target", NetRole.INTERNAL, 0)
+        blocker = self._net(canvas, (0, -2), (1, -1), blocker_id)
+        failed = self._net(canvas, (0, 1), (0, 3), failed_id)
+        self._block(
+            canvas,
+            {
+                (-1, -2),
+                (1, -2),
+                (0, -3),
+                (2, -1),
+                (1, 0),
+                (-1, -1),
+                (-1, 0),
+                (-1, 1),
+                (1, 1),
+                (0, 2),
+            },
+        )
+
+        result = _route_all(canvas, [blocker, failed], 2001, 35, bounds)
+
+        failure = result.failures[0]
+        assert failure.net_id == failed_id
+        assert failure.kind is RouteFailureKind.SEALED_POCKET
+        assert blocker_id in failure.blocking_nets
+        assert failure.wall
+
+    def test_budget_exhaustion_is_reported_as_unknown(self) -> None:
+        canvas = _Canvas()
+        bounds = (-4, -4, 8, 4)
+        canvas.limit = bounds
+        net_id = NetId(0, 1, "budgeted", NetRole.INTERNAL, 0)
+        net = self._net(canvas, (0, 0), (4, 0), net_id)
+
+        result = _route_all(
+            canvas,
+            [net],
+            2001,
+            35,
+            bounds,
+            budget={"left": 0},
+        )
+
+        assert result.status is DetailedRouteStatus.BUDGET
+        assert result.failures[0].kind is RouteFailureKind.BUDGET
+        assert result.failures[0].wall == ()
+        assert result.failures[0].blocking_nets == ()
+
+
 class TestAFailedSearchNamesTheWallThatCutIt:
     """A committed path is ``blocked``, not expensive, so nets never overlap and
     PathFinder's overuse signal -- what a history term exists to carry -- is
@@ -4118,8 +4206,18 @@ class TestAFailedSearchNamesTheWallThatCutIt:
     def test_a_sealed_pocket_charges_the_committed_cell(self) -> None:
         canvas, bounds = self._boxed_in()
         blame: dict[tuple[int, int, int], float] = {}
-        assert _astar(canvas, [(0, 0, 0)], {(30, 30, 0)}, {}, 1.0, bounds,
-                      None, None, blame) is None
+        result = _astar(
+            canvas,
+            [(0, 0, 0)],
+            {(30, 30, 0)},
+            {},
+            1.0,
+            bounds,
+            None,
+            None,
+            blame,
+        )
+        assert result.path is None
         assert blame == {(0, -1, 0): 1.0}, (
             "the one committed cell walling this net in was not charged, so "
             f"rip-up has nothing to negotiate over: {blame}"
@@ -4131,8 +4229,18 @@ class TestAFailedSearchNamesTheWallThatCutIt:
         canvas.limit = (-40, -40, 40, 40)
         canvas.blocked[0, -1, 0] = _TENTATIVE
         blame: dict[tuple[int, int, int], float] = {}
-        assert _astar(canvas, [(0, 0, 0)], {(4, 0, 0)}, {}, 1.0,
-                      (-40, -40, 40, 40), None, None, blame) is not None
+        result = _astar(
+            canvas,
+            [(0, 0, 0)],
+            {(4, 0, 0)},
+            {},
+            1.0,
+            (-40, -40, 40, 40),
+            None,
+            None,
+            blame,
+        )
+        assert result.path is not None
         assert blame == {}, blame
 
     def test_a_spent_budget_charges_nobody(self) -> None:
@@ -4141,8 +4249,18 @@ class TestAFailedSearchNamesTheWallThatCutIt:
         negotiation term becomes noise."""
         canvas, bounds = self._boxed_in()
         blame: dict[tuple[int, int, int], float] = {}
-        assert _astar(canvas, [(0, 0, 0)], {(30, 30, 0)}, {}, 1.0, bounds,
-                      {"left": 0}, None, blame) is None
+        result = _astar(
+            canvas,
+            [(0, 0, 0)],
+            {(30, 30, 0)},
+            {},
+            1.0,
+            bounds,
+            {"left": 0},
+            None,
+            blame,
+        )
+        assert result.path is None
         assert blame == {}, blame
 
     def test_a_wall_too_diffuse_to_accuse_anyone_charges_nobody(self) -> None:
@@ -4163,8 +4281,18 @@ class TestAFailedSearchNamesTheWallThatCutIt:
             for lvl in range(LEVELS):
                 canvas.blocked[x, 0, lvl] = 0
         blame: dict[tuple[int, int, int], float] = {}
-        assert _astar(canvas, [(0, 0, 0)], {(150, 30, 0)}, {}, 1.0, bounds,
-                      None, None, blame) is None
+        result = _astar(
+            canvas,
+            [(0, 0, 0)],
+            {(150, 30, 0)},
+            {},
+            1.0,
+            bounds,
+            None,
+            None,
+            blame,
+        )
+        assert result.path is None
         assert blame == {}, f"{len(blame)} cells charged for a diffuse wall"
 
 
@@ -4230,11 +4358,20 @@ class TestTheFlatGridIsTheSameSearch:
     def test_a_caller_grid_finds_the_identical_path(self) -> None:
         canvas, bounds = self._maze()
         canvas.routing_ports = frozenset({(10, 3)})
-        alone = _astar(canvas, [(0, 0, 0)], {(20, 0, 0)}, {}, 1.0, bounds)
+        alone = _astar(canvas, [(0, 0, 0)], {(20, 0, 0)}, {}, 1.0, bounds).path
         grid = _make_grid(canvas, bounds, _canvas_span(canvas, bounds), {})
         shared = _astar(
-            canvas, [(0, 0, 0)], {(20, 0, 0)}, {}, 1.0, bounds, None, None, None, grid
-        )
+            canvas,
+            [(0, 0, 0)],
+            {(20, 0, 0)},
+            {},
+            1.0,
+            bounds,
+            None,
+            None,
+            None,
+            grid,
+        ).path
         assert alone is not None
         assert shared == alone, (
             "a caller-supplied grid changed the path, so it is not an encoding "
@@ -4245,11 +4382,28 @@ class TestTheFlatGridIsTheSameSearch:
         """``bounds`` is baked into the grid, so one for a different box is a
         wrong answer waiting to happen and has to be refused, not trusted."""
         canvas, bounds = self._maze()
-        stale = _make_grid(canvas, (0, 0, 4, 4), _canvas_span(canvas, (0, 0, 4, 4)), {})
-        got = _astar(
-            canvas, [(0, 0, 0)], {(20, 0, 0)}, {}, 1.0, bounds, None, None, None, stale
+        stale = _make_grid(
+            canvas,
+            (0, 0, 4, 4),
+            _canvas_span(canvas, (0, 0, 4, 4)),
+            {},
         )
-        assert got == _astar(canvas, [(0, 0, 0)], {(20, 0, 0)}, {}, 1.0, bounds)
+        got = _astar(
+            canvas,
+            [(0, 0, 0)],
+            {(20, 0, 0)},
+            {},
+            1.0,
+            bounds,
+            None,
+            None,
+            None,
+            stale,
+        ).path
+        expected = _astar(
+            canvas, [(0, 0, 0)], {(20, 0, 0)}, {}, 1.0, bounds
+        ).path
+        assert got == expected
 
     def test_block_and_restore_return_the_cell_to_what_it_was(self) -> None:
         """Rip-up restores from ``base``, not to 1.

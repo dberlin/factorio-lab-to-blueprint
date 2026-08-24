@@ -83,7 +83,15 @@ from flab2bp.layout.base import (
     PlacedBuilding,
     Placement,
 )
-from flab2bp.layout.route_feedback import NetId, NetRole
+from flab2bp.layout.route_feedback import (
+    Cell,
+    DetailedRouteResult,
+    DetailedRouteStatus,
+    NetFailure,
+    NetId,
+    NetRole,
+    RouteFailureKind,
+)
 from flab2bp.layout.slots import SlotUndetermined, assign_sorter_slots
 from flab2bp.layout.spine import BELT_ITEM_IDS, MACHINE_ITEM_IDS, SORTER_TIERS
 from flab2bp.spec import BuildSpec
@@ -107,9 +115,10 @@ MARGIN = 1
 #: column its eastern neighbour's input heads open onto -- one channel serving
 #: two faces.  ``add_no_overlap_2d`` is satisfied, the pack is legal and tight,
 #: and two ports fight over one cell; the loser is handed an EMPTY start or goal
-#: set and A* returns ``None`` having expanded nothing.  That is not congestion
-#: and no amount of rip-up can price it away, which is why more solver time made
-#: this WORSE: a tighter pack is a pack with more faces pressed together.
+#: set and A* reports dynamic access loss having expanded nothing.  That is not
+#: congestion and no amount of rip-up can price it away, which is why more solver
+#: time made this WORSE: a tighter pack is a pack with more faces pressed
+#: together.
 #:
 #: Measured before this existed, with every unserved port's four neighbours
 #: classified: on ``casimir-crystal/no-proliferator`` three ports were boxed in,
@@ -381,8 +390,8 @@ _EXACT_HEURISTIC_GOALS = 64
 #: is paid ONCE per routing pass against the tens of seconds the pass costs.
 _ALT_LANDMARKS = 4
 
-#: Hard cap on A* node expansions for a single net.  Exceeding it returns
-#: ``None``, which the caller already treats as a route failure and handles by
+#: Hard cap on A* node expansions for a single net.  Exceeding it reports
+#: budget exhaustion, which the caller treats as a route failure and handles by
 #: ripping up and retrying -- so this degrades routing quality rather than
 #: correctness.  Without it a hard net explores every reachable cell x level and
 #: the whole layout appears to hang.
@@ -2186,8 +2195,8 @@ class _Canvas:
     #: A port is a lane's end tile, so it has at most three free neighbours and
     #: often one.  Without a reservation an earlier net's path takes the last
     #: one, and every net using that port is then handed an EMPTY start or goal
-    #: set: A* returns ``None`` having expanded zero nodes.  That is
-    #: indistinguishable from congestion in the counters and cannot be
+    #: set: A* reports dynamic access loss having expanded zero nodes.  That is
+    #: distinguishable from congestion in diagnostics but still cannot be
     #: negotiated away, because a net that expands nothing never registers a
     #: conflict for the history term to price.  Measured on the magnetic-ring
     #: spec: 48 of 128 searches failed at zero expansions, at every candidate
@@ -3651,6 +3660,14 @@ def _make_grid(
     return grid
 
 
+@dataclass(frozen=True, slots=True)
+class _PathSearchResult:
+    path: tuple[Cell, ...] | None
+    kind: RouteFailureKind | None
+    wall: tuple[Cell, ...]
+    expansions: int
+
+
 def _astar(
     canvas: _Canvas,
     starts: list[tuple[int, int, int]],
@@ -3662,7 +3679,7 @@ def _astar(
     deadline: float | None = None,
     blame: dict[tuple[int, int, int], float] | None = None,
     grid: _Grid | None = None,
-) -> list[tuple[int, int, int]] | None:
+) -> _PathSearchResult:
     """Cheapest free-cell path, with congestion history folded into the cost.
 
     The history term is what makes rip-up-and-reroute converge: a cell that
@@ -3682,10 +3699,10 @@ def _astar(
     :data:`_DEADLINE_CHECK_EVERY` expansions.  A single hard net can spend
     ``_MAX_EXPANSIONS`` nodes, which is seconds on its own, so a deadline that
     only the callers looked at would be a deadline the router could sail past.
-    Running out of clock returns ``None``, which is already the route-failure
-    path -- and a route failure is a REFUSAL, since ``_sweep`` discards any pack
-    with an unrouted net.  A deadline can therefore cost a placement but can
-    never degrade one.
+    Running out of clock reports :attr:`RouteFailureKind.BUDGET`, which is the
+    route-failure path -- and a route failure is a REFUSAL, since ``_sweep``
+    discards any pack with an unrouted net.  A deadline can therefore cost a
+    placement but can never degrade one.
 
     ``bounds`` is the INCLUSIVE box the path may occupy.  It used to be the
     block's bounding box with two tiles of slack added here, which meant the
@@ -3707,9 +3724,9 @@ def _astar(
     keeps it current.
     """
     if not goals:
-        return None
+        return _PathSearchResult(None, RouteFailureKind.DYNAMIC_ACCESS, (), 0)
     if (budget is not None and budget["left"] <= 0) or _expired(deadline):
-        return None
+        return _PathSearchResult(None, RouteFailureKind.BUDGET, (), 0)
 
     # Start cells stay exempt from `bounds` -- an external input run begins on
     # the entry ring, outside the routing box, and works inward -- so they are
@@ -3983,6 +4000,8 @@ def _astar(
             open_heap,
             (h((s[0] - gx0) * gh + (s[1] - gy0)), 0.0, si),
         )
+    if not open_heap:
+        return _PathSearchResult(None, RouteFailureKind.DYNAMIC_ACCESS, (), 0)
 
     while open_heap:
         _, g, cur = heappop(open_heap)
@@ -3993,15 +4012,21 @@ def _astar(
             if expansions > _MAX_EXPANSIONS:
                 if budget is not None:
                     budget["left"] = start_left - expansions + 1
-                return None
+                return _PathSearchResult(
+                    None, RouteFailureKind.BUDGET, (), expansions
+                )
             if expansions % _DEADLINE_CHECK_EVERY == 0 and _expired(deadline):
                 if budget is not None:
                     budget["left"] = start_left - expansions + 1
-                return None
+                return _PathSearchResult(
+                    None, RouteFailureKind.BUDGET, (), expansions
+                )
             if expansions >= start_left:
                 if budget is not None:
                     budget["left"] = start_left - expansions
-                return None
+                return _PathSearchResult(
+                    None, RouteFailureKind.BUDGET, (), expansions
+                )
             checkpoint = _MAX_EXPANSIONS + 1
             due = (expansions // _DEADLINE_CHECK_EVERY + 1) * _DEADLINE_CHECK_EVERY
             if due < checkpoint:
@@ -4036,7 +4061,9 @@ def _astar(
                 node = prev[node]
             if budget is not None:
                 budget["left"] = start_left - expansions
-            return _cut_loops(list(reversed(path)))
+            return _PathSearchResult(
+                tuple(_cut_loops(list(reversed(path)))), None, (), expansions
+            )
         q = cur // LEVELS
         lvl = cur - q * LEVELS
         # A plain step stays on `lvl`, so its toll is fixed for this expansion.
@@ -4111,46 +4138,38 @@ def _astar(
                     heappush(open_heap, (cost + far, cost, top))
 
     # THE HEAP EMPTIED, which is the one ending that proves no path exists -- the
-    # `return None`s above are a spent cap, a spent budget or a spent clock, and
-    # none of those says the pocket is sealed. So the cells with a finite `best`
-    # are exactly the free space this net could reach and the blocked cells
-    # touching it are its wall. The ones a committed path put there are the only
-    # wall cells any net owns, and `_route_all` charges them so the net holding
-    # one pays to keep it.
+    # Budget exits above do not say the pocket is sealed. The cells with a finite
+    # `best` are exactly the free space this net could reach and the blocked cells
+    # touching it are its wall. Only tentative cells have a routing-net owner.
     if budget is not None:
         budget["left"] = start_left - expansions
-    if blame is not None:
-        # `best` is a flat array rather than a dict now, so the pocket is
-        # counted by scanning it. That scan only ever happens on the ending that
-        # proves the pocket sealed, and it stops as soon as the pocket is too
-        # big to accuse anybody.
-        pocket = []
-        for i, seen_at in enumerate(best):
-            if seen_at != inf:
-                pocket.append(i)
-                if len(pocket) > _BLAME_MAX_POCKET:
-                    break
-        if len(pocket) <= _BLAME_MAX_POCKET:
-            blocked_get = canvas.blocked.get
-            #: The wall as a SET, because its size is the question
-            #: `_BLAME_MAX_WALL` asks -- a wall of three has named a suspect, a
-            #: wall of three thousand has named the whole corridor network.
-            #: Counting a cell once per adjacent pocket cell would make a long
-            #: thin pocket look guiltier than a fat one for the same wall.
-            wall: set[tuple[int, int, int]] = set()
-            for i in pocket:
-                q, blvl = divmod(i, LEVELS)
-                bx, by = divmod(q, gh)
-                bx += gx0
-                by += gy0
-                for dx, dy in _STEPS:
-                    cell = (bx + dx, by + dy, blvl)
-                    if blocked_get(cell) == _TENTATIVE:
-                        wall.add(cell)
-            if len(wall) <= _BLAME_MAX_WALL:
-                for cell in wall:
+    wall_cells: tuple[Cell, ...] = ()
+    pocket = []
+    for i, seen_at in enumerate(best):
+        if seen_at != inf:
+            pocket.append(i)
+            if len(pocket) > _BLAME_MAX_POCKET:
+                break
+    if len(pocket) <= _BLAME_MAX_POCKET:
+        blocked_get = canvas.blocked.get
+        wall: set[Cell] = set()
+        for i in pocket:
+            q, blvl = divmod(i, LEVELS)
+            bx, by = divmod(q, gh)
+            bx += gx0
+            by += gy0
+            for dx, dy in _STEPS:
+                cell = (bx + dx, by + dy, blvl)
+                if blocked_get(cell) == _TENTATIVE:
+                    wall.add(cell)
+        if len(wall) <= _BLAME_MAX_WALL:
+            wall_cells = tuple(sorted(wall))
+            if blame is not None:
+                for cell in wall_cells:
                     blame[cell] = blame.get(cell, 0.0) + 1.0
-    return None
+    return _PathSearchResult(
+        None, RouteFailureKind.SEALED_POCKET, wall_cells, expansions
+    )
 
 @dataclass
 class _Net:
@@ -4235,7 +4254,7 @@ def _bind_prepared_net(
 
 def _merge_frontier(
     canvas: _Canvas,
-    paths: dict[int, list[tuple[int, int, int]]],
+    paths: Mapping[int, Sequence[Cell]],
     siblings: tuple[int, ...],
     junctionable: Callable[[int, int], bool] | None = None,
 ) -> set[tuple[int, int, int]]:
@@ -4345,13 +4364,14 @@ def _route_all(
     bounds: tuple[int, int, int, int],
     deadline: float | None = None,
     budget: dict[str, int] | None = None,
-) -> tuple[int, int, int]:
+) -> DetailedRouteResult:
     """Route every net, negotiating congestion across iterations.
 
-    Returns ``(routed, failed, iterations)``.  Failures are counted and returned
-    rather than raised: the caller decides whether to repair, and a silently
-    swallowed failure is exactly the bug that made Strategy A ship a fallback
-    wearing a solver's clothes.
+    Returns stable routed and stranded net identities plus the diagnostic from
+    the selected best round. Failures are returned rather than raised: the
+    caller decides whether to repair, and a silently swallowed failure is
+    exactly the bug that made Strategy A ship a fallback wearing a solver's
+    clothes.
 
     THIS LOOP IS THE OVERRUN.  Up to :data:`RRR_MAX` rounds, each re-routing
     every net, each net allowed :data:`_MAX_EXPANSIONS` nodes -- bounded in
@@ -4374,9 +4394,10 @@ def _route_all(
     #: They are staked and unstaked together, always through `_stake`/`_unstake`,
     #: because `canvas.blocked`, `grid.occ` and `owner` disagreeing is a router
     #: that quietly routes through a committed belt.
-    paths: dict[int, list[tuple[int, int, int]]] = {}
-    owner: dict[tuple[int, int, int], int] = {}
+    paths: dict[int, tuple[Cell, ...]] = {}
+    owner: dict[Cell, int] = {}
     iterations = 0
+    expansions = 0
     # A TOTAL expansion budget across every net and every rip-up round.
     #
     # `_MAX_EXPANSIONS` bounds one search; nothing bounded the product. At
@@ -4399,15 +4420,108 @@ def _route_all(
     #: What gets committed used to be whichever round the loop happened to stop
     #: on, and the shared expansion budget makes the last round systematically
     #: the WORST one: round 1 spends the budget, every round after it has
-    #: nothing left to search with, and `_astar` returns `None` for every net
-    #: before expanding a node. Committing that round throws away a perfectly
-    #: good routing and reports the pack unwireable.
+    #: nothing left to search with, and `_astar` reports budget exhaustion for
+    #: every net before expanding a node. Committing that round throws away a
+    #: perfectly good routing and reports the pack unwireable.
     #:
     #: Measured on universe-matrix/max-proliferation: two of the five candidate
     #: heights reported `routed=0 failed=115` -- every net -- while their first
     #: round had routed roughly seventy of them. Rip-up-and-reroute is a search
     #: over rounds; keeping the incumbent is what makes it one.
-    best_paths: dict[int, list[tuple[int, int, int]]] = {}
+    best_paths: dict[int, tuple[Cell, ...]] = {}
+    best_failures: dict[int, NetFailure] = {}
+
+    def _net_id(index: int) -> NetId:
+        net_id = nets[index].net_id
+        if net_id is None:
+            raise ValueError("detailed routing requires stable net IDs")
+        return net_id
+
+    def _failure(index: int, search: _PathSearchResult) -> NetFailure:
+        blocking = tuple(
+            sorted(
+                {
+                    _net_id(blocker)
+                    for cell in search.wall
+                    if (blocker := owner.get(cell)) is not None
+                }
+            )
+        )
+        return NetFailure(
+            net_id=_net_id(index),
+            kind=search.kind or RouteFailureKind.DYNAMIC_ACCESS,
+            wall=search.wall,
+            blocking_nets=blocking,
+            expansions=search.expansions,
+        )
+
+    def _budget_result() -> DetailedRouteResult:
+        return DetailedRouteResult(
+            status=DetailedRouteStatus.BUDGET,
+            routed=(),
+            failures=tuple(
+                NetFailure(_net_id(i), RouteFailureKind.BUDGET, (), (), 0)
+                for i in range(len(nets))
+            ),
+            iterations=iterations,
+            expansions=expansions,
+        )
+
+    def _finish(
+        selected_paths: dict[int, tuple[Cell, ...]],
+        selected_failures: dict[int, NetFailure],
+        *,
+        budget_exhausted: bool,
+    ) -> DetailedRouteResult:
+        unlinked = _commit_paths(
+            canvas,
+            nets,
+            selected_paths,
+            belt_id,
+            belt_model,
+            src_group,
+            dst_group,
+        )
+        failures = dict(selected_failures)
+        if budget_exhausted:
+            for index in range(len(nets)):
+                if index not in selected_paths:
+                    previous = failures.get(index)
+                    failures[index] = NetFailure(
+                        _net_id(index),
+                        RouteFailureKind.BUDGET,
+                        (),
+                        (),
+                        previous.expansions if previous is not None else 0,
+                    )
+        for index in unlinked:
+            failures[index] = NetFailure(
+                _net_id(index), RouteFailureKind.COMMIT_LINK, (), (), 0
+            )
+        routed = tuple(
+            _net_id(index)
+            for index in range(len(nets))
+            if index in selected_paths and index not in failures
+        )
+        ordered_failures = tuple(
+            failures[index] for index in range(len(nets)) if index in failures
+        )
+        status = (
+            DetailedRouteStatus.BUDGET
+            if budget_exhausted
+            else (
+                DetailedRouteStatus.STRANDED
+                if ordered_failures
+                else DetailedRouteStatus.ROUTED
+            )
+        )
+        return DetailedRouteResult(
+            status=status,
+            routed=routed,
+            failures=ordered_failures,
+            iterations=iterations,
+            expansions=expansions,
+        )
 
     _reserve_port_access(canvas, nets)
 
@@ -4490,7 +4604,7 @@ def _route_all(
             junction_ok[x, y] = got
         return got
 
-    def _stake(index: int, path: list[tuple[int, int, int]]) -> None:
+    def _stake(index: int, path: tuple[Cell, ...]) -> None:
         """Put a path down: canvas, grid and ownership, in step."""
         paths[index] = path
         for cell in path:
@@ -4571,7 +4685,10 @@ def _route_all(
         return starts, goals
 
     def _repair(
-        stranded: list[int], pressure: float, blame: dict[tuple[int, int, int], float]
+        stranded: list[int],
+        pressure: float,
+        blame: dict[Cell, float],
+        search_failures: dict[int, _PathSearchResult],
     ) -> list[int]:
         """Place stranded nets by CROSSING settled belts and moving those.
 
@@ -4691,7 +4808,7 @@ def _route_all(
 
         def _stands_on(
             index: int,
-            through: list[tuple[int, int, int]],
+            through: Sequence[Cell],
             victims: Set[int],
         ) -> bool:
             """Does ``through`` attach only to paths this swap is about to move?
@@ -4723,9 +4840,10 @@ def _route_all(
                     return True
             return False
 
+        nonlocal expansions
         still: list[int] = []
         for index in stranded:
-            if _expired(deadline) or (budget is not None and budget["left"] <= 0):
+            if _expired(deadline) or budget["left"] <= 0:
                 still.append(index)
                 continue
             starts, goals = _ends(index)
@@ -4734,13 +4852,18 @@ def _route_all(
                 None, open_grid,
             )
             canvas.routing_ports = frozenset()
-            if through is None:
+            expansions += through.expansions
+            if through.path is None:
                 # Genuinely nowhere to go even with every belt open. That is a
                 # sealed pocket in the PACK, which repair cannot argue with and
                 # the next height can.
+                search_failures[index] = through
                 still.append(index)
                 continue
-            victims = _leaning({owner[cell] for cell in through if cell in owner})
+            through_path = through.path
+            victims = _leaning(
+                {owner[cell] for cell in through_path if cell in owner}
+            )
             victims.discard(index)
             if len(victims) > _REPAIR_MAX_VICTIMS:
                 still.append(index)
@@ -4769,7 +4892,7 @@ def _route_all(
             #
             # Declining costs nothing this swap was going to keep. A repair that
             # places a net by unlinking it has placed nothing.
-            if _stands_on(index, through, victims):
+            if _stands_on(index, through_path, victims):
                 still.append(index)
                 continue
             # ALL OR NOTHING, and this is the whole difference between a repair
@@ -4786,7 +4909,7 @@ def _route_all(
             saved = {hurt: paths[hurt] for hurt in victims}
             for hurt in victims:
                 _unstake(hurt)
-            _stake(index, through)
+            _stake(index, through_path)
             # The displaced go looking for a way round, longest first for the
             # same reason the round orders that way.
             moved: list[int] = []
@@ -4803,11 +4926,13 @@ def _route_all(
                     deadline, blame, grid,
                 )
                 canvas.routing_ports = frozenset()
-                if again is None:
+                expansions += again.expansions
+                if again.path is None:
                     break
-                _stake(hurt, again)
+                _stake(hurt, again.path)
                 moved.append(hurt)
             if len(moved) == len(victims):
+                search_failures.pop(index, None)
                 continue
             # Roll back to exactly the arrangement we found. The cells every
             # saved path wants are free again the moment the nets that took
@@ -4829,11 +4954,12 @@ def _route_all(
         grid.refresh_history(history)
         pressure = 0.5 * (1.6**it)
         failed = 0
+        search_failures: dict[int, _PathSearchResult] = {}
         #: Cells that CUT the board this round, and how many nets each cut off.
         #:
         #: Fresh every round, because a wall only exists while the path that
         #: built it does; `history` is where the charge accumulates.
-        blame: dict[tuple[int, int, int], float] = {}
+        blame: dict[Cell, float] = {}
         # PROMOTING LAST ROUND'S FAILURES to the front was tried here and is not
         # worth having.
         #
@@ -4864,17 +4990,19 @@ def _route_all(
         stranded: list[int] = []
         for i in order:
             if _expired(deadline):
-                return 0, len(nets), iterations
+                return _budget_result()
             starts, goals = _ends(i)
-            routed = _astar(
+            searched = _astar(
                 canvas, starts, goals, history, pressure, bounds, budget, deadline,
                 blame, grid,
             )
             canvas.routing_ports = frozenset()
-            if routed is None:
+            expansions += searched.expansions
+            if searched.path is None:
+                search_failures[i] = searched
                 stranded.append(i)
                 continue
-            _stake(i, routed)
+            _stake(i, searched.path)
         # AND THE REPAIR, before conceding the round.
         #
         # Repeated while it keeps placing nets, because a displaced net that
@@ -4884,17 +5012,14 @@ def _route_all(
         for _ in range(_REPAIR_PASSES):
             if not stranded or _expired(deadline):
                 break
-            after = _repair(stranded, pressure, blame)
+            after = _repair(stranded, pressure, blame, search_failures)
             if len(after) >= len(stranded):
                 stranded = after
                 break
             stranded = after
         failed = len(stranded)
         if failed == 0:
-            unlinked = _commit_paths(
-                canvas, nets, paths, belt_id, belt_model, src_group, dst_group
-            )
-            return len(paths) - unlinked, unlinked, iterations
+            return _finish(paths, {}, budget_exhausted=False)
         for path in paths.values():
             for cell in path:
                 history[cell] += 1.0
@@ -4943,6 +5068,10 @@ def _route_all(
             # mutated in place by the rip-up and by the repair, so keeping the
             # reference would make "the best round" mean "the last one".
             fewest_failed, stale, best_paths = failed, 0, dict(paths)
+            best_failures = {
+                index: _failure(index, search_failures[index])
+                for index in stranded
+            }
         else:
             stale += 1
         # An exhausted expansion budget ends the search as surely as a stale
@@ -4956,10 +5085,11 @@ def _route_all(
             or _expired(deadline)
         ):
             break
-    unlinked = _commit_paths(
-        canvas, nets, best_paths, belt_id, belt_model, src_group, dst_group
+    return _finish(
+        best_paths,
+        best_failures,
+        budget_exhausted=budget["left"] <= 0 or _expired(deadline),
     )
-    return len(best_paths) - unlinked, fewest_failed + unlinked, iterations
 
 
 def _match_access(
@@ -5169,15 +5299,15 @@ def _reserve_port_access(
 def _commit_paths(
     canvas: _Canvas,
     nets: list[_Net],
-    paths: dict[int, list[tuple[int, int, int]]],
+    paths: Mapping[int, Sequence[Cell]],
     belt_id: int,
     belt_model: int,
     src_group: Mapping[int, tuple[int, ...]] | None = None,
     dst_group: Mapping[int, tuple[int, ...]] | None = None,
-) -> int:
+) -> tuple[int, ...]:
     """Turn reserved cells into real belts, forward-linked source to sink.
 
-    Returns the number of routed nets that could NOT be linked to their source.
+    Returns the indices of routed nets that could not be linked at commit time.
 
     ``src_group`` is the router's own record of which nets share each net's
     SOURCE LANE, and it is the only thing that can tell a legitimate branch from
@@ -5225,7 +5355,7 @@ def _commit_paths(
     # below and get dropped. Silently, until `_commit_paths` learned to count.
     canvas.reserved.clear()
     canvas.routing_ports = frozenset()
-    unlinked = 0
+    unlinked: list[int] = []
     laid: dict[int, list[int]] = {}
     for i, path in paths.items():
         net = nets[i]
@@ -5255,7 +5385,7 @@ def _commit_paths(
                 )
             )
         if not ok or not indices:
-            unlinked += 1
+            unlinked.append(i)
             continue
         for a, b in zip(indices, indices[1:], strict=False):
             canvas.buildings[a] = _relink(canvas.buildings[a], output_obj=b)
@@ -5279,7 +5409,7 @@ def _commit_paths(
         }
         feeder = _source_for(canvas, indices[0], net, set(indices), kin)
         if feeder is None:
-            unlinked += 1
+            unlinked.append(i)
             continue
         excused = _run_cells(canvas, into, feeder) | _run_cells(
             canvas, into, indices[0]
@@ -5287,7 +5417,7 @@ def _commit_paths(
         if not _tap_source(
             canvas, feeder, indices[0], belt_id, belt_model, excused
         ):
-            unlinked += 1
+            unlinked.append(i)
             continue
         # The SINK side is counted exactly like the source side. A path that
         # reached nothing it can hand items to is unrouted, and reporting it as
@@ -5300,12 +5430,12 @@ def _commit_paths(
         }
         sink = _sink_for(canvas, indices[-1], net, set(indices), sink_kin)
         if sink is None:
-            unlinked += 1
+            unlinked.append(i)
             continue
         canvas.buildings[indices[-1]] = _relink(
             canvas.buildings[indices[-1]], output_obj=sink
         )
-    return unlinked
+    return tuple(unlinked)
 
 
 def _source_for(
@@ -5761,12 +5891,11 @@ def _route_external_inputs(
     core: tuple[int, int, int, int],
     deadline: float | None = None,
     budget: dict[str, int] | None = None,
-) -> int:
+) -> DetailedRouteResult:
     """Run every outside input from the block edge to the lane that wants it.
 
-    Returns the number of lanes that could not be reached.  A lane the
-    ``deadline`` ran out on counts as unreached, which is the same refusal any
-    other unreachable lane produces -- never a placement missing an entry run.
+    A lane the deadline or budget ran out on is a structured unknown, never a
+    placement missing an entry run.
 
     Without this, an external input was just a lane wearing a marker icon.  On a
     packed build that lane is frequently WALLED IN -- above it another lane,
@@ -5795,6 +5924,8 @@ def _route_external_inputs(
     # runs already use; a cell on the outermost ring cannot wall anything in,
     # because outward of it is ground no pass can reach.
     astar_bounds = _grow(core, _ENTRY_RING)
+    wanted = {net.dst.belt: net for net in nets}
+    ordered = list(wanted.items())
     starts = list(
         dict.fromkeys(
             cell
@@ -5803,93 +5934,154 @@ def _route_external_inputs(
             if canvas.free(cell)
         )
     )
-    if not starts:
-        return 0
-
-    history: dict[tuple[int, int, int], float] = defaultdict(float)
+    history: dict[Cell, float] = defaultdict(float)
     if budget is None:
         budget = {"left": _ROUTING_BUDGET}
-    wanted = {net.dst.belt: net.dst for net in nets}
-    carried = {net.dst.belt: net.item for net in nets}
-    missed = 0
-    for done, (belt, port) in enumerate(wanted.items()):
-        if _expired(deadline):
-            # Everything still to do is unreached. Counting them rather than
-            # returning what we have is the difference between a refusal and a
-            # placement whose remaining lanes silently have no way in.
-            return missed + len(wanted) - done
-        item = carried[belt]
-        # Spend exactly ONE of this lane's access reservations and leave the
-        # rest held. Every other port's stays held too, so bringing one input in
-        # cannot wall another lane up -- measured as `belt:external` sitting on
-        # the single open side of a lane head, on a canvas that had been clean a
-        # moment earlier.
-        #
-        # Releasing rather than claiming (`routing_ports`) is the point: a lane
-        # that also receives an internal net holds TWO cells, and claiming would
-        # let one straight run take both. The internal net would then be handed
-        # the empty goal set this exists to prevent.
-        mine = next(
-            (c for c, k in canvas.reserved.items() if k == (port.x, port.y)), None
+    routed: list[NetId] = []
+    failures: list[NetFailure] = []
+    expansions = 0
+
+    def net_id(net: _Net) -> NetId:
+        if net.net_id is None:
+            raise ValueError("detailed routing requires stable net IDs")
+        return net.net_id
+
+    def failed(net: _Net, search: _PathSearchResult) -> NetFailure:
+        return NetFailure(
+            net_id(net),
+            search.kind or RouteFailureKind.DYNAMIC_ACCESS,
+            search.wall,
+            (),
+            search.expansions,
         )
-        if mine is not None:
-            del canvas.reserved[mine]
-        # Straight out to the edge first. A lane head sits on the west face of
-        # its strip, so the run west along its own row is usually clear, costs
-        # one belt per tile, and -- unlike a routed path -- cannot compete with
-        # the other input lanes for the margin outside the block. That mattered:
-        # routing six lanes of a six-ingredient strip through a two-tile margin
-        # failed outright, while six parallel straight runs do not interact at
-        # all. It is also what spine does, and for the same reason.
-        path = _straight_to_edge(canvas, port, bounds)
-        if path is None:
-            goals = {
-                (port.x + dx, port.y + dy, 0)
-                for dx, dy in _STEPS
-                if canvas.free((port.x + dx, port.y + dy, 0))
-            }
-            if not goals:
-                missed += 1
-                continue
-            live = [c for c in starts if canvas.free(c)]
-            path = _astar(
-                canvas, live, goals, history, 1.0, astar_bounds, budget, deadline
+
+    if not starts:
+        failures.extend(
+            NetFailure(
+                net_id(net), RouteFailureKind.DYNAMIC_ACCESS, (), (), 0
             )
-        if path is None:
-            missed += 1
-            continue
-        indices: list[int] = []
-        profile = _altitude_profile(path, ramped=canvas.ramped)
-        if profile is None:
-            missed += 1
-            continue
-        for (x, y, lvl), z in zip(path, profile, strict=True):
-            if not canvas.free((x, y, lvl)) or not canvas.free_world(x, y, z):
-                break
-            indices.append(
-                canvas.add(
-                    PlacedBuilding(
-                        item_id=belt_id,
-                        model_index=belt_model,
-                        x=x,
-                        y=y,
-                        z=z,
-                        width=1,
-                        height=1,
-                        carries_item=item,
-                    ),
-                    level=lvl,
+            for _belt, net in ordered
+        )
+    else:
+        for done, (_belt, net) in enumerate(ordered):
+            if _expired(deadline):
+                failures.extend(
+                    NetFailure(
+                        net_id(pending), RouteFailureKind.BUDGET, (), (), 0
+                    )
+                    for _pending_belt, pending in ordered[done:]
                 )
+                break
+            port = net.dst
+            item = net.item
+            # Spend exactly one of this lane's access reservations and leave the
+            # rest held. A shared external/internal lane therefore keeps one
+            # access cell for the later internal net.
+            mine = next(
+                (
+                    cell
+                    for cell, key in canvas.reserved.items()
+                    if key == (port.x, port.y)
+                ),
+                None,
             )
-        if not indices:
-            missed += 1
-            continue
-        for a, b in zip(indices, indices[1:], strict=False):
-            canvas.buildings[a] = _relink(canvas.buildings[a], output_obj=b)
-        canvas.buildings[indices[-1]] = _relink(
-            canvas.buildings[indices[-1]], output_obj=port.belt
+            if mine is not None:
+                del canvas.reserved[mine]
+
+            # Straight runs keep parallel input lanes independent. Only a
+            # blocked straight run pays for A* along the entry ring.
+            path: Sequence[Cell] | None = _straight_to_edge(canvas, port, bounds)
+            if path is None:
+                goals = {
+                    (port.x + dx, port.y + dy, 0)
+                    for dx, dy in _STEPS
+                    if canvas.free((port.x + dx, port.y + dy, 0))
+                }
+                if not goals:
+                    failures.append(
+                        NetFailure(
+                            net_id(net),
+                            RouteFailureKind.DYNAMIC_ACCESS,
+                            (),
+                            (),
+                            0,
+                        )
+                    )
+                    continue
+                live = [cell for cell in starts if canvas.free(cell)]
+                searched = _astar(
+                    canvas,
+                    live,
+                    goals,
+                    history,
+                    1.0,
+                    astar_bounds,
+                    budget,
+                    deadline,
+                )
+                expansions += searched.expansions
+                path = searched.path
+                if path is None:
+                    failures.append(failed(net, searched))
+                    continue
+
+            profile = _altitude_profile(path, ramped=canvas.ramped)
+            if profile is None:
+                failures.append(
+                    NetFailure(
+                        net_id(net), RouteFailureKind.COMMIT_LINK, (), (), 0
+                    )
+                )
+                continue
+            indices: list[int] = []
+            for (x, y, lvl), z in zip(path, profile, strict=True):
+                if not canvas.free((x, y, lvl)) or not canvas.free_world(x, y, z):
+                    break
+                indices.append(
+                    canvas.add(
+                        PlacedBuilding(
+                            item_id=belt_id,
+                            model_index=belt_model,
+                            x=x,
+                            y=y,
+                            z=z,
+                            width=1,
+                            height=1,
+                            carries_item=item,
+                        ),
+                        level=lvl,
+                    )
+                )
+            if not indices:
+                failures.append(
+                    NetFailure(
+                        net_id(net), RouteFailureKind.COMMIT_LINK, (), (), 0
+                    )
+                )
+                continue
+            for a, b in zip(indices, indices[1:], strict=False):
+                canvas.buildings[a] = _relink(canvas.buildings[a], output_obj=b)
+            canvas.buildings[indices[-1]] = _relink(
+                canvas.buildings[indices[-1]], output_obj=port.belt
+            )
+            routed.append(net_id(net))
+
+    status = (
+        DetailedRouteStatus.BUDGET
+        if any(failure.kind is RouteFailureKind.BUDGET for failure in failures)
+        else (
+            DetailedRouteStatus.STRANDED
+            if failures
+            else DetailedRouteStatus.ROUTED
         )
-    return missed
+    )
+    return DetailedRouteResult(
+        status=status,
+        routed=tuple(routed),
+        failures=tuple(failures),
+        iterations=0,
+        expansions=expansions,
+    )
 
 
 class _Unseatable(NoValidLayout):
@@ -6961,6 +7153,13 @@ def _prepare_routing_problem(
     )
 
 
+@dataclass(slots=True)
+class _BuildResult:
+    placement: Placement
+    routing: DetailedRouteResult
+    towers: tuple[PlacedBuilding, ...]
+
+
 def _build(
     spec: BuildSpec,
     strips: list[Strip],
@@ -6970,7 +7169,7 @@ def _build(
     route: bool,
     deadline: float | None = None,
     budget: dict[str, int] | None = None,
-) -> tuple[Placement, int, int]:
+) -> _BuildResult:
     """Emit, wire and power one pack from a fresh prepared workspace."""
     prepared = _prepare_routing_problem(
         spec,
@@ -6994,10 +7193,15 @@ def _build(
         if net.net_id is not None and net.net_id.role is not NetRole.EXTERNAL
     ]
 
+    empty_routing = DetailedRouteResult(
+        DetailedRouteStatus.ROUTED, (), (), 0, 0
+    )
+    external_routing = empty_routing
+    internal_routing = empty_routing
+
     # External inputs retain first claim on routing space.
-    unreachable = 0
     if route:
-        unreachable = _route_external_inputs(
+        external_routing = _route_external_inputs(
             canvas,
             external_nets,
             belt_id,
@@ -7007,9 +7211,8 @@ def _build(
             budget,
         )
 
-    routed, failed, iterations = (0, 0, 0)
     if route and route_nets:
-        routed, failed, iterations = _route_all(
+        internal_routing = _route_all(
             canvas,
             route_nets,
             belt_id,
@@ -7018,7 +7221,27 @@ def _build(
             deadline,
             budget,
         )
-    failed += unreachable
+
+    failures = external_routing.failures + internal_routing.failures
+    routing_status = (
+        DetailedRouteStatus.BUDGET
+        if (
+            external_routing.status is DetailedRouteStatus.BUDGET
+            or internal_routing.status is DetailedRouteStatus.BUDGET
+        )
+        else (
+            DetailedRouteStatus.STRANDED
+            if failures
+            else DetailedRouteStatus.ROUTED
+        )
+    )
+    routing = DetailedRouteResult(
+        status=routing_status,
+        routed=external_routing.routed + internal_routing.routed,
+        failures=failures,
+        iterations=internal_routing.iterations,
+        expansions=external_routing.expansions + internal_routing.expansions,
+    )
 
     # Reservations and tentative markers are attempt-local and are spent before
     # the held power sites become buildings.
@@ -7026,11 +7249,10 @@ def _build(
     for cell in [c for c, owner in canvas.blocked.items() if owner == _TENTATIVE]:
         del canvas.blocked[cell]
     canvas.keep_out.clear()
-    towers = (
+    tower_start = len(canvas.buildings)
+    if power and not routing.failed_count:
         _place_power(canvas, prepared.power_sites)
-        if power and not failed
-        else 0
-    )
+    towers = tuple(canvas.buildings[tower_start:])
 
     # Slot indices are geometry, so they are derived here once rather than at
     # each of the several places a sorter gets created. Every sorter this
@@ -7056,19 +7278,19 @@ def _build(
             "machines": float(spec.machine_count),
             "strips": float(len(strips)),
             "sorters": float(prepared.sorters),
-            "towers": float(towers),
+            "towers": float(len(towers)),
             "spray_coaters": float(prepared.coaters),
             "nets": float(len(route_nets)),
-            "routed": float(routed),
-            "route_failures": float(failed),
-            "repair_iterations": float(iterations),
+            "routed": float(len(internal_routing.routed)),
+            "route_failures": float(routing.failed_count),
+            "repair_iterations": float(routing.iterations),
             "belt_tiles": float(
                 sum(1 for b in canvas.buildings if catalog.is_belt(b.item_id))
             ),
             "direct_inserts": float(prepared.direct_inserts),
         },
     )
-    return placement, failed, towers
+    return _BuildResult(placement, routing, towers)
 
 
 def _bridge(
@@ -7731,9 +7953,10 @@ def fallback_placement(
         y += s.height + MARGIN
     width = max((s.width for s in strips), default=1) + MARGIN
     pack = _Pack(at=at, width=width, height=y, status="fallback")
-    placement, _failed, _towers = _build(
+    result = _build(
         spec, strips, pack, power=power, route=False, ramped=ramped
     )
+    placement = result.placement
     placement.stats["fallback_used"] = 1.0
     placement.stats["solver_status"] = 0.0
     # The fallback stacks strips vertically without ever asking whether two of
@@ -8346,7 +8569,7 @@ class FreeformLayout:
             # coverage for the last net or two, like trading density for it, is
             # buying a green cell with something the build needed.
             try:
-                placement, failed, _towers = _build(
+                result = _build(
                     spec,
                     strips,
                     pack,
@@ -8370,10 +8593,12 @@ class FreeformLayout:
                 if rejected is not None:
                     rejected.add("prolif.sprayed_cargo_reaches_machines")
                 continue
+            failed = result.routing.failed_count
             if attempts is not None:
                 attempts.append(failed)
             if failed:
                 continue
+            placement = result.placement
             # AND THE PLACEMENT HAS TO PASS OUR OWN VALIDATOR BEFORE IT COUNTS.
             #
             # `lay_out` promises a valid `Placement` or `NoValidLayout`, and
