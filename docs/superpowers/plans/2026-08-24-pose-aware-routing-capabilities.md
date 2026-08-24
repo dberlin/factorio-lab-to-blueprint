@@ -156,7 +156,7 @@ git commit -m "Fix sequence feedback and promotion evidence"
 
 **Interfaces:**
 - Consumes: clean final `game-rules` branch SHA.
-- Produces: one branch containing authoritative pose/slot/serializer/altitude interfaces plus current sequence solver.
+- Produces: one branch containing authoritative pose/slot/collider-pitch/serializer/altitude interfaces plus current sequence solver.
 
 - [ ] **Step 1: Verify the source branch is clean and committed**
 
@@ -176,7 +176,7 @@ git merge --no-ff game-rules -m "Merge authoritative game rules"
 
 - [ ] **Step 4: Resolve conflicts by interface authority**
 
-Preserve game-rules catalog pose data, slot assignment, serializer, altitude, and validation behavior. Preserve sequence solver prepared/global/detailed/feedback/budget behavior. Shared freeform preparation/emission must call authoritative helpers rather than retain parallel logic.
+Preserve game-rules catalog pose data, collider-derived world/grid placement pitch, slot assignment, serializer, altitude, and validation behavior. Preserve sequence solver prepared/global/detailed/feedback/budget behavior. Shared freeform preparation/emission must call authoritative helpers rather than retain parallel logic.
 
 - [ ] **Step 5: Run merged focused tests**
 
@@ -196,8 +196,8 @@ Do not rewrite source branch commits.
 - Modify: `src/flab2bp/layout/freeform.py`
 
 **Interfaces:**
-- Consumes: authoritative catalog poses, oriented footprints, logical strip lanes/shards.
-- Produces: `StripFamilyId`, `StripInstanceId`, `LogicalLane`, `LaneAttachmentPlan`, `LanePlan`, `StripVariant`, `StripFamily`, and `generate_strip_families(spec)`.
+- Consumes: authoritative catalog poses, oriented footprints, collider-derived placement geometry, logical strip lanes/shards.
+- Produces: `MachinePlacementGeometry`, `StripFamilyId`, `StripInstanceId`, `LogicalLane`, `LaneAttachmentPlan`, `LanePlan`, `StripVariant`, `StripFamily`, and `generate_strip_families(spec)`.
 
 - [ ] **Step 1: Write failing refinery pose tests**
 
@@ -212,8 +212,24 @@ def test_rotated_refinery_variant_serves_both_lane_sides() -> None:
     family = refinery_family(required_above=True, required_below=True)
     rotated = variants_at_yaw(family, 90.0)
     assert rotated
-    assert all(variant.machine_width == 7 and variant.machine_height == 3 for variant in rotated)
+    assert all(variant.footprint_width == 7 and variant.footprint_height == 3 for variant in rotated)
+
+
+def test_equal_footprints_can_require_different_machine_pitch() -> None:
+    smelter = placement_geometry("arc-smelter", yaw=0.0)
+    assembler = placement_geometry("assembling-machine-1", yaw=0.0)
+    assert (smelter.footprint_width, assembler.footprint_width) == (3, 3)
+    assert smelter.pitch_x == 3
+    assert assembler.pitch_x == 4
+
+
+def test_machine_row_origins_advance_by_pitch_and_reserve_edge_halo() -> None:
+    variant = assembler_variant(machine_count=3)
+    assert variant.machine_origins_x == (0, 4, 8)
+    assert variant.box_width >= 12
+    assert no_collider_envelopes_overlap(variant)
 ```
+
 
 - [ ] **Step 2: Run and verify missing strip-variant module**
 
@@ -223,11 +239,11 @@ Expected: collection failure.
 
 - [ ] **Step 3: Implement immutable family/variant identities**
 
-Machine ranges are half-open stable ordinal intervals. Variant identity includes yaw, oriented dimensions, lane rows, attachments, and direct geometry.
+Machine ranges are half-open stable ordinal intervals on `StripInstance`; the logical family owns only `total_machine_count`. Variant identity includes yaw, oriented footprint, collider pitch/halos, lane rows, attachments, and box geometry.
 
 - [ ] **Step 4: Generate cardinal pose candidates from the slot table**
 
-Evaluate `0, 90, 180, 270` through catalog/slot transforms. Reject poses that cannot serve the required sides. Deduplicate exact physical variants and sort deterministically.
+Evaluate `0, 90, 180, 270` through catalog/slot transforms. Compute authoritative oriented placement geometry, advance repeated machine origins by pitch, reserve collider halos, reject poses that cannot serve required sides, deduplicate exact physical variants, and sort deterministically.
 
 - [ ] **Step 5: Bridge existing strip planning**
 
@@ -273,6 +289,7 @@ def test_chemical_lane_closer_uses_real_inner_anchor() -> None:
 - [ ] **Step 2: Write failing planning/emission identity test**
 
 Plan a lane, emit the strip, and assert every sorter machine endpoint equals the precomputed attachment cell/slot/span for that machine and lane.
+Lane rows must lie outside the pose-derived collider exclusion envelope; a slot-reachable row that physically overlaps the collider is infeasible.
 
 - [ ] **Step 3: Enumerate exact lane side profiles**
 
@@ -304,7 +321,7 @@ git commit -m "Seat lanes from machine slot poses"
 
 **Interfaces:**
 - Consumes: `StripFamily` variant tables.
-- Produces: variant indices in `PlacementProblem`, `AnnealState`, `PlacementKey`, decoder size lookup, and `MoveKind.CHANGE_VARIANT`.
+- Produces: variant indices in fixed-cardinality `PlacementProblem`/`AnnealState`/`PlacementKey`, selected-size decoding, and `MoveKind.CHANGE_VARIANT`. Direct targets are derived from the complete selected producer/consumer variant set after decoding.
 
 - [ ] **Step 1: Write failing atomic variant test**
 
@@ -345,6 +362,8 @@ git commit -m "Search pose-aware strip variants"
 - Modify: `src/flab2bp/layout/strip_variants.py`
 - Modify: `src/flab2bp/layout/sequence_pair.py`
 - Modify: `src/flab2bp/layout/route_feedback.py`
+- Modify: `src/flab2bp/layout/sequence_solver.py`
+- Modify: `src/flab2bp/layout/freeform.py`
 - Modify: focused tests
 
 **Interfaces:**
@@ -353,15 +372,15 @@ git commit -m "Search pose-aware strip variants"
 
 - [ ] **Step 1: Write machine-conservation property tests**
 
-For generated family sizes 1–12, apply deterministic split/merge sequences and assert machine ordinal union equals the original range, intersections are empty, and lane/rate totals are unchanged.
+For generated family sizes 1–12, apply deterministic stage-boundary split/merge sequences and assert machine ordinal union equals the original range, intersections are empty, and lane/rate totals are unchanged.
 
 - [ ] **Step 2: Write feedback-driven split test**
 
-A stranded net implicating a multi-machine strip after focused variant stagnation must create two child ranges and select pose-valid variants; unrelated strips retain order/state.
+A stranded net implicating a multi-machine strip after focused variant stagnation must create two child ranges and select pose-valid variants; unrelated strips retain order/state. The next stage receives a rebuilt fixed-cardinality problem matching the child instances.
 
 - [ ] **Step 3: Implement split state transformation**
 
-Replace parent in both permutations, variant/gap arrays, and physical net mapping. Preserve stage seed and deterministic insertion order.
+At a stage boundary, replace the parent in both permutations, variant/gap arrays, physical net mapping, prepared adapter inputs, and feedback endpoint map; then construct the next fixed-cardinality `PlacementProblem`. Never change cardinality during `anneal_stage`. Preserve the completed stage index, restart seed, and deterministic insertion order.
 
 - [ ] **Step 4: Implement exact inverse merge**
 
@@ -485,6 +504,7 @@ git commit -m "Integrate pose-aware closed-loop search"
 - [ ] **Step 1: Run focused capability suites**
 
 Run slot/catalog/strip-variant/sequence/global/freeform/validator tests.
+Include collider/pitch tests proving the 3×3 Smelter pitch 3 and 3×3 Assembler pitch 4 distinction, repeated-origin pitch, and strip/lane halo exclusion.
 
 - [ ] **Step 2: Run full static and test verification**
 

@@ -34,6 +34,7 @@ Only committed/finalized game-rule interfaces may be merged. Uncommitted integra
 
 - Rotate machines only through poses supported by authoritative pose geometry.
 - Let sequence-pair SA choose orientation with rectangle dimensions, port geometry, and lane seating as one atomic variant.
+- Separate catalog footprint from game-derived collider envelope and integer placement pitch; repeated machines and adjacent strips must not overlap world-space colliders.
 - Preserve regular shared lanes by keeping every physical strip pose-homogeneous.
 - Allow LNS to split a logical strip into pose-homogeneous child strips when one pose is insufficient or routing feedback implicates it.
 - Determine every lane row and sorter anchor from actual attachable slot poses.
@@ -67,7 +68,30 @@ Catalog buildings expose immutable game-extracted slot poses. Pose transforms pr
 
 Search, lane planning, emission, and validation consume the same helpers. No phase may independently reinterpret a pose.
 
-### 5.2 Addon supply poses
+### 5.2 Collider envelopes and placement pitch
+
+The game-rule catalog exposes one authoritative world-to-grid placement geometry per building pose:
+
+```python
+@dataclass(frozen=True, slots=True)
+class MachinePlacementGeometry:
+    footprint_width: int
+    footprint_height: int
+    pitch_x: int
+    pitch_y: int
+    west_halo: int
+    east_halo: int
+    north_halo: int
+    south_halo: int
+```
+
+One grid tile is `2π/5` world units. Pitch is derived from the oriented collider dimensions, not from footprint tile count. The confirmed discriminator is an Arc Smelter with 3×3 footprint and pitch 3 versus an Assembling Machine Mk.I with the same 3×3 footprint but pitch 4 because its 3.82-world-unit collider exceeds three tiles (`3 × 2π/5 ≈ 3.770`).
+
+The solver consumes a catalog/game-rule helper for this conversion. It does not copy collider constants or perform building-name checks.
+
+For a uniform row of `n` machines, origins advance by `pitch_x`, not footprint width. The machine band and strip exclusion envelope include the pose-derived edge halos so machines in another strip and adjacent lane belts cannot enter the collider. Footprint remains the building record's occupied/anchor geometry; pitch/envelope is placement exclusion geometry.
+
+### 5.3 Addon supply poses
 
 Add an immutable catalog representation for game-extracted addon supply poses when the finalized game-rules branch does not already provide one:
 
@@ -95,14 +119,13 @@ class StripFamily:
     group_key: str
     recipe_id: str
     machine_item_id: int
-    machine_start: int
-    machine_count: int
+    total_machine_count: int
     input_lanes: tuple[LogicalLane, ...]
     output_lanes: tuple[LogicalLane, ...]
     variants: tuple[StripVariant, ...]
 ```
 
-`machine_start..machine_start + machine_count` is a stable ordinal range inside the recipe group. Ranges partition every machine exactly once.
+`StripFamily` owns the immutable logical group/shard and its total machine count. Changing half-open machine ordinal ranges live only on `StripInstance`; active instance ranges must partition `0..total_machine_count` exactly once.
 
 ### 6.2 Pose-specific strip variant
 
@@ -113,16 +136,20 @@ class StripFamily:
 class StripVariant:
     variant_id: StripVariantId
     yaw: float
-    machine_width: int
-    machine_height: int
+    footprint_width: int
+    footprint_height: int
+    pitch_x: int
+    pitch_y: int
+    placement_geometry: MachinePlacementGeometry
     lane_plan: LanePlan
     box_width: int
     box_height: int
     attachment_plan: tuple[LaneAttachmentPlan, ...]
-    direct_targets: tuple[DirectInsertTarget, ...]
 ```
 
 Changing variant changes orientation, oriented footprint, lane rows, exact sorter anchors/spans, and sequence-pair rectangle dimensions together. A caller cannot combine the footprint from one pose with anchors from another.
+
+Direct-insert targets are derived from the complete selected instance/variant set because their geometry depends on both producer and consumer variants. They are not intrinsic fields of either endpoint variant.
 
 ### 6.3 Physical strip instance
 
@@ -135,15 +162,16 @@ Physical routing `NetId`s include the current instance identity. Feedback net cr
 For each strip family:
 
 1. Evaluate cardinal yaws `0°, 90°, 180°, 270°` through authoritative pose transforms.
-2. Compute the oriented footprint.
-3. Enumerate feasible lane seating plans for the required logical lanes.
-4. For every prospective lane row, compute legal attachments for a representative oriented machine.
-5. Require enough distinct attachable columns for all items sharing that lane.
-6. Require every attachment span to be inside sorter reach and choose sorter tier from the actual span.
-7. Apply the same relative attachment plan to every machine in the uniform strip.
-8. Reject any pose/seating combination that leaves a required lane or machine unattached.
-9. Deduplicate variants with identical yaw, lane rows, attachment geometry, and box dimensions.
-10. Sort variants deterministically by area, yaw, lane rows, and attachment fields.
+2. Compute the oriented footprint and collider-derived placement geometry.
+3. Compute machine origins using oriented pitch and reserve the full collider envelope.
+4. Enumerate feasible lane seating plans for the required logical lanes outside that envelope.
+5. For every prospective lane row, compute legal attachments for a representative oriented machine.
+6. Require enough distinct attachable columns for all items sharing that lane.
+7. Require every attachment span to be inside sorter reach and choose sorter tier from the actual span.
+8. Apply the same relative attachment plan and pitch to every machine in the uniform strip.
+9. Reject any pose/seating combination that leaves a required lane or machine unattached or overlaps a collider envelope.
+10. Deduplicate variants with identical yaw, placement geometry, lane rows, attachments, and box dimensions.
+11. Sort variants deterministically by area, yaw, lane rows, and attachment fields.
 
 An upright Oil Refinery variant with no north-facing pose is rejected when north service is required. Rotated variants are admitted only when their transformed poses provide every required attachment.
 
@@ -170,12 +198,12 @@ Emission consumes the precomputed `LaneAttachmentPlan`. It does not recompute a 
 
 `PlacementProblem` stores one variant table per physical strip instance. `AnnealState` gains a variant index per sequence-pair member.
 
-New moves:
+Within a fixed-cardinality temperature stage, moves are:
 
 - change one strip to another pose-valid variant;
-- split one instance at a stable machine-range boundary into two pose-homogeneous instances;
-- merge adjacent compatible ranges;
-- existing permutation, insertion, gap, and LNS moves.
+- existing permutation, insertion, gap, and local LNS moves.
+
+Split and merge are stage-boundary LNS transformations. They rebuild the `PlacementProblem`, both permutations, physical nets, prepared geometry inputs, and feedback endpoint mapping before the next fixed-cardinality SA stage. They never change cardinality inside `anneal_stage`.
 
 The decoder reads dimensions from the selected variant. `PlacementKey`, cache identity, elite identity, and exact state equality include instance ranges and variant indices.
 
@@ -273,6 +301,9 @@ These are correctness fixes, not performance work.
 - A rotated pose-valid refinery variant serves required lanes and swaps oriented footprint dimensions.
 - Variant moves update dimensions, lane plans, attachments, and placement key atomically.
 - No emitted sorter uses geometry from a different variant.
+- Arc Smelter 3×3 rows retain pitch 3; Assembling Machine Mk.I 3×3 rows use pitch 4 from collider geometry.
+- Repeated machine origins advance by pitch, and strip/lane exclusion respects pose-derived collider halos.
+- A footprint-equal but collider-overlapping arrangement is rejected before routing.
 
 ### Lane reach
 
