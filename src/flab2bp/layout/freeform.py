@@ -4068,15 +4068,36 @@ def _claim_power_sites(canvas: _Canvas, core: tuple[int, int, int, int]) -> list
     coaters draw power, and all of those are inside ``core``, so the lattice is
     laid over the core rather than over the finished bounding box -- the entry
     ring holds nothing but belts, which are unpowered.
+
+    THE LATTICE IS CLAMPED TO THE CORE, and that is the whole of the east and
+    south edge story.  The walk has to pass ``max`` to cover the last strip of
+    tiles -- stopping at the last point at or before it would leave a band up to
+    ``TOWER_SPACING`` deep closer to the edge than to any point -- so it steps
+    to ``max + half``.  It used to place the point THERE and then discard it
+    when ``_nearest_free`` could not drag it back inside the core, which is a
+    point that never had a chance: it is generated outside, searched from
+    outside, and rejected for being outside.  Measured across the four hardest
+    specs, that phantom row and column was about FOUR FIFTHS of every lattice
+    point the claim failed to place -- and each one is a hole the coverage
+    repair then had to fill after routing, from whatever ground was left.
+
+    Clamping asks for the same coverage at a point that can actually be claimed.
+    It only ever moves a point INWARD, so the spacing to its neighbour shrinks
+    and the covering argument in ``TOWER_SPACING`` holds a fortiori; the last
+    row can land close to the one before it, which costs a tower and buys an
+    edge that is covered by construction instead of by repair.
     """
     min_x, min_y, max_x, max_y = core
     half = TOWER_SPACING // 2
     sites: list[tuple[int, int]] = []
+    seen: set[tuple[int, int]] = set()
     y = min_y + half
     while y <= max_y + half:
         x = min_x + half
         while x <= max_x + half:
-            spot = _nearest_free(canvas, x, y, 4)
+            # Clamped, not clipped. See the docstring: a point past the face is
+            # asking for the edge to be covered, and the edge is inside.
+            spot = _nearest_free(canvas, min(x, max_x), min(y, max_y), 4)
             # Strictly inside the core. A lattice point near the east or south
             # face can be displaced onto the entry ring, and the ring belongs to
             # the input runs: a tower standing in one would break the straight
@@ -4086,7 +4107,8 @@ def _claim_power_sites(canvas: _Canvas, core: tuple[int, int, int, int]) -> list
                 min_x <= spot[0] <= max_x and min_y <= spot[1] <= max_y
             ):
                 spot = None
-            if spot is not None:
+            if spot is not None and spot not in seen:
+                seen.add(spot)
                 sites.append(spot)
                 canvas.keep_out.add(spot)
             x += TOWER_SPACING
