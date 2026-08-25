@@ -63,6 +63,7 @@ from flab2bp.layout.sequence_pair import (
 from flab2bp.layout.strip_variants import (
     StripInstanceId,
     StripVariant,
+    StripVariantId,
     default_strip_variant,
     generate_strip_families,
     partition_strip_family,
@@ -248,6 +249,12 @@ class StageStats:
     lns_size: int
     exact_key: tuple[int, int] | None
     validation_failures: tuple[str, ...]
+    variant_moves: int
+    selected_instance_ids: tuple[StripInstanceId, ...]
+    selected_variant_ids: tuple[StripVariantId, ...]
+    selected_pose_yaws: tuple[float, ...]
+    split_count: int
+    merge_count: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -428,6 +435,7 @@ class SequenceSolver[PreparedT]:
         restart: _RestartState,
         allowance: int,
     ) -> tuple[int, bool]:
+        stage_start = restart.anneal
         problem = height_state.problem
         context = feedback_cost_context(
             height_state.feedback,
@@ -520,7 +528,13 @@ class SequenceSolver[PreparedT]:
             restart.feedback_stagnation = 0
         restart.failure_signature = signature
         neighbourhood = frozenset[int]()
-        next_anneal = annealed.final_state
+        next_anneal = AnnealState(
+            pair=selected.state.pair,
+            gaps=selected.state.gaps,
+            base_seed=restart.seed,
+            stage_index=annealed.final_state.stage_index,
+            variant_indices=selected.state.variant_indices,
+        )
         if 0 < detailed.routing.failed_count <= 3:
             neighbourhood = _lns_neighbourhood(
                 detailed.routing, selected.state, problem, selected.decoded
@@ -540,6 +554,8 @@ class SequenceSolver[PreparedT]:
                     stage_index=annealed.final_state.stage_index,
                     variant_indices=repaired.variant_indices,
                 )
+        split_count = 0
+        merge_count = 0
         if self.stage_boundary_transform is not None and signature:
             transformed = self.stage_boundary_transform(
                 height_state.height,
@@ -570,6 +586,9 @@ class SequenceSolver[PreparedT]:
                     other.feedback_stagnation = 0
                 height_state.problem = transformed.problem
                 next_anneal = transformed.state
+                cardinality_delta = transformed.problem.size - problem.size
+                split_count = max(0, cardinality_delta)
+                merge_count = max(0, -cardinality_delta)
                 height_state.feedback = remap_feedback_nets(
                     height_state.feedback,
                     (),
@@ -584,6 +603,27 @@ class SequenceSolver[PreparedT]:
         height_state.stranded = detailed.routing.failed_count
         height_state.global_overflow = selected.result.total_overflow
         height_state.estimated_area = selected.decoded.width * height_state.height
+        selected_variant_ids = problem.selected_variant_ids(
+            selected.state.variant_indices
+        )
+        selected_pose_yaws = (
+            tuple(
+                problem.variant(strip, variant).yaw
+                for strip, variant in enumerate(selected.state.variant_indices)
+            )
+            if problem.variant_tables
+            else ()
+        )
+        stage_start_variants = stage_start.variant_indices or (0,) * problem.size
+        selected_variants = selected.state.variant_indices or (0,) * problem.size
+        variant_moves = sum(
+            before != after
+            for before, after in zip(
+                stage_start_variants,
+                selected_variants,
+                strict=True,
+            )
+        )
         self._stage_stats.append(
             StageStats(
                 height=height_state.height,
@@ -599,6 +639,12 @@ class SequenceSolver[PreparedT]:
                 lns_size=len(neighbourhood),
                 exact_key=exact_key,
                 validation_failures=validation_failures,
+                variant_moves=variant_moves,
+                selected_instance_ids=problem.instance_ids,
+                selected_variant_ids=selected_variant_ids,
+                selected_pose_yaws=selected_pose_yaws,
+                split_count=split_count,
+                merge_count=merge_count,
             )
         )
         return spent, False
@@ -856,6 +902,8 @@ class _ProductionTelemetry:
     best_stranded: int | None = None
     feedback_nets: int = 0
     feedback_cells: int = 0
+    pose_feasibility_rejects: int = 0
+    elevated_coater_routes: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -1196,6 +1244,11 @@ def _production_run(
             if telemetry.best_stranded is None
             else min(telemetry.best_stranded, result.routing.failed_count)
         )
+        if result.routing.status is DetailedRouteStatus.ROUTED:
+            telemetry.elevated_coater_routes = max(
+                telemetry.elevated_coater_routes,
+                len(candidate.prepared.coater_supply_ports),
+            )
         return result
 
     def certify(placement: Placement) -> ValidationVerdict:
@@ -1215,6 +1268,10 @@ def _production_run(
         family.family_id: family
         for family in generate_strip_families(spec)
     }
+    telemetry.pose_feasibility_rejects = sum(
+        4 - len({variant.yaw for variant in family.variants})
+        for family in family_by_id.values()
+    )
 
     def split_stage(
         height: int,
@@ -1388,6 +1445,15 @@ def _with_observational_stats(
     stage_count = len(result.stages)
     lns_sizes = tuple(stage.lns_size for stage in result.stages)
     belt_tiles = _exact_key(placement)[1]
+    exact_stage = next(
+        (stage for stage in result.stages if stage.exact_key == result.exact_key),
+        None,
+    )
+    pose_yaws = exact_stage.selected_pose_yaws if exact_stage is not None else ()
+    pose_counts = {
+        yaw: sum(selected == yaw for selected in pose_yaws)
+        for yaw in (0.0, 90.0, 180.0, 270.0)
+    }
     stats: dict[str, object] = dict(placement.stats)
     stats.update(
         {
@@ -1411,6 +1477,16 @@ def _with_observational_stats(
             "feedback_nets": float(telemetry.feedback_nets),
             "feedback_cells": float(telemetry.feedback_cells),
             "feedback_decays": float(stage_count),
+            "variant_moves": float(sum(stage.variant_moves for stage in result.stages)),
+            "pose_count": float(len(pose_yaws)),
+            "pose_yaw_0": float(pose_counts[0.0]),
+            "pose_yaw_90": float(pose_counts[90.0]),
+            "pose_yaw_180": float(pose_counts[180.0]),
+            "pose_yaw_270": float(pose_counts[270.0]),
+            "split_count": float(sum(stage.split_count for stage in result.stages)),
+            "merge_count": float(sum(stage.merge_count for stage in result.stages)),
+            "pose_feasibility_rejects": float(telemetry.pose_feasibility_rejects),
+            "elevated_coater_routes": float(telemetry.elevated_coater_routes),
             "planning_time_s": telemetry.planning_time_s,
             "placement_time_s": max(0.0, total_time_s - adapter_time_s),
             "preparation_time_s": telemetry.preparation_time_s,

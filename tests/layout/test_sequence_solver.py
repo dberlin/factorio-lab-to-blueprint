@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
+from fractions import Fraction
 from typing import cast
 
 import pytest
@@ -10,9 +11,10 @@ import pytest
 import flab2bp.layout.freeform as freeform_module
 import flab2bp.layout.sequence_solver as sequence_solver_module
 from flab2bp.bench.corpus import entry
+from flab2bp.dsp import catalog
 from flab2bp.lab.data import load_vendored
 from flab2bp.lab.url import parse_url
-from flab2bp.layout import validate
+from flab2bp.layout import slots, validate
 from flab2bp.layout.base import NoValidLayout, PlacedBuilding, Placement
 from flab2bp.layout.freeform import (
     _box,
@@ -87,8 +89,8 @@ from flab2bp.layout.strip_variants import (
     variants_for_count,
 )
 from flab2bp.rates.candidates import build_candidates
-from flab2bp.spec import BuildSpec
-from tests.layout.test_freeform import two_stage_spec
+from flab2bp.spec import BuildSpec, MachineGroup
+from tests.layout.test_freeform import proliferated_spec, two_stage_spec
 
 Prepared = tuple[int, DecodedPlacement]
 
@@ -1049,6 +1051,8 @@ def test_feedback_stagnation_rebuilds_the_next_fixed_cardinality_stage() -> None
         solver._heights[0].restarts[0].anneal.base_seed
         == solver._heights[0].restarts[0].seed
     )
+    assert sum(stage.split_count for stage in solver._stage_stats) == 1
+    assert sum(stage.merge_count for stage in solver._stage_stats) == 0
     assert solver._heights[0].restarts[0].anneal.stage_index == 3
 
 
@@ -1085,6 +1089,16 @@ def test_sequence_backend_returns_only_certified_placements(power: bool) -> None
         "lns_total_size",
         "feedback_nets",
         "feedback_cells",
+        "variant_moves",
+        "pose_count",
+        "pose_yaw_0",
+        "pose_yaw_90",
+        "pose_yaw_180",
+        "pose_yaw_270",
+        "split_count",
+        "merge_count",
+        "pose_feasibility_rejects",
+        "elevated_coater_routes",
         "lns_max_size",
         "feedback_decays",
         "placement_time_s",
@@ -1725,4 +1739,313 @@ def test_lns_continues_from_the_proxy_selected_elite(
         gaps=repaired.gaps,
         base_seed=anneal_inputs[0].base_seed,
         stage_index=1,
+    )
+
+
+def _single_real_machine_spec(
+    *,
+    recipe: str,
+    machine: str,
+    inputs: tuple[str, ...],
+    outputs: tuple[str, ...],
+) -> BuildSpec:
+    one = Fraction(1)
+    return BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id=recipe,
+                machine_item_id=machine,
+                count=1,
+                inputs_per_machine={item: one for item in inputs},
+                outputs_per_machine={item: one for item in outputs},
+            ),
+        ),
+        external_inputs={item: one for item in inputs},
+        outputs={item: one for item in outputs},
+        belt_item_id="conveyor-belt-3",
+        belt_items_per_second=Fraction(30),
+        label=f"sequence-{machine}",
+    )
+
+
+def test_refinery_closed_loop_routes_the_selected_rotated_pose() -> None:
+    spec = _single_real_machine_spec(
+        recipe="plasma-refining",
+        machine="oil-refinery",
+        inputs=("crude-oil",),
+        outputs=("refined-oil", "hydrogen"),
+    )
+
+    placement = SequencePairLayout(config=SequenceSolverConfig.test()).lay_out(
+        spec,
+        time_budget_s=2.0,
+    )
+
+    refinery = next(building for building in placement.buildings if building.item_id == 2308)
+    assert refinery.yaw in {90.0, 270.0}
+    assert not validate.certify(placement, spec, expect_power=False).errors
+    assert placement.stats["detailed_routes"] >= 1.0
+    assert placement.stats["pose_count"] == 1.0
+    assert (
+        placement.stats["pose_yaw_90"] + placement.stats["pose_yaw_270"]
+    ) == 1.0
+    assert placement.stats["pose_feasibility_rejects"] >= 1.0
+
+
+def test_chemical_closed_loop_emits_exact_inner_anchor_sorters() -> None:
+    spec = _single_real_machine_spec(
+        recipe="graphene-advanced",
+        machine="chemical-plant",
+        inputs=("fire-ice",),
+        outputs=("graphene", "hydrogen"),
+    )
+
+    placement = SequencePairLayout(config=SequenceSolverConfig.test()).lay_out(
+        spec,
+        time_budget_s=2.0,
+    )
+
+    machine_index, machine = next(
+        (index, building)
+        for index, building in enumerate(placement.buildings)
+        if building.item_id == 2309
+    )
+    machine_cells: list[tuple[int, int]] = []
+    for sorter in (
+        building
+        for building in placement.buildings
+        if catalog.is_sorter(building.item_id)
+        and (
+            building.output_obj == machine_index
+            or building.input_obj == machine_index
+        )
+    ):
+        assert sorter.x2 is not None and sorter.y2 is not None
+        if sorter.output_obj == machine_index:
+            far = (sorter.x, sorter.y)
+            machine_cell = (sorter.x2, sorter.y2)
+            slot = sorter.output_to_slot
+        else:
+            far = (sorter.x2, sorter.y2)
+            machine_cell = (sorter.x, sorter.y)
+            slot = sorter.input_from_slot
+        attachment = slots.attachment(machine, far)
+        assert attachment is not None
+        assert attachment.cell == machine_cell
+        assert attachment.slot == slot
+        assert attachment.span == max(
+            abs(sorter.x - sorter.x2),
+            abs(sorter.y - sorter.y2),
+        )
+        machine_cells.append(machine_cell)
+
+    assert machine_cells
+    assert any(
+        machine.x < x < machine.x + machine.width - 1
+        and machine.y < y < machine.y + machine.height - 1
+        for x, y in machine_cells
+    )
+    assert not validate.certify(placement, spec, expect_power=False).errors
+    assert placement.stats["pose_count"] == 1.0
+
+
+def test_proliferated_closed_loop_routes_elevated_supply_without_coater_sorter() -> None:
+    spec = proliferated_spec()
+
+    placement = SequencePairLayout(config=SequenceSolverConfig.test()).lay_out(
+        spec,
+        time_budget_s=2.0,
+    )
+
+    coaters = {
+        index: building
+        for index, building in enumerate(placement.buildings)
+        if building.item_id == catalog.SPRAY_COATER_ID
+    }
+    assert coaters
+    assert all(
+        building.output_obj not in coaters and building.input_obj not in coaters
+        for building in placement.buildings
+        if catalog.is_sorter(building.item_id)
+    )
+    for coater in coaters.values():
+        target = slots.addon_supply_cell(
+            coater.item_id,
+            x=coater.x,
+            y=coater.y,
+            z=coater.z,
+            yaw=coater.yaw,
+            area=1,
+        )
+        assert any(
+            (building.x, building.y, building.z)
+            == (target[0], target[1], Fraction(target[2]))
+            and building.carries_item in spec.external_inputs
+            for building in placement.buildings
+            if catalog.is_belt(building.item_id)
+        )
+    assert not validate.certify(placement, spec, expect_power=False).errors
+    assert placement.stats["elevated_coater_routes"] == float(len(coaters))
+
+
+def test_impossible_elevated_coater_route_refuses_without_partial(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = proliferated_spec()
+    original_prepare = _prepare_routing_problem
+    original_detailed = sequence_solver_module._route_detailed_candidate
+    detailed_results: list[DetailedStageResult] = []
+
+    def blocked_prepare(*args: object, **kwargs: object) -> _PreparedRoutingProblem:
+        prepared = original_prepare(*args, **kwargs)  # type: ignore[arg-type]
+        blocked = dict(prepared.blocked)
+        for port in prepared.coater_supply_ports:
+            for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                blocked[(port.x + dx, port.y + dy, port.z)] = -1
+        return replace(prepared, blocked=tuple(sorted(blocked.items())))
+
+    def recording_detailed(*args: object, **kwargs: object) -> DetailedStageResult:
+        result = original_detailed(*args, **kwargs)  # type: ignore[arg-type]
+        detailed_results.append(result)
+        return result
+
+    monkeypatch.setattr(sequence_solver_module, "_prepare_routing_problem", blocked_prepare)
+    monkeypatch.setattr(sequence_solver_module, "_route_detailed_candidate", recording_detailed)
+
+    with pytest.raises(NoValidLayout):
+        SequencePairLayout(config=SequenceSolverConfig.test()).lay_out(
+            spec,
+            time_budget_s=2.0,
+        )
+
+    assert detailed_results
+    assert all(result.placement is None for result in detailed_results)
+    assert any(
+        failure.net_id.role is NetRole.PROLIFERATOR
+        for result in detailed_results
+        for failure in result.routing.failures
+    )
+
+
+def test_broad_feedback_continues_from_routed_elite_variant_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _spec, _strips, problem = _two_stage_variant_problem()
+    anneal_inputs: list[AnnealState] = []
+    routed_states: list[AnnealState] = []
+
+    def incumbent(state: AnnealState, scalar: float) -> AnnealIncumbent:
+        decoded = decode_state(problem, state)
+        sizes = problem.selected_sizes(state.variant_indices)
+        return AnnealIncumbent(
+            state=state,
+            decoded=decoded,
+            energy=SearchEnergy(0, scalar),
+            key=PlacementKey(
+                x=decoded.x,
+                y=decoded.y,
+                dimensions=sizes,
+                east_gaps=state.gaps.east,
+                north_gaps=state.gaps.north,
+                instance_ids=problem.instance_ids,
+                variant_ids=problem.selected_variant_ids(state.variant_indices),
+            ),
+        )
+
+    def fake_anneal_stage(
+        stage_problem: PlacementProblem,
+        state: AnnealState,
+        config: object,
+        context: PlacementCostContext | None = None,
+        *,
+        direct_targets_for_state: object = None,
+    ) -> AnnealStageResult:
+        del stage_problem, config, context, direct_targets_for_state
+        anneal_inputs.append(state)
+        if len(anneal_inputs) == 1:
+            selected = replace(state, variant_indices=(1, 0))
+            final = replace(state, stage_index=state.stage_index + 1)
+            routed_states.append(selected)
+            return AnnealStageResult(
+                final_state=final,
+                incumbent=incumbent(final, 0.0),
+                accepted_moves=1,
+                elites=(incumbent(final, 0.0), incumbent(selected, 1.0)),
+            )
+        next_state = replace(state, stage_index=state.stage_index + 1)
+        only = incumbent(state, 0.0)
+        return AnnealStageResult(next_state, only, 0, (only,))
+
+    monkeypatch.setattr(sequence_solver_module, "anneal_stage", fake_anneal_stage)
+
+    failures = tuple(
+        NetFailure(
+            net_id=NetId(0, 1, f"item-{index}", NetRole.INTERNAL, index),
+            kind=RouteFailureKind.CONGESTION_WALL,
+            wall=((index, 0, 0),),
+            blocking_nets=(),
+            expansions=0,
+        )
+        for index in range(4)
+    )
+    detailed_calls = 0
+
+    def global_route(
+        decoded: DecodedPlacement,
+        feedback: FeedbackState,
+        allowance: int,
+    ) -> GlobalRouteResult:
+        del feedback, allowance
+        routed = decode_state(problem, routed_states[0])
+        return _global(overflow=0 if decoded == routed else 10)
+
+    def detailed_route(
+        decoded: DecodedPlacement,
+        allowance: int,
+    ) -> DetailedStageResult:
+        nonlocal detailed_calls
+        del decoded, allowance
+        detailed_calls += 1
+        if detailed_calls == 1:
+            return DetailedStageResult(
+                DetailedRouteResult(
+                    status=DetailedRouteStatus.STRANDED,
+                    routed=(),
+                    failures=failures,
+                    iterations=1,
+                    expansions=0,
+                ),
+                None,
+            )
+        return DetailedStageResult(_routing(DetailedRouteStatus.BUDGET), None)
+
+    solver = SequenceSolver(
+        heights=(problem.outline_height,),
+        problem_for_height=lambda _height: problem,
+        adapters=StageAdapters(
+            prepare=lambda _height, decoded: decoded,
+            global_route=global_route,
+            detailed_route=detailed_route,
+            validate=lambda _placement: ValidationVerdict(False, ("unreachable",)),
+        ),
+        expansion_budget=ExpansionBudget(100),
+        config=SequenceSolverConfig(
+            stages=2,
+            moves_per_stage=1,
+            restarts_per_height=1,
+            global_elites=2,
+        ),
+    )
+
+    with pytest.raises(NoValidLayout):
+        solver.search(max_stages=2)
+
+    assert anneal_inputs[1] == replace(routed_states[0], stage_index=1)
+    first = solver._stage_stats[0]
+    assert first.variant_moves == 1
+    assert first.selected_instance_ids == problem.instance_ids
+    assert first.selected_variant_ids == problem.selected_variant_ids((1, 0))
+    assert first.selected_pose_yaws == tuple(
+        problem.variant(strip, variant).yaw
+        for strip, variant in enumerate((1, 0))
     )
