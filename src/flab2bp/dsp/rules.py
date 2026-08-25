@@ -96,8 +96,11 @@ from flab2bp.dsp import colliders
 
 __all__ = [
     "ADDON_AREA_RADIUS",
+    "ADDON_AXIS_DEG",
     "ADDON_FROM_SLOT",
+    "ADDON_NEIGHBOUR_RADIAL_GAP",
     "ADDON_TO_SLOT",
+    "ADDON_TURRET_AXIS_DEG",
     "BELT_INPUT_SLOTS",
     "BELT_SLOT",
     "BELT_SLOT_AUTO_RANGE",
@@ -117,6 +120,9 @@ __all__ = [
     "SPLITTER_MAX_PORTS",
     "SPLITTER_OUTPUT_FROM_SLOT",
     "WORLD_UNITS_PER_LEVEL",
+    "addon_axis_aligned",
+    "addon_axis_offset_deg",
+    "addon_ride_is_straight",
     "world_gap",
 ]
 
@@ -430,3 +436,118 @@ SLOT_ALIGN_COS = math.cos(math.radians(SKEW_AXIS_DEG))
 #: constant or a port; only the radius above is checked.  Recorded here as an
 #: unported half of the rule rather than left implicit.
 ADDON_AREA_RADIUS = 1.0
+
+#: How far off an addon's own axis the belt it rides may travel, in DEGREES.
+#: ``BuildTool_Addon.CheckBuildConditions``, the hand tool, over every belt its
+#: area boxes found::
+#:
+#:     float num4 = (buildPreview2.desc.isTurret ? 18f : 20.5f);
+#:     float num5 = num4;  float num6 = 180f - num4;
+#:     bool flag = true;
+#:     if (hasOutput) {
+#:         normalized = (beltOutputBeltPose.position - objectPose.position).normalized;
+#:         num9 = Quaternion.Angle(Quaternion.LookRotation(normalized, up), b);
+#:         flag &= num9 < num5 || num9 > num6;
+#:         flag &= Mathf.Abs(objectPose.position.magnitude
+#:                           - beltOutputBeltPose.position.magnitude) < 0.6f;
+#:     }
+#:     if (hasInput) { ... the same, from beltInputBeltPose ... }
+#:     ...
+#:     if (!flag && !flag2) buildPreview2.condition = EBuildCondition.Collide;
+#:
+#: ``b`` is the addon AREA's rotation, which the addon's own yaw aims, so this
+#: is the belt's direction of travel against the addon's axis.  ``flag2`` is
+#: false exactly for the belt INSIDE the area box -- the one the addon rides --
+#: so for that belt both halves must hold or the addon is a collision.
+#:
+#: ``Mathf.Abs`` is not used; the game brackets the angle from BOTH ends
+#: (``< 20.5`` or ``> 159.5``), so a reversed belt passes and a right angle does
+#: not.  That is why this convicts a CORNER: a belt that turns on the addon's
+#: tile has an incoming direction and an outgoing direction a quarter turn
+#: apart, and no addon axis is within 20.5 degrees of both.
+#:
+#: The paste path states the same rule as a DISTANCE rather than an angle, at
+#: decompiled 145812, where a pasted addon meets a belt already on the planet::
+#:
+#:     flag10 &= Maths.DistancePointLine(objectPose2.position, ...) < 0.3f;
+#:     if (flag10 && (objectPose2.position - buildPreview2.lpos).magnitude < 2.5f) {
+#:         if (hasOutput) flag10 &= DistancePointLine(beltOutputBeltPose.position, ...) < 0.3f;
+#:         if (hasInput)  flag10 &= DistancePointLine(beltInputBeltPose.position, ...) < 0.3f;
+#:     }
+#:
+#: Same two neighbours, same verdict.  The angular form is what is ported,
+#: because our grid is cardinal and the angle carries the altitude clause with
+#: it.
+#:
+#: NOT in ``AddonPass``, the third clause: a belt and an addon from the SAME
+#: paste are excused without either test, and ``AddonPass``'s own direction test
+#: is dead for a mid-run belt because ``flag`` is set only when exactly one of
+#: ``input``/``output`` is null.  So this rule binds on hand placement and on a
+#: paste that meets an existing belt or prebuild, and not on the first paste of
+#: a self-contained blueprint onto bare ground.
+ADDON_AXIS_DEG = 20.5
+
+#: The same limit for a turret, which is the other belt addon that has one.
+ADDON_TURRET_AXIS_DEG = 18.0
+
+#: How far the ridden belt's neighbours may differ from it in RADIUS -- world
+#: units, so callers reach it through :func:`world_gap` with a pure ``dz``.
+#: The ``< 0.6f`` clause quoted above.  An altitude LEVEL is 1.3333 and a half
+#: level 0.6667, so this refuses a belt that changes height across the addon.
+ADDON_NEIGHBOUR_RADIAL_GAP = 0.6
+
+
+def addon_axis_offset_deg(yaw_deg: float, dx: float, dy: float) -> float:
+    """Angle in ``[0, 180]`` between a belt's travel and an addon's own axis.
+
+    Our yaw convention is the game's: yaw 0 aims ``+y``, yaw 90 aims ``+x``,
+    which is ``atan2(dx, dy)``.  ``Quaternion.Angle`` is unsigned, so this is
+    too, and the caller brackets it from both ends the way the game does.
+    """
+    if dx == 0 and dy == 0:
+        raise ValueError("a belt with no direction of travel has no axis offset")
+    off = (math.degrees(math.atan2(dx, dy)) - yaw_deg) % 360.0
+    return off if off <= 180.0 else 360.0 - off
+
+
+def addon_axis_aligned(
+    yaw_deg: float, dx: float, dy: float, *, limit_deg: float = ADDON_AXIS_DEG
+) -> bool:
+    """``num9 < num5 || num9 > num6``: is the belt along the addon's axis?
+
+    Either way along it.  A belt that runs the addon's axis backwards is
+    accepted by the game and by this.
+    """
+    off = addon_axis_offset_deg(yaw_deg, dx, dy)
+    return off < limit_deg or off > 180.0 - limit_deg
+
+
+def addon_ride_is_straight(
+    yaw_deg: float,
+    incoming: tuple[float, float, float] | None,
+    outgoing: tuple[float, float, float] | None,
+    *,
+    limit_deg: float = ADDON_AXIS_DEG,
+) -> bool:
+    """Whether a belt addon may sit on a belt with these neighbours.
+
+    ``incoming`` is the grid step from the ridden belt's INPUT belt to it;
+    ``outgoing`` the step from it to its OUTPUT belt.  Both are ``(dx, dy, dz)``
+    and either may be ``None`` when the belt is an end of its run -- the game
+    reads them from ``GetBeltInputBeltPose`` / ``GetBeltOutputBeltPose`` and
+    tests only the ones that exist.
+
+    A belt that TURNS on the addon's tile fails: the two directions are a
+    quarter turn apart and no axis is within :data:`ADDON_AXIS_DEG` of both.
+    """
+    for step in (incoming, outgoing):
+        if step is None:
+            continue
+        dx, dy, dz = step
+        if (dx, dy) == (0, 0):
+            continue
+        if not addon_axis_aligned(yaw_deg, dx, dy, limit_deg=limit_deg):
+            return False
+        if world_gap(0.0, 0.0, dz) >= ADDON_NEIGHBOUR_RADIAL_GAP:
+            return False
+    return True

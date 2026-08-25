@@ -1902,6 +1902,71 @@ def _addon_supply(ctx: Context) -> Iterable[Finding]:
             )
 
 
+def _addon_rides(
+    ctx: Context,
+) -> Iterable[
+    tuple[int, int | None, tuple[int, int, float] | None, tuple[int, int, float] | None]
+]:
+    """Every belt addon, the belt on its tile, and that belt's own two neighbours.
+
+    Yields ``(addon_index, ride_index, incoming, outgoing)``.  ``incoming`` is
+    the grid step from the ridden belt's INPUT belt to it and ``outgoing`` the
+    step from it to its OUTPUT belt, each ``None`` when that end of the run does
+    not exist.  ``ride_index`` is ``None`` when no belt sits on the addon's tile
+    at all.
+
+    Both directions come from the ``output_obj`` LINK GRAPH and not from any
+    stored yaw, because that is what the game reads: ``GetBeltOutputBeltPose``
+    and ``GetBeltInputBeltPose`` follow the belt's own connections.  This is the
+    one thing about a coater we did not choose, which is what makes the two
+    checks below able to convict a yaw we did.
+    """
+    bs = ctx.placement.buildings
+    forward: dict[int, int] = {}
+    backward: dict[int, int] = {}
+    for i, b in enumerate(bs):
+        if not cat.is_belt(b.item_id):
+            continue
+        j = b.output_obj
+        if j is None or not 0 <= j < len(bs) or not cat.is_belt(bs[j].item_id):
+            continue
+        forward[i] = j
+        backward.setdefault(j, i)
+
+    for i, b in enumerate(bs):
+        try:
+            info = cat.building(b.item_id)
+        except KeyError:
+            continue
+        if not info.is_belt_addon:
+            continue
+        ride = next(
+            (
+                k
+                for k, o in enumerate(bs)
+                if cat.is_belt(o.item_id) and (o.x, o.y, o.z) == (b.x, b.y, b.z)
+            ),
+            None,
+        )
+        if ride is None:
+            yield i, None, None, None
+            continue
+        nxt = forward.get(ride)
+        prv = backward.get(ride)
+        r = bs[ride]
+        outgoing = (
+            None
+            if nxt is None
+            else (bs[nxt].x - r.x, bs[nxt].y - r.y, float(bs[nxt].z - r.z))
+        )
+        incoming = (
+            None
+            if prv is None
+            else (r.x - bs[prv].x, r.y - bs[prv].y, float(r.z - bs[prv].z))
+        )
+        yield i, ride, incoming, outgoing
+
+
 @check("game.addon_facing")
 def _addon_facing(ctx: Context) -> Iterable[Finding]:
     """A belt addon may not stand ACROSS the belt it rides.
@@ -1960,32 +2025,9 @@ def _addon_facing(ctx: Context) -> Iterable[Finding]:
     them would be ours rather than the game's.
     """
     bs = ctx.placement.buildings
-    forward: dict[int, int] = {}
-    backward: dict[int, int] = {}
-    for i, b in enumerate(bs):
-        if not cat.is_belt(b.item_id):
-            continue
-        j = b.output_obj
-        if j is None or not 0 <= j < len(bs) or not cat.is_belt(bs[j].item_id):
-            continue
-        forward[i] = j
-        backward.setdefault(j, i)
-
-    for i, b in enumerate(bs):
-        try:
-            info = cat.building(b.item_id)
-        except KeyError:
-            continue
-        if not info.is_belt_addon:
-            continue
-        ride = next(
-            (
-                k
-                for k, o in enumerate(bs)
-                if cat.is_belt(o.item_id) and (o.x, o.y, o.z) == (b.x, b.y, b.z)
-            ),
-            None,
-        )
+    for i, ride, incoming, outgoing in _addon_rides(ctx):
+        b = bs[i]
+        info = cat.building(b.item_id)
         if ride is None:
             yield Finding(
                 "game.addon_facing",
@@ -1996,18 +2038,14 @@ def _addon_facing(ctx: Context) -> Iterable[Finding]:
                 {"x": b.x, "y": b.y},
             )
             continue
-        nxt = forward.get(ride)
-        if nxt is not None:
-            dx, dy = bs[nxt].x - b.x, bs[nxt].y - b.y
-        else:
-            prv = backward.get(ride)
-            if prv is None:
-                # Neither successor nor predecessor: a one-tile run has no
-                # direction of travel, so `rhs` is `Vector3.forward` and the
-                # game's own `flag` is false -- `num3` stays 1 and the test
-                # cannot fire.  Silence here is the game's answer, not ours.
-                continue
-            dx, dy = b.x - bs[prv].x, b.y - bs[prv].y
+        step = outgoing if outgoing is not None else incoming
+        if step is None:
+            # Neither successor nor predecessor: a one-tile run has no
+            # direction of travel, so `rhs` is `Vector3.forward` and the
+            # game's own `flag` is false -- `num3` stays 1 and the test
+            # cannot fire.  Silence here is the game's answer, not ours.
+            continue
+        dx, dy = step[0], step[1]
         if (dx, dy) == (0, 0):
             continue
         flow = round(math.degrees(math.atan2(dx, dy))) % 360
@@ -2026,6 +2064,97 @@ def _addon_facing(ctx: Context) -> Iterable[Finding]:
             f"at a right angle, so that belt pastes as a collision",
             (i, ride),
             {"yaw": round(b.yaw) % 360, "flow": flow, "off_by": off},
+        )
+
+
+@check("game.addon_corner")
+def _addon_corner(ctx: Context) -> Iterable[Finding]:
+    """A belt addon may not sit on a belt that TURNS on its tile.
+
+    ``game.addon_facing`` above reads ONE end of the ridden belt -- its
+    successor, or its predecessor when it has none.  A belt that arrives from
+    the north and leaves to the east agrees with a coater yawed 90 at the end
+    that check looks at, and disagrees at the end it does not.  This is the
+    other end.
+
+    The rule, at decompiled 145812 -- the addon half of the paste ladder, where
+    a pasted addon meets a belt that is already on the planet or already a
+    prebuild::
+
+        float num23 = Maths.DistancePointLine(objectPose2.position, lineStart2, lineEnd2);
+        flag10 &= num23 < 0.3f;
+        if (flag10 && (objectPose2.position - buildPreview2.lpos).magnitude < 2.5f) {
+            if (hasOutput) { num23 = DistancePointLine(beltOutputBeltPose.position, ...);
+                             flag10 &= num23 < 0.3f; }
+            if (hasInput)  { num23 = DistancePointLine(beltInputBeltPose.position, ...);
+                             flag10 &= num23 < 0.3f; }
+        }
+        flag9 |= flag10;
+        if (flag9) continue;                 # <- the excusal, not taken
+
+    and when the excusal is not taken the addon falls through to
+    ``buildPreview2.condition = EBuildCondition.Collide``.  Both the belt's own
+    INPUT belt and its OUTPUT belt must lie on the addon's line, not just the
+    belt itself.  A corner puts one of them a tile off it.
+
+    The hand tool states the same rule as an ANGLE rather than a distance, over
+    the same two neighbours (``BuildTool_Addon.CheckBuildConditions``), and that
+    is the form :func:`flab2bp.dsp.rules.addon_ride_is_straight` ports, because
+    our grid is cardinal and an angle carries the altitude clause with it.
+    Placing a Spray Coater by hand on a belt that turns under it is refused.
+
+    SCOPE, stated plainly because it bounds what a finding here proves.  The
+    paste path has THREE addon-versus-belt clauses and only two carry this
+    rule:
+
+    * 145812, quoted above -- addon preview against an EXISTING belt or
+      prebuild.  Corner refused.
+    * ``BuildTool_Addon`` -- hand placement.  Corner refused.
+    * ``AddonPass`` (BuildTool_BlueprintPaste, and its twin at 147454) -- an
+      addon and a belt from the SAME paste.  **No corner clause at all**, and
+      its one direction test is dead for a mid-run belt: ``flag`` is set only
+      when exactly one of ``input``/``output`` is null, so a belt with both
+      leaves ``num3`` at ``1f``.
+
+    So a finding here is NOT proof that a first paste onto bare ground is
+    rejected.  It is proof that the geometry is one the game refuses in the two
+    places it looks at both ends -- including a re-paste over the prebuilds the
+    first paste left.
+
+    MEASURED, and it is why the assumption this closes was wrong.  The game's
+    own eight Spray Coaters -- five in ``factory-heretical-smelter-block``,
+    three in ``tillable-blackbox-module-...`` -- ride a straight belt 8 of 8,
+    zero corners.  ``freeform``'s twenty coaters on the reported
+    ``max-proliferation`` blueprint were 14 straight and **6 turning**, every
+    one of them entering from ``(0, 1)`` and leaving to ``(1, 0)`` under a yaw
+    of 90.  ``game.addon_facing`` passed all six: it read the outgoing step,
+    which agrees with the yaw, and nothing looked at where the cargo came from.
+    """
+    bs = ctx.placement.buildings
+    for i, ride, incoming, outgoing in _addon_rides(ctx):
+        if ride is None or incoming is None or outgoing is None:
+            # One end alone is `game.addon_facing`'s question.  The game tests
+            # only the neighbours that exist, so an end-of-run belt has nothing
+            # for this clause to disagree about.
+            continue
+        b = bs[i]
+        info = cat.building(b.item_id)
+        if rules.addon_ride_is_straight(float(b.yaw), incoming, outgoing):
+            continue
+        yield Finding(
+            "game.addon_corner",
+            Severity.ERROR,
+            f"{info.name} {i} at ({b.x}, {b.y}) is yawed {round(b.yaw) % 360} and "
+            f"rides a belt that arrives {incoming[:2]} and leaves {outgoing[:2]}: "
+            f"the game requires the ridden belt's own input AND output to lie "
+            f"along the addon's axis, so a belt that turns on the addon's tile "
+            f"pastes as a collision",
+            (i, ride),
+            {
+                "yaw": round(b.yaw) % 360,
+                "incoming": list(incoming),
+                "outgoing": list(outgoing),
+            },
         )
 
 
