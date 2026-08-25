@@ -55,11 +55,10 @@ Deliberate scope reductions, each documented where it appears:
 
 from __future__ import annotations
 
-import itertools
 import math
 import time
 from collections import defaultdict, deque
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 from fractions import Fraction
 from functools import cache
@@ -3141,14 +3140,6 @@ def _merge_shared_risers(risers: list[_Riser]) -> list[_Riser]:
     return sorted(out, key=lambda r: (r.taps[0][0], r.item))
 
 
-#: Columns up to which the ordering below is solved exactly rather than greedily.
-#:
-#: ``8! = 40320`` orderings of at most 64 pairs each, once per emitted plan,
-#: against the CP-SAT solve that produced it.  The corpus's widest margin is
-#: seven columns.
-_COLUMN_ORDER_BRUTE_FORCE = 8
-
-
 def _assign_columns(risers: list[_Riser]) -> list[_Riser]:
     """Colour the trunks' vertical spans, leftmost free column first.
 
@@ -3156,20 +3147,18 @@ def _assign_columns(risers: list[_Riser]) -> list[_Riser]:
     fewest columns any assignment could -- and the margin's width is the whole
     area cost of risering.
 
-    WHICH colour lands in which column is then free, and it is not free of
-    consequence.  A trunk that must feed a lane and carry on needs a SPLITTER,
-    whose build collider is a cross standing 2.30 world units; a bridge crossing
-    that column at :data:`_BRIDGE_Z` is 4/3 up and one tile away, which is inside
-    it (``colliders.belt_keepout_offsets``).  A bridge only ever crosses columns
-    WEST of its own trunk, so putting the splitter-heavy trunks east of the lanes
-    that cross them removes the clash outright -- at no cost in columns, because
-    a permutation of colours is still a colouring.
+    WHICH colour lands in which column is free, AND IT NO LONGER MATTERS, which
+    is worth saying because a linear-ordering pass over the colours lived here
+    and has been deleted.  It was there because a bridge crossing a column at
+    bridge height stood a tile from any junction on it, and a bridge only ever
+    crosses columns WEST of its own trunk -- so the order decided who clashed
+    with whom.  It could not always reach zero: two trunks that each tap a row
+    beside the other's junction clash whichever way round they go.
 
-    That makes this a linear ordering problem over the colours, which is what
-    :func:`_order_columns` solves.  It cannot always reach zero: two trunks that
-    each tap a row beside the other's splitter conflict whichever way round they
-    go.  What it removes is every clash that was only an accident of the order
-    the greedy happened to run in.
+    :data:`_TRUNK_Z` removed the clash instead of ordering it away -- the
+    crossing passes UNDER the junction now, where the keep-out has nothing --
+    so an ordering pass would be reshuffling columns, and lengthening bridges,
+    against a rule that no longer binds.
     """
     free_from: list[int] = []
     out: list[_Riser] = []
@@ -3182,89 +3171,7 @@ def _assign_columns(risers: list[_Riser]) -> list[_Riser]:
         else:
             free_from[col] = hi + 1
         out.append(replace(riser, column=col))
-    order = _order_columns(out, len(free_from))
-    return [replace(r, column=order[r.column]) for r in out]
-
-
-def _splitter_rows(riser: _Riser) -> set[int]:
-    """Rows where this trunk needs a junction, matching :func:`_emit_risers`.
-
-    A tap that FILLS the trunk is a plain belt merge and a tap at the trunk's
-    last row is a plain end; everything else has to feed a lane and carry on,
-    which one ``output_obj`` cannot do.
-    """
-    last_y = riser.taps[-1][0]
-    return {y for y, _c, _d, is_source in riser.taps if not is_source and y != last_y}
-
-
-def _order_columns(risers: list[_Riser], columns: int) -> list[int]:
-    """Colour -> column, chosen so the fewest bridges cross beside a splitter.
-
-    ``w[i][j]`` counts the (splitter row on colour ``i``, bridge row on colour
-    ``j``) pairs that stand within a tile of each other; a bridge from colour
-    ``j`` crosses colour ``i``'s column exactly when ``i`` ends up west of ``j``,
-    so an ordering costs ``sum(w[i][j] for i west of j)``.  Two trunks of the
-    SAME colour never overlap vertically and a bridge never crosses its own
-    column, so the diagonal is empty by construction.
-
-    Brute force while the factorial is small and a greedy insertion after that.
-    The corpus runs to seven columns (``information-matrix``), and the cost of
-    being wrong here is a bridge beside a splitter, not a broken build --
-    ``validate.certify`` still has the last word.
-    """
-    if columns <= 1:
-        return [0]
-    bridges: list[set[int]] = [set() for _ in range(columns)]
-    splits: list[set[int]] = [set() for _ in range(columns)]
-    for r in risers:
-        bridges[r.column].update(y for y, *_ in r.taps)
-        splits[r.column].update(_splitter_rows(r))
-    w = [
-        [
-            sum(
-                1
-                for y in splits[i]
-                for y2 in bridges[j]
-                if abs(y - y2) <= 1
-            )
-            if i != j
-            else 0
-            for j in range(columns)
-        ]
-        for i in range(columns)
-    ]
-
-    def cost(order: Sequence[int]) -> int:
-        # `order[c]` is the column colour `c` takes, so colour `a` is west of
-        # colour `b` exactly when `order[a] < order[b]`.
-        return sum(
-            w[a][b]
-            for a in range(columns)
-            for b in range(columns)
-            if order[a] < order[b]
-        )
-
-    identity = list(range(columns))
-    if cost(identity) == 0:
-        return identity
-    if columns <= _COLUMN_ORDER_BRUTE_FORCE:
-        best = min(
-            (perm for perm in itertools.permutations(identity)), key=cost
-        )
-        return list(best)
-    # Greedy: place the colours west to east, taking whichever remaining one
-    # adds least. Deterministic, and it never costs more than the identity
-    # because the identity is one of the sequences it can produce.
-    placed: list[int] = []
-    left = set(identity)
-    while left:
-        pick = min(left, key=lambda c: (sum(w[c][b] for b in left if b != c), c))
-        placed.append(pick)
-        left.discard(pick)
-    order = [0] * columns
-    for slot, colour in enumerate(placed):
-        order[colour] = slot
-    return order if cost(order) <= cost(identity) else identity
+    return out
 
 
 def _emit_risers(
