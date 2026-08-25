@@ -130,6 +130,7 @@ __all__ = [
     "build_colliders",
     "collisions",
     "obb_overlap",
+    "own_centre_extent",
     "preview_pose",
     "sphere_box_overlap",
 ]
@@ -326,6 +327,41 @@ def build_colliders(model_index: int) -> tuple[tuple[Vec3, Vec3, Quat], ...]:
     ``hasBuildCollider == false`` and makes the game skip the test entirely.
     """
     return _table().get(model_index, ())
+
+
+@cache
+def own_centre_extent(model_index: int, yaw: float) -> tuple[float, float]:
+    """Full width and depth, in world units, of the smallest box about the
+    building's OWN centre that contains every build collider at ``yaw``.
+
+    The collider set is not symmetric about the prefab origin -- a Chemical
+    Plant's boxes run from x = -4.0 to x = +4.3 -- and the building is placed by
+    its centre, so the figure that matters is ``max |c +- h|`` per axis, taken
+    over the corners after turning.  A corner sweep rather than composed
+    rotation matrices: it is the same answer and obviously the same answer.
+
+    ``catalog.derive_footprint`` and ``catalog.clearance`` both read this.  They
+    ask different questions of it -- which tile centres are covered, and how far
+    apart two of these must be -- and neither may be answered from
+    ``blueprintBoxSize``, which the game derives from the LAST Build box and
+    which is therefore the one box ``buildColliders`` excludes.
+    """
+    boxes = build_colliders(model_index)
+    if not boxes:
+        return (0.0, 0.0)
+    half_turn = math.radians(yaw) * 0.5
+    spin = (0.0, math.sin(half_turn), 0.0, math.cos(half_turn))
+    ex = ez = 0.0
+    for centre, half, rot in boxes:
+        turned = _qmul(spin, rot)
+        corner = _qrot(spin, centre)
+        for sx in (-1.0, 1.0):
+            for sy in (-1.0, 1.0):
+                for sz in (-1.0, 1.0):
+                    spun = _qrot(turned, (sx * half[0], sy * half[1], sz * half[2]))
+                    ex = max(ex, abs(corner[0] + spun[0]))
+                    ez = max(ez, abs(corner[2] + spun[2]))
+    return (ex * 2.0, ez * 2.0)
 
 
 # --- overlap ----------------------------------------------------------------

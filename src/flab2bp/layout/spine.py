@@ -2732,12 +2732,23 @@ def _emit(
             coater_idx = len(buildings)
             buildings.append(
                 PlacedBuilding(
+                    # 1x1, NOT the catalog's ``1x3``, and for the same reason
+                    # `junction.make_splitter` is 1x1: a belt addon is anchored
+                    # on the belt tile it rides -- `addonAreaPoses` area 0 is
+                    # "the cargo belt it rides" -- so its position IS that
+                    # tile's.  The catalog figure is the collider's reach, which
+                    # is three tile centres along the belt, and feeding it here
+                    # would move the emitted centre a tile off the belt: at
+                    # yaw 90 a 1x3 becomes 3x1 and `tile_to_local_offset` puts
+                    # the coater's centre at ``x + 1``.  Measured -- it drove an
+                    # Oil Refinery and a Spray Coater into a `geom.collide` at
+                    # 2 x 1 tiles apart, and cost spine ten corpus cells.
                     item_id=CONSTANTS.spray_item_id,
                     model_index=spray.model_index,
                     x=mid.x,
                     y=mid.y,
-                    width=spray.width,
-                    height=spray.height,
+                    width=1,
+                    height=1,
                     yaw=Facing.EAST.value,
                 )
             )

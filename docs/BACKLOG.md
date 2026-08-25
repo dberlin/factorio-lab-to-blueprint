@@ -702,21 +702,69 @@ sits one tile off the band by design. That is a distance no amount of band
 tuning buys cheaply -- which is why the escape is height, above, and not a wider
 corridor.
 
-## OPEN -- one collider question left; the other two are answered
+## RESOLVED -- the plant was loose because a tile was being read as 1.0 unit
 
 `geom.collide` is a normal check now: 443 assembler-on-assembler pairs became 2,
-and turning it on cost no coverage. The two that remain are both real and
-neither is guessable from where we stand.
+and turning it on cost no coverage. All three questions this entry opened are
+answered.
 
-**A Chemical Plant is packed too LOOSE.** Its collider needs 7x5 where
-`derive_footprint` says 9x5, so there is density to win back --
-`catalog.clearance` clamps to at least the footprint and leaves it. Taking it
-means trusting the collider over `blueprintBoxSize` for tile OCCUPANCY, not just
-for spacing, and those are different questions: occupancy decides which tiles a
-sorter anchor may sit on and where a belt may run, and the slot poses are the
-authority there rather than either box. Settling it needs the same treatment
-spacing got -- a measurement against real blueprints -- not an inference from
-the collider being smaller.
+**A Chemical Plant was packed too LOOSE, and the collider was not the culprit --
+the divisor was.** `derive_footprint` was `2 * ceil(box / 2) - 1`: a world-unit
+half-extent compared against tile centres **one unit** apart, when they are
+`GRID_ARC` = 1.2566 apart. It was also reading `blueprintBoxSize`, which the game
+computes from the LAST Build box and which is therefore the one box
+`buildColliders` excludes. The two errors point opposite ways, and on every
+footprint the corpus pins they cancel exactly -- assembler 3, Matrix Lab 5, Arc
+Smelter 3, Oil Refinery 3x7, Depot 3, Tesla Tower 1, Wind Turbine 3, Solar Panel
+3 -- which is why the old rule had a clean sheet and why this looked like a
+collider question. On the Chemical Plant they do not cancel: 8.20 with a unit
+tile is 9 tiles; 8.60 with a real tile is **7**.
+
+The rule is now `2 * ceil(e / GRID_ARC) - 1` over the collider AABB about the
+building's own centre, and it is still ALWAYS ODD, so buildings stay
+integer-centred and `tile_to_local_offset`'s half-tile branch stays unreachable.
+
+The occupancy-versus-spacing worry this entry raised was the right worry and it
+is settled by measurement, not by argument: **no building's `slotPoses` fall
+outside its own footprint under the new rule**, and for the assembler, Matrix
+Lab, Oil Refinery and Miniature Particle Collider they land *exactly* on the
+edge tile. `test_every_footprint_contains_every_slot_pose` holds that. The
+Chemical Plant's poses reach 1.59 tiles, needing 5; it now has 7. There was
+never occupancy to lose -- there were two tiles per plant of pure padding.
+
+Two further consequences, each an independent confirmation that the corrected
+rule is the right one rather than merely a smaller one:
+
+* `_FOOTPRINT_OVERRIDES` is **gone**. Both its entries were corrections to the
+  unit error. Sorters derive 1x1, and the Energy Exchanger derives 9x9 -- the
+  value `temple-of-effectiveness` bounds it at, where the old rule derived 11x11
+  and stacked 209 cells in a blueprint the game itself wrote.
+* `junction.make_splitter` was forcing 1x1 by hand against a catalog that said
+  3x1. A splitter's arms reach 1.19 and a tile is 1.2566, so 1x1 is what the
+  corrected rule derives. The hand-forcing is now a statement of intent rather
+  than a correction.
+
+The corpus arbitrates the source field as well as the divisor, which is what
+this entry asked for. `factory-quick-start-step-3-red-cube` holds twelve Oil
+Refineries and all eighteen machine-side sorter endpoints in it sit **three
+tiles** from a refinery centre along the building's own axis.
+`blueprintBoxSize` with the corrected divisor makes that refinery 3x5, which
+reaches two, so every one of those eighteen sorters would miss the machine it
+serves. The colliders make it 3x7.
+`test_the_corpus_puts_sorter_ends_three_tiles_from_an_oil_refinery_centre` is
+that measurement.
+
+**The density it won**, paired and interleaved against master, three rounds
+each, **INVALID 0 in every round of both arms**: freeform **-9.8%, -10.3%,
+-9.8%** of total area over the full 72-cell corpus, on the cells clean in both
+arms; spine **-1.80%**, identically in all three rounds, over the 48-cell mid
+tier (32 cells clean in both, 5 of them moved). Clean counts were unmoved --
+freeform A 63/66/64 against B 64/64/64, spine 32 against 32 -- so the area is
+bought with packing rather than with coverage. The wins land where the Chemical
+Plant does: freeform `graphene` -28%, `information-matrix` -21% to -42%,
+`plastic` -19%, `quantum-chip` -28%; spine `plastic` -21%, `graphene` -18%. See
+the footprint entry at the end of this file for the one real bug the change
+surfaced on the way (a Spray Coater emitted a tile off its own belt).
 
 **A Splitter one tile from a Tesla Tower collides** -- CONFIRMED from the game,
 and it is the plain pitch requirement it looked like. A splitter is a CROSS of
@@ -1329,10 +1377,12 @@ excused only when `dotsCursor > 1`, which a single paste is not.
 `GetLatitudeRadPerGrid = 2*pi/(segment*5)` apart, and `segment` tracks the
 planet radius, so the arc is `2*pi/5 = 1.2566` units on every planet. An
 Assembling Machine's build collider is 3.82 units across. Three tiles is 3.770.
-`catalog.derive_footprint` returns `2*ceil(box/2) - 1 = 3` for it, both
-strategies duly place assemblers three tiles apart, and the game refuses every
-one of those pastes. The corpus agrees and always did: across every fixture,
-assemblers appear at a pitch of 4 or more and NEVER at 3, Matrix Labs at 5 or
+`catalog.derive_footprint` returned `2*ceil(box/2) - 1 = 3` for it, both
+strategies duly placed assemblers three tiles apart, and the game refused every
+one of those pastes. (Spacing is `catalog.clearance`'s job and has been since
+`geom.collide` landed; the footprint rule itself was carrying the same unit
+error, which item 1 below now records as fixed.) The corpus agrees and always
+did: across every fixture, assemblers appear at a pitch of 4 or more and NEVER at 3, Matrix Labs at 5 or
 more and never 4, Arc Smelters at 3. The extracted model reproduces each of
 those minimum pitches exactly.
 
@@ -1343,23 +1393,79 @@ Tower one tile from a Splitter.
 **What landed:** `dsp/data/colliders.json` (252 models of real
 `buildColliders`, from `scripts/extract_dsp_colliders.py`), `dsp/colliders.py`
 holding the predicate next to the C# it came from, and `geom.collide` in
-`layout/validate.py` -- an ERROR check, in `validate.OPT_IN` so it does not turn
-every build into a refusal before the footprints are fixed.
+`layout/validate.py` -- an ERROR check. It was parked in `validate.OPT_IN` while
+the footprints were wrong; `OPT_IN` is empty now and `geom.collide` is a normal
+check that both strategies pass on the whole corpus.
 
 **What is left, in order:**
 
-1. **Fix the footprints.** The right question is not "which tile centres does
-   this cover" but "how far apart must two of these be", which is
-   `ceil(blueprintBoxSize / GRID_ARC)` -- and that is EVEN for an Assembling
-   Machine (4). `derive_footprint`'s "always odd, as the corpus requires" is
-   wrong, and `tile_to_local_offset` has a half-tile branch for even footprints
-   that its own docstring calls unreachable. It is about to be reached.
-2. **`blueprintBoxSize` is the wrong field for this** even after that. The game
-   computes it FROM a collider (`ReadPrefab` 217456) and picks the LAST Build
-   box -- which, when a prefab has three or more, is exactly the one EXCLUDED
-   from `buildColliders`. Use the colliders. A Spray Coater's
-   `blueprintBoxSize` is 0.7 x 2.0; the box actually tested is 0.7 x 3.5, and it
-   turns with the building's yaw.
+1. ~~**Fix the footprints.**~~ **DONE, and the diagnosis in this item was
+   half wrong.** The right question for *spacing* is indeed "how far apart must
+   two of these be" -- and that question already had an answer,
+   `catalog.clearance`, which both packers use. It is NOT the footprint's
+   question. The footprint's question is occupancy, and the actual defect was a
+   **unit error**: `derive_footprint` compared a world-unit half-extent against
+   tile centres **one unit** apart when they are `GRID_ARC` = 1.2566 apart.
+
+   Corrected, it is `2 * ceil(e / GRID_ARC) - 1`, which is **still always odd**.
+   So `tile_to_local_offset`'s half-tile branch was NOT reached, and it must not
+   be: an even footprint puts an Assembling Machine's centre on a half-tile, and
+   across the geometry corpus 3,038 of 3,038 buildings are integer-centred. The
+   game does not write that geometry. The branch staying unreachable is the
+   result, not an omission.
+
+2. ~~**`blueprintBoxSize` is the wrong field for this.**~~ **DONE and
+   CONFIRMED**, and this half of the item was exactly right. Both errors were
+   live at once and they point opposite ways, which is why the old rule scored a
+   clean sheet against every footprint the corpus pins -- assembler 3, Matrix
+   Lab 5, Arc Smelter 3, Oil Refinery 3x7, Depot 3, Tesla Tower 1, Wind Turbine
+   3, Solar Panel 3. Fixing one without the other is worse than fixing neither:
+   `blueprintBoxSize / GRID_ARC` makes an Oil Refinery 3x5, and all eighteen
+   machine-side sorter endpoints in `factory-quick-start-step-3-red-cube` sit
+   three tiles from a refinery centre.
+
+   The measured effect, paired and interleaved against master, three rounds
+   each, INVALID 0 in every round of both arms:
+
+   * **freeform, full 72-cell corpus: area -9.8%, -10.3%, -9.8%** on the cells
+     clean in both arms (63, 64, 63 of them). Clean counts A 63/66/64 against
+     B 64/64/64 -- indistinguishable. The wins are concentrated where the
+     Chemical Plant is: `graphene` -28%, `information-matrix` -21% to -42%,
+     `plastic` -19%, `quantum-chip` -28%.
+   * **spine, 48-cell mid tier: area -1.80%**, identical in all three rounds,
+     32 cells clean in both arms and 5 of them moved -- `plastic` -21%,
+     `graphene` -18%, -17%, -9%, -8%. Spine's coater-supply limitation (16
+     refusals, the "ten-coater case" entry above) is unchanged and unrelated.
+
+     That spine number was **-0.54% on a first run and the first run was
+     wrong**, which is the reason it is stated with its denominator. The wrong
+     figure came from the arm that carried the coater bug below: it refused ten
+     cells, so only 22 cells were clean in both arms and the comparison was
+     silently made on a different, smaller and easier population.
+
+   **One real bug fell out of the growth half**, and it is worth not
+   re-discovering. The Spray Coater's collider is 3.8 units long about its own
+   centre, so its footprint went 1x1 -> 1x3 -- correct about the collider, and
+   spine was feeding that figure straight into `PlacedBuilding.width`. A belt
+   addon is anchored on the belt tile it rides (`addonAreaPoses` area 0 is "the
+   cargo belt it rides"), and `tile_to_local_offset` reads the centre off the
+   width, so at yaw 90 a 1x3 became 3x1 and moved the coater's emitted centre a
+   tile off its belt -- into an Oil Refinery, as `geom.collide`. It cost spine
+   **ten of 48 cells** before it was found, all as REFUSED rather than INVALID.
+   Spine now places a coater 1x1, as freeform and `junction.make_splitter`
+   already did, and `test_a_placed_coater_is_anchored_on_its_belt_tile_not_on
+   _its_collider` pins it.
+
+   Residual worth knowing for item 3: the corrected footprint is by definition
+   the last tile centre the collider covers, so the **first free tile beyond it
+   can be very close to the collider surface**. Across every building the
+   margin is: Vertical Launching Silo 0.04, Water Pump 0.057, Splitter 0.067,
+   Mining Machine 0.113 -- all under the 0.23 belt probe radius. That is not
+   new and not caused by this change (the Splitter's 0.067 is exactly the
+   "grazes its 1.19-unit arm by 0.16 of the 0.23 probe" already recorded in
+   item 3), and no production machine is in it: the Chemical Plant's margin is
+   0.73 and the tightest of the Fractionator and Storage Tank is 0.263.
+
 3. **Belts are HALF modelled now.** They are tested as a 0.23 sphere at
    `lpos + lpos.normalized * 0.2`, and a belt hitting a machine is not excused.
    That much is shipped, as `game.belt_crossing` -- but only for a belt standing

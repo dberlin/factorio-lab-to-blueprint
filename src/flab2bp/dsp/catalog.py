@@ -7,13 +7,18 @@ the fixtures won.
 Footprints
 ----------
 A building's grid footprint is **derived**, not tabulated: it is the set of tiles
-whose *centres* the build collider covers.  DSP tile centres sit on integers, so
-for a building centred at integer ``c`` with collider half-extent ``e`` the
-occupied tiles are those ``k`` with ``|k - c| < e``, giving
+whose *centres* the build collider covers.  Tile centres are
+``colliders.GRID_ARC`` = 1.2566 world units apart, so for a building centred on a
+tile with collider half-extent ``e`` the occupied tiles are those ``k`` with
+``|k| * GRID_ARC < e``, giving
 
-    width = 2 * ceil(blueprintBoxSize / 2) - 1
+    width = 2 * ceil(e / GRID_ARC) - 1
 
-which is **always odd**.  See :func:`derive_footprint`.
+which is **always odd**.  ``e`` comes from ``PrefabDesc.buildColliders`` -- the
+boxes the game's own paste test puts into the physics world -- and NOT from
+``blueprintBoxSize``, which the game derives from the one Build box those
+exclude.  See :func:`derive_footprint`, which carries the evidence for both
+halves of that.
 
 That oddness is not an artifact of the formula -- it is forced by the data.
 Across the whole fixture corpus every production building is integer-centred
@@ -24,8 +29,10 @@ an even footprint is geometrically impossible for anything the corpus contains.
 
 This corrects a earlier table that rounded the collider extent to nearest
 (Assembling Machine 4x4, Matrix Lab 6x6, Chemical Plant 8x5).  Rounding is wrong
-in both directions -- the assembler is really 3x3 and the chemical plant really
-9x5 -- so it was not a uniform off-by-one.
+in both directions -- the assembler is really 3x3 -- so it was not a uniform
+off-by-one.  The Chemical Plant is 7x5: it read 9x5 for as long as the divisor
+above was 1.0 instead of ``GRID_ARC``, which is the error :func:`derive_footprint`
+now records.
 
 .. warning::
    **Never pool fixtures across game versions for geometric validation, and
@@ -782,43 +789,71 @@ class Building:
         return bool(self.slots)
 
 
-def derive_footprint(blueprint_box: float) -> int:
-    """Tiles occupied along one axis by a building of this collider extent.
+def derive_footprint(extent: float) -> int:
+    """Tiles occupied along one axis by a building whose collider is this wide.
 
-    A building centred at integer ``c`` with half-extent ``e`` occupies the
-    tiles whose centres it covers -- those ``k`` with ``|k - c| < e`` -- which
-    numbers ``2 * ceil(e) - 1``.  Always odd, as the corpus requires.
+    ``extent`` is a FULL width in **world units**, measured about the building's
+    own centre -- :func:`colliders.own_centre_extent`.
 
-    Verified against every production building: assembler 3.82 -> 3, Matrix Lab
-    5.6 -> 5, Arc Smelter 2.9 -> 3, Chemical Plant 8.2 -> 9 (whose independently
-    extracted ``landBBox`` is exactly 9.0), Oil Refinery 7.2 -> 7.
+    A building centred on a tile covers the tile centres its collider reaches.
+    Tile centres are ``colliders.GRID_ARC`` = 1.2566 world units apart, **not
+    one unit**, so for a half-extent ``e`` the covered tiles are those ``k``
+    with ``|k| * GRID_ARC < e``, which numbers
+
+        2 * ceil(e / GRID_ARC) - 1
+
+    and is still always odd.  The oddness is not a convention: across the
+    corpus every production building is integer-centred (3,038 of 3,038), and
+    an even-width building centred on an integer would straddle tile
+    boundaries.  ``tile_to_local_offset``'s half-tile branch therefore stays
+    unreachable, and ``test_no_catalog_footprint_is_even`` still holds.
+
+    **This used to divide by 1.0** -- ``2 * ceil(box / 2) - 1`` on a
+    ``blueprintBoxSize`` -- which is a unit error, and it was fed a second one:
+    ``blueprintBoxSize`` is the game's own ``buildCollider.ext * 2`` for the
+    LAST Build box, which for a prefab with three or more boxes is exactly the
+    one ``buildColliders`` excludes.  The two errors point opposite ways and
+    cancel on most buildings, which is why the old rule scored a clean sheet
+    against the corpus.  Where they do not cancel:
+
+    * Chemical Plant: box 8.20 -> 9 tiles, collider 8.60 -> **7**.
+    * Energy Exchanger: box 11.70 -> 11, which ``temple-of-effectiveness``
+      refutes with 209 overlapping cells; collider 11.70 -> **9**, which is the
+      value the hand override used to carry.
+    * Sorters: degenerate 0.52 x 0.23 -> 1x1, also formerly a hand override.
+    * Splitter: 3x1 -> **1x1**, which ``junction.make_splitter`` already forced
+      by hand for exactly this reason.
+    * Spray Coater: 1x1 -> **1x3**; its tested box is 3.8 about its own centre,
+      not the 2.0 ``blueprintBoxSize`` claims.
+
+    Every corpus-pinned footprint is unchanged: assembler 3.82 -> 3, Matrix Lab
+    5.60 -> 5, Arc Smelter 2.90 -> 3, Oil Refinery 3.52x7.80 -> 3x7, Depot Mk.I
+    3.00 -> 3, Tesla Tower 0.60 -> 1, Wind Turbine -> 3, Solar Panel -> 3.
+    Using the corrected divisor on ``blueprintBoxSize`` instead is REFUTED: it
+    makes an Oil Refinery 3x5, and the corpus puts sorter endpoints three tiles
+    from a refinery's centre.
     """
-    half = blueprint_box / 2.0
-    # Subtract an epsilon so an exactly-integer half-extent, which covers no
-    # further tile centre, does not round up into one.
-    return max(1, 2 * math.ceil(half - 1e-9) - 1)
+    from flab2bp.dsp import colliders
+
+    half = extent / 2.0
+    # Subtract an epsilon so a half-extent that lands exactly on a tile centre,
+    # which does not cover it, does not round up into one.
+    return max(1, 2 * math.ceil(half / colliders.GRID_ARC - 1e-9) - 1)
 
 
-#: Footprints the derivation cannot produce, each with its reason.
-_FOOTPRINT_OVERRIDES: dict[int, tuple[int, int]] = {
-    # Sorters have a degenerate collider (0.52 x 0.23) because they are modelled
-    # as a line between two endpoints, not a box. Each end occupies one tile.
-    2011: (1, 1),
-    2012: (1, 1),
-    2013: (1, 1),
-    2014: (1, 1),
-    # Energy Exchanger. The collider derives 11x11, which real blueprints
-    # disprove: `temple-of-effectiveness` places 20 of them on a clean integer
-    # grid spaced exactly 10.0 apart, and at 11x11 that is 209 overlapping
-    # cells. The game cannot emit an overlapping blueprint.
-    #
-    # The corpus bounds this at <= 9 rather than pinning it: 9x9 and 7x7 both
-    # give zero overlaps at that spacing, so it cannot distinguish them. 9 is
-    # the largest value consistent with observation, and over-reserving is the
-    # safe direction -- it can waste a tile, never collide. Worth an in-game
-    # check if exchanger builds start looking loose.
-    2209: (9, 9),
-}
+# There is no footprint override table any more, and its removal is a result
+# rather than a tidy-up.  It held two entries, both of them corrections to the
+# unit error in :func:`derive_footprint`, and the corrected rule now produces
+# both from the collider data alone:
+#
+# * Sorters (2011-2014): a degenerate 0.52 x 0.23 collider, because a sorter is
+#   a line between two endpoints rather than a box -> 1x1, as the table said.
+# * Energy Exchanger (2209): the table said 9x9 because the derived 11x11 was
+#   refuted by `temple-of-effectiveness` -- 20 exchangers on a clean integer
+#   grid exactly 10.0 apart, which at 11x11 is 209 overlapping cells the game
+#   cannot have emitted.  The corrected rule derives 9x9 from the same 11.70
+#   collider the old one turned into 11.  `test_the_former_overrides_are_now
+#   _derived` pins both, so the rule cannot drift back off them silently.
 
 #: Belts carry no build collider in the asset table, so they are absent from it
 #: entirely. One belt building occupies exactly one tile.
@@ -856,6 +891,8 @@ def _addon_areas_for(
 
 @cache
 def _load() -> dict[int, Building]:
+    from flab2bp.dsp import colliders
+
     raw = json.loads(_DATA.read_text())
     poses = json.loads(_SLOT_POSES.read_text())
     out: dict[int, Building] = {}
@@ -867,10 +904,12 @@ def _load() -> dict[int, Building]:
             # Several prefab variants can share one item id (splitter-a/b/c).
             # The first is authoritative; later ones are alternate models.
             continue
-        box = row["blueprintBoxSize"]
-        w, h = _FOOTPRINT_OVERRIDES.get(
-            item_id, (derive_footprint(box[0]), derive_footprint(box[1]))
-        )
+        # NOT `row["blueprintBoxSize"]`: the game computes that field from a
+        # single collider (`ReadPrefab` 217456) and keeps the LAST Build box,
+        # which for a prefab with three or more boxes is precisely the box
+        # `buildColliders` leaves out.  Read the colliders instead.
+        ex, ez = colliders.own_centre_extent(row["modelIndex"], 0.0)
+        w, h = derive_footprint(ex), derive_footprint(ez)
         power = row.get("power") or {}
         building = Building(
             prefab=row["prefab"],
@@ -951,31 +990,14 @@ def clearance(item_id: int, yaw: float) -> tuple[int, int]:
 
     fw, fh = oriented_footprint(item_id, yaw)
     try:
-        boxes = colliders.build_colliders(building(item_id).model_index)
+        ex, ez = colliders.own_centre_extent(building(item_id).model_index, yaw)
     except Exception:  # noqa: BLE001 - an unreadable model must not stop a layout
         return (fw, fh)
-    if not boxes:
+    if not (ex or ez):
         return (fw, fh)
-    # The smallest box about the building's OWN centre that contains every
-    # collider, after turning. Taken over the eight corners of each box rather
-    # than by composing rotation matrices: a corner sweep is the same answer and
-    # is obviously the same answer, which matters more here than being clever.
-    half_turn = math.radians(yaw) * 0.5
-    spin = (0.0, math.sin(half_turn), 0.0, math.cos(half_turn))
-    ex = ez = 0.0
-    for centre, half, rot in boxes:
-        turned = colliders._qmul(spin, rot)
-        for sx in (-1.0, 1.0):
-            for sy in (-1.0, 1.0):
-                for sz in (-1.0, 1.0):
-                    local = (sx * half[0], sy * half[1], sz * half[2])
-                    corner = colliders._qrot(spin, centre)
-                    spun = colliders._qrot(turned, local)
-                    ex = max(ex, abs(corner[0] + spun[0]))
-                    ez = max(ez, abs(corner[2] + spun[2]))
     return (
-        max(fw, math.ceil(ex * 2 / colliders.GRID_ARC)),
-        max(fh, math.ceil(ez * 2 / colliders.GRID_ARC)),
+        max(fw, math.ceil(ex / colliders.GRID_ARC)),
+        max(fh, math.ceil(ez / colliders.GRID_ARC)),
     )
 
 
@@ -987,9 +1009,16 @@ def oriented_footprint(item_id: int, yaw: float) -> tuple[int, int]:
     zero, so the turn is snapped rather than run through trigonometry -- the same
     reasoning, and the same snap, as :func:`flab2bp.layout.slots.to_local`.
 
-    Both extents are odd for everything placeable (``derive_footprint`` can only
-    return odd, and both override entries are odd too), so a rotated building
-    still has a tile at its centre and ``tile_to_local_offset`` stays exact.
+    Both extents are odd for everything placeable -- ``derive_footprint`` can
+    only return odd, and there is no override table any more -- so a rotated
+    building still has a tile at its centre and ``tile_to_local_offset`` stays
+    exact.
+
+    Swapping is exactly right rather than merely close, because the extents come
+    from an AABB taken about the building's OWN centre: turning such a box by a
+    quarter is the same box with its two horizontal extents exchanged.  That is
+    not true of the raw collider set, which is why :func:`clearance` sweeps the
+    corners instead of swapping.
     """
     w, h = footprint(item_id)
     return (h, w) if int(round(yaw / 90.0)) % 2 else (w, h)
