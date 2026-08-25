@@ -130,3 +130,135 @@ test('the time it warns about is the product, not the per-layout budget', () => 
   fireEvent.change(screen.getByLabelText('Strategy'), { target: { value: 'spine' } });
   expect(screen.getByText(/up to 6s of solving/)).toBeInTheDocument();
 });
+
+test('the blueprint title is what the game will show, and it names the product', async () => {
+  serving({
+    status: 202,
+    body: aJob({ result: aResult({ title: 'space-warper 10/min (max prolif)' }) }),
+  });
+  mount();
+  build();
+
+  await waitFor(() =>
+    expect(screen.getByTestId('blueprint-title')).toHaveTextContent(
+      'space-warper 10/min (max prolif)',
+    ),
+  );
+});
+
+test('the copy button says what it copies', async () => {
+  serving({ status: 202, body: aJob({ result: aResult({ blueprint: A_BLUEPRINT }) }) });
+  mount();
+  build();
+
+  const button = await screen.findByRole('button', { name: 'Copy blueprint string' });
+  expect(button).toBeInTheDocument();
+});
+
+test('a build that has reached the layout loop counts pairs, not seconds', async () => {
+  // Two settled, a third in flight: the bar is 2/6 because two pairs are DONE,
+  // not because a third of some clock has passed.
+  serving(
+    {
+      status: 202,
+      body: aJob({
+        state: 'running',
+        result: null,
+        elapsed_s: 9,
+        solver_ceiling_s: 60,
+        progress: {
+          index: 3,
+          total: 6,
+          candidate: 'max-proliferation',
+          strategy: 'spine',
+          phase: 'started',
+          area: null,
+          ok: null,
+          reason: null,
+        },
+        settled: [
+          {
+            index: 1,
+            total: 6,
+            candidate: 'no-proliferator',
+            strategy: 'spine',
+            phase: 'refused',
+            area: null,
+            ok: null,
+            reason: 'nothing fits under the belt ceiling',
+          },
+          {
+            index: 2,
+            total: 6,
+            candidate: 'no-proliferator',
+            strategy: 'freeform',
+            phase: 'laid-out',
+            area: 2006,
+            ok: true,
+            reason: null,
+          },
+        ],
+      }),
+    },
+    { status: 200, body: aJob() },
+  );
+  mount();
+  build();
+
+  const progress = await screen.findByTestId('progress');
+  expect(progress).toHaveTextContent('Laying out 3 of 6: max-proliferation / spine');
+  // The pair that gave up stays on screen while the next one runs.
+  expect(screen.getByTestId('settled')).toHaveTextContent(
+    'no layout — nothing fits under the belt ceiling',
+  );
+  expect(screen.getByTestId('settled')).toHaveTextContent('2006 tiles, valid');
+  expect(progress.querySelector('.fill')).toHaveStyle({ width: '33.3%' });
+});
+
+test('before the layout loop starts there is nothing to count, and it says so', async () => {
+  serving(
+    {
+      status: 202,
+      body: aJob({ state: 'running', result: null, elapsed_s: 2, progress: null, settled: [] }),
+    },
+    { status: 200, body: aJob() },
+  );
+  mount();
+  build();
+
+  const progress = await screen.findByTestId('progress');
+  expect(progress).toHaveTextContent('Reading the URL and solving the rates');
+});
+
+test('warnings from a VALID build are shown, not swallowed by the string being emitted', async () => {
+  serving({
+    status: 202,
+    body: aJob({
+      result: aResult({
+        report: {
+          ok: true,
+          checks_run: ['belt.termination'],
+          skipped: [],
+          errors: [],
+          warnings: [
+            {
+              check: 'belt.termination',
+              message: 'belt run 14 runs 118 tiles and never terminates',
+            },
+            {
+              check: 'flow.external_entry_points',
+              message: "'copper-ingot' is belted in at 2 separate lanes",
+            },
+          ],
+        },
+      }),
+    }),
+  });
+  mount();
+  build();
+
+  const warnings = await screen.findByTestId('validation-warnings');
+  expect(warnings).toHaveTextContent('2 warning(s)');
+  expect(warnings).toHaveTextContent('belt run 14 runs 118 tiles and never terminates');
+  expect(warnings).toHaveTextContent("'copper-ingot' is belted in at 2 separate lanes");
+});

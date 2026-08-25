@@ -198,10 +198,18 @@ body {
 .build-panel .options .checkbox input {
   width: auto;
 }
-.blueprint-out {
+/* The blueprint's own name, which is the first thing worth reading once a
+   build lands -- it says what the thing MAKES. */
+.bp-title {
   flex: 1 1 100%;
-  min-height: 4rem;
-  max-height: 4rem;
+  font-size: 14px;
+  color: #e6edf5;
+}
+/* One line, not a textarea. There is nothing to read in 10kB of base64, and a
+   four-line box of it pushed the report below the fold. The button is the way
+   out of it; the field is here so it can still be selected by hand. */
+.blueprint-out {
+  flex: 1 1 12rem;
   font-family: ui-monospace, monospace;
   font-size: 11px;
   background: #0c1016;
@@ -212,8 +220,9 @@ body {
   overflow: auto;
 }
 
-/* Elapsed against the solver ceiling. Never reaches the end on its own: the
-   ceiling bounds CP-SAT only, so a bar that filled would be a promise. */
+/* Pairs finished over pairs to do, once the layout loop starts reporting;
+   elapsed against the solver ceiling before that, which never reaches the end
+   on its own because the ceiling bounds CP-SAT only. */
 .progress .bar {
   height: 4px;
   background: #26313d;
@@ -224,6 +233,12 @@ body {
   height: 100%;
   background: #4c8fd4;
   transition: width 0.3s linear;
+}
+.progress .reasons {
+  margin: 0.4rem 0 0;
+  padding-left: 1rem;
+  font-size: 11px;
+  color: #8fa0b3;
 }
 
 .build-report {

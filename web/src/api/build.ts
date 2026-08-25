@@ -68,6 +68,23 @@ const BuildResult = z.object({
 /** A refusal: which pairs were tried, and why each gave up. */
 const Refusal = z.object({ message: z.string(), reasons: z.array(z.string()) });
 
+/**
+ * One (candidate, strategy) pair, as `pipeline.build` starts it and as it
+ * settles. This is real progress rather than elapsed time — the pipeline says
+ * which pair it is on, so the bar moves when work finishes, not when the clock
+ * does.
+ */
+const Step = z.object({
+  index: z.number(),
+  total: z.number(),
+  candidate: z.string(),
+  strategy: z.string(),
+  phase: z.enum(['started', 'laid-out', 'refused']),
+  area: z.number().nullable(),
+  ok: z.boolean().nullable(),
+  reason: z.string().nullable(),
+});
+
 const Job = z.object({
   id: z.string(),
   state: z.enum(['queued', 'running', 'done', 'refused', 'error']),
@@ -75,12 +92,18 @@ const Job = z.object({
   /** A ceiling on solver time, not a promise of a finish time. */
   solver_ceiling_s: z.number(),
   queue_position: z.number().optional(),
+  /** Null until the first layout starts: the URL parse and the rate solve
+      come first, and nothing knows how long those take. */
+  progress: Step.nullable(),
+  /** Pairs that have already ended, newest last. */
+  settled: z.array(Step),
   result: BuildResult.nullable(),
   refusal: Refusal.nullable(),
   error: z.string().nullable(),
 });
 
 export type Job = z.infer<typeof Job>;
+export type Step = z.infer<typeof Step>;
 export type BuildResult = z.infer<typeof BuildResult>;
 export type Refusal = z.infer<typeof Refusal>;
 export type Attempt = z.infer<typeof Attempt>;

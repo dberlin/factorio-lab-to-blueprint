@@ -38,10 +38,16 @@ export function BuildReportPanel({ result }: { result: BuildResult }) {
 
   return (
     <section className="build-report" data-testid="build-report">
-      <h2>
-        {result.strategy} / {result.candidate}
-      </h2>
+      {/* The blueprint's own name, which is what the game will show. It names
+          the PRODUCT and the rate — `space-warper 10/min (max prolif)` — so it
+          is the heading; which strategy and candidate produced it is how, not
+          what, and sits under it. */}
+      <h2 data-testid="report-title">{result.title}</h2>
       <dl>
+        <dt>Won with</dt>
+        <dd>
+          {result.strategy} / {result.candidate}
+        </dd>
         <dt>Machines</dt>
         <dd>{result.machines}</dd>
         <dt>Area</dt>
@@ -126,6 +132,26 @@ export function BuildReportPanel({ result }: { result: BuildResult }) {
         <p className="note">
           {result.report.skipped.length} check(s) could not run: {result.report.skipped.join(', ')}
         </p>
+      )}
+
+      {/* A warning is a check that RAN and found something the player has to
+          act on -- a belt run past its ceiling, an input arriving on two
+          separate lanes. The build is valid and the string is emitted, so
+          nothing else on this page would ever mention them. */}
+      {result.report.warnings.length > 0 && (
+        <div className="warn" data-testid="validation-warnings">
+          <p>
+            <strong>{result.report.warnings.length} warning(s).</strong> The blueprint is valid and
+            will run; these are things to look at before you paste it.
+          </p>
+          <ul className="reasons">
+            {result.report.warnings.map((finding) => (
+              <li key={`${finding.check}:${finding.message}`}>
+                {finding.check}: {finding.message}
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
 
       {result.report.errors.length > 0 && (

@@ -25,6 +25,7 @@ export function BuildPanel() {
   const [busy, setBusy] = useState(false);
   const [requestError, setRequestError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [copyError, setCopyError] = useState<string | null>(null);
   const abort = useRef<AbortController | null>(null);
   const urlId = useId();
   const nameId = useId();
@@ -46,6 +47,7 @@ export function BuildPanel() {
     setBusy(true);
     setRequestError(null);
     setCopied(false);
+    setCopyError(null);
     setJob(null);
     try {
       const settled = await runBuild({ ...options, ...overrides }, setJob, controller.signal);
@@ -75,11 +77,30 @@ export function BuildPanel() {
 
   const blueprint = job?.result?.blueprint ?? null;
 
+  /**
+   * The clipboard is a permission, not a guarantee: an insecure origin, a
+   * denied prompt or a headless browser all leave `navigator.clipboard`
+   * unusable. A button that silently did nothing there would be the worst
+   * possible answer, so a failure says so and the string stays selectable.
+   */
   const copy = () => {
     if (!blueprint) return;
-    void navigator.clipboard?.writeText(blueprint).then(
-      () => setCopied(true),
-      () => setCopied(false),
+    const written = navigator.clipboard?.writeText(blueprint);
+    if (!written) {
+      setCopyError(
+        'This browser would not give the page the clipboard. Select the string instead.',
+      );
+      return;
+    }
+    void written.then(
+      () => {
+        setCopied(true);
+        setCopyError(null);
+      },
+      (cause: unknown) => {
+        setCopied(false);
+        setCopyError(cause instanceof Error ? cause.message : String(cause));
+      },
     );
   };
 
@@ -180,16 +201,26 @@ export function BuildPanel() {
       {job?.result && (
         <>
           {blueprint ? (
-            <div className="row">
-              <textarea
+            <div className="row result-head">
+              {/* The title is what the game will show on the blueprint, and it
+                  names the PRODUCT — `space-warper 10/min (max prolif)` — not
+                  the candidate that happened to win. */}
+              <strong className="bp-title" data-testid="blueprint-title">
+                {job.result.title}
+              </strong>
+              {/* The string itself is 10kB of base64 and there is nothing to
+                  read in it. It stays in the DOM for tests and for anyone who
+                  wants to select it by hand, and the button is the way out. */}
+              <input
                 className="blueprint-out"
                 readOnly
                 value={blueprint}
                 spellCheck={false}
+                aria-label="blueprint string"
                 data-testid="blueprint-string"
               />
-              <button type="button" onClick={copy}>
-                {copied ? 'Copied' : 'Copy'}
+              <button type="button" onClick={copy} data-testid="copy-blueprint">
+                {copied ? 'Copied' : 'Copy blueprint string'}
               </button>
             </div>
           ) : (
@@ -200,6 +231,11 @@ export function BuildPanel() {
               <span className="note">It will paste, and it will not run correctly.</span>
             </div>
           )}
+          {copyError && (
+            <p role="alert" className="error">
+              {copyError}
+            </p>
+          )}
           <BuildReportPanel result={job.result} />
         </>
       )}
@@ -208,25 +244,65 @@ export function BuildPanel() {
 }
 
 /**
- * Where the job is. `solver_ceiling_s` bounds the CP-SAT budgets only — rates,
- * validation and encoding are on top, and a strategy that refuses spends its
- * retry budget as well — so this gives elapsed time a scale rather than
- * promising a finish time, and it never claims to be finished.
+ * Where the job is.
+ *
+ * Two different things get shown here, and the difference is the point.
+ *
+ * Once `pipeline.build` reaches its layout loop it reports each (candidate,
+ * strategy) pair as it starts and as it ends, so the bar is a real count of
+ * work finished — 2 of 6 means two pairs are done, not that two sixths of the
+ * clock has passed.
+ *
+ * Before that it has nothing to report: parsing the URL and solving the rates
+ * happen first, take an unknown time, and are not divided into pairs. So the
+ * fallback is elapsed against `solver_ceiling_s`, which bounds the CP-SAT
+ * budgets ONLY — validation and encoding are on top, and a strategy that
+ * refuses spends its retry budget as well. It gives the wait a scale; it is not
+ * a promise of a finish time, and it never claims to be finished.
  */
 function Progress({ job }: { job: Job }) {
-  const fraction = Math.min(job.elapsed_s / Math.max(job.solver_ceiling_s, 0.001), 1);
+  if (job.state === 'queued') {
+    return (
+      <div className="progress" data-testid="progress">
+        <p>
+          {job.queue_position && job.queue_position > 0
+            ? `Queued — ${job.queue_position} build(s) ahead. One build runs at a time; a CP-SAT solve already uses every core.`
+            : 'Queued — starting next.'}
+        </p>
+        <div className="bar" />
+      </div>
+    );
+  }
+
+  const step = job.progress;
+  // Pairs FINISHED, not pairs reached: a pair that has started is work in
+  // flight, and counting it as done is how a bar gets to 100% and stays there.
+  const fraction = step
+    ? job.settled.length / step.total
+    : Math.min(job.elapsed_s / Math.max(job.solver_ceiling_s, 0.001), 1);
+
   return (
     <div className="progress" data-testid="progress">
       <p>
-        {job.state === 'queued'
-          ? job.queue_position && job.queue_position > 0
-            ? `Queued — ${job.queue_position} build(s) ahead. One build runs at a time; a CP-SAT solve already uses every core.`
-            : 'Queued — starting next.'
-          : `Solving… ${job.elapsed_s.toFixed(1)}s elapsed, up to ${job.solver_ceiling_s}s of layout solving.`}
+        {step
+          ? `Laying out ${step.index} of ${step.total}: ${step.candidate} / ${step.strategy} — ${job.elapsed_s.toFixed(1)}s elapsed.`
+          : `Reading the URL and solving the rates… ${job.elapsed_s.toFixed(1)}s elapsed, then up to ${job.solver_ceiling_s}s of layout solving.`}
       </p>
       <div className="bar">
         <div className="fill" style={{ width: `${(fraction * 100).toFixed(1)}%` }} />
       </div>
+      {job.settled.length > 0 && (
+        <ul className="reasons" data-testid="settled">
+          {job.settled.map((done) => (
+            <li key={`${done.candidate}/${done.strategy}`}>
+              {done.candidate} / {done.strategy}:{' '}
+              {done.phase === 'refused'
+                ? `no layout — ${done.reason ?? 'no reason given'}`
+                : `${done.area} tiles, ${done.ok ? 'valid' : 'INVALID'}`}
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }
