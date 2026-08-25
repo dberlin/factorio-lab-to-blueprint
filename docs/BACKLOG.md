@@ -636,6 +636,54 @@ rather than as anything about coaters.
    candidate source rather than the first that works. Nearest-by-manhattan
    picked a source whose actual route was 68 tiles for a straight-line 34.
 
+## OPEN -- we place belts beside splitters the game would refuse, and the obvious guard does not fix it
+
+`game.belt_collide` ships in `validate.OPT_IN`. Turning it on costs five to
+seven corpus cells -- **59/72 clean against 64-66 with it off, INVALID 0** -- and
+every one of those is a REFUSAL, not an invalid blueprint. The excusals in that
+check reproduce blueprints the game itself wrote (1189 raw findings to 0), so
+these are not false positives: **our layouts really do contain belt-beside-
+splitter geometry the game rejects at paste, and the only thing hiding it is
+that the check is off.**
+
+**THE GEOMETRY IS SETTLED.** An unlinked belt placed at every offset around a
+splitter, judged by `colliders.belt_collisions`, is convicted at exactly the
+FOUR ORTHOGONAL NEIGHBOURS and nowhere else:
+
+        .  .  .  .  .
+        .  .  X  .  .
+        .  X  S  X  .
+        .  .  X  .  .
+        .  .  .  .  .
+
+Diagonals clear (1.777 units against a 1.42 reach) and so does anything two
+tiles out. The game excuses a belt whose own run reaches the splitter, or a
+preview the splitter links to, within a couple of hops
+(`colliders.belt_chain_excuses`) -- so the test is LINKAGE, not distance. A
+neighbour is fatal only when it belongs to a different run.
+
+**IT IS STOCHASTIC**, which is why it reads as flaky: the same URL convicts 2
+belts in one run and 0 in another, depending on which run happens to be routed
+beside the tap.
+
+**THE OBVIOUS FIX WAS TRIED AND FAILS, so do not spend the day rediscovering
+it.** Adding the linkage test to `junction.site_is_clear`, so a tap is refused
+when an orthogonal neighbour carries a foreign belt, is both too strict and
+ineffective: it refused **1147 of 1619** sites on one spec -- 71% -- and the
+convictions survived anyway.
+
+The reason is ORDERING. `_tap_source` runs inside `_commit_paths`, which walks
+the committed paths in turn, so a splitter made for path A is created before
+path B's belts are staked beside it. A site test at tap time cannot see a belt
+that does not exist yet, and tightening it only starves the router of taps.
+
+**So the fix has to be one of these, and each needs measuring rather than
+picking:** choose taps AFTER every belt is staked rather than during the walk;
+or reserve a tap's four neighbours during routing so no foreign path may take
+them; or re-check the finished placement and refuse the pack, letting the sweep
+try another packing -- which is honest but buys nothing over simply turning
+`game.belt_collide` on.
+
 ## OPEN -- spine's ten-coater case is a runway problem now, not a rules one
 
 `super-magnetic-ring*60/max-proliferation` (10 spray lanes) still refuses, and
