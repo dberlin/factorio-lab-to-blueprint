@@ -330,8 +330,7 @@ def feedback_cost_context(
     """Build immutable candidate-independent feedback scoring inputs."""
     if problem.logical_net_ids:
         net_weights = tuple(
-            1.0 + state.logical_net_weight.get(logical, 0.0)
-            for logical in problem.logical_net_ids
+            1.0 + state.logical_net_weight.get(logical, 0.0) for logical in problem.logical_net_ids
         )
     else:
         weight_by_endpoints: dict[tuple[int, int], float] = {}

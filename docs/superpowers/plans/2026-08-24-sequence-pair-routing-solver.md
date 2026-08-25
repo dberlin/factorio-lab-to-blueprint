@@ -121,10 +121,12 @@ from enum import StrEnum
 
 Cell = tuple[int, int, int]
 
+
 class NetRole(StrEnum):
     INTERNAL = "internal"
     EXTERNAL = "external"
     PROLIFERATOR = "proliferator"
+
 
 @dataclass(frozen=True, order=True, slots=True)
 class NetId:
@@ -134,6 +136,7 @@ class NetId:
     role: NetRole
     ordinal: int
 
+
 class RouteFailureKind(StrEnum):
     STATIC_ACCESS = "static-access"
     DYNAMIC_ACCESS = "dynamic-access"
@@ -142,12 +145,14 @@ class RouteFailureKind(StrEnum):
     COMMIT_LINK = "commit-link"
     BUDGET = "budget"
 
+
 class DetailedRouteStatus(StrEnum):
     ROUTED = "routed"
     STRANDED = "stranded"
     UNPOWERABLE = "unpowerable"
     BUDGET = "budget"
     INVALID = "invalid"
+
 
 @dataclass(frozen=True, slots=True)
 class NetFailure:
@@ -156,6 +161,7 @@ class NetFailure:
     wall: tuple[Cell, ...]
     blocking_nets: tuple[NetId, ...]
     expansions: int
+
 
 @dataclass(frozen=True, slots=True)
 class DetailedRouteResult:
@@ -256,6 +262,7 @@ class _PreparedPort:
     tiles: int
     machines: int
 
+
 @dataclass(frozen=True, slots=True)
 class _PreparedNet:
     net_id: NetId
@@ -264,11 +271,13 @@ class _PreparedNet:
     item: str
     boundary_goals: tuple[tuple[int, int, int], ...] = ()
 
+
 @dataclass(slots=True)
 class _RoutingWorkspace:
     canvas: _Canvas
     buildings: list[PlacedBuilding]
     nets: list[_Net]
+
 
 @dataclass(frozen=True, slots=True)
 class _PreparedRoutingProblem:
@@ -472,9 +481,7 @@ def test_sequence_pair_relations_decode_to_expected_axes() -> None:
 
 def test_gap_profile_adds_explicit_channel_space() -> None:
     pair = SequencePair(positive=(0, 1), negative=(0, 1))
-    plain = decode_sequence_pair(
-        pair, GapProfile.zero(2), ((3, 2), (4, 2)), outline_height=6
-    )
+    plain = decode_sequence_pair(pair, GapProfile.zero(2), ((3, 2), (4, 2)), outline_height=6)
     gapped = decode_sequence_pair(
         pair,
         GapProfile(east=(2, 0), north=(0, 0)),
@@ -521,7 +528,10 @@ class SequencePair:
     def validate(self, size: int) -> None:
         wanted = tuple(range(size))
         if tuple(sorted(self.positive)) != wanted or tuple(sorted(self.negative)) != wanted:
-            raise ValueError("both sequence-pair permutations must contain every strip exactly once")
+            raise ValueError(
+                "both sequence-pair permutations must contain every strip exactly once"
+            )
+
 
 @dataclass(frozen=True, slots=True)
 class GapProfile:
@@ -531,6 +541,7 @@ class GapProfile:
     @classmethod
     def zero(cls, size: int) -> GapProfile:
         return cls((0,) * size, (0,) * size)
+
 
 @dataclass(frozen=True, slots=True)
 class PlacementProblem:
@@ -633,10 +644,12 @@ class PlacementCostContext:
     history_cost_by_net: tuple[float, ...]
     missed_direct_inserts: int = 0
 
+
 @dataclass(frozen=True, order=True, slots=True)
 class SearchEnergy:
     hard_outline_overflow: int
     scalar: float
+
 
 def cheap_energy(
     problem: PlacementProblem,
@@ -656,8 +669,11 @@ def cheap_energy(
     gap_ratio = decoded.gap_area / max(problem.area_lower_bound, 1)
     return SearchEnergy(
         hard_outline_overflow=overflow,
-        scalar=area_ratio + 0.35 * hpwl_ratio + 0.2 * history_ratio
-        + 0.1 * direct_ratio + 0.05 * gap_ratio,
+        scalar=area_ratio
+        + 0.35 * hpwl_ratio
+        + 0.2 * history_ratio
+        + 0.1 * direct_ratio
+        + 0.05 * gap_ratio,
     )
 ```
 
@@ -795,9 +811,7 @@ def test_global_router_uses_the_same_level_and_ramp_moves_as_detailed() -> None:
 
 def test_hard_solids_and_reserved_ports_remain_impassable() -> None:
     problem, hard_cells = prepared_blocked_detour()
-    result = route_global_once(
-        problem, FeedbackState.empty(problem.outline), budget=20_000
-    )
+    result = route_global_once(problem, FeedbackState.empty(problem.outline), budget=20_000)
     used = {cell for path in result.paths.values() for cell in path}
     assert used.isdisjoint(hard_cells)
 ```
@@ -829,6 +843,7 @@ class GlobalNetResult:
     level_changes: int
     overflow: int
     expansions: int
+
 
 @dataclass(frozen=True, slots=True)
 class GlobalRouteResult:
@@ -1059,6 +1074,7 @@ class SequenceSolverConfig:
     final_reserve_fraction: Fraction = Fraction(1, 4)
     seed: int = 20260824
 
+
 @dataclass(slots=True)
 class ExpansionBudget:
     total: int
@@ -1178,7 +1194,9 @@ git commit -m "Close sequence search with detailed routing feedback"
 ```python
 def test_promotion_requires_strict_runtime_ci_and_nonworse_quality() -> None:
     report = assess_promotion(
-        baseline=fixture_trials(seconds=(10.0, 10.2, 9.8), area=(100, 100, 100), belts=(50, 50, 50)),
+        baseline=fixture_trials(
+            seconds=(10.0, 10.2, 9.8), area=(100, 100, 100), belts=(50, 50, 50)
+        ),
         candidate=fixture_trials(seconds=(8.0, 8.2, 7.9), area=(100, 99, 100), belts=(50, 50, 49)),
         bootstrap_seed=7,
     )
@@ -1277,11 +1295,10 @@ git commit -m "Measure sequence solver promotion criteria"
 ```python
 def test_kernel_protocol_returns_exact_reference_integers() -> None:
     problem = generated_kernel_fixture(seed=11, strips=40)
-    expected = PythonSequenceKernel().decode_batch(
-        problem.pairs, problem.gaps, problem.sizes
-    )
+    expected = PythonSequenceKernel().decode_batch(problem.pairs, problem.gaps, problem.sizes)
     assert len(expected) == len(problem.pairs)
     assert all(isinstance(value, int) for row in expected for value in row)
+
 
 def test_global_kernel_reproduces_reference_paths_and_diagnostics() -> None:
     problem = prepared_global_kernel_fixture()
@@ -1298,12 +1315,11 @@ def test_global_kernel_reproduces_reference_paths_and_diagnostics() -> None:
 IntMatrix = Sequence[Sequence[int]]
 DecodedBatch = tuple[tuple[int, ...], ...]
 
+
 class SequenceKernel(Protocol):
     name: str
 
-    def decode_batch(
-        self, pairs: IntMatrix, gaps: IntMatrix, sizes: IntMatrix
-    ) -> DecodedBatch:
+    def decode_batch(self, pairs: IntMatrix, gaps: IntMatrix, sizes: IntMatrix) -> DecodedBatch:
         raise NotImplementedError
 
     def score_batch(

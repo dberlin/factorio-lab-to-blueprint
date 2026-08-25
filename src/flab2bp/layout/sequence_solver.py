@@ -320,8 +320,6 @@ StageBoundaryTransform = Callable[
 StageBoundaryCommit = Callable[[int, PlacementProblem], None]
 
 
-
-
 class SequenceSolver[PreparedT]:
     """Run deterministic discovery, then best-first closed routing stages."""
 

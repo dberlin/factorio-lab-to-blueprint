@@ -123,9 +123,8 @@ class PlacementProblem:
                     or self.sizes[strip][1] < variants[0].box_height
                 ):
                     raise ValueError("problem default sizes must contain variant index zero")
-        if (
-            not isinstance(self.logical_net_ids, tuple)
-            or (self.logical_net_ids and len(self.logical_net_ids) != len(self.nets))
+        if not isinstance(self.logical_net_ids, tuple) or (
+            self.logical_net_ids and len(self.logical_net_ids) != len(self.nets)
         ):
             raise ValueError("logical net ids must match the immutable placement nets")
         if self.instance_ids and self.logical_net_ids:

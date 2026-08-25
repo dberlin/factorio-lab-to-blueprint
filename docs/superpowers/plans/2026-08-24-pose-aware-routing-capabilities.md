@@ -91,14 +91,17 @@ Expected: assertions fail because the current stage context reuses one cached tu
 - [ ] **Step 4: Write failing strict persisted-metric tests**
 
 ```python
-@pytest.mark.parametrize("field,value", [
-    ("trial", 0.9),
-    ("trial", -1),
-    ("area", 100.5),
-    ("area", -1),
-    ("belt_tiles", -1.2),
-    ("buildings", 1.9),
-])
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("trial", 0.9),
+        ("trial", -1),
+        ("area", 100.5),
+        ("area", -1),
+        ("belt_tiles", -1.2),
+        ("buildings", 1.9),
+    ],
+)
 def test_persisted_integer_metrics_reject_fractional_or_negative(field: str, value: object) -> None:
     payload = valid_sample_payload()
     payload[field] = value
@@ -113,11 +116,14 @@ Required integer metrics and identities accept `int` or mathematically integral 
 - [ ] **Step 6: Write failing cross-validation promotion tests**
 
 ```python
-@pytest.mark.parametrize("available,checked,passed,demoted", [
-    (False, 0, 0, 0),
-    (True, 2, 1, 0),
-    (True, 2, 2, 1),
-])
+@pytest.mark.parametrize(
+    "available,checked,passed,demoted",
+    [
+        (False, 0, 0, 0),
+        (True, 2, 1, 0),
+        (True, 2, 2, 1),
+    ],
+)
 def test_promotion_requires_complete_successful_crossvalidation(
     available: bool, checked: int, passed: int, demoted: int
 ) -> None:
@@ -212,7 +218,9 @@ def test_rotated_refinery_variant_serves_both_lane_sides() -> None:
     family = refinery_family(required_above=True, required_below=True)
     rotated = variants_at_yaw(family, 90.0)
     assert rotated
-    assert all(variant.footprint_width == 7 and variant.footprint_height == 3 for variant in rotated)
+    assert all(
+        variant.footprint_width == 7 and variant.footprint_height == 3 for variant in rotated
+    )
 
 
 def test_equal_footprints_can_require_different_machine_pitch() -> None:
@@ -425,8 +433,10 @@ def test_no_sorter_targets_a_spray_coater() -> None:
     placement = emitted_proliferated_fixture()
     coater_indices = {i for i, b in enumerate(placement.buildings) if b.item_id == SPRAY_COATER_ID}
     assert not [
-        b for b in placement.buildings
-        if is_sorter(b.item_id) and (b.input_obj in coater_indices or b.output_obj in coater_indices)
+        b
+        for b in placement.buildings
+        if is_sorter(b.item_id)
+        and (b.input_obj in coater_indices or b.output_obj in coater_indices)
     ]
 ```
 
