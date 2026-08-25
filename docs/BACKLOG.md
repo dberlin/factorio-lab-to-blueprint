@@ -339,20 +339,33 @@ way and only the first is small:
   extent is 2.7; the Energy Exchanger's are at `±2.85` inside a half extent of
   5.85, and the real fixtures put their belts at 2.27 and 3.00 -- under the
   building. A belt overlapping a machine is legal in game and illegal in our
-  grid. That is the OPEN entry *"our footprints are a tile grid; the game's
-  collision is not"* at the bottom of this file, and this work sits behind it.
+  grid. ~~That is the OPEN entry *"our footprints are a tile grid; the game's
+  collision is not"* at the bottom of this file, and this work sits behind it.~~
+
+  **RE-AIMED 2026-08-25.** The footprint entry is closed and this was never
+  waiting on it. What forbids the overlap is the ROUTER's occupancy policy:
+  `freeform._Canvas.add` stakes a machine with `solid=True`, which writes every
+  level of every footprint tile into `blocked`, so no belt may enter a machine's
+  tiles at any altitude. Relaxing that for port tiles specifically is the work,
+  and it needs its own measurement -- the same policy is what keeps belts from
+  routing through machines generally, which is right everywhere else.
 
 Until then the refusal stands and is honest. `_machine_config` still owns the
 charge/discharge parameter block and is tested directly, so that coverage did not
 go with the removed placement.
 
-**Freeform is unchanged and needs the same correction.** Its
-`_machines_without_poses` owns the case there and refuses correctly, but its
-docstring argues from a false premise: *"a Ray Receiver IS fed in game, so it
+~~**Freeform is unchanged and needs the same correction.**~~ **MADE
+2026-08-25.** Its `_machines_without_poses` owned the case correctly but its
+docstring argued from a false premise -- *"a Ray Receiver IS fed in game, so it
 either carries its slots in an array the extractor does not read or takes items
-by some other mechanism"*. It is fed nothing -- it consumes no item at all, and
-its OUTPUT is what needs a belt. That file was being edited on master while this
-was written, so the correction was reported rather than made.
+by some other mechanism"* -- and its refusal message carried the same reading,
+so a reader who hit it was sent to the extractor rather than to belt-to-port
+docking. It is fed nothing; it consumes no item at all, and its OUTPUT is what
+needs a belt. The docstring now says so, and the message names the port count
+the way spine's `_sorterless_groups` does: *"gives it no insert pose on any face
+and 4 belt port(s) ... it takes a belt docked into a port, which neither
+strategy emits"*. Pinned by
+`test_the_refusal_names_the_belt_ports_rather_than_a_missing_array`.
 
 The other half of what the original measurement showed -- that `validate` called
 that unwired placement clean -- is its own entry above, and is unrelated to the
@@ -849,7 +862,16 @@ cross-shaped building like the Splitter reserves its empty corners too.
 conservative one, and where the two disagree it is the clearance that
 over-reserves.
 
-## OPEN -- the layout obeys the slot tables now; what it cannot serve is geometry
+## RESOLVED -- the layout obeys the slot tables, and rotation answered the geometry
+
+**RE-CHECKED AGAINST LIVE CODE 2026-08-25. Two of the three structural
+consequences below were closed eighty minutes after this entry was written and
+nobody came back to say so.** The entry landed at `6c43bd8` (Mon 14:33);
+`69eddea`, "Rotation: a machine is turned to face the lanes that must feed it",
+landed at 15:53. Everything from "Neither strategy can rotate a machine today"
+onward has been false since. The original text is kept below, struck through
+where it expired, because the RULES it states are still the right description of
+the game -- it is the *consequences* that moved.
 
 The game's own predicates are ported (`game.inserter_data`,
 `game.inserter_paste`, `game.inserter_skew`, `game.addon_supply` in
@@ -868,43 +890,82 @@ table says exactly what the old edge-row assumption said.
 
 WHAT STILL CANNOT BE LAID OUT, AND WHY
 
-`attachable_columns` for a lane one row clear of the machine, both sides:
+`attachable_columns` for a lane one row clear of the machine, both sides.
+**REGENERATED FROM LIVE CODE 2026-08-25**, at the yaw `slots.lane_orientation`
+actually picks and against the footprints as `0df4b57` corrected them -- the
+version written at `6c43bd8` was upright-only and pre-`GRID_ARC`, so three of its
+six rows are wrong now:
 
-| building | footprint | from above | from below |
+| building | built as | from above | from below |
 | --- | --- | --- | --- |
-| Assembling Machine, Smelter, Depot | 3x3 | 0,1,2 | 0,1,2 |
-| Matrix Lab | 5x5 | 1,2,3 | 1,2,3 |
-| Chemical Plant, Quantum Chemical Plant | 9x5 | 3,4,5,6 | 3,4,5,6 |
+| Assembling Machine (all three), Arc/Plane/Negentropy Smelter, Depot Mk.I | 3x3 | 0,1,2 | 0,1,2 |
+| Depot Mk.II | 5x3 | 1,2,3 | 1,2,3 |
+| Matrix Lab, Self-evolution Lab | 5x5 | 1,2,3 | 1,2,3 |
+| Chemical Plant, Quantum Chemical Plant | 7x5 | 2,3,4,5 | 2,3,4,5 |
 | Miniature Particle Collider | 9x5 | 1,2,3 | 1,2,3 |
-| **Oil Refinery** | 3x7 | **none** | 0,1,2 |
+| **Oil Refinery** | **7x3, at yaw 90** | **2,3,4** | **2,3,4** |
 | Ray Receiver, Energy Exchanger, Spray Coater | -- | **none** | **none** |
 
-Three structural consequences, each a packer problem rather than a validator
-one:
+Three structural consequences were drawn from that table. **Two are closed and
+the third was never a defect:**
 
-1. **An Oil Refinery cannot be served from the north.** Its nine poses are
-   0-2 east, 3-5 west, 6-8 on the south face; there is no pose on the north
-   face to be near. A layout that runs its lanes east-west can only feed a
-   Refinery from below. The fix is either to rotate it a quarter turn -- at
-   yaw 90 its east and west faces become north and south, and its 3x7 becomes
-   a 7x3 that suits a row band better -- or to route both of its connections
-   from the same side. Neither strategy can rotate a machine today.
-2. **A wide machine offers fewer columns than its width**, so fewer parallel
-   sorters fit. `_pick_sorter` is now sized against the attachable count rather
-   than the footprint width, which buys back capacity by raising the tier, but
-   a Chemical Plant still tops out at four sorters per lane.
-3. **A Chemical Plant's southern anchor is a row INSIDE its footprint**, so the
-   sorter is two tiles long before anything else -- and a lane three tiles clear
-   of it is already past `SORTER_MAX_REACH`. Wide machines must be packed
-   CLOSER to their lanes than 3x3s, not further.
+1. ~~**An Oil Refinery cannot be served from the north.**~~ **CLOSED by
+   `69eddea`, which is the rotation this item asked for.** The rule is read from
+   the table rather than tabulated: `slots.lane_orientation` prefers an
+   orientation reachable from BOTH sides, then from either, and breaks ties
+   toward upright so nothing turns without cause. Only 0 and 90 are candidates,
+   because mirroring cannot take a pose off a face. **The Refinery is the only
+   building in the catalog that moves**, and at yaw 90 it is a 7x3 offering
+   columns 2,3,4 to a lane on EITHER side. Both strategies call it --
+   `spine.py:327`, `freeform.py:1093` -- and
+   `tests/layout/test_sorter_slots.py` pins `lane_orientation(2308) == 90.0`
+   and `0.0` for every other building, so a regression that rotated everything
+   would fail as loudly as one that rotated nothing.
+2. **A wide machine offers fewer columns than its width.** STILL TRUE and not a
+   defect: it is what the prefabs say, and it is modelled rather than worked
+   around. `_pick_sorter` is sized against the attachable count rather than the
+   footprint width, which buys capacity back by raising the tier. The figure in
+   the original text needs one correction -- a Chemical Plant is 7x5, not 9x5,
+   since `0df4b57` -- so it offers **four of seven** columns, not four of nine,
+   and four sorters per lane is its ceiling.
+3. ~~**A Chemical Plant's southern anchor is a row INSIDE its footprint.**~~
+   **The geometry is still exactly that; the packers now obey it, which is what
+   this item asked for.** Measured on live code, as the deepest lane that still
+   attaches, counted in clear rows between footprint edge and lane:
 
-**51 tests in `test_spine.py` and `test_freeform.py` fail**, all of the form
-"this spec lays out and validates clean" for a spec containing an Oil Refinery,
-a Chemical Plant or a Spray Coater. They are the diagnosis, not the disease; the
-failure mode is `machine.inputs_supplied` / `machine.output_removed` /
-`flow.sorter_capacity`, never an invalid blueprint. The audit holds **INVALID 0
-and crashed 0** across three runs (tier `small`, budget 4s: 8/30 clean, 22
-refused, identical all three times).
+   | | above | below |
+   | --- | --- | --- |
+   | Assembling Machine, Matrix Lab, Oil Refinery (7x3), Particle Collider | 0,1,2 | 0,1,2 |
+   | **Chemical Plant, Quantum Chemical Plant** | **0,1** | 0,1,2 |
+   | Artificial Star, Vertical Launching Silo | 0,1 | 0,1 |
+
+   Both strategies charge that per side and from the poses: spine's
+   `_reach_charge`/`_anchor_span` and freeform's `_side_lane_caps` both walk
+   outward from the band and stop at the first row `slots.attachable_columns`
+   returns empty for. `_reach_charge`'s own docstring records the trap this
+   replaced -- one worst-of-both-sides number that was wrong on BOTH sides and
+   right in the total, so an aggregate check cleared it.
+
+**The "51 tests fail" measurement is dead.** `uv run pytest` is **1323 tests,
+0 failures**; `test_spine.py` and `test_freeform.py` are 176 and 228 of them and
+all green. The corpus figure moved with it: measured 2026-08-25 over four runs,
+freeform on the full stress corpus is **64-66/72 clean** (66, 65, 64, 66) and
+spine on the 48-cell mid tier is **32/48**, with **INVALID 0 and crashed 0 in
+every run** -- against the "8/30 clean" recorded above. The band is CP-SAT's,
+not a regression: it is quoted as a band because a single number from it has
+been mistaken for a movement on this project before.
+
+**WHAT IS ACTUALLY LEFT, AND IT IS THE LAST ROW OF THE TABLE.** Freeform's
+misses are six `universe-matrix` cells in every run, all the same refusal:
+*"a machine in this spec has lanes to wire and no insert pose to wire them to"*
+-- the Ray Receiver. The one or two `quantum-chip` cells that join them in a
+tight run are load, not geometry: run alone, `--only quantum-chip` is 6/6 clean.
+The Ray Receiver case is not this entry's; it is settled and owned
+by **"RESOLVED -- the extraction is complete; these buildings take belts, not
+sorters"** above, whose open tail is belt-to-port docking. Spine's sixteen mid-
+tier misses are all the Spray Coater supply case, owned by **"OPEN -- spine's
+ten-coater case is a runway problem now, not a rules one"**. Nothing refuses for
+a reason this entry names.
 
 ### Spray Coaters are belt-fed, and the belt goes one level UP
 
@@ -919,11 +980,20 @@ altitude level up**. The corpus confirms it: every coater there has a belt one
 level above and one tile to the side.
 
 So proliferation needs an ELEVATED proliferator lane whose tiles land in each
-coater's addon area. Neither strategy can route one, so `game.addon_supply`
-reports the coater unsupplied and every proliferated candidate refuses. That is
-a real capability loss and it is the right one: the sorter it replaces looked
-like a feed and was not one, and nothing could see that because a coater has no
-`slotPoses` for `CheckInserterDataLegal` to check.
+coater's addon area. ~~Neither strategy can route one, so `game.addon_supply`
+reports the coater unsupplied and every proliferated candidate refuses.~~
+
+**BOTH ROUTE ONE NOW; only the diagnosis above survives.** Spine grows an
+elevated spur from a lane's tail to the drop and chains coaters onto one supply
+belt (`795fc03`, and the entry "RESOLVED -- spine grows elevated lanes, and the
+drop was never the hard part"); freeform's coater supply came out clean on the
+re-measurement of 2026-08-23 with **zero `prolif.*` findings over nine corpus
+runs**. What remains is spine's runway, which is its own OPEN entry and is a
+question of where the spur can go, not of whether the connection exists.
+
+The rule itself is unchanged and still the point: the sorter this replaced
+looked like a feed and was not one, and nothing could see that because a coater
+has no `slotPoses` for `CheckInserterDataLegal` to check.
 
 ## RESOLVED -- the game's own rules are scattered across three forms
 
@@ -1408,12 +1478,44 @@ wrong blueprint -- it is a quietly worse one, everywhere, which is much harder
 to notice.
 
 
-## OPEN -- our footprints are a tile grid; the game's collision is not
+## RESOLVED -- the footprint fix landed; the one live defect left has its own entry
 
 The fourth and last unexplained error from the first in-game paste,
 "Collide with other object" (`EBuildCondition.Collide = 34`), is ours colliding
-with ourselves. It is now extracted, modelled and measured; what is NOT done is
-the layout fix, which is why this entry is OPEN.
+with ourselves. ~~It is now extracted, modelled and measured; what is NOT done
+is the layout fix, which is why this entry is OPEN.~~
+
+**RE-CHECKED AGAINST LIVE CODE 2026-08-25. The layout fix landed.** `geom.collide`
+is a normal ERROR check that both strategies pass on the whole corpus,
+`validate.OPT_IN` is down to the single entry `game.belt_collide`, and the audit
+measured today is **INVALID 0 in every run** -- freeform 64-66/72 over four runs
+of the full stress corpus, spine 32/48 on the 48-cell mid tier, crashed 0 in
+both. Items 1
+and 2 below are already marked DONE by the commits that did them, and item 3's
+excusal was found and merged at `bce0c31`/`9f174dc`.
+
+**What is left of this entry, item by item:**
+
+* Item 3 names a REAL live defect -- our belts sit beside splitters the game
+  would refuse, which is why `game.belt_collide` is still opt-in. That defect
+  has its own entry, **"OPEN -- we place belts beside splitters the game would
+  refuse, and the obvious guard does not fix it"**, with the geometry settled,
+  the obvious guard measured and rejected, and three candidate fixes to choose
+  between. Go there; do not re-derive it here.
+* Item 4, sorter-on-sorter, is genuinely NOT done, and **the reason it gives is
+  stale.** See its own text below: the blocker is no longer the slot data.
+* Nothing else in this entry names a layout defect that still reproduces.
+
+**One pointer into this entry needs correcting, and it is why closing this
+mattered.** The entry *"the extraction is complete; these buildings take belts,
+not sorters"* says belt-to-port docking "sits behind" this one, because "a belt
+overlapping a machine is legal in game and illegal in our grid". The footprint
+half of that is fixed. What actually forbids it now is the ROUTER's occupancy
+policy, not the footprint rule: `freeform._Canvas.add` stakes a machine with
+`solid=True`, which writes every level of every footprint tile into `blocked`,
+so no belt may enter a machine's tiles at any altitude. That is a routing policy
+to be revisited on its own terms, with its own measurement -- it is not waiting
+on anything here.
 
 **The rule.** `BuildTool_BlueprintPaste.CheckBuildConditions` (decompiled
 145712-145760) puts every preview's `PrefabDesc.buildColliders` into the live
@@ -1562,16 +1664,46 @@ check that both strategies pass on the whole corpus.
    1.19-unit arm by 0.16 of its 0.23 radius. Turning it on turns 15 `spine`
    tests red -- `magnetic-ring`, plus `quantum-chip/no-proliferator` and
    `free-proliferation` -- because the strategy's own self-check then refuses
-   every plan it emits. That is a ROUTER bug the footprint fix resolves, exactly
-   as spacing took `geom.collide` out of `OPT_IN`. With it opt-in the full
+   every plan it emits. ~~That is a ROUTER bug the footprint fix resolves,
+   exactly as spacing took `geom.collide` out of `OPT_IN`.~~ **That prediction
+   was made here and then falsified.** The footprint fix landed (item 1) and the
+   check is still opt-in: with it on the corpus drops to 59/72 against 64-66
+   with it off, every loss a refusal rather than an invalid. The router bug is
+   real and it is separate -- it is the belt-beside-splitter entry, where the
+   ordering argument for why the obvious guard fails is written out. With it
+   opt-in the full
    audit is unmoved: 144/144 cells at budget 4s, **INVALID 0**, and not one of
    the 38 refusals names either belt check -- they are the Spray Coater supply
    rule (spine, 32) and the missing insert poses (freeform, 6). Until then `game.belt_crossing` remains a
    LOWER bound on what the game rejects, and `game.belt_collide` is the upper
    one, available by name.
-4. **Sorters likewise**, and for a known reason: a sorter's box is rebuilt from
-   the poses of the buildings it connects, which needs the `slotPoses` data this
-   repository had wrong.
+4. **Sorters likewise** -- still not done, and ~~for a known reason: a sorter's
+   box is rebuilt from the poses of the buildings it connects, which needs the
+   `slotPoses` data this repository had wrong.~~ **THAT REASON EXPIRED.** The
+   `slotPoses` are extracted from the prefabs and correct; an Assembling Machine
+   has its twelve. The live blocker is the REBUILD, and it is measured:
+
+   * a sorter's `buildColliders` is one box, half-extents `(0.26, 0.15, 0.115)`
+     -- 0.52 by 0.23 in plan -- and the game re-seats it onto the connected
+     buildings' poses at `RefreshBuildPreview` 180039-180096;
+   * testing that box where the blueprint RECORD puts it is refuted by the
+     game's own output: **53 pairs closer than 0.52 units among the 1132 sorters
+     in the five single-area fixtures**, in blueprints that paste. Shipping the
+     raw test would convict the corpus, which is the same shape the belt rule
+     had at 1189 raw findings;
+   * so porting 180039-180096 is the work, not porting the box.
+
+   **One measurement worth having before anyone starts.** Read through the same
+   writer, in the same coordinates as the fixtures: across 16 corpus cells both
+   strategies emit **702 sorters with 172 anchor points shared by two or more of
+   them**, and **216 pairs under 0.52 units**. The game's 1132 share **zero**
+   anchor points. That divergence may be nothing -- our machine-side anchor is a
+   tile centre where the game writes a sub-tile pose, and the paste re-seats it
+   from the slot index either way -- but it is the first thing the rebuild will
+   have an opinion about, and it is not currently reported by anything.
+   `test_a_raw_sorter_box_test_convicts_blueprints_the_game_wrote` in
+   `tests/dsp/test_colliders.py` pins the fixture half so this reason cannot
+   quietly expire the way the last one did.
 
 **Not a defect, and worth not re-discovering:** columns compress by `cos(lat)`
 away from the paste anchor, because the longitude step is fixed at the anchor's

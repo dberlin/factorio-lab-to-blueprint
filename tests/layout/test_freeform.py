@@ -2044,6 +2044,31 @@ class TestModeDrivenMachines:
         assert "no insert pose on any face" in exc.value.reason
         assert "Energy Exchanger" in exc.value.reason
 
+    def test_the_refusal_names_the_belt_ports_rather_than_a_missing_array(self) -> None:
+        """The message must say the building is belt-PORTED, not under-extracted.
+
+        ``docs/BACKLOG.md`` settled this from the prefabs and the IL: an Energy
+        Exchanger carries ``insertPoses`` of length ZERO and four ``portPoses``,
+        45 of them across three fixtures name 90 peers and **every peer is a
+        belt**.  The extractor is not missing an array; there is no array to
+        miss.  Spine's ``_sorterless_groups`` already says so -- "has 0 insert
+        poses and 4 belt port(s)" -- and freeform's message did not, so a reader
+        who hit the freeform refusal was sent to the extractor rather than to
+        belt-to-port docking, which is the work that would actually unblock it.
+
+        The count is asserted, not merely the words: a message that says "belt
+        port(s)" with the wrong number would send the same reader to the same
+        wrong place.
+        """
+        spec = mode_driven_spec()
+        with pytest.raises(NoValidLayout) as exc:
+            FreeformLayout(power=False).lay_out(spec, time_budget_s=0.5)
+        reason = exc.value.reason
+        ports = len(catalog.building(catalog.ENERGY_EXCHANGER_ID).slots)
+        assert ports == 4, "the prefab's own port count, not a number chosen here"
+        assert f"{ports} belt port(s)" in reason, reason
+        assert "extractor" not in reason, reason
+
     def test_the_machine_carries_the_mode_not_a_recipe(self) -> None:
         """Asked of the unit that decides it, since no placement reaches here.
 

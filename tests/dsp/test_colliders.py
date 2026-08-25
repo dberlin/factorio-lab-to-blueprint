@@ -452,3 +452,72 @@ def test_a_belt_beside_a_machine_it_has_nothing_to_do_with_still_collides() -> N
             C.Preview(_BELT_MK3, 1.0, 0.0, 0.0, is_belt=True, output=0),
         ]
     )
+
+
+def test_a_raw_sorter_box_test_convicts_blueprints_the_game_wrote() -> None:
+    """Why :func:`C.collisions` still says nothing about sorter-on-sorter.
+
+    The reason recorded in that docstring used to be the slot data, and that
+    reason expired when the real ``PrefabDesc.slotPoses`` were extracted from
+    the prefabs.  The live reason is the RE-SEATING: the game rebuilds a
+    sorter's collider onto the poses of the buildings it connects
+    (``RefreshBuildPreview`` 180039-180096), so testing the prefab box where the
+    blueprint record puts it is not the game's test.
+
+    Both halves are asserted, because either alone would let the docstring drift
+    back:
+
+    * the slot data is THERE now -- an Assembling Machine has twelve poses -- so
+      "we cannot, the data is wrong" is no longer available as an excuse;
+    * and the raw box test is refuted by the corpus: the game's own blueprints
+      put sorter anchors closer than the box is wide, 53 times over 1132
+      sorters, in pastes that work.  A port that raised those would be wrong.
+
+    The count is asserted as a floor rather than an equality: the claim is that
+    the raw test convicts real blueprints, and one more fixture must not turn a
+    reinforcement of that claim into a failure.
+    """
+    assert len(cat.building(2303).slot_poses) == 12, "the extraction landed"
+
+    radius = 0.26
+    anchors: list[tuple[tuple[float, float, float], tuple[float, float, float]]] = []
+    close = 0
+    duplicated = 0
+    # PER BLUEPRINT, not pooled: two fixtures are two separate pastes, and their
+    # coordinates are both local to their own anchor.  Pooling them invents
+    # pairs -- it reported two shared points that are simply the same offset in
+    # two different blueprints.
+    for name in SINGLE_AREA_FIXTURES:
+        here = [
+            ((b.x, b.y, b.z), (b.x2, b.y2, b.z2))
+            for b in decode(fixture_text(name)).buildings
+            if cat.is_sorter(b.item_id)
+        ]
+        anchors += here
+        shared: dict[tuple[float, float, float], int] = {}
+        for ends in here:
+            for end in ends:
+                key = (round(end[0], 3), round(end[1], 3), round(end[2], 3))
+                shared[key] = shared.get(key, 0) + 1
+        duplicated += sum(1 for v in shared.values() if v > 1)
+        for i, a in enumerate(here):
+            for b2 in here[i + 1 :]:
+                if min(
+                    sum((u[k] - v[k]) ** 2 for k in range(3)) ** 0.5
+                    for u in a
+                    for v in b2
+                ) < 2 * radius:
+                    close += 1
+
+    assert len(anchors) == 1132, "the sample is the whole single-area corpus"
+
+    # The game never puts two sorter anchors on the same point.  We do -- 172 of
+    # them over 702 emitted sorters -- which is the measurement the backlog entry
+    # carries; it is recorded there rather than asserted here, because this test
+    # is about the GAME's geometry.
+    assert duplicated == 0
+
+    assert close >= 53, (
+        f"only {close} pairs under {2 * radius} units; if this ever reaches 0 the "
+        "raw box test is no longer refuted and the sorter check can be ported"
+    )
