@@ -1,5 +1,204 @@
 # Backlog
 
+## RESOLVED -- freeform docks a belt into a building PORT, and the wall it removed was not the one holding the corpus
+
+**The capability exists and is judged.** A Ray Receiver's prefab ships ZERO
+insert poses and two belt PORTS, and the game's two build tools mirror each
+other on exactly that: `BuildTool_Inserter` drops a cast target whose
+`slotPoses` is empty, `BuildTool_Path` drops one whose `portPoses` is empty. So
+no sorter can attach to one on any face at any distance, and a belt can.
+`freeform._dock_lane` now emits that belt; `validate.belt.port_dock` judges it.
+
+**And the corpus did not move.** Paired and interleaved, `--tier stress
+--budget 4`, ten rounds each:
+
+| arm | clean, per round | mean | INVALID | mean wall |
+|---|---|---|---|---|
+| master | 64 64 63 65 64 65 64 63 64 62 | 63.80 | 0 | 20.2s |
+| + belt-to-port docking | 64 62 65 62 64 64 63 64 64 65 | 63.70 | 0 | 27.2s |
+
+`-0.10` cells, on two arms whose spreads are both 62-65 and overlap entirely.
+AREA over the cells both arms wire, ROUND-PAIRED -- round *i* of A against round
+*i* of B, 626 paired clean rounds -- is **+0.269%**, and 41 of the 72 cells
+produce byte-identical area in both arms on every round. The 25 that move swing
+both ways by up to 14% on programs that cannot have changed, because the solver
+stops on a wall clock.
+
+**The control says both figures are noise, and it was run on this box in this
+hour rather than quoted.** Master against master-plus-a-comment -- two
+byte-different, program-identical files -- same harness, same interleave, ten
+rounds:
+
+| arm | clean, per round | mean | area, round-paired |
+|---|---|---|---|
+| master | 62 65 64 65 62 62 64 66 62 65 | 63.70 | - |
+| master + a comment | 63 63 63 62 65 64 64 63 64 65 | 63.60 | **-0.788%** |
+
+So the harness's own noise floor here is `-0.10` cells and `-0.79%` area between
+two copies of the same program. `+0.269%` is inside it and so is `-0.10`. There
+is no measurable density effect and no measurable clean-count effect, in either
+direction. INVALID stayed 0 in all 40 audit runs.
+
+**The +7s of wall is the honest cost**, and it is the whole of what changed:
+master refuses all six `universe-matrix` cells in 0.0s at a prefab lookup, and
+this branch spends its full budget packing and routing them before refusing on
+the clock. Those six cells hold six of sixteen job slots for their whole budget
+instead of none of it, which is the most likely source of the occasional 62.
+
+What changed is WHICH wall the six `universe-matrix` cells hit. Master refuses
+them at `_machines_without_poses` before a single tile is packed:
+
+    a machine in this spec has lanes to wire and no insert pose to wire them
+
+This branch packs them, routes them, and refuses on the clock instead:
+
+    the 15s deadline passed with no wired packing of 29 strips; 4 packs were
+    routed in that time and the best of them still left N nets unrouted
+
+That is a real move -- the connection is expressible now, and the refusal names
+the actual remaining obstacle rather than a missing capability -- and it is
+worth nothing on the tally.
+
+**How close it gets, measured at a 120s budget on all three candidates:**
+
+| candidate | strips | packs routed | best pack's unrouted nets |
+|---|---|---|---|
+| `no-proliferator` | 76 | 3 | **9** (worst 20) |
+| `free-proliferation` | 62 | 5 | **7** (worst 153) |
+| `max-proliferation` | 49 | 0 wired at any height | every pack left nets unrouted |
+
+Master reaches none of this: it refuses at a prefab lookup in 0.0s. So the
+remaining distance on `universe-matrix` is **seven to nine nets**, and
+`max-proliferation`'s own message names the owner -- *"That is a PACKER defect --
+it is producing packs its own router cannot wire"*. **The number is behind the
+packer and the router, and now nothing else.**
+
+### What a belt-to-port connection actually is
+
+Counted over the fixture corpus rather than reasoned out. 178 belt-to-port
+records across five of the ten real blueprints -- 20 Energy Exchangers in
+`temple-of-effectiveness`, one in `falk-v7-mall-full`, and the Interstellar
+Logistic Stations of `12-s-purple-science`, `factory-heretical-smelter-block`,
+`factory-endgame-distribution-hub` and `tillable-blackbox-module` -- and they
+are unanimous:
+
+* the BUILDING records nothing. `output_obj = input_obj = -1` on all 28 hosts,
+  every slot field zero. The belt does the naming, exactly as it does around a
+  splitter.
+* a belt DRAWING from a port: `input_obj = <building>`,
+  `input_from_slot = <port index>`, `input_to_slot = 1`. All 108.
+* a belt FEEDING one: `output_obj = <building>`,
+  `output_to_slot = <port index>`, `output_from_slot = 0`. All 70.
+* both offsets are `0` on all 178.
+
+The index is a subscript into `PrefabDesc.portPoses` and **not** into
+`slotPoses`; they are different arrays and a Ray Receiver's second is empty.
+`catalog.Building.port_poses` carries the first with Unity's axes mapped and
+each pose's forward attached -- the same shape `SlotPose` has, because it is the
+same question asked of the other array. `Building.slots` stays as the raw table
+it always was.
+
+**The clearest single record**, from `12-s-purple-science` (single-area, so it
+can be read flat): belt #47 at `(133, 34)` carries `output_obj = #80`,
+`output_to_slot = 5`, `output_from_slot = 0`, against an Interstellar Logistic
+Station centred at `(135, 35)` whose port 5 sits at model `(-2.7, -0.01, 1.256)`
+= `(-2.149, -1)` tiles. `133 - 135 = -2` and `34 - 35 = -1`: the belt is on the
+tile nearest the pose, and the station names nobody.
+
+### The port is INSIDE the footprint, and that was never the blocker
+
+A Ray Receiver's ports are 1.12 tiles from the centre of a 7x7. The BACKLOG
+entry this replaces said the work sat behind "our footprints are a tile grid",
+then re-aimed at `_Canvas.add`'s `solid=True`. **Neither is what mattered.**
+`_dock_lane` places its belts itself, after the machine, so the router's
+occupancy policy is untouched -- no belt the ROUTER lays may still enter a
+machine, which is right everywhere else.
+
+What could have convicted the dock is the build-collider probe, and the game
+excuses it itself:
+
+* `colliders.belt_run_ends_in_a_building` (`CheckBuildConditions` 147492) lets
+  off the belt whose run ends in the machine;
+* `colliders.belt_chain_excuses` (147443) lets off the ones within three hops
+  of it along their own run.
+
+A Ray Receiver's belt keepout reaches exactly two tiles from its centre --
+measured with `colliders.belt_keepout_offsets`, a 5x5 at z=0 inside a 7x7
+footprint -- so the dock column has exactly two tiles inside it: the docked belt
+itself and the one behind it. Both are excused. `geom.overlap` was never a
+question: it excludes belt-integrated buildings by design and its docstring
+already cited "a belt running through a Storage Tank" as a shape the game
+writes.
+
+### The belt's own slot is a pool cell too
+
+`entityConnPool[objId * 16 + slot]` is addressed once per OBJECT and the
+connection is written on both ends, so a belt drawing from a port has spent its
+own slot 1 -- the first index `slots.assign_belt_slots` hands to a belt-to-belt
+feeder. Handing it out twice means `WriteObjectConn` evicts one and the lane
+pastes clean and carries nothing. `assign_belt_slots` seeds it as taken before
+its scan; `game.slot_occupancy` cannot see it, because that check keys on the
+PEER side of every record and this clash is on the belt, which is the peer of
+only one of the two.
+
+Over the corpus's ~10,000 connection records, **no (object, slot) cell is named
+twice on the OWN side either** -- the same negative control the peer-side rule
+has, on the half nothing had looked at.
+
+### `BELT_PORT_MAX_TILE_GAP` is ours, and the measurement needed cleaning
+
+The paste path replays a recorded `inputObj` rather than re-deriving it from a
+pose, so there is no threshold in the IL to port. The corpus fixes the range
+instead -- and read flat across all ten fixtures the gaps run to 300 tiles,
+which is not slack: **seven of the ten are MULTI-AREA blueprints whose
+`localOffset` is per area**, so a flat read subtracts coordinates from different
+frames. Every gap over one tile, and every case where the named port is not the
+nearest one, is in one of those seven. On the four single-area fixtures:
+
+    12-s-purple-science        16 records   worst 0.149
+    factory-heretical-smelter  11 records   worst 0.071
+    factory-quick-start-3      11 records   worst 0.280
+    falk-v7-mall-full           2 records   worst 0.007
+
+and `temple-of-effectiveness`'s twenty Energy Exchangers put their belts at a
+clean integer `dy = +-3` against a pose at `+-2.268`, which is **0.732** -- a
+whole tile further out than the nearest tile centre. So the game does not
+require the nearest tile, and a rule that did would refuse a shape twenty of its
+own blueprints use. One tile admits both readings and nothing looser: a belt on
+the tile nearest a pose is at most `sqrt(2)/2` = 0.708 away by construction.
+
+### Two premises in the entry below were FALSE, and they are corrected
+
+* **There are EIGHT poseless buildings reachable as a spec group, not nine, and
+  `ray-receiver-pro` is not one of them because there is no such prefab in the
+  catalog at all.** The eight are fractionator, energy-exchanger, ray-receiver,
+  orbital-collector, both mining machines, water-pump, oil-extractor.
+* **`orbital-collector` is not a belt-port building.** It carries ZERO ports as
+  well as zero insert poses -- which is right for a building fed by logistics
+  vessels in orbit -- so belt-to-port docking will never reach it and its
+  refusal is permanent rather than pending. Seven of the eight take belts; the
+  eighth takes nothing.
+
+`tests/dsp/test_catalog.py` pins both lists so they cannot drift again.
+
+### What this does NOT do, and why
+
+**Only the OUTPUT side docks.** An ingredient would have to SPLIT one lane into
+a belt per machine -- a splitter per machine -- and the no-splitter invariant is
+what buys the whole lane-per-destination design. The refusal says so by name
+now, rather than repeating "which neither strategy emits" when one of them does.
+Nothing in the corpus needs it: the Ray Receiver in `universe-matrix` has
+`inputs_per_machine == {}` and is a pure source.
+
+**Spine still refuses, and should.** Its lanes live in shared corridors with
+trunks and risers rather than in the strip that owns them, so a dock column
+would have to cross the rest of the row band and then merge into a specific lane
+DEPTH inside a corridor the lane allocator owns -- which means teaching
+`_find_taps` a non-sorter tap kind and rippling that through `_lane_copies`,
+`_lane_items` and the tap-capacity model. Freeform's version is ~90 lines
+because a strip owns its output lane and it sits directly under the band. The
+refusal text now points the reader at `--strategy freeform`, which can build it.
+
 ## RESOLVED -- spine's direct inserts took machine slots and told nobody
 
 The coin-flip refusal on the user's 24-group URL --
@@ -859,7 +1058,18 @@ lane spine wants for it is the critical-photon OUTPUT, and that demand is
 correct: a Ray Receiver that reaches no belt is an idle Ray Receiver, which is
 exactly the two-idle-exchangers placement this entry was opened over.
 
-### What is left OPEN: belt-to-port docking, and it is blocked
+### ~~What is left OPEN: belt-to-port docking, and it is blocked~~ DONE for freeform
+
+**LANDED. See the entry at the top of this file**, which also corrects two
+premises stated below: there are EIGHT poseless spec-reachable buildings and not
+nine (`ray-receiver-pro` is not in the catalog), and `orbital-collector` is not
+a belt-port building at all -- it has zero ports as well as zero insert poses.
+
+The rest of this section is kept as it was written, because the second bullet is
+the diagnosis that turned out to be wrong and it is worth keeping wrong in
+public: the router's occupancy policy was never in the way, because `_dock_lane`
+lays its own belts after the machine rather than asking the router to route
+through one.
 
 To build `universe-matrix` we need a belt that ends at a port pose and carries
 `input_obj = <machine>, input_from_slot = <port index>`. Two things stand in the

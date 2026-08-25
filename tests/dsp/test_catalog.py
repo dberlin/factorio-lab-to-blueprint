@@ -729,3 +729,36 @@ def test_the_belt_port_class_is_the_nine_zero_pose_buildings_plus_the_stations()
         "storage-tank",
         "water-pump",
     ]
+
+
+def test_the_poseless_buildings_a_spec_group_can_reach() -> None:
+    """Eight, not nine, and one of them takes no belt either.
+
+    ``spine._sorterless_groups``'s docstring named nine and listed two things
+    that are not in the catalog as described: there is no ``ray-receiver-pro``
+    prefab at all, and ``orbital-collector`` carries ZERO ports as well as zero
+    insert poses -- which is right for a building fed by logistics vessels in
+    orbit, and means belt-to-port docking will never reach it.  Pinned here
+    because both strategies' refusals quote this set.
+    """
+    from flab2bp.layout.spine import MACHINE_ITEM_IDS
+
+    poseless = sorted(
+        catalog.building(i).prefab
+        for i in set(MACHINE_ITEM_IDS.values())
+        if not catalog.building(i).slot_poses
+    )
+    assert poseless == [
+        "energy-exchanger",
+        "fractionator",
+        "mining-drill",
+        "mining-drill-mk2",
+        "oil-extractor",
+        "orbital-collector",
+        "ray-receiver",
+        "water-pump",
+    ]
+    assert not catalog.building(
+        MACHINE_ITEM_IDS["orbital-collector"]
+    ).takes_belt_ports, "an Orbital Collector is fed in orbit, not by belt"
+    assert all(b.prefab != "ray-receiver-pro" for b in catalog.all_buildings())
