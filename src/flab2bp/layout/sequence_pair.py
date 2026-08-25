@@ -13,6 +13,7 @@ from flab2bp.dsp import catalog
 
 if TYPE_CHECKING:
     from flab2bp.layout.route_feedback import LogicalNetId
+    from flab2bp.layout.sequence_kernel import BackendName
     from flab2bp.layout.strip_variants import (
         StripFamily,
         StripInstanceId,
@@ -647,6 +648,7 @@ class AnnealStageResult:
     accepted_moves: int
     elites: tuple[AnnealIncumbent, ...]
     archive: tuple[TaggedAnnealIncumbent, ...] = ()
+    backend: BackendName = field(default="python", compare=False)
 
     def __post_init__(self) -> None:
         if not self.archive:
@@ -1328,6 +1330,7 @@ def anneal_stage(
         accepted_moves=accepted_moves,
         elites=archive_builder.blended_elites,
         archive=archive_builder.archive,
+        backend=kernel.backend,
     )
 
 

@@ -568,6 +568,7 @@ def test_quality_stage_skips_global_routes_narrowest_once_and_settles_detailed_s
     )
 
     result = solver.search(max_stages=2)
+    assert {stage.backend for stage in result.stages} == {"python"}
 
     first_candidates = candidates_by_stage[0]
     assert global_candidates == [
@@ -2766,6 +2767,34 @@ def test_production_observability_preserves_categories_and_all_grouped_work() ->
         False,
         config,
     )
+    assert cast(object, placement.stats["accelerator"]) == "cython"
+    assert {stage.backend for stage in result.stages} == {"cython"}
+
+    python_result = replace(
+        result,
+        stages=tuple(replace(stage, backend="python") for stage in result.stages),
+    )
+    python_placement = sequence_solver_module._with_observational_stats(
+        python_result,
+        run,
+        False,
+        config,
+    )
+    assert cast(object, python_placement.stats["accelerator"]) == "python"
+
+    assert len(result.stages) > 1
+    mixed_result = replace(
+        result,
+        stages=(replace(result.stages[0], backend="python"), *result.stages[1:]),
+    )
+    assert {stage.backend for stage in mixed_result.stages} == {"python", "cython"}
+    mixed_placement = sequence_solver_module._with_observational_stats(
+        mixed_result,
+        run,
+        False,
+        config,
+    )
+    assert cast(object, mixed_placement.stats["accelerator"]) == "mixed"
 
     discovery = tuple(stage for stage in result.stages if stage.anneal_stages == 2)
     executed_global = tuple(stage for stage in result.stages if stage.global_routes > 0)

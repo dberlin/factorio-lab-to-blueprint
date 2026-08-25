@@ -221,6 +221,7 @@ def test_backend_selection_falls_back_cleanly(monkeypatch: pytest.MonkeyPatch) -
         elite_count=4,
     )
     compiled_stage = anneal_stage(problem, state, config, context)
+    assert compiled_stage.backend == "cython"
     monkeypatch.setattr(sequence_kernel_module, "_compiled_decode_score", None)
 
     kernel = build_sequence_kernel(problem, context)
@@ -233,7 +234,9 @@ def test_backend_selection_falls_back_cleanly(monkeypatch: pytest.MonkeyPatch) -
         kernel.score_state(state),
         PythonSequenceKernel(problem, context).score_state(state),
     )
-    assert anneal_stage(problem, state, config, context) == compiled_stage
+    fallback_stage = anneal_stage(problem, state, config, context)
+    assert fallback_stage.backend == "python"
+    assert fallback_stage == compiled_stage
 
 
 def test_backend_selection_falls_back_before_signed_64_geometry_overflow() -> None:

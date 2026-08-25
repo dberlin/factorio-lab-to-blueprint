@@ -12,7 +12,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from fractions import Fraction
-from typing import Any, Protocol, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from flab2bp.layout import validate
 from flab2bp.layout.base import RETRY_BUDGET_S, NoValidLayout, Placement
@@ -86,6 +86,9 @@ from flab2bp.layout.strip_variants import (
     variants_for_count,
 )
 from flab2bp.spec import BuildSpec
+
+if TYPE_CHECKING:
+    from flab2bp.layout.sequence_kernel import BackendName
 
 
 class ObjectiveMode(StrEnum):
@@ -273,6 +276,7 @@ class StageObservation:
     anneal_moves: int
     anneal_seeds: tuple[int, ...]
     global_routes: int
+    backend: BackendName = field(compare=False)
     global_overflow: int | None
     detailed_status: DetailedRouteStatus
     stranded: int
@@ -1056,6 +1060,7 @@ class SequenceSolver[PreparedT]:
                 anneal_stages=selected.anneal_stages,
                 anneal_moves=selected.anneal_moves,
                 anneal_seeds=selected.anneal_seeds,
+                backend=selected.source.result.backend,
                 global_routes=global_routes,
                 global_overflow=global_overflow,
                 detailed_status=detailed.routing.status,
@@ -1984,10 +1989,16 @@ def _with_observational_stats(
         yaw: sum(selected == yaw for selected in pose_yaws) for yaw in (0.0, 90.0, 180.0, 270.0)
     }
     stats: dict[str, object] = dict(placement.stats)
+    observed_backends = {stage.backend for stage in result.stages}
+    accelerator = (
+        "mixed"
+        if len(observed_backends) > 1
+        else next(iter(observed_backends), "python")
+    )
     stats.update(
         {
             "backend": "sequence-pair",
-            "accelerator": "python",
+            "accelerator": accelerator,
             "seed": float(config.seed),
             "seeds": float(len(anneal_seeds)),
             "heights": float(len(run.heights)),

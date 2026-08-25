@@ -1613,6 +1613,10 @@ def test_stage_result_keeps_legacy_blended_elites_separate_from_pareto_archive()
 
     assert result.elites == (blended, second_blended)
     assert result.archive == archive
+    assert result.backend == "python"
+    restored = pickle.loads(pickle.dumps(result))
+    assert restored == result
+    assert restored.backend == "python"
 
 
 def test_incremental_archive_separates_legacy_first_entry_from_canonical_dedupe() -> None:
