@@ -2530,6 +2530,22 @@ def _emit(
         belt_model=belt_model,
     )
 
+    #: Machine index -> the SLOT indices already spoken for on it, across every
+    #: sorter this emission places -- direct inserts and lane taps alike.
+    #:
+    #: It lives HERE, above the direct-insert pass, because it used to start
+    #: empty at the lane pass and the direct pass therefore contributed nothing
+    #: to it.  A direct insert and a belt tap that happen to want the same
+    #: column on the same face of a machine want the same slot, and a slot holds
+    #: exactly one connection -- `entityConnPool[objId * 16 + slot]`, and
+    #: `WriteObjectConn` EVICTS the sitting tenant rather than refusing.  So the
+    #: pair pasted with one of them silently unwired and the two sorters
+    #: standing on the same tile.  Measured on the user's 24-group URL: a
+    #: machine-to-machine sorter from an Assembling Machine ended at (1, 157) on
+    #: slot 6 of a Matrix Lab, and the lab's input tap from the belt one row
+    #: above ended on the same tile and the same slot.
+    claimed_slots: dict[int, set[int]] = {}
+
     # --- direct inserts ---------------------------------------------------
     # A direct-inserted edge has no lane, so the sorter must reach machine to
     # machine.  This runs before the belt taps so that a connection served
@@ -2551,21 +2567,31 @@ def _emit(
         # produced diagonals; the span was also computed Manhattan
         # (``|dx| + dy``) where the validator measures Chebyshev, so a pair
         # could pass here and fail there.  With dx pinned to 0 the two agree.
-        #: ``(producer, consumer, span, column, producer_row, consumer_row)``.
+        #: ``(producer, consumer, span, column, producer_row, consumer_row,
+        #: producer_slot, consumer_slot)``.
         #: The two rows are the anchors the slot tables give, which are the
         #: machines' edge rows only when they happen to be -- a Chemical Plant's
-        #: is a row inside its footprint.
-        pairs: list[tuple[int, int, int, int, int, int]] = []
+        #: is a row inside its footprint.  The two slots are what the game will
+        #: read at those anchors, carried so the pass can book them.
+        pairs: list[tuple[int, int, int, int, int, int, int, int]] = []
 
         def _pair(
             a: int, others: list[int], *, a_produces: bool
-        ) -> tuple[int, int, int, int] | None:
+        ) -> tuple[int, int, int, int, int, int] | None:
             """A partner for ``a``, on a column BOTH can actually be wired on.
 
             Every column of the footprint overlap is tried, not just its middle:
             with the real tables an overlap can be wide and the attachable part
             of it narrow, and a machine-to-machine sorter needs a column that
             works at both ends at once.
+
+            A column whose slot is already spoken for at EITHER end is not such
+            a column.  Walking past it is the whole repair: the search was
+            already enumerating every column of the overlap, it simply did not
+            know that a slot it had handed out once could not be handed out
+            again.  Booking is done here, at the moment a column is accepted,
+            because the two loops below accept in sequence and a claim made
+            after both had run would come too late to separate them.
             """
             ab = buildings[a]
             for b in sorted(others, key=lambda o: abs(buildings[o].x - ab.x)):
@@ -2574,6 +2600,7 @@ def _emit(
                 hi = min(ab.x + ab.width, bb.x + bb.width) - 1
                 mid = (lo + hi) // 2
                 for col in sorted(range(lo, hi + 1), key=lambda c: (abs(c - mid), c)):
+                    src_i, dst_i = (a, b) if a_produces else (b, a)
                     src_b, dst_b = (ab, bb) if a_produces else (bb, ab)
                     got = sorter_slots.direct_anchors(src_b, dst_b, col)
                     if got is None:
@@ -2582,32 +2609,42 @@ def _emit(
                     reach = abs(in_row - out_row)
                     if not 1 <= reach <= CONSTANTS.sorter_max_reach:
                         continue
-                    return b, col, out_row, in_row
+                    if got[0].slot in claimed_slots.get(src_i, ()):
+                        continue
+                    if got[1].slot in claimed_slots.get(dst_i, ()):
+                        continue
+                    claimed_slots.setdefault(src_i, set()).add(got[0].slot)
+                    claimed_slots.setdefault(dst_i, set()).add(got[1].slot)
+                    return b, col, out_row, in_row, got[0].slot, got[1].slot
             return None
 
         for ci in cons:
             got = _pair(ci, prod, a_produces=False)
             if got is not None:
-                pairs.append((got[0], ci, abs(got[3] - got[2]), got[1], got[2], got[3]))
+                pairs.append(
+                    (got[0], ci, abs(got[3] - got[2]), got[1], got[2], got[3], got[4], got[5])
+                )
         # And every PRODUCER, not just every consumer.  A producer left out has
         # no belt lane either -- the insert removed it -- so it backs up, which
         # is what `machine.output_removed` was reporting on five corpus specs.
         # Pairing it with a consumer it already shares a column with costs one
         # more sorter and nothing else; the consumer simply gets fed twice.
-        wired = {pi for pi, _ci, _s, _c, _oy, _iy in pairs}
+        wired = {pi for pi, _ci, _s, _c, _oy, _iy, _os, _is in pairs}
         for pi in prod:
             if pi in wired:
                 continue
             got = _pair(pi, cons, a_produces=True)
             if got is not None:
-                pairs.append((pi, got[0], abs(got[3] - got[2]), got[1], got[2], got[3]))
+                pairs.append(
+                    (pi, got[0], abs(got[3] - got[2]), got[1], got[2], got[3], got[4], got[5])
+                )
         rate = rate_of.get((src, dst, item), Fraction(0))
         if not pairs:
             raise ValueError(
                 f"direct insert {src} -> {dst} ({item}) has no machine pair within "
                 f"sorter reach {CONSTANTS.sorter_max_reach}"
             )
-        worst = max(s for _, _, s, _x, _oy, _iy in pairs)
+        worst = max(s for _, _, s, _x, _oy, _iy, _os, _is in pairs)
         tier = next(
             (t for t in SORTER_TIERS if catalog.sorter_rate(t, worst) * len(pairs) >= rate),
             None,
@@ -2618,7 +2655,7 @@ def _emit(
                 f"{len(pairs)} sorters at span {worst} cannot carry it"
             )
         tier_model = catalog.building(tier).model_index
-        for pi, ci, _span, col, out_row, in_row in pairs:
+        for pi, ci, _span, col, out_row, in_row, _out_slot, _in_slot in pairs:
             buildings.append(
                 PlacedBuilding(
                     item_id=tier,
@@ -2644,17 +2681,14 @@ def _emit(
     #: one belt need one column each across the machine's width; without this the
     #: second item's sorters landed on top of the first's.
     lane_columns: dict[tuple[int, int], dict[int, set[int]]] = defaultdict(dict)
-    #: Machine index -> the SLOT indices already spoken for on it, across every
-    #: lane and every call.  `lane_columns` above rations COLUMNS within one
-    #: lane, which is a weaker statement: two lanes at different depths on the
-    #: SAME side of a machine reach the same columns and therefore the same
-    #: slots, and nothing was stopping them both taking one.  A slot holds
-    #: exactly one connection -- `entityConnPool[objId * 16 + slot]`, and
-    #: `WriteObjectConn` evicts the sitting tenant rather than refusing -- so the
-    #: second sorter pasted with the first silently unwired and both standing on
-    #: the same tile.  Measured on a pristine tree: 34 of spine's 43 clean
-    #: mid-tier cells carried at least one shared slot, 304 in all.
-    claimed_slots: dict[int, set[int]] = {}
+    #: `claimed_slots`, declared above the direct-insert pass, is the same idea
+    #: one level up, and it is the one that matters to the GAME rather than to
+    #: the geometry.  `lane_columns` here rations COLUMNS within one lane, which
+    #: is a weaker statement: two lanes at different depths on the SAME side of
+    #: a machine reach the same columns and therefore the same slots, and
+    #: nothing was stopping them both taking one.  Measured on a pristine tree:
+    #: 34 of spine's 43 clean mid-tier cells carried at least one shared slot,
+    #: 304 in all.
     for key, g in groups.items():
         connections = [(item, rate * g.count, True) for item, rate in g.inputs.items()]
         connections += [(item, rate * g.count, False) for item, rate in g.outputs.items()]

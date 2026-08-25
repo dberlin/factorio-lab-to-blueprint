@@ -28,6 +28,7 @@ from flab2bp.layout.spine import (
     MACHINE_ITEM_IDS,
     SpineLayout,
     _emit,
+    _Plan,
     fallback_plan,
     machine_group_footprint,
 )
@@ -1517,6 +1518,182 @@ class TestDirectInsertion:
         assert not _every_machine_pairs([0, 3], 3, [3], 3)
         # Both overlap: a 6-wide consumer straddles them.
         assert _every_machine_pairs([0, 3], 3, [0], 6)
+
+
+#: A 24-group build whose spine plans put a machine-to-machine sorter and a belt
+#: tap on the SAME slot of the same Matrix Lab.  It is here as a URL rather than
+#: as a hand-built spec because a hand-built one could not be found: 256
+#: generated producer/consumer shapes across four machine kinds, every plan of
+#: every sweep, produced no collision at all.  The geometry needs a direct
+#: insert whose span CROSSES the corridor that also feeds the consumer's north
+#: face, and that only turns up on a graph with enough items to make the
+#: corridor two deep.
+_SHARED_SLOT_URL = (
+    "https://factoriolab.github.io/dsp/list?z=eJxFyr0KwkAQReG3meJWO8GQapq7GDtJBMVt1UUkLoGA"
+    "Ept5dhH.uo.DGY1naJDReMSiDoC-.Pi7QRU-3KH6HQn6zSTqt7OhlWJEkGIJQS6HbJQpz9Yh4YQBN3ANbsE9"
+    "ODiviK3HFWLvcSOlTJacvvRe7qb6BOgIKRo_&v=11"
+)
+
+
+#: The row and lane assignment ``_solve_plan`` hands back for that URL when the
+#: sweep is starved -- one group per row, which is what CP-SAT settles for at
+#: the pipeline's own budget.  It is FROZEN rather than solved for, because the
+#: collision only appears in this shape: give the same sweep a full second per
+#: width and every plan it returns is clean, so a test that solved would go
+#: green on a fast machine and stay silent about the emitter.
+_SHARED_SLOT_ROWS = [
+    ["circuit-board#1"],
+    ["energetic-graphite#6"],
+    ["gear#7"],
+    ["glass#8"],
+    ["graphene-advanced#9"],
+    ["magnetic-coil#12"],
+    ["microcrystalline-component#13"],
+    ["diamond#3"],
+    ["plastic#17"],
+    ["titanium-glass#23"],
+    ["deuterium#2"],
+    ["electric-motor#4"],
+    ["processor#18"],
+    ["organic-crystal#14"],
+    ["electromagnetic-turbine#5"],
+    ["titanium-crystal#22"],
+    ["particle-container#15"],
+    ["casimir-crystal#0"],
+    ["strange-matter#21"],
+    ["plane-filter#16"],
+    ["graviton-lens#10"],
+    ["quantum-chip#19"],
+    ["gravity-matrix#11"],
+    ["space-warper-advanced#20"],
+]
+
+_SHARED_SLOT_LANES = [
+    ["copper-ingot", "iron-ingot"],
+    ["circuit-board", "coal"],
+    ["energetic-graphite", "iron-ingot"],
+    ["gear", "stone"],
+    ["glass", "fire-ice"],
+    ["graphene", "hydrogen", "copper-ingot", "magnet"],
+    ["magnetic-coil", "copper-ingot", "high-purity-silicon"],
+    ["microcrystalline-component", "energetic-graphite"],
+    ["diamond", "energetic-graphite", "refined-oil"],
+    ["plastic", "glass", "titanium-ingot", "water"],
+    ["titanium-glass", "hydrogen"],
+    ["deuterium", "gear", "iron-ingot", "magnetic-coil"],
+    ["electric-motor", "circuit-board", "microcrystalline-component"],
+    ["processor", "plastic", "refined-oil"],
+    ["organic-crystal", "water", "electric-motor", "magnetic-coil"],
+    ["electromagnetic-turbine", "organic-crystal", "titanium-ingot"],
+    ["titanium-crystal", "copper-ingot", "electromagnetic-turbine", "graphene"],
+    ["particle-container", "graphene", "hydrogen", "titanium-crystal"],
+    ["casimir-crystal", "deuterium", "iron-ingot", "particle-container"],
+    ["strange-matter", "casimir-crystal", "titanium-glass"],
+    ["plane-filter", "diamond", "strange-matter"],
+    ["graviton-lens", "plane-filter", "processor"],
+    ["graviton-lens"],
+    [],
+    ["space-warper"],
+]
+
+#: Two machine-to-machine edges, and the second one is the whole test: the
+#: quantum-chip row inserts straight into the Matrix Lab row below it, and the
+#: lab is ALSO fed by belt out of the corridor the insert crosses.
+_SHARED_SLOT_DIRECT = {
+    ("gravity-matrix#11", "space-warper-advanced#20", "gravity-matrix"),
+    ("quantum-chip#19", "gravity-matrix#11", "quantum-chip"),
+}
+
+
+class TestOneSlotHoldsOneConnection:
+    """A direct insert and a belt tap may not book the same machine slot.
+
+    ``_place_sorters`` already rationed slots among the LANE taps, and it was
+    right to: ``entityConnPool[objId * 16 + slot]`` is one int per
+    ``(object, slot)`` and ``WriteObjectConn`` evicts the sitting tenant rather
+    than refusing, so a doubly-named slot pastes with one sorter unwired and the
+    two of them standing on one tile.  What it could not ration was the
+    direct-insert pass, which ran FIRST, took a slot on each of its two peers,
+    and told nobody -- the ledger was declared empty on the line after it.
+
+    Measured on this URL before the fix: the machine-to-machine sorter out of
+    the quantum-chip row ended on tile (1, 157), and so did the Matrix Lab's
+    input tap from the corridor above it.  Both are slot 6.  Of the eight plans
+    one sweep returns, six or seven carried it, the densest one every time, and
+    whether the build survived came down to whether some later plan happened to
+    be clean: 3 of 20 builds at the pipeline's own 2s budget refused outright.
+    """
+
+    @staticmethod
+    def _spec() -> BuildSpec:
+        from flab2bp.lab.data import load_vendored
+        from flab2bp.lab.url import parse_url
+        from flab2bp.rates.candidates import build_candidates
+
+        cands = build_candidates(
+            load_vendored(), parse_url(_SHARED_SLOT_URL), count=3
+        ).candidates
+        return next(c for c in cands if c.label.endswith("no-proliferator"))
+
+    @staticmethod
+    def _plan() -> _Plan:
+        return _Plan(
+            rows=[list(r) for r in _SHARED_SLOT_ROWS],
+            lanes=[list(c) for c in _SHARED_SLOT_LANES],
+            direct=set(_SHARED_SLOT_DIRECT),
+            solver_status="OPTIMAL",
+        )
+
+    @pytest.mark.slow
+    def test_the_direct_insert_and_the_belt_tap_take_different_slots(self) -> None:
+        from flab2bp.layout import spine
+
+        spec = self._spec()
+        placement = spine._emit(
+            spec, self._plan(), power=False, belt_vertical_construction=True
+        )
+        report = validate.certify(placement, spec, expect_power=False)
+        shared = [f for f in report.errors if f.check == "game.slot_occupancy"]
+        assert not shared, shared[0].message
+
+    @pytest.mark.slow
+    def test_the_frozen_plan_still_direct_inserts_into_a_belt_fed_machine(self) -> None:
+        """Without this the test above can go green by going vacuous.
+
+        A change that stopped direct-inserting into the lab at all, or stopped
+        belting anything to it, would remove the collision and prove nothing.
+        """
+        spec = self._spec()
+        from flab2bp.layout import spine
+
+        placement = spine._emit(
+            spec, self._plan(), power=False, belt_vertical_construction=True
+        )
+        bs = placement.buildings
+        machine_to_machine = [
+            b
+            for b in bs
+            if catalog.is_sorter(b.item_id)
+            and b.input_obj is not None
+            and b.output_obj is not None
+            and not catalog.is_belt(bs[b.input_obj].item_id)
+            and not catalog.is_belt(bs[b.output_obj].item_id)
+        ]
+        assert machine_to_machine, "the frozen plan no longer direct-inserts anything"
+        fed_by_both = {
+            b.output_obj for b in machine_to_machine if b.output_obj is not None
+        } & {
+            b.output_obj
+            for b in bs
+            if catalog.is_sorter(b.item_id)
+            and b.input_obj is not None
+            and b.output_obj is not None
+            and catalog.is_belt(bs[b.input_obj].item_id)
+        }
+        assert fed_by_both, (
+            "no machine is both direct-inserted into and belt-fed, so the "
+            "collision this class exists for cannot occur"
+        )
 
 
 class TestSolverBehaviour:
