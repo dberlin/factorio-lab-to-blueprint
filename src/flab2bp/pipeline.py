@@ -10,6 +10,7 @@ touch it.
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+from fractions import Fraction
 from pathlib import Path
 from typing import Literal
 
@@ -38,6 +39,55 @@ from flab2bp.spec import BuildSpec, BuildSpecSet
 StrategyName = Literal["spine", "freeform", "best"]
 
 _STRATEGIES = {"spine": SpineLayout, "freeform": FreeformLayout}
+
+
+#: Outputs named in a title before it gives up and counts the rest.
+_TITLE_OUTPUTS = 2
+
+
+def _rate_per_minute(per_second: Fraction) -> str:
+    """A per-second rate as the per-minute figure a player thinks in.
+
+    FactorioLab's own ``*60`` means sixty per MINUTE, and the spec carries it as
+    ``1`` per second, so a title has to multiply back or it reads as a sixtieth
+    of what was asked for.  Whole numbers stay whole; anything else keeps two
+    decimals, because ``0.83/min`` is a rate and ``5/6/min`` is a puzzle.
+    """
+    per_minute = per_second * 60
+    if per_minute.denominator == 1:
+        return str(per_minute.numerator)
+    return f"{float(per_minute):.2f}".rstrip("0").rstrip(".")
+
+
+def _title(spec: BuildSpec) -> str:
+    """What this blueprint MAKES, which is what a player is looking for.
+
+    The candidate label -- ``max-proliferation``, ``no-proliferator`` -- says how
+    the rates were solved, not what comes out, and it used to be the whole
+    title.  Two blueprints in a library both called ``max-proliferation`` are
+    indistinguishable; ``super-magnetic-ring 60/min`` is not.
+
+    The label is not thrown away: it stays in the description, where provenance
+    belongs, and a proliferated candidate still says so here -- but after the
+    product, never instead of it.
+    """
+    if not spec.outputs:
+        return spec.label or "flab2bp"
+
+    ranked = sorted(spec.outputs.items(), key=lambda kv: (-kv[1], kv[0]))
+    named = ", ".join(
+        f"{item} {_rate_per_minute(rate)}/min" for item, rate in ranked[:_TITLE_OUTPUTS]
+    )
+    if len(ranked) > _TITLE_OUTPUTS:
+        named += f" +{len(ranked) - _TITLE_OUTPUTS} more"
+
+    # Only when there is something to say. Every spec has a proliferation
+    # answer; only two of the three are worth a player's attention.
+    note = {
+        "max-proliferation": " (max prolif)",
+        "free-proliferation": " (prolif)",
+    }.get(spec.label or "", "")
+    return named + note
 
 
 def _id_map(spec: BuildSpec) -> validate.IdMap:
@@ -281,7 +331,7 @@ def build(
     # Titles ride on the Placement, not on encode(), so stamp them here.
     labelled = replace(
         marked,
-        short_desc=name or chosen_spec.label,
+        short_desc=name or _title(chosen_spec),
         description=(
             f"flab2bp {best.strategy} layout, {chosen_spec.label} candidate, "
             f"{chosen_spec.machine_count} machines, {best.area} tiles"
