@@ -49,6 +49,7 @@ from flab2bp.layout.freeform import (
     _greedy_pack,
     _height_seed,
     _join_shard_islands,
+    _machines_without_poses,
     _make_grid,
     _merge_lanes,
     _Net,
@@ -499,6 +500,144 @@ class TestPlanStrips:
         """
         with pytest.raises(ValueError, match="cannot be seated"):
             plan_strips(self._many_input_spec(16), strip_len=6)
+
+
+class TestASideCarriesAsManyLanesAsItsPosesAllow:
+    """Lane seating asks the slot table how many rows a side really has.
+
+    ``_seat_inputs`` and ``out_cap`` both read ``SORTER_MAX_REACH`` and counted
+    from the machine's FOOTPRINT EDGE, which is the same false premise
+    ``sorter_span`` was corrected for in 5e982bb -- one layer earlier.  Three
+    lanes fit above a machine only when its northern pose is ON its top row, and
+    three fit below only when its clearance equals its footprint.  Neither holds
+    everywhere:
+
+    * a **Chemical Plant** anchors its north face on the row INSIDE its top
+      edge, so the outermost of three lanes above is FOUR tiles from anything a
+      sorter can hold and the side carries TWO;
+    * an **Assembling Machine** covers three rows and reserves four, so the
+      outermost of three lanes below is FOUR tiles from its bottom edge and the
+      south side carries TWO.
+
+    Seating a lane there is not a near miss -- ``slots.attachment`` returns
+    ``None``, so ``_link_lane`` places no sorter at all and the machine ships
+    joined to nothing on that lane.  ``_machines_without_poses`` catches it and
+    refuses, which is why the ``organic-crystal`` URL refused on every
+    candidate.  The fix is to never seat the lane, not to widen the reach.
+    """
+
+    @staticmethod
+    def _unreachable(strips: list[Any]) -> list[tuple[str, int, int]]:
+        """Every lane row of every strip that no sorter tier could join."""
+        out = []
+        for s in strips:
+            rows = [j for j in range(len(s.in_above))]
+            rows += [s.row_of_output(k) for k in range(len(s.out_lanes))]
+            rows += [s.row_of_input(lane[0]) for lane in s.in_below]
+            for row in rows:
+                span = s.sorter_span(row)
+                if not 1 <= span <= catalog.SORTER_MAX_REACH:
+                    out.append((s.recipe_id, row, span))
+        return out
+
+    @staticmethod
+    def _organic_crystal_spec() -> BuildSpec:
+        """The chemical-plant half of the URL that refused, and nothing else."""
+        ins = {"plastic": F(2), "refined-oil": F(1), "water": F(1)}
+        return BuildSpec(
+            groups=(
+                group("organic-crystal", "chemical-plant", 2, ins, {"organic-crystal": F(1)}),
+            ),
+            external_inputs={k: v * 2 for k, v in ins.items()},
+            outputs={"organic-crystal": F(2)},
+            belt_item_id="conveyor-belt-2",
+            belt_items_per_second=F(12),
+            label="organic-crystal",
+        )
+
+    def test_the_chemical_plants_north_face_is_really_inset(self) -> None:
+        """The premise, checked -- without it the next test proves nothing.
+
+        If a Chemical Plant took three lanes above like everything else, the
+        seating assertion below would pass whether or not seating consults the
+        slot table, and could never have shown the claim false.
+        """
+        from flab2bp.layout import slots as slot_table
+
+        item_id = MACHINE_ITEM_IDS["chemical-plant"]
+        probe = slot_table.probe_building(item_id, slot_table.lane_orientation(item_id))
+        assert slot_table.attachable_columns(probe, -1), "the near row must work"
+        assert slot_table.attachable_columns(probe, -2), "the middle row must work"
+        assert not slot_table.attachable_columns(probe, -3), (
+            "a Chemical Plant's third row above must be OUT of reach, or this "
+            "fixture cannot distinguish a slot-table answer from the constant 3"
+        )
+
+    def test_three_ingredients_on_a_chemical_plant_seat_where_a_sorter_reaches(
+        self,
+    ) -> None:
+        strips = plan_strips(self._organic_crystal_spec(), strip_len=6)
+        assert self._unreachable(strips) == []
+        assert _machines_without_poses(strips) == []
+        (s,) = strips
+        assert len(s.in_above) == 2, "only two rows above a Chemical Plant reach it"
+        assert len(s.in_below) == 1, "the third ingredient belongs on the south side"
+
+    def test_an_assemblers_south_side_carries_two_lanes_not_three(self) -> None:
+        """Its clearance exceeds its footprint, so the third row below is 4 away.
+
+        Three destinations is the shape ``universe-matrix`` hits: one output
+        lane per consumer put a lane on a row no sorter could anchor between.
+        """
+        spec = BuildSpec(
+            groups=(
+                group("gear", "assembling-machine-2", 3, {"iron-ingot": F(1)}, {"gear": F(1)}),
+                group("a", "assembling-machine-2", 1, {"gear": F(1)}, {"a": F(1)}),
+                group("b", "assembling-machine-2", 1, {"gear": F(1)}, {"b": F(1)}),
+                group("c", "assembling-machine-2", 1, {"gear": F(1)}, {"c": F(1)}),
+            ),
+            external_inputs={"iron-ingot": F(3)},
+            outputs={"a": F(1), "b": F(1), "c": F(1)},
+            belt_item_id="conveyor-belt-2",
+            belt_items_per_second=F(12),
+            label="three-consumers",
+        )
+        strips = plan_strips(spec, strip_len=6)
+        assert self._unreachable(strips) == []
+        assert _machines_without_poses(strips) == []
+        gears = [s for s in strips if s.recipe_id == "gear"]
+        assert gears, "the fixture must actually produce a gear strip"
+        assert all(len(s.out_lanes) + len(s.in_below) <= 2 for s in gears)
+
+    def test_the_refusal_never_calls_zero_tiles_past_the_reach(self) -> None:
+        """A span of 0 means NO pose is reachable, not a measured distance.
+
+        ``sorter_span`` returns 0 for "nothing to anchor on" and otherwise a
+        number ``slots.attachment`` has already bounded to 1..3, so the message
+        could never honestly read "0 tile(s) ... past the 3-tile reach" -- which
+        is exactly what the ``organic-crystal`` refusal said.
+        """
+        from flab2bp.layout.freeform import Strip
+
+        item_id = MACHINE_ITEM_IDS["chemical-plant"]
+        s = Strip(
+            group_key="organic-crystal#0",
+            recipe_id="organic-crystal",
+            item_id=item_id,
+            model_index=catalog.building(item_id).model_index,
+            machines=1,
+            mw=9,
+            mh=5,
+            yaw=0.0,
+            pw=9,
+            ph=5,
+            in_above=(("plastic",), ("refined-oil",), ("water",)),
+            out_lanes=(("organic-crystal", ""),),
+        )
+        assert s.sorter_span(0) == 0, "the fixture must really have no pose in reach"
+        (message,) = _machines_without_poses([s])
+        assert "0 tile(s)" not in message
+        assert "no insert pose within the" in message
 
 
 # --- fallback --------------------------------------------------------------
