@@ -79,7 +79,9 @@ sys.path.insert(0, str(_ROOT))
 sys.path.insert(0, str(_ROOT / "src"))
 
 from flab2bp.bench.corpus import URL_CORPUS, Tier  # noqa: E402
+from flab2bp.dsp import catalog  # noqa: E402
 from flab2bp.lab.data import load_vendored  # noqa: E402
+from flab2bp.lab.techs import belt_rules_for_url  # noqa: E402
 from flab2bp.lab.url import parse_url  # noqa: E402
 from flab2bp.layout import validate  # noqa: E402
 from flab2bp.layout.base import (  # noqa: E402
@@ -169,6 +171,22 @@ def _specs_for(url: str, count: int) -> tuple[object, ...]:
     return _SPECS[key]
 
 
+def _belt_rules_for(url: str) -> catalog.BeltAltitudeRules:
+    """The save's belt altitude rules, from this URL's researched technologies.
+
+    THE AUDIT USED TO IGNORE THESE ENTIRELY, and it mattered twice over: it
+    built both strategies with neither the slope rule nor the height ceiling,
+    and it then validated the result without them too.  So every cell was
+    measured against whatever the defaults happened to be rather than against
+    the save the URL describes -- a corpus number that could not have caught a
+    technology-dependent defect, in either direction.
+
+    Delegates to :func:`flab2bp.lab.techs.belt_rules_for_url` so the audit and
+    the production pipeline cannot drift apart on the question.
+    """
+    return belt_rules_for_url(url, load_vendored())
+
+
 def run_cell(job: Job) -> Result:
     """Lay one cell out and judge it. Runs in a worker process."""
     t0 = time.monotonic()
@@ -183,8 +201,13 @@ def run_cell(job: Job) -> Result:
     spec = specs[job.spec_index]
     label = spec.label  # type: ignore[attr-defined]
 
+    belt_rules = _belt_rules_for(job.url)
     cls = _STRATEGIES[job.strategy]
-    kwargs: dict[str, object] = {"power": job.power, "workers": job.workers}
+    kwargs: dict[str, object] = {
+        "power": job.power,
+        "workers": job.workers,
+        "belt_vertical_construction": belt_rules.vertical_construction,
+    }
     if job.arrangements is not None and job.strategy == "freeform":
         kwargs["arrangements"] = job.arrangements
     try:
@@ -211,6 +234,8 @@ def run_cell(job: Job) -> Result:
         spec,  # type: ignore[arg-type]
         ids=validate.id_map(spec),  # type: ignore[arg-type]
         expect_power=job.power,
+        max_belt_z=belt_rules.max_z,
+        belt_vertical_construction=belt_rules.vertical_construction,
     )
     elapsed = time.monotonic() - t0
     if report.ok:

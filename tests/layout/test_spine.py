@@ -1144,23 +1144,27 @@ class TestPower:
 
 
 class TestProliferation:
-    def test_spine_refuses_a_proliferated_spec_and_says_why(self) -> None:
-        """It used to assert spine laid this out. That assertion was false.
+    def test_spine_supplies_a_proliferated_spec_from_an_elevated_spur(self) -> None:
+        """This assertion has now been wrong twice, in opposite directions.
 
-        What it checked was that a coater consumes no grid tile, on a placement
-        whose coaters were fed by a SORTER -- a connection the game cannot make.
-        A Spray Coater ships zero insert poses and `BuildTool_Inserter` will not
-        target a building with none; all eight coaters in the fixture corpus
-        carry no connection at all. The game supplies an addon from a belt in
-        its addon area, which for a coater is one tile behind and one altitude
-        LEVEL up.
+        First it asserted spine LAID THIS OUT, and checked that a coater
+        consumes no grid tile -- on a placement whose coaters were fed by a
+        SORTER, a connection the game cannot make. A Spray Coater ships zero
+        insert poses, `BuildTool_Inserter` will not target a building with none,
+        and all eight coaters in the fixture corpus carry no connection at all.
 
-        That needs an elevated lane in the coater's own row, and spine runs
-        lanes at ground level in a corridor. Freeform builds it, the pipeline
-        runs both, so no capability is lost -- and a strategy that cannot build
-        something and says so is worth more than one that emits a sorter the
-        game deletes. The refusal has to NAME the missing capability, which is
-        what this pins.
+        Then it asserted spine REFUSED, and named "an elevated lane in the
+        coater's own row" as the missing capability. That was wrong too:
+        `_feed_coater` had always placed the drop at `z = 1`. What was missing
+        was the REACH -- it wanted one proliferator tile to be the lane's tail
+        and be adjacent to the drop at the same time, which nothing arranges.
+
+        So this pins the geometry rather than either verdict: the coater is
+        placed, an elevated spur reaches it, and `game.addon_supply` -- the
+        game's own positional rule, one tile behind and one LEVEL up -- is
+        satisfied. Each of those is asserted separately, because a placement
+        with no coater in it satisfies `addon_supply` trivially and that is
+        exactly how the previous version passed on geometry the game refuses.
         """
         spec = two_stage_spec()
         prolif = BuildSpec(
@@ -1172,9 +1176,18 @@ class TestProliferation:
             spray_lanes={"iron-ingot": False},
             label="prolif",
         )
-        with pytest.raises(NoValidLayout) as exc:
-            SpineLayout(power=False).lay_out(prolif, time_budget_s=0.5)
-        assert "elevated lane" in str(exc.value), str(exc.value)
+        p = SpineLayout(power=False).lay_out(prolif, time_budget_s=0.5)
+        coaters = [b for b in p.buildings if b.item_id == catalog.SPRAY_COATER_ID]
+        assert coaters, "no coater placed, so nothing below tests anything"
+        elevated = [b for b in p.buildings if b.z and b.z > 0]
+        assert elevated, "coater placed with no elevated supply anywhere"
+        report = validate.validate(
+            p, prolif, ids=validate.id_map(prolif), expect_power=False
+        )
+        assert not report.by_check("game.addon_supply"), [
+            f.message for f in report.by_check("game.addon_supply")
+        ]
+        assert report.ok, sorted({f.check for f in report.errors})
 
     def test_a_coater_still_consumes_no_grid_tile(self) -> None:
         """The half of the old test that was about geometry, kept.
@@ -2415,7 +2428,7 @@ class TestSprayCoatersAreFed:
     """
 
     @staticmethod
-    def _prolif_spec() -> BuildSpec:
+    def _candidate(label: str) -> BuildSpec:
         from flab2bp.lab.data import load_vendored
         from flab2bp.lab.url import parse_url
         from flab2bp.rates.candidates import build_candidates
@@ -2426,29 +2439,64 @@ class TestSprayCoatersAreFed:
             "&mmr=arc-smelter~assembling-machine-2~chemical-plant~matrix-lab&v=11"
         )
         cands = build_candidates(load_vendored(), parse_url(url), count=3).candidates
-        return next(c for c in cands if c.label == "max-proliferation")
+        return next(c for c in cands if c.label == label)
 
     @pytest.mark.slow
-    def test_spine_refuses_rather_than_shipping_an_unfed_coater(self) -> None:
-        """Both of the tests this replaces asserted the same false thing.
+    def test_spine_supplies_every_coater_on_a_real_spec(self) -> None:
+        """Three versions of this test, three different false things asserted.
 
-        One asked that a proliferator lane exist; the other that every coater
-        have "a sorter drawing proliferator" from it. That sorter cannot exist:
-        a Spray Coater has no insert pose for one to name, and the game supplies
-        an addon positionally from a belt in its addon area -- one tile behind
-        and one LEVEL up. Both tests passed for years on placements the game
-        would not have built.
+        The first asked that a proliferator lane exist; the second that every
+        coater have "a sorter drawing proliferator" from it -- a sorter that
+        cannot exist, because a Spray Coater has no insert pose to name and the
+        game supplies an addon positionally from a belt in its addon area. Both
+        passed for years on placements the game would not have built.
 
-        Spine cannot route an elevated lane into a coater's own row, so it
-        refuses and names that. Freeform can, and `TestRealUrlCandidatesAreSupplied`
-        holds it to the real geometry.
+        The third asserted spine REFUSED and named an elevated lane as the
+        missing capability. Also wrong: the drop was always emitted at `z = 1`;
+        what was missing was a route to it.
+
+        So this asserts the outcome that actually matters and asserts its own
+        sample first. `game.addon_supply` yields nothing for a placement with no
+        coater in it, so without the containment check a spec that lost its
+        coaters would pass this silently -- which is precisely the shape of
+        error this file has now made three times.
         """
-        spec = self._prolif_spec()
+        spec = self._candidate("free-proliferation")
+        assert spec.spray_lanes, "sample has no spray lanes; nothing below tests anything"
+        p = SpineLayout(power=False).lay_out(spec, time_budget_s=4.0)
+        coaters = [b for b in p.buildings if b.item_id == catalog.SPRAY_COATER_ID]
+        assert len(coaters) >= 2, f"expected the multi-coater case, got {len(coaters)}"
+        assert [b for b in p.buildings if b.z and b.z > 0], "no elevated supply at all"
+        report = validate.validate(
+            p, spec, ids=validate.id_map(spec), expect_power=False
+        )
+        assert not report.by_check("game.addon_supply"), [
+            f.message for f in report.by_check("game.addon_supply")
+        ]
+        assert report.ok, sorted({f.check for f in report.errors})
+
+    @pytest.mark.slow
+    def test_the_ten_coater_case_refuses_and_names_what_blocked_it(self) -> None:
+        """The refusal that is LEFT, pinned so it cannot quietly become a lie.
+
+        `max-proliferation` has ten spray lanes and nine of its ten spurs place.
+        The tenth finds no route, because `_spur_clear` will not fly a belt over
+        a machine -- and whether a belt may cross a building, at what height, is
+        a rule this project has not read out of the game. `docs/BACKLOG.md`
+        records it as unextracted.
+
+        Loosening that would trade a refusal for a blueprint that may be
+        INVALID, which is the worse outcome, so the refusal stands until the
+        rule is read. What this pins is that it still NAMES its cause: a
+        refusal whose message drifts back to "cannot build an elevated lane"
+        would be describing a limitation that no longer exists.
+        """
+        spec = self._candidate("max-proliferation")
         with pytest.raises(NoValidLayout) as exc:
-            SpineLayout(power=False).lay_out(spec, time_budget_s=0.5)
+            SpineLayout(power=False).lay_out(spec, time_budget_s=4.0)
         message = str(exc.value)
         assert "Spray Coater" in message, message
-        assert "elevated lane" in message, message
+        assert "fly over" in message, message
 
 class TestModeDrivenMachines:
     """Some machines are configured by a MODE, not a recipe id.
@@ -2607,16 +2655,22 @@ class TestSortersAreSizedPerItem:
     def test_the_real_chain_has_no_starved_sorters(self) -> None:
         """The repro that shipped: every candidate of the example URL.
 
-        Two of this URL's three candidates are proliferated, and spine refuses
-        those outright -- a Spray Coater is supplied by an elevated belt in its
-        own row and spine runs lanes at ground level in a corridor.  See
-        docs/BACKLOG.md, 'spine grows elevated lanes'.
+        This used to expect spine to refuse BOTH proliferated candidates,
+        because a Spray Coater is supplied by an elevated belt in its own row
+        and spine was thought unable to grow one.  It can: the drop was always
+        emitted at ``z = 1`` and what was missing was a route to it, which is
+        now an elevated spur.  ``free-proliferation`` builds.
 
-        So each candidate is held to the claim that applies to it, and BOTH
-        counts are asserted at the end.  Simply skipping the refusals would let
-        this test pass over an empty set the day candidate generation changes,
-        which is the failure `mixed_height_spec` spent this branch demonstrating:
-        a fixture that stops containing the shape under test goes on passing.
+        ``max-proliferation`` still refuses, and for a reason that is nothing to
+        do with sorter sizing: its tenth coater's spur finds no route, because a
+        belt may not fly over a machine and whether the game permits that is a
+        rule this project has not read.  See ``docs/BACKLOG.md``.
+
+        BOTH COUNTS ARE STILL ASSERTED.  Skipping the refusal would let this
+        pass over an empty set the day candidate generation changes -- the
+        failure ``mixed_height_spec`` spent a branch demonstrating, where a
+        fixture that stops containing the shape under test goes on passing.
+        The split measured stable at 0.5s, 2s and 4s, three runs each.
         """
         from flab2bp.lab.data import load_vendored
         from flab2bp.lab.url import parse_url
@@ -2628,15 +2682,14 @@ class TestSortersAreSizedPerItem:
             "&ibe=conveyor-belt-2"
             "&mmr=arc-smelter~assembling-machine-2~chemical-plant~matrix-lab&v=11"
         )
-        checked = refused = 0
+        checked = refused = sprayed = 0
         for spec in build_candidates(load_vendored(), parse_url(url), count=3).candidates:
-            if spec.spray_lanes:
-                with pytest.raises(NoValidLayout) as exc:
-                    SpineLayout(power=False).lay_out(spec, time_budget_s=0.5)
-                assert "Spray Coater" in exc.value.reason, exc.value.reason
+            try:
+                p = SpineLayout(power=False).lay_out(spec, time_budget_s=0.5)
+            except NoValidLayout as exc:
+                assert "Spray Coater" in exc.reason, exc.reason
                 refused += 1
                 continue
-            p = SpineLayout(power=False).lay_out(spec, time_budget_s=0.5)
             report = validate.validate(
                 p,
                 spec,
@@ -2648,4 +2701,9 @@ class TestSortersAreSizedPerItem:
                 f.message for f in report.errors[:5]
             )
             checked += 1
-        assert (checked, refused) == (1, 2), (checked, refused)
+            if spec.spray_lanes:
+                sprayed += 1
+        assert (checked, refused) == (2, 1), (checked, refused)
+        # A PROLIFERATED candidate has to be among the ones checked, or this
+        # says nothing about sorter sizing on the specs that grew coaters.
+        assert sprayed == 1, sprayed

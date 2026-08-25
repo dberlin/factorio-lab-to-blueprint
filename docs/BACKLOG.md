@@ -564,20 +564,70 @@ other chained its three groups producer-to-consumer, and `_solve_one` orders
 producers strictly above consumers, so the packer was never free to make the
 packing the test said it must refuse.
 
-## OPEN -- spine grows elevated lanes
+## RESOLVED -- spine grows elevated lanes, and the drop was never the hard part
 
-Spine refuses every proliferated spec, and the refusal names why: a Spray Coater
-is supplied by a BELT in its addon area, which the prefab puts at
-`(0, -1.25, 1)` -- a tile and a quarter behind the coater and exactly one
-altitude LEVEL up. So the supply has to be an elevated lane in the coater's OWN
-row, and spine runs lanes at ground level in a corridor. Freeform builds it, the
-pipeline runs both, so no user-visible capability is lost.
+Spine used to refuse EVERY proliferated spec. It now builds them, and
+`super-magnetic-ring*60/free-proliferation` validates clean with
+`game.addon_supply` finding nothing -- at **2050 tiles against the
+unproliferated candidate's 2832**, which is the whole point of proliferating.
 
-What was found while trying: the drop belt must be fed by the proliferator
-lane's TAIL, not by any adjacent tile. Taking a mid-lane tile's output orphans
-everything downstream of it -- the lane stops there and its remaining sorters
-draw from a belt nothing fills, which reports as
-`flow.external_entry_reachable` rather than as anything about coaters.
+**THE DIAGNOSIS IN THE ORIGINAL ENTRY WAS WRONG, and in an instructive way.**
+It said spine "can only run lanes at ground level", so the work looked like
+teaching it a new capability. `_feed_coater` had always placed the drop at
+`z = 1`. What it could not do was REACH it: it required one proliferator tile to
+be the lane's TAIL *and* be orthogonally adjacent to the drop, and nothing
+arranges that coincidence -- `_coater_tile` picks the mount by nearness to the
+lane's MIDPOINT while this needed the column beside where the lane ENDS, and a
+lane has essentially one tail because `_relink_output` gives every other tile an
+`output_obj`. A conjunction of two conditions optimised for by different code.
+The capability was there; the reach was missing.
+
+The tail requirement itself is real and stays: taking a mid-lane tile's output
+orphans everything downstream -- the lane stops there and its remaining sorters
+draw from a belt nothing fills, reported as `flow.external_entry_reachable`
+rather than as anything about coaters.
+
+**Three things it took, each found by measuring rather than by reasoning.**
+
+1. **A spur**, elevated, from the tail to the drop -- replacing the conjunction.
+2. **A chain.** The first spur consumes the lane's only tail, so coater two
+   found no source and the candidate died with coater one already supplied.
+   Coaters share one supply belt, which is what the corpus's "three coaters on
+   one chain" case has always shown.
+3. **A search, not two guesses.** The spur was first an L tried both ways
+   round. That fails the moment a later coater wants past an earlier spur, and
+   it read as a geometry limit when it was a search limit. It is a BFS now,
+   bounded to the placement's existing bounding box -- a spur may not enlarge
+   the factory to supply a coater -- and it takes the SHORTEST route over every
+   candidate source rather than the first that works. Nearest-by-manhattan
+   picked a source whose actual route was 68 tiles for a straight-line 34.
+
+## OPEN -- spine's ten-coater case waits on a rule we have not read
+
+`super-magnetic-ring*60/max-proliferation` (10 spray lanes) still refuses, and
+the refusal is now bounded by **a game rule this project has deliberately not
+guessed** rather than by any weakness in the search. Nine of its ten spurs
+place; the tenth finds no route.
+
+Instrumented over the whole run, what blocks a spur tile:
+
+    499  Conveyor Belt Mk.II  (same z)
+    493  Assembling Machine Mk.II  (below)
+    361  Arc Smelter  (below)
+    449  Sorters, Splitters, Spray Coaters  (below)
+
+`_spur_clear` refuses to fly over anything that is not a belt. A belt over a
+belt is `BELT_CROSSING_CLEARANCE` and is established; a belt over a MACHINE is
+the "may a belt cross a building, and at what height" question this file already
+records as unextracted, and an elevated Splitter diagonally over an Assembling
+Machine is one of the two open collider questions. So the elevated plane is
+mostly unusable, and 854 of the blocks are machines.
+
+**Loosening it is exactly the wrong move.** It would turn a refusal into a
+blueprint that may be INVALID, which is the worst outcome available, in exchange
+for one candidate on one spec whose sibling already builds smaller. The way in
+is to read the crossing rule out of the game, not to infer it from the fact that
+a build would be denser if it were permissive.
 
 Freeform's out-lanes start immediately below the machine FOOTPRINT, which puts
 them inside the row a machine's collider needs; a junction on such a lane is
