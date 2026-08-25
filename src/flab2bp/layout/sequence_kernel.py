@@ -4,11 +4,52 @@ from __future__ import annotations
 
 import sys
 from array import array
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import ClassVar, Literal, Protocol, runtime_checkable
 
 import flab2bp.layout.sequence_pair as sequence_pair
 from flab2bp.dsp import catalog
+
+type _DecodeScore = Callable[
+    [
+        array[int],
+        array[int],
+        array[int],
+        array[int],
+        array[int],
+        array[int],
+        array[float],
+        array[float],
+        array[int],
+        array[int],
+        bytearray,
+        bytearray,
+        array[int],
+        array[int],
+        array[int],
+        array[int],
+        int,
+        int,
+        int,
+    ],
+    tuple[
+        array[int],
+        array[int],
+        array[int],
+        array[int],
+        int,
+        int,
+        int,
+        int,
+        float,
+        float,
+        int,
+        int,
+    ],
+]
+
+_compiled_decode_score: _DecodeScore | None
 
 try:
     from flab2bp.layout._sequence_kernel import decode_score as _compiled_decode_score
