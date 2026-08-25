@@ -4367,3 +4367,229 @@ class TestTheMergeFrontierWithdrawsSitesAJunctionCannotHold:
             canvas.blocked[cell] = _TENTATIVE
         got = freeform._merge_frontier(canvas, {5: path}, (5,), lambda x, y: True)
         assert {(-1, 0, 0), (0, -1, 0), (0, 1, 0)} <= got, sorted(got)
+
+
+# --- belt docked into a building PORT ---------------------------------------
+
+
+def ray_receiver_spec() -> BuildSpec:
+    """A Ray Receiver making critical photons, and something that eats them.
+
+    The machine at the centre of every ``universe-matrix`` refusal.  Its prefab
+    ships ZERO insert poses and two belt PORTS, so no sorter can attach to it on
+    any face at any distance -- ``BuildTool_Inserter`` drops a cast target whose
+    ``slotPoses`` is empty -- and the only join it has is a belt docked into a
+    port.  It is also a pure SOURCE: it is fed nothing, and the lane it wants is
+    its output.
+    """
+    return BuildSpec(
+        groups=(
+            group("critical-photon", "ray-receiver", 2, {}, {"critical-photon": F(1)}),
+            group("graphene", "chemical-plant", 2, {"critical-photon": F(1)}, {"graphene": F(1)}),
+        ),
+        external_inputs={},
+        outputs={"graphene": F(2)},
+        belt_item_id="conveyor-belt-2",
+        belt_items_per_second=F(12),
+        label="ray-receiver",
+    )
+
+
+def _docks(p: Placement, machine_item_id: int) -> list[tuple[int, PlacedBuilding]]:
+    """Belts that draw from a machine of ``machine_item_id`` through a port."""
+    return [
+        (i, b)
+        for i, b in enumerate(p.buildings)
+        if catalog.is_belt(b.item_id)
+        and b.input_obj is not None
+        and p.buildings[b.input_obj].item_id == machine_item_id
+    ]
+
+
+class TestBeltDockedIntoAPort:
+    """The connection neither strategy could emit, and the wall behind the corpus.
+
+    Every ``universe-matrix`` cell refused on it: ``critical-photon`` is made by
+    a Ray Receiver, freeform's ``_machines_without_poses`` said so, and there was
+    nothing else to offer.
+    """
+
+    def test_the_prefab_still_has_no_insert_pose_and_two_ports(self) -> None:
+        """Ground truth for everything below, asserted rather than assumed.
+
+        If a later extraction fills in the insert poses, this fails first and
+        says so, rather than the docking path quietly becoming the wrong answer.
+        """
+        info = catalog.building(catalog.RAY_RECEIVER_ID)
+        assert info.slot_poses == ()
+        assert len(info.port_poses) == 2
+
+    def test_a_ray_receiver_lays_out_now(self) -> None:
+        p = FreeformLayout(power=False).lay_out(ray_receiver_spec(), time_budget_s=5.0)
+        receivers = [b for b in p.buildings if b.item_id == catalog.RAY_RECEIVER_ID]
+        assert len(receivers) == 2
+        assert len(_docks(p, catalog.RAY_RECEIVER_ID)) == 2, "one dock per machine"
+
+    def test_the_dock_carries_the_record_the_game_writes(self) -> None:
+        """Counted over the fixture corpus: 108 drawing records, all identical.
+
+        ``input_obj`` names the building, ``input_from_slot`` is a subscript into
+        ``PrefabDesc.portPoses``, ``input_to_slot`` is 1 -- the belt's own first
+        input slot -- and both offsets are 0.
+        """
+        from flab2bp.dsp import rules
+
+        p = FreeformLayout(power=False).lay_out(ray_receiver_spec(), time_budget_s=5.0)
+        for _i, b in _docks(p, catalog.RAY_RECEIVER_ID):
+            ports = catalog.building(catalog.RAY_RECEIVER_ID).port_poses
+            assert 0 <= b.input_from_slot < len(ports)
+            assert b.input_to_slot == rules.BELT_PORT_DRAW_TO_SLOT
+            assert b.input_offset == 0
+            assert b.output_obj is not None, "a dock that leads nowhere drains nothing"
+
+    def test_the_receiver_records_no_link_of_its_own(self) -> None:
+        """All 28 port-hosts in the corpus carry ``output_obj = input_obj = -1``.
+
+        The belt does the naming, exactly as it does around a splitter.  A host
+        that names a neighbour encodes a link the game does not read there.
+        """
+        p = FreeformLayout(power=False).lay_out(ray_receiver_spec(), time_budget_s=5.0)
+        for b in p.buildings:
+            if b.item_id == catalog.RAY_RECEIVER_ID:
+                assert b.output_obj is None and b.input_obj is None
+
+    def test_the_dock_stands_on_the_port_pose_inside_the_footprint(self) -> None:
+        """The port is 1.12 tiles from the centre of a 7x7, so the belt is INSIDE.
+
+        That is where the game puts it -- ``temple-of-effectiveness`` runs belts
+        under twenty Energy Exchangers -- and it is what makes the collider
+        excusals load-bearing rather than decorative.
+        """
+        from flab2bp.dsp import rules
+        from flab2bp.layout import slots as sorter_slots
+
+        p = FreeformLayout(power=False).lay_out(ray_receiver_spec(), time_budget_s=5.0)
+        inside = 0
+        for _i, b in _docks(p, catalog.RAY_RECEIVER_ID):
+            assert b.input_obj is not None
+            m = p.buildings[b.input_obj]
+            gap = sorter_slots.port_gap(m, (b.x, b.y), b.input_from_slot)
+            assert gap <= rules.BELT_PORT_MAX_TILE_GAP, gap
+            if m.x <= b.x < m.x + m.width and m.y <= b.y < m.y + m.height:
+                inside += 1
+        assert inside == 2, "the dock tile is a tile of the machine, and must be"
+
+    def test_two_receivers_do_not_share_one_machine_s_port(self) -> None:
+        """``entityConnPool[objId * 16 + slot]`` holds ONE connection.
+
+        Two belts on one port paste with the first silently unwired.  The claim
+        is checked on the whole placement rather than on the pair, because the
+        strip's claim map is shared across every lane on the machine.
+        """
+        p = FreeformLayout(power=False).lay_out(ray_receiver_spec(), time_budget_s=5.0)
+        seen: set[tuple[int, int]] = set()
+        for _i, b in _docks(p, catalog.RAY_RECEIVER_ID):
+            assert b.input_obj is not None
+            key = (b.input_obj, b.input_from_slot)
+            assert key not in seen, key
+            seen.add(key)
+
+    def test_the_placement_validates(self) -> None:
+        """The whole point: a docked machine is judged, not merely emitted.
+
+        ``lay_out`` refuses a placement its own validator convicts, so reaching
+        here is already the assertion -- restated explicitly so a future change
+        that stops validating inside ``lay_out`` cannot make this pass silently.
+        """
+        spec = ray_receiver_spec()
+        p = FreeformLayout(power=False).lay_out(spec, time_budget_s=5.0)
+        r = validate.validate(p, spec, expect_power=False)
+        assert not [f for f in r.findings if f.severity is validate.Severity.ERROR], [
+            f.message for f in r.findings[:5]
+        ]
+        assert "belt.port_dock" in r.checks_run
+
+    def test_an_ingredient_on_a_portless_machine_still_refuses(self) -> None:
+        """Only the OUTPUT side docks, and the refusal has to say which side.
+
+        An Energy Exchanger charging accumulators is FED something, and feeding
+        a port would need one lane split into a belt per machine -- a splitter
+        per machine, which is the invariant a lane per destination exists to
+        keep.  So this stays a refusal, and it names the reason rather than
+        repeating the old "neither strategy emits" now that one does.
+        """
+        with pytest.raises(NoValidLayout) as exc:
+            FreeformLayout(power=False).lay_out(mode_driven_spec(), time_budget_s=0.5)
+        reason = exc.value.reason
+        assert "no insert pose on any face" in reason, reason
+        assert "only the OUTPUT side docks" in reason, reason
+        assert "4 belt port(s)" in reason, reason
+
+
+class TestDockPortSelection:
+    """``_dock_lane`` picks the port, and two of its rules need a machine the
+    corpus spec cannot produce: a Ray Receiver upright offers its ``+y`` port at
+    index 0, so "the port facing the lane" and "the first free port" pick the
+    same one and neither rule can be shown to be doing anything.  Turned half
+    round the two indices swap, which separates them.
+    """
+
+    @staticmethod
+    def _receiver(x: int, y: int, yaw: float) -> PlacedBuilding:
+        info = catalog.building(catalog.RAY_RECEIVER_ID)
+        return PlacedBuilding(
+            item_id=catalog.RAY_RECEIVER_ID,
+            model_index=info.model_index,
+            x=x,
+            y=y,
+            width=info.width,
+            height=info.height,
+            yaw=yaw,
+        )
+
+    def _run(
+        self, yaw: float, claimed: dict[int, set[int]] | None = None
+    ) -> tuple[int, list[PlacedBuilding]]:
+        from flab2bp.layout.freeform import _Canvas, _dock_lane
+
+        canvas = _Canvas()
+        m = canvas.add(self._receiver(0, 0, yaw), solid=True)
+        lane_y = 10
+        lane = [
+            canvas.add(
+                PlacedBuilding(item_id=2002, model_index=36, x=x, y=lane_y, width=1, height=1)
+            )
+            for x in range(0, 7)
+        ]
+        placed = _dock_lane(
+            canvas, [m], lane, lane_y, "critical-photon", 2002, 36,
+            claimed if claimed is not None else {},
+        )
+        docks = [
+            b for b in canvas.buildings
+            if catalog.is_belt(b.item_id) and b.input_obj == m
+        ]
+        return placed, docks
+
+    def test_it_takes_the_port_that_faces_the_lane(self) -> None:
+        """Turned 180, the Ray Receiver's ``+y`` port is index ONE.
+
+        Docking into port 0 there would put the belt on the far side of the
+        machine from the lane, drawing items out into the building's north face
+        and running them back through it.
+        """
+        placed, docks = self._run(180.0)
+        assert placed == 1
+        assert [d.input_from_slot for d in docks] == [1]
+
+    def test_a_port_already_spoken_for_is_not_taken_twice(self) -> None:
+        """``entityConnPool[objId * 16 + slot]`` holds ONE connection.
+
+        The claim map is shared with the sorter path on purpose -- the pool is
+        one address space per object, so a port index and an insert-pose index
+        of the same number are the same cell -- and this is the half of it a
+        two-port machine can show.
+        """
+        placed, docks = self._run(180.0, claimed={0: {1}})
+        assert placed == 0, "the only port facing the lane was already claimed"
+        assert docks == []

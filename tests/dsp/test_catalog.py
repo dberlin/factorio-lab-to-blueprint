@@ -646,3 +646,86 @@ def test_clearance_is_measured_on_the_rotated_collider() -> None:
         w, h = catalog.clearance(b.item_id, 0.0)
         assert catalog.clearance(b.item_id, 90.0) == (h, w), b.name
         assert catalog.clearance(b.item_id, 180.0) == (w, h), b.name
+
+
+# --- belt ports -------------------------------------------------------------
+
+
+def test_port_poses_and_the_raw_slot_table_agree_everywhere() -> None:
+    """Two readings of one array, and they must not drift.
+
+    ``Building.slots`` is ``buildings.json``'s raw ``x/y/z/yaw`` dicts;
+    ``Building.port_poses`` is ``slot_poses.json``'s ``portPoses`` with Unity's
+    axes mapped and each pose's forward attached.  They come from two extracted
+    files and describe the same ``SlotConfig.slotPoses`` array, so a count that
+    differs means one of the two extractions has gone stale.
+    """
+    bad = [
+        (b.prefab, len(b.slots), len(b.port_poses))
+        for b in catalog.all_buildings()
+        if len(b.slots) != len(b.port_poses)
+    ]
+    assert not bad, bad
+
+
+def test_the_port_array_and_the_insert_array_are_disjoint() -> None:
+    """No building offers both a belt port and a sorter slot.
+
+    Not assumed anywhere -- ``Strip.takes_belt_ports`` asks both questions
+    rather than one -- but it is the fact that makes the two arrays safe to
+    claim from ONE map: the game addresses a connection as
+    ``entityConnPool[objId * 16 + slot]``, so port 0 and insert pose 0 of the
+    same building would be the same cell.
+    """
+    both = [b.prefab for b in catalog.all_buildings() if b.port_poses and b.slot_poses]
+    assert not both, both
+
+
+def test_the_ray_receiver_takes_belts_and_no_sorter() -> None:
+    """The prefab behind every ``universe-matrix`` refusal.
+
+    ``ray-receiver`` carries exactly one ``SlotConfig`` on the prefab root, with
+    ``insertPoses`` of length ZERO and two ``portPoses`` named ``slot-0`` and
+    ``slot-1``, at model ``(0, 0, +-1.41)``.  ``PrefabDesc.slotPoses`` IS
+    ``SlotConfig.insertPoses``, and ``BuildTool_Inserter`` drops any cast target
+    with none of those, so no sorter attaches to one on any face at any distance.
+    """
+    info = catalog.building(catalog.RAY_RECEIVER_ID)
+    assert info.slot_poses == ()
+    assert info.takes_belt_ports
+    assert [(round(p.dx, 3), round(p.dy, 3)) for p in info.port_poses] == [
+        (0.0, 1.41),
+        (0.0, -1.41),
+    ]
+    assert [(round(p.fx, 3), round(p.fy, 3)) for p in info.port_poses] == [
+        (0.0, 1.0),
+        (0.0, -1.0),
+    ]
+
+
+def test_the_belt_port_class_is_the_nine_zero_pose_buildings_plus_the_stations() -> None:
+    """Which buildings a belt docks into, listed rather than described.
+
+    Every one of these has ZERO insert poses, so a sorter cannot touch it, and
+    every one has at least one port.  Pinned because ``freeform._dock_lane``
+    serves the CLASS and not the Ray Receiver: a building that quietly joined or
+    left it would change what the layout can build without anything saying so.
+    """
+    ported = sorted(
+        b.prefab
+        for b in catalog.all_buildings()
+        if b.port_poses and b.occupies_tiles and b.item_id != catalog.SPLITTER_ID
+    )
+    assert ported == [
+        "energy-exchanger",
+        "fractionator",
+        "interstellar-logistic-station",
+        "logistic-station",
+        "mining-drill",
+        "mining-drill-mk2",
+        "oil-extractor",
+        "piler",
+        "ray-receiver",
+        "storage-tank",
+        "water-pump",
+    ]
