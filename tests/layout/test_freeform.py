@@ -483,34 +483,39 @@ class TestPlanStrips:
             )
         )
 
-    def test_mixing_raises_the_ceiling_well_past_any_real_recipe(self) -> None:
-        """Twelve ingredients seat on an assembler: three lanes above and one
-        below, each holding up to its three-tile width, with the second and last
-        south lane left for the output.
+    def test_the_ceiling_is_the_machines_insert_POSES_not_its_rows(self) -> None:
+        """Five ingredients on an assembler: three above, two below, output below.
 
-        THIS SAID FIFTEEN, AND FIFTEEN NEEDED A LANE NO SORTER COULD REACH.  An
-        Assembling Machine covers three rows and reserves four, and `_emit_strip`
-        seats it at the top of that band, so the padding lands on the south side
-        and the THIRD row below is four tiles from its bottom edge --
-        `slots.attachment` returns `None` there and `_link_lane` places nothing.
-        The old ceiling counted that row, so the fifteenth ingredient rode a belt
-        joined to the machine at neither end.  Nine above plus three below is
-        what the poses actually carry.
+        THIS SAID TWELVE, AND TWELVE NEEDED TWELVE SLOTS THAT DO NOT EXIST.  An
+        Assembling Machine offers a lane THREE insert poses per face, and a slot
+        holds exactly one connection -- ``entityConnPool[objId * 16 + slot]``,
+        see ``validate.game.slot_occupancy``.  Mixing several items onto one lane
+        saves a ROW and saves no slot at all, so a ceiling counted in rows
+        counted something the machine does not have: the twelve-ingredient plan
+        emitted three sorters onto slot 6 and three onto slot 7 of every machine,
+        of which the game keeps one each.
+
+        Three above plus two below is what the poses carry, the second south
+        column going to the output lane.  DSP's own recipes reach six
+        ingredients, so this DOES bind something real -- ``universe-matrix`` --
+        and that is recorded as a refusal rather than papered over.
         """
-        strips = plan_strips(self._many_input_spec(12), strip_len=6)
-        assert len(strips[0].in_lanes) == 12
-        assert len(strips[0].in_above) == 3
-        assert len(strips[0].in_below) == 1
+        strips = plan_strips(self._many_input_spec(5), strip_len=6)
+        assert len(strips[0].in_lanes) == 5
+        assert sum(len(lane) for lane in strips[0].in_above) == 3
+        assert sum(len(lane) for lane in strips[0].in_below) == 2
+
+    def test_seating_is_bounded_by_slots_and_not_by_lanes(self) -> None:
+        """Six ingredients need seven slots on a face that offers six.
+
+        The refusal has to name the arithmetic, because "unfed machine" three
+        stages later is what this replaced.
+        """
+        with pytest.raises(ValueError, match="insert pose"):
+            plan_strips(self._many_input_spec(6), strip_len=6)
 
     def test_a_recipe_needing_more_lanes_than_two_sides_carry_is_rejected(self) -> None:
-        """Thirteen exceeds even mixed lanes, and truncating one ingredient would
-        produce a blueprint that pastes cleanly and then stalls.
-
-        The bar moved from seven to sixteen when lanes learned to carry several
-        items, and back to thirteen when seating stopped counting a south row an
-        assembler's clearance puts out of reach.  DSP's own recipes top out at
-        six ingredients, so this limit still binds nothing real.
-        """
+        """Truncating an ingredient would paste cleanly and then stall."""
         with pytest.raises(ValueError, match="cannot be seated"):
             plan_strips(self._many_input_spec(13), strip_len=6)
 
@@ -1591,6 +1596,15 @@ class TestRealUrlCandidatesAreSupplied:
         Cached because a refused candidate costs the full ``RETRY_BUDGET_S``
         before it raises, and three tests asking the same question three times
         would pay it three times over.
+
+        THE BUDGET WAS RAISED TO 8s AND PUT BACK, and the negative is recorded
+        here so nobody spends the afternoon on it again.  Once the proliferator
+        chain had to clear a Spray Coater's collider -- ``_Canvas.belt_ban``,
+        and the paste that forced it -- whether freeform finds a pack whose
+        chain routes became a coin toss, and it stayed a coin toss at sixteen
+        times the budget.  It is not a clock problem, so it is not tuned; the
+        test that depends on it carries an ``xfail`` instead, and the backlog
+        entry on freeform's chain is what removes both.
         """
         from flab2bp.lab.data import load_vendored
         from flab2bp.lab.url import parse_url
@@ -1608,6 +1622,22 @@ class TestRealUrlCandidatesAreSupplied:
         assert out, "no real candidate laid out at all; the sample is empty"
         return tuple(out)
 
+    @pytest.mark.xfail(
+        strict=False,
+        reason=(
+            "UNSTABLE, and non-strict for exactly that reason: it passes and "
+            "fails on the same code.  freeform now finds a pack whose "
+            "proliferator chain clears a Spray Coater's 1.8975 collider only "
+            "sometimes, so the sample this class insists on containing -- a "
+            "coater from a URL that asked for proliferation -- is there or not "
+            "depending on the solve.  Measured: three passes in isolation, a "
+            "failure in the full file, and the same coin toss at sixteen times "
+            "the budget.  A strict marker would be wrong in one direction and a "
+            "green test wrong in the other.  docs/BACKLOG.md carries the cause "
+            "and the two ways out; SPINE builds these candidates cleanly, so "
+            "this is freeform's routing and not the game's rule."
+        ),
+    )
     @pytest.mark.slow
     def test_every_candidate_supplies_its_coaters(self) -> None:
         """The real assertion, restored -- the gap this guarded has closed.
@@ -1844,6 +1874,42 @@ class TestProducerWithManyConsumers:
 # --- mixed-item lanes ------------------------------------------------------
 
 
+def five_input_spec() -> BuildSpec:
+    """A REAL five-ingredient recipe on an Assembling Machine.
+
+    ``miniature-particle-collider`` takes five things and makes one, in an
+    assembler.  Five is the most a lane-fed machine can carry -- three insert
+    poses on the north face and three on the south, one of the south three spent
+    on the output lane -- and an assembler's ROW caps are tighter than that, so
+    seating five forces a shared lane.  That is what keeps mixed lanes under
+    test now that six ingredients are refused.
+
+    Deliberately a real recipe, not a synthesised one: a made-up name plans
+    perfectly well and then dies at ``catalog.recipe_id``, so a synthetic-only
+    test would pass while the feature stayed broken.
+    """
+    ingredients = [
+        "frame-material",
+        "graphene",
+        "processor",
+        "super-magnetic-ring",
+        "titanium-alloy",
+    ]
+    return BuildSpec(
+        groups=(
+            group(
+                "miniature-particle-collider",
+                "assembling-machine-2",
+                2,
+                {i: F(1) for i in ingredients},
+                {"miniature-particle-collider": F(1)},
+            ),
+        ),
+        external_inputs={i: F(2) for i in ingredients},
+        outputs={"miniature-particle-collider": F(2)},
+    )
+
+
 def six_input_spec() -> BuildSpec:
     """A REAL six-ingredient recipe, fed entirely from outside.
 
@@ -1925,16 +1991,35 @@ class TestMixedItemLanes:
     want.
     """
 
-    def test_a_six_ingredient_recipe_plans(self) -> None:
-        strips = plan_strips(six_input_spec(), strip_len=6)
-        assert strips
-        s = strips[0]
-        assert len(s.in_lanes) == 6, "every ingredient must still be present"
-        lanes = len(s.in_above) + len(s.in_below)
-        assert lanes < 6, f"expected mixing to save lanes, used {lanes} for 6 items"
+    def test_a_six_ingredient_recipe_is_REFUSED_and_the_refusal_names_why(self) -> None:
+        """``universe-matrix`` needs seven slots and a Matrix Lab lane reaches six.
 
-    def test_it_lays_out_and_validates(self) -> None:
-        spec = six_input_spec()
+        THIS TEST USED TO ASSERT THE OPPOSITE, and what it was asserting was an
+        invalid blueprint.  A Matrix Lab offers three insert poses per face to a
+        lane, so six ingredients and one output are seven sorters into six slots;
+        mixing items onto shared lanes saves ROWS and saves no slot at all.  The
+        plan it used to produce emitted -- measured on the tree before this
+        change -- THREE sorters onto slot 6 and three onto slot 7 of every Matrix
+        Lab, four shared slots per build.  The game stores one connection per
+        slot and ``WriteObjectConn`` evicts the previous one, so four of those
+        six ingredients pasted unwired.
+
+        A refusal is the honest answer and this is the only DSP recipe it binds.
+        Lifting it means serving a machine's EAST and WEST faces, which freeform
+        has never done; ``docs/BACKLOG.md`` carries the entry.
+        """
+        with pytest.raises(ValueError, match="insert pose"):
+            plan_strips(six_input_spec(), strip_len=6)
+
+    def test_a_five_ingredient_recipe_still_mixes_and_validates(self) -> None:
+        """Mixing is not dead, it is bounded.  Five fits, and has to keep fitting.
+
+        Without this, the column bound could tighten to "one item per lane" and
+        every mixed-lane test above would still pass by refusing.
+        """
+        spec = five_input_spec()
+        strips = plan_strips(spec, strip_len=6)
+        assert max(len(lane) for lane in strips[0].in_above + strips[0].in_below) > 1
         p = FreeformLayout(power=False).lay_out(spec, time_budget_s=0.5)
         report = _full_report(p, spec, power=False)
         assert report.ok, "\n".join(f"{f.check}: {f.message}" for f in report.errors[:8])
@@ -1945,10 +2030,10 @@ class TestMixedItemLanes:
         That starves the machine that needed the other item, and nothing about
         the paste looks wrong -- so this is correctness, not tidiness.
         """
-        spec = six_input_spec()
+        spec = five_input_spec()
         p = FreeformLayout(power=False).lay_out(spec, time_budget_s=0.5)
         shared = _lane_runs(p)
-        assert shared, "a six-input strip must produce at least one mixed lane"
+        assert shared, "a five-input strip must produce at least one mixed lane"
         assert any(len(f) > 1 for f in shared.values()), (
             "expected some belt to be drawn from under two different filters"
         )
@@ -3907,14 +3992,28 @@ class TestAPortKnowsItsOwnAltitude:
         assert port.z == 1
         assert port.at_tile(2).z == 1, "at_tile lost the port's altitude"
 
+    @pytest.mark.xfail(
+        strict=True,
+        reason=(
+            "REGRESSED DELIBERATELY, and the reason is in docs/BACKLOG.md under "
+            "'freeform's proliferator chain crosses a Spray Coater it cannot get "
+            "around'.  This passed by routing the chain over a coater at z = 1; "
+            "the game rejects that belt -- confirmed by paste on a cut-down "
+            "blueprint carrying one coater and its tower -- because a coater's "
+            "collider stands 1.8975 high.  `_Canvas.belt_ban` now holds the band "
+            "and max-proliferation cannot be wired.  A refusal is the right "
+            "answer while the chain has nowhere to go; strict so that whoever "
+            "gives it somewhere is told to delete this marker."
+        ),
+    )
     @pytest.mark.slow
     def test_the_proliferated_candidates_build(self) -> None:
         """The spec this was found on, and it could have failed either way.
 
-        Before the fix this URL built ONLY `no-proliferator`; both proliferated
-        candidates refused with "no packing of N strips could be wired at any
-        candidate height".  So a regression puts the refusal straight back and
-        this goes red.
+        Before the port-altitude fix this URL built ONLY `no-proliferator`; both
+        proliferated candidates refused with "no packing of N strips could be
+        wired at any candidate height".  So a regression puts the refusal
+        straight back and this goes red.
         """
         built = {}
         for spec in self._candidates():
@@ -3929,6 +4028,14 @@ class TestAPortKnowsItsOwnAltitude:
             f"proliferated candidate refused again; built only {sorted(built)}"
         )
 
+    @pytest.mark.xfail(
+        strict=True,
+        reason=(
+            "Same cause as the test above: max-proliferation refuses while the "
+            "proliferator chain has no route that clears a coater's 1.8975 "
+            "collider.  See docs/BACKLOG.md."
+        ),
+    )
     @pytest.mark.slow
     def test_every_coater_on_this_spec_is_supplied(self) -> None:
         """And the coaters are actually fed, not merely placed."""

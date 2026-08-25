@@ -98,7 +98,10 @@ __all__ = [
     "ADDON_AREA_RADIUS",
     "ADDON_FROM_SLOT",
     "ADDON_TO_SLOT",
+    "BELT_INPUT_SLOTS",
     "BELT_SLOT",
+    "BELT_SLOT_AUTO_RANGE",
+    "CONN_SLOTS_PER_OBJECT",
     "INPUT_TO_SLOT",
     "OUTPUT_FROM_SLOT",
     "PASTE_LATERAL",
@@ -181,6 +184,103 @@ ADDON_TO_SLOT = 14
 #: different values.  Prefixed here so the two can never be confused again.
 SPLITTER_INPUT_TO_SLOT = 14
 SPLITTER_OUTPUT_FROM_SLOT = 15
+
+#: The three slots a belt receives INPUT on, as a half-open range.
+#:
+#: A belt's slot 0 carries its own OUTPUT link -- the belt pathfinder reads it
+#: that way throughout (``ReadObjectConn(objId, 0, ...)`` for "what does this
+#: belt feed"), and slots 1..3 are the three things that may feed it, which is
+#: what ``BuildTool_Path`` walks when it looks for a free one::
+#:
+#:     for (int num163 = 1; num163 < 4; num163++)
+#:     {
+#:         factory.ReadObjectConn(coverObjId, num163, out ..., out otherObjId4, ...);
+#:         if (otherObjId4 == 0) { outputToSlot = num163; ... break; }
+#:         if (num163 == 3) { output = null; outputToSlot = 0; }   # give up
+#:     }
+#:
+#: Counted over the fixture corpus, every belt-to-belt link the game wrote names
+#: **1** (7169 records), **2** (95) or **3** (38) on the receiving belt, and
+#: never 0 and never more than 3.  Both strategies used to leave the field at
+#: the dataclass default of 0, which is not a value the game writes and which
+#: collides with the receiving belt's own output link.
+BELT_INPUT_SLOTS = (1, 4)
+
+
+#: How many connection slots one object HAS.  A hard property of the game's
+#: storage, not a limit it chooses to apply::
+#:
+#:     public void ReadObjectConn(int objId, int slot, out bool isOutput,
+#:                                out int otherObjId, out int otherSlot)
+#:     {
+#:         ...
+#:         int num = entityConnPool[objId * 16 + slot];
+#:
+#:     private void WriteObjectConnDirect(int objId, int slot, bool isOutput,
+#:                                        int otherObjId, int otherSlot)
+#:     {
+#:         ...
+#:         entityConnPool[objId * 16 + slot] = num;
+#:
+#: ONE ``int`` per ``(object, slot)``.  A slot therefore holds at most one
+#: connection -- occupancy is keyed on the slot INDEX, not on the slot's pose,
+#: because the pose never enters the address.  Two poses on one face are two
+#: independent cells; two sorters on one index are one cell, and the second wins:
+#:
+#:     public void WriteObjectConn(int objId, int slot, bool isOutput,
+#:                                 int otherObjId, int otherSlot)
+#:     {
+#:         ...
+#:         if (otherSlot >= 0)
+#:         {
+#:             ClearObjectConn(objId, slot);
+#:             ClearObjectConn(otherObjId, otherSlot);   # <- evicts the sitting tenant
+#:             WriteObjectConnDirect(objId, slot, isOutput, otherObjId, otherSlot);
+#:             WriteObjectConnDirect(otherObjId, otherSlot, !isOutput, objId, slot);
+#:         }
+#:     }
+#:
+#: So a blueprint naming one machine slot from two sorters does not fail loudly
+#: on the pool -- it pastes with the earlier sorter silently unwired, having been
+#: evicted by ``ClearObjectConn``.  What the player sees first is geometry: both
+#: sorters snap onto the SAME slot pose (``BuildTool_BlueprintPaste`` sets
+#: ``lpos = transformedBy.position``), land on top of each other and go
+#: ``EBuildCondition.Collide``; every sorter connected to a building in error is
+#: then reddened in turn::
+#:
+#:     else if (buildPreview16.desc.isInserter
+#:              && buildPreview16.condition == EBuildCondition.Ok
+#:              && ((buildPreview16.input  != null && input .condition != Ok && != NotEnoughItem)
+#:               || (buildPreview16.output != null && output.condition != Ok && != NotEnoughItem)))
+#:         buildPreview16.condition = EBuildCondition.ConnWithErrorBuilding;
+#:
+#: -- which is the "Connection target cannot be laid" of the paste that produced
+#: this constant, reported next to "Collide with other object".
+#:
+#: Confirmed on the corpus, which is what a rule this consequential deserves:
+#: over the 10 real game blueprints in ``tests/fixtures`` -- ~10,000 connection
+#: records -- **no** ``(object, slot)`` is named twice, on either reading of the
+#: scope (machine peers only, or every peer carrying an explicit index).
+CONN_SLOTS_PER_OBJECT = 16
+
+#: Where the game puts a connection whose peer slot is left to it, i.e. one
+#: recorded as :data:`BELT_SLOT`.  ``WriteObjectConn`` scans this half-open
+#: range for the first free cell::
+#:
+#:     if (otherSlot == -1)
+#:         for (int i = 4; i < 12; i++)
+#:             if (entityConnPool[otherObjId * 16 + i] == 0) { otherSlot = i; break; }
+#:
+#: Two consequences, and only the first is checked anywhere.  A ``-1`` end
+#: names no fixed cell, so it cannot share one and is exempt from the uniqueness
+#: rule above.  And a belt tile accepts at most ``12 - 4`` such connections:
+#: past that ``otherSlot`` stays ``-1``, the guarded ``if (otherSlot >= 0)``
+#: fails and the connection is dropped with no error at all.  The corpus's
+#: worst belt tile carries 6, so nothing here has ever been near it and no
+#: check asserts it; recorded so the bound is written down rather than
+#: rediscovered.
+BELT_SLOT_AUTO_RANGE = (4, 12)
+
 
 #: Ports on a DSP splitter.  Four sides, so at most four belts may attach to one
 #: junction tile -- counting both the ones feeding it and the ones drawing from

@@ -1,5 +1,226 @@
 # Backlog
 
+## OPEN -- freeform's proliferator chain crosses a Spray Coater it cannot get around
+
+CONFIRMED IN GAME, by paste.  The failing blueprint was cut down to one coater,
+its tower and every belt within six tiles -- no machines, no sorters -- and the
+game flagged the BELT directly over the coater.
+`colliders.belt_crossing_height` for the coater's model is **1.8975**; our chain
+crosses at **z = 1**, so it owes z = 2.
+
+**Nothing caught it because two checks each assumed the other did.**
+`geom.collide` skips belts and defers them to the belt probe;
+`colliders.belt_collisions` excuses belt addons outright, on the `AddonPass`
+reading; and `validate._stacks` takes a coater out of the crossing question
+because `PrefabDesc.multiLevel` is set for it, which is right for a Splitter --
+a belt one level up is on its raised port -- and wrong for a coater, whose
+raised port is at `(0, -1.25, 1)`, a tile and a quarter BEHIND it.  Directly
+over a coater there is no port, only 1.8975 of collider.
+`validate._addon_crossings` now asks the question, with the two real excusals
+kept: a belt at or below the addon's own level, and a belt on one of its area
+cells **at that area's own altitude** -- the 3-D form matters, because area 0 is
+the coater's own tile and a 2-D exemption excuses exactly the belt the game
+flagged.
+
+**SPINE IS FIXED.**  `_belt_floor_over` no longer excuses a belt addon, and
+`_SpurField` prices the addon's whole oriented footprint while exempting only
+its RAISED areas.  Spine's mid-tier corpus stays **48/48 CLEAN** and its
+coater crossings go from 8 to 0.
+
+**FREEFORM IS PART WAY.**  With the check on, freeform's tier-large corpus is
+**39-42 of 60 CLEAN** (two runs of the same code gave 39 and 42, so the spread
+is the solver's, not the change's), against 60/60 before -- and every one of
+those 60 carried the defect.  Each refusal is a proliferated candidate whose
+chain cannot be routed.
+
+`_Canvas.belt_ban` holds the band above a coater and under its clearance.  Two
+things about it were learned the expensive way and are worth keeping:
+
+* **A band, not a floor.**  A belt at the coater's own level is BESIDE it, not
+  over it, and the game's own blueprints carry sixteen such belts across eight
+  coaters.  A floor walled those off and cost cells for nothing.
+* **From the collider, not the footprint.**  The oriented footprint is three
+  tiles and the two boxes do not fill it -- box A stops at +1.51 tiles along the
+  coater's axis and box B at +0.32 -- so a footprint-wide ban closed the MARGIN
+  tile the chain enters through.  Each candidate cell is asked of the real
+  boxes now, which is the same question the check asks of the result.
+* **Every drop cell is exempt from EVERY ban.**  Coaters two tiles apart on one
+  row overlap footprints, so coater A's band covered coater B's drop -- the belt
+  was already standing there and the router could no longer reach it.
+
+The geometry is the problem, not the ban.  `_place_coaters` seats the coater at
+the EAST end of an input lane and derives the drop from area 1, which at
+`Facing.EAST` lands one tile WEST of it.  The chain enters from the east margin,
+so every approach to that drop crosses the coater's own collider, and the drop
+must be at exactly one level up -- `game.addon_supply`'s
+`ADDON_AREA_RADIUS` is 1.0 world units and a level is 1.333, so z = 2 is out of
+reach of the area.
+
+**Two ways out, and each needs measuring rather than picking.**
+
+1. **Let the chain climb.**  Level 2 over the coater and back down.  The margin
+   is one tile wide and a ramp needs run, so this needs somewhere to spend
+   `BELT_CLIMB_PER_TILE` that the margin does not obviously have.
+2. **Seat the coater so its raised area faces the margin.**  A coater at
+   `Facing.WEST` puts its drop one tile EAST, in the margin, and the banned
+   tiles fall inside the lane where the chain never goes.  It is legal --
+   `AddonPass` takes `Mathf.Abs`, so a reversal passes, and `game.addon_facing`
+   allows it -- but the game's own eight coaters carry the flow yaw EXACTLY,
+   never reversed, and **whether a reversed coater sprays is untested**.  See
+   the yaw entry below.  Do not take this option to buy corpus cells until that
+   is known.
+
+## OPEN -- our belts carry two yaws out of four, and nobody has watched one run
+
+Measured on the reported blueprint: our belts carry **yaw 0 (439) and yaw 90
+(153) and nothing else**.  We cannot emit a belt flowing `-x` or `-y` at all --
+the value is a hardcoded `Facing` constant rather than anything derived from the
+link direction.  Checked against flow on the compass the game's own data implies
+(0 = +y, 90 = +x): **194 of our belts agree with their links and 375 disagree**.
+The game's own blueprints are 259/10 and 249/26, and those disagreements are
+curve angles and long-range links, not a systematic inversion.
+
+**What is known and what is not, stated at exactly this strength.**  Flipping a
+coater-tile belt from 270 to 90 in a known-good hand-built blueprint PASTED
+FINE, so it is not a build-legality error.  That is all it establishes.  Every
+paste this project has done tests PLACEMENT, not operation: we have never had a
+fully-green paste, so nobody has ever watched one of our blueprints run.  A belt
+whose yaw contradicts its own links could paste cleanly and then move items the
+wrong way or not at all, and a Spray Coater is directional, so which way items
+pass through it is a runtime question we have not observed.
+
+**Do not read "pasted fine" as "correct".**  The precondition for testing this
+is a blueprint that pastes clean, which is what the coater-crossing entry above
+is blocking.
+
+## RESOLVED -- a machine slot holds ONE connection, and 90% of the corpus broke it
+
+Reported from an in-game paste: "Connection target cannot be laid" beside
+"Collide with other object", many sorters red. The diagnosis was right and the
+scale was much larger than the report.
+
+**THE GAME'S RULE.** `PlanetFactory` addresses a connection as
+`entityConnPool[objId * 16 + slot]` -- one `int` per `(object, slot)`. Occupancy
+is keyed on the slot INDEX and never on the slot's POSE, because the pose never
+enters the address. Writing a second connection into an occupied cell does not
+fail: `WriteObjectConn` calls `ClearObjectConn(otherObjId, otherSlot)` first and
+evicts the sitting tenant. So a blueprint naming one machine slot twice pastes
+with one sorter silently unwired -- and, because the paste snaps both ends onto
+the same slot pose (`lpos = transformedBy.position`), with the two sorters
+standing on each other: `Collide`, then `ConnWithErrorBuilding` on everything
+attached. Ported as `validate.game.slot_occupancy`, stated in
+`rules.CONN_SLOTS_PER_OBJECT`.
+
+**HOW BIG IT WAS.** Measured on a pristine `ce19f5f` with the predicate applied
+standalone, budget 4:
+
+| arm | cells | clean before | cells carrying a shared slot | shared cells in total |
+|---|---|---|---|---|
+| freeform, tier large | 60 | 60 | **54** | **1412** |
+| spine, tier mid | 48 | 43 (5 refused) | **34** | **304** |
+
+Every one of those validated `ok=True`. The negative control is the fixture
+corpus: over the 10 real game blueprints, ~10,000 connection records, no
+`(object, slot)` is named twice, on either reading of the check's scope.
+
+**THREE CAUSES, and only the first was the one reported.**
+
+1. `freeform._link_lane` indexed columns PER LANE and clamped
+   (`usable[min(column, len(usable) - 1)]`). Two stacked lanes each asked for
+   column 0 and got the same slot; a lane with more items than the machine has
+   columns clamped its surplus onto the last. Fixed by rationing columns across
+   every lane on a face (`Strip.column_offset`), trimming each lane to the
+   columns it will actually use, and claiming slots per machine in `_link_lane`.
+2. `_seat_inputs` counted ROWS and not SLOTS. Mixing two items onto one lane
+   saves a row and saves no slot, so the ceiling was counted in a currency the
+   machine does not have -- see the OPEN entry below.
+3. **Every belt-to-belt link named slot 0 of its successor.** The game never
+   writes 0 there: over the corpus, belt-to-belt is slot **1** (7169 records),
+   **2** (95) or **3** (38), which are the receiving belt's three INPUT slots.
+   Slot 0 is where its own OUTPUT link lives, so our value both collided on
+   merges and fought with the successor link. Fixed in
+   `slots.assign_belt_slots`, which mirrors the game's own first-free scan and
+   raises rather than dropping a fourth feeder.
+
+**COST.** freeform tier large goes from 60/60 clean-but-invalid to **58/60
+clean, 0 shared slots**. The two lost cells are `electromagnetic-matrix`
+`max-proliferation`; INVALID stays 0.
+
+## OPEN -- freeform cannot wire a six-ingredient recipe, and `universe-matrix` is one
+
+A lane-fed machine gets its sorters from the north and south faces only, and
+each face offers a lane three insert poses. Six ingredients plus one output is
+seven sorters into six slots. It does not fit, and `_seat_inputs` now says so by
+name instead of producing a plan that doubles up.
+
+This is not a new limit, it is a newly VISIBLE one. Before the slot rule was
+ported, `plan_strips` accepted twelve ingredients on an Assembling Machine and
+the emitted blueprint put three sorters on slot 6 and three on slot 7 of every
+machine. The six-ingredient case is the only DSP recipe the true bound binds.
+
+**The way out is the EAST and WEST faces.** An Assembling Machine and a Matrix
+Lab each define twelve slots, three per side, and freeform uses six of them. A
+vertical lane beside a strip, or a spur off the end of one, would reach the
+other six. That is a packer change, not a wiring change, and it is the same
+territory as serving a machine from a lane that is not in its own strip.
+
+## OPEN -- half of freeform's Spray Coaters stand ACROSS the belt they ride
+
+Reported in game: every coater red. The yaw of a belt addon is what aims its
+`addonAreaPoses`, and `freeform._place_coaters` writes one yaw for every coater
+regardless of which way the lane it lands on runs.
+
+**MEASURED**, on the reported blueprint's `max-proliferation` candidate, with
+the flow direction taken from the `output_obj` link graph and not from any yaw
+field:
+
+| source | coaters | yaw == flow |
+|---|---|---|
+| the game's own blueprints | 8 | **8** |
+| `spine` | 16 | **16** |
+| `freeform` | 20 | **10** -- six across the flow, four reversed |
+
+**Why it matters, and why only some of it is checked.** The paste's `AddonPass`
+excusal, which is what keeps a belt running under a coater from being called a
+collision, ends in `Mathf.Abs(Vector3.Dot(areaLine, beltDirection)) > 0.95f`.
+A reversal dots to -1 and passes; a right angle dots to 0 and the belt under
+that coater becomes `EBuildCondition.Collide`. `validate.game.addon_facing`
+ports exactly that and convicts the six, not the four.
+
+**Why `game.addon_supply` could never have caught it.** That check computes the
+addon area's cell FROM the addon's own yaw and then asks whether a belt is
+there -- and the placement put the belt at the same computed cell. It validates
+our choice against itself.
+
+**The fix is not a one-line yaw.** A freeform coater rides the head tile of an
+input lane, and that tile's direction of flow is decided later, by whichever
+route the router attaches to it. Turning the coater to match then moves its
+proliferator area to a different neighbour, and the drop belt -- already placed,
+and the sink of a routed net -- has to move with it. Either the coater must be
+seated on a tile whose flow is already settled, or the drop must be chosen after
+routing.
+
+## RETRACTED -- the Spray Coater's 1x1 footprint is CORRECT
+
+Recorded because it was believed twice on one day and is easy to believe a
+third time. The claim was that both strategies declare a coater `1x1` where the
+prefab says `1x3`, that `tile_to_local_offset` therefore emits every coater a
+tile off its belt, and that `geom.collide` is blinded by the same wrong size.
+
+Both halves are false. In `factory-heretical-smelter-block` and
+`tillable-blackbox-module-...`, blueprints the game wrote, all eight Spray
+Coaters sit at their nearest belt's position to within `(0.000, 0.000, 0.001)`.
+`tile_to_local_offset` is `x + width / 2 - 0.5`, so a `1x1` declared at the belt
+tile emits its centre ON the belt tile -- which is correct, and which our twenty
+coaters reproduce exactly. `geom.collide` builds its `Placed` from that same
+offset, so it tests the coater's real 3.5-unit collider at the coater's real
+pose. Forcing the footprint to the prefab pair is what MOVES the coater, and the
+collision that then appears is manufactured by the fix.
+
+`occupies_tiles = False` already says this: the tiles a coater's collider covers
+are not tiles it reserves. `validate.geom.footprint` has two branches for that
+reason, and collapsing them turns a test red on purpose.
+
 ## RESOLVED -- it was never the router. A port did not know its own altitude.
 
 This entry said freeform's A* strands nets under congestion on a proliferated

@@ -771,6 +771,89 @@ def check(
 # --- geometry --------------------------------------------------------------
 
 
+@check("geom.footprint")
+def _footprint(ctx: Context) -> Iterable[Finding]:
+    """The declared footprint says where the building will actually be built.
+
+    Not a game predicate.  It is the check that lets the game predicates mean
+    anything, and it exists because of what ``PlacedBuilding.width``/``height``
+    are.  Their own docstring calls them a footprint "cached here so geometry
+    checks never need the catalog" -- a cache with no invalidation, filled in by
+    hand by whichever strategy placed the building, and until now compared
+    against nothing.
+
+    Everything downstream reads the cache instead of the table.
+    ``codec.tile_to_local_offset`` turns the min-corner anchor into DSP's
+    ``localOffset`` as ``x + width / 2 - 0.5``, so the declared size decides the
+    world position that gets EMITTED; ``geom.collide`` builds its
+    ``colliders.Placed`` from that same offset, so a wrong size makes it test a
+    real collider box at a pose that does not exist and hand back a confident
+    pass.  A ported rule fed a wrong size is not a rule, it is a rubber stamp.
+
+    TWO BRANCHES, because two conventions are in use and both are correct.
+
+    A building that OCCUPIES TILES anchors on the minimum corner of its
+    footprint, so its declared size must be
+    ``catalog.oriented_footprint(item_id, yaw)`` -- the prefab's, with the
+    quarter turn applied.  Copying ``catalog.footprint`` and forgetting the turn
+    is a live hazard rather than a hypothetical: ``layout.spine`` carries a
+    comment about exactly that case.
+
+    A BELT ADDON anchors on the belt tile it RIDES, and must declare ``1x1`` so
+    that ``tile_to_local_offset`` leaves its centre on that tile.  This is
+    measured, not assumed: across ``factory-heretical-smelter-block`` and
+    ``tillable-blackbox-module-...``, blueprints the game itself wrote, all
+    eight Spray Coaters sit at their nearest belt's position to within
+    ``(0.000, 0.000, 0.001)``.  A Spray Coater's prefab footprint is ``1x3`` and
+    its collider is 3.5 world units long, and NEITHER of those is its anchor;
+    ``occupies_tiles`` is false for it precisely because the tiles its collider
+    covers are not tiles it reserves.  Asserting the prefab footprint here would
+    convict a correct coater and, if anyone "fixed" the strategy to satisfy it,
+    would move all twenty coaters a tile off their belts.  That was tried on
+    this branch and reverted; the branch is here so it cannot be tried again by
+    accident.
+
+    HONEST NEGATIVE: this check convicts NOTHING in either strategy today.  A
+    reported figure of 36 violations was all Spray Coaters and was the wrong
+    reading above.  It is a guard on a cache, not a fix for a defect, and it is
+    on by default because a check that fires on nothing costs nothing to run.
+    """
+    for i, b in enumerate(ctx.placement.buildings):
+        try:
+            info = cat.building(b.item_id)
+        except KeyError:
+            # Not in the catalog at all: there is no prefab to compare against,
+            # and inventing one would be the same class of error as the cache.
+            continue
+        if info.occupies_tiles:
+            want = cat.oriented_footprint(b.item_id, b.yaw)
+            why = (
+                f"its prefab at yaw {b.yaw:g} is {want[0]}x{want[1]} and it anchors "
+                f"on the minimum corner of that footprint"
+            )
+        else:
+            want = (1, 1)
+            why = (
+                "a belt addon anchors on the belt tile it rides, so it declares 1x1 "
+                "and its centre stays on that tile"
+            )
+        if (b.width, b.height) != want:
+            yield Finding(
+                "geom.footprint",
+                Severity.ERROR,
+                f"building {i} ({info.name}) at ({b.x}, {b.y}) declares a "
+                f"{b.width}x{b.height} footprint; {why}. The declared size is what "
+                f"the emitter turns into a world position and what the collider "
+                f"check tests, so both are wrong for it",
+                (i,),
+                {
+                    "declared": f"{b.width}x{b.height}",
+                    "expected": f"{want[0]}x{want[1]}",
+                    "yaw": b.yaw,
+                },
+            )
+
+
 @check("geom.overlap")
 def _overlap(ctx: Context) -> Iterable[Finding]:
     """No two buildings claim the same cell -- except those that share by design.
@@ -1501,6 +1584,81 @@ def _inserter_data(ctx: Context) -> Iterable[Finding]:
 
 
 
+@check("game.slot_occupancy")
+def _slot_occupancy(ctx: Context) -> Iterable[Finding]:
+    """One connection per slot -- ``PlanetFactory``'s ``entityConnPool``.
+
+    The game addresses a connection as ``entityConnPool[objId * 16 + slot]``:
+    ONE ``int`` per ``(object, slot)``.  Occupancy is keyed on the slot INDEX
+    and not on the slot's pose, because the pose never enters the address --
+    see :data:`~flab2bp.dsp.rules.CONN_SLOTS_PER_OBJECT`, where the C# is
+    quoted.  A second connection written to an occupied slot does not fail: it
+    calls ``ClearObjectConn`` on the sitting tenant first and evicts it.
+
+    So a blueprint that names one machine slot from two sorters is not a
+    blueprint the game rejects on the pool; it is a blueprint that pastes with
+    one of the two sorters silently unwired.  What the player sees is the
+    geometry that goes with it -- the paste snaps BOTH ends onto the same slot
+    pose, so the sorters land on top of one another and go ``Collide``, and
+    every sorter attached to a building in error is reddened after them with
+    ``ConnWithErrorBuilding``, "Connection target cannot be laid".  That is the
+    pair of messages the paste which produced this check reported.
+
+    Scope is every connection record carrying an EXPLICIT slot, on any peer,
+    because the pool does not distinguish: belt-to-belt links occupy a belt's
+    input slots 1..3 by the same arithmetic.  Ends recorded as
+    :data:`~flab2bp.dsp.rules.BELT_SLOT` are exempt and must be -- ``-1`` means
+    "the game picks", and ``WriteObjectConn`` then takes the first free cell in
+    :data:`~flab2bp.dsp.rules.BELT_SLOT_AUTO_RANGE`, so such an end names no
+    fixed cell to share.
+
+    The negative control is the corpus: over the 10 real game blueprints in
+    ``tests/fixtures``, ~10,000 connection records, this check finds nothing on
+    either reading of its scope.  Our own ``freeform`` output, by contrast, put
+    three sorters on slot 8 of one Assembling Machine and the whole suite
+    reported ``ok=True``, because nothing here had ever looked.
+    """
+    bs = ctx.placement.buildings
+    claims: dict[tuple[int, int], list[tuple[int, str]]] = defaultdict(list)
+    for i, b in enumerate(bs):
+        for label, link, slot in (
+            ("output", b.output_obj, b.output_to_slot),
+            ("input", b.input_obj, b.input_from_slot),
+        ):
+            if link is None or not 0 <= link < len(bs):
+                continue
+            if slot < 0:
+                continue
+            claims[(link, slot)].append((i, label))
+
+    for (link, slot), occupants in sorted(claims.items()):
+        if len(occupants) < 2:
+            continue
+        peer = bs[link]
+        try:
+            name = cat.building(peer.item_id).name
+        except KeyError:
+            name = f"item {peer.item_id}"
+        who = ", ".join(f"{i} ({label})" for i, label in occupants)
+        yield Finding(
+            "game.slot_occupancy",
+            Severity.ERROR,
+            f"slot {slot} of building {link} ({name}) at ({peer.x}, {peer.y}) is "
+            f"named by {len(occupants)} connections: {who}. The game stores one "
+            f"connection per slot, so pasting this leaves only the last of them "
+            f"attached and drops the rest",
+            (link, *(i for i, _ in occupants)),
+            {
+                "peer": link,
+                "slot": slot,
+                "peer_item_id": peer.item_id,
+                "claims": who,
+            },
+        )
+
+
+
+
 @check("game.inserter_paste")
 def _inserter_paste(ctx: Context) -> Iterable[Finding]:
     """Port of the ``ErrorInserterData`` ladder in ``BlueprintData`` (paste).
@@ -1737,6 +1895,133 @@ def _addon_supply(ctx: Context) -> Iterable[Finding]:
             )
 
 
+@check("game.addon_facing")
+def _addon_facing(ctx: Context) -> Iterable[Finding]:
+    """A belt addon may not stand ACROSS the belt it rides.
+
+    Port of the ``AddonPass`` excusal in ``BuildTool_BlueprintPaste``, which is
+    what keeps a belt running under a Spray Coater from being called a
+    collision.  For each of the addon's areas::
+
+        Vector3 vector  = addon.lpos + addon.lrot * (colPose.position
+                                                     + colPose.forward * size.z * 3f);
+        Vector3 vector2 = addon.lpos + addon.lrot * (colPose.position
+                                                     - colPose.forward * size.z * 3f);
+        float num2 = Maths.DistancePointLine(belt.lpos, vector, vector2);
+        float num3 = 1f;
+        if (flag) num3 = Mathf.Abs(Vector3.Dot((vector2 - vector).normalized, rhs));
+        flag3 |= num2 < 0.3f;
+        flag3 &= num3 > 0.95f;          # <- the direction test
+        flag2 |= flag3;
+
+    ``rhs`` is the belt's own direction of travel, taken from its preview links
+    and not from any stored yaw::
+
+        if (input == null && output != null) rhs = (output.lpos - lpos).normalized;
+        if (input != null && output == null) rhs = (lpos - input.lpos).normalized;
+
+    and the line it is dotted against runs along the addon's area, which the
+    addon's ``lrot`` -- its YAW -- aims.  When ``AddonPass`` returns false the
+    belt is not excused, ``flag6`` is set and the belt becomes
+    ``EBuildCondition.Collide``; the later re-probe at 147451 does not rescue
+    it, because that clause refuses to excuse a belt that is CLOSE to an addon
+    area, which the ridden belt is by definition.
+
+    ``Mathf.Abs`` is why this convicts a right angle and not a reversal.  A
+    coater yawed 180 from its belt dots to -1, passes, and pastes.  A coater
+    yawed 90 dots to 0 and turns the belt under it red -- "Collide with other
+    object".
+
+    WHY ``game.addon_supply`` CANNOT CATCH THIS, which is the part worth
+    keeping.  That check computes the addon area's cell FROM the addon's own yaw
+    and then asks whether a belt is there -- and the strategy that chose the yaw
+    put the belt at that same computed cell.  It validates our choice against
+    itself, so a wrong yaw is invisible to it by construction.  This check is
+    anchored to something we did not choose: the direction of flow through the
+    ridden belt, read from the ``output_obj`` LINK GRAPH.
+
+    MEASURED.  The game's own eight Spray Coaters -- five in
+    ``factory-heretical-smelter-block``, three in
+    ``tillable-blackbox-module-...`` -- carry the flow yaw EXACTLY, 8 of 8, over
+    two different run directions.  ``spine`` matches them, 16 of 16.
+    ``freeform`` does not: of the twenty coaters on the reported blueprint's
+    ``max-proliferation`` candidate, ten disagree -- six standing across a belt
+    that flows north and four reversed on a belt that flows west -- because it
+    writes one yaw for every coater regardless of the lane it lands on.  Only
+    the six are convicted here; the four reversals are recorded in the finding
+    count of neither, because the game accepts them and a check that refused
+    them would be ours rather than the game's.
+    """
+    bs = ctx.placement.buildings
+    forward: dict[int, int] = {}
+    backward: dict[int, int] = {}
+    for i, b in enumerate(bs):
+        if not cat.is_belt(b.item_id):
+            continue
+        j = b.output_obj
+        if j is None or not 0 <= j < len(bs) or not cat.is_belt(bs[j].item_id):
+            continue
+        forward[i] = j
+        backward.setdefault(j, i)
+
+    for i, b in enumerate(bs):
+        try:
+            info = cat.building(b.item_id)
+        except KeyError:
+            continue
+        if not info.is_belt_addon:
+            continue
+        ride = next(
+            (
+                k
+                for k, o in enumerate(bs)
+                if cat.is_belt(o.item_id) and (o.x, o.y, o.z) == (b.x, b.y, b.z)
+            ),
+            None,
+        )
+        if ride is None:
+            yield Finding(
+                "game.addon_facing",
+                Severity.ERROR,
+                f"{info.name} {i} at ({b.x}, {b.y}) rides no belt: there is no belt "
+                f"on its own tile, and an addon's area 0 IS the belt it sits on",
+                (i,),
+                {"x": b.x, "y": b.y},
+            )
+            continue
+        nxt = forward.get(ride)
+        if nxt is not None:
+            dx, dy = bs[nxt].x - b.x, bs[nxt].y - b.y
+        else:
+            prv = backward.get(ride)
+            if prv is None:
+                # Neither successor nor predecessor: a one-tile run has no
+                # direction of travel, so `rhs` is `Vector3.forward` and the
+                # game's own `flag` is false -- `num3` stays 1 and the test
+                # cannot fire.  Silence here is the game's answer, not ours.
+                continue
+            dx, dy = b.x - bs[prv].x, b.y - bs[prv].y
+        if (dx, dy) == (0, 0):
+            continue
+        flow = round(math.degrees(math.atan2(dx, dy))) % 360
+        # The addon's areas are aimed by its yaw, so the line the game dots
+        # against runs along the addon's own axis.  Both are quarter turns on
+        # our grid, so the dot is 1, 0 or -1 and `> 0.95` reduces to "parallel".
+        off = (round(b.yaw) - flow) % 360
+        if off in (0, 180):
+            continue
+        yield Finding(
+            "game.addon_facing",
+            Severity.ERROR,
+            f"{info.name} {i} at ({b.x}, {b.y}) is yawed {round(b.yaw) % 360} and "
+            f"stands across the belt it rides, which flows {flow}. The game aims "
+            f"an addon's areas with its yaw and refuses a belt that crosses one "
+            f"at a right angle, so that belt pastes as a collision",
+            (i, ride),
+            {"yaw": round(b.yaw) % 360, "flow": flow, "off_by": off},
+        )
+
+
 @check("game.belt_crossing")
 def _belt_crossing(ctx: Context) -> Iterable[Finding]:
     """A belt over a building must clear its build collider -- and it may.
@@ -1797,6 +2082,109 @@ def _belt_crossing(ctx: Context) -> Iterable[Finding]:
     the positive controls in ``tests/layout/test_validate.py`` still fire.
     """
     yield from _belt_collide_findings(ctx, "game.belt_crossing", crossings_only=True)
+    yield from _addon_crossings(ctx)
+
+
+def _addon_crossings(ctx: Context) -> Iterable[Finding]:
+    """A belt passing OVER a belt addon owes it the same clearance as anything else.
+
+    This half is separate because the addon is excused twice over on the way
+    here, and both excusals are right about the case they were written for and
+    wrong about this one.
+
+    * ``colliders.belt_collisions`` never reports a belt against a belt addon at
+      all, on the ``AddonPass`` reading -- and ``AddonPass`` is about a belt the
+      addon is ATTACHED to.  The belt it rides and the belt on its proliferator
+      area are what that clause exists to excuse.
+    * ``_stacks`` takes a Spray Coater out of the crossing question because
+      ``PrefabDesc.multiLevel`` is set for it, and for a Splitter or a Storage
+      Tank a belt one level up really is on a raised port.  A coater's raised
+      port is not overhead: area 1 sits at ``(0, -1.25, 1)``, a tile and a
+      quarter BEHIND it.  Directly over the coater there is no port, only 1.8975
+      of collider.
+
+    CONFIRMED IN GAME, by paste, which is why this is here rather than in the
+    backlog.  The failing blueprint was cut down to one coater, its tower and
+    every belt within six tiles -- no machines, no sorters -- and the game
+    flagged the BELT directly over the coater.  Our proliferator chain crosses
+    at ``z = 1`` and ``colliders.belt_crossing_height`` for the coater's model is
+    ``1.8975``, so it owes ``z = 2``.
+
+    MEASURED.  Over the eight coaters in the game's own blueprints there is not
+    one belt above a coater and under its clearance: the belts inside a coater's
+    footprint are either on the addon's own area cells or on the SAME level
+    beside it, which the ``z`` test lets through.  Our own output has six such
+    belts in ``freeform`` and eight in ``spine`` -- six at one level, two at one
+    and a half.
+
+    The two excusals kept: a belt at or below the addon's own level (it rides
+    one, and the game's blueprints are full of belts flanking a coater at
+    ground level), and a belt standing on one of the addon's area cells, which
+    is a connection and is what ``game.addon_supply`` requires to be there.
+    """
+    bs = ctx.placement.buildings
+    addons = [i for i, b in enumerate(bs) if ctx.kinds[i] is Kind.ADDON]
+    if not addons:
+        return
+    belts = [i for i, b in enumerate(bs) if cat.is_belt(b.item_id)]
+    if not belts:
+        return
+    for ai in addons:
+        ab = bs[ai]
+        try:
+            info = cat.building(ab.item_id)
+        except KeyError:
+            continue
+        # THREE-DIMENSIONAL, and it has to be.  Area 0 of a coater is
+        # ``(0, 0, 0)`` -- its own tile -- so a two-dimensional exemption
+        # excuses a belt flying over the coater at z + 1, which is precisely
+        # the belt the game flagged.  The attached belt is the one at the
+        # area's own altitude.
+        areas = {
+            (
+                ab.x + round(slots.to_world((adx, ady), ab.yaw)[0]),
+                ab.y + round(slots.to_world((adx, ady), ab.yaw)[1]),
+                float(ab.z) + adz,
+            )
+            for adx, ady, adz in info.addon_areas
+        }
+        need = dsp_colliders.belt_crossing_height(ab.model_index) + float(ab.z)
+        pose = dsp_colliders.Placed(
+            ab.model_index,
+            *codec.tile_to_local_offset(ab.x, ab.y, ab.z, ab.width, ab.height),
+            ab.yaw,
+        )
+        for bi in belts:
+            b = bs[bi]
+            if b.z <= ab.z:
+                continue
+            if any(
+                (b.x, b.y) == (ax, ay) and abs(float(b.z) - az) < 0.5
+                for ax, ay, az in areas
+            ):
+                continue
+            probe = dsp_colliders.Placed(
+                b.model_index,
+                *codec.tile_to_local_offset(b.x, b.y, b.z, b.width, b.height),
+                b.yaw,
+            )
+            if not dsp_colliders.belt_crossings(
+                [probe], [pose], directly_over_only=True
+            ):
+                continue
+            yield Finding(
+                "game.belt_crossing",
+                Severity.ERROR,
+                f"belt at ({b.x}, {b.y}) z={b.z} passes over {info.name} "
+                f"{ai} at ({ab.x}, {ab.y}) z={ab.z} without clearing its build "
+                f"collider; the game needs z > {need:.4f}",
+                (bi, ai),
+                {
+                    "belt_z": str(b.z),
+                    "needs_z_above": f"{need:.4f}",
+                    "under": str((ab.x, ab.y, str(ab.z))),
+                },
+            )
 
 
 @check("game.belt_collide")

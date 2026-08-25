@@ -22,6 +22,7 @@ from flab2bp.dsp.catalog import (
     TESLA_COVER_RADIUS,
 )
 from flab2bp.dsp.catalog import building as catalog_building
+from flab2bp.dsp.catalog import oriented_footprint as catalog_oriented_footprint
 from flab2bp.layout import junction
 from flab2bp.layout.base import PlacedBuilding, Placement
 from flab2bp.layout.slots import SlotUndetermined, assign_sorter_slots
@@ -222,6 +223,96 @@ def test_geom_overlap_clean_when_footprints_are_disjoint() -> None:
 def test_geom_overlap_ignores_different_altitudes() -> None:
     r = validate(place(belt(0, 0, 0), belt(0, 0, 1)))
     assert not fired(r, "geom.overlap")
+
+
+# --- the declared footprint is the prefab's --------------------------------
+
+FOOTPRINT = {"geom.footprint"}
+COATER = 2313  # Spray Coater: 1x3, and a belt ADDON, so occupies_tiles is False
+
+
+def test_geom_footprint_clean_on_a_derived_placement() -> None:
+    """The negative control: a placement built from the catalog fires nothing."""
+    assert not fired(validate(_belt_to_machine()), "geom.footprint")
+
+
+def _lone_coater(width: int, height: int, yaw: float = 0.0) -> Placement:
+    return Placement(
+        buildings=(
+            PlacedBuilding(
+                item_id=COATER,
+                model_index=catalog_building(COATER).model_index,
+                x=0,
+                y=0,
+                width=width,
+                height=height,
+                yaw=yaw,
+            ),
+        )
+    )
+
+
+def test_geom_footprint_fires_on_an_understated_machine() -> None:
+    """A 7x5 Chemical Plant declared 1x1 emits at the wrong world position.
+
+    ``tile_to_local_offset`` is ``x + width / 2 - 0.5``, so the declared size
+    moves the building three tiles; ``geom.collide`` then tests its real
+    collider box where it is not.
+    """
+    p = Placement(
+        buildings=(
+            dataclasses.replace(machine(0, 0, item_id=CHEM_PLANT), width=1, height=1),
+        )
+    )
+    r = validate(p, only=FOOTPRINT)
+    assert fired(r, "geom.footprint")
+    assert not r.ok
+    finding = r.by_check("geom.footprint")[0]
+    assert finding.detail["declared"] == "1x1"
+    assert finding.detail["expected"] == "7x5"
+
+
+def test_geom_footprint_fires_when_a_quarter_turn_is_not_applied() -> None:
+    """At yaw 90 a 7x5 is 5x7.  Declaring the unturned pair is still wrong.
+
+    Without this the check could be satisfied by copying ``catalog.footprint``
+    and ignoring yaw -- a different bug with the same symptom, and one
+    ``layout.spine`` already carries a comment about.
+    """
+    p = Placement(
+        buildings=(
+            dataclasses.replace(machine(0, 0, item_id=CHEM_PLANT), yaw=90.0),
+        )
+    )
+    r = validate(p, only=FOOTPRINT)
+    assert fired(r, "geom.footprint")
+    assert r.by_check("geom.footprint")[0].detail["expected"] == "5x7"
+
+
+def test_geom_footprint_wants_one_by_one_from_a_belt_addon() -> None:
+    """A Spray Coater's prefab is 1x3 and its ANCHOR is still one tile.
+
+    Measured on the game's own blueprints: all eight coaters in
+    ``factory-heretical-smelter-block`` and ``tillable-blackbox-module-...``
+    sit at their nearest belt's position to within (0.000, 0.000, 0.001).  A
+    coater rides its belt; the three tiles are collider, not footprint.  So 1x1
+    is right and the prefab pair is the thing that would be wrong.
+    """
+    assert not fired(validate(_lone_coater(1, 1), only=FOOTPRINT), "geom.footprint")
+    r = validate(_lone_coater(1, 3), only=FOOTPRINT)
+    assert fired(r, "geom.footprint")
+    assert r.by_check("geom.footprint")[0].detail["expected"] == "1x1"
+
+
+def test_geom_footprint_addon_rule_is_not_the_prefab_rule() -> None:
+    """Guards the guard: the two branches must be able to disagree.
+
+    A Spray Coater's ``oriented_footprint`` is 1x3, and the addon branch wants
+    1x1.  If someone collapses the branches, this fails -- which is the point,
+    because collapsing them is what would move every coater off its belt.
+    """
+    assert catalog_oriented_footprint(COATER, 0.0) == (1, 3)
+    assert not catalog_building(COATER).occupies_tiles
 
 
 COLLIDE = {"geom.overlap", "geom.collide"}
@@ -604,6 +695,288 @@ def test_game_inserter_data_fires_on_a_reversed_own_slot_pairing() -> None:
     """``ReadObjectConn(objId, 0)`` must be the output, ``1`` the input."""
     p = _retagged(_belt_to_machine(), 2, output_from_slot=1, input_to_slot=0)
     assert fired(validate(p), "game.inserter_data")
+
+
+SLOT_OCCUPANCY = {"game.slot_occupancy"}
+
+
+def _two_lanes_onto_one_column() -> Placement:
+    """Two stacked lanes, both feeding the same column of one machine.
+
+    The shipped defect in miniature.  Measured on ``freeform``/``magnetic-coil``
+    before the fix: belts at (1, 6) and (1, 7), an Assembling Machine at (1, 8),
+    and BOTH sorters ending on tile (1, 8) and naming slot 8 of it.  The machine
+    has one insert pose in that column, and the game's connection pool has one
+    cell for it.
+    """
+    return place(
+        machine(0, 0),
+        belt(0, -1),
+        belt(0, -2),
+        sorter(0, -1, 0, 0, inp=1, out=0),
+        sorter(0, -2, 0, 0, inp=2, out=0),
+    )
+
+
+def test_game_slot_occupancy_clean_on_a_derived_placement() -> None:
+    """The negative control: one sorter per slot fires nothing."""
+    assert not fired(validate(_belt_to_machine()), "game.slot_occupancy")
+
+
+def test_game_slot_occupancy_fires_when_two_sorters_name_one_machine_slot() -> None:
+    """``entityConnPool[objId * 16 + slot]`` holds ONE connection.
+
+    Writing a second calls ``ClearObjectConn`` on the first, so this pastes with
+    one of the two sorters unwired -- and, because the paste snaps both ends
+    onto the same slot pose, with the two of them standing on each other.
+    """
+    r = validate(_two_lanes_onto_one_column(), only=SLOT_OCCUPANCY)
+    assert fired(r, "game.slot_occupancy")
+    assert not r.ok
+    finding = r.by_check("game.slot_occupancy")[0]
+    assert finding.detail["peer"] == 0
+    assert finding.detail["slot"] == 8, finding.message
+    # The report has to NAME the machine and the slot, not merely count.
+    assert "Assembling Machine" in finding.message
+    assert "slot 8" in finding.message
+
+
+def test_game_slot_occupancy_exempts_the_belt_end_of_a_sorter() -> None:
+    """A belt end carries -1, which names no cell, so two may share one belt.
+
+    ``WriteObjectConn`` resolves -1 by taking the first free slot in
+    ``rules.BELT_SLOT_AUTO_RANGE``, so two sorters drawing from one belt tile
+    get slots 4 and 5 and do not collide.  Convicting them would make the check
+    fire on every real blueprint -- the corpus has belt tiles carrying six.
+    """
+    p = place(
+        machine(0, 0),
+        machine(4, 0),
+        belt(3, 0),
+        sorter(3, 0, 2, 0, inp=2, out=0),
+        sorter(3, 0, 4, 0, inp=2, out=1),
+    )
+    assert p.buildings[3].input_from_slot == -1
+    assert p.buildings[4].input_from_slot == -1
+    assert not fired(validate(p, only=SLOT_OCCUPANCY), "game.slot_occupancy")
+
+
+@pytest.mark.parametrize("name", GEOMETRY_SAFE_FIXTURES)
+def test_real_blueprint_never_shares_a_connection_slot(name: str) -> None:
+    """The wider negative control: blueprints the GAME wrote.
+
+    Run on the decoded records rather than through
+    :func:`decode_fixture_to_placement`, which drops sorters and addons -- the
+    very records that carry the machine-side slot indices this check is about.
+    """
+    from collections import defaultdict
+
+    from flab2bp.dsp.codec import decode
+
+    raw = decode((Path("tests/fixtures") / f"{name}.txt").read_text()).buildings
+    by_index = {b.index: b for b in raw}
+    claims: dict[tuple[int, int], list[int]] = defaultdict(list)
+    for b in raw:
+        for link, slot in (
+            (b.output_obj_idx, b.output_to_slot),
+            (b.input_obj_idx, b.input_from_slot),
+        ):
+            if link not in by_index or slot < 0:
+                continue
+            claims[(link, slot)].append(b.index)
+    shared = {k: v for k, v in claims.items() if len(v) > 1}
+    assert not shared, f"{name}: {list(shared.items())[:5]}"
+    assert claims, f"{name} decoded to no connection at all"
+
+
+FACING = {"game.addon_facing"}
+
+
+def _coater_on_a_run(yaw: float, *, along_y: bool = False) -> Placement:
+    """A two-tile belt run with a Spray Coater on its second tile.
+
+    The run's direction comes from the ``output_obj`` link and from nothing
+    else, which is the point: the check may not read a yaw we chose.
+    """
+    a, b = ((0, 0), (0, 1)) if along_y else ((0, 0), (1, 0))
+    return Placement(
+        buildings=(
+            belt(a[0], a[1], out=1),
+            belt(b[0], b[1]),
+            PlacedBuilding(
+                item_id=COATER,
+                model_index=catalog_building(COATER).model_index,
+                x=b[0],
+                y=b[1],
+                width=1,
+                height=1,
+                yaw=yaw,
+            ),
+        )
+    )
+
+
+def test_game_addon_facing_clean_along_the_run() -> None:
+    """The negative control, and the reversal the game accepts.
+
+    ``AddonPass`` ends in ``Mathf.Abs(Dot(...)) > 0.95f``, so a coater turned
+    end-for-end still passes.  Convicting it would be our rule, not the game's.
+    """
+    assert not fired(validate(_coater_on_a_run(90.0), only=FACING), "game.addon_facing")
+    assert not fired(validate(_coater_on_a_run(270.0), only=FACING), "game.addon_facing")
+
+
+def test_game_addon_facing_fires_across_the_run() -> None:
+    """A coater at a right angle to the belt it rides.
+
+    ``AddonPass`` then returns false for that belt, nothing else excuses it, and
+    the belt pastes as ``EBuildCondition.Collide``.  Six of ``freeform``'s
+    twenty coaters on the reported blueprint are in exactly this state.
+    """
+    r = validate(_coater_on_a_run(0.0), only=FACING)
+    assert fired(r, "game.addon_facing")
+    assert not r.ok
+    f = r.by_check("game.addon_facing")[0]
+    assert f.detail["flow"] == 90
+    assert f.detail["off_by"] == 270
+    assert "Spray Coater" in f.message
+
+
+def test_game_addon_facing_reads_the_run_and_not_the_belts_own_yaw() -> None:
+    """Guards the guard: the flow must come from the LINK GRAPH.
+
+    The belts here carry a yaw of 0 while their link runs east.  A check that
+    read the belt's yaw field would call the coater correct; one that reads the
+    links calls it crossways.  Our own belts do carry stale yaws, so this is not
+    hypothetical.
+    """
+    p = _coater_on_a_run(0.0)
+    assert all(b.yaw == 0.0 for b in p.buildings[:2])
+    assert fired(validate(p, only=FACING), "game.addon_facing")
+
+
+def test_game_addon_facing_fires_on_an_addon_riding_nothing() -> None:
+    p = Placement(
+        buildings=(
+            PlacedBuilding(
+                item_id=COATER,
+                model_index=catalog_building(COATER).model_index,
+                x=5,
+                y=5,
+                width=1,
+                height=1,
+            ),
+        )
+    )
+    assert fired(validate(p, only=FACING), "game.addon_facing")
+
+
+@pytest.mark.parametrize("name", ("factory-heretical-smelter-block",))
+def test_real_blueprint_coaters_face_along_their_belt(name: str) -> None:
+    """The wider control: the game's own coaters, read the same way.
+
+    Eight coaters across two fixtures, and every one carries its belt's flow yaw
+    EXACTLY -- not merely parallel to it.  Asserting the exact equality here
+    rather than the check's looser rule is deliberate: it records what the game
+    does, so that if the looser rule ever has to be tightened the evidence for
+    the tighter one is already written down.
+    """
+    import math as _math
+
+    from flab2bp.dsp.codec import decode
+    from flab2bp.dsp.records import is_belt as _is_belt
+
+    raw = decode((Path("tests/fixtures") / f"{name}.txt").read_text()).buildings
+    by = {b.index: b for b in raw}
+    seen = 0
+    for c in (b for b in raw if b.item_id == COATER):
+        ride = sorted(
+            (
+                b
+                for b in raw
+                if _is_belt(b.item_id)
+                and abs(b.x - c.x) < 0.2
+                and abs(b.y - c.y) < 0.2
+                and abs(b.z - c.z) < 0.2
+            ),
+            key=lambda b: abs(b.z - c.z),
+        )
+        assert ride, f"coater {c.index} rides no belt"
+        r = ride[0]
+        nxt = by.get(r.output_obj_idx)
+        assert nxt is not None, f"belt {r.index} under a coater has no successor"
+        flow = round(_math.degrees(_math.atan2(nxt.x - r.x, nxt.y - r.y))) % 360
+        assert round(c.yaw) % 360 == flow, (c.index, c.yaw, flow)
+        seen += 1
+    assert seen >= 5, seen
+
+
+CROSSING = {"game.belt_crossing"}
+
+
+def _coater_with_a_belt_at(z: int | None) -> Placement:
+    """A coater on its belt, its proliferator drop, and optionally a belt over it.
+
+    The drop is where ``game.addon_supply`` requires it: one tile along the
+    coater's own axis, one altitude level up.
+    """
+    coater = PlacedBuilding(
+        item_id=COATER,
+        model_index=catalog_building(COATER).model_index,
+        x=5,
+        y=5,
+        width=1,
+        height=1,
+        yaw=90.0,
+    )
+    bs = [belt(5, 5), coater, belt(4, 5, 1)]
+    if z is not None:
+        bs.append(belt(5, 5, z))
+    return Placement(buildings=tuple(bs))
+
+
+def test_game_belt_crossing_fires_on_a_belt_over_a_spray_coater() -> None:
+    """Confirmed in game: the paste flags the belt directly over the coater.
+
+    A Spray Coater's collider stands 1.8975 high, so a belt owes it z = 2.  Our
+    proliferator chain crossed at z = 1.  Nothing saw it because
+    ``colliders.belt_collisions`` excuses belt addons outright and ``_stacks``
+    takes a coater out of the crossing question on ``multiLevel``.
+    """
+    r = validate(_coater_with_a_belt_at(1), only=CROSSING)
+    assert fired(r, "game.belt_crossing")
+    assert not r.ok
+    f = r.by_check("game.belt_crossing")[0]
+    assert f.detail["needs_z_above"] == "1.8975"
+    assert "Spray Coater" in f.message
+
+
+def test_game_belt_crossing_clears_a_spray_coater_at_two_levels() -> None:
+    """The rule is a price, not a prohibition.  Two levels clears 1.8975."""
+    assert not fired(validate(_coater_with_a_belt_at(2), only=CROSSING), "game.belt_crossing")
+
+
+def test_game_belt_crossing_excuses_the_coaters_own_belts() -> None:
+    """The two belts a coater is ATTACHED to are not crossings.
+
+    Its own tile at its own level is the cargo belt it rides, and the cell one
+    tile along and one level up is the proliferator area.  The area exemption
+    has to be THREE-dimensional: area 0 is the coater's own tile, so a flat
+    exemption would excuse the belt in the test above -- the very one the game
+    flagged.
+    """
+    assert not fired(validate(_coater_with_a_belt_at(None), only=CROSSING), "game.belt_crossing")
+
+
+def test_game_belt_crossing_excuses_a_belt_beside_a_coater_on_the_ground() -> None:
+    """The game's own blueprints are full of these, so convicting one is fatal.
+
+    Sixteen belts across the eight corpus coaters stand inside a coater's
+    collider footprint at the SAME level; every one of them pastes.
+    """
+    p = _coater_with_a_belt_at(None)
+    p = Placement(buildings=(*p.buildings, belt(6, 5), belt(4, 5)))
+    assert not fired(validate(p, only=CROSSING), "game.belt_crossing")
 
 
 def test_game_inserter_paste_allows_a_purely_radial_stretch() -> None:
