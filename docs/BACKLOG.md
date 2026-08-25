@@ -765,7 +765,7 @@ twice.
     base, check off      41  41  40         65  64  65               --
     base, check ON       28  28  28         52  52  54          25  25  23
     fix  (default-on)    40  41  41         63  65  64           0   0   0
-                         40  40             64  64
+                         40  40  40         64  64  64           0   0   0
 
 **Twenty-five convicted corpus cells to zero, three rounds running.** The base's
 convictions are stable to the cell -- `casimir-crystal`, `information-matrix`,
