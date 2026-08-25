@@ -122,9 +122,7 @@ class CompiledSequenceKernel:
         self._weights = array("d", context.net_weights)
         self._history = array("d", context.history_summed_area)
         self._fixed_sizes: tuple[tuple[tuple[int, int], ...], array[int]] | None = None
-        self._sizes: dict[
-            tuple[int, ...], tuple[tuple[tuple[int, int], ...], array[int]]
-        ] = {}
+        self._sizes: dict[tuple[int, ...], tuple[tuple[tuple[int, int], ...], array[int]]] = {}
         if problem.variant_tables:
             zero_indices = (0,) * problem.size
             zero_sizes = problem.selected_sizes(zero_indices)
@@ -333,14 +331,8 @@ def _conservative_dimensions(
         base_width, base_height = problem.sizes[strip]
         dimensions.append(
             (
-                max(
-                    variant.box_width + base_width - default.box_width
-                    for variant in variants
-                ),
-                max(
-                    variant.box_height + base_height - default.box_height
-                    for variant in variants
-                ),
+                max(variant.box_width + base_width - default.box_width for variant in variants),
+                max(variant.box_height + base_height - default.box_height for variant in variants),
             )
         )
     return tuple(dimensions)

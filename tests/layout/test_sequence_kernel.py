@@ -119,9 +119,9 @@ def _real_case(name: str) -> tuple[PlacementProblem, AnnealState, PlacementCostC
     return problem, state, context
 
 
-def _generated_cases(count: int = 384, seed: int = 90210) -> Iterator[
-    tuple[PlacementProblem, AnnealState, PlacementCostContext]
-]:
+def _generated_cases(
+    count: int = 384, seed: int = 90210
+) -> Iterator[tuple[PlacementProblem, AnnealState, PlacementCostContext]]:
     rng = random.Random(seed)
     for _index in range(count):
         size = rng.randint(1, 40)

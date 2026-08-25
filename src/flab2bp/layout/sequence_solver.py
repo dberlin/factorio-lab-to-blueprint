@@ -514,8 +514,7 @@ class SequenceSolver[PreparedT]:
                     (
                         height
                         for height in eligible
-                        if height.height in self._protected_followup_heights
-                        and height.stages == 1
+                        if height.height in self._protected_followup_heights and height.stages == 1
                     ),
                     None,
                 )
@@ -1550,7 +1549,7 @@ def _production_run(
             try:
                 planned_strip_len = max(1, spec.machine_count)
                 strips = plan_strips(spec, strip_len=planned_strip_len)
-            except (KeyError, ValueError):
+            except KeyError, ValueError:
                 raise NoValidLayout(
                     f"the spec cannot be split into strips: {exc}",
                     spec_label=spec.label,
@@ -1593,12 +1592,8 @@ def _production_run(
             if variant_tables
             else sum(width * height for width, height in sizes)
         )
-        seeds = {
-            height: _greedy_pack(strips, height) for height in _candidate_heights(strips)
-        }
-        coarse_heights = tuple(
-            sorted(seeds, key=lambda height: (seeds[height].width, height))
-        )
+        seeds = {height: _greedy_pack(strips, height) for height in _candidate_heights(strips)}
+        coarse_heights = tuple(sorted(seeds, key=lambda height: (seeds[height].width, height)))
         neighbor_heights: list[int] = []
         for height in coarse_heights:
             neighbor = height + 2
@@ -1990,11 +1985,7 @@ def _with_observational_stats(
     }
     stats: dict[str, object] = dict(placement.stats)
     observed_backends = {stage.backend for stage in result.stages}
-    accelerator = (
-        "mixed"
-        if len(observed_backends) > 1
-        else next(iter(observed_backends), "python")
-    )
+    accelerator = "mixed" if len(observed_backends) > 1 else next(iter(observed_backends), "python")
     stats.update(
         {
             "backend": "sequence-pair",

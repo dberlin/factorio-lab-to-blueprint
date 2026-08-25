@@ -98,7 +98,7 @@ def load_existing_colors(path: str) -> dict[int, int]:
     try:
         with open(path, encoding="utf-8") as fh:
             return {int(i["id"]): int(i["color"]) for i in json.load(fh) if "color" in i}
-    except (OSError, ValueError, KeyError):
+    except OSError, ValueError, KeyError:
         return {}
 
 
