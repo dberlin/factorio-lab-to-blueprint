@@ -153,6 +153,15 @@ class Job:
     refusal: Json | None = None
     #: The message, on ``error``.
     error: str | None = None
+    #: The last thing ``pipeline.build`` said it was doing.  ``None`` until the
+    #: first pair starts -- parsing the URL and solving the rates happen before
+    #: any layout does, and claiming "candidate 1 of 6" during them would be a
+    #: guess dressed as a fact.
+    progress: pipeline.AttemptProgress | None = None
+    #: Every pair that has settled, newest last.  Kept because "spine refused
+    #: this candidate 40 seconds ago" is worth seeing while the next one runs,
+    #: not only in the report at the end.
+    settled: list[pipeline.AttemptProgress] = field(default_factory=list)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     @property
@@ -166,7 +175,7 @@ class Job:
         return self.state in ("done", "refused", "error")
 
 
-def run_build(options: Options) -> pipeline.Build:
+def run_build(options: Options, on_progress: pipeline.ProgressSink) -> pipeline.Build:
     """The one call into the solver.
 
     ``--flow`` and ``--fetch-flow`` are deliberately not wired: the latter
@@ -181,7 +190,14 @@ def run_build(options: Options) -> pipeline.Build:
         candidates=options.candidates,
         time_budget_s=options.budget_s,
         name=options.name,
+        on_progress=on_progress,
     )
+
+
+#: What a :class:`Builder` runs.  The progress sink is a parameter rather than
+#: something the builder reaches in and sets, so a test can substitute a solve
+#: that reports whatever sequence it wants to see rendered.
+Solve = Callable[[Options, pipeline.ProgressSink], pipeline.Build]
 
 
 class Builder:
@@ -192,7 +208,7 @@ class Builder:
         *,
         workers: int = 1,
         history: int = HISTORY,
-        solve: Callable[[Options], pipeline.Build] = run_build,
+        solve: Solve = run_build,
     ) -> None:
         self._pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="flab2bp-build")
         self._solve = solve
@@ -231,8 +247,16 @@ class Builder:
         with job._lock:
             job.state = "running"
             job.started_at = time.monotonic()
+
+        def note(step: pipeline.AttemptProgress) -> None:
+            # Called from the solve thread; a poll reads it from another.
+            with job._lock:
+                job.progress = step
+                if step.phase != "started":
+                    job.settled.append(step)
+
         try:
-            build = self._solve(job.options)
+            build = self._solve(job.options, note)
         except NoValidLayout as exc:
             # Not an error. A spec nobody can lay out reports which pairs were
             # tried and why each gave up, and that is the most useful thing on
@@ -274,10 +298,32 @@ class Builder:
                 "result": job.result,
                 "refusal": job.refusal,
                 "error": job.error,
+                # Real progress, not elapsed time: `pipeline.build` says which
+                # pair it is on. Absent until the first layout starts, because
+                # the URL parse and the rate solve come first and nothing knows
+                # how long they take.
+                "progress": _step(job.progress),
+                "settled": [_step(s) for s in job.settled],
             }
         if job.state == "queued":
             body["queue_position"] = self.queue_position(job)
         return body
+
+
+def _step(step: pipeline.AttemptProgress | None) -> Json | None:
+    """One :class:`~flab2bp.pipeline.AttemptProgress` as JSON, or nothing."""
+    if step is None:
+        return None
+    return {
+        "index": step.index,
+        "total": step.total,
+        "candidate": step.candidate,
+        "strategy": step.strategy,
+        "phase": step.phase,
+        "area": step.area,
+        "ok": step.ok,
+        "reason": step.reason,
+    }
 
 
 def _reasons(exc: NoValidLayout) -> tuple[str, ...]:

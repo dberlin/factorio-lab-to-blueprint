@@ -24,7 +24,7 @@ def _settled(builder: Builder, job_id: str, *, timeout_s: float = 20.0) -> dict[
 
 
 def test_a_successful_build_reports_done_with_a_result(small_build: pipeline.Build) -> None:
-    builder = Builder(solve=lambda _: small_build)
+    builder = Builder(solve=lambda _o, _p: small_build)
     try:
         job = builder.submit(Options(url=URL))
         snap = _settled(builder, job.id)
@@ -39,7 +39,7 @@ def test_a_successful_build_reports_done_with_a_result(small_build: pipeline.Bui
 def test_a_refusal_is_a_result_not_an_error() -> None:
     """``NoValidLayout`` must not land in the same channel as a bad URL."""
 
-    def refuse(_: Options) -> pipeline.Build:
+    def refuse(_o: Options, _p: pipeline.ProgressSink) -> pipeline.Build:
         raise NoValidLayout(
             "spine/no-proliferator: too tall; freeform/no-proliferator: unroutable",
             spec_label="no-proliferator",
@@ -63,7 +63,7 @@ def test_a_refusal_is_a_result_not_an_error() -> None:
 
 
 def test_a_bad_url_is_an_error() -> None:
-    def blow_up(_: Options) -> pipeline.Build:
+    def blow_up(_o: Options, _p: pipeline.ProgressSink) -> pipeline.Build:
         raise ValueError("that is not a FactorioLab URL")
 
     builder = Builder(solve=blow_up)
@@ -80,7 +80,7 @@ def test_a_second_job_queues_behind_the_first(small_build: pipeline.Build) -> No
     """One worker, so the second job waits -- and says how far back it is."""
     release = threading.Event()
 
-    def wait_then_build(_: Options) -> pipeline.Build:
+    def wait_then_build(_o: Options, _p: pipeline.ProgressSink) -> pipeline.Build:
         release.wait(timeout=20.0)
         return small_build
 
@@ -105,7 +105,7 @@ def test_a_second_job_queues_behind_the_first(small_build: pipeline.Build) -> No
 def test_old_finished_jobs_are_evicted_and_running_ones_are_not(
     small_build: pipeline.Build,
 ) -> None:
-    builder = Builder(history=3, solve=lambda _: small_build)
+    builder = Builder(history=3, solve=lambda _o, _p: small_build)
     try:
         # One at a time: submitting six at once would have them evicted out from
         # under the poll, which is eviction working, not eviction under test.
@@ -125,7 +125,7 @@ def test_old_finished_jobs_are_evicted_and_running_ones_are_not(
 def test_the_snapshot_carries_the_ceiling_and_the_elapsed_time(
     small_build: pipeline.Build,
 ) -> None:
-    builder = Builder(solve=lambda _: small_build)
+    builder = Builder(solve=lambda _o, _p: small_build)
     try:
         options = Options(url=URL, strategy="best", candidates=2, budget_s=4.0)
         snap = _settled(builder, builder.submit(options).id)
@@ -134,5 +134,62 @@ def test_the_snapshot_carries_the_ceiling_and_the_elapsed_time(
         reported = snap["options"]
         assert isinstance(reported, dict)
         assert reported["strategy"] == "best"
+    finally:
+        builder.shutdown()
+
+
+def test_a_running_job_reports_which_pair_it_is_on(small_build: pipeline.Build) -> None:
+    """Real progress, not elapsed time.
+
+    Elapsed-against-a-ceiling was what this had before `pipeline.build` could
+    say anything, and it could not tell a build stuck on its first candidate
+    from one on its last.
+    """
+    reached_second = threading.Event()
+    release = threading.Event()
+
+    def solve(_o: Options, note: pipeline.ProgressSink) -> pipeline.Build:
+        note(pipeline.AttemptProgress(1, 2, "no-proliferator", "spine", "started"))
+        note(
+            pipeline.AttemptProgress(
+                1, 2, "no-proliferator", "spine", "refused", reason="too tall"
+            )
+        )
+        note(pipeline.AttemptProgress(2, 2, "no-proliferator", "freeform", "started"))
+        reached_second.set()
+        release.wait(timeout=20.0)
+        return small_build
+
+    builder = Builder(solve=solve)
+    try:
+        job = builder.submit(Options(url=URL))
+        assert reached_second.wait(timeout=20.0)
+        snap = builder.snapshot(job)
+        progress = snap["progress"]
+        assert isinstance(progress, dict)
+        assert (progress["index"], progress["total"]) == (2, 2)
+        assert progress["strategy"] == "freeform"
+        assert progress["phase"] == "started"
+        # A pair that already gave up stays visible while the next one runs;
+        # `started` events are not kept, or every pair would appear twice.
+        settled = snap["settled"]
+        assert isinstance(settled, list)
+        assert [(s["strategy"], s["phase"], s["reason"]) for s in settled] == [
+            ("spine", "refused", "too tall")
+        ]
+    finally:
+        release.set()
+        builder.shutdown()
+
+
+def test_a_job_that_has_not_started_laying_out_claims_no_progress(
+    small_build: pipeline.Build,
+) -> None:
+    """Parsing the URL and solving the rates come first and take an unknown time."""
+    builder = Builder(solve=lambda _o, _p: small_build)
+    try:
+        snap = _settled(builder, builder.submit(Options(url=URL)).id)
+        assert snap["progress"] is None
+        assert snap["settled"] == []
     finally:
         builder.shutdown()

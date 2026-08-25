@@ -16,12 +16,10 @@ from typing import Any
 import pytest
 
 from flab2bp import pipeline
-from flab2bp.web.jobs import Builder, Options, run_build
+from flab2bp.web.jobs import Builder, Options, Solve, run_build
 from flab2bp.web.server import serve
 
 URL = "https://factoriolab.github.io/dsp/flow?o=graphene*60&v=11"
-
-Solve = Callable[[Options], pipeline.Build]
 
 
 def _decode(content_type: str, body: bytes) -> Any:
@@ -104,7 +102,7 @@ def test_the_post_does_not_wait_for_the_solve(
     """
     release = threading.Event()
 
-    def slow(_: Options) -> pipeline.Build:
+    def slow(_o: Options, _p: pipeline.ProgressSink) -> pipeline.Build:
         release.wait(timeout=20.0)
         return small_build
 
@@ -131,7 +129,7 @@ def test_a_refusal_comes_back_200_not_500(start: Callable[..., Client]) -> None:
     """A spec that cannot be laid out is an answer, and answers are not errors."""
     from flab2bp.layout.base import NoValidLayout
 
-    def refuse(_: Options) -> pipeline.Build:
+    def refuse(_o: Options, _p: pipeline.ProgressSink) -> pipeline.Build:
         raise NoValidLayout("spine/a: too tall", spec_label="a", budget_s=1.0)
 
     client = start(refuse)

@@ -26,7 +26,6 @@ import json
 import mimetypes
 import shutil
 import subprocess
-from collections.abc import Callable
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -35,8 +34,7 @@ from urllib.parse import parse_qs, urlparse
 
 import httpx
 
-from flab2bp.pipeline import Build
-from flab2bp.web.jobs import Builder, InvalidOptions, Options, parse_options, run_build
+from flab2bp.web.jobs import Builder, InvalidOptions, Solve, parse_options, run_build
 from flab2bp.web.payload import Json
 
 #: Refuse a body larger than this. A FactorioLab URL is long, but not this long.
@@ -263,7 +261,7 @@ def serve(
     port: int = 8000,
     dist: Path | None = None,
     workers: int = 1,
-    solve: Callable[[Options], Build] = run_build,
+    solve: Solve = run_build,
 ) -> tuple[ThreadingHTTPServer, Builder]:
     """A configured, unstarted server and the queue behind it.
 
