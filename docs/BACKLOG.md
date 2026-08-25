@@ -1409,7 +1409,10 @@ every build into a refusal before the footprints are fixed.
    tests red -- `magnetic-ring`, plus `quantum-chip/no-proliferator` and
    `free-proliferation` -- because the strategy's own self-check then refuses
    every plan it emits. That is a ROUTER bug the footprint fix resolves, exactly
-   as spacing took `geom.collide` out of `OPT_IN`. Until then `game.belt_crossing` remains a
+   as spacing took `geom.collide` out of `OPT_IN`. With it opt-in the full
+   audit is unmoved: 144/144 cells at budget 4s, **INVALID 0**, and not one of
+   the 38 refusals names either belt check -- they are the Spray Coater supply
+   rule (spine, 32) and the missing insert poses (freeform, 6). Until then `game.belt_crossing` remains a
    LOWER bound on what the game rejects, and `game.belt_collide` is the upper
    one, available by name.
 4. **Sorters likewise**, and for a known reason: a sorter's box is rebuilt from
