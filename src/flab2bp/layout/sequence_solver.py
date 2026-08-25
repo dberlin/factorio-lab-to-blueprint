@@ -1086,6 +1086,7 @@ def _production_run(
     power: bool,
     strip_len: int,
     config: SequenceSolverConfig,
+    belt_vertical_construction: bool = True,
 ) -> _ProductionRun:
     started = time.monotonic()
     ceiling = max(time_budget_s, RETRY_BUDGET_S)
@@ -1229,6 +1230,7 @@ def _production_run(
                     list(selected),
                     pack,
                     power=power,
+                    ramped=not belt_vertical_construction,
                 )
             except _Unpowerable:
                 return _ProductionCandidate(
@@ -1452,6 +1454,7 @@ class SequencePairLayout:
         self,
         *,
         power: bool = False,
+        belt_vertical_construction: bool = True,
         strip_len: int = 6,
         config: SequenceSolverConfig | None = None,
         solver_factory: _SolverFactory | None = None,
@@ -1462,6 +1465,7 @@ class SequencePairLayout:
             raise ValueError("strip length must be a positive integer")
         self._solver_factory = solver_factory
         self.power = power
+        self.ramped = not belt_vertical_construction
         self.strip_len = strip_len
         self.config = config or SequenceSolverConfig()
 
@@ -1487,6 +1491,7 @@ class SequencePairLayout:
             spec,
             time_budget_s=time_budget_s,
             power=self.power,
+            belt_vertical_construction=not self.ramped,
             strip_len=self.strip_len,
             config=self.config,
         )

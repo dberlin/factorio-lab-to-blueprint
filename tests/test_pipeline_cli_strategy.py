@@ -17,13 +17,23 @@ def test_best_selects_only_production_backends() -> None:
     assert pipeline._strategy_names("best") == ("spine", "freeform")
 
 
-def test_sequence_pair_constructs_sequence_pair_layout() -> None:
+@pytest.mark.parametrize(
+    ("belt_vertical_construction", "expected_ramped"),
+    ((False, True), (True, False)),
+)
+def test_sequence_pair_constructs_with_url_slope_rule(
+    belt_vertical_construction: bool,
+    expected_ramped: bool,
+) -> None:
     layout = pipeline._new_layout(
-        "sequence-pair", power=True, belt_vertical_construction=True
+        "sequence-pair",
+        power=True,
+        belt_vertical_construction=belt_vertical_construction,
     )
 
     assert isinstance(layout, SequencePairLayout)
     assert layout.power is True
+    assert layout.ramped is expected_ramped
 
 
 def test_cli_passes_exact_sequence_pair_name(

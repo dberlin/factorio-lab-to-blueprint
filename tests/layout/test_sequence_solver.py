@@ -634,6 +634,51 @@ def test_direct_targets_derive_geometry_from_both_selected_endpoint_variants() -
     assert consumer_changed.producer_row == target.producer_row
 
 
+@pytest.mark.parametrize(
+    ("belt_vertical_construction", "expected_ramped"),
+    ((False, True), (True, False)),
+)
+def test_production_preparation_applies_save_slope_rule_to_every_candidate(
+    monkeypatch: pytest.MonkeyPatch,
+    belt_vertical_construction: bool,
+    expected_ramped: bool,
+) -> None:
+    spec = two_stage_spec()
+    run = _production_run(
+        spec,
+        time_budget_s=2.0,
+        power=False,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+        belt_vertical_construction=belt_vertical_construction,
+    )
+    height_state = run.solver._heights[0]
+    decoded = decode_state(
+        height_state.problem,
+        AnnealState.initial(height_state.problem.size, seed=7),
+    )
+    captured: list[bool] = []
+
+    def capture(
+        spec: BuildSpec,
+        selected: list[freeform_module.Strip],
+        pack: _Pack,
+        *,
+        power: bool,
+        ramped: bool,
+    ) -> _PreparedRoutingProblem:
+        del spec, selected, pack, power
+        captured.append(ramped)
+        raise freeform_module._Unpowerable
+
+    monkeypatch.setattr(sequence_solver_module, "_prepare_routing_problem", capture)
+
+    for _ in range(2):
+        candidate = run.solver.adapters.prepare(height_state.height, decoded)
+        assert candidate.preparation_error == "unpowerable"
+    assert captured == [expected_ramped, expected_ramped]
+
+
 def test_production_preparation_receives_the_complete_selected_physical_plan(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -659,8 +704,9 @@ def test_production_preparation_receives_the_complete_selected_physical_plan(
         pack: _Pack,
         *,
         power: bool,
+        ramped: bool,
     ) -> _PreparedRoutingProblem:
-        del spec, pack, power
+        del spec, pack, power, ramped
         captured.append(selected)
         raise freeform_module._Unpowerable
 
@@ -1382,14 +1428,25 @@ def test_fake_closed_loop_splits_then_runs_the_production_merge_policy(
 
 
 @pytest.mark.parametrize("power", [False, True])
-def test_sequence_backend_returns_only_certified_placements(power: bool) -> None:
+@pytest.mark.parametrize("belt_vertical_construction", [False, True])
+def test_sequence_backend_returns_only_certified_placements(
+    power: bool,
+    belt_vertical_construction: bool,
+) -> None:
     spec = two_stage_spec()
     placement = SequencePairLayout(
         power=power,
+        belt_vertical_construction=belt_vertical_construction,
         config=SequenceSolverConfig.test(),
     ).lay_out(spec, time_budget_s=2.0)
 
-    assert not validate.certify(placement, spec, expect_power=power).errors
+    assert not validate.validate(
+        placement,
+        spec,
+        ids=validate.id_map(spec),
+        expect_power=power,
+        belt_vertical_construction=belt_vertical_construction,
+    ).errors
     assert cast(object, placement.stats["backend"]) == "sequence-pair"
     assert placement.stats["detailed_routes"] >= 1.0
     assert placement.stats["direct_candidates"] == 1.0

@@ -49,6 +49,31 @@ hash_valid=True buildings=10 areas=1
 
 The current-model pipeline validator accepted the selected attempt; the two skipped checks are the expected power-only checks under `--no-power`.
 
+## Slope-rule follow-up
+
+Round-one review found that explicit sequence-pair construction discarded the
+URL-derived `beltVerticalConstruction` capability even though validation still
+used it. The backend now follows the same semantics as freeform: an unlocked
+save uses the dense profile, while a locked save prepares every routing
+candidate with `ramped=True`.
+
+RED/GREEN coverage pins both capability values at the pipeline constructor,
+prepared-candidate, and certified routed-placement boundaries. Focused
+sequence, global-router, freeform, and validator slope checks passed (49 test
+cases total across the two focused invocations).
+
+A second real CLI smoke used the iron-ingot URL with an explicit empty
+technology set (`tre=_`), without `--allow-invalid`. It exited 0 and reported:
+
+```text
+belt altitude ceiling 8.55 (lab level 3), vertical belt construction no -- read from the URL's researched technologies
+```
+
+The emitted blueprint decoded with
+`hash_valid=True buildings=10 areas=1`. Thus the locked-save path is accepted
+by the current-model validator directly rather than relying on the CLI's
+invalid-output override.
+
 ## Result
 
 `sequence-pair` is available only by explicit request. The centralized production tuple remains exactly `("spine", "freeform")`, and `best` resolves through that tuple rather than through all registered backends. Audit backend registration remains present without changing production selection defaults.
