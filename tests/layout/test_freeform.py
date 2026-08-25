@@ -259,6 +259,41 @@ def test_strip_emission_reproduces_every_precomputed_attachment() -> None:
     assert sorted(actual) == sorted(expected)
 
 
+def test_input_lane_emission_uses_precomputed_attachment_span() -> None:
+    spec = two_stage_spec()
+    strip = next(strip for strip in plan_strips(spec) if strip.recipe_id == "gear")
+    input_attachments = tuple(
+        attachment
+        for plan in strip.attachment_plan
+        if plan.lane.kind == "input"
+        for attachment in plan.attachments
+    )
+    assert input_attachments
+    canvas = _Canvas()
+    belt_id = catalog.item_id(spec.belt_item_id)
+
+    _inputs, _outputs, sorter_count = _emit_strip(
+        canvas,
+        strip,
+        0,
+        0,
+        belt_id,
+        catalog.building(belt_id).model_index,
+        {},
+    )
+
+    assert sorter_count == strip.machines * len(strip.attachment_plan)
+    assert {
+        max(abs(sorter.x - sorter.x2), abs(sorter.y - sorter.y2))
+        for sorter in canvas.buildings
+        if catalog.is_sorter(sorter.item_id)
+        and sorter.output_obj is not None
+        and canvas.buildings[sorter.output_obj].item_id == strip.item_id
+        and sorter.x2 is not None
+        and sorter.y2 is not None
+    } == {attachment.span for attachment in input_attachments}
+
+
 def test_strip_emission_refuses_an_attachment_that_no_longer_reproduces() -> None:
     spec = two_stage_spec()
     strip = next(strip for strip in plan_strips(spec) if strip.recipe_id == "gear")

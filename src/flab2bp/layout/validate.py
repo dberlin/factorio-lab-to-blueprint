@@ -1964,7 +1964,7 @@ def _belt_in_addon_area(
             float(want[1] - belt.y),
             float(want[2] - belt.z),
         )
-        if distance < _ADDON_AREA_RADIUS:
+        if distance < rules.ADDON_AREA_RADIUS:
             candidates.append((distance, i))
     return min(candidates)[1] if candidates else None
 
@@ -2466,12 +2466,18 @@ def _addon_crossings(ctx: Context) -> Iterable[Finding]:
         # the belt the game flagged.  The attached belt is the one at the
         # area's own altitude.
         areas = {
-            (
-                ab.x + round(slots.to_world((adx, ady), ab.yaw)[0]),
-                ab.y + round(slots.to_world((adx, ady), ab.yaw)[1]),
-                float(ab.z) + adz,
+            (round(want[0]), round(want[1]), float(want[2]))
+            for area in info.addon_areas
+            for want in (
+                slots.addon_supply_position(
+                    ab.item_id,
+                    x=ab.x,
+                    y=ab.y,
+                    z=ab.z,
+                    yaw=ab.yaw,
+                    area=area.area,
+                ),
             )
-            for adx, ady, adz in info.addon_areas
         }
         need = dsp_colliders.belt_crossing_height(ab.model_index) + float(ab.z)
         pose = dsp_colliders.Placed(

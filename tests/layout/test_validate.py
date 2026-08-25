@@ -1308,6 +1308,21 @@ def test_game_addon_supply_uses_rotated_elevated_pose(
     ]
 
 
+def test_game_addon_supply_accepts_belt_inside_authoritative_radius() -> None:
+    report = validate(
+        place(
+            belt(0, 0, carries="ore"),
+            belt(-1, 0, 1, carries="proliferator-3"),
+            _coater(0, 0),
+        ),
+        only={"game.addon_supply"},
+    )
+
+    assert not fired(report, "game.addon_supply"), [
+        finding.message for finding in report.by_check("game.addon_supply")
+    ]
+
+
 COATER_SPEC = BuildSpec(
     groups=(),
     external_inputs={"proliferator-3": Fraction(1)},

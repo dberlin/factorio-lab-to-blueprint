@@ -642,6 +642,16 @@ def test_clearance_exceeds_the_footprint_exactly_where_the_collider_does() -> No
     assert catalog.oriented_footprint(2303, 0.0) == (3, 3)
     assert catalog.clearance(2303, 0.0) == (4, 4)
     assert catalog.clearance(2101, 0.0) == (3, 3)  # Depot Mk.I, 3.00 units
+
+
+def test_clearance_uses_non_footprint_collider_extent() -> None:
+    """Collider clearance must not silently collapse to the footprint."""
+    item_id = 2303  # Assembling Machine Mk.II
+    assert catalog.oriented_footprint(item_id, 0.0) == (3, 3)
+    assert colliders.own_centre_extent(
+        catalog.building(item_id).model_index, 0.0
+    ) == pytest.approx((3.82, 3.82))
+    assert catalog.clearance(item_id, 0.0) == (4, 4)
     for b in catalog.all_buildings():
         cw, ch = catalog.clearance(b.item_id, 0.0)
         fw, fh = catalog.oriented_footprint(b.item_id, 0.0)

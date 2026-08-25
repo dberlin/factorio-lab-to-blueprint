@@ -1029,12 +1029,11 @@ def _port_poses_for(prefab: str, table: Mapping[str, Any]) -> tuple[SlotPose, ..
 #:
 #: Only :func:`_addon_areas_for` uses it, to turn the prefab's world-space addon
 #: offsets into the levels the rest of this project counts in.
-WORLD_UNITS_PER_LEVEL = Fraction(4, 3)
 
 
 def _asset_altitude_level(value: object) -> Fraction:
     """Normalize the asset's rounded Unity height into project levels."""
-    level = Fraction(str(value)) / WORLD_UNITS_PER_LEVEL
+    level = Fraction(str(value)) / Fraction(WORLD_UNITS_PER_LEVEL).limit_denominator()
     nearest = round(level)
     if abs(level - nearest) <= Fraction(1, 10_000):
         return Fraction(nearest)
@@ -1202,11 +1201,10 @@ def clearance(item_id: int, yaw: float) -> tuple[int, int]:
     geometry -- it is the previous behaviour, unchanged, for a building we have
     no collider data for.
     """
+    from flab2bp.dsp import colliders
+
     fw, fh = oriented_footprint(item_id, yaw)
-    try:
-        ex, ez = colliders.own_centre_extent(building(item_id).model_index, yaw)
-    except Exception:  # noqa: BLE001 - an unreadable model must not stop a layout
-        return (fw, fh)
+    ex, ez = colliders.own_centre_extent(building(item_id).model_index, yaw)
     if not (ex or ez):
         return (fw, fh)
     return (

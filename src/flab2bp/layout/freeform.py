@@ -70,7 +70,7 @@ from dataclasses import dataclass, field, replace
 from enum import Enum
 from fractions import Fraction
 from functools import lru_cache
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 from ortools.sat.python import cp_model
@@ -916,8 +916,7 @@ class Strip:
         if lane in self.in_above:
             index = self.in_above.index(lane)
             row = index
-            side = "south"
-            side_index = index
+            side: Literal["north", "south"] = "south"
             offset = sum(len(other) for other in self.in_above[:index])
         else:
             index = self.in_below.index(lane)
@@ -2830,7 +2829,6 @@ def _emit_strip(
                 tuple(lane_idx[row]),
                 s.machines,
             )
-            tier, _count = _pick_sorter(item_rate(item, in_rates), span, 1)
             placed += _link_lane(
                 canvas,
                 lane_idx[row],
