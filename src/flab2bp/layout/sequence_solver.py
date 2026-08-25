@@ -868,6 +868,7 @@ class SequenceSolver[PreparedT]:
                 )
         split_count = 0
         merge_count = 0
+        topology_changed = False
         if (
             starting_mode is ObjectiveMode.EXPLORATION
             and self.stage_boundary_transform is not None
@@ -903,6 +904,7 @@ class SequenceSolver[PreparedT]:
                         )
                     sibling_updates.append((other, sibling))
                 if transformed is not None:
+                    topology_changed = transformed.problem != problem
                     if self.stage_boundary_commit is not None:
                         self.stage_boundary_commit(
                             height_state.height,
@@ -923,14 +925,27 @@ class SequenceSolver[PreparedT]:
                     )
                     restart.failure_signature = ()
                     restart.feedback_stagnation = 0
+                    if topology_changed:
+                        for candidate_restart in height_state.restarts:
+                            candidate_restart.archive = ()
+                        height_state.objective_mode = ObjectiveMode.EXPLORATION
+                        height_state.quality_restart = None
+                        height_state.pending_quality_exit = False
+                        height_state.quality_stagnation = 0
+                        height_state.narrowest_key = None
 
         restart.anneal = next_anneal
         height_state.stages += 1
         height_state.spent += spent
-        height_state.stranded = detailed.routing.failed_count
-        if global_overflow is not None:
-            height_state.global_overflow = global_overflow
-        height_state.estimated_area = selected.decoded.width * height_state.height
+        if topology_changed:
+            height_state.stranded = 1 << 60
+            height_state.global_overflow = 1 << 60
+            height_state.estimated_area = 1 << 60
+        else:
+            height_state.stranded = detailed.routing.failed_count
+            if global_overflow is not None:
+                height_state.global_overflow = global_overflow
+            height_state.estimated_area = selected.decoded.width * height_state.height
         selected_variant_ids = problem.selected_variant_ids(selected.state.variant_indices)
         selected_pose_yaws = (
             tuple(

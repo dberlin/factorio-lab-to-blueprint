@@ -2123,6 +2123,142 @@ def test_production_boundary_does_not_merge_incompatible_or_implicated_children(
     )
 
 
+def test_topology_change_clears_stale_quality_archives_before_restart_fallback() -> None:
+    original = PlacementProblem(
+        sizes=((1, 1),),
+        nets=((0, 0),),
+        outline_height=40,
+        area_lower_bound=1,
+    )
+    rebuilt = PlacementProblem(
+        sizes=((1, 1), (1, 1)),
+        nets=((0, 1),),
+        outline_height=40,
+        area_lower_bound=2,
+    )
+    fake = _FakeRouting(
+        detailed_results=(
+            DetailedStageResult(
+                _routing(DetailedRouteStatus.STRANDED, geometric_failure=True),
+                None,
+            ),
+        )
+    )
+
+    def transform(
+        _height: int,
+        _problem: PlacementProblem,
+        state: AnnealState,
+        _feedback: FeedbackState,
+        _result: DetailedRouteResult,
+        _stagnation: int,
+    ) -> StageBoundaryUpdate:
+        return StageBoundaryUpdate(
+            rebuilt,
+            AnnealState(
+                pair=SequencePair((0, 1), (0, 1)),
+                gaps=GapProfile.zero(2),
+                base_seed=state.base_seed,
+                stage_index=state.stage_index,
+                variant_indices=(0, 0),
+            ),
+        )
+
+    solver = SequenceSolver(
+        heights=(40,),
+        problem_for_height=lambda _height: original,
+        adapters=fake.adapters(),
+        expansion_budget=ExpansionBudget(100),
+        config=SequenceSolverConfig(
+            stages=2,
+            moves_per_stage=1,
+            restarts_per_height=2,
+            global_elites=1,
+        ),
+        stage_boundary_transform=transform,
+    )
+    seeds = tuple(restart.seed for restart in solver._heights[0].restarts)
+
+    with pytest.raises(NoValidLayout):
+        solver.search(max_stages=1)
+
+    height_state = solver._heights[0]
+    assert height_state.problem == rebuilt
+    assert all(not restart.archive for restart in height_state.restarts)
+    assert height_state.quality_restart is None
+    accepted_after_rebuild = tuple(restart.accepted_moves for restart in height_state.restarts)
+    height_state.objective_mode = sequence_solver_module.ObjectiveMode.QUALITY
+    height_state.quality_restart = 1
+
+    with pytest.raises(NoValidLayout):
+        solver.search(max_stages=2)
+
+    resumed = solver._stage_stats[1]
+    assert resumed.global_routes == 1
+    assert resumed.quality_exited
+    assert resumed.objective_mode is sequence_solver_module.ObjectiveMode.EXPLORATION
+    assert len(fake.prepared_candidates[-1][1].x) == 2
+    assert tuple(restart.seed for restart in height_state.restarts) == seeds
+    assert tuple(restart.stages for restart in height_state.restarts) in {
+        (2, 1),
+        (1, 2),
+    }
+    assert all(
+        after >= before
+        for before, after in zip(
+            accepted_after_rebuild,
+            (restart.accepted_moves for restart in height_state.restarts),
+            strict=True,
+        )
+    )
+
+
+def test_exact_problem_identity_transform_retains_restart_archive() -> None:
+    problem = PlacementProblem(
+        sizes=((1, 1),),
+        nets=((0, 0),),
+        outline_height=40,
+        area_lower_bound=1,
+    )
+    fake = _FakeRouting(
+        detailed_results=(
+            DetailedStageResult(
+                _routing(DetailedRouteStatus.STRANDED, geometric_failure=True),
+                None,
+            ),
+        )
+    )
+
+    def identity_transform(
+        _height: int,
+        stage_problem: PlacementProblem,
+        state: AnnealState,
+        _feedback: FeedbackState,
+        _result: DetailedRouteResult,
+        _stagnation: int,
+    ) -> StageBoundaryUpdate:
+        return StageBoundaryUpdate(stage_problem, state)
+
+    solver = SequenceSolver(
+        heights=(40,),
+        problem_for_height=lambda _height: problem,
+        adapters=fake.adapters(),
+        expansion_budget=ExpansionBudget(100),
+        config=SequenceSolverConfig(
+            stages=1,
+            moves_per_stage=1,
+            restarts_per_height=1,
+            global_elites=1,
+        ),
+        stage_boundary_transform=identity_transform,
+    )
+
+    with pytest.raises(NoValidLayout):
+        solver.search(max_stages=1)
+
+    assert solver._heights[0].restarts[0].archive
+
+
 def test_fixed_size_problem_skips_pose_boundary_transforms_without_metadata() -> None:
     problem = PlacementProblem(
         sizes=((1, 1), (1, 1)),
