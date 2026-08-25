@@ -55,7 +55,10 @@ from flab2bp.layout.sequence_pair import (
     AnnealState,
     DecodedPlacement,
     DirectInsertTarget,
+    EnergyBreakdown,
+    PlacementKey,
     PlacementProblem,
+    SearchEnergy,
     StageBoundaryUpdate,
     align_direct_inserts,
     anneal_stage,
@@ -239,7 +242,7 @@ class StageAdapters[PreparedT]:
 
 
 @dataclass(frozen=True, slots=True)
-class StageStats:
+class StageObservation:
     """Deterministic observations from one closed temperature stage."""
 
     height: int
@@ -261,6 +264,13 @@ class StageStats:
     selected_pose_yaws: tuple[float, ...]
     split_count: int
     merge_count: int
+    candidate_key: PlacementKey
+    breakdown: EnergyBreakdown
+
+    @property
+    def energy(self) -> SearchEnergy:
+        """Return the exact blended energy derived from the observed components."""
+        return self.breakdown.energy
 
 
 @dataclass(frozen=True, slots=True)
@@ -269,8 +279,15 @@ class SequenceSearchResult:
 
     placement: Placement
     exact_key: tuple[int, int]
-    stages: tuple[StageStats, ...]
+    exact_candidate_key: PlacementKey
+    exact_breakdown: EnergyBreakdown
+    stages: tuple[StageObservation, ...]
     termination: str
+
+    @property
+    def exact_energy(self) -> SearchEnergy:
+        """Return the selected exact incumbent's observed blended energy."""
+        return self.exact_breakdown.energy
 
 
 @dataclass(slots=True)
@@ -299,11 +316,21 @@ class _HeightState:
 
 
 @dataclass(frozen=True, slots=True)
+class _ExactIncumbent:
+    exact_key: tuple[int, int]
+    placement: Placement
+    candidate_key: PlacementKey
+    breakdown: EnergyBreakdown
+
+
+@dataclass(frozen=True, slots=True)
 class _GlobalCandidate[PreparedT]:
     prepared: PreparedT
     state: AnnealState
     decoded: DecodedPlacement
     result: GlobalRouteResult
+    key: PlacementKey
+    breakdown: EnergyBreakdown
 
 
 StageBoundaryTransform = Callable[
@@ -370,8 +397,8 @@ class SequenceSolver[PreparedT]:
             )
             for order, height in enumerate(heights)
         ]
-        self._stage_stats: list[StageStats] = []
-        self._incumbent: tuple[tuple[int, int], Placement] | None = None
+        self._stage_stats: list[StageObservation] = []
+        self._incumbent: _ExactIncumbent | None = None
 
     def search(self, *, max_stages: int | None = None) -> SequenceSearchResult:
         """Search until its stage cap, deadline, or searchable budget is exhausted."""
@@ -430,10 +457,12 @@ class SequenceSolver[PreparedT]:
                 "stage-limit": "no scheduled stage produced an exact layout",
             }[termination]
             raise NoValidLayout(reason)
-        exact_key, placement = self._incumbent
+        incumbent = self._incumbent
         return SequenceSearchResult(
-            placement=placement,
-            exact_key=exact_key,
+            placement=incumbent.placement,
+            exact_key=incumbent.exact_key,
+            exact_candidate_key=incumbent.candidate_key,
+            exact_breakdown=incumbent.breakdown,
             stages=tuple(self._stage_stats),
             termination=termination,
         )
@@ -488,6 +517,8 @@ class SequenceSolver[PreparedT]:
                     prepared=prepared,
                     state=elite.state,
                     decoded=elite.decoded,
+                    key=elite.key,
+                    breakdown=elite.breakdown,
                     result=global_result,
                 )
             )
@@ -506,8 +537,13 @@ class SequenceSolver[PreparedT]:
             validation_failures = verdict.failed_checks
             if verdict.ok:
                 exact_key = _exact_key(detailed.placement)
-                if self._incumbent is None or exact_key < self._incumbent[0]:
-                    self._incumbent = exact_key, detailed.placement
+                if self._incumbent is None or exact_key < self._incumbent.exact_key:
+                    self._incumbent = _ExactIncumbent(
+                        exact_key=exact_key,
+                        placement=detailed.placement,
+                        candidate_key=selected.key,
+                        breakdown=selected.breakdown,
+                    )
                 if height_state.exact_key is None or exact_key < height_state.exact_key:
                     height_state.exact_key = exact_key
 
@@ -642,7 +678,7 @@ class SequenceSolver[PreparedT]:
             )
         )
         self._stage_stats.append(
-            StageStats(
+            StageObservation(
                 height=height_state.height,
                 restart=restart.restart,
                 stage_index=restart.stages - 1,
@@ -662,6 +698,8 @@ class SequenceSolver[PreparedT]:
                 selected_pose_yaws=selected_pose_yaws,
                 split_count=split_count,
                 merge_count=merge_count,
+                candidate_key=selected.key,
+                breakdown=selected.breakdown,
             )
         )
         return spent, False
@@ -1525,8 +1563,14 @@ def _with_observational_stats(
     stage_count = len(result.stages)
     lns_sizes = tuple(stage.lns_size for stage in result.stages)
     belt_tiles = _exact_key(placement)[1]
+    breakdown = result.exact_breakdown
     exact_stage = next(
-        (stage for stage in result.stages if stage.exact_key == result.exact_key),
+        (
+            stage
+            for stage in result.stages
+            if stage.exact_key == result.exact_key
+            and stage.candidate_key == result.exact_candidate_key
+        ),
         None,
     )
     pose_yaws = exact_stage.selected_pose_yaws if exact_stage is not None else ()
@@ -1584,6 +1628,16 @@ def _with_observational_stats(
             "direct_inserts": float(placement.stats.get("direct_inserts", 0.0)),
             "area": float(placement.area),
             "belt_tiles": float(belt_tiles),
+            "pack_width": float(breakdown.width),
+            "target_height": float(breakdown.outline_height),
+            "used_height": float(breakdown.used_height),
+            "box_area": float(breakdown.box_area),
+            "gap_area": float(breakdown.gap_area),
+            "weighted_hpwl": breakdown.weighted_hpwl,
+            "history_cost": breakdown.history_cost,
+            "missed_direct_inserts": float(breakdown.missed_direct_inserts),
+            "hard_outline_overflow": float(breakdown.hard_outline_overflow),
+            "search_energy": breakdown.energy.scalar,
             "power": float(power),
             "termination": result.termination,
             "termination_cause": result.termination,

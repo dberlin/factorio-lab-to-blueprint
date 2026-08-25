@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 import random
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import TYPE_CHECKING
 
@@ -397,6 +397,43 @@ class SearchEnergy:
     hard_outline_overflow: int
     scalar: float
 
+    @classmethod
+    def from_breakdown(cls, breakdown: EnergyBreakdown) -> SearchEnergy:
+        """Derive the blended objective from one raw candidate observation."""
+        area_scale = max(breakdown.area_lower_bound, 1)
+        net_scale = max(breakdown.net_count, 1)
+        return cls(
+            hard_outline_overflow=breakdown.hard_outline_overflow,
+            scalar=(
+                breakdown.width * breakdown.outline_height / area_scale
+                + 0.35 * breakdown.weighted_hpwl / area_scale
+                + 0.2 * breakdown.history_cost / net_scale
+                + 0.1 * breakdown.missed_direct_inserts / net_scale
+                + 0.05 * breakdown.gap_area / area_scale
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class EnergyBreakdown:
+    """Immutable raw geometry and routing-proxy metrics for one candidate."""
+
+    width: int
+    used_height: int
+    box_area: int
+    gap_area: int
+    weighted_hpwl: float
+    history_cost: float
+    missed_direct_inserts: int
+    hard_outline_overflow: int
+    outline_height: int
+    area_lower_bound: int
+    net_count: int
+    energy: SearchEnergy = field(init=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "energy", SearchEnergy.from_breakdown(self))
+
 
 @dataclass(frozen=True, slots=True)
 class AnnealState:
@@ -477,8 +514,13 @@ class AnnealIncumbent:
 
     state: AnnealState
     decoded: DecodedPlacement
-    energy: SearchEnergy
+    breakdown: EnergyBreakdown
     key: PlacementKey
+
+    @property
+    def energy(self) -> SearchEnergy:
+        """Return the objective derived from this incumbent's sole score source."""
+        return self.breakdown.energy
 
 
 @dataclass(frozen=True, slots=True)
@@ -996,12 +1038,12 @@ def apply_move(
     )
 
 
-def cheap_energy(
+def score_candidate(
     problem: PlacementProblem,
     decoded: DecodedPlacement,
     context: PlacementCostContext,
-) -> SearchEnergy:
-    """Compute the normalized routing-aware proxy objective."""
+) -> EnergyBreakdown:
+    """Compute one candidate's complete geometry and routing-proxy observation."""
     if len(decoded.x) != problem.size:
         raise ValueError("decoded placement size must match the placement problem")
     if context.net_pairs != problem.nets:
@@ -1012,8 +1054,6 @@ def cheap_energy(
     for target in context.direct_targets:
         _validate_direct_target(problem, target, sizes)
 
-    overflow = max(0, decoded.used_height - problem.outline_height)
-    area_ratio = decoded.width * problem.outline_height / max(problem.area_lower_bound, 1)
     weighted_hpwl = sum(
         context.net_weights[index]
         * (
@@ -1022,36 +1062,41 @@ def cheap_energy(
         )
         for index, (source, destination) in enumerate(context.net_pairs)
     )
-    hpwl_ratio = weighted_hpwl / max(problem.area_lower_bound, 1)
-    history_ratio = _candidate_history_cost(problem, decoded, context) / max(
-        len(context.net_pairs), 1
-    )
-    direct_ratio = sum(
-        not _target_is_direct(decoded, target) for target in context.direct_targets
-    ) / max(len(context.net_pairs), 1)
-    gap_ratio = decoded.gap_area / max(problem.area_lower_bound, 1)
-    return SearchEnergy(
-        hard_outline_overflow=overflow,
-        scalar=(
-            area_ratio
-            + 0.35 * hpwl_ratio
-            + 0.2 * history_ratio
-            + 0.1 * direct_ratio
-            + 0.05 * gap_ratio
+    return EnergyBreakdown(
+        width=decoded.width,
+        used_height=decoded.used_height,
+        box_area=sum(width * height for width, height in sizes),
+        gap_area=decoded.gap_area,
+        weighted_hpwl=weighted_hpwl,
+        history_cost=_candidate_history_cost(decoded, context, sizes),
+        missed_direct_inserts=sum(
+            not _target_is_direct(decoded, target) for target in context.direct_targets
         ),
+        hard_outline_overflow=max(0, decoded.used_height - problem.outline_height),
+        outline_height=problem.outline_height,
+        area_lower_bound=problem.area_lower_bound,
+        net_count=len(context.net_pairs),
     )
 
 
-def _candidate_history_cost(
+def cheap_energy(
     problem: PlacementProblem,
     decoded: DecodedPlacement,
     context: PlacementCostContext,
+) -> SearchEnergy:
+    """Return the blended objective derived from the complete candidate score."""
+    return score_candidate(problem, decoded, context).energy
+
+
+def _candidate_history_cost(
+    decoded: DecodedPlacement,
+    context: PlacementCostContext,
+    sizes: tuple[tuple[int, int], ...],
 ) -> float:
     width, height = context.history_outline
     stride = width + 1
     table = context.history_summed_area
     total = 0.0
-    sizes = problem.selected_sizes(decoded.variant_indices)
     for source, destination in context.net_pairs:
         source_width, source_height = sizes[source]
         destination_width, destination_height = sizes[destination]
@@ -1502,10 +1547,11 @@ def _score_state(
         if direct_targets_for_state is not None
         else context
     )
+    breakdown = score_candidate(problem, decoded, candidate_context)
     return AnnealIncumbent(
         state=state,
         decoded=decoded,
-        energy=cheap_energy(problem, decoded, candidate_context),
+        breakdown=breakdown,
         key=PlacementKey(
             x=decoded.x,
             y=decoded.y,

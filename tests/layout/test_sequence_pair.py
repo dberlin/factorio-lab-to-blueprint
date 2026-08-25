@@ -6,6 +6,7 @@ from typing import Any, cast
 
 import pytest
 
+import flab2bp.layout.sequence_pair as sequence_pair_module
 from flab2bp.layout.base import DETERMINISTIC_WORKERS
 from flab2bp.layout.freeform import (
     _direct_alignment_targets,
@@ -952,7 +953,7 @@ def test_moves_are_legal_no_ops_for_empty_and_singleton_states() -> None:
             assert len(moved.gaps.east) == size
 
 
-def test_cheap_energy_uses_every_normalized_component() -> None:
+def test_candidate_score_reports_independently_recomputed_components() -> None:
     problem = PlacementProblem(
         sizes=((2, 3), (4, 1)),
         nets=((0, 1),),
@@ -980,16 +981,82 @@ def test_cheap_energy_uses_every_normalized_component() -> None:
         (target,),
     )
 
-    energy = cheap_energy(problem, decoded, context)
+    breakdown = sequence_pair_module.score_candidate(problem, decoded, context)
 
-    assert energy.hard_outline_overflow == 3
-    assert energy.scalar == pytest.approx(
-        3.5  # normalized width * outline height
-        + 0.35 * 1.4  # feedback-weighted HPWL
-        + 0.2 * 3.0  # history congestion
-        + 0.1 * 1.0  # missed direct inserts
-        + 0.05 * 0.5  # explicit gap area
+    sizes = problem.selected_sizes(decoded.variant_indices)
+    independent_box_area = sum(width * height for width, height in sizes)
+    independent_hpwl = sum(
+        context.net_weights[index]
+        * (
+            abs(decoded.x[source] - decoded.x[destination])
+            + abs(decoded.y[source] - decoded.y[destination])
+        )
+        for index, (source, destination) in enumerate(context.net_pairs)
     )
+    history_width, history_height = context.history_outline
+    history_stride = history_width + 1
+    independent_history = 0.0
+    for source, destination in context.net_pairs:
+        source_width, source_height = sizes[source]
+        destination_width, destination_height = sizes[destination]
+        x0 = min(history_width, max(0, min(decoded.x[source], decoded.x[destination])))
+        y0 = min(history_height, max(0, min(decoded.y[source], decoded.y[destination])))
+        x1 = min(
+            history_width,
+            max(
+                decoded.x[source] + source_width,
+                decoded.x[destination] + destination_width,
+            ),
+        )
+        y1 = min(
+            history_height,
+            max(
+                decoded.y[source] + source_height,
+                decoded.y[destination] + destination_height,
+            ),
+        )
+        independent_history += (
+            context.history_summed_area[y1 * history_stride + x1]
+            - context.history_summed_area[y0 * history_stride + x1]
+            - context.history_summed_area[y1 * history_stride + x0]
+            + context.history_summed_area[y0 * history_stride + x0]
+        )
+
+    assert breakdown.width == decoded.width
+    assert breakdown.used_height == decoded.used_height
+    assert breakdown.box_area == independent_box_area
+    assert breakdown.gap_area == decoded.gap_area
+    assert breakdown.weighted_hpwl == independent_hpwl
+    assert breakdown.history_cost == independent_history
+    assert breakdown.missed_direct_inserts == 1
+    assert breakdown.hard_outline_overflow == max(0, decoded.used_height - problem.outline_height)
+    assert breakdown.energy == cheap_energy(problem, decoded, context)
+    assert breakdown.energy.scalar == pytest.approx(
+        decoded.width * problem.outline_height / problem.area_lower_bound
+        + 0.35 * independent_hpwl / problem.area_lower_bound
+        + 0.2 * independent_history / len(problem.nets)
+        + 0.1 * breakdown.missed_direct_inserts / len(problem.nets)
+        + 0.05 * decoded.gap_area / problem.area_lower_bound
+    )
+
+
+def test_energy_breakdown_is_immutable() -> None:
+    breakdown = sequence_pair_module.EnergyBreakdown(
+        width=1,
+        used_height=1,
+        box_area=1,
+        gap_area=0,
+        weighted_hpwl=0.0,
+        history_cost=0.0,
+        missed_direct_inserts=0,
+        hard_outline_overflow=0,
+        outline_height=1,
+        area_lower_bound=1,
+        net_count=0,
+    )
+
+    with pytest.raises(FrozenInstanceError):
+        breakdown.width = 2  # type: ignore[misc]
 
 
 def test_missed_direct_insert_penalty_depends_on_candidate_geometry() -> None:

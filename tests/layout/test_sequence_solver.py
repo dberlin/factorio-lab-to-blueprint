@@ -49,11 +49,11 @@ from flab2bp.layout.sequence_pair import (
     AnnealState,
     DecodedPlacement,
     DirectInsertTarget,
+    EnergyBreakdown,
     GapProfile,
     PlacementCostContext,
     PlacementKey,
     PlacementProblem,
-    SearchEnergy,
     SequencePair,
     StageBoundaryUpdate,
     anneal_stage,
@@ -62,6 +62,7 @@ from flab2bp.layout.sequence_pair import (
     decode_state,
     derive_stage_seed,
     repair_neighbourhood,
+    score_candidate,
     split_stage_boundary,
 )
 from flab2bp.layout.sequence_solver import (
@@ -166,6 +167,36 @@ def _global(
     )
 
 
+def _candidate_breakdown(
+    problem: PlacementProblem,
+    decoded: DecodedPlacement,
+    scalar: float | None = None,
+) -> EnergyBreakdown:
+    breakdown = score_candidate(
+        problem,
+        decoded,
+        PlacementCostContext(
+            net_weights=(1.0,) * len(problem.nets),
+            net_pairs=problem.nets,
+            history_outline=(0, problem.outline_height),
+            history_summed_area=(0.0,) * (problem.outline_height + 1),
+        ),
+    )
+    if scalar is None:
+        return breakdown
+    return replace(
+        breakdown,
+        gap_area=0,
+        weighted_hpwl=scalar / 0.35,
+        history_cost=0.0,
+        missed_direct_inserts=0,
+        hard_outline_overflow=0,
+        outline_height=0,
+        area_lower_bound=1,
+        net_count=1,
+    )
+
+
 @dataclass
 class _FakeRouting:
     detailed_results: tuple[DetailedStageResult, ...] = ()
@@ -173,11 +204,13 @@ class _FakeRouting:
     stage_trace: list[int] = field(default_factory=list)
     global_allowances: list[int] = field(default_factory=list)
     detailed_allowances: list[int] = field(default_factory=list)
+    prepared_candidates: list[Prepared] = field(default_factory=list)
     feedback_seen: list[FeedbackState] = field(default_factory=list)
     _detailed_index: int = 0
 
     def prepare(self, height: int, decoded: DecodedPlacement) -> Prepared:
         self.stage_trace.append(height)
+        self.prepared_candidates.append((height, decoded))
         return height, decoded
 
     def global_route(
@@ -302,6 +335,57 @@ def test_exact_incumbents_compare_only_area_then_belt_tiles() -> None:
     result = _solver(fake, heights=(40,)).search(max_stages=3)
     assert result.placement is better_belts
     assert result.exact_key == (100, 40)
+
+
+def test_selected_score_reaches_stage_and_exact_incumbent_observations() -> None:
+    exact = _placement(area=20, belt_tiles=4)
+    fake = _FakeRouting(
+        detailed_results=(DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), exact),)
+    )
+
+    result = _solver(fake, heights=(40,)).search(max_stages=1)
+
+    observation = result.stages[0]
+    _height, decoded = fake.prepared_candidates[0]
+    assert observation.breakdown is result.exact_breakdown
+    assert observation.candidate_key == result.exact_candidate_key
+    assert observation.energy == observation.breakdown.energy
+    assert observation.breakdown.width == decoded.width
+    assert observation.breakdown.used_height == decoded.used_height
+    assert observation.breakdown.box_area == 1
+    assert observation.breakdown.gap_area == decoded.gap_area
+    assert observation.breakdown.weighted_hpwl == 0.0
+    assert observation.breakdown.history_cost == 0.0
+    assert observation.breakdown.missed_direct_inserts == 0
+    assert observation.breakdown.hard_outline_overflow == max(
+        0, decoded.used_height - observation.height
+    )
+
+
+def test_observation_mutation_or_removal_cannot_change_selected_state_or_key() -> None:
+    exact = _placement(area=20, belt_tiles=4)
+    fake = _FakeRouting(
+        detailed_results=(DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), exact),)
+    )
+    result = _solver(fake, heights=(40,)).search(max_stages=1)
+    observation = result.stages[0]
+    mutated_breakdown = replace(
+        observation.breakdown,
+        width=observation.breakdown.width + 10_000,
+        weighted_hpwl=observation.breakdown.weighted_hpwl + 10_000.0,
+    )
+
+    mutated = replace(
+        result,
+        exact_breakdown=mutated_breakdown,
+        stages=(replace(observation, breakdown=mutated_breakdown),),
+    )
+    removed = replace(result, stages=())
+
+    for observed in (mutated, removed):
+        assert observed.placement is exact
+        assert observed.exact_key == (20, 4)
+        assert observed.exact_candidate_key == result.exact_candidate_key
 
 
 def test_validator_rejection_never_establishes_an_exact_incumbent() -> None:
@@ -1506,6 +1590,16 @@ def test_sequence_backend_returns_only_certified_placements(
         "termination",
         "validation_clean",
         "validation_status",
+        "pack_width",
+        "target_height",
+        "used_height",
+        "box_area",
+        "gap_area",
+        "weighted_hpwl",
+        "history_cost",
+        "missed_direct_inserts",
+        "hard_outline_overflow",
+        "search_energy",
     } <= placement.stats.keys()
 
 
@@ -1777,7 +1871,7 @@ def test_powered_one_net_miss_feeds_lns_or_refuses_honestly(
         return AnnealIncumbent(
             state=state,
             decoded=decoded,
-            energy=SearchEnergy(0, 0.0),
+            breakdown=_candidate_breakdown(problem, decoded, 0.0),
             key=PlacementKey(
                 x=decoded.x,
                 y=decoded.y,
@@ -1975,7 +2069,7 @@ def test_lns_continues_from_the_proxy_selected_elite(
         return AnnealIncumbent(
             state=state,
             decoded=decoded,
-            energy=SearchEnergy(0, scalar),
+            breakdown=_candidate_breakdown(problem, decoded, scalar),
             key=PlacementKey(
                 x=decoded.x,
                 y=decoded.y,
@@ -2316,7 +2410,7 @@ def test_broad_feedback_continues_from_routed_elite_variant_identity(
         return AnnealIncumbent(
             state=state,
             decoded=decoded,
-            energy=SearchEnergy(0, scalar),
+            breakdown=_candidate_breakdown(problem, decoded, scalar),
             key=PlacementKey(
                 x=decoded.x,
                 y=decoded.y,
