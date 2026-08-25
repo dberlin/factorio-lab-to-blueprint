@@ -514,9 +514,19 @@ Run Ruff format check on branch-new files, Ruff lint, mypy, and full pytest. Com
 
 Require zero INVALID and CRASH outcomes. Record honest refusals by cell.
 
-- [ ] **Step 4: Solve the supplied URL across all three candidates**
+- [ ] **Step 4: Solve both supplied regression URLs**
 
-Power enabled, equal fixed budget. Require:
+Run the refinery pose URL against Freeform, SequencePair, and Spine:
+
+`https://factoriolab.github.io/dsp/list?z=eJxFyrEKwkAQRdG.meJVM0GxmuYtxk4SQXFbdRGJSyCgaDPfLqJod7jc0XmGqYzOI2ZzBezt598LNPrlDs3vyLBPLo5WqhMq1TNULofilKk8vEPGCQNu4BrcgntwCF6R2kgrpD7SRmqdPAdjGb3c3ewFUJ8mgA__&v=11`
+
+Freeform and SequencePair must no longer refuse because of the upright Oil Refinery pose; emitted refinery orientation and slot attachments must validate. Spine remains a comparison.
+
+Run all three candidates of the earlier Chemical/coater URL with power enabled and equal fixed budget:
+
+`https://factoriolab.github.io/dsp/flow?z=eJxFyr0KwkAQAOG32WKqveBPtc0exi4YQfFa9QqJRyCgaHPPLqJo9zHMaMpCZTQ.MZsrhLeffy9p9Ms9ze9IhE.ORivFHJViCZXLMZvLlB-2IXFm4IZ3-A4.4EP1K7GtcU3sa9xKKZOl6nVVe7lbCC8O2iYM&v=11`
+
+For every reported result require:
 
 - detailed `ROUTED`;
 - `validate.certify` clean under merged rules;

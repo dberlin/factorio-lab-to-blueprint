@@ -336,7 +336,8 @@ These are correctness fixes, not performance work.
 - Existing sequence/freeform tests remain green after game-rule merge.
 - Full Ruff lint, mypy, and pytest pass, excluding inherited repository-wide formatter drift already present at merge base.
 - Broad sequence audit has zero INVALID and CRASH outcomes under the merged game rules.
-- The supplied URL is solved across all candidates; only game-rule-aware, detailed-routed, independently cross-validated output is reported.
+- The refinery pose regression URL (`https://factoriolab.github.io/dsp/list?z=eJxFyrEKwkAQRdG.meJVM0GxmuYtxk4SQXFbdRGJSyCgaDPfLqJod7jc0XmGqYzOI2ZzBezt598LNPrlDs3vyLBPLo5WqhMq1TNULofilKk8vEPGCQNu4BrcgntwCF6R2kgrpD7SRmqdPAdjGb3c3ewFUJ8mgA__&v=11`) produces a game-rule-valid Freeform and SequencePair result rather than the current master refusal; Spine remains a comparison oracle.
+- The earlier Chemical/coater URL is solved across all candidates; only game-rule-aware, detailed-routed, independently cross-validated output is reported.
 - The old 2,337-area blueprint is not reused or compared as valid evidence.
 
 ## 15. Rollout
