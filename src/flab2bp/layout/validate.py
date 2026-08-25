@@ -1724,6 +1724,116 @@ def _addon_supply(ctx: Context) -> Iterable[Finding]:
             )
 
 
+def _stacks(item_id: int) -> bool:
+    """``PrefabDesc.multiLevel`` -- may another building stand on this one."""
+    try:
+        return bool(cat.building(item_id).multi_level)
+    except KeyError:
+        return False
+
+
+@check("game.belt_crossing")
+def _belt_crossing(ctx: Context) -> Iterable[Finding]:
+    """A belt over a building must clear its build collider -- and it may.
+
+    The rule this repository spent a long time NOT guessing.  A belt preview is
+    not tested with its box.  ``BuildTool_BlueprintPaste.CheckBuildConditions``
+    branches on ``isBelt`` inside the same query loop (decompiled 145761)::
+
+        int num17 = ((!buildPreview2.desc.isBelt)
+            ? Physics.OverlapBoxNonAlloc(colliderData.pos, colliderData.ext, ...)
+            : Physics.OverlapSphereNonAlloc(buildPreview2.lpos
+                  + buildPreview2.lpos.normalized * 0.2f, 0.23f, ...));
+
+    and the excusal at 145872 is asymmetric::
+
+        || (!buildPreview2.desc.isBelt && component.buildPreview.desc.isBelt)
+
+    -- a machine is excused against a belt, a belt is NOT excused against a
+    machine.  So the answer to "may a belt cross a building" is YES, and the
+    price is height: the probe reaches ``0.23 - 0.2 = 0.03`` below the belt
+    node, so a belt clears a collider whose top stands ``t`` above the ground
+    when ``z > (t + 0.03) * 3/4``.  That is z > 3.53 -- four half-levels -- over
+    an Assembling Machine, 2.80 over an Arc Smelter, 1.75 over a Splitter and
+    0.76 over a Sorter.  :func:`flab2bp.dsp.colliders.belt_crossing_height`
+    computes it per model.
+
+    A Splitter is NOT a belt for this purpose.  ``PrefabDesc.ReadPrefab`` line
+    217564 sets ``isBelt = beltSpeed > 0`` from a ``BeltDesc``; a splitter takes
+    the ``SplitterDesc`` branch and sets ``isSplitter``.  An elevated splitter
+    over a machine is an ordinary box-against-box question, and ``geom.collide``
+    is where it is asked.
+
+    Scope, and why it is a LOWER bound on what the game rejects.
+
+    * Only belts directly OVER a collider's footprint, and only where the belt
+      is higher than the building it passes over.  A belt level with or below a
+      building is the lateral question, and there the same test contradicts
+      blueprints the game wrote: it flags the belt that runs through a Storage
+      Tank in ``factory-quick-start-step-3-red-cube`` and every belt a Splitter
+      sits on, both already recorded on ``geom.overlap`` as real.  Something
+      excuses those that this port has not found -- ``BuildTool_Path`` line
+      157683 excuses the first and last two nodes of a drag against the object
+      they connect to, and three for a station, but the paste has no such clause
+      and previews carry no drag index.  This check does not pretend to it.
+    * Sorters and belt addons are left out entirely because the game excuses
+      them (lines 145871 and 145885); belt on belt is
+      ``geom.belt_single_occupancy``'s question, not this one.
+    * ``multiLevel`` buildings are left out.  The game lets another building
+      stand ON a Splitter, Depot, Storage Tank, Matrix Lab or Spray Coater, and
+      their belt ports rise with the stack -- so a belt one level above one of
+      those is a connection, not a crossing, and the corpus is full of them.
+    * ``catalog.LOW_CONFIDENCE_FOOTPRINTS`` is left out, for the reason already
+      recorded there: those colliders do not reproduce real blueprints.
+
+    Negative control: zero findings on both ``catalog.GEOMETRY_SAFE_FIXTURES``.
+    Not vacuous -- over the single-area fixtures 42 belts pass over a collider
+    and clear it, and every remaining pair that does NOT clear is one of the two
+    excluded classes above.
+    """
+    bs = ctx.placement.buildings
+    belts = [
+        (i, dsp_colliders.Placed(b.model_index, *codec.tile_to_local_offset(
+            b.x, b.y, b.z, b.width, b.height
+        ), b.yaw))
+        for i, b in enumerate(bs)
+        if ctx.kinds[i] is Kind.BELT
+    ]
+    under = [
+        (i, dsp_colliders.Placed(b.model_index, *codec.tile_to_local_offset(
+            b.x, b.y, b.z, b.width, b.height
+        ), b.yaw))
+        for i, b in enumerate(bs)
+        if ctx.kinds[i] not in (Kind.BELT, Kind.SORTER, Kind.ADDON)
+        and b.item_id not in cat.LOW_CONFIDENCE_FOOTPRINTS
+        and not _stacks(b.item_id)
+    ]
+    if not belts or not under:
+        return
+    pairs = dsp_colliders.belt_crossings(
+        [p for _i, p in belts], [p for _i, p in under], directly_over_only=True
+    )
+    for a, c in pairs:
+        ia, ba = belts[a]
+        ic, bc = under[c]
+        if bs[ia].z <= bs[ic].z:
+            continue
+        need = dsp_colliders.belt_crossing_height(bc.model_index) + float(bs[ic].z)
+        yield Finding(
+            "game.belt_crossing",
+            Severity.ERROR,
+            f"belt at ({ba.x}, {ba.y}) z={bs[ia].z} passes over "
+            f"{cat.building(bs[ic].item_id).name} at ({bs[ic].x}, {bs[ic].y}) "
+            f"without clearing its build collider; the game needs z > {need:.4f}",
+            (ia, ic),
+            {
+                "belt_z": str(bs[ia].z),
+                "needs_z_above": f"{need:.4f}",
+                "under": str((bs[ic].x, bs[ic].y, str(bs[ic].z))),
+            },
+        )
+
+
 @check("sorter.filter")
 def _filter(ctx: Context) -> Iterable[Finding]:
     bs = ctx.placement.buildings
