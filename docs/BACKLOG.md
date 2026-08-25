@@ -1,5 +1,60 @@
 # Backlog
 
+## OPEN -- freeform's router strands 2 to 4 nets on a proliferated `super-magnetic-ring`, and it is not the clock
+
+The last thing standing between freeform and the whole
+`super-magnetic-ring*60` URL. Its `no-proliferator` candidate builds --
+13 strips, 1466 buildings, `route_failures` 0.0, validates clean with the spec
+attached. Its two proliferated candidates refuse at every budget.
+
+**IT IS NOT A DEADLINE, AND THAT WAS CHECKED RATHER THAN ASSUMED.** At a 120s
+budget the sweep exhausts every candidate height and refuses early:
+
+    free-proliferation   120s budget -> REFUSED after 45.0s
+    max-proliferation    120s budget -> REFUSED after 24.2s
+
+Both take the "no packing of N strips could be wired at any candidate height"
+branch, never the deadline branch. A longer clock buys nothing.
+
+**WHAT THE PACKS ACTUALLY DO.** Instrumented over the ten packs each sweep
+routes, counting every commit-side failure by kind:
+
+    free-proliferation   ~20 nets/pack   2 to 4 failed   4 to 8 rounds
+                         2 tap failures in the whole sweep
+    max-proliferation    ~22 nets/pack   2 to 4 failed   4 to 5 rounds
+                         0 tap failures in the whole sweep
+
+So it is A* stranding, not the junction work that fixed the sibling cells:
+`_source_for`, `_sink_for`, `_altitude_profile` and `_tap_source` report
+essentially nothing. Every pack loses a handful of nets to congestion, every
+height, consistently -- no near misses and no outliers.
+
+**WHERE NOT TO START.** `_route_all`'s own docstrings already record what has
+been measured and rejected on exactly this failure: promoting last round's
+failures to the front of the order is noise (five packs lost a failure, three
+gained one, one pack that routed everything stopped doing so), and the history
+term cannot see overuse at all, because a committed path is `blocked` rather
+than dear so two nets never overlap. `## MEASURED AND REJECTED -- a routing-
+capacity constraint in freeform's packer` below is the packer-side attempt.
+
+**NOT PINNED AS A TEST.** `TestRealUrlCandidatesAreSupplied` used to assert this
+spec lays out, bundled into three tests about three unrelated properties, so all
+three failed with one routing message and none of them said anything about
+coaters, sorter capacity or cycles. Those tests now check their property on
+every real candidate freeform CAN build, over a sample widened until it provably
+contains the shape each one tests. This refusal is a defect we want gone, not a
+truth about the game, so it lives here rather than as a passing assertion.
+
+**A SIXTH SAMPLING ERROR, found while splitting them.** The old
+`test_every_candidate_supplies_its_coaters` could not have failed on a coater
+bug even before the routing regression. The only candidate of that URL freeform
+ever built is the UNPROLIFERATED one, which contains **zero Spray Coaters**, and
+`prolif.coaters_are_supplied` yields no finding for a placement with no coater
+in it. Measured by mutation: shrinking the widened sample back to that one URL
+now fails on `sample has too few coaters: [0]`. Every test in that class carries
+a containment assertion for its own shape now -- coaters, sorter tiers,
+junctions -- so the vacuous case fails loudly instead of passing.
+
 ## OPEN -- spine refuses a Ray Receiver and an Energy Exchanger, and the slot table is why
 
 Surfaced by the per-side tap charge, not caused by it. `slot_poses.json`, which

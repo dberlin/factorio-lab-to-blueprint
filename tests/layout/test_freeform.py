@@ -8,6 +8,7 @@ would let a rates regression masquerade as a layout one.
 from __future__ import annotations
 
 import contextlib
+import functools
 import math
 import time
 from fractions import Fraction as F
@@ -1367,33 +1368,108 @@ class TestRealUrlCandidatesAreSupplied:
 
     The hand-built fixtures are too small to exercise sorter tier selection or a
     multi-coater supply chain, which is why both bugs survived them.
+
+    EVERY TEST HERE USED TO ASSERT TWO THINGS AT ONCE and report both as one
+    failure: that its property holds, and that every candidate of one URL lays
+    out.  The second is not this class's question -- a refusal EMITS NOTHING, so
+    it cannot violate a property of an emitted blueprint -- and while it was
+    bundled in, all three tests failed with the same routing message and none of
+    them said anything about coaters, sorter capacity or cycles.
+
+    Measured, so the split is not a convenience: freeform builds
+    `super-magnetic-ring`'s `no-proliferator` candidate (1466 buildings, valid)
+    and cannot build its two proliferated ones.  That is not the clock running
+    out -- at a 120s budget the sweep exhausts every candidate height in 45s and
+    24s respectively and refuses -- it is 2 to 4 nets per pack stranded in A*,
+    consistently, over every pack at every height.  It is recorded in
+    docs/BACKLOG.md rather than pinned as a passing assertion here, because it
+    is a defect we want gone, not a truth about the game.
+
+    SO THE SAMPLE IS WIDENED AND THEN CHECKED.  Skipping refusals is exactly the
+    sampling error this project has paid for repeatedly -- a count taken only
+    over survivors -- and it bites hardest here, because the one candidate that
+    survived the old URL is the UNPROLIFERATED one and it contains no coater at
+    all.  Every test below therefore asserts what its sample CONTAINS before it
+    asserts anything about it, so a sample that has lost the shape fails loudly
+    instead of passing vacuously.
     """
 
+    #: Real URLs, kept as literals rather than read from ``bench.corpus`` so
+    #: that editing the corpus cannot silently change what these tests cover.
+    URLS = (
+        # The largest spec freeform builds: 13 strips, 1466 buildings, 180
+        # sorters over four tiers.
+        "https://factoriolab.github.io/dsp/flow?o=super-magnetic-ring*60"
+        "&ibe=conveyor-belt-2"
+        "&mmr=arc-smelter~assembling-machine-2~chemical-plant~matrix-lab"
+        "&mps=proliferator-2-products&v=11",
+        # Carries the shapes the big one loses to a refusal: a proliferated
+        # candidate with two coaters and three distinct sorter tiers.
+        "https://factoriolab.github.io/dsp/list?o=plastic*60&ibe=conveyor-belt-2"
+        "&mmr=arc-smelter~assembling-machine-2~chemical-plant~matrix-lab&v=11",
+        # Three coaters on one supply chain, which is the multi-coater case.
+        "https://factoriolab.github.io/dsp/list?o=magnetic-coil*60"
+        "&ibe=conveyor-belt-2"
+        "&mmr=arc-smelter~assembling-machine-2~chemical-plant~matrix-lab&v=11",
+    )
+
     @staticmethod
-    def _candidates() -> list[BuildSpec]:
+    @functools.cache
+    def _built() -> tuple[tuple[BuildSpec, Placement], ...]:
+        """Every candidate of every URL that freeform can build, with its result.
+
+        Cached because a refused candidate costs the full ``RETRY_BUDGET_S``
+        before it raises, and three tests asking the same question three times
+        would pay it three times over.
+        """
         from flab2bp.lab.data import load_vendored
         from flab2bp.lab.url import parse_url
         from flab2bp.rates.candidates import build_candidates
 
-        url = (
-            "https://factoriolab.github.io/dsp/flow?o=super-magnetic-ring*60"
-            "&ibe=conveyor-belt-2"
-            "&mmr=arc-smelter~assembling-machine-2~chemical-plant~matrix-lab"
-            "&mps=proliferator-2-products&v=11"
-        )
-        return list(build_candidates(load_vendored(), parse_url(url), count=3).candidates)
+        data = load_vendored()
+        out: list[tuple[BuildSpec, Placement]] = []
+        for url in TestRealUrlCandidatesAreSupplied.URLS:
+            for spec in build_candidates(data, parse_url(url), count=3).candidates:
+                with contextlib.suppress(NoValidLayout):
+                    out.append(
+                        (spec, FreeformLayout(power=True).lay_out(spec, time_budget_s=0.5))
+                    )
+        assert out, "no real candidate laid out at all; the sample is empty"
+        return tuple(out)
 
     @pytest.mark.slow
     def test_every_candidate_supplies_its_coaters(self) -> None:
-        for spec in self._candidates():
-            p = FreeformLayout(power=True).lay_out(spec, time_budget_s=0.5)
+        built = self._built()
+        coaters = [
+            sum(1 for b in p.buildings if b.item_id == catalog.SPRAY_COATER_ID)
+            for _spec, p in built
+        ]
+        # WITHOUT THIS THE TEST IS ABOUT NOTHING. `prolif.coaters_are_supplied`
+        # yields no finding for a placement with no coater in it, so a sample of
+        # unproliferated candidates passes it however broken the coater path is.
+        assert sum(coaters) >= 4, f"sample has too few coaters: {coaters}"
+        assert max(coaters) >= 2, f"no multi-coater supply chain in {coaters}"
+        for spec, p in built:
             bad = _full_report(p, spec, power=True).by_check("prolif.coaters_are_supplied")
             assert not bad, f"{spec.label}: " + "; ".join(f.message for f in bad)
 
     @pytest.mark.slow
     def test_every_candidate_respects_sorter_capacity(self) -> None:
-        for spec in self._candidates():
-            p = FreeformLayout(power=True).lay_out(spec, time_budget_s=0.5)
+        built = self._built()
+        tiers = {
+            b.item_id
+            for _spec, p in built
+            for b in p.buildings
+            if catalog.is_sorter(b.item_id)
+        }
+        n_sorters = sum(
+            1 for _spec, p in built for b in p.buildings if catalog.is_sorter(b.item_id)
+        )
+        # A sample that never picks a tier above Mk.I cannot show tier selection
+        # wrong, which is the bug this class exists to catch.
+        assert len(tiers) >= 3, f"sample exercises only {len(tiers)} sorter tier(s)"
+        assert n_sorters >= 100, f"sample has only {n_sorters} sorters"
+        for spec, p in built:
             bad = _full_report(p, spec, power=True).by_check("flow.sorter_capacity")
             assert not bad, f"{spec.label}: " + "; ".join(f.message for f in bad)
 
@@ -1407,8 +1483,17 @@ class TestRealUrlCandidatesAreSupplied:
         prefers source-merging, so the check fires on correct layouts. This
         asserts the property itself so the guarantee is covered regardless.
         """
-        for spec in self._candidates():
-            p = FreeformLayout(power=True).lay_out(spec, time_budget_s=0.5)
+        built = self._built()
+        splitters = sum(
+            1
+            for _spec, p in built
+            for b in p.buildings
+            if b.item_id == catalog.SPLITTER_ID
+        )
+        # A cycle needs somewhere to close. A sample with no junction in it is a
+        # sample of straight runs, which are acyclic by construction.
+        assert splitters >= 1, "sample contains no junction, so no cycle is possible"
+        for spec, p in built:
             for i, b in enumerate(p.buildings):
                 if not catalog.is_belt(b.item_id):
                     continue
