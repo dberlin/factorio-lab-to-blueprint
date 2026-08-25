@@ -64,7 +64,7 @@ import heapq
 import math
 import time
 from collections import defaultdict
-from collections.abc import Collection, Mapping, Sequence, Set
+from collections.abc import Callable, Collection, Mapping, Sequence, Set
 from dataclasses import dataclass, field, replace
 from enum import Enum
 from fractions import Fraction
@@ -3272,6 +3272,7 @@ def _merge_frontier(
     canvas: _Canvas,
     paths: dict[int, list[tuple[int, int, int]]],
     siblings: tuple[int, ...],
+    junctionable: Callable[[int, int], bool] | None = None,
 ) -> set[tuple[int, int, int]]:
     """Free cells beside a sibling net's path -- somewhere to merge into.
 
@@ -3283,10 +3284,26 @@ def _merge_frontier(
     The sibling's own cells are not offered as goals: they are occupied, so A*
     could never step onto them.  Their free neighbours are what a merging belt
     actually needs.
+
+    ``junctionable`` IS THE SOURCE SIDE ONLY, and it is the difference between
+    offering a merge point and offering a merge point that can be built.
+    Leaving a sibling's path puts a SPLITTER on the cell left from, because that
+    cell already flows onward; a splitter's cross collider needs three and a
+    half tiles from an Assembling Machine's centre, and a path running beside a
+    machine band offers plenty of cells at 2.83.  Without the filter A* takes
+    the cheapest of those, ``_tap_source`` refuses the site at commit time, and
+    the whole pack is discarded for a tap that was never legal -- with the
+    router blamed for a route it was told to make.
+
+    The DESTINATION side passes nothing, and that is not an oversight: arriving
+    at a sibling's path builds no junction at all, only a link from this path's
+    tail (see ``_sink_for``), so no site has to be clear.
     """
     out: set[tuple[int, int, int]] = set()
     for s in siblings:
         for x, y, lvl in paths.get(s, ()):
+            if junctionable is not None and not junctionable(x, y):
+                continue
             for dx, dy in _STEPS:
                 cell = (x + dx, y + dy, lvl)
                 if canvas.free(cell):
@@ -3434,6 +3451,19 @@ def _route_all(
     # second. That leaves the chain a single linear run, which is the only shape
     # that is both correct and reachable.
 
+    #: (x, y) -> may a splitter stand there.  Memoised for the whole pass, which
+    #: is exact rather than approximate: `canvas.buildings` does not change while
+    #: rounds run -- belts are only ever added by `_commit_paths`, after the last
+    #: round has already returned.
+    junction_ok: dict[tuple[int, int], bool] = {}
+
+    def _can_junction(x: int, y: int) -> bool:
+        got = junction_ok.get((x, y))
+        if got is None:
+            got = junction.site_is_clear(canvas.buildings, x, y)
+            junction_ok[x, y] = got
+        return got
+
     def _stake(index: int, path: list[tuple[int, int, int]]) -> None:
         """Put a path down: canvas, grid and ownership, in step."""
         paths[index] = path
@@ -3469,16 +3499,35 @@ def _route_all(
         canvas.routing_ports = frozenset(
             {(net.src.x, net.src.y), (net.dst.x, net.dst.y)}
         )
-        starts = [
-            (net.src.x + dx, net.src.y + dy, 0)
-            for dx, dy in _STEPS
-            if canvas.free((net.src.x + dx, net.src.y + dy, 0))
-        ]
+        # THE LANE TILE IS ONLY FREE FOR THE FIRST NET TO LEAVE IT.  Its port is
+        # the lane's END, which has no onward link, so the first tap merely
+        # points it at the branch. Every later one finds that link in place and
+        # needs a SPLITTER on the lane tile -- and a lane runs directly beside
+        # its machine band, where a splitter's cross collider never fits. Those
+        # starts are withdrawn rather than offered and then refused at commit
+        # time, which is the difference between the router picking its second
+        # choice and the whole pack being discarded.
+        siblings = src_group.get(index, ())
+        needs_junction = any(s in paths for s in siblings) or (
+            canvas.buildings[net.src.belt].output_obj is not None
+        )
+        starts = (
+            []
+            if needs_junction and not _can_junction(net.src.x, net.src.y)
+            else [
+                (net.src.x + dx, net.src.y + dy, 0)
+                for dx, dy in _STEPS
+                if canvas.free((net.src.x + dx, net.src.y + dy, 0))
+            ]
+        )
         # Leaving from a sibling's belt is as good as leaving from the lane,
         # and it is the only option when the lane is walled in. `_tap_source`
-        # turns the attachment into a splitter on that belt.
+        # turns the attachment into a splitter on that belt, so only cells that
+        # can CARRY a splitter are offered.
         starts.extend(
-            sorted(_merge_frontier(canvas, paths, src_group.get(index, ())) - set(starts))
+            sorted(
+                _merge_frontier(canvas, paths, siblings, _can_junction) - set(starts)
+            )
         )
         goals = {
             (net.dst.x + dx, net.dst.y + dy, 0)
