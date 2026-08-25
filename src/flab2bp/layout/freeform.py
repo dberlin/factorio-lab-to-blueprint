@@ -652,19 +652,26 @@ class Strip:
     def band_rows(self) -> int:
         """Rows the machine band RESERVES -- clearance, not footprint.
 
-        THE strip row map lives on these three members and nothing else may
+        THE strip row map lives on these two members and nothing else may
         compute a row from `mh`. `mh` is how tall the machines are; `ph` is how
         much room their colliders need, and lanes have to start after the second
         or a junction on them is illegal against the machine beside it.
 
         The two were the same number until spacing landed, so every consumer
         that wanted "the first row after the band" wrote `mh` and was right by
-        accident. There are SEVEN of them -- `row_of_output`, `row_of_input`'s
+        accident. There were SEVEN of them -- `row_of_output`, `row_of_input`'s
         `in_below` branch, the band skip in emission, the probe lane in
-        `_attachable_columns`, and the two SPAN expressions that size sorters
-        from the machine's bottom edge -- and moving a subset is what took this
-        module from 9 failing tests to 80, twice. They move together or not at
-        all, which is what this exists to make possible.
+        `_attachable_columns`, `height`, and the two SPAN expressions that size
+        sorters from the machine's bottom edge -- and moving a subset is what
+        took this module from 9 failing tests to 80, twice. They move together
+        or not at all, which is what this exists to make possible.
+
+        THE TWO SPAN CONSUMERS HAVE SINCE LEFT, and that is a correction rather
+        than a subset move: a span is not a row-map question at all. It is the
+        distance from a lane to the machine's insert POSE, and `sorter_span`
+        reads that from the slot table, because a Chemical Plant's northern
+        anchor is a row inside its footprint and no arithmetic on `mh` or `ph`
+        can know it. Five consumers ask here now, and they still move together.
         """
         return self.ph
 
@@ -673,13 +680,39 @@ class Strip:
         """Row index of the first lane under the machine band."""
         return self.machine_row + self.band_rows
 
-    def rows_below_machines(self, row: int) -> int:
-        """Tiles from the machines' bottom EDGE to ``row`` -- a sorter's span.
+    def sorter_span(self, row: int) -> int:
+        """Tiles a sorter crosses between lane ``row`` and the machine it serves.
 
-        From the footprint edge, not the band's, because that is where the
-        sorter anchors. The two differ by exactly the clearance rows.
+        Chebyshev, matching ``validate._sorter_span``, and read from the
+        machine's OWN insert poses rather than from the edge of its footprint.
+
+        THIS REPLACES ``rows_below_machines``, WHICH COUNTED FROM THE FOOTPRINT
+        EDGE, and which was right only for a machine whose poses sit on that
+        edge.  A Chemical Plant's NORTHERN anchor is a row INSIDE its 9x5
+        footprint, so a lane one row clear of it is TWO tiles from the anchor,
+        not one -- the same correction ``_find_taps`` took in 954bea2, arriving
+        one layer later in the same module.
+
+        The span sizes the sorter tier, so understating it by one picks a Mk.II
+        where a Mk.III is needed: ``_pick_sorter(2/s, span=1)`` returns a Mk.II
+        and a Mk.II sustains 3/2 across the two tiles it actually crosses.  That
+        is a starvation with nothing to see at paste time, and it is what
+        ``flow.sorter_capacity`` reported on every refiner of
+        ``two-product-producer``.
+
+        The WORST column is taken, never the one ``_link_lane`` happens to pick.
+        Over-stating a span costs one sorter tier; under-stating it starves a
+        machine.
+
+        Zero means no pose is reachable from that row at all.  That is a
+        different failure and belongs to ``_machines_without_poses``.
         """
-        return row - (self.machine_row + self.mh - 1)
+        lane_y = row - self.machine_row
+        probe = slots.probe_building(self.item_id, self.yaw)
+        reach = slots.attachable_columns(probe, lane_y)
+        if not reach:
+            return 0
+        return max(abs(lane_y - a.cell[1]) for a in reach.values())
 
     @property
     def machine_row(self) -> int:
@@ -2135,11 +2168,11 @@ def _emit_strip(
         return placed
 
     for j, lane in enumerate(s.in_above):
-        sorters += feed(lane, row=j, span=n_above - j, near_edge=machine_y)
+        sorters += feed(lane, row=j, span=s.sorter_span(j), near_edge=machine_y)
 
     for j, (item, dest) in enumerate(s.out_lanes):
         row = s.row_of_output(j)
-        span = s.rows_below_machines(row)
+        span = s.sorter_span(row)
         out_ports[item, dest] = _Port(
             lane_idx[row][-1],
             ox + width - 1,
@@ -2158,7 +2191,7 @@ def _emit_strip(
     # machine band's south edge.
     for lane in s.in_below:
         row = s.row_of_input(lane[0])
-        sorters += feed(lane, row=row, span=s.rows_below_machines(row), near_edge=bottom)
+        sorters += feed(lane, row=row, span=s.sorter_span(row), near_edge=bottom)
 
     return in_ports, out_ports, sorters
 
@@ -6069,48 +6102,72 @@ def _fanout_shortfall(strips: list[Strip]) -> list[str]:
 
 
 def _machines_without_poses(strips: list[Strip]) -> list[str]:
-    """Strips with lanes to wire and no insert pose to wire them to.
+    """Lanes seated where no sorter of any tier can join them to their machine.
 
-    ``slots.attachment`` reads the game's own ``PrefabDesc.slotPoses``, and for
-    a Ray Receiver and an Energy Exchanger that array has LENGTH ZERO.
-    ``BuildTool_Inserter`` will not target a building with no pose, so no sorter
-    can attach to one on any face at any distance.
+    Two shapes, and they are worth telling apart in the message because they
+    call for different fixes.
 
-    THIS IS A REFUSAL BECAUSE THE ALTERNATIVE WAS A CRASH AND, BEFORE THAT, A
-    LIE.  ``Strip.input_lane_tiles`` correctly returns 0 for such a machine --
-    no column can be wired, so no belt tile does any work -- and ``_emit_strip``
-    then built that row as an empty lane and indexed its head, which is
-    ``IndexError: list index out of range`` from ``feed``.  The OUTPUT side did
-    not even crash: ``_link_lane`` finds no usable column, places nothing, and
-    returns 0, so the machine shipped joined to nothing at either end.  That is
-    the shape spine measured on this same spec -- two Energy Exchangers and ZERO
-    sorters in the whole placement, which `validate` called ok.
+    THE MACHINE HAS NO INSERT POSE AT ALL.  ``slots.attachment`` reads the
+    game's own ``PrefabDesc.slotPoses``, and for a Ray Receiver and an Energy
+    Exchanger that array has LENGTH ZERO.  ``BuildTool_Inserter`` will not
+    target a building with no pose, so no sorter can attach to one on any face
+    at any distance.  ``Strip.input_lane_tiles`` correctly returns 0 for such a
+    machine, ``_emit_strip`` then built that row as an empty lane, and ``feed``
+    indexed its head -- ``IndexError: list index out of range``.  The OUTPUT
+    side did not even crash: ``_link_lane`` finds no usable column, places
+    nothing and returns 0, so the machine shipped joined to nothing at either
+    end.  That is the shape spine measured on the mode-driven spec -- two Energy
+    Exchangers and ZERO sorters in the whole placement, which `validate` called
+    ok.
 
-    A blueprint that pastes two idle exchangers is worse than a refusal, and a
-    refusal that names the prefab is worth more than either.  Whether the
-    extraction is incomplete -- these machines ARE fed in game, so they either
-    carry their slots in an array the extractor does not read or take items by
+    THE LANE IS SIMPLY TOO FAR from the nearest pose.  A machine's poses are not
+    on its footprint edge in general, so a lane that looks two rows clear can be
+    three or four tiles from anything a sorter can anchor on, and every tier
+    reaches exactly ``SORTER_MAX_REACH``.  Over the 36 corpus specs this is 31
+    lanes; the old edge-row arithmetic charged 24 of them a span of 3 -- legal,
+    so a sorter was emitted that could not reach -- and the other 7 a span of 4,
+    which is `ValueError: span 4 outside 1..3` and is the crash every
+    `universe-matrix` stress cell reported.
+
+    BOTH ARE REFUSALS RATHER THAN REPAIRS, and deliberately so.  Whether the
+    pose extraction is incomplete -- a Ray Receiver IS fed in game, so it either
+    carries its slots in an array the extractor does not read or takes items by
     some other mechanism -- is a question for the extractor and has its own
-    backlog entry; until it is answered, refusing is the honest reading of the
-    data we have.
+    backlog entry.  Until it is answered, refusing is the honest reading of the
+    data we have, and a blueprint that pastes idle machines is worse than a
+    refusal that names the prefab.
 
-    Returns one description per offending building, empty when every machine
-    with a lane can be reached.
+    Returns one description per distinct offending (building, lane kind), empty
+    when every lane in the plan can be joined to its machine.
     """
-    seen: set[int] = set()
+    reach = catalog.SORTER_MAX_REACH
+    seen: set[tuple[int, str, int]] = set()
     out: list[str] = []
     for s in strips:
-        if s.item_id in seen or not (s.in_lanes or s.out_lanes):
-            continue
-        if s.attachable_columns:
-            continue
-        seen.add(s.item_id)
-        out.append(
-            f"{catalog.building(s.item_id).name} ({s.recipe_id}): the game's "
-            f"prefab gives it no insert pose on any face, so none of its "
-            f"{len(s.in_lanes)} ingredient lane(s) and {len(s.out_lanes)} "
-            f"output lane(s) can be joined to it by a sorter"
-        )
+        rows: list[tuple[int, str]] = [(j, "ingredient") for j in range(len(s.in_above))]
+        rows += [(s.row_of_output(k), "output") for k in range(len(s.out_lanes))]
+        rows += [(s.row_of_input(lane[0]), "ingredient") for lane in s.in_below]
+        for row, kind in rows:
+            span = s.sorter_span(row)
+            if 1 <= span <= reach:
+                continue
+            key = (s.item_id, kind, span)
+            if key in seen:
+                continue
+            seen.add(key)
+            name = catalog.building(s.item_id).name
+            if not s.attachable_columns:
+                out.append(
+                    f"{name} ({s.recipe_id}): the game's prefab gives it no "
+                    f"insert pose on any face, so its {kind} lane cannot be "
+                    f"joined to it by a sorter"
+                )
+            else:
+                out.append(
+                    f"{name} ({s.recipe_id}): its {kind} lane on row {row} is "
+                    f"{span} tile(s) from the nearest insert pose, past the "
+                    f"{reach}-tile reach of every sorter tier"
+                )
     return out
 
 
