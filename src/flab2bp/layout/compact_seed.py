@@ -7,7 +7,9 @@ production sequence-pair representation; no CP placement is exposed as a layout.
 
 from __future__ import annotations
 
+import contextlib
 import math
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -50,7 +52,7 @@ class CompactSeedStatus(StrEnum):
 class CompactSeedConfig:
     """Bounded deterministic work allowed for one single-worker CP-SAT solve."""
 
-    max_deterministic_time: float = 4.0
+    max_deterministic_time: float = 5.0
 
     def __post_init__(self) -> None:
         if (
@@ -140,6 +142,19 @@ class _ModelVariables:
     secondary_upper_bound: int
 
 
+@dataclass(frozen=True, slots=True)
+class _ModelPlan:
+    size_tables: tuple[tuple[tuple[int, int], ...], ...]
+    max_width: int
+    area_width_lower_bound: int
+    port_tables: tuple[tuple[tuple[tuple[int, int], ...], tuple[tuple[int, int], ...]], ...]
+    net_weights: tuple[int, ...]
+    direct_groups: tuple[tuple[tuple[int, int], tuple[VariantDirectInsertTarget, ...]], ...]
+    tie_coefficients: tuple[tuple[int, int, int, int, int], ...]
+    secondary_upper_bound: int
+    width_weight: int
+
+
 def solve_compact_seed(
     problem: PlacementProblem,
     *,
@@ -163,9 +178,12 @@ def solve_compact_seed(
         raise ValueError("base seed must be an integer")
     if type(attempt) is not int or attempt < 0:
         raise ValueError("attempt must be a non-negative integer")
-    chosen_config = config or CompactSeedConfig()
-    if not isinstance(chosen_config, CompactSeedConfig):
-        raise ValueError("compact seed config must be a CompactSeedConfig")
+    if config is None:
+        chosen_config = CompactSeedConfig()
+    elif type(config) is CompactSeedConfig:
+        chosen_config = config
+    else:
+        raise ValueError("compact seed config must be exactly CompactSeedConfig")
     if not isinstance(direct_eligibility, tuple) or any(
         not isinstance(entry, VariantDirectInsertTarget) for entry in direct_eligibility
     ):
@@ -179,11 +197,12 @@ def solve_compact_seed(
 
     stage_seed = derive_stage_seed(base_seed, attempt)
     solver_seed = stage_seed % _RANDOM_SEED_MODULUS
-    is_cancelled = cancelled or (lambda: False)
+    is_cancelled: Callable[[], bool] = (lambda: False) if cancelled is None else cancelled
     if is_cancelled() or _deadline_reached(absolute_deadline):
         return _empty_result(CompactSeedStatus.CANCELLED, solver_seed, "CANCELLED")
 
     _validate_direct_eligibility(problem, direct_eligibility)
+    plan = _prepare_model_plan(problem, direct_eligibility, stage_seed)
     if problem.size == 0:
         state = AnnealState(
             pair=SequencePair((), ()),
@@ -210,7 +229,7 @@ def solve_compact_seed(
         )
         return CompactSeedResult(CompactSeedStatus.OPTIMAL, state, diagnostics)
 
-    model, variables = _build_model(problem, direct_eligibility, stage_seed)
+    model, variables = _build_model(problem, plan)
     if is_cancelled() or _deadline_reached(absolute_deadline):
         return _empty_result(
             CompactSeedStatus.CANCELLED,
@@ -238,8 +257,12 @@ def solve_compact_seed(
             )
         solver.parameters.max_time_in_seconds = remaining - _DEADLINE_SAFETY_SECONDS
 
-    status_code = solver.solve(model)
-    if is_cancelled() or _deadline_reached(absolute_deadline):
+    status_code, cancellation_requested = _solve_interruptibly(
+        solver,
+        model,
+        cancelled,
+    )
+    if cancellation_requested or is_cancelled() or _deadline_reached(absolute_deadline):
         return _diagnostic_empty_result(
             CompactSeedStatus.CANCELLED,
             "CANCELLED",
@@ -265,18 +288,104 @@ def solve_compact_seed(
     )
 
 
-def _build_model(
+def _prepare_model_plan(
     problem: PlacementProblem,
     direct_eligibility: tuple[VariantDirectInsertTarget, ...],
     stage_seed: int,
-) -> tuple[cp_model.CpModel, _ModelVariables]:
-    model = cp_model.CpModel()
+) -> _ModelPlan:
+    """Validate every integer bound before constructing an OR-Tools object."""
+
     size_tables = _selected_size_tables(problem)
     size = problem.size
     height = problem.outline_height
+    _require_cp_nonnegative(height, "outline height")
+    _require_cp_nonnegative(size - 1, "sequence rank domain", allow_negative_one=True)
+
+    for strip, table in enumerate(size_tables):
+        _require_cp_nonnegative(len(table) - 1, f"variant domain for strip {strip}")
+        for variant, (width, strip_height) in enumerate(table):
+            _require_cp_nonnegative(width, f"width for strip {strip} variant {variant}")
+            _require_cp_nonnegative(
+                strip_height,
+                f"height for strip {strip} variant {variant}",
+            )
+
     max_width = sum(max(width for width, _strip_height in table) for table in size_tables)
-    if max_width > _CP_INT_MAX:
-        raise ValueError("compact seed width domain exceeds signed 64-bit CP-SAT limits")
+    _require_cp_nonnegative(max_width, "maximum width")
+    _require_cp_nonnegative(2 * max_width, "doubled x coordinate domain")
+    _require_cp_nonnegative(2 * height, "doubled y coordinate domain")
+    area_width_lower_bound = (problem.area_lower_bound + height - 1) // height
+    _require_cp_nonnegative(area_width_lower_bound, "area-derived width lower bound")
+
+    port_tables = tuple(
+        _net_port_offset_tables(problem, net_index) for net_index in range(len(problem.nets))
+    )
+    for net_index, (source_offsets, destination_offsets) in enumerate(port_tables):
+        for offset in (*source_offsets, *destination_offsets):
+            _require_cp_signed(offset[0], f"net {net_index} x port offset")
+            _require_cp_signed(offset[1], f"net {net_index} y port offset")
+
+    net_weights = tuple(
+        LAMBDA_HPWL * (1 + _stable_coefficient(stage_seed, net_index, 0, 3))
+        for net_index in range(len(problem.nets))
+    )
+    by_key: dict[tuple[int, int], list[VariantDirectInsertTarget]] = {}
+    for entry in direct_eligibility:
+        by_key.setdefault(entry.target.key, []).append(entry)
+    direct_groups = tuple((key, tuple(by_key[key])) for key in sorted(by_key))
+    tie_coefficients = tuple(
+        (
+            _stable_coefficient(stage_seed, strip, 1, 7),
+            _stable_coefficient(stage_seed, strip, 2, 7),
+            _stable_coefficient(stage_seed, strip, 3, 7),
+            _stable_coefficient(stage_seed, strip, 4, 7),
+            _stable_coefficient(stage_seed, strip, 5, 7),
+        )
+        for strip in range(size)
+    )
+
+    secondary_upper_bound = sum(weight * (2 * max_width + 2 * height) for weight in net_weights)
+    secondary_upper_bound += MU_DIRECT * len(direct_groups)
+    secondary_upper_bound += sum(
+        x_coefficient * max_width
+        + y_coefficient * height
+        + variant_coefficient * (len(size_tables[strip]) - 1)
+        + (positive_coefficient + negative_coefficient) * (size - 1)
+        for strip, (
+            x_coefficient,
+            y_coefficient,
+            variant_coefficient,
+            positive_coefficient,
+            negative_coefficient,
+        ) in enumerate(tie_coefficients)
+    )
+    _require_cp_nonnegative(secondary_upper_bound, "secondary objective upper bound")
+    width_weight = secondary_upper_bound + 1
+    _require_cp_nonnegative(width_weight, "width objective coefficient")
+    objective_upper_bound = width_weight * max_width + secondary_upper_bound
+    _require_cp_nonnegative(objective_upper_bound, "full objective upper bound")
+    return _ModelPlan(
+        size_tables=size_tables,
+        max_width=max_width,
+        area_width_lower_bound=area_width_lower_bound,
+        port_tables=port_tables,
+        net_weights=net_weights,
+        direct_groups=direct_groups,
+        tie_coefficients=tie_coefficients,
+        secondary_upper_bound=secondary_upper_bound,
+        width_weight=width_weight,
+    )
+
+
+def _build_model(
+    problem: PlacementProblem,
+    plan: _ModelPlan,
+) -> tuple[cp_model.CpModel, _ModelVariables]:
+    model = cp_model.CpModel()
+    size_tables = plan.size_tables
+    size = problem.size
+    height = problem.outline_height
+    max_width = plan.max_width
 
     x: list[cp_model.IntVar] = []
     y: list[cp_model.IntVar] = []
@@ -345,18 +454,19 @@ def _build_model(
             )
 
     outline_width = model.new_int_var(0, max_width, "outline_width")
-    area_width_lower_bound = (problem.area_lower_bound + height - 1) // height
-    model.add(outline_width >= area_width_lower_bound)
+    model.add(outline_width >= plan.area_width_lower_bound)
     for strip in range(size):
         model.add(outline_width >= x[strip] + widths[strip])
 
     secondary_terms: list[cp_model.LinearExpr] = []
-    secondary_upper_bound = 0
     port_offsets: list[
         tuple[cp_model.IntVar, cp_model.IntVar, cp_model.IntVar, cp_model.IntVar]
     ] = []
-    for net_index, (source, destination) in enumerate(problem.nets):
-        source_offsets, destination_offsets = _net_port_offset_tables(problem, net_index)
+    for net_index, (
+        (source, destination),
+        (source_offsets, destination_offsets),
+        weight,
+    ) in enumerate(zip(problem.nets, plan.port_tables, plan.net_weights, strict=True)):
         source_x = _element_variable(
             model, variants[source], source_offsets, 0, f"source_x_{net_index}"
         )
@@ -380,17 +490,12 @@ def _build_model(
             absolute_y,
             y[source] + source_y - y[destination] - destination_y,
         )
-        weight = LAMBDA_HPWL * (1 + _stable_coefficient(stage_seed, net_index, 0, 3))
         secondary_terms.extend((weight * absolute_x, weight * absolute_y))
-        secondary_upper_bound += weight * (2 * max_width + 2 * height)
 
     direct_successes: list[tuple[tuple[int, int], cp_model.IntVar]] = []
-    by_key: dict[tuple[int, int], list[VariantDirectInsertTarget]] = {}
-    for entry in direct_eligibility:
-        by_key.setdefault(entry.target.key, []).append(entry)
-    for direct_index, key in enumerate(sorted(by_key)):
+    for direct_index, (key, entries) in enumerate(plan.direct_groups):
         successes: list[cp_model.IntVar] = []
-        for combo_index, entry in enumerate(by_key[key]):
+        for combo_index, entry in enumerate(entries):
             target = entry.target
             success = model.new_bool_var(f"direct_{direct_index}_{combo_index}")
             model.add_implication(success, selected[target.producer][entry.producer_variant])
@@ -411,14 +516,14 @@ def _build_model(
         missed = model.new_bool_var(f"direct_missed_{direct_index}")
         model.add(missed + sum(successes) == 1)
         secondary_terms.append(MU_DIRECT * missed)
-        secondary_upper_bound += MU_DIRECT
 
-    for strip in range(size):
-        x_coefficient = _stable_coefficient(stage_seed, strip, 1, 7)
-        y_coefficient = _stable_coefficient(stage_seed, strip, 2, 7)
-        variant_coefficient = _stable_coefficient(stage_seed, strip, 3, 7)
-        positive_coefficient = _stable_coefficient(stage_seed, strip, 4, 7)
-        negative_coefficient = _stable_coefficient(stage_seed, strip, 5, 7)
+    for strip, (
+        x_coefficient,
+        y_coefficient,
+        variant_coefficient,
+        positive_coefficient,
+        negative_coefficient,
+    ) in enumerate(plan.tie_coefficients):
         secondary_terms.extend(
             (
                 x_coefficient * x[strip],
@@ -428,18 +533,8 @@ def _build_model(
                 negative_coefficient * negative_ranks[strip],
             )
         )
-        secondary_upper_bound += (
-            x_coefficient * max_width
-            + y_coefficient * height
-            + variant_coefficient * (len(size_tables[strip]) - 1)
-            + (positive_coefficient + negative_coefficient) * (size - 1)
-        )
 
-    width_weight = secondary_upper_bound + 1
-    objective = width_weight * outline_width + sum(secondary_terms)
-    objective_upper_bound = width_weight * max_width + secondary_upper_bound
-    if objective_upper_bound > _CP_INT_MAX:
-        raise ValueError("compact seed objective exceeds signed 64-bit CP-SAT limits")
+    objective = plan.width_weight * outline_width + sum(secondary_terms)
     model.minimize(objective)
     return model, _ModelVariables(
         x=tuple(x),
@@ -454,8 +549,8 @@ def _build_model(
         port_offsets=tuple(port_offsets),
         direct_successes=tuple(direct_successes),
         objective=objective,
-        width_weight=width_weight,
-        secondary_upper_bound=secondary_upper_bound,
+        width_weight=plan.width_weight,
+        secondary_upper_bound=plan.secondary_upper_bound,
     )
 
 
@@ -589,6 +684,66 @@ def _validate_direct_eligibility(
 def _stable_coefficient(seed: int, index: int, channel: int, maximum: int) -> int:
     mixed = derive_stage_seed(seed, index * 8 + channel)
     return 1 + mixed % maximum
+
+
+def _require_cp_nonnegative(
+    value: int,
+    name: str,
+    *,
+    allow_negative_one: bool = False,
+) -> None:
+    lower_bound = -1 if allow_negative_one else 0
+    if value < lower_bound or value > _CP_INT_MAX:
+        raise ValueError(f"{name} exceeds signed 64-bit CP-SAT limits")
+
+
+def _require_cp_signed(value: int, name: str) -> None:
+    if not -_CP_INT_MAX <= value <= _CP_INT_MAX:
+        raise ValueError(f"{name} exceeds signed 64-bit CP-SAT limits")
+
+
+def _solve_interruptibly(
+    solver: cp_model.CpSolver,
+    model: cp_model.CpModel,
+    cancelled: Callable[[], bool] | None,
+) -> tuple[cp_model.CpSolverStatus, bool]:
+    if cancelled is None:
+        return solver.solve(model), False
+
+    finished = threading.Event()
+    cancellation_requested = threading.Event()
+    watcher_errors: list[BaseException] = []
+
+    def watch_cancellation() -> None:
+        while not finished.wait(0.005):
+            try:
+                should_cancel = cancelled()
+            except BaseException as error:
+                watcher_errors.append(error)
+                with contextlib.suppress(BaseException):
+                    solver.stop_search()
+                return
+            if should_cancel:
+                cancellation_requested.set()
+                try:
+                    solver.stop_search()
+                except BaseException as error:
+                    watcher_errors.append(error)
+                return
+
+    watcher = threading.Thread(
+        target=watch_cancellation,
+        name="compact-seed-cancellation",
+    )
+    watcher.start()
+    try:
+        status = solver.solve(model)
+    finally:
+        finished.set()
+        watcher.join()
+    if watcher_errors:
+        raise watcher_errors[0]
+    return status, cancellation_requested.is_set()
 
 
 def _status_from_solver(status: cp_model.CpSolverStatus) -> CompactSeedStatus:

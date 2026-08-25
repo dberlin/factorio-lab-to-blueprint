@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import itertools
 import math
+import threading
 import time
 from dataclasses import FrozenInstanceError
+from typing import cast
 
 import pytest
 from ortools.sat.python import cp_model
@@ -107,7 +109,7 @@ def _variant_problem() -> PlacementProblem:
 
 def test_config_is_immutable_and_validates_exact_types_and_ranges() -> None:
     config = CompactSeedConfig()
-    assert config.max_deterministic_time == 4.0
+    assert config.max_deterministic_time == 5.0
     with pytest.raises(FrozenInstanceError):
         config.max_deterministic_time = 1.0  # type: ignore[misc]
 
@@ -122,6 +124,138 @@ def test_config_is_immutable_and_validates_exact_types_and_ranges() -> None:
         solve_compact_seed(problem, base_seed=1, attempt=True)
     with pytest.raises(ValueError, match="attempt"):
         solve_compact_seed(problem, base_seed=1, attempt=-1)
+
+
+def test_falsey_non_configs_are_rejected_and_falsey_cancellation_is_preserved() -> None:
+    problem = _fixed_problem()
+    for falsey in (False, 0, ()):
+        with pytest.raises(ValueError, match="config"):
+            solve_compact_seed(
+                problem,
+                base_seed=1,
+                attempt=0,
+                config=cast(CompactSeedConfig, falsey),
+            )
+
+    class FalseyCancellation:
+        def __bool__(self) -> bool:
+            return False
+
+        def __call__(self) -> bool:
+            return True
+
+    cancelled = solve_compact_seed(
+        problem,
+        base_seed=1,
+        attempt=0,
+        cancelled=FalseyCancellation(),
+    )
+    assert cancelled.status is CompactSeedStatus.CANCELLED
+    assert cancelled.state is None
+
+
+def test_int64_model_boundaries_fail_before_ortools_model_construction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def unexpected_model() -> cp_model.CpModel:
+        raise AssertionError("OR-Tools model constructed before module validation")
+
+    monkeypatch.setattr(cp_model, "CpModel", unexpected_model)
+    cases = (
+        PlacementProblem(((1, 1),), (), 2**63, 1),
+        PlacementProblem((((1 << 63) - 1, 1), (1, 1)), (), 1, 1),
+        PlacementProblem(((1 << 62, 1),), ((0, 0),), 1, 1),
+        PlacementProblem(((1 << 60, 1),), ((0, 0),) * 10, 1, 1),
+    )
+    for problem in cases:
+        with pytest.raises(ValueError, match="signed 64-bit"):
+            solve_compact_seed(problem, base_seed=1, attempt=0)
+
+
+def test_inflight_cancellation_stops_solver_and_joins_watcher(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    solve_started = threading.Event()
+    cancellation_enabled = threading.Event()
+    stop_called = threading.Event()
+
+    def fake_solve(self: cp_model.CpSolver, model: cp_model.CpModel) -> cp_model.CpSolverStatus:
+        del self, model
+        solve_started.set()
+        assert stop_called.wait(1.0), "cancellation watcher did not stop the blocking solve"
+        return cp_model.UNKNOWN
+
+    def fake_stop_search(self: cp_model.CpSolver) -> None:
+        del self
+        stop_called.set()
+
+    def enable_cancellation() -> None:
+        assert solve_started.wait(1.0)
+        cancellation_enabled.set()
+
+    monkeypatch.setattr(cp_model.CpSolver, "solve", fake_solve)
+    monkeypatch.setattr(cp_model.CpSolver, "stop_search", fake_stop_search)
+    trigger = threading.Thread(target=enable_cancellation)
+    trigger.start()
+    result = solve_compact_seed(
+        _fixed_problem(),
+        base_seed=1,
+        attempt=0,
+        cancelled=cancellation_enabled.is_set,
+    )
+    trigger.join()
+
+    assert result.status is CompactSeedStatus.CANCELLED
+    assert result.state is None
+    assert stop_called.is_set()
+    assert not any(
+        thread.name == "compact-seed-cancellation" and thread.is_alive()
+        for thread in threading.enumerate()
+    )
+
+
+def test_inflight_cancellation_callback_exception_stops_solver_and_propagates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class CancellationError(RuntimeError):
+        pass
+
+    solve_started = threading.Event()
+    stop_called = threading.Event()
+    callback_calls = 0
+
+    def cancellation() -> bool:
+        nonlocal callback_calls
+        callback_calls += 1
+        if solve_started.is_set():
+            raise CancellationError("cancel callback failed")
+        return False
+
+    def fake_solve(self: cp_model.CpSolver, model: cp_model.CpModel) -> cp_model.CpSolverStatus:
+        del self, model
+        solve_started.set()
+        assert stop_called.wait(1.0), "callback failure did not stop the blocking solve"
+        return cp_model.UNKNOWN
+
+    def fake_stop_search(self: cp_model.CpSolver) -> None:
+        del self
+        stop_called.set()
+
+    monkeypatch.setattr(cp_model.CpSolver, "solve", fake_solve)
+    monkeypatch.setattr(cp_model.CpSolver, "stop_search", fake_stop_search)
+    with pytest.raises(CancellationError, match="cancel callback failed"):
+        solve_compact_seed(
+            _fixed_problem(),
+            base_seed=1,
+            attempt=0,
+            cancelled=cancellation,
+        )
+    assert callback_calls >= 2
+    assert stop_called.is_set()
+    assert not any(
+        thread.name == "compact-seed-cancellation" and thread.is_alive()
+        for thread in threading.enumerate()
+    )
 
 
 def test_fixed_height_model_has_exact_non_overlap_and_validated_zero_gap_state() -> None:
