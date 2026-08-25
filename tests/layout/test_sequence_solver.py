@@ -2489,7 +2489,7 @@ def test_seeded_production_schedules_one_balanced_height_and_reports_compact_wor
     result = run.solver.search()
     placement = _with_observational_stats(result, run, False, config)
     assert placement.stats["compact_seed_attempt"] == 3.0
-    assert placement.stats["compact_seed_base_seed"] == float(compact_root_seed)
+    assert placement.stats["compact_seed_base_seed"] == compact_root_seed
     assert placement.stats["compact_seed_status"] == "feasible"
     assert placement.stats["compact_seed_height"] == float(problem.outline_height)
     assert placement.stats["compact_seed_solved_width"] == 17.0

@@ -4,6 +4,7 @@ import multiprocessing
 import pickle
 import time
 from concurrent.futures import Future, ProcessPoolExecutor
+from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -359,7 +360,7 @@ def test_result_reserve_formula_is_bounded(
 
 def test_two_real_spawned_islands_are_unseeded_then_seeded_and_both_valid() -> None:
     spec = two_stage_spec()
-    config = SequenceSolverConfig.test()
+    config = replace(SequenceSolverConfig.test(), seed=9_007_199_254_740_993)
     compact_config = CompactSeedConfig(max_deterministic_time=0.05)
     seeds = _sequence_island_seeds(config.seed, 2)
     soft_deadline = time.monotonic() + 20.0
@@ -397,7 +398,7 @@ def test_two_real_spawned_islands_are_unseeded_then_seeded_and_both_valid() -> N
     assert "compact_seed_attempt" not in island0.stats
     assert "compact_seed_closures" not in island0.stats
     assert island1.stats["compact_seed_attempt"] == 0.0
-    assert island1.stats["compact_seed_base_seed"] == float(config.seed)
+    assert island1.stats["compact_seed_base_seed"] == config.seed
     assert island1.stats["compact_seed_status"] in {"optimal", "feasible"}
     assert island1.stats["compact_seed_decoded_width"] >= 1.0
     assert island1.stats["compact_seed_closures"] == 1.0

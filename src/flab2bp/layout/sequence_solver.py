@@ -2548,7 +2548,7 @@ def _with_observational_stats(
         stats.update(
             {
                 "compact_seed_attempt": float(compact_attempt),
-                "compact_seed_base_seed": float(
+                "compact_seed_base_seed": (
                     compact_base_seed if compact_base_seed is not None else config.seed
                 ),
                 "compact_seed_status": compact_result.status.value,
