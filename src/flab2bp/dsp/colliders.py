@@ -874,6 +874,20 @@ def belt_collisions(previews: Sequence[Preview]) -> list[tuple[int, int]]:
     either the clearing does not survive to 147384 or something restores it;
     what is MEASURED is that the rule is symmetric, and that is what is here.
 
+    ONE SIMPLIFICATION, in the conservative direction.  The re-probe at 147384
+    is not always the same sphere: when a belt has a belt on BOTH sides it uses
+    ``Physics.OverlapCapsuleNonAlloc`` between its neighbours scaled to 0.65 and
+    pulled 0.45 back toward the middle.  On a straight run that collapses to a
+    segment of +-0.065 tiles about the node -- the sphere, to three decimals --
+    but on a corner it shifts about 0.46 tiles toward the outside of the turn.
+    The hits fed to the excusals here are the MAIN loop's sphere in every case.
+    That can only convict where the game would excuse, never the reverse: the
+    belt is already ``Collide`` when this pass begins, so the pass can lower the
+    verdict and never raise it, and a hit the capsule would have missed is one
+    the game drops.  It costs nothing on the corpus -- zero either way -- and
+    modelling it would mean carrying neighbour positions into a query that is
+    otherwise pure geometry.
+
     Not vacuous, and the falsifier is the same measurement run the other way:
     the raw probe flags 1189 belts over the fixture corpus, so a sample that
     could not have shown a residue is not what this is.
