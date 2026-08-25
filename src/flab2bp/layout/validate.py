@@ -2082,6 +2082,109 @@ def _belt_crossing(ctx: Context) -> Iterable[Finding]:
     the positive controls in ``tests/layout/test_validate.py`` still fire.
     """
     yield from _belt_collide_findings(ctx, "game.belt_crossing", crossings_only=True)
+    yield from _addon_crossings(ctx)
+
+
+def _addon_crossings(ctx: Context) -> Iterable[Finding]:
+    """A belt passing OVER a belt addon owes it the same clearance as anything else.
+
+    This half is separate because the addon is excused twice over on the way
+    here, and both excusals are right about the case they were written for and
+    wrong about this one.
+
+    * ``colliders.belt_collisions`` never reports a belt against a belt addon at
+      all, on the ``AddonPass`` reading -- and ``AddonPass`` is about a belt the
+      addon is ATTACHED to.  The belt it rides and the belt on its proliferator
+      area are what that clause exists to excuse.
+    * ``_stacks`` takes a Spray Coater out of the crossing question because
+      ``PrefabDesc.multiLevel`` is set for it, and for a Splitter or a Storage
+      Tank a belt one level up really is on a raised port.  A coater's raised
+      port is not overhead: area 1 sits at ``(0, -1.25, 1)``, a tile and a
+      quarter BEHIND it.  Directly over the coater there is no port, only 1.8975
+      of collider.
+
+    CONFIRMED IN GAME, by paste, which is why this is here rather than in the
+    backlog.  The failing blueprint was cut down to one coater, its tower and
+    every belt within six tiles -- no machines, no sorters -- and the game
+    flagged the BELT directly over the coater.  Our proliferator chain crosses
+    at ``z = 1`` and ``colliders.belt_crossing_height`` for the coater's model is
+    ``1.8975``, so it owes ``z = 2``.
+
+    MEASURED.  Over the eight coaters in the game's own blueprints there is not
+    one belt above a coater and under its clearance: the belts inside a coater's
+    footprint are either on the addon's own area cells or on the SAME level
+    beside it, which the ``z`` test lets through.  Our own output has six such
+    belts in ``freeform`` and eight in ``spine`` -- six at one level, two at one
+    and a half.
+
+    The two excusals kept: a belt at or below the addon's own level (it rides
+    one, and the game's blueprints are full of belts flanking a coater at
+    ground level), and a belt standing on one of the addon's area cells, which
+    is a connection and is what ``game.addon_supply`` requires to be there.
+    """
+    bs = ctx.placement.buildings
+    addons = [i for i, b in enumerate(bs) if ctx.kinds[i] is Kind.ADDON]
+    if not addons:
+        return
+    belts = [i for i, b in enumerate(bs) if cat.is_belt(b.item_id)]
+    if not belts:
+        return
+    for ai in addons:
+        ab = bs[ai]
+        try:
+            info = cat.building(ab.item_id)
+        except KeyError:
+            continue
+        # THREE-DIMENSIONAL, and it has to be.  Area 0 of a coater is
+        # ``(0, 0, 0)`` -- its own tile -- so a two-dimensional exemption
+        # excuses a belt flying over the coater at z + 1, which is precisely
+        # the belt the game flagged.  The attached belt is the one at the
+        # area's own altitude.
+        areas = {
+            (
+                ab.x + round(slots.to_world((adx, ady), ab.yaw)[0]),
+                ab.y + round(slots.to_world((adx, ady), ab.yaw)[1]),
+                float(ab.z) + adz,
+            )
+            for adx, ady, adz in info.addon_areas
+        }
+        need = dsp_colliders.belt_crossing_height(ab.model_index) + float(ab.z)
+        pose = dsp_colliders.Placed(
+            ab.model_index,
+            *codec.tile_to_local_offset(ab.x, ab.y, ab.z, ab.width, ab.height),
+            ab.yaw,
+        )
+        for bi in belts:
+            b = bs[bi]
+            if b.z <= ab.z:
+                continue
+            if any(
+                (b.x, b.y) == (ax, ay) and abs(float(b.z) - az) < 0.5
+                for ax, ay, az in areas
+            ):
+                continue
+            probe = dsp_colliders.Placed(
+                b.model_index,
+                *codec.tile_to_local_offset(b.x, b.y, b.z, b.width, b.height),
+                b.yaw,
+            )
+            if not dsp_colliders.belt_crossings(
+                [probe], [pose], directly_over_only=True
+            ):
+                continue
+            yield Finding(
+                "game.belt_crossing",
+                Severity.ERROR,
+                f"belt at ({b.x}, {b.y}) z={b.z} passes over {info.name} "
+                f"{ai} at ({ab.x}, {ab.y}) z={ab.z} without clearing its build "
+                f"collider; the game needs z > {need:.4f}",
+                (bi, ai),
+                {
+                    "belt_z": str(b.z),
+                    "needs_z_above": f"{need:.4f}",
+                    "under": str((ab.x, ab.y, str(ab.z))),
+                },
+            )
 
 
 @check("game.belt_collide")

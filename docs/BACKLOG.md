@@ -1,5 +1,98 @@
 # Backlog
 
+## OPEN -- freeform's proliferator chain crosses a Spray Coater it cannot get around
+
+CONFIRMED IN GAME, by paste.  The failing blueprint was cut down to one coater,
+its tower and every belt within six tiles -- no machines, no sorters -- and the
+game flagged the BELT directly over the coater.
+`colliders.belt_crossing_height` for the coater's model is **1.8975**; our chain
+crosses at **z = 1**, so it owes z = 2.
+
+**Nothing caught it because two checks each assumed the other did.**
+`geom.collide` skips belts and defers them to the belt probe;
+`colliders.belt_collisions` excuses belt addons outright, on the `AddonPass`
+reading; and `validate._stacks` takes a coater out of the crossing question
+because `PrefabDesc.multiLevel` is set for it, which is right for a Splitter --
+a belt one level up is on its raised port -- and wrong for a coater, whose
+raised port is at `(0, -1.25, 1)`, a tile and a quarter BEHIND it.  Directly
+over a coater there is no port, only 1.8975 of collider.
+`validate._addon_crossings` now asks the question, with the two real excusals
+kept: a belt at or below the addon's own level, and a belt on one of its area
+cells **at that area's own altitude** -- the 3-D form matters, because area 0 is
+the coater's own tile and a 2-D exemption excuses exactly the belt the game
+flagged.
+
+**SPINE IS FIXED.**  `_belt_floor_over` no longer excuses a belt addon, and
+`_SpurField` prices the addon's whole oriented footprint while exempting only
+its RAISED areas.  Spine's mid-tier corpus stays **48/48 CLEAN** and its
+coater crossings go from 8 to 0.
+
+**FREEFORM IS PART WAY.**  With the check on, freeform's tier-large corpus is
+**39-42 of 60 CLEAN** (two runs of the same code gave 39 and 42, so the spread
+is the solver's, not the change's), against 60/60 before -- and every one of
+those 60 carried the defect.  Each refusal is a proliferated candidate whose
+chain cannot be routed.
+
+`_Canvas.belt_ban` holds the band above a coater and under its clearance.  Two
+things about it were learned the expensive way and are worth keeping:
+
+* **A band, not a floor.**  A belt at the coater's own level is BESIDE it, not
+  over it, and the game's own blueprints carry sixteen such belts across eight
+  coaters.  A floor walled those off and cost cells for nothing.
+* **From the collider, not the footprint.**  The oriented footprint is three
+  tiles and the two boxes do not fill it -- box A stops at +1.51 tiles along the
+  coater's axis and box B at +0.32 -- so a footprint-wide ban closed the MARGIN
+  tile the chain enters through.  Each candidate cell is asked of the real
+  boxes now, which is the same question the check asks of the result.
+* **Every drop cell is exempt from EVERY ban.**  Coaters two tiles apart on one
+  row overlap footprints, so coater A's band covered coater B's drop -- the belt
+  was already standing there and the router could no longer reach it.
+
+The geometry is the problem, not the ban.  `_place_coaters` seats the coater at
+the EAST end of an input lane and derives the drop from area 1, which at
+`Facing.EAST` lands one tile WEST of it.  The chain enters from the east margin,
+so every approach to that drop crosses the coater's own collider, and the drop
+must be at exactly one level up -- `game.addon_supply`'s
+`ADDON_AREA_RADIUS` is 1.0 world units and a level is 1.333, so z = 2 is out of
+reach of the area.
+
+**Two ways out, and each needs measuring rather than picking.**
+
+1. **Let the chain climb.**  Level 2 over the coater and back down.  The margin
+   is one tile wide and a ramp needs run, so this needs somewhere to spend
+   `BELT_CLIMB_PER_TILE` that the margin does not obviously have.
+2. **Seat the coater so its raised area faces the margin.**  A coater at
+   `Facing.WEST` puts its drop one tile EAST, in the margin, and the banned
+   tiles fall inside the lane where the chain never goes.  It is legal --
+   `AddonPass` takes `Mathf.Abs`, so a reversal passes, and `game.addon_facing`
+   allows it -- but the game's own eight coaters carry the flow yaw EXACTLY,
+   never reversed, and **whether a reversed coater sprays is untested**.  See
+   the yaw entry below.  Do not take this option to buy corpus cells until that
+   is known.
+
+## OPEN -- our belts carry two yaws out of four, and nobody has watched one run
+
+Measured on the reported blueprint: our belts carry **yaw 0 (439) and yaw 90
+(153) and nothing else**.  We cannot emit a belt flowing `-x` or `-y` at all --
+the value is a hardcoded `Facing` constant rather than anything derived from the
+link direction.  Checked against flow on the compass the game's own data implies
+(0 = +y, 90 = +x): **194 of our belts agree with their links and 375 disagree**.
+The game's own blueprints are 259/10 and 249/26, and those disagreements are
+curve angles and long-range links, not a systematic inversion.
+
+**What is known and what is not, stated at exactly this strength.**  Flipping a
+coater-tile belt from 270 to 90 in a known-good hand-built blueprint PASTED
+FINE, so it is not a build-legality error.  That is all it establishes.  Every
+paste this project has done tests PLACEMENT, not operation: we have never had a
+fully-green paste, so nobody has ever watched one of our blueprints run.  A belt
+whose yaw contradicts its own links could paste cleanly and then move items the
+wrong way or not at all, and a Spray Coater is directional, so which way items
+pass through it is a runtime question we have not observed.
+
+**Do not read "pasted fine" as "correct".**  The precondition for testing this
+is a blueprint that pastes clean, which is what the coater-crossing entry above
+is blocking.
+
 ## RESOLVED -- a machine slot holds ONE connection, and 90% of the corpus broke it
 
 Reported from an in-game paste: "Connection target cannot be laid" beside

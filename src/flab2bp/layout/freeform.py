@@ -72,7 +72,7 @@ from fractions import Fraction
 import numpy as np
 from ortools.sat.python import cp_model
 
-from flab2bp.dsp import catalog, params, rules
+from flab2bp.dsp import catalog, codec, colliders, params, rules
 from flab2bp.layout import junction, slots, validate
 from flab2bp.layout.base import (
     DEFAULT_SEARCH_WORKERS,
@@ -2017,6 +2017,27 @@ class _Canvas:
     #: whatever is left.
     keep_out: set[tuple[int, int]] = field(default_factory=set)
 
+    #: ``(x, y)`` -> routing LEVELS no belt may stand on there.
+    #:
+    #: A BAND, not a floor, and the difference is the whole of it.  A belt may
+    #: cross a building and the price is height --
+    #: ``colliders.belt_crossing_height`` solves it per model -- but a belt at
+    #: the building's OWN level is beside it, not over it, and the game's own
+    #: blueprints are full of belts flanking a Spray Coater on the ground.  What
+    #: is forbidden is the band between: above the addon and under its
+    #: clearance.
+    #:
+    #: Machines never need this -- ``solid`` keeps the router off them at every
+    #: level.  A belt ADDON does, because it reserves no tile at all: it rides
+    #: its belt, and its collider is still 1.8975 high and three tiles long.  A
+    #: route crossing a Spray Coater at level 1 pastes as
+    #: ``EBuildCondition.Collide`` on the crossing BELT, confirmed in game on a
+    #: cut-down blueprint carrying one coater, its tower and nothing else.
+    #:
+    #: The addon's own raised area is deliberately absent: that cell carries the
+    #: proliferator connection and a belt is REQUIRED there, one level up.
+    belt_ban: dict[tuple[int, int], set[int]] = field(default_factory=dict)
+
     def add(self, b: PlacedBuilding, *, solid: bool = False, level: int | None = None) -> int:
         """Place ``b`` and mark the lattice cells it takes out of play.
 
@@ -2073,8 +2094,10 @@ class _Canvas:
         return (x, y, z) not in self.world_taken
 
     def free(self, cell: tuple[int, int, int]) -> bool:
-        x, y, _ = cell
+        x, y, z = cell
         if cell in self.blocked or (x, y) in self.solid or (x, y) in self.keep_out:
+            return False
+        if z in self.belt_ban.get((x, y), ()):
             return False
         if self.limit is not None:
             min_x, min_y, max_x, max_y = self.limit
@@ -6187,7 +6210,63 @@ def _place_coaters(
             # drop belt above is at the right x and the wrong LEVEL, so
             # `game.addon_supply` reports the coater unsupplied and the
             # candidate is refused rather than shipped looking fed.
+            # PRICE THE COATER FOR EVERY ROUTE THAT COMES AFTER IT.  A coater
+            # reserves no tile -- it rides its belt -- so nothing in `solid` or
+            # `blocked` keeps a later route off it, and its collider is 1.8975
+            # high and three tiles long.  The proliferator chain used to cross
+            # at level 1 and paste as `EBuildCondition.Collide` on the crossing
+            # BELT; confirmed in game on a cut-down blueprint carrying one
+            # coater, its tower and no machines at all.  `game.belt_crossing`
+            # is the check; this is where it is honoured.
+            #
+            # The drop cell is left out on purpose: that is the addon's raised
+            # area, a belt is REQUIRED there one level up, and it is already
+            # placed above.
+            # EXACT, from the collider, not from the footprint.  The oriented
+            # footprint is three tiles and the two boxes do not fill it: box A
+            # is 0.9 high and stops at +1.51 tiles along the coater's axis, box
+            # B reaches 2.7 high and stops at +0.32.  Banning the whole
+            # footprint at level 1 walled off the MARGIN tile the proliferator
+            # chain enters through, and the chain then had no way in at all --
+            # 22 corpus cells refused for a cell the game does not object to.
+            # So each candidate cell is asked of the real boxes, which is the
+            # same question `validate.game.belt_crossing` asks of the result.
+            pose = colliders.Placed(
+                coater.model_index,
+                *codec.tile_to_local_offset(cx, cy, Fraction(0), 1, 1),
+                Facing.EAST.value,
+            )
+            need = colliders.belt_crossing_height(coater.model_index)
+            span = (catalog.oriented_footprint(
+                catalog.SPRAY_COATER_ID, Facing.EAST.value
+            )[0] - 1) // 2 + 1
+            for dx in range(-span, span + 1):
+                for dy in range(-span, span + 1):
+                    tile = (cx + dx, cy + dy)
+                    if tile == (drop_cell[0], drop_cell[1]):
+                        continue
+                    for level in range(1, math.floor(need) + 1):
+                        probe = colliders.Placed(
+                            belt_model,
+                            *codec.tile_to_local_offset(
+                                tile[0], tile[1], Fraction(level), 1, 1
+                            ),
+                            0.0,
+                        )
+                        if colliders.belt_crossings(
+                            [probe], [pose], directly_over_only=True
+                        ):
+                            canvas.belt_ban.setdefault(tile, set()).add(level)
             out.append(_Coater(coater=idx, drop=drop, x=drop_cell[0], y=drop_cell[1]))
+
+    # EVERY drop is exempt from EVERY ban, not just its own coater's.  Coaters
+    # two tiles apart on one row overlap footprints, so coater A's band covered
+    # coater B's drop cell -- the belt was already standing there, but the
+    # router could no longer reach it and the net came back unrouted with no
+    # explanation.  A drop cell carries a required connection whichever coater
+    # is standing over it.
+    for c in out:
+        canvas.belt_ban.pop((c.x, c.y), None)
     return out
 
 

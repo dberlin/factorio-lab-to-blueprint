@@ -1708,26 +1708,43 @@ class TestASeventhItemRidesASharedLane:
     the producer row 3 lanes, and of the 15 producer pairs exactly one has a
     union that small -- a pair an edge between them forbids from sharing a row.
 
-    What closes it is that the cap is on LANES and the overflow is in ITEMS.
-    Two items ride one lane with each tapping sorter filtered to its own item,
-    which is a mechanism freeform has shipped since ``six_input_spec`` and the
-    validator already reads: ``_sorter_item`` trusts ``filter_id`` above every
-    other source, so nothing in ``validate`` had to change for this.
+    IT DOES NOT FIT, and the tests below say so now.  The reasoning above puts
+    the cap on LANES and moves the overflow into ITEMS -- two items on one lane,
+    each tapping sorter filtered -- and that closes the LANE cap without
+    touching the real one.  Every item still needs its own SORTER, every sorter
+    needs its own machine SLOT, and a slot holds exactly one connection:
+    ``entityConnPool[objId * 16 + slot]``, with ``WriteObjectConn`` evicting the
+    sitting tenant rather than refusing.  A Matrix Lab offers a lane three
+    insert poses per face, so six, and seven items need seven.
+
+    The plan this class describes was emitted for months and the seventh sorter
+    was silently dropped -- ``machine.output_removed`` is what it reads as now
+    that the slots are rationed.  Sharing is still real and still planned; what
+    is gone is the claim that it raises the ceiling past six.
+
+    So the emission half of sharing is currently UNREACHABLE on spine: the lane
+    cap and the slot cap are both six, so a spec that needs a shared lane needs
+    a seventh slot too.  ``freeform`` is in exactly the same position, and
+    ``docs/BACKLOG.md`` records the way out for both -- a machine's EAST and
+    WEST faces, which neither strategy uses.
     """
 
     @staticmethod
     def _filters(p: Placement) -> list[PlacedBuilding]:
         return [b for b in p.buildings if b.filter_id]
 
-    @pytest.mark.parametrize("power", [True, False], ids=["power", "no-power"])
-    def test_it_lays_out_and_validates_clean(self, power: bool) -> None:
-        from flab2bp.pipeline import _id_map
+    def test_a_seventh_item_is_refused_because_a_slot_holds_one_connection(self) -> None:
+        """Seven sorters into six slots, and the refusal is the honest answer.
 
-        spec = seven_item_spec()
-        p = SpineLayout(power=power).lay_out(spec, time_budget_s=0.5)
-        assert p.stats["fallback_reason"] == FALLBACK_NONE
-        report = validate.validate(p, spec, ids=_id_map(spec), expect_power=power)
-        assert report.ok, [f.message for f in report.errors]
+        THIS ASSERTED THE OPPOSITE, and what it asserted was an invalid
+        blueprint: the plan emitted, the seventh sorter had nowhere to stand,
+        and it was dropped without a word.  Now the slots are rationed the
+        shortfall surfaces as ``machine.output_removed`` -- the product's own
+        sorter is the one that loses the race -- and the layout refuses.
+        """
+        with pytest.raises(NoValidLayout) as exc:
+            SpineLayout(power=False).lay_out(seven_item_spec(), time_budget_s=0.5)
+        assert "output_removed" in str(exc.value) or "inputs_supplied" in str(exc.value)
 
     def test_exactly_one_lane_carries_two_items(self) -> None:
         """Seven items on six lanes is ONE shared lane, not seven halves."""
@@ -1739,29 +1756,17 @@ class TestASeventhItemRidesASharedLane:
         # The product owns its lane's exit, so it is never one of the pair.
         assert "universe-matrix" not in shared
 
-    def test_both_sorters_on_the_shared_lane_are_filtered(self) -> None:
-        """An unfiltered sorter on a shared lane starves the other machine.
+    def test_the_planner_still_mixes_even_though_emission_cannot_follow(self) -> None:
+        """Sharing is planned and then refused, and both halves are the point.
 
-        It grabs whatever passes, and the blueprint still pastes perfectly
-        cleanly -- which is why this is pinned rather than trusted.
+        Keeping this rather than deleting the feature's coverage: the planner's
+        arithmetic is still correct about LANES and is what a fix would build
+        on.  What it cannot do on its own is find a seventh slot.
         """
-        spec = seven_item_spec()
-        plan = fallback_plan(spec)
-        (shared,) = plan.mixed.values()
-        p = SpineLayout(power=False).lay_out(spec, time_budget_s=0.5)
-        filtered = self._filters(p)
-        assert {b.filter_id for b in filtered} == {
-            catalog.get_item_id(i) for i in shared
-        }
-        # And no sorter anywhere else got a filter it does not need: the zero is
-        # the signal `validate` uses to tell a shared lane from a plain one.
-        assert len(filtered) == 2
-
-    def test_the_two_sorters_do_not_share_an_anchor_column(self) -> None:
-        """One column each, or the second sorter lands on top of the first."""
-        p = SpineLayout(power=False).lay_out(seven_item_spec(), time_budget_s=0.5)
-        columns = {b.x for b in self._filters(p)}
-        assert len(columns) == 2
+        plan = fallback_plan(seven_item_spec())
+        assert len(plan.mixed) == 1
+        with pytest.raises(NoValidLayout):
+            SpineLayout(power=False).lay_out(seven_item_spec(), time_budget_s=0.5)
 
     def test_a_six_item_recipe_shares_nothing(self) -> None:
         """One item per lane is tried FIRST, so a spec that fits keeps its shape.
@@ -3077,16 +3082,16 @@ class TestSortersAreSizedPerItem:
         emitted at ``z = 1`` and what was missing was a route to it, which is
         now an elevated spur.  ``free-proliferation`` builds.
 
-        ``max-proliferation`` still refuses, and for a reason that is nothing to
-        do with sorter sizing: its tenth coater's spur finds no route, because a
-        belt may not fly over a machine and whether the game permits that is a
-        rule this project has not read.  See ``docs/BACKLOG.md``.
+        ``max-proliferation`` USED TO REFUSE, on its tenth coater's spur, and
+        that refusal is gone: rationing machine slots forced the lane extents to
+        cover every column a sorter might be pushed onto, which lengthened the
+        lanes and gave the spur search room it never had.  All three candidates
+        build now.
 
-        BOTH COUNTS ARE STILL ASSERTED.  Skipping the refusal would let this
-        pass over an empty set the day candidate generation changes -- the
-        failure ``mixed_height_spec`` spent a branch demonstrating, where a
-        fixture that stops containing the shape under test goes on passing.
-        The split measured stable at 0.5s, 2s and 4s, three runs each.
+        EVERY COUNT IS STILL ASSERTED.  Skipping any of them would let this pass
+        over an empty set the day candidate generation changes -- the failure
+        ``mixed_height_spec`` spent a branch demonstrating, where a fixture that
+        stops containing the shape under test goes on passing.
         """
         from flab2bp.lab.data import load_vendored
         from flab2bp.lab.url import parse_url
@@ -3119,7 +3124,9 @@ class TestSortersAreSizedPerItem:
             checked += 1
             if spec.spray_lanes:
                 sprayed += 1
-        assert (checked, refused) == (2, 1), (checked, refused)
+        assert (checked, refused) == (3, 0), (checked, refused)
         # A PROLIFERATED candidate has to be among the ones checked, or this
         # says nothing about sorter sizing on the specs that grew coaters.
-        assert sprayed == 1, sprayed
+        # BOTH of them are, now that neither refuses: 3 spray lanes on
+        # `free-proliferation` and 11 on `max-proliferation`.
+        assert sprayed == 2, sprayed

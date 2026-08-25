@@ -911,6 +911,74 @@ def test_real_blueprint_coaters_face_along_their_belt(name: str) -> None:
     assert seen >= 5, seen
 
 
+CROSSING = {"game.belt_crossing"}
+
+
+def _coater_with_a_belt_at(z: int | None) -> Placement:
+    """A coater on its belt, its proliferator drop, and optionally a belt over it.
+
+    The drop is where ``game.addon_supply`` requires it: one tile along the
+    coater's own axis, one altitude level up.
+    """
+    coater = PlacedBuilding(
+        item_id=COATER,
+        model_index=catalog_building(COATER).model_index,
+        x=5,
+        y=5,
+        width=1,
+        height=1,
+        yaw=90.0,
+    )
+    bs = [belt(5, 5), coater, belt(4, 5, 1)]
+    if z is not None:
+        bs.append(belt(5, 5, z))
+    return Placement(buildings=tuple(bs))
+
+
+def test_game_belt_crossing_fires_on_a_belt_over_a_spray_coater() -> None:
+    """Confirmed in game: the paste flags the belt directly over the coater.
+
+    A Spray Coater's collider stands 1.8975 high, so a belt owes it z = 2.  Our
+    proliferator chain crossed at z = 1.  Nothing saw it because
+    ``colliders.belt_collisions`` excuses belt addons outright and ``_stacks``
+    takes a coater out of the crossing question on ``multiLevel``.
+    """
+    r = validate(_coater_with_a_belt_at(1), only=CROSSING)
+    assert fired(r, "game.belt_crossing")
+    assert not r.ok
+    f = r.by_check("game.belt_crossing")[0]
+    assert f.detail["needs_z_above"] == "1.8975"
+    assert "Spray Coater" in f.message
+
+
+def test_game_belt_crossing_clears_a_spray_coater_at_two_levels() -> None:
+    """The rule is a price, not a prohibition.  Two levels clears 1.8975."""
+    assert not fired(validate(_coater_with_a_belt_at(2), only=CROSSING), "game.belt_crossing")
+
+
+def test_game_belt_crossing_excuses_the_coaters_own_belts() -> None:
+    """The two belts a coater is ATTACHED to are not crossings.
+
+    Its own tile at its own level is the cargo belt it rides, and the cell one
+    tile along and one level up is the proliferator area.  The area exemption
+    has to be THREE-dimensional: area 0 is the coater's own tile, so a flat
+    exemption would excuse the belt in the test above -- the very one the game
+    flagged.
+    """
+    assert not fired(validate(_coater_with_a_belt_at(None), only=CROSSING), "game.belt_crossing")
+
+
+def test_game_belt_crossing_excuses_a_belt_beside_a_coater_on_the_ground() -> None:
+    """The game's own blueprints are full of these, so convicting one is fatal.
+
+    Sixteen belts across the eight corpus coaters stand inside a coater's
+    collider footprint at the SAME level; every one of them pastes.
+    """
+    p = _coater_with_a_belt_at(None)
+    p = Placement(buildings=(*p.buildings, belt(6, 5), belt(4, 5)))
+    assert not fired(validate(p, only=CROSSING), "game.belt_crossing")
+
+
 def test_game_inserter_paste_allows_a_purely_radial_stretch() -> None:
     """0.90 world units straight out of the face is legal on paste, not on copy.
 

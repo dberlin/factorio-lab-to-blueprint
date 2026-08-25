@@ -3743,19 +3743,28 @@ def _belt_floor_over(b: PlacedBuilding) -> Fraction | None:
     model's build collider in closed form -- 3.5325 over an Assembling Machine
     Mk.II, 2.7975 over an Arc Smelter, 4.9725 over a Chemical Plant.
 
-    Three classes are excused rather than priced: a sorter and a belt addon by
-    ``PrefabDesc`` flag in both directions (147437 and 147454), and another belt
-    because :func:`flab2bp.dsp.colliders.belt_collisions` gives a belt no target
-    box at all -- belt on belt is a single-occupancy question, which the caller
-    answers separately.  ``0.0`` from ``belt_crossing_height`` is
+    Two classes are excused rather than priced: a sorter by ``PrefabDesc`` flag
+    in both directions (147437), and another belt because
+    :func:`flab2bp.dsp.colliders.belt_collisions` gives a belt no target box at
+    all -- belt on belt is a single-occupancy question, which the caller answers
+    separately.  ``0.0`` from ``belt_crossing_height`` is
     ``hasBuildCollider == false``, which skips the test entirely.
+
+    A BELT ADDON WAS THE THIRD AND IS NOT ANY MORE.  The ``AddonPass`` clause at
+    147454 excuses a belt the addon is ATTACHED to -- the belt it rides and the
+    belt on its proliferator area -- and it was read here as excusing every belt
+    at any altitude.  Confirmed in game, by paste: the failing blueprint cut
+    down to one Spray Coater, its tower and every belt within six tiles, with no
+    machines and no sorters, and the game flagged the BELT DIRECTLY OVER THE
+    COATER.  A coater's collider stands 1.8975 high, so a belt owes it ``z = 2``
+    like anything else.  The attachment cells are excused by
+    :class:`_SpurField`, which knows where they are; this function prices the
+    building.
 
     The game's bound is STRICT, so it is rounded UP to the next
     :data:`catalog.BELT_Z_QUANTUM`: 3.5325 becomes 4, not 3.5.
     """
     if catalog.is_belt(b.item_id) or catalog.is_sorter(b.item_id):
-        return None
-    if catalog.building(b.item_id).is_belt_addon:
         return None
     need = colliders.belt_crossing_height(b.model_index) + float(b.z)
     if need <= 0.0:
@@ -3798,13 +3807,45 @@ class _SpurField:
                     for x in range(b.x, b.x + b.width)
                     for y in range(b.y, b.y + b.height)
                 ]
+                priced = tiles
             else:
+                # A belt-integrated building HOLDS one tile and its collider
+                # covers its oriented footprint.  The two were the same number
+                # until a Spray Coater had to be priced: it reserves nothing --
+                # it rides the belt -- and its collider is three tiles long and
+                # 1.8975 high, so a belt crossing any of the three owes it that
+                # height.  `taken` stays the one tile it stands on; the floor
+                # goes on all three.
                 tiles = [(b.x, b.y)]
+                fw, fh = catalog.oriented_footprint(b.item_id, b.yaw)
+                priced = [
+                    (b.x + dx, b.y + dy)
+                    for dx in range(-((fw - 1) // 2), (fw - 1) // 2 + 1)
+                    for dy in range(-((fh - 1) // 2), (fh - 1) // 2 + 1)
+                ]
+                # ... except where a RAISED area attaches.  Those cells carry a
+                # connection, not a crossing, and `game.addon_supply` requires a
+                # belt on exactly one of them.  Only the raised ones: a coater's
+                # area 0 is its own tile at its own altitude, and exempting that
+                # tile would let an elevated spur fly straight over the coater,
+                # which is the defect this pricing exists to stop.  The ground
+                # belt there is held by `taken` already.
+                attached = {
+                    (
+                        b.x + round(sorter_slots.to_world((adx, ady), b.yaw)[0]),
+                        b.y + round(sorter_slots.to_world((adx, ady), b.yaw)[1]),
+                    )
+                    for adx, ady, adz in info.addon_areas
+                    if adz > 0
+                }
+                priced = [t for t in priced if t not in attached]
             floor = _belt_floor_over(b)
             for tile in tiles:
                 self.taken.setdefault(tile, set()).add(b.z)
-                if floor is not None and floor > self.floor.get(tile, _GROUND):
-                    self.floor[tile] = floor
+            if floor is not None:
+                for tile in priced:
+                    if floor > self.floor.get(tile, _GROUND):
+                        self.floor[tile] = floor
 
     def allows(self, x: int, y: int, z: Fraction) -> bool:
         """May an elevated belt tile stand at ``(x, y, z)``?"""

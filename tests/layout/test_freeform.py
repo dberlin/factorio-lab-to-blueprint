@@ -1596,6 +1596,15 @@ class TestRealUrlCandidatesAreSupplied:
         Cached because a refused candidate costs the full ``RETRY_BUDGET_S``
         before it raises, and three tests asking the same question three times
         would pay it three times over.
+
+        THE BUDGET WAS RAISED TO 8s AND PUT BACK, and the negative is recorded
+        here so nobody spends the afternoon on it again.  Once the proliferator
+        chain had to clear a Spray Coater's collider -- ``_Canvas.belt_ban``,
+        and the paste that forced it -- whether freeform finds a pack whose
+        chain routes became a coin toss, and it stayed a coin toss at sixteen
+        times the budget.  It is not a clock problem, so it is not tuned; the
+        test that depends on it carries an ``xfail`` instead, and the backlog
+        entry on freeform's chain is what removes both.
         """
         from flab2bp.lab.data import load_vendored
         from flab2bp.lab.url import parse_url
@@ -1613,6 +1622,22 @@ class TestRealUrlCandidatesAreSupplied:
         assert out, "no real candidate laid out at all; the sample is empty"
         return tuple(out)
 
+    @pytest.mark.xfail(
+        strict=False,
+        reason=(
+            "UNSTABLE, and non-strict for exactly that reason: it passes and "
+            "fails on the same code.  freeform now finds a pack whose "
+            "proliferator chain clears a Spray Coater's 1.8975 collider only "
+            "sometimes, so the sample this class insists on containing -- a "
+            "coater from a URL that asked for proliferation -- is there or not "
+            "depending on the solve.  Measured: three passes in isolation, a "
+            "failure in the full file, and the same coin toss at sixteen times "
+            "the budget.  A strict marker would be wrong in one direction and a "
+            "green test wrong in the other.  docs/BACKLOG.md carries the cause "
+            "and the two ways out; SPINE builds these candidates cleanly, so "
+            "this is freeform's routing and not the game's rule."
+        ),
+    )
     @pytest.mark.slow
     def test_every_candidate_supplies_its_coaters(self) -> None:
         """The real assertion, restored -- the gap this guarded has closed.
@@ -3967,14 +3992,28 @@ class TestAPortKnowsItsOwnAltitude:
         assert port.z == 1
         assert port.at_tile(2).z == 1, "at_tile lost the port's altitude"
 
+    @pytest.mark.xfail(
+        strict=True,
+        reason=(
+            "REGRESSED DELIBERATELY, and the reason is in docs/BACKLOG.md under "
+            "'freeform's proliferator chain crosses a Spray Coater it cannot get "
+            "around'.  This passed by routing the chain over a coater at z = 1; "
+            "the game rejects that belt -- confirmed by paste on a cut-down "
+            "blueprint carrying one coater and its tower -- because a coater's "
+            "collider stands 1.8975 high.  `_Canvas.belt_ban` now holds the band "
+            "and max-proliferation cannot be wired.  A refusal is the right "
+            "answer while the chain has nowhere to go; strict so that whoever "
+            "gives it somewhere is told to delete this marker."
+        ),
+    )
     @pytest.mark.slow
     def test_the_proliferated_candidates_build(self) -> None:
         """The spec this was found on, and it could have failed either way.
 
-        Before the fix this URL built ONLY `no-proliferator`; both proliferated
-        candidates refused with "no packing of N strips could be wired at any
-        candidate height".  So a regression puts the refusal straight back and
-        this goes red.
+        Before the port-altitude fix this URL built ONLY `no-proliferator`; both
+        proliferated candidates refused with "no packing of N strips could be
+        wired at any candidate height".  So a regression puts the refusal
+        straight back and this goes red.
         """
         built = {}
         for spec in self._candidates():
@@ -3989,6 +4028,14 @@ class TestAPortKnowsItsOwnAltitude:
             f"proliferated candidate refused again; built only {sorted(built)}"
         )
 
+    @pytest.mark.xfail(
+        strict=True,
+        reason=(
+            "Same cause as the test above: max-proliferation refuses while the "
+            "proliferator chain has no route that clears a coater's 1.8975 "
+            "collider.  See docs/BACKLOG.md."
+        ),
+    )
     @pytest.mark.slow
     def test_every_coater_on_this_spec_is_supplied(self) -> None:
         """And the coaters are actually fed, not merely placed."""
