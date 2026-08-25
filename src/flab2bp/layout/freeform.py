@@ -2247,6 +2247,7 @@ def _emit_strip(
     rates: dict[str, Fraction],
     in_rates: Mapping[str, Fraction] | None = None,
     out_rates: Mapping[str, Fraction] | None = None,
+    sprayed: Set[str] = frozenset(),
 ) -> tuple[dict[str, _Port], dict[tuple[str, str], _Port], int]:
     """Place one strip's lanes, machines and sorters.
 
@@ -2292,7 +2293,27 @@ def _emit_strip(
     for lane in s.in_above + s.in_below:
         row = s.row_of_input(lane[0])
         lane_item_of[row] = lane[0]
-        lane_tiles_of[row] = s.input_lane_tiles(lane)
+        need = s.input_lane_tiles(lane)
+        # A LANE THAT CARRIES A SPRAY COATER NEEDS TWO TILES, because a one-tile
+        # lane has no direction of flow at all.
+        #
+        # `game.addon_facing` reads the ridden belt's flow from its link graph:
+        # its successor if it has one, otherwise its predecessor.  A one-tile
+        # lane has no successor, so the direction is whichever way the ROUTER
+        # happened to arrive -- decided long after `_place_coaters` has had to
+        # commit to a yaw, and the yaw is what aims the addon's areas.  Measured
+        # on `electromagnetic-matrix/max-proliferation`: every coater convicted
+        # was on a single-tile lane fed from the south, flowing 0 against a yaw
+        # of 90.  A second tile makes the successor the lane's own next tile, so
+        # the flow is east by construction and the yaw is right by construction.
+        #
+        # One belt, no area: the tile is inside the strip's existing width, and
+        # `min(..., width)` keeps it there.  It is dead belt in the sense
+        # `input_lane_tiles` means -- no sorter draws from it -- which is the
+        # price of a coater the game will accept.
+        if need and any(it in sprayed for it in lane):
+            need = min(max(need, 2), width)
+        lane_tiles_of[row] = need
     for k, (item, _dest) in enumerate(s.out_lanes):
         lane_item_of[s.row_of_output(k)] = item
         lane_tiles_of[s.row_of_output(k)] = width
@@ -3044,6 +3065,32 @@ def _make_grid(
         if lo_x <= cx <= hi_x and lo_y <= cy <= hi_y:
             at = (cx - gx0) * xstep + (cy - gy0) * LEVELS
             occ[at : at + LEVELS] = holes
+    # THE BAND OVER A BELT ADDON AND A JUNCTION'S COLLIDER, which this used to
+    # leave out -- and leaving them out is not a missing optimisation, it is a
+    # grid that DISAGREES WITH ``_Canvas.free``.
+    #
+    # `_Canvas.free` refuses both (see `belt_ban` and `guard`); the flat grid is
+    # what A* actually searches, and it was built from `blocked`, `solid`,
+    # `keep_out` and `reserved` only.  So the search happily returned paths
+    # through a Spray Coater's 1.8975 band, `_commit_paths` asked `free` about
+    # every cell it was about to build on, found one refused, and dropped the
+    # WHOLE net -- counted in `unlinked`, which the sweep reads as "this pack
+    # could not be wired" and discards.  Round after round, because nothing in
+    # the search had learned anything: the next round produced the same path.
+    #
+    # Traced on `plastic/max-proliferation`, where every routing pass reported
+    # `5 paths, 1 unlinked` and the one was always the same net, always refused
+    # at the same cell -- `(6, 8)` at level 1, the tile a coater rides, banned
+    # in `belt_ban` and passable in the grid.  The refusal named the PACKER.
+    for (cx, cy), levels in canvas.belt_ban.items():
+        if lo_x <= cx <= hi_x and lo_y <= cy <= hi_y:
+            at = (cx - gx0) * xstep + (cy - gy0) * LEVELS
+            for clvl in levels:
+                if 0 <= clvl < LEVELS:
+                    occ[at + clvl] = 0
+    for cx, cy, clvl in canvas.guard:
+        if lo_x <= cx <= hi_x and lo_y <= cy <= hi_y and 0 <= clvl < LEVELS:
+            occ[(cx - gx0) * xstep + (cy - gy0) * LEVELS + clvl] = 0
     reserved = tuple(
         ((cx - gx0) * xstep + (cy - gy0) * LEVELS + clvl, port)
         for (cx, cy, clvl), port in canvas.reserved.items()
@@ -5969,6 +6016,7 @@ def _build(
             belt_model,
             rates,
             *per_item.get(s.group_key, ({}, {})),
+            sprayed=frozenset(spec.spray_lanes),
         )
         sorters += placed
         strip_in_ports.append(ins)
@@ -6311,6 +6359,39 @@ class _Coater:
     y: int
 
 
+def _coater_seat(port: _Port) -> tuple[int, int]:
+    """The lane tile a Spray Coater rides: its HEAD, where the items arrive.
+
+    **A coater sprays what passes THROUGH it, so everything a machine takes has
+    to reach the coater first.**  An input lane is emitted west to east and
+    linked the same way -- ``_emit_strip`` chains ``indices[k].output_obj =
+    indices[k + 1]`` -- and the feeding net sinks into ``lane_idx[row][0]``,
+    which is why ``_Port.x`` is the lane's WEST end.  So an input lane flows
+    west to east, its head is ``port.x``, and every sorter on it draws from a
+    tile at or after the head.
+
+    This used to seat the coater at ``port.x1``, the lane's east end, on the
+    reasoning that it is nearest the east margin the drop belt lived in.  That
+    is the DOWNSTREAM end: the last belt of the chain, with no ``output_obj``
+    and nothing after it.  Measured over five clean proliferated freeform
+    placements (``energy-matrix``, ``graphene``, ``plastic``, ``processor``,
+    ``magnetic-coil``), **all 12 coaters were the last belt of their own chain
+    and all 12 had zero pickups anywhere downstream of them** -- every sorter on
+    every sprayed lane drew from a tile the cargo reached before the coater.
+    The spray was applied to cargo dead-ended at the end of a belt.  Spine on
+    the same five specs seats 0 of 12 at the tail.  So the blueprint pasted, the
+    coaters were supplied, ``prolif.coaters_are_supplied`` passed -- and not one
+    proliferated recipe would have run proliferated.
+
+    The routing follows the correctness.  At ``Facing.EAST`` the drop belt is
+    one tile BEHIND the coater, so a tail seat put the drop *inside* the lane,
+    hemmed between the machine band and the neighbouring lanes' coater bans; a
+    head seat puts it one tile west of the strip, in the ``WEST_CHANNEL``
+    column, which is reserved corridor at level 0 and empty at level 1.
+    """
+    return port.x, port.y
+
+
 def _place_coaters(
     canvas: _Canvas,
     spec: BuildSpec,
@@ -6334,12 +6415,9 @@ def _place_coaters(
     * **It must be reachable from a proliferator supply.**  A coater with
       nothing feeding it sprays nothing, and the build then runs unproliferated
       while looking perfectly healthy.  Each coater gets a one-tile ``drop``
-      belt in its strip's east margin, one tile away, which a proliferator net
-      is routed to and a sorter bridges.
-
-    The east margin is reserved by ``_pack`` (each strip claims ``width +
-    MARGIN``) and nothing is emitted into it, so the drop cell is free by
-    construction rather than by luck.
+      belt one tile behind it, which a proliferator net is routed to.
+    * **It must sit at the lane's HEAD, where the items arrive.**  See
+      :func:`_coater_seat`.
     """
     coater = catalog.building(catalog.SPRAY_COATER_ID)
     wanted = set(spec.spray_lanes)
@@ -6358,8 +6436,7 @@ def _place_coaters(
             port = in_ports.get(item)
             if port is None:
                 continue
-            # East end of this lane: nearest the margin the drop belt lives in.
-            cx, cy = port.x1, port.y
+            cx, cy = _coater_seat(port)
             host = belt_at.get((cx, cy, 0))
             # WHERE the proliferator belt has to be, from the coater's own addon
             # area rather than from convenience. The game attaches an addon's

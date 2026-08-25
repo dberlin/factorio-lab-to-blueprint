@@ -3992,20 +3992,6 @@ class TestAPortKnowsItsOwnAltitude:
         assert port.z == 1
         assert port.at_tile(2).z == 1, "at_tile lost the port's altitude"
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "REGRESSED DELIBERATELY, and the reason is in docs/BACKLOG.md under "
-            "'freeform's proliferator chain crosses a Spray Coater it cannot get "
-            "around'.  This passed by routing the chain over a coater at z = 1; "
-            "the game rejects that belt -- confirmed by paste on a cut-down "
-            "blueprint carrying one coater and its tower -- because a coater's "
-            "collider stands 1.8975 high.  `_Canvas.belt_ban` now holds the band "
-            "and max-proliferation cannot be wired.  A refusal is the right "
-            "answer while the chain has nowhere to go; strict so that whoever "
-            "gives it somewhere is told to delete this marker."
-        ),
-    )
     @pytest.mark.slow
     def test_the_proliferated_candidates_build(self) -> None:
         """The spec this was found on, and it could have failed either way.
@@ -4028,14 +4014,6 @@ class TestAPortKnowsItsOwnAltitude:
             f"proliferated candidate refused again; built only {sorted(built)}"
         )
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "Same cause as the test above: max-proliferation refuses while the "
-            "proliferator chain has no route that clears a coater's 1.8975 "
-            "collider.  See docs/BACKLOG.md."
-        ),
-    )
     @pytest.mark.slow
     def test_every_coater_on_this_spec_is_supplied(self) -> None:
         """And the coaters are actually fed, not merely placed."""
@@ -4047,6 +4025,143 @@ class TestAPortKnowsItsOwnAltitude:
         # for months on an empty set.
         assert coaters, "no coater placed; the check below would assert nothing"
         bad = _full_report(p, spec, power=False).by_check("prolif.coaters_are_supplied")
+        assert not bad, "; ".join(f.message for f in bad)
+
+
+class TestTheRoutingGridAgreesWithTheCanvas:
+    """A* searches ``_make_grid``'s flat array, and it must refuse what ``free`` does.
+
+    ``_Canvas.free`` refuses a cell in a belt addon's ``belt_ban`` band and a
+    cell in a junction's ``guard``.  ``_make_grid`` flattened ``blocked``,
+    ``solid``, ``keep_out`` and ``reserved`` and nothing else, so the search saw
+    both as open ground: it returned paths straight through a Spray Coater's
+    1.8975 band, ``_commit_paths`` asked ``free`` about each cell it was about
+    to build on, found one refused, and dropped the WHOLE net into ``unlinked``.
+    The sweep reads that as "this pack could not be wired" and discards it, so
+    the refusal blamed the packer -- and nothing in the search had learned
+    anything, so the next round produced the same path.
+
+    Measured on ``plastic/max-proliferation``: every routing pass reported
+    ``5 paths, 1 unlinked``, always the same net, always refused at ``(6, 8)``
+    level 1 -- the tile a coater rides.
+    """
+
+    @staticmethod
+    def _grid_and_canvas() -> tuple[Any, _Canvas]:
+        canvas = _Canvas()
+        canvas.limit = (0, 0, 6, 4)
+        canvas.belt_ban[3, 2] = {1}
+        canvas.guard.add((5, 1, 1))
+        canvas.keep_out.add((1, 4))
+        box = (0, 0, 6, 4)
+        span = _canvas_span(canvas, box)
+        return _make_grid(canvas, box, span, {}), canvas
+
+    def test_every_cell_free_refuses_is_impassable_in_the_grid(self) -> None:
+        grid, canvas = self._grid_and_canvas()
+        disagree = [
+            (x, y, lvl)
+            for x in range(7)
+            for y in range(5)
+            for lvl in range(LEVELS)
+            if canvas.free((x, y, lvl)) != bool(grid.occ[grid.index((x, y, lvl))])
+        ]
+        assert not disagree, (
+            "the router searches a grid that disagrees with `_Canvas.free` at "
+            f"{disagree}; every such cell is a path A* will return and "
+            "`_commit_paths` will then throw the whole net away for"
+        )
+
+    def test_the_ban_and_the_guard_are_the_cells_it_used_to_miss(self) -> None:
+        """Named explicitly, so the test above cannot pass by testing nothing."""
+        grid, _ = self._grid_and_canvas()
+        assert grid.occ[grid.index((3, 2, 1))] == 0, "coater band is passable"
+        assert grid.occ[grid.index((5, 1, 1))] == 0, "junction guard is passable"
+        # And a BAND, not a floor: the levels either side of the ban stay open,
+        # because a belt beside a coater is legal and the corpus is full of them.
+        assert grid.occ[grid.index((3, 2, 0))] == 1
+        assert grid.occ[grid.index((3, 2, 2))] == 1
+
+
+class TestACoaterSpraysWhatTheMachinesActuallyEat:
+    """A Spray Coater rides the HEAD of its lane, not the tail.
+
+    An input lane is emitted west to east and linked the same way, and the net
+    feeding it sinks into ``lane_idx[row][0]`` -- so it flows west to east and
+    ``_Port.x`` is where the items arrive.  ``_place_coaters`` seated the coater
+    at ``port.x1``, the DOWNSTREAM end: the last belt of the chain, with no
+    ``output_obj`` and nothing after it.
+
+    Measured over five clean proliferated freeform placements before the fix:
+    all 12 coaters were the last belt of their own chain and all 12 had zero
+    pickups downstream.  Every sorter on every sprayed lane drew from a tile the
+    cargo reached BEFORE the coater, so the spray was applied to cargo
+    dead-ended at the end of a belt and not one proliferated recipe would have
+    run proliferated.  Spine on the same five specs seats 0 of 12 at the tail.
+
+    The blueprint pasted and ``prolif.coaters_are_supplied`` passed throughout:
+    that check asks whether proliferator reaches the coater, never whether the
+    coater reaches the machines.
+    """
+
+    URL = TestAPortKnowsItsOwnAltitude.URL
+
+    @pytest.mark.slow
+    def test_no_coater_is_the_last_belt_of_its_own_chain(self) -> None:
+        """Every proliferated candidate this URL offers, not just one.
+
+        ``free-proliferation`` is the one that BUILDS on the tail seat -- five
+        coaters, five of them tails -- so it is what makes this test able to
+        fail on the defect rather than merely on the refusal that came with it.
+        """
+        total = tails = 0
+        for spec in TestAPortKnowsItsOwnAltitude._candidates():
+            with contextlib.suppress(NoValidLayout):
+                p = FreeformLayout(power=False).lay_out(spec, time_budget_s=8.0)
+            bs = p.buildings
+            for b in bs:
+                if b.item_id != catalog.SPRAY_COATER_ID:
+                    continue
+                total += 1
+                ride = next(
+                    o
+                    for o in bs
+                    if catalog.is_belt(o.item_id) and (o.x, o.y, o.z) == (b.x, b.y, b.z)
+                )
+                nxt = ride.output_obj
+                if nxt is None or not catalog.is_belt(bs[nxt].item_id):
+                    tails += 1
+        assert total, "no coater placed anywhere; the assertion below is vacuous"
+        assert not tails, (
+            f"{tails} of {total} coaters ride the last belt of their own chain: "
+            "nothing is downstream of them, so nothing they spray ever reaches a "
+            "machine"
+        )
+
+    @pytest.mark.slow
+    def test_a_sprayed_lane_is_never_one_tile_long(self) -> None:
+        """Because a one-tile lane has no direction, and the yaw is then a guess.
+
+        ``game.addon_facing`` reads the ridden belt's flow from its successor,
+        or from its predecessor when it has none.  A one-tile lane has no
+        successor, so its direction is whichever way the ROUTER arrived --
+        settled long after ``_place_coaters`` had to choose a yaw.  On
+        ``electromagnetic-matrix/max-proliferation`` every convicted coater sat
+        on a single-tile lane fed from the south, flowing 0 against a yaw of 90.
+        """
+        spec = next(
+            c
+            for c in TestAPortKnowsItsOwnAltitude._candidates()
+            if c.label == "max-proliferation"
+        )
+        try:
+            p = FreeformLayout(power=False).lay_out(spec, time_budget_s=8.0)
+        except NoValidLayout as exc:
+            # The strategy runs `certify` on every packing it wires, so this
+            # defect reaches us as a REFUSAL naming `game.addon_facing` rather
+            # than as a placement with findings.  Same failure, one layer up.
+            pytest.fail(f"refused rather than built: {exc.reason}")
+        bad = _full_report(p, spec, power=False).by_check("game.addon_facing")
         assert not bad, "; ".join(f.message for f in bad)
 
 
