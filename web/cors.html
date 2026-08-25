@@ -1,0 +1,35 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>FactorioLab CORS / COEP reachability</title>
+<script src="./coi-serviceworker.js"></script>
+<pre id="out">running...</pre>
+<script type="module">
+const out = document.getElementById('out');
+window.__probe = { done: false, result: {} };
+const R = window.__probe.result;
+R.crossOriginIsolated = self.crossOriginIsolated;
+const urls = [
+  'https://factoriolab.github.io/data/dsp/hash.json',
+  'https://factoriolab.github.io/data/dsp/data.json',
+];
+R.fetches = {};
+(async () => {
+  for (const u of urls) {
+    const t = performance.now();
+    try {
+      const r = await fetch(u);
+      const b = await r.arrayBuffer();
+      R.fetches[u] = {
+        ok: r.ok, status: r.status, bytes: b.byteLength,
+        ms: Math.round(performance.now() - t),
+        acao: r.headers.get('access-control-allow-origin'),
+        corp: r.headers.get('cross-origin-resource-policy'),
+      };
+    } catch (e) {
+      R.fetches[u] = { ok: false, error: String(e) };
+    }
+  }
+  window.__probe.done = true;
+  out.textContent = JSON.stringify(R, null, 2);
+})();
+</script>
