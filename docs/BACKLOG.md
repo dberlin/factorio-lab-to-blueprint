@@ -712,7 +712,81 @@ a real capability loss and it is the right one: the sorter it replaces looked
 like a feed and was not one, and nothing could see that because a coater has no
 `slotPoses` for `CheckInserterDataLegal` to check.
 
-## OPEN -- the game's own rules are scattered across three forms
+## RESOLVED -- the game's own rules are scattered across three forms
+
+`src/flab2bp/dsp/rules.py` now owns what the game PERMITS, and its docstring is
+the index of every game rule in the project. Nothing changed value; ruff, mypy
+and the full suite are green on an isolated checkout carrying only the move.
+
+**The map, before the move.** Four forms, not three:
+
+* **Ported predicates** in `layout/validate.py` -- `game.inserter_data`
+  (`CheckInserterDataLegal`), `game.inserter_paste` (the `ErrorInserterData`
+  ladder), `game.inserter_skew` (`TooSkew`), `game.addon_supply`
+  (`PlanetFactory`'s addon pass), `geom.altitude_step` (`TooSteep`),
+  `geom.collide`.
+* **A ported predicate with its own geometry engine** -- `dsp/colliders.py` is
+  the whole of `EBuildCondition.Collide`: the physics query, the exemptions,
+  the spherical-to-flat argument, and `GRID_ARC` = 1.2566. It is a module and
+  not a constant because the rule is an algorithm.
+* **Extracted data** -- `dsp/data/slot_poses.json`, `colliders.json`,
+  `buildings.json`, produced by the three `scripts/extract_dsp_*.py` and served
+  by `dsp/catalog.py`.
+* **Constants with the decompiled source quoted in comments** -- spread over
+  `dsp/catalog.py` (belt slope, `BELT_Z_PER_WORLD_UNIT`, `belt_max_z`, the
+  Tesla radii), `layout/slots.py` (`SLOT_REACH`, `SLOT_ALIGN_DEG`, the sorter
+  and addon slot indices), `layout/junction.py` (the splitter slot indices,
+  `MAX_PORTS`) and eight private constants in `layout/validate.py`.
+
+**Two things were genuinely wrong, and both were name-level, not value-level.**
+
+* `24f` -- the `TooSkew` axis limit -- was written **twice**, as
+  `slots.SLOT_ALIGN_DEG` and as `validate._SKEW_AXIS_DEG`, with nothing tying
+  the two literals together. One rule, two consumers, two chances to drift.
+* `INPUT_TO_SLOT` and `OUTPUT_FROM_SLOT` were the **same two names** in
+  `layout/slots.py` (a sorter's own ends: 1 and 0) and in `layout/junction.py`
+  (a splitter's fields: 14 and 15). The splitter pair now carries a `SPLITTER_`
+  prefix.
+
+**Two unit disagreements, found by putting the rules side by side. Recorded,
+not resolved, because resolving either would change behaviour.**
+
+* `game.inserter_paste` compares a WORLD distance against `PASTE_SNAP` /
+  `PASTE_RADIAL`, but the quantity the game compares is
+  `num40 = zero.magnitude / num38` with `num38` one tile -- a distance in
+  TILES. Read literally the port's threshold is 0.8 world units where the
+  game's is 0.8 tiles = 1.005 world units, so **our check is about 25% tighter
+  than the game's**. Tighter is the safe direction (we refuse pastes the game
+  would take, never the reverse) and nothing we emit lands in the band, but it
+  is not faithful. The other half of the same ladder, `num41`, is NOT divided by
+  `num38` and so genuinely is in world units -- which is why one ladder can
+  hold both frames. `SLOT_REACH` is unambiguous by contrast:
+  `CheckInserterDataLegal` compares a bare `Vector3.magnitude` and the port
+  compares world to world.
+* `game.inserter_skew` compares a TILE distance against `SORTER_LENGTH` while
+  the game's `magnitude` there is a world `Vector3` magnitude. Whether
+  `num131`/`num132` are pre-scaled by the grid size was never recorded and the
+  decompiled source is not in this repository, so it cannot be settled from
+  here. It decides nothing we emit either way: our sorters span 1 to
+  `SORTER_MAX_REACH` = 3 tiles, which is 1.0..3.0 read as tiles and
+  1.257..3.770 read as world units, and every one of those is inside every band
+  in the table.
+
+**What did NOT move, and why.** `dsp/catalog.py` keeps the quantities that stay
+with the building table and the technology set that parameterises them --
+`MAX_BELT_SLOPE`, `BELT_Z_PER_WORLD_UNIT`, `belt_max_z`, `BeltAltitudeRules`,
+`TESLA_*`, footprint derivation. `dsp/colliders.py` keeps `Collide`.
+`dsp/data/*.json` keeps the tables. Moving the catalog constants would have
+meant a large mechanical rewrite of `freeform.py` and `spine.py` while another
+agent was editing `freeform.py`, and the value of that is a naming question,
+not a correctness one. `rules.py`'s docstring names all of them so the index is
+complete either way.
+
+**Still open, adjacent to this:** `_ADDON_AREA_RADIUS`'s companion clause,
+`Maths.DistancePointLine(...) < 0.3f`, has never been given a constant or a
+port -- only the `sqrMagnitude < 1f` radius is checked. Recorded on
+`rules.ADDON_AREA_RADIUS`.
+
 ## RESOLVED -- layout solver speed
 
 *Kept as a record of what the numbers actually said, because the first diagnosis

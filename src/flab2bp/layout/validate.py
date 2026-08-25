@@ -1494,41 +1494,18 @@ def _inserter_paste(ctx: Context) -> Iterable[Finding]:
 
     A different predicate from ``game.inserter_data`` and the one that actually
     fires on a paste, which is what our users do with what we emit.  Pasting
-    does not merely test a sorter's end -- it SNAPS it onto the slot pose::
+    does not merely test a sorter's end -- it SNAPS it onto the slot pose, and
+    then runs a three-branch ladder on the correction.  The game's own source
+    for that ladder, and the caveat about which of its two quantities is in
+    tiles and which in world units, are stated with the constants in
+    :mod:`flab2bp.dsp.rules`; this function only applies them.
 
-        transformedBy = slotPoses[inputFromSlot].GetTransformedBy(input pose)
-        zero          = transformedBy.position - lpos    # the correction
-        lpos          = transformedBy.position
-        num38         = CalcLocalGridSize(...)           # one tile
-        num40         = zero.magnitude / num38
-        num41         = Abs(Dot(transformedBy.right, zero))
-        if (num40 > 0.8f) {
-            if      (num41 >  0.5f)                 -> ErrorInserterData
-            else if (num41 <  0.1f && num40 > 1.6f) -> ErrorInserterData
-            else if (num41 >= 0.1f && num40 > 0.8f) -> ErrorInserterData
-        }
-        if (Dot(transformedBy.forward, (lpos2 - lpos).normalized) < 0f)
-                                                    -> ErrorInserterData
-
-    So the paste is *looser* than the copy check in one band and identical
-    everywhere else: a correction that is purely radial -- straight out of the
-    machine's face, ``num41`` under a tenth of a tile -- is tolerated out to 1.6
-    tiles, and anything with real sideways slide is capped at 0.5.  This is the
-    band that decides real pastes.  Measured on our own output: with every
-    machine-side slot forced to 0, 41 of 60 ends landed 1.87 tiles out and the
-    game reported "Sorter data error"; with the slot the geometry implies they
-    land 0.24 and it does not.  1.87 is over ``rules.PASTE_RADIAL`` however square the
-    approach, which is why forcing 0 could never have worked.
-
-    ``transformedBy.right`` is reconstructed as the slot's forward turned a
+    ``transformedBy.right`` is reconstructed here as the slot's forward turned a
     quarter turn in the build plane.  Unity's ``right`` is ``Cross(up, forward)``
     and every slot pose is upright to within a degree, so the two agree to
-    better than the ``0.1`` the ladder discriminates on -- and the ladder takes
-    an absolute value, so the sign the axis mapping flips does not matter.
-
-    The silo branch (``isSilo``, 2.5/2.4) is not ported: we never emit a Vertical
-    Launching Silo, and porting a branch with no way to test it is how the last
-    round of guesses got in.
+    better than the :data:`~flab2bp.dsp.rules.PASTE_LATERAL_EPS` the ladder
+    discriminates on -- and the ladder takes an absolute value, so the sign the
+    axis mapping flips does not matter.
     """
     for i, b in ctx.of_kind(Kind.SORTER):
         anchors = _anchors(b)
@@ -1621,34 +1598,14 @@ def _inserter_skew(ctx: Context) -> Iterable[Finding]:
     writing 69 of 125 backwards -- but that rests on the corpus being unanimous,
     not on any ported predicate refusing it.
 
-    ``EBuildCondition.TooSkew`` is "Deflection too much" (``偏角太大``,
-    condition 15 -- NOT ``TooBend``/``弯曲过度``)::
-
-        magnitude = (lpos2 - lpos).magnitude
-        if (magnitude > num131) -> TooFar
-        if (magnitude < num132) -> TooClose
-        ...
-        if (Quaternion.Angle(lrot, lrot2) > 30f) -> TooSkew
-        normalized4 = (lpos2 - lpos).normalized
-        num135 = Acos(Abs(Dot(normalized4, lrot .Forward()))) in degrees
-        num136 = Acos(Abs(Dot(normalized4, lrot2.Forward()))) in degrees
-        if (num135 > 24f || num136 > 24f) -> TooSkew
-
-    The thresholds move with how many ends are on a belt, which is the
-    ``flag21``/``flag22`` pair: belt-to-belt is the tightest at 0.4..5.0,
-    machine-to-machine the loosest at 0.9..7.5.
+    The game's source for the ladder, the thresholds it uses, which of its tests
+    are NOT ported and why, and the caveat about what units
+    :data:`~flab2bp.dsp.rules.SORTER_LENGTH` is in are all stated with the
+    constants in :mod:`flab2bp.dsp.rules`; this function only applies them.
 
     ``Quaternion.Angle`` between two rotations that share an up axis is the angle
     between their forwards, and both of ours are upright, so the 30-degree test
-    is done on forwards.
-
-    Two of the game's tests are NOT ported, both because they need the planet's
-    grid rather than ours: ``CalcSegmentsAcross`` counts the grid segments a
-    sorter crosses, which is a function of latitude, and the combined
-    ``sqrt(segments^2 + altitude^2)`` minimum built on it.  Our sorters never
-    change level (``sorter.altitude``) and sit on a uniform grid, where the
-    length test above is the same statement; near a pole it would not be, and
-    nothing we emit goes near one.
+    is done on forwards here.
     """
     bs = ctx.placement.buildings
     for i, b in ctx.of_kind(Kind.SORTER):
@@ -1720,12 +1677,9 @@ def _inserter_skew(ctx: Context) -> Iterable[Finding]:
 def _addon_supply(ctx: Context) -> Iterable[Finding]:
     """A belt addon is fed by BELT, and the game finds that belt by position.
 
-    Port of the addon-connection pass in ``PlanetFactory``::
-
-        Pose pose = prefabDesc.addonAreaPoses[i];
-        Pose transformedBy = pose.GetTransformedBy(entity pose);
-        if (sqrMagnitude < 1f && DistancePointLine(...) < 0.3f) -> nearest belt
-        WriteObjectConn(entityId, i, isOutput: true, num2, 13);
+    Port of the addon-connection pass in ``PlanetFactory``, whose source and
+    whose ``sqrMagnitude < 1f`` radius are stated with
+    :data:`~flab2bp.dsp.rules.ADDON_AREA_RADIUS`.
 
     So a Spray Coater carries no connection of its own -- all eight in the
     fixture corpus have ``input_obj`` and ``output_obj`` unset -- and is
