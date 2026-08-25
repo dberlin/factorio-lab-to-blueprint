@@ -1,5 +1,119 @@
 # Backlog
 
+## RESOLVED -- spine's direct inserts took machine slots and told nobody
+
+The coin-flip refusal on the user's 24-group URL --
+`no-proliferator`, `spine`, `power=0`, `game.slot_occupancy` -- was not a
+clock problem and was not intermittent in the way it looked.
+
+`_place_sorters` rations machine slots among belt taps out of a
+`claimed_slots` ledger.  That ledger was declared on the line AFTER the
+direct-insert pass, so it always started empty: a machine-to-machine sorter
+booked a slot on each of its two peers and nothing downstream could see it.
+On this URL that is a Matrix Lab fed twice on tile (1, 157) -- the insert out
+of the quantum-chip row and the lab's own input tap from the corridor the
+insert crosses, both slot 6.  The ledger is hoisted above the direct pass now
+and books both ends as each column is accepted.
+
+Refusal rate at the pipeline's own 2s budget, 20 builds an arm, jobs=5:
+
+| arm | refused | area median | wall clock median |
+|---|---|---|---|
+| master `a1fc8fc2` | 2-3 / 20 | 3897 | 18.5s |
+| + the slot fix | **0 / 20** | 3926 | 17.4s |
+
+Mid tier: 48/48 clean both arms, 46 of 48 cells byte-identical in area, one
+better and one worse (`processor/max-proliferation`, the two power settings
+moving opposite ways), net +0.3%.  INVALID 0 throughout.
+
+**Three claims in the briefing did not survive n=20**, and they matter because
+each pointed somewhere else:
+
+* "1.0s succeeded 3 of 3" -- at n=20, 1.0s is the WORST budget, 6/20 refused.
+  The rates are 1.0s 30%, 2.0s 15%, 3.0s 5%, 4.0s 10%: noise around a
+  budget-independent coin flip, not a curve.
+* "more time gives worse area" is real but it is not about area ranking --
+  see the OPEN entry below, which is where that behaviour actually lives.
+* The head plan of the sweep carried the collision essentially every time
+  (6 or 7 of 8 plans, three trials).  The intermittency was entirely in
+  whether some LATER plan of the same sweep happened to be clean.
+
+## OPEN -- spine's width sweep starves every solve, and a bigger budget makes it worse
+
+Found while measuring the entry above.  It is a separate defect and it is not
+fixed.
+
+`_solve_plan` sweeps eight candidate widths at
+`per_solve = max(time_budget_s / len(widths), 0.25)`.  On a 24-group spec a
+width needs about a second to reach a FIRST feasible solution.  At the 0.25s
+a 2s budget buys, six of the eight widths find nothing at all and the two that
+do are the two WIDEST, whose plans emit 5010 tiles against the 3504 the
+narrowest returns once it is given a second.  Measured, one solve per width:
+
+| per-solve | widths that solved | head plan emits |
+|---|---|---|
+| 0.25s | 2 of 8 (and 0 of 8 on one rep) | 5010 |
+| 0.50s | 7 of 8 | 4380 |
+| 0.75s | 8 of 8 | 3874 |
+| 1.00s | 8 of 8 | 3504 |
+| 1.50s | 8 of 8 | 3576 |
+
+That is where the impossible-looking budget curve comes from.  A 2s sweep that
+finds NOTHING falls through to the `RETRY_BUDGET_S` retry, which has ~12s and
+comes back with a good plan; a 4s sweep finds the wide plan, `lay_out` accepts
+the first valid thing it is handed, and the retry never runs.  With the slot
+fix in and 20 builds an arm: **median 3926 tiles at a 2s budget against 4770
+at 4s**.  More budget, worse layout, reproducibly.
+
+It also means the stated budget is fiction.  A "2s" spine build on this URL
+takes **17-18 seconds**, because the retry fires nearly every time.
+
+**Two fixes were built and measured and NEITHER is safe to ship.**
+
+1. *Raise the floor to 1.0s.*  One constant.  Kills the inversion outright --
+   3900 at 2s against 3952 at 4s -- and takes the wall clock from 17.4s to
+   10.1s with 0/20 refusals.  But it makes a PRE-EXISTING intermittent
+   large-tier refusal much likelier: `information-matrix/max-proliferation`
+   refuses on `game.belt_capacity` in about 1 cell-run in 20 on master
+   (1 of 18, and 1 of 24 with the slot fix) and in 6 of 18 with the floor
+   raised.  Better plans by `_measure` are not better plans by belt capacity.
+2. *Floor plus a deadline that stops the sweep once it has something.*  Best
+   numbers of anything measured -- 0/20 refused, median 3900, **2.7s** against
+   master's 18.5s.  But cutting the sweep short costs COVERAGE, and coverage is
+   the caller's only defence against emission and the self-check, which the
+   sweep cannot see: two large-tier cells went CLEAN to REFUSED.
+
+So the real blocker is underneath both: **`_measure` is not the objective.**
+It ranks plans by `max_row_width * (row heights + lane count)` while the thing
+being minimised is the emitted area, and the two disagree by enough that
+searching harder on the proxy can land on a plan the validator refuses.  Until
+the ranking and the gates agree, buying more search buys more ways to lose.
+
+## OPEN -- freeform's quantum-chip packs miss by one net, and the sweep throws the whole pack away
+
+The stress-tier refusal reads "the 15s deadline passed with no wired packing of
+40 strips".  **It is not clock-bound.**
+
+Given a 60s ceiling instead of 15s, three runs: one wired (12090 tiles, 56.1s)
+and two refused after **44.2s and 46.9s** -- with a quarter of the clock still
+unspent, under the OTHER message, "no packing of 40 strips could be wired at
+any candidate height ... That is a PACKER defect".  Four times the clock does
+not buy reliability; it buys the sweep getting far enough to say what is really
+wrong.  At 15s the deadline simply wins the race to the refusal.
+
+And the packs are not far off.  Over six 15s runs across the three candidates,
+the BEST pack of each sweep left **1, 1, 3, 3, 4 and 4 nets unrouted**, against
+worsts of 62 to 74.  A sweep that routes three or four packs and gets to within
+one net of wiring on its best, then discards it whole and tries a different
+height, is spending its clock re-deriving what it already nearly had.  The
+lever is a repair for the last few nets, or the packer arrangement that strands
+them -- not the stopwatch, and not the budget.
+
+(`_sweep`'s own comment already argued the stopwatch is not the lever, on
+`universe-matrix` numbers.  This adds the near-miss counts for `quantum-chip`
+and the 60s control that separates "ran out of clock" from "ran out of
+candidates".)
+
 ## RESOLVED -- freeform's coater was at the wrong END of its lane, and the router could not see the ban
 
 **Freeform's mid tier is 48/48 clean, INVALID 0**, from 35-36 of 48.  Paired
