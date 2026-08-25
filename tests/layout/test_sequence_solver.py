@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from fractions import Fraction
@@ -1537,6 +1538,21 @@ def test_deadline_returns_an_existing_exact_incumbent() -> None:
     ).search(max_stages=5)
     assert result.placement is exact
     assert result.termination == "deadline"
+
+
+def test_production_run_uses_supplied_absolute_deadline_without_shrinking_ledger() -> None:
+    run = _production_run(
+        two_stage_spec(),
+        time_budget_s=2.0,
+        power=False,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+        absolute_deadline=time.monotonic() - 1.0,
+    )
+
+    assert run.solver.deadline_reached()
+    assert run.ceiling == 15.0
+    assert run.solver.budget.total == 6_000_000
 
 
 def test_deadline_without_an_exact_incumbent_raises() -> None:

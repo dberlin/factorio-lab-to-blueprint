@@ -62,6 +62,7 @@ def _new_layout(
     *,
     power: bool,
     belt_vertical_construction: bool,
+    sequence_islands: int = 1,
 ) -> SpineLayout | FreeformLayout | SequencePairLayout:
     """Construct one explicitly selected layout backend."""
     if strategy == "spine":
@@ -77,6 +78,7 @@ def _new_layout(
     return SequencePairLayout(
         power=power,
         belt_vertical_construction=belt_vertical_construction,
+        islands=sequence_islands,
     )
 
 
@@ -244,6 +246,7 @@ def build(
     power: bool = True,
     candidates: int = 3,
     time_budget_s: float = 2.0,
+    sequence_islands: int = 1,
     dataset: Dataset | None = None,
     name: str = "",
     flow: Path | None = None,
@@ -273,6 +276,8 @@ def build(
     worst outcome available here, since nothing surfaces the failure until you
     are standing in front of it in game.
     """
+    if sequence_islands != 1 and strategy != "sequence-pair":
+        raise ValueError("sequence islands require --strategy sequence-pair")
     data = dataset if dataset is not None else load_vendored()
     request = parse_url(url)
     # How high a belt may go, and whether it may climb with no run at all, are
@@ -405,6 +410,7 @@ def build(
                 sname,
                 power=power,
                 belt_vertical_construction=belt_rules.vertical_construction,
+                sequence_islands=sequence_islands,
             )
             try:
                 placement = layout.lay_out(spec, time_budget_s=time_budget_s)
@@ -499,9 +505,7 @@ def build(
             data,
             chosen_spec.external_inputs,
             exempt=(
-                frozenset(
-                    i for i in chosen_spec.external_inputs if i.startswith("proliferator")
-                )
+                frozenset(i for i in chosen_spec.external_inputs if i.startswith("proliferator"))
                 if selection.uses_proliferator
                 else frozenset()
             ),

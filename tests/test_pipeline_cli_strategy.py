@@ -34,6 +34,19 @@ def test_sequence_pair_constructs_with_url_slope_rule(
     assert isinstance(layout, SequencePairLayout)
     assert layout.power is True
     assert layout.ramped is expected_ramped
+    assert layout.islands == 1
+
+
+def test_pipeline_constructs_explicit_sequence_island_count() -> None:
+    layout = pipeline._new_layout(
+        "sequence-pair",
+        power=False,
+        belt_vertical_construction=True,
+        sequence_islands=6,
+    )
+
+    assert isinstance(layout, SequencePairLayout)
+    assert layout.islands == 6
 
 
 def test_cli_passes_exact_sequence_pair_name(
@@ -56,6 +69,85 @@ def test_cli_passes_exact_sequence_pair_name(
     assert received["strategy"] == "sequence-pair"
     assert received["power"] is False
     assert capsys.readouterr().out == "BLUEPRINT\n"
+
+
+@pytest.mark.parametrize(("affinity", "expected"), ((3, 3), (64, 8)))
+def test_cli_sequence_pair_uses_affinity_capped_auto_islands(
+    monkeypatch: pytest.MonkeyPatch,
+    affinity: int,
+    expected: int,
+) -> None:
+    received: dict[str, Any] = {}
+
+    def fake_build(url: str, **kwargs: Any) -> SimpleNamespace:
+        del url
+        received.update(kwargs)
+        return SimpleNamespace(
+            blueprint="BLUEPRINT",
+            report=SimpleNamespace(errors=()),
+        )
+
+    monkeypatch.setattr(pipeline, "build", fake_build)
+    monkeypatch.setattr(cli, "_report", lambda build, *, verbose: None)
+    monkeypatch.setattr(cli, "_available_cpu_count", lambda: affinity)
+
+    assert cli.main(["iron-ingot", "--strategy", "sequence-pair"]) == 0
+    assert received["sequence_islands"] == expected
+
+
+def test_cli_sequence_island_override_accepts_sixteen(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    received: dict[str, Any] = {}
+
+    def fake_build(url: str, **kwargs: Any) -> SimpleNamespace:
+        del url
+        received.update(kwargs)
+        return SimpleNamespace(
+            blueprint="BLUEPRINT",
+            report=SimpleNamespace(errors=()),
+        )
+
+    monkeypatch.setattr(pipeline, "build", fake_build)
+    monkeypatch.setattr(cli, "_report", lambda build, *, verbose: None)
+
+    assert (
+        cli.main(
+            [
+                "iron-ingot",
+                "--strategy",
+                "sequence-pair",
+                "--sequence-islands",
+                "16",
+            ]
+        )
+        == 0
+    )
+    assert received["sequence_islands"] == 16
+
+
+@pytest.mark.parametrize(
+    "argv",
+    (
+        ["iron-ingot", "--strategy", "spine", "--sequence-islands", "2"],
+        ["iron-ingot", "--strategy", "sequence-pair", "--sequence-islands", "0"],
+        ["iron-ingot", "--strategy", "sequence-pair", "--sequence-islands", "17"],
+    ),
+)
+def test_cli_rejects_invalid_sequence_island_use(
+    monkeypatch: pytest.MonkeyPatch,
+    argv: list[str],
+) -> None:
+    monkeypatch.setattr(
+        pipeline,
+        "build",
+        lambda *args, **kwargs: pytest.fail("invalid CLI arguments reached pipeline"),
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(argv)
+
+    assert exc_info.value.code == 2
 
 
 def test_strategy_help_separates_best_from_experimental_backend(

@@ -9,6 +9,7 @@ diagnostics go to stderr.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from collections import Counter
 from pathlib import Path
@@ -113,6 +114,14 @@ def _report(build: pipeline.Build, *, verbose: bool) -> None:
             )
 
 
+def _available_cpu_count() -> int:
+    """Return the CPU set this process may actually schedule on."""
+    try:
+        return max(1, len(os.sched_getaffinity(0)))
+    except AttributeError, OSError:
+        return max(1, os.process_cpu_count() or 1)
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         prog="flab2bp",
@@ -127,6 +136,13 @@ def main(argv: list[str] | None = None) -> int:
         help="layout backend; best evaluates only spine and freeform and keeps "
         "the smallest VALID result (default); sequence-pair is an explicit "
         "experimental/audit backend",
+    )
+    ap.add_argument(
+        "--sequence-islands",
+        type=int,
+        metavar="N",
+        help="whole-solve process islands for explicit sequence-pair (default: "
+        "CPU affinity capped at 8; explicit range 1..16)",
     )
     ap.add_argument("--no-power", dest="power", action="store_false", help="omit Tesla Towers")
     ap.add_argument(
@@ -183,6 +199,15 @@ def main(argv: list[str] | None = None) -> int:
         "an invalid blueprint pastes cleanly and then does not run)",
     )
     args = ap.parse_args(argv)
+    if args.sequence_islands is not None and args.strategy != "sequence-pair":
+        ap.error("--sequence-islands requires --strategy sequence-pair")
+    if args.sequence_islands is not None and not 1 <= args.sequence_islands <= 16:
+        ap.error("--sequence-islands must be from 1 to 16")
+    sequence_islands = (
+        args.sequence_islands or min(8, _available_cpu_count())
+        if args.strategy == "sequence-pair"
+        else 1
+    )
 
     try:
         build = pipeline.build(
@@ -191,6 +216,7 @@ def main(argv: list[str] | None = None) -> int:
             power=args.power,
             candidates=args.candidates,
             time_budget_s=args.budget,
+            sequence_islands=sequence_islands,
             name=args.name,
             flow=args.flow,
             fetch_flow=args.fetch_flow,

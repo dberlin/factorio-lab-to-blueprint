@@ -101,6 +101,7 @@ class ObjectiveMode(StrEnum):
 type QualityArchiveKey = tuple[int, int, int, int, float, PlacementKey]
 
 _QUALITY_REVISIT_AFTER = 2
+_MAX_SEQUENCE_ISLANDS = 16
 
 
 @dataclass(frozen=True, slots=True)
@@ -1530,10 +1531,11 @@ def _production_run(
     strip_len: int,
     config: SequenceSolverConfig,
     belt_vertical_construction: bool = True,
+    absolute_deadline: float | None = None,
 ) -> _ProductionRun:
     started = time.monotonic()
     ceiling = max(time_budget_s, RETRY_BUDGET_S)
-    deadline = started + ceiling
+    deadline = started + ceiling if absolute_deadline is None else absolute_deadline
 
     def deadline_reached() -> bool:
         return time.monotonic() >= deadline
@@ -1883,7 +1885,7 @@ class _SolverFactory(Protocol):
 
 
 class SequencePairLayout:
-    """Audit-only closed-loop sequence-pair layout backend."""
+    """Closed-loop sequence-pair layout backend."""
 
     name = "sequence-pair"
 
@@ -1895,16 +1897,22 @@ class SequencePairLayout:
         strip_len: int = 6,
         config: SequenceSolverConfig | None = None,
         solver_factory: _SolverFactory | None = None,
+        islands: int = 1,
     ) -> None:
         if type(power) is not bool:
             raise ValueError("power mode must be a bool")
         if type(strip_len) is not int or strip_len <= 0:
             raise ValueError("strip length must be a positive integer")
+        if type(islands) is not int or not 1 <= islands <= _MAX_SEQUENCE_ISLANDS:
+            raise ValueError(f"islands must be an integer from 1 to {_MAX_SEQUENCE_ISLANDS}")
+        if solver_factory is not None and islands != 1:
+            raise ValueError("solver factory requires exactly one island")
         self._solver_factory = solver_factory
         self.power = power
         self.ramped = not belt_vertical_construction
         self.strip_len = strip_len
         self.config = config or SequenceSolverConfig()
+        self.islands = islands
 
     def lay_out(self, spec: BuildSpec, *, time_budget_s: float = 60.0) -> Placement:
         """Return only a detailed-routed, powered, validator-clean placement."""
@@ -1923,6 +1931,19 @@ class SequencePairLayout:
                 config=self.config,
             )
             return solver.search().placement
+
+        if self.islands > 1:
+            from flab2bp.layout.sequence_islands import run_sequence_islands
+
+            return run_sequence_islands(
+                spec,
+                time_budget_s=time_budget_s,
+                power=self.power,
+                belt_vertical_construction=not self.ramped,
+                strip_len=self.strip_len,
+                config=self.config,
+                islands=self.islands,
+            )
 
         run = _production_run(
             spec,
