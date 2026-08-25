@@ -777,6 +777,97 @@ def partition_strip_family(
     return result
 
 
+def split_strip_instance(
+    family: StripFamily,
+    parent: StripInstance,
+    *,
+    left_machine_count: int | None = None,
+    child_variant_indices: tuple[int, int] | None = None,
+) -> tuple[StripInstance, StripInstance]:
+    """Partition one physical range into deterministic count-realized children."""
+    if parent.family_id != family.family_id:
+        raise ValueError("split parent belongs to another logical family")
+    if parent.machine_stop > family.total_machine_count:
+        raise ValueError("split parent extends beyond its logical family")
+    if parent.machine_count < 2:
+        raise ValueError("a one-machine strip cannot be split")
+    left_count = (
+        (parent.machine_count + 1) // 2
+        if left_machine_count is None
+        else left_machine_count
+    )
+    if not 0 < left_count < parent.machine_count:
+        raise ValueError("split boundary must lie inside the parent range")
+    right_count = parent.machine_count - left_count
+
+    if child_variant_indices is None:
+        try:
+            parent_index = next(
+                index
+                for index, variant in enumerate(family.variants)
+                if variant.template_key == parent.variant.template_key
+            )
+        except StopIteration:
+            raise ValueError("split parent variant is outside its logical family") from None
+        child_variant_indices = (parent_index, parent_index)
+    if (
+        not isinstance(child_variant_indices, tuple)
+        or len(child_variant_indices) != 2
+        or any(
+            type(index) is not int or not 0 <= index < len(family.variants)
+            for index in child_variant_indices
+        )
+    ):
+        raise ValueError("split children require two pose-valid family variant indices")
+
+    children: list[StripInstance] = []
+    start = parent.machine_start
+    for count, variant_index in zip(
+        (left_count, right_count),
+        child_variant_indices,
+        strict=True,
+    ):
+        instance_id = StripInstanceId(family.family_id, start, count)
+        children.append(
+            StripInstance(
+                instance_id=instance_id,
+                machine_start=start,
+                machine_count=count,
+                variant=_variant_for_count(family.variants[variant_index], count),
+            )
+        )
+        start += count
+    return children[0], children[1]
+
+
+def merge_strip_instances(
+    family: StripFamily,
+    left: StripInstance,
+    right: StripInstance,
+) -> StripInstance | None:
+    """Merge adjacent compatible ranges, or return ``None`` when illegal."""
+    if (
+        left.family_id != family.family_id
+        or right.family_id != family.family_id
+        or left.machine_stop != right.machine_start
+        or left.variant.template_key != right.variant.template_key
+        or right.machine_stop > family.total_machine_count
+    ):
+        return None
+    machine_count = left.machine_count + right.machine_count
+    instance_id = StripInstanceId(
+        family_id=family.family_id,
+        machine_start=left.machine_start,
+        machine_count=machine_count,
+    )
+    return StripInstance(
+        instance_id=instance_id,
+        machine_start=left.machine_start,
+        machine_count=machine_count,
+        variant=_variant_for_count(left.variant, machine_count),
+    )
+
+
 def validate_instance_partition(
     family: StripFamily,
     instances: tuple[StripInstance, ...],
@@ -812,8 +903,10 @@ __all__ = [
     "default_strip_variant",
     "generate_strip_families",
     "lane_reach_profiles",
+    "merge_strip_instances",
     "partition_strip_family",
     "placement_geometry",
+    "split_strip_instance",
     "validate_instance_partition",
     "variants_for_count",
 ]

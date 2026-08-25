@@ -39,9 +39,12 @@ from flab2bp.layout.route_feedback import (
     DetailedRouteResult,
     DetailedRouteStatus,
     FeedbackState,
+    RouteFailureKind,
     decay_feedback,
     feedback_cost_context,
+    remap_feedback_nets,
     select_lns_neighbourhood,
+    select_split_candidate,
     update_feedback,
 )
 from flab2bp.layout.sequence_pair import (
@@ -50,10 +53,12 @@ from flab2bp.layout.sequence_pair import (
     DecodedPlacement,
     DirectInsertTarget,
     PlacementProblem,
+    StageBoundaryUpdate,
     align_direct_inserts,
     anneal_stage,
     derive_stage_seed,
     repair_neighbourhood,
+    split_stage_boundary,
 )
 from flab2bp.layout.strip_variants import (
     StripInstanceId,
@@ -260,6 +265,8 @@ class _RestartState:
     restart: int
     seed: int
     anneal: AnnealState
+    failure_signature: tuple[object, ...] = ()
+    feedback_stagnation: int = 0
     stages: int = 0
 
 
@@ -286,6 +293,19 @@ class _GlobalCandidate[PreparedT]:
     result: GlobalRouteResult
 
 
+StageBoundaryTransform = Callable[
+    [
+        int,
+        PlacementProblem,
+        AnnealState,
+        FeedbackState,
+        DetailedRouteResult,
+        int,
+    ],
+    StageBoundaryUpdate | None,
+]
+
+
 class SequenceSolver[PreparedT]:
     """Run deterministic discovery, then best-first closed routing stages."""
 
@@ -304,6 +324,7 @@ class SequenceSolver[PreparedT]:
             [PlacementProblem, AnnealState], tuple[DirectInsertTarget, ...]
         ]
         | None = None,
+        stage_boundary_transform: StageBoundaryTransform | None = None,
     ) -> None:
         if (
             not isinstance(heights, tuple)
@@ -319,6 +340,7 @@ class SequenceSolver[PreparedT]:
         if not isinstance(direct_targets, tuple):
             raise ValueError("direct-insert targets must be an immutable tuple")
         self.direct_targets = direct_targets
+        self.stage_boundary_transform = stage_boundary_transform
         self.direct_targets_for_state = direct_targets_for_state
         self.budget.configure(heights, self.config.final_reserve_fraction)
         feedback_factory = initial_feedback or _default_feedback
@@ -475,6 +497,28 @@ class SequenceSolver[PreparedT]:
         height_state.feedback = update_feedback(
             decay_feedback(height_state.feedback), detailed.routing
         )
+        signature = tuple(
+            (
+                failure.net_id.logical,
+                failure.kind,
+                tuple(net.logical for net in failure.blocking_nets),
+            )
+            for failure in detailed.routing.failures
+            if failure.kind
+            not in {
+                RouteFailureKind.STATIC_ACCESS,
+                RouteFailureKind.BUDGET,
+            }
+        )
+        if signature:
+            restart.feedback_stagnation = (
+                restart.feedback_stagnation + 1
+                if signature == restart.failure_signature
+                else 1
+            )
+        else:
+            restart.feedback_stagnation = 0
+        restart.failure_signature = signature
         neighbourhood = frozenset[int]()
         next_anneal = annealed.final_state
         if 0 < detailed.routing.failed_count <= 3:
@@ -496,6 +540,42 @@ class SequenceSolver[PreparedT]:
                     stage_index=annealed.final_state.stage_index,
                     variant_indices=repaired.variant_indices,
                 )
+        if self.stage_boundary_transform is not None and signature:
+            transformed = self.stage_boundary_transform(
+                height_state.height,
+                problem,
+                next_anneal,
+                height_state.feedback,
+                detailed.routing,
+                restart.feedback_stagnation,
+            )
+            if transformed is not None:
+                for other in height_state.restarts:
+                    if other is restart:
+                        continue
+                    sibling = self.stage_boundary_transform(
+                        height_state.height,
+                        problem,
+                        other.anneal,
+                        height_state.feedback,
+                        detailed.routing,
+                        restart.feedback_stagnation,
+                    )
+                    if sibling is None or sibling.problem != transformed.problem:
+                        raise ValueError(
+                            "stage-boundary transform must rebuild every restart identically"
+                        )
+                    other.anneal = sibling.state
+                    other.failure_signature = ()
+                    other.feedback_stagnation = 0
+                height_state.problem = transformed.problem
+                next_anneal = transformed.state
+                height_state.feedback = remap_feedback_nets(
+                    height_state.feedback,
+                    (),
+                )
+                restart.failure_signature = ()
+                restart.feedback_stagnation = 0
 
         restart.anneal = next_anneal
         restart.stages += 1
@@ -667,18 +747,40 @@ def _selected_strips(
     problem: PlacementProblem,
     variant_indices: tuple[int, ...],
 ) -> list[Strip]:
-    """Project one complete search selection into exact Freeform physical plans."""
+    """Project current instance ranges into exact Freeform physical plans."""
     problem.selected_sizes(variant_indices)
     if not problem.variant_tables:
         return list(strips)
-    if len(strips) != problem.size:
-        raise ValueError("physical strip plan size must match the placement problem")
+    exact_templates = {
+        (strip.family_id, strip.machine_start, strip.machines): strip
+        for strip in strips
+        if strip.family_id is not None
+    }
+    family_templates = {
+        strip.family_id: strip
+        for strip in strips
+        if strip.family_id is not None
+    }
     selected: list[Strip] = []
-    for index, strip in enumerate(strips):
+    for index, instance_id in enumerate(problem.instance_ids):
+        strip = exact_templates.get(
+            (
+                instance_id.family_id,
+                instance_id.machine_start,
+                instance_id.machine_count,
+            )
+        ) or family_templates.get(instance_id.family_id)
+        if strip is None:
+            if len(strips) != problem.size:
+                raise ValueError(
+                    "physical strip templates do not cover the placement instances"
+                )
+            strip = strips[index]
         variant = problem.variant(index, variant_indices[index])
         selected.append(
             replace(
                 strip,
+                machines=instance_id.machine_count,
                 mw=variant.footprint_width,
                 mh=variant.footprint_height,
                 yaw=variant.yaw,
@@ -687,6 +789,8 @@ def _selected_strips(
                 lane_plan=variant.lane_plan,
                 attachment_plan=variant.attachment_plan,
                 box_height=variant.box_height,
+                family_id=instance_id.family_id,
+                machine_start=instance_id.machine_start,
             )
         )
     return selected
@@ -891,35 +995,50 @@ def _production_run(
                 area_lower_bound=area_lower_bound,
                 instance_ids=instance_ids,
                 variant_tables=variant_tables,
+                logical_net_families=tuple(
+                    (
+                        instance_ids[source].family_id,
+                        instance_ids[destination].family_id,
+                    )
+                    for source, destination in nets
+                ),
             )
             for height in heights
         }
     finally:
         telemetry.planning_time_s += time.monotonic() - planning_started
-    selected_cache: dict[tuple[int, ...], tuple[Strip, ...]] = {}
-    direct_cache: dict[tuple[int, ...], tuple[DirectInsertTarget, ...]] = {}
+    selected_cache: dict[
+        tuple[tuple[StripInstanceId, ...], tuple[int, ...]],
+        tuple[Strip, ...],
+    ] = {}
+    direct_cache: dict[
+        tuple[tuple[StripInstanceId, ...], tuple[int, ...]],
+        tuple[DirectInsertTarget, ...],
+    ] = {}
 
     def selected_strips(
         problem: PlacementProblem,
         variant_indices: tuple[int, ...],
     ) -> tuple[Strip, ...]:
-        selected = selected_cache.get(variant_indices)
+        key = (problem.instance_ids, variant_indices)
+        selected = selected_cache.get(key)
         if selected is None:
             selected = tuple(_selected_strips(strips, problem, variant_indices))
-            selected_cache[variant_indices] = selected
+            selected_cache[key] = selected
         return selected
 
     def selected_direct_targets(
         problem: PlacementProblem,
         variant_indices: tuple[int, ...],
     ) -> tuple[DirectInsertTarget, ...]:
-        targets = direct_cache.get(variant_indices)
+        key = (problem.instance_ids, variant_indices)
+        targets = direct_cache.get(key)
         if targets is None:
             selected = selected_strips(problem, variant_indices)
             targets = _direct_alignment_targets(
                 _direct_net_candidates(list(selected), spec)
             )
-            direct_cache[variant_indices] = targets
+            direct_cache[key] = targets
         return targets
 
     def direct_targets_for_state(
@@ -996,9 +1115,26 @@ def _production_run(
             if deadline_reached():
                 result = _empty_global_result(exhausted=False, cancelled=True)
             else:
+                current_nets = tuple(net.net_id for net in candidate.prepared.nets)
+                expected_weights = {
+                    net: weight
+                    for net in current_nets
+                    if (
+                        weight := feedback.logical_net_weight.get(
+                            net.logical,
+                            0.0,
+                        )
+                    )
+                    > 0.0
+                }
+                routed_feedback = (
+                    feedback
+                    if dict(feedback.net_weight) == expected_weights
+                    else remap_feedback_nets(feedback, current_nets)
+                )
                 result = route_global(
                     candidate.prepared,
-                    feedback,
+                    routed_feedback,
                     allowance,
                     max_rounds=config.global_rounds,
                     cancelled=deadline_reached,
@@ -1052,6 +1188,51 @@ def _production_run(
         finally:
             telemetry.validation_time_s += time.monotonic() - validation_started
 
+    family_by_id = {
+        family.family_id: family
+        for family in generate_strip_families(spec)
+    }
+
+    def split_stage(
+        height: int,
+        problem: PlacementProblem,
+        state: AnnealState,
+        _feedback: FeedbackState,
+        result: DetailedRouteResult,
+        stagnation: int,
+    ) -> StageBoundaryUpdate | None:
+        target = select_split_candidate(
+            result,
+            problem.instance_ids,
+            stagnation=stagnation,
+            split_after=2,
+        )
+        if target is None:
+            return None
+        family = family_by_id[problem.instance_ids[target].family_id]
+        transformed = split_stage_boundary(
+            problem,
+            state,
+            family,
+            target,
+            right_variant_offset=1 if len(family.variants) > 1 else 0,
+        )
+        selected = _selected_strips(
+            strips,
+            transformed.problem,
+            transformed.state.variant_indices,
+        )
+        rebuilt = replace(
+            transformed.problem,
+            sizes=tuple(_box(strip) for strip in selected),
+            nets=tuple(_nets_between(selected)),
+        )
+        problems[height] = rebuilt
+        selected_cache.clear()
+        direct_cache.clear()
+        return StageBoundaryUpdate(rebuilt, transformed.state)
+
+
     expansion_total = max(
         _ROUTING_BUDGET,
         int(_ROUTING_EXPANSIONS_PER_SECOND * ceiling),
@@ -1070,6 +1251,7 @@ def _production_run(
         deadline_reached=deadline_reached,
         direct_targets=direct_targets,
         direct_targets_for_state=direct_targets_for_state,
+        stage_boundary_transform=split_stage,
     )
     return _ProductionRun(
         solver=solver,

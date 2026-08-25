@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import fields
+from dataclasses import fields, replace
 from fractions import Fraction
 
 import pytest
@@ -16,8 +16,10 @@ from flab2bp.layout.strip_variants import (
     default_strip_variant,
     generate_strip_families,
     lane_reach_profiles,
+    merge_strip_instances,
     partition_strip_family,
     placement_geometry,
+    split_strip_instance,
     validate_instance_partition,
     variants_for_count,
 )
@@ -330,3 +332,96 @@ def test_freeform_compatibility_selects_the_pose_default_deterministically() -> 
     assert [strip.machines for strip in first] == [2, 1]
     assert all(strip.yaw == default.yaw for strip in first)
     assert all((strip.mw, strip.mh) == (7, 3) for strip in first)
+
+
+@pytest.mark.parametrize("machine_count", range(1, 13))
+def test_repeated_stage_boundary_splits_conserve_every_machine_and_lane(
+    machine_count: int,
+) -> None:
+    family = _family(
+        _single_machine_spec("assembling-machine-1", count=machine_count)
+    )
+    instances = list(
+        partition_strip_family(family, max_machine_count=machine_count)
+    )
+    original_lane_ids = tuple(
+        lane.lane_id for lane in family.input_lanes + family.output_lanes
+    )
+
+    while (
+        parent_index := next(
+            (
+                index
+                for index, instance in enumerate(instances)
+                if instance.machine_count > 1
+            ),
+            -1,
+        )
+    ) >= 0:
+        parent = instances[parent_index]
+        instances[parent_index : parent_index + 1] = split_strip_instance(
+            family,
+            parent,
+        )
+        validate_instance_partition(family, tuple(instances))
+
+    ordinals = [
+        ordinal
+        for instance in instances
+        for ordinal in range(instance.machine_start, instance.machine_stop)
+    ]
+    assert ordinals == list(range(machine_count))
+    assert len(instances) <= machine_count
+    assert sum(instance.machine_count for instance in instances) == machine_count
+    assert all(
+        tuple(plan.lane.lane_id for plan in instance.variant.attachment_plan)
+        == original_lane_ids
+        for instance in instances
+    )
+
+    while len(instances) > 1:
+        merged = merge_strip_instances(family, instances[0], instances[1])
+        assert merged is not None
+        instances[:2] = [merged]
+        validate_instance_partition(family, tuple(instances))
+
+    assert (instances[0].machine_start, instances[0].machine_count) == (
+        0,
+        machine_count,
+    )
+
+
+def test_three_machine_split_is_two_plus_one_and_merge_is_its_exact_inverse() -> None:
+    family = _family(_single_machine_spec("assembling-machine-1", count=3))
+    (parent,) = partition_strip_family(family, max_machine_count=3)
+
+    left, right = split_strip_instance(family, parent)
+
+    assert (left.machine_start, left.machine_count) == (0, 2)
+    assert (right.machine_start, right.machine_count) == (2, 1)
+    assert merge_strip_instances(family, left, right) == parent
+
+
+def test_merge_rejects_non_adjacent_or_pose_incompatible_ranges() -> None:
+    family = _family(_single_machine_spec("assembling-machine-1", count=4))
+    (parent,) = partition_strip_family(family, max_machine_count=4)
+    left, right = split_strip_instance(family, parent)
+    alternate = variants_for_count(family, right.machine_count)[1]
+    incompatible = StripInstance(
+        instance_id=right.instance_id,
+        machine_start=right.machine_start,
+        machine_count=right.machine_count,
+        variant=alternate,
+    )
+    displaced = StripInstance(
+        instance_id=replace(
+            right.instance_id,
+            machine_start=right.machine_start + 1,
+        ),
+        machine_start=right.machine_start + 1,
+        machine_count=right.machine_count,
+        variant=right.variant,
+    )
+
+    assert merge_strip_instances(family, left, incompatible) is None
+    assert merge_strip_instances(family, left, displaced) is None

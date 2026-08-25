@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from types import MappingProxyType
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from flab2bp.layout.strip_variants import StripFamilyId, StripInstanceId
 
 from .sequence_pair import (
     DecodedPlacement,
@@ -24,6 +28,19 @@ class NetRole(StrEnum):
     PROLIFERATOR = "proliferator"
 
 
+@dataclass(frozen=True, slots=True)
+class LogicalNetId:
+    """Stable recipe edge identity shared by all current physical branches."""
+
+    source_family: StripFamilyId | None
+    destination_family: StripFamilyId | None
+    item: str
+    role: NetRole
+    legacy_source_strip: int | None = None
+    legacy_destination_strip: int | None = None
+    legacy_ordinal: int | None = None
+
+
 @dataclass(frozen=True, order=True, slots=True)
 class NetId:
     source_strip: int | None
@@ -31,6 +48,20 @@ class NetId:
     item: str
     role: NetRole
     ordinal: int
+    logical_id: LogicalNetId | None = None
+
+    @property
+    def logical(self) -> LogicalNetId:
+        """Return stable identity, deriving a legacy-local key when unavailable."""
+        return self.logical_id or LogicalNetId(
+            None,
+            None,
+            self.item,
+            self.role,
+            self.source_strip,
+            self.destination_strip,
+            self.ordinal,
+        )
 
 
 class RouteFailureKind(StrEnum):
@@ -96,7 +127,7 @@ class FeedbackState:
     outline: tuple[int, int]
     net_weight: Mapping[NetId, float]
     cell_history: Mapping[Cell, float]
-
+    logical_net_weight: Mapping[LogicalNetId, float] = field(default_factory=dict)
     def __post_init__(self) -> None:
         if (
             not isinstance(self.outline, tuple)
@@ -107,6 +138,7 @@ class FeedbackState:
         width, height = self.outline
         net_weight = dict(self.net_weight)
         cell_history = dict(self.cell_history)
+        logical_net_weight = dict(self.logical_net_weight)
         if any(
             not isinstance(net, NetId)
             or not math.isfinite(value)
@@ -114,6 +146,19 @@ class FeedbackState:
             for net, value in net_weight.items()
         ):
             raise ValueError("feedback net weights must be finite values from 0 to 8")
+        if any(
+            not isinstance(net, LogicalNetId)
+            or not math.isfinite(value)
+            or not 0.0 <= value <= _MAX_NET_WEIGHT
+            for net, value in logical_net_weight.items()
+        ):
+            raise ValueError("logical feedback weights must be finite values from 0 to 8")
+        if not logical_net_weight:
+            for net, value in net_weight.items():
+                logical_net_weight[net.logical] = max(
+                    logical_net_weight.get(net.logical, 0.0),
+                    value,
+                )
         if any(
             not _valid_cell(cell, width, height) or not math.isfinite(value) or value < 0.0
             for cell, value in cell_history.items()
@@ -123,17 +168,32 @@ class FeedbackState:
             )
         object.__setattr__(self, "net_weight", MappingProxyType(net_weight))
         object.__setattr__(self, "cell_history", MappingProxyType(cell_history))
+        object.__setattr__(
+            self,
+            "logical_net_weight",
+            MappingProxyType(logical_net_weight),
+        )
 
     @classmethod
     def empty(cls, outline: tuple[int, int]) -> FeedbackState:
         """Return an empty feedback snapshot for ``outline``."""
-        return cls(outline=outline, net_weight={}, cell_history={})
+        return cls(
+            outline=outline,
+            net_weight={},
+            cell_history={},
+            logical_net_weight={},
+        )
 
     def for_outline(self, outline: tuple[int, int]) -> FeedbackState:
         """Preserve logical net weights and clear spatial history on outline change."""
         if outline == self.outline:
             return self
-        return FeedbackState(outline=outline, net_weight=self.net_weight, cell_history={})
+        return FeedbackState(
+            outline=outline,
+            net_weight=self.net_weight,
+            cell_history={},
+            logical_net_weight=self.logical_net_weight,
+        )
 
 
 def update_feedback(state: FeedbackState, result: DetailedRouteResult) -> FeedbackState:
@@ -143,14 +203,26 @@ def update_feedback(state: FeedbackState, result: DetailedRouteResult) -> Feedba
         return state
 
     net_weight = dict(state.net_weight)
+    logical_net_weight = dict(state.logical_net_weight)
     cell_history = dict(state.cell_history)
     width, height = state.outline
     for failure in geometric:
-        net_weight[failure.net_id] = min(_MAX_NET_WEIGHT, net_weight.get(failure.net_id, 0.0) + 1.0)
+        logical = failure.net_id.logical
+        weight = min(
+            _MAX_NET_WEIGHT,
+            logical_net_weight.get(logical, 0.0) + 1.0,
+        )
+        logical_net_weight[logical] = weight
+        net_weight[failure.net_id] = weight
         for cell in failure.wall:
             if _valid_cell(cell, width, height):
                 cell_history[cell] = cell_history.get(cell, 0.0) + 1.0
-    return FeedbackState(state.outline, net_weight, cell_history)
+    return FeedbackState(
+        state.outline,
+        net_weight,
+        cell_history,
+        logical_net_weight,
+    )
 
 
 def decay_feedback(state: FeedbackState) -> FeedbackState:
@@ -160,12 +232,87 @@ def decay_feedback(state: FeedbackState) -> FeedbackState:
         for net, value in state.net_weight.items()
         if (decayed := value * _DECAY_FACTOR) >= _PRUNE_BELOW
     }
+    logical_net_weight = {
+        net: decayed
+        for net, value in state.logical_net_weight.items()
+        if (decayed := value * _DECAY_FACTOR) >= _PRUNE_BELOW
+    }
     cell_history = {
         cell: decayed
         for cell, value in state.cell_history.items()
         if (decayed := value * _DECAY_FACTOR) >= _PRUNE_BELOW
     }
-    return FeedbackState(state.outline, net_weight, cell_history)
+    return FeedbackState(
+        state.outline,
+        net_weight,
+        cell_history,
+        logical_net_weight,
+    )
+
+
+def remap_feedback_nets(
+    state: FeedbackState,
+    nets: tuple[NetId, ...],
+    *,
+    outline: tuple[int, int] | None = None,
+) -> FeedbackState:
+    """Broadcast logical criticality onto current physical nets after rebuilding."""
+    if not isinstance(nets, tuple) or any(not isinstance(net, NetId) for net in nets):
+        raise ValueError("feedback remapping requires an immutable physical net tuple")
+    target_outline = state.outline if outline is None else outline
+    physical = {
+        net: weight
+        for net in nets
+        if (weight := state.logical_net_weight.get(net.logical, 0.0))
+        >= _PRUNE_BELOW
+    }
+    return FeedbackState(
+        target_outline,
+        physical,
+        {},
+        state.logical_net_weight,
+    )
+
+
+def select_split_candidate(
+    result: DetailedRouteResult,
+    instances: tuple[StripInstanceId, ...],
+    *,
+    stagnation: int,
+    split_after: int,
+) -> int | None:
+    """Select one implicated multi-machine instance after focused stagnation."""
+    if type(stagnation) is not int or stagnation < 0:
+        raise ValueError("split stagnation must be a non-negative integer")
+    if type(split_after) is not int or split_after <= 0:
+        raise ValueError("split threshold must be a positive integer")
+    if not isinstance(instances, tuple):
+        raise ValueError("split candidates must be an immutable instance tuple")
+    if stagnation < split_after:
+        return None
+    implicated: set[int] = set()
+    for failure in result.failures:
+        if failure.kind not in _GEOMETRIC_FAILURES:
+            continue
+        _add_net_endpoints(implicated, failure.net_id, len(instances))
+        for blocker in failure.blocking_nets:
+            _add_net_endpoints(implicated, blocker, len(instances))
+    candidates = [
+        index
+        for index in implicated
+        if instances[index].machine_count > 1
+    ]
+    if not candidates:
+        return None
+    return min(
+        candidates,
+        key=lambda index: (
+            -instances[index].machine_count,
+            instances[index].family_id,
+            instances[index].machine_start,
+            index,
+        ),
+    )
 
 
 def feedback_cost_context(
@@ -174,17 +321,35 @@ def feedback_cost_context(
     direct_targets: tuple[DirectInsertTarget, ...] = (),
 ) -> PlacementCostContext:
     """Build immutable candidate-independent feedback scoring inputs."""
-    weight_by_endpoints: dict[tuple[int, int], float] = {}
-    for net, weight in state.net_weight.items():
-        if net.source_strip is None or net.destination_strip is None:
-            continue
-        endpoints = (net.source_strip, net.destination_strip)
-        weight_by_endpoints[endpoints] = weight_by_endpoints.get(endpoints, 0.0) + weight
+    if problem.logical_net_families:
+        weight_by_families: dict[tuple[object, object], float] = {}
+        for logical, weight in state.logical_net_weight.items():
+            if logical.source_family is None or logical.destination_family is None:
+                continue
+            families = (logical.source_family, logical.destination_family)
+            weight_by_families[families] = (
+                weight_by_families.get(families, 0.0) + weight
+            )
+        net_weights = tuple(
+            1.0 + weight_by_families.get(families, 0.0)
+            for families in problem.logical_net_families
+        )
+    else:
+        weight_by_endpoints: dict[tuple[int, int], float] = {}
+        for net, weight in state.net_weight.items():
+            if net.source_strip is None or net.destination_strip is None:
+                continue
+            endpoints = (net.source_strip, net.destination_strip)
+            weight_by_endpoints[endpoints] = (
+                weight_by_endpoints.get(endpoints, 0.0) + weight
+            )
+        net_weights = tuple(
+            1.0 + weight_by_endpoints.get(endpoints, 0.0)
+            for endpoints in problem.nets
+        )
 
     return PlacementCostContext(
-        net_weights=tuple(
-            1.0 + weight_by_endpoints.get(endpoints, 0.0) for endpoints in problem.nets
-        ),
+        net_weights=net_weights,
         net_pairs=problem.nets,
         history_outline=state.outline,
         history_summed_area=_summed_area_table(state),

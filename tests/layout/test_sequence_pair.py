@@ -43,9 +43,17 @@ from flab2bp.layout.sequence_pair import (
     decode_sequence_pair,
     decode_state,
     derive_stage_seed,
+    merge_stage_boundary,
     repair_neighbourhood,
+    split_stage_boundary,
 )
-from flab2bp.layout.strip_variants import StripInstanceId, StripVariant, _variant_id
+from flab2bp.layout.strip_variants import (
+    StripInstanceId,
+    StripVariant,
+    _variant_id,
+    partition_strip_family,
+    variants_for_count,
+)
 from tests.layout.test_freeform import two_stage_spec
 from tests.layout.test_strip_variants import _family, _single_machine_spec
 
@@ -750,6 +758,84 @@ def test_alignment_accepts_smaller_selected_variant_without_default_overlap() ->
 
 
 
+def test_stage_boundary_split_rebuilds_every_cardinality_owned_array() -> None:
+    family = _family(_single_machine_spec("assembling-machine-1", count=4))
+    parent = partition_strip_family(family, max_machine_count=4)[0]
+    parent_variants = variants_for_count(family, 3)
+    unrelated_variants = variants_for_count(family, 1)
+    problem = PlacementProblem(
+        sizes=(
+            (parent_variants[0].box_width + 2, parent_variants[0].box_height + 1),
+            (
+                unrelated_variants[0].box_width + 2,
+                unrelated_variants[0].box_height + 1,
+            ),
+        ),
+        nets=((0, 1), (1, 0)),
+        outline_height=40,
+        area_lower_bound=1,
+        instance_ids=(
+            replace(parent.instance_id, machine_count=3),
+            StripInstanceId(family.family_id, 3, 1),
+        ),
+        variant_tables=(parent_variants, unrelated_variants),
+    )
+    state = AnnealState(
+        pair=SequencePair((1, 0), (0, 1)),
+        gaps=GapProfile((2, 3), (4, 1)),
+        base_seed=71,
+        stage_index=5,
+        variant_indices=(0, 1),
+    )
+
+    split = split_stage_boundary(problem, state, family, 0)
+
+    assert tuple(
+        (instance.machine_start, instance.machine_count)
+        for instance in split.problem.instance_ids
+    ) == ((0, 2), (2, 1), (3, 1))
+    assert split.state.pair == SequencePair((2, 0, 1), (0, 1, 2))
+    assert split.state.gaps == GapProfile((2, 0, 3), (4, 0, 1))
+    assert split.state.variant_indices == (0, 0, 1)
+    assert split.state.base_seed == 71
+    assert split.state.stage_index == 5
+    assert split.problem.nets == ((0, 2), (1, 2), (2, 0), (2, 1))
+    assert all(
+        len(table[0].machine_origins_x) == instance.machine_count
+        for instance, table in zip(
+            split.problem.instance_ids,
+            split.problem.variant_tables,
+            strict=True,
+        )
+    )
+
+
+def test_compatible_stage_boundary_merge_is_exact_split_inverse() -> None:
+    family = _family(_single_machine_spec("assembling-machine-1", count=3))
+    (parent,) = partition_strip_family(family, max_machine_count=3)
+    variants = variants_for_count(family, 3)
+    problem = PlacementProblem(
+        sizes=((variants[0].box_width + 2, variants[0].box_height + 1),),
+        nets=((0, 0),),
+        outline_height=40,
+        area_lower_bound=1,
+        instance_ids=(parent.instance_id,),
+        variant_tables=(variants,),
+    )
+    state = AnnealState(
+        pair=SequencePair((0,), (0,)),
+        gaps=GapProfile((3,), (4,)),
+        base_seed=91,
+        stage_index=7,
+        variant_indices=(1,),
+    )
+
+    split = split_stage_boundary(problem, state, family, 0)
+    merged = merge_stage_boundary(split.problem, split.state, family, 0, 1)
+
+    assert merged is not None
+    assert merged.problem == problem
+    assert merged.state == state
 def test_every_move_preserves_both_permutations_and_gap_bounds() -> None:
     state = AnnealState.initial(size=8, seed=41)
     for kind in MoveKind:

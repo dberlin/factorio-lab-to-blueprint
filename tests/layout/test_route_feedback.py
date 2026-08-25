@@ -6,12 +6,15 @@ from flab2bp.layout.route_feedback import (
     DetailedRouteResult,
     DetailedRouteStatus,
     FeedbackState,
+    LogicalNetId,
     NetFailure,
     NetId,
     NetRole,
     RouteFailureKind,
     decay_feedback,
     feedback_cost_context,
+    remap_feedback_nets,
+    select_split_candidate,
     update_feedback,
 )
 from flab2bp.layout.sequence_pair import (
@@ -22,6 +25,7 @@ from flab2bp.layout.sequence_pair import (
     cheap_energy,
     decode_sequence_pair,
 )
+from flab2bp.layout.strip_variants import StripFamilyId, StripInstanceId
 
 
 def test_net_identity_distinguishes_roles_and_ordinals() -> None:
@@ -263,3 +267,67 @@ def test_feedback_context_clips_fully_y_overflowed_net_box_to_zero() -> None:
     empty = feedback_cost_context(FeedbackState.empty(state.outline), problem)
 
     assert cheap_energy(problem, decoded, context) == cheap_energy(problem, decoded, empty)
+
+
+def test_logical_feedback_survives_physical_child_reindexing() -> None:
+    source_family = StripFamilyId("source#0", 0)
+    destination_family = StripFamilyId("destination#0", 0)
+    logical = LogicalNetId(
+        source_family,
+        destination_family,
+        "iron-ingot",
+        NetRole.INTERNAL,
+    )
+    parent_net = NetId(0, 1, "iron-ingot", NetRole.INTERNAL, 0, logical)
+    state = update_feedback(
+        FeedbackState.empty((20, 20)),
+        _detailed_failure(RouteFailureKind.CONGESTION_WALL, net=parent_net),
+    )
+    child_nets = (
+        NetId(0, 2, "iron-ingot", NetRole.INTERNAL, 0, logical),
+        NetId(1, 2, "iron-ingot", NetRole.INTERNAL, 0, logical),
+    )
+
+    remapped = remap_feedback_nets(state, child_nets, outline=(24, 20))
+
+    assert remapped.logical_net_weight[logical] == 1.0
+    assert {remapped.net_weight[net] for net in child_nets} == {1.0}
+    assert not remapped.cell_history
+
+
+def test_split_candidate_requires_repeated_geometric_feedback_and_machine_capacity() -> None:
+    family = StripFamilyId("source#0", 0)
+    instances = (
+        StripInstanceId(family, 0, 3),
+        StripInstanceId(StripFamilyId("other#0", 0), 0, 1),
+    )
+    failure = _detailed_failure(
+        RouteFailureKind.SEALED_POCKET,
+        net=NetId(0, 1, "iron-ingot", NetRole.INTERNAL, 0),
+    )
+
+    assert select_split_candidate(failure, instances, stagnation=1, split_after=2) is None
+    assert select_split_candidate(failure, instances, stagnation=2, split_after=2) == 0
+
+
+def test_logical_family_weights_reach_every_reindexed_physical_edge() -> None:
+    source = StripFamilyId("source#0", 0)
+    destination = StripFamilyId("destination#0", 0)
+    logical = LogicalNetId(source, destination, "iron-ingot", NetRole.INTERNAL)
+    state = FeedbackState(
+        outline=(20, 20),
+        net_weight={},
+        cell_history={},
+        logical_net_weight={logical: 2.0},
+    )
+    problem = PlacementProblem(
+        sizes=((2, 2), (2, 2), (2, 2)),
+        nets=((0, 2), (1, 2)),
+        outline_height=20,
+        area_lower_bound=12,
+        logical_net_families=((source, destination), (source, destination)),
+    )
+
+    context = feedback_cost_context(state, problem)
+
+    assert context.net_weights == (3.0, 3.0)

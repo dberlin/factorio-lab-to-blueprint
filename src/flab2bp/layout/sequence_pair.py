@@ -13,6 +13,8 @@ from flab2bp.dsp import catalog
 
 if TYPE_CHECKING:
     from flab2bp.layout.strip_variants import (
+        StripFamily,
+        StripFamilyId,
         StripInstanceId,
         StripVariant,
         StripVariantId,
@@ -80,6 +82,10 @@ class PlacementProblem:
     outline_height: int
     area_lower_bound: int
     instance_ids: tuple[StripInstanceId, ...] = ()
+    logical_net_families: tuple[
+        tuple[StripFamilyId | None, StripFamilyId | None],
+        ...,
+    ] = ()
     variant_tables: tuple[tuple[StripVariant, ...], ...] = ()
 
     def __post_init__(self) -> None:
@@ -126,6 +132,32 @@ class PlacementProblem:
                     raise ValueError(
                         "problem default sizes must contain variant index zero"
                     )
+        if (
+            not isinstance(self.logical_net_families, tuple)
+            or (
+                self.logical_net_families
+                and len(self.logical_net_families) != len(self.nets)
+            )
+            or any(
+                not isinstance(families, tuple) or len(families) != 2
+                for families in self.logical_net_families
+            )
+        ):
+            raise ValueError(
+                "logical net families must match the immutable placement nets"
+            )
+        if self.instance_ids and self.logical_net_families:
+            expected_families = tuple(
+                (
+                    self.instance_ids[source].family_id,
+                    self.instance_ids[destination].family_id,
+                )
+                for source, destination in self.nets
+            )
+            if self.logical_net_families != expected_families:
+                raise ValueError(
+                    "logical net families must match current physical endpoints"
+                )
 
     @property
     def size(self) -> int:
@@ -441,6 +473,19 @@ class AnnealState:
             base_seed=seed,
             variant_indices=(0,) * size,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class StageBoundaryUpdate:
+    """A complete fixed-cardinality problem/state rebuilt between SA stages."""
+
+    problem: PlacementProblem
+    state: AnnealState
+
+    def __post_init__(self) -> None:
+        if self.problem.size != len(self.state.pair.positive):
+            raise ValueError("stage-boundary problem and state cardinality disagree")
+        self.problem._validate_variant_indices(self.state.variant_indices)
 
 
 @dataclass(frozen=True, order=True, slots=True)
@@ -1190,6 +1235,301 @@ def repair_neighbourhood(
         base_seed=seed,
         variant_indices=variant_indices,
     )
+
+
+def split_stage_boundary(
+    problem: PlacementProblem,
+    state: AnnealState,
+    family: StripFamily,
+    strip: int,
+    *,
+    right_variant_offset: int = 0,
+) -> StageBoundaryUpdate:
+    """Replace one instance with exact child ranges between annealing stages."""
+    from flab2bp.layout.strip_variants import (
+        StripInstance,
+        split_strip_instance,
+    )
+
+    problem._validate_variant_indices(state.variant_indices)
+    if not problem.variant_tables:
+        raise ValueError("stage-boundary split requires a variant-aware problem")
+    if type(strip) is not int or not 0 <= strip < problem.size:
+        raise ValueError("split target must identify a placement strip")
+    if type(right_variant_offset) is not int or right_variant_offset < 0:
+        raise ValueError("right child variant offset must be non-negative")
+    instance_id = problem.instance_ids[strip]
+    if instance_id.family_id != family.family_id:
+        raise ValueError("split target belongs to another logical family")
+    selected = problem.variant(strip, state.variant_indices[strip])
+    parent = StripInstance(
+        instance_id=instance_id,
+        machine_start=instance_id.machine_start,
+        machine_count=instance_id.machine_count,
+        variant=selected,
+    )
+    family_templates = {
+        variant.template_key: index
+        for index, variant in enumerate(family.variants)
+    }
+    try:
+        selected_family_index = family_templates[selected.template_key]
+    except KeyError:
+        raise ValueError("selected split variant is outside its logical family") from None
+    right_family_index = (
+        selected_family_index + right_variant_offset
+    ) % len(family.variants)
+    left, right = split_strip_instance(
+        family,
+        parent,
+        child_variant_indices=(selected_family_index, right_family_index),
+    )
+
+    parent_table = problem.variant_tables[strip]
+    child_tables = tuple(
+        _realized_table_in_parent_order(family, parent_table, child.machine_count)
+        for child in (left, right)
+    )
+    selected_keys = (left.variant.template_key, right.variant.template_key)
+    child_indices = tuple(
+        next(
+            index
+            for index, variant in enumerate(table)
+            if variant.template_key == selected_key
+        )
+        for table, selected_key in zip(child_tables, selected_keys, strict=True)
+    )
+    width_padding = problem.sizes[strip][0] - parent_table[0].box_width
+    height_padding = problem.sizes[strip][1] - parent_table[0].box_height
+    child_sizes = tuple(
+        (table[0].box_width + width_padding, table[0].box_height + height_padding)
+        for table in child_tables
+    )
+
+    def expanded(index: int) -> tuple[int, ...]:
+        if index < strip:
+            return (index,)
+        if index == strip:
+            return (strip, strip + 1)
+        return (index + 1,)
+
+    pair = SequencePair(
+        tuple(child for index in state.pair.positive for child in expanded(index)),
+        tuple(child for index in state.pair.negative for child in expanded(index)),
+    )
+    gaps = GapProfile(
+        state.gaps.east[:strip] + (state.gaps.east[strip], 0) + state.gaps.east[strip + 1 :],
+        state.gaps.north[:strip]
+        + (state.gaps.north[strip], 0)
+        + state.gaps.north[strip + 1 :],
+    )
+    variant_indices = (
+        state.variant_indices[:strip]
+        + child_indices
+        + state.variant_indices[strip + 1 :]
+    )
+    nets = _remap_nets(problem.nets, expanded)
+    rebuilt_ids = (
+        problem.instance_ids[:strip]
+        + (left.instance_id, right.instance_id)
+        + problem.instance_ids[strip + 1 :]
+    )
+    rebuilt = PlacementProblem(
+        sizes=problem.sizes[:strip] + child_sizes + problem.sizes[strip + 1 :],
+        nets=nets,
+        outline_height=problem.outline_height,
+        area_lower_bound=problem.area_lower_bound,
+        instance_ids=rebuilt_ids,
+        variant_tables=problem.variant_tables[:strip]
+        + child_tables
+        + problem.variant_tables[strip + 1 :],
+        logical_net_families=(
+            tuple(
+                (
+                    rebuilt_ids[source].family_id,
+                    rebuilt_ids[destination].family_id,
+                )
+                for source, destination in nets
+            )
+            if problem.logical_net_families
+            else ()
+        ),
+    )
+    return StageBoundaryUpdate(
+        problem=rebuilt,
+        state=AnnealState(
+            pair=pair,
+            gaps=gaps,
+            base_seed=state.base_seed,
+            stage_index=state.stage_index,
+            variant_indices=variant_indices,
+        ),
+    )
+
+
+def merge_stage_boundary(
+    problem: PlacementProblem,
+    state: AnnealState,
+    family: StripFamily,
+    left_strip: int,
+    right_strip: int,
+) -> StageBoundaryUpdate | None:
+    """Collapse compatible adjacent children between stages."""
+    from flab2bp.layout.strip_variants import (
+        StripInstance,
+        merge_strip_instances,
+    )
+
+    problem._validate_variant_indices(state.variant_indices)
+    if (
+        not problem.variant_tables
+        or type(left_strip) is not int
+        or type(right_strip) is not int
+        or right_strip != left_strip + 1
+        or not 0 <= left_strip < right_strip < problem.size
+    ):
+        return None
+    left_id, right_id = problem.instance_ids[left_strip : right_strip + 1]
+    left_variant = problem.variant(left_strip, state.variant_indices[left_strip])
+    right_variant = problem.variant(right_strip, state.variant_indices[right_strip])
+    left = StripInstance(
+        left_id,
+        left_id.machine_start,
+        left_id.machine_count,
+        left_variant,
+    )
+    right = StripInstance(
+        right_id,
+        right_id.machine_start,
+        right_id.machine_count,
+        right_variant,
+    )
+    merged = merge_strip_instances(family, left, right)
+    if merged is None:
+        return None
+    for permutation in (state.pair.positive, state.pair.negative):
+        position = permutation.index(left_strip)
+        if position + 1 >= len(permutation) or permutation[position + 1] != right_strip:
+            return None
+    if state.gaps.east[right_strip] or state.gaps.north[right_strip]:
+        return None
+
+    merged_table = _realized_table_in_parent_order(
+        family,
+        problem.variant_tables[left_strip],
+        merged.machine_count,
+    )
+    selected_index = next(
+        index
+        for index, variant in enumerate(merged_table)
+        if variant.template_key == merged.variant.template_key
+    )
+    width_padding = (
+        problem.sizes[left_strip][0]
+        - problem.variant_tables[left_strip][0].box_width
+    )
+    height_padding = (
+        problem.sizes[left_strip][1]
+        - problem.variant_tables[left_strip][0].box_height
+    )
+
+    def collapsed(index: int) -> tuple[int, ...]:
+        if index == right_strip:
+            return ()
+        if index < right_strip:
+            return (index,)
+        return (index - 1,)
+
+    pair = SequencePair(
+        tuple(child for index in state.pair.positive for child in collapsed(index)),
+        tuple(child for index in state.pair.negative for child in collapsed(index)),
+    )
+    nets = _remap_nets(problem.nets, collapsed)
+    rebuilt_ids = (
+        problem.instance_ids[:left_strip]
+        + (merged.instance_id,)
+        + problem.instance_ids[right_strip + 1 :]
+    )
+    rebuilt = PlacementProblem(
+        sizes=problem.sizes[:left_strip]
+        + (
+            (
+                merged_table[0].box_width + width_padding,
+                merged_table[0].box_height + height_padding,
+            ),
+        )
+        + problem.sizes[right_strip + 1 :],
+        nets=nets,
+        outline_height=problem.outline_height,
+        area_lower_bound=problem.area_lower_bound,
+        instance_ids=rebuilt_ids,
+        variant_tables=problem.variant_tables[:left_strip]
+        + (merged_table,)
+        + problem.variant_tables[right_strip + 1 :],
+        logical_net_families=(
+            tuple(
+                (
+                    rebuilt_ids[source].family_id,
+                    rebuilt_ids[destination].family_id,
+                )
+                for source, destination in nets
+            )
+            if problem.logical_net_families
+            else ()
+        ),
+    )
+    return StageBoundaryUpdate(
+        problem=rebuilt,
+        state=AnnealState(
+            pair=pair,
+            gaps=GapProfile(
+                state.gaps.east[:left_strip]
+                + (state.gaps.east[left_strip],)
+                + state.gaps.east[right_strip + 1 :],
+                state.gaps.north[:left_strip]
+                + (state.gaps.north[left_strip],)
+                + state.gaps.north[right_strip + 1 :],
+            ),
+            base_seed=state.base_seed,
+            stage_index=state.stage_index,
+            variant_indices=state.variant_indices[:left_strip]
+            + (selected_index,)
+            + state.variant_indices[right_strip + 1 :],
+        ),
+    )
+
+
+def _realized_table_in_parent_order(
+    family: StripFamily,
+    parent_table: tuple[StripVariant, ...],
+    machine_count: int,
+) -> tuple[StripVariant, ...]:
+    from flab2bp.layout.strip_variants import variants_for_count
+
+    realized = {
+        variant.template_key: variant
+        for variant in variants_for_count(family, machine_count)
+    }
+    try:
+        return tuple(realized[variant.template_key] for variant in parent_table)
+    except KeyError:
+        raise ValueError("variant table contains a pose outside its logical family") from None
+
+
+def _remap_nets(
+    nets: tuple[tuple[int, int], ...],
+    remap: Callable[[int], tuple[int, ...]],
+) -> tuple[tuple[int, int], ...]:
+    rebuilt: list[tuple[int, int]] = []
+    seen: set[tuple[int, int]] = set()
+    for source, destination in nets:
+        for new_source in remap(source):
+            for new_destination in remap(destination):
+                net = (new_source, new_destination)
+                if net not in seen:
+                    seen.add(net)
+                    rebuilt.append(net)
+    return tuple(rebuilt)
 
 
 def _repair_permutation(

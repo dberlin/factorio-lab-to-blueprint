@@ -89,6 +89,7 @@ from flab2bp.layout.route_feedback import (
     Cell,
     DetailedRouteResult,
     DetailedRouteStatus,
+    LogicalNetId,
     NetFailure,
     NetId,
     NetRole,
@@ -104,6 +105,7 @@ if TYPE_CHECKING:
         LaneAttachmentPlan,
         LanePlan,
         LaneSorterAttachment,
+        StripFamilyId,
     )
 
 #: Free tiles reserved on a strip's east and south faces.  One is enough for a
@@ -772,6 +774,8 @@ class Strip:
     #: when this is set, and the extra column is the belt's.  Clearance is what
     #: the collider needs, so a belt inside it would paste as a collision.
     flank_outputs: bool = False
+    family_id: StripFamilyId | None = None
+    machine_start: int = 0
 
     @property
     def in_lanes(self) -> tuple[str, ...]:
@@ -1664,13 +1668,14 @@ def plan_strips(spec: BuildSpec, *, strip_len: int = 6) -> list[Strip]:
         group = groups[family.group_key]
         if family.variants:
             variant = default_strip_variant(family)
-            machine_counts = tuple(
-                instance.machine_count
-                for instance in partition_strip_family(
-                    family,
-                    max_machine_count=max(1, strip_len),
-                    variant_id=variant.variant_id,
-                )
+            instances = partition_strip_family(
+                family,
+                max_machine_count=max(1, strip_len),
+                variant_id=variant.variant_id,
+            )
+            instance_ranges = tuple(
+                (instance.machine_start, instance.machine_count)
+                for instance in instances
             )
             footprint_width = variant.footprint_width
             footprint_height = variant.footprint_height
@@ -1694,6 +1699,12 @@ def plan_strips(spec: BuildSpec, *, strip_len: int = 6) -> list[Strip]:
                 base + (1 if index < extra else 0)
                 for index in range(instance_count)
             )
+            machine_start = 0
+            instance_ranges_list: list[tuple[int, int]] = []
+            for machine_count in machine_counts:
+                instance_ranges_list.append((machine_start, machine_count))
+                machine_start += machine_count
+            instance_ranges = tuple(instance_ranges_list)
             footprint_width = group.width
             footprint_height = group.height
             yaw = group.yaw
@@ -1709,7 +1720,7 @@ def plan_strips(spec: BuildSpec, *, strip_len: int = 6) -> list[Strip]:
                 + len(outputs)
                 + len(inputs_below)
             )
-        for machine_count in machine_counts:
+        for machine_start, machine_count in instance_ranges:
             _check_shared_lane_capacity(
                 group,
                 inputs_above + inputs_below,
@@ -1736,6 +1747,8 @@ def plan_strips(spec: BuildSpec, *, strip_len: int = 6) -> list[Strip]:
                     box_height=box_height,
                     mode_params=family.mode_params,
                     flank_outputs=family.flank_outputs,
+                    family_id=family.family_id,
+                    machine_start=machine_start,
                 )
             )
     return strips
@@ -7378,7 +7391,21 @@ def _prepare_routing_problem(
         )
         destination_strip = strip_of_belt.get(net.dst.belt)
         identity = (source_strip, destination_strip, net.item, role)
-        net_id = NetId(*identity, ordinal=ordinals[identity])
+        logical_id = LogicalNetId(
+            strips[source_strip].family_id if source_strip is not None else None,
+            (
+                strips[destination_strip].family_id
+                if destination_strip is not None
+                else None
+            ),
+            net.item,
+            role,
+        )
+        net_id = NetId(
+            *identity,
+            ordinal=ordinals[identity],
+            logical_id=logical_id,
+        )
         ordinals[identity] += 1
         prepared_nets.append(
             _PreparedNet(

@@ -35,6 +35,7 @@ from flab2bp.layout.route_feedback import (
     NetRole,
     RouteFailureKind,
     select_lns_neighbourhood,
+    select_split_candidate,
 )
 from flab2bp.layout.sequence_pair import (
     AnnealConfig,
@@ -49,12 +50,14 @@ from flab2bp.layout.sequence_pair import (
     PlacementProblem,
     SearchEnergy,
     SequencePair,
+    StageBoundaryUpdate,
     anneal_stage,
     apply_variant_move,
     decode_sequence_pair,
     decode_state,
     derive_stage_seed,
     repair_neighbourhood,
+    split_stage_boundary,
 )
 from flab2bp.layout.sequence_solver import (
     DetailedStageResult,
@@ -72,6 +75,11 @@ from flab2bp.layout.sequence_solver import (
     _selected_direct_targets,
     _selected_strips,
     _variant_search_inputs,
+)
+from flab2bp.layout.strip_variants import (
+    generate_strip_families,
+    partition_strip_family,
+    variants_for_count,
 )
 from flab2bp.rates.candidates import build_candidates
 from flab2bp.spec import BuildSpec
@@ -687,6 +695,238 @@ def test_production_preparation_receives_the_complete_selected_physical_plan(
             variant.lane_plan,
             variant.attachment_plan,
         )
+
+
+def test_selected_strips_rebuild_from_child_instance_ranges() -> None:
+    spec = two_stage_spec()
+    strips = plan_strips(spec, strip_len=6)
+    instance_ids, variant_tables = _variant_search_inputs(
+        spec,
+        strips,
+        strip_len=6,
+    )
+    family = next(
+        family
+        for family in generate_strip_families(spec)
+        if family.total_machine_count > 1
+    )
+    target = next(
+        index
+        for index, instance in enumerate(instance_ids)
+        if instance.family_id == family.family_id and instance.machine_count > 1
+    )
+    problem = PlacementProblem(
+        sizes=tuple(_box(strip) for strip in strips),
+        nets=tuple(_nets_between(strips)),
+        outline_height=40,
+        area_lower_bound=1,
+        instance_ids=instance_ids,
+        variant_tables=variant_tables,
+    )
+    state = AnnealState.initial(problem.size, seed=17)
+
+    split = split_stage_boundary(problem, state, family, target)
+    selected = _selected_strips(strips, split.problem, split.state.variant_indices)
+
+    assert [strip.machines for strip in selected[target : target + 2]] == [
+        split.problem.instance_ids[target].machine_count,
+        split.problem.instance_ids[target + 1].machine_count,
+    ]
+    assert [strip.machine_start for strip in selected[target : target + 2]] == [
+        split.problem.instance_ids[target].machine_start,
+        split.problem.instance_ids[target + 1].machine_start,
+    ]
+    assert all(strip.family_id is not None for strip in selected)
+
+
+def test_prepared_physical_nets_keep_stable_logical_family_edges() -> None:
+    spec = two_stage_spec()
+    strips = plan_strips(spec, strip_len=6)
+    height = sum(_box(strip)[1] for strip in strips)
+    prepared = _prepare_routing_problem(
+        spec,
+        strips,
+        _greedy_pack(strips, height),
+        power=False,
+    )
+
+    assert prepared.nets
+    for net in prepared.nets:
+        logical = net.net_id.logical_id
+        assert logical is not None
+        assert logical.source_family == (
+            strips[net.net_id.source_strip].family_id
+            if net.net_id.source_strip is not None
+            else None
+        )
+        assert logical.destination_family == (
+            strips[net.net_id.destination_strip].family_id
+            if net.net_id.destination_strip is not None
+            else None
+        )
+
+
+
+def test_production_stage_boundary_rebuilds_preparation_for_children() -> None:
+    spec = two_stage_spec()
+    run = _production_run(
+        spec,
+        time_budget_s=2.0,
+        power=False,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+    )
+    height_state = next(
+        height
+        for height in run.solver._heights
+        if any(
+            instance.machine_count > 1
+            for instance in height.problem.instance_ids
+        )
+    )
+    problem = height_state.problem
+    target = next(
+        index
+        for index, instance in enumerate(problem.instance_ids)
+        if instance.machine_count > 1
+    )
+    state = height_state.restarts[0].anneal
+    result = DetailedRouteResult(
+        status=DetailedRouteStatus.STRANDED,
+        routed=(),
+        failures=(
+            NetFailure(
+                net_id=NetId(
+                    target,
+                    target,
+                    "forced-split",
+                    NetRole.INTERNAL,
+                    0,
+                ),
+                kind=RouteFailureKind.CONGESTION_WALL,
+                wall=((0, 0, 0),),
+                blocking_nets=(),
+                expansions=0,
+            ),
+        ),
+        iterations=1,
+        expansions=0,
+    )
+    transform = run.solver.stage_boundary_transform
+    assert transform is not None
+
+    transformed = transform(
+        height_state.height,
+        problem,
+        state,
+        height_state.feedback,
+        result,
+        2,
+    )
+
+    assert transformed is not None
+    assert transformed.problem.size == problem.size + 1
+    decoded = decode_state(transformed.problem, transformed.state)
+    candidate = run.solver.adapters.prepare(height_state.height, decoded)
+    assert candidate.problem == transformed.problem
+    assert len(candidate.selected_strips) == transformed.problem.size
+    assert tuple(
+        (strip.family_id, strip.machine_start, strip.machines)
+        for strip in candidate.selected_strips
+    ) == tuple(
+        (
+            instance.family_id,
+            instance.machine_start,
+            instance.machine_count,
+        )
+        for instance in transformed.problem.instance_ids
+    )
+
+
+def test_feedback_stagnation_rebuilds_the_next_fixed_cardinality_stage() -> None:
+    family = next(
+        family
+        for family in generate_strip_families(two_stage_spec())
+        if family.total_machine_count > 1
+    )
+    (instance,) = partition_strip_family(
+        family,
+        max_machine_count=family.total_machine_count,
+    )
+    variants = variants_for_count(family, family.total_machine_count)
+    problem = PlacementProblem(
+        sizes=((variants[0].box_width, variants[0].box_height),),
+        nets=((0, 0),),
+        outline_height=40,
+        area_lower_bound=1,
+        instance_ids=(instance.instance_id,),
+        variant_tables=(variants,),
+    )
+    prepared_sizes: list[int] = []
+    transformed_stagnation: list[int] = []
+
+    def prepare(_height: int, decoded: DecodedPlacement) -> DecodedPlacement:
+        prepared_sizes.append(len(decoded.x))
+        return decoded
+
+    failure = _routing(
+        DetailedRouteStatus.STRANDED,
+        geometric_failure=True,
+    )
+
+    def transform(
+        _height: int,
+        stage_problem: PlacementProblem,
+        stage_state: AnnealState,
+        _feedback: FeedbackState,
+        result: DetailedRouteResult,
+        stagnation: int,
+    ) -> StageBoundaryUpdate | None:
+        transformed_stagnation.append(stagnation)
+        target = select_split_candidate(
+            result,
+            stage_problem.instance_ids,
+            stagnation=stagnation,
+            split_after=2,
+        )
+        return (
+            None
+            if target is None
+            else split_stage_boundary(stage_problem, stage_state, family, target)
+        )
+
+    solver = SequenceSolver(
+        heights=(40,),
+        problem_for_height=lambda _height: problem,
+        adapters=StageAdapters(
+            prepare=prepare,
+            global_route=lambda _prepared, _feedback, _allowance: _global(),
+            detailed_route=lambda _prepared, _allowance: DetailedStageResult(
+                failure,
+                None,
+            ),
+            validate=lambda _placement: ValidationVerdict(False, ("unreachable",)),
+        ),
+        expansion_budget=ExpansionBudget(100),
+        config=SequenceSolverConfig(
+            stages=3,
+            moves_per_stage=1,
+            restarts_per_height=1,
+            global_elites=1,
+        ),
+        stage_boundary_transform=transform,
+    )
+
+    with pytest.raises(NoValidLayout):
+        solver.search(max_stages=3)
+    assert transformed_stagnation == [1, 2, 1]
+    assert prepared_sizes == [1, 1, 2]
+    assert solver._heights[0].problem.size == 2
+    assert (
+        solver._heights[0].restarts[0].anneal.base_seed
+        == solver._heights[0].restarts[0].seed
+    )
+    assert solver._heights[0].restarts[0].anneal.stage_index == 3
 
 
 @pytest.mark.parametrize("power", [False, True])
