@@ -1089,6 +1089,141 @@ class TestOneBeltIsNotEnough:
             _allocate_lanes(groups, edges, rows, set(), spec, dict.fromkeys(copies, 99))
 
 
+class TestBundleLaneSeating:
+    @staticmethod
+    def _quantum_chip_spec() -> BuildSpec:
+        from flab2bp.bench.corpus import entry
+        from flab2bp.lab.data import load_vendored
+        from flab2bp.lab.url import parse_url
+        from flab2bp.rates.candidates import build_candidates
+
+        candidates = build_candidates(
+            load_vendored(), parse_url(entry("quantum-chip").url), count=3
+        ).candidates
+        buildable = [candidate for candidate in candidates if not candidate.spray_lanes]
+        return min(buildable, key=lambda candidate: candidate.machine_count)
+
+    @pytest.mark.slow
+    def test_degraded_quantum_row_keeps_parallel_oil_bundles(self) -> None:
+        """The real mixed-height row is feasible without flattening either oil."""
+        from flab2bp.layout.spine import _adapt, _emit, _lane_requirements, _Plan
+        from flab2bp.pipeline import _id_map
+
+        spec = self._quantum_chip_spec()
+        groups, edges = _adapt(spec)
+        rows = [
+            ["plasma-refining#11"],
+            ["copper-ingot#2", "energetic-graphite#3", "iron-ingot#7"],
+            ["high-purity-silicon#6", "plastic#12"],
+            ["titanium-ingot#18"],
+            ["sulfuric-acid#15"],
+            ["graphene#5"],
+            ["organic-crystal#9"],
+            ["circuit-board#1", "microcrystalline-component#8"],
+            ["processor#13"],
+            ["glass#4", "titanium-crystal#16"],
+            ["casimir-crystal#0"],
+            ["titanium-glass#17"],
+            ["plane-filter#10"],
+            ["quantum-chip#14"],
+        ]
+
+        lanes, mixed, copies = _lane_requirements(groups, edges, rows, set(), spec)
+
+        assert copies["crude-oil"] == 2
+        assert copies["refined-oil"] == 2
+        assert sum(corridor.count("crude-oil") for corridor in lanes) == 2
+        assert sum(corridor.count("refined-oil") for corridor in lanes) == 8
+        assert mixed == {}
+
+        placement = _emit(spec, _Plan(rows=rows, lanes=lanes, mixed=mixed), power=True)
+        report = validate.validate(
+            placement, spec, ids=_id_map(spec), expect_power=True
+        )
+        capacity_errors = [
+            finding for finding in report.errors if finding.check == "flow.belt_capacity"
+        ]
+        assert not capacity_errors, "\n".join(
+            finding.message for finding in capacity_errors
+        )
+
+    def test_bounded_dfs_matches_brute_force_for_generated_bundle_cases(self) -> None:
+        """For at most six bundles, DFS finds a seat iff exhaustive enumeration does."""
+        import random
+
+        from flab2bp.layout.spine import _seat_nonmixed_bands
+
+        rng = random.Random(0x5E47)
+
+        def fits(
+            band: set[str], charges: dict[str, int], copies: dict[str, int], reach: int
+        ) -> bool:
+            depths = sorted(
+                (charges[item] for item in band for _ in range(copies[item])),
+                reverse=True,
+            )
+            return all(charge + depth + 1 <= reach for depth, charge in enumerate(depths))
+
+        for case in range(512):
+            item_count = rng.randrange(7)
+            items = [f"item-{index}" for index in range(item_count)]
+            reach = rng.randrange(1, 4)
+            copies = dict.fromkeys(items, 1)
+            for _ in range(rng.randrange(7 - item_count)):
+                if not items:
+                    break
+                copies[rng.choice(items)] += 1
+            upper_charge = {item: rng.randrange(reach + 1) for item in items}
+            lower_charge = {item: rng.randrange(reach + 1) for item in items}
+            prefers_upper = {item: bool(rng.randrange(2)) for item in items}
+
+            feasible = False
+            for mask in range(1 << item_count):
+                upper = {item for index, item in enumerate(items) if mask & (1 << index)}
+                lower = set(items) - upper
+                if fits(upper, upper_charge, copies, reach) and fits(
+                    lower, lower_charge, copies, reach
+                ):
+                    feasible = True
+                    break
+
+            seated = _seat_nonmixed_bands(
+                items,
+                prefers_upper,
+                upper_charge,
+                lower_charge,
+                reach,
+                copies,
+            )
+            assert (seated is not None) is feasible, (
+                f"case {case}: items={items}, copies={copies}, "
+                f"upper={upper_charge}, lower={lower_charge}, reach={reach}"
+            )
+            if seated is not None:
+                upper, lower = seated
+                assert upper.isdisjoint(lower)
+                assert upper | lower == set(items)
+                assert fits(upper, upper_charge, copies, reach)
+                assert fits(lower, lower_charge, copies, reach)
+
+    def test_bounded_dfs_breaks_equal_choices_deterministically(self) -> None:
+        from flab2bp.layout.spine import _seat_nonmixed_bands
+
+        args = (
+            ["beta", "alpha"],
+            {"alpha": True, "beta": True},
+            {"alpha": 0, "beta": 0},
+            {"alpha": 0, "beta": 0},
+            1,
+            {"alpha": 1, "beta": 1},
+        )
+        assert [_seat_nonmixed_bands(*args) for _ in range(3)] == [
+            ({"beta"}, {"alpha"}),
+            ({"beta"}, {"alpha"}),
+            ({"beta"}, {"alpha"}),
+        ]
+
+
 class TestPower:
     def test_no_power_emits_zero_towers(self) -> None:
         p = SpineLayout(power=False).lay_out(magnetic_ring_spec(), time_budget_s=0.5)

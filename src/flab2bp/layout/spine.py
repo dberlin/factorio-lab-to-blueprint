@@ -440,6 +440,51 @@ def _fits_band(
     return all(c + j + 1 <= reach for j, c in enumerate(combined))
 
 
+def _seat_nonmixed_bands(
+    items: list[str],
+    prefers_upper: dict[str, bool],
+    upper_charge: dict[str, int],
+    lower_charge: dict[str, int],
+    reach: int,
+    copies: dict[str, int],
+) -> tuple[set[str], set[str]] | None:
+    """Seat every whole item bundle on one of two bands, if that is possible.
+
+    ``items`` is already in the allocator's deterministic constraint order.
+    Trying its preferred side first preserves that order as the tie-break while
+    the bounded backtrack makes the non-mixed search complete.  A row can expose
+    at most ``2 * reach`` lanes, so the usual reach of three admits at most six
+    bundles and 64 side assignments.
+    """
+    if sum(copies.get(item, 1) for item in items) > 2 * reach:
+        return None
+
+    upper: set[str] = set()
+    lower: set[str] = set()
+
+    def search(index: int) -> tuple[set[str], set[str]] | None:
+        if index == len(items):
+            return set(upper), set(lower)
+
+        item = items[index]
+        bands = (
+            ((upper, upper_charge), (lower, lower_charge))
+            if prefers_upper[item]
+            else ((lower, lower_charge), (upper, upper_charge))
+        )
+        for band, charge in bands:
+            if not _fits_band(band, item, charge, reach, copies):
+                continue
+            band.add(item)
+            seated = search(index + 1)
+            if seated is not None:
+                return seated
+            band.remove(item)
+        return None
+
+    return search(0)
+
+
 def belt_capacity(spec: BuildSpec) -> Fraction:
     """Items per second one belt of this build's tier sustains."""
     return catalog.BELT_RATE.get(BELT_ITEM_IDS.get(spec.belt_item_id, 2001), Fraction(6))
@@ -927,19 +972,31 @@ def _allocate_lanes(
                     return None
             return below, above, rides_below, rides_above
 
-        # Four greedies, cheapest and most conservative first.  The first is the
-        # allocation this function has always made, so any row that used to seat
-        # still seats identically and the other three only ever open ground the
-        # first could not reach: a band preference that respects reach ahead of
-        # flow, and then lane sharing on top of each.
+        # Preserve both existing non-mixed greedies as fast paths, then make that
+        # mode complete before lane sharing is allowed to change the shape.
         seated = next(
             (
                 s
-                for mix, gap_first in ((0, 0), (0, 1), (1, 0), (1, 1))
-                if (s := _seat(allow_mix=bool(mix), gap_first=bool(gap_first))) is not None
+                for gap_first in (False, True)
+                if (s := _seat(allow_mix=False, gap_first=gap_first)) is not None
             ),
             None,
         )
+        if seated is None:
+            exact = _seat_nonmixed_bands(
+                ordered_items, prefers_above, up, down, reach, copies
+            )
+            if exact is not None:
+                seated = exact[0], exact[1], dict[str, str](), dict[str, str]()
+        if seated is None:
+            seated = next(
+                (
+                    s
+                    for gap_first in (False, True)
+                    if (s := _seat(allow_mix=True, gap_first=gap_first)) is not None
+                ),
+                None,
+            )
         if seated is None:
             need = sum(copies.get(i, 1) for i in consumes[r] | produces[r])
             who = "+".join(rows[r])
