@@ -771,6 +771,63 @@ def check(
 # --- geometry --------------------------------------------------------------
 
 
+@check("geom.footprint")
+def _footprint(ctx: Context) -> Iterable[Finding]:
+    """The declared footprint is the prefab's, at the yaw the building carries.
+
+    This one is not a game predicate.  It is the check that lets the game
+    predicates mean anything, and it exists because of what
+    ``PlacedBuilding.width``/``height`` are: a CACHE of
+    ``catalog.oriented_footprint``, filled in by hand by whichever strategy
+    placed the building, with no invalidation and -- until now -- nothing
+    comparing it against the table it was copied from.
+
+    Everything downstream reads the cache and not the catalog.
+    ``codec.tile_to_local_offset`` turns the min-corner anchor into DSP's
+    ``localOffset`` as ``x + width / 2 - 0.5``, so a wrong width EMITS the
+    building at the wrong world position; ``geom.collide`` builds its
+    ``colliders.Placed`` from the same offset, so it then tests the real
+    collider box at a pose that does not exist and returns a confident pass.
+    That is exactly what happened: a Spray Coater is 1x3 and both strategies
+    declared it ``(1, 1)``, which moved every coater a tile off its belt AND
+    hid the collisions that followed from ``geom.collide``.
+
+    A ported rule fed a wrong size is not a rule, it is a rubber stamp.  This
+    check is what makes "the collider check passed" a statement about the
+    blueprint rather than about the cache.
+
+    BELT ADDONS ARE INCLUDED, deliberately, even though ``occupies_tiles`` is
+    false for them.  That flag says a coater RESERVES no tile -- it rides the
+    belt rather than displacing it, which is why ``geom.overlap`` exempts it.
+    It says nothing about what the two numbers mean, and the emitter reads them
+    for a coater exactly as it does for an assembler.  Exempting addons here
+    would have exempted the only building type that has ever got this wrong.
+    """
+    for i, b in enumerate(ctx.placement.buildings):
+        try:
+            want = cat.oriented_footprint(b.item_id, b.yaw)
+        except KeyError:
+            # Not in the catalog at all: there is no prefab to compare against,
+            # and inventing one would be the same class of error as the cache.
+            continue
+        if (b.width, b.height) != want:
+            yield Finding(
+                "geom.footprint",
+                Severity.ERROR,
+                f"building {i} ({cat.building(b.item_id).name}) at ({b.x}, {b.y}) "
+                f"declares a {b.width}x{b.height} footprint, but its prefab at yaw "
+                f"{b.yaw:g} is {want[0]}x{want[1]}; the declared size is what the "
+                f"emitter turns into a world position and what the collider check "
+                f"tests, so both are wrong for it",
+                (i,),
+                {
+                    "declared": f"{b.width}x{b.height}",
+                    "prefab": f"{want[0]}x{want[1]}",
+                    "yaw": b.yaw,
+                },
+            )
+
+
 @check("geom.overlap")
 def _overlap(ctx: Context) -> Iterable[Finding]:
     """No two buildings claim the same cell -- except those that share by design.
@@ -1497,6 +1554,81 @@ def _inserter_data(ctx: Context) -> Iterable[Finding]:
                         "dot": round(_dot(slot_fwd, _unit(far, end)), 3),
                     },
                 )
+
+
+
+
+@check("game.slot_occupancy")
+def _slot_occupancy(ctx: Context) -> Iterable[Finding]:
+    """One connection per slot -- ``PlanetFactory``'s ``entityConnPool``.
+
+    The game addresses a connection as ``entityConnPool[objId * 16 + slot]``:
+    ONE ``int`` per ``(object, slot)``.  Occupancy is keyed on the slot INDEX
+    and not on the slot's pose, because the pose never enters the address --
+    see :data:`~flab2bp.dsp.rules.CONN_SLOTS_PER_OBJECT`, where the C# is
+    quoted.  A second connection written to an occupied slot does not fail: it
+    calls ``ClearObjectConn`` on the sitting tenant first and evicts it.
+
+    So a blueprint that names one machine slot from two sorters is not a
+    blueprint the game rejects on the pool; it is a blueprint that pastes with
+    one of the two sorters silently unwired.  What the player sees is the
+    geometry that goes with it -- the paste snaps BOTH ends onto the same slot
+    pose, so the sorters land on top of one another and go ``Collide``, and
+    every sorter attached to a building in error is reddened after them with
+    ``ConnWithErrorBuilding``, "Connection target cannot be laid".  That is the
+    pair of messages the paste which produced this check reported.
+
+    Scope is every connection record carrying an EXPLICIT slot, on any peer,
+    because the pool does not distinguish: belt-to-belt links occupy a belt's
+    input slots 1..3 by the same arithmetic.  Ends recorded as
+    :data:`~flab2bp.dsp.rules.BELT_SLOT` are exempt and must be -- ``-1`` means
+    "the game picks", and ``WriteObjectConn`` then takes the first free cell in
+    :data:`~flab2bp.dsp.rules.BELT_SLOT_AUTO_RANGE`, so such an end names no
+    fixed cell to share.
+
+    The negative control is the corpus: over the 10 real game blueprints in
+    ``tests/fixtures``, ~10,000 connection records, this check finds nothing on
+    either reading of its scope.  Our own ``freeform`` output, by contrast, put
+    three sorters on slot 8 of one Assembling Machine and the whole suite
+    reported ``ok=True``, because nothing here had ever looked.
+    """
+    bs = ctx.placement.buildings
+    claims: dict[tuple[int, int], list[tuple[int, str]]] = defaultdict(list)
+    for i, b in enumerate(bs):
+        for label, link, slot in (
+            ("output", b.output_obj, b.output_to_slot),
+            ("input", b.input_obj, b.input_from_slot),
+        ):
+            if link is None or not 0 <= link < len(bs):
+                continue
+            if slot < 0:
+                continue
+            claims[(link, slot)].append((i, label))
+
+    for (link, slot), occupants in sorted(claims.items()):
+        if len(occupants) < 2:
+            continue
+        peer = bs[link]
+        try:
+            name = cat.building(peer.item_id).name
+        except KeyError:
+            name = f"item {peer.item_id}"
+        who = ", ".join(f"{i} ({label})" for i, label in occupants)
+        yield Finding(
+            "game.slot_occupancy",
+            Severity.ERROR,
+            f"slot {slot} of building {link} ({name}) at ({peer.x}, {peer.y}) is "
+            f"named by {len(occupants)} connections: {who}. The game stores one "
+            f"connection per slot, so pasting this leaves only the last of them "
+            f"attached and drops the rest",
+            (link, *(i for i, _ in occupants)),
+            {
+                "peer": link,
+                "slot": slot,
+                "peer_item_id": peer.item_id,
+                "claims": who,
+            },
+        )
 
 
 

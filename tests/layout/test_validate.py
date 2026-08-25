@@ -224,6 +224,87 @@ def test_geom_overlap_ignores_different_altitudes() -> None:
     assert not fired(r, "geom.overlap")
 
 
+# --- the declared footprint is the prefab's --------------------------------
+
+FOOTPRINT = {"geom.footprint"}
+COATER = 2313  # Spray Coater: 1x3, and a belt ADDON, so occupies_tiles is False
+
+
+def test_geom_footprint_clean_on_a_derived_placement() -> None:
+    """The negative control: a placement built from the catalog fires nothing."""
+    assert not fired(validate(_belt_to_machine()), "geom.footprint")
+
+
+def test_geom_footprint_fires_on_an_understated_size() -> None:
+    """A 1x3 Spray Coater declared 1x1 -- the defect, exactly as it shipped.
+
+    Both strategies wrote ``width=1, height=1`` for a coater.  That is not a
+    cosmetic field: ``codec.tile_to_local_offset`` reads it, so the emitted
+    coater landed a tile off its belt, and ``geom.collide`` reads it too, so the
+    collision that followed was tested at a pose that does not exist and came
+    back clean.
+    """
+    p = Placement(
+        buildings=(
+            PlacedBuilding(
+                item_id=COATER,
+                model_index=catalog_building(COATER).model_index,
+                x=0,
+                y=0,
+                width=1,
+                height=1,
+            ),
+        )
+    )
+    r = validate(p, only=FOOTPRINT)
+    assert fired(r, "geom.footprint")
+    assert not r.ok
+    finding = r.by_check("geom.footprint")[0]
+    assert finding.detail["declared"] == "1x1"
+    assert finding.detail["prefab"] == "1x3"
+
+
+def test_geom_footprint_clean_when_the_addon_declares_its_real_size() -> None:
+    """A belt addon is INCLUDED in the check, so it has to be able to pass it."""
+    p = Placement(
+        buildings=(
+            PlacedBuilding(
+                item_id=COATER,
+                model_index=catalog_building(COATER).model_index,
+                x=0,
+                y=0,
+                width=1,
+                height=3,
+            ),
+        )
+    )
+    assert not fired(validate(p, only=FOOTPRINT), "geom.footprint")
+
+
+def test_geom_footprint_fires_when_a_quarter_turn_is_not_applied() -> None:
+    """At yaw 90 a 1x3 is 3x1.  Declaring the unturned pair is still wrong.
+
+    Without this the check could be satisfied by copying ``catalog.footprint``
+    and ignoring yaw, which is a different bug with the same symptom.
+    """
+    p = Placement(
+        buildings=(
+            PlacedBuilding(
+                item_id=COATER,
+                model_index=catalog_building(COATER).model_index,
+                x=0,
+                y=0,
+                width=1,
+                height=3,
+                yaw=90.0,
+            ),
+        )
+    )
+    r = validate(p, only=FOOTPRINT)
+    assert fired(r, "geom.footprint")
+    assert r.by_check("geom.footprint")[0].detail["prefab"] == "3x1"
+
+
 COLLIDE = {"geom.overlap", "geom.collide"}
 
 
@@ -604,6 +685,98 @@ def test_game_inserter_data_fires_on_a_reversed_own_slot_pairing() -> None:
     """``ReadObjectConn(objId, 0)`` must be the output, ``1`` the input."""
     p = _retagged(_belt_to_machine(), 2, output_from_slot=1, input_to_slot=0)
     assert fired(validate(p), "game.inserter_data")
+
+
+SLOT_OCCUPANCY = {"game.slot_occupancy"}
+
+
+def _two_lanes_onto_one_column() -> Placement:
+    """Two stacked lanes, both feeding the same column of one machine.
+
+    The shipped defect in miniature.  Measured on ``freeform``/``magnetic-coil``
+    before the fix: belts at (1, 6) and (1, 7), an Assembling Machine at (1, 8),
+    and BOTH sorters ending on tile (1, 8) and naming slot 8 of it.  The machine
+    has one insert pose in that column, and the game's connection pool has one
+    cell for it.
+    """
+    return place(
+        machine(0, 0),
+        belt(0, -1),
+        belt(0, -2),
+        sorter(0, -1, 0, 0, inp=1, out=0),
+        sorter(0, -2, 0, 0, inp=2, out=0),
+    )
+
+
+def test_game_slot_occupancy_clean_on_a_derived_placement() -> None:
+    """The negative control: one sorter per slot fires nothing."""
+    assert not fired(validate(_belt_to_machine()), "game.slot_occupancy")
+
+
+def test_game_slot_occupancy_fires_when_two_sorters_name_one_machine_slot() -> None:
+    """``entityConnPool[objId * 16 + slot]`` holds ONE connection.
+
+    Writing a second calls ``ClearObjectConn`` on the first, so this pastes with
+    one of the two sorters unwired -- and, because the paste snaps both ends
+    onto the same slot pose, with the two of them standing on each other.
+    """
+    r = validate(_two_lanes_onto_one_column(), only=SLOT_OCCUPANCY)
+    assert fired(r, "game.slot_occupancy")
+    assert not r.ok
+    finding = r.by_check("game.slot_occupancy")[0]
+    assert finding.detail["peer"] == 0
+    assert finding.detail["slot"] == 8, finding.message
+    # The report has to NAME the machine and the slot, not merely count.
+    assert "Assembling Machine" in finding.message
+    assert "slot 8" in finding.message
+
+
+def test_game_slot_occupancy_exempts_the_belt_end_of_a_sorter() -> None:
+    """A belt end carries -1, which names no cell, so two may share one belt.
+
+    ``WriteObjectConn`` resolves -1 by taking the first free slot in
+    ``rules.BELT_SLOT_AUTO_RANGE``, so two sorters drawing from one belt tile
+    get slots 4 and 5 and do not collide.  Convicting them would make the check
+    fire on every real blueprint -- the corpus has belt tiles carrying six.
+    """
+    p = place(
+        machine(0, 0),
+        machine(4, 0),
+        belt(3, 0),
+        sorter(3, 0, 2, 0, inp=2, out=0),
+        sorter(3, 0, 4, 0, inp=2, out=1),
+    )
+    assert p.buildings[3].input_from_slot == -1
+    assert p.buildings[4].input_from_slot == -1
+    assert not fired(validate(p, only=SLOT_OCCUPANCY), "game.slot_occupancy")
+
+
+@pytest.mark.parametrize("name", GEOMETRY_SAFE_FIXTURES)
+def test_real_blueprint_never_shares_a_connection_slot(name: str) -> None:
+    """The wider negative control: blueprints the GAME wrote.
+
+    Run on the decoded records rather than through
+    :func:`decode_fixture_to_placement`, which drops sorters and addons -- the
+    very records that carry the machine-side slot indices this check is about.
+    """
+    from collections import defaultdict
+
+    from flab2bp.dsp.codec import decode
+
+    raw = decode((Path("tests/fixtures") / f"{name}.txt").read_text()).buildings
+    by_index = {b.index: b for b in raw}
+    claims: dict[tuple[int, int], list[int]] = defaultdict(list)
+    for b in raw:
+        for link, slot in (
+            (b.output_obj_idx, b.output_to_slot),
+            (b.input_obj_idx, b.input_from_slot),
+        ):
+            if link not in by_index or slot < 0:
+                continue
+            claims[(link, slot)].append(b.index)
+    shared = {k: v for k, v in claims.items() if len(v) > 1}
+    assert not shared, f"{name}: {list(shared.items())[:5]}"
+    assert claims, f"{name} decoded to no connection at all"
 
 
 def test_game_inserter_paste_allows_a_purely_radial_stretch() -> None:
