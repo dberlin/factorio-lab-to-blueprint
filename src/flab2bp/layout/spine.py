@@ -1183,6 +1183,39 @@ FALLBACK_SEED_UNWIRABLE = 6.0
 #: nothing downstream was obliged to look. Now it looks, and a rejected
 #: placement becomes a refusal.
 FALLBACK_SELF_CHECK = 7.0
+#: A machine in the spec accepts NO SORTER AT ALL, on any face, at any distance.
+#:
+#: Settled from the game rather than inferred.  ``BuildTool_Inserter`` drops any
+#: cast target whose ``PrefabDesc.slotPoses`` is null or empty and which is not a
+#: belt::
+#:
+#:     if (prefabDesc != null && (prefabDesc.slotPoses == null
+#:             || prefabDesc.slotPoses.Length == 0) && !prefabDesc.isBelt)
+#:     { castObject = false; castObjectId = 0; }
+#:
+#: and ``PrefabDesc.slotPoses`` is ``SlotConfig.insertPoses``, which the Ray
+#: Receiver and the Energy Exchanger ship EMPTY -- read straight out of
+#: ``resources.assets``: one ``SlotConfig`` each, on the prefab root, with
+#: ``insertPoses`` length 0 and ``addonAreaCenter`` length 0, and their only
+#: pose children named ``slot-0``/``slot(0..3)`` -- which are the BELT PORTS.
+#: The extraction is not missing an array; there is no array to miss.
+#:
+#: What the game does instead is dock a belt straight into a port.
+#: ``BuildTool_Path`` accepts a target with ``portPoses`` or
+#: ``addonAreaColPoses``, and the connection is written on the BELT --
+#: ``inputObjId``/``inputFromSlot`` for a belt drawing OUT of the building,
+#: ``outputObjId``/``outputToSlot`` for one feeding IN.  All 45 Energy
+#: Exchangers in the fixture corpus are wired exactly that way: 90 peers, every
+#: one a belt, not a single sorter, and the exchanger itself carrying no
+#: connection of its own.
+#:
+#: Spine has no belt-to-port docking, so a spec containing such a machine is a
+#: REFUSAL and this names why.  It used to arrive as
+#: :data:`FALLBACK_SEED_UNWIRABLE`, whose message blames corridor ordering and
+#: quotes a height difference -- both true of a row that is merely awkward, both
+#: meaningless here, and between them enough to send the next reader to the
+#: packer instead of to the prefab.
+FALLBACK_SORTERLESS_MACHINE = 8.0
 
 def _rejected(placement: Placement, spec: BuildSpec, *, power: bool) -> str:
     """Named checks this placement fails, or ``""`` when it is clean.
@@ -1213,7 +1246,57 @@ _REFUSAL_TEXT = {
         "a group cannot be wired even alone in its own row, so no packing can "
         "help it"
     ),
+    FALLBACK_SORTERLESS_MACHINE: (
+        "a machine in this spec takes no sorter on any face -- the game wires it "
+        "by docking a belt into a port instead, which this strategy cannot emit"
+    ),
 }
+
+
+def _sorterless_groups(groups: dict[str, _Group]) -> list[str]:
+    """Groups whose building the game will not let a sorter touch.
+
+    A building with an empty ``PrefabDesc.slotPoses`` is refused by
+    ``BuildTool_Inserter`` outright, so a lane seated beside one can never be
+    joined to it -- see :data:`FALLBACK_SORTERLESS_MACHINE` for the C# and for
+    what the game does instead.  This is a property of the PREFAB, so it is
+    decidable before a single row is packed and no number of seconds can change
+    it.
+
+    A MACHINE WITH NOTHING TO WIRE IS NOT CHARGED.  The absence of a pose costs
+    a machine nothing if it wanted no sorter, and refusing over a connection the
+    building never asked for would be refusing the wrong thing.  Nothing in the
+    corpus is shaped that way today, so it is a guard rather than a filter.
+
+    THE SPRAY COATER IS NOT EXCLUDED HERE, and deliberately not.  It ships zero
+    insert poses too and is nonetheless fed -- positionally, through
+    ``addonAreaPoses``, by :func:`_feed_coater` -- so an exclusion for it reads
+    like the obviously right thing to write.  It would be dead code: a coater is
+    never a spec group.  ``spray-coater`` is not in :data:`MACHINE_ITEM_IDS` at
+    all, coaters are grown during emission from a proliferated group's lanes,
+    and of the nine poseless buildings that CAN reach here -- fractionator,
+    energy-exchanger, ray-receiver, ray-receiver-pro, orbital-collector, the two
+    mining machines, water-pump, oil-extractor -- not one is a belt addon.  The
+    check was written with that exclusion, and deleting it changed no test, which
+    is the only reason it is gone: a guard that cannot fire is a claim about the
+    code that the code does not make.
+
+    Returns one line per offending group, deterministically ordered, empty when
+    every machine in the spec can take a sorter.
+    """
+    out: list[str] = []
+    for key, g in sorted(groups.items()):
+        b = catalog.building(g.item_id)
+        if b.slot_poses:
+            continue
+        if not g.inputs and not g.outputs:
+            continue
+        wants = sorted(set(g.inputs) | set(g.outputs))
+        out.append(
+            f"{b.prefab} ({key}) has 0 insert poses and {len(b.slots)} belt "
+            f"port(s), but must wire {', '.join(wants)}"
+        )
+    return out
 
 
 def _refusal(reason: float, detail: str = "") -> str:
@@ -1259,6 +1342,13 @@ def _solve_plan(
     plan came back.
     """
     groups, edges = _adapt(spec)
+    # Before any packing: a machine the game will not let a sorter touch cannot
+    # be wired at any width, in any row order, at any budget.  Naming it here
+    # costs one lookup per group and keeps the row model from reporting a prefab
+    # fact as a geometry failure.
+    sorterless = _sorterless_groups(groups)
+    if sorterless:
+        return [], FALLBACK_SORTERLESS_MACHINE, "; ".join(sorterless)
     seed_rows = _topological_rows(groups, edges)
     order = [row[0] for row in seed_rows]
     depth = {key: i for i, key in enumerate(order)}
@@ -4309,8 +4399,8 @@ class SpineLayout:
 
         A budget that finds nothing feasible is retried ONCE at
         :data:`RETRY_BUDGET_S` before refusing.  Deterministic refusals -- no
-        budget, empty spec, and a recipe no row can wire -- skip the retry:
-        repeating them cannot change them.
+        budget, empty spec, a recipe no row can wire, and a machine the game
+        takes no sorter on -- skip the retry: repeating them cannot change them.
 
         Within one attempt, :func:`_solve_plan` hands back every plan its width
         sweep solved, densest first, and each is emitted and self-checked in turn
@@ -4385,6 +4475,8 @@ class SpineLayout:
             if not plans:
                 if reason == FALLBACK_SEED_UNWIRABLE:
                     break  # structural -- more seconds cannot change a recipe
+                if reason == FALLBACK_SORTERLESS_MACHINE:
+                    break  # a prefab fact -- more seconds cannot add an insert pose
                 if reason == FALLBACK_EMPTY_SPEC:
                     break  # deterministic -- more seconds cannot help
                 continue
