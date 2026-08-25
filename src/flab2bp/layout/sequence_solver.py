@@ -342,6 +342,8 @@ class _HeightState:
     objective_mode: ObjectiveMode = ObjectiveMode.EXPLORATION
     narrowest_key: QualityArchiveKey | None = None
     quality_stagnation: int = 0
+    quality_restart: int | None = None
+    pending_quality_exit: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -478,10 +480,7 @@ class SequenceSolver[PreparedT]:
                     break
                 height_state = self._select_height(eligible)
                 allowance = self.budget.shared_allowance()
-                restart = min(
-                    (run for run in height_state.restarts if run.stages < self.config.stages),
-                    key=lambda run: (run.stages, run.restart),
-                )
+                restart = self._select_restart(height_state)
                 spent, cancelled = self._run_stage(height_state, restart, allowance)
                 self.budget.settle_shared(spent)
             self._last_height = height_state.height
@@ -516,6 +515,53 @@ class SequenceSolver[PreparedT]:
             if alternatives:
                 return min(alternatives, key=_height_priority)
         return best
+
+    def _select_restart(self, height_state: _HeightState) -> _RestartState:
+        if height_state.objective_mode is ObjectiveMode.QUALITY:
+            quality_restart = self._select_quality_restart(height_state)
+            if quality_restart is not None:
+                return quality_restart
+            height_state.objective_mode = ObjectiveMode.EXPLORATION
+            height_state.quality_restart = None
+            height_state.quality_stagnation = 0
+            height_state.pending_quality_exit = True
+        return min(
+            (restart for restart in height_state.restarts if restart.stages < self.config.stages),
+            key=lambda restart: (restart.stages, restart.restart),
+        )
+
+    def _select_quality_restart(self, height_state: _HeightState) -> _RestartState | None:
+        legal: list[tuple[_RestartState, AnnealIncumbent]] = []
+        for restart in height_state.restarts:
+            if restart.stages >= self.config.stages:
+                continue
+            candidate = _legal_quality_candidate(restart.archive)
+            if candidate is not None:
+                legal.append((restart, candidate))
+        if not legal:
+            return None
+
+        selected = next(
+            (entry for entry in legal if entry[0].restart == height_state.quality_restart),
+            None,
+        )
+        if selected is None:
+            selected = min(
+                legal,
+                key=lambda entry: (
+                    quality_archive_key(entry[1]),
+                    entry[0].stages,
+                    entry[0].restart,
+                ),
+            )
+        restart, candidate = selected
+        restart.anneal = replace(
+            candidate.state,
+            base_seed=restart.seed,
+            stage_index=restart.anneal.stage_index,
+        )
+        height_state.quality_restart = restart.restart
+        return restart
 
     def _run_discovery(
         self,
@@ -610,12 +656,17 @@ class SequenceSolver[PreparedT]:
             (tagged.incumbent, source_by_incumbent[id(tagged.incumbent)]) for tagged in merged
         )
         if height_state.objective_mode is ObjectiveMode.QUALITY:
-            return self._route_quality_candidate(
-                height_state,
-                narrowest.incumbent,
-                source_by_incumbent[id(narrowest.incumbent)],
-                allowance,
-            )
+            if narrowest.incumbent.breakdown.hard_outline_overflow == 0:
+                return self._route_quality_candidate(
+                    height_state,
+                    narrowest.incumbent,
+                    source_by_incumbent[id(narrowest.incumbent)],
+                    allowance,
+                )
+            height_state.objective_mode = ObjectiveMode.EXPLORATION
+            height_state.quality_restart = None
+            height_state.quality_stagnation = 0
+            height_state.pending_quality_exit = True
         return self._route_archive(height_state, candidates, allowance)
 
     def _route_quality_candidate(
@@ -626,8 +677,6 @@ class SequenceSolver[PreparedT]:
         allowance: int,
     ) -> tuple[int, bool]:
         """Detailed-route one legal width-first candidate without a proxy pass."""
-        if elite.breakdown.hard_outline_overflow != 0:
-            raise ValueError("quality archive must retain a legal candidate")
         selected = _StageCandidate(
             prepared=self.adapters.prepare(height_state.height, elite.decoded),
             source=source,
@@ -710,6 +759,8 @@ class SequenceSolver[PreparedT]:
         starting_mode = height_state.objective_mode
         prior_height_exact = height_state.exact_key
         exact_key: tuple[int, int] | None = None
+        pending_quality_exit = height_state.pending_quality_exit
+        height_state.pending_quality_exit = False
         validation_failures: tuple[str, ...] = ()
         if detailed.routing.status is DetailedRouteStatus.ROUTED and detailed.placement is not None:
             verdict = self.adapters.validate(detailed.placement)
@@ -732,20 +783,29 @@ class SequenceSolver[PreparedT]:
             and global_overflow == 0
             and exact_key is not None
         )
-        quality_exited = starting_mode is ObjectiveMode.QUALITY and exact_key is None
+        quality_exited = pending_quality_exit or (
+            starting_mode is ObjectiveMode.QUALITY and exact_key is None
+        )
         if quality_entered:
             height_state.objective_mode = ObjectiveMode.QUALITY
+            height_state.quality_restart = selected.source.restart.restart
             height_state.quality_stagnation = 0
         elif starting_mode is ObjectiveMode.QUALITY:
             if quality_exited:
                 height_state.objective_mode = ObjectiveMode.EXPLORATION
+                height_state.quality_restart = None
                 height_state.quality_stagnation = 0
             elif prior_height_exact is None or (
                 exact_key is not None and exact_key < prior_height_exact
             ):
+                height_state.quality_restart = selected.source.restart.restart
                 height_state.quality_stagnation = 0
             else:
+                height_state.quality_restart = selected.source.restart.restart
                 height_state.quality_stagnation += 1
+        elif pending_quality_exit:
+            height_state.quality_restart = None
+            height_state.quality_stagnation = 0
 
         source = selected.source
         restart = source.restart
@@ -972,6 +1032,17 @@ def _new_height_state(
         feedback=feedback_factory(problem),
         restarts=restarts,
     )
+
+
+def _legal_quality_candidate(
+    archive: Sequence[TaggedAnnealIncumbent],
+) -> AnnealIncumbent | None:
+    legal = tuple(
+        tagged.incumbent
+        for tagged in archive
+        if tagged.incumbent.breakdown.hard_outline_overflow == 0
+    )
+    return min(legal, key=quality_archive_key, default=None)
 
 
 def _height_priority(

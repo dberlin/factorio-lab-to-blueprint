@@ -640,6 +640,184 @@ def test_quality_failure_exits_and_following_stage_restores_global_feedback(
     assert len(fake.global_allowances) == 2
 
 
+def _quality_provenance_solver(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    restart_zero_hard_overflow: int,
+    detailed_results: tuple[DetailedStageResult, ...],
+) -> tuple[
+    SequenceSolver[Prepared],
+    _FakeRouting,
+    list[tuple[int, int]],
+    list[int],
+    list[int],
+]:
+    origin_by_seed: dict[int, int] = {}
+    origin_by_decoded: dict[DecodedPlacement, int] = {}
+    anneal_trace: list[tuple[int, int]] = []
+    global_trace: list[int] = []
+    detailed_trace: list[int] = []
+
+    def fake_anneal_stage(
+        problem: PlacementProblem,
+        state: AnnealState,
+        config: AnnealConfig,
+        context: PlacementCostContext | None = None,
+    ) -> AnnealStageResult:
+        del config, context
+        origin = origin_by_seed[state.base_seed]
+        candidate_state = replace(
+            state,
+            gaps=GapProfile((origin,), (0,)),
+        )
+        decoded = decode_state(problem, candidate_state)
+        candidate = AnnealIncumbent(
+            state=candidate_state,
+            decoded=decoded,
+            breakdown=replace(
+                _candidate_breakdown(problem, decoded, float(origin)),
+                hard_outline_overflow=(restart_zero_hard_overflow if origin == 0 else 0),
+            ),
+            key=PlacementKey(
+                x=decoded.x,
+                y=decoded.y,
+                dimensions=problem.sizes,
+                east_gaps=candidate_state.gaps.east,
+                north_gaps=candidate_state.gaps.north,
+            ),
+        )
+        origin_by_decoded[decoded] = origin
+        anneal_trace.append((origin, state.stage_index))
+        return AnnealStageResult(
+            final_state=replace(candidate_state, stage_index=state.stage_index + 1),
+            incumbent=candidate,
+            accepted_moves=1,
+            elites=(candidate,),
+            archive=(
+                sequence_pair_module.TaggedAnnealIncumbent(
+                    candidate,
+                    tuple(sequence_pair_module.EliteCategory),
+                ),
+            ),
+        )
+
+    monkeypatch.setattr(sequence_solver_module, "anneal_stage", fake_anneal_stage)
+    fake = _FakeRouting(detailed_results=detailed_results)
+
+    def global_route(
+        prepared: Prepared,
+        feedback: FeedbackState,
+        allowance: int,
+    ) -> GlobalRouteResult:
+        del feedback, allowance
+        origin = origin_by_decoded[prepared[1]]
+        global_trace.append(origin)
+        return _global(overflow=1 - origin)
+
+    def detailed_route(prepared: Prepared, allowance: int) -> DetailedStageResult:
+        detailed_trace.append(origin_by_decoded[prepared[1]])
+        return fake.detailed_route(prepared, allowance)
+
+    solver = SequenceSolver(
+        heights=(40,),
+        problem_for_height=lambda height: PlacementProblem(
+            sizes=((1, 1),),
+            nets=((0, 0),),
+            outline_height=height,
+            area_lower_bound=1,
+        ),
+        adapters=replace(
+            fake.adapters(),
+            global_route=global_route,
+            detailed_route=detailed_route,
+        ),
+        expansion_budget=ExpansionBudget(100),
+        config=SequenceSolverConfig(
+            stages=2,
+            moves_per_stage=1,
+            restarts_per_height=2,
+            global_elites=2,
+        ),
+    )
+    origin_by_seed.update(
+        (restart.seed, restart.restart) for restart in solver._heights[0].restarts
+    )
+    return solver, fake, anneal_trace, global_trace, detailed_trace
+
+
+def test_quality_exploitation_retains_exact_restart_with_a_legal_archive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exact = _placement(area=20, belt_tiles=4)
+    solver, _fake, anneal_trace, global_trace, detailed_trace = _quality_provenance_solver(
+        monkeypatch,
+        restart_zero_hard_overflow=1,
+        detailed_results=(
+            DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), exact),
+            DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), exact),
+        ),
+    )
+
+    result = solver.search(max_stages=2)
+
+    assert anneal_trace == [(0, 0), (1, 0), (1, 1)]
+    assert sorted(global_trace) == [0, 1]
+    assert detailed_trace == [1, 1]
+    assert result.stages[1].global_routes == 0
+    assert solver._heights[0].quality_restart == 1
+
+
+def test_quality_provenance_falls_back_to_another_legal_restart(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exact = _placement(area=20, belt_tiles=4)
+    solver, _fake, anneal_trace, global_trace, detailed_trace = _quality_provenance_solver(
+        monkeypatch,
+        restart_zero_hard_overflow=0,
+        detailed_results=(
+            DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), exact),
+            DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), exact),
+        ),
+    )
+    solver.search(max_stages=1)
+    solver._heights[0].restarts[1].stages = solver.config.stages
+
+    solver.search(max_stages=2)
+
+    assert anneal_trace[-1] == (0, 1)
+    assert sorted(global_trace) == [0, 1]
+    assert detailed_trace == [1, 0]
+    assert solver._heights[0].quality_restart == 0
+
+
+def test_quality_without_a_legal_restart_exits_and_resumes_exploration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exact = _placement(area=20, belt_tiles=4)
+    solver, _fake, anneal_trace, global_trace, detailed_trace = _quality_provenance_solver(
+        monkeypatch,
+        restart_zero_hard_overflow=1,
+        detailed_results=(
+            DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), exact),
+            DetailedStageResult(_routing(DetailedRouteStatus.STRANDED), None),
+        ),
+    )
+    solver.search(max_stages=1)
+    solver._heights[0].restarts[1].stages = solver.config.stages
+
+    result = solver.search(max_stages=2)
+
+    assert anneal_trace[-1] == (0, 1)
+    assert sorted(global_trace) == [0, 0, 1]
+    assert detailed_trace == [1, 0]
+    resumed = result.stages[1]
+    assert resumed.global_routes == 1
+    assert resumed.global_skip_reason is None
+    assert resumed.quality_exited
+    assert resumed.objective_mode is sequence_solver_module.ObjectiveMode.EXPLORATION
+    assert solver._heights[0].quality_restart is None
+
+
 def test_best_height_scheduling_uses_complete_exact_key_before_stable_order() -> None:
     detailed_heights: list[int] = []
 
