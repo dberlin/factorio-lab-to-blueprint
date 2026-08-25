@@ -8,6 +8,7 @@ would let a rates regression masquerade as a layout one.
 from __future__ import annotations
 
 import contextlib
+import functools
 import math
 import time
 from fractions import Fraction as F
@@ -393,6 +394,17 @@ class TestPlanStrips:
         Three fit above; the fourth goes below alongside the output lane. Every
         prior test used recipes with three inputs or fewer, which is why this
         stayed broken until a real URL was tried.
+
+        THE HEIGHT ASSERTION USED TO READ ``3 + s.mh + 2``, AND THAT IS FALSE.
+        It believed a machine band costs as many rows as the machines are tall,
+        which held only while a tile was 1.0 world units.  An Assembling Machine
+        COVERS three tiles and NEEDS four -- its collider is 3.82 units against
+        a 1.2566 tile -- so the band reserves ``s.ph``, and every lane below it
+        begins after the CLEARANCE rather than after the footprint.  This strip
+        is 9 rows, not 8, and the missing row was the one a junction beside a
+        machine needs.  ``Strip.band_rows`` is the single owner of that number
+        (see its docstring for the seven consumers that move together), so the
+        test asks it instead of restating a literal that was right by accident.
         """
         spec = BuildSpec(
             groups=(
@@ -416,7 +428,12 @@ class TestPlanStrips:
         # Every lane still reachable: three above, two below (one in, one out).
         assert len(s.in_above) <= catalog.SORTER_MAX_REACH
         assert len(s.in_below) + len(s.out_lanes) <= catalog.SORTER_MAX_REACH
-        assert s.height == 3 + s.mh + 2
+        # The fixture must be a machine whose clearance EXCEEDS its footprint,
+        # or the corrected reading and the false one are the same number and
+        # this assertion could not tell them apart.
+        assert (s.mh, s.ph) == (3, 4), "fixture must be a machine that pads"
+        assert s.band_rows == s.ph, "the band reserves clearance, not footprint"
+        assert s.height == 3 + s.band_rows + 2 == 9
 
     def test_a_four_input_recipe_lays_out_and_validates(self) -> None:
         """Planning it is not enough -- it has to emit and pass the neutral judge.
@@ -1351,33 +1368,155 @@ class TestRealUrlCandidatesAreSupplied:
 
     The hand-built fixtures are too small to exercise sorter tier selection or a
     multi-coater supply chain, which is why both bugs survived them.
+
+    EVERY TEST HERE USED TO ASSERT TWO THINGS AT ONCE and report both as one
+    failure: that its property holds, and that every candidate of one URL lays
+    out.  The second is not this class's question -- a refusal EMITS NOTHING, so
+    it cannot violate a property of an emitted blueprint -- and while it was
+    bundled in, all three tests failed with the same routing message and none of
+    them said anything about sorter capacity or cycles.
+
+    Measured, so the split is not a convenience: freeform builds
+    `super-magnetic-ring`'s `no-proliferator` candidate (1466 buildings, valid)
+    and cannot build its two proliferated ones.  That is not the clock running
+    out -- at a 120s budget the sweep exhausts every candidate height in 45s and
+    24s respectively and refuses -- it is 2 to 4 nets per pack STRANDED IN A*,
+    consistently, over every pack at every height.  It is recorded in
+    docs/BACKLOG.md rather than pinned as a passing assertion here, because it
+    is a defect we want gone, not a truth about the game.
+
+    WHICH CANDIDATES A URL ACTUALLY ASKED FOR, because it is not all of them.
+    ``build_candidates`` emits `no-proliferator`, `free-proliferation` and
+    `max-proliferation` for EVERY url, including one that carries no ``mps=``
+    and therefore resolves to ``proliferator_from_request(...) is None``.  Two
+    of the three URLs below are of that kind, so their proliferated candidates
+    -- and every Spray Coater in them -- are variants the SYNTHESISER offered,
+    not builds FactorioLab chose.  The two property tests below are still right
+    to cover them, because the layout stage is genuinely handed every candidate
+    the synthesiser emits and must lay out whatever it is given; but no test
+    here may present a coater on such a candidate as evidence that a real
+    proliferated URL is served.  See
+    ``test_no_corpus_url_yet_yields_a_buildable_proliferated_candidate``.
+
+    THE SAMPLE IS WIDENED AND THEN CHECKED.  Skipping refusals is exactly the
+    sampling error this project has paid for repeatedly -- a count taken only
+    over survivors -- so every test below asserts what its sample CONTAINS
+    before it asserts anything about it, and a sample that has lost the shape
+    fails loudly instead of passing vacuously.
     """
 
+    #: Real URLs, kept as literals rather than read from ``bench.corpus`` so
+    #: that editing the corpus cannot silently change what these tests cover.
+    URLS = (
+        # The largest spec freeform builds: 13 strips, 1466 buildings, 180
+        # sorters over four tiers. The ONLY one of the three that asks for
+        # proliferation (`mps=proliferator-2-products` -> MK2).
+        "https://factoriolab.github.io/dsp/flow?o=super-magnetic-ring*60"
+        "&ibe=conveyor-belt-2"
+        "&mmr=arc-smelter~assembling-machine-2~chemical-plant~matrix-lab"
+        "&mps=proliferator-2-products&v=11",
+        # No `mps=`: FactorioLab chose no proliferation here. Present for its
+        # SORTER TIERS -- three distinct ones in a single build -- not for the
+        # coaters its synthesised variants happen to carry.
+        "https://factoriolab.github.io/dsp/list?o=plastic*60&ibe=conveyor-belt-2"
+        "&mmr=arc-smelter~assembling-machine-2~chemical-plant~matrix-lab&v=11",
+        # No `mps=` either. Present for belt junctions and a second machine mix.
+        "https://factoriolab.github.io/dsp/list?o=magnetic-coil*60"
+        "&ibe=conveyor-belt-2"
+        "&mmr=arc-smelter~assembling-machine-2~chemical-plant~matrix-lab&v=11",
+    )
+
     @staticmethod
-    def _candidates() -> list[BuildSpec]:
+    @functools.cache
+    def _built() -> tuple[tuple[BuildSpec, Placement, bool], ...]:
+        """Candidates freeform can build: ``(spec, placement, url_asked_for_prolif)``.
+
+        The third element is what the URL REQUESTED, read from
+        ``proliferator_from_request``, and never what the candidate itself does.
+        A candidate can carry coaters while its URL asked for none; telling the
+        two apart is the whole point of carrying it.
+
+        Cached because a refused candidate costs the full ``RETRY_BUDGET_S``
+        before it raises, and three tests asking the same question three times
+        would pay it three times over.
+        """
         from flab2bp.lab.data import load_vendored
         from flab2bp.lab.url import parse_url
-        from flab2bp.rates.candidates import build_candidates
+        from flab2bp.rates.candidates import build_candidates, proliferator_from_request
 
-        url = (
-            "https://factoriolab.github.io/dsp/flow?o=super-magnetic-ring*60"
-            "&ibe=conveyor-belt-2"
-            "&mmr=arc-smelter~assembling-machine-2~chemical-plant~matrix-lab"
-            "&mps=proliferator-2-products&v=11"
-        )
-        return list(build_candidates(load_vendored(), parse_url(url), count=3).candidates)
+        data = load_vendored()
+        out: list[tuple[BuildSpec, Placement, bool]] = []
+        for url in TestRealUrlCandidatesAreSupplied.URLS:
+            request = parse_url(url)
+            asked = proliferator_from_request(request) is not None
+            for spec in build_candidates(data, request, count=3).candidates:
+                with contextlib.suppress(NoValidLayout):
+                    p = FreeformLayout(power=True).lay_out(spec, time_budget_s=0.5)
+                    out.append((spec, p, asked))
+        assert out, "no real candidate laid out at all; the sample is empty"
+        return tuple(out)
 
     @pytest.mark.slow
-    def test_every_candidate_supplies_its_coaters(self) -> None:
-        for spec in self._candidates():
-            p = FreeformLayout(power=True).lay_out(spec, time_budget_s=0.5)
-            bad = _full_report(p, spec, power=True).by_check("prolif.coaters_are_supplied")
-            assert not bad, f"{spec.label}: " + "; ".join(f.message for f in bad)
+    def test_no_corpus_url_yet_yields_a_buildable_proliferated_candidate(self) -> None:
+        """A GUARD ON A COVERAGE GAP, and the honest remains of a test that lied.
+
+        `test_every_candidate_supplies_its_coaters` used to assert that every
+        candidate of a real URL had its coaters supplied.  It could not have
+        failed on a coater bug, for two reasons stacked on each other.
+
+        First, the only candidate of its URL that freeform ever built is the
+        UNPROLIFERATED one, and that placement contains zero Spray Coaters;
+        `prolif.coaters_are_supplied` yields no finding for a placement with no
+        coater in it, so the assertion ran on an empty set every time.
+
+        Second -- and this is why widening the sample did not rescue it -- every
+        coater a wider sample can offer comes from a `free-proliferation` or
+        `max-proliferation` candidate of a URL carrying NO `mps=`.  Measured on
+        the whole corpus: `proliferator_from_request` returns a tier for
+        **1 of 12** URLs, `super-magnetic-ring`, and its two proliferated
+        candidates are precisely the ones freeform refuses.  Passing a coater
+        assertion on a candidate the URL never requested would be asserting
+        against a build FactorioLab did not choose, which this project may not
+        do -- so the check is NOT pinned, and this records why with the numbers.
+
+        This test fails the moment the gap closes, which is the point: restore a
+        real `prolif.coaters_are_supplied` assertion on the newly buildable
+        candidate and delete this guard.
+        """
+        asked = [(spec, p) for spec, p, was_asked in self._built() if was_asked]
+        assert asked, "no candidate of a proliferation-requesting URL built at all"
+        coaters = sum(
+            1
+            for _spec, p in asked
+            for b in p.buildings
+            if b.item_id == catalog.SPRAY_COATER_ID
+        )
+        assert coaters == 0, (
+            "a real proliferated build is available now -- restore "
+            "test_every_candidate_supplies_its_coaters on it, assert "
+            "prolif.coaters_are_supplied there, and delete this guard"
+        )
 
     @pytest.mark.slow
     def test_every_candidate_respects_sorter_capacity(self) -> None:
-        for spec in self._candidates():
-            p = FreeformLayout(power=True).lay_out(spec, time_budget_s=0.5)
+        built = self._built()
+        tiers = {
+            b.item_id
+            for _spec, p, _asked in built
+            for b in p.buildings
+            if catalog.is_sorter(b.item_id)
+        }
+        n_sorters = sum(
+            1
+            for _spec, p, _asked in built
+            for b in p.buildings
+            if catalog.is_sorter(b.item_id)
+        )
+        # A sample that never picks a tier above Mk.I cannot show tier selection
+        # wrong, which is the bug this class exists to catch.
+        assert len(tiers) >= 3, f"sample exercises only {len(tiers)} sorter tier(s)"
+        assert n_sorters >= 100, f"sample has only {n_sorters} sorters"
+        for spec, p, _asked in built:
             bad = _full_report(p, spec, power=True).by_check("flow.sorter_capacity")
             assert not bad, f"{spec.label}: " + "; ".join(f.message for f in bad)
 
@@ -1391,8 +1530,17 @@ class TestRealUrlCandidatesAreSupplied:
         prefers source-merging, so the check fires on correct layouts. This
         asserts the property itself so the guarantee is covered regardless.
         """
-        for spec in self._candidates():
-            p = FreeformLayout(power=True).lay_out(spec, time_budget_s=0.5)
+        built = self._built()
+        splitters = sum(
+            1
+            for _spec, p, _asked in built
+            for b in p.buildings
+            if b.item_id == catalog.SPLITTER_ID
+        )
+        # A cycle needs somewhere to close. A sample with no junction in it is a
+        # sample of straight runs, which are acyclic by construction.
+        assert splitters >= 1, "sample contains no junction, so no cycle is possible"
+        for spec, p, _asked in built:
             for i, b in enumerate(p.buildings):
                 if not catalog.is_belt(b.item_id):
                     continue
@@ -1686,25 +1834,84 @@ def mode_driven_spec() -> BuildSpec:
 
 
 class TestModeDrivenMachines:
-    def test_it_lays_out(self) -> None:
+    """Some machines are configured by a MODE, not a recipe id.
+
+    An Energy Exchanger's charge/discharge lives in its parameter block while
+    ``recipe_id`` stays zero.  FactorioLab models these as ordinary recipes with
+    real item flow, so they plan like anything else -- only the emission and,
+    as it turns out, the WIRING differ.
+    """
+
+    def test_the_game_gives_an_exchanger_no_sorter_slot_at_all(self) -> None:
+        """Ground truth, and the reason for the refusal below.
+
+        ``slot_poses.json`` is extracted from the game's own prefabs and the
+        Energy Exchanger's ``slotPoses`` array is EMPTY, as is the Ray
+        Receiver's.  If a later extraction fills these in, this test fails first
+        and says so, rather than the refusal below quietly becoming wrong.
+        """
+        from flab2bp.layout import slots as sorter_slots
+
+        probe = sorter_slots.probe_building(catalog.ENERGY_EXCHANGER_ID, 0.0)
+        height = catalog.footprint(catalog.ENERGY_EXCHANGER_ID)[1]
+        offsets = [
+            *range(-catalog.SORTER_MAX_REACH, 0),
+            *range(height, height + catalog.SORTER_MAX_REACH),
+        ]
+        assert offsets, "the probe must ask about some row, or it proves nothing"
+        assert all(not sorter_slots.attachable_columns(probe, y) for y in offsets)
+
+    def test_it_refuses_the_machine_rather_than_shipping_it_unwired(self) -> None:
+        """THIS USED TO BE ``test_it_lays_out``, AND WHAT IT ASSERTED WAS FALSE.
+
+        It asserted ``p.buildings``, and it got them: measured on the spine side
+        of the same spec, two Energy Exchangers and **zero sorters in the whole
+        placement** -- neither machine joined to anything at either end -- and
+        the validator called that report ok.  Freeform's version was worse still
+        once the layout obeyed the slot tables: ``Strip.input_lane_tiles``
+        correctly returns 0 for a machine no sorter can reach, ``_emit_strip``
+        built that row as an empty lane, and ``feed`` indexed its head --
+        ``IndexError: list index out of range``.
+
+        A blueprint that pastes two idle exchangers is worse than a refusal, and
+        an IndexError is worse than both.  ``_machines_without_poses`` refuses
+        before the height sweep and names the prefab.  Whether the extraction is
+        incomplete is an open question for the extractor, recorded in
+        docs/BACKLOG.md -- not something the packer should paper over.
+        """
         spec = mode_driven_spec()
-        p = FreeformLayout(power=False).lay_out(spec, time_budget_s=0.5)
-        assert p.buildings
+        with pytest.raises(NoValidLayout) as exc:
+            FreeformLayout(power=False).lay_out(spec, time_budget_s=0.5)
+        assert "no insert pose on any face" in exc.value.reason
+        assert "Energy Exchanger" in exc.value.reason
 
     def test_the_machine_carries_the_mode_not_a_recipe(self) -> None:
-        """recipe_id stays zero; the mode rides in the parameter block."""
+        """Asked of the unit that decides it, since no placement reaches here.
+
+        This used to read the emitted buildings.  A refused spec has none, so
+        the question moves to where it is actually answered: the strip plan
+        carries the parameter block, and ``_emit_strip`` writes ``recipe_id=0``
+        for exactly those strips -- the rule asserted below on a strip that DOES
+        emit, so neither half of the branch is untested.
+        """
         from flab2bp.dsp import params
 
-        spec = mode_driven_spec()
-        p = FreeformLayout(power=False).lay_out(spec, time_budget_s=0.5)
-        exchangers = [
-            b for b in p.buildings if b.item_id == catalog.ENERGY_EXCHANGER_ID
-        ]
-        assert len(exchangers) == 2, f"expected 2 exchangers, got {len(exchangers)}"
-        want = params.parameters_for("accumulator-full")
-        for b in exchangers:
-            assert b.recipe_id == 0, "a mode-driven machine has no recipe id"
-            assert b.parameters == want, f"expected {want}, got {b.parameters}"
+        s = plan_strips(mode_driven_spec(), strip_len=6)[0]
+        assert s.item_id == catalog.ENERGY_EXCHANGER_ID
+        assert s.is_mode_driven, "a mode-driven strip must say so"
+        assert s.mode_params == params.parameters_for("accumulator-full")
+
+    def test_an_ordinary_recipe_still_carries_a_recipe_id(self) -> None:
+        """The mode path must not swallow normal machines.
+
+        The other half of ``_emit_strip``'s branch, on a spec that lays out --
+        without it, deleting the branch entirely would leave every assertion
+        above green.
+        """
+        p = FreeformLayout(power=False).lay_out(single_recipe_spec(), time_budget_s=0.5)
+        smelters = [b for b in p.buildings if b.recipe_id]
+        assert smelters, "the fixture must emit machines with a recipe id"
+        assert all(b.parameters == () for b in smelters)
 
     def test_charge_and_discharge_differ(self) -> None:
         """A guard on the poles: emitting the wrong one drains what it should fill."""

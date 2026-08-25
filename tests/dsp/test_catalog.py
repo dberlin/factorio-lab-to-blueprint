@@ -425,3 +425,62 @@ class TestBeltRulesComeFromTheUrlsTechnologies:
         )
         assert rules.from_url is False
         assert rules.vertical_construction is True
+
+
+def test_oriented_footprint_swaps_only_on_a_quarter_turn() -> None:
+    """A rotated building's extents swap; a half turn's do not.
+
+    Real blueprints record yaws like 355.5 and -6.7e-07 for what is plainly
+    zero, so the turn is snapped rather than trusted.
+    """
+    assert catalog.oriented_footprint(2308, 0.0) == (3, 7)
+    assert catalog.oriented_footprint(2308, 90.0) == (7, 3)
+    assert catalog.oriented_footprint(2308, 180.0) == (3, 7)
+    assert catalog.oriented_footprint(2308, 270.0) == (7, 3)
+    assert catalog.oriented_footprint(2308, -6.7e-07) == (3, 7)
+    assert catalog.oriented_footprint(2308, 355.5) == (3, 7)
+
+
+def test_every_oriented_footprint_stays_odd() -> None:
+    """Rotation cannot make an even extent, so the centre stays on a tile.
+
+    `tile_to_local_offset` is exact only for odd footprints, and its even branch
+    is unreachable -- which stays true only if rotating cannot reach it either.
+    """
+    for b in catalog.all_buildings():
+        for yaw in (0.0, 90.0, 180.0, 270.0):
+            w, h = catalog.oriented_footprint(b.item_id, yaw)
+            assert w % 2 == 1 and h % 2 == 1, (b.name, yaw, w, h)
+
+
+def test_clearance_exceeds_the_footprint_exactly_where_the_collider_does() -> None:
+    """An Assembling Machine covers 3 tiles and needs 4.
+
+    Its collider is 3.82 world units and a tile is 1.2566, so 3 tiles is 3.77
+    and two of them at that pitch intersect -- which is what `geom.collide`
+    reported 443 times. A Depot's collider is exactly 3.00 and fits.
+    """
+    assert catalog.oriented_footprint(2303, 0.0) == (3, 3)
+    assert catalog.clearance(2303, 0.0) == (4, 4)
+    assert catalog.clearance(2101, 0.0) == (3, 3)  # Depot Mk.I, 3.00 units
+    for b in catalog.all_buildings():
+        cw, ch = catalog.clearance(b.item_id, 0.0)
+        fw, fh = catalog.oriented_footprint(b.item_id, 0.0)
+        assert cw >= fw and ch >= fh, b.name
+
+
+def test_clearance_is_measured_on_the_rotated_collider() -> None:
+    """And for every shipped building that happens to equal swapping the two.
+
+    The tested box turns with the building, so a box not centred on the
+    building's own origin does not have swappable extents in general.  Measuring
+    the turn is therefore the correct thing to do -- but NO building in the
+    catalog distinguishes it from a swap, because the extent is taken
+    symmetrically about the origin and that absorbs any offset.  Stated rather
+    than left as a mutation that survives: a future building can separate them,
+    and this is the test that would notice.
+    """
+    for b in catalog.all_buildings():
+        w, h = catalog.clearance(b.item_id, 0.0)
+        assert catalog.clearance(b.item_id, 90.0) == (h, w), b.name
+        assert catalog.clearance(b.item_id, 180.0) == (w, h), b.name

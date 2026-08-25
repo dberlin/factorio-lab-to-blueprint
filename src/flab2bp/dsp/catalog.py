@@ -42,13 +42,15 @@ from __future__ import annotations
 import json
 import math
 import re
-from collections.abc import Set
+from collections.abc import Mapping, Set
 from dataclasses import dataclass
 from fractions import Fraction
 from functools import cache
 from pathlib import Path
+from typing import Any
 
 _DATA = Path(__file__).parent / "data" / "buildings.json"
+_SLOT_POSES = Path(__file__).parent / "data" / "slot_poses.json"
 
 
 # --- id ranges -------------------------------------------------------------
@@ -687,6 +689,39 @@ def belt_marker(dsp_item_id: int) -> tuple[int, int]:
 
 
 @dataclass(frozen=True, slots=True)
+class SlotPose:
+    """One sorter attachment point, in the building's own unrotated frame.
+
+    This is ``PrefabDesc.slotPoses[i]`` -- the array the game indexes with a
+    sorter's ``inputFromSlot`` / ``outputToSlot`` -- with Unity's model axes
+    mapped onto our tile grid.
+
+    The mapping is ``dx = model.x``, ``dy = model.z``, ``dz = model.y``: Unity
+    puts ``+z`` forward and ``+y`` up, our grid puts ``+y`` north and ``z``
+    up.  It is not a guess.  ``test_game_slot_poses`` scores all eight
+    axis-permutations against the 1206 machine-side sorter records the game
+    itself wrote and this is the only one that lands every end beside the slot
+    it names; the next best leaves 779 of them further than a tile away.
+
+    ``fx, fy, fz`` is ``Pose.forward``, in the same frame -- the direction the
+    game requires a sorter's approach to agree with.  Near-unit and very nearly
+    horizontal; the tiny ``fz`` is the model's own build-in tilt, kept rather
+    than zeroed because the game dots against it unrounded.
+
+    All six are floats because the game's are: these are Unity ``Transform``
+    world coordinates inside a prefab, on a 0.1-tile lattice that no exact
+    rational reconstruction would improve.
+    """
+
+    dx: float
+    dy: float
+    dz: float
+    fx: float
+    fy: float
+    fz: float
+
+
+@dataclass(frozen=True, slots=True)
 class Building:
     """One buildable thing, with the geometry the layout stage needs."""
 
@@ -699,10 +734,30 @@ class Building:
     #: 0 = normal building. 1 = belt addon: occupies NO grid tile of its own and
     #: mounts onto a belt (this is what makes the Spray Coater nearly free).
     addon_type: int
-    #: Explicit I/O slots, when the building defines any.  Most production
-    #: buildings define none at all, which is why a sorter may attach anywhere
-    #: on their perimeter.  The Fractionator is the exception that matters.
+    #: Belt and fluid PORT poses -- ``PrefabDesc.portPoses``, which is
+    #: ``SlotConfig.slotPoses`` in the prefab.  The name is the game's and it is
+    #: a trap: these are where a belt or a pipe meets the building, and they are
+    #: NOT what a sorter's slot index means.  See :attr:`slot_poses`.
     slots: tuple[dict[str, float], ...]
+    #: Where a sorter may attach -- ``PrefabDesc.slotPoses``, which is
+    #: ``SlotConfig.insertPoses`` in the prefab, indexed exactly as a sorter's
+    #: ``inputFromSlot`` / ``outputToSlot``.  Empty for a building that accepts
+    #: no sorter at all (Storage Tank, Fractionator, Splitter, belts), which is
+    #: also how the game's own checks read it: they skip a peer whose
+    #: ``slotPoses.Length`` does not cover the index.
+    slot_poses: tuple[SlotPose, ...]
+    #: Where a belt ADDON looks for the belts it attaches to, as ``(dx, dy, dz)``
+    #: offsets from the addon's own tile -- ``dx``/``dy`` in tiles, ``dz`` in
+    #: altitude levels.  ``PrefabDesc.addonAreaPoses``.
+    #:
+    #: This is how a Spray Coater is supplied, and it is not by sorter.  On
+    #: build the game takes the nearest belt within 1.0 of each area and writes
+    #: the connection itself, which is why all eight coaters in the corpus carry
+    #: no connection of their own.  Area 0 is the cargo belt it sprays and sits
+    #: at ``(0, 0, 0)`` -- the coater rides it.  Area 1 is the PROLIFERATOR
+    #: supply, at ``(0, -1.25, 1)``: one tile and a quarter behind the coater
+    #: and exactly one altitude level up.
+    addon_areas: tuple[tuple[float, float, float], ...]
     cover_radius: Fraction
     connect_distance: Fraction
 
@@ -766,9 +821,44 @@ _BELT_ENTRIES = {
 }
 
 
+def _slot_poses_for(prefab: str, table: Mapping[str, Any]) -> tuple[SlotPose, ...]:
+    """``prefab``'s sorter slots, with Unity's model axes mapped onto the grid."""
+    return tuple(
+        SlotPose(
+            dx=float(p["pos"][0]),
+            dy=float(p["pos"][2]),
+            dz=float(p["pos"][1]),
+            fx=float(p["fwd"][0]),
+            fy=float(p["fwd"][2]),
+            fz=float(p["fwd"][1]),
+        )
+        for p in (table.get(prefab) or {}).get("slotPoses", ())
+    )
+
+
+#: World units per altitude level, from the blueprint paste path::
+#:
+#:     lpos = dir * (localOffset_z * 1.3333333f + 0.2f + realRadius)
+#:
+#: Only :func:`_addon_areas_for` uses it, to turn the prefab's world-space addon
+#: offsets into the levels the rest of this project counts in.
+WORLD_UNITS_PER_LEVEL = 4.0 / 3.0
+
+
+def _addon_areas_for(
+    prefab: str, table: Mapping[str, Any]
+) -> tuple[tuple[float, float, float], ...]:
+    """``prefab``'s addon areas, in tiles across and altitude LEVELS up."""
+    return tuple(
+        (float(a[0]), float(a[2]), float(a[1]) / WORLD_UNITS_PER_LEVEL)
+        for a in (table.get(prefab) or {}).get("addonAreas", ())
+    )
+
+
 @cache
 def _load() -> dict[int, Building]:
     raw = json.loads(_DATA.read_text())
+    poses = json.loads(_SLOT_POSES.read_text())
     out: dict[int, Building] = {}
     for row in raw:
         item_id = row.get("itemId")
@@ -792,6 +882,8 @@ def _load() -> dict[int, Building]:
             height=int(h),
             addon_type=row.get("addonType", 0),
             slots=tuple(row.get("slots") or ()),
+            slot_poses=_slot_poses_for(row["prefab"], poses),
+            addon_areas=_addon_areas_for(row["prefab"], poses),
             cover_radius=Fraction(power.get("coverRadius") or 0).limit_denominator(100),
             connect_distance=Fraction(power.get("connectDistance") or 0).limit_denominator(100),
         )
@@ -807,6 +899,8 @@ def _load() -> dict[int, Building]:
             height=1,
             addon_type=0,
             slots=(),
+            slot_poses=(),
+            addon_areas=(),
             cover_radius=Fraction(0),
             connect_distance=Fraction(0),
         )
@@ -823,6 +917,81 @@ def building(item_id: int) -> Building:
 def footprint(item_id: int) -> tuple[int, int]:
     b = building(item_id)
     return (b.width, b.height)
+
+
+@cache
+def clearance(item_id: int, yaw: float) -> tuple[int, int]:
+    """Tiles to RESERVE for ``item_id`` at ``yaw`` so nothing collides with it.
+
+    Not the same as :func:`oriented_footprint`, and the difference is the whole
+    point.  A footprint is the tiles whose centres the building covers; a
+    clearance is how much room it needs before the next one.  An Assembling
+    Machine covers 3 but its collider is 3.82 world units, and a tile is
+    ``colliders.GRID_ARC`` = 1.2566 of them -- so 3 tiles is 3.77 and two of
+    them at that pitch INTERSECT.  ``geom.collide`` reported 443 such pairs.
+
+    Reserving ``ceil(extent / GRID_ARC)`` per building and keeping the
+    reservations disjoint gives a centre-to-centre distance of at least
+    ``(cl_a + cl_b) / 2``, which is at least the ``(ext_a + ext_b) / (2 *
+    GRID_ARC)`` the colliders actually require -- for any PAIR, not just two of
+    a kind.  It over-reserves by less than a tile per pair, which wastes space
+    and can never collide; the reverse trade is what shipped red.
+
+    The extent is measured on the ROTATED collider, not by swapping the two
+    numbers: the tested box turns with the building, and a box that is not
+    square about its own centre does not have swappable extents.
+
+    Buildings whose colliders cannot be read fall back to the footprint, which
+    is what the packer used before this existed.  That is not a guess about
+    geometry -- it is the previous behaviour, unchanged, for a building we have
+    no collider data for.
+    """
+    from flab2bp.dsp import colliders
+
+    fw, fh = oriented_footprint(item_id, yaw)
+    try:
+        boxes = colliders.build_colliders(building(item_id).model_index)
+    except Exception:  # noqa: BLE001 - an unreadable model must not stop a layout
+        return (fw, fh)
+    if not boxes:
+        return (fw, fh)
+    # The smallest box about the building's OWN centre that contains every
+    # collider, after turning. Taken over the eight corners of each box rather
+    # than by composing rotation matrices: a corner sweep is the same answer and
+    # is obviously the same answer, which matters more here than being clever.
+    half_turn = math.radians(yaw) * 0.5
+    spin = (0.0, math.sin(half_turn), 0.0, math.cos(half_turn))
+    ex = ez = 0.0
+    for centre, half, rot in boxes:
+        turned = colliders._qmul(spin, rot)
+        for sx in (-1.0, 1.0):
+            for sy in (-1.0, 1.0):
+                for sz in (-1.0, 1.0):
+                    local = (sx * half[0], sy * half[1], sz * half[2])
+                    corner = colliders._qrot(spin, centre)
+                    spun = colliders._qrot(turned, local)
+                    ex = max(ex, abs(corner[0] + spun[0]))
+                    ez = max(ez, abs(corner[2] + spun[2]))
+    return (
+        max(fw, math.ceil(ex * 2 / colliders.GRID_ARC)),
+        max(fh, math.ceil(ez * 2 / colliders.GRID_ARC)),
+    )
+
+
+def oriented_footprint(item_id: int, yaw: float) -> tuple[int, int]:
+    """Grid extents of ``item_id`` built at ``yaw``, in tiles.
+
+    A quarter turn swaps them.  DSP yaws are stored as floats and real
+    blueprints carry values like ``355.5`` and ``-6.7e-07`` for what is plainly
+    zero, so the turn is snapped rather than run through trigonometry -- the same
+    reasoning, and the same snap, as :func:`flab2bp.layout.slots.to_local`.
+
+    Both extents are odd for everything placeable (``derive_footprint`` can only
+    return odd, and both override entries are odd too), so a rotated building
+    still has a tile at its centre and ``tile_to_local_offset`` stays exact.
+    """
+    w, h = footprint(item_id)
+    return (h, w) if int(round(yaw / 90.0)) % 2 else (w, h)
 
 
 def all_buildings() -> tuple[Building, ...]:

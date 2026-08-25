@@ -1,5 +1,513 @@
 # Backlog
 
+## OPEN -- freeform's router strands 2 to 4 nets on a proliferated `super-magnetic-ring`, and it is not the clock
+
+The last thing standing between freeform and the whole
+`super-magnetic-ring*60` URL. Its `no-proliferator` candidate builds --
+13 strips, 1466 buildings, `route_failures` 0.0, validates clean with the spec
+attached. Its two proliferated candidates refuse at every budget.
+
+**IT IS NOT A DEADLINE, AND THAT WAS CHECKED RATHER THAN ASSUMED.** At a 120s
+budget the sweep exhausts every candidate height and refuses early:
+
+    free-proliferation   120s budget -> REFUSED after 45.0s
+    max-proliferation    120s budget -> REFUSED after 24.2s
+
+Both take the "no packing of N strips could be wired at any candidate height"
+branch, never the deadline branch. A longer clock buys nothing.
+
+**WHAT THE PACKS ACTUALLY DO.** Instrumented over the ten packs each sweep
+routes, counting every commit-side failure by kind:
+
+    free-proliferation   ~20 nets/pack   2 to 4 failed   4 to 8 rounds
+                         2 tap failures in the whole sweep
+    max-proliferation    ~22 nets/pack   2 to 4 failed   4 to 5 rounds
+                         0 tap failures in the whole sweep
+
+So it is A* stranding, not the junction work that fixed the sibling cells:
+`_source_for`, `_sink_for`, `_altitude_profile` and `_tap_source` report
+essentially nothing. Every pack loses a handful of nets to congestion, every
+height, consistently -- no near misses and no outliers.
+
+**WHERE NOT TO START.** `_route_all`'s own docstrings already record what has
+been measured and rejected on exactly this failure: promoting last round's
+failures to the front of the order is noise (five packs lost a failure, three
+gained one, one pack that routed everything stopped doing so), and the history
+term cannot see overuse at all, because a committed path is `blocked` rather
+than dear so two nets never overlap. `## MEASURED AND REJECTED -- a routing-
+capacity constraint in freeform's packer` below is the packer-side attempt.
+
+**NOT PINNED AS A TEST.** `TestRealUrlCandidatesAreSupplied` used to assert this
+spec lays out, bundled into three tests about three unrelated properties, so all
+three failed with one routing message and none of them said anything about
+coaters, sorter capacity or cycles. Those tests now check their property on
+every real candidate freeform CAN build, over a sample widened until it provably
+contains the shape each one tests. This refusal is a defect we want gone, not a
+truth about the game, so it lives here rather than as a passing assertion.
+
+**A SIXTH SAMPLING ERROR, found while splitting them.** The old
+`test_every_candidate_supplies_its_coaters` could not have failed on a coater
+bug even before the routing regression. The only candidate of that URL freeform
+ever built is the UNPROLIFERATED one, which contains **zero Spray Coaters**, and
+`prolif.coaters_are_supplied` yields no finding for a placement with no coater
+in it. So the assertion ran on an empty set on every green run it ever had.
+
+## OPEN -- `prolif.coaters_are_supplied` cannot be pinned on a real spec today, and widening the sample does not fix it
+
+The first attempt at the above was to widen the sample: add two more real URLs
+so that some candidate in it would carry coaters. **That is wrong and the
+numbers say why.** `build_candidates` emits `no-proliferator`,
+`free-proliferation` and `max-proliferation` for EVERY url, including one that
+carries no `mps=` at all. Measured with `proliferator_from_request(parse_url(...))`
+over the whole corpus:
+
+    super-magnetic-ring   mps=proliferator-2-products   -> ProliferatorTier.MK2
+    the other 11 URLs     no mps=                       -> None
+
+    1 of 12 corpus URLs actually requests proliferation
+
+So every coater a widened sample can offer comes from a proliferated candidate
+of a URL where **FactorioLab chose no proliferation at all**. Asserting on one
+would be asserting against a build FactorioLab did not choose -- the same class
+of mutation as spraying recipes it left alone -- and this project may not do
+that. Demonstrated by mutation: forcing the "did this URL ask?" flag to `True`
+turns up **6 coaters** in the sample, all of them on candidates no URL
+requested.
+
+And the one URL that DOES request proliferation is `super-magnetic-ring`, whose
+two proliferated candidates are exactly the ones freeform refuses (see the entry
+above). **So there is currently no real specification anywhere in the corpus
+that both requests proliferation and yields a build freeform can serve**, and
+`prolif.coaters_are_supplied` therefore has no honest pin on a real spec. It is
+still covered on the hand-built fixtures by
+`TestProliferatorIsActuallySupplied`, which is smaller than we would like and is
+why the real-URL class exists in the first place.
+
+`test_no_corpus_url_yet_yields_a_buildable_proliferated_candidate` records the
+gap as an assertion that FAILS the moment it closes, with instructions in the
+message to restore the real check and delete the guard. Two ways to close it:
+
+1. fix the A* stranding above, so `super-magnetic-ring`'s proliferated
+   candidates build; or
+2. add a corpus URL that carries `mps=` and is small enough to route today.
+
+**Whether `build_candidates` should offer proliferated variants for a URL that
+asked for none is a separate, open question, and it is the user's call.** It was
+NOT changed here. It is only recorded, because it is what makes a widened
+sample look like coverage when it is not.
+
+The other two tests in the class carry a containment assertion for their own
+shape -- sorter tiers, junctions -- so the vacuous case fails loudly instead of
+passing. Both were mutation-checked.
+
+## OPEN -- spine refuses a Ray Receiver and an Energy Exchanger, and the slot table is why
+
+Surfaced by the per-side tap charge, not caused by it. `slot_poses.json`, which
+`scripts/extract_dsp_slot_poses.py` reads out of the game's own prefabs, gives
+**Ray Receiver and Energy Exchanger a `slotPoses` array of length zero**. Every
+other machine in the corpus offers columns from at least one face:
+
+    Chemical Plant, Quantum Chemical Plant   8 poses    above 2  below 3
+    Ray Receiver                             0 poses    above 0  below 0
+    Energy Exchanger                         0 poses    above 0  below 0
+
+The old tap model could not see it. `_anchor_inset` took the WORST of the two
+sides and skipped a side whose span was `None`, so a building with no reachable
+pose on either side scored zero -- indistinguishable from a machine whose poses
+sit on its edge. So the allocator seated lanes for it, `_find_taps` found no
+span, `_emit` swallowed the miss, and the placement shipped.
+
+MEASURED on the code before the change: `TestModeDrivenMachines`' two-exchanger
+spec emitted **2 Energy Exchangers and 0 sorters in the whole placement** --
+neither machine joined to anything at either end -- and `validate` called that
+report ok. Four tests asserted properties of that placement.
+
+Spine now refuses the spec and names the reason, which is the right end of the
+trade: a blueprint that pastes two idle exchangers is worse than a refusal.
+`_machine_config` still owns the charge/discharge parameter block and is tested
+directly, so that coverage did not go with it.
+
+WHAT IS OPEN is whether the extraction is incomplete. These machines are fed in
+game, so either they carry their slots in an array the extractor does not read
+-- `portPoses` and `addonAreas` are both extracted separately already, and a
+Spray Coater's supply lives in `addonAreaPoses` -- or they genuinely take items
+by some other mechanism. **That question belongs in the extractor, not in the tap
+model**, and until it is answered spine's refusal is the honest reading of the
+data we have. Note `validate` did not flag the unwired exchangers either; a
+`machine.inputs_supplied` check that misses a machine with no sorters at all is
+a second thing to look at.
+
+## RESOLVED -- the tap-capacity model is per side, and two errors cancelling hid it
+
+Fixed and measured; "WHAT LANDED" at the end of this entry has the numbers. The
+diagnosis and the map are kept as they were written, because they are the durable
+part and because the map is what corrected the diagnosis.
+
+DIAGNOSED, then fixed. This was the whole of the remaining spine
+`machine.inputs_supplied` failure -- ten tests, and every one of them a machine
+one ingredient short.
+
+`_allocate_lanes` already carries the right concept for the corridor BELOW a
+row. Its docstring states the failure exactly: "the lane is allocated below,
+`_find_tap` correctly refuses to wire something out of reach, and the machine
+simply gets no sorter for that item at all". A short machine in a tall row stops
+above the row's floor, so every lane below it is that gap further away, and
+`above_gap` / `_fits_below` order and cap the band to match.
+
+The same thing happens on the corridor ABOVE, for a different reason, and the
+model says that side "costs it nothing". A Chemical Plant's poses on that face
+sit a row INSIDE its five-deep footprint, so a sorter reaching one is a tile
+longer than the gap suggests. Measured, usable lane depths per corridor:
+
+    Chemical Plant, Quantum Chemical Plant    above 2    below 3
+    Assembler, Oil Refinery, Matrix Lab       above 3    below 3
+
+The model assumes 3 and 3 for everything. Every rejected tap in the failing
+specs was on the `above` side at a gap of 3 or more -- the third depth a plant
+cannot reach -- and `_find_taps` correctly refused each one after the allocator
+had already put the item there.
+
+Note the asymmetry, because it is why the first attempt missed. `_Group.tap_height`
+folds the inset into the gap model as if it applied to both sides, and it changed
+none of the ten failures: the gap thresholds are not the per-corridor DEPTH cap,
+and taking the worse side for both is not what the geometry says.
+
+THE ALLOCATOR-ONLY FIX WAS BUILT AND IT MADE THINGS WORSE. Mirroring `above_gap`
+exactly -- a `below_inset`, the same `_fits_below` greedy with the inset in place
+of the gap, the band ordered worst-inset-first, and then the mirror of
+`gap_first` so an inset item prefers the side without one -- took spine from 10
+failures to 12. `graphene` regressed: a Chemical Plant running sulfuric-acid
+still ends one ingredient short, now because the allocator correctly refuses to
+seat a third item upward and cannot find room downward either.
+
+That result is worth more than the change was. It says the constraint is real and
+the allocator is not where it can be satisfied: if a row's plant can take only
+two lanes upward and its ingredients want three, no seating order fixes it --
+the ROW is wrong, and the row is chosen by CP-SAT. So the asymmetric per-side cap
+has to reach the tap-capacity model, which is what decides that a plant may share
+a row at all.
+
+The bound I checked earlier and dismissed was the wrong one: a group's TOTAL lane
+need (4) against its total reach (2 + 3 = 5) is not binding, but its need on ONE
+SIDE against that side's cap is. A row of items that all prefer upward puts three
+against a cap of two, and nothing downstream can undo it.
+
+Do not attempt the allocator half again on its own; it is measured, reverted, and
+recorded here precisely so the next attempt starts at the model.
+
+### THE MAP -- every place that computes or consumes a tap-capacity bound
+
+Enumerated before touching anything, in the form that worked for the strip's row
+layout. Twenty-four sites; four of them are silently WRONG rather than merely
+loose, and two of those four are in code that never says `inset`.
+
+**The truth, and the two numbers derived from it**
+
+| # | site | computes | side |
+| --- | --- | --- | --- |
+| 1 | `_anchor_span(id, yaw, h, gap, above=)` `spine.py:3128` | tiles a sorter must span from a lane `gap` clear, or `None` | PER SIDE, per gap -- the ground truth |
+| 2 | `_anchor_inset(id, yaw, h)` `spine.py:3111` | `max` over the two sides of `span(gap=1) - 1` | collapses (1) to ONE number; the asymmetry dies here |
+| 3 | `_Group.tap_height` `spine.py:195` | `height - _anchor_inset` | the only carrier of the inset into any model; three consumers |
+
+Measured from (1), every machine the corpus uses:
+
+    Chemical Plant, Quantum Chemical Plant   above 2  below 3   spans above [2,3,-,-] below [1,2,3,-]
+    Assembler Mk.II/III, Arc/Plane Smelter   above 3  below 3
+    Oil Refinery (yaw 90), Matrix Lab,
+      Miniature Particle Collider            above 3  below 3
+    Ray Receiver                             above 0  below 0   (no attachable pose either side)
+
+**The allocator, per row, after CP-SAT has chosen it**
+
+| # | site | computes | side |
+| --- | --- | --- | --- |
+| 4 | `_allocate_lanes:741-746` | `row_h = max pitch_h`; `gaps[item] = row_h - tap_height` | per item, used on ONE side only |
+| 5 | `_seat._room`, `slot is below` `:783` | `sum(copies) <= reach` for the corridor **above** the row | PER SIDE -- flat 3, no gap, no inset. **WRONG: 2 for a plant** |
+| 6 | `_seat._room` else -> `_fits_below` `:393,784` | `g + j + 1 <= reach` for the corridor **below** the row | PER SIDE -- charges the ABOVE-side inset. **WRONG: 2 where truth is 3** |
+| 7 | `_seat._compatible` `:804` | two items may share a lane only at equal `gaps` | the one-sided gap again |
+| 8 | `_seat` `gap_first` `:859` | an item with `gaps > 0` is seated UPWARD first | **pushes a plant's items at the side that cannot take them** |
+| 9 | `_allocate_lanes:887` | `need > 2 * reach` | AGGREGATE -- message only |
+| 10 | `_allocate_lanes:942-945` | above-the-row band sorted worst-gap-shallowest; the other band plain `sorted` | correct only while the above side costs nothing |
+| 11 | `lane_order` `geometry.py:111` | `len(band) <= max_reach`, both bands | PER SIDE, flat, cannot see the inset. Last gate before emission |
+| 12 | `_cover_sprayed` `:974` | proliferator-to-coater lane spacing | lane-to-lane, not machine reach -- unaffected |
+
+**CP-SAT, `_solve_one` -- what decides a plant may share a row at all**
+
+| # | site | computes | side |
+| --- | --- | --- | --- |
+| 13 | flat tap capacity `:1306-1351` | `sum(lane_copies * tapped) <= 2 * tap_reach` = 6 | AGGREGATE. Truth for a plant's row is 2 + 3 = 5 |
+| 14 | `over` / `can_share` `:1321-1326` | `sum(copies) > 2 * tap_reach` picks which items may be priced at half a lane | AGGREGATE, against the same overstated 6 |
+| 15 | Hall family `:1394-1457` | `lanes with gap >= t <= tap_reach + max(0, tap_reach - t)` | AGGREGATE -- the leading `tap_reach` is the upper corridor, assumed full, unconditionally |
+| 16 | `heights` `:1394` + `is_h: row_h[r] == h` `:1454` | reifies a PITCH-height variable against a set of TAP heights | **two different spaces** |
+| 17 | `thresholds` `:1398` | `{min(b - a, tap_reach)}` over TAP-height differences | **the real gap is `row_h(pitch) - tap_height`** |
+| 18 | `corridor_h[r+1] <= reach - 1` `:1558` | direct-insert span across a corridor | machine-to-machine, no inset |
+
+**Emission**
+
+| # | site | computes | side |
+| --- | --- | --- | --- |
+| 19 | `_realizable_direct:1845` | `dy` off `groups[src].height`, `1 <= dy <= reach` | no inset -- but `_emit`'s `_pair` re-checks with `direct_anchors` and RAISES, so it refuses rather than lying |
+| 20 | `_find_taps:3234` | asks (1) directly | correct |
+| 21 | `_emit:2413` `if not found ... continue` | -- | **the swallow point.** A refused tap becomes no sorter and no error |
+| 22 | `_pick_sorter(rate, tap.span, widest)` `:2443` | tier from `_anchor_span`'s span and `attachable_columns`' count | already inset-aware; NOT freeform's silent-tier bug |
+| 23 | `_place_sorters:3294` | `attachable_columns`, places nothing when empty | correct |
+| 24 | `_coater_lane_candidates:3363` | lane-to-lane proliferator reach | unaffected |
+
+**The four that produce a WRONG value rather than an infeasible model**
+
+* **(5)** under-charges the above side by one. This is the whole of the ten
+  failures. Traced on `casimir-crystal`: three refused taps, every one a Chemical
+  Plant reaching UP at a gap of 3 or more, `_anchor_span` returning `None`, and
+  each one swallowed by (21).
+* **(6)** over-charges the below side by one, because `tap_height` takes the
+  worse of the two sides and the plant's inset is on the other one.
+* **(5) and (6) cancel in the TOTAL.** The allocator believes 3 above + 2 below;
+  the truth is 2 above + 3 below. Both are 5. **That is why the aggregate check
+  cleared the model** -- the earlier "4 needed against 2 + 3 = 5" was not merely
+  the wrong bound, it was a bound the two errors had conspired to make look right.
+* **(16)/(17)** put the whole height-aware family in the wrong number space, and
+  neither mentions `inset`. `row_h` takes a PITCH height; `heights` are TAP
+  heights, so `is_h` is false whenever the row's tallest pitch is not also some
+  group's tap height. Measured over the twelve corpus specs: **9 of 12 have a
+  realizable `row_h` the reification can never match**, and against real gaps of
+  `pitch_h - tap_height` the threshold set is **absent in 3 specs and incomplete
+  in 6**. A row whose tallest machine is a Chemical Plant (`row_h` 5, tap heights
+  {3,4}) is exactly such a row -- so on `graphene` and `plastic`, the two specs
+  the reverted allocator regressed, the height-aware constraint never fires at
+  all and only the flat 6 applies. This is the strip's `mh`/`ph` bug, one module
+  over: right by accident for as long as clearance and footprint were the same
+  number, wrong since spacing made them differ.
+
+**Where the asymmetry has to enter, and what it costs**
+
+At (5) and (6) as two DIFFERENT numbers -- an `above_inset` and a `below_inset`
+in place of one `tap_height` -- and at (13)/(15) as a two-dimensional threshold
+family. Item `i`'s reachable lanes are a prefix of the corridor above of length
+`A_i = reach - above_inset(i)`, which is **row-independent** because a machine is
+flush with the top of its row, plus a prefix of the corridor below of length
+`B_i = reach - (row_h - height(i) + below_inset(i))`. Two nested prefix families,
+so Hall's condition is exactly
+
+    for all a, b in 0..reach:   #{lanes i : A_i <= a and B_i <= b}  <=  a + b
+
+and today's model is the single slice `a = reach` of it. Sixteen inequalities per
+row where there is now one family, most of them non-binding and skippable by the
+same "cannot bind even if the row took everything" test already at `:1433`.
+
+Note what this is NOT: no side-assignment variable, no new decision, the same
+`tapped_by` literals counted. **It is a tightened bound on the same feasibility
+question**, not a different question -- so it is a correctness fix, not a density
+decision, though it will refuse rows that pack today and the area cost has to be
+measured paired and interleaved.
+
+Not attempted here, and deliberately: it is three coupled changes (the allocator
+mirror that already regressed 10 -> 12 on its own, the height-space repair, and
+the `a` dimension), and the allocator half is measured-and-reverted precisely
+because doing one of the three alone is what fails.
+
+**One thing the map found that is not about the inset at all:** both tests in
+`TestTapCapacityIsHeightAware` fail on their own PREMISE, not on the model.
+`test_the_allocator_refuses_the_gapped_row` asserts
+`sorted({heights}) == [3, 7]` and gets `[3]`, because rotation (`69eddea`) turns
+the Oil Refinery a quarter turn and its 3x7 became a 7x3. `mixed_height_spec` is
+uniform-height now, so the fixture built to exercise the height-aware bound
+exercises nothing, and the whole family at `:1394-1457` has had **no test
+coverage since rotation landed** -- which is how (16) and (17) survived the
+spacing change. Repairing the fixture needs a real height gap out of what the
+catalog now offers (tap heights are 3, 4 and 5; pitches run to 8) and a mutation
+check that the repaired fixture fails with the constraint removed.
+
+### WHAT LANDED, AND WHAT IT COST
+
+Three changes, in one commit because each alone is measured to make things worse
+or nothing: the allocator mirror (10 -> 12 on its own, `35c4210`), the
+height-space repair, and the second Hall dimension.
+
+`_reach_charge(item_id, yaw, h, above=)` replaces `_anchor_inset`, and
+`above_charge` / `below_inset` replace `tap_height`. One rule now covers both
+corridors -- lane `j` of a band, counted from the nearest, is reachable when
+`charge + j + 1 <= reach` -- so `_fits_below` became `_fits_band` and serves
+both, and the corridor above is ordered worst-charge-nearest exactly as the one
+below always was. The CP-SAT family became
+
+    lanes with up >= s and down >= t   <=   (reach - s) + (reach - t)
+
+over both thresholds instead of the `s = 0` slice, keyed on PITCH heights, with
+`row_h[r]` restricted by `add_allowed_assignments` to the values it can actually
+take -- so the enumeration is exhaustive rather than hopeful.
+
+MEASURED:
+
+* **Suite 18 -> 9. Spine 10 -> 1**, and the one left is the Spray Coater
+  refusal, which is the separate entry below. Freeform's 8 are untouched and
+  cannot move: it imports three constant tables from spine and nothing else.
+* Newly laid out, at budget 15 on the non-proliferated candidate, validator
+  clean and no fallback: `casimir-crystal` REFUSED -> **20,328** tiles,
+  `information-matrix` REFUSED -> **7,031**.
+* **The density cost is real and here it is**: `graphene` 576 -> **600** tiles,
+  +4.2%, on a candidate that already laid out. `plastic` unchanged at 656.
+* Audit, tier mid (trivial+small+mid), budget 4, both arms interleaved, 3 runs
+  each: spine 20/48 and freeform 26/48 in BOTH arms, **INVALID 0, crashed 0**,
+  spine area **14,139 in both arms to the tile**, deterministic across runs.
+  Freeform's -0.19% is its own run-to-run noise -- one cell moves between
+  repeats within each arm, in both arms.
+
+**AND THE AUDIT COULD NOT HAVE SHOWN THIS FIX WORKING.** All 84 spine refusals
+across every tier up to mid are the Spray Coater; the corpus at those tiers
+contains none of the shape under test, because the candidates that carry it are
+sprayed and refused earlier for an unrelated reason. Reporting "audit unchanged"
+as confirmation would have been the fourth sampling error of this session. What
+the audit does say is the useful half: the tightened bound cost no density and no
+cell anywhere it can see.
+
+The fixtures are `pitch_gap_spec` and `inset_face_spec`, deliberate mirror
+images -- three Assembling Machines whose 4-tile clearance gaps every lane below
+them, and three Chemical Plants whose poses inset every lane above them. Both are
+red on the pre-fix source and green after, and three mutations discriminate:
+forcing `above_charge` to 0 kills only the inset tests, dropping the row gap from
+`_below_charge` kills only the clearance tests, and removing the CP-SAT family
+kills only the two packer tests while the four allocator and ground-truth tests
+stay green.
+
+Two fixtures were built and thrown away before these, both green for reasons that
+had nothing to do with the claim, and both worth naming: one asserted heights
+through `sorted({...})` over a SET, which deduplicated the thing it measured; the
+other chained its three groups producer-to-consumer, and `_solve_one` orders
+producers strictly above consumers, so the packer was never free to make the
+packing the test said it must refuse.
+
+## OPEN -- spine grows elevated lanes
+
+Spine refuses every proliferated spec, and the refusal names why: a Spray Coater
+is supplied by a BELT in its addon area, which the prefab puts at
+`(0, -1.25, 1)` -- a tile and a quarter behind the coater and exactly one
+altitude LEVEL up. So the supply has to be an elevated lane in the coater's OWN
+row, and spine runs lanes at ground level in a corridor. Freeform builds it, the
+pipeline runs both, so no user-visible capability is lost.
+
+What was found while trying: the drop belt must be fed by the proliferator
+lane's TAIL, not by any adjacent tile. Taking a mid-lane tile's output orphans
+everything downstream of it -- the lane stops there and its remaining sorters
+draw from a belt nothing fills, which reports as
+`flow.external_entry_reachable` rather than as anything about coaters.
+
+Freeform's out-lanes start immediately below the machine FOOTPRINT, which puts
+them inside the row a machine's collider needs; a junction on such a lane is
+illegal, and `junction.site_is_clear` refuses it. Moving lane rows to start
+after the clearance band is the obvious fix and is NOT the way in -- it took
+freeform from 9 test failures to 80, because the strip's row indices are
+consumed in several places that each assume lanes start at `mh`. Whatever fixes
+this has to change those together.
+
+## OPEN -- two collider questions left, both deliberately unanswered
+
+`geom.collide` is a normal check now: 443 assembler-on-assembler pairs became 2,
+and turning it on cost no coverage. The two that remain are both real and
+neither is guessable from where we stand.
+
+**A Chemical Plant is packed too LOOSE.** Its collider needs 7x5 where
+`derive_footprint` says 9x5, so there is density to win back --
+`catalog.clearance` clamps to at least the footprint and leaves it. Taking it
+means trusting the collider over `blueprintBoxSize` for tile OCCUPANCY, not just
+for spacing, and those are different questions: occupancy decides which tiles a
+sorter anchor may sit on and where a belt may run, and the slot poses are the
+authority there rather than either box. Settling it needs the same treatment
+spacing got -- a measurement against real blueprints -- not an inference from
+the collider being smaller.
+
+**A Splitter one tile from a Tesla Tower collides**, and so does an elevated
+Splitter diagonally over an Assembling Machine. The first is a plain pitch
+requirement: a splitter is a CROSS of two boxes reaching 1.19 units from its
+centre, a tower reaches 0.3, and 1.19 + 0.3 is more than one tile of 1.2566. The
+second is not about splitters at all -- it is a belt at level 1 passing over a
+machine 5 tiles tall, which is the "may a belt cross a building, and at what
+height" question this file already records as unextracted. Both are refusals
+today rather than shipped defects, which is the right place for them until the
+crossing rule is read out of the game rather than inferred.
+
+Note also that `catalog.clearance` takes an AABB over every collider box, so a
+cross-shaped building like the Splitter reserves its empty corners too.
+`geom.collide` tests the real boxes and knows better; the clearance is the
+conservative one, and where the two disagree it is the clearance that
+over-reserves.
+
+## OPEN -- the layout obeys the slot tables now; what it cannot serve is geometry
+
+The game's own predicates are ported (`game.inserter_data`,
+`game.inserter_paste`, `game.inserter_skew`, `game.addon_supply` in
+`layout/validate.py`), the real `PrefabDesc.slotPoses` and `addonAreaPoses`
+tables are extracted from the game's prefabs
+(`scripts/extract_dsp_slot_poses.py` -> `dsp/data/slot_poses.json`), and both
+strategies now choose a sorter's machine-side anchor from those tables via
+`slots.attachment`. **Every placement either serves a machine where the game
+has a pose, or does not serve it: zero `game.*` findings on everything that
+lays out.**
+
+The cost is coverage, not density. Paired and interleaved over the cells both
+arms lay out, constraining the anchor moved total area by **-0.28%** (6494 vs
+6512); the 3x3-machine cells are identical to the tile, because for a 3x3 the
+table says exactly what the old edge-row assumption said.
+
+WHAT STILL CANNOT BE LAID OUT, AND WHY
+
+`attachable_columns` for a lane one row clear of the machine, both sides:
+
+| building | footprint | from above | from below |
+| --- | --- | --- | --- |
+| Assembling Machine, Smelter, Depot | 3x3 | 0,1,2 | 0,1,2 |
+| Matrix Lab | 5x5 | 1,2,3 | 1,2,3 |
+| Chemical Plant, Quantum Chemical Plant | 9x5 | 3,4,5,6 | 3,4,5,6 |
+| Miniature Particle Collider | 9x5 | 1,2,3 | 1,2,3 |
+| **Oil Refinery** | 3x7 | **none** | 0,1,2 |
+| Ray Receiver, Energy Exchanger, Spray Coater | -- | **none** | **none** |
+
+Three structural consequences, each a packer problem rather than a validator
+one:
+
+1. **An Oil Refinery cannot be served from the north.** Its nine poses are
+   0-2 east, 3-5 west, 6-8 on the south face; there is no pose on the north
+   face to be near. A layout that runs its lanes east-west can only feed a
+   Refinery from below. The fix is either to rotate it a quarter turn -- at
+   yaw 90 its east and west faces become north and south, and its 3x7 becomes
+   a 7x3 that suits a row band better -- or to route both of its connections
+   from the same side. Neither strategy can rotate a machine today.
+2. **A wide machine offers fewer columns than its width**, so fewer parallel
+   sorters fit. `_pick_sorter` is now sized against the attachable count rather
+   than the footprint width, which buys back capacity by raising the tier, but
+   a Chemical Plant still tops out at four sorters per lane.
+3. **A Chemical Plant's southern anchor is a row INSIDE its footprint**, so the
+   sorter is two tiles long before anything else -- and a lane three tiles clear
+   of it is already past `SORTER_MAX_REACH`. Wide machines must be packed
+   CLOSER to their lanes than 3x3s, not further.
+
+**51 tests in `test_spine.py` and `test_freeform.py` fail**, all of the form
+"this spec lays out and validates clean" for a spec containing an Oil Refinery,
+a Chemical Plant or a Spray Coater. They are the diagnosis, not the disease; the
+failure mode is `machine.inputs_supplied` / `machine.output_removed` /
+`flow.sorter_capacity`, never an invalid blueprint. The audit holds **INVALID 0
+and crashed 0** across three runs (tier `small`, budget 4s: 8/30 clean, 22
+refused, identical all three times).
+
+### Spray Coaters are belt-fed, and the belt goes one level UP
+
+Both strategies used to run a sorter into a coater. That connection does not
+exist: a coater ships zero insert poses, `BuildTool_Inserter` refuses to target
+a building with none, and all eight coaters in the corpus carry no connection at
+all -- `input_obj` and `output_obj` unset, `(15, 14)` in their four slot fields.
+The game attaches an addon's belts positionally, from
+`PrefabDesc.addonAreaPoses`, and for a coater area 1 -- the proliferator supply
+-- is at `(0, -1.25, 1)`: a tile and a quarter behind it and **exactly one
+altitude level up**. The corpus confirms it: every coater there has a belt one
+level above and one tile to the side.
+
+So proliferation needs an ELEVATED proliferator lane whose tiles land in each
+coater's addon area. Neither strategy can route one, so `game.addon_supply`
+reports the coater unsupplied and every proliferated candidate refuses. That is
+a real capability loss and it is the right one: the sorter it replaces looked
+like a feed and was not one, and nothing could see that because a coater has no
+`slotPoses` for `CheckInserterDataLegal` to check.
+
+## OPEN -- the game's own rules are scattered across three forms
 ## RESOLVED -- layout solver speed
 
 *Kept as a record of what the numbers actually said, because the first diagnosis
@@ -316,7 +824,9 @@ each assume it is fixed. The fix is probably to decide the final extent up front
 -- reserve the entry ring before anything routes -- rather than to re-order the
 passes again.
 
-## OPEN -- the game's own rules are scattered across three forms
+*The consolidation item below is the same concern seen from the other side: the
+rules above now live in a data file, a catalog dataclass, four validator checks
+and a layout primitive, and the argument for one module is stronger for it.*
 
 The first in-game paste (2026-08-24) turned a pile of inferred rules into
 extracted ones: the game is installed at `/home/dannyb/Dyson Sphere Program/`,
@@ -354,10 +864,35 @@ touch `catalog.py` and `validate.py` and will conflict anyway -- the
 consolidation is nearly free at merge time and expensive later.
 
 **Rules still unextracted**, and each is a place the guessing could resume:
-`NeedGround` ("Foundation required", still unexplained -- the game does not
-offer to auto-place foundation); `TooSkew` ("Deflection too much"); and whether
-a belt may cross over a building, and at what height -- deliberately left
-unanswered rather than inferred from the fixtures' silence.
+whether a belt may cross over a building, and at what height -- deliberately
+left unanswered rather than inferred from the fixtures' silence.
+
+Two that were on this list are now answered, and both are recorded in
+`layout/validate.py`'s comments rather than as checks, because neither can be
+one:
+
+* **`NeedGround`** ("Foundation required") is not a property of a blueprint at
+  all. In `BuildTool_BlueprintPaste` it is a terrain raycast per `landPoint`:
+  18 m down, refused when the hit is below `-0.3 - landOffset` of the planet
+  radius, or when the ground and water layers differ by more than
+  `0.27 + landOffset`, or when nothing is hit. The same blueprint pastes one
+  tile away. It does not offer to auto-foundation because reform is a separate
+  opt-in pass (`ComputeReform`). No offline check can predict it; levelling the
+  ground answers it.
+* **`TooSkew`** ("Deflection too much", `偏角太大`, condition 15 -- NOT
+  `TooBend`/`弯曲过度`) is ported as `game.inserter_skew`. It reads the
+  blueprint's own anchors and yaws, not the snapped ones: 30 degrees between the
+  two end rotations, 24 degrees between each end's forward and the line the
+  sorter runs along, plus a length window that varies with how many ends are on
+  a belt. On an integer grid the window cannot bind -- its loosest floor is 0.9
+  and the shortest sorter is 1.0.
+
+A third is worth recording because it was got WRONG first and the corpus caught
+it: the skew ladder does **not** run on the snapped positions. Reading it that
+way rejects 11 Oil Refinery sorters in `factory-quick-start-step-3-red-cube`, a
+blueprint the game ships. It also means a backwards sorter yaw is not rejected
+by anything ported here -- the yaw is derived from the geometry because 1250 of
+1250 real sorters agree on it, not because a predicate refuses the alternative.
 
 **And when it lands, `gamerules.py` must carry each rule's GUARD, not just its
 threshold.** The belt slope rule is not `slope <= 0.8`; it is

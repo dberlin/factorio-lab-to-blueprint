@@ -18,7 +18,14 @@ from flab2bp.dsp.catalog import building as catalog_building
 from flab2bp.layout import junction
 from flab2bp.layout.base import PlacedBuilding, Placement
 from flab2bp.layout.slots import SlotUndetermined, assign_sorter_slots
-from flab2bp.layout.validate import CHECKS, IdMap, Report, Severity, validate
+from flab2bp.layout.validate import (
+    CHECKS,
+    Finding,
+    IdMap,
+    Report,
+    Severity,
+    validate,
+)
 from flab2bp.spec import BuildSpec, MachineGroup, ProliferatorMode
 
 ASSEMBLER = 2304  # Assembling Machine Mk.II, 4x4
@@ -146,6 +153,33 @@ def errors(report: Report) -> list[str]:
     return [f.check for f in report.findings if f.severity is Severity.ERROR]
 
 
+def measured(finding: Finding, key: str) -> float:
+    """The MEASUREMENT a finding reported under ``key``.
+
+    ``Finding.detail`` is ``Mapping[str, object]`` on purpose: one detail
+    carries a slot index, an end label and a measured distance side by side, and
+    there is no narrower type honest about all three.  So a test that wants to
+    compare a distance has to say that it expects a distance.
+
+    ``Fraction`` is accepted alongside the others because the module docstring
+    promises it: rates in a detail are exact Fractions.  Narrowing this to
+    ``float`` would fail a check that reported one, which is a real value and
+    not a defect.
+
+    Asserting rather than casting buys the diagnosis, not the catch.  Measured
+    with `game.inserter_data` mutated to report its gap as ``f"{gap:.3f}"``: a
+    ``cast`` leaves ``'3.263' > 1.6`` to raise ``TypeError`` from inside the
+    comparison, while this fails as "reported gap='3.263' (str), which is not a
+    measurement" and names the check that did it.
+    """
+    value = finding.detail[key]
+    assert isinstance(value, int | float | Fraction), (
+        f"{finding.check} reported {key}={value!r} ({type(value).__name__}), "
+        f"which is not a measurement"
+    )
+    return float(value)
+
+
 # --- registry --------------------------------------------------------------
 
 
@@ -216,21 +250,22 @@ def test_geom_collide_does_not_fire_on_a_tighter_building() -> None:
     assert not fired(r, "geom.collide")
 
 
-def test_geom_collide_is_opt_in_because_our_layout_fails_it() -> None:
-    """Records a defect, and is the thing that fails when the defect is fixed.
+def test_geom_collide_runs_by_default_now_that_the_layout_passes_it() -> None:
+    """The inverse of the test this replaces, which asked to be deleted.
 
-    ``geom.collide`` is deliberately not in the default run: it fires on every
-    placement both strategies currently produce, so switching it on turns every
-    build into a refusal.  See ``validate.OPT_IN`` for the measurement.  When
-    the footprints are corrected, delete that set and this test with it.
+    ``geom.collide`` was opt-in because it fired on almost everything we made --
+    443 assembler-on-assembler pairs, one defect. Spacing fixed that and turning
+    it on cost no coverage, so it is a normal check and a collision is a refusal.
+    Nothing may go back into ``OPT_IN`` without a measurement of what leaving it
+    on would cost.
     """
     from flab2bp.layout.validate import OPT_IN
 
-    assert {"geom.collide"} == OPT_IN
+    assert set() == OPT_IN
     r = validate(place(machine(0, 0), machine(3, 0)))
-    assert "geom.collide" in r.skipped
-    assert "geom.collide" not in r.checks_run
-    assert not fired(r, "geom.collide"), "the default run must not report it"
+    assert "geom.collide" in r.checks_run
+    assert "geom.collide" not in r.skipped
+    assert fired(r, "geom.collide"), "three tiles apart is a collision"
 
 
 def test_geom_belt_single_occupancy_fires_on_two_belts_in_one_cell() -> None:
@@ -412,8 +447,10 @@ def test_sorter_endpoint_pair_fires_when_links_disagree_with_anchors() -> None:
     assert fired(r, "sorter.endpoint_pair")
 
 
+SPRAY_COATER = 2313  # a belt addon: no insert pose, fed by belt from its addon area
 CHEMICAL_PLANT = 2309  # 9x5, and never a sorter peer anywhere in the corpus
-MATRIX_LAB = 2901  # 5x5, mirrored ring, handedness observed
+MATRIX_LAB = 2901  # 5x5, and its slot ring runs the opposite way round
+OIL_REFINERY = 2308  # 3x7, nine slots, and none at all on its north face
 
 
 def _retagged(
@@ -424,8 +461,9 @@ def _retagged(
     input_from_slot: int | None = None,
     output_from_slot: int | None = None,
     input_to_slot: int | None = None,
+    yaw: float | None = None,
 ) -> Placement:
-    """``p`` with one sorter's slot fields overwritten, to mutate a good build."""
+    """``p`` with one sorter's slot fields or yaw overwritten, to mutate a good build."""
     b = p.buildings[index]
     bs = list(p.buildings)
     bs[index] = dataclasses.replace(
@@ -436,6 +474,8 @@ def _retagged(
             b.output_from_slot if output_from_slot is None else output_from_slot
         ),
         input_to_slot=b.input_to_slot if input_to_slot is None else input_to_slot,
+        yaw=b.yaw if yaw is None else yaw,
+        yaw2=b.yaw2 if yaw is None else yaw,
     )
     return Placement(buildings=tuple(bs))
 
@@ -495,11 +535,185 @@ def test_sorter_slot_reach_clean_on_a_three_wide_machine() -> None:
     assert not fired(r, "sorter.slot_reach")
 
 
-def test_sorter_slot_reach_fires_on_a_far_column_of_a_wide_machine() -> None:
-    """A 9-wide Chemical Plant still has three slots on its south side.
+# --- the game's own build conditions ----------------------------------------
 
-    The sorter lands on the plant's leftmost column, four tiles from the side's
-    centre and beside no slot at all.
+
+def test_game_inserter_data_clean_on_a_derived_placement() -> None:
+    """The negative control for all three: a legal sorter fires nothing.
+
+    Without this the checks below could pass by firing on everything.  The wider
+    negative control is ``test_the_slot_poses_are_what_the_corpus_lands_on``,
+    which runs the same predicate over 1142 sorters the game itself wrote.
+    """
+    r = validate(_belt_to_machine())
+    assert not fired(r, "game.inserter_data")
+    assert not fired(r, "game.inserter_paste")
+    assert not fired(r, "game.inserter_skew")
+
+
+def test_game_inserter_data_fires_when_the_machine_side_is_zeroed() -> None:
+    """Slot 0 on a sorter entering from the east: the defect we shipped.
+
+    Slot 0 of an assembler is the west end of its NORTH face, so an end on the
+    east face lands 2.02 tiles from it -- over the 0.8 of
+    ``CheckInserterDataLegal``, and over the 1.6 the paste path allows even a
+    perfectly radial correction.  Measured in game at 1.87 on a real build with
+    every machine-side slot forced to 0, against 0.24 with the right one.
+    """
+    p = _retagged(_belt_to_machine(), 2, output_to_slot=0)
+    r = validate(p)
+    assert fired(r, "game.inserter_data")
+    assert fired(r, "game.inserter_paste")
+    gap = measured(r.by_check("game.inserter_data")[0], "gap")
+    assert gap > 1.6, gap
+
+
+def test_game_inserter_data_fires_when_the_sorter_runs_into_the_slots_back() -> None:
+    """Slot 10 is the assembler's west face; this sorter arrives from the east.
+
+    The predicate has two halves and they catch different things, so the second
+    one needs its own witness.  A slot square across the sorter is NOT caught
+    here -- the game's test is ``< 0f``, and a right angle dots to zero -- which
+    is why the corner case belongs to ``game.inserter_skew`` instead.
+    """
+    r = validate(_retagged(_belt_to_machine(), 2, output_to_slot=10))
+    dots = [f for f in r.by_check("game.inserter_data") if "dot" in f.detail]
+    assert dots, [f.message for f in r.by_check("game.inserter_data")]
+    assert measured(dots[0], "dot") < 0
+
+
+def test_game_inserter_data_fires_on_a_reversed_own_slot_pairing() -> None:
+    """``ReadObjectConn(objId, 0)`` must be the output, ``1`` the input."""
+    p = _retagged(_belt_to_machine(), 2, output_from_slot=1, input_to_slot=0)
+    assert fired(validate(p), "game.inserter_data")
+
+
+def test_game_inserter_paste_allows_a_purely_radial_stretch() -> None:
+    """0.90 world units straight out of the face is legal on paste, not on copy.
+
+    The paste ladder tolerates ``num40`` up to 1.6 when ``num41`` -- the sideways
+    part -- is under 0.1, and caps everything else at 0.8.  This is the band
+    where the two predicates genuinely disagree, and the port keeps them apart
+    rather than averaging them.
+
+    The numbers are WORLD units, and that distinction is the whole reason this
+    test moved: a tile is 1.2566 of them.  Anchored on the Chemical Plant's
+    south EDGE row the gap is 0.90 and lands in the band; on the row its pose
+    actually sits over it is 0.357 and legal for both.  The earlier version of
+    this test called that same edge-row case "1.1 tiles" and put it in the band
+    by treating tiles as world units.
+    """
+    p = place(
+        machine(0, 0, item_id=CHEMICAL_PLANT),
+        belt(4, -1),
+        sorter(4, -1, 4, 2, inp=1, out=0),
+    )
+    r = validate(p)
+    assert not fired(r, "game.inserter_paste"), [
+        f.message for f in r.by_check("game.inserter_paste")
+    ]
+    gaps = [measured(f, "gap") for f in r.by_check("game.inserter_data") if "gap" in f.detail]
+    assert gaps and 0.8 < gaps[0] <= 1.6, gaps
+
+
+def test_game_inserter_paste_stops_a_radial_stretch_at_1_6() -> None:
+    """The plant's south EDGE row is 1.61 world units out and refused; 0.90 was not.
+
+    Its poses sit over the row INSIDE that edge, so anchoring on the edge itself
+    is further from the pose than anchoring a row deeper in -- which is exactly
+    the shape that makes a wide machine want to be packed closer, not further.
+
+    The pair with :func:`test_game_inserter_paste_allows_a_purely_radial_stretch`
+    is what pins ``_PASTE_RADIAL``: one test on each side of the threshold, both
+    with the sideways part at zero, so only that constant separates them.
+
+    ``_PASTE_LATERAL`` has no such pair and cannot get one -- with ``snap``
+    already over 0.8, a lateral of 0.1 or more is refused by the ladder's third
+    branch whatever the first says, and a lateral under 0.1 never reaches the
+    first.  The branch is unreachable for anything that is not a silo.  It is
+    ported anyway, because a port that quietly drops a branch is not one.
+    """
+    r = validate(
+        place(
+            machine(0, 0, item_id=CHEMICAL_PLANT),
+            belt(4, -2),
+            sorter(4, -2, 4, 0, inp=1, out=0),
+        )
+    )
+    snaps = [f for f in r.by_check("game.inserter_paste") if "snap" in f.detail]
+    assert snaps, [f.message for f in r.by_check("game.inserter_paste")]
+    assert measured(snaps[0], "lateral") < 0.1
+    assert measured(snaps[0], "snap") > 1.6
+
+
+def test_two_assemblers_collide_at_pitch_3_and_clear_at_pitch_4() -> None:
+    """The end-to-end statement of what spacing is for.
+
+    `geom.collide` is the game's own test, on real collider boxes, and it
+    reported 443 assembler-on-assembler pairs on our output before this. The
+    footprint said 3 and the collider needs 4; both numbers are here so that
+    changing either one has to break this.
+    """
+    tight = place(machine(0, 0), machine(3, 0))
+    assert fired(validate(tight, only={"geom.collide"}), "geom.collide")
+
+    clear = place(machine(0, 0), machine(4, 0))
+    assert not fired(validate(clear, only={"geom.collide"}), "geom.collide")
+
+    assert catalog_building(ASSEMBLER).width == 3, "covers three tiles"
+    from flab2bp.dsp import catalog as _cat
+
+    assert _cat.clearance(ASSEMBLER, 0.0)[0] == 4, "and needs a fourth"
+
+
+def _coater(x: int, y: int, z: Fraction | int = 0) -> PlacedBuilding:
+    """A Spray Coater on the belt at ``(x, y)``.
+
+    ``z`` is converted the way ``belt`` and ``splitter`` above convert theirs.
+    Handing ``PlacedBuilding`` a bare ``int`` was not merely a type error: this
+    helper feeds ``game.addon_supply``, which measures a proliferator belt one
+    altitude LEVEL up against a 1.0-unit area, and altitudes are Fractions
+    because a level is not a whole tile.
+    """
+    b = catalog_building(SPRAY_COATER)
+    return PlacedBuilding(
+        item_id=SPRAY_COATER,
+        model_index=b.model_index,
+        x=x,
+        y=y,
+        z=Fraction(z),
+        yaw=90.0,  # Facing.EAST
+    )
+
+
+def test_game_addon_supply_fires_when_a_coater_has_no_proliferator_belt() -> None:
+    """A Spray Coater is fed from one place and it is not a sorter.
+
+    The belt the coater rides is at its own tile; the proliferator belt has to
+    be in addon area 1, a tile and a quarter behind it and one altitude level
+    UP.  A belt beside it at ground level -- which is what both strategies used
+    to build, with a sorter running from it -- is not in the area and the game
+    attaches nothing.
+    """
+    r = validate(place(belt(0, 0), belt(1, 0), _coater(0, 0)))
+    assert fired(r, "game.addon_supply")
+
+
+def test_game_addon_supply_clean_when_the_belt_is_where_the_game_looks() -> None:
+    """One level up and a tile behind: 0.25 from the area centre, well inside 1.0."""
+    r = validate(place(belt(0, 0), belt(-1, 0, 1), _coater(0, 0)))
+    assert not fired(r, "game.addon_supply"), [
+        f.message for f in r.by_check("game.addon_supply")
+    ]
+
+
+def test_game_inserter_data_fires_on_a_far_column_of_a_wide_machine() -> None:
+    """A Chemical Plant is nine wide and takes a sorter on four of its columns.
+
+    The sorter lands on the plant's leftmost column, where the real slot table
+    has nothing, and the nearest slot on that face is three tiles away.  This is
+    the class of defect the old ``sorter.slot_reach`` warning could only guess
+    at, and the game's own numbers make it an error.
     """
     r = validate(
         place(
@@ -508,26 +722,44 @@ def test_sorter_slot_reach_fires_on_a_far_column_of_a_wide_machine() -> None:
             sorter(0, 5, 0, 4, inp=1, out=0),
         )
     )
-    assert fired(r, "sorter.slot_reach")
+    assert fired(r, "game.inserter_data")
+    assert fired(r, "game.inserter_paste")
 
 
-def test_sorter_slot_handedness_warns_only_for_unobserved_buildings() -> None:
-    unobserved = validate(
+def test_game_inserter_skew_fires_on_a_yaw_across_the_run() -> None:
+    """A sorter facing across the line it runs along is "deflection too much".
+
+    Turned a quarter, the axis test reads 90 degrees against a limit of 24.  A
+    yaw turned a HALF is not caught -- the game takes an absolute value, and
+    both ends carry the same blueprint yaw whichever way it points -- which is
+    why `assign_sorter_slots` derives the yaw from the corpus rule rather than
+    leaning on this check to notice.
+    """
+    r = validate(_retagged(_belt_to_machine(), 2, yaw=0.0))
+    off = [f for f in r.by_check("game.inserter_skew") if "off_axis_deg" in f.detail]
+    assert off, [f.message for f in r.by_check("game.inserter_skew")]
+    assert measured(off[0], "off_axis_deg") > 24.0
+
+
+def test_game_inserter_skew_fires_on_a_sorter_longer_than_the_game_allows() -> None:
+    """Eight tiles between two machines, against a 7.5 ceiling.
+
+    The ceiling is the only half of the length window an integer grid can reach.
+    The FLOOR cannot bind on anything we could emit -- the loosest of the three
+    is 0.9 and the shortest sorter on a tile grid is 1.0 -- so it is ported and
+    left without a witness rather than given a fabricated one.  ``sorter.reach``
+    fires here too; this asserts only on the game's own ladder.
+    """
+    r = validate(
         place(
-            machine(0, 0, item_id=CHEMICAL_PLANT),
-            belt(4, 5),
-            sorter(4, 5, 4, 4, inp=1, out=0),
+            machine(0, 0),
+            machine(0, 11),
+            sorter(1, 2, 1, 10, inp=0, out=1),
         )
     )
-    assert fired(unobserved, "sorter.slot_handedness")
-    observed = validate(
-        place(
-            machine(0, 0, item_id=MATRIX_LAB),
-            belt(2, 5),
-            sorter(2, 5, 2, 4, inp=1, out=0),
-        )
-    )
-    assert not fired(observed, "sorter.slot_handedness")
+    lengths = [f for f in r.by_check("game.inserter_skew") if "max" in f.detail]
+    assert lengths, [f.message for f in r.by_check("game.inserter_skew")]
+    assert measured(lengths[0], "length") > 7.5
 
 
 # --- belts -----------------------------------------------------------------

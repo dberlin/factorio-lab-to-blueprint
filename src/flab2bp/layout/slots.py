@@ -6,89 +6,90 @@ its four slot fields.  Pasted into the game that produced four errors and drew
 validator passed the same build with ``INVALID 0``, because nothing in it looked
 at these fields at all.
 
-Everything below is read off the 1288 sorters in ``tests/fixtures/*.txt``, all
-of which the game itself wrote, and is re-derived from their geometry by
-``tests/layout/test_sorter_slots.py`` on every run.
-
 THE THREE CONSTANTS
 -------------------
-``output_from_slot == 0`` and ``input_to_slot == 1`` on all 1288, without a
-single exception.  These are the sorter's *own* ends and never vary.  The BELT
-side of a connection is always ``-1`` (849 belt inputs, 391 belt outputs, no
-other value).  Only the MACHINE side carries a real index.
+``output_from_slot == 0`` and ``input_to_slot == 1`` on all 1288 sorters in
+``tests/fixtures/*.txt``, without a single exception.  These are the sorter's
+*own* ends and never vary; the game requires exactly this ordering, and rejects
+the sorter outright when it is reversed (``CheckInserterDataLegal``, first two
+tests).  The BELT side of a connection is always ``-1`` (849 belt inputs, 391
+belt outputs, no other value).  Only the MACHINE side carries a real index.
 
-THE MACHINE-SIDE RING
----------------------
-A building's insert slots form a ring of **twelve**, three per side, whatever
-its footprint.  That is not an assumption: the Matrix Lab is 5x5 and its west
-side is slots 3/4/5, so its south side holds three and not five.  Measured slot
-poses, in the machine's own frame, in tiles from its centre:
+THE MACHINE SIDE IS NOW READ FROM THE GAME, NOT INFERRED
+--------------------------------------------------------
+A slot index is a subscript into ``PrefabDesc.slotPoses``, and those poses are
+shipped in the prefabs.  ``scripts/extract_dsp_slot_poses.py`` pulls them out;
+:attr:`flab2bp.dsp.catalog.Building.slot_poses` serves them; :func:`machine_slot`
+picks the one the game would pick -- the nearest pose whose forward agrees with
+the direction the sorter arrives from.
 
-    Assembling Machine Mk.I  0:(-0.81,+0.86) 1:(0,+0.86) 2:(+0.81,+0.86)
-                             3:(+0.89,+0.81) 4:(+0.89, 0) 5:(+0.89,-0.81)
-                             6:(+0.81,-0.86) 7:(0,-0.86) 8:(-0.81,-0.86)
-                             9:(-0.89,-0.81) 10:(-0.89,0) 11:(-0.89,+0.81)
+This module used to guess instead, from a ring re-derived out of seven observed
+buildings: twelve slots, three per side, handedness extrapolated by footprint
+from a sample of two.  The real table says the ring is real but the
+extrapolation was not:
 
-The three slots on a side sit ~0.8 apart regardless of how long that side is,
-so on a wide building they occupy only its middle three columns; the side's
-*offset* from the centre is what scales with the footprint.  Rounded to tiles
-that gives an offset in ``{-1, 0, +1}`` along the side, which is what
-:func:`machine_slot` computes.
+* an **Assembling Machine** has 12, three per side, un-mirrored -- as derived;
+* a **Matrix Lab** has 12, mirrored -- also as derived;
+* an **Oil Refinery** has **9**, and not as a ring: 0-2 east, 3-5 west, 6-8 on
+  the south face at ``z = -3.6``.  Its north face takes no sorter at all;
+* a **Chemical Plant** has **8**, in two rows -- 0,1,2,7 along the north face
+  at ``x in {-1, 0, 1, 2}``, and 3-6 along ``z = -0.9``, which is one row INSIDE
+  a footprint five deep.  Four of the nine columns of a nine-wide building, and
+  neither of the two long sides, will take a sorter anywhere.
 
-At a corner tile the offset alone is ambiguous -- eight perimeter tiles, twelve
-slots -- and the sorter's approach direction disambiguates it: a vertical
-approach means the north/south side, a horizontal one the east/west side.  All
-343 corner records in the corpus agree, with no ties.
+The Chemical Plant is why a three-building blueprint containing one pasted with
+"Sorter data error" while the same shape built from 3x3 Assembling Machines
+pasted clean.  No ring rule could have produced that; only the table does.
 
-Machine yaw rotates the ring with the building: the offset and the approach are
-both un-rotated into the machine's frame first.  Verified at yaw 0, 90, 180
-and 270.
+WHAT "NEAREST" MEANS, AND WHY 0.8
+---------------------------------
+The game's own tolerance.  ``BuildTool_BlueprintCopy.CheckInserterDataLegal``
+rejects a sorter whose end lands more than ``0.8`` from the pose it names, and
+the paste path (``BlueprintData``, ``EBuildCondition.ErrorInserterData``) snaps
+the end onto the pose and rejects the same distance with a wider allowance for a
+purely radial offset.  Both are ported in ``layout.validate``; this module uses
+the ``0.8`` figure so that what we emit and what we check agree.
 
-HANDEDNESS, AND WHAT COULD NOT BE DERIVED
------------------------------------------
-Two families exist, mirrored in the machine's local x axis:
-
-* **Not mirrored** -- south side runs west->east.  Observed on Assembling
-  Machine Mk.I and Mk.III, Arc Smelter, Negentropy Smelter, Depot Mk.I.
-* **Mirrored** -- south side runs east->west.  Observed on Matrix Lab and Oil
-  Refinery.
-
-Both appear in the *same* fixture (``12-s-purple-science`` has assemblers of one
-handedness and Matrix Labs of the other), so this is not a coordinate artifact
-of one blueprint; it is authored per prefab, and DSP ships no slot poses for any
-of these buildings for us to read.  **The rule that predicts handedness from
-building data was not derived.**  Every one of the five un-mirrored buildings is
-3x3 and both mirrored ones are larger, so :data:`_MIRRORED` records what was
-observed and :func:`ring_is_mirrored` extends it by footprint -- an inference
-from n=2 on the mirrored side, and the weakest link in this module.
-:func:`handedness_is_observed` reports which buildings that inference covers so
-the validator can say so out loud.
-
-Getting the handedness wrong moves a slot to its mirror image on the same side
-(0 <-> 2, 3 <-> 11, ...); the middle of the north and south sides (7 and 1) is
-the same either way.
+:func:`machine_slot` returns the nearest slot even when the nearest is further
+than that, rather than raising.  A sorter whose end is nowhere near any slot is
+a LAYOUT defect, and the validator names it as one -- refusing to encode it here
+would only convert a reported error into a crash, and the nearest real slot is
+the one the game would have snapped to.  It raises only when there is no slot to
+name at all.
 """
 
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
-from dataclasses import replace
+from dataclasses import dataclass, replace
 
 from flab2bp.dsp import catalog as cat
+from flab2bp.dsp import colliders
 from flab2bp.layout.base import PlacedBuilding
 
 __all__ = [
+    "ADDON_FROM_SLOT",
+    "ADDON_TO_SLOT",
     "BELT_SLOT",
     "INPUT_TO_SLOT",
     "OUTPUT_FROM_SLOT",
-    "SLOTS_PER_SIDE",
-    "SLOT_COUNT",
+    "SLOT_REACH",
+    "Attachment",
     "SlotUndetermined",
     "assign_sorter_slots",
-    "handedness_is_observed",
+    "attachable_columns",
+    "attachment",
+    "lane_facing",
+    "lane_orientation",
     "machine_slot",
-    "ring_is_mirrored",
-    "side_offset",
+    "probe_building",
+    "slot_forward",
+    "slot_offset",
+    "sorter_yaw",
+    "world_gap",
+    "to_local",
+    "to_world",
 ]
 
 #: The sorter's own ends.  Constant on all 1288 real sorters.
@@ -98,9 +99,40 @@ INPUT_TO_SLOT = 1
 #: What the belt side of a connection carries.  Also constant on all 1288.
 BELT_SLOT = -1
 
-#: Slots per side, and therefore per building.  Independent of footprint.
-SLOTS_PER_SIDE = 3
-SLOT_COUNT = 4 * SLOTS_PER_SIDE
+#: What a belt ADDON carries in all four of its slot fields.
+#:
+#: A Spray Coater is not wired to anything.  All eight in the corpus record
+#: ``input_obj = output_obj = -1`` with ``(15, 14)`` on both ends, and nothing
+#: anywhere names one as a connection.  The game writes the same pair in
+#: ``BuildTool_Addon`` (``outputToSlot = 14; inputFromSlot = 15``) and again in
+#: the blueprint paste path.  It rides the belt it sits on; the association is
+#: positional, and there is no sorter in it.
+ADDON_FROM_SLOT = 15
+ADDON_TO_SLOT = 14
+
+#: How far a sorter end may sit from the slot pose it names, in WORLD UNITS.
+#:
+#: ``0.8f`` in ``BuildTool_BlueprintCopy.CheckInserterDataLegal`` and again in
+#: the blueprint-paste path.  A game constant, not one of ours -- and a
+#: ``Vector3.magnitude`` in Unity world space, which is NOT tiles.
+#:
+#: A tile is ``colliders.GRID_ARC`` = 1.2566 world units, so a distance in tiles
+#: has to be scaled before it is compared with this.  The first version of this
+#: module compared them directly and reported the corpus's worst gap as 0.774
+#: against 0.8 -- "just inside", and cited as evidence the port was right.  It
+#: was evidence of nothing: 0.8 is loose enough that BOTH readings pass, so the
+#: control could not tell them apart.  Read correctly the worst real gap is
+#: **0.113**, which is what it should look like when the game snaps a sorter end
+#: onto a pose.  What settled it was not the corpus but the collider work: an
+#: Assembling Machine's 3.82-wide box does not fit a 3-tile pitch at 1.2566 per
+#: tile, and real blueprints never pack one at 3.
+SLOT_REACH = 0.8
+
+#: How far off a slot's facing a sorter may run, in degrees, and the cosine of
+#: it.  ``24f`` in ``BuildTool_BlueprintPaste``, where exceeding it is
+#: ``EBuildCondition.TooSkew``.
+SLOT_ALIGN_DEG = 24.0
+SLOT_ALIGN_COS = math.cos(math.radians(SLOT_ALIGN_DEG))
 
 
 class SlotUndetermined(ValueError):
@@ -109,42 +141,6 @@ class SlotUndetermined(ValueError):
     Raised rather than defaulted.  A guessed ``0`` is exactly what made every
     sorter in the first in-game paste invalid, so there is no fallback here.
     """
-
-
-#: Handedness as read off the corpus, keyed by DSP item id.  ``True`` means the
-#: ring is mirrored in the machine's local x axis (south side runs east->west).
-#:
-#: Only buildings with corpus evidence appear.  Nothing may be added here on a
-#: hunch -- ``test_slot_handedness_matches_corpus`` re-derives every entry.
-_MIRRORED: dict[int, bool] = {
-    2101: False,  # Depot Mk.I           99 records
-    2302: False,  # Arc Smelter          20
-    2303: False,  # Assembling Mk.I     197
-    2305: False,  # Assembling Mk.III   648
-    2319: False,  # Negentropy Smelter  200
-    2308: True,  # Oil Refinery          36
-    2901: True,  # Matrix Lab            47
-}
-
-
-def handedness_is_observed(item_id: int) -> bool:
-    """Is this building's ring handedness read from the corpus, or inferred?"""
-    return item_id in _MIRRORED
-
-
-def ring_is_mirrored(item_id: int) -> bool:
-    """Whether ``item_id``'s slot ring is mirrored in the machine's local x.
-
-    Observed values win.  For everything else this falls back to the only
-    predicate consistent with the corpus -- 3x3 is un-mirrored, larger is
-    mirrored -- which is an inference, not a measurement.  See the module
-    docstring.
-    """
-    observed = _MIRRORED.get(item_id)
-    if observed is not None:
-        return observed
-    b = cat.building(item_id)
-    return (b.width, b.height) != (3, 3)
 
 
 def _unrotate(dx: float, dy: float, yaw: float) -> tuple[float, float]:
@@ -166,15 +162,72 @@ def _unrotate(dx: float, dy: float, yaw: float) -> tuple[float, float]:
     return (dy, -dx)
 
 
-def _along(t: float) -> int:
-    """Which of a side's three slots sits nearest offset ``t`` along it.
+def to_local(offset: tuple[float, float], yaw: float) -> tuple[float, float]:
+    """A world-tile offset expressed in the frame of a building turned by ``yaw``."""
+    return _unrotate(offset[0], offset[1], yaw)
 
-    The slots are ~0.8 apart whatever the side's length, so on anything wider
-    than three tiles they cover only the middle three columns and an anchor
-    further out has no slot directly beside it.  Clamping picks the nearest,
-    which is what the game does when it snaps a sorter end onto a slot pose.
+
+def to_world(local: tuple[float, float], yaw: float) -> tuple[float, float]:
+    """The inverse of :func:`to_local`: a building-local offset, turned into world."""
+    return _unrotate(local[0], local[1], -yaw)
+
+
+def slot_offset(item_id: int, yaw: float, slot: int) -> tuple[float, float, float]:
+    """Slot ``slot``'s position relative to the building's centre.
+
+    ``(tiles east, tiles north, altitude LEVELS)`` -- the grid frame the rest of
+    this project counts in, NOT the world units the prefab stores.  The pose
+    comes out of Unity in world units; a tile is ``GRID_ARC`` = 1.2566 of them
+    and a level is ``WORLD_UNITS_PER_LEVEL`` = 4/3, so both are divided out
+    here, once, rather than at each of the several places that add this to a
+    tile coordinate.
+
+    This is the game's ``slotPoses[slot].GetTransformedBy(objectPose)`` minus
+    the building's own position, rotated by its yaw.  Height is not affected by
+    yaw.
     """
-    return max(-1, min(1, int(round(t))))
+    p = _pose(item_id, slot)
+    wx, wy = to_world((p.dx, p.dy), yaw)
+    return (
+        wx / colliders.GRID_ARC,
+        wy / colliders.GRID_ARC,
+        p.dz / cat.WORLD_UNITS_PER_LEVEL,
+    )
+
+
+def world_gap(dx: float, dy: float, dz: float = 0.0) -> float:
+    """A grid-frame offset as the world distance the game would measure.
+
+    Tiles and levels have different sizes in world units, so a bare Euclidean
+    distance over the grid frame is not a distance at all.  Every comparison
+    against :data:`SLOT_REACH` goes through this.
+    """
+    ex = dx * colliders.GRID_ARC
+    ey = dy * colliders.GRID_ARC
+    ez = dz * cat.WORLD_UNITS_PER_LEVEL
+    return math.sqrt(ex * ex + ey * ey + ez * ez)
+
+
+def slot_forward(item_id: int, yaw: float, slot: int) -> tuple[float, float, float]:
+    """Slot ``slot``'s ``Pose.forward``, in world axes.
+
+    Points out of the building, along the direction a sorter attached there must
+    run.  The game dots this against the sorter's own axis in two separate
+    checks, so the sign matters and is preserved.
+    """
+    p = _pose(item_id, slot)
+    fx, fy = to_world((p.fx, p.fy), yaw)
+    return (fx, fy, p.fz)
+
+
+def _pose(item_id: int, slot: int) -> cat.SlotPose:
+    poses = cat.building(item_id).slot_poses
+    if not 0 <= slot < len(poses):
+        raise SlotUndetermined(
+            f"building {item_id} ({cat.building(item_id).name}) defines "
+            f"{len(poses)} sorter slots, so slot {slot} does not exist on it"
+        )
+    return poses[slot]
 
 
 def machine_slot(
@@ -187,56 +240,274 @@ def machine_slot(
 
     ``offset`` is the sorter's machine-side end minus the machine's centre, in
     world tiles.  ``approach`` is that same end minus the sorter's *other* end,
-    so it points into the machine -- which is what tells a corner tile's two
-    candidate slots apart.
+    so it points into the machine.
 
-    Raises :class:`SlotUndetermined` when the approach is exactly diagonal, in
-    which case neither side is the one the sorter came through.
+    ANGLE FIRST, THEN DISTANCE.  That is the game's own order of preference.
+    ``BuildTool_Inserter`` scores every candidate pose pair by::
+
+        bias = Max(Angle(axis, endPose.forward), Angle(-axis, startPose.forward))
+        bias = Max(bias, 180f - Angle(startPose.forward, endPose.forward))
+
+    and keeps the smallest -- an angular figure with no distance term in it.
+    Here the angular term is reduced to a yes/no at the game's own 24-degree
+    ``TooSkew`` threshold, and distance decides among the slots that pass; a
+    whole face of a building passes together, so the nearest slot along it wins.
+
+    Ordering by distance first would be wrong at a corner, where two slots sit
+    the same 0.1 tiles from the same tile centre and only their facing tells
+    them apart -- a sorter arriving along the machine's west side would be given
+    the south-facing slot on an index tie and paste as "deflection too much".
+
+    Raises :class:`SlotUndetermined` only when the building defines no slot the
+    sorter could name.  Distance is NOT a reason to raise: see the module
+    docstring.
     """
-    lx, ly = _unrotate(offset[0], offset[1], yaw)
-    ax, ay = _unrotate(approach[0], approach[1], yaw)
-
-    mirrored = ring_is_mirrored(item_id)
-    if abs(ax) == abs(ay):
+    poses = cat.building(item_id).slot_poses
+    if not poses:
         raise SlotUndetermined(
-            f"sorter approaches building {item_id} diagonally by "
-            f"({approach[0]}, {approach[1]}); no side is the one it entered"
+            f"building {item_id} ({cat.building(item_id).name}) defines no sorter "
+            f"slots at all, so no sorter can attach to it"
         )
-
-    if abs(ay) > abs(ax):
-        # Vertical approach: it came through the north or south side, whichever
-        # faces the direction it travelled from.
-        south = ay < 0
-        step = _along(lx)
-        if mirrored:
-            return (1 - step) if south else 6 + (step + 1)
-        return (step + 1) if south else 6 + (1 - step)
-
-    east = ax < 0
-    step = _along(ly)
-    if mirrored:
-        return 9 + (step + 1) if east else 3 + (1 - step)
-    return 3 + (1 - step) if east else 9 + (step + 1)
-
-
-def side_offset(
-    item_id: int,
-    yaw: float,
-    offset: tuple[float, float],
-    approach: tuple[float, float],
-) -> float | None:
-    """How far along its side a sorter's machine end sits, in tiles from centre.
-
-    The three slots on a side span roughly ``[-1, +1]`` about its centre, so an
-    ``abs()`` above 1 means the end is beside no slot at all and
-    :func:`machine_slot` clamped to the nearest.  ``None`` when the side cannot
-    be identified, which is the same condition :func:`machine_slot` refuses on.
-    """
-    ax, ay = _unrotate(approach[0], approach[1], yaw)
-    if abs(ax) == abs(ay):
-        return None
     lx, ly = _unrotate(offset[0], offset[1], yaw)
-    return lx if abs(ay) > abs(ax) else ly
+    # The game dots against the direction from this end towards the other one,
+    # which is the negation of the approach.
+    ax, ay = -approach[0], -approach[1]
+    span = (ax * ax + ay * ay) ** 0.5
+    if span == 0:
+        raise SlotUndetermined(
+            f"sorter has both ends on the same tile, so it approaches building "
+            f"{item_id} from no direction at all"
+        )
+    ax, ay = _unrotate(ax / span, ay / span, yaw)
+
+    # Ranked, never filtered: a slot the sorter runs squarely away from sorts
+    # behind every one it runs towards, but it is still preferred to naming
+    # nothing.  A building whose every slot faces the wrong way is a layout
+    # defect that `game.inserter_data` reports by name; dropping the sorter here
+    # would replace a reported error with a crash.
+    #
+    # Aligned-or-not, at the game's own 24-degree threshold, rather than the raw
+    # cosine.  The slots on one face do NOT share a bit-identical forward -- each
+    # is its own prefab Transform and they differ in the sixth decimal -- so
+    # ordering by the raw cosine would let numerical noise outrank a whole tile
+    # of distance.  Bucketing at a threshold the game itself uses restores the
+    # tie the geometry intends, and 13 of the corpus's 1206 records turn on it.
+    #
+    # Distance is measured in the build plane.  Every slot on a building sits
+    # within 0.04 of the same height, so the vertical term is common to all of
+    # them and cannot move the winner.
+    def rank(k: int) -> tuple[int, float, int]:
+        p = poses[k]
+        aligned = 0 if p.fx * ax + p.fy * ay >= SLOT_ALIGN_COS else 1
+        return (aligned, (p.dx - lx) ** 2 + (p.dy - ly) ** 2, k)
+
+    return min(range(len(poses)), key=rank)
+
+
+@dataclass(frozen=True, slots=True)
+class Attachment:
+    """Where a sorter may meet a machine, and what the game will read there.
+
+    ``cell`` is the grid tile the sorter's machine-side end must occupy -- NOT
+    necessarily a tile on the machine's outer edge.  A Chemical Plant's southern
+    slots sit at ``z = -0.9`` in a footprint five deep, so their anchor is one
+    row INSIDE the building and the sorter is two tiles long instead of one.
+    ``slot`` is what :func:`machine_slot` will derive for that geometry, so a
+    caller that anchors here and lets :func:`assign_sorter_slots` fill the
+    fields in gets this index by construction.
+    """
+
+    cell: tuple[int, int]
+    slot: int
+    span: int
+
+
+def attachment(machine: PlacedBuilding, far: tuple[int, int]) -> Attachment | None:
+    """Where a straight sorter between ``far`` and ``machine`` must anchor.
+
+    ``None`` means the game allows no such sorter, and the caller's only honest
+    responses are to try another column or to refuse.  There is no nearest-legal
+    answer to fall back on: a sorter anchored where no insert pose is within
+    reach is rejected on paste, which is the whole class of defect this exists
+    to stop.
+
+    What is checked, and where each rule comes from:
+
+    * the run is axis-aligned and ``far`` is off the footprint -- ours, and what
+      ``sorter.reach`` already requires;
+    * the anchor is a tile of ``machine``, so the end lands on the building it
+      names (``sorter.endpoint_pair``);
+    * the end is within :data:`SLOT_REACH` of the pose -- the game's
+      ``CheckInserterDataLegal``, and the paste path's ladder with it;
+    * the slot faces back along the run to within :data:`SLOT_ALIGN_DEG` -- the
+      game's ``TooSkew``, and the sign half of ``CheckInserterDataLegal``;
+    * the span is within ``catalog.SORTER_MAX_REACH``.
+
+    The game's LENGTH window is deliberately not applied.  Its loosest floor is
+    0.9 and its tightest ceiling 5.0, while an axis-aligned sorter on a tile
+    grid is 1, 2 or 3 tiles long -- it cannot bind on anything expressible here,
+    and ``game.inserter_skew`` covers the case a hand-built fixture reaches.
+
+    Ties are broken by the shortest span, then by the closest pose, then by the
+    lowest slot index, so the result is deterministic.
+    """
+    if not cat.building(machine.item_id).slot_poses:
+        # A building that takes no sorter anywhere answers "nowhere" rather than
+        # raising. `machine_slot` still raises for one that has been wired up
+        # regardless -- that is a sorter already built on a false premise, and a
+        # different thing from a planner asking whether it could be.
+        return None
+    fx, fy = far
+    cx, cy = _centre(machine)
+    xs = range(machine.x, machine.x + machine.width)
+    ys = range(machine.y, machine.y + machine.height)
+
+    cells: list[tuple[int, int]] = []
+    if fx in xs and fy not in ys:
+        cells = [(fx, y) for y in ys]
+    elif fy in ys and fx not in xs:
+        cells = [(x, fy) for x in xs]
+    if not cells:
+        return None
+
+    best: Attachment | None = None
+    best_key: tuple[int, float, int] | None = None
+    for cell in cells:
+        span = max(abs(cell[0] - fx), abs(cell[1] - fy))
+        if not 1 <= span <= cat.SORTER_MAX_REACH:
+            continue
+        slot = machine_slot(
+            machine.item_id,
+            machine.yaw,
+            (cell[0] - cx, cell[1] - cy),
+            (cell[0] - fx, cell[1] - fy),
+        )
+        sx, sy, sz = slot_offset(machine.item_id, machine.yaw, slot)
+        pose = (cx + sx, cy + sy)
+        reach = world_gap(pose[0] - cell[0], pose[1] - cell[1], sz)
+        if reach > SLOT_REACH:
+            continue
+        wx, wy, _wz = slot_forward(machine.item_id, machine.yaw, slot)
+        ax, ay = fx - pose[0], fy - pose[1]
+        n = (ax * ax + ay * ay) ** 0.5
+        if n == 0.0 or (wx * ax + wy * ay) / n < SLOT_ALIGN_COS:
+            continue
+        key = (span, reach, slot)
+        if best_key is None or key < best_key:
+            best_key, best = key, Attachment(cell, slot, span)
+    return best
+
+
+def probe_building(item_id: int, yaw: float) -> PlacedBuilding:
+    """One machine of this type at the origin, for asking geometric questions.
+
+    :func:`attachment` and :func:`attachable_columns` answer about a PLACED
+    building, which is right for wiring but awkward for a planner that wants to
+    know what a type will offer before it has placed one.  This is the type-level
+    stand-in, with the footprint already oriented so its extents and its poses
+    agree.
+    """
+    w, h = cat.oriented_footprint(item_id, yaw)
+    return PlacedBuilding(
+        item_id=item_id,
+        model_index=cat.building(item_id).model_index,
+        x=0,
+        y=0,
+        width=w,
+        height=h,
+        yaw=yaw,
+    )
+
+
+def direct_anchors(
+    src: PlacedBuilding, dst: PlacedBuilding, column: int
+) -> tuple[Attachment, Attachment] | None:
+    """Both ends of a machine-to-machine sorter on ``column``, or ``None``.
+
+    A direct insert has no belt to anchor against, so each end has to be found
+    against the OTHER machine's anchor rather than against a fixed tile -- and
+    those two answers depend on each other.  Two passes settle it: the producer
+    is placed against the consumer's near edge, the consumer against that, and
+    the producer re-checked against the consumer's final cell.  A third pass
+    cannot move anything, because the second already fixed the only tile the
+    first was approximating.
+
+    ``None`` is a refusal.  Direct insertion is an optimisation -- the same
+    connection can go by belt -- so a caller that cannot get an answer here has
+    somewhere to go, unlike one wiring a lane.
+    """
+    near = dst.y if dst.y > src.y else dst.y + dst.height - 1
+    first = attachment(src, (column, near))
+    if first is None:
+        return None
+    second = attachment(dst, (column, first.cell[1]))
+    if second is None:
+        return None
+    settled = attachment(src, (column, second.cell[1]))
+    if settled is None:
+        return None
+    return (settled, second)
+
+
+def lane_facing(item_id: int, yaw: float) -> tuple[bool, bool]:
+    """Can a building at ``yaw`` be served from the north, and from the south?
+
+    Read off the poses: a lane can serve a face only if some pose there points
+    back at it.  Both strategies run their belts east-west, so these two are the
+    only directions that decide whether a machine can be wired at all.
+    """
+    north = south = False
+    for k in range(len(cat.building(item_id).slot_poses)):
+        _fx, fy, _fz = slot_forward(item_id, yaw, k)
+        north = north or fy >= SLOT_ALIGN_COS
+        south = south or fy <= -SLOT_ALIGN_COS
+    return (north, south)
+
+
+def lane_orientation(item_id: int) -> float:
+    """The yaw to build ``item_id`` at, for a layout whose lanes run east-west.
+
+    An Oil Refinery has nine poses and NOT ONE of them faces north, so upright
+    it can only ever be fed from below -- which is why every Refinery spec
+    refused.  Turned a quarter it presents three poses to each side, and its
+    3x7 becomes a 7x3 that suits a row band better as well.
+
+    The rule is read from the table, not tabulated per building: prefer an
+    orientation reachable from BOTH sides, then one reachable from either, and
+    break ties toward upright so nothing rotates without cause.  Only 0 and 90
+    are considered -- 180 and 270 are those two mirrored, and a face that has a
+    pose still has one after mirroring, so they can differ from the pair only in
+    which columns are offered and never in whether a side works at all.
+
+    Returns ``0.0`` for a building with no poses at all.  Nothing can be wired to
+    one, so no rotation improves it, and ``game.addon_supply`` or the caller's
+    own refusal is what reports that.
+    """
+    if not cat.building(item_id).slot_poses:
+        return 0.0
+    scored = []
+    for yaw in (0.0, 90.0):
+        north, south = lane_facing(item_id, yaw)
+        scored.append((-(north and south), -(north or south), yaw))
+    scored.sort()
+    return scored[0][2]
+
+
+def attachable_columns(
+    machine: PlacedBuilding, lane_y: int
+) -> dict[int, Attachment]:
+    """Every column of ``machine`` a sorter from a lane at ``lane_y`` can use.
+
+    Empty is a real answer and a common one.  An Oil Refinery has no insert pose
+    on its northern face at all, so a lane above it can serve none of its
+    columns however close it sits; a Matrix Lab is five wide and offers three.
+    """
+    out: dict[int, Attachment] = {}
+    for x in range(machine.x, machine.x + machine.width):
+        got = attachment(machine, (x, lane_y))
+        if got is not None:
+            out[x] = got
+    return out
 
 
 def _centre(b: PlacedBuilding) -> tuple[float, float]:
@@ -271,12 +542,33 @@ def _peer_slot(
     )
 
 
+def sorter_yaw(head: tuple[int, int], tail: tuple[int, int]) -> float:
+    """The yaw a sorter running ``head`` -> ``tail`` carries, in degrees.
+
+    A sorter's yaw points from the end it draws FROM to the end it feeds INTO --
+    from ``(x, y)`` to ``(x2, y2)``.  All 1250 real sorters in the corpus with a
+    measurable span do this, with no exception and with ``yaw2 == yaw`` on every
+    one of them.
+
+    It matters because the game reconstructs the ends' rotations on paste: a
+    machine end is re-rotated to the slot's own pose, the other end keeps the
+    yaw the blueprint carries, and ``Quaternion.Angle`` between the two over 30
+    degrees is ``EBuildCondition.TooSkew``.  A yaw that points the other way is
+    exactly 180 degrees out, so it is not a cosmetic field.
+
+    A zero-length sorter yields 0.0 rather than raising; ``sorter.reach`` is
+    where a sorter with both ends on one tile gets reported, and raising here
+    would replace that report with a crash.
+    """
+    return math.degrees(math.atan2(tail[0] - head[0], tail[1] - head[1])) % 360.0
+
+
 def assign_sorter_slots(
     buildings: Sequence[PlacedBuilding],
 ) -> tuple[PlacedBuilding, ...]:
-    """Fill in every sorter's four slot fields from the geometry around it.
+    """Fill in every sorter's four slot fields and its yaw from its geometry.
 
-    A strategy places sorters; it does not have to know this convention.  Both
+    A strategy places sorters; it does not have to know these conventions.  Both
     strategies run their finished building list through here, which is why there
     is one place to be right rather than four call sites to keep in step.
 
@@ -285,6 +577,26 @@ def assign_sorter_slots(
     """
     out: list[PlacedBuilding] = []
     for b in buildings:
+        if cat.building(b.item_id).is_belt_addon:
+            # A belt addon carries the same constant pair on all four fields and
+            # is wired to nothing. Setting it here rather than at the one place
+            # a coater is created keeps every "what does the game read in these
+            # fields" answer in this module.
+            if b.input_obj is not None or b.output_obj is not None:
+                raise SlotUndetermined(
+                    f"belt addon (item {b.item_id}) has a connection; the game "
+                    f"wires addons to nothing and will not let a sorter target one"
+                )
+            out.append(
+                replace(
+                    b,
+                    output_to_slot=ADDON_TO_SLOT,
+                    input_from_slot=ADDON_FROM_SLOT,
+                    output_from_slot=ADDON_FROM_SLOT,
+                    input_to_slot=ADDON_TO_SLOT,
+                )
+            )
+            continue
         if not cat.is_sorter(b.item_id):
             out.append(b)
             continue
@@ -307,6 +619,7 @@ def assign_sorter_slots(
             if b.output_obj is None
             else _peer_slot(buildings[b.output_obj], tail, head)
         )
+        yaw = sorter_yaw(head, tail)
         out.append(
             replace(
                 b,
@@ -314,6 +627,8 @@ def assign_sorter_slots(
                 input_from_slot=input_from,
                 output_from_slot=OUTPUT_FROM_SLOT,
                 input_to_slot=INPUT_TO_SLOT,
+                yaw=yaw,
+                yaw2=yaw,
             )
         )
     return tuple(out)

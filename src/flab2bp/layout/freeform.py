@@ -64,7 +64,7 @@ import heapq
 import math
 import time
 from collections import defaultdict
-from collections.abc import Collection, Mapping, Sequence, Set
+from collections.abc import Callable, Collection, Mapping, Sequence, Set
 from dataclasses import dataclass, field, replace
 from enum import Enum
 from fractions import Fraction
@@ -73,7 +73,7 @@ import numpy as np
 from ortools.sat.python import cp_model
 
 from flab2bp.dsp import catalog, params
-from flab2bp.layout import junction, validate
+from flab2bp.layout import junction, slots, validate
 from flab2bp.layout.base import (
     DEFAULT_SEARCH_WORKERS,
     RETRY_BUDGET_S,
@@ -82,7 +82,7 @@ from flab2bp.layout.base import (
     PlacedBuilding,
     Placement,
 )
-from flab2bp.layout.slots import assign_sorter_slots
+from flab2bp.layout.slots import SlotUndetermined, assign_sorter_slots
 from flab2bp.layout.spine import BELT_ITEM_IDS, MACHINE_ITEM_IDS, SORTER_TIERS
 from flab2bp.spec import BuildSpec
 
@@ -544,8 +544,17 @@ class _Group:
     item_id: int
     model_index: int
     count: int
+    #: Grid extents AS BUILT -- already swapped when ``yaw`` is a quarter turn,
+    #: so nothing downstream has to remember to swap them.
     width: int
     height: int
+    #: Which way this machine is turned, chosen from its own insert poses by
+    #: `slots.lane_orientation`. A building with no pose facing the lane cannot
+    #: be wired at all however it is packed.
+    yaw: float
+    #: Tiles to reserve per machine, from the rotated collider.
+    pitch_w: int
+    pitch_h: int
     inputs: dict[str, Fraction]
     outputs: dict[str, Fraction]
     proliferated: bool
@@ -597,6 +606,15 @@ class Strip:
     machines: int
     mw: int
     mh: int
+    #: The machines' yaw, carried from the group so the emitted record and the
+    #: extents above cannot disagree about which way they are turned.
+    yaw: float
+    #: Tiles to RESERVE per machine, from the rotated collider -- see
+    #: `catalog.clearance`. An Assembling Machine covers `mw` = 3 and needs 4:
+    #: its 3.82-unit collider does not fit a 3-tile pitch at 1.2566 units per
+    #: tile. Spacing and the pack use these; anchors and slots use `mw`/`mh`.
+    pw: int
+    ph: int
     #: Lanes arriving on the north side, ordered top-down.  Each lane holds one
     #: or more items; more than one means a shared lane whose sorters filter.
     in_above: tuple[tuple[str, ...], ...]
@@ -624,11 +642,77 @@ class Strip:
 
     @property
     def width(self) -> int:
-        return self.machines * self.mw
+        return self.machines * self.pw
 
     @property
     def height(self) -> int:
-        return len(self.in_above) + self.mh + len(self.out_lanes) + len(self.in_below)
+        return len(self.in_above) + self.ph + len(self.out_lanes) + len(self.in_below)
+
+    @property
+    def band_rows(self) -> int:
+        """Rows the machine band RESERVES -- clearance, not footprint.
+
+        THE strip row map lives on these two members and nothing else may
+        compute a row from `mh`. `mh` is how tall the machines are; `ph` is how
+        much room their colliders need, and lanes have to start after the second
+        or a junction on them is illegal against the machine beside it.
+
+        The two were the same number until spacing landed, so every consumer
+        that wanted "the first row after the band" wrote `mh` and was right by
+        accident. There were SEVEN of them -- `row_of_output`, `row_of_input`'s
+        `in_below` branch, the band skip in emission, the probe lane in
+        `_attachable_columns`, `height`, and the two SPAN expressions that size
+        sorters from the machine's bottom edge -- and moving a subset is what
+        took this module from 9 failing tests to 80, twice. They move together
+        or not at all, which is what this exists to make possible.
+
+        THE TWO SPAN CONSUMERS HAVE SINCE LEFT, and that is a correction rather
+        than a subset move: a span is not a row-map question at all. It is the
+        distance from a lane to the machine's insert POSE, and `sorter_span`
+        reads that from the slot table, because a Chemical Plant's northern
+        anchor is a row inside its footprint and no arithmetic on `mh` or `ph`
+        can know it. Five consumers ask here now, and they still move together.
+        """
+        return self.ph
+
+    @property
+    def first_row_below_band(self) -> int:
+        """Row index of the first lane under the machine band."""
+        return self.machine_row + self.band_rows
+
+    def sorter_span(self, row: int) -> int:
+        """Tiles a sorter crosses between lane ``row`` and the machine it serves.
+
+        Chebyshev, matching ``validate._sorter_span``, and read from the
+        machine's OWN insert poses rather than from the edge of its footprint.
+
+        THIS REPLACES ``rows_below_machines``, WHICH COUNTED FROM THE FOOTPRINT
+        EDGE, and which was right only for a machine whose poses sit on that
+        edge.  A Chemical Plant's NORTHERN anchor is a row INSIDE its 9x5
+        footprint, so a lane one row clear of it is TWO tiles from the anchor,
+        not one -- the same correction ``_find_taps`` took in 954bea2, arriving
+        one layer later in the same module.
+
+        The span sizes the sorter tier, so understating it by one picks a Mk.II
+        where a Mk.III is needed: ``_pick_sorter(2/s, span=1)`` returns a Mk.II
+        and a Mk.II sustains 3/2 across the two tiles it actually crosses.  That
+        is a starvation with nothing to see at paste time, and it is what
+        ``flow.sorter_capacity`` reported on every refiner of
+        ``two-product-producer``.
+
+        The WORST column is taken, never the one ``_link_lane`` happens to pick.
+        Over-stating a span costs one sorter tier; under-stating it starves a
+        machine.
+
+        Zero means no pose is reachable from that row at all.  That is a
+        different failure and belongs to ``_machines_without_poses``.
+        """
+        lane_y = row - self.machine_row
+        probe = slots.probe_building(self.item_id, self.yaw)
+        reach = slots.attachable_columns(probe, lane_y)
+        if not reach:
+            return 0
+        return max(abs(lane_y - a.cell[1]) for a in reach.values())
 
     @property
     def machine_row(self) -> int:
@@ -670,12 +754,20 @@ class Strip:
                 return j
         for j, lane in enumerate(self.in_below):
             if item in lane:
-                return len(self.in_above) + self.mh + len(self.out_lanes) + j
+                return self.first_row_below_band + len(self.out_lanes) + j
         raise KeyError(f"{item!r} is not an ingredient of {self.recipe_id!r}")
 
     def row_of_output(self, k: int) -> int:
-        """Row index of the ``k``-th output lane, relative to the strip's top."""
-        return len(self.in_above) + self.mh + k
+        """Row index of the ``k``-th output lane, relative to the strip's top.
+
+        Counted from the machine FOOTPRINT, not the clearance band. Moving it to
+        `ph` was tried, to keep a lane out of the row a machine's collider needs
+        so that a junction on it would be legal -- it took freeform from 9
+        failures to 80, because the strip's row indices are consumed in several
+        places that each assume lanes start at `mh`. The junction constraint is
+        real; solving it by moving lane rows is not the way in.
+        """
+        return self.first_row_below_band + k
 
     def input_lane_tiles(self, lane: tuple[str, ...]) -> int:
         """Belt tiles an INPUT lane actually needs, counted from its west end.
@@ -690,9 +782,52 @@ class Strip:
         Output lanes are NOT trimmable the same way: they are filled at every
         machine column and drained at the east end, so every tile between the
         first sorter and the port carries flow.
+
+        The columns come from the machine's own insert poses, not from
+        ``min(slot, mw - 1)``.  A seven-wide Oil Refinery offers only its middle
+        three and a nine-wide Chemical Plant four of nine, so a lane trimmed to
+        the left edge stopped short of every column that could be wired and the
+        last machine got no sorter at all.
+
+        ZERO IS A REAL ANSWER AND ITS CALLER MUST HAVE REFUSED ALREADY.  A
+        machine whose prefab ships no insert pose at all -- a Ray Receiver, an
+        Energy Exchanger -- offers no column on either side, so a lane serving it
+        needs no belt tiles because no sorter could ever draw from one.
+        ``_machines_without_poses`` refuses such a spec before the sweep starts;
+        emission may not be reached with one, because a zero-tile lane is an
+        empty ``lane_idx`` row and ``feed`` indexes its head.
         """
-        last_slot = min(len(lane) - 1, self.mw - 1)
-        return (self.machines - 1) * self.mw + last_slot + 1
+        cols = self.attachable_columns
+        if not cols:
+            return 0
+        last_slot = cols[min(len(lane) - 1, len(cols) - 1)]
+        return (self.machines - 1) * self.pw + last_slot + 1
+
+    def _attachable_columns(self, *, above: bool) -> tuple[int, ...]:
+        """Columns of ONE of this strip's machines a sorter can reach, from 0."""
+        probe = slots.probe_building(self.item_id, self.yaw)
+        lane_y = -1 if above else self.band_rows
+        return tuple(sorted(slots.attachable_columns(probe, lane_y)))
+
+    @property
+    def attachable_columns(self) -> tuple[int, ...]:
+        """Columns of one of this strip's machines ANY sorter could reach.
+
+        The two sides are UNIONED rather than asked for separately.  Every
+        building we place offers the same columns above and below, so the union
+        is the same answer; where it would not be, it is the longer one, and a
+        tile of dead belt is a warning where a missing tile is an unfed machine.
+
+        EMPTY MEANS NO SORTER CAN TOUCH THIS MACHINE ANYWHERE, which is a
+        different thing from a narrow choice and is what
+        ``_machines_without_poses`` refuses on.
+        """
+        return tuple(
+            sorted(
+                set(self._attachable_columns(above=True))
+                | set(self._attachable_columns(above=False))
+            )
+        )
 
     def east_of_input(self, item: str) -> int:
         """Offset from the strip's west edge to the last tile of ``item``'s lane."""
@@ -955,14 +1090,20 @@ def _adapt(spec: BuildSpec) -> dict[str, _Group]:
             item_id = resolved
             mode_params = ()
         b = catalog.building(item_id)
+        yaw = slots.lane_orientation(item_id)
+        gw, gh = catalog.oriented_footprint(item_id, yaw)
+        pw, ph = catalog.clearance(item_id, yaw)
         groups[f"{mg.recipe_id}#{i}"] = _Group(
             key=f"{mg.recipe_id}#{i}",
             recipe_id=mg.recipe_id,
             item_id=item_id,
             model_index=b.model_index,
             count=mg.count,
-            width=b.width,
-            height=b.height,
+            width=gw,
+            height=gh,
+            yaw=yaw,
+            pitch_w=pw,
+            pitch_h=ph,
             inputs=dict(mg.inputs_per_machine),
             outputs=dict(mg.outputs_per_machine),
             proliferated=mg.is_proliferated,
@@ -1140,6 +1281,9 @@ def plan_strips(spec: BuildSpec, *, strip_len: int = 6) -> list[Strip]:
                         machines=n,
                         mw=g.width,
                         mh=g.height,
+                        yaw=g.yaw,
+                        pw=g.pitch_w,
+                        ph=g.pitch_h,
                         in_above=in_above,
                         in_below=in_below,
                         out_lanes=tuple(shard),
@@ -1938,8 +2082,8 @@ def _emit_strip(
     lane_idx: dict[int, list[int]] = {}
     for row in range(s.height):
         y = oy + row
-        if n_above <= row < n_above + s.mh:
-            continue  # machine band
+        if n_above <= row < s.first_row_below_band:
+            continue  # machine band, clearance rows included
         indices = []
         for k in range(lane_tiles_of.get(row, width)):
             indices.append(
@@ -1968,10 +2112,11 @@ def _emit_strip(
                 PlacedBuilding(
                     item_id=s.item_id,
                     model_index=s.model_index,
-                    x=ox + k * s.mw,
+                    x=ox + k * s.pw,
                     y=machine_y,
                     width=s.mw,
                     height=s.mh,
+                    yaw=s.yaw,
                     # A mode-driven machine carries no recipe id at all: its job
                     # is the word in the parameter block. This was once
                     # `abs(hash(name)) % 30000`, which is not a DSP recipe id and
@@ -2023,11 +2168,11 @@ def _emit_strip(
         return placed
 
     for j, lane in enumerate(s.in_above):
-        sorters += feed(lane, row=j, span=n_above - j, near_edge=machine_y)
+        sorters += feed(lane, row=j, span=s.sorter_span(j), near_edge=machine_y)
 
     for j, (item, dest) in enumerate(s.out_lanes):
         row = s.row_of_output(j)
-        span = j + 1
+        span = s.sorter_span(row)
         out_ports[item, dest] = _Port(
             lane_idx[row][-1],
             ox + width - 1,
@@ -2044,11 +2189,9 @@ def _emit_strip(
 
     # Overflow ingredients, seated below the output lanes and reaching up to the
     # machine band's south edge.
-    for j, lane in enumerate(s.in_below):
+    for lane in s.in_below:
         row = s.row_of_input(lane[0])
-        sorters += feed(
-            lane, row=row, span=len(s.out_lanes) + j + 1, near_edge=bottom
-        )
+        sorters += feed(lane, row=row, span=s.sorter_span(row), near_edge=bottom)
 
     return in_ports, out_ports, sorters
 
@@ -2078,20 +2221,34 @@ def _link_lane(
     uses to tell the two apart, so do not set a filter where none is needed.
     """
     model_index = catalog.building(tier).model_index
-    facing = Facing.SOUTH.value if lane_y < machine_y else Facing.NORTH.value
+    facing = Facing.SOUTH.value if lane_y < machine_y else Facing.NORTH.value  # placeholder
     placed = 0
     for m_idx in machines:
         m = canvas.buildings[m_idx]
-        x = m.x + min(column, m.width - 1)
+        # WHICH column, and WHERE on the machine, from the machine's own insert
+        # poses. The near edge row is right for a 3x3 and wrong for most else: a
+        # Chemical Plant's southern slots are a row inside its footprint, an Oil
+        # Refinery has none at all on its north face, and a Matrix Lab offers
+        # only its middle three columns. `column` still spreads successive
+        # sorters across the machine, but only over columns that HAVE a pose --
+        # clamping to `m.width - 1` picked column 0 of a Matrix Lab, which has
+        # none, and left the machine unfed.
+        reachable = slots.attachable_columns(m, lane_y)
+        lane_xs = {canvas.buildings[i].x for i in lane}
+        usable = sorted(c for c in reachable if c in lane_xs)
+        if not usable:
+            continue
+        x = usable[min(column, len(usable) - 1)]
         belt_idx = next((i for i in lane if canvas.buildings[i].x == x), None)
         if belt_idx is None:
             continue
+        anchor_y = reachable[x].cell[1]
         if into_machine:
             src, dst = belt_idx, m_idx
-            ax, ay, bx, by = x, lane_y, x, machine_y
+            ax, ay, bx, by = x, lane_y, x, anchor_y
         else:
             src, dst = m_idx, belt_idx
-            ax, ay, bx, by = x, machine_y, x, lane_y
+            ax, ay, bx, by = x, anchor_y, x, lane_y
         canvas.buildings.append(
             PlacedBuilding(
                 item_id=tier,
@@ -3148,6 +3305,7 @@ def _merge_frontier(
     canvas: _Canvas,
     paths: dict[int, list[tuple[int, int, int]]],
     siblings: tuple[int, ...],
+    junctionable: Callable[[int, int], bool] | None = None,
 ) -> set[tuple[int, int, int]]:
     """Free cells beside a sibling net's path -- somewhere to merge into.
 
@@ -3159,10 +3317,26 @@ def _merge_frontier(
     The sibling's own cells are not offered as goals: they are occupied, so A*
     could never step onto them.  Their free neighbours are what a merging belt
     actually needs.
+
+    ``junctionable`` IS THE SOURCE SIDE ONLY, and it is the difference between
+    offering a merge point and offering a merge point that can be built.
+    Leaving a sibling's path puts a SPLITTER on the cell left from, because that
+    cell already flows onward; a splitter's cross collider needs three and a
+    half tiles from an Assembling Machine's centre, and a path running beside a
+    machine band offers plenty of cells at 2.83.  Without the filter A* takes
+    the cheapest of those, ``_tap_source`` refuses the site at commit time, and
+    the whole pack is discarded for a tap that was never legal -- with the
+    router blamed for a route it was told to make.
+
+    The DESTINATION side passes nothing, and that is not an oversight: arriving
+    at a sibling's path builds no junction at all, only a link from this path's
+    tail (see ``_sink_for``), so no site has to be clear.
     """
     out: set[tuple[int, int, int]] = set()
     for s in siblings:
         for x, y, lvl in paths.get(s, ()):
+            if junctionable is not None and not junctionable(x, y):
+                continue
             for dx, dy in _STEPS:
                 cell = (x + dx, y + dy, lvl)
                 if canvas.free(cell):
@@ -3310,6 +3484,19 @@ def _route_all(
     # second. That leaves the chain a single linear run, which is the only shape
     # that is both correct and reachable.
 
+    #: (x, y) -> may a splitter stand there.  Memoised for the whole pass, which
+    #: is exact rather than approximate: `canvas.buildings` does not change while
+    #: rounds run -- belts are only ever added by `_commit_paths`, after the last
+    #: round has already returned.
+    junction_ok: dict[tuple[int, int], bool] = {}
+
+    def _can_junction(x: int, y: int) -> bool:
+        got = junction_ok.get((x, y))
+        if got is None:
+            got = junction.site_is_clear(canvas.buildings, x, y)
+            junction_ok[x, y] = got
+        return got
+
     def _stake(index: int, path: list[tuple[int, int, int]]) -> None:
         """Put a path down: canvas, grid and ownership, in step."""
         paths[index] = path
@@ -3345,16 +3532,35 @@ def _route_all(
         canvas.routing_ports = frozenset(
             {(net.src.x, net.src.y), (net.dst.x, net.dst.y)}
         )
-        starts = [
-            (net.src.x + dx, net.src.y + dy, 0)
-            for dx, dy in _STEPS
-            if canvas.free((net.src.x + dx, net.src.y + dy, 0))
-        ]
+        # THE LANE TILE IS ONLY FREE FOR THE FIRST NET TO LEAVE IT.  Its port is
+        # the lane's END, which has no onward link, so the first tap merely
+        # points it at the branch. Every later one finds that link in place and
+        # needs a SPLITTER on the lane tile -- and a lane runs directly beside
+        # its machine band, where a splitter's cross collider never fits. Those
+        # starts are withdrawn rather than offered and then refused at commit
+        # time, which is the difference between the router picking its second
+        # choice and the whole pack being discarded.
+        siblings = src_group.get(index, ())
+        needs_junction = any(s in paths for s in siblings) or (
+            canvas.buildings[net.src.belt].output_obj is not None
+        )
+        starts = (
+            []
+            if needs_junction and not _can_junction(net.src.x, net.src.y)
+            else [
+                (net.src.x + dx, net.src.y + dy, 0)
+                for dx, dy in _STEPS
+                if canvas.free((net.src.x + dx, net.src.y + dy, 0))
+            ]
+        )
         # Leaving from a sibling's belt is as good as leaving from the lane,
         # and it is the only option when the lane is walled in. `_tap_source`
-        # turns the attachment into a splitter on that belt.
+        # turns the attachment into a splitter on that belt, so only cells that
+        # can CARRY a splitter are offered.
         starts.extend(
-            sorted(_merge_frontier(canvas, paths, src_group.get(index, ())) - set(starts))
+            sorted(
+                _merge_frontier(canvas, paths, siblings, _can_junction) - set(starts)
+            )
         )
         goals = {
             (net.dst.x + dx, net.dst.y + dy, 0)
@@ -4345,6 +4551,11 @@ def _tap_source(
     if canvas.buildings[onward].item_id == catalog.SPLITTER_ID:
         junction_idx = onward
     else:
+        # A junction's collider reaches further than the tile it shares, so a
+        # site beside a machine is one the game refuses. The router has other
+        # tiles; refusing here costs a tap, not a build.
+        if not junction.site_is_clear(canvas.buildings, b.x, b.y):
+            return False
         junction_idx = canvas.add(
             junction.make_splitter(b.x, b.y, b.z, carries_item=b.carries_item)
         )
@@ -5527,12 +5738,24 @@ def _build(
     # placement nothing was ever going to look at.
     towers = _place_power(canvas, power_sites) if power and not failed else 0
 
+    # Slot indices are geometry, so they are derived here once rather than at
+    # each of the several places a sorter gets created. Every sorter this
+    # strategy emitted before carried a defaulted zero in all four fields, which
+    # the game rejects outright.
+    #
+    # A sorter whose slot cannot be derived is a REFUSAL, not a crash and not a
+    # guess. The one case that reaches this today is a Spray Coater: it ships
+    # zero slot poses, and `BuildTool_Inserter` will not even let a sorter
+    # target a building with none, so the connection this strategy wants does
+    # not exist in the game. Refusing says so; emitting an index the game never
+    # writes would not.
+    try:
+        wired = assign_sorter_slots(canvas.buildings)
+    except SlotUndetermined as exc:
+        raise NoValidLayout(f"a sorter's slot could not be derived: {exc}") from exc
+
     placement = Placement(
-        # Slot indices are geometry, so they are derived here once rather than
-        # at each of the several places a sorter gets created. Every sorter this
-        # strategy emitted before carried a defaulted zero in all four fields,
-        # which the game rejects outright.
-        buildings=assign_sorter_slots(canvas.buildings),
+        buildings=wired,
         description=f"flab2bp freeform layout ({spec.label or 'default'})",
         short_desc=spec.label or "flab2bp",
         stats={
@@ -5673,7 +5896,17 @@ def _place_coaters(
             # East end of this lane: nearest the margin the drop belt lives in.
             cx, cy = port.x1, port.y
             host = belt_at.get((cx, cy, 0))
-            drop_cell = (cx + 1, cy, 0)
+            # WHERE the proliferator belt has to be, from the coater's own addon
+            # area rather than from convenience. The game attaches an addon's
+            # belts positionally: area 0 is the cargo belt it rides, area 1 the
+            # proliferator supply, and for a coater that is `(0, -1.25, 1)` --
+            # a tile and a quarter BEHIND it and exactly one altitude level UP.
+            # A belt beside it at ground level, which is what this used to build
+            # and then run a sorter from, is in neither area and the game
+            # attaches nothing to it.
+            adx, ady, adz = catalog.building(catalog.SPRAY_COATER_ID).addon_areas[1]
+            wx, wy = slots.to_world((adx, ady), Facing.EAST.value)
+            drop_cell = (cx + round(wx), cy + round(wy), round(adz))
             if host is None or not canvas.free(drop_cell):
                 continue
 
@@ -5683,6 +5916,7 @@ def _place_coaters(
                     model_index=belt_model,
                     x=drop_cell[0],
                     y=drop_cell[1],
+                    z=Fraction(drop_cell[2]),
                     width=1,
                     height=1,
                     carries_item=_proliferator_item(spec),
@@ -5700,26 +5934,16 @@ def _place_coaters(
                     yaw=Facing.EAST.value,
                 )
             )
-            # Sorter drop -> coater, span 1. Anchors sit on the two buildings;
-            # the connection indices carry the semantics.
-            sorter = SORTER_TIERS[0]
-            canvas.buildings.append(
-                PlacedBuilding(
-                    item_id=sorter,
-                    model_index=catalog.building(sorter).model_index,
-                    x=drop_cell[0],
-                    y=drop_cell[1],
-                    width=1,
-                    height=1,
-                    x2=cx,
-                    y2=cy,
-                    z2=Fraction(0),
-                    yaw=Facing.WEST.value,
-                    yaw2=Facing.WEST.value,
-                    input_obj=drop,
-                    output_obj=idx,
-                )
-            )
+            # NO sorter drop -> coater. That connection does not exist in the
+            # game: a coater ships zero insert poses, `BuildTool_Inserter` will
+            # not target a building with none, and all eight coaters in the
+            # fixture corpus carry no connection at all. The game attaches the
+            # belts positionally instead, from `PrefabDesc.addonAreaPoses` --
+            # area 1, the proliferator supply, sits at `(0, -1.25, 1)`: a tile
+            # and a quarter behind the coater and one altitude level UP. The
+            # drop belt above is at the right x and the wrong LEVEL, so
+            # `game.addon_supply` reports the coater unsupplied and the
+            # candidate is refused rather than shipped looking fed.
             out.append(_Coater(coater=idx, drop=drop, x=drop_cell[0], y=drop_cell[1]))
     return out
 
@@ -5874,6 +6098,76 @@ def _fanout_shortfall(strips: list[Strip]) -> list[str]:
                 f"{item}: {src_key} lane is {tiles} tile(s) wide but must tap "
                 f"{per_lane} consumer lane(s) of {dest}"
             )
+    return out
+
+
+def _machines_without_poses(strips: list[Strip]) -> list[str]:
+    """Lanes seated where no sorter of any tier can join them to their machine.
+
+    Two shapes, and they are worth telling apart in the message because they
+    call for different fixes.
+
+    THE MACHINE HAS NO INSERT POSE AT ALL.  ``slots.attachment`` reads the
+    game's own ``PrefabDesc.slotPoses``, and for a Ray Receiver and an Energy
+    Exchanger that array has LENGTH ZERO.  ``BuildTool_Inserter`` will not
+    target a building with no pose, so no sorter can attach to one on any face
+    at any distance.  ``Strip.input_lane_tiles`` correctly returns 0 for such a
+    machine, ``_emit_strip`` then built that row as an empty lane, and ``feed``
+    indexed its head -- ``IndexError: list index out of range``.  The OUTPUT
+    side did not even crash: ``_link_lane`` finds no usable column, places
+    nothing and returns 0, so the machine shipped joined to nothing at either
+    end.  That is the shape spine measured on the mode-driven spec -- two Energy
+    Exchangers and ZERO sorters in the whole placement, which `validate` called
+    ok.
+
+    THE LANE IS SIMPLY TOO FAR from the nearest pose.  A machine's poses are not
+    on its footprint edge in general, so a lane that looks two rows clear can be
+    three or four tiles from anything a sorter can anchor on, and every tier
+    reaches exactly ``SORTER_MAX_REACH``.  Over the 36 corpus specs this is 31
+    lanes; the old edge-row arithmetic charged 24 of them a span of 3 -- legal,
+    so a sorter was emitted that could not reach -- and the other 7 a span of 4,
+    which is `ValueError: span 4 outside 1..3` and is the crash every
+    `universe-matrix` stress cell reported.
+
+    BOTH ARE REFUSALS RATHER THAN REPAIRS, and deliberately so.  Whether the
+    pose extraction is incomplete -- a Ray Receiver IS fed in game, so it either
+    carries its slots in an array the extractor does not read or takes items by
+    some other mechanism -- is a question for the extractor and has its own
+    backlog entry.  Until it is answered, refusing is the honest reading of the
+    data we have, and a blueprint that pastes idle machines is worse than a
+    refusal that names the prefab.
+
+    Returns one description per distinct offending (building, lane kind), empty
+    when every lane in the plan can be joined to its machine.
+    """
+    reach = catalog.SORTER_MAX_REACH
+    seen: set[tuple[int, str, int]] = set()
+    out: list[str] = []
+    for s in strips:
+        rows: list[tuple[int, str]] = [(j, "ingredient") for j in range(len(s.in_above))]
+        rows += [(s.row_of_output(k), "output") for k in range(len(s.out_lanes))]
+        rows += [(s.row_of_input(lane[0]), "ingredient") for lane in s.in_below]
+        for row, kind in rows:
+            span = s.sorter_span(row)
+            if 1 <= span <= reach:
+                continue
+            key = (s.item_id, kind, span)
+            if key in seen:
+                continue
+            seen.add(key)
+            name = catalog.building(s.item_id).name
+            if not s.attachable_columns:
+                out.append(
+                    f"{name} ({s.recipe_id}): the game's prefab gives it no "
+                    f"insert pose on any face, so its {kind} lane cannot be "
+                    f"joined to it by a sorter"
+                )
+            else:
+                out.append(
+                    f"{name} ({s.recipe_id}): its {kind} lane on row {row} is "
+                    f"{span} tile(s) from the nearest insert pose, past the "
+                    f"{reach}-tile reach of every sorter tier"
+                )
     return out
 
 
@@ -6062,6 +6356,20 @@ class FreeformLayout:
         # consumers taps a different tile for each and junctions there. What
         # remains unservable is a lane with fewer TILES than taps to make, since
         # two taps on one tile would need two splitters on one square.
+        # A machine no sorter can attach to is refused FIRST, because it is not
+        # a question about the packing at all: `_emit_strip` crashes on the
+        # empty lane it implies, so every later stage would be reporting a
+        # symptom of this one.
+        unreachable = _machines_without_poses(strips)
+        if unreachable:
+            raise NoValidLayout(
+                "a machine in this spec has lanes to wire and no insert pose to "
+                "wire them to, so it would paste joined to nothing. "
+                + "; ".join(unreachable[:3]),
+                spec_label=spec.label,
+                budget_s=0.0,
+            )
+
         shortfall = _fanout_shortfall(strips)
         if shortfall:
             raise NoValidLayout(
