@@ -2702,7 +2702,8 @@ class TestModeDrivenMachines:
         """
         with pytest.raises(NoValidLayout) as exc:
             SpineLayout(power=False).lay_out(self._exchanger_spec(), time_budget_s=0.5)
-        assert "cannot be wired even alone in its own row" in exc.value.reason
+        assert "takes no sorter on any face" in exc.value.reason
+        assert "energy-exchanger" in exc.value.reason
 
     def test_the_machine_carries_the_mode_not_a_recipe(self) -> None:
         """Asked of the unit that decides it, since no placement reaches here.
@@ -2738,6 +2739,156 @@ class TestModeDrivenMachines:
         assert smelters
         assert all(b.recipe_id == catalog.recipe_id("iron-ingot") for b in smelters)
         assert all(b.parameters == () for b in smelters)
+
+
+class TestAMachineTheGameTakesNoSorterOn:
+    """The refusal must name the PREFAB, because that is what is wrong.
+
+    Settled from the game, not inferred.  ``BuildTool_Inserter`` drops any cast
+    target whose ``PrefabDesc.slotPoses`` is empty and which is not a belt, and
+    ``PrefabDesc.slotPoses`` is ``SlotConfig.insertPoses`` -- which the Ray
+    Receiver and the Energy Exchanger ship EMPTY.  Their prefabs carry one
+    ``SlotConfig`` each, on the root, with ``insertPoses`` length 0 and
+    ``addonAreaCenter`` length 0; their only pose children are named ``slot-0``
+    and ``slot(0..3)``, and those are the BELT PORTS.  The game wires them by
+    docking a belt straight into a port -- all 45 Energy Exchangers in the
+    fixture corpus have exactly that: 90 peers, every one a belt.
+
+    Spine has no belt-to-port docking, so the refusal is right.  What these pin
+    is that it SAYS SO.  The case used to arrive as ``FALLBACK_SEED_UNWIRABLE``
+    -- "no ordering of its two corridors puts in reach; machine heights differ
+    by up to 6 tiles" -- which is a statement about a packing, is not what is
+    wrong here, and sends the next reader to the row model instead of to the
+    prefab.
+    """
+
+    @staticmethod
+    def _ray_receiver_spec() -> BuildSpec:
+        """A pure SOURCE: the game gives a Ray Receiver photons, not items.
+
+        This is the shape the ``universe-matrix`` corpus cell actually has --
+        ``inputs_per_machine`` is literally empty and the only lane it wants is
+        the critical-photon OUTPUT -- so the refusal cannot be waved away as
+        being about a feed that does not exist.
+        """
+        return BuildSpec(
+            groups=(
+                group(
+                    "critical-photon", "ray-receiver", 4, {}, {"critical-photon": F(1)}
+                ),
+            ),
+            external_inputs={},
+            outputs={"critical-photon": F(4)},
+            belt_item_id="conveyor-belt-2",
+            belt_items_per_second=F(12),
+            label="photons",
+        )
+
+    def test_the_refusal_names_the_prefab_and_the_mechanism(self) -> None:
+        with pytest.raises(NoValidLayout) as exc:
+            SpineLayout(power=False).lay_out(
+                self._ray_receiver_spec(), time_budget_s=0.5
+            )
+        reason = exc.value.reason
+        assert "ray-receiver" in reason, reason
+        assert "0 insert poses" in reason, reason
+        assert "belt port" in reason, reason
+        assert "critical-photon" in reason, reason
+
+    def test_it_no_longer_blames_the_row_model(self) -> None:
+        """The old message was not merely vague, it pointed somewhere wrong.
+
+        Corridor ordering and a height difference are real causes of a real
+        refusal.  Quoting them for a machine that takes no sorter at all is the
+        failure this project keeps paying for: a message that could not have
+        been produced by the actual cause.
+        """
+        with pytest.raises(NoValidLayout) as exc:
+            SpineLayout(power=False).lay_out(
+                self._ray_receiver_spec(), time_budget_s=0.5
+            )
+        reason = exc.value.reason
+        assert "no ordering of its two corridors" not in reason, reason
+        assert "machine heights differ" not in reason, reason
+
+    def test_it_is_deterministic_and_skips_the_retry(self) -> None:
+        """A prefab fact cannot be solved by spending more seconds on it."""
+        from flab2bp.layout.spine import FALLBACK_SORTERLESS_MACHINE, _solve_plan
+
+        plans, reason, detail = _solve_plan(
+            self._ray_receiver_spec(),
+            time_budget_s=0.5,
+            workers=DETERMINISTIC_WORKERS,
+        )
+        assert plans == []
+        assert reason == FALLBACK_SORTERLESS_MACHINE
+        assert "ray-receiver" in detail
+
+    def test_the_coater_never_reaches_the_check_at_all(self) -> None:
+        """Why there is no belt-addon exclusion, pinned rather than argued.
+
+        A Spray Coater ships zero insert poses too, and it IS fed -- positionally,
+        through ``addonAreaPoses``.  Excluding it here looks obviously right and
+        would be dead code: it is not a machine the spec can name, and none of
+        the poseless buildings that CAN reach the check is a belt addon.  If that
+        ever changes -- a coater becomes a spec group, or a belt addon is added
+        to ``MACHINE_ITEM_IDS`` -- this fails, and the exclusion has to come back
+        before the check starts refusing a machine the emitter would have fed.
+        """
+        from flab2bp.layout.spine import MACHINE_ITEM_IDS
+
+        assert "spray-coater" not in MACHINE_ITEM_IDS
+        poseless = [
+            name
+            for name, item_id in MACHINE_ITEM_IDS.items()
+            if not catalog.building(item_id).slot_poses
+        ]
+        assert poseless, "the check would be unreachable if this were empty"
+        assert not [n for n in poseless if catalog.building(MACHINE_ITEM_IDS[n]).is_belt_addon]
+
+    def test_a_proliferated_spec_is_untouched_by_it(self) -> None:
+        """The coater's own group -- the smelter -- takes sorters and is kept."""
+        from flab2bp.layout.spine import _adapt, _sorterless_groups
+
+        spec = BuildSpec(
+            groups=(
+                group(
+                    "iron-ingot",
+                    "arc-smelter",
+                    2,
+                    {"iron-ore": F(1)},
+                    {"iron-ingot": F(1)},
+                    mode=ProliferatorMode.PRODUCTS,
+                ),
+            ),
+            external_inputs={"iron-ore": F(2)},
+            outputs={"iron-ingot": F(2)},
+            belt_item_id="conveyor-belt-2",
+            belt_items_per_second=F(12),
+            label="sprayed",
+        )
+        groups, _edges = _adapt(spec)
+        assert _sorterless_groups(groups) == []
+
+    def test_a_machine_with_nothing_to_wire_is_not_charged(self) -> None:
+        """The refusal is about what the machine NEEDS, not what its prefab lacks.
+
+        Refusing a building over a connection it never wanted would be refusing
+        the wrong thing.  Nothing in the corpus is shaped that way today, so it
+        is asked of the unit rather than of a spec.
+        """
+        from flab2bp.layout.spine import _adapt, _sorterless_groups
+
+        spec = BuildSpec(
+            groups=(group("critical-photon", "ray-receiver", 1, {}, {}),),
+            external_inputs={},
+            outputs={},
+            belt_item_id="conveyor-belt-2",
+            belt_items_per_second=F(12),
+            label="idle",
+        )
+        groups, _edges = _adapt(spec)
+        assert _sorterless_groups(groups) == []
 
 
 class TestSortersAreSizedPerItem:

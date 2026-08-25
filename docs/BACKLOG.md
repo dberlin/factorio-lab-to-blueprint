@@ -274,54 +274,121 @@ carry, and silence is the one answer that must not be available.
 Related but separate: the machines in the measurement above have no sorters
 because the game gives them no sorter slots -- see the entry below.
 
-## OPEN -- spine refuses a Ray Receiver and an Energy Exchanger, and the slot table is why
+## RESOLVED -- the extraction is complete; these buildings take belts, not sorters
 
-Surfaced by the per-side tap charge, not caused by it. `slot_poses.json`, which
-`scripts/extract_dsp_slot_poses.py` reads out of the game's own prefabs, gives
-**Ray Receiver and Energy Exchanger a `slotPoses` array of length zero**. Every
-other machine in the corpus offers columns from at least one face:
+The open question was whether `scripts/extract_dsp_slot_poses.py` was missing an
+array. **It is not. There is no array to miss.** Settled from the game's own
+prefabs and its own IL, not inferred.
 
-    Chemical Plant, Quantum Chemical Plant   8 poses    above 2  below 3
-    Ray Receiver                             0 poses    above 0  below 0
-    Energy Exchanger                         0 poses    above 0  below 0
+**The prefabs.** Reading `resources.assets` directly: `ray-receiver` and
+`energy-exchanger` each carry exactly ONE `SlotConfig`, on the prefab root --
+which is what `GetComponentInChildren<SlotConfig>(true)` picks -- with
 
-The old tap model could not see it. `_anchor_inset` took the WORST of the two
-sides and skipped a side whose span was `None`, so a building with no reachable
-pose on either side scored zero -- indistinguishable from a machine whose poses
-sit on its edge. So the allocator seated lanes for it, `_find_taps` found no
-span, `_emit` swallowed the miss, and the placement shipped.
+    ray-receiver       slotPoses(ports) 2   insertPoses 0   addonAreaCenter 0
+    energy-exchanger   slotPoses(ports) 4   insertPoses 0   addonAreaCenter 0
+    chemical-plant     slotPoses(ports) 0   insertPoses 8   addonAreaCenter 0
+    assembler-mk-1     slotPoses(ports) 0   insertPoses 12  addonAreaCenter 0
+    spray-coater       slotPoses(ports) 0   insertPoses 0   addonAreaCenter 2
 
-MEASURED on the code before the change: `TestModeDrivenMachines`' two-exchanger
-spec emitted **2 Energy Exchangers and 0 sorters in the whole placement** --
-neither machine joined to anything at either end -- and `validate` called that
-report ok. Four tests asserted properties of that placement.
+and their only pose children are named `slot-0`, `slot-1` and `slot(0)`..`slot(3)`
+-- the BELT PORTS. There are no `insert-*` children and no third array. The
+extractor already reads every field the component has.
 
-Spine now refuses the spec and names the reason, which is the right end of the
-trade: a blueprint that pastes two idle exchangers is worse than a refusal.
-`_machine_config` still owns the charge/discharge parameter block and is tested
-directly, so that coverage did not go with it.
+**The IL.** `BuildTool_Inserter` (`Assembly-CSharp.dll`, decompiled with
+`ilspycmd`) drops any cast target that has no insert pose:
 
-WHAT IS OPEN is whether the extraction is incomplete, and it is worth being
-precise about why that is genuinely undecided rather than merely unchecked.
+```csharp
+if (prefabDesc != null && (prefabDesc.slotPoses == null
+        || prefabDesc.slotPoses.Length == 0) && !prefabDesc.isBelt)
+{ castObject = false; castObjectId = 0; castObjectPos = Vector3.zero; }
+```
 
-Both machines take items in game, so one of two things is true. Either they
-carry their attachment points in an array `scripts/extract_dsp_slot_poses.py`
-does not read -- `portPoses` and `addonAreas` are extracted separately already,
-and a Spray Coater's supply lives in `addonAreaPoses` rather than in `slotPoses`,
-so a third such array is not a hypothetical -- or these buildings genuinely take
-items by a mechanism that is not a sorter slot, the way a Logistics Station takes
-them through ports and a coater through an addon area.
+and `PrefabDesc.slotPoses` is `SlotConfig.insertPoses` (`PrefabDesc.ReadPrefab`,
+lines 1208-1221). **So no sorter can ever attach to either building, on any
+face, at any distance.** `BuildTool_Path` is the mirror image and shows what does
+attach:
 
-**That question belongs in the extractor, not in the tap model.** What decides it
-is reading the two prefabs in the decompiled source and seeing which array is
-populated; it is not decidable from our end of the pipeline, and it must not be
-guessed at by loosening a reach model, because a charge invented to make these
-two buildings wireable would be wrong for every building that is honestly
-unreachable on a face. Until it is answered, spine's refusal is the honest
-reading of the data we have.
+```csharp
+if (prefabDesc2 != null && (prefabDesc2.portPoses == null || prefabDesc2.portPoses.Length == 0)
+        && (prefabDesc2.addonAreaColPoses == null || prefabDesc2.addonAreaColPoses.Length == 0)
+        && !prefabDesc2.isBelt)
+{ castObject = false; ... }
+```
 
-The other half of what the measurement showed -- that `validate` called that
-unwired placement clean -- is its own entry above, and is unrelated to the
+A BELT may target a building with `portPoses` -- and the belt is what carries the
+connection, not the building.
+
+**The corpus agrees, and it is not a small sample.** 45 Energy Exchangers across
+three fixtures, 90 peers naming them, and **every single peer is a belt. Zero
+sorters.** The exchangers themselves carry `input_obj = output_obj = -1`. The
+belts sit at 2.27 or 3.00 tiles from the exchanger centre -- inside its 11.7-wide
+box, i.e. running UNDER it -- and carry `in_obj=<exchanger> in_from=2` (drawing
+out of port 2) or `out_obj=<exchanger> out_to=0` (feeding into port 0). The
+`falk` fixture uses the ±x ports, 1 and 3, the same way. There is no Ray Receiver
+anywhere in the 13,690-building fixture corpus, so the exchanger is the whole of
+the direct evidence -- but it is the same mechanism and the same two IL lines.
+
+So the class is not "two odd prefabs". Nine buildings reachable as a spec group
+have zero insert poses -- fractionator, energy-exchanger, ray-receiver,
+ray-receiver-pro, orbital-collector, both mining machines, water-pump,
+oil-extractor -- and every one of them is a belt-port building. The Spray Coater
+is the fourth kind again: zero insert poses, zero ports, and fed through
+`addonAreaPoses`.
+
+**Spine's refusal was correct, and it was blaming the wrong thing.** It arrived
+as `FALLBACK_SEED_UNWIRABLE`: *"row 1 (critical-photon#4) taps 1 lanes that no
+ordering of its two corridors puts in reach; machine heights differ by up to 6
+tiles and the face looking up costs up to 3."* Corridor ordering and a height
+difference are real causes of a real refusal and neither is what is wrong here,
+so the message sent a reader to the packer. It is now
+`FALLBACK_SORTERLESS_MACHINE`, raised by `_sorterless_groups` before a single row
+is packed, and it names the prefab: *"ray-receiver (critical-photon#4) has 0
+insert poses and 2 belt port(s), but must wire critical-photon."*
+
+Measured: exactly **3 of 36 corpus specs** contain such a machine, all three
+`universe-matrix`, all three the same Ray Receiver -- so the check's blast radius
+is the six cells that already refused, decided without running one CP-SAT solve.
+The six now refuse in 0.0s instead of 0.5-9.6s, because the answer never needed
+the solver.
+
+**The "stop demanding lanes for it" fix does not apply, and it is worth saying
+why.** The Ray Receiver in the corpus spec has `inputs_per_machine == {}` -- it
+is a pure source, given photons by a Dyson sphere, not fed anything. The single
+lane spine wants for it is the critical-photon OUTPUT, and that demand is
+correct: a Ray Receiver that reaches no belt is an idle Ray Receiver, which is
+exactly the two-idle-exchangers placement this entry was opened over.
+
+### What is left OPEN: belt-to-port docking, and it is blocked
+
+To build `universe-matrix` we need a belt that ends at a port pose and carries
+`input_obj = <machine>, input_from_slot = <port index>`. Two things stand in the
+way and only the first is small:
+
+* **The emitter has no such connection.** Every machine-to-lane join in both
+  strategies is a sorter. A belt tile that docks into a port is a new kind of
+  edge for the router, the lane model, `flow.conservation` and the writer.
+* **The port is INSIDE the footprint, and our collision model is a tile grid.**
+  Ray Receiver ports are at model `(0, 0, ±1.41)` on a 5-tile axis whose half
+  extent is 2.7; the Energy Exchanger's are at `±2.85` inside a half extent of
+  5.85, and the real fixtures put their belts at 2.27 and 3.00 -- under the
+  building. A belt overlapping a machine is legal in game and illegal in our
+  grid. That is the OPEN entry *"our footprints are a tile grid; the game's
+  collision is not"* at the bottom of this file, and this work sits behind it.
+
+Until then the refusal stands and is honest. `_machine_config` still owns the
+charge/discharge parameter block and is tested directly, so that coverage did not
+go with the removed placement.
+
+**Freeform is unchanged and needs the same correction.** Its
+`_machines_without_poses` owns the case there and refuses correctly, but its
+docstring argues from a false premise: *"a Ray Receiver IS fed in game, so it
+either carries its slots in an array the extractor does not read or takes items
+by some other mechanism"*. It is fed nothing -- it consumes no item at all, and
+its OUTPUT is what needs a belt. That file was being edited on master while this
+was written, so the correction was reported rather than made.
+
+The other half of what the original measurement showed -- that `validate` called
+that unwired placement clean -- is its own entry above, and is unrelated to the
 extraction: it would skip these machines just as silently if the slot table were
 complete.
 
