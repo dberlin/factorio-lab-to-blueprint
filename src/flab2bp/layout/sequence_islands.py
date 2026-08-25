@@ -92,6 +92,11 @@ def _sequence_island_seeds(base_seed: int, islands: int) -> tuple[int, ...]:
     )
 
 
+def _sequence_island_result_reserve_s(ceiling: float) -> float:
+    """Reserve measured time for certification, result IPC, and pool shutdown."""
+    return min(4.0, ceiling / 3.0)
+
+
 def _sequence_island_deadlines(
     time_budget_s: float,
     *,
@@ -100,7 +105,7 @@ def _sequence_island_deadlines(
     """Return the solve ceiling, child soft deadline, and parent hard deadline."""
     ceiling = max(time_budget_s, RETRY_BUDGET_S)
     hard_deadline = started + ceiling
-    result_reserve_s = min(1.0, ceiling / 10.0)
+    result_reserve_s = _sequence_island_result_reserve_s(ceiling)
     return ceiling, hard_deadline - result_reserve_s, hard_deadline
 
 

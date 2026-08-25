@@ -11,6 +11,7 @@ from flab2bp.layout.base import NoValidLayout, PlacedBuilding, Placement
 from flab2bp.layout.sequence_islands import (
     _merge_sequence_island_outcomes,
     _sequence_island_deadlines,
+    _sequence_island_result_reserve_s,
     _sequence_island_seeds,
     _SequenceIslandOutcome,
 )
@@ -211,7 +212,7 @@ def test_child_soft_deadline_leaves_parent_time_to_collect_result(
 ) -> None:
     _PendingExecutor.instances.clear()
     monkeypatch.setattr(islands_module, "ProcessPoolExecutor", _PendingExecutor)
-    ticks = iter((100.0, 114.0))
+    ticks = iter((100.0, 111.0))
     monkeypatch.setattr(
         "flab2bp.layout.sequence_islands.time.monotonic",
         lambda: next(ticks),
@@ -243,8 +244,8 @@ def test_child_soft_deadline_leaves_parent_time_to_collect_result(
     )
 
     executor = _PendingExecutor.instances[-1]
-    assert {request.soft_deadline for request in executor.requests} == {114.0}
-    assert observed_waits == [1.0]
+    assert {request.soft_deadline for request in executor.requests} == {111.0}
+    assert observed_waits == [4.0]
     assert executor.kwargs["mp_context"].get_start_method() == "spawn"
     assert executor.kwargs["max_tasks_per_child"] == 1
     assert placement.stats["islands_requested"] == 3.0
@@ -252,20 +253,40 @@ def test_child_soft_deadline_leaves_parent_time_to_collect_result(
     assert placement.stats["islands_refused"] == 0.0
     assert placement.stats["winner_island_id"] == 0
     assert placement.stats["winner_island_seed"] == SequenceSolverConfig().seed
-    assert placement.stats["island_result_reserve_s"] == 1.0
+    assert placement.stats["island_result_reserve_s"] == 4.0
     assert executor.shutdown_calls[-1] == (True, False)
 
 
-@pytest.mark.parametrize("time_budget_s", [0.0, 0.01])
-def test_short_budget_deadlines_keep_the_retry_ceiling(time_budget_s: float) -> None:
-    ceiling, soft_deadline, hard_deadline = _sequence_island_deadlines(
-        time_budget_s,
-        started=100.0,
+@pytest.mark.parametrize(
+    ("time_budget_s", "ceiling", "soft_deadline", "hard_deadline"),
+    (
+        (0.0, 15.0, 111.0, 115.0),
+        (0.01, 15.0, 111.0, 115.0),
+        (30.0, 30.0, 126.0, 130.0),
+    ),
+)
+def test_deadline_split_preserves_the_parent_ceiling(
+    time_budget_s: float,
+    ceiling: float,
+    soft_deadline: float,
+    hard_deadline: float,
+) -> None:
+    assert _sequence_island_deadlines(time_budget_s, started=100.0) == (
+        ceiling,
+        soft_deadline,
+        hard_deadline,
     )
 
-    assert ceiling == 15.0
-    assert soft_deadline == 114.0
-    assert hard_deadline == 115.0
+
+@pytest.mark.parametrize(
+    ("ceiling", "expected"),
+    ((9.0, 3.0), (12.0, 4.0), (30.0, 4.0), (60.0, 4.0)),
+)
+def test_result_reserve_formula_is_bounded(
+    ceiling: float,
+    expected: float,
+) -> None:
+    assert _sequence_island_result_reserve_s(ceiling) == expected
 
 
 def test_two_spawned_islands_match_the_same_islands_run_serially() -> None:
