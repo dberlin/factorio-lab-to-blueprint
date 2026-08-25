@@ -1,6 +1,110 @@
 # Backlog
 
-## OPEN -- freeform's proliferator chain crosses a Spray Coater it cannot get around
+## RESOLVED -- freeform's coater was at the wrong END of its lane, and the router could not see the ban
+
+**Freeform's mid tier is 48/48 clean, INVALID 0**, from 35-36 of 48.  Paired
+and interleaved against `bed1b65`, three rounds each, `--tier mid --budget 4`:
+
+| arm | clean | area over the 35 cells every arm wires |
+|---|---|---|
+| master | 35 / 36 / 36 | 19818 |
+| + the grid fix | 36 / 36 / 36 | 19968 |
+| + the head seat | 46 / 46 / 45 | 19984 |
+| + the two-tile lane | **48 / 48 / 48** | 19896 |
+
+`+0.40%` on the common set, inside master's own spread over the same three
+rounds (19680 to 20062).  There is no measurable density cost.  INVALID stayed
+0 in all nine runs.
+
+**NEITHER OF THE TWO WAYS OUT THIS ENTRY NAMED WAS THE ANSWER**, and the entry
+was wrong about where the problem was.  Both are recorded below with why.
+
+**What it actually was, in two parts.**
+
+1. **The router searched a grid that disagreed with its own canvas.**
+   `_Canvas.free` refuses a cell inside `belt_ban` (a belt addon's band) and
+   inside `guard` (a junction's collider).  `_make_grid` -- the flat array A\*
+   actually searches -- was built from `blocked`, `solid`, `keep_out` and
+   `reserved`, and neither of those.  So the search returned paths straight
+   through a coater's 1.8975 band, `_commit_paths` asked `free` about each cell
+   before building on it, found one refused, and dropped the WHOLE net into
+   `unlinked`.  The sweep reads a pack with an unlinked net as unwireable and
+   discards it, so the refusal named the PACKER.  Nothing in the search had
+   learned anything either, so the next round produced the same path.  Traced
+   on `plastic/max-proliferation`, where every routing pass reported `5 paths,
+   1 unlinked`, always the same net, always at (6, 8) level 1 -- the tile a
+   coater rides.
+
+2. **The coater rode the DOWNSTREAM end of its lane, so it sprayed nothing.**
+   An input lane is emitted west to east and linked the same way, and the net
+   feeding it sinks into `lane_idx[row][0]` -- so it flows west to east and its
+   head is `_Port.x`.  `_place_coaters` seated the coater at `port.x1`.
+   Measured over five clean proliferated placements (`energy-matrix`,
+   `graphene`, `plastic`, `processor`, `magnetic-coil`), flow taken from the
+   link graph: **all 12 coaters were the last belt of their own chain and all
+   12 had ZERO pickups downstream**.  Every sorter on every sprayed lane drew
+   from a tile the cargo reached BEFORE the coater.  Spine on the same five
+   specs seats 0 of 12 at the tail.  The blueprints pasted and
+   `prolif.coaters_are_supplied` passed the whole time: that check asks whether
+   proliferator reaches the coater, never whether the coater reaches the
+   machines.
+
+   The routing follows the correctness.  At `Facing.EAST` the drop is one tile
+   BEHIND the coater, so a tail seat put the drop INSIDE the lane, hemmed
+   between the machine band and the neighbouring lanes' bans.  Over the seven
+   refusing cells, **70 of 265 drops had exactly ONE free access cell at level
+   1**, and a mid-chain drop needs two -- one for the hop arriving and one for
+   the hop leaving.  The head seat puts the drop in the `WEST_CHANNEL` column
+   and that falls to **10 of 290**.  On the clean cells the same count was 12
+   of 181, which is how the two populations differ.
+
+3. **A sprayed lane needs two tiles.**  `game.addon_facing` reads the ridden
+   belt's flow from its successor, or its predecessor when it has none.  A
+   one-tile lane has no successor, so its direction is whichever way the ROUTER
+   arrived -- settled long after `_place_coaters` has had to choose a yaw, and
+   the yaw is what aims the addon's areas.  On
+   `electromagnetic-matrix/max-proliferation` every convicted coater sat on a
+   single-tile lane fed from the south, flowing 0 against a yaw of 90.  A
+   second tile makes the successor the lane's own next tile.  One belt, no
+   area: the tile is inside the strip's existing width.
+
+**The two options this entry named, measured.**
+
+1. **"Let the chain climb" cannot work, and the reason is arithmetic.**  The
+   drop must be reached AT level 1, because `ADDON_AREA_RADIUS` is 1.0 world
+   units and a level is 1.333.  A belt one level above the drop cannot hand
+   into it: `_legal_link` allows `dz = BELT_CLIMB_PER_TILE` over one tile, not
+   a whole level.  So a route at level 2 must come DOWN before it arrives, and
+   `_altitude_profile` puts the half-level tile on the cell whose successor
+   changes level -- which, approaching from the east margin, is the coater's own
+   tile, resting at 3/2 against a clearance of 1.8975.  There is no ramp
+   placement that clears it.  Level 2 was already in the lattice (`LEVELS = 3`)
+   the whole time; the chain had the height and could not use it.
+2. **"Seat the coater at `Facing.WEST`" was not needed and is still untested.**
+   Moving the coater to the other END of the lane buys the same open drop cell
+   without reversing anything, and it is what correctness wanted anyway.  No
+   coater in freeform's output is reversed -- see the yaw entry below.
+
+**LATENT, not fixed, and worth knowing.**
+
+* `_place_coaters` still `continue`s when a drop cell is not free, so a lane
+  the spec wants sprayed can silently get no coater at all.  **Nothing checks
+  that a sprayed lane HAS one** -- `prolif.coaters_are_supplied` yields nothing
+  for a placement with no coater in it, and `game.addon_supply` only speaks
+  about coaters that exist.  A check that every `spec.spray_lanes` item carries
+  a coater would close it.
+* The addon area admits a belt **TWO tiles behind** as well as one:
+  `world_gap` for the two-tile offset is 0.94 against `ADDON_AREA_RADIUS` 1.0.
+  Not used, because the unported `DistancePointLine < 0.3f` companion clause is
+  what would decide it and nobody has ported it.
+* The real paste rule is STRICTER than `game.addon_facing`.  At decompiled
+  145812 the excusal requires the ridden belt's own INPUT belt and OUTPUT belt
+  to lie within 0.3 of the addon's line as well, when the belt is within 2.5 of
+  the addon -- so a coater on a CORNER is refused even though its successor
+  alone is parallel.  Our coaters now sit on straight runs and satisfy it; the
+  check does not test it, so that is silence rather than a pass.
+
+## RESOLVED (superseded) -- freeform's proliferator chain crosses a Spray Coater it cannot get around
 
 CONFIRMED IN GAME, by paste.  The failing blueprint was cut down to one coater,
 its tower and every belt within six tiles -- no machines, no sorters -- and the
@@ -164,7 +268,35 @@ vertical lane beside a strip, or a spur off the end of one, would reach the
 other six. That is a packer change, not a wiring change, and it is the same
 territory as serving a machine from a lane that is not in its own strip.
 
-## OPEN -- half of freeform's Spray Coaters stand ACROSS the belt they ride
+## RESOLVED -- freeform's Spray Coaters carry the flow yaw now, 51 of 51
+
+Re-measured after the coater moved to its lane's HEAD and sprayed lanes gained
+a two-tile minimum (see the entry at the top), on the max-proliferation
+candidate of seven mid-tier URLs -- `energy-matrix`, `graphene`, `plastic`,
+`processor`, `electromagnetic-matrix`, `magnetic-coil`, `super-magnetic-ring`
+-- with the flow taken from the `output_obj` link graph and not from any yaw
+field:
+
+| source | coaters | yaw == flow | reversed | across |
+|---|---|---|---|---|
+| the game's own blueprints | 8 | 8 | 0 | 0 |
+| `spine` | 16 | 16 | 0 | 0 |
+| `freeform`, before | 20 | 10 | 4 | 6 |
+| `freeform`, now | **51** | **51** | **0** | **0** |
+
+It is right by construction rather than by luck.  The coater rides the head of
+an input lane; the head's successor is the lane's own next tile, which
+`_emit_strip` links eastward; so the flow through the ridden belt is 90 and the
+yaw written is `Facing.EAST`.  The two-tile minimum is what makes "the head has
+a successor" true -- without it a one-tile lane has no successor and the flow
+falls back to whichever way the router arrived, which is where all six
+right-angle convictions came from.
+
+The reversal question the entry below raises is therefore MOOT for freeform
+rather than answered: nothing it emits is reversed, so nobody needs to know
+whether a reversed coater sprays.  Still unknown; still not relied on.
+
+## RESOLVED (superseded) -- half of freeform's Spray Coaters stand ACROSS the belt they ride
 
 Reported in game: every coater red. The yaw of a belt addon is what aims its
 `addonAreaPoses`, and `freeform._place_coaters` writes one yaw for every coater
