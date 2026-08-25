@@ -9,6 +9,7 @@ from typing import cast
 import pytest
 
 import flab2bp.layout.freeform as freeform_module
+import flab2bp.layout.sequence_pair as sequence_pair_module
 import flab2bp.layout.sequence_solver as sequence_solver_module
 from flab2bp.bench.corpus import entry
 from flab2bp.dsp import catalog
@@ -73,6 +74,7 @@ from flab2bp.layout.sequence_solver import (
     StageAdapters,
     ValidationVerdict,
     _decoded_pack,
+    _pose_stage_boundary_update,
     _production_run,
     _ProductionCandidate,
     _rebuild_stage_problem_nets,
@@ -856,6 +858,10 @@ def test_production_stage_boundary_rebuilds_preparation_for_children() -> None:
             _box(strip) for strip in selected
         )
 
+    commit = run.solver.stage_boundary_commit
+    assert commit is not None
+    commit(height_state.height, alternate.problem)
+
     decoded = decode_state(alternate.problem, alternate.state)
     candidate = run.solver.adapters.prepare(height_state.height, decoded)
     assert candidate.problem == alternate.problem
@@ -873,7 +879,7 @@ def test_production_stage_boundary_rebuilds_preparation_for_children() -> None:
     )
 
 
-def test_rebuilt_net_order_keeps_matching_logical_family_weights() -> None:
+def test_rebuilt_net_order_keeps_exact_logical_keys() -> None:
     families = generate_strip_families(two_stage_spec())
     source = next(family for family in families if family.total_machine_count > 1)
     destination = next(family for family in families if family.family_id != source.family_id)
@@ -902,7 +908,20 @@ def test_rebuilt_net_order_keeps_matching_logical_family_weights() -> None:
         destination_variants,
         second_destination_variants,
     )
+    first_edge = LogicalNetId(
+        source.family_id,
+        destination.family_id,
+        "first-product",
+        NetRole.INTERNAL,
+    )
+    second_edge = LogicalNetId(
+        source.family_id,
+        second_destination_id,
+        "split-product",
+        NetRole.PROLIFERATOR,
+    )
     original_nets = ((0, 2), (1, 2), (0, 3), (1, 3))
+    original_logical = (first_edge, first_edge, second_edge, second_edge)
     problem = PlacementProblem(
         sizes=tuple((variants[0].box_width, variants[0].box_height) for variants in tables),
         nets=original_nets,
@@ -910,38 +929,27 @@ def test_rebuilt_net_order_keeps_matching_logical_family_weights() -> None:
         area_lower_bound=1,
         instance_ids=instance_ids,
         variant_tables=tables,
-        logical_net_families=tuple(
-            (
-                instance_ids[source_index].family_id,
-                instance_ids[destination_index].family_id,
-            )
-            for source_index, destination_index in original_nets
-        ),
+        logical_net_ids=original_logical,
     )
-    sorted_nets = tuple(sorted(original_nets))
 
-    rebuilt = _rebuild_stage_problem_nets(problem, sorted_nets)
-
-    assert rebuilt.nets == sorted_nets
-    assert rebuilt.logical_net_families == tuple(
-        (
-            rebuilt.instance_ids[source_index].family_id,
-            rebuilt.instance_ids[destination_index].family_id,
-        )
-        for source_index, destination_index in sorted_nets
+    rebuilt = _rebuild_stage_problem_nets(
+        problem,
+        tuple(zip(original_nets, original_logical, strict=True)),
     )
-    weighted_edge = LogicalNetId(
-        source.family_id,
-        second_destination_id,
-        "split-product",
-        NetRole.INTERNAL,
+
+    assert rebuilt.nets == ((0, 2), (0, 3), (1, 2), (1, 3))
+    assert rebuilt.logical_net_ids == (
+        first_edge,
+        second_edge,
+        first_edge,
+        second_edge,
     )
     context = feedback_cost_context(
         FeedbackState(
             outline=(40, 40),
             net_weight={},
             cell_history={},
-            logical_net_weight={weighted_edge: 2.0},
+            logical_net_weight={second_edge: 2.0},
         ),
         rebuilt,
     )
@@ -1031,6 +1039,279 @@ def test_feedback_stagnation_rebuilds_the_next_fixed_cardinality_stage() -> None
     assert sum(stage.split_count for stage in solver._stage_stats) == 1
     assert sum(stage.merge_count for stage in solver._stage_stats) == 0
     assert solver._heights[0].restarts[0].anneal.stage_index == 3
+
+
+def test_production_boundary_does_not_merge_incompatible_or_implicated_children() -> None:
+    family = next(
+        candidate
+        for candidate in generate_strip_families(two_stage_spec())
+        if candidate.total_machine_count > 1 and len(candidate.variants) > 1
+    )
+    (parent,) = partition_strip_family(
+        family,
+        max_machine_count=family.total_machine_count,
+    )
+    variants = variants_for_count(family, family.total_machine_count)
+    problem = PlacementProblem(
+        sizes=((variants[0].box_width, variants[0].box_height),),
+        nets=((0, 0),),
+        outline_height=40,
+        area_lower_bound=1,
+        instance_ids=(parent.instance_id,),
+        variant_tables=(variants,),
+    )
+    state = AnnealState.initial(1, seed=19)
+    unimplicated = DetailedRouteResult(
+        status=DetailedRouteStatus.STRANDED,
+        routed=(),
+        failures=(
+            NetFailure(
+                NetId(None, None, "elsewhere", NetRole.INTERNAL, 0),
+                RouteFailureKind.CONGESTION_WALL,
+                ((0, 0, 0),),
+                (),
+                0,
+            ),
+        ),
+        iterations=1,
+        expansions=0,
+    )
+    implicated = _routing(
+        DetailedRouteStatus.STRANDED,
+        geometric_failure=True,
+    )
+    incompatible = split_stage_boundary(
+        problem,
+        state,
+        family,
+        0,
+        right_variant_offset=1,
+    )
+    compatible = split_stage_boundary(problem, state, family, 0)
+
+    assert (
+        _pose_stage_boundary_update(
+            incompatible.problem,
+            incompatible.state,
+            unimplicated,
+            stagnation=1,
+            family_by_id={family.family_id: family},
+        )
+        is None
+    )
+    assert (
+        _pose_stage_boundary_update(
+            compatible.problem,
+            compatible.state,
+            implicated,
+            stagnation=1,
+            family_by_id={family.family_id: family},
+        )
+        is None
+    )
+
+
+def test_merge_waits_until_every_restart_has_one_compatible_problem(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        sequence_pair_module,
+        "apply_move",
+        lambda state, *_args, **_kwargs: state,
+    )
+    family = next(
+        candidate
+        for candidate in generate_strip_families(two_stage_spec())
+        if candidate.total_machine_count > 1 and len(candidate.variants) > 1
+    )
+    (parent,) = partition_strip_family(
+        family,
+        max_machine_count=family.total_machine_count,
+    )
+    variants = variants_for_count(family, family.total_machine_count)
+    parent_problem = PlacementProblem(
+        sizes=((variants[0].box_width, variants[0].box_height),),
+        nets=((0, 0),),
+        outline_height=40,
+        area_lower_bound=1,
+        instance_ids=(parent.instance_id,),
+        variant_tables=(variants,),
+    )
+    split = split_stage_boundary(
+        parent_problem,
+        AnnealState.initial(1, seed=29),
+        family,
+        0,
+    )
+    unimplicated = DetailedRouteResult(
+        status=DetailedRouteStatus.STRANDED,
+        routed=(),
+        failures=(
+            NetFailure(
+                NetId(None, None, "elsewhere", NetRole.INTERNAL, 0),
+                RouteFailureKind.CONGESTION_WALL,
+                ((0, 0, 0),),
+                (),
+                0,
+            ),
+        ),
+        iterations=1,
+        expansions=0,
+    )
+    fake = _FakeRouting(
+        detailed_results=(DetailedStageResult(unimplicated, None),),
+    )
+
+    def boundary(
+        _height: int,
+        stage_problem: PlacementProblem,
+        stage_state: AnnealState,
+        _feedback: FeedbackState,
+        result: DetailedRouteResult,
+        stagnation: int,
+    ) -> StageBoundaryUpdate | None:
+        return _pose_stage_boundary_update(
+            stage_problem,
+            stage_state,
+            result,
+            stagnation=stagnation,
+            family_by_id={family.family_id: family},
+        )
+
+    solver = SequenceSolver(
+        heights=(40,),
+        problem_for_height=lambda _height: split.problem,
+        adapters=fake.adapters(),
+        expansion_budget=ExpansionBudget(100),
+        config=SequenceSolverConfig(
+            stages=1,
+            moves_per_stage=1,
+            restarts_per_height=2,
+            global_elites=1,
+            seed=31,
+        ),
+        stage_boundary_transform=boundary,
+    )
+    first, second = solver._heights[0].restarts
+    first.anneal = replace(
+        split.state,
+        base_seed=first.seed,
+        variant_indices=(0, 0),
+    )
+    second.anneal = replace(
+        split.state,
+        base_seed=second.seed,
+        variant_indices=(0, 1),
+    )
+
+    with pytest.raises(NoValidLayout):
+        solver.search(max_stages=1)
+
+    assert solver._heights[0].problem == split.problem
+    assert all(len(restart.anneal.pair.positive) == 2 for restart in (first, second))
+    assert sum(stage.merge_count for stage in solver._stage_stats) == 0
+
+
+def test_fake_closed_loop_splits_then_runs_the_production_merge_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        sequence_pair_module,
+        "apply_move",
+        lambda state, *_args, **_kwargs: state,
+    )
+    original_family = next(
+        candidate
+        for candidate in generate_strip_families(two_stage_spec())
+        if candidate.total_machine_count > 1
+    )
+    family = replace(original_family, variants=(original_family.variants[0],))
+    (parent,) = partition_strip_family(
+        family,
+        max_machine_count=family.total_machine_count,
+    )
+    variants = variants_for_count(family, family.total_machine_count)
+    logical = LogicalNetId(
+        family.family_id,
+        family.family_id,
+        "loop",
+        NetRole.INTERNAL,
+    )
+    problem = PlacementProblem(
+        sizes=((variants[0].box_width, variants[0].box_height),),
+        nets=((0, 0),),
+        outline_height=40,
+        area_lower_bound=1,
+        instance_ids=(parent.instance_id,),
+        variant_tables=(variants,),
+        logical_net_ids=(logical,),
+    )
+    implicated = DetailedStageResult(
+        _routing(DetailedRouteStatus.STRANDED, geometric_failure=True),
+        None,
+    )
+    unimplicated = DetailedStageResult(
+        DetailedRouteResult(
+            status=DetailedRouteStatus.STRANDED,
+            routed=(),
+            failures=(
+                NetFailure(
+                    NetId(None, None, "elsewhere", NetRole.INTERNAL, 0),
+                    RouteFailureKind.CONGESTION_WALL,
+                    ((0, 0, 0),),
+                    (),
+                    0,
+                ),
+            ),
+            iterations=1,
+            expansions=0,
+        ),
+        None,
+    )
+    fake = _FakeRouting(
+        detailed_results=(implicated, implicated, unimplicated),
+    )
+
+    def boundary(
+        _height: int,
+        stage_problem: PlacementProblem,
+        stage_state: AnnealState,
+        _feedback: FeedbackState,
+        result: DetailedRouteResult,
+        stagnation: int,
+    ) -> StageBoundaryUpdate | None:
+        return _pose_stage_boundary_update(
+            stage_problem,
+            stage_state,
+            result,
+            stagnation=stagnation,
+            family_by_id={family.family_id: family},
+        )
+
+    solver = SequenceSolver(
+        heights=(40,),
+        problem_for_height=lambda _height: problem,
+        adapters=fake.adapters(),
+        expansion_budget=ExpansionBudget(100),
+        config=SequenceSolverConfig(
+            stages=3,
+            moves_per_stage=1,
+            restarts_per_height=1,
+            global_elites=1,
+            seed=23,
+        ),
+        stage_boundary_transform=boundary,
+    )
+
+    with pytest.raises(NoValidLayout):
+        solver.search(max_stages=3)
+
+    assert sum(stage.split_count for stage in solver._stage_stats) == 1
+    assert sum(stage.merge_count for stage in solver._stage_stats) == 1
+    assert solver._heights[0].problem == problem
+    restart = solver._heights[0].restarts[0]
+    assert restart.anneal.base_seed == restart.seed
+    assert restart.anneal.stage_index == 3
 
 
 @pytest.mark.parametrize("power", [False, True])

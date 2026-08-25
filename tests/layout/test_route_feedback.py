@@ -310,24 +310,30 @@ def test_split_candidate_requires_repeated_geometric_feedback_and_machine_capaci
     assert select_split_candidate(failure, instances, stagnation=2, split_after=2) == 0
 
 
-def test_logical_family_weights_reach_every_reindexed_physical_edge() -> None:
+def test_logical_weights_remain_exact_for_shared_endpoint_families() -> None:
     source = StripFamilyId("source#0", 0)
     destination = StripFamilyId("destination#0", 0)
-    logical = LogicalNetId(source, destination, "iron-ingot", NetRole.INTERNAL)
+    internal = LogicalNetId(source, destination, "iron-ingot", NetRole.INTERNAL)
+    proliferator = LogicalNetId(
+        source,
+        destination,
+        "proliferator",
+        NetRole.PROLIFERATOR,
+    )
     state = FeedbackState(
         outline=(20, 20),
         net_weight={},
         cell_history={},
-        logical_net_weight={logical: 2.0},
+        logical_net_weight={internal: 2.0, proliferator: 4.0},
     )
     problem = PlacementProblem(
         sizes=((2, 2), (2, 2), (2, 2)),
-        nets=((0, 2), (1, 2)),
+        nets=((0, 2), (1, 2), (0, 2), (1, 2)),
         outline_height=20,
         area_lower_bound=12,
-        logical_net_families=((source, destination), (source, destination)),
+        logical_net_ids=(internal, internal, proliferator, proliferator),
     )
 
     context = feedback_cost_context(state, problem)
 
-    assert context.net_weights == (3.0, 3.0)
+    assert context.net_weights == (3.0, 3.0, 5.0, 5.0)

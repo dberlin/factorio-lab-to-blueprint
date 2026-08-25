@@ -12,9 +12,9 @@ from typing import TYPE_CHECKING
 from flab2bp.dsp import catalog
 
 if TYPE_CHECKING:
+    from flab2bp.layout.route_feedback import LogicalNetId
     from flab2bp.layout.strip_variants import (
         StripFamily,
-        StripFamilyId,
         StripInstanceId,
         StripVariant,
         StripVariantId,
@@ -82,10 +82,7 @@ class PlacementProblem:
     outline_height: int
     area_lower_bound: int
     instance_ids: tuple[StripInstanceId, ...] = ()
-    logical_net_families: tuple[
-        tuple[StripFamilyId | None, StripFamilyId | None],
-        ...,
-    ] = ()
+    logical_net_ids: tuple[LogicalNetId, ...] = ()
     variant_tables: tuple[tuple[StripVariant, ...], ...] = ()
 
     def __post_init__(self) -> None:
@@ -127,15 +124,11 @@ class PlacementProblem:
                 ):
                     raise ValueError("problem default sizes must contain variant index zero")
         if (
-            not isinstance(self.logical_net_families, tuple)
-            or (self.logical_net_families and len(self.logical_net_families) != len(self.nets))
-            or any(
-                not isinstance(families, tuple) or len(families) != 2
-                for families in self.logical_net_families
-            )
+            not isinstance(self.logical_net_ids, tuple)
+            or (self.logical_net_ids and len(self.logical_net_ids) != len(self.nets))
         ):
-            raise ValueError("logical net families must match the immutable placement nets")
-        if self.instance_ids and self.logical_net_families:
+            raise ValueError("logical net ids must match the immutable placement nets")
+        if self.instance_ids and self.logical_net_ids:
             expected_families = tuple(
                 (
                     self.instance_ids[source].family_id,
@@ -143,8 +136,12 @@ class PlacementProblem:
                 )
                 for source, destination in self.nets
             )
-            if self.logical_net_families != expected_families:
-                raise ValueError("logical net families must match current physical endpoints")
+            actual_families = tuple(
+                (logical.source_family, logical.destination_family)
+                for logical in self.logical_net_ids
+            )
+            if actual_families != expected_families:
+                raise ValueError("logical net ids must match current physical endpoints")
 
     @property
     def size(self) -> int:
@@ -1283,7 +1280,11 @@ def split_stage_boundary(
     variant_indices = (
         state.variant_indices[:strip] + child_indices + state.variant_indices[strip + 1 :]
     )
-    nets = _remap_nets(problem.nets, expanded)
+    nets, logical_net_ids = _remap_nets(
+        problem.nets,
+        problem.logical_net_ids,
+        expanded,
+    )
     rebuilt_ids = (
         problem.instance_ids[:strip]
         + (left.instance_id, right.instance_id)
@@ -1298,17 +1299,7 @@ def split_stage_boundary(
         variant_tables=problem.variant_tables[:strip]
         + child_tables
         + problem.variant_tables[strip + 1 :],
-        logical_net_families=(
-            tuple(
-                (
-                    rebuilt_ids[source].family_id,
-                    rebuilt_ids[destination].family_id,
-                )
-                for source, destination in nets
-            )
-            if problem.logical_net_families
-            else ()
-        ),
+        logical_net_ids=logical_net_ids,
     )
     return StageBoundaryUpdate(
         problem=rebuilt,
@@ -1393,7 +1384,11 @@ def merge_stage_boundary(
         tuple(child for index in state.pair.positive for child in collapsed(index)),
         tuple(child for index in state.pair.negative for child in collapsed(index)),
     )
-    nets = _remap_nets(problem.nets, collapsed)
+    nets, logical_net_ids = _remap_nets(
+        problem.nets,
+        problem.logical_net_ids,
+        collapsed,
+    )
     rebuilt_ids = (
         problem.instance_ids[:left_strip]
         + (merged.instance_id,)
@@ -1415,17 +1410,7 @@ def merge_stage_boundary(
         variant_tables=problem.variant_tables[:left_strip]
         + (merged_table,)
         + problem.variant_tables[right_strip + 1 :],
-        logical_net_families=(
-            tuple(
-                (
-                    rebuilt_ids[source].family_id,
-                    rebuilt_ids[destination].family_id,
-                )
-                for source, destination in nets
-            )
-            if problem.logical_net_families
-            else ()
-        ),
+        logical_net_ids=logical_net_ids,
     )
     return StageBoundaryUpdate(
         problem=rebuilt,
@@ -1466,18 +1451,25 @@ def _realized_table_in_parent_order(
 
 def _remap_nets(
     nets: tuple[tuple[int, int], ...],
+    logical_net_ids: tuple[LogicalNetId, ...],
     remap: Callable[[int], tuple[int, ...]],
-) -> tuple[tuple[int, int], ...]:
+) -> tuple[tuple[tuple[int, int], ...], tuple[LogicalNetId, ...]]:
     rebuilt: list[tuple[int, int]] = []
-    seen: set[tuple[int, int]] = set()
-    for source, destination in nets:
+    rebuilt_logical: list[LogicalNetId] = []
+    seen: set[tuple[tuple[int, int], LogicalNetId | None]] = set()
+    logical_keys: tuple[LogicalNetId | None, ...] = logical_net_ids or (None,) * len(nets)
+    for (source, destination), logical in zip(nets, logical_keys, strict=True):
         for new_source in remap(source):
             for new_destination in remap(destination):
                 net = (new_source, new_destination)
-                if net not in seen:
-                    seen.add(net)
-                    rebuilt.append(net)
-    return tuple(rebuilt)
+                key = (net, logical)
+                if key in seen:
+                    continue
+                seen.add(key)
+                rebuilt.append(net)
+                if logical is not None:
+                    rebuilt_logical.append(logical)
+    return tuple(rebuilt), tuple(rebuilt_logical)
 
 
 def _repair_permutation(

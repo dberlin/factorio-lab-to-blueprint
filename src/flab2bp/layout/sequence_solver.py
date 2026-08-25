@@ -8,7 +8,7 @@ to the current freeform geometry, routers, power planner, and validator.
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from fractions import Fraction
 from typing import Any, Protocol, cast
@@ -23,11 +23,11 @@ from flab2bp.layout.freeform import (
     _box,
     _build_prepared,
     _candidate_heights,
+    _dests,
     _direct_alignment_targets,
     _direct_net_candidates,
     _fanout_shortfall,
     _greedy_pack,
-    _nets_between,
     _Pack,
     _prepare_routing_problem,
     _PreparedRoutingProblem,
@@ -39,9 +39,12 @@ from flab2bp.layout.route_feedback import (
     DetailedRouteResult,
     DetailedRouteStatus,
     FeedbackState,
+    LogicalNetId,
+    NetRole,
     RouteFailureKind,
     decay_feedback,
     feedback_cost_context,
+    geometric_failure_instances,
     remap_feedback_nets,
     select_lns_neighbourhood,
     select_split_candidate,
@@ -57,10 +60,13 @@ from flab2bp.layout.sequence_pair import (
     align_direct_inserts,
     anneal_stage,
     derive_stage_seed,
+    merge_stage_boundary,
     repair_neighbourhood,
     split_stage_boundary,
 )
 from flab2bp.layout.strip_variants import (
+    StripFamily,
+    StripFamilyId,
     StripInstanceId,
     StripVariant,
     StripVariantId,
@@ -311,6 +317,9 @@ StageBoundaryTransform = Callable[
     ],
     StageBoundaryUpdate | None,
 ]
+StageBoundaryCommit = Callable[[int, PlacementProblem], None]
+
+
 
 
 class SequenceSolver[PreparedT]:
@@ -332,6 +341,7 @@ class SequenceSolver[PreparedT]:
         ]
         | None = None,
         stage_boundary_transform: StageBoundaryTransform | None = None,
+        stage_boundary_commit: StageBoundaryCommit | None = None,
     ) -> None:
         if (
             not isinstance(heights, tuple)
@@ -348,6 +358,7 @@ class SequenceSolver[PreparedT]:
             raise ValueError("direct-insert targets must be an immutable tuple")
         self.direct_targets = direct_targets
         self.stage_boundary_transform = stage_boundary_transform
+        self.stage_boundary_commit = stage_boundary_commit
         self.direct_targets_for_state = direct_targets_for_state
         self.budget.configure(heights, self.config.final_reserve_fraction)
         feedback_factory = initial_feedback or _default_feedback
@@ -564,6 +575,7 @@ class SequenceSolver[PreparedT]:
                 restart.feedback_stagnation,
             )
             if transformed is not None:
+                sibling_updates: list[tuple[_RestartState, StageBoundaryUpdate]] = []
                 for other in height_state.restarts:
                     if other is restart:
                         continue
@@ -576,23 +588,34 @@ class SequenceSolver[PreparedT]:
                         restart.feedback_stagnation,
                     )
                     if sibling is None or sibling.problem != transformed.problem:
+                        if transformed.problem.size < problem.size:
+                            transformed = None
+                            break
                         raise ValueError(
                             "stage-boundary transform must rebuild every restart identically"
                         )
-                    other.anneal = sibling.state
-                    other.failure_signature = ()
-                    other.feedback_stagnation = 0
-                height_state.problem = transformed.problem
-                next_anneal = transformed.state
-                cardinality_delta = transformed.problem.size - problem.size
-                split_count = max(0, cardinality_delta)
-                merge_count = max(0, -cardinality_delta)
-                height_state.feedback = remap_feedback_nets(
-                    height_state.feedback,
-                    (),
-                )
-                restart.failure_signature = ()
-                restart.feedback_stagnation = 0
+                    sibling_updates.append((other, sibling))
+                if transformed is not None:
+                    if self.stage_boundary_commit is not None:
+                        self.stage_boundary_commit(
+                            height_state.height,
+                            transformed.problem,
+                        )
+                    for other, sibling in sibling_updates:
+                        other.anneal = sibling.state
+                        other.failure_signature = ()
+                        other.feedback_stagnation = 0
+                    height_state.problem = transformed.problem
+                    next_anneal = transformed.state
+                    cardinality_delta = transformed.problem.size - problem.size
+                    split_count = max(0, cardinality_delta)
+                    merge_count = max(0, -cardinality_delta)
+                    height_state.feedback = remap_feedback_nets(
+                        height_state.feedback,
+                        (),
+                    )
+                    restart.failure_signature = ()
+                    restart.feedback_stagnation = 0
 
         restart.anneal = next_anneal
         restart.stages += 1
@@ -841,27 +864,112 @@ def _selected_direct_targets(
     return _direct_alignment_targets(_direct_net_candidates(selected, spec))
 
 
+def _placement_nets(
+    strips: Sequence[Strip],
+) -> tuple[tuple[tuple[int, int], LogicalNetId], ...]:
+    """Return every exact logical edge with its current physical endpoints."""
+    by_group: dict[str, list[int]] = {}
+    for index, strip in enumerate(strips):
+        by_group.setdefault(strip.group_key, []).append(index)
+    nets = {
+        (
+            (source, destination),
+            LogicalNetId(
+                strip.family_id,
+                strips[destination].family_id,
+                item,
+                NetRole.INTERNAL,
+            ),
+        )
+        for source, strip in enumerate(strips)
+        for item, destination_groups in strip.out_lanes
+        for destination_group in _dests(destination_groups)
+        for destination in by_group.get(destination_group, ())
+    }
+    return tuple(
+        sorted(
+            nets,
+            key=lambda entry: (
+                entry[0],
+                entry[1].item,
+                entry[1].role.value,
+            ),
+        )
+    )
+
+
 def _rebuild_stage_problem_nets(
     problem: PlacementProblem,
-    nets: tuple[tuple[int, int], ...],
+    nets: tuple[tuple[tuple[int, int], LogicalNetId], ...],
 ) -> PlacementProblem:
-    """Rebind sorted physical nets and their logical families as one value."""
-    logical_net_families = (
-        tuple(
-            (
-                problem.instance_ids[source].family_id,
-                problem.instance_ids[destination].family_id,
-            )
-            for source, destination in nets
+    """Rebind sorted physical nets and exact logical ids as one value."""
+    ordered = tuple(
+        sorted(
+            nets,
+            key=lambda entry: (
+                entry[0],
+                entry[1].item,
+                entry[1].role.value,
+            ),
         )
-        if problem.instance_ids
-        else ()
     )
     return replace(
         problem,
-        nets=nets,
-        logical_net_families=logical_net_families,
+        nets=tuple(endpoints for endpoints, _logical in ordered),
+        logical_net_ids=tuple(logical for _endpoints, logical in ordered),
     )
+
+
+def _pose_stage_boundary_update(
+    problem: PlacementProblem,
+    state: AnnealState,
+    result: DetailedRouteResult,
+    *,
+    stagnation: int,
+    family_by_id: dict[StripFamilyId, StripFamily],
+) -> StageBoundaryUpdate | None:
+    """Apply one deterministic legal topology change after a completed stage."""
+    target = select_split_candidate(
+        result,
+        problem.instance_ids,
+        stagnation=stagnation,
+        split_after=2,
+    )
+    if target is not None:
+        family = family_by_id[problem.instance_ids[target].family_id]
+        return split_stage_boundary(
+            problem,
+            state,
+            family,
+            target,
+            right_variant_offset=1 if len(family.variants) > 1 else 0,
+        )
+
+    implicated = geometric_failure_instances(result, problem.size)
+    for left_strip in range(problem.size - 1):
+        right_strip = left_strip + 1
+        if left_strip in implicated or right_strip in implicated:
+            continue
+        left_id = problem.instance_ids[left_strip]
+        right_id = problem.instance_ids[right_strip]
+        if (
+            left_id.family_id != right_id.family_id
+            or left_id.machine_start + left_id.machine_count != right_id.machine_start
+        ):
+            continue
+        merge_family = family_by_id.get(left_id.family_id)
+        if merge_family is None:
+            continue
+        merged = merge_stage_boundary(
+            problem,
+            state,
+            merge_family,
+            left_strip,
+            right_strip,
+        )
+        if merged is not None:
+            return merged
+    return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1025,7 +1133,8 @@ def _production_run(
         direct_candidates = _direct_net_candidates(strips, spec)
         direct_targets = _direct_alignment_targets(direct_candidates)
         sizes = tuple(_box(strip) for strip in strips)
-        nets = tuple(_nets_between(strips))
+        placement_nets = _placement_nets(strips)
+        nets = tuple(endpoints for endpoints, _logical in placement_nets)
         area_lower_bound = (
             sum(
                 min(
@@ -1048,13 +1157,7 @@ def _production_run(
                 area_lower_bound=area_lower_bound,
                 instance_ids=instance_ids,
                 variant_tables=variant_tables,
-                logical_net_families=tuple(
-                    (
-                        instance_ids[source].family_id,
-                        instance_ids[destination].family_id,
-                    )
-                    for source, destination in nets
-                ),
+                logical_net_ids=tuple(logical for _endpoints, logical in placement_nets),
             )
             for height in heights
         }
@@ -1249,7 +1352,7 @@ def _production_run(
         4 - len({variant.yaw for variant in family.variants}) for family in family_by_id.values()
     )
 
-    def split_stage(
+    def transform_stage(
         height: int,
         problem: PlacementProblem,
         state: AnnealState,
@@ -1257,22 +1360,15 @@ def _production_run(
         result: DetailedRouteResult,
         stagnation: int,
     ) -> StageBoundaryUpdate | None:
-        target = select_split_candidate(
-            result,
-            problem.instance_ids,
-            stagnation=stagnation,
-            split_after=2,
-        )
-        if target is None:
-            return None
-        family = family_by_id[problem.instance_ids[target].family_id]
-        transformed = split_stage_boundary(
+        transformed = _pose_stage_boundary_update(
             problem,
             state,
-            family,
-            target,
-            right_variant_offset=1 if len(family.variants) > 1 else 0,
+            result,
+            stagnation=stagnation,
+            family_by_id=family_by_id,
         )
+        if transformed is None:
+            return None
         selected = _selected_strips(
             strips,
             transformed.problem,
@@ -1280,12 +1376,14 @@ def _production_run(
         )
         rebuilt = _rebuild_stage_problem_nets(
             transformed.problem,
-            tuple(_nets_between(selected)),
+            _placement_nets(selected),
         )
-        problems[height] = rebuilt
+        return StageBoundaryUpdate(rebuilt, transformed.state)
+
+    def commit_stage(height: int, problem: PlacementProblem) -> None:
+        problems[height] = problem
         selected_cache.clear()
         direct_cache.clear()
-        return StageBoundaryUpdate(rebuilt, transformed.state)
 
     expansion_total = max(
         _ROUTING_BUDGET,
@@ -1305,7 +1403,8 @@ def _production_run(
         deadline_reached=deadline_reached,
         direct_targets=direct_targets,
         direct_targets_for_state=direct_targets_for_state,
-        stage_boundary_transform=split_stage,
+        stage_boundary_transform=transform_stage,
+        stage_boundary_commit=commit_stage,
     )
     return _ProductionRun(
         solver=solver,

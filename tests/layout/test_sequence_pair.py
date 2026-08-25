@@ -17,6 +17,7 @@ from flab2bp.layout.route_feedback import (
     DetailedRouteResult,
     DetailedRouteStatus,
     FeedbackState,
+    LogicalNetId,
     NetFailure,
     NetId,
     NetRole,
@@ -806,13 +807,26 @@ def test_compatible_stage_boundary_merge_is_exact_split_inverse() -> None:
     family = _family(_single_machine_spec("assembling-machine-1", count=3))
     (parent,) = partition_strip_family(family, max_machine_count=3)
     variants = variants_for_count(family, 3)
+    internal = LogicalNetId(
+        family.family_id,
+        family.family_id,
+        "iron-ingot",
+        NetRole.INTERNAL,
+    )
+    proliferator = LogicalNetId(
+        family.family_id,
+        family.family_id,
+        "proliferator",
+        NetRole.PROLIFERATOR,
+    )
     problem = PlacementProblem(
         sizes=((variants[0].box_width + 2, variants[0].box_height + 1),),
-        nets=((0, 0),),
+        nets=((0, 0), (0, 0)),
         outline_height=40,
         area_lower_bound=1,
         instance_ids=(parent.instance_id,),
         variant_tables=(variants,),
+        logical_net_ids=(internal, proliferator),
     )
     state = AnnealState(
         pair=SequencePair((0,), (0,)),
@@ -823,8 +837,20 @@ def test_compatible_stage_boundary_merge_is_exact_split_inverse() -> None:
     )
 
     split = split_stage_boundary(problem, state, family, 0)
+    context = feedback_cost_context(
+        FeedbackState(
+            outline=(40, 40),
+            net_weight={},
+            cell_history={},
+            logical_net_weight={internal: 2.0, proliferator: 4.0},
+        ),
+        split.problem,
+    )
     merged = merge_stage_boundary(split.problem, split.state, family, 0, 1)
 
+    assert split.problem.logical_net_ids.count(internal) == 4
+    assert split.problem.logical_net_ids.count(proliferator) == 4
+    assert context.net_weights == (3.0,) * 4 + (5.0,) * 4
     assert merged is not None
     assert merged.problem == problem
     assert merged.state == state

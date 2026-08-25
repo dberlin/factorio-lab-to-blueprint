@@ -274,6 +274,23 @@ def remap_feedback_nets(
     )
 
 
+def geometric_failure_instances(
+    result: DetailedRouteResult,
+    instance_count: int,
+) -> frozenset[int]:
+    """Return exact physical endpoints implicated by current geometric failures."""
+    if type(instance_count) is not int or instance_count < 0:
+        raise ValueError("instance count must be a non-negative integer")
+    implicated: set[int] = set()
+    for failure in result.failures:
+        if failure.kind not in _GEOMETRIC_FAILURES:
+            continue
+        _add_net_endpoints(implicated, failure.net_id, instance_count)
+        for blocker in failure.blocking_nets:
+            _add_net_endpoints(implicated, blocker, instance_count)
+    return frozenset(implicated)
+
+
 def select_split_candidate(
     result: DetailedRouteResult,
     instances: tuple[StripInstanceId, ...],
@@ -290,13 +307,7 @@ def select_split_candidate(
         raise ValueError("split candidates must be an immutable instance tuple")
     if stagnation < split_after:
         return None
-    implicated: set[int] = set()
-    for failure in result.failures:
-        if failure.kind not in _GEOMETRIC_FAILURES:
-            continue
-        _add_net_endpoints(implicated, failure.net_id, len(instances))
-        for blocker in failure.blocking_nets:
-            _add_net_endpoints(implicated, blocker, len(instances))
+    implicated = geometric_failure_instances(result, len(instances))
     candidates = [index for index in implicated if instances[index].machine_count > 1]
     if not candidates:
         return None
@@ -317,15 +328,10 @@ def feedback_cost_context(
     direct_targets: tuple[DirectInsertTarget, ...] = (),
 ) -> PlacementCostContext:
     """Build immutable candidate-independent feedback scoring inputs."""
-    if problem.logical_net_families:
-        weight_by_families: dict[tuple[object, object], float] = {}
-        for logical, weight in state.logical_net_weight.items():
-            if logical.source_family is None or logical.destination_family is None:
-                continue
-            families = (logical.source_family, logical.destination_family)
-            weight_by_families[families] = weight_by_families.get(families, 0.0) + weight
+    if problem.logical_net_ids:
         net_weights = tuple(
-            1.0 + weight_by_families.get(families, 0.0) for families in problem.logical_net_families
+            1.0 + state.logical_net_weight.get(logical, 0.0)
+            for logical in problem.logical_net_ids
         )
     else:
         weight_by_endpoints: dict[tuple[int, int], float] = {}
