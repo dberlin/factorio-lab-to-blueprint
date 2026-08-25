@@ -6226,13 +6226,27 @@ def _machines_without_poses(strips: list[Strip]) -> list[str]:
     ``_side_lane_caps`` now keeps seating inside what the poses reach, so this
     is a guard against a future seating bug rather than a routine outcome.
 
-    BOTH ARE REFUSALS RATHER THAN REPAIRS, and deliberately so.  Whether the
-    pose extraction is incomplete -- a Ray Receiver IS fed in game, so it either
-    carries its slots in an array the extractor does not read or takes items by
-    some other mechanism -- is a question for the extractor and has its own
-    backlog entry.  Until it is answered, refusing is the honest reading of the
-    data we have, and a blueprint that pastes idle machines is worse than a
-    refusal that names the prefab.
+    BOTH ARE REFUSALS RATHER THAN REPAIRS, and deliberately so.
+
+    THIS DOCSTRING USED TO ARGUE FROM A FALSE PREMISE, and the message it
+    justified sent readers to the wrong place: *"a Ray Receiver IS fed in game,
+    so it either carries its slots in an array the extractor does not read or
+    takes items by some other mechanism -- a question for the extractor"*.  It
+    is not a question for the extractor.  Settled from the prefabs and from the
+    IL, and recorded in ``docs/BACKLOG.md``: ``ray-receiver`` and
+    ``energy-exchanger`` each carry exactly one ``SlotConfig`` whose
+    ``insertPoses`` has LENGTH ZERO and whose ``portPoses`` has two and four
+    entries respectively, ``PrefabDesc.slotPoses`` IS ``SlotConfig.insertPoses``,
+    and ``BuildTool_Inserter`` drops any target with none.  There is no array to
+    miss.  A Ray Receiver is also fed NOTHING -- it is a pure source, and the
+    lane it wants is its critical-photon OUTPUT.
+
+    What these buildings take is a BELT DOCKED INTO A PORT, which neither
+    strategy can emit; that work is the open item, and it is blocked in turn on
+    a port being INSIDE the footprint while our occupancy is a tile grid.  So
+    the message names the port count as well as the missing poses, exactly as
+    spine's :func:`_sorterless_groups` does, and a blueprint that pastes idle
+    machines stays worse than a refusal that names the prefab.
 
     Returns one description per distinct offending (building, lane kind), empty
     when every lane in the plan can be joined to its machine.
@@ -6252,12 +6266,15 @@ def _machines_without_poses(strips: list[Strip]) -> list[str]:
             if key in seen:
                 continue
             seen.add(key)
-            name = catalog.building(s.item_id).name
+            building = catalog.building(s.item_id)
+            name = building.name
             if not s.attachable_columns:
                 out.append(
                     f"{name} ({s.recipe_id}): the game's prefab gives it no "
-                    f"insert pose on any face, so its {kind} lane cannot be "
-                    f"joined to it by a sorter"
+                    f"insert pose on any face and {len(building.slots)} belt "
+                    f"port(s), so its {kind} lane cannot be joined to it by a "
+                    f"sorter -- it takes a belt docked into a port, which "
+                    f"neither strategy emits"
                 )
             else:
                 out.append(

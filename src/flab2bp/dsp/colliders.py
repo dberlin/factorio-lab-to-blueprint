@@ -492,15 +492,29 @@ def collisions(
       (line 145871), so it can only ever collide with another sorter -- and a
       sorter's own box is rebuilt from the pose of the buildings it connects
       (lines 145718-145746, and ``RefreshBuildPreview`` lines 180039-180096
-      re-seats ``lpos`` onto ``desc.slotPoses``).  That needs slot data this
-      repository is currently known to have wrong, so it is left out rather than
-      guessed at.
+      re-seats ``lpos`` onto ``desc.slotPoses``).
+
+      THE REASON THIS IS OUT IS THE RE-SEATING, NOT THE DATA.  It used to say
+      "that needs slot data this repository is currently known to have wrong",
+      and that has not been true since the real ``slotPoses`` were extracted
+      from the prefabs.  What is still missing is the rebuild: a sorter's
+      ``buildColliders`` is one box of half-extents ``(0.26, 0.15, 0.115)``, and
+      testing it where the record puts it is refuted by the game's own output --
+      **53 pairs closer than 0.52 units among the 1132 sorters in the five
+      single-area fixtures**, in blueprints that paste.  Porting 180039-180096
+      is what would make the question answerable; until then this reports
+      nothing about sorters rather than reporting those 53 shapes as errors.
+      ``test_a_raw_sorter_box_test_convicts_blueprints_the_game_wrote`` pins
+      both halves.
     * A belt IS tested, as a 0.23 sphere rather than a box, and a belt hitting a
-      machine is NOT excused.  But that model over-reports on real blueprints --
-      it flags belts three tiles from an Interstellar Logistics Station in
-      ``12-s-purple-science``, which the game wrote -- so something about it is
-      still wrong and shipping it would break the negative control.  Excluded
-      until it can be made to pass.
+      machine is NOT excused -- but not HERE.  That model lives in
+      :func:`belt_crossings` and, with the paste's own excusals applied, in
+      :func:`belt_collisions`; the over-reporting recorded here (belts three
+      tiles from an Interstellar Logistics Station in ``12-s-purple-science``,
+      which the game wrote) was the excusals missing, and with them the fixture
+      corpus goes from 1189 raw findings to zero.  Belts stay out of THIS
+      function because their verdict needs the preview graph, which a list of
+      boxes does not carry.
 
     By default the flat model is used -- see "Why the default model is FLAT" in
     the module docstring.  Every pair reported is then one that no paste in the
