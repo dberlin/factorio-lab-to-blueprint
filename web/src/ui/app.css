@@ -1,0 +1,139 @@
+:root {
+  color-scheme: dark;
+}
+body {
+  margin: 0;
+  font:
+    14px / 1.5 system-ui,
+    sans-serif;
+  background: #10141a;
+  color: #dfe6ee;
+}
+.layout {
+  display: grid;
+  grid-template-rows: auto auto 1fr;
+  height: 100vh;
+}
+.toolbar {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  padding: 0.5rem 1rem;
+  background: #182029;
+  border-bottom: 1px solid #26313d;
+}
+.input-panel {
+  display: grid;
+  gap: 0.5rem;
+  padding: 1rem;
+  max-width: 60rem;
+}
+.input-panel textarea {
+  width: 100%;
+  min-height: 7rem;
+  max-height: 7rem;
+  overflow: auto;
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  background: #0c1016;
+  color: inherit;
+  border: 1px solid #26313d;
+  border-radius: 4px;
+  padding: 0.5rem;
+}
+.input-panel button {
+  justify-self: start;
+  padding: 0.4rem 1rem;
+}
+.error {
+  color: #ff8080;
+}
+.warn {
+  color: #ffcc66;
+}
+.canvas {
+  min-height: 0;
+}
+.canvas-empty {
+  display: grid;
+  place-items: center;
+  color: #7b8794;
+}
+.info {
+  position: absolute;
+  right: 1rem;
+  top: 4rem;
+  width: 18rem;
+  background: #182029ee;
+  border: 1px solid #26313d;
+  border-radius: 6px;
+  padding: 0.75rem 1rem;
+}
+.info h2 {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+}
+.info dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.15rem 0.75rem;
+  margin: 0;
+  font-size: 12px;
+}
+.info dt {
+  color: #8fa0b3;
+}
+.info dd {
+  margin: 0;
+}
+.info dd.inferred {
+  font-style: italic;
+}
+.info .inferred-tag {
+  font-style: normal;
+  font-size: 0.85em;
+  opacity: 0.7;
+}
+.bom {
+  position: absolute;
+  left: 1rem;
+  bottom: 1rem;
+  max-height: 45vh;
+  overflow: auto;
+  width: 16rem;
+  background: #182029ee;
+  border: 1px solid #26313d;
+  border-radius: 6px;
+  padding: 0.5rem 0.75rem;
+  font-size: 12px;
+}
+.bom h2 {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  color: #8fa0b3;
+  margin: 0.5rem 0 0.25rem;
+}
+.bom td:first-child {
+  text-align: right;
+  padding-right: 0.5rem;
+  color: #9ad6a0;
+  font-variant-numeric: tabular-nums;
+}
+.note {
+  color: #8fa0b3;
+  font-size: 11px;
+}
+.row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.row input {
+  flex: 1 1 20rem;
+  background: #0c1016;
+  color: inherit;
+  border: 1px solid #26313d;
+  border-radius: 4px;
+  padding: 0.35rem 0.5rem;
+}

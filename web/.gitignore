@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.rsbuild/
+*.log
+coverage/
+
+# NOTE: `public/` was ignored in the standalone dsp-blueprint-viewer repo,
+# because there it is regenerated from a local Dyson Sphere Program install by
+# `bun run extract-assets`. It is COMMITTED here: without the catalog JSON and
+# the icon atlas the viewer renders nothing, and requiring a game install to
+# run the web UI of a repo that already vendors FactorioLab's dataset would be
+# a strange asymmetry. It is 1.6MB.
