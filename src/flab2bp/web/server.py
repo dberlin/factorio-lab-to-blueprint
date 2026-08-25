@@ -314,17 +314,17 @@ def main(argv: list[str] | None = None) -> int:
     root = repo_root()
     dist = args.dist if args.dist is not None else root / DIST
     if args.build or (args.autobuild and not (dist / "index.html").is_file()):
-        print("flab2bp-web: building the front end (bun install && bun run build) ...")
+        print("flab2bp-web: building the front end (bun install && bun run build) ...", flush=True)
         try:
             build_front_end(root)
         except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
             # Not fatal: the API is the half that needs Python, and the page
             # itself explains what is missing rather than 404ing silently.
-            print(f"flab2bp-web: could not build the front end: {exc}")
-            print("flab2bp-web: serving the API anyway; the page will say so.")
+            print(f"flab2bp-web: could not build the front end: {exc}", flush=True)
+            print("flab2bp-web: serving the API anyway; the page will say so.", flush=True)
 
     httpd, builder = serve(host=args.host, port=args.port, dist=dist, workers=args.workers)
-    print(f"flab2bp-web: http://{args.host}:{args.port}")
+    print(f"flab2bp-web: http://{args.host}:{args.port}", flush=True)
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

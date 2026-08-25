@@ -22,7 +22,7 @@ from collections import OrderedDict
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Literal, get_args
 
 from flab2bp import pipeline
 from flab2bp.layout.base import NoValidLayout
@@ -50,7 +50,10 @@ class Options:
     """One build request, already validated."""
 
     url: str
-    strategy: str = "best"
+    #: The pipeline's own Literal, so a strategy name that reached here without
+    #: going through `parse_options` is a type error rather than a KeyError deep
+    #: inside `pipeline.build`.
+    strategy: pipeline.StrategyName = "best"
     power: bool = True
     candidates: int = 3
     budget_s: float = 2.0
@@ -92,7 +95,7 @@ def parse_options(raw: object) -> Options:
         raise InvalidOptions("'url' is required")
 
     strategy = raw.get("strategy", "best")
-    if strategy not in ("best", "spine", "freeform"):
+    if strategy not in get_args(pipeline.StrategyName):
         raise InvalidOptions("'strategy' must be one of best, spine, freeform")
 
     candidates = raw.get("candidates", 3)
@@ -173,7 +176,7 @@ def run_build(options: Options) -> pipeline.Build:
     """
     return pipeline.build(
         options.url,
-        strategy=options.strategy,  # type: ignore[arg-type]
+        strategy=options.strategy,
         power=options.power,
         candidates=options.candidates,
         time_budget_s=options.budget_s,

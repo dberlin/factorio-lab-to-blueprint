@@ -184,6 +184,10 @@ body {
   flex: none;
   width: 100%;
   min-width: 0;
+  /* Without this, `width: 100%` plus the inherited padding and border makes
+     each control ~18px wider than its grid track and it runs under the
+     sidebar's scrollbar. */
+  box-sizing: border-box;
 }
 .build-panel .options .checkbox {
   grid-column: 1 / -1;
