@@ -1324,6 +1324,45 @@ class TestProliferation:
         ]
         assert report.ok, sorted({f.check for f in report.errors})
 
+    def test_a_placed_coater_is_anchored_on_its_belt_tile_not_on_its_collider(
+        self,
+    ) -> None:
+        """A belt addon's placement is 1x1 whatever its collider spans.
+
+        ``catalog.footprint`` reports a Spray Coater as 1x3, which is true of
+        its collider: the box the game tests is 3.8 world units long about the
+        coater's own centre, so it covers three tile centres along the belt.
+        Its POSITION is still the belt tile it rides -- ``addonAreaPoses`` area
+        0 is "the cargo belt it rides" -- and ``tile_to_local_offset`` reads the
+        centre off the width, so emitting it 1x3 moves it a tile off the belt.
+        At yaw 90 that became an Oil Refinery and a Spray Coater two tiles apart
+        failing ``geom.collide``, and it cost spine ten corpus cells before the
+        anchor was pinned here.
+        """
+        spec = two_stage_spec()
+        prolif = BuildSpec(
+            groups=spec.groups,
+            external_inputs={**spec.external_inputs, "proliferator-3": F(1) / 2},
+            outputs=spec.outputs,
+            belt_item_id=spec.belt_item_id,
+            belt_items_per_second=spec.belt_items_per_second,
+            spray_lanes={"iron-ingot": False},
+            label="prolif",
+        )
+        p = SpineLayout(power=False).lay_out(prolif, time_budget_s=0.5)
+        coaters = [b for b in p.buildings if b.item_id == catalog.SPRAY_COATER_ID]
+        assert coaters, "no coater placed, so nothing below tests anything"
+        assert all((b.width, b.height) == (1, 1) for b in coaters), [
+            (b.x, b.y, b.width, b.height) for b in coaters
+        ]
+        # And the catalog really does disagree, so this is not vacuous.
+        assert catalog.footprint(catalog.SPRAY_COATER_ID) == (1, 3)
+        # Every coater sits exactly on a belt tile of the lane it rides.
+        belts = {(b.x, b.y, b.z) for b in p.buildings if catalog.is_belt(b.item_id)}
+        assert all((b.x, b.y, b.z) in belts for b in coaters), [
+            (b.x, b.y, b.z) for b in coaters
+        ]
+
     def test_a_coater_still_consumes_no_grid_tile(self) -> None:
         """The half of the old test that was about geometry, kept.
 
