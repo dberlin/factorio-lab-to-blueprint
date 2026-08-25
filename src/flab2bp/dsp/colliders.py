@@ -131,6 +131,7 @@ __all__ = [
     "belt_collisions",
     "belt_crossing_height",
     "belt_crossings",
+    "belt_keepout_offsets",
     "belt_probe",
     "belt_run_ends_in_a_building",
     "build_colliders",
@@ -653,6 +654,45 @@ def belt_crossing_height(model_index: int) -> float:
         return 0.0
     top = max(pos[1] + ext[1] for pos, ext, _q in cols)
     return (top + BELT_PROBE_RADIUS - BELT_PROBE_LIFT) * 3.0 / 4.0
+
+
+@cache
+def belt_keepout_offsets(
+    model_index: int, yaw: float = 0.0, reach: int = 3, levels: int = 4
+) -> frozenset[tuple[int, int, int]]:
+    """Tile offsets at which a belt's probe touches this model's build collider.
+
+    ``(dx, dy, dz)`` from the building's own tile and blueprint ``z``, MEASURED
+    rather than asserted: the belt probe of :func:`belt_probe` is placed at every
+    offset in the box and asked whether it overlaps any of
+    :func:`target_boxes`.  That is the same question
+    :func:`belt_collisions` asks, minus the excusals -- so this is the set of
+    places an UNLINKED belt may not stand, and a caller that keeps foreign belts
+    out of it cannot be convicted by that check.
+
+    For a Splitter it comes out as the four orthogonal neighbours and the tile
+    itself, at ``dz`` 0 AND 1 and nowhere else: the arms reach 1.19 world units
+    against a 1.2566 tile, so a diagonal at 1.777 clears, and the collider stands
+    2.30 units tall against a level's 4/3, so one level up is still inside it and
+    two are not.  ``reach`` and ``levels`` are the search box, not the answer;
+    they are wide enough that a non-empty ring at their edge would show.
+
+    Negative ``dz`` is searched too -- a belt UNDER an elevated building -- and
+    for every model in this catalog it comes back empty, because a collider
+    starts at the ground and rises.
+    """
+    lpos, lrot = flat_pose(0.0, 0.0, 0.0, yaw)
+    boxes = target_boxes(Placed(model_index, 0.0, 0.0, 0.0, yaw), lpos, lrot)
+    if not boxes:
+        return frozenset()
+    out = set()
+    for dx in range(-reach, reach + 1):
+        for dy in range(-reach, reach + 1):
+            for dz in range(-levels, levels + 1):
+                probe = belt_probe(dx, dy, dz)
+                if any(sphere_box_overlap(probe, BELT_PROBE_RADIUS, b) for b in boxes):
+                    out.add((dx, dy, dz))
+    return frozenset(out)
 
 
 def probe_inside_footprint(centre: Vec3, box: Box) -> bool:

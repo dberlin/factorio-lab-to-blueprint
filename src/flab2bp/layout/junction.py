@@ -35,6 +35,7 @@ from collections.abc import Sequence
 from fractions import Fraction
 
 from flab2bp.dsp import catalog
+from flab2bp.dsp import colliders as dsp_colliders
 from flab2bp.dsp.rules import (
     SPLITTER_INPUT_TO_SLOT,
     SPLITTER_MAX_PORTS,
@@ -51,6 +52,34 @@ from flab2bp.layout.base import PlacedBuilding
 
 class TooManyPorts(ValueError):
     """More belts attached to one junction than a splitter has sides."""
+
+
+def _keepout() -> frozenset[tuple[int, int, int]]:
+    return dsp_colliders.belt_keepout_offsets(
+        catalog.building(catalog.SPLITTER_ID).model_index
+    )
+
+
+def keepout_cells(x: int, y: int, level: int) -> tuple[tuple[int, int, int], ...]:
+    """Routing cells a junction at ``(x, y, level)`` denies to a FOREIGN belt.
+
+    The lateral half of the game's belt rule, which
+    :func:`flab2bp.dsp.colliders.belt_keepout_offsets` measures rather than
+    asserts: the four orthogonal neighbours and the tile itself, at this level
+    and at the one above it.  Two levels up clears -- the collider stands 2.30
+    world units and a level is 4/3 -- and so does every diagonal.
+
+    A belt on the junction's own run is EXCUSED by the game
+    (``colliders.belt_chain_excuses``), so these cells are denied only to belts
+    that are not part of it.  The caller knows which those are; this function
+    knows only the geometry.
+
+    ``level`` is a ROUTING LEVEL, and it is the same integer as the junction's
+    blueprint ``z`` because a junction always rests on a level.
+    """
+    return tuple(
+        (x + dx, y + dy, level + dz) for dx, dy, dz in sorted(_keepout())
+    )
 
 
 def site_is_clear(buildings: Sequence[PlacedBuilding], x: int, y: int) -> bool:
