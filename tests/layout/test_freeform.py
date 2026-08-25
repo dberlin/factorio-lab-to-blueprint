@@ -526,6 +526,20 @@ class TestPlanStrips:
         with pytest.raises(ValueError, match="insert pose"):
             plan_strips(self._many_input_spec(7), strip_len=6)
 
+    def test_a_flanked_output_claims_no_column_on_the_south_face(self) -> None:
+        """The south face is handed back whole, not minus one.
+
+        ``column_offset`` rations columns across every lane on a face, and it
+        charged the ingredients below for the output lane sharing that face.  A
+        flanked output is not on that face at all.  Charging it anyway rations
+        away the column the flank exists to free, and it shows up as a lane
+        trimmed one tile short of the column it was actually given.
+        """
+        strips = plan_strips(self._many_input_spec(6), strip_len=6)
+        s = strips[0]
+        assert s.flank_outputs and s.out_lanes, "this strip must have both to mean anything"
+        assert s.column_offset(s.in_below[0]) == 0
+
     def test_a_recipe_needing_more_lanes_than_two_sides_carry_is_rejected(self) -> None:
         """Truncating an ingredient would paste cleanly and then stall."""
         with pytest.raises(ValueError, match="cannot be seated"):
