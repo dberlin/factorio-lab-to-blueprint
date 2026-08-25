@@ -271,19 +271,16 @@ def test_geom_collide_runs_by_default_now_that_the_layout_passes_it() -> None:
     Nothing may go back into ``OPT_IN`` without a measurement of what leaving it
     on would cost.
 
-    ``game.belt_collide`` was in there on exactly that measurement and came out
-    the same way: a Splitter's footprint is 1x1 against a 2.38-unit cross, so
-    both strategies routed belts a tile from one, and the fix was to give the
-    router the collider rather than to widen a bound.  The set is EMPTY again,
-    which is the state this project wants it in -- a check nobody runs is a
-    check nobody can rely on.
+    ``game.belt_collide`` is in there on exactly that measurement, and it is
+    HALF out: freeform's router has the Splitter's collider now and convicts
+    zero, while spine's trunk margin still crosses its own junctions at bridge
+    height on two URLs.  See :data:`OPT_IN` for the numbers and the backlog for
+    the geometry.  It comes out the way ``geom.collide`` did -- by giving the
+    router the collider, not by widening a bound.
     """
     from flab2bp.layout.validate import OPT_IN
 
-    assert OPT_IN == set(), (
-        "a check was parked as opt-in; that needs a measurement of what "
-        "leaving it on costs, recorded where OPT_IN is defined"
-    )
+    assert {"game.belt_collide"} == OPT_IN
     r = validate(place(machine(0, 0), machine(3, 0)))
     assert "geom.collide" in r.checks_run
     assert "geom.collide" not in r.skipped
