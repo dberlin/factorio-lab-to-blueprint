@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import contextlib
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import cast
 
 import pytest
@@ -30,10 +30,12 @@ from flab2bp.layout.route_feedback import (
     DetailedRouteResult,
     DetailedRouteStatus,
     FeedbackState,
+    LogicalNetId,
     NetFailure,
     NetId,
     NetRole,
     RouteFailureKind,
+    feedback_cost_context,
     select_lns_neighbourhood,
     select_split_candidate,
 )
@@ -71,12 +73,15 @@ from flab2bp.layout.sequence_solver import (
     _decoded_pack,
     _production_run,
     _ProductionCandidate,
+    _rebuild_stage_problem_nets,
     _route_detailed_candidate,
     _selected_direct_targets,
     _selected_strips,
     _variant_search_inputs,
 )
 from flab2bp.layout.strip_variants import (
+    StripFamilyId,
+    StripInstanceId,
     generate_strip_families,
     partition_strip_family,
     variants_for_count,
@@ -791,6 +796,21 @@ def test_production_stage_boundary_rebuilds_preparation_for_children() -> None:
         if instance.machine_count > 1
     )
     state = height_state.restarts[0].anneal
+    alternate_index = next(
+        index
+        for index, variant in enumerate(problem.variant_tables[target])
+        if (variant.box_width, variant.box_height)
+        != (
+            problem.variant_tables[target][0].box_width,
+            problem.variant_tables[target][0].box_height,
+        )
+    )
+    alternate_state = apply_variant_move(
+        problem,
+        state,
+        strip=target,
+        variant=alternate_index,
+    )
     result = DetailedRouteResult(
         status=DetailedRouteStatus.STRANDED,
         routed=(),
@@ -823,13 +843,34 @@ def test_production_stage_boundary_rebuilds_preparation_for_children() -> None:
         result,
         2,
     )
+    alternate = transform(
+        height_state.height,
+        problem,
+        alternate_state,
+        height_state.feedback,
+        result,
+        2,
+    )
 
     assert transformed is not None
+    assert alternate is not None
+    assert transformed.problem == alternate.problem
     assert transformed.problem.size == problem.size + 1
-    decoded = decode_state(transformed.problem, transformed.state)
+    initial_strips = plan_strips(spec, strip_len=6)
+    for update in (transformed, alternate):
+        selected = _selected_strips(
+            initial_strips,
+            update.problem,
+            update.state.variant_indices,
+        )
+        assert update.problem.selected_sizes(
+            update.state.variant_indices
+        ) == tuple(_box(strip) for strip in selected)
+
+    decoded = decode_state(alternate.problem, alternate.state)
     candidate = run.solver.adapters.prepare(height_state.height, decoded)
-    assert candidate.problem == transformed.problem
-    assert len(candidate.selected_strips) == transformed.problem.size
+    assert candidate.problem == alternate.problem
+    assert len(candidate.selected_strips) == alternate.problem.size
     assert tuple(
         (strip.family_id, strip.machine_start, strip.machines)
         for strip in candidate.selected_strips
@@ -839,8 +880,90 @@ def test_production_stage_boundary_rebuilds_preparation_for_children() -> None:
             instance.machine_start,
             instance.machine_count,
         )
-        for instance in transformed.problem.instance_ids
+        for instance in alternate.problem.instance_ids
     )
+
+
+def test_rebuilt_net_order_keeps_matching_logical_family_weights() -> None:
+    families = generate_strip_families(two_stage_spec())
+    source = next(family for family in families if family.total_machine_count > 1)
+    destination = next(
+        family for family in families if family.family_id != source.family_id
+    )
+    source_variants = variants_for_count(source, 1)
+    destination_variants = variants_for_count(destination, 1)
+    second_destination_id = StripFamilyId("second-destination#0", 0)
+    second_destination_variants = tuple(
+        replace(
+            variant,
+            variant_id=replace(
+                variant.variant_id,
+                family_id=second_destination_id,
+            ),
+        )
+        for variant in destination_variants
+    )
+    instance_ids = (
+        StripInstanceId(source.family_id, 0, 1),
+        StripInstanceId(source.family_id, 1, 1),
+        StripInstanceId(destination.family_id, 0, 1),
+        StripInstanceId(second_destination_id, 0, 1),
+    )
+    tables = (
+        source_variants,
+        source_variants,
+        destination_variants,
+        second_destination_variants,
+    )
+    original_nets = ((0, 2), (1, 2), (0, 3), (1, 3))
+    problem = PlacementProblem(
+        sizes=tuple(
+            (variants[0].box_width, variants[0].box_height)
+            for variants in tables
+        ),
+        nets=original_nets,
+        outline_height=40,
+        area_lower_bound=1,
+        instance_ids=instance_ids,
+        variant_tables=tables,
+        logical_net_families=tuple(
+            (
+                instance_ids[source_index].family_id,
+                instance_ids[destination_index].family_id,
+            )
+            for source_index, destination_index in original_nets
+        ),
+    )
+    sorted_nets = tuple(sorted(original_nets))
+
+    rebuilt = _rebuild_stage_problem_nets(problem, sorted_nets)
+
+    assert rebuilt.nets == sorted_nets
+    assert rebuilt.logical_net_families == tuple(
+        (
+            rebuilt.instance_ids[source_index].family_id,
+            rebuilt.instance_ids[destination_index].family_id,
+        )
+        for source_index, destination_index in sorted_nets
+    )
+    weighted_edge = LogicalNetId(
+        source.family_id,
+        second_destination_id,
+        "split-product",
+        NetRole.INTERNAL,
+    )
+    context = feedback_cost_context(
+        FeedbackState(
+            outline=(40, 40),
+            net_weight={},
+            cell_history={},
+            logical_net_weight={weighted_edge: 2.0},
+        ),
+        rebuilt,
+    )
+    assert context.net_weights == (1.0, 3.0, 1.0, 3.0)
+
+
 
 
 def test_feedback_stagnation_rebuilds_the_next_fixed_cardinality_stage() -> None:

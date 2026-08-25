@@ -807,6 +807,29 @@ def _selected_direct_targets(
     return _direct_alignment_targets(_direct_net_candidates(selected, spec))
 
 
+def _rebuild_stage_problem_nets(
+    problem: PlacementProblem,
+    nets: tuple[tuple[int, int], ...],
+) -> PlacementProblem:
+    """Rebind sorted physical nets and their logical families as one value."""
+    logical_net_families = (
+        tuple(
+            (
+                problem.instance_ids[source].family_id,
+                problem.instance_ids[destination].family_id,
+            )
+            for source, destination in nets
+        )
+        if problem.instance_ids
+        else ()
+    )
+    return replace(
+        problem,
+        nets=nets,
+        logical_net_families=logical_net_families,
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class _ProductionCandidate:
     height: int
@@ -1222,10 +1245,9 @@ def _production_run(
             transformed.problem,
             transformed.state.variant_indices,
         )
-        rebuilt = replace(
+        rebuilt = _rebuild_stage_problem_nets(
             transformed.problem,
-            sizes=tuple(_box(strip) for strip in selected),
-            nets=tuple(_nets_between(selected)),
+            tuple(_nets_between(selected)),
         )
         problems[height] = rebuilt
         selected_cache.clear()
