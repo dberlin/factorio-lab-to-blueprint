@@ -1,31 +1,30 @@
 import { defineConfig } from '@rsbuild/core';
 import { pluginReact } from '@rsbuild/plugin-react';
-import { handleProxyRequest } from './src/server/proxy';
+
+/**
+ * Where `flab2bp-web` is listening. The dev server proxies the API to it rather
+ * than answering it: the solver is Python, and there is no version of this that
+ * does not need that process running.
+ */
+const API = process.env.FLAB2BP_API ?? 'http://127.0.0.1:8000';
 
 export default defineConfig({
   plugins: [pluginReact({ reactCompiler: true })],
   html: { template: './index.html' },
   source: { entry: { index: './src/index.tsx' } },
   server: {
-    // Mirrors server.ts: the /api/fetch handler below is an open relay to any
-    // http(s) URL, so neither server should be reachable from the LAN.
+    // The API it proxies to will spend every core on a CP-SAT solve for anyone
+    // who asks, and /api/fetch is an open relay to any http(s) URL. Neither
+    // this nor the Python server should be reachable from the LAN.
     host: '127.0.0.1',
-    // The dev server answers /api/fetch itself. A `server.proxy` entry cannot
-    // work here: rsbuild's dev server also defaults to port 3000, so proxying
-    // /api/fetch to localhost:3000 aimed the dev server back at itself and
-    // every URL load hung until it timed out.
-    setup: ({ server }) => {
-      server.middlewares.use((req, res, next) => {
-        handleProxyRequest(req.url ?? '/')
-          .then(async (response) => {
-            if (!response) return next();
-            res.statusCode = response.status;
-            const type = response.headers.get('content-type');
-            if (type) res.setHeader('content-type', type);
-            res.end(await response.text());
-          })
-          .catch(next);
-      });
-    },
+    // Not 3000: that is the standalone viewer's port, and running both at once
+    // while working on the two halves is normal.
+    port: 3001,
+    // `/api/fetch` used to be answered here, by importing the viewer's own
+    // proxy.ts into this config. It now lives in the Python server alongside
+    // `/api/build`, so that the built app served by `flab2bp-web` and the app
+    // served by `rsbuild dev` are talking to exactly the same endpoints. One
+    // implementation, one place it can be wrong.
+    proxy: { '/api': API },
   },
 });

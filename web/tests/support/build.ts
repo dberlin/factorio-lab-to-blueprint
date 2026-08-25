@@ -1,0 +1,98 @@
+/**
+ * Fixtures shaped like what `flab2bp.web.payload.describe` actually emits.
+ *
+ * Hand-written rather than captured, but the zod schema in `src/api/build.ts`
+ * parses every response, so a fixture that drifts from the Python payload fails
+ * the same way a real response would.
+ */
+import { readFileSync } from 'node:fs';
+import type { BuildResult, Job } from '../../src/api/build';
+
+/**
+ * A real DSP blueprint string, so a test that hands one to the renderer is
+ * exercising the render rather than a parse failure.
+ */
+export const A_BLUEPRINT = readFileSync(
+  'tests/fixtures/new-planet-establishment-polar-buildings-calldown-for-mass-production.txt',
+  'utf8',
+).trim();
+
+export function aResult(overrides: Partial<BuildResult> = {}): BuildResult {
+  return {
+    blueprint: A_BLUEPRINT,
+    valid: true,
+    strategy: 'spine',
+    candidate: 'no-proliferator',
+    machines: 9,
+    area: 575,
+    buildings: 42,
+    title: 'electromagnetic-matrix 60/min',
+    description: 'flab2bp spine layout',
+    outputs: { 'electromagnetic-matrix': { exact: '1', per_minute: 60 } },
+    external_inputs: { 'magnetic-coil': { exact: '5/6', per_minute: 50 } },
+    input_markers: 1,
+    unmarked_inputs: [],
+    flow_pinned: false,
+    flow_findings: [],
+    belt_rules: { max_z: 26.55, lab_level: 9, vertical_construction: true, from_url: false },
+    refused: [],
+    report: { ok: true, checks_run: ['power'], skipped: [], errors: [], warnings: [] },
+    attempts: [
+      {
+        candidate: 'no-proliferator',
+        strategy: 'spine',
+        area: 575,
+        ok: true,
+        errors: 0,
+        chosen: true,
+      },
+    ],
+    ...overrides,
+  };
+}
+
+export interface Scripted {
+  status?: number;
+  body: unknown;
+}
+
+const realFetch = globalThis.fetch;
+
+/**
+ * Scripts `fetch`, answering each call with the next response and repeating the
+ * last one thereafter — which is what a poll loop needs.  Returns the calls, so
+ * a test can assert what was sent as well as what came back.
+ */
+export function serving(...responses: Scripted[]): Array<{ url: string; init?: RequestInit }> {
+  const calls: Array<{ url: string; init?: RequestInit }> = [];
+  let index = 0;
+  globalThis.fetch = ((url: string, init?: RequestInit) => {
+    calls.push({ url, init });
+    const next = responses[Math.min(index++, responses.length - 1)];
+    if (!next) throw new Error('serving() was given no responses');
+    return Promise.resolve(
+      new Response(typeof next.body === 'string' ? next.body : JSON.stringify(next.body), {
+        status: next.status ?? 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+  }) as unknown as typeof fetch;
+  return calls;
+}
+
+export function restoreFetch(): void {
+  globalThis.fetch = realFetch;
+}
+
+export function aJob(overrides: Partial<Job> = {}): Job {
+  return {
+    id: 'abc123',
+    state: 'done',
+    elapsed_s: 1.2,
+    solver_ceiling_s: 12,
+    result: aResult(),
+    refusal: null,
+    error: null,
+    ...overrides,
+  };
+}

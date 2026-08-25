@@ -9,10 +9,25 @@ body {
   background: #10141a;
   color: #dfe6ee;
 }
+:root {
+  /* The build form and its report are long enough to need their own scroll,
+     and a 3D view squeezed into whatever is left under them is not a view. So
+     the inputs live in a column beside the canvas rather than above it. */
+  --sidebar: 27rem;
+}
 .layout {
   display: grid;
-  grid-template-rows: auto auto 1fr;
+  grid-template-rows: auto 1fr;
+  grid-template-columns: var(--sidebar) 1fr;
   height: 100vh;
+}
+.toolbar {
+  grid-column: 1 / -1;
+}
+.sidebar {
+  overflow-y: auto;
+  border-right: 1px solid #26313d;
+  min-height: 0;
 }
 .toolbar {
   display: flex;
@@ -96,7 +111,8 @@ body {
 }
 .bom {
   position: absolute;
-  left: 1rem;
+  /* Clear of the sidebar, which the absolute positioning does not know about. */
+  left: calc(var(--sidebar) + 1rem);
   bottom: 1rem;
   max-height: 45vh;
   overflow: auto;
@@ -136,4 +152,123 @@ body {
   border: 1px solid #26313d;
   border-radius: 4px;
   padding: 0.35rem 0.5rem;
+}
+
+/* ---- the flab2bp build panel ---- */
+
+.build-panel {
+  display: grid;
+  gap: 0.5rem;
+  padding: 1rem 1rem 0;
+}
+.build-panel select {
+  background: #0c1016;
+  color: inherit;
+  border: 1px solid #26313d;
+  border-radius: 4px;
+  padding: 0.3rem;
+}
+/* A grid, not a flex row: in a 27rem column the options wrapped so that a
+   label and its own control ended up on different lines, which made
+   "Candidates" read as a caption for the budget box beside it. */
+.build-panel .options {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 0.4rem 0.6rem;
+  font-size: 12px;
+  color: #b6c2d0;
+}
+.build-panel .options input,
+.build-panel .options select {
+  flex: none;
+  width: 100%;
+  min-width: 0;
+}
+.build-panel .options .checkbox {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.build-panel .options .checkbox input {
+  width: auto;
+}
+.blueprint-out {
+  flex: 1 1 100%;
+  min-height: 4rem;
+  max-height: 4rem;
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  background: #0c1016;
+  color: inherit;
+  border: 1px solid #26313d;
+  border-radius: 4px;
+  padding: 0.4rem;
+  overflow: auto;
+}
+
+/* Elapsed against the solver ceiling. Never reaches the end on its own: the
+   ceiling bounds CP-SAT only, so a bar that filled would be a promise. */
+.progress .bar {
+  height: 4px;
+  background: #26313d;
+  border-radius: 2px;
+  overflow: hidden;
+}
+.progress .fill {
+  height: 100%;
+  background: #4c8fd4;
+  transition: width 0.3s linear;
+}
+
+.build-report {
+  border-top: 1px solid #26313d;
+  padding-top: 0.75rem;
+  font-size: 12px;
+}
+.build-report h2 {
+  margin: 0 0 0.5rem;
+  font-size: 0.9rem;
+}
+.build-report dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.15rem 0.75rem;
+  margin: 0 0 0.5rem;
+}
+.build-report dt {
+  color: #8fa0b3;
+}
+.build-report dd {
+  margin: 0;
+}
+/* A refusal is a result. It is bordered, not red: the reasons are the useful
+   output, and styling them as a crash would say the opposite. */
+.build-report.refused {
+  border: 1px solid #4a5a6b;
+  border-radius: 6px;
+  padding: 0.75rem;
+  background: #161d26;
+}
+.build-report .reasons {
+  margin: 0.25rem 0;
+  padding-left: 1.1rem;
+  color: #b6c2d0;
+}
+.attempts {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 0.5rem;
+}
+.attempts th {
+  text-align: left;
+  color: #8fa0b3;
+  font-weight: normal;
+}
+.attempts td {
+  font-variant-numeric: tabular-nums;
+}
+.attempts tr.chosen td {
+  color: #9ad6a0;
 }

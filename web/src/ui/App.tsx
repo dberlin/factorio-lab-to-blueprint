@@ -4,6 +4,7 @@ import { BlueprintCanvas } from '../scene/BlueprintCanvas';
 import { isAbortError, loadCatalog } from '../state/assets';
 import { BlueprintProvider } from '../state/BlueprintProvider';
 import { BomPanel } from './BomPanel';
+import { BuildPanel } from './BuildPanel';
 import { InfoPanel } from './InfoPanel';
 import { InputPanel } from './InputPanel';
 import { Toolbar } from './Toolbar';
@@ -42,7 +43,14 @@ export function App() {
     <BlueprintProvider catalog={catalog}>
       <div className="layout">
         <Toolbar />
-        <InputPanel />
+        {/* Building and loading are the same act from two directions -- solve a
+            FactorioLab URL into a blueprint, or bring a blueprint you already
+            have -- so they share a scrolling column beside the canvas rather
+            than stacking on top of it and squeezing the 3D view. */}
+        <div className="sidebar">
+          <BuildPanel />
+          <InputPanel />
+        </div>
         <BlueprintCanvas />
         <InfoPanel />
         <BomPanel />

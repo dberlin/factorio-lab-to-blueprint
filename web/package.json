@@ -1,11 +1,10 @@
 {
-  "name": "dsp-blueprint-viewer",
+  "name": "flab2bp-web",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "rsbuild dev",
     "build": "rsbuild build",
-    "serve": "bun run server.ts",
     "test": "rstest run",
     "test:watch": "rstest watch",
     "typecheck": "tsc --noEmit",

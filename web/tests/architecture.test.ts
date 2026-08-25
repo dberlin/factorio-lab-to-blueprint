@@ -28,12 +28,18 @@ const FORBIDDEN_IMPORT = new RegExp(
     String.raw`|\brequire\s*\(\s*['"]${SPEC}['"]`,
 );
 
-// src/server is included for a different reason than format/model: it is
-// imported by rsbuild.config.ts, which is loaded outside the browser bundle
-// and must stay free of any front-end dependency.
-test('format/, model/ and server/ import neither React nor three.js', () => {
+// src/api is included for a different reason than format/model: it is the
+// client half of the Python build API, and keeping it renderer-free is what
+// lets the request/poll/parse path be tested without mounting a component.
+//
+// `src/server` used to be listed here too. It held the `/api/fetch` proxy,
+// which the Bun server and this repo's rsbuild config both imported; both are
+// gone. The endpoint now lives in `flab2bp.web.server` alongside `/api/build`,
+// so the app served by `flab2bp-web` and the app served by `rsbuild dev` talk
+// to the same implementation instead of two that can drift.
+test('format/, model/ and api/ import neither React nor three.js', () => {
   const offenders: string[] = [];
-  for (const dir of ['src/format', 'src/model', 'src/server']) {
+  for (const dir of ['src/format', 'src/model', 'src/api']) {
     for (const file of sources(dir)) {
       const text = readFileSync(file, 'utf8');
       if (FORBIDDEN_IMPORT.test(text)) offenders.push(file);

@@ -21,6 +21,7 @@ Neither belongs on a public interface without work this does not do.
 from __future__ import annotations
 
 import argparse
+import gzip
 import json
 import mimetypes
 import shutil
@@ -49,6 +50,21 @@ BUILD_TIMEOUT_S = 240.0
 
 #: Where ``bun run build`` puts the front end, relative to the repo root.
 DIST = Path("web") / "dist"
+
+#: Below this, a response is sent uncompressed: the headers cost more than the
+#: saving, and every job poll is a few hundred bytes.
+GZIP_MIN_BYTES = 1024
+
+
+def _compressible(content_type: str) -> bool:
+    """Text compresses; the icon atlas is a PNG and gzip only makes it bigger."""
+    kind = content_type.split(";")[0].strip()
+    return kind.startswith("text/") or kind in {
+        "application/json",
+        "application/javascript",
+        "text/javascript",
+        "image/svg+xml",
+    }
 
 
 def repo_root() -> Path:
@@ -79,9 +95,24 @@ class Handler(BaseHTTPRequestHandler):
 
     # ---- plumbing -------------------------------------------------------
 
+    def _wants_gzip(self) -> bool:
+        return "gzip" in self.headers.get("Accept-Encoding", "").lower()
+
     def _send(self, status: int, body: bytes, content_type: str) -> None:
+        encoding: str | None = None
+        # The bundle is 1.2MB of JavaScript and compresses to under a third of
+        # that. Skipped for anything small (the header costs more than it
+        # saves) and for the already-compressed atlas PNG, which gzip makes
+        # very slightly larger.
+        if len(body) > GZIP_MIN_BYTES and _compressible(content_type) and self._wants_gzip():
+            body = gzip.compress(body, compresslevel=6)
+            encoding = "gzip"
+
         self.send_response(status)
         self.send_header("Content-Type", content_type)
+        if encoding is not None:
+            self.send_header("Content-Encoding", encoding)
+            self.send_header("Vary", "Accept-Encoding")
         self.send_header("Content-Length", str(len(body)))
         # The whole app is one person's local tool; a cached poll, or a cached
         # index.html after a rebuild, is pure confusion.

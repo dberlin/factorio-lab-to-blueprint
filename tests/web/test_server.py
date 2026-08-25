@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gzip
 import json
 import threading
 import time
@@ -204,3 +205,50 @@ def test_the_inherited_proxy_still_validates_its_input(start: Callable[..., Clie
         400,
         "Only http/https are allowed",
     )
+
+
+def test_a_large_text_response_is_gzipped_when_the_client_asks(
+    start: Callable[..., Client], tmp_path: Path
+) -> None:
+    """1.2MB of JavaScript uncompressed is the difference this makes."""
+    client = start()
+    (tmp_path / "index.html").write_text("<title>flab2bp</title>")
+    (tmp_path / "big.js").write_text("console.log('x');\n" * 5000)
+
+    request = urllib.request.Request(
+        client.base + "/big.js", headers={"Accept-Encoding": "gzip"}
+    )
+    with urllib.request.urlopen(request, timeout=10) as response:
+        raw = response.read()
+        assert response.headers.get("Content-Encoding") == "gzip"
+        assert response.headers.get("Vary") == "Accept-Encoding"
+        assert len(raw) < 5000  # 85KB of repetitive JS
+        assert gzip.decompress(raw).decode() == "console.log('x');\n" * 5000
+
+    # A client that did not ask still gets it uncompressed and intact.
+    plain = client.get("/big.js")[1]
+    assert plain == "console.log('x');\n" * 5000
+
+
+def test_the_icon_atlas_is_not_gzipped(start: Callable[..., Client], tmp_path: Path) -> None:
+    """A PNG is already compressed; gzipping it spends CPU to add bytes."""
+    client = start()
+    (tmp_path / "index.html").write_text("<title>flab2bp</title>")
+    (tmp_path / "atlas.png").write_bytes(b"\x89PNG\r\n\x1a\n" + bytes(range(256)) * 20)
+
+    request = urllib.request.Request(
+        client.base + "/atlas.png", headers={"Accept-Encoding": "gzip"}
+    )
+    with urllib.request.urlopen(request, timeout=10) as response:
+        assert response.headers.get("Content-Encoding") is None
+
+
+def test_a_small_json_poll_is_not_gzipped(start: Callable[..., Client]) -> None:
+    """The header would cost more than the saving on a few hundred bytes."""
+    client = start()
+    request = urllib.request.Request(
+        client.base + "/api/health", headers={"Accept-Encoding": "gzip"}
+    )
+    with urllib.request.urlopen(request, timeout=10) as response:
+        assert response.headers.get("Content-Encoding") is None
+        assert json.loads(response.read())["ok"] is True
