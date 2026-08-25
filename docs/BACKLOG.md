@@ -250,23 +250,90 @@ corpus: over the 10 real game blueprints, ~10,000 connection records, no
 clean, 0 shared slots**. The two lost cells are `electromagnetic-matrix`
 `max-proliferation`; INVALID stays 0.
 
-## OPEN -- freeform cannot wire a six-ingredient recipe, and `universe-matrix` is one
+## RESOLVED -- freeform wires a six-ingredient recipe now, and it bought no cells
 
-A lane-fed machine gets its sorters from the north and south faces only, and
-each face offers a lane three insert poses. Six ingredients plus one output is
-seven sorters into six slots. It does not fit, and `_seat_inputs` now says so by
-name instead of producing a plan that doubles up.
+The six-slot ceiling is gone. `plan_strips` seats `universe-matrix` -- six
+ingredients and a product on a Matrix Lab -- and the placement validates with
+`game.slot_occupancy` untouched: seven connections on seven DISTINCT slots, of
+which one is an index no lane row can name at any distance.
 
-This is not a new limit, it is a newly VISIBLE one. Before the slot rule was
-ported, `plan_strips` accepted twelve ingredients on an Assembling Machine and
-the emitted blueprint put three sorters on slot 6 and three on slot 7 of every
-machine. The six-ingredient case is the only DSP recipe the true bound binds.
+**AND THE CORPUS DID NOT MOVE, because the ceiling was not the only thing in the
+way.** All six `universe-matrix` cells still refuse, on the entry further down
+this file: `critical-photon` is made by a **Ray Receiver**, whose prefab ships
+zero insert poses and two belt PORTS, and neither strategy emits a belt docked
+into a port. `_seat_inputs` was simply the refusal that fired first. Freeform's
+message for those six cells changed from *"6 ingredients cannot be seated"* to
+*"the game's prefab gives it no insert pose on any face and 2 belt port(s)"*,
+which is the honest one, and spine's `_sorterless_groups` has been saying the
+same thing about the same machine all along.
 
-**The way out is the EAST and WEST faces.** An Assembling Machine and a Matrix
-Lab each define twelve slots, three per side, and freeform uses six of them. A
-vertical lane beside a strip, or a spur off the end of one, would reach the
-other six. That is a packer change, not a wiring change, and it is the same
-territory as serving a machine from a lane that is not in its own strip.
+So this entry closes a real limit and moves no number. The number is behind
+belt-to-port docking, and nothing else.
+
+**How the output leaves.** Each machine drops its product EAST into a one-tile
+belt standing in the column past its clearance; those gap belts run south and
+join the output lane under the band, where the output lane always was.
+
+THE OUTPUT IS WHAT MOVES, AND THAT IS THE WHOLE DESIGN. A belt tile takes
+several feeders and has ONE successor, so gap belts draining into one output
+lane is a shape a belt makes natively. Flanking an INGREDIENT instead would need
+one lane feeding a gap belt per machine -- a splitter per machine -- and
+no-splitters is what buys the lane-per-destination design. The east and west
+faces are not symmetric for this reason and not for a geometric one: a Matrix
+Lab offers three poses on each.
+
+Freeing the south COLUMN is what makes six fit; the south ROWS were never the
+bound. `universe-matrix` seats three ingredients mixed onto one lane above and
+three onto one below, with the output lane keeping its row directly under the
+band -- which is also what keeps the gap belts two tiles long. Moving the output
+row below the ingredients would have been tidier and is impossible: the gap belt
+would have to cross an ingredient lane to reach it.
+
+The column is BOUGHT: `pw` is the machine's clearance plus one when a strip
+flanks. Clearance is what the collider needs, so a belt inside it pastes as a
+collision -- an Assembling Machine reserves four columns for a three-column
+footprint for exactly that reason. Flanking is the SECOND attempt and never the
+first, so every recipe that seats on two faces seats as it did and pays nothing.
+
+**Measured, and the measurement is a proof rather than a corpus number.**
+`plan_strips` is pure and deterministic, and it is the only thing the change
+touches that a non-flanking spec reaches. Over all 36 corpus specs the two arms
+produce **byte-identical strip plans on 33**; the three that differ are the
+three `universe-matrix` candidates, which master refuses outright. Every other
+edit is gated on `Strip.flank_outputs`, which is `False` on every strip of those
+33. The programs are equal there by construction.
+
+The audit says the same thing less clearly, which is why the plan comparison is
+the load-bearing one. Paired and interleaved, `--tier stress --budget 4`, ten
+rounds each:
+
+| arm | clean, per round | area over the 59 cells both arms wire |
+|---|---|---|
+| master | 64.1 mean (63-65) | 80691 mean (79438-81863) |
+| + flanked outputs | 64.2 mean (63-66) | 81914 mean (80309-83348) |
+
+That +1.5% is noise, and the control says so: master against
+master-plus-a-comment, same harness, same interleave, six rounds, reads
+**-0.26%** with the second arm larger in 3 of 6 -- so the harness has no
+order bias. Single-worker runs disagree with THEMSELVES on
+`super-magnetic-ring` (1349 vs 1479 tiles between two byte-different copies of
+master), because the budget is wall-clock and the solver stops on a clock. Nine
+of ten rounds falling one way is a run of coin flips over a program that cannot
+have changed. INVALID stayed 0 in all 26 audit runs.
+
+**Spine did not get the same treatment, and should not until the port work
+lands.** Its lanes live in shared corridors with trunks and risers rather than
+in the strip that owns them, so a gap belt would have to merge into a corridor
+lane through all of that machinery -- much more than freeform's two tiles. And
+it would buy nothing: spine refuses all six `universe-matrix` cells with
+`FALLBACK_SORTERLESS_MACHINE` on the same Ray Receiver, four of them in 0.0s,
+before a slot ceiling is ever reached. Measured, not assumed. Spine's own
+six-lane bound is not binding on any corpus spec.
+
+Four more recipes sit at exactly six connections with zero margin -- Ray
+Receiver, Plasma Turret, Miniature Particle Collider, Advanced Mining Machine.
+None of them changes, because flanking only runs when seating fails; what they
+gain is that a seventh connection is now reachable if one is ever asked for.
 
 ## RESOLVED -- freeform's Spray Coaters carry the flow yaw now, 51 of 51
 
