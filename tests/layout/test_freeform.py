@@ -17,7 +17,7 @@ from typing import Any
 import pytest
 
 from flab2bp.dsp import catalog
-from flab2bp.layout import freeform, validate
+from flab2bp.layout import freeform, junction, validate
 from flab2bp.layout.base import (
     DETERMINISTIC_WORKERS,
     RETRY_BUDGET_S,
@@ -4048,3 +4048,124 @@ class TestAPortKnowsItsOwnAltitude:
         assert coaters, "no coater placed; the check below would assert nothing"
         bad = _full_report(p, spec, power=False).by_check("prolif.coaters_are_supplied")
         assert not bad, "; ".join(f.message for f in bad)
+
+
+class TestAJunctionIsNotBuiltBesideAForeignBelt:
+    """`game.belt_collide`, at the one shape our own output kept hitting it.
+
+    A Splitter is belt-integrated -- it shares the tile of the belts it joins
+    and occupies nothing -- but its build collider is a 2.38-unit cross standing
+    2.30 units tall, and the game's belt probe catches that a tile out and a
+    level up (`colliders.belt_keepout_offsets`).  A belt on the junction's own
+    run is excused; a stranger there is `EBuildCondition.Collide` at paste.
+    """
+
+    def _scene(
+        self, *, stranger: bool
+    ) -> tuple[_Canvas, list[_Net], dict[int, list[tuple[int, int, int]]]]:
+        canvas = _Canvas()
+        lane = canvas.add(_belt(0, 0, item="x"))
+        onward = canvas.add(_belt(0, 1, item="x"))
+        canvas.buildings[lane] = _relink(canvas.buildings[lane], output_obj=onward)
+        if stranger:
+            # One tile east of the tap, carrying something else and linked to
+            # nothing the tap can reach.  This is the cell the game refuses.
+            canvas.add(_belt(1, 0, item="y"))
+        dst = canvas.add(_belt(-2, 0, item="x"))
+        net = _Net(
+            src=_Port(lane, 0, 0, 0, 0),
+            dst=_Port(dst, -2, 0, -2, 0),
+            item="x",
+        )
+        return canvas, [net], {0: [(-1, 0, 0)]}
+
+    def _splitters(self, canvas: _Canvas) -> list[int]:
+        return [
+            i
+            for i, b in enumerate(canvas.buildings)
+            if b.item_id == catalog.SPLITTER_ID
+        ]
+
+    def test_the_site_is_refused_when_a_stranger_holds_a_keep_out_cell(self) -> None:
+        canvas, nets, paths = self._scene(stranger=True)
+        unlinked = _commit_paths(canvas, nets, paths, 2001, 35)
+        assert not self._splitters(canvas), (
+            "a junction was built one tile from a belt that is not on its run; "
+            "the game refuses that paste with EBuildCondition.Collide"
+        )
+        assert unlinked == 1, (
+            "the tap was refused, so the net is UNROUTED and the sweep must be "
+            "told so -- a pack that reports itself wired is the worse failure"
+        )
+
+    def test_the_same_site_is_taken_when_nothing_foreign_is_beside_it(self) -> None:
+        """The control, without which the test above passes for free.
+
+        Same scene minus the stranger.  The lane's own onward belt is still in
+        the keep-out and must NOT count: it is one hop from the junction, which
+        is exactly what `colliders.belt_chain_excuses` lets off.
+        """
+        canvas, nets, paths = self._scene(stranger=False)
+        unlinked = _commit_paths(canvas, nets, paths, 2001, 35)
+        assert len(self._splitters(canvas)) == 1, (
+            "the junction was refused with nothing foreign beside it, so the "
+            "predicate is refusing sites the game builds"
+        )
+        assert unlinked == 0
+
+    def test_the_junction_holds_its_collider_against_later_passes(self) -> None:
+        """A splitter reports no occupied tile, so nothing after routing knows.
+
+        External input runs, coater spurs and the power lattice all ask
+        `canvas.free`, and until the guard existed they could lay a belt into
+        the cross's room after the router had gone.
+        """
+        canvas, nets, paths = self._scene(stranger=False)
+        _commit_paths(canvas, nets, paths, 2001, 35)
+        for cell in junction.keepout_cells(0, 0, 0):
+            assert not canvas.free(cell), f"{cell} was left open beside a junction"
+        assert canvas.free((1, 1, 0)), "the diagonal clears and must stay routable"
+        assert canvas.free((2, 0, 0)), "two tiles out clears and must stay routable"
+        assert canvas.free((0, 0, 2)), "two levels up clears and must stay routable"
+
+
+class TestTheMergeFrontierWithdrawsSitesAJunctionCannotHold:
+    """The routing-time half, which is the half that had to exist.
+
+    The backlog's failed attempt put this test inside ``_commit_paths``, where
+    it refused 1147 of 1619 sites and the convictions survived anyway: a tap is
+    taken while the walk is half done, so the belt that lands beside it has not
+    been staked yet.  Asked at the frontier instead, it costs one of the several
+    cells a sibling's path offers, and the router picks another.
+    """
+
+    def _scene(self) -> tuple[_Canvas, dict[int, list[tuple[int, int, int]]]]:
+        canvas = _Canvas()
+        # A stranger one tile north of the path's first cell: in that cell's
+        # keep-out, and on nobody's run.
+        canvas.add(_belt(0, 1, item="y"))
+        path = [(0, 0, 0), (1, 0, 0), (2, 0, 0)]
+        for cell in path:
+            canvas.blocked[cell] = _TENTATIVE
+        return canvas, {5: path}
+
+    def test_a_cell_whose_tap_is_dirty_is_not_offered(self) -> None:
+        canvas, paths = self._scene()
+        got = freeform._merge_frontier(canvas, paths, (5,), lambda x, y: True)
+        assert (-1, 0, 0) not in got and (0, -1, 0) not in got, (
+            "a merge was offered whose junction would stand beside a foreign "
+            f"belt: {sorted(got)}"
+        )
+        assert (1, 1, 0) in got, (
+            "the clean cells of the same path stopped being offered, so this "
+            "withdraws more than the rule asks for"
+        )
+
+    def test_the_same_cells_come_back_when_the_stranger_is_gone(self) -> None:
+        """Without this the test above passes for any predicate that says no."""
+        canvas = _Canvas()
+        path = [(0, 0, 0), (1, 0, 0), (2, 0, 0)]
+        for cell in path:
+            canvas.blocked[cell] = _TENTATIVE
+        got = freeform._merge_frontier(canvas, {5: path}, (5,), lambda x, y: True)
+        assert {(-1, 0, 0), (0, -1, 0), (0, 1, 0)} <= got, sorted(got)

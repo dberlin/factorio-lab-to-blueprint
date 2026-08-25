@@ -2016,6 +2016,16 @@ class _Canvas:
     #: the router can afford to path around it, and coverage cannot afford to be
     #: whatever is left.
     keep_out: set[tuple[int, int]] = field(default_factory=set)
+    #: Cells a junction's build collider denies to any belt not on its own run.
+    #:
+    #: A splitter is belt-integrated: it shares the tile of the belts it joins
+    #: and `add` marks nothing, so no pass after the one that built it knows it
+    #: is there.  Its collider is a 2.38-unit cross standing 2.30 units tall,
+    #: which the game's belt probe catches a tile out and a level up --
+    #: `junction.keepout_cells`, measured in `colliders.belt_keepout_offsets`.
+    #: Held for the rest of the build, because the runs, spurs and lattices that
+    #: come after routing would otherwise walk straight through it.
+    guard: set[tuple[int, int, int]] = field(default_factory=set)
 
     #: ``(x, y)`` -> routing LEVELS no belt may stand on there.
     #:
@@ -2097,7 +2107,11 @@ class _Canvas:
         x, y, z = cell
         if cell in self.blocked or (x, y) in self.solid or (x, y) in self.keep_out:
             return False
-        if z in self.belt_ban.get((x, y), ()):
+        # Two independent refusals, added by two branches to the same gate and
+        # kept both: `belt_ban` is the height a belt owes whatever it crosses
+        # (a Spray Coater wants 1.8975), `guard` is a junction's own collider.
+        # Either one alone would let the other's case through.
+        if z in self.belt_ban.get((x, y), ()) or cell in self.guard:
             return False
         if self.limit is not None:
             min_x, min_y, max_x, max_y = self.limit
@@ -3590,17 +3604,78 @@ def _merge_frontier(
     The DESTINATION side passes nothing, and that is not an oversight: arriving
     at a sibling's path builds no junction at all, only a link from this path's
     tail (see ``_sink_for``), so no site has to be clear.
+
+    THE BELT HALF IS ASKED HERE TOO, and it is asked here rather than at commit
+    time for the reason the backlog entry records: a site test inside
+    ``_commit_paths`` cannot see a belt that has not been staked yet, and
+    tightening it there only starves the router of taps.  A junction denies
+    :func:`junction.keepout_cells` to any belt that is not on its own run, so a
+    sibling's cell whose keep-out already holds a FOREIGN belt is not a merge
+    point that can be built -- and withdrawing it costs the router one of the
+    several cells a frontier offers, where refusing at commit time costs the
+    whole pack.
     """
     out: set[tuple[int, int, int]] = set()
     for s in siblings:
-        for x, y, lvl in paths.get(s, ()):
+        path = paths.get(s, ())
+        for at, (x, y, lvl) in enumerate(path):
             if junctionable is not None and not junctionable(x, y):
                 continue
-            for dx, dy in _STEPS:
-                cell = (x + dx, y + dy, lvl)
-                if canvas.free(cell):
-                    out.add(cell)
+            # The neighbours FIRST, and the belt half only for a cell that has
+            # some. This is a routing pass's inner loop -- every sibling's every
+            # cell, per net, per round -- and most cells of a settled path are
+            # walled in by their own neighbours, so testing a keep-out nobody
+            # could have used is the expensive half of a question already
+            # answered.
+            free = [
+                cell
+                for dx, dy in _STEPS
+                if canvas.free(cell := (x + dx, y + dy, lvl))
+            ]
+            if not free:
+                continue
+            if junctionable is not None and not _junction_belt_clear(
+                canvas, (x, y, lvl), path, at
+            ):
+                continue
+            out.update(free)
     return out
+
+
+def _junction_belt_clear(
+    canvas: _Canvas,
+    tap: tuple[int, int, int],
+    path: Sequence[tuple[int, int, int]],
+    at: int,
+) -> bool:
+    """Is a junction on ``tap`` clear of belts the game would not excuse?
+
+    ``path`` is the run the junction would sit on and ``at`` where on it, so the
+    cells the game DOES excuse are known: ``colliders.belt_chain_excuses`` lets
+    a belt off when the junction is within three hops along its own run, which
+    on a straight path is the three cells either side.  Two are taken here
+    rather than three, because a run that doubles back can put its own fourth
+    cell against the junction and this predicate should not have to know.
+
+    Only cells the router can still see are consulted, so this is a ROUTING-TIME
+    question: a cell held by a settled belt or by another net's staked path is
+    foreign, and everything else -- machines, sorters, empty ground -- is not
+    this rule's business.  ``junction.site_is_clear`` asks the machine half.
+    """
+    excused = set(path[max(0, at - 2) : at + 3])
+    for cell in junction.keepout_cells(*tap):
+        if cell in excused:
+            continue
+        who = canvas.blocked.get(cell)
+        if who is None:
+            continue
+        if who == _TENTATIVE:
+            return False
+        if 0 <= who < len(canvas.buildings) and catalog.is_belt(
+            canvas.buildings[who].item_id
+        ):
+            return False
+    return True
 
 
 def _route_all(
@@ -4467,6 +4542,15 @@ def _commit_paths(
     Before splitters existed, every such net rewrote the same lane-end tile and
     the last to commit won silently.  The earlier paths stayed on the grid as
     belts nothing fed: real buildings, real area, no items.
+
+    THE BELTS ALL GO DOWN BEFORE ANY TAP IS TAKEN, and that ordering is the
+    whole reason this is two loops rather than one.  A junction's collider
+    reaches a tile further than the tile it shares, so whether a site is legal
+    depends on what stands beside it -- and walking the nets once, staking and
+    tapping each in turn, made a splitter for net A before net B's belts existed
+    to be seen.  A site test in that order cannot be right in principle: it is
+    asked a question whose answer has not been decided yet.  Staking first makes
+    ``_tap_source``'s test a question about a finished arrangement.
     """
     for cell, owner in list(canvas.blocked.items()):
         if owner == _TENTATIVE:
@@ -4480,6 +4564,7 @@ def _commit_paths(
     canvas.reserved.clear()
     canvas.routing_ports = frozenset()
     unlinked = 0
+    laid: dict[int, list[int]] = {}
     for i, path in paths.items():
         net = nets[i]
         indices: list[int] = []
@@ -4512,6 +4597,19 @@ def _commit_paths(
             continue
         for a, b in zip(indices, indices[1:], strict=False):
             canvas.buildings[a] = _relink(canvas.buildings[a], output_obj=b)
+        laid[i] = indices
+
+    # WHO FEEDS WHOM, now that every belt exists.  `into` is the reverse of
+    # `output_obj`, which the junction site test needs to walk a run UPSTREAM;
+    # it is built once here rather than per tap because a placement can hold
+    # tens of thousands of buildings and a pack takes hundreds of taps.
+    into: dict[int, list[int]] = defaultdict(list)
+    for idx, built in enumerate(canvas.buildings):
+        if built.output_obj is not None:
+            into[built.output_obj].append(idx)
+
+    for i, indices in laid.items():
+        net = nets[i]
         kin = {
             cell
             for s in (src_group or {}).get(i, ())
@@ -4521,7 +4619,12 @@ def _commit_paths(
         if feeder is None:
             unlinked += 1
             continue
-        if not _tap_source(canvas, feeder, indices[0], belt_id, belt_model):
+        excused = _run_cells(canvas, into, feeder) | _run_cells(
+            canvas, into, indices[0]
+        )
+        if not _tap_source(
+            canvas, feeder, indices[0], belt_id, belt_model, excused
+        ):
             unlinked += 1
             continue
         # The SINK side is counted exactly like the source side. A path that
@@ -4786,8 +4889,90 @@ def _sink_for(
     return None
 
 
+def _run_cells(
+    canvas: _Canvas,
+    into: Mapping[int, list[int]],
+    start: int,
+    hops: int = 3,
+) -> set[tuple[int, int, int]]:
+    """Routing cells of the belts within ``hops`` links of ``start``, both ways.
+
+    The set the game excuses around a junction, in cells rather than in indices.
+    ``colliders.belt_chain_excuses`` walks a belt's own run three hops in each
+    direction and lets off anything it reaches, and a junction is one of those
+    hops -- so a belt this close to the tap is a belt the paste will not convict,
+    however near it stands.
+
+    Followed through SPLITTERS as well as belts, for the same reason
+    ``_leads_back`` does: a junction carries no ``output_obj`` of its own, so a
+    walk that stops at one misses exactly the run a tap creates.  ``into`` is
+    the reverse of ``output_obj``, which the caller builds once per commit.
+
+    Deliberately generous.  Over-excusing here can only leave a site the game
+    would refuse looking clear, which ``validate.certify`` still catches and
+    which costs the sweep a candidate; under-excusing would refuse taps the game
+    is perfectly happy with, which costs it a route.
+    """
+    seen = {start}
+    frontier = [start]
+    for _ in range(hops):
+        nxt: list[int] = []
+        for idx in frontier:
+            b = canvas.buildings[idx]
+            onward = b.output_obj
+            if (
+                onward is not None
+                and 0 <= onward < len(canvas.buildings)
+                and onward not in seen
+            ):
+                seen.add(onward)
+                nxt.append(onward)
+            for j in into.get(idx, ()):
+                if j not in seen:
+                    seen.add(j)
+                    nxt.append(j)
+        frontier = nxt
+    out: set[tuple[int, int, int]] = set()
+    for idx in seen:
+        b = canvas.buildings[idx]
+        # A ramp tile rests between levels and holds no single lattice cell, so
+        # both are excused rather than one guessed at.
+        out.add((b.x, b.y, math.floor(b.z)))
+        out.add((b.x, b.y, math.ceil(b.z)))
+    return out
+
+
+def _belt_keepout_clear(
+    canvas: _Canvas,
+    x: int,
+    y: int,
+    level: int,
+    excused: Set[tuple[int, int, int]],
+) -> bool:
+    """Would a junction here stand beside a belt the paste would not excuse?
+
+    The commit-time twin of :func:`_junction_belt_clear`, asked of real
+    buildings rather than of staked paths.  ``excused`` is the junction's own
+    run, from :func:`_run_cells`.
+    """
+    for cell in junction.keepout_cells(x, y, level):
+        if cell in excused:
+            continue
+        who = canvas.blocked.get(cell)
+        if who is None or not 0 <= who < len(canvas.buildings):
+            continue
+        if catalog.is_belt(canvas.buildings[who].item_id):
+            return False
+    return True
+
+
 def _tap_source(
-    canvas: _Canvas, belt_idx: int, branch: int, belt_id: int, belt_model: int
+    canvas: _Canvas,
+    belt_idx: int,
+    branch: int,
+    belt_id: int,
+    belt_model: int,
+    excused: Set[tuple[int, int, int]] = frozenset(),
 ) -> bool:
     """Make ``belt_idx`` hand items to ``branch``, junctioning if it must.
 
@@ -4822,9 +5007,23 @@ def _tap_source(
         # tiles; refusing here costs a tap, not a build.
         if not junction.site_is_clear(canvas.buildings, b.x, b.y):
             return False
+        # And the same collider reaches a tile of BELT, which is the half this
+        # could not ask until every belt was staked first -- see `_commit_paths`.
+        # `_merge_frontier` steers the router away from these sites so that this
+        # is the last word rather than the only one; when it does fire, the net
+        # counts as unrouted and the sweep tries another pack, which is what it
+        # does for every other kind of routing failure.
+        level = math.floor(b.z)
+        if not _belt_keepout_clear(canvas, b.x, b.y, level, excused):
+            return False
         junction_idx = canvas.add(
             junction.make_splitter(b.x, b.y, b.z, carries_item=b.carries_item)
         )
+        # Nothing routed later may take the collider's room either. The passes
+        # after this one -- external input runs, coater spurs, the power lattice
+        # -- all ask `canvas.free`, and until now none of them knew a junction
+        # was there at all: it is belt-integrated and reports no occupied tile.
+        canvas.guard.update(junction.keepout_cells(b.x, b.y, level))
         canvas.buildings[belt_idx] = _relink(b, output_obj=junction_idx)
         # Carry the lane onward FROM the junction, so everything downstream of
         # the tap stays fed. Dropping this would starve the rest of the lane in
