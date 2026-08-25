@@ -33,13 +33,51 @@ from flab2bp.lab.url import parse_url
 from flab2bp.layout import markers, validate
 from flab2bp.layout.base import NoValidLayout, Placement
 from flab2bp.layout.freeform import FreeformLayout
+from flab2bp.layout.sequence_solver import SequencePairLayout
 from flab2bp.layout.spine import SpineLayout
 from flab2bp.rates.candidates import build_candidates
 from flab2bp.spec import BuildSpec, BuildSpecSet
 
-StrategyName = Literal["spine", "freeform", "best"]
+ExplicitStrategyName = Literal["spine", "freeform", "sequence-pair"]
+StrategyName = Literal["best", "spine", "freeform", "sequence-pair"]
 
-_STRATEGIES = {"spine": SpineLayout, "freeform": FreeformLayout}
+STRATEGY_CHOICES: tuple[StrategyName, ...] = (
+    "best",
+    "spine",
+    "freeform",
+    "sequence-pair",
+)
+_PRODUCTION_STRATEGIES: tuple[ExplicitStrategyName, ...] = ("spine", "freeform")
+
+
+def _strategy_names(strategy: StrategyName) -> tuple[ExplicitStrategyName, ...]:
+    """Resolve a request without promoting audit backends into ``best``."""
+    if strategy == "best":
+        return _PRODUCTION_STRATEGIES
+    return (strategy,)
+
+
+def _new_layout(
+    strategy: ExplicitStrategyName,
+    *,
+    power: bool,
+    belt_vertical_construction: bool,
+) -> SpineLayout | FreeformLayout | SequencePairLayout:
+    """Construct one explicitly selected layout backend."""
+    if strategy == "spine":
+        return SpineLayout(
+            power=power,
+            belt_vertical_construction=belt_vertical_construction,
+        )
+    if strategy == "freeform":
+        return FreeformLayout(
+            power=power,
+            belt_vertical_construction=belt_vertical_construction,
+        )
+    return SequencePairLayout(
+        power=power,
+        belt_vertical_construction=belt_vertical_construction,
+    )
 
 
 #: Outputs named in a title before it gives up and counts the rest.
@@ -341,7 +379,7 @@ def build(
             )
         spec_set = BuildSpecSet(candidates=unsprayed)
 
-    wanted = list(_STRATEGIES) if strategy == "best" else [strategy]
+    wanted = _strategy_names(strategy)
 
     # Counted here, after the flow filter, so a progress report never promises a
     # pair that was already dropped.
@@ -363,21 +401,11 @@ def build(
                         phase="started",
                     )
                 )
-            # BOTH strategies need the save's slope rule now.
-            #
-            # `freeform` chooses between the ramped and the dense form with it.
-            # `spine` used to be exempt, and the reasoning was sound while it
-            # held: its bridges reserve a ramp column, so a bridge is legal
-            # either way. The Spray Coater spur broke the exemption -- it runs
-            # inside a corridor, where there is no column to spare, so whether
-            # it may leave the lane's tail already elevated or must spend
-            # `RAMP_TILES_PER_LEVEL` tiles climbing is the difference between
-            # supplying the coater and refusing.
-            kw: dict[str, object] = {
-                "power": power,
-                "belt_vertical_construction": belt_rules.vertical_construction,
-            }
-            layout = _STRATEGIES[sname](**kw)
+            layout = _new_layout(
+                sname,
+                power=power,
+                belt_vertical_construction=belt_rules.vertical_construction,
+            )
             try:
                 placement = layout.lay_out(spec, time_budget_s=time_budget_s)
             except NoValidLayout as exc:

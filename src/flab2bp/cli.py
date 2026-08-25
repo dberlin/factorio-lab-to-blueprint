@@ -122,10 +122,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("url", help="a factoriolab.github.io/dsp/... URL")
     ap.add_argument(
         "--strategy",
-        choices=("best", "spine", "freeform"),
+        choices=pipeline.STRATEGY_CHOICES,
         default="best",
-        help="layout backend; 'best' lays out every candidate with both and keeps "
-        "the smallest VALID result (default)",
+        help="layout backend; best evaluates only spine and freeform and keeps "
+        "the smallest VALID result (default); sequence-pair is an explicit "
+        "experimental/audit backend",
     )
     ap.add_argument("--no-power", dest="power", action="store_false", help="omit Tesla Towers")
     ap.add_argument(
