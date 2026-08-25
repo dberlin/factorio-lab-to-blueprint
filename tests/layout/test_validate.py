@@ -22,6 +22,7 @@ from flab2bp.dsp.catalog import (
     TESLA_COVER_RADIUS,
 )
 from flab2bp.dsp.catalog import building as catalog_building
+from flab2bp.dsp.catalog import oriented_footprint as catalog_oriented_footprint
 from flab2bp.layout import junction
 from flab2bp.layout.base import PlacedBuilding, Placement
 from flab2bp.layout.slots import SlotUndetermined, assign_sorter_slots
@@ -235,25 +236,32 @@ def test_geom_footprint_clean_on_a_derived_placement() -> None:
     assert not fired(validate(_belt_to_machine()), "geom.footprint")
 
 
-def test_geom_footprint_fires_on_an_understated_size() -> None:
-    """A 1x3 Spray Coater declared 1x1 -- the defect, exactly as it shipped.
-
-    Both strategies wrote ``width=1, height=1`` for a coater.  That is not a
-    cosmetic field: ``codec.tile_to_local_offset`` reads it, so the emitted
-    coater landed a tile off its belt, and ``geom.collide`` reads it too, so the
-    collision that followed was tested at a pose that does not exist and came
-    back clean.
-    """
-    p = Placement(
+def _lone_coater(width: int, height: int, yaw: float = 0.0) -> Placement:
+    return Placement(
         buildings=(
             PlacedBuilding(
                 item_id=COATER,
                 model_index=catalog_building(COATER).model_index,
                 x=0,
                 y=0,
-                width=1,
-                height=1,
+                width=width,
+                height=height,
+                yaw=yaw,
             ),
+        )
+    )
+
+
+def test_geom_footprint_fires_on_an_understated_machine() -> None:
+    """A 7x5 Chemical Plant declared 1x1 emits at the wrong world position.
+
+    ``tile_to_local_offset`` is ``x + width / 2 - 0.5``, so the declared size
+    moves the building three tiles; ``geom.collide`` then tests its real
+    collider box where it is not.
+    """
+    p = Placement(
+        buildings=(
+            dataclasses.replace(machine(0, 0, item_id=CHEM_PLANT), width=1, height=1),
         )
     )
     r = validate(p, only=FOOTPRINT)
@@ -261,48 +269,50 @@ def test_geom_footprint_fires_on_an_understated_size() -> None:
     assert not r.ok
     finding = r.by_check("geom.footprint")[0]
     assert finding.detail["declared"] == "1x1"
-    assert finding.detail["prefab"] == "1x3"
-
-
-def test_geom_footprint_clean_when_the_addon_declares_its_real_size() -> None:
-    """A belt addon is INCLUDED in the check, so it has to be able to pass it."""
-    p = Placement(
-        buildings=(
-            PlacedBuilding(
-                item_id=COATER,
-                model_index=catalog_building(COATER).model_index,
-                x=0,
-                y=0,
-                width=1,
-                height=3,
-            ),
-        )
-    )
-    assert not fired(validate(p, only=FOOTPRINT), "geom.footprint")
+    assert finding.detail["expected"] == "7x5"
 
 
 def test_geom_footprint_fires_when_a_quarter_turn_is_not_applied() -> None:
-    """At yaw 90 a 1x3 is 3x1.  Declaring the unturned pair is still wrong.
+    """At yaw 90 a 7x5 is 5x7.  Declaring the unturned pair is still wrong.
 
     Without this the check could be satisfied by copying ``catalog.footprint``
-    and ignoring yaw, which is a different bug with the same symptom.
+    and ignoring yaw -- a different bug with the same symptom, and one
+    ``layout.spine`` already carries a comment about.
     """
     p = Placement(
         buildings=(
-            PlacedBuilding(
-                item_id=COATER,
-                model_index=catalog_building(COATER).model_index,
-                x=0,
-                y=0,
-                width=1,
-                height=3,
-                yaw=90.0,
-            ),
+            dataclasses.replace(machine(0, 0, item_id=CHEM_PLANT), yaw=90.0),
         )
     )
     r = validate(p, only=FOOTPRINT)
     assert fired(r, "geom.footprint")
-    assert r.by_check("geom.footprint")[0].detail["prefab"] == "3x1"
+    assert r.by_check("geom.footprint")[0].detail["expected"] == "5x7"
+
+
+def test_geom_footprint_wants_one_by_one_from_a_belt_addon() -> None:
+    """A Spray Coater's prefab is 1x3 and its ANCHOR is still one tile.
+
+    Measured on the game's own blueprints: all eight coaters in
+    ``factory-heretical-smelter-block`` and ``tillable-blackbox-module-...``
+    sit at their nearest belt's position to within (0.000, 0.000, 0.001).  A
+    coater rides its belt; the three tiles are collider, not footprint.  So 1x1
+    is right and the prefab pair is the thing that would be wrong.
+    """
+    assert not fired(validate(_lone_coater(1, 1), only=FOOTPRINT), "geom.footprint")
+    r = validate(_lone_coater(1, 3), only=FOOTPRINT)
+    assert fired(r, "geom.footprint")
+    assert r.by_check("geom.footprint")[0].detail["expected"] == "1x1"
+
+
+def test_geom_footprint_addon_rule_is_not_the_prefab_rule() -> None:
+    """Guards the guard: the two branches must be able to disagree.
+
+    A Spray Coater's ``oriented_footprint`` is 1x3, and the addon branch wants
+    1x1.  If someone collapses the branches, this fails -- which is the point,
+    because collapsing them is what would move every coater off its belt.
+    """
+    assert catalog_oriented_footprint(COATER, 0.0) == (1, 3)
+    assert not catalog_building(COATER).occupies_tiles
 
 
 COLLIDE = {"geom.overlap", "geom.collide"}

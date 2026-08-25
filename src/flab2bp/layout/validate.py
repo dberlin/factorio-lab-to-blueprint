@@ -773,56 +773,82 @@ def check(
 
 @check("geom.footprint")
 def _footprint(ctx: Context) -> Iterable[Finding]:
-    """The declared footprint is the prefab's, at the yaw the building carries.
+    """The declared footprint says where the building will actually be built.
 
-    This one is not a game predicate.  It is the check that lets the game
-    predicates mean anything, and it exists because of what
-    ``PlacedBuilding.width``/``height`` are: a CACHE of
-    ``catalog.oriented_footprint``, filled in by hand by whichever strategy
-    placed the building, with no invalidation and -- until now -- nothing
-    comparing it against the table it was copied from.
+    Not a game predicate.  It is the check that lets the game predicates mean
+    anything, and it exists because of what ``PlacedBuilding.width``/``height``
+    are.  Their own docstring calls them a footprint "cached here so geometry
+    checks never need the catalog" -- a cache with no invalidation, filled in by
+    hand by whichever strategy placed the building, and until now compared
+    against nothing.
 
-    Everything downstream reads the cache and not the catalog.
+    Everything downstream reads the cache instead of the table.
     ``codec.tile_to_local_offset`` turns the min-corner anchor into DSP's
-    ``localOffset`` as ``x + width / 2 - 0.5``, so a wrong width EMITS the
-    building at the wrong world position; ``geom.collide`` builds its
-    ``colliders.Placed`` from the same offset, so it then tests the real
-    collider box at a pose that does not exist and returns a confident pass.
-    That is exactly what happened: a Spray Coater is 1x3 and both strategies
-    declared it ``(1, 1)``, which moved every coater a tile off its belt AND
-    hid the collisions that followed from ``geom.collide``.
+    ``localOffset`` as ``x + width / 2 - 0.5``, so the declared size decides the
+    world position that gets EMITTED; ``geom.collide`` builds its
+    ``colliders.Placed`` from that same offset, so a wrong size makes it test a
+    real collider box at a pose that does not exist and hand back a confident
+    pass.  A ported rule fed a wrong size is not a rule, it is a rubber stamp.
 
-    A ported rule fed a wrong size is not a rule, it is a rubber stamp.  This
-    check is what makes "the collider check passed" a statement about the
-    blueprint rather than about the cache.
+    TWO BRANCHES, because two conventions are in use and both are correct.
 
-    BELT ADDONS ARE INCLUDED, deliberately, even though ``occupies_tiles`` is
-    false for them.  That flag says a coater RESERVES no tile -- it rides the
-    belt rather than displacing it, which is why ``geom.overlap`` exempts it.
-    It says nothing about what the two numbers mean, and the emitter reads them
-    for a coater exactly as it does for an assembler.  Exempting addons here
-    would have exempted the only building type that has ever got this wrong.
+    A building that OCCUPIES TILES anchors on the minimum corner of its
+    footprint, so its declared size must be
+    ``catalog.oriented_footprint(item_id, yaw)`` -- the prefab's, with the
+    quarter turn applied.  Copying ``catalog.footprint`` and forgetting the turn
+    is a live hazard rather than a hypothetical: ``layout.spine`` carries a
+    comment about exactly that case.
+
+    A BELT ADDON anchors on the belt tile it RIDES, and must declare ``1x1`` so
+    that ``tile_to_local_offset`` leaves its centre on that tile.  This is
+    measured, not assumed: across ``factory-heretical-smelter-block`` and
+    ``tillable-blackbox-module-...``, blueprints the game itself wrote, all
+    eight Spray Coaters sit at their nearest belt's position to within
+    ``(0.000, 0.000, 0.001)``.  A Spray Coater's prefab footprint is ``1x3`` and
+    its collider is 3.5 world units long, and NEITHER of those is its anchor;
+    ``occupies_tiles`` is false for it precisely because the tiles its collider
+    covers are not tiles it reserves.  Asserting the prefab footprint here would
+    convict a correct coater and, if anyone "fixed" the strategy to satisfy it,
+    would move all twenty coaters a tile off their belts.  That was tried on
+    this branch and reverted; the branch is here so it cannot be tried again by
+    accident.
+
+    HONEST NEGATIVE: this check convicts NOTHING in either strategy today.  A
+    reported figure of 36 violations was all Spray Coaters and was the wrong
+    reading above.  It is a guard on a cache, not a fix for a defect, and it is
+    on by default because a check that fires on nothing costs nothing to run.
     """
     for i, b in enumerate(ctx.placement.buildings):
         try:
-            want = cat.oriented_footprint(b.item_id, b.yaw)
+            info = cat.building(b.item_id)
         except KeyError:
             # Not in the catalog at all: there is no prefab to compare against,
             # and inventing one would be the same class of error as the cache.
             continue
+        if info.occupies_tiles:
+            want = cat.oriented_footprint(b.item_id, b.yaw)
+            why = (
+                f"its prefab at yaw {b.yaw:g} is {want[0]}x{want[1]} and it anchors "
+                f"on the minimum corner of that footprint"
+            )
+        else:
+            want = (1, 1)
+            why = (
+                "a belt addon anchors on the belt tile it rides, so it declares 1x1 "
+                "and its centre stays on that tile"
+            )
         if (b.width, b.height) != want:
             yield Finding(
                 "geom.footprint",
                 Severity.ERROR,
-                f"building {i} ({cat.building(b.item_id).name}) at ({b.x}, {b.y}) "
-                f"declares a {b.width}x{b.height} footprint, but its prefab at yaw "
-                f"{b.yaw:g} is {want[0]}x{want[1]}; the declared size is what the "
-                f"emitter turns into a world position and what the collider check "
-                f"tests, so both are wrong for it",
+                f"building {i} ({info.name}) at ({b.x}, {b.y}) declares a "
+                f"{b.width}x{b.height} footprint; {why}. The declared size is what "
+                f"the emitter turns into a world position and what the collider "
+                f"check tests, so both are wrong for it",
                 (i,),
                 {
                     "declared": f"{b.width}x{b.height}",
-                    "prefab": f"{want[0]}x{want[1]}",
+                    "expected": f"{want[0]}x{want[1]}",
                     "yaw": b.yaw,
                 },
             )
