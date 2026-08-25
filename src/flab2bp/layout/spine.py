@@ -65,7 +65,7 @@ from functools import cache
 
 from ortools.sat.python import cp_model
 
-from flab2bp.dsp import catalog, params
+from flab2bp.dsp import catalog, colliders, params
 from flab2bp.layout import junction, validate
 from flab2bp.layout import slots as sorter_slots
 from flab2bp.layout.base import (
@@ -3683,41 +3683,128 @@ def _coater_tile(
 _STEP4 = ((1, 0), (-1, 0), (0, 1), (0, -1))
 
 
-def _spur_clear(buildings: list[PlacedBuilding], x: int, y: int, z: Fraction) -> bool:
-    """May an elevated belt tile stand at ``(x, y, z)``?
+_GROUND = Fraction(0)
 
-    Two separate refusals, and the second is the conservative one.
+#: The highest a spur will ever fly, whatever a tile asks of it.
+#:
+#: :data:`catalog.DEFAULT_MAX_BELT_Z` is ``buildMaxHeight`` on a NEW save, so a
+#: spur that stays under it pastes on ANY save.  The layout is not told the
+#: URL's own ceiling -- only the validator is -- and helping a spur by assuming
+#: a researched one would ship geometry ``geom.altitude_range`` refuses on
+#: exactly the saves that cannot paste it.
+_MAX_SPUR_Z = catalog.BELT_Z_QUANTUM * math.floor(
+    catalog.DEFAULT_MAX_BELT_Z / float(catalog.BELT_Z_QUANTUM)
+)
 
-    A building at the SAME ``z`` is a plain collision.  A building BELOW is only
-    allowed to be another belt: ``BELT_CROSSING_CLEARANCE`` is the height a belt
-    needs to pass over a belt, and that much is established.  Whether a belt may
-    cross a MACHINE, and at what height, is a rule this project has not read out
-    of the game -- ``docs/BACKLOG.md`` records it as unextracted, and an
-    elevated Splitter diagonally over an Assembling Machine is one of the two
-    open collider questions.  So a spur declines to fly over anything that is
-    not a belt, rather than guess a clearance and ship geometry the game may
-    refuse.
+
+def _belt_floor_over(b: PlacedBuilding) -> Fraction | None:
+    """Lowest blueprint ``z`` at which a belt tile clears ``b``, or ``None``.
+
+    ``None`` means the game excuses ``b`` for a belt outright, at any altitude.
+
+    THE RULE IS THE GAME'S NOW, NOT A GUESS.  ``CheckBuildConditions`` does not
+    box-test a belt preview at all: it probes it with a 0.23 sphere centred 0.2
+    above the node (145761), and the ``isInserter`` asymmetry at 145872 excuses
+    a machine against a belt but NOT a belt against a machine.  So a belt MAY
+    cross a machine and the price is height, which
+    :func:`flab2bp.dsp.colliders.belt_crossing_height` solves against that
+    model's build collider in closed form -- 3.5325 over an Assembling Machine
+    Mk.II, 2.7975 over an Arc Smelter, 4.9725 over a Chemical Plant.
+
+    Three classes are excused rather than priced: a sorter and a belt addon by
+    ``PrefabDesc`` flag in both directions (147437 and 147454), and another belt
+    because :func:`flab2bp.dsp.colliders.belt_collisions` gives a belt no target
+    box at all -- belt on belt is a single-occupancy question, which the caller
+    answers separately.  ``0.0`` from ``belt_crossing_height`` is
+    ``hasBuildCollider == false``, which skips the test entirely.
+
+    The game's bound is STRICT, so it is rounded UP to the next
+    :data:`catalog.BELT_Z_QUANTUM`: 3.5325 becomes 4, not 3.5.
+    """
+    if catalog.is_belt(b.item_id) or catalog.is_sorter(b.item_id):
+        return None
+    if catalog.building(b.item_id).is_belt_addon:
+        return None
+    need = colliders.belt_crossing_height(b.model_index) + float(b.z)
+    if need <= 0.0:
+        return None
+    quantum = catalog.BELT_Z_QUANTUM
+    return quantum * (math.floor(need / float(quantum)) + 1)
+
+
+class _SpurField:
+    """Where an elevated spur belt may stand over a placement, per tile.
+
+    Two facts per tile, and both are load-bearing:
+
+    * ``taken`` -- the altitudes something already occupies there.  That is a
+      plain single-occupancy collision whatever the building is, and it is the
+      one refusal that survived the rule being read.
+    * ``floor`` -- the lowest altitude at which a belt clears everything
+      standing on the tile, from :func:`_belt_floor_over`.
+
+    Precomputed, because the search is three-dimensional now.  Asking every
+    building about every ``(tile, altitude)`` a route might visit was affordable
+    while there was one altitude per tile and is not with a dozen.
 
     Footprint convention follows :func:`_tower_keep_out`: ``(b.x, b.y)`` is the
     minimum corner, and a belt-integrated building like a Splitter reports
     ``occupies_tiles`` false and holds only its own tile.
     """
-    for b in buildings:
-        try:
-            info = catalog.building(b.item_id)
-        except KeyError:
-            continue
-        if info.occupies_tiles:
-            hit = b.x <= x < b.x + b.width and b.y <= y < b.y + b.height
-        else:
-            hit = b.x == x and b.y == y
-        if not hit:
-            continue
-        if b.z == z:
+
+    def __init__(self, buildings: list[PlacedBuilding]) -> None:
+        self.floor: dict[tuple[int, int], Fraction] = {}
+        self.taken: dict[tuple[int, int], set[Fraction]] = {}
+        for b in buildings:
+            try:
+                info = catalog.building(b.item_id)
+            except KeyError:
+                continue
+            if info.occupies_tiles:
+                tiles = [
+                    (x, y)
+                    for x in range(b.x, b.x + b.width)
+                    for y in range(b.y, b.y + b.height)
+                ]
+            else:
+                tiles = [(b.x, b.y)]
+            floor = _belt_floor_over(b)
+            for tile in tiles:
+                self.taken.setdefault(tile, set()).add(b.z)
+                if floor is not None and floor > self.floor.get(tile, _GROUND):
+                    self.floor[tile] = floor
+
+    def allows(self, x: int, y: int, z: Fraction) -> bool:
+        """May an elevated belt tile stand at ``(x, y, z)``?"""
+        if z in self.taken.get((x, y), ()):
             return False
-        if not catalog.is_belt(b.item_id):
-            return False
-    return True
+        return z >= self.floor.get((x, y), _GROUND)
+
+    def lowest(
+        self, x: int, y: int, floor: Fraction, ceiling: Fraction
+    ) -> Fraction | None:
+        """The lowest altitude in ``floor..ceiling`` this tile allows, or ``None``."""
+        z = max(floor, self.floor.get((x, y), _GROUND))
+        while z <= ceiling:
+            if z not in self.taken.get((x, y), ()):
+                return z
+            z += catalog.BELT_Z_QUANTUM
+        return None
+
+    @property
+    def ceiling(self) -> Fraction:
+        """The highest altitude any tile of this placement could ever demand."""
+        return max(self.floor.values(), default=_GROUND)
+
+
+def _spur_clear(buildings: list[PlacedBuilding], x: int, y: int, z: Fraction) -> bool:
+    """May an elevated belt tile stand at ``(x, y, z)``?
+
+    The single-building form of :class:`_SpurField`, and it delegates to it so
+    the two cannot drift.  The search uses the field; this exists because the
+    rule is easier to read and to test one tile at a time.
+    """
+    return _SpurField(buildings).allows(x, y, z)
 
 
 def _coater_spur(
@@ -3728,6 +3815,7 @@ def _coater_spur(
     *,
     belt_vertical_construction: bool,
     start_z: Fraction = Fraction(0),
+    field: _SpurField | None = None,
 ) -> list[tuple[int, int, Fraction]] | None:
     """Tiles from just after ``tail`` to ``drop`` inclusive, or ``None``.
 
@@ -3748,27 +3836,33 @@ def _coater_spur(
     trying to save, and invisibly.  The box is what the other buildings already
     occupy; the search may use it and may not grow it.
 
-    The z profile is the save's business.  With ``beltVerticalConstruction`` the
-    spur is at ``level`` throughout.  Without it the climb is metered at
-    :data:`catalog.BELT_CLIMB_PER_TILE` per tile, so the first tiles ramp and a
-    route too short to finish the climb is rejected rather than emitted too
-    steep.  ``start_z`` is what makes a CHAIN work: the first spur leaves the
-    proliferator lane at ground level and climbs, while every later one leaves
-    the previous coater's drop already at ``level`` and has no climb to make.
+    IT CLIMBS NOW, AND THE ALTITUDE IS PART OF THE STATE.  A spur used to have
+    one altitude per tile, fixed by the step count, and therefore refused to fly
+    over anything that was not a belt.  The crossing rule is read
+    (:func:`_belt_floor_over`), so the search is over ``(tile, altitude)``: a
+    route may lift over an Assembling Machine at ``z = 4`` and come back down,
+    and the drop is only reached at ``level`` because that is where the addon
+    area is.
+
+    The z profile is still the save's business.  With
+    ``beltVerticalConstruction`` a level change costs no run, so each tile takes
+    the LOWEST altitude it allows at or above ``level`` -- the previous
+    behaviour exactly wherever nothing has to be crossed, and no gratuitous
+    height where something does.  Without the unlock the altitude may only move
+    by :data:`catalog.BELT_CLIMB_PER_TILE` per tile, which is what makes the
+    ramp a search cost rather than a post-hoc profile: a route with no room to
+    climb simply never reaches the goal state.  ``start_z`` is what makes a
+    CHAIN work -- the first spur leaves the proliferator lane at ground level,
+    every later one leaves the previous coater's drop already at ``level``.
+
+    ``field`` is :class:`_SpurField` over the same ``buildings``, hoisted by
+    :func:`_feed_coater` because it is rebuilt once per coater and searched once
+    per candidate source.
 
     All of it in :class:`~fractions.Fraction`, because a climb of ``1/2`` a
     level per tile against a ``4/5`` slope limit is exactly the arithmetic a
     float rounds into a blueprint the game rejects at paste time.
     """
-    rise = level - start_z
-    climb = rise / catalog.BELT_CLIMB_PER_TILE if rise > 0 else Fraction(0)
-
-    def _z_at(n: int) -> Fraction:
-        """Blueprint z of the ``n``-th spur tile, counting from one."""
-        if belt_vertical_construction or not rise:
-            return level
-        return min(level, start_z + catalog.BELT_CLIMB_PER_TILE * n)
-
     xs = [b.x for b in buildings]
     ys = [b.y for b in buildings]
     if not xs:
@@ -3776,50 +3870,68 @@ def _coater_spur(
     lo_x, hi_x = min(xs), max(b.x + b.width - 1 for b in buildings)
     lo_y, hi_y = min(ys), max(b.y + b.height - 1 for b in buildings)
 
-    #: (x, y) -> the step count it was first reached at, which fixes its z.
-    seen: dict[tuple[int, int], int] = {tail: 0}
-    parent: dict[tuple[int, int], tuple[int, int]] = {}
-    queue: deque[tuple[int, int]] = deque([tail])
-    while queue:
-        here = queue.popleft()
-        step = seen[here] + 1
-        z = _z_at(step)
-        for dx, dy in _STEP4:
-            nxt = (here[0] + dx, here[1] + dy)
-            if nxt in seen:
-                continue
-            if not (lo_x <= nxt[0] <= hi_x and lo_y <= nxt[1] <= hi_y):
-                continue
-            if nxt == drop:
-                # Arriving is only arriving if the climb has finished: a drop
-                # reached too early sits below the addon area and supplies
-                # nothing, which `game.addon_supply` would report and which is
-                # worse than saying so here.
-                if z != level:
-                    continue
-                seen[nxt] = step
-                parent[nxt] = here
-                queue.clear()
-                break
-            if not _spur_clear(buildings, nxt[0], nxt[1], z):
-                continue
-            seen[nxt] = step
-            parent[nxt] = here
-            queue.append(nxt)
-        if drop in seen:
-            break
+    fld = _SpurField(buildings) if field is None else field
+    quantum = catalog.BELT_CLIMB_PER_TILE
+    ceiling = min(max(level, start_z, fld.ceiling), _MAX_SPUR_Z)
 
-    if drop not in seen:
+    def _altitudes(cell: tuple[int, int], z: Fraction) -> tuple[Fraction, ...]:
+        """The altitudes a step from ``z`` may land on at ``cell``.
+
+        The drop is special twice over: it must be at ``level``, because that is
+        the altitude the coater's addon area sits at and a drop below it
+        supplies nothing, and it is not tested for clearance, because
+        :func:`_feed_coater` has already established the addon area is empty.
+        """
+        if belt_vertical_construction:
+            if cell == drop:
+                return (level,)
+            lo = fld.lowest(cell[0], cell[1], level, ceiling)
+            return () if lo is None else (lo,)
+        reach = [nz for nz in (z, z + quantum, z - quantum) if _GROUND <= nz <= ceiling]
+        if cell == drop:
+            return tuple(nz for nz in reach if nz == level)
+        return tuple(
+            sorted(
+                (nz for nz in reach if fld.allows(cell[0], cell[1], nz)),
+                key=lambda nz: (abs(nz - level), nz),
+            )
+        )
+
+    start = (tail[0], tail[1], start_z)
+    seen: set[tuple[int, int, Fraction]] = {start}
+    parent: dict[tuple[int, int, Fraction], tuple[int, int, Fraction]] = {}
+    queue: deque[tuple[int, int, Fraction]] = deque([start])
+    goal: tuple[int, int, Fraction] | None = None
+    while queue and goal is None:
+        here = queue.popleft()
+        for dx, dy in _STEP4:
+            cell = (here[0] + dx, here[1] + dy)
+            if cell == tail:
+                continue
+            if not (lo_x <= cell[0] <= hi_x and lo_y <= cell[1] <= hi_y):
+                continue
+            for nz in _altitudes(cell, here[2]):
+                state = (cell[0], cell[1], nz)
+                if state in seen:
+                    continue
+                seen.add(state)
+                parent[state] = here
+                if cell == drop:
+                    goal = state
+                    break
+                queue.append(state)
+            if goal is not None:
+                break
+
+    if goal is None:
         return None
-    route: list[tuple[int, int]] = []
-    cursor = drop
-    while cursor != tail:
+    route: list[tuple[int, int, Fraction]] = []
+    cursor = goal
+    while cursor != start:
         route.append(cursor)
         cursor = parent[cursor]
     route.reverse()
-    if not belt_vertical_construction and len(route) < climb:
-        return None
-    return [(x, y, _z_at(n)) for n, (x, y) in enumerate(route, start=1)]
+    return route
 
 
 def _feed_coater(
@@ -3884,8 +3996,18 @@ def _feed_coater(
     ``!history.beltVerticalConstruction && ratio > 0.8f`` test applies, one level
     over one tile is about 1.06, and the spur must spend
     :data:`catalog.RAMP_TILES_PER_LEVEL` tiles climbing at
-    :data:`catalog.BELT_CLIMB_PER_TILE` -- so a spur too short to ramp is
-    refused rather than emitted too steep for the game to accept.
+    :data:`catalog.BELT_CLIMB_PER_TILE` -- which is why the altitude is part of
+    the search state in :func:`_coater_spur` rather than a profile applied
+    afterwards: a route with no room to ramp never reaches the goal at all.
+
+    THE RUNWAY QUESTION THIS ANSWERED, measured rather than assumed.  Crossing
+    an Assembling Machine costs ``z = 4``, which is sixteen tiles of ramp on a
+    save without the unlock -- and every URL in the corpus reads as EVERY
+    technology researched (``lab.techs.belt_rules_for_url`` on a URL with no
+    technology set), so ``beltVerticalConstruction`` is on and those sixteen
+    tiles cost nothing.  The corpus never pays the runway.  The ramp path is
+    still here and still correct, because a URL that names its technologies can
+    turn the unlock off.
 
     Returns ``(belts placed, the new tail)``.  The tail is what the next coater
     chains from; ``None`` means there is nothing to chain from.
@@ -3929,6 +4051,7 @@ def _feed_coater(
     # are bounded by the placement's own bounding box, so this is a handful of
     # BFS per coater rather than anything open-ended.
     best: tuple[int, list[tuple[int, int, Fraction]]] | None = None
+    field = _SpurField(buildings)
     for src in sources:
         source = buildings[src]
         spur = _coater_spur(
@@ -3938,6 +4061,7 @@ def _feed_coater(
             level,
             belt_vertical_construction=belt_vertical_construction,
             start_z=source.z if isinstance(source.z, Fraction) else Fraction(source.z),
+            field=field,
         )
         if spur is None:
             continue
@@ -3970,12 +4094,14 @@ def _feed_coater(
         "spine cannot supply a Spray Coater: the game takes an addon's "
         "proliferator from a belt in its addon area, one tile behind the coater "
         f"and {level} altitude level(s) up, and no elevated spur reaches {cell} "
-        f"from any of the {len(sources)} available source(s). Every route was "
-        "blocked by a building it may not fly over"
+        f"from any of the {len(sources)} available source(s). A spur may fly "
+        "over a building at the altitude that building's build collider "
+        f"demands, up to z = {_MAX_SPUR_Z}, so what is left is tiles something "
+        "already occupies at every altitude a belt could use"
         + (
             ""
             if belt_vertical_construction
-            else ", or was too short to climb without exceeding the slope limit "
+            else ", or a route with no room to climb to them at the slope limit "
             "this save's technologies impose"
         )
         + "."
