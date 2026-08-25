@@ -67,7 +67,8 @@ resolving either would CHANGE BEHAVIOUR and this module was a move:
    compares -- ``num40 = zero.magnitude / num38``, with ``num38`` one tile --
    is a distance in TILES.  Read literally, the port's threshold is
    ``0.8`` world units where the game's is ``0.8`` tiles = ``1.005`` world
-   units, so our check is about 25% TIGHTER than the game.  Tighter is the safe
+   units -- the game's bound is a factor of ``GRID_ARC`` = 1.2566 LARGER than
+   the one we apply, so our check is TIGHTER.  Tighter is the safe
    direction (we refuse pastes the game would accept, never the reverse) and
    nothing we currently emit lands in the band, but it is not faithful.
    Note that ``num41`` -- :data:`PASTE_LATERAL`, :data:`PASTE_LATERAL_EPS` -- is

@@ -755,8 +755,9 @@ not resolved, because resolving either would change behaviour.**
   `PASTE_RADIAL`, but the quantity the game compares is
   `num40 = zero.magnitude / num38` with `num38` one tile -- a distance in
   TILES. Read literally the port's threshold is 0.8 world units where the
-  game's is 0.8 tiles = 1.005 world units, so **our check is about 25% tighter
-  than the game's**. Tighter is the safe direction (we refuse pastes the game
+  game's is 0.8 tiles = 1.005 world units -- **the game's bound is a factor of
+  `GRID_ARC` = 1.2566 larger than the one we apply, so our check is tighter**.
+  Tighter is the safe direction (we refuse pastes the game
   would take, never the reverse) and nothing we emit lands in the band, but it
   is not faithful. The other half of the same ladder, `num41`, is NOT divided by
   `num38` and so genuinely is in world units -- which is why one ladder can
