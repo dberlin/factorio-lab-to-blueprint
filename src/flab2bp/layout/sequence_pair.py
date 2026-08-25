@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 import random
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING
 
@@ -1124,6 +1124,8 @@ def score_candidate(
     problem: PlacementProblem,
     decoded: DecodedPlacement,
     context: PlacementCostContext,
+    *,
+    direct_targets: tuple[DirectInsertTarget, ...] | None = None,
 ) -> EnergyBreakdown:
     """Compute one candidate's complete geometry and routing-proxy observation."""
     if len(decoded.x) != problem.size:
@@ -1132,8 +1134,14 @@ def score_candidate(
         raise ValueError("placement cost context must match the problem net identities")
     if context.history_outline[1] != problem.outline_height:
         raise ValueError("placement cost context must match the problem outline height")
+    if direct_targets is None:
+        direct_targets = context.direct_targets
+    elif not isinstance(direct_targets, tuple) or any(
+        not isinstance(target, DirectInsertTarget) for target in direct_targets
+    ):
+        raise ValueError("direct-insert targets must be an immutable tuple")
     sizes = problem.selected_sizes(decoded.variant_indices)
-    for target in context.direct_targets:
+    for target in direct_targets:
         _validate_direct_target(problem, target, sizes)
 
     weighted_hpwl = sum(
@@ -1152,7 +1160,7 @@ def score_candidate(
         weighted_hpwl=weighted_hpwl,
         history_cost=_candidate_history_cost(decoded, context, sizes),
         missed_direct_inserts=sum(
-            not _target_is_direct(decoded, target) for target in context.direct_targets
+            not _target_is_direct(decoded, target) for target in direct_targets
         ),
         hard_outline_overflow=max(0, decoded.used_height - problem.outline_height),
         outline_height=problem.outline_height,
@@ -1232,7 +1240,15 @@ def anneal_stage(
         )
 
     rng = random.Random(derive_stage_seed(state.base_seed, state.stage_index))
-    current = _score_state(problem, state, context, direct_targets_for_state)
+    initial_targets = (
+        direct_targets_for_state(problem, state) if direct_targets_for_state is not None else None
+    )
+    current = _score_state(
+        problem,
+        state,
+        context,
+        direct_targets=initial_targets,
+    )
     archive_builder = EliteArchiveBuilder(config.elite_count)
     archive_builder.add(current)
     accepted_moves = 0
@@ -1245,11 +1261,16 @@ def anneal_stage(
             rng=rng,
             problem=problem,
         )
+        candidate_targets = (
+            direct_targets_for_state(problem, candidate_state)
+            if direct_targets_for_state is not None
+            else None
+        )
         candidate = _score_state(
             problem,
             candidate_state,
             context,
-            direct_targets_for_state,
+            direct_targets=candidate_targets,
         )
         archive_builder.add(candidate)
         temperature = _linear_temperature(config, move_index)
@@ -1615,22 +1636,17 @@ def _score_state(
     problem: PlacementProblem,
     state: AnnealState,
     context: PlacementCostContext,
-    direct_targets_for_state: Callable[
-        [PlacementProblem, AnnealState], tuple[DirectInsertTarget, ...]
-    ]
-    | None = None,
+    *,
+    direct_targets: tuple[DirectInsertTarget, ...] | None = None,
 ) -> AnnealIncumbent:
     decoded = decode_state(problem, state)
     dimensions = problem.selected_sizes(state.variant_indices)
-    candidate_context = (
-        replace(
-            context,
-            direct_targets=direct_targets_for_state(problem, state),
-        )
-        if direct_targets_for_state is not None
-        else context
+    breakdown = score_candidate(
+        problem,
+        decoded,
+        context,
+        direct_targets=direct_targets,
     )
-    breakdown = score_candidate(problem, decoded, candidate_context)
     return AnnealIncumbent(
         state=state,
         decoded=decoded,

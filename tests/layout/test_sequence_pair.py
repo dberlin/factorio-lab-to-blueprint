@@ -1102,6 +1102,54 @@ def test_missed_direct_insert_penalty_depends_on_candidate_geometry() -> None:
     assert cheap_energy(problem, aligned, context) < cheap_energy(problem, separated, context)
 
 
+def test_dynamic_direct_targets_score_with_one_validated_context() -> None:
+    problem = PlacementProblem(
+        sizes=((2, 1), (2, 1)),
+        nets=((0, 1),),
+        outline_height=2,
+        area_lower_bound=4,
+    )
+    decoded = DecodedPlacement(
+        x=(0, 0),
+        y=(1, 0),
+        width=2,
+        used_height=2,
+        x_windows=((0, 0), (0, 0)),
+        y_windows=((1, 1), (0, 0)),
+        gap_area=0,
+    )
+    target = DirectInsertTarget((0, 1), 0, 1, 0, 0, 2, 2)
+    context = feedback_cost_context(FeedbackState.empty((2, 2)), problem)
+
+    without_target = sequence_pair_module.score_candidate(
+        problem,
+        decoded,
+        context,
+        direct_targets=(),
+    )
+    with_target = sequence_pair_module.score_candidate(
+        problem,
+        decoded,
+        context,
+        direct_targets=(target,),
+    )
+
+    assert without_target == sequence_pair_module.score_candidate(
+        problem,
+        decoded,
+        replace(context, direct_targets=()),
+    )
+    assert with_target == sequence_pair_module.score_candidate(
+        problem,
+        decoded,
+        replace(context, direct_targets=(target,)),
+    )
+    assert without_target.missed_direct_inserts == 0
+    assert with_target.missed_direct_inserts == 1
+    assert without_target.energy != with_target.energy
+    assert context.direct_targets == ()
+
+
 def test_cheap_energy_handles_zero_area_and_no_nets_without_zero_division() -> None:
     problem = PlacementProblem(
         sizes=(),
@@ -1425,6 +1473,42 @@ def test_fixed_seed_reproduces_stage_incumbent_and_accepted_move_count() -> None
     assert a.final_state == b.final_state
     assert a.elites == b.elites
     assert a.archive == b.archive
+
+
+def test_anneal_stage_validates_cost_context_once_for_dynamic_targets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    problem = _tiny_placement_problem()
+    validation_calls = 0
+    original_post_init = PlacementCostContext.__post_init__
+
+    def count_validation(context: PlacementCostContext) -> None:
+        nonlocal validation_calls
+        validation_calls += 1
+        original_post_init(context)
+
+    monkeypatch.setattr(PlacementCostContext, "__post_init__", count_validation)
+    context = PlacementCostContext(
+        net_weights=(1.0,) * len(problem.nets),
+        net_pairs=problem.nets,
+        history_outline=(0, problem.outline_height),
+        history_summed_area=(0.0,) * (problem.outline_height + 1),
+    )
+
+    anneal_stage(
+        problem,
+        AnnealState.initial(problem.size, 17),
+        AnnealConfig(
+            moves_per_stage=7,
+            initial_temperature=1.0,
+            final_temperature=0.05,
+            elite_count=4,
+        ),
+        context,
+        direct_targets_for_state=lambda _problem, _state: (),
+    )
+
+    assert validation_calls == 1
 
 
 def test_archive_capacity_does_not_change_the_annealing_walk_or_blended_incumbent() -> None:
