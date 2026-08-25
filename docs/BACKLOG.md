@@ -1,104 +1,71 @@
 # Backlog
 
-## OPEN -- freeform's router strands 2 to 4 nets on a proliferated `super-magnetic-ring`, and it is not the clock
+## RESOLVED -- it was never the router. A port did not know its own altitude.
 
-The last thing standing between freeform and the whole
-`super-magnetic-ring*60` URL. Its `no-proliferator` candidate builds --
-13 strips, 1466 buildings, `route_failures` 0.0, validates clean with the spec
-attached. Its two proliferated candidates refuse at every budget.
+This entry said freeform's A* strands nets under congestion on a proliferated
+`super-magnetic-ring`, and that a PathFinder-style history term was the missing
+piece. Both halves were wrong, and the second was disproved expensively before
+the first was understood: real negotiated congestion was built, measured at
+parity-to-slightly-worse over 12 interleaved paired rounds, and is parked
+unmerged on `pathfinder-router`.
 
-**IT IS NOT A DEADLINE, AND THAT WAS CHECKED RATHER THAN ASSUMED.** At a 120s
-budget the sweep exhausts every candidate height and refuses early:
+**THE CLUE WAS IN THAT WORK'S OWN FAILURE TAXONOMY.** Counted over every search
+that returned `None`, 422 of 600 were handed an EMPTY START OR GOAL SET -- a
+search that expands zero nodes. That registers no conflict, so no history term
+of any weight can price it, which is exactly why negotiation moved the
+goal-set failures and could not touch the rest. A router cannot route to a cell
+it is never told to look at.
 
-    free-proliferation   120s budget -> REFUSED after 45.0s
-    max-proliferation    120s budget -> REFUSED after 24.2s
+**THE CAUSE IS ONE MISSING FIELD.** `_Port` carried x and y and no z. A Spray
+Coater's proliferator drop belt sits one altitude LEVEL up -- its addon area is
+at `(0, -1.25, 1)` -- while every lane port sits at 0, and both
+`_reserve_port_access` and the router's start/goal construction looked for a
+free cell beside a port at hard-coded level 0 regardless. For a drop that is the
+plane BELOW it, and that plane is solid lane belt. The drop reported no free
+neighbour, no access cell could be held, and the search began with nowhere to
+go.
 
-Both take the "no packing of N strips could be wired at any candidate height"
-branch, never the deadline branch. A longer clock buys nothing.
+Measured on the URL it was reported against, same command both ways:
 
-**WHAT THE PACKS ACTUALLY DO.** Instrumented over the ten packs each sweep
-routes, counting every commit-side failure by kind:
+    before   no-proliferator only, 2028 tiles; both proliferated candidates
+             refused with "no packing of N strips could be wired"
+    after    max-proliferation, 1326 tiles
 
-    free-proliferation   ~20 nets/pack   2 to 4 failed   4 to 8 rounds
-                         2 tap failures in the whole sweep
-    max-proliferation    ~22 nets/pack   2 to 4 failed   4 to 5 rounds
-                         0 tap failures in the whole sweep
+Corpus, freeform, four runs: **64, 65, 66, 63 of 72** against ~35 before.
+INVALID 0 in every run.
 
-So it is A* stranding, not the junction work that fixed the sibling cells:
-`_source_for`, `_sink_for`, `_altitude_profile` and `_tap_source` report
-essentially nothing. Every pack loses a handful of nets to congestion, every
-height, consistently -- no near misses and no outliers.
+**WHAT IS PINNED, AND WHAT IS NOT.** The same correction lands in three places:
+goal cells, start cells, and the reservation pass.
+`TestAPortKnowsItsOwnAltitude` kills the GOAL mutant. The start and reservation
+mutants SURVIVE -- this corpus never exercises a drop as a search SOURCE,
+because the chain reaches every drop as a destination. They are kept as the
+identical defect in sibling paths, and they are unexercised rather than
+verified.
 
-**WHERE NOT TO START.** `_route_all`'s own docstrings already record what has
-been measured and rejected on exactly this failure: promoting last round's
-failures to the front of the order is noise (five packs lost a failure, three
-gained one, one pack that routed everything stopped doing so), and the history
-term cannot see overuse at all, because a committed path is `blocked` rather
-than dear so two nets never overlap. `## MEASURED AND REJECTED -- a routing-
-capacity constraint in freeform's packer` below is the packer-side attempt.
+**EVERY ROUTER-SIDE REFUSAL ON THE CORPUS IS GONE.** All six that remain are
+`universe-matrix`, and all six are the zero-length `slotPoses` case -- see the
+Ray Receiver / Energy Exchanger entry below. There is no "no packing could be
+wired" refusal left anywhere in the corpus.
 
-**NOT PINNED AS A TEST.** `TestRealUrlCandidatesAreSupplied` used to assert this
-spec lays out, bundled into three tests about three unrelated properties, so all
-three failed with one routing message and none of them said anything about
-coaters, sorter capacity or cycles. Those tests now check their property on
-every real candidate freeform CAN build, over a sample widened until it provably
-contains the shape each one tests. This refusal is a defect we want gone, not a
-truth about the game, so it lives here rather than as a passing assertion.
+**WHERE NOT TO START, still true and now for a better reason.** `_route_all`'s
+docstrings record what has been measured and rejected on this failure --
+promoting last round's failures to the front is noise, and the history term
+cannot see overuse because a committed path is `blocked` rather than dear. Those
+findings stand. They were simply aimed at 2.5% of the problem.
 
-**A SIXTH SAMPLING ERROR, found while splitting them.** The old
-`test_every_candidate_supplies_its_coaters` could not have failed on a coater
-bug even before the routing regression. The only candidate of that URL freeform
-ever built is the UNPROLIFERATED one, which contains **zero Spray Coaters**, and
-`prolif.coaters_are_supplied` yields no finding for a placement with no coater
-in it. So the assertion ran on an empty set on every green run it ever had.
+## RESOLVED -- `prolif.coaters_are_supplied` is pinned on a real spec now
 
-## OPEN -- `prolif.coaters_are_supplied` cannot be pinned on a real spec today, and widening the sample does not fix it
+The guard this entry described has been replaced by the assertion it was holding
+a place for. The check could not fail while the only candidate freeform built
+contained zero coaters, and widening the sample did not rescue it because every
+coater a wider sample offered came from a candidate of a URL that never
+requested proliferation -- which this project may not assert against.
 
-The first attempt at the above was to widen the sample: add two more real URLs
-so that some candidate in it would carry coaters. **That is wrong and the
-numbers say why.** `build_candidates` emits `no-proliferator`,
-`free-proliferation` and `max-proliferation` for EVERY url, including one that
-carries no `mps=` at all. Measured with `proliferator_from_request(parse_url(...))`
-over the whole corpus:
-
-    super-magnetic-ring   mps=proliferator-2-products   -> ProliferatorTier.MK2
-    the other 11 URLs     no mps=                       -> None
-
-    1 of 12 corpus URLs actually requests proliferation
-
-So every coater a widened sample can offer comes from a proliferated candidate
-of a URL where **FactorioLab chose no proliferation at all**. Asserting on one
-would be asserting against a build FactorioLab did not choose -- the same class
-of mutation as spraying recipes it left alone -- and this project may not do
-that. Demonstrated by mutation: forcing the "did this URL ask?" flag to `True`
-turns up **6 coaters** in the sample, all of them on candidates no URL
-requested.
-
-And the one URL that DOES request proliferation is `super-magnetic-ring`, whose
-two proliferated candidates are exactly the ones freeform refuses (see the entry
-above). **So there is currently no real specification anywhere in the corpus
-that both requests proliferation and yields a build freeform can serve**, and
-`prolif.coaters_are_supplied` therefore has no honest pin on a real spec. It is
-still covered on the hand-built fixtures by
-`TestProliferatorIsActuallySupplied`, which is smaller than we would like and is
-why the real-URL class exists in the first place.
-
-`test_no_corpus_url_yet_yields_a_buildable_proliferated_candidate` records the
-gap as an assertion that FAILS the moment it closes, with instructions in the
-message to restore the real check and delete the guard. Two ways to close it:
-
-1. fix the A* stranding above, so `super-magnetic-ring`'s proliferated
-   candidates build; or
-2. add a corpus URL that carries `mps=` and is small enough to route today.
-
-**Whether `build_candidates` should offer proliferated variants for a URL that
-asked for none is a separate, open question, and it is the user's call.** It was
-NOT changed here. It is only recorded, because it is what makes a widened
-sample look like coverage when it is not.
-
-The other two tests in the class carry a containment assertion for their own
-shape -- sorter tiers, junctions -- so the vacuous case fails loudly instead of
-passing. Both were mutation-checked.
+`super-magnetic-ring`, the one corpus URL that does request it, now builds its
+proliferated candidates, so `test_every_candidate_supplies_its_coaters` asserts
+`prolif.coaters_are_supplied` on a real proliferated build. It carries a
+containment assertion on the coater count, because this test has been vacuous
+twice and the second time survived a deliberate widening.
 
 ## RESOLVED -- it was ten checks, not three, and the first cause was not `group_for`
 
