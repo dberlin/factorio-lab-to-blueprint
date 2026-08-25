@@ -7,15 +7,25 @@ to the current freeform geometry, routers, power planner, and validator.
 
 from __future__ import annotations
 
+import math
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from fractions import Fraction
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from flab2bp.layout import validate
 from flab2bp.layout.base import RETRY_BUDGET_S, NoValidLayout, Placement
+from flab2bp.layout.compact_seed import (
+    CompactSeedConfig,
+    CompactSeedDiagnostics,
+    CompactSeedResult,
+    CompactSeedStatus,
+    VariantDirectInsertTarget,
+    solve_compact_seed,
+)
 from flab2bp.layout.freeform import (
     _ROUTING_BUDGET,
     _ROUTING_EXPANSIONS_PER_SECOND,
@@ -70,6 +80,7 @@ from flab2bp.layout.sequence_pair import (
     align_direct_inserts,
     anneal_stage,
     build_elite_archive,
+    decode_state,
     derive_stage_seed,
     merge_stage_boundary,
     quality_archive_key,
@@ -426,6 +437,7 @@ class SequenceSolver[PreparedT]:
         config: SequenceSolverConfig | None = None,
         deadline_reached: Callable[[], bool] | None = None,
         initial_feedback: Callable[[PlacementProblem], FeedbackState] | None = None,
+        initial_states: Mapping[int, AnnealState] | None = None,
         direct_targets: tuple[DirectInsertTarget, ...] = (),
         direct_targets_for_state: Callable[
             [PlacementProblem, AnnealState], tuple[DirectInsertTarget, ...]
@@ -462,6 +474,11 @@ class SequenceSolver[PreparedT]:
         self.stage_boundary_transform = stage_boundary_transform
         self.stage_boundary_commit = stage_boundary_commit
         self.direct_targets_for_state = direct_targets_for_state
+        problem_by_height = {height: problem_for_height(height) for height in heights}
+        self.initial_states = _validated_initial_states(
+            problem_by_height,
+            initial_states,
+        )
         self.budget.configure(heights, self.config.final_reserve_fraction)
         self._protected_followup_heights = protected_followup_heights
         feedback_factory = initial_feedback or _default_feedback
@@ -469,9 +486,10 @@ class SequenceSolver[PreparedT]:
             _new_height_state(
                 order,
                 height,
-                problem_for_height(height),
+                problem_by_height[height],
                 feedback_factory,
                 self.config,
+                self.initial_states.get(height),
             )
             for order, height in enumerate(heights)
         ]
@@ -1131,24 +1149,55 @@ def _default_feedback(problem: PlacementProblem) -> FeedbackState:
     return FeedbackState.empty((sum(widths) + 4 * problem.size, problem.outline_height))
 
 
+def _validated_initial_states(
+    problem_by_height: Mapping[int, PlacementProblem],
+    initial_states: Mapping[int, AnnealState] | None,
+) -> Mapping[int, AnnealState]:
+    if initial_states is None:
+        return MappingProxyType({})
+    if not isinstance(initial_states, Mapping):
+        raise ValueError("initial states must be an immutable height mapping")
+    copied = dict(initial_states)
+    for height, state in copied.items():
+        if type(height) is not int or height not in problem_by_height:
+            raise ValueError("initial state height must identify a scheduled problem")
+        if not isinstance(state, AnnealState):
+            raise ValueError("initial state mapping values must be annealing states")
+        try:
+            decoded = decode_state(problem_by_height[height], state)
+        except ValueError as exc:
+            raise ValueError("initial state must match its scheduled placement problem") from exc
+        if decoded.used_height > height:
+            raise ValueError("initial state must fit its scheduled placement problem")
+    return MappingProxyType(copied)
+
+
 def _new_height_state(
     order: int,
     height: int,
     problem: PlacementProblem,
     feedback_factory: Callable[[PlacementProblem], FeedbackState],
     config: SequenceSolverConfig,
+    initial_state: AnnealState | None,
 ) -> _HeightState:
     if problem.outline_height != height:
         raise ValueError("height problem outline must match its scheduled height")
     height_seed = derive_stage_seed(config.seed, order)
-    restarts = [
-        _RestartState(
-            restart=restart,
-            seed=(seed := derive_stage_seed(height_seed, restart)),
-            anneal=AnnealState.initial(problem.size, seed),
+    restarts: list[_RestartState] = []
+    for restart in range(config.restarts_per_height):
+        seed = derive_stage_seed(height_seed, restart)
+        anneal = (
+            AnnealState.initial(problem.size, seed)
+            if initial_state is None
+            else replace(initial_state, base_seed=seed, stage_index=0)
         )
-        for restart in range(config.restarts_per_height)
-    ]
+        restarts.append(
+            _RestartState(
+                restart=restart,
+                seed=seed,
+                anneal=anneal,
+            )
+        )
     return _HeightState(
         order=order,
         height=height,
@@ -1325,6 +1374,80 @@ def _selected_direct_targets(
     return _direct_alignment_targets(_direct_net_candidates(selected, spec))
 
 
+def _balanced_compact_seed_height(problem: PlacementProblem) -> int:
+    """Choose a width-major near-square height from authoritative feasible boxes."""
+    choices: list[tuple[tuple[int, int], ...]] = []
+    if problem.variant_tables:
+        selection = [0] * problem.size
+        for strip, variants in enumerate(problem.variant_tables):
+            sizes: list[tuple[int, int]] = []
+            for variant in range(len(variants)):
+                selection[strip] = variant
+                sizes.append(problem.selected_sizes(tuple(selection))[strip])
+            selection[strip] = 0
+            choices.append(tuple(sizes))
+    else:
+        choices.extend((size,) for size in problem.sizes)
+
+    feasible_area = sum(
+        min(width * height for width, height in strip_choices) for strip_choices in choices
+    )
+    area = max(problem.area_lower_bound, feasible_area, 1)
+    balanced_width = math.isqrt(area)
+    if balanced_width * balanced_width < area:
+        balanced_width += 1
+    balanced_height = area // balanced_width
+    minimum_height = max(
+        (min(height for _width, height in strip_choices) for strip_choices in choices),
+        default=1,
+    )
+    return max(minimum_height, balanced_height)
+
+
+def _variant_direct_eligibility(
+    spec: BuildSpec,
+    strips: list[Strip],
+    problem: PlacementProblem,
+) -> tuple[VariantDirectInsertTarget, ...]:
+    """Enumerate only endpoint-variant pairs production can directly attach."""
+    defaults = (0,) * problem.size
+    baseline = _selected_direct_targets(spec, strips, problem, defaults)
+    if not baseline:
+        return ()
+
+    variant_counts = (
+        tuple(len(table) for table in problem.variant_tables)
+        if problem.variant_tables
+        else (1,) * problem.size
+    )
+    eligible: list[VariantDirectInsertTarget] = []
+    for candidate in baseline:
+        for producer_variant in range(variant_counts[candidate.producer]):
+            for consumer_variant in range(variant_counts[candidate.consumer]):
+                selection = list(defaults)
+                selection[candidate.producer] = producer_variant
+                selection[candidate.consumer] = consumer_variant
+                selected = {
+                    target.key: target
+                    for target in _selected_direct_targets(
+                        spec,
+                        strips,
+                        problem,
+                        tuple(selection),
+                    )
+                }
+                target = selected.get(candidate.key)
+                if target is not None:
+                    eligible.append(
+                        VariantDirectInsertTarget(
+                            producer_variant,
+                            consumer_variant,
+                            target,
+                        )
+                    )
+    return tuple(eligible)
+
+
 def _placement_nets(
     strips: Sequence[Strip],
 ) -> tuple[tuple[tuple[int, int], LogicalNetId], ...]:
@@ -1460,6 +1583,10 @@ class _ProductionTelemetry:
     feedback_cells: int = 0
     pose_feasibility_rejects: int = 0
     elevated_coater_routes: int = 0
+    compact_seed_attempt: int | None = None
+    compact_seed_height: int | None = None
+    compact_seed_result: CompactSeedResult | None = None
+    compact_seed_wall_time_s: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -1547,6 +1674,8 @@ def _production_run(
     config: SequenceSolverConfig,
     belt_vertical_construction: bool = True,
     absolute_deadline: float | None = None,
+    compact_seed_attempt: int | None = None,
+    compact_seed_config: CompactSeedConfig | None = None,
 ) -> _ProductionRun:
     started = time.monotonic()
     ceiling = max(time_budget_s, RETRY_BUDGET_S)
@@ -1556,6 +1685,17 @@ def _production_run(
         return time.monotonic() >= deadline
 
     telemetry = _ProductionTelemetry()
+    if compact_seed_attempt is not None and (
+        type(compact_seed_attempt) is not int or compact_seed_attempt < 0
+    ):
+        raise ValueError("compact seed attempt must be a non-negative integer or None")
+    if compact_seed_config is None:
+        chosen_compact_config = CompactSeedConfig()
+    elif type(compact_seed_config) is CompactSeedConfig:
+        chosen_compact_config = compact_seed_config
+    else:
+        raise ValueError("compact seed config must be exactly CompactSeedConfig")
+    initial_states: dict[int, AnnealState] = {}
 
     planning_started = time.monotonic()
     try:
@@ -1632,6 +1772,76 @@ def _production_run(
             )
             for height in heights
         }
+        if compact_seed_attempt is not None:
+            template_problem = problems[heights[0]]
+            compact_height = _balanced_compact_seed_height(template_problem)
+            telemetry.compact_seed_attempt = compact_seed_attempt
+            telemetry.compact_seed_height = compact_height
+            if compact_height not in seeds:
+                seeds[compact_height] = _greedy_pack(strips, compact_height)
+            if compact_height not in problems:
+                problems[compact_height] = replace(
+                    template_problem,
+                    outline_height=compact_height,
+                )
+            if compact_height not in heights:
+                heights += (compact_height,)
+            if compact_height not in protected_followup_heights:
+                protected_followup_heights += (compact_height,)
+
+            compact_started = time.monotonic()
+            try:
+                direct_eligibility = (
+                    ()
+                    if deadline_reached()
+                    else _variant_direct_eligibility(
+                        spec,
+                        strips,
+                        problems[compact_height],
+                    )
+                )
+                compact_result = solve_compact_seed(
+                    problems[compact_height],
+                    base_seed=config.seed,
+                    attempt=compact_seed_attempt,
+                    config=chosen_compact_config,
+                    direct_eligibility=direct_eligibility,
+                    absolute_deadline=deadline,
+                    cancelled=deadline_reached,
+                )
+            except Exception as exc:
+                compact_result = CompactSeedResult(
+                    CompactSeedStatus.INVALID,
+                    None,
+                    CompactSeedDiagnostics(
+                        solver_seed=0,
+                        status_name="INVALID",
+                        width_weight=1,
+                        secondary_upper_bound=0,
+                        validation_error=f"{type(exc).__name__}: {exc}",
+                    ),
+                )
+            finally:
+                telemetry.compact_seed_wall_time_s = time.monotonic() - compact_started
+            if compact_result.state is not None:
+                try:
+                    validated = _validated_initial_states(
+                        {compact_height: problems[compact_height]},
+                        {compact_height: compact_result.state},
+                    )
+                except ValueError as exc:
+                    compact_result = CompactSeedResult(
+                        CompactSeedStatus.INVALID,
+                        None,
+                        replace(
+                            compact_result.diagnostics,
+                            status_name="INVALID",
+                            validation_error=f"{type(exc).__name__}: {exc}",
+                        ),
+                    )
+                else:
+                    initial_states.update(validated)
+            telemetry.compact_seed_result = compact_result
     finally:
         telemetry.planning_time_s += time.monotonic() - planning_started
     selected_cache: dict[
@@ -1858,6 +2068,7 @@ def _production_run(
         protected_followup_heights=protected_followup_heights,
         config=config,
         deadline_reached=deadline_reached,
+        initial_states=initial_states,
         direct_targets=direct_targets,
         direct_targets_for_state=direct_targets_for_state,
         stage_boundary_transform=transform_stage,
@@ -1912,6 +2123,7 @@ class SequencePairLayout:
         strip_len: int = 6,
         config: SequenceSolverConfig | None = None,
         solver_factory: _SolverFactory | None = None,
+        compact_seed_config: CompactSeedConfig | None = None,
         islands: int = 1,
     ) -> None:
         if type(power) is not bool:
@@ -1922,11 +2134,14 @@ class SequencePairLayout:
             raise ValueError(f"islands must be an integer from 1 to {_MAX_SEQUENCE_ISLANDS}")
         if solver_factory is not None and islands != 1:
             raise ValueError("solver factory requires exactly one island")
+        if compact_seed_config is not None and type(compact_seed_config) is not CompactSeedConfig:
+            raise ValueError("compact seed config must be exactly CompactSeedConfig")
         self._solver_factory = solver_factory
         self.power = power
         self.ramped = not belt_vertical_construction
         self.strip_len = strip_len
         self.config = config or SequenceSolverConfig()
+        self.compact_seed_config = compact_seed_config or CompactSeedConfig()
         self.islands = islands
 
     def lay_out(self, spec: BuildSpec, *, time_budget_s: float = 60.0) -> Placement:
@@ -1957,6 +2172,7 @@ class SequencePairLayout:
                 belt_vertical_construction=not self.ramped,
                 strip_len=self.strip_len,
                 config=self.config,
+                compact_seed_config=self.compact_seed_config,
                 islands=self.islands,
             )
 
@@ -2109,6 +2325,29 @@ def _with_observational_stats(
             "validation_status": "clean",
         }
     )
+    compact_result = telemetry.compact_seed_result
+    compact_height = telemetry.compact_seed_height
+    compact_attempt = telemetry.compact_seed_attempt
+    if compact_result is not None and compact_height is not None and compact_attempt is not None:
+        diagnostics = compact_result.diagnostics
+        stats.update(
+            {
+                "compact_seed_attempt": float(compact_attempt),
+                "compact_seed_status": compact_result.status.value,
+                "compact_seed_height": float(compact_height),
+                "compact_seed_solved_width": float(
+                    diagnostics.solved_width if diagnostics.solved_width is not None else -1
+                ),
+                "compact_seed_decoded_width": float(
+                    diagnostics.decoded_width if diagnostics.decoded_width is not None else -1
+                ),
+                "compact_seed_decoded_height": float(
+                    diagnostics.decoded_height if diagnostics.decoded_height is not None else -1
+                ),
+                "compact_seed_deterministic_time_s": diagnostics.deterministic_time,
+                "compact_seed_wall_time_s": telemetry.compact_seed_wall_time_s,
+            }
+        )
     # Placement predates string-valued audit dimensions.  Keep the public
     # runtime contract required by the audit backend without widening the shared
     # production type in this audit-only task.

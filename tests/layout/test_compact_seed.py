@@ -10,6 +10,7 @@ from typing import cast
 import pytest
 from ortools.sat.python import cp_model
 
+import flab2bp.layout.sequence_solver as sequence_solver_module
 from flab2bp.lab.data import load_vendored
 from flab2bp.lab.url import parse_url
 from flab2bp.layout.compact_seed import (
@@ -490,6 +491,32 @@ def test_real_refinery_height_30_seed_is_cython_decodable_without_witness_hint()
         logical_net_ids=tuple(logical for _endpoints, logical in placement_nets),
         variant_tables=variant_tables,
     )
+
+    balanced_height = getattr(
+        sequence_solver_module,
+        "_balanced_compact_seed_height",
+        None,
+    )
+    assert balanced_height is not None
+    assert balanced_height(problem) == 30
+    enumerate_eligibility = getattr(
+        sequence_solver_module,
+        "_variant_direct_eligibility",
+        None,
+    )
+    assert enumerate_eligibility is not None
+    eligibility = enumerate_eligibility(spec, strips, problem)
+    assert len(eligibility) == 432
+    assert len(
+        {
+            (
+                entry.target.key,
+                entry.producer_variant,
+                entry.consumer_variant,
+            )
+            for entry in eligibility
+        }
+    ) == len(eligibility)
 
     result = solve_compact_seed(
         problem,

@@ -1,19 +1,25 @@
 from __future__ import annotations
 
-from concurrent.futures import Future
-from dataclasses import replace
+import multiprocessing
+import pickle
+import time
+from concurrent.futures import Future, ProcessPoolExecutor
 from typing import Any
 
 import pytest
 
 import flab2bp.layout.sequence_islands as islands_module
+from flab2bp.layout import validate
 from flab2bp.layout.base import NoValidLayout, PlacedBuilding, Placement
+from flab2bp.layout.compact_seed import CompactSeedConfig
 from flab2bp.layout.sequence_islands import (
     _merge_sequence_island_outcomes,
+    _run_sequence_island,
     _sequence_island_deadlines,
     _sequence_island_result_reserve_s,
     _sequence_island_seeds,
     _SequenceIslandOutcome,
+    _SequenceIslandRequest,
 )
 from flab2bp.layout.sequence_pair import derive_stage_seed
 from flab2bp.layout.sequence_solver import SequencePairLayout, SequenceSolverConfig
@@ -238,13 +244,20 @@ def test_child_soft_deadline_leaves_parent_time_to_collect_result(
 
     monkeypatch.setattr(islands_module, "wait", complete_at_soft_deadline)
 
-    placement = SequencePairLayout(islands=3).lay_out(
+    compact_config = CompactSeedConfig(max_deterministic_time=0.125)
+    placement = SequencePairLayout(
+        islands=3,
+        compact_seed_config=compact_config,
+    ).lay_out(
         two_stage_spec(),
         time_budget_s=2.0,
     )
 
     executor = _PendingExecutor.instances[-1]
     assert {request.soft_deadline for request in executor.requests} == {111.0}
+    assert [request.compact_seed_attempt for request in executor.requests] == [None, 0, 1]
+    assert all(request.compact_seed_config is compact_config for request in executor.requests)
+    assert pickle.loads(pickle.dumps(executor.requests[1])) == executor.requests[1]
     assert observed_waits == [4.0]
     assert executor.kwargs["mp_context"].get_start_method() == "spawn"
     assert executor.kwargs["max_tasks_per_child"] == 1
@@ -289,28 +302,43 @@ def test_result_reserve_formula_is_bounded(
     assert _sequence_island_result_reserve_s(ceiling) == expected
 
 
-def test_two_spawned_islands_match_the_same_islands_run_serially() -> None:
+def test_two_real_spawned_islands_are_unseeded_then_seeded_and_both_valid() -> None:
     spec = two_stage_spec()
     config = SequenceSolverConfig.test()
+    compact_config = CompactSeedConfig(max_deterministic_time=0.05)
     seeds = _sequence_island_seeds(config.seed, 2)
-    serial = tuple(
-        SequencePairLayout(config=replace(config, seed=seed)).lay_out(spec, time_budget_s=2.0)
-        for seed in seeds
+    soft_deadline = time.monotonic() + 20.0
+    requests = tuple(
+        _SequenceIslandRequest(
+            spec=spec,
+            time_budget_s=2.0,
+            soft_deadline=soft_deadline,
+            power=False,
+            belt_vertical_construction=True,
+            strip_len=6,
+            config=config,
+            island_id=island_id,
+            seed=seed,
+            compact_seed_attempt=None if island_id == 0 else island_id - 1,
+            compact_seed_config=compact_config,
+        )
+        for island_id, seed in enumerate(seeds)
     )
-    expected_id, expected = min(
-        enumerate(serial),
-        key=lambda item: (
-            item[1].area,
-            int(item[1].stats["belt_tiles"]),
-            item[0],
-        ),
-    )
+    assert pickle.loads(pickle.dumps(requests)) == requests
 
-    parallel = SequencePairLayout(islands=2, config=config).lay_out(spec, time_budget_s=2.0)
+    with ProcessPoolExecutor(
+        max_workers=2,
+        mp_context=multiprocessing.get_context("spawn"),
+        max_tasks_per_child=1,
+    ) as executor:
+        outcomes = tuple(executor.map(_run_sequence_island, requests))
 
-    assert parallel.buildings == expected.buildings
-    assert parallel.area == expected.area
-    assert parallel.stats["belt_tiles"] == expected.stats["belt_tiles"]
-    assert parallel.stats["winner_island_id"] == expected_id
-    assert parallel.stats["islands_completed"] >= 1.0
-    assert parallel.stats["winner_island_seed"] == seeds[expected_id]
+    assert [outcome.status for outcome in outcomes] == ["completed", "completed"]
+    island0, island1 = (outcome.placement for outcome in outcomes)
+    assert island0 is not None and island1 is not None
+    assert not validate.certify(island0, spec, expect_power=False).errors
+    assert not validate.certify(island1, spec, expect_power=False).errors
+    assert "compact_seed_attempt" not in island0.stats
+    assert island1.stats["compact_seed_attempt"] == 0.0
+    assert island1.stats["compact_seed_status"] in {"optimal", "feasible"}
+    assert island1.stats["compact_seed_decoded_width"] >= 1.0

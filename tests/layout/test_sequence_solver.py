@@ -18,6 +18,13 @@ from flab2bp.lab.data import load_vendored
 from flab2bp.lab.url import parse_url
 from flab2bp.layout import slots, validate
 from flab2bp.layout.base import NoValidLayout, PlacedBuilding, Placement
+from flab2bp.layout.compact_seed import (
+    CompactSeedConfig,
+    CompactSeedDiagnostics,
+    CompactSeedResult,
+    CompactSeedStatus,
+    VariantDirectInsertTarget,
+)
 from flab2bp.layout.freeform import (
     _box,
     _build_prepared,
@@ -85,6 +92,7 @@ from flab2bp.layout.sequence_solver import (
     _selected_direct_targets,
     _selected_strips,
     _variant_search_inputs,
+    _with_observational_stats,
 )
 from flab2bp.layout.strip_variants import (
     StripFamilyId,
@@ -267,6 +275,7 @@ def _solver(
     budget: ExpansionBudget | None = None,
     config: SequenceSolverConfig | None = None,
     deadline_reached: Callable[[], bool] | None = None,
+    initial_states: dict[int, AnnealState] | None = None,
 ) -> SequenceSolver[Prepared]:
     return SequenceSolver(
         heights=heights,
@@ -286,6 +295,7 @@ def _solver(
             global_elites=1,
         ),
         deadline_reached=deadline_reached or (lambda: False),
+        initial_states=initial_states,
     )
 
 
@@ -437,6 +447,73 @@ def test_three_restart_search_keeps_every_topology_lane_sibling_full(
         tuple(MoveKind),
         tuple(MoveKind),
     ]
+
+
+def test_compact_initial_state_is_rebased_per_restart_and_topology_only_resets_dimensions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _spec, _strips, problem = _two_stage_variant_problem()
+    selected_variants = tuple(1 if len(variants) > 1 else 0 for variants in problem.variant_tables)
+    order = tuple(reversed(range(problem.size)))
+    compact = AnnealState(
+        pair=SequencePair(order, order),
+        gaps=GapProfile((1,) * problem.size, (1,) * problem.size),
+        variant_indices=selected_variants,
+        base_seed=-1,
+        stage_index=9,
+    )
+    starts: list[AnnealState] = []
+    real_anneal_stage = anneal_stage
+
+    def capture_anneal(
+        current_problem: PlacementProblem,
+        state: AnnealState,
+        config: AnnealConfig,
+        context: PlacementCostContext | None = None,
+    ) -> AnnealStageResult:
+        starts.append(state)
+        return real_anneal_stage(current_problem, state, config, context)
+
+    monkeypatch.setattr(sequence_solver_module, "anneal_stage", capture_anneal)
+    solver = SequenceSolver(
+        heights=(problem.outline_height,),
+        problem_for_height=lambda _height: problem,
+        adapters=_FakeRouting().adapters(),
+        expansion_budget=ExpansionBudget(1_000),
+        config=SequenceSolverConfig(
+            stages=1,
+            moves_per_stage=1,
+            restarts_per_height=2,
+            global_elites=1,
+        ),
+        initial_states={problem.outline_height: compact},
+    )
+
+    with pytest.raises(NoValidLayout):
+        solver.search(max_stages=1)
+
+    topology, full = starts
+    restarts = solver._heights[0].restarts
+    assert topology.pair == compact.pair == full.pair
+    assert [topology.base_seed, full.base_seed] == [restart.seed for restart in restarts]
+    assert topology.stage_index == full.stage_index == 0
+    assert topology.gaps == GapProfile.zero(problem.size)
+    assert topology.variant_indices == (0,) * problem.size
+    assert full.gaps == compact.gaps
+    assert full.variant_indices == compact.variant_indices
+
+
+def test_absent_initial_state_keeps_exact_anneal_initial_and_mapping_is_validated() -> None:
+    solver = _solver(_FakeRouting(), heights=(40,))
+    for restart in solver._heights[0].restarts:
+        assert restart.anneal == AnnealState.initial(1, restart.seed)
+
+    with pytest.raises(ValueError, match="initial state height"):
+        _solver(
+            _FakeRouting(),
+            heights=(40,),
+            initial_states={60: AnnealState.initial(1, 1)},
+        )
 
 
 def test_topology_lane_resets_lns_dimensions_before_its_next_dynamic_target_stage(
@@ -2024,6 +2101,271 @@ def test_direct_targets_derive_geometry_from_both_selected_endpoint_variants() -
         )[0]
     )
     assert consumer_changed.producer_row == target.producer_row
+
+
+def test_compact_direct_eligibility_contains_exactly_authoritative_variant_targets() -> None:
+    spec, strips, problem = _two_stage_variant_problem()
+    enumerate_eligibility = getattr(
+        sequence_solver_module,
+        "_variant_direct_eligibility",
+        None,
+    )
+    assert enumerate_eligibility is not None
+
+    actual = enumerate_eligibility(spec, strips, problem)
+    expected: set[VariantDirectInsertTarget] = set()
+    for baseline in _selected_direct_targets(
+        spec,
+        strips,
+        problem,
+        (0,) * problem.size,
+    ):
+        for producer_variant in range(len(problem.variant_tables[baseline.producer])):
+            for consumer_variant in range(len(problem.variant_tables[baseline.consumer])):
+                selection = [0] * problem.size
+                selection[baseline.producer] = producer_variant
+                selection[baseline.consumer] = consumer_variant
+                selected = {
+                    target.key: target
+                    for target in _selected_direct_targets(
+                        spec,
+                        strips,
+                        problem,
+                        tuple(selection),
+                    )
+                }
+                target = selected.get(baseline.key)
+                if target is not None:
+                    expected.add(
+                        VariantDirectInsertTarget(
+                            producer_variant,
+                            consumer_variant,
+                            target,
+                        )
+                    )
+
+    assert actual
+    assert set(actual) == expected
+    assert len(actual) == len(expected)
+
+
+def test_serial_production_never_calls_compact_solver_and_keeps_exact_initial_states(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def refuse_compact(*_args: object, **_kwargs: object) -> CompactSeedResult:
+        raise AssertionError("serial production must remain unseeded")
+
+    monkeypatch.setattr(sequence_solver_module, "solve_compact_seed", refuse_compact)
+    run = _production_run(
+        two_stage_spec(),
+        time_budget_s=2.0,
+        power=False,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+    )
+
+    for height in run.solver._heights:
+        for restart in height.restarts:
+            assert restart.anneal == AnnealState.initial(height.problem.size, restart.seed)
+
+
+def test_seeded_production_schedules_one_balanced_height_and_reports_compact_work(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[
+        tuple[
+            PlacementProblem,
+            int,
+            CompactSeedConfig,
+            tuple[VariantDirectInsertTarget, ...],
+            float | None,
+            Callable[[], bool] | None,
+        ]
+    ] = []
+
+    def compact(
+        problem: PlacementProblem,
+        *,
+        base_seed: int,
+        attempt: int,
+        config: CompactSeedConfig,
+        direct_eligibility: tuple[VariantDirectInsertTarget, ...],
+        absolute_deadline: float | None,
+        cancelled: Callable[[], bool] | None,
+    ) -> CompactSeedResult:
+        del base_seed
+        calls.append(
+            (
+                problem,
+                attempt,
+                config,
+                direct_eligibility,
+                absolute_deadline,
+                cancelled,
+            )
+        )
+        order = tuple(range(problem.size))
+        selected = tuple(len(table) - 1 for table in problem.variant_tables)
+        state = AnnealState(
+            pair=SequencePair(order, order),
+            gaps=GapProfile.zero(problem.size),
+            variant_indices=selected,
+            base_seed=-1,
+        )
+        return CompactSeedResult(
+            CompactSeedStatus.FEASIBLE,
+            state,
+            CompactSeedDiagnostics(
+                solver_seed=17,
+                status_name="FEASIBLE",
+                width_weight=99,
+                secondary_upper_bound=98,
+                deterministic_time=0.75,
+                solved_width=17,
+                decoded_width=16,
+                decoded_height=problem.outline_height,
+            ),
+        )
+
+    monkeypatch.setattr(sequence_solver_module, "solve_compact_seed", compact)
+    deadline = time.monotonic() + 10.0
+    compact_config = CompactSeedConfig(max_deterministic_time=0.125)
+    config = SequenceSolverConfig.test()
+    run = _production_run(
+        two_stage_spec(),
+        time_budget_s=2.0,
+        power=False,
+        strip_len=6,
+        config=config,
+        absolute_deadline=deadline,
+        compact_seed_attempt=3,
+        compact_seed_config=compact_config,
+    )
+
+    assert len(calls) == 1
+    problem, attempt, observed_config, eligibility, observed_deadline, cancelled = calls[0]
+    assert attempt == 3
+    assert observed_config is compact_config
+    assert observed_deadline == deadline
+    assert cancelled is not None and not cancelled()
+    assert eligibility
+    assert run.heights.count(problem.outline_height) == 1
+    assert run.solver._protected_followup_heights.count(problem.outline_height) == 1
+    matching = next(
+        height for height in run.solver._heights if height.height == problem.outline_height
+    )
+    for restart in matching.restarts:
+        assert restart.anneal.pair == SequencePair(
+            tuple(range(problem.size)),
+            tuple(range(problem.size)),
+        )
+        assert restart.anneal.variant_indices == tuple(
+            len(table) - 1 for table in problem.variant_tables
+        )
+        assert restart.anneal.base_seed == restart.seed
+        assert restart.anneal.stage_index == 0
+
+    result = run.solver.search()
+    placement = _with_observational_stats(result, run, False, config)
+    assert placement.stats["compact_seed_attempt"] == 3.0
+    assert placement.stats["compact_seed_status"] == "feasible"
+    assert placement.stats["compact_seed_height"] == float(problem.outline_height)
+    assert placement.stats["compact_seed_solved_width"] == 17.0
+    assert placement.stats["compact_seed_decoded_width"] == 16.0
+    assert placement.stats["compact_seed_deterministic_time_s"] == 0.75
+    assert placement.stats["compact_seed_wall_time_s"] >= 0.0
+    assert placement.stats["planning_time_s"] >= placement.stats["compact_seed_wall_time_s"]
+
+
+@pytest.mark.parametrize(
+    "status",
+    (
+        CompactSeedStatus.UNKNOWN,
+        CompactSeedStatus.CANCELLED,
+        CompactSeedStatus.INVALID,
+    ),
+)
+def test_unsuccessful_compact_seed_falls_back_exactly_to_anneal_initial(
+    monkeypatch: pytest.MonkeyPatch,
+    status: CompactSeedStatus,
+) -> None:
+    solved_problem: list[PlacementProblem] = []
+
+    def compact(
+        problem: PlacementProblem,
+        **_kwargs: object,
+    ) -> CompactSeedResult:
+        solved_problem.append(problem)
+        return CompactSeedResult(
+            status,
+            None,
+            CompactSeedDiagnostics(
+                solver_seed=17,
+                status_name=status.value.upper(),
+                width_weight=1,
+                secondary_upper_bound=0,
+            ),
+        )
+
+    monkeypatch.setattr(sequence_solver_module, "solve_compact_seed", compact)
+    run = _production_run(
+        two_stage_spec(),
+        time_budget_s=2.0,
+        power=False,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+        compact_seed_attempt=0,
+    )
+
+    matching = next(
+        height
+        for height in run.solver._heights
+        if height.height == solved_problem[0].outline_height
+    )
+    for restart in matching.restarts:
+        assert restart.anneal == AnnealState.initial(matching.problem.size, restart.seed)
+
+
+def test_malformed_successful_compact_seed_is_downgraded_and_falls_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    solved_problem: list[PlacementProblem] = []
+
+    def compact(
+        problem: PlacementProblem,
+        **_kwargs: object,
+    ) -> CompactSeedResult:
+        solved_problem.append(problem)
+        return CompactSeedResult(
+            CompactSeedStatus.FEASIBLE,
+            AnnealState.initial(problem.size - 1, 17),
+            CompactSeedDiagnostics(
+                solver_seed=17,
+                status_name="FEASIBLE",
+                width_weight=1,
+                secondary_upper_bound=0,
+            ),
+        )
+
+    monkeypatch.setattr(sequence_solver_module, "solve_compact_seed", compact)
+    run = _production_run(
+        two_stage_spec(),
+        time_budget_s=2.0,
+        power=False,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+        compact_seed_attempt=0,
+    )
+
+    assert run.telemetry.compact_seed_result is not None
+    assert run.telemetry.compact_seed_result.status is CompactSeedStatus.INVALID
+    matching = next(
+        height
+        for height in run.solver._heights
+        if height.height == solved_problem[0].outline_height
+    )
+    for restart in matching.restarts:
+        assert restart.anneal == AnnealState.initial(matching.problem.size, restart.seed)
 
 
 def test_production_run_stages_plus_two_height_neighbor(

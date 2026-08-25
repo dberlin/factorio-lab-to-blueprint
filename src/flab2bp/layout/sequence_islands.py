@@ -11,6 +11,7 @@ from typing import Literal, cast
 
 from flab2bp.layout import validate
 from flab2bp.layout.base import RETRY_BUDGET_S, NoValidLayout, Placement
+from flab2bp.layout.compact_seed import CompactSeedConfig
 from flab2bp.layout.sequence_pair import derive_stage_seed
 from flab2bp.layout.sequence_solver import (
     SequenceSolverConfig,
@@ -34,6 +35,8 @@ class _SequenceIslandRequest:
     config: SequenceSolverConfig
     island_id: int
     seed: int
+    compact_seed_attempt: int | None
+    compact_seed_config: CompactSeedConfig
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,6 +124,8 @@ def _run_sequence_island(request: _SequenceIslandRequest) -> _SequenceIslandOutc
             strip_len=request.strip_len,
             config=config,
             absolute_deadline=request.soft_deadline,
+            compact_seed_attempt=request.compact_seed_attempt,
+            compact_seed_config=request.compact_seed_config,
         )
         result = run.solver.search()
         placement = _with_observational_stats(result, run, request.power, config)
@@ -229,6 +234,7 @@ def run_sequence_islands(
     belt_vertical_construction: bool,
     strip_len: int,
     config: SequenceSolverConfig,
+    compact_seed_config: CompactSeedConfig,
     islands: int,
 ) -> Placement:
     """Run complete production solves in fresh spawned children and merge them."""
@@ -248,6 +254,8 @@ def run_sequence_islands(
             config=config,
             island_id=island_id,
             seed=seed,
+            compact_seed_attempt=None if island_id == 0 else island_id - 1,
+            compact_seed_config=compact_seed_config,
         )
         for island_id, seed in enumerate(seeds)
     )
