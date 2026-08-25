@@ -1,0 +1,118 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>End-to-end seam: Pyodide builds the proto, or-tools-wasm solves it</title>
+<script src="./coi-serviceworker.js"></script>
+<pre id="out">running...</pre>
+<script type="module">
+const out = document.getElementById('out');
+window.__probe = { done: false, result: {} };
+const R = window.__probe.result;
+const show = () => { out.textContent = JSON.stringify(R, null, 2); };
+R.crossOriginIsolated = self.crossOriginIsolated;
+const IDX = 'https://cdn.jsdelivr.net/pyodide/v0.28.3/full/';
+
+(async () => {
+  try {
+    // ---- 1. the solver side: or-tools-wasm ----
+    const { CpSat } = await import('./vendor/ortools/browser/cp-sat.js');
+
+    // ---- 2. the modelling side: CPython in the browser ----
+    await new Promise((res, rej) => {
+      const s = document.createElement('script');
+      s.src = IDX + 'pyodide.js'; s.onload = res; s.onerror = rej;
+      document.head.appendChild(s);
+    });
+    let t = performance.now();
+    const pyodide = await loadPyodide({ indexURL: IDX });
+    R.pyodideBootMs = Math.round(performance.now() - t); show();
+
+    await pyodide.loadPackage(['micropip']);
+    const micropip = pyodide.pyimport('micropip');
+    // Pyodide ships protobuf 6.31.1 but ortools 9.15's generated code declares
+    // gencode 6.33.1, and the runtime refuses to load older-than-gencode.
+    t = performance.now();
+    await micropip.install('protobuf==6.33.1');
+    R.protobufInstallMs = Math.round(performance.now() - t); show();
+
+    // ---- 3. ortools' own pure-python proto modules, no libortools ----
+    const zip = new Uint8Array(await (await fetch('./pyshim.zip')).arrayBuffer());
+    R.shimZipBytes = zip.length;
+    await pyodide.unpackArchive(zip, 'zip', { extractDir: '/shim' });
+    pyodide.runPython(`import sys; sys.path.insert(0, '/shim')`);
+
+    // ---- 4. Python builds a CpModelProto with only protobuf present ----
+    t = performance.now();
+    const modelBytes = pyodide.runPython(`
+import sys
+from ortools.sat import cp_model_pb2, sat_parameters_pb2
+
+m = cp_model_pb2.CpModelProto()
+def add_var(lo, hi, name):
+    v = m.variables.add(); v.domain.extend([lo, hi]); v.name = name
+    return len(m.variables) - 1
+
+# x0..x5 in [0,20], b0..b5 bool, x[i]+3 <= x[i+1] enforced by b[i], exactly-one b
+xs = [add_var(0, 20, f"x{i}") for i in range(6)]
+bs = [add_var(0, 1, f"b{i}") for i in range(6)]
+for i in range(5):
+    c = m.constraints.add()
+    c.enforcement_literal.append(bs[i])
+    lin = c.linear
+    lin.vars.extend([xs[i], xs[i+1]]); lin.coeffs.extend([1, -1])
+    lin.domain.extend([-9223372036854775808, -3])
+c = m.constraints.add()
+c.exactly_one.literals.extend(bs)
+
+w = add_var(0, 100, "w")
+for i in range(6):
+    c = m.constraints.add()
+    lin = c.linear
+    lin.vars.extend([w, xs[i]]); lin.coeffs.extend([1, -1])
+    lin.domain.extend([0, 9223372036854775807])
+m.objective.vars.append(w); m.objective.coeffs.append(1)
+
+raw = m.SerializeToString()
+globals()['MODEL_VARS'] = len(m.variables)
+globals()['MODEL_CONS'] = len(m.constraints)
+raw
+`);
+    R.pyBuildMs = Math.round(performance.now() - t);
+    R.modelVars = pyodide.globals.get('MODEL_VARS');
+    R.modelCons = pyodide.globals.get('MODEL_CONS');
+    const mb = modelBytes.toJs ? modelBytes.toJs() : modelBytes;
+    const modelU8 = new Uint8Array(mb);
+    R.modelBytes = modelU8.length; show();
+
+    // ---- 5. the seam: bytes across to the wasm solver ----
+    const paramU8 = new Uint8Array(await (await fetch('./models/params_5s_w1.pb')).arrayBuffer());
+    const v = await CpSat.validate(modelU8);
+    R.validate = v; show();
+    t = performance.now();
+    const respU8 = await CpSat.solveRaw(modelU8, paramU8);
+    R.solveMs = Math.round(performance.now() - t);
+    R.respBytes = respU8.length; show();
+
+    // ---- 6. back into Python, parsed by the same pure-python protos ----
+    pyodide.globals.set('RESP', pyodide.toPy(respU8));
+    R.pyParsed = pyodide.runPython(`
+import json
+from ortools.sat import cp_model_pb2
+r = cp_model_pb2.CpSolverResponse()
+r.ParseFromString(bytes(RESP))
+names = [v.name for v in m.variables]
+json.dumps({
+    "status": cp_model_pb2.CpSolverStatus.Name(r.status),
+    "objective": r.objective_value,
+    "wall_time": r.wall_time,
+    "values": {n: r.solution[i] for i, n in enumerate(names)},
+})
+`);
+    R.ok = true;
+  } catch (e) {
+    R.ok = false;
+    R.error = String(e && e.stack ? e.stack : e).slice(0, 1500);
+  } finally {
+    window.__probe.done = true; show();
+  }
+})();
+</script>

@@ -1,0 +1,57 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Pyodide cold-load payload</title>
+<script src="./coi-serviceworker.js"></script>
+<pre id="out">running...</pre>
+<script>
+const out = document.getElementById('out');
+window.__probe = { done: false, result: {} };
+const R = window.__probe.result;
+R.crossOriginIsolated = self.crossOriginIsolated;
+const IDX = 'https://cdn.jsdelivr.net/pyodide/v0.28.3/full/';
+const PKGS = (new URLSearchParams(location.search).get('pkgs') || 'micropip,pydantic,sympy,protobuf').split(',').filter(Boolean);
+
+function say(k, v) { R[k] = v; out.textContent = JSON.stringify(R, null, 2); }
+
+(async () => {
+  try {
+    const t0 = performance.now();
+    await new Promise((res, rej) => {
+      const s = document.createElement('script');
+      s.src = IDX + 'pyodide.js'; s.onload = res; s.onerror = rej;
+      document.head.appendChild(s);
+    });
+    say('loaderJsMs', Math.round(performance.now() - t0));
+
+    const t1 = performance.now();
+    const pyodide = await loadPyodide({ indexURL: IDX });
+    say('bootMs', Math.round(performance.now() - t1));
+    say('pythonVersion', pyodide.runPython('import sys; sys.version'));
+
+    const t2 = performance.now();
+    await pyodide.loadPackage(PKGS);
+    say('loadPackagesMs', Math.round(performance.now() - t2));
+    say('packages', PKGS);
+
+    const t3 = performance.now();
+    say('importCheck', pyodide.runPython(`
+import json
+mods = {}
+for m in ("pydantic","sympy","google.protobuf","fractions","decimal"):
+    try:
+        __import__(m); mods[m] = "ok"
+    except Exception as e:
+        mods[m] = type(e).__name__ + ": " + str(e)[:80]
+json.dumps(mods)
+`));
+    say('importMs', Math.round(performance.now() - t3));
+    R.ok = true;
+  } catch (e) {
+    R.ok = false;
+    R.error = String(e && e.stack ? e.stack : e);
+  } finally {
+    window.__probe.done = true;
+    out.textContent = JSON.stringify(R, null, 2);
+  }
+})();
+</script>
