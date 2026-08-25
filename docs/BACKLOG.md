@@ -636,53 +636,140 @@ rather than as anything about coaters.
    candidate source rather than the first that works. Nearest-by-manhattan
    picked a source whose actual route was 68 tiles for a straight-line 34.
 
-## OPEN -- we place belts beside splitters the game would refuse, and the obvious guard does not fix it
+## OPEN -- spine's trunk margin crosses its own junctions at bridge height
 
-`game.belt_collide` ships in `validate.OPT_IN`. Turning it on costs five to
-seven corpus cells -- **59/72 clean against 64-66 with it off, INVALID 0** -- and
-every one of those is a REFUSAL, not an invalid blueprint. The excusals in that
-check reproduce blueprints the game itself wrote (1189 raw findings to 0), so
-these are not false positives: **our layouts really do contain belt-beside-
-splitter geometry the game rejects at paste, and the only thing hiding it is
-that the check is off.**
+**FREEFORM'S HALF OF THIS IS CLOSED.** What is left is spine, it is two URLs,
+and it is structural rather than a search failure. `game.belt_collide` stays in
+`validate.OPT_IN` because of it and for no other reason.
 
-**THE GEOMETRY IS SETTLED.** An unlinked belt placed at every offset around a
-splitter, judged by `colliders.belt_collisions`, is convicted at exactly the
-FOUR ORTHOGONAL NEIGHBOURS and nowhere else:
+### The geometry, and the half of it that was missing
 
-        .  .  .  .  .
-        .  .  X  .  .
-        .  X  S  X  .
-        .  .  X  .  .
-        .  .  .  .  .
+An unlinked belt placed at every offset around a splitter, judged by
+`colliders.belt_collisions`, is convicted at the four orthogonal neighbours AND
+THE TILE ITSELF -- at the splitter's own level and at the one ABOVE it:
 
-Diagonals clear (1.777 units against a 1.42 reach) and so does anything two
-tiles out. The game excuses a belt whose own run reaches the splitter, or a
-preview the splitter links to, within a couple of hops
-(`colliders.belt_chain_excuses`) -- so the test is LINKAGE, not distance. A
-neighbour is fatal only when it belongs to a different run.
+        dz = 0            dz = 1            dz = 2
+        .  .  .  .  .     .  .  .  .  .     .  .  .  .  .
+        .  .  X  .  .     .  .  X  .  .     .  .  .  .  .
+        .  X  X  X  .     .  X  X  X  .     .  .  .  .  .
+        .  .  X  .  .     .  .  X  .  .     .  .  .  .  .
+        .  .  .  .  .     .  .  .  .  .     .  .  .  .  .
 
-**IT IS STOCHASTIC**, which is why it reads as flaky: the same URL convicts 2
-belts in one run and 0 in another, depending on which run happens to be routed
-beside the tap.
+The entry this replaces had only the `dz = 0` plate, and that is why it read as
+a lateral problem. It is not: **most of the convictions were a belt one LEVEL
+above the splitter**, over it or beside it. The arms reach 1.19 world units
+against a 1.2566-tile pitch, so a diagonal at 1.777 clears and two tiles out
+clears; the cross stands 2.30 units against a level's 4/3, so one level up is
+still inside it and two are not. `colliders.belt_keepout_offsets` MEASURES this
+rather than asserting it -- it probes the box and returns the offsets -- and
+`junction.keepout_cells` turns it into routing cells. Two tests pin it, one of
+them checking both directions of the pairing against `belt_collisions` itself,
+so an offset that stopped convicting would show as an over-strict keep-out.
 
-**THE OBVIOUS FIX WAS TRIED AND FAILS, so do not spend the day rediscovering
-it.** Adding the linkage test to `junction.site_is_clear`, so a tap is refused
-when an orthogonal neighbour carries a foreign belt, is both too strict and
-ineffective: it refused **1147 of 1619** sites on one spec -- 71% -- and the
-convictions survived anyway.
+The excusal is unchanged and untouched: the game lets a belt off when its own
+run reaches the splitter within three hops (`colliders.belt_chain_excuses`), so
+a keep-out cell is only fatal to a belt on a DIFFERENT run.
 
-The reason is ORDERING. `_tap_source` runs inside `_commit_paths`, which walks
-the committed paths in turn, so a splitter made for path A is created before
-path B's belts are staked beside it. A site test at tap time cannot see a belt
-that does not exist yet, and tightening it only starves the router of taps.
+### Freeform: closed, and it needed two of the three named directions
 
-**So the fix has to be one of these, and each needs measuring rather than
-picking:** choose taps AFTER every belt is staked rather than during the walk;
-or reserve a tap's four neighbours during routing so no foreign path may take
-them; or re-check the finished placement and refuse the pack, letting the sweep
-try another packing -- which is honest but buys nothing over simply turning
-`game.belt_collide` on.
+Measured, paired and interleaved against a pristine `9dffc5d` checkout with its
+own `uv sync`, four arms a round, three rounds, `game.belt_collide` named in the
+`-ON` arms so a conviction shows as INVALID rather than as a refusal:
+
+    round 1     freeform clean/72     convicted cells
+    base  off        65                    --
+    base  on         52                    14
+    fix   off        63                    --
+    fix   on         62                     0
+
+**Fourteen convicted freeform cells to zero**, over `information-matrix`,
+`quantum-chip` and `super-magnetic-ring`, with the clean rate flat and area flat
+(+0.08% mean over 103 cells clean in both arms, spread -31% to +15% -- freeform's
+height sweep is stochastic and the spread is its noise, not this change's).
+
+Three things, and the ORDERING one is why the guard in the old entry failed:
+
+1. **Taps are chosen after every belt is staked.** `_commit_paths` is two loops
+   now: stake and self-link every net, then walk them again to attach sources
+   and sinks. A site test in the old one-loop order was asked a question whose
+   answer had not been decided yet -- that is the whole of why adding the
+   linkage test to `junction.site_is_clear` refused 1147 of 1619 sites and the
+   convictions survived anyway.
+2. **`_merge_frontier` withdraws a merge cell whose tap would stand beside a
+   foreign belt.** Freeform's junctions are ALL of this kind: instrumented over
+   `super-magnetic-ring`, `information-matrix` and `quantum-chip`, 100% of them
+   sit on a sibling's routed path rather than on a lane port, because `_ends`
+   already withdraws a lane start that would need a junction it cannot have. So
+   the site is decided during routing, where refusing costs one of several
+   offered cells rather than the whole pack. Withdrawal rate on the two hardest
+   URLs: 10-62% of offered frontier cells, median about 38%.
+3. **A junction guards its collider's room afterwards.** It is belt-integrated
+   and `_Canvas.add` marks nothing, so external input runs, coater spurs and the
+   power lattice all used to route straight through it; `_Canvas.guard` is the
+   set they now ask about.
+
+The third named direction -- re-check and refuse the pack -- is what taking the
+check out of `OPT_IN` already does by itself, since both strategies run
+`validate.certify` on every candidate and discard a failing one. It was the
+floor, and it is still the floor.
+
+### Spine: better, and stuck on the last two URLs
+
+Spine's junctions are its trunk taps. A trunk is a column in the east margin; a
+lane reaches its trunk along its own row, crossing the trunk columns west of it
+at `_BRIDGE_Z = 1`. That is exactly one level, and one level is inside the
+cross. **Every spine conviction measured is the same shape: a bridge at
+`(x, y +/- 1, z = 1)` against a junction at `(x, y, z = 0)`** -- a foreign
+lane's bridge passing one row from somebody's tap.
+
+`spine._order_columns` removes every one of those that the column ORDER caused.
+A bridge only ever crosses columns WEST of its own trunk, so putting the
+splitter-heavy trunks east of the lanes that cross them is free -- a permutation
+of a colouring is still a colouring, so it costs no column and no area. It is a
+linear ordering problem over the colours, brute-forced to eight columns.
+Measured with the self-check blind, eight of the ten URLs spine can build go to
+zero convictions, `information-matrix` included (2-3 a cell before).
+
+**What is left is mutual, and no ordering can help.** On
+`super-magnetic-ring`, `iron-ingot` taps rows 7/10/19 and `magnet` taps rows
+8/11/37 -- two items on ADJACENT lane rows of the same corridors, so each
+trunk's bridge rows fall a tile from the other's junction rows whichever way
+round they go. Over every permutation of the four columns the conflict count
+bottoms out at one, and one is enough.
+
+Taking the check out of `OPT_IN` today therefore costs **six spine cells**,
+`super-magnetic-ring` and `quantum-chip`, and turns four spine tests red --
+`wide-flow`, the magnetic-ring chain and `quantum-chip` refusing outright. That
+is a capability loss, not a bound to widen, so the check stays opt-in.
+
+### What would actually fix spine, and why the obvious one does not fit
+
+Height. A bridge clears a junction at `z > 1.7475`, so `z = 2`. It does not fit:
+`_trunk_x` spaces trunks two columns apart with ONE free ramp column each, a
+belt climbs half a level per tile, and the ends are the problem rather than the
+middle. Leaving the lane at `z = 0` the bridge can be at `1/2` on the ramp
+column and at most `1` on the FIRST trunk column it crosses; arriving at its own
+trunk at `z = 0` it can be at most `1` on the LAST one. So the first and last
+trunk column a bridge crosses can never be cleared at this pitch, whatever the
+middle does. Clearing them needs four free columns west of trunk 0 and three
+before the target trunk -- pitch 4 against pitch 2, which more than doubles the
+margin.
+
+Three cheaper-looking escapes were considered and are dead:
+
+* **Order the columns so the conflict disappears** -- done, and the residue is
+  mutual, above.
+* **Jog the bridge to a clear row** -- the margin's ramp columns are occupied at
+  every row by the other bridges, and a detour at `z = 0` under one of them is a
+  belt-over-belt clearance violation.
+* **Move the junction off the trunk column** -- every column in the margin is
+  crossed by bridges, so this relocates the clash rather than removing it.
+
+The two that are still open are a wider margin (measure the area against the six
+cells it buys) and giving each trunk its flow DIRECTION as a free bit, which
+moves the splitter-free row from the trunk's last tap to its first -- legal only
+where the source taps allow it, and that is the thing to check first because it
+costs nothing if it works.
 
 ## OPEN -- spine's ten-coater case is a runway problem now, not a rules one
 
