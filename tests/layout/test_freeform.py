@@ -4050,6 +4050,61 @@ class TestAPortKnowsItsOwnAltitude:
         assert not bad, "; ".join(f.message for f in bad)
 
 
+class TestTheRoutingGridAgreesWithTheCanvas:
+    """A* searches ``_make_grid``'s flat array, and it must refuse what ``free`` does.
+
+    ``_Canvas.free`` refuses a cell in a belt addon's ``belt_ban`` band and a
+    cell in a junction's ``guard``.  ``_make_grid`` flattened ``blocked``,
+    ``solid``, ``keep_out`` and ``reserved`` and nothing else, so the search saw
+    both as open ground: it returned paths straight through a Spray Coater's
+    1.8975 band, ``_commit_paths`` asked ``free`` about each cell it was about
+    to build on, found one refused, and dropped the WHOLE net into ``unlinked``.
+    The sweep reads that as "this pack could not be wired" and discards it, so
+    the refusal blamed the packer -- and nothing in the search had learned
+    anything, so the next round produced the same path.
+
+    Measured on ``plastic/max-proliferation``: every routing pass reported
+    ``5 paths, 1 unlinked``, always the same net, always refused at ``(6, 8)``
+    level 1 -- the tile a coater rides.
+    """
+
+    @staticmethod
+    def _grid_and_canvas() -> tuple[Any, _Canvas]:
+        canvas = _Canvas()
+        canvas.limit = (0, 0, 6, 4)
+        canvas.belt_ban[3, 2] = {1}
+        canvas.guard.add((5, 1, 1))
+        canvas.keep_out.add((1, 4))
+        box = (0, 0, 6, 4)
+        span = _canvas_span(canvas, box)
+        return _make_grid(canvas, box, span, {}), canvas
+
+    def test_every_cell_free_refuses_is_impassable_in_the_grid(self) -> None:
+        grid, canvas = self._grid_and_canvas()
+        disagree = [
+            (x, y, lvl)
+            for x in range(7)
+            for y in range(5)
+            for lvl in range(LEVELS)
+            if canvas.free((x, y, lvl)) != bool(grid.occ[grid.index((x, y, lvl))])
+        ]
+        assert not disagree, (
+            "the router searches a grid that disagrees with `_Canvas.free` at "
+            f"{disagree}; every such cell is a path A* will return and "
+            "`_commit_paths` will then throw the whole net away for"
+        )
+
+    def test_the_ban_and_the_guard_are_the_cells_it_used_to_miss(self) -> None:
+        """Named explicitly, so the test above cannot pass by testing nothing."""
+        grid, _ = self._grid_and_canvas()
+        assert grid.occ[grid.index((3, 2, 1))] == 0, "coater band is passable"
+        assert grid.occ[grid.index((5, 1, 1))] == 0, "junction guard is passable"
+        # And a BAND, not a floor: the levels either side of the ban stay open,
+        # because a belt beside a coater is legal and the corpus is full of them.
+        assert grid.occ[grid.index((3, 2, 0))] == 1
+        assert grid.occ[grid.index((3, 2, 2))] == 1
+
+
 class TestAJunctionIsNotBuiltBesideAForeignBelt:
     """`game.belt_collide`, at the one shape our own output kept hitting it.
 
