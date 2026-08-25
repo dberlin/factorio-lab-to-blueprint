@@ -1,5 +1,6 @@
+import pickle
 import random
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import FrozenInstanceError, replace
 from itertools import combinations, permutations
 from typing import Any, cast
@@ -1200,6 +1201,61 @@ def test_cost_context_must_match_problem_net_count() -> None:
         )
 
 
+class _HashProbe(int):
+    calls = 0
+
+    def __hash__(self) -> int:
+        type(self).calls += 1
+        return super().__hash__()
+
+
+class _CollidingInt(int):
+    def __hash__(self) -> int:
+        return 0
+
+
+def test_placement_key_caches_deep_hash_and_keeps_collision_safe_equality() -> None:
+    _HashProbe.calls = 0
+    probed = PlacementKey(
+        x=(_HashProbe(1),),
+        y=(2,),
+        dimensions=((3, 4),),
+        east_gaps=(5,),
+        north_gaps=(6,),
+    )
+
+    assert _HashProbe.calls == 1
+    expected_hash = hash(probed)
+    assert hash(probed) == expected_hash
+    assert _HashProbe.calls == 1
+
+    first = replace(probed, x=(_CollidingInt(1),))
+    second = replace(probed, x=(_CollidingInt(2),))
+    assert hash(first) == hash(second)
+    assert first != second
+    collision_map = {first: "first", second: "second"}
+    assert len(collision_map) == 2
+    assert collision_map[first] == "first"
+    assert collision_map[second] == "second"
+
+
+def test_placement_key_cache_preserves_pickle_and_ordering() -> None:
+    lower = PlacementKey(
+        x=(1,),
+        y=(2,),
+        dimensions=((3, 4),),
+        east_gaps=(5,),
+        north_gaps=(6,),
+    )
+    higher = replace(lower, x=(2,))
+
+    restored = pickle.loads(pickle.dumps(higher))
+
+    assert restored == higher
+    assert hash(restored) == hash(higher)
+    assert lower < restored
+
+
 def _archive_incumbent(
     *,
     width: int,
@@ -1250,6 +1306,93 @@ def _archive_incumbent(
             north_gaps=(0,),
         ),
     )
+
+
+def test_incremental_archive_materializes_only_when_dirty_and_requested(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+    real_build = sequence_pair_module.build_elite_archive
+
+    def counted_build(
+        candidates: Iterable[AnnealIncumbent],
+        elite_count: int,
+    ) -> tuple[sequence_pair_module.TaggedAnnealIncumbent, ...]:
+        nonlocal calls
+        calls += 1
+        return real_build(candidates, elite_count)
+
+    monkeypatch.setattr(sequence_pair_module, "build_elite_archive", counted_build)
+    builder = sequence_pair_module.EliteArchiveBuilder(elite_count=2)
+    blended = _archive_incumbent(width=8, hpwl=0.0, history=0.0)
+    narrowest = _archive_incumbent(width=4, hpwl=100.0, history=100.0)
+    builder.add(blended)
+    builder.add(narrowest)
+
+    assert calls == 0
+    materialized = builder.archive
+    assert calls == 1
+    assert builder.archive is materialized
+    assert calls == 1
+
+    builder.add(replace(blended, state=replace(blended.state, base_seed=99)))
+    assert builder.archive is materialized
+    assert calls == 1
+
+    builder.add(_archive_incumbent(width=3, hpwl=50.0, history=50.0))
+    assert builder.archive != materialized
+    assert calls == 2
+
+
+def test_anneal_stage_materializes_archive_once_after_all_moves(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+    real_build = sequence_pair_module.build_elite_archive
+
+    def counted_build(
+        candidates: Iterable[AnnealIncumbent],
+        elite_count: int,
+    ) -> tuple[sequence_pair_module.TaggedAnnealIncumbent, ...]:
+        nonlocal calls
+        calls += 1
+        return real_build(candidates, elite_count)
+
+    monkeypatch.setattr(sequence_pair_module, "build_elite_archive", counted_build)
+    problem = _tiny_placement_problem()
+
+    result = anneal_stage(
+        problem,
+        AnnealState.initial(problem.size, 17),
+        replace(AnnealConfig.test(), moves_per_stage=7),
+    )
+
+    assert result.archive
+    assert calls == 1
+
+
+def test_incremental_archive_matches_batch_for_variant_distinct_keys() -> None:
+    problem, state = _refinery_variant_problem()
+    context = PlacementCostContext(
+        net_weights=(),
+        net_pairs=(),
+        history_outline=(0, problem.outline_height),
+        history_summed_area=(0.0,) * (problem.outline_height + 1),
+    )
+    original = sequence_pair_module._score_state(problem, state, context)
+    rotated = sequence_pair_module._score_state(
+        problem,
+        apply_variant_move(problem, state, strip=0, variant=1),
+        context,
+    )
+    assert original.key.variant_ids != rotated.key.variant_ids
+
+    batch = sequence_pair_module.build_elite_archive((original, rotated), elite_count=2)
+    builder = sequence_pair_module.EliteArchiveBuilder(elite_count=2)
+    builder.add(rotated)
+    builder.add(original)
+
+    assert builder.archive == batch
 
 
 def test_elite_archive_keeps_distinct_narrowest_when_blended_winner_is_wider() -> None:
