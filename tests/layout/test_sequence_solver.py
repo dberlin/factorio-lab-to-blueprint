@@ -377,6 +377,67 @@ def test_scheduler_routes_only_legacy_blended_elites_before_archive_union_cutove
     )
 
 
+def test_equal_key_energy_keeps_legacy_first_state_for_scheduler_continuation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    selected: list[AnnealIncumbent] = []
+
+    def fake_anneal_stage(
+        problem: PlacementProblem,
+        state: AnnealState,
+        config: AnnealConfig,
+        context: PlacementCostContext | None = None,
+    ) -> AnnealStageResult:
+        del config, context
+        canonical_state = replace(state, gaps=GapProfile.zero(1))
+        legacy_state = replace(state, gaps=GapProfile((1,), (0,)))
+        decoded = decode_state(problem, canonical_state)
+        canonical_key = PlacementKey(
+            x=decoded.x,
+            y=decoded.y,
+            dimensions=problem.sizes,
+            east_gaps=canonical_state.gaps.east,
+            north_gaps=canonical_state.gaps.north,
+        )
+        legacy_first = AnnealIncumbent(
+            state=legacy_state,
+            decoded=decoded,
+            breakdown=_candidate_breakdown(problem, decoded, 0.0),
+            key=canonical_key,
+        )
+        canonical = replace(legacy_first, state=canonical_state)
+        selected.append(legacy_first)
+        return AnnealStageResult(
+            final_state=replace(state, stage_index=state.stage_index + 1),
+            incumbent=legacy_first,
+            accepted_moves=0,
+            elites=(legacy_first,),
+            archive=(
+                sequence_pair_module.TaggedAnnealIncumbent(
+                    canonical,
+                    tuple(sequence_pair_module.EliteCategory),
+                ),
+            ),
+        )
+
+    monkeypatch.setattr(sequence_solver_module, "anneal_stage", fake_anneal_stage)
+    fake = _FakeRouting()
+    solver = _solver(
+        fake,
+        heights=(40,),
+        config=SequenceSolverConfig(
+            stages=1,
+            moves_per_stage=1,
+            restarts_per_height=1,
+            global_elites=1,
+        ),
+    )
+    with pytest.raises(NoValidLayout):
+        solver.search(max_stages=1)
+
+    assert solver._heights[0].restarts[0].anneal.gaps == selected[0].state.gaps
+
+
 def test_detailed_route_still_runs_when_global_spends_the_stage_allowance() -> None:
     fake = _FakeRouting(spend_allowance=True)
     with pytest.raises(NoValidLayout):

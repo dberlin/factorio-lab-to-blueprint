@@ -1344,6 +1344,23 @@ def test_stage_result_keeps_legacy_blended_elites_separate_from_pareto_archive()
     assert result.archive == archive
 
 
+def test_incremental_archive_separates_legacy_first_entry_from_canonical_dedupe() -> None:
+    legacy_first = _archive_incumbent(width=1, hpwl=0.0, history=0.0, seed=19)
+    canonical = replace(legacy_first, state=replace(legacy_first.state, base_seed=7))
+
+    forward = sequence_pair_module.EliteArchiveBuilder(elite_count=1)
+    forward.add(legacy_first)
+    forward.add(canonical)
+    reverse = sequence_pair_module.EliteArchiveBuilder(elite_count=1)
+    reverse.add(canonical)
+    reverse.add(legacy_first)
+
+    assert forward.blended_elites == (legacy_first,)
+    assert reverse.blended_elites == (canonical,)
+    assert forward.archive == reverse.archive
+    assert forward.archive[0].incumbent == canonical
+
+
 def test_elite_archive_deduplicates_exact_keys_with_stable_category_and_seed_ties() -> None:
     later_seed = _archive_incumbent(width=1, hpwl=0.0, history=0.0, seed=19)
     earlier_seed = replace(later_seed, state=replace(later_seed.state, base_seed=7))

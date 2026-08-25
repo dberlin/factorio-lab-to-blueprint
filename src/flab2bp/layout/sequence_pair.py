@@ -561,18 +561,28 @@ class EliteArchiveBuilder:
         default_factory=dict,
         repr=False,
     )
+    _archive_blended_by_key: dict[PlacementKey, AnnealIncumbent] = field(
+        init=False,
+        default_factory=dict,
+        repr=False,
+    )
 
     def __post_init__(self) -> None:
         if type(self.elite_count) is not int or self.elite_count <= 0:
             raise ValueError("elite count must be a positive integer")
 
     def add(self, candidate: AnnealIncumbent) -> None:
-        """Retain one candidate without losing prior blended runners-up."""
-        _retain_blended_elite(self._blended_by_key, candidate, self.elite_count)
+        """Retain one candidate without losing legacy or canonical runners-up."""
+        _retain_legacy_blended_elite(self._blended_by_key, candidate, self.elite_count)
+        _retain_canonical_blended_elite(
+            self._archive_blended_by_key,
+            candidate,
+            self.elite_count,
+        )
         self.archive = build_elite_archive(
             (
                 *(entry.incumbent for entry in self.archive),
-                *self._blended_by_key.values(),
+                *self._archive_blended_by_key.values(),
                 candidate,
             ),
             self.elite_count,
@@ -1688,7 +1698,21 @@ def build_elite_archive(
     )
 
 
-def _retain_blended_elite(
+def _retain_legacy_blended_elite(
+    elites: dict[PlacementKey, AnnealIncumbent],
+    candidate: AnnealIncumbent,
+    elite_count: int,
+) -> None:
+    previous = elites.get(candidate.key)
+    if previous is not None and previous.energy <= candidate.energy:
+        return
+    elites[candidate.key] = candidate
+    if len(elites) > elite_count:
+        worst = max(elites.values(), key=_blended_archive_key)
+        del elites[worst.key]
+
+
+def _retain_canonical_blended_elite(
     elites: dict[PlacementKey, AnnealIncumbent],
     candidate: AnnealIncumbent,
     elite_count: int,
