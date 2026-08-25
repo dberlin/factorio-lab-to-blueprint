@@ -1374,40 +1374,53 @@ class TestRealUrlCandidatesAreSupplied:
     out.  The second is not this class's question -- a refusal EMITS NOTHING, so
     it cannot violate a property of an emitted blueprint -- and while it was
     bundled in, all three tests failed with the same routing message and none of
-    them said anything about coaters, sorter capacity or cycles.
+    them said anything about sorter capacity or cycles.
 
     Measured, so the split is not a convenience: freeform builds
     `super-magnetic-ring`'s `no-proliferator` candidate (1466 buildings, valid)
     and cannot build its two proliferated ones.  That is not the clock running
     out -- at a 120s budget the sweep exhausts every candidate height in 45s and
-    24s respectively and refuses -- it is 2 to 4 nets per pack stranded in A*,
+    24s respectively and refuses -- it is 2 to 4 nets per pack STRANDED IN A*,
     consistently, over every pack at every height.  It is recorded in
     docs/BACKLOG.md rather than pinned as a passing assertion here, because it
     is a defect we want gone, not a truth about the game.
 
-    SO THE SAMPLE IS WIDENED AND THEN CHECKED.  Skipping refusals is exactly the
+    WHICH CANDIDATES A URL ACTUALLY ASKED FOR, because it is not all of them.
+    ``build_candidates`` emits `no-proliferator`, `free-proliferation` and
+    `max-proliferation` for EVERY url, including one that carries no ``mps=``
+    and therefore resolves to ``proliferator_from_request(...) is None``.  Two
+    of the three URLs below are of that kind, so their proliferated candidates
+    -- and every Spray Coater in them -- are variants the SYNTHESISER offered,
+    not builds FactorioLab chose.  The two property tests below are still right
+    to cover them, because the layout stage is genuinely handed every candidate
+    the synthesiser emits and must lay out whatever it is given; but no test
+    here may present a coater on such a candidate as evidence that a real
+    proliferated URL is served.  See
+    ``test_no_corpus_url_yet_yields_a_buildable_proliferated_candidate``.
+
+    THE SAMPLE IS WIDENED AND THEN CHECKED.  Skipping refusals is exactly the
     sampling error this project has paid for repeatedly -- a count taken only
-    over survivors -- and it bites hardest here, because the one candidate that
-    survived the old URL is the UNPROLIFERATED one and it contains no coater at
-    all.  Every test below therefore asserts what its sample CONTAINS before it
-    asserts anything about it, so a sample that has lost the shape fails loudly
-    instead of passing vacuously.
+    over survivors -- so every test below asserts what its sample CONTAINS
+    before it asserts anything about it, and a sample that has lost the shape
+    fails loudly instead of passing vacuously.
     """
 
     #: Real URLs, kept as literals rather than read from ``bench.corpus`` so
     #: that editing the corpus cannot silently change what these tests cover.
     URLS = (
         # The largest spec freeform builds: 13 strips, 1466 buildings, 180
-        # sorters over four tiers.
+        # sorters over four tiers. The ONLY one of the three that asks for
+        # proliferation (`mps=proliferator-2-products` -> MK2).
         "https://factoriolab.github.io/dsp/flow?o=super-magnetic-ring*60"
         "&ibe=conveyor-belt-2"
         "&mmr=arc-smelter~assembling-machine-2~chemical-plant~matrix-lab"
         "&mps=proliferator-2-products&v=11",
-        # Carries the shapes the big one loses to a refusal: a proliferated
-        # candidate with two coaters and three distinct sorter tiers.
+        # No `mps=`: FactorioLab chose no proliferation here. Present for its
+        # SORTER TIERS -- three distinct ones in a single build -- not for the
+        # coaters its synthesised variants happen to carry.
         "https://factoriolab.github.io/dsp/list?o=plastic*60&ibe=conveyor-belt-2"
         "&mmr=arc-smelter~assembling-machine-2~chemical-plant~matrix-lab&v=11",
-        # Three coaters on one supply chain, which is the multi-coater case.
+        # No `mps=` either. Present for belt junctions and a second machine mix.
         "https://factoriolab.github.io/dsp/list?o=magnetic-coil*60"
         "&ibe=conveyor-belt-2"
         "&mmr=arc-smelter~assembling-machine-2~chemical-plant~matrix-lab&v=11",
@@ -1415,8 +1428,13 @@ class TestRealUrlCandidatesAreSupplied:
 
     @staticmethod
     @functools.cache
-    def _built() -> tuple[tuple[BuildSpec, Placement], ...]:
-        """Every candidate of every URL that freeform can build, with its result.
+    def _built() -> tuple[tuple[BuildSpec, Placement, bool], ...]:
+        """Candidates freeform can build: ``(spec, placement, url_asked_for_prolif)``.
+
+        The third element is what the URL REQUESTED, read from
+        ``proliferator_from_request``, and never what the candidate itself does.
+        A candidate can carry coaters while its URL asked for none; telling the
+        two apart is the whole point of carrying it.
 
         Cached because a refused candidate costs the full ``RETRY_BUDGET_S``
         before it raises, and three tests asking the same question three times
@@ -1424,52 +1442,81 @@ class TestRealUrlCandidatesAreSupplied:
         """
         from flab2bp.lab.data import load_vendored
         from flab2bp.lab.url import parse_url
-        from flab2bp.rates.candidates import build_candidates
+        from flab2bp.rates.candidates import build_candidates, proliferator_from_request
 
         data = load_vendored()
-        out: list[tuple[BuildSpec, Placement]] = []
+        out: list[tuple[BuildSpec, Placement, bool]] = []
         for url in TestRealUrlCandidatesAreSupplied.URLS:
-            for spec in build_candidates(data, parse_url(url), count=3).candidates:
+            request = parse_url(url)
+            asked = proliferator_from_request(request) is not None
+            for spec in build_candidates(data, request, count=3).candidates:
                 with contextlib.suppress(NoValidLayout):
-                    out.append(
-                        (spec, FreeformLayout(power=True).lay_out(spec, time_budget_s=0.5))
-                    )
+                    p = FreeformLayout(power=True).lay_out(spec, time_budget_s=0.5)
+                    out.append((spec, p, asked))
         assert out, "no real candidate laid out at all; the sample is empty"
         return tuple(out)
 
     @pytest.mark.slow
-    def test_every_candidate_supplies_its_coaters(self) -> None:
-        built = self._built()
-        coaters = [
-            sum(1 for b in p.buildings if b.item_id == catalog.SPRAY_COATER_ID)
-            for _spec, p in built
-        ]
-        # WITHOUT THIS THE TEST IS ABOUT NOTHING. `prolif.coaters_are_supplied`
-        # yields no finding for a placement with no coater in it, so a sample of
-        # unproliferated candidates passes it however broken the coater path is.
-        assert sum(coaters) >= 4, f"sample has too few coaters: {coaters}"
-        assert max(coaters) >= 2, f"no multi-coater supply chain in {coaters}"
-        for spec, p in built:
-            bad = _full_report(p, spec, power=True).by_check("prolif.coaters_are_supplied")
-            assert not bad, f"{spec.label}: " + "; ".join(f.message for f in bad)
+    def test_no_corpus_url_yet_yields_a_buildable_proliferated_candidate(self) -> None:
+        """A GUARD ON A COVERAGE GAP, and the honest remains of a test that lied.
+
+        `test_every_candidate_supplies_its_coaters` used to assert that every
+        candidate of a real URL had its coaters supplied.  It could not have
+        failed on a coater bug, for two reasons stacked on each other.
+
+        First, the only candidate of its URL that freeform ever built is the
+        UNPROLIFERATED one, and that placement contains zero Spray Coaters;
+        `prolif.coaters_are_supplied` yields no finding for a placement with no
+        coater in it, so the assertion ran on an empty set every time.
+
+        Second -- and this is why widening the sample did not rescue it -- every
+        coater a wider sample can offer comes from a `free-proliferation` or
+        `max-proliferation` candidate of a URL carrying NO `mps=`.  Measured on
+        the whole corpus: `proliferator_from_request` returns a tier for
+        **1 of 12** URLs, `super-magnetic-ring`, and its two proliferated
+        candidates are precisely the ones freeform refuses.  Passing a coater
+        assertion on a candidate the URL never requested would be asserting
+        against a build FactorioLab did not choose, which this project may not
+        do -- so the check is NOT pinned, and this records why with the numbers.
+
+        This test fails the moment the gap closes, which is the point: restore a
+        real `prolif.coaters_are_supplied` assertion on the newly buildable
+        candidate and delete this guard.
+        """
+        asked = [(spec, p) for spec, p, was_asked in self._built() if was_asked]
+        assert asked, "no candidate of a proliferation-requesting URL built at all"
+        coaters = sum(
+            1
+            for _spec, p in asked
+            for b in p.buildings
+            if b.item_id == catalog.SPRAY_COATER_ID
+        )
+        assert coaters == 0, (
+            "a real proliferated build is available now -- restore "
+            "test_every_candidate_supplies_its_coaters on it, assert "
+            "prolif.coaters_are_supplied there, and delete this guard"
+        )
 
     @pytest.mark.slow
     def test_every_candidate_respects_sorter_capacity(self) -> None:
         built = self._built()
         tiers = {
             b.item_id
-            for _spec, p in built
+            for _spec, p, _asked in built
             for b in p.buildings
             if catalog.is_sorter(b.item_id)
         }
         n_sorters = sum(
-            1 for _spec, p in built for b in p.buildings if catalog.is_sorter(b.item_id)
+            1
+            for _spec, p, _asked in built
+            for b in p.buildings
+            if catalog.is_sorter(b.item_id)
         )
         # A sample that never picks a tier above Mk.I cannot show tier selection
         # wrong, which is the bug this class exists to catch.
         assert len(tiers) >= 3, f"sample exercises only {len(tiers)} sorter tier(s)"
         assert n_sorters >= 100, f"sample has only {n_sorters} sorters"
-        for spec, p in built:
+        for spec, p, _asked in built:
             bad = _full_report(p, spec, power=True).by_check("flow.sorter_capacity")
             assert not bad, f"{spec.label}: " + "; ".join(f.message for f in bad)
 
@@ -1486,14 +1533,14 @@ class TestRealUrlCandidatesAreSupplied:
         built = self._built()
         splitters = sum(
             1
-            for _spec, p in built
+            for _spec, p, _asked in built
             for b in p.buildings
             if b.item_id == catalog.SPLITTER_ID
         )
         # A cycle needs somewhere to close. A sample with no junction in it is a
         # sample of straight runs, which are acyclic by construction.
         assert splitters >= 1, "sample contains no junction, so no cycle is possible"
-        for spec, p in built:
+        for spec, p, _asked in built:
             for i, b in enumerate(p.buildings):
                 if not catalog.is_belt(b.item_id):
                     continue

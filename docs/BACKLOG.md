@@ -50,10 +50,55 @@ truth about the game, so it lives here rather than as a passing assertion.
 bug even before the routing regression. The only candidate of that URL freeform
 ever built is the UNPROLIFERATED one, which contains **zero Spray Coaters**, and
 `prolif.coaters_are_supplied` yields no finding for a placement with no coater
-in it. Measured by mutation: shrinking the widened sample back to that one URL
-now fails on `sample has too few coaters: [0]`. Every test in that class carries
-a containment assertion for its own shape now -- coaters, sorter tiers,
-junctions -- so the vacuous case fails loudly instead of passing.
+in it. So the assertion ran on an empty set on every green run it ever had.
+
+## OPEN -- `prolif.coaters_are_supplied` cannot be pinned on a real spec today, and widening the sample does not fix it
+
+The first attempt at the above was to widen the sample: add two more real URLs
+so that some candidate in it would carry coaters. **That is wrong and the
+numbers say why.** `build_candidates` emits `no-proliferator`,
+`free-proliferation` and `max-proliferation` for EVERY url, including one that
+carries no `mps=` at all. Measured with `proliferator_from_request(parse_url(...))`
+over the whole corpus:
+
+    super-magnetic-ring   mps=proliferator-2-products   -> ProliferatorTier.MK2
+    the other 11 URLs     no mps=                       -> None
+
+    1 of 12 corpus URLs actually requests proliferation
+
+So every coater a widened sample can offer comes from a proliferated candidate
+of a URL where **FactorioLab chose no proliferation at all**. Asserting on one
+would be asserting against a build FactorioLab did not choose -- the same class
+of mutation as spraying recipes it left alone -- and this project may not do
+that. Demonstrated by mutation: forcing the "did this URL ask?" flag to `True`
+turns up **6 coaters** in the sample, all of them on candidates no URL
+requested.
+
+And the one URL that DOES request proliferation is `super-magnetic-ring`, whose
+two proliferated candidates are exactly the ones freeform refuses (see the entry
+above). **So there is currently no real specification anywhere in the corpus
+that both requests proliferation and yields a build freeform can serve**, and
+`prolif.coaters_are_supplied` therefore has no honest pin on a real spec. It is
+still covered on the hand-built fixtures by
+`TestProliferatorIsActuallySupplied`, which is smaller than we would like and is
+why the real-URL class exists in the first place.
+
+`test_no_corpus_url_yet_yields_a_buildable_proliferated_candidate` records the
+gap as an assertion that FAILS the moment it closes, with instructions in the
+message to restore the real check and delete the guard. Two ways to close it:
+
+1. fix the A* stranding above, so `super-magnetic-ring`'s proliferated
+   candidates build; or
+2. add a corpus URL that carries `mps=` and is small enough to route today.
+
+**Whether `build_candidates` should offer proliferated variants for a URL that
+asked for none is a separate, open question, and it is the user's call.** It was
+NOT changed here. It is only recorded, because it is what makes a widened
+sample look like coverage when it is not.
+
+The other two tests in the class carry a containment assertion for their own
+shape -- sorter tiers, junctions -- so the vacuous case fails loudly instead of
+passing. Both were mutation-checked.
 
 ## OPEN -- spine refuses a Ray Receiver and an Energy Exchanger, and the slot table is why
 
