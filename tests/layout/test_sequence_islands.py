@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import time
 from concurrent.futures import Future
 from dataclasses import replace
 from typing import Any
@@ -11,6 +10,7 @@ import flab2bp.layout.sequence_islands as islands_module
 from flab2bp.layout.base import NoValidLayout, PlacedBuilding, Placement
 from flab2bp.layout.sequence_islands import (
     _merge_sequence_island_outcomes,
+    _sequence_island_deadlines,
     _sequence_island_seeds,
     _SequenceIslandOutcome,
 )
@@ -161,6 +161,14 @@ class _ImmediateExecutor:
         self.shutdown_calls.append((wait, cancel_futures))
 
 
+class _PendingExecutor(_ImmediateExecutor):
+    def submit(self, fn: Any, request: Any) -> Future[_SequenceIslandOutcome]:
+        del fn
+        self.requests.append(request)
+        future: Future[_SequenceIslandOutcome] = Future()
+        return future
+
+
 @pytest.mark.parametrize("raised", [RuntimeError("worker exploded"), KeyboardInterrupt()])
 def test_worker_failure_or_interrupt_terminates_and_propagates(
     monkeypatch: pytest.MonkeyPatch,
@@ -198,20 +206,45 @@ def test_parent_deadline_terminates_active_workers_and_refuses_without_an_exact(
     assert not executor.killed
 
 
-def test_parent_absolute_deadline_is_shared_by_every_request(
+def test_child_soft_deadline_leaves_parent_time_to_collect_result(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _ImmediateExecutor.instances.clear()
-    _ImmediateExecutor.raised = None
-    monkeypatch.setattr(islands_module, "ProcessPoolExecutor", _ImmediateExecutor)
-    before = time.monotonic()
+    _PendingExecutor.instances.clear()
+    monkeypatch.setattr(islands_module, "ProcessPoolExecutor", _PendingExecutor)
+    ticks = iter((100.0, 114.0))
+    monkeypatch.setattr(
+        "flab2bp.layout.sequence_islands.time.monotonic",
+        lambda: next(ticks),
+    )
+    observed_waits: list[float | None] = []
 
-    placement = SequencePairLayout(islands=3).lay_out(two_stage_spec(), time_budget_s=2.0)
+    def complete_at_soft_deadline(
+        futures: list[Future[_SequenceIslandOutcome]],
+        *,
+        timeout: float | None,
+    ) -> tuple[set[Future[_SequenceIslandOutcome]], set[Future[_SequenceIslandOutcome]]]:
+        observed_waits.append(timeout)
+        executor = _PendingExecutor.instances[-1]
+        for future, request in zip(futures, executor.requests, strict=True):
+            future.set_result(
+                _SequenceIslandOutcome.completed(
+                    request.island_id,
+                    request.seed,
+                    _placement(area=20 + request.island_id, belt_tiles=4),
+                )
+            )
+        return set(futures), set()
 
-    executor = _ImmediateExecutor.instances[-1]
-    deadlines = {request.absolute_deadline for request in executor.requests}
-    assert len(deadlines) == 1
-    assert before + 14.0 <= deadlines.pop() <= time.monotonic() + 15.0
+    monkeypatch.setattr(islands_module, "wait", complete_at_soft_deadline)
+
+    placement = SequencePairLayout(islands=3).lay_out(
+        two_stage_spec(),
+        time_budget_s=2.0,
+    )
+
+    executor = _PendingExecutor.instances[-1]
+    assert {request.soft_deadline for request in executor.requests} == {114.0}
+    assert observed_waits == [1.0]
     assert executor.kwargs["mp_context"].get_start_method() == "spawn"
     assert executor.kwargs["max_tasks_per_child"] == 1
     assert placement.stats["islands_requested"] == 3.0
@@ -219,7 +252,20 @@ def test_parent_absolute_deadline_is_shared_by_every_request(
     assert placement.stats["islands_refused"] == 0.0
     assert placement.stats["winner_island_id"] == 0
     assert placement.stats["winner_island_seed"] == SequenceSolverConfig().seed
+    assert placement.stats["island_result_reserve_s"] == 1.0
     assert executor.shutdown_calls[-1] == (True, False)
+
+
+@pytest.mark.parametrize("time_budget_s", [0.0, 0.01])
+def test_short_budget_deadlines_keep_the_retry_ceiling(time_budget_s: float) -> None:
+    ceiling, soft_deadline, hard_deadline = _sequence_island_deadlines(
+        time_budget_s,
+        started=100.0,
+    )
+
+    assert ceiling == 15.0
+    assert soft_deadline == 114.0
+    assert hard_deadline == 115.0
 
 
 def test_two_spawned_islands_match_the_same_islands_run_serially() -> None:
@@ -245,4 +291,5 @@ def test_two_spawned_islands_match_the_same_islands_run_serially() -> None:
     assert parallel.area == expected.area
     assert parallel.stats["belt_tiles"] == expected.stats["belt_tiles"]
     assert parallel.stats["winner_island_id"] == expected_id
+    assert parallel.stats["islands_completed"] >= 1.0
     assert parallel.stats["winner_island_seed"] == seeds[expected_id]

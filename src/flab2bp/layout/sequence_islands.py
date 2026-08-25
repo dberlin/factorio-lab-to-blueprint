@@ -27,7 +27,7 @@ class _SequenceIslandRequest:
 
     spec: BuildSpec
     time_budget_s: float
-    absolute_deadline: float
+    soft_deadline: float
     power: bool
     belt_vertical_construction: bool
     strip_len: int
@@ -92,6 +92,18 @@ def _sequence_island_seeds(base_seed: int, islands: int) -> tuple[int, ...]:
     )
 
 
+def _sequence_island_deadlines(
+    time_budget_s: float,
+    *,
+    started: float,
+) -> tuple[float, float, float]:
+    """Return the solve ceiling, child soft deadline, and parent hard deadline."""
+    ceiling = max(time_budget_s, RETRY_BUDGET_S)
+    hard_deadline = started + ceiling
+    result_reserve_s = min(1.0, ceiling / 10.0)
+    return ceiling, hard_deadline - result_reserve_s, hard_deadline
+
+
 def _run_sequence_island(request: _SequenceIslandRequest) -> _SequenceIslandOutcome:
     """Reconstruct and run one production solver entirely inside a child."""
     config = replace(request.config, seed=request.seed)
@@ -103,7 +115,7 @@ def _run_sequence_island(request: _SequenceIslandRequest) -> _SequenceIslandOutc
             belt_vertical_construction=request.belt_vertical_construction,
             strip_len=request.strip_len,
             config=config,
-            absolute_deadline=request.absolute_deadline,
+            absolute_deadline=request.soft_deadline,
         )
         result = run.solver.search()
         placement = _with_observational_stats(result, run, request.power, config)
@@ -187,6 +199,7 @@ def _island_stats(
     outcomes: Sequence[_SequenceIslandOutcome],
     *,
     requested: int,
+    result_reserve_s: float,
 ) -> Placement:
     placement = cast(Placement, winner.placement)
     stats: dict[str, object] = dict(placement.stats)
@@ -195,6 +208,7 @@ def _island_stats(
             "islands_requested": float(requested),
             "islands_completed": float(len(outcomes)),
             "islands_refused": float(sum(outcome.status == "refused" for outcome in outcomes)),
+            "island_result_reserve_s": result_reserve_s,
             "winner_island_id": winner.island_id,
             "winner_island_seed": winner.seed,
         }
@@ -213,14 +227,16 @@ def run_sequence_islands(
     islands: int,
 ) -> Placement:
     """Run complete production solves in fresh spawned children and merge them."""
-    ceiling = max(time_budget_s, RETRY_BUDGET_S)
-    absolute_deadline = time.monotonic() + ceiling
+    ceiling, soft_deadline, hard_deadline = _sequence_island_deadlines(
+        time_budget_s,
+        started=time.monotonic(),
+    )
     seeds = _sequence_island_seeds(config.seed, islands)
     requests = tuple(
         _SequenceIslandRequest(
             spec=spec,
             time_budget_s=time_budget_s,
-            absolute_deadline=absolute_deadline,
+            soft_deadline=soft_deadline,
             power=power,
             belt_vertical_construction=belt_vertical_construction,
             strip_len=strip_len,
@@ -245,7 +261,7 @@ def run_sequence_islands(
             future_ids[future] = request.island_id
         done, not_done = wait(
             futures,
-            timeout=max(0.0, absolute_deadline - time.monotonic()),
+            timeout=max(0.0, hard_deadline - time.monotonic()),
         )
         outcomes = tuple(future.result() for future in sorted(done, key=future_ids.__getitem__))
         if not_done:
@@ -278,4 +294,9 @@ def run_sequence_islands(
         spec_label=spec.label,
         budget_s=ceiling,
     )
-    return _island_stats(winner, outcomes, requested=islands)
+    return _island_stats(
+        winner,
+        outcomes,
+        requested=islands,
+        result_reserve_s=hard_deadline - soft_deadline,
+    )
