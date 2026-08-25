@@ -457,10 +457,16 @@ def test_attachment_reaches_a_chemical_plants_inner_row() -> None:
 
 
 def test_attachable_columns_are_the_ones_the_table_has() -> None:
-    """Four of a Chemical Plant's nine columns, three of a Matrix Lab's five."""
+    """Four of a Chemical Plant's seven columns, three of a Matrix Lab's five.
+
+    The four are centre-1 .. centre+2, and they still are: when the plant's
+    footprint went from 9 wide to 7 its centre column moved from 4 to 3 and
+    these moved with it, which is the check that the poses are read off the
+    centre and not off the corner.
+    """
     plant = _at(2309)
-    assert sorted(S.attachable_columns(plant, -1)) == [3, 4, 5, 6]
-    assert sorted(S.attachable_columns(plant, 5)) == [3, 4, 5, 6]
+    assert sorted(S.attachable_columns(plant, -1)) == [2, 3, 4, 5]
+    assert sorted(S.attachable_columns(plant, 5)) == [2, 3, 4, 5]
     lab = _at(2901)
     assert sorted(S.attachable_columns(lab, -1)) == [1, 2, 3]
 

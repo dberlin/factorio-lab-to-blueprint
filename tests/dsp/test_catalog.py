@@ -8,15 +8,26 @@ produce an overlapping blueprint, so any overlap it reports is a wrong table.
 from __future__ import annotations
 
 import collections
+import json
+import math
 import pathlib
 from fractions import Fraction
 
 import pytest
 
-from flab2bp.dsp import catalog
+from flab2bp.dsp import catalog, colliders
 from flab2bp.dsp.codec import decode
 
 FIXTURES = pathlib.Path(__file__).parent.parent / "fixtures"
+
+
+def _blueprint_box_size(item_id: int) -> tuple[float, float]:
+    """The field the footprint deliberately no longer reads, for contrast."""
+    data = pathlib.Path(catalog.__file__).parent / "data" / "buildings.json"
+    for row in json.loads(data.read_text()):
+        if row.get("itemId") == item_id:
+            return (float(row["blueprintBoxSize"][0]), float(row["blueprintBoxSize"][1]))
+    raise AssertionError(f"no row for item {item_id}")
 
 
 def test_table_loads() -> None:
@@ -26,27 +37,173 @@ def test_table_loads() -> None:
 
 
 @pytest.mark.parametrize(
-    ("box", "expected"),
+    ("extent", "expected"),
     [
-        (3.82, 3),  # Assembling Machine -- half-extent 1.91 covers 3 tile centres
-        (5.6, 5),  # Matrix Lab
+        # A tile is GRID_ARC = 1.2566 world units, so the tile centres a
+        # half-extent `e` reaches are those with |k| * GRID_ARC < e.
+        (3.82, 3),  # Assembling Machine -- 1.91 reaches 1.52 tiles
+        (5.6, 5),  # Matrix Lab -- 2.80 reaches 2.23
         (2.9, 3),  # Arc Smelter
-        (8.2, 9),  # Chemical Plant, corroborated by landBBox == 9.0
-        (7.2, 7),  # Oil Refinery, long axis
+        (8.6, 7),  # Chemical Plant -- 4.30 reaches 3.42, so seven, not nine
+        (7.8, 7),  # Oil Refinery, long axis -- 3.90 reaches 3.10
         (0.6, 1),  # Tesla Tower
-        (4.5, 5),  # Fractionator / Storage Tank
-        (10.0, 9),  # exactly-integer half-extent covers no further centre
+        (4.5, 3),  # Fractionator / Storage Tank -- 2.25 reaches 1.79
+        (11.7, 9),  # Energy Exchanger -- 5.85 reaches 4.66
+        # An extent landing exactly on a tile centre does not cover it.
+        (2 * colliders.GRID_ARC, 1),
+        (4 * colliders.GRID_ARC, 3),
     ],
 )
-def test_derive_footprint(box: float, expected: int) -> None:
-    assert catalog.derive_footprint(box) == expected
+def test_derive_footprint(extent: float, expected: int) -> None:
+    assert catalog.derive_footprint(extent) == expected
+
+
+def test_the_footprint_rule_divides_by_the_tile_arc_not_by_one() -> None:
+    """The regression this file exists to hold: a tile is not one world unit.
+
+    The old rule was ``2 * ceil(extent / 2) - 1`` -- a world-unit half-extent
+    compared against tile centres one unit apart, when they are ``GRID_ARC``
+    apart.  It over-counted whenever the two divisors straddled a boundary,
+    which is exactly where the Chemical Plant sits.  Breaking the fix by putting
+    the 1.0 back turns each of these into the second number.
+    """
+    for extent, right, wrong_with_a_unit_tile in (
+        (8.6, 7, 9),  # Chemical Plant
+        (4.5, 3, 5),  # Fractionator, Storage Tank
+        (11.7, 9, 11),  # Energy Exchanger
+        (2.38, 1, 3),  # Splitter
+        (6.9, 5, 7),  # Satellite Substation
+    ):
+        assert catalog.derive_footprint(extent) == right
+        assert 2 * math.ceil(extent / 2.0 - 1e-9) - 1 == wrong_with_a_unit_tile
+
+
+def test_the_footprint_rule_reads_colliders_not_blueprint_box_size() -> None:
+    """The other half of the fix, and the corpus refutes the alternative.
+
+    ``blueprintBoxSize`` is the game's own ``buildCollider.ext * 2`` for the
+    LAST Build box, which for a prefab with three or more boxes is the box
+    ``buildColliders`` excludes.  Dividing THAT by ``GRID_ARC`` makes an Oil
+    Refinery 3x5 -- and ``factory-quick-start-step-3-red-cube`` puts sorter
+    endpoints three tiles from a refinery's centre, which a 3x5 does not reach.
+    """
+    refinery = catalog.building(2308)
+    box = _blueprint_box_size(refinery.item_id)
+    assert box == pytest.approx((3.51, 7.2), abs=0.01)
+    assert catalog.derive_footprint(box[1]) == 5, "the field itself would say 5"
+    assert catalog.footprint(2308) == (3, 7), "the colliders say 7, and so does the corpus"
+    # And the collider really is the longer of the two.
+    assert colliders.own_centre_extent(refinery.model_index, 0.0)[1] == pytest.approx(7.8)
+
+
+def test_the_corpus_puts_sorter_ends_three_tiles_from_an_oil_refinery_centre() -> None:
+    """The measurement that refutes ``blueprintBoxSize``, on a blueprint the game wrote.
+
+    ``factory-quick-start-step-3-red-cube`` holds twelve Oil Refineries on a
+    clean lattice -- x in 5, 9, ... 25 and y in 2 or 14 -- and all eighteen
+    machine-side sorter endpoints in it land **three tiles** from a refinery's
+    centre along the building's own long axis.  A footprint of 3x5
+    reaches two, so it would put all sixteen outside the machine they serve, and
+    the game does not emit a sorter that misses its target.
+
+    That fixture is not in ``test_local_offset.GEOMETRY_CORPUS`` -- it has 21
+    off-grid entities and 9 collapsed cells at its edges, which disqualifies it
+    from whole-blueprint geometry -- so this asks the narrower question the
+    refineries themselves can answer, and it is the only evidence in the corpus
+    that separates ``blueprintBoxSize`` (7.20, and so 5 tiles) from the
+    ``buildColliders`` figure (7.80, and so 7).
+    """
+    bp = decode(
+        (FIXTURES / "factory-quick-start-step-3-red-cube.txt").read_text(encoding="utf-8").strip()
+    )
+    belts = {
+        (round(b.x), round(b.y), round(b.z))
+        for b in bp.buildings
+        if catalog.is_belt(b.item_id)
+    }
+    refineries = [
+        (round(b.x), round(b.y), round(b.z), b.yaw)
+        for b in bp.buildings
+        if b.item_id == 2308
+    ]
+    machines = [
+        (round(b.x), round(b.y), round(b.z))
+        for b in bp.buildings
+        if not catalog.is_belt(b.item_id) and not catalog.is_belt_integrated(b.item_id)
+    ]
+    assert len(refineries) == 12, len(refineries)
+
+    local: list[tuple[int, int]] = []
+    for b in bp.buildings:
+        if not catalog.is_sorter(b.item_id):
+            continue
+        for px, py in ((b.x, b.y), (b.x2, b.y2)):
+            cell = (round(px), round(py), round(b.z))
+            if cell in belts:
+                continue  # the belt-side end says nothing about the machine
+            # Nearest machine by Manhattan distance; refineries sit four tiles
+            # apart, so a Chebyshev tie would attribute an endpoint to the wrong
+            # one of a neighbouring pair.
+            near = min(machines, key=lambda m: abs(cell[0] - m[0]) + abs(cell[1] - m[1]))
+            match = [r for r in refineries if (r[0], r[1], r[2]) == near]
+            if not match:
+                continue
+            rx, ry, _rz, yaw = match[0]
+            dx, dy = cell[0] - rx, cell[1] - ry
+            for _ in range(int(round(yaw / 90.0)) % 4):
+                dx, dy = dy, -dx
+            local.append((dx, dy))
+
+    assert len(local) == 18, local
+    assert all(dy == -3 for _, dy in local), local
+    assert max(abs(dy) for _, dy in local) == 3, local
+    assert max(abs(dx) for dx, _ in local) <= 1, local
+    w, h = catalog.footprint(2308)
+    assert h // 2 >= 3, f"a {w}x{h} refinery cannot reach its own sorter endpoints"
+
+
+def test_the_former_overrides_are_now_derived() -> None:
+    """``_FOOTPRINT_OVERRIDES`` is gone because the corrected rule produces it.
+
+    Both entries were corrections to the unit error, not to the data:
+
+    * sorters -- a degenerate 0.52 x 0.23 collider, one tile per end;
+    * Energy Exchanger -- 9x9, the value ``temple-of-effectiveness`` bounds it
+      at, where the old rule derived 11x11 and put 209 cells on top of each
+      other in a blueprint the game itself wrote.
+    """
+    assert not hasattr(catalog, "_FOOTPRINT_OVERRIDES")
+    for sorter in (2011, 2012, 2013, 2014):
+        assert catalog.footprint(sorter) == (1, 1)
+    assert catalog.footprint(2209) == (9, 9)
+
+
+def test_every_footprint_contains_every_slot_pose() -> None:
+    """Occupancy and spacing are different questions; the poses arbitrate the first.
+
+    A sorter attaches at a ``PrefabDesc.slotPoses`` position, and the layout
+    looks for that pose on one of the building's own tiles.  A footprint that
+    does not reach its own furthest pose would silently lose wiring options, so
+    shrinking one is only safe while this holds.  It holds with room to spare
+    nowhere: for the Assembling Machine, Matrix Lab, Oil Refinery and Miniature
+    Particle Collider the poses land exactly on the edge tile.
+    """
+    for b in catalog.all_buildings():
+        if not b.slot_poses:
+            continue
+        need_x = max(abs(p.dx) / colliders.GRID_ARC for p in b.slot_poses)
+        need_y = max(abs(p.dy) / colliders.GRID_ARC for p in b.slot_poses)
+        assert round(need_x) <= b.width // 2, f"{b.name}: pose at {need_x:.2f} tiles"
+        assert round(need_y) <= b.height // 2, f"{b.name}: pose at {need_y:.2f} tiles"
 
 
 def test_every_derived_footprint_is_odd() -> None:
     """Even footprints are geometrically impossible for integer-centred buildings.
 
-    Sorters are the one exception the table overrides by hand, and they are odd
-    anyway, so this holds across the board.
+    ``2 * ceil(e / GRID_ARC) - 1`` cannot return an even number, which is what
+    keeps ``tile_to_local_offset``'s half-tile branch unreachable -- and the
+    corpus insists on that: 3,038 of 3,038 buildings are integer-centred, so a
+    building on a half-tile is geometry the game never writes.
     """
     for b in catalog.all_buildings():
         assert b.width % 2 == 1, f"{b.name} width {b.width} is even"
@@ -62,12 +219,17 @@ def test_every_derived_footprint_is_odd() -> None:
         (2305, (3, 3)),  # Assembling Machine Mk.III
         (2901, (5, 5)),  # Matrix Lab -- was wrongly 6x6
         (2902, (5, 5)),  # Self-evolution Lab
-        (2309, (9, 5)),  # Chemical Plant -- was wrongly 8x5, and got BIGGER
+        (2309, (7, 5)),  # Chemical Plant -- collider 8.60 reaches 3.42 tiles
+        (2317, (7, 5)),  # Quantum Chemical Plant, same prefab geometry
         (2308, (3, 7)),  # Oil Refinery
-        (2314, (5, 5)),  # Fractionator
+        (2314, (3, 3)),  # Fractionator -- a 4.50 cube reaches 1.79 tiles
+        (2106, (3, 3)),  # Storage Tank, likewise
+        (2310, (9, 5)),  # Miniature Particle Collider, unchanged by the fix
         (2201, (1, 1)),  # Tesla Tower
         (2013, (1, 1)),  # Sorter Mk.III
         (2002, (1, 1)),  # Conveyor Belt Mk.II
+        (2020, (1, 1)),  # Splitter -- `junction.make_splitter` forced this by hand
+        (2313, (1, 3)),  # Spray Coater -- its tested box is 3.8, not the 2.0 claimed
     ],
 )
 def test_known_footprints(item_id: int, expected: tuple[int, int]) -> None:

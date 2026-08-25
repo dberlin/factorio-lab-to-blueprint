@@ -614,8 +614,11 @@ def test_game_inserter_paste_allows_a_purely_radial_stretch() -> None:
     this test called that same edge-row case "1.1 tiles" and put it in the band
     by treating tiles as world units.
     """
+    # The plant is anchored at x=1 so its 7x5 footprint spans columns 1..7 and
+    # its centre lands on (4, 2) -- the geometry this pair of tests measures.
+    # It used to be anchored at x=0 because the footprint used to read 9 wide.
     p = place(
-        machine(0, 0, item_id=CHEMICAL_PLANT),
+        machine(1, 0, item_id=CHEMICAL_PLANT),
         belt(4, -1),
         sorter(4, -1, 4, 2, inp=1, out=0),
     )
@@ -646,7 +649,7 @@ def test_game_inserter_paste_stops_a_radial_stretch_at_1_6() -> None:
     """
     r = validate(
         place(
-            machine(0, 0, item_id=CHEMICAL_PLANT),
+            machine(1, 0, item_id=CHEMICAL_PLANT),  # centre (4, 2); see the pair above
             belt(4, -2),
             sorter(4, -2, 4, 0, inp=1, out=0),
         )
@@ -816,14 +819,15 @@ def test_power_coverage_clean_when_machine_is_inside_radius() -> None:
 
 def test_power_coverage_uses_every_tile_not_just_the_centre() -> None:
     # Needs a building big enough that centre and corner genuinely disagree, so
-    # a Chemical Plant (9x5) rather than a 3x3 assembler -- at 3x3 the two
+    # a Chemical Plant (7x5) rather than a 3x3 assembler -- at 3x3 the two
     # readings barely differ and the test would pass without discriminating.
     #
-    # Tower centre (0.5, 0.5), radius 10.5.  Plant at (2,2) spans x 2..10,
-    # y 2..6, so its centre is (6.5, 4.5) at distance 7.21 -- comfortably
-    # inside -- while its far tile centre (10.5, 6.5) is 11.66 away, outside.
-    # A centre-only check would pass this and leave the far end dark.
-    r = validate(place(tower(0, 0), machine(2, 2, item_id=CHEM_PLANT)))
+    # Tower centre (0.5, 0.5), radius 10.5.  Plant at (4,4) spans x 4..10,
+    # y 4..8, so its centre is (7.5, 6.5) at distance 9.24 -- inside -- while
+    # its far tile centre (10.5, 8.5) is 12.81 away, outside.  A centre-only
+    # check would pass this and leave the far end dark.  The anchor moved from
+    # (2,2) when the plant stopped reading two tiles wider than its collider.
+    r = validate(place(tower(0, 0), machine(4, 4, item_id=CHEM_PLANT)))
     assert fired(r, "power.coverage")
 
 
@@ -834,7 +838,7 @@ def test_power_coverage_centre_only_would_not_catch_that_case() -> None:
     radius, the test above would still pass -- but for the wrong reason, and it
     would no longer be testing what it claims to.
     """
-    plant = machine(2, 2, item_id=CHEM_PLANT)
+    plant = machine(4, 4, item_id=CHEM_PLANT)
     cx = Fraction(2 * plant.x + plant.width, 2)
     cy = Fraction(2 * plant.y + plant.height, 2)
     tx = ty = Fraction(1, 2)

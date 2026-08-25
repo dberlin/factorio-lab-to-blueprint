@@ -355,9 +355,9 @@ class TestAdapter:
         """Footprints are derived, always odd, and genuinely varied.
 
         Smelters and assemblers are the *same* 3x3 under the derived rule, so
-        heterogeneity is proven by the larger plants instead -- a 9x5 chemical
-        plant is five times the area of a 3x3 smelter, and the 3x7 refinery is
-        the case where width and height differ.
+        heterogeneity is proven by the larger plants instead -- a 7x5 chemical
+        plant is nearly four times the area of a 3x3 smelter, and the 3x7
+        refinery is the case where width and height differ.
         """
         smelter = machine_group_footprint(group("x", "arc-smelter", 1))
         assembler = machine_group_footprint(group("x", "assembling-machine-2", 1))
@@ -367,18 +367,18 @@ class TestAdapter:
 
         assert smelter == (3, 3)
         assert assembler == (3, 3)
-        assert chemical == (9, 5)
+        assert chemical == (7, 5)
         assert lab == (5, 5)
         assert refinery == (3, 7)
 
-        # Genuinely heterogeneous: at least three distinct sizes, spanning a 5x
-        # area range, including a non-square one.
+        # Genuinely heterogeneous: at least three distinct sizes, spanning a
+        # near-4x area range, including a non-square one.
         assert len({smelter, chemical, lab, refinery}) >= 3
-        assert chemical[0] * chemical[1] >= 5 * smelter[0] * smelter[1]
+        assert chemical[0] * chemical[1] >= 3 * smelter[0] * smelter[1]
         assert refinery[0] != refinery[1]
 
     def test_every_derived_footprint_dimension_is_odd(self) -> None:
-        """The derived rule is ``2 * ceil(box / 2) - 1``, so never even.
+        """The derived rule is ``2 * ceil(e / GRID_ARC) - 1``, so never even.
 
         An even-width building centred on an integer would straddle tile
         boundaries, which belts (fixed 1x1 on integer centres) prove cannot
