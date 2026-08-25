@@ -617,17 +617,42 @@ Instrumented over the whole run, what blocks a spur tile:
     449  Sorters, Splitters, Spray Coaters  (below)
 
 `_spur_clear` refuses to fly over anything that is not a belt. A belt over a
-belt is `BELT_CROSSING_CLEARANCE` and is established; a belt over a MACHINE is
-the "may a belt cross a building, and at what height" question this file already
-records as unextracted, and an elevated Splitter diagonally over an Assembling
-Machine is one of the two open collider questions. So the elevated plane is
-mostly unusable, and 854 of the blocks are machines.
+belt is `BELT_CROSSING_CLEARANCE` and is established; a belt over a MACHINE was
+the "may a belt cross a building, and at what height" question this file
+recorded as unextracted.
 
-**Loosening it is exactly the wrong move.** It would turn a refusal into a
-blueprint that may be INVALID, which is the worst outcome available, in exchange
-for one candidate on one spec whose sibling already builds smaller. The way in
-is to read the crossing rule out of the game, not to infer it from the fact that
-a build would be denser if it were permissive.
+**THE RULE IS NOW READ, and it is permissive.** `game.belt_crossing` in
+`layout/validate.py` and `colliders.belt_crossing_height` carry it. A belt
+preview is not tested with its box at all: `CheckBuildConditions` line 145761
+probes it with a 0.23 sphere centred 0.2 above the node, and line 145872 excuses
+a machine against a belt but NOT a belt against a machine. So a belt may cross a
+machine, and the price is height:
+
+    Sorter                 z > 0.7575    (excused anyway -- see below)
+    Splitter               z > 1.7475
+    Spray Coater           z > 1.8975    (excused anyway)
+    Arc Smelter            z > 2.7975
+    Assembling Machine     z > 3.5325
+    Matrix Lab             z > 2.9475
+    Chemical Plant         z > 4.9725
+
+and sorters and belt addons are excused outright, so `_spur_clear` refuses over
+449 blocks the game would have allowed at any height. Of the four blocker
+classes, only the 493 assemblers and 361 smelters carry a real height price:
+**z = 4 clears both** on the half-level grid, which is inside `buildMaxHeight`
+from `labLevel >= 2`.
+
+**So the refusal is NOT correct-permanently.** What it costs is runway:
+`BELT_CLIMB_PER_TILE` is 1/2, so z = 4 is eight tiles of ramp up and eight down,
+sixteen tiles a spur must find before it may cross anything. That is the number
+the next step has to measure against -- whether the tenth spur has room for it --
+and it is a search question now, not a rules question.
+
+**Loosening `_spur_clear` blindly is still the wrong move.** The permission is
+conditional on the height, and the height is per-model; a spur that flies at
+z = 1 over an assembler still pastes as `EBuildCondition.Collide`. Use
+`colliders.belt_crossing_height`, and turn `game.belt_crossing` on in whatever
+audit measures the change.
 
 Freeform's out-lanes start immediately below the machine FOOTPRINT, which puts
 them inside the row a machine's collider needs; a junction on such a lane is
@@ -637,7 +662,7 @@ freeform from 9 test failures to 80, because the strip's row indices are
 consumed in several places that each assume lanes start at `mh`. Whatever fixes
 this has to change those together.
 
-## OPEN -- two collider questions left, both deliberately unanswered
+## OPEN -- one collider question left; the other two are answered
 
 `geom.collide` is a normal check now: 443 assembler-on-assembler pairs became 2,
 and turning it on cost no coverage. The two that remain are both real and
@@ -653,15 +678,27 @@ authority there rather than either box. Settling it needs the same treatment
 spacing got -- a measurement against real blueprints -- not an inference from
 the collider being smaller.
 
-**A Splitter one tile from a Tesla Tower collides**, and so does an elevated
-Splitter diagonally over an Assembling Machine. The first is a plain pitch
-requirement: a splitter is a CROSS of two boxes reaching 1.19 units from its
-centre, a tower reaches 0.3, and 1.19 + 0.3 is more than one tile of 1.2566. The
-second is not about splitters at all -- it is a belt at level 1 passing over a
-machine 5 tiles tall, which is the "may a belt cross a building, and at what
-height" question this file already records as unextracted. Both are refusals
-today rather than shipped defects, which is the right place for them until the
-crossing rule is read out of the game rather than inferred.
+**A Splitter one tile from a Tesla Tower collides** -- CONFIRMED from the game,
+and it is the plain pitch requirement it looked like. A splitter is a CROSS of
+two boxes reaching 1.19 units from its centre, a tower reaches 0.3, and
+1.19 + 0.3 is more than one tile of 1.2566. Two tiles clears it;
+`tests/dsp/test_colliders.py::test_a_splitter_is_not_a_belt_and_is_box_tested`
+pins both sides.
+
+**An elevated Splitter diagonally over an Assembling Machine collides** --
+CONFIRMED, and the framing this entry used for it was WRONG. It is not "a belt
+at level 1 passing over a machine". `PrefabDesc.ReadPrefab` line 217564 sets
+`isBelt = beltSpeed > 0` from a `BeltDesc`; a Splitter takes the `SplitterDesc`
+branch four lines later and sets `isSplitter`. A Splitter is therefore
+box-tested like any machine, and the belt sphere rule does not reach it at all.
+Box against box, an assembler's collider reaches 1.91 and a splitter's arm 1.19,
+so the pair needs **three tiles** of diagonal separation, or **z = 4** -- above
+the assembler's 4.68-unit collider top, exactly the height a belt would need,
+but for the box reason. `geom.collide` already asks this question correctly;
+what was missing was only the reading of it.
+
+The crossing rule the second question was blocked on is read; see
+"spine's ten-coater case" above and `game.belt_crossing`.
 
 Note also that `catalog.clearance` takes an AABB over every collider box, so a
 cross-shaped building like the Splitter reserves its empty corners too.
@@ -1102,8 +1139,11 @@ touch `catalog.py` and `validate.py` and will conflict anyway -- the
 consolidation is nearly free at merge time and expensive later.
 
 **Rules still unextracted**, and each is a place the guessing could resume:
-whether a belt may cross over a building, and at what height -- deliberately
-left unanswered rather than inferred from the fixtures' silence.
+the LATERAL half of the belt collision rule -- what excuses a belt standing
+beside, or level with, a building it overlaps. The vertical half (crossing) is
+extracted and shipped as `game.belt_crossing`; the lateral half is not, because
+a faithful port of it convicts blueprints the game wrote (see the belt item
+under "our footprints are a tile grid" below).
 
 Two that were on this list are now answered, and both are recorded in
 `layout/validate.py`'s comments rather than as checks, because neither can be
@@ -1205,12 +1245,27 @@ every build into a refusal before the footprints are fixed.
    from `buildColliders`. Use the colliders. A Spray Coater's
    `blueprintBoxSize` is 0.7 x 2.0; the box actually tested is 0.7 x 3.5, and it
    turns with the building's yaw.
-3. **Belts are still unmodelled.** They ARE tested -- as a 0.23 sphere at
-   `lpos + lpos.normalized * 0.2`, and a belt hitting a machine is not excused
-   -- but that model flags belts three tiles from an Interstellar Logistics
-   Station in `12-s-purple-science`, which the game wrote. Something in it is
-   wrong; it is left out rather than shipped. So `geom.collide` is a LOWER bound
-   on what the game rejects.
+3. **Belts are HALF modelled now.** They are tested as a 0.23 sphere at
+   `lpos + lpos.normalized * 0.2`, and a belt hitting a machine is not excused.
+   That much is shipped, as `game.belt_crossing` -- but only for a belt standing
+   directly OVER a building and higher than it, which is the crossing question
+   and passes the corpus.
+
+   The LATERAL half is still not modelled, and the reason is now measured rather
+   than suspected. Applied without the height restriction the same sphere flags
+   **1189 belts across the fixture corpus**, in blueprints the game itself
+   wrote: 675 against a building in `catalog.LOW_CONFIDENCE_FOOTPRINTS` (whose
+   colliders are already recorded as untrustworthy), 382 against a building
+   separated in longitude, where the flat grid is not the real spacing -- and
+   the rest against Splitters and a Storage Tank at exact, uncontaminated
+   spacing. A belt one tile from a Splitter grazes its 1.19-unit arm by 0.16 of
+   the 0.23 probe, and *every* blueprint containing a splitter does that, so
+   something excuses it. `BuildTool_Path` line 157683 excuses the first and last
+   two nodes of a drag against the object they connect to, and three for a
+   station -- but the paste path has no such clause and its previews carry no
+   drag index. **Finding that excusal is what is left**, and until it is found
+   both `geom.collide` and `game.belt_crossing` are LOWER bounds on what the
+   game rejects.
 4. **Sorters likewise**, and for a known reason: a sorter's box is rebuilt from
    the poses of the buildings it connects, which needs the `slotPoses` data this
    repository had wrong.

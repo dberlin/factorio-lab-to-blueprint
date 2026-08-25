@@ -193,3 +193,134 @@ def test_the_control_would_notice_a_shifted_building() -> None:
         for i, p in enumerate(placed)
     ]
     assert C.collisions(nudged)
+
+
+# --- the belt crossing rule -------------------------------------------------
+#
+# A belt is not box-tested.  `CheckBuildConditions` line 145761 probes it with a
+# 0.23 sphere centred 0.2 above the node, and line 145872 excuses a machine
+# against a belt but not a belt against a machine.  So a belt MAY cross a
+# building, and the question is only how high.
+
+_ASSEMBLER_2 = 66
+_ARC_SMELTER = 62
+_SPLITTER = 38
+_TESLA_TOWER = 44
+_BELT_MK3 = 37
+_SORTER_3 = 43
+
+
+def test_belt_crossing_height_is_the_collider_top_plus_the_probe_reach() -> None:
+    """`z > (top + RADIUS - LIFT) * 3/4`, arithmetic held to the data.
+
+    An Assembling Machine's build collider tops out at 4.68 model units and the
+    probe reaches 0.03 BELOW the belt node, so the belt must stand at
+    `(4.68 + 0.03) * 3/4 = 3.5325` -- four half-levels, not one.  Fixing the
+    numbers here is what makes the constants mutation-visible: change either of
+    them and this fails.
+    """
+    assert C.BELT_PROBE_RADIUS == 0.23
+    assert C.BELT_PROBE_LIFT == 0.2
+    assert C.belt_crossing_height(_ASSEMBLER_2) == pytest.approx(3.5325)
+    assert C.belt_crossing_height(_ARC_SMELTER) == pytest.approx(2.7975)
+    assert C.belt_crossing_height(_SPLITTER) == pytest.approx(1.7475)
+    assert C.belt_crossing_height(_SORTER_3) == pytest.approx(0.7575)
+
+
+def test_a_belt_crosses_an_assembler_only_above_that_height() -> None:
+    """The bound is tight from both sides, on the belt's own half-level grid."""
+    machine = [C.Placed(_ASSEMBLER_2, 0.0, 0.0, 0.0, 0.0)]
+    for z in (0.0, 1.0, 2.0, 3.0, 3.5):
+        assert C.belt_crossings([C.Placed(_BELT_MK3, 0.0, 0.0, z, 0.0)], machine), z
+    assert not C.belt_crossings([C.Placed(_BELT_MK3, 0.0, 0.0, 4.0, 0.0)], machine)
+    # And the boundary itself: just under the computed height collides, just
+    # over it does not.
+    h = C.belt_crossing_height(_ASSEMBLER_2)
+    assert C.belt_crossings([C.Placed(_BELT_MK3, 0.0, 0.0, h - 0.01, 0.0)], machine)
+    assert not C.belt_crossings([C.Placed(_BELT_MK3, 0.0, 0.0, h + 0.01, 0.0)], machine)
+
+
+def test_the_belt_probe_is_a_sphere_and_not_the_belt_box() -> None:
+    """Two tiles from an assembler is clear at ground level.
+
+    The probe is 0.23, so it must clear a 1.91-unit collider by 2.14 units --
+    1.71 tiles.  A box model of the belt would put the boundary somewhere else,
+    and the footprint model puts it at two tiles for a different reason.
+    """
+    machine = [C.Placed(_ASSEMBLER_2, 0.0, 0.0, 0.0, 0.0)]
+    assert C.belt_crossings([C.Placed(_BELT_MK3, 1.0, 0.0, 0.0, 0.0)], machine)
+    assert not C.belt_crossings([C.Placed(_BELT_MK3, 2.0, 0.0, 0.0, 0.0)], machine)
+
+
+def test_a_splitter_is_not_a_belt_and_is_box_tested() -> None:
+    """`isBelt = beltSpeed > 0`; a Splitter sets `isSplitter` instead.
+
+    Both of the open collider questions turn on this.  A Splitter one tile from
+    a Tesla Tower collides because 1.19 + 0.30 exceeds one 1.2566-unit tile --
+    a plain pitch requirement, nothing to do with crossing.  And an elevated
+    Splitter over an Assembling Machine is box against box: it needs the same
+    height a belt would, but for the box reason, and three tiles of separation
+    clears it at any height.
+    """
+    tower = C.Placed(_TESLA_TOWER, 0.0, 0.0, 0.0, 0.0)
+    assert C.collisions([C.Placed(_SPLITTER, 1.0, 0.0, 0.0, 0.0), tower])
+    assert not C.collisions([C.Placed(_SPLITTER, 2.0, 0.0, 0.0, 0.0), tower])
+
+    machine = C.Placed(_ASSEMBLER_2, 0.0, 0.0, 0.0, 0.0)
+    assert C.collisions([machine, C.Placed(_SPLITTER, 1.0, 1.0, 1.0, 0.0)])
+    assert not C.collisions([machine, C.Placed(_SPLITTER, 1.0, 1.0, 4.0, 0.0)])
+    assert not C.collisions([machine, C.Placed(_SPLITTER, 3.0, 3.0, 1.0, 0.0)])
+
+
+def test_real_blueprints_fly_belts_over_buildings_and_always_clear_them() -> None:
+    """The rule fires and does not misfire, on blueprints the game wrote.
+
+    Over the single-area fixtures, take every belt whose probe sits inside a
+    collider's footprint while standing higher than that building.  Each one
+    must CLEAR the collider, unless the building is one the game lets things
+    stack on (``multiLevel`` -- a belt a level above a Splitter or a Storage
+    Tank is on its upper port, not crossing it) or one of
+    ``catalog.LOW_CONFIDENCE_FOOTPRINTS``, whose colliders are already recorded
+    as not reproducing real blueprints.
+
+    If the height bound were too high these real belts would be convicted; if it
+    were too low nothing would be counted as clearing at all.
+    """
+    clear = 0
+    for name in SINGLE_AREA_FIXTURES:
+        raw = decode(fixture_text(name)).buildings
+        belts = [
+            C.Placed(b.model_index, b.x, b.y, b.z, b.yaw)
+            for b in raw
+            if cat.is_belt(b.item_id)
+        ]
+        others = [
+            (b, C.Placed(b.model_index, b.x, b.y, b.z, b.yaw))
+            for b in raw
+            if not cat.is_belt(b.item_id)
+            and not cat.is_sorter(b.item_id)
+            and C.build_colliders(b.model_index)
+        ]
+        for belt in belts:
+            probe = C.belt_probe(belt.x, belt.y, belt.z)
+            for src, other in others:
+                if belt.z <= other.z or abs(other.x - belt.x) > 8 or abs(other.y - belt.y) > 8:
+                    continue
+                pose = C.flat_pose(other.x, other.y, other.z, other.yaw)
+                if not any(
+                    C._horizontally_inside(probe, box)
+                    for box in C._target_boxes(other, *pose)
+                ):
+                    continue
+                if not C.belt_crossings([belt], [other], directly_over_only=True):
+                    clear += 1
+                    continue
+                try:
+                    info = cat.building(src.item_id)
+                except KeyError:  # not a catalog building; nothing to assert
+                    continue
+                assert info.multi_level or src.item_id in cat.LOW_CONFIDENCE_FOOTPRINTS, (
+                    f"{info.name} in {name}: a belt at z={belt.z} stands over its "
+                    f"collider without clearing it"
+                )
+    assert clear >= 20, clear

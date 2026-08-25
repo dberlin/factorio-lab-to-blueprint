@@ -120,12 +120,18 @@ from functools import cache
 from pathlib import Path
 
 __all__ = [
+    "BELT_PROBE_LIFT",
+    "BELT_PROBE_RADIUS",
     "GRID_ARC",
     "Box",
+    "belt_crossing_height",
+    "belt_crossings",
+    "belt_probe",
     "build_colliders",
     "collisions",
     "obb_overlap",
     "preview_pose",
+    "sphere_box_overlap",
 ]
 
 _DATA = Path(__file__).parent / "data" / "colliders.json"
@@ -491,3 +497,165 @@ def collisions(
                 if any(obb_overlap(query, other) for other in targets[j]):
                     hits.add(pair)
     return sorted(hits)
+
+
+# --- belts ------------------------------------------------------------------
+#
+# A belt is not tested with its build collider.  The SAME query loop in
+# ``BuildTool_BlueprintPaste.CheckBuildConditions`` branches on ``isBelt``
+# (decompiled line 145761)::
+#
+#     int num17 = ((!buildPreview2.desc.isBelt)
+#         ? Physics.OverlapBoxNonAlloc(colliderData.pos, colliderData.ext,
+#               BuildTool._tmp_cols, colliderData.q, mask, QueryTriggerInteraction.Collide)
+#         : Physics.OverlapSphereNonAlloc(buildPreview2.lpos
+#               + buildPreview2.lpos.normalized * 0.2f, 0.23f, BuildTool._tmp_cols,
+#               395264, QueryTriggerInteraction.Collide));
+#
+# ``lpos.normalized`` is radial up, so the probe is a 0.23 sphere centred 0.2
+# ABOVE the belt node -- one probe per belt TILE, since a blueprint stores every
+# belt tile as its own building.  The interactive belt tool asks the same
+# question one size larger: ``BuildTool_Path`` line 157520 uses 0.28 at
+# ``+ 0.22``, as a capsule between the 0.65-scaled neighbour positions when the
+# belt has a belt input or output.  What decides whether OUR blueprint pastes is
+# the paste query, so the paste numbers are the ones here.
+#
+# THIS IS THE ANSWER TO "MAY A BELT CROSS A BUILDING, AND AT WHAT HEIGHT".  It
+# may.  The test is three-dimensional and the probe is small, so a belt high
+# enough that the sphere clears the building's build collider does not collide
+# with it, and one whose sphere passes UNDER a raised collider does not either.
+# Nothing else in the paste path re-tests it: the only other belt-specific query
+# is a terrain/vein probe against layer 11 (line 146093) that an empty flat
+# planet cannot fail.
+#
+# The direction is asymmetric.  The excusal at line 145872 reads::
+#
+#     || (!buildPreview2.desc.isBelt && component.buildPreview.desc.isBelt)
+#
+# so a MACHINE is excused against a belt and a BELT is not excused against a
+# machine.  A belt that fails to clear is a real ``Collide`` even though the
+# machine testing the same pair says nothing.
+#
+# ``isBelt`` is exactly "has a ``BeltDesc`` whose speed is positive''
+# (``PrefabDesc.ReadPrefab`` line 217564, ``isBelt = beltSpeed > 0``).  A
+# Splitter takes the ``SplitterDesc`` branch four lines later and sets
+# ``isSplitter``, NOT ``isBelt``, so a Splitter is box-tested like any machine
+# and this rule does not govern it.
+
+#: Radius of the belt probe sphere, ``CheckBuildConditions`` line 145761.
+BELT_PROBE_RADIUS = 0.23
+
+#: How far above the belt node the probe sphere is centred, same line.  It is
+#: SMALLER than the radius, so the probe reaches 0.03 units BELOW the node.
+BELT_PROBE_LIFT = 0.2
+
+
+def belt_probe(x: float, y: float, z: float) -> Vec3:
+    """Centre of the sphere the game tests a belt tile with, in the flat frame.
+
+    ``lpos + lpos.normalized * BELT_PROBE_LIFT``, written in the local frame
+    :func:`flat_pose` uses, where radial up is ``+y``.
+    """
+    return (x * GRID_ARC, z * 4.0 / 3.0 + 0.2 + BELT_PROBE_LIFT, y * GRID_ARC)
+
+
+def sphere_box_overlap(centre: Vec3, radius: float, box: Box) -> bool:
+    """``Physics.OverlapSphere`` against one oriented box.
+
+    Squared closest-point-on-box distance, which is what Unity's sphere-vs-box
+    narrow phase computes.  Touching exactly does not overlap.
+    """
+    inv = (-box.rot[0], -box.rot[1], -box.rot[2], box.rot[3])
+    d = _qrot(
+        inv,
+        (centre[0] - box.centre[0], centre[1] - box.centre[1], centre[2] - box.centre[2]),
+    )
+    out = 0.0
+    for i in range(3):
+        excess = abs(d[i]) - box.half[i]
+        if excess > 0.0:
+            out += excess * excess
+    return out < radius * radius
+
+
+def belt_crossing_height(model_index: int) -> float:
+    """Lowest blueprint ``z`` at which a belt tile clears this model's collider.
+
+    The vertical half of the rule above, solved for a building standing at
+    ``z = 0``: the probe's lowest point is ``z * 4/3 + 0.2 + LIFT - RADIUS`` and
+    the collider's top is ``0.2 + max(pos.y + ext.y)``, so the belt clears when
+
+        ``z > (top + RADIUS - LIFT) * 3/4``
+
+    Strictly greater.  The returned value is that bound, NOT a legal ``z``; a
+    caller wanting one rounds it up to :data:`flab2bp.dsp.catalog.BELT_Z_QUANTUM`.
+    ``0.0`` for a model with no build collider, which is
+    ``hasBuildCollider == false`` and skips the test entirely.
+
+    Add the building's own ``z`` for a building that is not on the ground.  This
+    answers the vertical question only: a belt beside a building, rather than
+    over it, is decided by :func:`belt_crossings`.
+    """
+    cols = build_colliders(model_index)
+    if not cols:
+        return 0.0
+    top = max(pos[1] + ext[1] for pos, ext, _q in cols)
+    return (top + BELT_PROBE_RADIUS - BELT_PROBE_LIFT) * 3.0 / 4.0
+
+
+def _horizontally_inside(centre: Vec3, box: Box) -> bool:
+    """Whether a point is inside a box's footprint, ignoring height."""
+    inv = (-box.rot[0], -box.rot[1], -box.rot[2], box.rot[3])
+    d = _qrot(
+        inv,
+        (centre[0] - box.centre[0], centre[1] - box.centre[1], centre[2] - box.centre[2]),
+    )
+    return abs(d[0]) <= box.half[0] and abs(d[2]) <= box.half[2]
+
+
+def belt_crossings(
+    belts: list[Placed], buildings: list[Placed], *, directly_over_only: bool = False
+) -> list[tuple[int, int]]:
+    """``(belt index, building index)`` pairs the game would call ``Collide``.
+
+    Each belt's probe sphere against each building's build collider, on the flat
+    grid :func:`collisions` uses and for the same reason.
+
+    Nothing is excused here.  The caller must leave out what the game excuses,
+    because which of those a placement contains is the caller's fact: sorters
+    (line 145871, in both directions), belt addons (``AddonPass``, lines 145885
+    and 146029), other belts (line 145875) and a belt a building covers (lines
+    145970-146003).
+
+    ``directly_over_only`` narrows the answer to belts whose probe centre is
+    inside the collider's FOOTPRINT -- the crossing question, "how high must a
+    belt be to pass over this".  Use it, because the full test over-reports and
+    the narrowed one does not.  Measured over the whole fixture corpus, the full
+    test flags 1189 belts in blueprints the game itself wrote; the narrowed one
+    flags 11, all of them either a building in
+    ``catalog.LOW_CONFIDENCE_FOOTPRINTS`` or a pair separated in longitude,
+    where the flat grid is not the real spacing.  In the same corpus 133 belts
+    pass over or under a collider and clear it, so the narrowed test is not
+    vacuous.
+
+    The residue is entirely LATERAL: a belt one tile from a Splitter grazes its
+    1.19-unit arm by 0.16 of the 0.23 probe, and every blueprint with a splitter
+    in it does that.  Something excuses it that is not in the paste path as read
+    -- ``BuildTool_Path`` line 157683 excuses the first and last two nodes of a
+    drag against the object they connect to, and three for a station, but the
+    paste has no such clause and previews carry no drag index.  Until that is
+    found the lateral half is not modelled, and this is a LOWER bound on what
+    the game rejects, never an upper one.
+    """
+    hits: list[tuple[int, int]] = []
+    for i, belt in enumerate(belts):
+        probe = belt_probe(belt.x, belt.y, belt.z)
+        for j, b in enumerate(buildings):
+            lpos, lrot = flat_pose(b.x, b.y, b.z, b.yaw)
+            for box in _target_boxes(b, lpos, lrot):
+                if directly_over_only and not _horizontally_inside(probe, box):
+                    continue
+                if sphere_box_overlap(probe, BELT_PROBE_RADIUS, box):
+                    hits.append((i, j))
+                    break
+    return hits

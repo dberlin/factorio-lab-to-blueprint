@@ -734,6 +734,12 @@ class Building:
     #: 0 = normal building. 1 = belt addon: occupies NO grid tile of its own and
     #: mounts onto a belt (this is what makes the Spray Coater nearly free).
     addon_type: int
+    #: ``PrefabDesc.multiLevel`` -- whether the game lets another building stand
+    #: directly ON this one.  Splitters, Depots, Storage Tanks, Matrix Labs and
+    #: Spray Coaters all stack, and their belt ports rise with the stack, so a
+    #: belt sitting a level above one of these is a CONNECTION rather than a
+    #: crossing.  ``game.belt_crossing`` needs to know the difference.
+    multi_level: int
     #: Belt and fluid PORT poses -- ``PrefabDesc.portPoses``, which is
     #: ``SlotConfig.slotPoses`` in the prefab.  The name is the game's and it is
     #: a trap: these are where a belt or a pipe meets the building, and they are
@@ -881,6 +887,7 @@ def _load() -> dict[int, Building]:
             width=int(w),
             height=int(h),
             addon_type=row.get("addonType", 0),
+            multi_level=row.get("multiLevel") or 0,
             slots=tuple(row.get("slots") or ()),
             slot_poses=_slot_poses_for(row["prefab"], poses),
             addon_areas=_addon_areas_for(row["prefab"], poses),
@@ -898,6 +905,7 @@ def _load() -> dict[int, Building]:
             width=1,
             height=1,
             addon_type=0,
+            multi_level=0,
             slots=(),
             slot_poses=(),
             addon_areas=(),

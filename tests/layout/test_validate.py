@@ -3222,3 +3222,69 @@ def test_a_check_alone_says_what_it_says_inside_a_whole_run() -> None:
             assert list(alone.findings) == list(whole.by_check(cid)), cid
             compared += 1
     assert compared > 90, f"only {compared} checks compared"
+
+
+# --- game.belt_crossing -----------------------------------------------------
+
+
+def _belt_over_assembler(belt_z: Fraction) -> Placement:
+    """One Assembling Machine Mk.II on the ground, one belt tile over its centre."""
+    machine = catalog_building(2304)
+    belt = catalog_building(2002)
+    return Placement(
+        buildings=(
+            PlacedBuilding(
+                item_id=machine.item_id,
+                model_index=machine.model_index,
+                x=0,
+                y=0,
+                z=Fraction(0),
+                width=machine.width,
+                height=machine.height,
+            ),
+            PlacedBuilding(
+                item_id=belt.item_id,
+                model_index=belt.model_index,
+                x=machine.width // 2,
+                y=machine.height // 2,
+                z=belt_z,
+                width=1,
+                height=1,
+            ),
+        )
+    )
+
+
+def test_a_belt_may_cross_a_machine_but_only_above_its_collider() -> None:
+    """The rule the three OPEN backlog entries were blocked on.
+
+    A belt over an Assembling Machine is legal in the game -- the belt is probed
+    with a 0.23 sphere, not its box, and a machine is excused against a belt but
+    not the reverse.  The price is height: the collider tops out at 4.68 units,
+    so the belt must stand above z = 3.5325, which on the belt's half-level grid
+    is z = 4.  Three and a half is not enough.
+
+    The sweep starts half a level up, not at zero: a belt LEVEL with a machine
+    is the lateral question, which this check deliberately does not answer.
+    """
+    for z in (Fraction(1, 2), Fraction(1), Fraction(2), Fraction(3), Fraction(7, 2)):
+        r = validate(_belt_over_assembler(z), only={"game.belt_crossing"})
+        assert r.by_check("game.belt_crossing"), f"z={z} should collide"
+    r = validate(_belt_over_assembler(Fraction(4)), only={"game.belt_crossing"})
+    assert not r.by_check("game.belt_crossing"), [f.message for f in r.findings]
+
+
+def test_belt_crossing_names_the_height_it_needs() -> None:
+    """A refusal that does not say how high to go is not actionable."""
+    r = validate(_belt_over_assembler(Fraction(1)), only={"game.belt_crossing"})
+    (f,) = r.by_check("game.belt_crossing")
+    assert f.detail["needs_z_above"] == "3.5325"
+
+
+@pytest.mark.parametrize("name", GEOMETRY_SAFE_FIXTURES)
+def test_real_blueprint_has_no_belt_crossing_findings(name: str) -> None:
+    """Negative control: the game's own blueprints must survive the rule."""
+    p = decode_fixture_to_placement(name)
+    assert p.buildings, "fixture decoded to nothing"
+    r = validate(p, only={"game.belt_crossing"})
+    assert not r.by_check("game.belt_crossing"), [f.message for f in r.findings[:5]]
