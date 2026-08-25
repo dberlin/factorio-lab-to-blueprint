@@ -1271,6 +1271,8 @@ def anneal_stage(
     | None = None,
 ) -> AnnealStageResult:
     """Run exactly one reproducible linearly cooled block of cheap SA moves."""
+    from flab2bp.layout.sequence_kernel import build_sequence_kernel
+
     state.pair.validate(problem.size)
     if len(state.gaps.east) != problem.size:
         raise ValueError("annealing state size must match the placement problem")
@@ -1282,17 +1284,13 @@ def anneal_stage(
             history_outline=(0, problem.outline_height),
             history_summed_area=(0.0,) * (problem.outline_height + 1),
         )
+    kernel = build_sequence_kernel(problem, context)
 
     rng = random.Random(derive_stage_seed(state.base_seed, state.stage_index))
     initial_targets = (
         direct_targets_for_state(problem, state) if direct_targets_for_state is not None else None
     )
-    current = _score_state(
-        problem,
-        state,
-        context,
-        direct_targets=initial_targets,
-    )
+    current = kernel.score_state(state, direct_targets=initial_targets)
     archive_builder = EliteArchiveBuilder(config.elite_count)
     archive_builder.add(current)
     accepted_moves = 0
@@ -1310,12 +1308,7 @@ def anneal_stage(
             if direct_targets_for_state is not None
             else None
         )
-        candidate = _score_state(
-            problem,
-            candidate_state,
-            context,
-            direct_targets=candidate_targets,
-        )
+        candidate = kernel.score_state(candidate_state, direct_targets=candidate_targets)
         archive_builder.add(candidate)
         temperature = _linear_temperature(config, move_index)
         if _accept_move(current.energy, candidate.energy, temperature, rng):
