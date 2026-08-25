@@ -57,6 +57,21 @@ def viewer_path() -> Path | None:
     return None
 
 
+def viewer_deps_installed() -> bool:
+    """Has anyone run ``bun install`` for the viewer yet?
+
+    The source being present is not the same as the source being RUNNABLE.
+    ``web/node_modules`` used to be committed, so this was always true by
+    accident; untracking it made a fresh checkout fail these tests with
+    ``Cannot find package 'fflate'`` instead of skipping, which is exactly what
+    the module docstring promises never happens. `bun.lock` is the declaration
+    and `bun install` is the fix -- the caller is told so rather than left to
+    read a resolver error.
+    """
+    root = viewer_path()
+    return root is not None and (root / "node_modules").is_dir()
+
+
 class CrossValidationUnavailable(RuntimeError):
     """Raised only when the caller demanded strictness."""
 

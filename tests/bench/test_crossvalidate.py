@@ -19,6 +19,7 @@ from flab2bp.bench.crossvalidate import (
     CrossCheck,
     bun_available,
     crossvalidate,
+    viewer_deps_installed,
     viewer_path,
 )
 from flab2bp.dsp import catalog, codec
@@ -27,10 +28,10 @@ from flab2bp.layout.base import PlacedBuilding, Placement
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
 
 needs_viewer = pytest.mark.skipif(
-    not bun_available() or viewer_path() is None,
+    not bun_available() or viewer_path() is None or not viewer_deps_installed(),
     reason=(
-        "cross-validation needs `bun` and a dsp-blueprint-viewer checkout "
-        "(set DSP_VIEWER_PATH)"
+        "cross-validation needs `bun`, a dsp-blueprint-viewer checkout "
+        "(set DSP_VIEWER_PATH), and `bun install` run in it"
     ),
 )
 
