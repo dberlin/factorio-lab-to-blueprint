@@ -726,8 +726,10 @@ NEEDS_SPEC: set[str] = set()
 #: shape of defect ``geom.collide`` was here for.  It is the paste's whole belt
 #: rule, lateral half included, and it is clean on the corpus: zero findings on
 #: every single-area fixture, against 1189 for the same geometry with nothing
-#: excused.  On our own output it refuses ``magnetic-ring`` and several real
-#: specs, and fifteen ``spine`` tests with them, because a Splitter's
+#: excused.  On our own output it turns 15 ``spine`` tests red -- the strategy's
+#: own self-check refuses every plan it emits for ``magnetic-ring``,
+#: ``quantum-chip/no-proliferator`` and ``free-proliferation`` -- because a
+#: Splitter's
 #: ``catalog.footprint`` is 1x1 against a 2.38-unit collider and both strategies
 #: therefore route belts one tile from one.  Spacing is what fixed
 #: ``geom.collide``; the same fix -- steps 1 and 2 of the "our footprints are a
@@ -1815,9 +1817,11 @@ def _belt_collide(ctx: Context) -> Iterable[Finding]:
     ``catalog.footprint`` is 1x1; its build collider is a 2.38-unit cross, which
     needs two tiles.  So both strategies route belts one tile from a Splitter --
     at ground level and, on ramps, one level up, where the probe still catches
-    the 1.19-unit arm by 0.16 of its 0.23 radius.  Turning this on refuses
-    ``magnetic-ring`` and several real specs outright, and fifteen ``spine``
-    tests with them.  That is a ROUTER bug, not a rule bug: the belt needs
+    the 1.19-unit arm by 0.16 of its 0.23 radius.  Turning this on turns 15
+    ``spine`` tests red -- ``magnetic-ring``, ``quantum-chip/no-proliferator``
+    and ``free-proliferation`` -- because the strategy's own self-check then
+    refuses every plan it emits.  That is a ROUTER bug, not a rule bug: the belt
+    needs
     ``z > 1.7475`` or one more tile of clearance, and neither is this check's to
     arrange.  Fix the footprints (steps 1 and 2 of the entry) and this comes on
     by name first, then by default.

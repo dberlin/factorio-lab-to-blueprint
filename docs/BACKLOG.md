@@ -688,6 +688,13 @@ z = 1 over an assembler still pastes as `EBuildCondition.Collide`. Use
 `colliders.belt_crossing_height`, and turn `game.belt_crossing` on in whatever
 audit measures the change.
 
+**And the height is not only owed directly overhead.** The lateral half of the
+same rule is extracted now (`colliders.belt_collisions`, and `game.belt_collide`
+in `validate.OPT_IN`): the probe is a sphere, so a belt one tile BESIDE a
+Splitter at z = 1 collides with it exactly as one over it does. Anything that
+loosens `_spur_clear` should measure against `game.belt_collide`, not only
+`game.belt_crossing`, or it will trade one refusal for a red paste.
+
 **A STALE PARAGRAPH LIVED HERE** claiming freeform's out-lanes start
 immediately below the machine FOOTPRINT, inside the row a machine's collider
 needs, so a junction on one is always illegal. That was true when it was
@@ -1253,12 +1260,11 @@ Worth doing when the `game-rules` and `altitude-study` branches land, since both
 touch `catalog.py` and `validate.py` and will conflict anyway -- the
 consolidation is nearly free at merge time and expensive later.
 
-**Rules still unextracted**, and each is a place the guessing could resume:
-the LATERAL half of the belt collision rule -- what excuses a belt standing
-beside, or level with, a building it overlaps. The vertical half (crossing) is
-extracted and shipped as `game.belt_crossing`; the lateral half is not, because
-a faithful port of it convicts blueprints the game wrote (see the belt item
-under "our footprints are a tile grid" below).
+**Rules still unextracted** -- none of the belt ones. The LATERAL half of the
+belt collision rule is extracted now too: the excusal is `CheckBuildConditions`
+147257, and it ships as `colliders.belt_collisions` and `game.belt_collide`.
+That check is in `validate.OPT_IN` because it convicts OUR output, not the
+game's -- see the belt item under "our footprints are a tile grid" below.
 
 Two that were on this list are now answered, and both are recorded in
 `layout/validate.py`'s comments rather than as checks, because neither can be
@@ -1360,27 +1366,52 @@ every build into a refusal before the footprints are fixed.
    from `buildColliders`. Use the colliders. A Spray Coater's
    `blueprintBoxSize` is 0.7 x 2.0; the box actually tested is 0.7 x 3.5, and it
    turns with the building's yaw.
-3. **Belts are HALF modelled now.** They are tested as a 0.23 sphere at
-   `lpos + lpos.normalized * 0.2`, and a belt hitting a machine is not excused.
-   That much is shipped, as `game.belt_crossing` -- but only for a belt standing
-   directly OVER a building and higher than it, which is the crossing question
-   and passes the corpus.
+3. **Belts are fully modelled now, and the model refuses us.** They are tested
+   as a 0.23 sphere at `lpos + lpos.normalized * 0.2`, and a belt hitting a
+   machine is not excused. The vertical half ships as `game.belt_crossing`.
 
-   The LATERAL half is still not modelled, and the reason is now measured rather
-   than suspected. Applied without the height restriction the same sphere flags
-   **1189 belts across the fixture corpus**, in blueprints the game itself
-   wrote: 675 against a building in `catalog.LOW_CONFIDENCE_FOOTPRINTS` (whose
-   colliders are already recorded as untrustworthy), 382 against a building
-   separated in longitude, where the flat grid is not the real spacing -- and
-   the rest against Splitters and a Storage Tank at exact, uncontaminated
-   spacing. A belt one tile from a Splitter grazes its 1.19-unit arm by 0.16 of
-   the 0.23 probe, and *every* blueprint containing a splitter does that, so
-   something excuses it. `BuildTool_Path` line 157683 excuses the first and last
-   two nodes of a drag against the object they connect to, and three for a
-   station -- but the paste path has no such clause and its previews carry no
-   drag index. **Finding that excusal is what is left**, and until it is found
-   both `geom.collide` and `game.belt_crossing` are LOWER bounds on what the
-   game rejects.
+   **The lateral excusal is found.** It is not `BuildTool_Path`'s drag index,
+   which is what the previous reading looked for and rightly did not find. It
+   is a THIRD pass over the belts inside `CheckBuildConditions` itself, at
+   147257. The main loop sets a belt to `Collide` at 146072 *without* calling
+   `AddErrorMessage` -- the only branch in the method that stays silent --
+   because 147384 re-probes every belt already marked and can put it back to
+   `Ok`. A belt is excused:
+
+   * against a building its own run reaches within **three belt hops in either
+     direction** (147451), and against a Splitter's own linked previews within
+     two;
+   * against any sorter preview (the `isInserter` asymmetry, 147437) and any
+     belt addon (147454, `AddonPass`'s twin);
+   * and, failing all of that, whenever the run ends in a buildable non-belt
+     building (147492).
+
+   Measured: the raw probe convicts **1189** belts across the fixture corpus;
+   with the excusals, **0** on every fixture whose geometry the model can place
+   -- all five single-area ones, and both of the others that decode cleanly.
+   The falsifier is the same run with the upstream clauses dead: 25 convictions,
+   4 of them against a Splitter at exact spacing, each the second or third node
+   of a run leaving one -- which is exactly what those clauses describe.
+
+   One detail is **read but not settled**: `ArrangeOverlapBP` materialises the
+   reverse belt links at 144472 and clears them again at 144554, which taken at
+   face value would make the three `input` clauses of 147451 dead on a paste.
+   The corpus says they are live. Either the clearing does not survive to
+   147384 or something restores it; settling that needs a runtime trace or a
+   second decompile, and the rule is measured either way.
+
+   `colliders.belt_collisions` holds it with the C#; `game.belt_collide` is it
+   against a `Placement`. **That check is in `validate.OPT_IN`**, and the reason
+   is step 1 above: a Splitter's `catalog.footprint` is 1x1 against a 2.38-unit
+   collider, so both strategies route belts one tile from a Splitter -- at
+   ground level and, on ramps, one level up, where the probe still catches the
+   1.19-unit arm by 0.16 of its 0.23 radius. Turning it on turns 15 `spine`
+   tests red -- `magnetic-ring`, plus `quantum-chip/no-proliferator` and
+   `free-proliferation` -- because the strategy's own self-check then refuses
+   every plan it emits. That is a ROUTER bug the footprint fix resolves, exactly
+   as spacing took `geom.collide` out of `OPT_IN`. Until then `game.belt_crossing` remains a
+   LOWER bound on what the game rejects, and `game.belt_collide` is the upper
+   one, available by name.
 4. **Sorters likewise**, and for a known reason: a sorter's box is rebuilt from
    the poses of the buildings it connects, which needs the `slotPoses` data this
    repository had wrong.
