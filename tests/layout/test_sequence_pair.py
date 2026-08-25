@@ -516,9 +516,7 @@ def _refinery_variant_problem(
         sizes=((variants[0].box_width, variants[0].box_height),),
         nets=(),
         outline_height=12,
-        area_lower_bound=min(
-            variant.box_width * variant.box_height for variant in variants
-        ),
+        area_lower_bound=min(variant.box_width * variant.box_height for variant in variants),
         instance_ids=(StripInstanceId(family.family_id, 0, 1),),
         variant_tables=(variants,),
     )
@@ -540,9 +538,7 @@ def test_variant_move_changes_refinery_pose_box_lane_and_attachments_atomically(
     )
     assert selected.lane_plan != original.lane_plan
     assert selected.attachment_plan != original.attachment_plan
-    assert decode_state(problem, moved).used_height != decode_state(
-        problem, state
-    ).used_height
+    assert decode_state(problem, moved).used_height != decode_state(problem, state).used_height
 
 
 def test_variant_selection_rejects_wrong_cardinality_and_invalid_indices() -> None:
@@ -572,12 +568,15 @@ def test_variant_selection_rejects_wrong_cardinality_and_invalid_indices() -> No
 def test_change_variant_is_a_no_op_only_when_every_strip_has_one_variant() -> None:
     problem, state = _refinery_variant_problem(variant_count=1)
 
-    assert apply_move(
-        state,
-        MoveKind.CHANGE_VARIANT,
-        random.Random(7),
-        problem=problem,
-    ) == state
+    assert (
+        apply_move(
+            state,
+            MoveKind.CHANGE_VARIANT,
+            random.Random(7),
+            problem=problem,
+        )
+        == state
+    )
 
 
 def test_change_variant_move_selects_another_valid_variant_and_nothing_else() -> None:
@@ -617,8 +616,7 @@ def test_selected_variant_dimensions_and_identity_reach_decode_and_elite_keys() 
     assert decoded.used_height == problem.variant(0, 1).box_height
     assert all(
         elite.key.instance_ids == problem.instance_ids
-        and elite.key.variant_ids
-        == problem.selected_variant_ids(elite.state.variant_indices)
+        and elite.key.variant_ids == problem.selected_variant_ids(elite.state.variant_indices)
         and elite.key.dimensions == problem.selected_sizes(elite.state.variant_indices)
         for elite in result.elites
     )
@@ -687,15 +685,12 @@ def _alignment_variant_problem(
         for default, selected in zip(default_widths, selected_widths, strict=True)
     )
     problem = PlacementProblem(
-        sizes=tuple(
-            (width, template.box_height) for width in default_widths
-        ),
+        sizes=tuple((width, template.box_height) for width in default_widths),
         nets=((0, 1),),
         outline_height=template.box_height * 2,
         area_lower_bound=1,
         instance_ids=tuple(
-            StripInstanceId(family.family_id, machine_start, 1)
-            for machine_start in range(3)
+            StripInstanceId(family.family_id, machine_start, 1) for machine_start in range(3)
         ),
         variant_tables=tables,
     )
@@ -756,8 +751,6 @@ def test_alignment_accepts_smaller_selected_variant_without_default_overlap() ->
     assert aligned.width == 13
 
 
-
-
 def test_stage_boundary_split_rebuilds_every_cardinality_owned_array() -> None:
     family = _family(_single_machine_spec("assembling-machine-1", count=4))
     parent = partition_strip_family(family, max_machine_count=4)[0]
@@ -791,8 +784,7 @@ def test_stage_boundary_split_rebuilds_every_cardinality_owned_array() -> None:
     split = split_stage_boundary(problem, state, family, 0)
 
     assert tuple(
-        (instance.machine_start, instance.machine_count)
-        for instance in split.problem.instance_ids
+        (instance.machine_start, instance.machine_count) for instance in split.problem.instance_ids
     ) == ((0, 2), (2, 1), (3, 1))
     assert split.state.pair == SequencePair((2, 0, 1), (0, 1, 2))
     assert split.state.gaps == GapProfile((2, 0, 3), (4, 0, 1))
@@ -836,6 +828,8 @@ def test_compatible_stage_boundary_merge_is_exact_split_inverse() -> None:
     assert merged is not None
     assert merged.problem == problem
     assert merged.state == state
+
+
 def test_every_move_preserves_both_permutations_and_gap_bounds() -> None:
     state = AnnealState.initial(size=8, seed=41)
     for kind in MoveKind:

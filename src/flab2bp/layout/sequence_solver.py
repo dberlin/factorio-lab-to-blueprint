@@ -520,9 +520,7 @@ class SequenceSolver[PreparedT]:
         )
         if signature:
             restart.feedback_stagnation = (
-                restart.feedback_stagnation + 1
-                if signature == restart.failure_signature
-                else 1
+                restart.feedback_stagnation + 1 if signature == restart.failure_signature else 1
             )
         else:
             restart.feedback_stagnation = 0
@@ -603,9 +601,7 @@ class SequenceSolver[PreparedT]:
         height_state.stranded = detailed.routing.failed_count
         height_state.global_overflow = selected.result.total_overflow
         height_state.estimated_area = selected.decoded.width * height_state.height
-        selected_variant_ids = problem.selected_variant_ids(
-            selected.state.variant_indices
-        )
+        selected_variant_ids = problem.selected_variant_ids(selected.state.variant_indices)
         selected_pose_yaws = (
             tuple(
                 problem.variant(strip, variant).yaw
@@ -776,9 +772,7 @@ def _variant_search_inputs(
                 raise ValueError("physical strip plan and variant instance order disagree")
             realized = variants_for_count(family, instance.machine_count)
             variants = (instance.variant,) + tuple(
-                variant
-                for variant in realized
-                if variant.variant_id != instance.variant.variant_id
+                variant for variant in realized if variant.variant_id != instance.variant.variant_id
             )
             instance_ids.append(instance.instance_id)
             variant_tables.append(variants)
@@ -802,11 +796,7 @@ def _selected_strips(
         for strip in strips
         if strip.family_id is not None
     }
-    family_templates = {
-        strip.family_id: strip
-        for strip in strips
-        if strip.family_id is not None
-    }
+    family_templates = {strip.family_id: strip for strip in strips if strip.family_id is not None}
     selected: list[Strip] = []
     for index, instance_id in enumerate(problem.instance_ids):
         strip = exact_templates.get(
@@ -818,9 +808,7 @@ def _selected_strips(
         ) or family_templates.get(instance_id.family_id)
         if strip is None:
             if len(strips) != problem.size:
-                raise ValueError(
-                    "physical strip templates do not cover the placement instances"
-                )
+                raise ValueError("physical strip templates do not cover the placement instances")
             strip = strips[index]
         variant = problem.variant(index, variant_indices[index])
         selected.append(
@@ -1041,14 +1029,8 @@ def _production_run(
         area_lower_bound = (
             sum(
                 min(
-                    (
-                        variant.box_width + sizes[strip][0] - variants[0].box_width
-                    )
-                    * (
-                        variant.box_height
-                        + sizes[strip][1]
-                        - variants[0].box_height
-                    )
+                    (variant.box_width + sizes[strip][0] - variants[0].box_width)
+                    * (variant.box_height + sizes[strip][1] - variants[0].box_height)
                     for variant in variants
                 )
                 for strip, variants in enumerate(variant_tables)
@@ -1106,9 +1088,7 @@ def _production_run(
         targets = direct_cache.get(key)
         if targets is None:
             selected = selected_strips(problem, variant_indices)
-            targets = _direct_alignment_targets(
-                _direct_net_candidates(list(selected), spec)
-            )
+            targets = _direct_alignment_targets(_direct_net_candidates(list(selected), spec))
             direct_cache[key] = targets
         return targets
 
@@ -1264,13 +1244,9 @@ def _production_run(
         finally:
             telemetry.validation_time_s += time.monotonic() - validation_started
 
-    family_by_id = {
-        family.family_id: family
-        for family in generate_strip_families(spec)
-    }
+    family_by_id = {family.family_id: family for family in generate_strip_families(spec)}
     telemetry.pose_feasibility_rejects = sum(
-        4 - len({variant.yaw for variant in family.variants})
-        for family in family_by_id.values()
+        4 - len({variant.yaw for variant in family.variants}) for family in family_by_id.values()
     )
 
     def split_stage(
@@ -1310,7 +1286,6 @@ def _production_run(
         selected_cache.clear()
         direct_cache.clear()
         return StageBoundaryUpdate(rebuilt, transformed.state)
-
 
     expansion_total = max(
         _ROUTING_BUDGET,
@@ -1451,8 +1426,7 @@ def _with_observational_stats(
     )
     pose_yaws = exact_stage.selected_pose_yaws if exact_stage is not None else ()
     pose_counts = {
-        yaw: sum(selected == yaw for selected in pose_yaws)
-        for yaw in (0.0, 90.0, 180.0, 270.0)
+        yaw: sum(selected == yaw for selected in pose_yaws) for yaw in (0.0, 90.0, 180.0, 270.0)
     }
     stats: dict[str, object] = dict(placement.stats)
     stats.update(

@@ -128,6 +128,7 @@ class FeedbackState:
     net_weight: Mapping[NetId, float]
     cell_history: Mapping[Cell, float]
     logical_net_weight: Mapping[LogicalNetId, float] = field(default_factory=dict)
+
     def __post_init__(self) -> None:
         if (
             not isinstance(self.outline, tuple)
@@ -263,8 +264,7 @@ def remap_feedback_nets(
     physical = {
         net: weight
         for net in nets
-        if (weight := state.logical_net_weight.get(net.logical, 0.0))
-        >= _PRUNE_BELOW
+        if (weight := state.logical_net_weight.get(net.logical, 0.0)) >= _PRUNE_BELOW
     }
     return FeedbackState(
         target_outline,
@@ -297,11 +297,7 @@ def select_split_candidate(
         _add_net_endpoints(implicated, failure.net_id, len(instances))
         for blocker in failure.blocking_nets:
             _add_net_endpoints(implicated, blocker, len(instances))
-    candidates = [
-        index
-        for index in implicated
-        if instances[index].machine_count > 1
-    ]
+    candidates = [index for index in implicated if instances[index].machine_count > 1]
     if not candidates:
         return None
     return min(
@@ -327,12 +323,9 @@ def feedback_cost_context(
             if logical.source_family is None or logical.destination_family is None:
                 continue
             families = (logical.source_family, logical.destination_family)
-            weight_by_families[families] = (
-                weight_by_families.get(families, 0.0) + weight
-            )
+            weight_by_families[families] = weight_by_families.get(families, 0.0) + weight
         net_weights = tuple(
-            1.0 + weight_by_families.get(families, 0.0)
-            for families in problem.logical_net_families
+            1.0 + weight_by_families.get(families, 0.0) for families in problem.logical_net_families
         )
     else:
         weight_by_endpoints: dict[tuple[int, int], float] = {}
@@ -340,12 +333,9 @@ def feedback_cost_context(
             if net.source_strip is None or net.destination_strip is None:
                 continue
             endpoints = (net.source_strip, net.destination_strip)
-            weight_by_endpoints[endpoints] = (
-                weight_by_endpoints.get(endpoints, 0.0) + weight
-            )
+            weight_by_endpoints[endpoints] = weight_by_endpoints.get(endpoints, 0.0) + weight
         net_weights = tuple(
-            1.0 + weight_by_endpoints.get(endpoints, 0.0)
-            for endpoints in problem.nets
+            1.0 + weight_by_endpoints.get(endpoints, 0.0) for endpoints in problem.nets
         )
 
     return PlacementCostContext(

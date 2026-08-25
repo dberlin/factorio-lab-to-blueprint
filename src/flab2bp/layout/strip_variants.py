@@ -37,19 +37,25 @@ class MachinePlacementGeometry:
     south_halo: int
 
     def __post_init__(self) -> None:
-        if min(
-            self.footprint_width,
-            self.footprint_height,
-            self.pitch_x,
-            self.pitch_y,
-        ) <= 0:
+        if (
+            min(
+                self.footprint_width,
+                self.footprint_height,
+                self.pitch_x,
+                self.pitch_y,
+            )
+            <= 0
+        ):
             raise ValueError("placement dimensions and pitches must be positive")
-        if min(
-            self.west_halo,
-            self.east_halo,
-            self.north_halo,
-            self.south_halo,
-        ) < 0:
+        if (
+            min(
+                self.west_halo,
+                self.east_halo,
+                self.north_halo,
+                self.south_halo,
+            )
+            < 0
+        ):
             raise ValueError("placement halos must be non-negative")
         if self.west_halo + self.footprint_width + self.east_halo != self.pitch_x:
             raise ValueError("horizontal halos must complete the collider pitch")
@@ -85,8 +91,7 @@ class LaneReachProfile:
         if not columns or columns != tuple(sorted(set(columns))):
             raise ValueError("lane reach profile columns must be non-empty and distinct")
         if any(
-            attachment.cell[0] != column
-            or not 1 <= attachment.span <= catalog.SORTER_MAX_REACH
+            attachment.cell[0] != column or not 1 <= attachment.span <= catalog.SORTER_MAX_REACH
             for column, attachment in self.attachments
         ):
             raise ValueError("lane reach profile contains invalid attachment geometry")
@@ -253,17 +258,12 @@ class StripVariant:
             raise ValueError("variant attachments must use their planned lane rows")
         lane_ys = tuple(plan.lane_y for plan in self.attachment_plan)
         envelope_top = -self.placement_geometry.north_halo
-        envelope_bottom = (
-            self.footprint_height + self.placement_geometry.south_halo
-        )
+        envelope_bottom = self.footprint_height + self.placement_geometry.south_halo
         if any(envelope_top <= lane_y < envelope_bottom for lane_y in lane_ys):
             raise ValueError("variant lane enters the collider exclusion envelope")
         minimum_y = min(envelope_top, *lane_ys)
         maximum_y = max(envelope_bottom, *(lane_y + 1 for lane_y in lane_ys))
-        if (
-            self.lane_plan.machine_row != -minimum_y
-            or self.box_height != maximum_y - minimum_y
-        ):
+        if self.lane_plan.machine_row != -minimum_y or self.box_height != maximum_y - minimum_y:
             raise ValueError("variant box does not exactly contain lanes and collider")
         if self.variant_id != _variant_id(
             self.variant_id.family_id,
@@ -398,9 +398,7 @@ class StripInstance:
 def placement_geometry(machine_item_id: str | int, yaw: float) -> MachinePlacementGeometry:
     """Return authoritative oriented footprint, pitch, and deterministic halos."""
     item_id = (
-        catalog.item_id(machine_item_id)
-        if isinstance(machine_item_id, str)
-        else machine_item_id
+        catalog.item_id(machine_item_id) if isinstance(machine_item_id, str) else machine_item_id
     )
     footprint_width, footprint_height = catalog.oriented_footprint(item_id, yaw)
     pitch_x, pitch_y = catalog.clearance(item_id, yaw)
@@ -426,9 +424,7 @@ def lane_reach_profiles(
 ) -> tuple[LaneReachProfile, ...]:
     """Enumerate exact reachable rows outside one pose's collider envelope."""
     item_id = (
-        catalog.item_id(machine_item_id)
-        if isinstance(machine_item_id, str)
-        else machine_item_id
+        catalog.item_id(machine_item_id) if isinstance(machine_item_id, str) else machine_item_id
     )
     geometry = placement_geometry(item_id, yaw)
     probe = slots.probe_building(item_id, yaw)
@@ -537,10 +533,12 @@ def _side_seatings(
     profiles: tuple[LaneReachProfile, ...],
     side: LaneSide,
 ) -> tuple[tuple[LaneAttachmentPlan, ...], ...]:
-    side_lanes = tuple(sorted(
-        (lane for lane in lanes if lane.side == side),
-        key=lambda lane: (lane.side_index, lane.lane_id),
-    ))
+    side_lanes = tuple(
+        sorted(
+            (lane for lane in lanes if lane.side == side),
+            key=lambda lane: (lane.side_index, lane.lane_id),
+        )
+    )
     if not side_lanes:
         return ((),)
     side_profiles = tuple(profile for profile in profiles if profile.side == side)
@@ -566,10 +564,12 @@ def _attachment_plan_seatings(
     south = _side_seatings(lanes, profiles, "south")
     north = _side_seatings(lanes, profiles, "north")
     return tuple(
-        tuple(sorted(
-            south_plans + north_plans,
-            key=lambda plan: (plan.lane_y, plan.lane.lane_id),
-        ))
+        tuple(
+            sorted(
+                south_plans + north_plans,
+                key=lambda plan: (plan.lane_y, plan.lane.lane_id),
+            )
+        )
         for south_plans, north_plans in product(south, north)
     )
 
@@ -615,9 +615,7 @@ def _variants(
         lane_plan = LanePlan(machine_row=-minimum_y, lane_rows=lane_rows)
         box_width = machine_count * geometry.pitch_x
         box_height = maximum_y - minimum_y
-        machine_origins_x = tuple(
-            range(0, machine_count * geometry.pitch_x, geometry.pitch_x)
-        )
+        machine_origins_x = tuple(range(0, machine_count * geometry.pitch_x, geometry.pitch_x))
         variant_id = _variant_id(
             family_id,
             yaw,
@@ -699,9 +697,7 @@ def default_strip_variant(family: StripFamily) -> StripVariant:
 def _variant_for_count(template: StripVariant, machine_count: int) -> StripVariant:
     if machine_count <= 0:
         raise ValueError("realized strip variant machine count must be positive")
-    machine_origins_x = tuple(
-        range(0, machine_count * template.pitch_x, template.pitch_x)
-    )
+    machine_origins_x = tuple(range(0, machine_count * template.pitch_x, template.pitch_x))
     box_width = machine_count * template.pitch_x
     variant_id = _variant_id(
         template.variant_id.family_id,
@@ -732,9 +728,7 @@ def variants_for_count(
     machine_count: int,
 ) -> tuple[StripVariant, ...]:
     """Realize every family pose in stable family order for ``machine_count``."""
-    return tuple(
-        _variant_for_count(template, machine_count) for template in family.variants
-    )
+    return tuple(_variant_for_count(template, machine_count) for template in family.variants)
 
 
 def partition_strip_family(
@@ -748,9 +742,7 @@ def partition_strip_family(
         raise ValueError("maximum strip machine count must be positive")
     chosen_id = variant_id or default_strip_variant(family).variant_id
     try:
-        template = next(
-            variant for variant in family.variants if variant.variant_id == chosen_id
-        )
+        template = next(variant for variant in family.variants if variant.variant_id == chosen_id)
     except StopIteration:
         raise ValueError("strip instance variant does not belong to the family") from None
     instance_count = max(
@@ -792,9 +784,7 @@ def split_strip_instance(
     if parent.machine_count < 2:
         raise ValueError("a one-machine strip cannot be split")
     left_count = (
-        (parent.machine_count + 1) // 2
-        if left_machine_count is None
-        else left_machine_count
+        (parent.machine_count + 1) // 2 if left_machine_count is None else left_machine_count
     )
     if not 0 < left_count < parent.machine_count:
         raise ValueError("split boundary must lie inside the parent range")

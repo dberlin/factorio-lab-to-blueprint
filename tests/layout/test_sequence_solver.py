@@ -574,10 +574,7 @@ def _two_stage_variant_problem() -> tuple[
         strips,
         strip_len=6,
     )
-    sizes = tuple(
-        (variants[0].box_width, variants[0].box_height)
-        for variants in variant_tables
-    )
+    sizes = tuple((variants[0].box_width, variants[0].box_height) for variants in variant_tables)
     return (
         spec,
         strips,
@@ -607,8 +604,7 @@ def test_direct_targets_derive_geometry_from_both_selected_endpoint_variants() -
         for variant in range(1, len(problem.variant_tables[target.producer]))
         if (
             selection := tuple(
-                variant if strip == target.producer else 0
-                for strip in range(problem.size)
+                variant if strip == target.producer else 0 for strip in range(problem.size)
             )
         )
         and _selected_direct_targets(spec, strips, problem, selection)[0].producer_row
@@ -618,22 +614,21 @@ def test_direct_targets_derive_geometry_from_both_selected_endpoint_variants() -
         4 if strip == target.consumer else 0 for strip in range(problem.size)
     )
 
-    producer_changed = _selected_direct_targets(
-        spec, strips, problem, producer_selection
-    )[0]
+    producer_changed = _selected_direct_targets(spec, strips, problem, producer_selection)[0]
     consumer_plans = _selected_strips(strips, problem, consumer_selection)
-    consumer_changed = _selected_direct_targets(
-        spec, strips, problem, consumer_selection
-    )[0]
+    consumer_changed = _selected_direct_targets(spec, strips, problem, consumer_selection)[0]
     assert producer_changed.producer_row != target.producer_row
     assert producer_changed.consumer_row == target.consumer_row
     assert (
         consumer_plans[target.consumer].lane_plan
         != _selected_strips(strips, problem, default)[target.consumer].lane_plan
     )
-    assert consumer_changed == freeform_module._direct_alignment_targets(
-        freeform_module._direct_net_candidates(consumer_plans, spec)
-    )[0]
+    assert (
+        consumer_changed
+        == freeform_module._direct_alignment_targets(
+            freeform_module._direct_net_candidates(consumer_plans, spec)
+        )[0]
+    )
     assert consumer_changed.producer_row == target.producer_row
 
 
@@ -713,9 +708,7 @@ def test_selected_strips_rebuild_from_child_instance_ranges() -> None:
         strip_len=6,
     )
     family = next(
-        family
-        for family in generate_strip_families(spec)
-        if family.total_machine_count > 1
+        family for family in generate_strip_families(spec) if family.total_machine_count > 1
     )
     target = next(
         index
@@ -773,7 +766,6 @@ def test_prepared_physical_nets_keep_stable_logical_family_edges() -> None:
         )
 
 
-
 def test_production_stage_boundary_rebuilds_preparation_for_children() -> None:
     spec = two_stage_spec()
     run = _production_run(
@@ -786,16 +778,11 @@ def test_production_stage_boundary_rebuilds_preparation_for_children() -> None:
     height_state = next(
         height
         for height in run.solver._heights
-        if any(
-            instance.machine_count > 1
-            for instance in height.problem.instance_ids
-        )
+        if any(instance.machine_count > 1 for instance in height.problem.instance_ids)
     )
     problem = height_state.problem
     target = next(
-        index
-        for index, instance in enumerate(problem.instance_ids)
-        if instance.machine_count > 1
+        index for index, instance in enumerate(problem.instance_ids) if instance.machine_count > 1
     )
     state = height_state.restarts[0].anneal
     alternate_index = next(
@@ -865,9 +852,9 @@ def test_production_stage_boundary_rebuilds_preparation_for_children() -> None:
             update.problem,
             update.state.variant_indices,
         )
-        assert update.problem.selected_sizes(
-            update.state.variant_indices
-        ) == tuple(_box(strip) for strip in selected)
+        assert update.problem.selected_sizes(update.state.variant_indices) == tuple(
+            _box(strip) for strip in selected
+        )
 
     decoded = decode_state(alternate.problem, alternate.state)
     candidate = run.solver.adapters.prepare(height_state.height, decoded)
@@ -889,9 +876,7 @@ def test_production_stage_boundary_rebuilds_preparation_for_children() -> None:
 def test_rebuilt_net_order_keeps_matching_logical_family_weights() -> None:
     families = generate_strip_families(two_stage_spec())
     source = next(family for family in families if family.total_machine_count > 1)
-    destination = next(
-        family for family in families if family.family_id != source.family_id
-    )
+    destination = next(family for family in families if family.family_id != source.family_id)
     source_variants = variants_for_count(source, 1)
     destination_variants = variants_for_count(destination, 1)
     second_destination_id = StripFamilyId("second-destination#0", 0)
@@ -919,10 +904,7 @@ def test_rebuilt_net_order_keeps_matching_logical_family_weights() -> None:
     )
     original_nets = ((0, 2), (1, 2), (0, 3), (1, 3))
     problem = PlacementProblem(
-        sizes=tuple(
-            (variants[0].box_width, variants[0].box_height)
-            for variants in tables
-        ),
+        sizes=tuple((variants[0].box_width, variants[0].box_height) for variants in tables),
         nets=original_nets,
         outline_height=40,
         area_lower_bound=1,
@@ -964,8 +946,6 @@ def test_rebuilt_net_order_keeps_matching_logical_family_weights() -> None:
         rebuilt,
     )
     assert context.net_weights == (1.0, 3.0, 1.0, 3.0)
-
-
 
 
 def test_feedback_stagnation_rebuilds_the_next_fixed_cardinality_stage() -> None:
@@ -1047,10 +1027,7 @@ def test_feedback_stagnation_rebuilds_the_next_fixed_cardinality_stage() -> None
     assert transformed_stagnation == [1, 2, 1]
     assert prepared_sizes == [1, 1, 2]
     assert solver._heights[0].problem.size == 2
-    assert (
-        solver._heights[0].restarts[0].anneal.base_seed
-        == solver._heights[0].restarts[0].seed
-    )
+    assert solver._heights[0].restarts[0].anneal.base_seed == solver._heights[0].restarts[0].seed
     assert sum(stage.split_count for stage in solver._stage_stats) == 1
     assert sum(stage.merge_count for stage in solver._stage_stats) == 0
     assert solver._heights[0].restarts[0].anneal.stage_index == 3
@@ -1786,9 +1763,7 @@ def test_refinery_closed_loop_routes_the_selected_rotated_pose() -> None:
     assert not validate.certify(placement, spec, expect_power=False).errors
     assert placement.stats["detailed_routes"] >= 1.0
     assert placement.stats["pose_count"] == 1.0
-    assert (
-        placement.stats["pose_yaw_90"] + placement.stats["pose_yaw_270"]
-    ) == 1.0
+    assert (placement.stats["pose_yaw_90"] + placement.stats["pose_yaw_270"]) == 1.0
     assert placement.stats["pose_feasibility_rejects"] >= 1.0
 
 
@@ -1815,10 +1790,7 @@ def test_chemical_closed_loop_emits_exact_inner_anchor_sorters() -> None:
         building
         for building in placement.buildings
         if catalog.is_sorter(building.item_id)
-        and (
-            building.output_obj == machine_index
-            or building.input_obj == machine_index
-        )
+        and (building.output_obj == machine_index or building.input_obj == machine_index)
     ):
         assert sorter.x2 is not None and sorter.y2 is not None
         if sorter.output_obj == machine_index:
@@ -1878,8 +1850,7 @@ def test_proliferated_closed_loop_routes_elevated_supply_without_coater_sorter()
             area=1,
         )
         assert any(
-            (building.x, building.y, building.z)
-            == (target[0], target[1], Fraction(target[2]))
+            (building.x, building.y, building.z) == (target[0], target[1], Fraction(target[2]))
             and building.carries_item in spec.external_inputs
             for building in placement.buildings
             if catalog.is_belt(building.item_id)
@@ -2046,6 +2017,5 @@ def test_broad_feedback_continues_from_routed_elite_variant_identity(
     assert first.selected_instance_ids == problem.instance_ids
     assert first.selected_variant_ids == problem.selected_variant_ids((1, 0))
     assert first.selected_pose_yaws == tuple(
-        problem.variant(strip, variant).yaw
-        for strip, variant in enumerate((1, 0))
+        problem.variant(strip, variant).yaw for strip, variant in enumerate((1, 0))
     )

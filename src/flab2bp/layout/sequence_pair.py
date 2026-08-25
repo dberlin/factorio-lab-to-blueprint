@@ -103,9 +103,7 @@ class PlacementProblem:
         _validate_positive_integer(self.outline_height, "outline height")
         if type(self.area_lower_bound) is not int or self.area_lower_bound < 0:
             raise ValueError("area lower bound must be a non-negative integer")
-        if not isinstance(self.instance_ids, tuple) or not isinstance(
-            self.variant_tables, tuple
-        ):
+        if not isinstance(self.instance_ids, tuple) or not isinstance(self.variant_tables, tuple):
             raise ValueError("strip instances and variant tables must be immutable tuples")
         if bool(self.instance_ids) != bool(self.variant_tables):
             raise ValueError("strip instances and variant tables must be supplied together")
@@ -122,30 +120,21 @@ class PlacementProblem:
                     or len(variant.machine_origins_x) != instance_id.machine_count
                     for variant in variants
                 ):
-                    raise ValueError(
-                        "strip variants must realize the exact owning instance"
-                    )
+                    raise ValueError("strip variants must realize the exact owning instance")
                 if (
                     self.sizes[strip][0] < variants[0].box_width
                     or self.sizes[strip][1] < variants[0].box_height
                 ):
-                    raise ValueError(
-                        "problem default sizes must contain variant index zero"
-                    )
+                    raise ValueError("problem default sizes must contain variant index zero")
         if (
             not isinstance(self.logical_net_families, tuple)
-            or (
-                self.logical_net_families
-                and len(self.logical_net_families) != len(self.nets)
-            )
+            or (self.logical_net_families and len(self.logical_net_families) != len(self.nets))
             or any(
                 not isinstance(families, tuple) or len(families) != 2
                 for families in self.logical_net_families
             )
         ):
-            raise ValueError(
-                "logical net families must match the immutable placement nets"
-            )
+            raise ValueError("logical net families must match the immutable placement nets")
         if self.instance_ids and self.logical_net_families:
             expected_families = tuple(
                 (
@@ -155,9 +144,7 @@ class PlacementProblem:
                 for source, destination in self.nets
             )
             if self.logical_net_families != expected_families:
-                raise ValueError(
-                    "logical net families must match current physical endpoints"
-                )
+                raise ValueError("logical net families must match current physical endpoints")
 
     @property
     def size(self) -> int:
@@ -174,9 +161,7 @@ class PlacementProblem:
             raise ValueError("variant index must identify a pose-valid strip variant")
         return table[variant]
 
-    def selected_sizes(
-        self, variant_indices: tuple[int, ...]
-    ) -> tuple[tuple[int, int], ...]:
+    def selected_sizes(self, variant_indices: tuple[int, ...]) -> tuple[tuple[int, int], ...]:
         """Return box dimensions for one complete immutable selection."""
         indices = self._validate_variant_indices(variant_indices)
         if not self.variant_tables:
@@ -193,21 +178,16 @@ class PlacementProblem:
             )
         return tuple(selected)
 
-    def selected_variant_ids(
-        self, variant_indices: tuple[int, ...]
-    ) -> tuple[StripVariantId, ...]:
+    def selected_variant_ids(self, variant_indices: tuple[int, ...]) -> tuple[StripVariantId, ...]:
         """Return the exact physical identities in one complete selection."""
         indices = self._validate_variant_indices(variant_indices)
         if not self.variant_tables:
             return ()
         return tuple(
-            self.variant(strip, variant).variant_id
-            for strip, variant in enumerate(indices)
+            self.variant(strip, variant).variant_id for strip, variant in enumerate(indices)
         )
 
-    def _validate_variant_indices(
-        self, variant_indices: tuple[int, ...]
-    ) -> tuple[int, ...]:
+    def _validate_variant_indices(self, variant_indices: tuple[int, ...]) -> tuple[int, ...]:
         if not isinstance(variant_indices, tuple):
             raise ValueError("variant indices must be an immutable tuple")
         if not self.variant_tables and not variant_indices:
@@ -308,10 +288,7 @@ class DecodedPlacement:
             raise ValueError("realized direct inserts must be an immutable set of integer pairs")
         if (
             not isinstance(self.variant_indices, tuple)
-            or (
-                self.variant_indices
-                and len(self.variant_indices) != size
-            )
+            or (self.variant_indices and len(self.variant_indices) != size)
             or any(type(variant) is not int or variant < 0 for variant in self.variant_indices)
         ):
             raise ValueError(
@@ -441,10 +418,7 @@ class AnnealState:
             raise ValueError("annealing pair and gap profile sizes must match")
         if (
             not isinstance(self.variant_indices, tuple)
-            or (
-                self.variant_indices
-                and len(self.variant_indices) != size
-            )
+            or (self.variant_indices and len(self.variant_indices) != size)
             or any(type(variant) is not int or variant < 0 for variant in self.variant_indices)
         ):
             raise ValueError(
@@ -766,9 +740,7 @@ def _align_direct_target(
     x[producer], x[consumer] = x_pair
     y[producer], y[consumer] = y_pair
     width = max(coordinate + size[0] for coordinate, size in zip(x, sizes, strict=True))
-    used_height = max(
-        coordinate + size[1] for coordinate, size in zip(y, sizes, strict=True)
-    )
+    used_height = max(coordinate + size[1] for coordinate, size in zip(y, sizes, strict=True))
     if width > outline[0] or used_height > outline[1]:
         return None
 
@@ -977,9 +949,7 @@ def apply_move(
     if not isinstance(kind, MoveKind):
         raise ValueError("unknown annealing move kind")
     size = len(state.pair.positive)
-    if size == 0 or (
-        size == 1 and kind not in (MoveKind.GAP_STEP, MoveKind.CHANGE_VARIANT)
-    ):
+    if size == 0 or (size == 1 and kind not in (MoveKind.GAP_STEP, MoveKind.CHANGE_VARIANT)):
         return state
 
     positive = state.pair.positive
@@ -1008,9 +978,7 @@ def apply_move(
             return state
         problem.selected_sizes(state.variant_indices)
         mutable = tuple(
-            strip
-            for strip, variants in enumerate(problem.variant_tables)
-            if len(variants) > 1
+            strip for strip, variants in enumerate(problem.variant_tables) if len(variants) > 1
         )
         if not mutable:
             return state
@@ -1165,9 +1133,7 @@ def anneal_stage(
             current = candidate
             accepted_moves += 1
 
-    ordered_elites = tuple(
-        sorted(elites.values(), key=lambda elite: (elite.energy, elite.key))
-    )
+    ordered_elites = tuple(sorted(elites.values(), key=lambda elite: (elite.energy, elite.key)))
     final_state = AnnealState(
         pair=current.state.pair,
         gaps=current.state.gaps,
@@ -1269,16 +1235,13 @@ def split_stage_boundary(
         variant=selected,
     )
     family_templates = {
-        variant.template_key: index
-        for index, variant in enumerate(family.variants)
+        variant.template_key: index for index, variant in enumerate(family.variants)
     }
     try:
         selected_family_index = family_templates[selected.template_key]
     except KeyError:
         raise ValueError("selected split variant is outside its logical family") from None
-    right_family_index = (
-        selected_family_index + right_variant_offset
-    ) % len(family.variants)
+    right_family_index = (selected_family_index + right_variant_offset) % len(family.variants)
     left, right = split_strip_instance(
         family,
         parent,
@@ -1292,11 +1255,7 @@ def split_stage_boundary(
     )
     selected_keys = (left.variant.template_key, right.variant.template_key)
     child_indices = tuple(
-        next(
-            index
-            for index, variant in enumerate(table)
-            if variant.template_key == selected_key
-        )
+        next(index for index, variant in enumerate(table) if variant.template_key == selected_key)
         for table, selected_key in zip(child_tables, selected_keys, strict=True)
     )
     width_padding = problem.sizes[strip][0] - parent_table[0].box_width
@@ -1319,14 +1278,10 @@ def split_stage_boundary(
     )
     gaps = GapProfile(
         state.gaps.east[:strip] + (state.gaps.east[strip], 0) + state.gaps.east[strip + 1 :],
-        state.gaps.north[:strip]
-        + (state.gaps.north[strip], 0)
-        + state.gaps.north[strip + 1 :],
+        state.gaps.north[:strip] + (state.gaps.north[strip], 0) + state.gaps.north[strip + 1 :],
     )
     variant_indices = (
-        state.variant_indices[:strip]
-        + child_indices
-        + state.variant_indices[strip + 1 :]
+        state.variant_indices[:strip] + child_indices + state.variant_indices[strip + 1 :]
     )
     nets = _remap_nets(problem.nets, expanded)
     rebuilt_ids = (
@@ -1424,14 +1379,8 @@ def merge_stage_boundary(
         for index, variant in enumerate(merged_table)
         if variant.template_key == merged.variant.template_key
     )
-    width_padding = (
-        problem.sizes[left_strip][0]
-        - problem.variant_tables[left_strip][0].box_width
-    )
-    height_padding = (
-        problem.sizes[left_strip][1]
-        - problem.variant_tables[left_strip][0].box_height
-    )
+    width_padding = problem.sizes[left_strip][0] - problem.variant_tables[left_strip][0].box_width
+    height_padding = problem.sizes[left_strip][1] - problem.variant_tables[left_strip][0].box_height
 
     def collapsed(index: int) -> tuple[int, ...]:
         if index == right_strip:
@@ -1507,8 +1456,7 @@ def _realized_table_in_parent_order(
     from flab2bp.layout.strip_variants import variants_for_count
 
     realized = {
-        variant.template_key: variant
-        for variant in variants_for_count(family, machine_count)
+        variant.template_key: variant for variant in variants_for_count(family, machine_count)
     }
     try:
         return tuple(realized[variant.template_key] for variant in parent_table)
@@ -1542,6 +1490,7 @@ def _repair_permutation(
     for strip in order:
         repaired.insert(rng.randrange(len(repaired) + 1), strip)
     return tuple(repaired)
+
 
 def _score_state(
     problem: PlacementProblem,

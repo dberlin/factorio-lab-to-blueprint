@@ -87,8 +87,7 @@ def test_rotated_refinery_variant_serves_both_lane_sides() -> None:
 
     assert rotated
     assert all(
-        variant.footprint_width == 7 and variant.footprint_height == 3
-        for variant in rotated
+        variant.footprint_width == 7 and variant.footprint_height == 3 for variant in rotated
     )
     assert all(
         {plan.lane.side for plan in variant.attachment_plan} == {"north", "south"}
@@ -103,7 +102,6 @@ def test_equal_footprints_can_require_different_machine_pitch() -> None:
     assert (smelter.footprint_width, assembler.footprint_width) == (3, 3)
     assert smelter.pitch_x == 3
     assert assembler.pitch_x == 4
-
 
 
 def test_lane_profiles_exclude_collider_halo_rows() -> None:
@@ -131,8 +129,7 @@ def test_variants_expand_one_pose_into_exact_alternative_seatings() -> None:
         geometry = variant.placement_geometry
         assert all(
             plan.lane_y < -geometry.north_halo
-            or plan.lane_y
-            >= geometry.footprint_height + geometry.south_halo
+            or plan.lane_y >= geometry.footprint_height + geometry.south_halo
             for plan in variant.attachment_plan
         )
 
@@ -154,30 +151,22 @@ def test_shared_lane_items_receive_distinct_authoritative_columns() -> None:
     assert shared
     for plan in shared:
         assert len(plan.attachments) == len(plan.lane.items)
-        assert len({attachment.column for attachment in plan.attachments}) == len(
-            plan.attachments
-        )
+        assert len({attachment.column for attachment in plan.attachments}) == len(plan.attachments)
+
 
 def test_machine_row_origins_advance_by_pitch_and_reserve_edge_halo() -> None:
-    variant = default_strip_variant(
-        _family(_single_machine_spec("assembling-machine-1", count=3))
-    )
+    variant = default_strip_variant(_family(_single_machine_spec("assembling-machine-1", count=3)))
 
     assert variant.machine_origins_x == (0, 4, 8)
     assert variant.box_width >= 12
     envelopes = tuple(
         (
             origin - variant.placement_geometry.west_halo,
-            origin
-            + variant.footprint_width
-            + variant.placement_geometry.east_halo,
+            origin + variant.footprint_width + variant.placement_geometry.east_halo,
         )
         for origin in variant.machine_origins_x
     )
-    assert all(
-        left[1] <= right[0]
-        for left, right in zip(envelopes, envelopes[1:], strict=False)
-    )
+    assert all(left[1] <= right[0] for left, right in zip(envelopes, envelopes[1:], strict=False))
 
 
 def test_every_variant_attachment_is_exact_for_its_yaw_and_current_lane_row() -> None:
@@ -218,9 +207,7 @@ def test_variant_generation_is_deduplicated_and_deterministic() -> None:
 
     assert first == second
     for family in first:
-        assert len({variant.variant_id for variant in family.variants}) == len(
-            family.variants
-        )
+        assert len({variant.variant_id for variant in family.variants}) == len(family.variants)
         sort_keys = [variant.sort_key for variant in family.variants]
         assert sort_keys == sorted(sort_keys)
 
@@ -302,8 +289,7 @@ def test_realized_variant_order_and_geometry_are_stable_for_every_count() -> Non
         assert sum(instance.machine_count for instance in instances) == 7
         assert all(
             len(instance.variant.machine_origins_x) == instance.machine_count
-            and instance.variant.box_width
-            == instance.machine_count * instance.variant.pitch_x
+            and instance.variant.box_width == instance.machine_count * instance.variant.pitch_x
             for instance in instances
         )
 
@@ -338,23 +324,13 @@ def test_freeform_compatibility_selects_the_pose_default_deterministically() -> 
 def test_repeated_stage_boundary_splits_conserve_every_machine_and_lane(
     machine_count: int,
 ) -> None:
-    family = _family(
-        _single_machine_spec("assembling-machine-1", count=machine_count)
-    )
-    instances = list(
-        partition_strip_family(family, max_machine_count=machine_count)
-    )
-    original_lane_ids = tuple(
-        lane.lane_id for lane in family.input_lanes + family.output_lanes
-    )
+    family = _family(_single_machine_spec("assembling-machine-1", count=machine_count))
+    instances = list(partition_strip_family(family, max_machine_count=machine_count))
+    original_lane_ids = tuple(lane.lane_id for lane in family.input_lanes + family.output_lanes)
 
     while (
         parent_index := next(
-            (
-                index
-                for index, instance in enumerate(instances)
-                if instance.machine_count > 1
-            ),
+            (index for index, instance in enumerate(instances) if instance.machine_count > 1),
             -1,
         )
     ) >= 0:
@@ -374,8 +350,7 @@ def test_repeated_stage_boundary_splits_conserve_every_machine_and_lane(
     assert len(instances) <= machine_count
     assert sum(instance.machine_count for instance in instances) == machine_count
     assert all(
-        tuple(plan.lane.lane_id for plan in instance.variant.attachment_plan)
-        == original_lane_ids
+        tuple(plan.lane.lane_id for plan in instance.variant.attachment_plan) == original_lane_ids
         for instance in instances
     )
 

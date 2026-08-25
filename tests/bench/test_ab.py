@@ -14,6 +14,7 @@ stay at ~21s and a bake-off belongs behind a script entry point.
 from __future__ import annotations
 
 import argparse
+import mmap
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -525,16 +526,22 @@ class _MemoryLayout:
 
     def __call__(self) -> Placement:
         payload = bytearray(self.megabytes * 1024 * 1024)
+        # Commit every virtual page so peak RSS observes the requested allocation.
+        for offset in range(0, len(payload), mmap.PAGESIZE):
+            payload[offset] = 1
         placement = _placement()
         assert payload
         return placement
 
 
 def test_isolated_attempt_peak_rss_is_not_contaminated_by_a_prior_attempt() -> None:
-    large = isolated_attempt(_MemoryLayout(48))
-    small = isolated_attempt(_MemoryLayout(1))
+    large_megabytes = 96
+    small_megabytes = 1
+    large = isolated_attempt(_MemoryLayout(large_megabytes))
+    small = isolated_attempt(_MemoryLayout(small_megabytes))
 
-    assert large.peak_rss_mb > small.peak_rss_mb + 24
+    minimum_resident_delta = (large_megabytes - small_megabytes) / 2
+    assert large.peak_rss_mb > small.peak_rss_mb + minimum_resident_delta
 
 
 

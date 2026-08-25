@@ -333,9 +333,7 @@ def _estimated_length(net: _PreparedNet) -> int:
         )
     return min(
         (
-            abs(x - destination[0])
-            + abs(y - destination[1])
-            + abs(level - destination[2])
+            abs(x - destination[0]) + abs(y - destination[1]) + abs(level - destination[2])
             for x, y, level in net.boundary_goals
         ),
         default=0,
@@ -434,9 +432,7 @@ def _route_ends(
             sorted(
                 {
                     index
-                    for cell in _adjacent_port(
-                        (net.src.x, net.src.y, net.src.z)
-                    )
+                    for cell in _adjacent_port((net.src.x, net.src.y, net.src.z))
                     if (index := _live_index(grid, flags, cell)) is not None
                 }
             )
