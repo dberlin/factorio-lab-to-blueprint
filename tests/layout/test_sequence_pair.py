@@ -1,5 +1,9 @@
+import base64
+import os
 import pickle
 import random
+import subprocess
+import sys
 from collections.abc import Callable, Iterable
 from dataclasses import FrozenInstanceError, replace
 from itertools import combinations, permutations
@@ -54,6 +58,7 @@ from flab2bp.layout.sequence_pair import (
     split_stage_boundary,
 )
 from flab2bp.layout.strip_variants import (
+    StripFamilyId,
     StripInstanceId,
     StripVariant,
     _variant_id,
@@ -1256,6 +1261,53 @@ def test_placement_key_cache_preserves_pickle_and_ordering() -> None:
     assert lower < restored
 
 
+def test_placement_key_pickle_rehashes_under_destination_process_seed() -> None:
+    family_id = StripFamilyId("process-seeded-hash", 0)
+    key = PlacementKey(
+        x=(1,),
+        y=(2,),
+        dimensions=((3, 4),),
+        east_gaps=(5,),
+        north_gaps=(6,),
+        instance_ids=(StripInstanceId(family_id, 0, 1),),
+    )
+    payload = base64.b64encode(pickle.dumps(key)).decode()
+    script = """
+import base64
+import pickle
+import sys
+
+key = pickle.loads(base64.b64decode(sys.argv[1]))
+fresh = type(key)(
+    key.x,
+    key.y,
+    key.dimensions,
+    key.east_gaps,
+    key.north_gaps,
+    key.instance_ids,
+    key.variant_ids,
+)
+assert key == fresh
+assert hash(key) == hash(fresh)
+assert {key: "present"}[fresh] == "present"
+assert fresh in {key}
+print(hash(key))
+"""
+
+    hashes = tuple(
+        subprocess.run(
+            (sys.executable, "-c", script, payload),
+            check=True,
+            capture_output=True,
+            text=True,
+            env={**os.environ, "PYTHONHASHSEED": seed},
+        ).stdout.strip()
+        for seed in ("101", "202")
+    )
+
+    assert hashes[0] != hashes[1]
+
+
 def _archive_incumbent(
     *,
     width: int,
@@ -1511,6 +1563,34 @@ def test_incremental_archive_matches_batch_after_mandatory_winners_collapse() ->
         second_blended,
         third_blended,
         collapsed_extremes,
+    )
+
+
+def test_incremental_archive_replaces_late_same_key_with_batch_canonical_candidate() -> None:
+    mandatory = _archive_incumbent(width=1, hpwl=0.0, history=0.0)
+    early = _archive_incumbent(width=8, hpwl=1.0, history=1.0, seed=19)
+    other = _archive_incumbent(width=9, hpwl=1.0, history=1.0)
+    late_canonical = replace(
+        early,
+        state=replace(early.state, base_seed=7),
+        breakdown=replace(early.breakdown, missed_direct_inserts=1_000),
+    )
+    builder = sequence_pair_module.EliteArchiveBuilder(elite_count=3)
+    for candidate in (mandatory, early, other):
+        builder.add(candidate)
+    eager_before_late = builder.archive
+
+    builder.add(late_canonical)
+    batch = sequence_pair_module.build_elite_archive(
+        (mandatory, early, other, late_canonical),
+        elite_count=3,
+    )
+
+    assert builder.archive != eager_before_late
+    assert builder.archive == batch
+    assert (
+        next(entry.incumbent for entry in builder.archive if entry.incumbent.key == early.key)
+        is late_canonical
     )
 
 

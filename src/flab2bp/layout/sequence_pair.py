@@ -538,6 +538,21 @@ class PlacementKey:
         """Return the process-local exact-key hash computed at construction."""
         return self._cached_hash
 
+    def __reduce__(self) -> tuple[type[PlacementKey], tuple[object, ...]]:
+        """Reconstruct through the constructor so pickle never carries a process hash."""
+        return (
+            type(self),
+            (
+                self.x,
+                self.y,
+                self.dimensions,
+                self.east_gaps,
+                self.north_gaps,
+                self.instance_ids,
+                self.variant_ids,
+            ),
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class AnnealIncumbent:
@@ -574,7 +589,7 @@ class TaggedAnnealIncumbent:
 
 @dataclass(slots=True)
 class EliteArchiveBuilder:
-    """Bounded incremental state for exact batch-equivalent elite retention."""
+    """Incremental exact state with lazy batch-equivalent elite materialization."""
 
     elite_count: int
     _archive: tuple[TaggedAnnealIncumbent, ...] = field(
@@ -588,12 +603,7 @@ class EliteArchiveBuilder:
         default_factory=dict,
         repr=False,
     )
-    _archive_blended_by_key: dict[PlacementKey, AnnealIncumbent] = field(
-        init=False,
-        default_factory=dict,
-        repr=False,
-    )
-    _category_winners: dict[EliteCategory, AnnealIncumbent] = field(
+    _canonical_by_key: dict[PlacementKey, AnnealIncumbent] = field(
         init=False,
         default_factory=dict,
         repr=False,
@@ -604,34 +614,19 @@ class EliteArchiveBuilder:
             raise ValueError("elite count must be a positive integer")
 
     def add(self, candidate: AnnealIncumbent) -> None:
-        """Retain one candidate without losing legacy or canonical runners-up."""
+        """Retain one candidate without losing legacy or canonical representatives."""
         _retain_legacy_blended_elite(self._blended_by_key, candidate, self.elite_count)
-        changed = _retain_canonical_blended_elite(
-            self._archive_blended_by_key,
-            candidate,
-            self.elite_count,
-        )
-        for category in (
-            EliteCategory.NARROWEST,
-            EliteCategory.LOWEST_HPWL,
-            EliteCategory.LOWEST_HISTORY,
-        ):
-            changed |= _retain_category_winner(
-                self._category_winners,
-                category,
-                candidate,
-            )
-        self._archive_dirty |= changed
+        previous = self._canonical_by_key.get(candidate.key)
+        if previous is None or _archive_dedupe_key(candidate) < _archive_dedupe_key(previous):
+            self._canonical_by_key[candidate.key] = candidate
+            self._archive_dirty = True
 
     @property
     def archive(self) -> tuple[TaggedAnnealIncumbent, ...]:
         """Materialize the tagged canonical archive only after retained changes."""
         if self._archive_dirty:
             self._archive = build_elite_archive(
-                (
-                    *self._archive_blended_by_key.values(),
-                    *self._category_winners.values(),
-                ),
+                self._canonical_by_key.values(),
                 self.elite_count,
             )
             self._archive_dirty = False
@@ -1775,56 +1770,6 @@ def _retain_legacy_blended_elite(
     if len(elites) > elite_count:
         worst = max(elites.values(), key=_blended_archive_key)
         del elites[worst.key]
-
-
-def _retain_canonical_blended_elite(
-    elites: dict[PlacementKey, AnnealIncumbent],
-    candidate: AnnealIncumbent,
-    elite_count: int,
-) -> bool:
-    previous = elites.get(candidate.key)
-    if previous is not None and (
-        previous.energy < candidate.energy
-        or (
-            previous.energy == candidate.energy
-            and _archive_dedupe_key(previous) <= _archive_dedupe_key(candidate)
-        )
-    ):
-        return False
-    elites[candidate.key] = candidate
-    if len(elites) > elite_count:
-        worst = max(elites.values(), key=_blended_archive_key)
-        del elites[worst.key]
-        return worst.key != candidate.key
-    return True
-
-
-def _retain_category_winner(
-    winners: dict[EliteCategory, AnnealIncumbent],
-    category: EliteCategory,
-    candidate: AnnealIncumbent,
-) -> bool:
-    previous = winners.get(category)
-    if previous is not None:
-        if candidate.key == previous.key:
-            if _archive_dedupe_key(previous) <= _archive_dedupe_key(candidate):
-                return False
-        elif not _category_candidate_precedes(category, candidate, previous):
-            return False
-    winners[category] = candidate
-    return True
-
-
-def _category_candidate_precedes(
-    category: EliteCategory,
-    candidate: AnnealIncumbent,
-    previous: AnnealIncumbent,
-) -> bool:
-    if category is EliteCategory.NARROWEST:
-        return quality_archive_key(candidate) < quality_archive_key(previous)
-    if category is EliteCategory.LOWEST_HPWL:
-        return _lowest_hpwl_archive_key(candidate) < _lowest_hpwl_archive_key(previous)
-    return _lowest_history_archive_key(candidate) < _lowest_history_archive_key(previous)
 
 
 def _blended_archive_key(candidate: AnnealIncumbent) -> tuple[SearchEnergy, PlacementKey]:
