@@ -505,14 +505,26 @@ class TestPlanStrips:
         assert sum(len(lane) for lane in strips[0].in_above) == 3
         assert sum(len(lane) for lane in strips[0].in_below) == 2
 
-    def test_seating_is_bounded_by_slots_and_not_by_lanes(self) -> None:
-        """Six ingredients need seven slots on a face that offers six.
+    def test_six_ingredients_seat_once_the_product_leaves_east(self) -> None:
+        """Six fit when the output flanks; seven still do not, and must not.
 
-        The refusal has to name the arithmetic, because "unfed machine" three
-        stages later is what this replaced.
+        THIS TEST USED TO ASSERT THAT SIX REFUSED, and it was right about the
+        arithmetic and wrong about the building.  An Assembling Machine defines
+        TWELVE insert poses, three per side, and a lane-fed strip was reading two
+        of the four sides.  Six ingredients and a product is seven connections
+        into six slots only if the east face does not exist.
+
+        Seven ingredients still refuse, and that is the half of this test that
+        matters.  The north and south faces carry three sorters each and the east
+        face carries the product; the ceiling moved from six connections to
+        seven, it did not go away.  If a change makes seven pass, it has relaxed
+        ``game.slot_occupancy`` rather than used another face.
         """
+        strips = plan_strips(self._many_input_spec(6), strip_len=6)
+        assert strips[0].flank_outputs, "six must seat by flanking, not by doubling up"
+        assert len(strips[0].in_lanes) == 6
         with pytest.raises(ValueError, match="insert pose"):
-            plan_strips(self._many_input_spec(6), strip_len=6)
+            plan_strips(self._many_input_spec(7), strip_len=6)
 
     def test_a_recipe_needing_more_lanes_than_two_sides_carry_is_rejected(self) -> None:
         """Truncating an ingredient would paste cleanly and then stall."""
@@ -1991,25 +2003,82 @@ class TestMixedItemLanes:
     want.
     """
 
-    def test_a_six_ingredient_recipe_is_REFUSED_and_the_refusal_names_why(self) -> None:
-        """``universe-matrix`` needs seven slots and a Matrix Lab lane reaches six.
+    def test_a_six_ingredient_recipe_builds_with_its_product_leaving_east(self) -> None:
+        """``universe-matrix`` wants seven connections and a Matrix Lab has twelve.
 
-        THIS TEST USED TO ASSERT THE OPPOSITE, and what it was asserting was an
-        invalid blueprint.  A Matrix Lab offers three insert poses per face to a
-        lane, so six ingredients and one output are seven sorters into six slots;
-        mixing items onto shared lanes saves ROWS and saves no slot at all.  The
-        plan it used to produce emitted -- measured on the tree before this
-        change -- THREE sorters onto slot 6 and three onto slot 7 of every Matrix
-        Lab, four shared slots per build.  The game stores one connection per
-        slot and ``WriteObjectConn`` evicts the previous one, so four of those
-        six ingredients pasted unwired.
+        THIS TEST HAS ASSERTED BOTH ANSWERS BEFORE THIS ONE.  It first asserted
+        that six ingredients seated, and the plan it was blessing put THREE
+        sorters onto slot 6 and three onto slot 7 of every Matrix Lab -- four
+        shared slots per build, four ingredients pasting unwired, because
+        ``WriteObjectConn`` evicts rather than refuses.  It then asserted the
+        refusal that replaced it, which was honest and was still reading two of
+        the machine's four faces.
 
-        A refusal is the honest answer and this is the only DSP recipe it binds.
-        Lifting it means serving a machine's EAST and WEST faces, which freeform
-        has never done; ``docs/BACKLOG.md`` carries the entry.
+        What it asserts now is the whole of it: six ingredients on the north and
+        south faces, the product out the EAST face into a belt in the gap column,
+        and a placement the validator accepts.  ``game.slot_occupancy`` is
+        unchanged and is part of what accepts it -- seven connections, seven
+        distinct slots, on a building the game gives twelve.
         """
-        with pytest.raises(ValueError, match="insert pose"):
-            plan_strips(six_input_spec(), strip_len=6)
+        spec = six_input_spec()
+        strips = plan_strips(spec, strip_len=6)
+        assert strips and all(s.flank_outputs for s in strips)
+        p = FreeformLayout(power=False).lay_out(spec, time_budget_s=0.5)
+        report = _full_report(p, spec, power=False)
+        assert report.ok, "\n".join(f"{f.check}: {f.message}" for f in report.errors[:8])
+
+    def test_the_seventh_connection_lands_on_a_face_no_lane_can_reach(self) -> None:
+        """The extra slot is EARNED, not borrowed from a lane the plan already had.
+
+        Without this the test above could pass on a build that had quietly gone
+        back to seating seven sorters over six lane-reachable slots -- the
+        occupancy check convicts two sorters on ONE slot, and would say nothing
+        about seven sorters spread over six slots and one machine left unfed.
+
+        So: every Matrix Lab carries seven connections with seven distinct slot
+        indices, and at least one of those indices is a slot NO lane row can
+        name, north or south, at any distance a sorter reaches.  That slot is on
+        the east face and there is nowhere else it could have come from.
+        """
+        spec = six_input_spec()
+        p = FreeformLayout(power=False).lay_out(spec, time_budget_s=0.5)
+        labs = {
+            i
+            for i, b in enumerate(p.buildings)
+            if b.item_id == MACHINE_ITEM_IDS["matrix-lab"]
+        }
+        assert labs, "the spec builds Matrix Labs or this proves nothing"
+
+        from flab2bp.layout import slots as slot_table
+
+        item_id = MACHINE_ITEM_IDS["matrix-lab"]
+        yaw = slot_table.lane_orientation(item_id)
+        probe = slot_table.probe_building(item_id, yaw)
+        lane_reachable: set[int] = set()
+        for lane_y in list(range(-catalog.SORTER_MAX_REACH, 0)) + list(
+            range(probe.height, probe.height + catalog.SORTER_MAX_REACH)
+        ):
+            for a in slot_table.attachable_columns(probe, lane_y).values():
+                lane_reachable.add(a.slot)
+
+        named: dict[int, list[int]] = {}
+        for b in p.buildings:
+            for link, slot in ((b.output_obj, b.output_to_slot), (b.input_obj, b.input_from_slot)):
+                if link in labs and slot >= 0:
+                    named.setdefault(link, []).append(slot)
+        assert named, "no connection names a Matrix Lab at all"
+        for lab, slot_ids in named.items():
+            assert len(slot_ids) == len(set(slot_ids)), (
+                f"lab {lab} names slot(s) twice: {sorted(slot_ids)}"
+            )
+            assert len(slot_ids) == 7, (
+                f"lab {lab} carries {len(slot_ids)} connections, not six ingredients "
+                f"and a product: {sorted(slot_ids)}"
+            )
+            assert set(slot_ids) - lane_reachable, (
+                f"lab {lab} used only slots a north or south lane can reach "
+                f"({sorted(lane_reachable)}); the east face was never used"
+            )
 
     def test_a_five_ingredient_recipe_still_mixes_and_validates(self) -> None:
         """Mixing is not dead, it is bounded.  Five fits, and has to keep fitting.

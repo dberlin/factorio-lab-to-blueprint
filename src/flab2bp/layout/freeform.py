@@ -634,6 +634,25 @@ class Strip:
     #: Parameter block for a machine configured by a MODE rather than a recipe
     #: (Energy Exchanger, Ray Receiver).  Empty for an ordinary craft.
     mode_params: tuple[int, ...] = ()
+    #: Does the product leave by the machines' EAST face instead of their south?
+    #:
+    #: A machine slot holds one connection and a face offers three, so a lane-fed
+    #: strip has a hard ceiling of six: three columns north, three south.
+    #: ``universe-matrix`` is six ingredients and a product, and seven does not
+    #: fit -- the only recipe in the dataset where the true bound binds.
+    #:
+    #: The east face is the way out, and the OUTPUT is what goes there, because
+    #: an output MERGES and an input would have to split.  Each machine drops its
+    #: product east into a one-tile belt in the gap beside it; those gap belts run
+    #: south and join the output row under the band, which is where it always was.
+    #: Several belts feeding one is a thing a belt does; one belt feeding several
+    #: is a splitter, and the no-splitter invariant is what buys the whole
+    #: lane-per-destination design.
+    #:
+    #: The gap is bought, not found: ``pw`` is the machine's clearance PLUS ONE
+    #: when this is set, and the extra column is the belt's.  Clearance is what
+    #: the collider needs, so a belt inside it would paste as a collision.
+    flank_outputs: bool = False
 
     @property
     def in_lanes(self) -> tuple[str, ...]:
@@ -794,7 +813,10 @@ class Strip:
             if other is lane or other == lane:
                 return seen
             seen += len(other)
-        seen = len(self.out_lanes)
+        # A flanked output takes no south column at all -- its sorters leave by
+        # the east face -- so the ingredients below start at zero.  Charging them
+        # for it would ration away the very column the flank exists to free.
+        seen = 0 if self.flank_outputs else len(self.out_lanes)
         for other in self.in_below:
             if other is lane or other == lane:
                 return seen
@@ -1236,6 +1258,30 @@ def _side_lane_caps(item_id: int, yaw: float, band_rows: int) -> tuple[int, int]
     return caps[0], caps[1]
 
 
+def _flank_seat(item_id: int, yaw: float, gap: int) -> slots.Attachment | None:
+    """Where a machine's product leaves eastward, for a belt in column ``gap``.
+
+    ``gap`` is measured from the machine's own west edge and is its CLEARANCE
+    width, so the belt stands one column clear of everything the collider needs.
+    Putting it inside the clearance would paste as a collision on the belt, which
+    is the same rule that makes an Assembling Machine reserve four columns for a
+    three-column footprint.
+
+    The row nearest the machine's south edge wins: the gap belt runs from that
+    row down to the output lane under the band, and every row above it is another
+    belt tile to lay and another cell the router has to path around.
+
+    ``None`` means this building offers no pose on its east face a sorter of that
+    span could name.  There is no nearest-legal answer -- refusing to flank is the
+    caller's only honest move, and the six-slot ceiling stands.
+    """
+    probe = slots.probe_building(item_id, yaw)
+    rows = slots.attachable_rows(probe, gap)
+    if not rows:
+        return None
+    return rows[max(rows)]
+
+
 def _seat_inputs(
     items: tuple[str, ...],
     n_sinks: int,
@@ -1243,6 +1289,8 @@ def _seat_inputs(
     below_cap: int,
     max_per_lane: int,
     columns: int,
+    *,
+    flank_outputs: bool = False,
 ) -> tuple[tuple[tuple[str, ...], ...], tuple[tuple[str, ...], ...]]:
     """Seat ingredients into lanes above and below the machine band.
 
@@ -1276,9 +1324,20 @@ def _seat_inputs(
     honest answer, and it is raised where the arithmetic is visible rather than
     left to surface downstream as an unfed machine.
 
+    ``flank_outputs`` says the product leaves by the machines' EAST face, so the
+    output lane costs a ROW below the band and no COLUMN on it.  That is the one
+    degree of freedom that seats seven connections on a building that offers six
+    per pair of faces, and it is why ``universe-matrix`` seats at all: three
+    ingredients mixed onto one lane above, three onto one below, and the product
+    out east.  It changes only the column arithmetic here -- the rows, the reach
+    caps and the mixing ladder are the same for both.
+
     Returns ``(above, below)``.  ``below`` shares the south side with the output
     lanes, so it is kept as small as possible.
     """
+    # The output lane still needs its ROW under the band even when flanked -- the
+    # gap belts drain into it -- so only the column charge goes away.
+    out_columns = 0 if flank_outputs else (1 if n_sinks else 0)
     n = len(items)
     if n == 0:
         return (), ()
@@ -1301,15 +1360,16 @@ def _seat_inputs(
                 continue  # no room left below for an output lane
             if sum(len(lane) for lane in above) > columns:
                 continue  # more sorters than the north face has slots
-            if sum(len(lane) for lane in below) + (1 if n_sinks else 0) > columns:
+            if sum(len(lane) for lane in below) + out_columns > columns:
                 continue  # ... or than the south face has, output lane included
             return above, below
+    flanked = " with the product leaving east" if flank_outputs else ""
     raise ValueError(
-        f"{n} ingredients cannot be seated: {above_cap} lane(s) above and "
-        f"{below_cap} below carrying at most {max_per_lane} items each, over a "
-        f"face that offers {columns} insert pose(s) per side, leaves no room for "
-        f"{n} ingredient sorter(s) and the output lane. A machine slot holds one "
-        f"connection, so two sorters cannot share a column"
+        f"{n} ingredients cannot be seated{flanked}: {above_cap} lane(s) above "
+        f"and {below_cap} below carrying at most {max_per_lane} items each, over "
+        f"a face that offers {columns} insert pose(s) per side, leaves no room "
+        f"for {n} ingredient sorter(s) and the output lane. A machine slot holds "
+        f"one connection, so two sorters cannot share a column"
     )
 
 
@@ -1375,6 +1435,16 @@ def plan_strips(spec: BuildSpec, *, strip_len: int = 6) -> list[Strip]:
             if item in spec.outputs or not dests:
                 sinks.append((item, ""))  # leaves the build
 
+        columns = (
+            len(slots.attachable_columns(slots.probe_building(g.item_id, g.yaw), -1))
+            or 1
+        )
+        # THE EAST FACE IS THE SECOND ATTEMPT, NEVER THE FIRST.  Flanking buys a
+        # seventh connection and costs a belt column per machine, so a recipe that
+        # seats on the north and south faces alone must keep seating exactly as it
+        # did -- otherwise every strip in the corpus pays for a slot only
+        # `universe-matrix` needs.
+        flank = False
         try:
             in_above, in_below = _seat_inputs(
                 in_items,
@@ -1382,15 +1452,28 @@ def plan_strips(spec: BuildSpec, *, strip_len: int = 6) -> list[Strip]:
                 above_cap,
                 below_cap,
                 max_per_lane=g.width,
-                columns=len(
-                    slots.attachable_columns(
-                        slots.probe_building(g.item_id, g.yaw), -1
-                    )
-                )
-                or 1,
+                columns=columns,
             )
         except ValueError as exc:
-            raise ValueError(f"recipe {g.recipe_id!r}: {exc}") from None
+            # One sink, because one gap belt beside a machine carries one item.
+            # A producer feeding several destinations would need a gap column
+            # each, and the second one is not free the way the first is.
+            seat = _flank_seat(g.item_id, g.yaw, g.pitch_w) if len(sinks) == 1 else None
+            if seat is None:
+                raise ValueError(f"recipe {g.recipe_id!r}: {exc}") from None
+            try:
+                in_above, in_below = _seat_inputs(
+                    in_items,
+                    len(sinks),
+                    above_cap,
+                    below_cap,
+                    max_per_lane=g.width,
+                    columns=columns,
+                    flank_outputs=True,
+                )
+            except ValueError as flanked:
+                raise ValueError(f"recipe {g.recipe_id!r}: {flanked}") from None
+            flank = True
 
         # Output lanes share the south side with any overflow inputs, so the
         # shard size is what is left after those are seated.
@@ -1406,7 +1489,12 @@ def plan_strips(spec: BuildSpec, *, strip_len: int = 6) -> list[Strip]:
             slots.attachable_columns(slots.probe_building(g.item_id, g.yaw), g.pitch_h)
         )
         out_cap = below_cap - len(in_below)
-        if south_columns:
+        if flank:
+            # A flanked output takes no south column, so `south_columns` does not
+            # bound it -- but one gap belt carries one item, so one lane is the
+            # whole allowance.
+            out_cap = min(out_cap, 1)
+        elif south_columns:
             out_cap = min(
                 out_cap, south_columns - sum(len(lane) for lane in in_below)
             )
@@ -1450,12 +1538,16 @@ def plan_strips(spec: BuildSpec, *, strip_len: int = 6) -> list[Strip]:
                         mw=g.width,
                         mh=g.height,
                         yaw=g.yaw,
-                        pw=g.pitch_w,
+                        # The gap belt's column is bought here, once: clearance
+                        # plus one, so the belt stands clear of the collider that
+                        # made the clearance necessary.
+                        pw=g.pitch_w + 1 if flank else g.pitch_w,
                         ph=g.pitch_h,
                         in_above=in_above,
                         in_below=in_below,
                         out_lanes=tuple(shard),
                         mode_params=g.mode_params,
+                        flank_outputs=flank,
                     )
                 )
     return strips
@@ -2437,6 +2529,20 @@ def _emit_strip(
             tuple(lane_idx[row]),
             s.machines,
         )
+        if s.flank_outputs:
+            sorters += _flank_lane(
+                canvas,
+                s,
+                machines,
+                lane_idx[row],
+                oy + row,
+                item,
+                item_rate(item, out_rates),
+                belt_id,
+                belt_model,
+                claimed,
+            )
+            continue
         tier, _count = _pick_sorter(item_rate(item, out_rates), span, 1)
         sorters += _link_lane(
             canvas,
@@ -2457,6 +2563,105 @@ def _emit_strip(
         sorters += feed(lane, row=row, span=s.sorter_span(row), near_edge=bottom)
 
     return in_ports, out_ports, sorters
+
+
+def _flank_lane(
+    canvas: _Canvas,
+    s: Strip,
+    machines: list[int],
+    out_lane: list[int],
+    lane_y: int,
+    item: str,
+    rate: Fraction,
+    belt_id: int,
+    belt_model: int,
+    claimed: dict[int, set[int]],
+) -> int:
+    """One product sorter per machine, EAST into the gap belt beside it.
+
+    The south face of a lane-fed machine offers three columns and so does the
+    north, and ``universe-matrix`` wants seven connections.  This is where the
+    seventh comes from: the product leaves by the east face instead of the south,
+    which hands the whole south face back to the ingredients.
+
+    Geometry, per machine:
+
+    * a belt stands in the column one past the machine's CLEARANCE -- ``pw - 1``
+      from its west edge, with ``pw`` already bought a column wider for exactly
+      this.  Inside the clearance the game's own collider check would call it a
+      collision;
+    * a sorter runs from the machine's lowest free east pose into that belt;
+    * the belt runs SOUTH to the output lane under the band and joins it.
+
+    JOINING, NOT SPLITTING, IS WHY THE OUTPUT IS WHAT GETS FLANKED.  A belt tile
+    takes several feeders and has one successor, so several gap belts draining
+    into one output lane is a shape a belt makes natively.  An ingredient would
+    have to go the other way -- one lane feeding a gap belt per machine -- and
+    that is a splitter per machine, which is the invariant a lane per destination
+    exists to keep.
+
+    A machine whose east slots are all spoken for is SKIPPED, silently and
+    beltless, exactly as ``_link_lane`` skips one whose columns are.  It is not a
+    fallback: an unwired product is what the flow checks convict, so the
+    placement is refused rather than shipped short.  The belt is laid only after
+    the slot is secured, so a skip leaves no orphan belt behind either.
+    """
+    placed = 0
+    for m_idx in machines:
+        m = canvas.buildings[m_idx]
+        gx = m.x + s.pw - 1
+        rows = slots.attachable_rows(m, gx)
+        taken = claimed.setdefault(m_idx, set())
+        # Lowest free row first: the gap belt runs from there down to the output
+        # lane, so every row further north is another belt tile and another cell
+        # the router has to path around.
+        ry = next((y for y in sorted(rows, reverse=True) if rows[y].slot not in taken), None)
+        if ry is None:
+            continue
+        got = rows[ry]
+        tail = next((i for i in out_lane if canvas.buildings[i].x == gx), None)
+        if tail is None:
+            continue
+        taken.add(got.slot)
+        column: list[int] = []
+        for y in range(ry, lane_y):
+            column.append(
+                canvas.add(
+                    PlacedBuilding(
+                        item_id=belt_id,
+                        model_index=belt_model,
+                        x=gx,
+                        y=y,
+                        width=1,
+                        height=1,
+                        yaw=Facing.SOUTH.value,
+                        carries_item=item,
+                    )
+                )
+            )
+        for a, b in zip(column, column[1:], strict=False):
+            canvas.buildings[a] = _relink(canvas.buildings[a], output_obj=b)
+        canvas.buildings[column[-1]] = _relink(canvas.buildings[column[-1]], output_obj=tail)
+        tier, _count = _pick_sorter(rate, got.span, 1)
+        canvas.buildings.append(
+            PlacedBuilding(
+                item_id=tier,
+                model_index=catalog.building(tier).model_index,
+                x=got.cell[0],
+                y=got.cell[1],
+                width=1,
+                height=1,
+                x2=gx,
+                y2=ry,
+                z2=Fraction(0),
+                yaw=Facing.EAST.value,
+                yaw2=Facing.EAST.value,
+                input_obj=m_idx,
+                output_obj=column[0],
+            )
+        )
+        placed += 1
+    return placed
 
 
 def _link_lane(
