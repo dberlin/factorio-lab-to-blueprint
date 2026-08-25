@@ -28,12 +28,15 @@ from flab2bp.layout.route_feedback import (
 )
 from flab2bp.layout.sequence_pair import (
     AnnealConfig,
+    AnnealIncumbent,
     AnnealState,
     DecodedPlacement,
     DirectInsertTarget,
+    EnergyBreakdown,
     GapProfile,
     MoveKind,
     PlacementCostContext,
+    PlacementKey,
     PlacementProblem,
     SearchEnergy,
     SequencePair,
@@ -639,6 +642,12 @@ def test_fixed_seed_reproduces_variant_trace() -> None:
     assert tuple(elite.state.variant_indices for elite in first.elites) == tuple(
         elite.state.variant_indices for elite in second.elites
     )
+    assert first.archive == second.archive
+    assert first.elites == tuple(entry.incumbent for entry in first.archive)
+    assert all(
+        elite.key.variant_ids == problem.selected_variant_ids(elite.state.variant_indices)
+        for elite in first.elites
+    )
     assert first.final_state.variant_indices == second.final_state.variant_indices
 
 
@@ -1144,6 +1153,174 @@ def test_cost_context_must_match_problem_net_count() -> None:
         )
 
 
+def _archive_incumbent(
+    *,
+    width: int,
+    hpwl: float,
+    history: float,
+    overflow: int = 0,
+    seed: int = 0,
+) -> AnnealIncumbent:
+    state = AnnealState(
+        pair=SequencePair((0,), (0,)),
+        gaps=GapProfile.zero(1),
+        base_seed=seed,
+        variant_indices=(0,),
+    )
+    decoded = DecodedPlacement(
+        x=(0,),
+        y=(0,),
+        width=width,
+        used_height=1,
+        x_windows=((0, 0),),
+        y_windows=((0, 0),),
+        gap_area=0,
+        variant_indices=(0,),
+    )
+    dimensions = ((width, 1),)
+    return AnnealIncumbent(
+        state=state,
+        decoded=decoded,
+        breakdown=EnergyBreakdown(
+            width=width,
+            used_height=1,
+            box_area=width,
+            gap_area=0,
+            weighted_hpwl=hpwl,
+            history_cost=history,
+            missed_direct_inserts=0,
+            hard_outline_overflow=overflow,
+            outline_height=1,
+            area_lower_bound=1,
+            net_count=1,
+        ),
+        key=PlacementKey(
+            x=(0,),
+            y=(0,),
+            dimensions=dimensions,
+            east_gaps=(0,),
+            north_gaps=(0,),
+        ),
+    )
+
+
+def test_elite_archive_keeps_distinct_narrowest_when_blended_winner_is_wider() -> None:
+    wider_blended = _archive_incumbent(width=8, hpwl=0.0, history=0.0)
+    narrowest = _archive_incumbent(width=4, hpwl=100.0, history=100.0)
+
+    archive = sequence_pair_module.build_elite_archive(
+        (wider_blended, narrowest),
+        elite_count=1,
+    )
+
+    assert tuple(entry.incumbent for entry in archive) == (wider_blended, narrowest)
+    assert archive[0].categories == (
+        sequence_pair_module.EliteCategory.BLENDED,
+        sequence_pair_module.EliteCategory.LOWEST_HPWL,
+        sequence_pair_module.EliteCategory.LOWEST_HISTORY,
+    )
+    assert archive[1].categories == (sequence_pair_module.EliteCategory.NARROWEST,)
+
+
+def test_elite_archive_retains_all_distinct_category_winners_beyond_cap() -> None:
+    blended = _archive_incumbent(width=8, hpwl=10.0, history=10.0)
+    narrowest = _archive_incumbent(width=4, hpwl=1_000.0, history=1_000.0)
+    lowest_hpwl = _archive_incumbent(width=20, hpwl=0.0, history=100.0)
+    lowest_history = _archive_incumbent(width=21, hpwl=100.0, history=0.0)
+
+    archive = sequence_pair_module.build_elite_archive(
+        (lowest_history, narrowest, blended, lowest_hpwl),
+        elite_count=1,
+    )
+
+    assert tuple(entry.incumbent for entry in archive) == (
+        blended,
+        narrowest,
+        lowest_hpwl,
+        lowest_history,
+    )
+    assert tuple(entry.categories for entry in archive) == (
+        (sequence_pair_module.EliteCategory.BLENDED,),
+        (sequence_pair_module.EliteCategory.NARROWEST,),
+        (sequence_pair_module.EliteCategory.LOWEST_HPWL,),
+        (sequence_pair_module.EliteCategory.LOWEST_HISTORY,),
+    )
+
+
+def test_elite_archive_fills_remaining_capacity_in_blended_order() -> None:
+    blended = _archive_incumbent(width=8, hpwl=10.0, history=10.0)
+    narrowest = _archive_incumbent(width=4, hpwl=1_000.0, history=1_000.0)
+    lowest_hpwl = _archive_incumbent(width=20, hpwl=0.0, history=100.0)
+    lowest_history = _archive_incumbent(width=21, hpwl=100.0, history=0.0)
+    extra_best = _archive_incumbent(width=22, hpwl=100.0, history=100.0)
+    extra_worse = _archive_incumbent(width=23, hpwl=100.0, history=100.0)
+    candidates = (
+        extra_worse,
+        lowest_history,
+        narrowest,
+        extra_best,
+        blended,
+        lowest_hpwl,
+    )
+
+    forward = sequence_pair_module.build_elite_archive(candidates, elite_count=5)
+    reverse = sequence_pair_module.build_elite_archive(
+        reversed(candidates),
+        elite_count=5,
+    )
+
+    assert forward == reverse
+    assert tuple(entry.incumbent for entry in forward) == (
+        blended,
+        narrowest,
+        lowest_hpwl,
+        lowest_history,
+        extra_best,
+    )
+    assert forward[-1].categories == (sequence_pair_module.EliteCategory.BLENDED,)
+
+
+def test_elite_archive_deduplicates_exact_keys_with_stable_category_and_seed_ties() -> None:
+    later_seed = _archive_incumbent(width=1, hpwl=0.0, history=0.0, seed=19)
+    earlier_seed = replace(later_seed, state=replace(later_seed.state, base_seed=7))
+
+    forward = sequence_pair_module.build_elite_archive(
+        (later_seed, earlier_seed),
+        elite_count=1,
+    )
+    reverse = sequence_pair_module.build_elite_archive(
+        (earlier_seed, later_seed),
+        elite_count=1,
+    )
+
+    assert forward == reverse
+    assert len(forward) == 1
+    assert forward[0].incumbent.state.base_seed == 7
+    assert forward[0].categories == tuple(sequence_pair_module.EliteCategory)
+
+
+def test_elite_archive_orders_hard_overflow_before_every_soft_category_metric() -> None:
+    legal = _archive_incumbent(width=50, hpwl=50.0, history=50.0)
+    overflowing = _archive_incumbent(
+        width=1,
+        hpwl=0.0,
+        history=0.0,
+        overflow=1,
+    )
+
+    archive = sequence_pair_module.build_elite_archive(
+        (overflowing, legal),
+        elite_count=1,
+    )
+
+    assert archive == (
+        sequence_pair_module.TaggedAnnealIncumbent(
+            incumbent=legal,
+            categories=tuple(sequence_pair_module.EliteCategory),
+        ),
+    )
+
+
 def test_derived_stage_seeds_are_stable_and_stage_specific() -> None:
     assert derive_stage_seed(123, 4) == derive_stage_seed(123, 4)
     assert derive_stage_seed(123, 4) != derive_stage_seed(123, 5)
@@ -1166,6 +1343,27 @@ def test_fixed_seed_reproduces_stage_incumbent_and_accepted_move_count() -> None
     assert a.accepted_moves == b.accepted_moves
     assert a.final_state == b.final_state
     assert a.elites == b.elites
+    assert a.archive == b.archive
+    assert a.elites == tuple(entry.incumbent for entry in a.archive)
+
+
+def test_archive_capacity_does_not_change_the_annealing_walk_or_blended_incumbent() -> None:
+    problem = _tiny_placement_problem()
+    state = AnnealState.initial(problem.size, 47)
+    small_archive = AnnealConfig(
+        moves_per_stage=80,
+        initial_temperature=1.5,
+        final_temperature=0.05,
+        elite_count=1,
+    )
+    large_archive = replace(small_archive, elite_count=12)
+
+    small = anneal_stage(problem, state, small_archive)
+    large = anneal_stage(problem, state, large_archive)
+
+    assert small.final_state == large.final_state
+    assert small.accepted_moves == large.accepted_moves
+    assert small.incumbent == large.incumbent
 
 
 def test_anneal_stage_advances_once_and_retains_ordered_distinct_elites() -> None:
@@ -1183,10 +1381,20 @@ def test_anneal_stage_advances_once_and_retains_ordered_distinct_elites() -> Non
     assert result.final_state.stage_index == state.stage_index + 1
     assert result.final_state.base_seed == state.base_seed
     assert 0 <= result.accepted_moves <= config.moves_per_stage
-    assert 1 <= len(result.elites) <= config.elite_count
+    assert (
+        1 <= len(result.archive) <= max(config.elite_count, len(sequence_pair_module.EliteCategory))
+    )
+    assert result.elites == tuple(entry.incumbent for entry in result.archive)
     assert len({elite.key for elite in result.elites}) == len(result.elites)
-    assert result.elites == tuple(
-        sorted(result.elites, key=lambda elite: (elite.energy, elite.key))
+    assert result.archive[0].categories[0] is sequence_pair_module.EliteCategory.BLENDED
+    assert all(
+        entry.categories
+        == tuple(
+            category
+            for category in sequence_pair_module.EliteCategory
+            if category in entry.categories
+        )
+        for entry in result.archive
     )
     assert result.incumbent == result.elites[0]
     result.final_state.pair.validate(problem.size)

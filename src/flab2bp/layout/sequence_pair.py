@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 import random
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import TYPE_CHECKING
@@ -311,6 +311,15 @@ class MoveKind(Enum):
     CHANGE_VARIANT = "change_variant"
 
 
+class EliteCategory(Enum):
+    """Deterministic reason an annealing incumbent belongs in the elite archive."""
+
+    BLENDED = "blended"
+    NARROWEST = "narrowest"
+    LOWEST_HPWL = "lowest_hpwl"
+    LOWEST_HISTORY = "lowest_history"
+
+
 @dataclass(frozen=True, slots=True)
 class AnnealConfig:
     """Fixed schedule for one deterministic annealing temperature stage."""
@@ -524,13 +533,59 @@ class AnnealIncumbent:
 
 
 @dataclass(frozen=True, slots=True)
+class TaggedAnnealIncumbent:
+    """One exact incumbent with its ordered elite-category memberships."""
+
+    incumbent: AnnealIncumbent
+    categories: tuple[EliteCategory, ...]
+
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.categories, tuple)
+            or not self.categories
+            or len(set(self.categories)) != len(self.categories)
+            or self.categories
+            != tuple(category for category in EliteCategory if category in self.categories)
+        ):
+            raise ValueError("elite categories must be a non-empty canonical tuple")
+
+
+@dataclass(frozen=True, slots=True, init=False)
 class AnnealStageResult:
     """Result of exactly one deterministic temperature stage."""
 
     final_state: AnnealState
     incumbent: AnnealIncumbent
     accepted_moves: int
-    elites: tuple[AnnealIncumbent, ...]
+    archive: tuple[TaggedAnnealIncumbent, ...]
+
+    def __init__(
+        self,
+        final_state: AnnealState,
+        incumbent: AnnealIncumbent,
+        accepted_moves: int,
+        elites: tuple[AnnealIncumbent, ...] | None = None,
+        *,
+        archive: tuple[TaggedAnnealIncumbent, ...] | None = None,
+    ) -> None:
+        """Build a tagged result while accepting the legacy untagged elite argument."""
+        if archive is None:
+            if elites is None:
+                raise TypeError("annealing stage result requires an elite archive")
+            archive = tuple(
+                TaggedAnnealIncumbent(elite, (EliteCategory.BLENDED,)) for elite in elites
+            )
+        elif elites is not None and elites != tuple(entry.incumbent for entry in archive):
+            raise ValueError("tagged archive and compatibility elites must agree")
+        object.__setattr__(self, "final_state", final_state)
+        object.__setattr__(self, "incumbent", incumbent)
+        object.__setattr__(self, "accepted_moves", accepted_moves)
+        object.__setattr__(self, "archive", archive)
+
+    @property
+    def elites(self) -> tuple[AnnealIncumbent, ...]:
+        """Return the archive incumbents for compatibility with existing consumers."""
+        return tuple(entry.incumbent for entry in self.archive)
 
 
 def decode_sequence_pair(
@@ -1151,7 +1206,7 @@ def anneal_stage(
 
     rng = random.Random(derive_stage_seed(state.base_seed, state.stage_index))
     current = _score_state(problem, state, context, direct_targets_for_state)
-    elites: dict[PlacementKey, AnnealIncumbent] = {current.key: current}
+    archive = build_elite_archive((current,), config.elite_count)
     accepted_moves = 0
     move_kinds = tuple(MoveKind)
 
@@ -1168,13 +1223,15 @@ def anneal_stage(
             context,
             direct_targets_for_state,
         )
-        _retain_elite(elites, candidate, config.elite_count)
+        archive = build_elite_archive(
+            (*(entry.incumbent for entry in archive), candidate),
+            config.elite_count,
+        )
         temperature = _linear_temperature(config, move_index)
         if _accept_move(current.energy, candidate.energy, temperature, rng):
             current = candidate
             accepted_moves += 1
 
-    ordered_elites = tuple(sorted(elites.values(), key=lambda elite: (elite.energy, elite.key)))
     final_state = AnnealState(
         pair=current.state.pair,
         gaps=current.state.gaps,
@@ -1184,9 +1241,9 @@ def anneal_stage(
     )
     return AnnealStageResult(
         final_state=final_state,
-        incumbent=ordered_elites[0],
+        incumbent=archive[0].incumbent,
         accepted_moves=accepted_moves,
-        elites=ordered_elites,
+        archive=archive,
     )
 
 
@@ -1564,18 +1621,151 @@ def _score_state(
     )
 
 
-def _retain_elite(
-    elites: dict[PlacementKey, AnnealIncumbent],
-    candidate: AnnealIncumbent,
+def build_elite_archive(
+    candidates: Iterable[AnnealIncumbent],
     elite_count: int,
-) -> None:
-    previous = elites.get(candidate.key)
-    if previous is not None and previous.energy <= candidate.energy:
-        return
-    elites[candidate.key] = candidate
-    if len(elites) > elite_count:
-        worst = max(elites.values(), key=lambda elite: (elite.energy, elite.key))
-        del elites[worst.key]
+) -> tuple[TaggedAnnealIncumbent, ...]:
+    """Return a capped deterministic union of mandatory category winners."""
+    if type(elite_count) is not int or elite_count <= 0:
+        raise ValueError("elite count must be a positive integer")
+
+    distinct: dict[PlacementKey, AnnealIncumbent] = {}
+    for candidate in candidates:
+        previous = distinct.get(candidate.key)
+        if previous is None or _archive_dedupe_key(candidate) < _archive_dedupe_key(previous):
+            distinct[candidate.key] = candidate
+    if not distinct:
+        return ()
+
+    values = tuple(distinct.values())
+    mandatory = (
+        (EliteCategory.BLENDED, min(values, key=_blended_archive_key)),
+        (EliteCategory.NARROWEST, min(values, key=_narrowest_archive_key)),
+        (EliteCategory.LOWEST_HPWL, min(values, key=_lowest_hpwl_archive_key)),
+        (EliteCategory.LOWEST_HISTORY, min(values, key=_lowest_history_archive_key)),
+    )
+    order: list[PlacementKey] = []
+    categories_by_key: dict[PlacementKey, list[EliteCategory]] = {}
+    for category, winner in mandatory:
+        categories = categories_by_key.get(winner.key)
+        if categories is None:
+            order.append(winner.key)
+            categories_by_key[winner.key] = [category]
+        else:
+            categories.append(category)
+
+    effective_cap = max(elite_count, len(order))
+    for candidate in sorted(values, key=_blended_archive_key):
+        if len(order) >= effective_cap:
+            break
+        if candidate.key in categories_by_key:
+            continue
+        order.append(candidate.key)
+        categories_by_key[candidate.key] = [EliteCategory.BLENDED]
+
+    return tuple(
+        TaggedAnnealIncumbent(
+            incumbent=distinct[key],
+            categories=tuple(categories_by_key[key]),
+        )
+        for key in order
+    )
+
+
+def _blended_archive_key(candidate: AnnealIncumbent) -> tuple[SearchEnergy, PlacementKey]:
+    return candidate.energy, candidate.key
+
+
+def _narrowest_archive_key(
+    candidate: AnnealIncumbent,
+) -> tuple[int, int, int, int, float, PlacementKey]:
+    breakdown = candidate.breakdown
+    return (
+        breakdown.hard_outline_overflow,
+        breakdown.width,
+        breakdown.used_height,
+        breakdown.gap_area,
+        breakdown.weighted_hpwl,
+        candidate.key,
+    )
+
+
+def _lowest_hpwl_archive_key(
+    candidate: AnnealIncumbent,
+) -> tuple[int, float, int, int, PlacementKey]:
+    breakdown = candidate.breakdown
+    return (
+        breakdown.hard_outline_overflow,
+        breakdown.weighted_hpwl,
+        breakdown.width,
+        breakdown.gap_area,
+        candidate.key,
+    )
+
+
+def _lowest_history_archive_key(
+    candidate: AnnealIncumbent,
+) -> tuple[int, float, int, float, PlacementKey]:
+    breakdown = candidate.breakdown
+    return (
+        breakdown.hard_outline_overflow,
+        breakdown.history_cost,
+        breakdown.width,
+        breakdown.weighted_hpwl,
+        candidate.key,
+    )
+
+
+def _archive_dedupe_key(
+    candidate: AnnealIncumbent,
+) -> tuple[
+    tuple[int, ...],
+    tuple[int, ...],
+    tuple[int, ...],
+    tuple[int, ...],
+    tuple[int, ...],
+    int,
+    int,
+    int,
+    int,
+    int,
+    int,
+    float,
+    float,
+    int,
+    int,
+    int,
+    int,
+    int,
+    tuple[tuple[int, int], ...],
+    tuple[tuple[int, int], ...],
+    tuple[tuple[int, int], ...],
+]:
+    state = candidate.state
+    breakdown = candidate.breakdown
+    return (
+        state.pair.positive,
+        state.pair.negative,
+        state.gaps.east,
+        state.gaps.north,
+        state.variant_indices,
+        state.base_seed,
+        state.stage_index,
+        breakdown.width,
+        breakdown.used_height,
+        breakdown.box_area,
+        breakdown.gap_area,
+        breakdown.weighted_hpwl,
+        breakdown.history_cost,
+        breakdown.missed_direct_inserts,
+        breakdown.hard_outline_overflow,
+        breakdown.outline_height,
+        breakdown.area_lower_bound,
+        breakdown.net_count,
+        candidate.decoded.x_windows,
+        candidate.decoded.y_windows,
+        tuple(sorted(candidate.decoded.direct)),
+    )
 
 
 def _linear_temperature(config: AnnealConfig, move_index: int) -> float:
