@@ -757,12 +757,13 @@ that measurement.
 **The density it won**, paired and interleaved against master, three rounds
 each, **INVALID 0 in every round of both arms**: freeform **-9.8%, -10.3%,
 -9.8%** of total area over the full 72-cell corpus, on the cells clean in both
-arms; spine **-0.54%**, identically in all three rounds, over the 48-cell mid
-tier. Clean counts were unmoved -- freeform A 63/66/64 against B 64/64/64, spine
-32 against 32 -- so the area is bought with packing rather than with coverage.
-The wins land where the Chemical Plant does: `graphene` -28%,
-`information-matrix` -21% to -42%, `plastic` -19%, `quantum-chip` -28%. See the
-footprint entry at the end of this file for the one real bug the change
+arms; spine **-1.80%**, identically in all three rounds, over the 48-cell mid
+tier (32 cells clean in both, 5 of them moved). Clean counts were unmoved --
+freeform A 63/66/64 against B 64/64/64, spine 32 against 32 -- so the area is
+bought with packing rather than with coverage. The wins land where the Chemical
+Plant does: freeform `graphene` -28%, `information-matrix` -21% to -42%,
+`plastic` -19%, `quantum-chip` -28%; spine `plastic` -21%, `graphene` -18%. See
+the footprint entry at the end of this file for the one real bug the change
 surfaced on the way (a Spray Coater emitted a tile off its own belt).
 
 **A Splitter one tile from a Tesla Tower collides** -- CONFIRMED from the game,
@@ -1431,9 +1432,16 @@ check that both strategies pass on the whole corpus.
      B 64/64/64 -- indistinguishable. The wins are concentrated where the
      Chemical Plant is: `graphene` -28%, `information-matrix` -21% to -42%,
      `plastic` -19%, `quantum-chip` -28%.
-   * **spine, 48-cell mid tier: area -0.54%**, identical in all three rounds,
-     two cells moved. Spine's coater-supply limitation (16 refusals, the
-     "ten-coater case" entry above) is unchanged and unrelated.
+   * **spine, 48-cell mid tier: area -1.80%**, identical in all three rounds,
+     32 cells clean in both arms and 5 of them moved -- `plastic` -21%,
+     `graphene` -18%, -17%, -9%, -8%. Spine's coater-supply limitation (16
+     refusals, the "ten-coater case" entry above) is unchanged and unrelated.
+
+     That spine number was **-0.54% on a first run and the first run was
+     wrong**, which is the reason it is stated with its denominator. The wrong
+     figure came from the arm that carried the coater bug below: it refused ten
+     cells, so only 22 cells were clean in both arms and the comparison was
+     silently made on a different, smaller and easier population.
 
    **One real bug fell out of the growth half**, and it is worth not
    re-discovering. The Spray Coater's collider is 3.8 units long about its own
