@@ -789,6 +789,128 @@ def test_real_blueprint_never_shares_a_connection_slot(name: str) -> None:
     assert claims, f"{name} decoded to no connection at all"
 
 
+FACING = {"game.addon_facing"}
+
+
+def _coater_on_a_run(yaw: float, *, along_y: bool = False) -> Placement:
+    """A two-tile belt run with a Spray Coater on its second tile.
+
+    The run's direction comes from the ``output_obj`` link and from nothing
+    else, which is the point: the check may not read a yaw we chose.
+    """
+    a, b = ((0, 0), (0, 1)) if along_y else ((0, 0), (1, 0))
+    return Placement(
+        buildings=(
+            belt(a[0], a[1], out=1),
+            belt(b[0], b[1]),
+            PlacedBuilding(
+                item_id=COATER,
+                model_index=catalog_building(COATER).model_index,
+                x=b[0],
+                y=b[1],
+                width=1,
+                height=1,
+                yaw=yaw,
+            ),
+        )
+    )
+
+
+def test_game_addon_facing_clean_along_the_run() -> None:
+    """The negative control, and the reversal the game accepts.
+
+    ``AddonPass`` ends in ``Mathf.Abs(Dot(...)) > 0.95f``, so a coater turned
+    end-for-end still passes.  Convicting it would be our rule, not the game's.
+    """
+    assert not fired(validate(_coater_on_a_run(90.0), only=FACING), "game.addon_facing")
+    assert not fired(validate(_coater_on_a_run(270.0), only=FACING), "game.addon_facing")
+
+
+def test_game_addon_facing_fires_across_the_run() -> None:
+    """A coater at a right angle to the belt it rides.
+
+    ``AddonPass`` then returns false for that belt, nothing else excuses it, and
+    the belt pastes as ``EBuildCondition.Collide``.  Six of ``freeform``'s
+    twenty coaters on the reported blueprint are in exactly this state.
+    """
+    r = validate(_coater_on_a_run(0.0), only=FACING)
+    assert fired(r, "game.addon_facing")
+    assert not r.ok
+    f = r.by_check("game.addon_facing")[0]
+    assert f.detail["flow"] == 90
+    assert f.detail["off_by"] == 270
+    assert "Spray Coater" in f.message
+
+
+def test_game_addon_facing_reads_the_run_and_not_the_belts_own_yaw() -> None:
+    """Guards the guard: the flow must come from the LINK GRAPH.
+
+    The belts here carry a yaw of 0 while their link runs east.  A check that
+    read the belt's yaw field would call the coater correct; one that reads the
+    links calls it crossways.  Our own belts do carry stale yaws, so this is not
+    hypothetical.
+    """
+    p = _coater_on_a_run(0.0)
+    assert all(b.yaw == 0.0 for b in p.buildings[:2])
+    assert fired(validate(p, only=FACING), "game.addon_facing")
+
+
+def test_game_addon_facing_fires_on_an_addon_riding_nothing() -> None:
+    p = Placement(
+        buildings=(
+            PlacedBuilding(
+                item_id=COATER,
+                model_index=catalog_building(COATER).model_index,
+                x=5,
+                y=5,
+                width=1,
+                height=1,
+            ),
+        )
+    )
+    assert fired(validate(p, only=FACING), "game.addon_facing")
+
+
+@pytest.mark.parametrize("name", ("factory-heretical-smelter-block",))
+def test_real_blueprint_coaters_face_along_their_belt(name: str) -> None:
+    """The wider control: the game's own coaters, read the same way.
+
+    Eight coaters across two fixtures, and every one carries its belt's flow yaw
+    EXACTLY -- not merely parallel to it.  Asserting the exact equality here
+    rather than the check's looser rule is deliberate: it records what the game
+    does, so that if the looser rule ever has to be tightened the evidence for
+    the tighter one is already written down.
+    """
+    import math as _math
+
+    from flab2bp.dsp.codec import decode
+    from flab2bp.dsp.records import is_belt as _is_belt
+
+    raw = decode((Path("tests/fixtures") / f"{name}.txt").read_text()).buildings
+    by = {b.index: b for b in raw}
+    seen = 0
+    for c in (b for b in raw if b.item_id == COATER):
+        ride = sorted(
+            (
+                b
+                for b in raw
+                if _is_belt(b.item_id)
+                and abs(b.x - c.x) < 0.2
+                and abs(b.y - c.y) < 0.2
+                and abs(b.z - c.z) < 0.2
+            ),
+            key=lambda b: abs(b.z - c.z),
+        )
+        assert ride, f"coater {c.index} rides no belt"
+        r = ride[0]
+        nxt = by.get(r.output_obj_idx)
+        assert nxt is not None, f"belt {r.index} under a coater has no successor"
+        flow = round(_math.degrees(_math.atan2(nxt.x - r.x, nxt.y - r.y))) % 360
+        assert round(c.yaw) % 360 == flow, (c.index, c.yaw, flow)
+        seen += 1
+    assert seen >= 5, seen
+
+
 def test_game_inserter_paste_allows_a_purely_radial_stretch() -> None:
     """0.90 world units straight out of the face is legal on paste, not on copy.
 

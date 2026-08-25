@@ -98,6 +98,7 @@ __all__ = [
     "ADDON_AREA_RADIUS",
     "ADDON_FROM_SLOT",
     "ADDON_TO_SLOT",
+    "BELT_INPUT_SLOTS",
     "BELT_SLOT",
     "BELT_SLOT_AUTO_RANGE",
     "CONN_SLOTS_PER_OBJECT",
@@ -183,6 +184,28 @@ ADDON_TO_SLOT = 14
 #: different values.  Prefixed here so the two can never be confused again.
 SPLITTER_INPUT_TO_SLOT = 14
 SPLITTER_OUTPUT_FROM_SLOT = 15
+
+#: The three slots a belt receives INPUT on, as a half-open range.
+#:
+#: A belt's slot 0 carries its own OUTPUT link -- the belt pathfinder reads it
+#: that way throughout (``ReadObjectConn(objId, 0, ...)`` for "what does this
+#: belt feed"), and slots 1..3 are the three things that may feed it, which is
+#: what ``BuildTool_Path`` walks when it looks for a free one::
+#:
+#:     for (int num163 = 1; num163 < 4; num163++)
+#:     {
+#:         factory.ReadObjectConn(coverObjId, num163, out ..., out otherObjId4, ...);
+#:         if (otherObjId4 == 0) { outputToSlot = num163; ... break; }
+#:         if (num163 == 3) { output = null; outputToSlot = 0; }   # give up
+#:     }
+#:
+#: Counted over the fixture corpus, every belt-to-belt link the game wrote names
+#: **1** (7169 records), **2** (95) or **3** (38) on the receiving belt, and
+#: never 0 and never more than 3.  Both strategies used to leave the field at
+#: the dataclass default of 0, which is not a value the game writes and which
+#: collides with the receiving belt's own output link.
+BELT_INPUT_SLOTS = (1, 4)
+
 
 #: How many connection slots one object HAS.  A hard property of the game's
 #: storage, not a limit it chooses to apply::

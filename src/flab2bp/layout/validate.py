@@ -1895,6 +1895,133 @@ def _addon_supply(ctx: Context) -> Iterable[Finding]:
             )
 
 
+@check("game.addon_facing")
+def _addon_facing(ctx: Context) -> Iterable[Finding]:
+    """A belt addon may not stand ACROSS the belt it rides.
+
+    Port of the ``AddonPass`` excusal in ``BuildTool_BlueprintPaste``, which is
+    what keeps a belt running under a Spray Coater from being called a
+    collision.  For each of the addon's areas::
+
+        Vector3 vector  = addon.lpos + addon.lrot * (colPose.position
+                                                     + colPose.forward * size.z * 3f);
+        Vector3 vector2 = addon.lpos + addon.lrot * (colPose.position
+                                                     - colPose.forward * size.z * 3f);
+        float num2 = Maths.DistancePointLine(belt.lpos, vector, vector2);
+        float num3 = 1f;
+        if (flag) num3 = Mathf.Abs(Vector3.Dot((vector2 - vector).normalized, rhs));
+        flag3 |= num2 < 0.3f;
+        flag3 &= num3 > 0.95f;          # <- the direction test
+        flag2 |= flag3;
+
+    ``rhs`` is the belt's own direction of travel, taken from its preview links
+    and not from any stored yaw::
+
+        if (input == null && output != null) rhs = (output.lpos - lpos).normalized;
+        if (input != null && output == null) rhs = (lpos - input.lpos).normalized;
+
+    and the line it is dotted against runs along the addon's area, which the
+    addon's ``lrot`` -- its YAW -- aims.  When ``AddonPass`` returns false the
+    belt is not excused, ``flag6`` is set and the belt becomes
+    ``EBuildCondition.Collide``; the later re-probe at 147451 does not rescue
+    it, because that clause refuses to excuse a belt that is CLOSE to an addon
+    area, which the ridden belt is by definition.
+
+    ``Mathf.Abs`` is why this convicts a right angle and not a reversal.  A
+    coater yawed 180 from its belt dots to -1, passes, and pastes.  A coater
+    yawed 90 dots to 0 and turns the belt under it red -- "Collide with other
+    object".
+
+    WHY ``game.addon_supply`` CANNOT CATCH THIS, which is the part worth
+    keeping.  That check computes the addon area's cell FROM the addon's own yaw
+    and then asks whether a belt is there -- and the strategy that chose the yaw
+    put the belt at that same computed cell.  It validates our choice against
+    itself, so a wrong yaw is invisible to it by construction.  This check is
+    anchored to something we did not choose: the direction of flow through the
+    ridden belt, read from the ``output_obj`` LINK GRAPH.
+
+    MEASURED.  The game's own eight Spray Coaters -- five in
+    ``factory-heretical-smelter-block``, three in
+    ``tillable-blackbox-module-...`` -- carry the flow yaw EXACTLY, 8 of 8, over
+    two different run directions.  ``spine`` matches them, 16 of 16.
+    ``freeform`` does not: of the twenty coaters on the reported blueprint's
+    ``max-proliferation`` candidate, ten disagree -- six standing across a belt
+    that flows north and four reversed on a belt that flows west -- because it
+    writes one yaw for every coater regardless of the lane it lands on.  Only
+    the six are convicted here; the four reversals are recorded in the finding
+    count of neither, because the game accepts them and a check that refused
+    them would be ours rather than the game's.
+    """
+    bs = ctx.placement.buildings
+    forward: dict[int, int] = {}
+    backward: dict[int, int] = {}
+    for i, b in enumerate(bs):
+        if not cat.is_belt(b.item_id):
+            continue
+        j = b.output_obj
+        if j is None or not 0 <= j < len(bs) or not cat.is_belt(bs[j].item_id):
+            continue
+        forward[i] = j
+        backward.setdefault(j, i)
+
+    for i, b in enumerate(bs):
+        try:
+            info = cat.building(b.item_id)
+        except KeyError:
+            continue
+        if not info.is_belt_addon:
+            continue
+        ride = next(
+            (
+                k
+                for k, o in enumerate(bs)
+                if cat.is_belt(o.item_id) and (o.x, o.y, o.z) == (b.x, b.y, b.z)
+            ),
+            None,
+        )
+        if ride is None:
+            yield Finding(
+                "game.addon_facing",
+                Severity.ERROR,
+                f"{info.name} {i} at ({b.x}, {b.y}) rides no belt: there is no belt "
+                f"on its own tile, and an addon's area 0 IS the belt it sits on",
+                (i,),
+                {"x": b.x, "y": b.y},
+            )
+            continue
+        nxt = forward.get(ride)
+        if nxt is not None:
+            dx, dy = bs[nxt].x - b.x, bs[nxt].y - b.y
+        else:
+            prv = backward.get(ride)
+            if prv is None:
+                # Neither successor nor predecessor: a one-tile run has no
+                # direction of travel, so `rhs` is `Vector3.forward` and the
+                # game's own `flag` is false -- `num3` stays 1 and the test
+                # cannot fire.  Silence here is the game's answer, not ours.
+                continue
+            dx, dy = b.x - bs[prv].x, b.y - bs[prv].y
+        if (dx, dy) == (0, 0):
+            continue
+        flow = round(math.degrees(math.atan2(dx, dy))) % 360
+        # The addon's areas are aimed by its yaw, so the line the game dots
+        # against runs along the addon's own axis.  Both are quarter turns on
+        # our grid, so the dot is 1, 0 or -1 and `> 0.95` reduces to "parallel".
+        off = (round(b.yaw) - flow) % 360
+        if off in (0, 180):
+            continue
+        yield Finding(
+            "game.addon_facing",
+            Severity.ERROR,
+            f"{info.name} {i} at ({b.x}, {b.y}) is yawed {round(b.yaw) % 360} and "
+            f"stands across the belt it rides, which flows {flow}. The game aims "
+            f"an addon's areas with its yaw and refuses a belt that crosses one "
+            f"at a right angle, so that belt pastes as a collision",
+            (i, ride),
+            {"yaw": round(b.yaw) % 360, "flow": flow, "off_by": off},
+        )
+
+
 @check("game.belt_crossing")
 def _belt_crossing(ctx: Context) -> Iterable[Finding]:
     """A belt over a building must clear its build collider -- and it may.

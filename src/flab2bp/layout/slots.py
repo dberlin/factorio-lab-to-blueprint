@@ -72,11 +72,13 @@ from flab2bp.dsp import colliders
 from flab2bp.dsp.rules import (
     ADDON_FROM_SLOT,
     ADDON_TO_SLOT,
+    BELT_INPUT_SLOTS,
     BELT_SLOT,
     INPUT_TO_SLOT,
     OUTPUT_FROM_SLOT,
     SLOT_ALIGN_COS,
     SLOT_REACH,
+    SPLITTER_MAX_PORTS,
     WORLD_UNITS_PER_LEVEL,
     world_gap,
 )
@@ -91,6 +93,7 @@ __all__ = [
     "SLOT_REACH",
     "Attachment",
     "SlotUndetermined",
+    "assign_belt_slots",
     "assign_sorter_slots",
     "attachable_columns",
     "attachment",
@@ -532,15 +535,99 @@ def sorter_yaw(head: tuple[int, int], tail: tuple[int, int]) -> float:
 def assign_sorter_slots(
     buildings: Sequence[PlacedBuilding],
 ) -> tuple[PlacedBuilding, ...]:
-    """Fill in every sorter's four slot fields and its yaw from its geometry.
+    """Fill in every LINK's slot fields, and every sorter's yaw, from geometry.
 
     A strategy places sorters; it does not have to know these conventions.  Both
     strategies run their finished building list through here, which is why there
-    is one place to be right rather than four call sites to keep in step.
+    is one place to be right rather than four call sites to keep in step.  The
+    name is narrower than the job -- :func:`assign_belt_slots` runs from here
+    too -- and it is kept because being the ONE post-pass both strategies
+    already call is the property that matters.
 
     Raises :class:`SlotUndetermined` if any sorter's slot cannot be derived.
     Emitting a guess instead is what this module exists to stop.
     """
+    return assign_belt_slots(_assign_sorter_slots_only(buildings))
+
+
+def assign_belt_slots(
+    buildings: Sequence[PlacedBuilding],
+) -> tuple[PlacedBuilding, ...]:
+    """Give every belt-authored link its own slot on the peer it names.
+
+    A SLOT HOLDS ONE CONNECTION.  The game stores connections as
+    ``entityConnPool[objId * 16 + slot]``, and ``WriteObjectConn`` evicts
+    whatever is already in the cell rather than refusing -- see
+    :data:`~flab2bp.dsp.rules.CONN_SLOTS_PER_OBJECT`.  Every belt here used to
+    leave ``output_to_slot`` at the dataclass default of ``0``, which is wrong
+    twice: it is not a value the game ever writes for a belt-to-belt link, and
+    where two belts merge into a third the two links landed in the same cell and
+    one of them was dropped on paste.
+
+    WHAT THE GAME WRITES, counted over the fixture corpus rather than guessed:
+
+    * belt -> belt, ``output_to_slot``: **1** (7169 records), **2** (95),
+      **3** (38).  Never 0, never above 3.  Those are the three INPUT slots of
+      the receiving belt; slot 0 is where its own output link lives, so writing
+      0 puts a predecessor's back-link in the cell the successor link needs.
+    * belt <-> splitter: **0..3**, one per side, in both directions.
+    * and across all ~10,000 connection records in the corpus, **no
+      ``(object, slot)`` cell is named twice.**
+
+    The assignment mirrors the game's own scan -- ``WriteObjectConn`` resolving
+    an unspecified peer slot walks upward from the first legal index and takes
+    the first free one.  Belts are visited in index order so the result is
+    deterministic.
+
+    Raises :class:`SlotUndetermined` when a receiving belt is out of input slots.
+    A fourth belt feeding one belt tile has nowhere to go: the game would drop
+    the link silently, and a dropped link is a blueprint that pastes and then
+    starves.
+    """
+    taken: dict[int, set[int]] = {}
+    out: list[PlacedBuilding] = []
+    for i, b in enumerate(buildings):
+        if not cat.is_belt(b.item_id):
+            out.append(b)
+            continue
+        changes: dict[str, int] = {}
+        for field, link in (("output_to_slot", b.output_obj), ("input_from_slot", b.input_obj)):
+            if link is None or not 0 <= link < len(buildings):
+                continue
+            peer = buildings[link]
+            if cat.is_belt(peer.item_id):
+                if field != "output_to_slot":
+                    # A belt never names another belt as `input_obj`: runs chain
+                    # forward only, and `input_obj` on a belt names the SPLITTER
+                    # it draws from. Leaving it alone rather than inventing a
+                    # slot for a link the corpus does not contain.
+                    continue
+                legal = range(BELT_INPUT_SLOTS[0], BELT_INPUT_SLOTS[1])
+            elif peer.item_id == cat.SPLITTER_ID:
+                legal = range(0, SPLITTER_MAX_PORTS)
+            else:
+                # A machine, a station, an addon: the slot is the peer's own
+                # perimeter index and is not this function's to choose.
+                continue
+            used = taken.setdefault(link, set())
+            slot = next((s for s in legal if s not in used), None)
+            if slot is None:
+                raise SlotUndetermined(
+                    f"belt {i} at ({b.x}, {b.y}) is the "
+                    f"{len(used) + 1}th link into building {link} at "
+                    f"({peer.x}, {peer.y}), which has only {len(legal)} slots for "
+                    f"them; the game would drop the surplus without an error"
+                )
+            used.add(slot)
+            changes[field] = slot
+        out.append(replace(b, **changes) if changes else b)  # type: ignore[arg-type]
+    return tuple(out)
+
+
+def _assign_sorter_slots_only(
+    buildings: Sequence[PlacedBuilding],
+) -> tuple[PlacedBuilding, ...]:
+    """The sorter and addon half of :func:`assign_sorter_slots`."""
     out: list[PlacedBuilding] = []
     for b in buildings:
         if cat.building(b.item_id).is_belt_addon:

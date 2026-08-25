@@ -769,6 +769,38 @@ class Strip:
         """
         return self.first_row_below_band + k
 
+    def column_offset(self, lane: tuple[str, ...]) -> int:
+        """The first machine column this input lane may use.
+
+        A MACHINE SLOT HOLDS ONE CONNECTION.  The game stores connections as
+        ``entityConnPool[objId * 16 + slot]`` and ``WriteObjectConn`` evicts the
+        sitting tenant rather than refusing, so two sorters on one slot paste
+        with one of them unwired and both standing on the same tile --
+        ``validate.game.slot_occupancy``.
+
+        Columns therefore have to be rationed across every lane on the same
+        FACE, not just across the items sharing one lane.  Each lane consumes
+        one column per item it carries, and this returns how many the lanes
+        before it have already taken.  North is ``in_above`` in order; south is
+        the output lanes -- one column each -- and then ``in_below``.
+
+        Before this existed, every lane started at column 0 and the surplus was
+        clamped onto the last reachable column.  Measured on a pristine tree at
+        budget 4, that put two or more sorters on one slot in 54 of 60 freeform
+        corpus cells (1412 shared slots), and all 60 validated CLEAN.
+        """
+        seen = 0
+        for other in self.in_above:
+            if other is lane or other == lane:
+                return seen
+            seen += len(other)
+        seen = len(self.out_lanes)
+        for other in self.in_below:
+            if other is lane or other == lane:
+                return seen
+            seen += len(other)
+        raise KeyError(f"{lane!r} is not an input lane of {self.recipe_id!r}")
+
     def input_lane_tiles(self, lane: tuple[str, ...]) -> int:
         """Belt tiles an INPUT lane actually needs, counted from its west end.
 
@@ -796,11 +828,20 @@ class Strip:
         ``_machines_without_poses`` refuses such a spec before the sweep starts;
         emission may not be reached with one, because a zero-tile lane is an
         empty ``lane_idx`` row and ``feed`` indexes its head.
+
+        The lane's own items are not the whole story: it starts at
+        :meth:`column_offset`, because the lanes before it on the same face have
+        already claimed columns and a slot takes one connection.  A lane trimmed
+        as if it began at column 0 stops short of the column it is actually
+        given, and the machine goes unfed -- which is how the first version of
+        the slot rationing turned six ``magnetic-coil`` cells from invalid into
+        refused rather than into correct.
         """
         cols = self.attachable_columns
         if not cols:
             return 0
-        last_slot = cols[min(len(lane) - 1, len(cols) - 1)]
+        first = self.column_offset(lane)
+        last_slot = cols[min(first + len(lane) - 1, len(cols) - 1)]
         return (self.machines - 1) * self.pw + last_slot + 1
 
     def _attachable_columns(self, *, above: bool) -> tuple[int, ...]:
@@ -1196,7 +1237,12 @@ def _side_lane_caps(item_id: int, yaw: float, band_rows: int) -> tuple[int, int]
 
 
 def _seat_inputs(
-    items: tuple[str, ...], n_sinks: int, above_cap: int, below_cap: int, max_per_lane: int
+    items: tuple[str, ...],
+    n_sinks: int,
+    above_cap: int,
+    below_cap: int,
+    max_per_lane: int,
+    columns: int,
 ) -> tuple[tuple[tuple[str, ...], ...], tuple[tuple[str, ...], ...]]:
     """Seat ingredients into lanes above and below the machine band.
 
@@ -1212,6 +1258,24 @@ def _seat_inputs(
     :func:`_side_lane_caps`, and they are not both ``SORTER_MAX_REACH``: a
     Chemical Plant carries two lanes above and an Assembling Machine two below.
 
+    ``columns`` is how many insert poses one FACE of this machine offers a lane,
+    and it bounds the side differently from the row caps: a row cap counts
+    LANES, this counts SORTERS.  Every item on a side needs its own column,
+    because a machine slot holds exactly one connection -- see
+    :data:`~flab2bp.dsp.rules.CONN_SLOTS_PER_OBJECT` and
+    ``validate.game.slot_occupancy``.  Mixing two items onto one lane saves a
+    row and saves no column at all, so without this bound "mix harder" walks
+    straight past the real limit.
+
+    It was missing, and what it cost was not hypothetical.  ``universe-matrix``
+    takes six ingredients and produces one, and a Matrix Lab offers three
+    columns above and three below: seven sorters into six slots.  The old
+    seating accepted it, and the emitted blueprint put THREE sorters on slot 6
+    and three more on slot 7 of every Matrix Lab -- measured, 4 shared slots per
+    build -- which pastes with four of the six unwired.  A refusal here is the
+    honest answer, and it is raised where the arithmetic is visible rather than
+    left to surface downstream as an unfed machine.
+
     Returns ``(above, below)``.  ``below`` shares the south side with the output
     lanes, so it is kept as small as possible.
     """
@@ -1220,16 +1284,32 @@ def _seat_inputs(
         return (), ()
     for k in range(1, max(1, max_per_lane) + 1):
         lanes = [tuple(items[i : i + k]) for i in range(0, n, k)]
-        above, below = tuple(lanes[:above_cap]), tuple(lanes[above_cap:])
-        if len(below) > below_cap:
-            continue  # more lanes than two sides can hold; mix harder
-        if n_sinks and below_cap - len(below) <= 0:
-            continue  # no room left below for an output lane
-        return above, below
+        # The split point is searched rather than fixed at `above_cap`.  Filling
+        # the north side first was harmless while only ROWS were rationed --
+        # a full north side left the whole south side for the rest.  With
+        # columns rationed too it is not: four ingredients mixed two-to-a-lane
+        # give two lanes, both of which fit above by row count and neither of
+        # which fits by column count, and a fixed split would have refused a
+        # spec that seats perfectly well one lane per side.  Largest `above`
+        # first, so `below` stays as small as it can and leaves the output lane
+        # its room.
+        for a in range(min(len(lanes), above_cap), -1, -1):
+            above, below = tuple(lanes[:a]), tuple(lanes[a:])
+            if len(below) > below_cap:
+                continue  # more lanes than that side can hold; mix harder
+            if n_sinks and below_cap - len(below) <= 0:
+                continue  # no room left below for an output lane
+            if sum(len(lane) for lane in above) > columns:
+                continue  # more sorters than the north face has slots
+            if sum(len(lane) for lane in below) + (1 if n_sinks else 0) > columns:
+                continue  # ... or than the south face has, output lane included
+            return above, below
     raise ValueError(
         f"{n} ingredients cannot be seated: {above_cap} lane(s) above and "
-        f"{below_cap} below carrying at most {max_per_lane} items each leaves "
-        "no room for the output lane"
+        f"{below_cap} below carrying at most {max_per_lane} items each, over a "
+        f"face that offers {columns} insert pose(s) per side, leaves no room for "
+        f"{n} ingredient sorter(s) and the output lane. A machine slot holds one "
+        f"connection, so two sorters cannot share a column"
     )
 
 
@@ -1297,14 +1377,39 @@ def plan_strips(spec: BuildSpec, *, strip_len: int = 6) -> list[Strip]:
 
         try:
             in_above, in_below = _seat_inputs(
-                in_items, len(sinks), above_cap, below_cap, max_per_lane=g.width
+                in_items,
+                len(sinks),
+                above_cap,
+                below_cap,
+                max_per_lane=g.width,
+                columns=len(
+                    slots.attachable_columns(
+                        slots.probe_building(g.item_id, g.yaw), -1
+                    )
+                )
+                or 1,
             )
         except ValueError as exc:
             raise ValueError(f"recipe {g.recipe_id!r}: {exc}") from None
 
         # Output lanes share the south side with any overflow inputs, so the
         # shard size is what is left after those are seated.
+        # Output lanes take columns on the south face too, so they are bounded
+        # by what the inputs seated there left as well as by the row cap.
+        #
+        # A machine with NO insert pose at all is left alone here: zero columns
+        # would bound this to zero and raise "no room on the south side", which
+        # is true but useless -- `_machines_without_poses` already refuses such
+        # a spec by name, and preempting it replaced a diagnosis with an
+        # arithmetic complaint.
+        south_columns = len(
+            slots.attachable_columns(slots.probe_building(g.item_id, g.yaw), g.pitch_h)
+        )
         out_cap = below_cap - len(in_below)
+        if south_columns:
+            out_cap = min(
+                out_cap, south_columns - sum(len(lane) for lane in in_below)
+            )
         shards = (
             _shard_sinks(sinks, cap=out_cap, max_shards=g.count) if sinks else [[]]
         )
@@ -2207,6 +2312,12 @@ def _emit_strip(
 
     bottom = machine_y + s.mh - 1
     sorters = 0
+    # Machine index -> the slot indices already spoken for on it. ONE dict for
+    # the whole strip, because the two faces of a machine are served by
+    # different callers -- `in_above` from the north, `out_lanes` and `in_below`
+    # from the south -- and a per-caller map would let the two collide exactly
+    # where a per-lane `column` used to.
+    claimed: dict[int, set[int]] = {}
 
     def item_rate(item: str, table: Mapping[str, Fraction]) -> Fraction:
         """What ONE sorter moves: one machine's rate for this one item."""
@@ -2216,9 +2327,18 @@ def _emit_strip(
         return rates.get(item, Fraction(1))
 
     def feed(lane: tuple[str, ...], row: int, span: int, near_edge: int) -> int:
-        """One filtered sorter per (item, machine) for this lane."""
+        """One filtered sorter per (item, machine) for this lane.
+
+        The column each sorter asks for is the lane's own
+        ``Strip.column_offset`` plus the item's position within it -- NOT the
+        position alone.  A machine slot holds one connection, so the columns are
+        rationed across every lane on the face, and this has to be the same
+        arithmetic ``Strip.input_lane_tiles`` trimmed the lane with or the
+        sorter asks for a column with no belt under it.
+        """
         placed = 0
         shared = len(lane) > 1
+        offset = s.column_offset(lane)
         for slot, item in enumerate(lane):
             in_ports[item] = _Port(
                 lane_idx[row][0],
@@ -2238,8 +2358,9 @@ def _emit_strip(
                 near_edge,
                 tier,
                 into_machine=True,
+                claimed=claimed,
                 filter_id=_lane_filter(item) if shared else 0,
-                column=slot,
+                column=offset + slot,
             )
         return placed
 
@@ -2260,7 +2381,15 @@ def _emit_strip(
         )
         tier, _count = _pick_sorter(item_rate(item, out_rates), span, 1)
         sorters += _link_lane(
-            canvas, lane_idx[row], machines, oy + row, bottom, tier, into_machine=False
+            canvas,
+            lane_idx[row],
+            machines,
+            oy + row,
+            bottom,
+            tier,
+            into_machine=False,
+            claimed=claimed,
+            column=j,
         )
 
     # Overflow ingredients, seated below the output lanes and reaching up to the
@@ -2281,6 +2410,7 @@ def _link_lane(
     tier: int,
     *,
     into_machine: bool,
+    claimed: dict[int, set[int]],
     filter_id: int = 0,
     column: int = 0,
 ) -> int:
@@ -2295,6 +2425,30 @@ def _link_lane(
     this sorter moves, which is mandatory on a shared lane and left at zero on a
     plain one.  That zero-versus-set distinction is the signal the validator
     uses to tell the two apart, so do not set a filter where none is needed.
+
+    ``claimed`` is machine index -> the slot indices already spoken for on it,
+    and it is what stops two sorters landing on one.  A MACHINE SLOT HOLDS
+    EXACTLY ONE CONNECTION -- the game stores it as
+    ``entityConnPool[objId * 16 + slot]``, and ``WriteObjectConn`` evicts the
+    sitting tenant rather than refusing -- so a second sorter on one slot pastes
+    with the first silently unwired and the two of them standing on each other.
+    ``validate.game.slot_occupancy`` is the check; this is where it is honoured.
+
+    ``column`` used to be a per-LANE index into ``usable``, and
+    ``usable[min(column, len(usable) - 1)]`` clamped.  Both halves put two
+    sorters on one slot: two stacked lanes each asked for column 0 and got the
+    same one, and a lane with more items than the machine has reachable columns
+    clamped its surplus onto the last.  Measured on a pristine tree before this
+    change, at budget 4: 54 of 60 freeform corpus cells carried at least one
+    shared slot, 1412 in all, and every one of the 60 validated CLEAN.
+
+    ``column`` is now a PREFERENCE, not an index: the search starts there and
+    rotates through the rest.  When every reachable column of a machine is
+    already spoken for, this machine gets no sorter from this lane -- the same
+    answer, and the same silence, that a machine with no reachable column at all
+    has always got.  It is not a fallback that hides anything: an unfed machine
+    is what ``machine.inputs_supplied`` and the flow checks convict, so the
+    placement is refused rather than emitted.
     """
     model_index = catalog.building(tier).model_index
     facing = Facing.SOUTH.value if lane_y < machine_y else Facing.NORTH.value  # placeholder
@@ -2314,10 +2468,16 @@ def _link_lane(
         usable = sorted(c for c in reachable if c in lane_xs)
         if not usable:
             continue
-        x = usable[min(column, len(usable) - 1)]
+        taken = claimed.setdefault(m_idx, set())
+        start = min(column, len(usable) - 1)
+        order = usable[start:] + usable[:start]
+        x = next((c for c in order if reachable[c].slot not in taken), None)
+        if x is None:
+            continue
         belt_idx = next((i for i in lane if canvas.buildings[i].x == x), None)
         if belt_idx is None:
             continue
+        taken.add(reachable[x].slot)
         anchor_y = reachable[x].cell[1]
         if into_machine:
             src, dst = belt_idx, m_idx
