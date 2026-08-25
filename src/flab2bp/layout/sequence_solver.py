@@ -929,6 +929,9 @@ def _pose_stage_boundary_update(
     family_by_id: dict[StripFamilyId, StripFamily],
 ) -> StageBoundaryUpdate | None:
     """Apply one deterministic legal topology change after a completed stage."""
+    if not problem.instance_ids:
+        return None
+
     target = select_split_candidate(
         result,
         problem.instance_ids,

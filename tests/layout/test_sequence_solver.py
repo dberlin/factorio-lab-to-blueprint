@@ -1111,6 +1111,73 @@ def test_production_boundary_does_not_merge_incompatible_or_implicated_children(
     )
 
 
+def test_fixed_size_problem_skips_pose_boundary_transforms_without_metadata() -> None:
+    problem = PlacementProblem(
+        sizes=((1, 1), (1, 1)),
+        nets=(),
+        outline_height=40,
+        area_lower_bound=2,
+    )
+    geometric_failure = DetailedRouteResult(
+        status=DetailedRouteStatus.STRANDED,
+        routed=(),
+        failures=(
+            NetFailure(
+                NetId(None, None, "external", NetRole.INTERNAL, 0),
+                RouteFailureKind.CONGESTION_WALL,
+                ((0, 0, 0),),
+                (),
+                0,
+            ),
+        ),
+        iterations=1,
+        expansions=0,
+    )
+    fake = _FakeRouting(
+        detailed_results=(DetailedStageResult(geometric_failure, None),),
+    )
+    boundary_updates: list[StageBoundaryUpdate | None] = []
+
+    def boundary(
+        _height: int,
+        stage_problem: PlacementProblem,
+        stage_state: AnnealState,
+        _feedback: FeedbackState,
+        result: DetailedRouteResult,
+        stagnation: int,
+    ) -> StageBoundaryUpdate | None:
+        update = _pose_stage_boundary_update(
+            stage_problem,
+            stage_state,
+            result,
+            stagnation=stagnation,
+            family_by_id={},
+        )
+        boundary_updates.append(update)
+        return update
+
+    solver = SequenceSolver(
+        heights=(40,),
+        problem_for_height=lambda _height: problem,
+        adapters=fake.adapters(),
+        expansion_budget=ExpansionBudget(100),
+        config=SequenceSolverConfig(
+            stages=2,
+            moves_per_stage=1,
+            restarts_per_height=1,
+            global_elites=1,
+        ),
+        stage_boundary_transform=boundary,
+    )
+
+    with pytest.raises(NoValidLayout):
+        solver.search(max_stages=2)
+
+    assert boundary_updates == [None, None]
+    assert len(fake.detailed_allowances) == 2
+    assert solver._heights[0].problem == problem
+
+
 def test_merge_waits_until_every_restart_has_one_compatible_problem(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
