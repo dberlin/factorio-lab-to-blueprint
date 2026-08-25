@@ -91,11 +91,12 @@ same page without a second step.
 
 **A build is a job, not a request.** `--budget` is per layout and `best` lays out every
 candidate with both strategies, so a build runs for seconds to minutes; `POST /api/build`
-returns an id immediately and the page polls `GET /api/build/<id>`. The panel shows elapsed
-time against the solver ceiling — `candidates x strategies x budget`, which is an upper bound
-on CP-SAT time and not a finish time, since rates, validation and encoding are on top of it.
-A submitted job may ask for at most 300s of solving; over that is refused with the arithmetic
-spelled out rather than quietly clamped.
+returns an id immediately and the page polls `GET /api/build/<id>`. `pipeline.build` reports
+each (candidate, strategy) pair as it starts and as it settles, so the bar counts pairs
+finished and the line above it names the pair currently in CP-SAT. Before the layout loop —
+parsing the URL, solving the rates — there is nothing to count, and the panel says so rather
+than inventing a fraction. A submitted job may ask for at most 300s of solving; over that is
+refused with the arithmetic spelled out rather than quietly clamped.
 
 **A refusal is a result.** A spec that cannot be laid out reports one line per strategy and
 candidate saying why each gave up, and the page shows that as the answer rather than as a
@@ -113,6 +114,10 @@ either way.
 `web/` is the former `dsp-blueprint-viewer` — React, rsbuild and three.js — taken in-tree and
 taken over rather than vendored. Its own gates still apply to it: `cd web && bun run typecheck
 && bun run lint && bun run test`.
+
+`uv run scripts/web_smoke.py` drives the whole thing in a real browser and decodes the string
+the Copy button actually put on the clipboard. **[docs/WEB_UI.md](docs/WEB_UI.md)** has the
+options, the API, and the list of what this does not do.
 
 ## Development
 

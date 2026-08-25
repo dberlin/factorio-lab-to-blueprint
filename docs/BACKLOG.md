@@ -535,9 +535,11 @@ are not tiles it reserves. `validate.geom.footprint` has two branches for that
 reason, and collapsing them turns a test red on purpose.
 ## OPEN -- what the web UI does not do, and where the server arm is thin
 
-`flab2bp-web` serves the vertical slice: paste a FactorioLab URL, submit a job,
-poll it, copy the string, see it rendered. These are the gaps, named here rather
-than left to be discovered.
+`flab2bp-web` serves the whole loop: paste a FactorioLab URL, submit a job, watch
+it, copy the string, see it rendered. `scripts/web_smoke.py` proves that in a
+real browser and decodes what the Copy button put on the clipboard.
+`docs/WEB_UI.md` is the reference; these are the gaps, named here rather than
+left to be discovered.
 
 **Not wired, and the page says so.** `--flow` and `--fetch-flow`. The first
 needs a file upload; the second drives a headless browser through `nodriver` and
@@ -564,12 +566,32 @@ machine will make every concurrent build slower than running them in turn, since
 `time_budget_s` is wall-clock. Two people using one server contend; there is no
 admission control beyond the queue and the 300s ceiling per job.
 
-**Progress is elapsed time against a ceiling, not a phase.** `pipeline.build`
-offers no callback, so the server cannot say "solving candidate 2 of 3" without
-a change inside the pipeline. `candidates x strategies x budget` is what the UI
-shows, and it bounds CP-SAT only -- rates, validation and encoding are on top.
-A per-attempt callback on `pipeline.build` would turn this into real progress
-and is the smallest change that would.
+**DONE -- progress is real now.** `pipeline.build` takes an `on_progress` sink
+and fires it as each (candidate, strategy) pair starts and as it settles, so the
+bar counts pairs FINISHED over pairs to do and the line names the pair in CP-SAT.
+The one part that is still a guess is what happens before the layout loop --
+parsing the URL and solving the rates take an unknown time and are not divided
+into pairs -- and the panel says that in words rather than inventing a fraction
+for it.
+
+**Still not a phase inside a pair.** A single 60s CP-SAT solve reports nothing
+between "started" and "laid-out". That needs a `SolutionCallback`, which lives
+in `src/flab2bp/layout/`. Worth it only alongside the cancel below, since they
+want the same hook.
+
+**A refusal leaves the last blueprint on screen.** The viewer renders whatever
+was loaded last, so after a refusal the toolbar still names the build before it.
+Clearing it throws away the thing you were looking at, which seemed worse, but
+a stale heading over a refusal panel is not right either.
+
+**FIXED -- `web/node_modules` was committed, and was broken.** 14,760 files of it
+were tracked on master while `web/.gitignore` said `node_modules/`. Worse, the
+root `.gitignore`'s UNANCHORED `dist/` pattern stripped every package's own
+`dist/` on the way in, so a fresh clone got a tree complete enough that
+`bun install --frozen-lockfile` said "no changes" and incomplete enough that
+`bun run build` died on `Cannot find module '@rsbuild/core/dist/index.js'`. Any
+unanchored ignore pattern is a trap once a vendored dependency tree is inside the
+repo; `bun.lock` is the declaration and the tree is no longer tracked.
 
 **`/api/fetch` is an open relay**, inherited from the viewer and reimplemented
 in Python for parity. It follows redirects, so an allowed http(s) URL can still
