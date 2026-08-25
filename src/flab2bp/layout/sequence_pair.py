@@ -550,42 +550,59 @@ class TaggedAnnealIncumbent:
             raise ValueError("elite categories must be a non-empty canonical tuple")
 
 
-@dataclass(frozen=True, slots=True, init=False)
+@dataclass(slots=True)
+class EliteArchiveBuilder:
+    """Bounded incremental state for exact batch-equivalent elite retention."""
+
+    elite_count: int
+    archive: tuple[TaggedAnnealIncumbent, ...] = field(init=False, default=())
+    _blended_by_key: dict[PlacementKey, AnnealIncumbent] = field(
+        init=False,
+        default_factory=dict,
+        repr=False,
+    )
+
+    def __post_init__(self) -> None:
+        if type(self.elite_count) is not int or self.elite_count <= 0:
+            raise ValueError("elite count must be a positive integer")
+
+    def add(self, candidate: AnnealIncumbent) -> None:
+        """Retain one candidate without losing prior blended runners-up."""
+        _retain_blended_elite(self._blended_by_key, candidate, self.elite_count)
+        self.archive = build_elite_archive(
+            (
+                *(entry.incumbent for entry in self.archive),
+                *self._blended_by_key.values(),
+                candidate,
+            ),
+            self.elite_count,
+        )
+
+    @property
+    def blended_elites(self) -> tuple[AnnealIncumbent, ...]:
+        """Return the legacy configured-cap blended reservoir."""
+        return tuple(sorted(self._blended_by_key.values(), key=_blended_archive_key))
+
+
+@dataclass(frozen=True, slots=True)
 class AnnealStageResult:
     """Result of exactly one deterministic temperature stage."""
 
     final_state: AnnealState
     incumbent: AnnealIncumbent
     accepted_moves: int
-    archive: tuple[TaggedAnnealIncumbent, ...]
+    elites: tuple[AnnealIncumbent, ...]
+    archive: tuple[TaggedAnnealIncumbent, ...] = ()
 
-    def __init__(
-        self,
-        final_state: AnnealState,
-        incumbent: AnnealIncumbent,
-        accepted_moves: int,
-        elites: tuple[AnnealIncumbent, ...] | None = None,
-        *,
-        archive: tuple[TaggedAnnealIncumbent, ...] | None = None,
-    ) -> None:
-        """Build a tagged result while accepting the legacy untagged elite argument."""
-        if archive is None:
-            if elites is None:
-                raise TypeError("annealing stage result requires an elite archive")
-            archive = tuple(
-                TaggedAnnealIncumbent(elite, (EliteCategory.BLENDED,)) for elite in elites
+    def __post_init__(self) -> None:
+        if not self.archive:
+            object.__setattr__(
+                self,
+                "archive",
+                tuple(
+                    TaggedAnnealIncumbent(elite, (EliteCategory.BLENDED,)) for elite in self.elites
+                ),
             )
-        elif elites is not None and elites != tuple(entry.incumbent for entry in archive):
-            raise ValueError("tagged archive and compatibility elites must agree")
-        object.__setattr__(self, "final_state", final_state)
-        object.__setattr__(self, "incumbent", incumbent)
-        object.__setattr__(self, "accepted_moves", accepted_moves)
-        object.__setattr__(self, "archive", archive)
-
-    @property
-    def elites(self) -> tuple[AnnealIncumbent, ...]:
-        """Return the archive incumbents for compatibility with existing consumers."""
-        return tuple(entry.incumbent for entry in self.archive)
 
 
 def decode_sequence_pair(
@@ -1206,7 +1223,8 @@ def anneal_stage(
 
     rng = random.Random(derive_stage_seed(state.base_seed, state.stage_index))
     current = _score_state(problem, state, context, direct_targets_for_state)
-    archive = build_elite_archive((current,), config.elite_count)
+    archive_builder = EliteArchiveBuilder(config.elite_count)
+    archive_builder.add(current)
     accepted_moves = 0
     move_kinds = tuple(MoveKind)
 
@@ -1223,10 +1241,7 @@ def anneal_stage(
             context,
             direct_targets_for_state,
         )
-        archive = build_elite_archive(
-            (*(entry.incumbent for entry in archive), candidate),
-            config.elite_count,
-        )
+        archive_builder.add(candidate)
         temperature = _linear_temperature(config, move_index)
         if _accept_move(current.energy, candidate.energy, temperature, rng):
             current = candidate
@@ -1241,9 +1256,10 @@ def anneal_stage(
     )
     return AnnealStageResult(
         final_state=final_state,
-        incumbent=archive[0].incumbent,
+        incumbent=archive_builder.blended_elites[0],
         accepted_moves=accepted_moves,
-        archive=archive,
+        elites=archive_builder.blended_elites,
+        archive=archive_builder.archive,
     )
 
 
@@ -1670,6 +1686,26 @@ def build_elite_archive(
         )
         for key in order
     )
+
+
+def _retain_blended_elite(
+    elites: dict[PlacementKey, AnnealIncumbent],
+    candidate: AnnealIncumbent,
+    elite_count: int,
+) -> None:
+    previous = elites.get(candidate.key)
+    if previous is not None and (
+        previous.energy < candidate.energy
+        or (
+            previous.energy == candidate.energy
+            and _archive_dedupe_key(previous) <= _archive_dedupe_key(candidate)
+        )
+    ):
+        return
+    elites[candidate.key] = candidate
+    if len(elites) > elite_count:
+        worst = max(elites.values(), key=_blended_archive_key)
+        del elites[worst.key]
 
 
 def _blended_archive_key(candidate: AnnealIncumbent) -> tuple[SearchEnergy, PlacementKey]:

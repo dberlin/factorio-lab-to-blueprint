@@ -301,6 +301,82 @@ def test_every_stage_ends_with_exactly_one_detailed_route() -> None:
     assert len(fake.detailed_allowances) == 3
 
 
+def test_scheduler_routes_only_legacy_blended_elites_before_archive_union_cutover(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    selected: list[tuple[AnnealIncumbent, AnnealIncumbent]] = []
+
+    def fake_anneal_stage(
+        problem: PlacementProblem,
+        state: AnnealState,
+        config: AnnealConfig,
+        context: PlacementCostContext | None = None,
+    ) -> AnnealStageResult:
+        del config, context
+
+        def incumbent(east_gap: int, scalar: float) -> AnnealIncumbent:
+            candidate_state = replace(
+                state,
+                gaps=GapProfile((east_gap,), (0,)),
+            )
+            decoded = decode_state(problem, candidate_state)
+            return AnnealIncumbent(
+                state=candidate_state,
+                decoded=decoded,
+                breakdown=_candidate_breakdown(problem, decoded, scalar),
+                key=PlacementKey(
+                    x=decoded.x,
+                    y=decoded.y,
+                    dimensions=problem.sizes,
+                    east_gaps=candidate_state.gaps.east,
+                    north_gaps=candidate_state.gaps.north,
+                ),
+            )
+
+        best_blended = incumbent(0, 0.0)
+        second_blended = incumbent(1, 1.0)
+        pareto_only = incumbent(2, 100.0)
+        selected.append((best_blended, second_blended))
+        return AnnealStageResult(
+            final_state=replace(state, stage_index=state.stage_index + 1),
+            incumbent=best_blended,
+            accepted_moves=0,
+            elites=(best_blended, second_blended),
+            archive=(
+                sequence_pair_module.TaggedAnnealIncumbent(
+                    best_blended,
+                    (sequence_pair_module.EliteCategory.BLENDED,),
+                ),
+                sequence_pair_module.TaggedAnnealIncumbent(
+                    pareto_only,
+                    (sequence_pair_module.EliteCategory.NARROWEST,),
+                ),
+                sequence_pair_module.TaggedAnnealIncumbent(
+                    second_blended,
+                    (sequence_pair_module.EliteCategory.BLENDED,),
+                ),
+            ),
+        )
+
+    monkeypatch.setattr(sequence_solver_module, "anneal_stage", fake_anneal_stage)
+    fake = _FakeRouting()
+    with pytest.raises(NoValidLayout):
+        _solver(
+            fake,
+            heights=(40,),
+            config=SequenceSolverConfig(
+                stages=1,
+                moves_per_stage=1,
+                restarts_per_height=1,
+                global_elites=2,
+            ),
+        ).search(max_stages=1)
+
+    assert tuple(decoded for _height, decoded in fake.prepared_candidates) == tuple(
+        incumbent.decoded for incumbent in selected[0]
+    )
+
+
 def test_detailed_route_still_runs_when_global_spends_the_stage_allowance() -> None:
     fake = _FakeRouting(spend_allowance=True)
     with pytest.raises(NoValidLayout):

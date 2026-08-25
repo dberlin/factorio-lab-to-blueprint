@@ -643,7 +643,6 @@ def test_fixed_seed_reproduces_variant_trace() -> None:
         elite.state.variant_indices for elite in second.elites
     )
     assert first.archive == second.archive
-    assert first.elites == tuple(entry.incumbent for entry in first.archive)
     assert all(
         elite.key.variant_ids == problem.selected_variant_ids(elite.state.variant_indices)
         for elite in first.elites
@@ -1158,6 +1157,7 @@ def _archive_incumbent(
     width: int,
     hpwl: float,
     history: float,
+    missed_direct: int = 0,
     overflow: int = 0,
     seed: int = 0,
 ) -> AnnealIncumbent:
@@ -1188,7 +1188,7 @@ def _archive_incumbent(
             gap_area=0,
             weighted_hpwl=hpwl,
             history_cost=history,
-            missed_direct_inserts=0,
+            missed_direct_inserts=missed_direct,
             hard_outline_overflow=overflow,
             outline_height=1,
             area_lower_bound=1,
@@ -1280,6 +1280,70 @@ def test_elite_archive_fills_remaining_capacity_in_blended_order() -> None:
     assert forward[-1].categories == (sequence_pair_module.EliteCategory.BLENDED,)
 
 
+def test_incremental_archive_matches_batch_after_mandatory_winners_collapse() -> None:
+    blended = _archive_incumbent(width=8, hpwl=10.0, history=10.0)
+    narrowest = _archive_incumbent(width=4, hpwl=1_000.0, history=1_000.0)
+    lowest_hpwl = _archive_incumbent(width=20, hpwl=0.0, history=100.0)
+    lowest_history = _archive_incumbent(width=21, hpwl=100.0, history=0.0)
+    second_blended = _archive_incumbent(width=9, hpwl=10.0, history=10.0)
+    third_blended = _archive_incumbent(width=10, hpwl=10.0, history=10.0)
+    collapsed_extremes = _archive_incumbent(
+        width=3,
+        hpwl=0.0,
+        history=0.0,
+        missed_direct=200,
+    )
+    candidates = (
+        blended,
+        narrowest,
+        lowest_hpwl,
+        lowest_history,
+        second_blended,
+        third_blended,
+        collapsed_extremes,
+    )
+
+    builder = sequence_pair_module.EliteArchiveBuilder(elite_count=4)
+    for candidate in candidates:
+        builder.add(candidate)
+    batch = sequence_pair_module.build_elite_archive(candidates, elite_count=4)
+
+    assert builder.archive == batch
+    assert tuple(entry.incumbent for entry in batch) == (
+        blended,
+        collapsed_extremes,
+        second_blended,
+        third_blended,
+    )
+    assert builder.blended_elites == (
+        blended,
+        second_blended,
+        third_blended,
+        collapsed_extremes,
+    )
+
+
+def test_stage_result_keeps_legacy_blended_elites_separate_from_pareto_archive() -> None:
+    blended = _archive_incumbent(width=8, hpwl=10.0, history=10.0)
+    second_blended = _archive_incumbent(width=9, hpwl=10.0, history=10.0)
+    narrowest = _archive_incumbent(width=4, hpwl=1_000.0, history=1_000.0)
+    archive = sequence_pair_module.build_elite_archive(
+        (blended, second_blended, narrowest),
+        elite_count=2,
+    )
+
+    result = sequence_pair_module.AnnealStageResult(
+        final_state=blended.state,
+        incumbent=blended,
+        accepted_moves=0,
+        elites=(blended, second_blended),
+        archive=archive,
+    )
+
+    assert result.elites == (blended, second_blended)
+    assert result.archive == archive
+
+
 def test_elite_archive_deduplicates_exact_keys_with_stable_category_and_seed_ties() -> None:
     later_seed = _archive_incumbent(width=1, hpwl=0.0, history=0.0, seed=19)
     earlier_seed = replace(later_seed, state=replace(later_seed.state, base_seed=7))
@@ -1344,7 +1408,6 @@ def test_fixed_seed_reproduces_stage_incumbent_and_accepted_move_count() -> None
     assert a.final_state == b.final_state
     assert a.elites == b.elites
     assert a.archive == b.archive
-    assert a.elites == tuple(entry.incumbent for entry in a.archive)
 
 
 def test_archive_capacity_does_not_change_the_annealing_walk_or_blended_incumbent() -> None:
@@ -1381,11 +1444,14 @@ def test_anneal_stage_advances_once_and_retains_ordered_distinct_elites() -> Non
     assert result.final_state.stage_index == state.stage_index + 1
     assert result.final_state.base_seed == state.base_seed
     assert 0 <= result.accepted_moves <= config.moves_per_stage
+    assert 1 <= len(result.elites) <= config.elite_count
+    assert result.elites == tuple(
+        sorted(result.elites, key=lambda elite: (elite.energy, elite.key))
+    )
     assert (
         1 <= len(result.archive) <= max(config.elite_count, len(sequence_pair_module.EliteCategory))
     )
-    assert result.elites == tuple(entry.incumbent for entry in result.archive)
-    assert len({elite.key for elite in result.elites}) == len(result.elites)
+    assert len({entry.incumbent.key for entry in result.archive}) == len(result.archive)
     assert result.archive[0].categories[0] is sequence_pair_module.EliteCategory.BLENDED
     assert all(
         entry.categories
