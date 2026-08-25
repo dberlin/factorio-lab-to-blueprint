@@ -2247,6 +2247,7 @@ def _emit_strip(
     rates: dict[str, Fraction],
     in_rates: Mapping[str, Fraction] | None = None,
     out_rates: Mapping[str, Fraction] | None = None,
+    sprayed: Set[str] = frozenset(),
 ) -> tuple[dict[str, _Port], dict[tuple[str, str], _Port], int]:
     """Place one strip's lanes, machines and sorters.
 
@@ -2292,7 +2293,27 @@ def _emit_strip(
     for lane in s.in_above + s.in_below:
         row = s.row_of_input(lane[0])
         lane_item_of[row] = lane[0]
-        lane_tiles_of[row] = s.input_lane_tiles(lane)
+        need = s.input_lane_tiles(lane)
+        # A LANE THAT CARRIES A SPRAY COATER NEEDS TWO TILES, because a one-tile
+        # lane has no direction of flow at all.
+        #
+        # `game.addon_facing` reads the ridden belt's flow from its link graph:
+        # its successor if it has one, otherwise its predecessor.  A one-tile
+        # lane has no successor, so the direction is whichever way the ROUTER
+        # happened to arrive -- decided long after `_place_coaters` has had to
+        # commit to a yaw, and the yaw is what aims the addon's areas.  Measured
+        # on `electromagnetic-matrix/max-proliferation`: every coater convicted
+        # was on a single-tile lane fed from the south, flowing 0 against a yaw
+        # of 90.  A second tile makes the successor the lane's own next tile, so
+        # the flow is east by construction and the yaw is right by construction.
+        #
+        # One belt, no area: the tile is inside the strip's existing width, and
+        # `min(..., width)` keeps it there.  It is dead belt in the sense
+        # `input_lane_tiles` means -- no sorter draws from it -- which is the
+        # price of a coater the game will accept.
+        if need and any(it in sprayed for it in lane):
+            need = min(max(need, 2), width)
+        lane_tiles_of[row] = need
     for k, (item, _dest) in enumerate(s.out_lanes):
         lane_item_of[s.row_of_output(k)] = item
         lane_tiles_of[s.row_of_output(k)] = width
@@ -5995,6 +6016,7 @@ def _build(
             belt_model,
             rates,
             *per_item.get(s.group_key, ({}, {})),
+            sprayed=frozenset(spec.spray_lanes),
         )
         sorters += placed
         strip_in_ports.append(ins)
@@ -6414,7 +6436,7 @@ def _place_coaters(
             port = in_ports.get(item)
             if port is None:
                 continue
-            cx, cy = port.x1, port.y
+            cx, cy = _coater_seat(port)
             host = belt_at.get((cx, cy, 0))
             # WHERE the proliferator belt has to be, from the coater's own addon
             # area rather than from convenience. The game attaches an addon's
