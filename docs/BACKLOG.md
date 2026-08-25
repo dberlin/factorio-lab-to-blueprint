@@ -636,7 +636,7 @@ rather than as anything about coaters.
    candidate source rather than the first that works. Nearest-by-manhattan
    picked a source whose actual route was 68 tiles for a straight-line 34.
 
-## OPEN -- spine's ten-coater case waits on a rule we have not read
+## OPEN -- spine's ten-coater case is a runway problem now, not a rules one
 
 `super-magnetic-ring*60/max-proliferation` (10 spray lanes) still refuses, and
 the refusal is now bounded by **a game rule this project has deliberately not
@@ -688,13 +688,19 @@ z = 1 over an assembler still pastes as `EBuildCondition.Collide`. Use
 `colliders.belt_crossing_height`, and turn `game.belt_crossing` on in whatever
 audit measures the change.
 
-Freeform's out-lanes start immediately below the machine FOOTPRINT, which puts
-them inside the row a machine's collider needs; a junction on such a lane is
-illegal, and `junction.site_is_clear` refuses it. Moving lane rows to start
-after the clearance band is the obvious fix and is NOT the way in -- it took
-freeform from 9 test failures to 80, because the strip's row indices are
-consumed in several places that each assume lanes start at `mh`. Whatever fixes
-this has to change those together.
+**A STALE PARAGRAPH LIVED HERE** claiming freeform's out-lanes start
+immediately below the machine FOOTPRINT, inside the row a machine's collider
+needs, so a junction on one is always illegal. That was true when it was
+written and is not now: `Strip.row_of_output` returns `first_row_below_band`,
+i.e. `machine_row + ph`, so lanes already start after the CLEARANCE band. It was
+checked before this was rewritten.
+
+What is still true is the reason a junction beside a machine fails:
+`junction.site_is_clear` needs `(splitter_clearance + machine_clearance) / 2`
+tiles centre to centre, about three against an Assembling Machine, and a lane
+sits one tile off the band by design. That is a distance no amount of band
+tuning buys cheaply -- which is why the escape is height, above, and not a wider
+corridor.
 
 ## OPEN -- one collider question left; the other two are answered
 
