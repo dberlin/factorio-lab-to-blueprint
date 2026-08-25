@@ -78,8 +78,12 @@ def keepout_cells(x: int, y: int, level: int) -> tuple[tuple[int, int, int], ...
     blueprint ``z`` because a junction always rests on a level.
     """
     return tuple(
-        (x + dx, y + dy, level + dz) for dx, dy, dz in sorted(_keepout())
+        (x + dx, y + dy, level + dz) for dx, dy, dz in _KEEPOUT
     )
+
+
+#: The offsets, resolved once. :func:`keepout_cells` is in a routing inner loop.
+_KEEPOUT: tuple[tuple[int, int, int], ...] = tuple(sorted(_keepout()))
 
 
 def site_is_clear(buildings: Sequence[PlacedBuilding], x: int, y: int) -> bool:

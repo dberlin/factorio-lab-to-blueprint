@@ -3436,14 +3436,24 @@ def _merge_frontier(
         for at, (x, y, lvl) in enumerate(path):
             if junctionable is not None and not junctionable(x, y):
                 continue
+            # The neighbours FIRST, and the belt half only for a cell that has
+            # some. This is a routing pass's inner loop -- every sibling's every
+            # cell, per net, per round -- and most cells of a settled path are
+            # walled in by their own neighbours, so testing a keep-out nobody
+            # could have used is the expensive half of a question already
+            # answered.
+            free = [
+                cell
+                for dx, dy in _STEPS
+                if canvas.free(cell := (x + dx, y + dy, lvl))
+            ]
+            if not free:
+                continue
             if junctionable is not None and not _junction_belt_clear(
                 canvas, (x, y, lvl), path, at
             ):
                 continue
-            for dx, dy in _STEPS:
-                cell = (x + dx, y + dy, lvl)
-                if canvas.free(cell):
-                    out.add(cell)
+            out.update(free)
     return out
 
 
