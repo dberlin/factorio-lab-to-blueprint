@@ -2370,18 +2370,16 @@ def _emit(
                 reachable = [r for r in reachable if r]
                 if not reachable:
                     continue
-                pick = _pick_sorter(rate, tap.span, max(len(r) for r in reachable))
-                cols = min(pick[1], max(len(r) for r in reachable)) if pick else 1
-                # A rider on a shared lane starts one column further along the
-                # machine, because two sorters serving one machine off one belt
-                # cannot stand in the same column.  Charged to the EXTENT as
-                # well as to the sorter pass: the lane is emitted from the taps
-                # it is charged for, so a rider whose column the lane never
-                # reached simply got no sorter -- `machine.inputs_supplied`, on
-                # the very spec the sharing exists for.
-                off = _share_column(plan, tap.corridor, tap.depth, item)
-                lo = min(r[min(off, len(r) - 1)] for r in reachable)
-                hi = max(r[min(off + cols - 1, len(r) - 1)] for r in reachable)
+                # EVERY reachable column, not the slice this item's own offset
+                # implies.  A machine slot holds one connection, so the sorter
+                # pass may have to walk past a column another lane has already
+                # claimed on this face -- and a column the lane never reached is
+                # a machine with no sorter, which is `machine.inputs_supplied`.
+                # Measured on `graphene`: the extent was charged for column 11
+                # of a Chemical Plant, the claim pushed the sorter to 12, and
+                # the lane stopped at 11.
+                lo = min(r[0] for r in reachable)
+                hi = max(r[-1] for r in reachable)
                 _extend(tap.corridor, tap.depth, lo, hi)
                 (drain_at if into else fill_at)[tap.corridor, tap.depth].append((lo, hi))
 
@@ -2646,6 +2644,17 @@ def _emit(
     #: one belt need one column each across the machine's width; without this the
     #: second item's sorters landed on top of the first's.
     lane_columns: dict[tuple[int, int], dict[int, set[int]]] = defaultdict(dict)
+    #: Machine index -> the SLOT indices already spoken for on it, across every
+    #: lane and every call.  `lane_columns` above rations COLUMNS within one
+    #: lane, which is a weaker statement: two lanes at different depths on the
+    #: SAME side of a machine reach the same columns and therefore the same
+    #: slots, and nothing was stopping them both taking one.  A slot holds
+    #: exactly one connection -- `entityConnPool[objId * 16 + slot]`, and
+    #: `WriteObjectConn` evicts the sitting tenant rather than refusing -- so the
+    #: second sorter pasted with the first silently unwired and both standing on
+    #: the same tile.  Measured on a pristine tree: 34 of spine's 43 clean
+    #: mid-tier cells carried at least one shared slot, 304 in all.
+    claimed_slots: dict[int, set[int]] = {}
     for key, g in groups.items():
         connections = [(item, rate * g.count, True) for item, rate in g.inputs.items()]
         connections += [(item, rate * g.count, False) for item, rate in g.outputs.items()]
@@ -2700,6 +2709,7 @@ def _emit(
                     filter_id=_lane_filter(item) if shared else 0,
                     column=_share_column(plan, *lane_key, item),
                     reserved=lane_columns[lane_key] if shared else None,
+                    claimed=claimed_slots,
                 )
 
     # --- spray coaters ----------------------------------------------------
@@ -3545,6 +3555,7 @@ def _place_sorters(
     filter_id: int = 0,
     column: int = 0,
     reserved: dict[int, set[int]] | None = None,
+    claimed: dict[int, set[int]] | None = None,
 ) -> int:
     """Connect a lane to EVERY machine of a group, ``per_machine`` sorters each.
 
@@ -3560,6 +3571,17 @@ def _place_sorters(
     across CALLS, keyed by machine: two items on one belt cannot be drawn by two
     sorters standing in the same column, and ``used`` alone only ever saw the
     one item it was called for.
+
+    ``claimed`` is the same idea one level up, and it is the one that matters to
+    the GAME rather than to the geometry: machine index -> the SLOT indices
+    already spoken for on it, across every lane.  ``reserved`` is per-lane and
+    counts columns; two lanes at different depths on the same side of a machine
+    reach the same columns and so the same slots, and nothing was stopping both
+    from taking one.  A slot holds exactly one connection -- see
+    :data:`~flab2bp.dsp.rules.CONN_SLOTS_PER_OBJECT` -- so the second sorter
+    pasted with the first evicted and the two of them on one tile.  Keyed on the
+    SLOT rather than the column so the two faces cannot block each other:
+    column 1 from above is slot 7, column 1 from below is slot 1.
     """
     model_index = catalog.building(tier).model_index
     placed = 0
@@ -3571,6 +3593,13 @@ def _place_sorters(
         # no insert pose on that face -- and the loop below then places nothing
         # rather than anchoring where the game has no slot.
         reachable = sorter_slots.attachable_columns(m, lane_y)
+        spoken: set[int] | None = (
+            None if claimed is None else claimed.setdefault(m_idx, set())
+        )
+        free = {
+            c for c, att in reachable.items()
+            if spoken is None or att.slot not in spoken
+        }
         for i in range(per_machine):
             # ONE column for both anchors.  This sorter is vertical -- the lane
             # sits in a corridor above or below the machine row -- so the two
@@ -3580,13 +3609,16 @@ def _place_sorters(
             # offset, which is why 100 of 118 came out diagonal with dx of only
             # ever 1 or 2.
             x = _shared_column(
-                buildings, lane, m, prefer=column + i, avoid=used, allowed=set(reachable)
+                buildings, lane, m, prefer=column + i, avoid=used, allowed=free
             )
             if x is None:
                 continue
             belt_idx = _lane_tile_at(buildings, lane, x)
             if belt_idx is None:
                 continue
+            if spoken is not None:
+                spoken.add(reachable[x].slot)
+                free.discard(x)
             # WHERE on the machine, from the machine's own insert poses. The
             # near edge row is right for a 3x3 and wrong for most else: a
             # Chemical Plant's southern slots are a row inside its footprint.
