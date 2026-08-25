@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import random
 import struct
+from array import array
 from collections.abc import Iterator
 from typing import cast
 
@@ -11,6 +12,7 @@ import flab2bp.layout.sequence_kernel as sequence_kernel_module
 from flab2bp.bench.corpus import entry
 from flab2bp.lab.data import load_vendored
 from flab2bp.lab.url import parse_url
+from flab2bp.layout._sequence_kernel import decode_score
 from flab2bp.layout.freeform import (
     _box,
     _candidate_heights,
@@ -186,6 +188,46 @@ def _generated_cases(
             direct_targets=tuple(targets),
         )
         yield problem, state, context
+
+
+def test_compiled_decode_score_returns_coordinate_workspace_arrays() -> None:
+    earliest_x = array("q", [0])
+    earliest_y = array("q", [0])
+    latest_x = array("q", [0])
+    latest_y = array("q", [0])
+
+    result = decode_score(
+        array("q", [0]),
+        array("q", [0]),
+        array("q", [0]),
+        array("q", [0]),
+        array("q", [1, 1]),
+        array("q"),
+        array("d"),
+        array("d", [0.0, 0.0]),
+        array("q"),
+        array("q", [0]),
+        bytearray(1),
+        bytearray(1),
+        earliest_x,
+        earliest_y,
+        latest_x,
+        latest_y,
+        1,
+        0,
+        6,
+    )
+
+    coordinates = result[:4]
+    assert all(type(values) is array and values.typecode == "q" for values in coordinates)
+    assert all(
+        actual is expected
+        for actual, expected in zip(
+            coordinates,
+            (earliest_x, earliest_y, latest_x, latest_y),
+            strict=True,
+        )
+    )
 
 
 def test_backend_selection_uses_aot_extension() -> None:

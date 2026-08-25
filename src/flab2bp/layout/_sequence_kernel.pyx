@@ -16,10 +16,10 @@ def decode_score(
     long long[::1] negative_position,
     unsigned char[::1] horizontal,
     unsigned char[::1] vertical,
-    long long[::1] earliest_x,
-    long long[::1] earliest_y,
-    long long[::1] latest_x,
-    long long[::1] latest_y,
+    object earliest_x_array,
+    object earliest_y_array,
+    object latest_x_array,
+    object latest_y_array,
     long long outline_height,
     long long history_width,
     long long sorter_max_reach,
@@ -45,6 +45,10 @@ def decode_score(
     cdef double compensation = 0.0
     cdef double term, combined
     cdef double history_cost = 0.0
+    cdef long long[::1] earliest_x = earliest_x_array
+    cdef long long[::1] earliest_y = earliest_y_array
+    cdef long long[::1] latest_x = latest_x_array
+    cdef long long[::1] latest_y = latest_y_array
 
 
     for index in range(size * size):
@@ -192,10 +196,10 @@ def decode_score(
         overflow = 0
 
     return (
-        earliest_x,
-        earliest_y,
-        latest_x,
-        latest_y,
+        earliest_x_array,
+        earliest_y_array,
+        latest_x_array,
+        latest_y_array,
         width,
         used_height,
         gap_area,
