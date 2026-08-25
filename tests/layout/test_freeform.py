@@ -3995,3 +3995,45 @@ class TestAJunctionIsNotBuiltBesideAForeignBelt:
         assert canvas.free((1, 1, 0)), "the diagonal clears and must stay routable"
         assert canvas.free((2, 0, 0)), "two tiles out clears and must stay routable"
         assert canvas.free((0, 0, 2)), "two levels up clears and must stay routable"
+
+
+class TestTheMergeFrontierWithdrawsSitesAJunctionCannotHold:
+    """The routing-time half, which is the half that had to exist.
+
+    The backlog's failed attempt put this test inside ``_commit_paths``, where
+    it refused 1147 of 1619 sites and the convictions survived anyway: a tap is
+    taken while the walk is half done, so the belt that lands beside it has not
+    been staked yet.  Asked at the frontier instead, it costs one of the several
+    cells a sibling's path offers, and the router picks another.
+    """
+
+    def _scene(self) -> tuple[_Canvas, dict[int, list[tuple[int, int, int]]]]:
+        canvas = _Canvas()
+        # A stranger one tile north of the path's first cell: in that cell's
+        # keep-out, and on nobody's run.
+        canvas.add(_belt(0, 1, item="y"))
+        path = [(0, 0, 0), (1, 0, 0), (2, 0, 0)]
+        for cell in path:
+            canvas.blocked[cell] = _TENTATIVE
+        return canvas, {5: path}
+
+    def test_a_cell_whose_tap_is_dirty_is_not_offered(self) -> None:
+        canvas, paths = self._scene()
+        got = freeform._merge_frontier(canvas, paths, (5,), lambda x, y: True)
+        assert (-1, 0, 0) not in got and (0, -1, 0) not in got, (
+            "a merge was offered whose junction would stand beside a foreign "
+            f"belt: {sorted(got)}"
+        )
+        assert (1, 1, 0) in got, (
+            "the clean cells of the same path stopped being offered, so this "
+            "withdraws more than the rule asks for"
+        )
+
+    def test_the_same_cells_come_back_when_the_stranger_is_gone(self) -> None:
+        """Without this the test above passes for any predicate that says no."""
+        canvas = _Canvas()
+        path = [(0, 0, 0), (1, 0, 0), (2, 0, 0)]
+        for cell in path:
+            canvas.blocked[cell] = _TENTATIVE
+        got = freeform._merge_frontier(canvas, {5: path}, (5,), lambda x, y: True)
+        assert {(-1, 0, 0), (0, -1, 0), (0, 1, 0)} <= got, sorted(got)
