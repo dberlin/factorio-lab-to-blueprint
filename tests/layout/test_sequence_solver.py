@@ -856,6 +856,63 @@ def test_best_height_scheduling_uses_complete_exact_key_before_stable_order() ->
     assert result.exact_key == (100, 1)
 
 
+def test_height_neighbor_gets_one_protected_followup_before_exact_key_best_first() -> None:
+    detailed_calls: dict[int, int] = {26: 0, 31: 0}
+    fake = _FakeRouting()
+
+    def detailed_route(prepared: Prepared, allowance: int) -> DetailedStageResult:
+        height, _decoded = prepared
+        detailed_calls[height] += 1
+        exact = {
+            (31, 1): _placement(area=1888, belt_tiles=932),
+            (31, 2): _placement(area=1888, belt_tiles=932),
+            (26, 1): _placement(area=2139, belt_tiles=855),
+            (26, 2): _placement(area=1728, belt_tiles=771),
+        }[(height, detailed_calls[height])]
+        return DetailedStageResult(
+            _routing(DetailedRouteStatus.ROUTED, expansions=min(1, allowance)),
+            exact,
+        )
+
+    budget = ExpansionBudget(100)
+    solver = SequenceSolver(
+        heights=(31, 26),
+        problem_for_height=lambda height: PlacementProblem(
+            sizes=((1, 1),),
+            nets=((0, 0),),
+            outline_height=height,
+            area_lower_bound=1,
+        ),
+        adapters=replace(fake.adapters(), detailed_route=detailed_route),
+        expansion_budget=budget,
+        config=SequenceSolverConfig(
+            stages=3,
+            moves_per_stage=1,
+            restarts_per_height=1,
+            global_elites=1,
+        ),
+        protected_followup_heights=(26,),
+    )
+
+    result = solver.search(max_stages=3)
+
+    assert [stage.height for stage in result.stages] == [31, 26, 26]
+    assert [stage.exact_key for stage in result.stages] == [
+        (1888, 932),
+        (2139, 855),
+        (1728, 771),
+    ]
+    assert result.exact_key == (1728, 771)
+    assert budget.spent == 3
+
+    solver._heights[0].exact_key = (1, 0)
+    continued = solver.search(max_stages=4)
+
+    assert continued.stages[-1].height == 31
+    assert detailed_calls == {26: 2, 31: 2}
+    assert budget.spent == 4
+
+
 def test_best_height_fallback_order_is_stranded_overflow_narrowest_spend_then_stable() -> None:
     solver = _solver(_FakeRouting(), heights=(40, 60))
     first, second = solver._heights
@@ -1605,6 +1662,47 @@ def test_direct_targets_derive_geometry_from_both_selected_endpoint_variants() -
         )[0]
     )
     assert consumer_changed.producer_row == target.producer_row
+
+
+def test_production_run_stages_plus_two_height_neighbor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    widths = {24: 5, 26: 3, 28: 1, 30: 1, 32: 3}
+    packed_heights: list[int] = []
+
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "_candidate_heights",
+        lambda _strips: [24, 26, 30],
+    )
+
+    def fake_greedy_pack(
+        _strips: list[freeform_module.Strip],
+        height: int,
+    ) -> _Pack:
+        packed_heights.append(height)
+        return _Pack(at={}, width=widths[height], height=height, status="packed")
+
+    monkeypatch.setattr(sequence_solver_module, "_greedy_pack", fake_greedy_pack)
+
+    run = _production_run(
+        two_stage_spec(),
+        time_budget_s=2.0,
+        power=False,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+    )
+
+    assert packed_heights == [24, 26, 30, 32, 28]
+    assert run.heights == (30, 26, 24, 32, 28)
+    assert [height.problem.outline_height for height in run.solver._heights] == [
+        30,
+        26,
+        24,
+        32,
+        28,
+    ]
+    assert run.solver._protected_followup_heights == (32, 28)
 
 
 @pytest.mark.parametrize(

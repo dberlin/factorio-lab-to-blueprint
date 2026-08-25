@@ -415,6 +415,7 @@ class SequenceSolver[PreparedT]:
         problem_for_height: Callable[[int], PlacementProblem],
         adapters: StageAdapters[PreparedT],
         expansion_budget: ExpansionBudget,
+        protected_followup_heights: tuple[int, ...] = (),
         config: SequenceSolverConfig | None = None,
         deadline_reached: Callable[[], bool] | None = None,
         initial_feedback: Callable[[PlacementProblem], FeedbackState] | None = None,
@@ -433,6 +434,17 @@ class SequenceSolver[PreparedT]:
             or any(type(height) is not int or height <= 0 for height in heights)
         ):
             raise ValueError("candidate heights must be unique positive integers in a tuple")
+        if (
+            not isinstance(protected_followup_heights, tuple)
+            or len(set(protected_followup_heights)) != len(protected_followup_heights)
+            or any(
+                type(height) is not int or height not in heights
+                for height in protected_followup_heights
+            )
+        ):
+            raise ValueError(
+                "protected follow-up heights must be unique scheduled integers in a tuple"
+            )
         self.config = config or SequenceSolverConfig()
         self.adapters = adapters
         self.budget = expansion_budget
@@ -444,6 +456,7 @@ class SequenceSolver[PreparedT]:
         self.stage_boundary_commit = stage_boundary_commit
         self.direct_targets_for_state = direct_targets_for_state
         self.budget.configure(heights, self.config.final_reserve_fraction)
+        self._protected_followup_heights = protected_followup_heights
         feedback_factory = initial_feedback or _default_feedback
         self._heights = [
             _new_height_state(
@@ -493,7 +506,16 @@ class SequenceSolver[PreparedT]:
                 if not eligible:
                     termination = "candidates"
                     break
-                height_state = self._select_height(eligible)
+                protected_followup = next(
+                    (
+                        height
+                        for height in eligible
+                        if height.height in self._protected_followup_heights
+                        and height.stages == 1
+                    ),
+                    None,
+                )
+                height_state = protected_followup or self._select_height(eligible)
                 allowance = self.budget.shared_allowance()
                 restart = self._select_restart(height_state)
                 spent, cancelled = self._run_stage(height_state, restart, allowance)
@@ -1566,8 +1588,21 @@ def _production_run(
             if variant_tables
             else sum(width * height for width, height in sizes)
         )
-        seeds = {height: _greedy_pack(strips, height) for height in _candidate_heights(strips)}
-        heights = tuple(sorted(seeds, key=lambda height: (seeds[height].width, height)))
+        seeds = {
+            height: _greedy_pack(strips, height) for height in _candidate_heights(strips)
+        }
+        coarse_heights = tuple(
+            sorted(seeds, key=lambda height: (seeds[height].width, height))
+        )
+        neighbor_heights: list[int] = []
+        for height in coarse_heights:
+            neighbor = height + 2
+            if neighbor in seeds:
+                continue
+            seeds[neighbor] = _greedy_pack(strips, neighbor)
+            neighbor_heights.append(neighbor)
+        protected_followup_heights = tuple(neighbor_heights)
+        heights = coarse_heights + protected_followup_heights
         problems = {
             height: PlacementProblem(
                 sizes=sizes,
@@ -1803,6 +1838,7 @@ def _production_run(
             validate=certify,
         ),
         expansion_budget=ExpansionBudget(expansion_total),
+        protected_followup_heights=protected_followup_heights,
         config=config,
         deadline_reached=deadline_reached,
         direct_targets=direct_targets,
