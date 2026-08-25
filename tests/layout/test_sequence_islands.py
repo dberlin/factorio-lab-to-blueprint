@@ -339,6 +339,11 @@ def test_two_real_spawned_islands_are_unseeded_then_seeded_and_both_valid() -> N
     assert not validate.certify(island0, spec, expect_power=False).errors
     assert not validate.certify(island1, spec, expect_power=False).errors
     assert "compact_seed_attempt" not in island0.stats
+    assert "compact_seed_closures" not in island0.stats
     assert island1.stats["compact_seed_attempt"] == 0.0
     assert island1.stats["compact_seed_status"] in {"optimal", "feasible"}
     assert island1.stats["compact_seed_decoded_width"] >= 1.0
+    assert island1.stats["compact_seed_closures"] == 1.0
+    assert island1.stats["compact_seed_closure_status"] == "routed"
+    assert island1.stats["compact_seed_closure_backend"] == "cython"
+    assert island1.stats["compact_seed_closure_exact"] == 1.0

@@ -490,7 +490,7 @@ def test_compact_initial_state_is_rebased_per_restart_and_topology_only_resets_d
     )
 
     with pytest.raises(NoValidLayout):
-        solver.search(max_stages=1)
+        solver.search(max_stages=2)
 
     topology, full = starts
     restarts = solver._heights[0].restarts
@@ -514,6 +514,211 @@ def test_absent_initial_state_keeps_exact_anneal_initial_and_mapping_is_validate
             heights=(40,),
             initial_states={60: AnnealState.initial(1, 1)},
         )
+
+
+def test_compact_seed_routes_raw_state_before_any_anneal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exact = _placement(area=20, belt_tiles=4)
+    fake = _FakeRouting(
+        detailed_results=(DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), exact),)
+    )
+    compact = AnnealState.initial(1, 17)
+
+    def forbid_anneal(*_args: object, **_kwargs: object) -> AnnealStageResult:
+        raise AssertionError("raw compact seed must route before annealing")
+
+    monkeypatch.setattr(sequence_solver_module, "anneal_stage", forbid_anneal)
+    solver = _solver(
+        fake,
+        heights=(40,),
+        config=SequenceSolverConfig(
+            stages=1,
+            moves_per_stage=7,
+            restarts_per_height=1,
+            global_elites=1,
+        ),
+        initial_states={40: compact},
+    )
+
+    result = solver.search(max_stages=1)
+
+    assert result.placement is exact
+    assert fake.prepared_candidates == [(40, decode_state(solver._heights[0].problem, compact))]
+    assert fake.global_allowances == []
+    assert fake.detailed_allowances == [solver.budget.discovery_by_height[40]]
+    observation = result.stages[0]
+    assert observation.global_skip_reason == "compact-seed"
+    assert observation.anneal_stages == 0
+    assert observation.anneal_moves == 0
+    assert observation.accepted_moves == 0
+    assert observation.anneal_seeds == ()
+    assert observation.exact_key == (20, 4)
+
+
+def test_failed_compact_seed_closure_charges_discovery_then_ordinary_search_continues(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exact = _placement(area=20, belt_tiles=4)
+    fake = _FakeRouting(
+        detailed_results=(
+            DetailedStageResult(
+                _routing(DetailedRouteStatus.BUDGET, expansions=7),
+                None,
+            ),
+            DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), exact),
+        )
+    )
+    anneal_calls = 0
+    real_anneal_stage = anneal_stage
+
+    def capture_anneal(
+        problem: PlacementProblem,
+        state: AnnealState,
+        config: AnnealConfig,
+        context: PlacementCostContext | None = None,
+    ) -> AnnealStageResult:
+        nonlocal anneal_calls
+        anneal_calls += 1
+        return real_anneal_stage(problem, state, config, context)
+
+    monkeypatch.setattr(sequence_solver_module, "anneal_stage", capture_anneal)
+    solver = _solver(
+        fake,
+        heights=(40,),
+        budget=ExpansionBudget(100),
+        config=SequenceSolverConfig(
+            stages=1,
+            moves_per_stage=1,
+            restarts_per_height=1,
+            global_elites=1,
+            final_reserve_fraction=Fraction(0),
+        ),
+        initial_states={40: AnnealState.initial(1, 17)},
+    )
+
+    result = solver.search(max_stages=2)
+
+    assert result.placement is exact
+    assert anneal_calls == 1
+    assert [stage.global_skip_reason for stage in result.stages] == [
+        "compact-seed",
+        None,
+    ]
+    assert fake.detailed_allowances == [100, 93]
+    assert solver.budget.spent == 7
+
+
+def test_validator_rejected_compact_seed_never_escapes_and_discovery_recovers() -> None:
+    rejected = _placement(area=1, belt_tiles=1, valid=False)
+    exact = _placement(area=20, belt_tiles=4)
+    solver = _solver(
+        _FakeRouting(
+            detailed_results=(
+                DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), rejected),
+                DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), exact),
+            )
+        ),
+        heights=(40,),
+        config=SequenceSolverConfig(
+            stages=1,
+            moves_per_stage=1,
+            restarts_per_height=1,
+            global_elites=1,
+        ),
+        initial_states={40: AnnealState.initial(1, 17)},
+    )
+
+    result = solver.search(max_stages=2)
+
+    assert result.placement is exact
+    seed_observation, discovery = result.stages
+    assert seed_observation.global_skip_reason == "compact-seed"
+    assert seed_observation.exact_key is None
+    assert seed_observation.validation_failures == ("fake.invalid",)
+    assert discovery.exact_key == (20, 4)
+
+
+def test_compact_exact_incumbent_cannot_be_displaced_by_worse_discovery() -> None:
+    compact_exact = _placement(area=20, belt_tiles=4)
+    worse = _placement(area=30, belt_tiles=1)
+    solver = _solver(
+        _FakeRouting(
+            detailed_results=(
+                DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), compact_exact),
+                DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), worse),
+            )
+        ),
+        heights=(40,),
+        config=SequenceSolverConfig(
+            stages=1,
+            moves_per_stage=1,
+            restarts_per_height=1,
+            global_elites=1,
+        ),
+        initial_states={40: AnnealState.initial(1, 17)},
+    )
+
+    result = solver.search(max_stages=2)
+
+    assert result.placement is compact_exact
+    assert result.exact_key == (20, 4)
+    assert result.stages[0].global_skip_reason == "compact-seed"
+    assert result.stages[1].exact_key == (30, 1)
+
+
+def test_deadline_after_clean_compact_closure_returns_retained_exact(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exact = _placement(area=20, belt_tiles=4)
+    checks = iter((False, True))
+
+    def forbid_anneal(*_args: object, **_kwargs: object) -> AnnealStageResult:
+        raise AssertionError("deadline after seed closure must stop before annealing")
+
+    monkeypatch.setattr(sequence_solver_module, "anneal_stage", forbid_anneal)
+    solver = _solver(
+        _FakeRouting(
+            detailed_results=(DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), exact),)
+        ),
+        heights=(40,),
+        config=SequenceSolverConfig(
+            stages=1,
+            moves_per_stage=1,
+            restarts_per_height=1,
+            global_elites=1,
+        ),
+        deadline_reached=lambda: next(checks),
+        initial_states={40: AnnealState.initial(1, 17)},
+    )
+
+    result = solver.search(max_stages=2)
+
+    assert result.placement is exact
+    assert result.termination == "deadline"
+    assert len(result.stages) == 1
+
+
+def test_unseeded_solver_has_no_compact_closure() -> None:
+    exact = _placement(area=20, belt_tiles=4)
+    solver = _solver(
+        _FakeRouting(
+            detailed_results=(DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), exact),)
+        ),
+        heights=(40,),
+        config=SequenceSolverConfig(
+            stages=1,
+            moves_per_stage=1,
+            restarts_per_height=1,
+            global_elites=1,
+        ),
+    )
+
+    result = solver.search(max_stages=1)
+
+    assert result.stages[0].global_skip_reason is None
+    assert result.stages[0].anneal_stages == 1
+    assert result.stages[0].anneal_moves == 1
 
 
 def test_topology_lane_resets_lns_dimensions_before_its_next_dynamic_target_stage(
