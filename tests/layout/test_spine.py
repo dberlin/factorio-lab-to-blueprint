@@ -2321,12 +2321,13 @@ class TestRealCorpusSpecsActuallySolve:
             load_vendored(), parse_url(entry(url_id).url), count=3
         ).candidates
         # The SMALLEST SPINE CAN BUILD, which is not simply the smallest.
-        # Proliferation cuts machine count, so `min` picks a sprayed candidate --
-        # and spine refuses those: a Spray Coater is supplied by an elevated belt
-        # in its own row and spine runs lanes at ground level in a corridor. That
-        # gap is documented in docs/BACKLOG.md and asserted by
-        # `test_spine_refuses_rather_than_shipping_an_unfed_coater`; handing it to
-        # a test about the SOLVER measures the wrong thing.
+        # Proliferation cuts machine count, so `min` picks a sprayed candidate,
+        # and a sprayed candidate is mostly a test of the elevated coater spur:
+        # a Spray Coater takes its proliferator positionally from a belt in its
+        # addon area, which `TestSprayCoatersAreFed` covers on its own terms.
+        # Handing that to a test about the SOLVER measures the wrong thing.
+        # (This comment used to say spine REFUSED every sprayed candidate. It
+        # did, until `_spur_clear` learned the game's belt-crossing height.)
         buildable = [c for c in candidates if not c.spray_lanes] or list(candidates)
         return min(buildable, key=lambda s: s.machine_count)
 
@@ -2378,12 +2379,13 @@ class TestPowerCoverageOnRealSpecs:
             load_vendored(), parse_url(entry(url_id).url), count=3
         ).candidates
         # The SMALLEST SPINE CAN BUILD, which is not simply the smallest.
-        # Proliferation cuts machine count, so `min` picks a sprayed candidate --
-        # and spine refuses those: a Spray Coater is supplied by an elevated belt
-        # in its own row and spine runs lanes at ground level in a corridor. That
-        # gap is documented in docs/BACKLOG.md and asserted by
-        # `test_spine_refuses_rather_than_shipping_an_unfed_coater`; handing it to
-        # a test about the SOLVER measures the wrong thing.
+        # Proliferation cuts machine count, so `min` picks a sprayed candidate,
+        # and a sprayed candidate is mostly a test of the elevated coater spur:
+        # a Spray Coater takes its proliferator positionally from a belt in its
+        # addon area, which `TestSprayCoatersAreFed` covers on its own terms.
+        # Handing that to a test about the SOLVER measures the wrong thing.
+        # (This comment used to say spine REFUSED every sprayed candidate. It
+        # did, until `_spur_clear` learned the game's belt-crossing height.)
         buildable = [c for c in candidates if not c.spray_lanes] or list(candidates)
         return min(buildable, key=lambda s: s.machine_count)
 
@@ -2570,12 +2572,13 @@ class TestRealSpecsValidateClean:
             load_vendored(), parse_url(entry(url_id).url), count=3
         ).candidates
         # The SMALLEST SPINE CAN BUILD, which is not simply the smallest.
-        # Proliferation cuts machine count, so `min` picks a sprayed candidate --
-        # and spine refuses those: a Spray Coater is supplied by an elevated belt
-        # in its own row and spine runs lanes at ground level in a corridor. That
-        # gap is documented in docs/BACKLOG.md and asserted by
-        # `test_spine_refuses_rather_than_shipping_an_unfed_coater`; handing it to
-        # a test about the SOLVER measures the wrong thing.
+        # Proliferation cuts machine count, so `min` picks a sprayed candidate,
+        # and a sprayed candidate is mostly a test of the elevated coater spur:
+        # a Spray Coater takes its proliferator positionally from a belt in its
+        # addon area, which `TestSprayCoatersAreFed` covers on its own terms.
+        # Handing that to a test about the SOLVER measures the wrong thing.
+        # (This comment used to say spine REFUSED every sprayed candidate. It
+        # did, until `_spur_clear` learned the game's belt-crossing height.)
         buildable = [c for c in candidates if not c.spray_lanes] or list(candidates)
         return min(buildable, key=lambda s: s.machine_count)
 
@@ -2615,6 +2618,27 @@ class TestSprayCoatersAreFed:
         cands = build_candidates(load_vendored(), parse_url(url), count=3).candidates
         return next(c for c in cands if c.label == label)
 
+    @staticmethod
+    def _corpus_candidate(label: str) -> BuildSpec:
+        """The corpus entry's OWN url, which is not the one above.
+
+        `_candidate` drops `&mps=proliferator-2-products` and asks for three
+        candidates; the corpus asks for six from the URL the user actually
+        supplied.  The two produce DIFFERENT specs -- eleven spray lanes against
+        ten -- and only the corpus one is the cell `docs/BACKLOG.md` and
+        `scripts/audit.py` name.  Measuring the ten-coater case against the
+        other spec is measuring a different spec.
+        """
+        from flab2bp.bench.corpus import entry
+        from flab2bp.lab.data import load_vendored
+        from flab2bp.lab.url import parse_url
+        from flab2bp.rates.candidates import build_candidates
+
+        cands = build_candidates(
+            load_vendored(), parse_url(entry("super-magnetic-ring").url), count=6
+        ).candidates
+        return next(c for c in cands if c.label == label)
+
     @pytest.mark.slow
     def test_spine_supplies_every_coater_on_a_real_spec(self) -> None:
         """Three versions of this test, three different false things asserted.
@@ -2650,27 +2674,94 @@ class TestSprayCoatersAreFed:
         assert report.ok, sorted({f.check for f in report.errors})
 
     @pytest.mark.slow
-    def test_the_ten_coater_case_refuses_and_names_what_blocked_it(self) -> None:
-        """The refusal that is LEFT, pinned so it cannot quietly become a lie.
+    def test_the_ten_coater_case_places_every_spur_by_climbing_over_machines(
+        self,
+    ) -> None:
+        """The refusal that is GONE, and the check that would have caught a cheat.
 
-        `max-proliferation` has ten spray lanes and nine of its ten spurs place.
-        The tenth finds no route, because `_spur_clear` will not fly a belt over
-        a machine -- and whether a belt may cross a building, at what height, is
-        a rule this project has not read out of the game. `docs/BACKLOG.md`
-        records it as unextracted.
+        `max-proliferation` has ten spray lanes.  Nine of its ten spurs used to
+        place and the tenth found no route, because `_spur_clear` refused to fly
+        a belt over anything that was not a belt.  The game's rule is read now:
+        `CheckBuildConditions` probes a belt preview with a 0.23 sphere rather
+        than its box, so a belt MAY cross a machine and the price is height --
+        `colliders.belt_crossing_height`, which `_belt_floor_over` rounds up to
+        the altitude quantum.
 
-        Loosening that would trade a refusal for a blueprint that may be
-        INVALID, which is the worse outcome, so the refusal stands until the
-        rule is read. What this pins is that it still NAMES its cause: a
-        refusal whose message drifts back to "cannot build an elevated lane"
-        would be describing a limitation that no longer exists.
+        `game.belt_crossing` is what makes this a test and not a hope.  A spur
+        that flew at `z = 1` over an Assembling Machine would place, and would
+        paste as `EBuildCondition.Collide`; that check convicts it and is
+        asserted separately from `report.ok` so a future default change cannot
+        silently stop exercising it.  Its own sample is asserted first: the
+        placement really does contain a belt above `z = 1`, so a build that lost
+        its climb could not pass this quietly.
         """
-        spec = self._candidate("max-proliferation")
-        with pytest.raises(NoValidLayout) as exc:
-            SpineLayout(power=False).lay_out(spec, time_budget_s=4.0)
-        message = str(exc.value)
-        assert "Spray Coater" in message, message
-        assert "fly over" in message, message
+        spec = self._corpus_candidate("max-proliferation")
+        assert len(spec.spray_lanes) >= 10, "sample is not the ten-lane case"
+        p = SpineLayout(power=False).lay_out(spec, time_budget_s=4.0)
+        coaters = [b for b in p.buildings if b.item_id == catalog.SPRAY_COATER_ID]
+        assert len(coaters) == 10, f"expected ten coaters, got {len(coaters)}"
+        assert [b for b in p.buildings if b.z and b.z > 1], (
+            "nothing climbed above the addon level, so the crossing rule was "
+            "never exercised and the assertions below prove nothing"
+        )
+        report = validate.validate(p, spec, ids=validate.id_map(spec), expect_power=False)
+        assert not report.by_check("game.addon_supply"), [
+            f.message for f in report.by_check("game.addon_supply")
+        ]
+        assert not report.by_check("game.belt_crossing"), [
+            f.message for f in report.by_check("game.belt_crossing")
+        ]
+        assert report.ok, sorted({f.check for f in report.errors})
+
+    def test_a_spur_may_cross_a_machine_only_at_that_machine_s_own_height(
+        self,
+    ) -> None:
+        """The permission is per-model, and the model is the game's.
+
+        The whole hazard in loosening `_spur_clear` is loosening it by a
+        constant.  An Arc Smelter clears at `z = 3` and an Assembling Machine
+        Mk.II does not -- it needs 3.5325, so `z = 4` -- and a spur that took
+        the smelter's answer for the assembler would place and then paste red.
+
+        The bound is STRICT in the game, which is why the assertions sit on the
+        quantum ABOVE it rather than on the bound itself.  Sorters are excused
+        outright by `PrefabDesc` flag, in both directions.
+        """
+        from flab2bp.layout.spine import _spur_clear
+
+        def _one(item_id: int) -> list[PlacedBuilding]:
+            info = catalog.building(item_id)
+            return [
+                PlacedBuilding(
+                    item_id=item_id,
+                    model_index=info.model_index,
+                    x=0,
+                    y=0,
+                    z=Fraction(0),
+                    width=info.width,
+                    height=info.height,
+                )
+            ]
+
+        smelter = _one(MACHINE_ITEM_IDS["arc-smelter"])
+        assembler = _one(MACHINE_ITEM_IDS["assembling-machine-2"])
+        for z in (F(0), F(1), F(2), F(5, 2)):
+            assert not _spur_clear(smelter, 0, 0, z), f"smelter cleared at {z}"
+            assert not _spur_clear(assembler, 0, 0, z), f"assembler cleared at {z}"
+        assert _spur_clear(smelter, 0, 0, F(3)), "an Arc Smelter clears at 3"
+        assert not _spur_clear(assembler, 0, 0, F(3)), (
+            "an Assembling Machine needs 3.5325, so z = 3 must still collide"
+        )
+        assert not _spur_clear(assembler, 0, 0, F(7, 2)), (
+            "3.5325 is STRICT: rounding it down to the quantum below pastes red"
+        )
+        assert _spur_clear(assembler, 0, 0, F(4)), "an assembler clears at 4"
+
+        sorter = _one(catalog.SORTER_IDS[0])
+        assert _spur_clear(sorter, 0, 0, F(1, 2)), "a sorter is excused outright"
+        assert not _spur_clear(sorter, 0, 0, F(0)), (
+            "excused from the crossing probe is not excused from the tile"
+        )
 
 class TestModeDrivenMachines:
     """Some machines are configured by a MODE, not a recipe id.

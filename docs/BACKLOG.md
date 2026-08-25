@@ -684,64 +684,69 @@ them; or re-check the finished placement and refuse the pack, letting the sweep
 try another packing -- which is honest but buys nothing over simply turning
 `game.belt_collide` on.
 
-## OPEN -- spine's ten-coater case is a runway problem now, not a rules one
+## RESOLVED -- the ten-coater case never owed any runway, and eleven cells came with it
 
-`super-magnetic-ring*60/max-proliferation` (10 spray lanes) still refuses, and
-the refusal is now bounded by **a game rule this project has deliberately not
-guessed** rather than by any weakness in the search. Nine of its ten spurs
-place; the tenth finds no route.
+`super-magnetic-ring*60/max-proliferation` lays out and validates clean, at both
+power settings. Mid-tier spine goes **32/48 -> 43/48**, five interleaved paired
+rounds, every round identical in both arms, **INVALID 0 throughout**, and the
+**total area over the cells clean in BOTH arms is unchanged to the tile**
+(23795 -> 23795). Eleven cells moved REFUSED -> CLEAN and none moved the other
+way:
 
-Instrumented over the whole run, what blocks a spur tile:
+    electromagnetic-matrix/max-proliferation  power=1
+    graphene/max-proliferation                power=0,1
+    magnetic-coil/max-proliferation           power=1
+    plastic/max-proliferation                 power=1
+    processor/free-proliferation              power=0,1
+    processor/max-proliferation               power=0,1
+    super-magnetic-ring/max-proliferation     power=0,1
 
-    499  Conveyor Belt Mk.II  (same z)
-    493  Assembling Machine Mk.II  (below)
-    361  Arc Smelter  (below)
-    449  Sorters, Splitters, Spray Coaters  (below)
+**THE RUNWAY QUESTION HAD A ONE-LINE ANSWER, and it is that there is no
+runway to find.** This entry asked whether the tenth spur has room for sixteen
+tiles of ramp. It never needs one: `lab.techs.belt_rules_for_url` reads a URL
+carrying no technology set as EVERY technology researched, so every corpus URL
+including this one comes back `vertical_construction=True, lab_level=9`, and
+with `beltVerticalConstruction` a level change costs no horizontal run at all --
+`geom.altitude_step` returns before the slope test. Sixteen tiles of ramp is the
+cost on a save that has NOT researched it, and no corpus cell is such a save.
+Measuring that took one call and saved building a shape around a constraint that
+was not there.
 
-`_spur_clear` refuses to fly over anything that is not a belt. A belt over a
-belt is `BELT_CROSSING_CLEARANCE` and is established; a belt over a MACHINE was
-the "may a belt cross a building, and at what height" question this file
-recorded as unextracted.
+**What shipped is the rule, not a constant.** `_belt_floor_over` asks
+`colliders.belt_crossing_height` per model and rounds the game's STRICT bound up
+to `BELT_Z_QUANTUM`: 3.5325 over an Assembling Machine becomes `z = 4`, not 3.5.
+Sorters and belt addons are excused outright by `PrefabDesc` flag, and a belt is
+not a probe target at all -- so all 449 sorter/splitter/coater blocks and the
+499 belt blocks this entry counted were never crossings. `_SpurField`
+precomputes `(floor, taken)` per tile and `_spur_clear` delegates to it, so the
+readable one-tile rule and the search cannot drift.
 
-**THE RULE IS NOW READ, and it is permissive.** `game.belt_crossing` in
-`layout/validate.py` and `colliders.belt_crossing_height` carry it. A belt
-preview is not tested with its box at all: `CheckBuildConditions` line 145761
-probes it with a 0.23 sphere centred 0.2 above the node, and line 145872 excuses
-a machine against a belt but NOT a belt against a machine. So a belt may cross a
-machine, and the price is height:
+**The altitude is part of the search state now**, not a profile applied to a
+2D route afterwards. That is what makes the ramp honest on a save without the
+unlock: without `beltVerticalConstruction` a step may move the altitude by at
+most `BELT_CLIMB_PER_TILE`, so a route with no room to climb simply never
+reaches the goal, and the old "route shorter than the climb" post-check is gone.
+With the unlock each tile takes the LOWEST altitude it allows at or above the
+addon level -- byte-identical to the old behaviour wherever nothing is crossed,
+which is why the area did not move.
 
-    Sorter                 z > 0.7575    (excused anyway -- see below)
-    Splitter               z > 1.7475
-    Spray Coater           z > 1.8975    (excused anyway)
-    Arc Smelter            z > 2.7975
-    Assembling Machine     z > 3.5325
-    Matrix Lab             z > 2.9475
-    Chemical Plant         z > 4.9725
+`_MAX_SPUR_Z` is `DEFAULT_MAX_BELT_Z` (8.5 on the quantum), the ceiling on a NEW
+save. The layout is not told the URL's `buildMaxHeight` -- only the validator is
+-- so a spur that assumed a researched ceiling would ship geometry
+`geom.altitude_range` refuses on exactly the saves that cannot paste it. Nothing
+in the corpus asks for more than 4.
 
-and sorters and belt addons are excused outright, so `_spur_clear` refuses over
-449 blocks the game would have allowed at any height. Of the four blocker
-classes, only the 493 assemblers and 361 smelters carry a real height price:
-**z = 4 clears both** on the half-level grid, which is inside `buildMaxHeight`
-from `labLevel >= 2`.
-
-**So the refusal is NOT correct-permanently.** What it costs is runway:
-`BELT_CLIMB_PER_TILE` is 1/2, so z = 4 is eight tiles of ramp up and eight down,
-sixteen tiles a spur must find before it may cross anything. That is the number
-the next step has to measure against -- whether the tenth spur has room for it --
-and it is a search question now, not a rules question.
-
-**Loosening `_spur_clear` blindly is still the wrong move.** The permission is
-conditional on the height, and the height is per-model; a spur that flies at
-z = 1 over an assembler still pastes as `EBuildCondition.Collide`. Use
-`colliders.belt_crossing_height`, and turn `game.belt_crossing` on in whatever
-audit measures the change.
-
-**And the height is not only owed directly overhead.** The lateral half of the
-same rule is extracted now (`colliders.belt_collisions`, and `game.belt_collide`
-in `validate.OPT_IN`): the probe is a sphere, so a belt one tile BESIDE a
-Splitter at z = 1 collides with it exactly as one over it does. Anything that
-loosens `_spur_clear` should measure against `game.belt_collide`, not only
-`game.belt_crossing`, or it will trade one refusal for a red paste.
+**`game.belt_crossing` is genuinely exercised, and the falsifier was run.**
+Replacing the per-model height with a constant `0.5` makes spine's own
+self-validation reject every plan it emits -- "every plan that emitted was
+rejected by our own validator: game.belt_crossing" -- so the check is not
+decoration here. `game.belt_collide`, the lateral half, went 4 findings over 32
+placed cells to 6 over 43: the two extra are the two `max-proliferation` cells
+that now exist at all, each carrying the same single pre-existing
+belt-beside-splitter conviction the other three `super-magnetic-ring`
+candidates already had, on a `magnet` riser bridge. **Zero of the six are on a
+proliferator belt**, i.e. none is a spur -- against a sample of 267 proliferator
+belts in that one placement, 19 of them flying above the addon level.
 
 **A STALE PARAGRAPH LIVED HERE** claiming freeform's out-lanes start
 immediately below the machine FOOTPRINT, inside the row a machine's collider
@@ -756,6 +761,35 @@ tiles centre to centre, about three against an Assembling Machine, and a lane
 sits one tile off the band by design. That is a distance no amount of band
 tuning buys cheaply -- which is why the escape is height, above, and not a wider
 corridor.
+
+**THE HEIGHT WAS NOT THE ONLY THING BLOCKING A SPUR**, and what is left is a
+different defect entirely -- see the next entry.
+
+## OPEN -- five spur refusals are left and every one is a drop OUTSIDE the bounding box
+
+The five mid-tier cells still refusing are `electromagnetic-matrix/max-`,
+`magnetic-coil/free-` and `/max-`, `plastic/free-` and `/max-proliferation`, all
+at `power=0`, and instrumenting `_coater_spur` says the same thing about all
+five: **the coater's addon cell is at `x = -1`**, one column outside the
+placement's own bounding box.
+
+    electromagnetic-matrix  tail=(9, 0)   drop=(-1, 1)  box=(0, 15, 0, 27)
+    magnetic-coil           tail=(3, 5)   drop=(-1, 6)  box=(0,  5, 0, 15)
+    plastic                 tail=(20, 0)  drop=(-1, 1)  box=(0, 24, 0, 16)
+
+`_coater_spur` is bounded to the existing footprint on purpose -- a spur may not
+enlarge the factory to supply a coater -- and the bound applies to the DROP as
+well as to the route. But the drop is not the spur's choice: the coater is
+already placed, `addonAreaPoses` puts its proliferator area one tile behind it,
+and a coater on the block's west edge therefore has an addon area the search is
+forbidden from reaching. No amount of height helps; there is nothing to search.
+
+**Two candidate fixes and they are not equivalent.** Either let the box include
+the forced drop cell (one column of area, bounded, and the coater is already
+committed), or stop `_coater_tile` choosing a mount column whose addon area
+falls outside the block. The second keeps the area promise intact and is
+probably the right one; the first is one line and needs the area measured, since
+`docs/AB_COMPARISON.md` is scored on it. Neither has been measured yet.
 
 ## RESOLVED -- the plant was loose because a tile was being read as 1.0 unit
 
