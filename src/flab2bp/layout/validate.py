@@ -722,19 +722,17 @@ NEEDS_SPEC: set[str] = set()
 #: Anything put back in here needs the same shape of evidence: a measurement of
 #: what it costs to leave on, not a note that it is inconvenient.
 #:
-#: ``game.belt_collide`` is here on exactly that evidence, and for exactly the
-#: shape of defect ``geom.collide`` was here for.  It is the paste's whole belt
-#: rule, lateral half included, and it is clean on the corpus: zero findings on
-#: every single-area fixture, against 1189 for the same geometry with nothing
-#: excused.  On our own output it turns 15 ``spine`` tests red -- the strategy's
-#: own self-check refuses every plan it emits for ``magnetic-ring``,
-#: ``quantum-chip/no-proliferator`` and ``free-proliferation`` -- because a
-#: Splitter's
-#: ``catalog.footprint`` is 1x1 against a 2.38-unit collider and both strategies
-#: therefore route belts one tile from one.  Spacing is what fixed
-#: ``geom.collide``; the same fix -- steps 1 and 2 of the "our footprints are a
-#: tile grid" backlog entry -- is what takes this out of here.
-OPT_IN: set[str] = {"game.belt_collide"}
+#: ``game.belt_collide`` WAS here, on exactly that evidence and for exactly the
+#: shape of defect ``geom.collide`` was here for: a Splitter's
+#: ``catalog.footprint`` is 1x1 against a build collider that is a 2.38-unit
+#: cross standing 2.30 units tall, so both strategies routed belts a tile from
+#: one and the check refused them.  It came out the same way ``geom.collide``
+#: did -- by giving the router the collider, not by widening a bound.
+#: ``colliders.belt_keepout_offsets`` measures the cells it denies,
+#: ``junction.keepout_cells`` names them, and freeform's committer stakes every
+#: belt before it takes a tap so the site test is asked a question that has an
+#: answer.  See the backlog entry for the paired corpus measurement.
+OPT_IN: set[str] = set()
 
 #: Check ids whose COVERAGE depends on matching each placed machine to the spec
 #: group it realises.  When any machine cannot be matched, these checks still

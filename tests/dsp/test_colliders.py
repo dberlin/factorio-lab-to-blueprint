@@ -452,3 +452,49 @@ def test_a_belt_beside_a_machine_it_has_nothing_to_do_with_still_collides() -> N
             C.Preview(_BELT_MK3, 1.0, 0.0, 0.0, is_belt=True, output=0),
         ]
     )
+
+
+def test_the_splitter_keep_out_is_the_plus_shape_and_one_level_up() -> None:
+    """`belt_keepout_offsets`, against the rule read off the C#.
+
+    The four orthogonal neighbours and the tile itself, at ``dz`` 0 and 1.  Both
+    bounds matter and both are the collider's:
+
+    * laterally, the arms reach 1.19 units and the probe 0.23, against a
+      1.2566-unit tile -- so one tile out grazes at 1.2566 < 1.42 and the
+      DIAGONAL at 1.777 does not;
+    * vertically, the cross stands 2.30 units and a blueprint level is 4/3, so a
+      belt one level up sits inside it and two levels up clears.
+
+    A caller that keeps foreign belts out of exactly these cells cannot be
+    convicted by `belt_collisions`, which is what the freeform router uses it
+    for.
+    """
+    got = C.belt_keepout_offsets(_SPLITTER)
+    assert got == frozenset(
+        {(dx, dy, dz) for dx, dy in ((0, 0), (1, 0), (-1, 0), (0, 1), (0, -1))
+         for dz in (0, 1)}
+    ), sorted(got)
+
+
+def test_the_keep_out_agrees_with_the_verdict_it_is_derived_from() -> None:
+    """Not a second opinion: every offset in it really does convict.
+
+    The falsifier is the pairing.  An offset the set names where an unlinked
+    belt is NOT convicted would make it over-strict, and one it leaves out where
+    a belt IS convicted would make it unsound -- so both directions are checked
+    over the whole search box rather than the answer being restated.
+    """
+    keep = C.belt_keepout_offsets(_SPLITTER)
+    for dx in range(-2, 3):
+        for dy in range(-2, 3):
+            for dz in range(-1, 3):
+                hits = C.belt_collisions(
+                    [
+                        C.Preview(_SPLITTER, 0.0, 0.0, 0.0, is_splitter=True),
+                        C.Preview(
+                            _BELT_MK3, float(dx), float(dy), float(dz), is_belt=True
+                        ),
+                    ]
+                )
+                assert bool(hits) == ((dx, dy, dz) in keep), (dx, dy, dz, hits)
