@@ -701,6 +701,21 @@ way:
     processor/max-proliferation               power=0,1
     super-magnetic-ring/max-proliferation     power=0,1
 
+At `--tier large` (60 cells, everything but the stress tier) the same paired
+interleaved shape, three rounds: **A [40, 40, 39] -> B [55, 55, 55]**, INVALID 0
+in every round, **16** cells REFUSED -> CLEAN and none the other way, adding
+`casimir-crystal/max-proliferation` and `information-matrix/max-proliferation`
+at both power settings. Area over the cells clean in both arms moves 101479 ->
+101400, and both cells that moved are `information-matrix/no-proliferator` --
+a spec with no coater in it at all, so it is CP-SAT nondeterminism and not this
+change, which cannot run when `prolif is None`.
+
+The stress tier is not paired here and the honest reason is the 300s command
+cap: the master arm spends **148 seconds on `quantum-chip/max-proliferation`
+alone**, refusing, and never finished a full-corpus round inside it. This arm
+did the whole 72 cells in 25s wall for 59/72. A refusal that costs the retry
+ceiling is exactly what stops costing it when the spur places.
+
 **THE RUNWAY QUESTION HAD A ONE-LINE ANSWER, and it is that there is no
 runway to find.** This entry asked whether the tenth spur has room for sixteen
 tiles of ramp. It never needs one: `lab.techs.belt_rules_for_url` reads a URL
