@@ -1031,7 +1031,14 @@ def test_grouped_discovery_routes_the_union_and_preserves_restart_identity(
     observation = solver._stage_stats[0]
     assert observation.restart == 1
     assert observation.seed == second.seed
-    assert observation.accepted_moves == 12
+    assert observation.accepted_moves == 23
+    assert observation.anneal_stages == 2
+    assert observation.anneal_moves == 2
+    assert observation.anneal_seeds == (first.seed, second.seed)
+    assert observation.archive_categories == (
+        sequence_pair_module.EliteCategory.NARROWEST,
+        sequence_pair_module.EliteCategory.LOWEST_HISTORY,
+    )
     assert observation.candidate_key == candidate_by_restart[1].key
     assert result.exact_candidate_key == candidate_by_restart[1].key
     assert result.exact_breakdown == candidate_by_restart[1].breakdown
@@ -2568,6 +2575,7 @@ def test_sequence_backend_returns_only_certified_placements(
         "heights",
         "restarts",
         "stages",
+        "anneal_stages",
         "moves",
         "accepted_moves",
         "decoded_candidates",
@@ -2591,6 +2599,8 @@ def test_sequence_backend_returns_only_certified_placements(
         "elevated_coater_routes",
         "lns_max_size",
         "feedback_decays",
+        "archive_category",
+        "archive_categories",
         "objective_mode",
         "global_skip_reason",
         "quality_stages",
@@ -2632,6 +2642,103 @@ def test_sequence_backend_returns_only_certified_placements(
         "hard_outline_overflow",
         "search_energy",
     } <= placement.stats.keys()
+
+
+def test_production_observability_preserves_categories_and_all_grouped_work() -> None:
+    config = SequenceSolverConfig(
+        stages=2,
+        moves_per_stage=1,
+        restarts_per_height=2,
+        global_elites=1,
+        global_rounds=1,
+    )
+    run = _production_run(
+        two_stage_spec(),
+        time_budget_s=2.0,
+        power=False,
+        strip_len=6,
+        config=config,
+    )
+
+    result = run.solver.search()
+    original_stats = dict(result.placement.stats)
+    placement = sequence_solver_module._with_observational_stats(
+        result,
+        run,
+        False,
+        config,
+    )
+
+    discovery = tuple(stage for stage in result.stages if stage.anneal_stages == 2)
+    executed_global = tuple(stage for stage in result.stages if stage.global_routes > 0)
+    skipped_global = tuple(
+        stage for stage in result.stages if stage.global_skip_reason == "quality-mode"
+    )
+    all_restarts = tuple(restart for height in run.solver._heights for restart in height.restarts)
+    all_stage_seeds = {seed for stage in result.stages for seed in stage.anneal_seeds}
+
+    assert len(discovery) == len(run.heights)
+    assert all(stage.anneal_moves == 2 for stage in discovery)
+    assert all(len(stage.anneal_seeds) == 2 for stage in discovery)
+    assert sum(stage.anneal_moves for stage in result.stages) == sum(
+        restart.stages * config.moves_per_stage for restart in all_restarts
+    )
+    assert sum(stage.accepted_moves for stage in result.stages) == sum(
+        restart.accepted_moves for restart in all_restarts
+    )
+    assert all_stage_seeds == {restart.seed for restart in all_restarts}
+    assert placement.stats["stages"] == float(len(result.stages))
+    assert placement.stats["anneal_stages"] == float(
+        sum(stage.anneal_stages for stage in result.stages)
+    )
+    assert placement.stats["moves"] == float(sum(stage.anneal_moves for stage in result.stages))
+    assert placement.stats["accepted_moves"] == float(
+        sum(stage.accepted_moves for stage in result.stages)
+    )
+    assert placement.stats["seeds"] == float(len(all_stage_seeds))
+
+    assert result.exact_archive_categories
+    expected_categories = [category.value for category in result.exact_archive_categories]
+    assert cast(object, placement.stats["archive_categories"]) == expected_categories
+    assert cast(object, placement.stats["archive_category"]) == expected_categories[0]
+    exact_stage = next(
+        stage
+        for stage in result.stages
+        if stage.exact_key == result.exact_key and stage.candidate_key == result.exact_candidate_key
+    )
+    assert exact_stage.archive_categories == result.exact_archive_categories
+
+    assert executed_global
+    assert skipped_global
+    assert all(stage.global_route_time_s > 0.0 for stage in executed_global)
+    assert all(stage.global_route_time_s == 0.0 for stage in skipped_global)
+    for stage in result.stages:
+        assert stage.preparation_time_s >= 0.0
+        assert stage.global_route_time_s >= 0.0
+        assert stage.detailed_route_time_s >= 0.0
+        assert stage.validation_time_s >= 0.0
+    for field_name in (
+        "preparation_time_s",
+        "global_route_time_s",
+        "detailed_route_time_s",
+        "validation_time_s",
+    ):
+        assert placement.stats[field_name] == sum(
+            getattr(stage, field_name) for stage in result.stages
+        )
+    assert placement.stats["total_time_s"] == pytest.approx(
+        placement.stats["planning_time_s"]
+        + placement.stats["placement_time_s"]
+        + placement.stats["preparation_time_s"]
+        + placement.stats["global_route_time_s"]
+        + placement.stats["detailed_route_time_s"]
+        + placement.stats["validation_time_s"]
+        + placement.stats["compilation_time_s"]
+    )
+
+    assert result.placement.stats == original_stats
+    assert result.placement is not placement
+    assert result.exact_candidate_key == exact_stage.candidate_key
 
 
 def test_production_threads_global_rounds_and_hard_deadline(

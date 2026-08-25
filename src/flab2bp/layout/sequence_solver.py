@@ -269,6 +269,9 @@ class StageObservation:
     stage_index: int
     seed: int
     accepted_moves: int
+    anneal_stages: int
+    anneal_moves: int
+    anneal_seeds: tuple[int, ...]
     global_routes: int
     global_overflow: int | None
     detailed_status: DetailedRouteStatus
@@ -285,6 +288,11 @@ class StageObservation:
     merge_count: int
     candidate_key: PlacementKey
     breakdown: EnergyBreakdown
+    archive_categories: tuple[EliteCategory, ...]
+    preparation_time_s: float = field(compare=False)
+    global_route_time_s: float = field(compare=False)
+    detailed_route_time_s: float = field(compare=False)
+    validation_time_s: float = field(compare=False)
     objective_mode: ObjectiveMode
     global_skip_reason: str | None
     quality_entered: bool
@@ -305,6 +313,7 @@ class SequenceSearchResult:
     exact_key: tuple[int, int]
     exact_candidate_key: PlacementKey
     exact_breakdown: EnergyBreakdown
+    exact_archive_categories: tuple[EliteCategory, ...]
     stages: tuple[StageObservation, ...]
     termination: str
 
@@ -352,6 +361,7 @@ class _ExactIncumbent:
     placement: Placement
     candidate_key: PlacementKey
     breakdown: EnergyBreakdown
+    archive_categories: tuple[EliteCategory, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -369,6 +379,11 @@ class _StageCandidate[PreparedT]:
     decoded: DecodedPlacement
     key: PlacementKey
     breakdown: EnergyBreakdown
+    archive_categories: tuple[EliteCategory, ...]
+    anneal_stages: int
+    anneal_moves: int
+    accepted_moves: int
+    anneal_seeds: tuple[int, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -503,6 +518,7 @@ class SequenceSolver[PreparedT]:
             exact_key=incumbent.exact_key,
             exact_candidate_key=incumbent.candidate_key,
             exact_breakdown=incumbent.breakdown,
+            exact_archive_categories=incumbent.archive_categories,
             stages=tuple(self._stage_stats),
             termination=termination,
         )
@@ -652,40 +668,51 @@ class SequenceSolver[PreparedT]:
             tagged for tagged in merged if EliteCategory.NARROWEST in tagged.categories
         )
         height_state.narrowest_key = quality_archive_key(narrowest.incumbent)
-        candidates = tuple(
-            (tagged.incumbent, source_by_incumbent[id(tagged.incumbent)]) for tagged in merged
-        )
+        candidates = tuple((tagged, source_by_incumbent[id(tagged.incumbent)]) for tagged in merged)
         if height_state.objective_mode is ObjectiveMode.QUALITY:
             if narrowest.incumbent.breakdown.hard_outline_overflow == 0:
                 return self._route_quality_candidate(
                     height_state,
-                    narrowest.incumbent,
+                    narrowest,
                     source_by_incumbent[id(narrowest.incumbent)],
+                    annealed,
                     allowance,
                 )
             height_state.objective_mode = ObjectiveMode.EXPLORATION
             height_state.quality_restart = None
             height_state.quality_stagnation = 0
             height_state.pending_quality_exit = True
-        return self._route_archive(height_state, candidates, allowance)
+        return self._route_archive(height_state, candidates, annealed, allowance)
 
     def _route_quality_candidate(
         self,
         height_state: _HeightState,
-        elite: AnnealIncumbent,
+        tagged: TaggedAnnealIncumbent,
         source: _AnnealedRestart,
+        annealed: Sequence[_AnnealedRestart],
         allowance: int,
     ) -> tuple[int, bool]:
         """Detailed-route one legal width-first candidate without a proxy pass."""
+        elite = tagged.incumbent
+        preparation_started = time.perf_counter()
+        prepared = self.adapters.prepare(height_state.height, elite.decoded)
+        preparation_time_s = time.perf_counter() - preparation_started
         selected = _StageCandidate(
-            prepared=self.adapters.prepare(height_state.height, elite.decoded),
+            prepared=prepared,
             source=source,
             state=elite.state,
             decoded=elite.decoded,
             key=elite.key,
             breakdown=elite.breakdown,
+            archive_categories=tagged.categories,
+            anneal_stages=len(annealed),
+            anneal_moves=len(annealed) * self.config.moves_per_stage,
+            accepted_moves=sum(item.result.accepted_moves for item in annealed),
+            anneal_seeds=tuple(item.restart.seed for item in annealed),
         )
+        detailed_started = time.perf_counter()
         detailed = self.adapters.detailed_route(selected.prepared, allowance)
+        detailed_route_time_s = time.perf_counter() - detailed_started
         spent = detailed.routing.expansions
         _check_spend(spent, allowance)
         return self._complete_routing_stage(
@@ -696,24 +723,39 @@ class SequenceSolver[PreparedT]:
             global_routes=0,
             global_overflow=None,
             global_skip_reason="quality-mode",
+            preparation_time_s=preparation_time_s,
+            global_route_time_s=0.0,
+            detailed_route_time_s=detailed_route_time_s,
         )
 
     def _route_archive(
         self,
         height_state: _HeightState,
-        candidates: Sequence[tuple[AnnealIncumbent, _AnnealedRestart]],
+        candidates: Sequence[tuple[TaggedAnnealIncumbent, _AnnealedRestart]],
+        annealed: Sequence[_AnnealedRestart],
         allowance: int,
     ) -> tuple[int, bool]:
         spent = 0
+        preparation_time_s = 0.0
+        global_route_time_s = 0.0
+        anneal_stages = len(annealed)
+        anneal_moves = anneal_stages * self.config.moves_per_stage
+        accepted_moves = sum(item.result.accepted_moves for item in annealed)
+        anneal_seeds = tuple(item.restart.seed for item in annealed)
         global_candidates: list[_GlobalCandidate[PreparedT]] = []
-        for elite, source in candidates:
+        for tagged, source in candidates:
+            elite = tagged.incumbent
+            preparation_started = time.perf_counter()
             prepared = self.adapters.prepare(height_state.height, elite.decoded)
+            preparation_time_s += time.perf_counter() - preparation_started
             remaining = allowance - spent
+            global_started = time.perf_counter()
             global_result = self.adapters.global_route(
                 prepared,
                 height_state.feedback,
                 remaining,
             )
+            global_route_time_s += time.perf_counter() - global_started
             _check_spend(global_result.expansions, remaining)
             spent += global_result.expansions
             global_candidates.append(
@@ -724,6 +766,11 @@ class SequenceSolver[PreparedT]:
                     decoded=elite.decoded,
                     key=elite.key,
                     breakdown=elite.breakdown,
+                    archive_categories=tagged.categories,
+                    anneal_stages=anneal_stages,
+                    anneal_moves=anneal_moves,
+                    accepted_moves=accepted_moves,
+                    anneal_seeds=anneal_seeds,
                     result=global_result,
                 )
             )
@@ -731,7 +778,9 @@ class SequenceSolver[PreparedT]:
         selected = min(global_candidates, key=_global_priority)
         if selected.result.cancelled:
             return spent, True
+        detailed_started = time.perf_counter()
         detailed = self.adapters.detailed_route(selected.prepared, allowance - spent)
+        detailed_route_time_s = time.perf_counter() - detailed_started
         _check_spend(detailed.routing.expansions, allowance - spent)
         spent += detailed.routing.expansions
         return self._complete_routing_stage(
@@ -742,6 +791,9 @@ class SequenceSolver[PreparedT]:
             global_routes=len(global_candidates),
             global_overflow=selected.result.total_overflow,
             global_skip_reason=None,
+            preparation_time_s=preparation_time_s,
+            global_route_time_s=global_route_time_s,
+            detailed_route_time_s=detailed_route_time_s,
         )
 
     def _complete_routing_stage(
@@ -754,6 +806,9 @@ class SequenceSolver[PreparedT]:
         global_routes: int,
         global_overflow: int | None,
         global_skip_reason: str | None,
+        preparation_time_s: float,
+        global_route_time_s: float,
+        detailed_route_time_s: float,
     ) -> tuple[int, bool]:
         problem = height_state.problem
         starting_mode = height_state.objective_mode
@@ -762,8 +817,11 @@ class SequenceSolver[PreparedT]:
         pending_quality_exit = height_state.pending_quality_exit
         height_state.pending_quality_exit = False
         validation_failures: tuple[str, ...] = ()
+        validation_time_s = 0.0
         if detailed.routing.status is DetailedRouteStatus.ROUTED and detailed.placement is not None:
+            validation_started = time.perf_counter()
             verdict = self.adapters.validate(detailed.placement)
+            validation_time_s = time.perf_counter() - validation_started
             validation_failures = verdict.failed_checks
             if verdict.ok:
                 exact_key = _exact_key(detailed.placement)
@@ -773,6 +831,7 @@ class SequenceSolver[PreparedT]:
                         placement=detailed.placement,
                         candidate_key=selected.key,
                         breakdown=selected.breakdown,
+                        archive_categories=selected.archive_categories,
                     )
                 if height_state.exact_key is None or exact_key < height_state.exact_key:
                     height_state.exact_key = exact_key
@@ -971,7 +1030,10 @@ class SequenceSolver[PreparedT]:
                 restart=restart.restart,
                 stage_index=restart.stages - 1,
                 seed=restart.seed,
-                accepted_moves=annealed.accepted_moves,
+                accepted_moves=selected.accepted_moves,
+                anneal_stages=selected.anneal_stages,
+                anneal_moves=selected.anneal_moves,
+                anneal_seeds=selected.anneal_seeds,
                 global_routes=global_routes,
                 global_overflow=global_overflow,
                 detailed_status=detailed.routing.status,
@@ -988,6 +1050,11 @@ class SequenceSolver[PreparedT]:
                 merge_count=merge_count,
                 candidate_key=selected.key,
                 breakdown=selected.breakdown,
+                archive_categories=selected.archive_categories,
+                preparation_time_s=preparation_time_s,
+                global_route_time_s=global_route_time_s,
+                detailed_route_time_s=detailed_route_time_s,
+                validation_time_s=validation_time_s,
                 objective_mode=height_state.objective_mode,
                 global_skip_reason=global_skip_reason,
                 quality_entered=quality_entered,
@@ -1341,10 +1408,6 @@ class _ProductionCandidate:
 @dataclass(slots=True)
 class _ProductionTelemetry:
     planning_time_s: float = 0.0
-    preparation_time_s: float = 0.0
-    global_route_time_s: float = 0.0
-    detailed_route_time_s: float = 0.0
-    validation_time_s: float = 0.0
     global_routes: int = 0
     detailed_routes: int = 0
     global_expansions: int = 0
@@ -1558,54 +1621,50 @@ def _production_run(
         return selected_direct_targets(problem, state.variant_indices)
 
     def prepare(height: int, decoded: DecodedPlacement) -> _ProductionCandidate:
-        preparation_started = time.monotonic()
-        try:
-            problem = problems[height]
-            selected = selected_strips(problem, decoded.variant_indices)
-            selected_targets = selected_direct_targets(
-                problem,
-                decoded.variant_indices,
-            )
-            aligned = align_direct_inserts(problem, decoded, selected_targets)
-            pack = _decoded_pack(height, aligned)
-            if deadline_reached():
-                return _ProductionCandidate(
-                    height=height,
-                    problem=problem,
-                    decoded=aligned,
-                    pack=pack,
-                    prepared=None,
-                    preparation_error="deadline",
-                    selected_strips=selected,
-                )
-            try:
-                prepared = _prepare_routing_problem(
-                    spec,
-                    list(selected),
-                    pack,
-                    power=power,
-                    ramped=not belt_vertical_construction,
-                )
-            except _Unpowerable:
-                return _ProductionCandidate(
-                    height=height,
-                    problem=problem,
-                    decoded=aligned,
-                    pack=pack,
-                    prepared=None,
-                    preparation_error="unpowerable",
-                    selected_strips=selected,
-                )
+        problem = problems[height]
+        selected = selected_strips(problem, decoded.variant_indices)
+        selected_targets = selected_direct_targets(
+            problem,
+            decoded.variant_indices,
+        )
+        aligned = align_direct_inserts(problem, decoded, selected_targets)
+        pack = _decoded_pack(height, aligned)
+        if deadline_reached():
             return _ProductionCandidate(
                 height=height,
                 problem=problem,
                 decoded=aligned,
                 pack=pack,
-                prepared=prepared,
+                prepared=None,
+                preparation_error="deadline",
                 selected_strips=selected,
             )
-        finally:
-            telemetry.preparation_time_s += time.monotonic() - preparation_started
+        try:
+            prepared = _prepare_routing_problem(
+                spec,
+                list(selected),
+                pack,
+                power=power,
+                ramped=not belt_vertical_construction,
+            )
+        except _Unpowerable:
+            return _ProductionCandidate(
+                height=height,
+                problem=problem,
+                decoded=aligned,
+                pack=pack,
+                prepared=None,
+                preparation_error="unpowerable",
+                selected_strips=selected,
+            )
+        return _ProductionCandidate(
+            height=height,
+            problem=problem,
+            decoded=aligned,
+            pack=pack,
+            prepared=prepared,
+            selected_strips=selected,
+        )
 
     def global_route(
         candidate: _ProductionCandidate,
@@ -1621,37 +1680,33 @@ def _production_run(
                 exhausted=False,
                 cancelled=is_deadline,
             )
-        routing_started = time.monotonic()
-        try:
-            if deadline_reached():
-                result = _empty_global_result(exhausted=False, cancelled=True)
-            else:
-                current_nets = tuple(net.net_id for net in candidate.prepared.nets)
-                expected_weights = {
-                    net: weight
-                    for net in current_nets
-                    if (
-                        weight := feedback.logical_net_weight.get(
-                            net.logical,
-                            0.0,
-                        )
+        if deadline_reached():
+            result = _empty_global_result(exhausted=False, cancelled=True)
+        else:
+            current_nets = tuple(net.net_id for net in candidate.prepared.nets)
+            expected_weights = {
+                net: weight
+                for net in current_nets
+                if (
+                    weight := feedback.logical_net_weight.get(
+                        net.logical,
+                        0.0,
                     )
-                    > 0.0
-                }
-                routed_feedback = (
-                    feedback
-                    if dict(feedback.net_weight) == expected_weights
-                    else remap_feedback_nets(feedback, current_nets)
                 )
-                result = route_global(
-                    candidate.prepared,
-                    routed_feedback,
-                    allowance,
-                    max_rounds=config.global_rounds,
-                    cancelled=deadline_reached,
-                )
-        finally:
-            telemetry.global_route_time_s += time.monotonic() - routing_started
+                > 0.0
+            }
+            routed_feedback = (
+                feedback
+                if dict(feedback.net_weight) == expected_weights
+                else remap_feedback_nets(feedback, current_nets)
+            )
+            result = route_global(
+                candidate.prepared,
+                routed_feedback,
+                allowance,
+                max_rounds=config.global_rounds,
+                cancelled=deadline_reached,
+            )
         telemetry.global_expansions += result.expansions
         telemetry.best_overflow = (
             result.total_overflow
@@ -1666,18 +1721,14 @@ def _production_run(
             return _closed_detailed_result(DetailedRouteStatus.BUDGET)
         if candidate.prepared is None:
             return _closed_detailed_result(DetailedRouteStatus.UNPOWERABLE)
-        routing_started = time.monotonic()
-        try:
-            result = _route_detailed_candidate(
-                spec,
-                list(candidate.selected_strips) if candidate.selected_strips else strips,
-                candidate.prepared,
-                power=power,
-                deadline=deadline,
-                allowance=allowance,
-            )
-        finally:
-            telemetry.detailed_route_time_s += time.monotonic() - routing_started
+        result = _route_detailed_candidate(
+            spec,
+            list(candidate.selected_strips) if candidate.selected_strips else strips,
+            candidate.prepared,
+            power=power,
+            deadline=deadline,
+            allowance=allowance,
+        )
         telemetry.detailed_expansions += result.routing.expansions
         telemetry.best_stranded = (
             result.routing.failed_count
@@ -1692,17 +1743,13 @@ def _production_run(
         return result
 
     def certify(placement: Placement) -> ValidationVerdict:
-        validation_started = time.monotonic()
-        try:
-            if deadline_reached():
-                return ValidationVerdict(False, ("deadline",))
-            report = validate.certify(placement, spec, expect_power=power)
-            if deadline_reached():
-                return ValidationVerdict(False, ("deadline",))
-            failures = tuple(sorted({finding.check for finding in report.errors}))
-            return ValidationVerdict(not failures, failures)
-        finally:
-            telemetry.validation_time_s += time.monotonic() - validation_started
+        if deadline_reached():
+            return ValidationVerdict(False, ("deadline",))
+        report = validate.certify(placement, spec, expect_power=power)
+        if deadline_reached():
+            return ValidationVerdict(False, ("deadline",))
+        failures = tuple(sorted({finding.check for finding in report.errors}))
+        return ValidationVerdict(not failures, failures)
 
     family_by_id = {family.family_id: family for family in generate_strip_families(spec)}
     telemetry.pose_feasibility_rejects = sum(
@@ -1869,14 +1916,20 @@ def _with_observational_stats(
     placement = result.placement
     telemetry = run.telemetry
     total_time_s = time.monotonic() - run.started
+    preparation_time_s = sum(stage.preparation_time_s for stage in result.stages)
+    global_route_time_s = sum(stage.global_route_time_s for stage in result.stages)
+    detailed_route_time_s = sum(stage.detailed_route_time_s for stage in result.stages)
+    validation_time_s = sum(stage.validation_time_s for stage in result.stages)
     adapter_time_s = (
         telemetry.planning_time_s
-        + telemetry.preparation_time_s
-        + telemetry.global_route_time_s
-        + telemetry.detailed_route_time_s
-        + telemetry.validation_time_s
+        + preparation_time_s
+        + global_route_time_s
+        + detailed_route_time_s
+        + validation_time_s
     )
     stage_count = len(result.stages)
+    anneal_stage_count = sum(stage.anneal_stages for stage in result.stages)
+    anneal_seeds = {seed for stage in result.stages for seed in stage.anneal_seeds}
     lns_sizes = tuple(stage.lns_size for stage in result.stages)
     belt_tiles = _exact_key(placement)[1]
     breakdown = result.exact_breakdown
@@ -1900,11 +1953,12 @@ def _with_observational_stats(
             "backend": "sequence-pair",
             "accelerator": "python",
             "seed": float(config.seed),
-            "seeds": float(len({stage.seed for stage in result.stages})),
+            "seeds": float(len(anneal_seeds)),
             "heights": float(len(run.heights)),
             "restarts": float(len(run.heights) * config.restarts_per_height),
             "stages": float(stage_count),
-            "moves": float(stage_count * config.moves_per_stage),
+            "anneal_stages": float(anneal_stage_count),
+            "moves": float(sum(stage.anneal_moves for stage in result.stages)),
             "accepted_moves": float(sum(stage.accepted_moves for stage in result.stages)),
             "decoded_candidates": float(sum(stage.global_routes for stage in result.stages)),
             "global_routes": float(telemetry.global_routes),
@@ -1917,6 +1971,8 @@ def _with_observational_stats(
             "feedback_nets": float(telemetry.feedback_nets),
             "feedback_cells": float(telemetry.feedback_cells),
             "feedback_decays": float(sum(stage.global_routes > 0 for stage in result.stages)),
+            "archive_categories": [category.value for category in result.exact_archive_categories],
+            "archive_category": result.exact_archive_categories[0].value,
             "objective_mode": (
                 exact_stage.objective_mode.value
                 if exact_stage is not None
@@ -1946,10 +2002,10 @@ def _with_observational_stats(
             "elevated_coater_routes": float(telemetry.elevated_coater_routes),
             "planning_time_s": telemetry.planning_time_s,
             "placement_time_s": max(0.0, total_time_s - adapter_time_s),
-            "preparation_time_s": telemetry.preparation_time_s,
-            "global_route_time_s": telemetry.global_route_time_s,
-            "detailed_route_time_s": telemetry.detailed_route_time_s,
-            "validation_time_s": telemetry.validation_time_s,
+            "preparation_time_s": preparation_time_s,
+            "global_route_time_s": global_route_time_s,
+            "detailed_route_time_s": detailed_route_time_s,
+            "validation_time_s": validation_time_s,
             "compilation_time_s": 0.0,
             "total_time_s": total_time_s,
             "global_expansions": float(telemetry.global_expansions),
