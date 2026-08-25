@@ -61,6 +61,7 @@ from flab2bp.layout.sequence_pair import (
     DirectInsertTarget,
     EliteCategory,
     EnergyBreakdown,
+    GapProfile,
     PlacementKey,
     PlacementProblem,
     SearchEnergy,
@@ -648,8 +649,15 @@ class SequenceSolver[PreparedT]:
         )
         results: list[_AnnealedRestart] = []
         for restart in restarts:
-            restart_config = topology_stage_config if restart.restart == 0 else stage_config
+            topology_lane = self.config.restarts_per_height >= 2 and restart.restart == 0
+            restart_config = topology_stage_config if topology_lane else stage_config
             stage_start = restart.anneal
+            if topology_lane:
+                stage_start = replace(
+                    stage_start,
+                    gaps=GapProfile.zero(problem.size),
+                    variant_indices=(0,) * problem.size,
+                )
             if self.direct_targets_for_state is None:
                 result = anneal_stage(
                     problem,

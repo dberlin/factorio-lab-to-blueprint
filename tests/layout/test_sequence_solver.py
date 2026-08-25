@@ -396,6 +396,281 @@ def test_one_restart_search_retains_the_full_move_pool(
     assert move_pools == [tuple(MoveKind)]
 
 
+def test_three_restart_search_keeps_every_topology_lane_sibling_full(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    move_pools: list[tuple[MoveKind, ...]] = []
+    real_anneal_stage = anneal_stage
+
+    def capture_anneal(
+        problem: PlacementProblem,
+        state: AnnealState,
+        config: AnnealConfig,
+        context: PlacementCostContext | None = None,
+    ) -> AnnealStageResult:
+        move_pools.append(config.move_kinds)
+        return real_anneal_stage(problem, state, config, context)
+
+    monkeypatch.setattr(sequence_solver_module, "anneal_stage", capture_anneal)
+    solver = _solver(
+        _FakeRouting(),
+        heights=(40,),
+        config=SequenceSolverConfig(
+            stages=1,
+            moves_per_stage=1,
+            restarts_per_height=3,
+            global_elites=1,
+        ),
+    )
+
+    with pytest.raises(NoValidLayout):
+        solver.search(max_stages=1)
+
+    assert move_pools == [
+        (
+            MoveKind.SWAP_POSITIVE,
+            MoveKind.SWAP_NEGATIVE,
+            MoveKind.SWAP_BOTH,
+            MoveKind.INSERT_POSITIVE,
+            MoveKind.INSERT_NEGATIVE,
+        ),
+        tuple(MoveKind),
+        tuple(MoveKind),
+    ]
+
+
+def test_topology_lane_resets_lns_dimensions_before_its_next_dynamic_target_stage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _spec, _strips, problem = _two_stage_variant_problem()
+    anneal_inputs: list[AnnealState] = []
+    selected_states: list[AnnealState] = []
+    dynamic_callbacks: list[object | None] = []
+    nondefault_variants = tuple(
+        1 if len(variants) > 1 else 0 for variants in problem.variant_tables
+    )
+    assert any(nondefault_variants)
+
+    def incumbent(state: AnnealState, scalar: float) -> AnnealIncumbent:
+        decoded = decode_state(problem, state)
+        return AnnealIncumbent(
+            state=state,
+            decoded=decoded,
+            breakdown=_candidate_breakdown(problem, decoded, scalar),
+            key=PlacementKey(
+                x=decoded.x,
+                y=decoded.y,
+                dimensions=problem.selected_sizes(state.variant_indices),
+                east_gaps=state.gaps.east,
+                north_gaps=state.gaps.north,
+                instance_ids=problem.instance_ids,
+                variant_ids=problem.selected_variant_ids(state.variant_indices),
+            ),
+        )
+
+    def fake_anneal_stage(
+        stage_problem: PlacementProblem,
+        state: AnnealState,
+        config: AnnealConfig,
+        context: PlacementCostContext | None = None,
+        *,
+        direct_targets_for_state: object | None = None,
+    ) -> AnnealStageResult:
+        del stage_problem, config, context
+        call = len(anneal_inputs)
+        anneal_inputs.append(state)
+        dynamic_callbacks.append(direct_targets_for_state)
+        if call < 2:
+            east = (call + 1,) + (0,) * (problem.size - 1)
+            selected = replace(
+                state,
+                gaps=GapProfile(east, (0,) * problem.size),
+                variant_indices=nondefault_variants,
+            )
+            selected_states.append(selected)
+        else:
+            selected = state
+        elite = incumbent(selected, float(call))
+        return AnnealStageResult(
+            final_state=replace(selected, stage_index=state.stage_index + 1),
+            incumbent=elite,
+            accepted_moves=0,
+            elites=(elite,),
+        )
+
+    monkeypatch.setattr(sequence_solver_module, "anneal_stage", fake_anneal_stage)
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "_lns_neighbourhood",
+        lambda *_args: frozenset({0}),
+    )
+    failure = _routing(
+        DetailedRouteStatus.STRANDED,
+        geometric_failure=True,
+    )
+    first_selected_decoded: list[DecodedPlacement] = []
+
+    def global_route(
+        decoded: DecodedPlacement,
+        _feedback: FeedbackState,
+        _allowance: int,
+    ) -> GlobalRouteResult:
+        if not first_selected_decoded:
+            first_selected_decoded.append(decode_state(problem, selected_states[0]))
+        return _global(overflow=0 if decoded == first_selected_decoded[0] else 10)
+
+    def callback(_problem: PlacementProblem, _state: AnnealState) -> tuple[()]:
+        return ()
+
+    solver = SequenceSolver(
+        heights=(problem.outline_height,),
+        problem_for_height=lambda _height: problem,
+        adapters=StageAdapters(
+            prepare=lambda _height, decoded: decoded,
+            global_route=global_route,
+            detailed_route=lambda _decoded, _allowance: DetailedStageResult(failure, None),
+            validate=lambda _placement: ValidationVerdict(False, ("unreachable",)),
+        ),
+        expansion_budget=ExpansionBudget(100),
+        config=SequenceSolverConfig(
+            stages=2,
+            moves_per_stage=1,
+            restarts_per_height=2,
+            global_elites=2,
+        ),
+        direct_targets_for_state=callback,
+    )
+
+    with pytest.raises(NoValidLayout):
+        solver.search(max_stages=2)
+
+    repaired = repair_neighbourhood(
+        selected_states[0].pair,
+        selected_states[0].gaps,
+        frozenset({0}),
+        seed=derive_stage_seed(solver._heights[0].restarts[0].seed, 1),
+        variant_indices=selected_states[0].variant_indices,
+    )
+    assert anneal_inputs[2] == replace(
+        repaired,
+        gaps=GapProfile.zero(problem.size),
+        base_seed=solver._heights[0].restarts[0].seed,
+        stage_index=1,
+        variant_indices=(0,) * problem.size,
+    )
+    sibling = solver._heights[0].restarts[1]
+    assert sibling.anneal.gaps == selected_states[1].gaps
+    assert sibling.anneal.variant_indices == nondefault_variants
+    assert dynamic_callbacks == [callback, callback, callback]
+
+
+def test_topology_lane_resets_split_variant_offset_for_the_new_problem_size(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    family = next(
+        candidate
+        for candidate in generate_strip_families(two_stage_spec())
+        if candidate.total_machine_count > 1 and len(candidate.variants) > 1
+    )
+    (parent,) = partition_strip_family(
+        family,
+        max_machine_count=family.total_machine_count,
+    )
+    variants = variants_for_count(family, family.total_machine_count)
+    problem = PlacementProblem(
+        sizes=((variants[0].box_width, variants[0].box_height),),
+        nets=((0, 0),),
+        outline_height=40,
+        area_lower_bound=1,
+        instance_ids=(parent.instance_id,),
+        variant_tables=(variants,),
+    )
+    anneal_inputs: list[tuple[PlacementProblem, AnnealState]] = []
+
+    def fake_anneal_stage(
+        stage_problem: PlacementProblem,
+        state: AnnealState,
+        config: AnnealConfig,
+        context: PlacementCostContext | None = None,
+    ) -> AnnealStageResult:
+        del config, context
+        anneal_inputs.append((stage_problem, state))
+        decoded = decode_state(stage_problem, state)
+        elite = AnnealIncumbent(
+            state=state,
+            decoded=decoded,
+            breakdown=_candidate_breakdown(stage_problem, decoded),
+            key=PlacementKey(
+                x=decoded.x,
+                y=decoded.y,
+                dimensions=stage_problem.selected_sizes(state.variant_indices),
+                east_gaps=state.gaps.east,
+                north_gaps=state.gaps.north,
+                instance_ids=stage_problem.instance_ids,
+                variant_ids=stage_problem.selected_variant_ids(state.variant_indices),
+            ),
+        )
+        return AnnealStageResult(
+            final_state=replace(state, stage_index=state.stage_index + 1),
+            incumbent=elite,
+            accepted_moves=0,
+            elites=(elite,),
+        )
+
+    def transform(
+        _height: int,
+        stage_problem: PlacementProblem,
+        state: AnnealState,
+        _feedback: FeedbackState,
+        _result: DetailedRouteResult,
+        _stagnation: int,
+    ) -> StageBoundaryUpdate | None:
+        if stage_problem.size != 1:
+            return None
+        return split_stage_boundary(
+            stage_problem,
+            state,
+            family,
+            0,
+            right_variant_offset=1,
+        )
+
+    monkeypatch.setattr(sequence_solver_module, "anneal_stage", fake_anneal_stage)
+    failure = _routing(
+        DetailedRouteStatus.STRANDED,
+        geometric_failure=True,
+    )
+    solver = SequenceSolver(
+        heights=(40,),
+        problem_for_height=lambda _height: problem,
+        adapters=StageAdapters(
+            prepare=lambda _height, decoded: decoded,
+            global_route=lambda _decoded, _feedback, _allowance: _global(),
+            detailed_route=lambda _decoded, _allowance: DetailedStageResult(failure, None),
+            validate=lambda _placement: ValidationVerdict(False, ("unreachable",)),
+        ),
+        expansion_budget=ExpansionBudget(100),
+        config=SequenceSolverConfig(
+            stages=2,
+            moves_per_stage=1,
+            restarts_per_height=2,
+            global_elites=1,
+        ),
+        stage_boundary_transform=transform,
+    )
+
+    with pytest.raises(NoValidLayout):
+        solver.search(max_stages=2)
+
+    resized_problem, reset_state = anneal_inputs[2]
+    assert resized_problem.size == 2
+    assert reset_state.gaps == GapProfile.zero(2)
+    assert reset_state.variant_indices == (0, 0)
+    sibling = solver._heights[0].restarts[1]
+    assert sibling.anneal.variant_indices == (0, 1)
+    assert reset_state.pair == sibling.anneal.pair
+
+
 def test_exploitation_waits_until_every_grouped_discovery_finishes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
