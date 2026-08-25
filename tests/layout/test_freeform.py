@@ -484,22 +484,35 @@ class TestPlanStrips:
         )
 
     def test_mixing_raises_the_ceiling_well_past_any_real_recipe(self) -> None:
-        """Fifteen ingredients now seat: three lanes above and two below, each
-        holding up to the assembler's three-tile width, with the last south lane
-        left for the output."""
-        strips = plan_strips(self._many_input_spec(15), strip_len=6)
-        assert len(strips[0].in_lanes) == 15
+        """Twelve ingredients seat on an assembler: three lanes above and one
+        below, each holding up to its three-tile width, with the second and last
+        south lane left for the output.
+
+        THIS SAID FIFTEEN, AND FIFTEEN NEEDED A LANE NO SORTER COULD REACH.  An
+        Assembling Machine covers three rows and reserves four, and `_emit_strip`
+        seats it at the top of that band, so the padding lands on the south side
+        and the THIRD row below is four tiles from its bottom edge --
+        `slots.attachment` returns `None` there and `_link_lane` places nothing.
+        The old ceiling counted that row, so the fifteenth ingredient rode a belt
+        joined to the machine at neither end.  Nine above plus three below is
+        what the poses actually carry.
+        """
+        strips = plan_strips(self._many_input_spec(12), strip_len=6)
+        assert len(strips[0].in_lanes) == 12
+        assert len(strips[0].in_above) == 3
+        assert len(strips[0].in_below) == 1
 
     def test_a_recipe_needing_more_lanes_than_two_sides_carry_is_rejected(self) -> None:
-        """Sixteen exceeds even mixed lanes, and truncating one ingredient would
+        """Thirteen exceeds even mixed lanes, and truncating one ingredient would
         produce a blueprint that pastes cleanly and then stalls.
 
         The bar moved from seven to sixteen when lanes learned to carry several
-        items; DSP's own recipes top out at six ingredients, so this limit no
-        longer binds anything real.
+        items, and back to thirteen when seating stopped counting a south row an
+        assembler's clearance puts out of reach.  DSP's own recipes top out at
+        six ingredients, so this limit still binds nothing real.
         """
         with pytest.raises(ValueError, match="cannot be seated"):
-            plan_strips(self._many_input_spec(16), strip_len=6)
+            plan_strips(self._many_input_spec(13), strip_len=6)
 
 
 class TestASideCarriesAsManyLanesAsItsPosesAllow:

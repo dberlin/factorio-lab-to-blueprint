@@ -1141,8 +1141,62 @@ def _check_shared_lane_capacity(
             )
 
 
+def _side_lane_caps(item_id: int, yaw: float, band_rows: int) -> tuple[int, int]:
+    """Lane rows above and below the machine band a sorter can actually reach.
+
+    THIS IS THE SEATING HALF OF THE CORRECTION ``sorter_span`` TOOK IN 5e982bb.
+    Both sides were assumed to carry ``SORTER_MAX_REACH`` lanes, counted from the
+    machine's FOOTPRINT EDGE, and that is right only for a machine whose insert
+    poses sit on that edge with no clearance padding under it.  Two families in
+    the catalog break it, in opposite directions:
+
+    * a **Chemical Plant** (and its quantum variant) anchors its north face on
+      the row INSIDE its top edge, so the outermost of three lanes above is FOUR
+      tiles from anything a sorter can hold: two rows above, three below;
+    * an **Assembling Machine** (and the Re-composing Assembler) covers three
+      rows and RESERVES four -- its 3.82-unit collider does not fit a 3-tile
+      pitch -- and ``_emit_strip`` seats the machines at the top of that band, so
+      the padding lands on the south side: three rows above, two below.
+
+    Seating a lane outside that is not a near miss.  ``slots.attachment``
+    returns ``None`` for it, ``_link_lane`` places no sorter at all, and the
+    machine ships joined to nothing on that lane -- which is what
+    ``_machines_without_poses`` refuses on and why the ``organic-crystal`` URL
+    refused on every candidate.  Tightening the seat is the fix; widening the
+    reach would emit a sorter the game rejects on paste.
+
+    A row is counted only while every row nearer the machine is reachable too,
+    so the answer is a contiguous run outward from the band.  It cannot have a
+    hole in practice -- span grows monotonically as a lane moves away from the
+    one pose row a face offers -- and a prefix is the conservative reading if it
+    ever did.
+
+    A BUILDING WITH NO POSES AT ALL GETS THE OLD CONSTANT BACK, deliberately.  A
+    Ray Receiver and an Energy Exchanger ship a zero-length ``slotPoses``, so
+    every row would score 0 and seating would raise ``cannot be seated`` -- a
+    worse message than ``_machines_without_poses``' own, which names the prefab
+    and says the game gives it no pose on any face.  That refusal stays the
+    owner of this case.
+    """
+    if not catalog.building(item_id).slot_poses:
+        return catalog.SORTER_MAX_REACH, catalog.SORTER_MAX_REACH
+    probe = slots.probe_building(item_id, yaw)
+    caps: list[int] = []
+    for lane_ys in (
+        [-(k + 1) for k in range(catalog.SORTER_MAX_REACH)],
+        [band_rows + k for k in range(catalog.SORTER_MAX_REACH)],
+    ):
+        n = 0
+        for lane_y in lane_ys:
+            if not slots.attachable_columns(probe, lane_y):
+                break
+            n += 1
+        caps.append(n)
+    return caps[0], caps[1]
+
+
 def _seat_inputs(
-    items: tuple[str, ...], n_sinks: int, reach: int, max_per_lane: int
+    items: tuple[str, ...], n_sinks: int, above_cap: int, below_cap: int, max_per_lane: int
 ) -> tuple[tuple[tuple[str, ...], ...], tuple[tuple[str, ...], ...]]:
     """Seat ingredients into lanes above and below the machine band.
 
@@ -1154,6 +1208,10 @@ def _seat_inputs(
     sorters serving one machine from one lane cannot share an anchor, so each
     item on a shared lane needs its own column across that width.
 
+    ``above_cap`` and ``below_cap`` are THIS MACHINE's rows per side, from
+    :func:`_side_lane_caps`, and they are not both ``SORTER_MAX_REACH``: a
+    Chemical Plant carries two lanes above and an Assembling Machine two below.
+
     Returns ``(above, below)``.  ``below`` shares the south side with the output
     lanes, so it is kept as small as possible.
     """
@@ -1162,15 +1220,16 @@ def _seat_inputs(
         return (), ()
     for k in range(1, max(1, max_per_lane) + 1):
         lanes = [tuple(items[i : i + k]) for i in range(0, n, k)]
-        above, below = tuple(lanes[:reach]), tuple(lanes[reach:])
-        if len(below) > reach:
+        above, below = tuple(lanes[:above_cap]), tuple(lanes[above_cap:])
+        if len(below) > below_cap:
             continue  # more lanes than two sides can hold; mix harder
-        if n_sinks and reach - len(below) <= 0:
+        if n_sinks and below_cap - len(below) <= 0:
             continue  # no room left below for an output lane
         return above, below
     raise ValueError(
-        f"{n} ingredients cannot be seated: two sides of {reach} lanes carrying "
-        f"at most {max_per_lane} items each leaves no room for the output lane"
+        f"{n} ingredients cannot be seated: {above_cap} lane(s) above and "
+        f"{below_cap} below carrying at most {max_per_lane} items each leaves "
+        "no room for the output lane"
     )
 
 
@@ -1220,9 +1279,13 @@ def plan_strips(spec: BuildSpec, *, strip_len: int = 6) -> list[Strip]:
                 if src != key:
                     consumers[src, item].append(key)
 
-    reach = catalog.SORTER_MAX_REACH
     strips: list[Strip] = []
     for key, g in groups.items():
+        # How many lane rows THIS machine's poses actually reach, per side. Not
+        # `SORTER_MAX_REACH` on both: a Chemical Plant's north anchor is a row
+        # inside its footprint and an Assembling Machine's clearance pads its
+        # south, so one carries two lanes above and the other two below.
+        above_cap, below_cap = _side_lane_caps(g.item_id, g.yaw, g.pitch_h)
         in_items = tuple(sorted(g.inputs))
 
         sinks: list[tuple[str, str]] = []
@@ -1234,14 +1297,14 @@ def plan_strips(spec: BuildSpec, *, strip_len: int = 6) -> list[Strip]:
 
         try:
             in_above, in_below = _seat_inputs(
-                in_items, len(sinks), reach, max_per_lane=g.width
+                in_items, len(sinks), above_cap, below_cap, max_per_lane=g.width
             )
         except ValueError as exc:
             raise ValueError(f"recipe {g.recipe_id!r}: {exc}") from None
 
         # Output lanes share the south side with any overflow inputs, so the
         # shard size is what is left after those are seated.
-        out_cap = reach - len(in_below)
+        out_cap = below_cap - len(in_below)
         shards = (
             _shard_sinks(sinks, cap=out_cap, max_shards=g.count) if sinks else [[]]
         )
@@ -6129,6 +6192,15 @@ def _machines_without_poses(strips: list[Strip]) -> list[str]:
     which is `ValueError: span 4 outside 1..3` and is the crash every
     `universe-matrix` stress cell reported.
 
+    THE MESSAGE NEVER QUOTES A DISTANCE, because it has none to quote.
+    ``sorter_span`` reads the slot table through ``slots.attachment``, which has
+    already rejected anything outside ``1..SORTER_MAX_REACH``, so the only
+    failing value it can return is 0 -- meaning nothing anchorable was found at
+    all, not a measured four tiles.  Printing that 0 as a distance is what made
+    the ``organic-crystal`` refusal read "0 tile(s) ... past the 3-tile reach".
+    ``_side_lane_caps`` now keeps seating inside what the poses reach, so this
+    is a guard against a future seating bug rather than a routine outcome.
+
     BOTH ARE REFUSALS RATHER THAN REPAIRS, and deliberately so.  Whether the
     pose extraction is incomplete -- a Ray Receiver IS fed in game, so it either
     carries its slots in an array the extractor does not read or takes items by
@@ -6164,9 +6236,9 @@ def _machines_without_poses(strips: list[Strip]) -> list[str]:
                 )
             else:
                 out.append(
-                    f"{name} ({s.recipe_id}): its {kind} lane on row {row} is "
-                    f"{span} tile(s) from the nearest insert pose, past the "
-                    f"{reach}-tile reach of every sorter tier"
+                    f"{name} ({s.recipe_id}): its {kind} lane is seated on row "
+                    f"{row}, which has no insert pose within the {reach}-tile "
+                    "reach of any sorter tier on any column of the machine"
                 )
     return out
 
