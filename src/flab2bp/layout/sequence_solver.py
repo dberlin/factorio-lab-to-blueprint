@@ -52,6 +52,8 @@ from flab2bp.layout.route_feedback import (
 )
 from flab2bp.layout.sequence_pair import (
     AnnealConfig,
+    AnnealIncumbent,
+    AnnealStageResult,
     AnnealState,
     DecodedPlacement,
     DirectInsertTarget,
@@ -60,8 +62,10 @@ from flab2bp.layout.sequence_pair import (
     PlacementProblem,
     SearchEnergy,
     StageBoundaryUpdate,
+    TaggedAnnealIncumbent,
     align_direct_inserts,
     anneal_stage,
+    build_elite_archive,
     derive_stage_seed,
     merge_stage_boundary,
     repair_neighbourhood,
@@ -295,6 +299,8 @@ class _RestartState:
     restart: int
     seed: int
     anneal: AnnealState
+    accepted_moves: int = 0
+    archive: tuple[TaggedAnnealIncumbent, ...] = ()
     failure_signature: tuple[object, ...] = ()
     feedback_stagnation: int = 0
     stages: int = 0
@@ -324,8 +330,16 @@ class _ExactIncumbent:
 
 
 @dataclass(frozen=True, slots=True)
+class _AnnealedRestart:
+    restart: _RestartState
+    stage_start: AnnealState
+    result: AnnealStageResult
+
+
+@dataclass(frozen=True, slots=True)
 class _GlobalCandidate[PreparedT]:
     prepared: PreparedT
+    source: _AnnealedRestart
     state: AnnealState
     decoded: DecodedPlacement
     result: GlobalRouteResult
@@ -403,7 +417,7 @@ class SequenceSolver[PreparedT]:
     def search(self, *, max_stages: int | None = None) -> SequenceSearchResult:
         """Search until its stage cap, deadline, or searchable budget is exhausted."""
         stage_limit = (
-            self.config.stages * self.config.restarts_per_height * len(self._heights)
+            (1 + (self.config.stages - 1) * self.config.restarts_per_height) * len(self._heights)
             if max_stages is None
             else max_stages
         )
@@ -420,6 +434,8 @@ class SequenceSolver[PreparedT]:
             if discovery is not None:
                 height_state = discovery
                 allowance = self.budget.discovery_allowance(height_state.height)
+                spent, cancelled = self._run_discovery(height_state, allowance)
+                self.budget.settle_discovery(height_state.height, spent)
             else:
                 if self.budget.shared_left == 0:
                     termination = "budget"
@@ -434,15 +450,11 @@ class SequenceSolver[PreparedT]:
                     break
                 height_state = min(eligible, key=_height_priority)
                 allowance = self.budget.shared_allowance()
-
-            restart = min(
-                (run for run in height_state.restarts if run.stages < self.config.stages),
-                key=lambda run: (run.stages, run.restart),
-            )
-            spent, cancelled = self._run_stage(height_state, restart, allowance)
-            if discovery is not None:
-                self.budget.settle_discovery(height_state.height, spent)
-            else:
+                restart = min(
+                    (run for run in height_state.restarts if run.stages < self.config.stages),
+                    key=lambda run: (run.stages, run.restart),
+                )
+                spent, cancelled = self._run_stage(height_state, restart, allowance)
                 self.budget.settle_shared(spent)
             if cancelled:
                 termination = "cancelled"
@@ -467,13 +479,31 @@ class SequenceSolver[PreparedT]:
             termination=termination,
         )
 
+    def _run_discovery(
+        self,
+        height_state: _HeightState,
+        allowance: int,
+    ) -> tuple[int, bool]:
+        """Advance every restart, then route their deterministic archive union once."""
+        annealed = self._anneal_restarts(height_state, height_state.restarts)
+        self._persist_annealed_restarts(annealed)
+        return self._route_annealed(height_state, annealed, allowance)
+
     def _run_stage(
         self,
         height_state: _HeightState,
         restart: _RestartState,
         allowance: int,
     ) -> tuple[int, bool]:
-        stage_start = restart.anneal
+        annealed = self._anneal_restarts(height_state, (restart,))
+        self._persist_annealed_restarts(annealed)
+        return self._route_annealed(height_state, annealed, allowance)
+
+    def _anneal_restarts(
+        self,
+        height_state: _HeightState,
+        restarts: Sequence[_RestartState],
+    ) -> tuple[_AnnealedRestart, ...]:
         problem = height_state.problem
         context = feedback_cost_context(
             height_state.feedback,
@@ -484,25 +514,71 @@ class SequenceSolver[PreparedT]:
             moves_per_stage=self.config.moves_per_stage,
             elite_count=max(self.config.global_elites, 1),
         )
-        if self.direct_targets_for_state is None:
-            annealed = anneal_stage(
-                problem,
-                restart.anneal,
-                stage_config,
-                context,
+        results: list[_AnnealedRestart] = []
+        for restart in restarts:
+            stage_start = restart.anneal
+            if self.direct_targets_for_state is None:
+                result = anneal_stage(
+                    problem,
+                    stage_start,
+                    stage_config,
+                    context,
+                )
+            else:
+                result = anneal_stage(
+                    problem,
+                    stage_start,
+                    stage_config,
+                    context,
+                    direct_targets_for_state=self.direct_targets_for_state,
+                )
+            results.append(
+                _AnnealedRestart(
+                    restart=restart,
+                    stage_start=stage_start,
+                    result=result,
+                )
             )
-        else:
-            annealed = anneal_stage(
-                problem,
-                restart.anneal,
-                stage_config,
-                context,
-                direct_targets_for_state=self.direct_targets_for_state,
-            )
+        return tuple(results)
 
+    @staticmethod
+    def _persist_annealed_restarts(annealed: Sequence[_AnnealedRestart]) -> None:
+        for source in annealed:
+            source.restart.anneal = source.result.final_state
+            source.restart.accepted_moves += source.result.accepted_moves
+            source.restart.archive = source.result.archive
+            source.restart.stages += 1
+
+    def _route_annealed(
+        self,
+        height_state: _HeightState,
+        annealed: Sequence[_AnnealedRestart],
+        allowance: int,
+    ) -> tuple[int, bool]:
+        source_by_incumbent: dict[int, _AnnealedRestart] = {}
+        for source in annealed:
+            for tagged in source.result.archive:
+                # Archive union retains an input object, so identity carries its restart.
+                source_by_incumbent.setdefault(id(tagged.incumbent), source)
+        merged = build_elite_archive(
+            (tagged.incumbent for source in annealed for tagged in source.result.archive),
+            self.config.global_elites,
+        )
+        candidates = tuple(
+            (tagged.incumbent, source_by_incumbent[id(tagged.incumbent)]) for tagged in merged
+        )
+        return self._route_archive(height_state, candidates, allowance)
+
+    def _route_archive(
+        self,
+        height_state: _HeightState,
+        candidates: Sequence[tuple[AnnealIncumbent, _AnnealedRestart]],
+        allowance: int,
+    ) -> tuple[int, bool]:
+        problem = height_state.problem
         spent = 0
         global_candidates: list[_GlobalCandidate[PreparedT]] = []
-        for elite in annealed.elites[: self.config.global_elites]:
+        for elite, source in candidates:
             prepared = self.adapters.prepare(height_state.height, elite.decoded)
             remaining = allowance - spent
             global_result = self.adapters.global_route(
@@ -515,6 +591,7 @@ class SequenceSolver[PreparedT]:
             global_candidates.append(
                 _GlobalCandidate(
                     prepared=prepared,
+                    source=source,
                     state=elite.state,
                     decoded=elite.decoded,
                     key=elite.key,
@@ -550,6 +627,10 @@ class SequenceSolver[PreparedT]:
         height_state.feedback = update_feedback(
             decay_feedback(height_state.feedback), detailed.routing
         )
+        source = selected.source
+        restart = source.restart
+        annealed = source.result
+        stage_start = source.stage_start
         signature = tuple(
             (
                 failure.net_id.logical,
@@ -652,7 +733,6 @@ class SequenceSolver[PreparedT]:
                     restart.feedback_stagnation = 0
 
         restart.anneal = next_anneal
-        restart.stages += 1
         height_state.stages += 1
         height_state.spent += spent
         height_state.stranded = detailed.routing.failed_count

@@ -287,21 +287,229 @@ def _solver(
     )
 
 
-def test_every_height_gets_one_stage_before_any_second_stage() -> None:
-    fake = _FakeRouting()
-    with pytest.raises(NoValidLayout):
-        _solver(fake).search(max_stages=4)
-    assert fake.stage_trace[:3] == [40, 60, 80]
+def test_grouped_discovery_advances_every_restart_before_exploitation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    anneal_trace: list[tuple[int, int, int]] = []
+    real_anneal_stage = anneal_stage
 
+    def capture_anneal(
+        problem: PlacementProblem,
+        state: AnnealState,
+        config: AnnealConfig,
+        context: PlacementCostContext | None = None,
+    ) -> AnnealStageResult:
+        anneal_trace.append((problem.outline_height, state.base_seed, state.stage_index))
+        return real_anneal_stage(problem, state, config, context)
 
-def test_every_stage_ends_with_exactly_one_detailed_route() -> None:
+    monkeypatch.setattr(sequence_solver_module, "anneal_stage", capture_anneal)
     fake = _FakeRouting()
+    solver = _solver(fake)
+    expected_trace = [
+        (height.height, restart.seed, 0)
+        for height in solver._heights
+        for restart in height.restarts
+    ]
+
     with pytest.raises(NoValidLayout):
-        _solver(fake, heights=(40,)).search(max_stages=3)
+        solver.search(max_stages=3)
+
+    assert anneal_trace == expected_trace
+    assert fake.stage_trace == [40, 60, 80]
     assert len(fake.detailed_allowances) == 3
+    assert len(solver._stage_stats) == 3
+    assert [
+        (restart.stages, restart.anneal.stage_index)
+        for height in solver._heights
+        for restart in height.restarts
+    ] == [(1, 1)] * 6
 
 
-def test_scheduler_routes_only_legacy_blended_elites_before_archive_union_cutover(
+def test_exploitation_waits_until_every_grouped_discovery_finishes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    anneal_trace: list[tuple[int, int]] = []
+    real_anneal_stage = anneal_stage
+
+    def capture_anneal(
+        problem: PlacementProblem,
+        state: AnnealState,
+        config: AnnealConfig,
+        context: PlacementCostContext | None = None,
+    ) -> AnnealStageResult:
+        anneal_trace.append((problem.outline_height, state.stage_index))
+        return real_anneal_stage(problem, state, config, context)
+
+    monkeypatch.setattr(sequence_solver_module, "anneal_stage", capture_anneal)
+    with pytest.raises(NoValidLayout):
+        _solver(_FakeRouting()).search(max_stages=4)
+
+    assert anneal_trace[:6] == [
+        (40, 0),
+        (40, 0),
+        (60, 0),
+        (60, 0),
+        (80, 0),
+        (80, 0),
+    ]
+    assert anneal_trace[6][1] == 1
+
+
+def test_default_stage_limit_counts_grouped_discovery_as_one_routing_unit() -> None:
+    exact = _placement(area=20, belt_tiles=4)
+    fake = _FakeRouting(
+        detailed_results=(DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), exact),)
+    )
+    solver = _solver(
+        fake,
+        heights=(40,),
+        config=SequenceSolverConfig(
+            stages=2,
+            moves_per_stage=1,
+            restarts_per_height=2,
+            global_elites=1,
+        ),
+    )
+
+    result = solver.search()
+
+    assert result.termination == "stage-limit"
+    assert len(fake.detailed_allowances) == 3
+    assert [restart.stages for restart in solver._heights[0].restarts] == [2, 2]
+
+
+def test_grouped_discovery_routes_the_union_and_preserves_restart_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _spec, _strips, problem = _two_stage_variant_problem()
+    assert len(problem.variant_tables[0]) > 1
+    origin_by_seed: dict[int, int] = {}
+    final_by_restart: dict[int, AnnealState] = {}
+    candidate_by_restart: dict[int, AnnealIncumbent] = {}
+
+    def fake_anneal_stage(
+        problem: PlacementProblem,
+        state: AnnealState,
+        config: AnnealConfig,
+        context: PlacementCostContext | None = None,
+    ) -> AnnealStageResult:
+        del config, context
+        origin = origin_by_seed[state.base_seed]
+        gap = 3 if origin == 0 else 1
+        variant_indices = tuple(
+            1 if origin == 1 and index == 0 else 0 for index in range(problem.size)
+        )
+        candidate_state = replace(
+            state,
+            gaps=GapProfile((gap,) * problem.size, (0,) * problem.size),
+            variant_indices=variant_indices,
+        )
+        decoded = decode_state(problem, candidate_state)
+        candidate = AnnealIncumbent(
+            state=candidate_state,
+            decoded=decoded,
+            breakdown=replace(
+                _candidate_breakdown(
+                    problem,
+                    decoded,
+                    0.0 if origin == 0 else 100.0,
+                ),
+                width=100 if origin == 0 else 1,
+            ),
+            key=PlacementKey(
+                x=decoded.x,
+                y=decoded.y,
+                dimensions=problem.selected_sizes(variant_indices),
+                east_gaps=candidate_state.gaps.east,
+                north_gaps=candidate_state.gaps.north,
+                instance_ids=problem.instance_ids,
+                variant_ids=problem.selected_variant_ids(variant_indices),
+            ),
+        )
+        final_state = replace(
+            state,
+            gaps=GapProfile((4 - origin,) * problem.size, (0,) * problem.size),
+            stage_index=state.stage_index + 1,
+            variant_indices=variant_indices,
+        )
+        candidate_by_restart[origin] = candidate
+        final_by_restart[origin] = final_state
+        return AnnealStageResult(
+            final_state=final_state,
+            incumbent=candidate,
+            accepted_moves=11 + origin,
+            elites=(candidate,),
+            archive=(
+                sequence_pair_module.TaggedAnnealIncumbent(
+                    candidate,
+                    tuple(sequence_pair_module.EliteCategory),
+                ),
+            ),
+        )
+
+    routed: list[DecodedPlacement] = []
+
+    def global_route(
+        prepared: Prepared,
+        feedback: FeedbackState,
+        allowance: int,
+    ) -> GlobalRouteResult:
+        del feedback, allowance
+        routed.append(prepared[1])
+        selected = candidate_by_restart[1].decoded
+        return _global(overflow=0 if prepared[1] == selected else 1)
+
+    exact = _placement(area=20, belt_tiles=4)
+    fake = _FakeRouting(
+        detailed_results=(DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), exact),)
+    )
+    solver = SequenceSolver(
+        heights=(problem.outline_height,),
+        problem_for_height=lambda _height: problem,
+        adapters=replace(fake.adapters(), global_route=global_route),
+        expansion_budget=ExpansionBudget(100),
+        config=SequenceSolverConfig(
+            stages=1,
+            moves_per_stage=1,
+            restarts_per_height=2,
+            global_elites=1,
+        ),
+    )
+    origin_by_seed.update(
+        (restart.seed, restart.restart) for restart in solver._heights[0].restarts
+    )
+    monkeypatch.setattr(sequence_solver_module, "anneal_stage", fake_anneal_stage)
+
+    result = solver.search(max_stages=1)
+
+    first, second = solver._heights[0].restarts
+    assert routed == [
+        candidate_by_restart[0].decoded,
+        candidate_by_restart[1].decoded,
+    ]
+    assert first.anneal == final_by_restart[0]
+    assert second.anneal == replace(
+        candidate_by_restart[1].state,
+        base_seed=second.seed,
+        stage_index=1,
+    )
+    assert (first.accepted_moves, second.accepted_moves) == (11, 12)
+    assert first.archive[0].incumbent is candidate_by_restart[0]
+    assert second.archive[0].incumbent is candidate_by_restart[1]
+    assert (first.stages, second.stages) == (1, 1)
+    observation = solver._stage_stats[0]
+    assert observation.restart == 1
+    assert observation.seed == second.seed
+    assert observation.accepted_moves == 12
+    assert observation.candidate_key == candidate_by_restart[1].key
+    assert result.exact_candidate_key == candidate_by_restart[1].key
+    assert result.exact_breakdown == candidate_by_restart[1].breakdown
+    assert observation.selected_variant_ids == problem.selected_variant_ids(
+        candidate_by_restart[1].state.variant_indices
+    )
+
+
+def test_scheduler_routes_bounded_pareto_archive_after_union_cutover(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     selected: list[tuple[AnnealIncumbent, AnnealIncumbent]] = []
@@ -314,7 +522,7 @@ def test_scheduler_routes_only_legacy_blended_elites_before_archive_union_cutove
     ) -> AnnealStageResult:
         del config, context
 
-        def incumbent(east_gap: int, scalar: float) -> AnnealIncumbent:
+        def incumbent(east_gap: int, scalar: float, width: int) -> AnnealIncumbent:
             candidate_state = replace(
                 state,
                 gaps=GapProfile((east_gap,), (0,)),
@@ -323,7 +531,10 @@ def test_scheduler_routes_only_legacy_blended_elites_before_archive_union_cutove
             return AnnealIncumbent(
                 state=candidate_state,
                 decoded=decoded,
-                breakdown=_candidate_breakdown(problem, decoded, scalar),
+                breakdown=replace(
+                    _candidate_breakdown(problem, decoded, scalar),
+                    width=width,
+                ),
                 key=PlacementKey(
                     x=decoded.x,
                     y=decoded.y,
@@ -333,10 +544,10 @@ def test_scheduler_routes_only_legacy_blended_elites_before_archive_union_cutove
                 ),
             )
 
-        best_blended = incumbent(0, 0.0)
-        second_blended = incumbent(1, 1.0)
-        pareto_only = incumbent(2, 100.0)
-        selected.append((best_blended, second_blended))
+        best_blended = incumbent(0, 0.0, 10)
+        second_blended = incumbent(1, 1.0, 9)
+        pareto_only = incumbent(2, 100.0, 1)
+        selected.append((best_blended, pareto_only))
         return AnnealStageResult(
             final_state=replace(state, stage_index=state.stage_index + 1),
             incumbent=best_blended,
@@ -377,7 +588,7 @@ def test_scheduler_routes_only_legacy_blended_elites_before_archive_union_cutove
     )
 
 
-def test_equal_key_energy_keeps_legacy_first_state_for_scheduler_continuation(
+def test_equal_key_energy_continues_from_canonical_archive_state(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     selected: list[AnnealIncumbent] = []
@@ -406,7 +617,7 @@ def test_equal_key_energy_keeps_legacy_first_state_for_scheduler_continuation(
             key=canonical_key,
         )
         canonical = replace(legacy_first, state=canonical_state)
-        selected.append(legacy_first)
+        selected.append(canonical)
         return AnnealStageResult(
             final_state=replace(state, stage_index=state.stage_index + 1),
             incumbent=legacy_first,
@@ -648,7 +859,7 @@ def test_selected_global_cancellation_stops_before_detailed_or_feedback() -> Non
         config=SequenceSolverConfig(
             stages=1,
             moves_per_stage=1,
-            restarts_per_height=1,
+            restarts_per_height=2,
             global_elites=1,
         ),
     )
@@ -661,6 +872,9 @@ def test_selected_global_cancellation_stops_before_detailed_or_feedback() -> Non
     assert len(feedback_seen) == 1
     assert not feedback_seen[0].net_weight
     assert not feedback_seen[0].cell_history
+    assert [
+        (restart.stages, restart.anneal.stage_index) for restart in solver._heights[0].restarts
+    ] == [(1, 1), (1, 1)]
 
 
 def test_deadline_empty_global_is_cancelled_without_budget_exhaustion() -> None:
@@ -1544,6 +1758,12 @@ def test_merge_waits_until_every_restart_has_one_compatible_problem(
     assert solver._heights[0].problem == split.problem
     assert all(len(restart.anneal.pair.positive) == 2 for restart in (first, second))
     assert sum(stage.merge_count for stage in solver._stage_stats) == 0
+    assert (first.stages, second.stages) == (1, 1)
+    assert (first.anneal.stage_index, second.anneal.stage_index) == (1, 1)
+    assert (first.anneal.variant_indices, second.anneal.variant_indices) == (
+        (0, 0),
+        (0, 1),
+    )
 
 
 def test_fake_closed_loop_splits_then_runs_the_production_merge_policy(
