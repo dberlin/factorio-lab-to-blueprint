@@ -533,6 +533,77 @@ collision that then appears is manufactured by the fix.
 `occupies_tiles = False` already says this: the tiles a coater's collider covers
 are not tiles it reserves. `validate.geom.footprint` has two branches for that
 reason, and collapsing them turns a test red on purpose.
+## OPEN -- what the web UI does not do, and where the server arm is thin
+
+`flab2bp-web` serves the whole loop: paste a FactorioLab URL, submit a job, watch
+it, copy the string, see it rendered. `scripts/web_smoke.py` proves that in a
+real browser and decodes what the Copy button put on the clipboard.
+`docs/WEB_UI.md` is the reference; these are the gaps, named here rather than
+left to be discovered.
+
+**Not wired, and the page says so.** `--flow` and `--fetch-flow`. The first
+needs a file upload; the second drives a headless browser through `nodriver` and
+is a much bigger surface than a build. Until then every web build reports
+`flow_pinned: false` -- the recipe selection is DERIVED, not FactorioLab's own.
+That is the weaker of the two guarantees, and it is stated on the page.
+
+**A job does not survive a restart.** The registry is a dict in the server
+process and the queue is a `ThreadPoolExecutor`. Restarting `flab2bp-web`
+abandons every in-flight solve and every finished result. For one person on
+localhost this is the right trade; anything longer-lived wants the job state
+somewhere it can be re-read, and that is a different program.
+
+**A running solve cannot be cancelled.** "Stop watching" stops the polling, not
+the solve: CP-SAT holds its worker until its budget expires. Interrupting it
+means a `SolutionCallback` or a solve interrupter, which lives inside
+`src/flab2bp/layout/` and was out of scope. The button is named for what it
+actually does.
+
+**Concurrency is a queue, not parallelism, and that is deliberate.** One CP-SAT
+solve already runs at ~700% CPU (see the note in `pyproject.toml` about why the
+test suite is not `-n auto`). `--workers` exists but raising it above 1 on one
+machine will make every concurrent build slower than running them in turn, since
+`time_budget_s` is wall-clock. Two people using one server contend; there is no
+admission control beyond the queue and the 300s ceiling per job.
+
+**DONE -- progress is real now.** `pipeline.build` takes an `on_progress` sink
+and fires it as each (candidate, strategy) pair starts and as it settles, so the
+bar counts pairs FINISHED over pairs to do and the line names the pair in CP-SAT.
+The one part that is still a guess is what happens before the layout loop --
+parsing the URL and solving the rates take an unknown time and are not divided
+into pairs -- and the panel says that in words rather than inventing a fraction
+for it.
+
+**Still not a phase inside a pair.** A single 60s CP-SAT solve reports nothing
+between "started" and "laid-out". That needs a `SolutionCallback`, which lives
+in `src/flab2bp/layout/`. Worth it only alongside the cancel below, since they
+want the same hook.
+
+**A refusal leaves the last blueprint on screen.** The viewer renders whatever
+was loaded last, so after a refusal the toolbar still names the build before it.
+Clearing it throws away the thing you were looking at, which seemed worse, but
+a stale heading over a refusal panel is not right either.
+
+**FIXED -- `web/node_modules` was committed, and was broken.** 14,760 files of it
+were tracked on master while `web/.gitignore` said `node_modules/`. Worse, the
+root `.gitignore`'s UNANCHORED `dist/` pattern stripped every package's own
+`dist/` on the way in, so a fresh clone got a tree complete enough that
+`bun install --frozen-lockfile` said "no changes" and incomplete enough that
+`bun run build` died on `Cannot find module '@rsbuild/core/dist/index.js'`. Any
+unanchored ignore pattern is a trap once a vendored dependency tree is inside the
+repo; `bun.lock` is the declaration and the tree is no longer tracked.
+
+**`/api/fetch` is an open relay**, inherited from the viewer and reimplemented
+in Python for parity. It follows redirects, so an allowed http(s) URL can still
+reach a loopback address. Mitigated only by binding to 127.0.0.1. Anything
+public needs this closed first, along with rate limiting on `/api/build`.
+
+**Considered and dropped: running the solver client-side.** `ortools` is not in
+Pyodide's package set, and while a WASM port of OR-Tools exists, the whole point
+of it would be removing the server -- which this arm does not do. It would be a
+second solver stack to keep in step with the Python one, for no capability the
+server does not already provide.
+
 
 ## RESOLVED -- it was never the router. A port did not know its own altitude.
 

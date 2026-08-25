@@ -17,6 +17,10 @@ from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _BRIDGE = _REPO_ROOT / "scripts" / "crossvalidate.ts"
+#: The decoder now lives in this repo, under ``web/``.  The sibling checkout is
+#: still consulted after it, so a machine that has one keeps working, but the
+#: in-tree copy is what a fresh clone gets and so it is what wins.
+_IN_TREE = _REPO_ROOT / "web"
 _DEFAULT_SIBLING = _REPO_ROOT.parent / "dsp-blueprint-viewer"
 
 
@@ -39,13 +43,13 @@ def bun_available() -> bool:
 
 
 def viewer_path() -> Path | None:
-    """Resolve the viewer checkout: ``$DSP_VIEWER_PATH`` then the sibling dir."""
+    """Resolve the viewer: ``$DSP_VIEWER_PATH``, then in-tree, then the sibling."""
     candidates: list[Path] = []
     override = os.environ.get("DSP_VIEWER_PATH")
     if override:
         candidates.append(Path(override))
     else:
-        candidates.append(_DEFAULT_SIBLING)
+        candidates.extend((_IN_TREE, _DEFAULT_SIBLING))
 
     for candidate in candidates:
         if (candidate / "src" / "format" / "index.ts").exists():

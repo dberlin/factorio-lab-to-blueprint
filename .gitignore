@@ -14,3 +14,9 @@ wheels/
 
 # Serena's local index.
 /.serena/
+
+# The web front end's build output and dependencies. `dist/` above already
+# covers web/dist; these are the rest of what bun and rsbuild leave behind.
+node_modules/
+/web/.rsbuild/
+/web/coverage/

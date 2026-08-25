@@ -25,6 +25,11 @@ dependencies = [
 
 [project.scripts]
 flab2bp = "flab2bp.cli:main"
+# The web front end adds NO dependency: `flab2bp.web` is standard library plus
+# `httpx`, which is already required. There is deliberately no `[web]` extra to
+# install, because there is nothing in it -- the only thing the browser half
+# needs that Python cannot provide is `bun`, to build the TypeScript in `web/`.
+flab2bp-web = "flab2bp.web.server:main"
 
 [dependency-groups]
 dev = [

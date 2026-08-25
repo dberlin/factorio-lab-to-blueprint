@@ -72,6 +72,53 @@ run is the one failure nobody discovers until they are standing in front of it i
 DSP's blueprint checksum is a *variant* of MD5 — two altered init constants and eight altered
 round constants, not derivable from `sin()`. See `dsp/md5f.py`.
 
+## In a browser
+
+Same solver, same options, plus the blueprint rendered in 3D on the page that built it.
+
+```bash
+uv run flab2bp-web        # http://127.0.0.1:8000
+```
+
+That is the whole command. It builds the front end with `bun` on first run — `bun install &&
+bun run build` in `web/` — and then serves it, so the only prerequisites are `uv sync` and
+`bun` on `PATH`. Pass `--build` to force a rebuild after changing the TypeScript, `--no-build`
+to never shell out to bun, or `--port`/`--host` to move it.
+
+Paste a FactorioLab URL, pick the strategy, candidate count and per-layout budget, and press
+Build. The blueprint string is there to copy when it is done, and the viewer renders it in the
+same page without a second step.
+
+**A build is a job, not a request.** `--budget` is per layout and `best` lays out every
+candidate with both strategies, so a build runs for seconds to minutes; `POST /api/build`
+returns an id immediately and the page polls `GET /api/build/<id>`. `pipeline.build` reports
+each (candidate, strategy) pair as it starts and as it settles, so the bar counts pairs
+finished and the line above it names the pair currently in CP-SAT. Before the layout loop —
+parsing the URL, solving the rates — there is nothing to count, and the panel says so rather
+than inventing a fraction. A submitted job may ask for at most 300s of solving; over that is
+refused with the arithmetic spelled out rather than quietly clamped.
+
+**A refusal is a result.** A spec that cannot be laid out reports one line per strategy and
+candidate saying why each gave up, and the page shows that as the answer rather than as a
+failure. So is an invalid build: if validation fails, the string is withheld and the errors are
+listed, exactly as the CLI refuses to emit without `--allow-invalid` — the page has a button
+that says what you are asking for.
+
+Not wired yet: `--flow` and `--fetch-flow`. The page says so rather than leaving "recipe
+selection derived, not pinned" to be inferred from silence.
+
+For working on the TypeScript, `cd web && bun run dev` starts rsbuild on port 3001 with `/api`
+proxied to `flab2bp-web` on 8000 — the solver is Python, so that process has to be running
+either way.
+
+`web/` is the former `dsp-blueprint-viewer` — React, rsbuild and three.js — taken in-tree and
+taken over rather than vendored. Its own gates still apply to it: `cd web && bun run typecheck
+&& bun run lint && bun run test`.
+
+`uv run scripts/web_smoke.py` drives the whole thing in a real browser and decodes the string
+the Copy button actually put on the clipboard. **[docs/WEB_UI.md](docs/WEB_UI.md)** has the
+options, the API, and the list of what this does not do.
+
 ## Development
 
 ```bash

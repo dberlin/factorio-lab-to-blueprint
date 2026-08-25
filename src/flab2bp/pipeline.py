@@ -9,6 +9,7 @@ touch it.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from fractions import Fraction
 from pathlib import Path
@@ -138,6 +139,40 @@ class Attempt:
 
 
 @dataclass(frozen=True, slots=True)
+class AttemptProgress:
+    """Where a build has got to, reported as each pair starts and settles.
+
+    A build's wall clock is ``candidates x strategies x budget`` plus rates,
+    validation and encoding, and nothing outside this loop can tell which of
+    those pairs is currently running.  A caller with a progress bar therefore
+    has exactly two choices: guess from elapsed time, or be told.  This is being
+    told.
+
+    ``index`` is 1-based over ``total`` pairs, counted AFTER any flow filter has
+    dropped the illegal candidates, so it never counts a pair that will not run.
+    """
+
+    index: int
+    total: int
+    candidate: str
+    strategy: str
+    #: ``started`` fires before the solve; the other two after it settles.
+    phase: Literal["started", "laid-out", "refused"]
+    #: Tiles, on ``laid-out``.
+    area: int | None = None
+    #: Whether the validator passed it, on ``laid-out``.
+    ok: bool | None = None
+    #: Why the strategy gave up, on ``refused``.
+    reason: str | None = None
+
+
+#: Told what a build is doing, as it does it.  Deliberately not wrapped in a
+#: try/except: a progress sink that raises is a bug in the caller, and a build
+#: that swallowed it would report a number nobody produced.
+ProgressSink = Callable[[AttemptProgress], None]
+
+
+@dataclass(frozen=True, slots=True)
 class Build:
     """The chosen result, plus everything that lost, for reporting."""
 
@@ -177,6 +212,7 @@ def build(
     fetch_flow: bool = False,
     fetch_timeout_s: float = 90.0,
     browser: str | None = None,
+    on_progress: ProgressSink | None = None,
 ) -> Build:
     """Turn a FactorioLab URL into a pasteable DSP blueprint.
 
@@ -267,10 +303,26 @@ def build(
 
     wanted = list(_STRATEGIES) if strategy == "best" else [strategy]
 
+    # Counted here, after the flow filter, so a progress report never promises a
+    # pair that was already dropped.
+    total_pairs = len(spec_set.candidates) * len(wanted)
+    pair_index = 0
+
     attempts: list[Attempt] = []
     refused: list[str] = []
     for spec in spec_set.candidates:
         for sname in wanted:
+            pair_index += 1
+            if on_progress is not None:
+                on_progress(
+                    AttemptProgress(
+                        index=pair_index,
+                        total=total_pairs,
+                        candidate=spec.label,
+                        strategy=sname,
+                        phase="started",
+                    )
+                )
             # BOTH strategies need the save's slope rule now.
             #
             # `freeform` chooses between the ramped and the dense form with it.
@@ -293,6 +345,17 @@ def build(
                 # others may well succeed. Record it so the reason survives to
                 # the report rather than vanishing into an empty result.
                 refused.append(f"{sname}/{spec.label}: {exc.reason}")
+                if on_progress is not None:
+                    on_progress(
+                        AttemptProgress(
+                            index=pair_index,
+                            total=total_pairs,
+                            candidate=spec.label,
+                            strategy=sname,
+                            phase="refused",
+                            reason=exc.reason,
+                        )
+                    )
                 continue
             # Pass the spec AND the id map. Without them the nine
             # spec-dependent checks are skipped, and a build that never ran its
@@ -306,6 +369,18 @@ def build(
                 belt_vertical_construction=belt_rules.vertical_construction,
             )
             attempts.append(Attempt(spec.label, sname, placement, report))
+            if on_progress is not None:
+                on_progress(
+                    AttemptProgress(
+                        index=pair_index,
+                        total=total_pairs,
+                        candidate=spec.label,
+                        strategy=sname,
+                        phase="laid-out",
+                        area=placement.area,
+                        ok=report.ok,
+                    )
+                )
 
     valid = [a for a in attempts if a.ok]
     if not attempts:
