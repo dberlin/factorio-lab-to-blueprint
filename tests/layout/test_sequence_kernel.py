@@ -3,6 +3,7 @@ from __future__ import annotations
 import random
 import struct
 from collections.abc import Iterator
+from typing import cast
 
 import pytest
 
@@ -233,6 +234,76 @@ def test_backend_selection_falls_back_cleanly(monkeypatch: pytest.MonkeyPatch) -
         PythonSequenceKernel(problem, context).score_state(state),
     )
     assert anneal_stage(problem, state, config, context) == compiled_stage
+
+
+def test_backend_selection_falls_back_before_signed_64_geometry_overflow() -> None:
+    maximum = 2**63 - 1
+    problem = PlacementProblem(
+        sizes=((maximum, 1), (1, 1)),
+        nets=(),
+        outline_height=1,
+        area_lower_bound=maximum + 1,
+    )
+    context = PlacementCostContext((), (), (0, 1), (0.0, 0.0))
+    state = AnnealState(
+        pair=SequencePair((0, 1), (0, 1)),
+        gaps=GapProfile.zero(2),
+        base_seed=0,
+        variant_indices=(0, 0),
+    )
+
+    kernel = build_sequence_kernel(problem, context)
+
+    assert isinstance(kernel, PythonSequenceKernel)
+    assert kernel.score_state(state).decoded.width == 2**63
+
+
+def test_backend_selection_falls_back_for_non_float_score_inputs() -> None:
+    problem = PlacementProblem(
+        sizes=((1, 1), (1, 1)),
+        nets=((0, 1),),
+        outline_height=1,
+        area_lower_bound=2,
+    )
+    integer_weight = PlacementCostContext(
+        net_weights=cast(tuple[float, ...], (2**53 + 1,)),
+        net_pairs=problem.nets,
+        history_outline=(0, 1),
+        history_summed_area=(0.0, 0.0),
+    )
+    integer_history = PlacementCostContext(
+        net_weights=(1.0,),
+        net_pairs=problem.nets,
+        history_outline=(1, 1),
+        history_summed_area=cast(tuple[float, ...], (0, 0, 0, 0)),
+    )
+
+    assert isinstance(build_sequence_kernel(problem, integer_weight), PythonSequenceKernel)
+    assert isinstance(build_sequence_kernel(problem, integer_history), PythonSequenceKernel)
+
+
+def test_compiled_kernel_reuses_size_dependent_workspace() -> None:
+    problem = PlacementProblem(
+        sizes=((2, 1), (1, 2), (2, 2)),
+        nets=((0, 1), (1, 2)),
+        outline_height=4,
+        area_lower_bound=10,
+    )
+    context = PlacementCostContext(
+        net_weights=(1.0, 2.0),
+        net_pairs=problem.nets,
+        history_outline=(0, 4),
+        history_summed_area=(0.0,) * 5,
+    )
+    kernel = CompiledSequenceKernel(problem, context)
+    workspace = kernel._workspace_buffers
+    identities = tuple(id(buffer) for buffer in workspace)
+
+    kernel.score_state(AnnealState.initial(problem.size, 17))
+    kernel.score_state(AnnealState.initial(problem.size, 23))
+
+    assert kernel._workspace_buffers is workspace
+    assert tuple(id(buffer) for buffer in kernel._workspace_buffers) == identities
 
 
 @pytest.mark.slow

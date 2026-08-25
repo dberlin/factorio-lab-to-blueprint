@@ -1,7 +1,5 @@
 # cython: language_level=3, boundscheck=False, wraparound=False, initializedcheck=False, cdivision=True
 
-from array import array as py_array
-
 from libc.math cimport fabs, isfinite
 
 
@@ -15,6 +13,13 @@ def decode_score(
     const double[::1] weights,
     const double[::1] history,
     const long long[::1] targets,
+    long long[::1] negative_position,
+    unsigned char[::1] horizontal,
+    unsigned char[::1] vertical,
+    long long[::1] earliest_x,
+    long long[::1] earliest_y,
+    long long[::1] latest_x,
+    long long[::1] latest_y,
     long long outline_height,
     long long history_width,
     long long sorter_max_reach,
@@ -41,22 +46,13 @@ def decode_score(
     cdef double term, combined
     cdef double history_cost = 0.0
 
-    cdef object negative_position_array = py_array("q", [0]) * size
-    cdef object horizontal_array = bytearray(size * size)
-    cdef object vertical_array = bytearray(size * size)
-    cdef object earliest_x_array = py_array("q", [0]) * size
-    cdef object earliest_y_array = py_array("q", [0]) * size
-    cdef object latest_x_array = py_array("q", [0]) * size
-    cdef object latest_y_array = py_array("q", [0]) * size
-    cdef object weighted_terms_array = py_array("d", [0.0]) * net_count
-    cdef long long[::1] negative_position = negative_position_array
-    cdef unsigned char[::1] horizontal = horizontal_array
-    cdef unsigned char[::1] vertical = vertical_array
-    cdef long long[::1] earliest_x = earliest_x_array
-    cdef long long[::1] earliest_y = earliest_y_array
-    cdef long long[::1] latest_x = latest_x_array
-    cdef long long[::1] latest_y = latest_y_array
-    cdef double[::1] weighted_terms = weighted_terms_array
+
+    for index in range(size * size):
+        horizontal[index] = 0
+        vertical[index] = 0
+    for index in range(size):
+        earliest_x[index] = 0
+        earliest_y[index] = 0
 
     for position in range(size):
         negative_position[negative[position]] = position
@@ -126,9 +122,7 @@ def decode_score(
         dy = earliest_y[source] - earliest_y[destination]
         if dy < 0:
             dy = -dy
-        weighted_terms[index] = weights[index] * (dx + dy)
-    for index in range(net_count):
-        term = weighted_terms[index]
+        term = weights[index] * (dx + dy)
         combined = weighted_hpwl + term
         if fabs(weighted_hpwl) >= fabs(term):
             compensation = compensation + ((weighted_hpwl - combined) + term)
@@ -198,10 +192,10 @@ def decode_score(
         overflow = 0
 
     return (
-        earliest_x_array,
-        earliest_y_array,
-        latest_x_array,
-        latest_y_array,
+        earliest_x,
+        earliest_y,
+        latest_x,
+        latest_y,
         width,
         used_height,
         gap_area,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from array import array
 from dataclasses import dataclass
 from typing import ClassVar, Literal, Protocol, runtime_checkable
@@ -13,6 +14,9 @@ try:
     from flab2bp.layout._sequence_kernel import decode_score as _compiled_decode_score
 except ImportError:
     _compiled_decode_score = None
+
+_SIGNED_64_MAX = 2**63 - 1
+_BUFFER_INDEX_MAX = min(_SIGNED_64_MAX, sys.maxsize)
 
 BackendName = Literal["python", "cython"]
 
@@ -89,6 +93,17 @@ class CompiledSequenceKernel:
         self._targets: dict[tuple[sequence_pair.DirectInsertTarget, ...], array[int]] = {
             context.direct_targets: _target_buffer(context.direct_targets)
         }
+        size = problem.size
+        adjacency_size = size * size
+        self._workspace_buffers = (
+            array("q", [0]) * size,
+            bytearray(adjacency_size),
+            bytearray(adjacency_size),
+            array("q", [0]) * size,
+            array("q", [0]) * size,
+            array("q", [0]) * size,
+            array("q", [0]) * size,
+        )
 
     def score_state(
         self,
@@ -126,6 +141,7 @@ class CompiledSequenceKernel:
             self._weights,
             self._history,
             targets_buffer,
+            *self._workspace_buffers,
             self.problem.outline_height,
             self.context.history_outline[0],
             catalog.SORTER_MAX_REACH,
@@ -210,10 +226,83 @@ def build_sequence_kernel(
     problem: sequence_pair.PlacementProblem,
     context: sequence_pair.PlacementCostContext,
 ) -> SequenceKernel:
-    """Select the compiled backend when installed, otherwise the Python reference."""
-    if compiled_backend_available():
+    """Select the compiled backend only when its fixed-width domain is exact."""
+    if compiled_backend_available() and _compiled_inputs_are_safe(problem, context):
         return CompiledSequenceKernel(problem, context)
     return PythonSequenceKernel(problem, context)
+
+
+def _compiled_inputs_are_safe(
+    problem: sequence_pair.PlacementProblem,
+    context: sequence_pair.PlacementCostContext,
+) -> bool:
+    if any(type(value) is not float for value in context.net_weights):
+        return False
+    if any(type(value) is not float for value in context.history_summed_area):
+        return False
+
+    size = problem.size
+    history_width, history_height = context.history_outline
+    workspace_products = (
+        size * size,
+        size * 2,
+        len(context.net_pairs) * 2,
+        len(context.direct_targets) * 6,
+        (history_width + 1) * (history_height + 1),
+    )
+    if any(product > _BUFFER_INDEX_MAX for product in workspace_products):
+        return False
+    if problem.outline_height > _SIGNED_64_MAX or history_width > _SIGNED_64_MAX:
+        return False
+    if any(
+        value > _SIGNED_64_MAX
+        for target in context.direct_targets
+        for value in (
+            target.producer,
+            target.consumer,
+            target.producer_row,
+            target.consumer_row,
+            target.producer_span,
+            target.consumer_span,
+        )
+    ):
+        return False
+
+    dimensions = _conservative_dimensions(problem)
+    horizontal_span = sum(width + sequence_pair._MAX_GAP for width, _height in dimensions)
+    vertical_span = sum(height + sequence_pair._MAX_GAP for _width, height in dimensions)
+    geometry_intermediates = (
+        horizontal_span,
+        vertical_span,
+        horizontal_span + vertical_span,
+        sum(width * height for width, height in dimensions),
+        sequence_pair._MAX_GAP * sum(width + height for width, height in dimensions),
+    )
+    return all(value <= _SIGNED_64_MAX for value in geometry_intermediates)
+
+
+def _conservative_dimensions(
+    problem: sequence_pair.PlacementProblem,
+) -> tuple[tuple[int, int], ...]:
+    if not problem.variant_tables:
+        return problem.sizes
+    dimensions: list[tuple[int, int]] = []
+    for strip, variants in enumerate(problem.variant_tables):
+        default = variants[0]
+        base_width, base_height = problem.sizes[strip]
+        dimensions.append(
+            (
+                max(
+                    variant.box_width + base_width - default.box_width
+                    for variant in variants
+                ),
+                max(
+                    variant.box_height + base_height - default.box_height
+                    for variant in variants
+                ),
+            )
+        )
+    return tuple(dimensions)
 
 
 def _validate_stable_context(
