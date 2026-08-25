@@ -1,5 +1,5 @@
 # /// script
-# requires-python = ">=3.11"
+# requires-python = ">=3.14"
 # dependencies = ["UnityPy==1.25.3", "TypeTreeGeneratorAPI"]
 # ///
 """Extract the current DSP recipe and item tables from a game install.

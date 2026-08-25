@@ -9,7 +9,7 @@
 - Exact Python reference behavior and deterministic seeds remain authoritative.
 - No game-rule, routing, acceptance, or production-default changes.
 - Remove Python overhead before integrating Numba.
-- Numba output must match coordinates/windows/gaps/direct misses/HPWL/history/SearchEnergy exactly, including CPython 3.12 compensated summation.
+- Numba output must match coordinates/windows/gaps/direct misses/HPWL/history/SearchEnergy exactly, including CPython 3.14 compensated summation.
 - Pure-Python fallback remains available.
 - No timing thresholds in pytest.
 - Quality changes follow fresh per-height evidence after acceleration.

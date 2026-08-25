@@ -6,7 +6,7 @@ readme = "README.md"
 authors = [
     { name = "Daniel Berlin", email = "dberlin@dberlin.org" }
 ]
-requires-python = ">=3.12"
+requires-python = ">=3.14"
 dependencies = [
     # ortools provides BOTH the CP-SAT solver (layout) and, via its SCIP/HiGHS
     # backends, the MILP solver (rates).
@@ -16,7 +16,7 @@ dependencies = [
     # HiGHS symbols into the incompatible library (`ImportError: Symbol not
     # found: setLocalOptionValue`); import it second and it segfaults mid-solve,
     # which showed up as the whole suite exiting 139.
-    "ortools>=9.10",
+    "ortools>=9.15.6755",
     "httpx>=0.27",
     "pydantic>=2.13.4",
     "sympy>=1.14.0",
@@ -94,12 +94,12 @@ markers = [
 
 [tool.ruff]
 line-length = 100
-target-version = "py312"
+target-version = "py314"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
 
 [tool.mypy]
-python_version = "3.12"
+python_version = "3.14"
 strict = true
 files = ["src", "tests"]
