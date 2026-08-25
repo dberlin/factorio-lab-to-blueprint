@@ -702,21 +702,57 @@ sits one tile off the band by design. That is a distance no amount of band
 tuning buys cheaply -- which is why the escape is height, above, and not a wider
 corridor.
 
-## OPEN -- one collider question left; the other two are answered
+## RESOLVED -- the plant was loose because a tile was being read as 1.0 unit
 
 `geom.collide` is a normal check now: 443 assembler-on-assembler pairs became 2,
-and turning it on cost no coverage. The two that remain are both real and
-neither is guessable from where we stand.
+and turning it on cost no coverage. All three questions this entry opened are
+answered.
 
-**A Chemical Plant is packed too LOOSE.** Its collider needs 7x5 where
-`derive_footprint` says 9x5, so there is density to win back --
-`catalog.clearance` clamps to at least the footprint and leaves it. Taking it
-means trusting the collider over `blueprintBoxSize` for tile OCCUPANCY, not just
-for spacing, and those are different questions: occupancy decides which tiles a
-sorter anchor may sit on and where a belt may run, and the slot poses are the
-authority there rather than either box. Settling it needs the same treatment
-spacing got -- a measurement against real blueprints -- not an inference from
-the collider being smaller.
+**A Chemical Plant was packed too LOOSE, and the collider was not the culprit --
+the divisor was.** `derive_footprint` was `2 * ceil(box / 2) - 1`: a world-unit
+half-extent compared against tile centres **one unit** apart, when they are
+`GRID_ARC` = 1.2566 apart. It was also reading `blueprintBoxSize`, which the game
+computes from the LAST Build box and which is therefore the one box
+`buildColliders` excludes. The two errors point opposite ways, and on every
+footprint the corpus pins they cancel exactly -- assembler 3, Matrix Lab 5, Arc
+Smelter 3, Oil Refinery 3x7, Depot 3, Tesla Tower 1, Wind Turbine 3, Solar Panel
+3 -- which is why the old rule had a clean sheet and why this looked like a
+collider question. On the Chemical Plant they do not cancel: 8.20 with a unit
+tile is 9 tiles; 8.60 with a real tile is **7**.
+
+The rule is now `2 * ceil(e / GRID_ARC) - 1` over the collider AABB about the
+building's own centre, and it is still ALWAYS ODD, so buildings stay
+integer-centred and `tile_to_local_offset`'s half-tile branch stays unreachable.
+
+The occupancy-versus-spacing worry this entry raised was the right worry and it
+is settled by measurement, not by argument: **no building's `slotPoses` fall
+outside its own footprint under the new rule**, and for the assembler, Matrix
+Lab, Oil Refinery and Miniature Particle Collider they land *exactly* on the
+edge tile. `test_every_footprint_contains_every_slot_pose` holds that. The
+Chemical Plant's poses reach 1.59 tiles, needing 5; it now has 7. There was
+never occupancy to lose -- there were two tiles per plant of pure padding.
+
+Two further consequences, each an independent confirmation that the corrected
+rule is the right one rather than merely a smaller one:
+
+* `_FOOTPRINT_OVERRIDES` is **gone**. Both its entries were corrections to the
+  unit error. Sorters derive 1x1, and the Energy Exchanger derives 9x9 -- the
+  value `temple-of-effectiveness` bounds it at, where the old rule derived 11x11
+  and stacked 209 cells in a blueprint the game itself wrote.
+* `junction.make_splitter` was forcing 1x1 by hand against a catalog that said
+  3x1. A splitter's arms reach 1.19 and a tile is 1.2566, so 1x1 is what the
+  corrected rule derives. The hand-forcing is now a statement of intent rather
+  than a correction.
+
+The corpus arbitrates the source field as well as the divisor, which is what
+this entry asked for. `factory-quick-start-step-3-red-cube` holds twelve Oil
+Refineries and all eighteen machine-side sorter endpoints in it sit **three
+tiles** from a refinery centre along the building's own axis.
+`blueprintBoxSize` with the corrected divisor makes that refinery 3x5, which
+reaches two, so every one of those eighteen sorters would miss the machine it
+serves. The colliders make it 3x7.
+`test_the_corpus_puts_sorter_ends_three_tiles_from_an_oil_refinery_centre` is
+that measurement.
 
 **A Splitter one tile from a Tesla Tower collides** -- CONFIRMED from the game,
 and it is the plain pitch requirement it looked like. A splitter is a CROSS of

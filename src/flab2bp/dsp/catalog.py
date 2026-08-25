@@ -1009,9 +1009,16 @@ def oriented_footprint(item_id: int, yaw: float) -> tuple[int, int]:
     zero, so the turn is snapped rather than run through trigonometry -- the same
     reasoning, and the same snap, as :func:`flab2bp.layout.slots.to_local`.
 
-    Both extents are odd for everything placeable (``derive_footprint`` can only
-    return odd, and both override entries are odd too), so a rotated building
-    still has a tile at its centre and ``tile_to_local_offset`` stays exact.
+    Both extents are odd for everything placeable -- ``derive_footprint`` can
+    only return odd, and there is no override table any more -- so a rotated
+    building still has a tile at its centre and ``tile_to_local_offset`` stays
+    exact.
+
+    Swapping is exactly right rather than merely close, because the extents come
+    from an AABB taken about the building's OWN centre: turning such a box by a
+    quarter is the same box with its two horizontal extents exchanged.  That is
+    not true of the raw collider set, which is why :func:`clearance` sweeps the
+    corners instead of swapping.
     """
     w, h = footprint(item_id)
     return (h, w) if int(round(yaw / 90.0)) % 2 else (w, h)

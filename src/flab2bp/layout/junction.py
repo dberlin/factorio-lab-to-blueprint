@@ -120,11 +120,14 @@ def make_splitter(
 ) -> PlacedBuilding:
     """A junction at ``(x, y, z)``, ready for belts to attach to it.
 
-    ``width``/``height`` are 1 rather than the catalog's derived ``3x1``.  The
-    derived figure comes from the model's bounding box, but a splitter is
-    belt-integrated: it shares the tile of the belts it joins and excludes
-    nothing, so a 3-tile footprint would make the occupancy check reject
-    layouts the game accepts.
+    ``width``/``height`` are 1, which the catalog now agrees with: a splitter's
+    arms reach 1.19 world units and a tile is 1.2566, so it covers exactly one
+    tile centre.  This used to disagree with a catalog that derived ``3x1`` by
+    treating a tile as one world unit, and was forced by hand for the reason
+    that reading was wrong -- a splitter is belt-integrated, it shares the tile
+    of the belts it joins and excludes nothing, and a 3-tile footprint made the
+    occupancy check reject layouts the game accepts.  The hand-forcing stays as
+    the statement of intent; it is no longer a correction.
 
     ``carries_item`` is layout bookkeeping, matching the belts it joins, so the
     validator can attribute a junction to a lane.

@@ -401,8 +401,10 @@ Carried forward from the previous handoff, all still true:
 New today:
 
 - **Machine footprints that matter to the row model:** `arc-smelter` and
-  `assembling-machine-2` 3×3, `matrix-lab` 5×5, `chemical-plant` 9×5, **`oil-refinery` 3×7**.
+  `assembling-machine-2` 3×3, `matrix-lab` 5×5, `chemical-plant` 7×5, **`oil-refinery` 3×7**.
   That 4-tile spread against a sorter reach of 3 is what `57c3f3e` is about.
+  (The plant read 9×5 until the footprint rule stopped treating a tile as one
+  world unit; a tile is `GRID_ARC` = 1.2566.)
 - **Exactly 2 of 493 recipes consume an item they also produce:** `reforming-refine` and
   `x-ray-cracking`. Both are refined-oil/hydrogen. Any cycle bug will involve them.
 - **Sphere projection does not threaten power.** DSP compares a 3D chord between

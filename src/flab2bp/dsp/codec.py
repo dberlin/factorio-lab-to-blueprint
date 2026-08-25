@@ -174,11 +174,21 @@ def tile_to_local_offset(
 
     The even-footprint half-tile case is a different matter: it is
     **unreachable**, not verified.  ``catalog.derive_footprint`` returns
-    ``2 * ceil(box / 2) - 1``, always odd, and both entries in its override
-    table are odd too -- so ``width / 2 - 0.5`` is always the integer
-    ``(width - 1) / 2`` for anything that can be placed, and the corpus says
-    nothing about the branch.  ``test_no_catalog_footprint_is_even`` fails if
-    that ever stops being true.
+    ``2 * ceil(e / GRID_ARC) - 1``, which cannot be even, and there is no
+    override table left to smuggle one in -- so ``width / 2 - 0.5`` is always
+    the integer ``(width - 1) / 2`` for anything that can be placed, and the
+    corpus says nothing about the branch.
+    ``test_no_catalog_footprint_is_even`` fails if that ever stops being true.
+
+    That the branch stays unreachable is a **result**, not an accident waiting
+    to be corrected.  ``docs/BACKLOG.md`` once proposed making footprints the
+    spacing figure ``ceil(box / GRID_ARC)``, which is EVEN for an Assembling
+    Machine, on the ground that the right question is how far apart two of them
+    must be.  It is the right question -- and it already has an answer,
+    ``catalog.clearance``, which the packers use.  Answering it *here* as well
+    would put an assembler's centre on a half-tile, and across the geometry
+    corpus 3,038 of 3,038 buildings are integer-centred.  The game does not
+    write that geometry; neither may we.
     """
     return (x + width / 2.0 - 0.5, y + height / 2.0 - 0.5, float(z))
 
