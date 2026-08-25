@@ -308,8 +308,8 @@ def test_real_blueprints_fly_belts_over_buildings_and_always_clear_them() -> Non
                     continue
                 pose = C.flat_pose(other.x, other.y, other.z, other.yaw)
                 if not any(
-                    C._horizontally_inside(probe, box)
-                    for box in C._target_boxes(other, *pose)
+                    C.probe_inside_footprint(probe, box)
+                    for box in C.target_boxes(other, *pose)
                 ):
                     continue
                 if not C.belt_crossings([belt], [other], directly_over_only=True):
@@ -324,3 +324,131 @@ def test_real_blueprints_fly_belts_over_buildings_and_always_clear_them() -> Non
                     f"collider without clearing it"
                 )
     assert clear >= 20, clear
+
+
+# --- the lateral half: the excusal, and what it must and must not let through
+
+
+def _previews(name: str) -> list[C.Preview]:
+    """A fixture as the paste sees it, at the coordinates the game recorded.
+
+    No rounding into tile space.  `tests/layout/test_validate.py` asks the same
+    question of a `Placement`, which HAS been rounded; only this one is a test
+    of the rule rather than of the rounding.
+    """
+    raw = decode(fixture_text(name)).buildings
+    return [
+        C.Preview(
+            b.model_index,
+            b.x,
+            b.y,
+            float(b.z),
+            b.yaw,
+            is_belt=cat.is_belt(b.item_id),
+            is_inserter=cat.is_sorter(b.item_id),
+            is_splitter=b.item_id == cat.SPLITTER_ID,
+            is_belt_addon=_is_addon(b.item_id),
+            output=b.output_obj_idx if b.output_obj_idx >= 0 else None,
+            input=b.input_obj_idx if b.input_obj_idx >= 0 else None,
+        )
+        for b in raw
+    ]
+
+
+def _is_addon(item_id: int) -> bool:
+    try:
+        return cat.building(item_id).is_belt_addon
+    except KeyError:
+        return False
+
+
+@pytest.mark.parametrize("name", SINGLE_AREA_FIXTURES)
+def test_the_excused_verdict_convicts_no_belt_the_game_itself_placed(name: str) -> None:
+    """The negative control the lateral half was blocked on.
+
+    Raw, the 0.23 probe flags 1189 belts across the fixture corpus in blueprints
+    the game wrote.  With the paste's own excusals -- three belt hops either way
+    to the building the run reaches, a Splitter's linked previews, and a run that
+    ends in a building -- it must flag none.  That is the whole claim, and this
+    is what would falsify it.
+    """
+    previews = _previews(name)
+    hits = C.belt_collisions(previews)
+    named = [
+        (i, j, cat.building(decode(fixture_text(name)).buildings[j].item_id).name)
+        for i, j in hits[:5]
+    ]
+    assert not hits, named
+
+
+def test_the_excusal_is_what_makes_the_corpus_clean_not_the_geometry() -> None:
+    """Mutation control: break the excusal and the same fixtures convict.
+
+    Without this the test above could pass because nothing overlaps at all.  It
+    is the one fixture with Splitters in it, and every belt beside one of them
+    grazes its 1.19-unit arm by 0.16 of the 0.23 probe.
+    """
+    previews = _previews("factory-quick-start-step-3-red-cube")
+    assert not C.belt_collisions(previews)
+    stripped = [
+        C.Preview(
+            p.model_index,
+            p.x,
+            p.y,
+            p.z,
+            p.yaw,
+            is_belt=p.is_belt,
+            is_inserter=p.is_inserter,
+            is_splitter=p.is_splitter,
+            is_belt_addon=p.is_belt_addon,
+        )
+        for p in previews
+    ]
+    assert len(C.belt_collisions(stripped)) >= 20
+
+
+def test_a_belt_is_excused_three_hops_from_what_its_run_reaches_and_no_further() -> None:
+    """`CheckBuildConditions` 147451, at its exact reach.
+
+    Only the four tiles orthogonally adjacent to a Splitter graze its 1.19-unit
+    arm, so the run is bent into a U to put a THIRD one of them four hops down
+    the chain.  Belt 1 touches the splitter and outputs into it; belt 3 reaches
+    it on the third hop and is excused; belt 5 reaches it on the fifth and is
+    not.  Belts 2 and 4 sit on the diagonal, 0.635 units clear, and are not hits
+    at all -- which is what makes the difference between 3 and 5 the excusal's
+    and not the geometry's.
+    """
+    where = {1: (1, 0), 2: (1, 1), 3: (0, 1), 4: (-1, 1), 5: (-1, 0)}
+    previews = [C.Preview(_SPLITTER, 0.0, 0.0, 0.0, is_splitter=True)]
+    for n, (x, y) in where.items():
+        previews.append(
+            C.Preview(_BELT_MK3, float(x), float(y), 0.0, is_belt=True, output=n - 1)
+        )
+    assert C.belt_collisions(previews) == [(5, 0)]
+
+    # Every one of the three that touches it is a hit without the links: that is
+    # what the chain is doing, and 1 and 3 are not simply out of range.
+    stripped = [
+        C.Preview(
+            p.model_index, p.x, p.y, p.z, is_belt=p.is_belt, is_splitter=p.is_splitter
+        )
+        for p in previews
+    ]
+    assert C.belt_collisions(stripped) == [(1, 0), (3, 0), (5, 0)]
+
+
+def test_a_belt_beside_a_machine_it_has_nothing_to_do_with_still_collides() -> None:
+    """The rule must not have been widened into a licence."""
+    assert C.belt_collisions(
+        [
+            C.Preview(_ASSEMBLER_2, 0.0, 0.0, 0.0),
+            C.Preview(_BELT_MK3, 1.0, 0.0, 0.0, is_belt=True),
+        ]
+    ) == [(1, 0)]
+    # ... and one hop away it is excused, which is the clause at 147492.
+    assert not C.belt_collisions(
+        [
+            C.Preview(_ASSEMBLER_2, 0.0, 0.0, 0.0),
+            C.Preview(_BELT_MK3, 1.0, 0.0, 0.0, is_belt=True, output=0),
+        ]
+    )

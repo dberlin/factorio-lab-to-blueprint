@@ -38,6 +38,7 @@ from flab2bp.layout.validate import (
     validate,
 )
 from flab2bp.spec import BuildSpec, MachineGroup, ProliferatorMode
+from tests.dsp.test_local_offset import GEOMETRY_CORPUS
 
 ASSEMBLER = 2304  # Assembling Machine Mk.II, 4x4
 SMELTER = 2302  # Arc Smelter, 3x3
@@ -269,10 +270,16 @@ def test_geom_collide_runs_by_default_now_that_the_layout_passes_it() -> None:
     it on cost no coverage, so it is a normal check and a collision is a refusal.
     Nothing may go back into ``OPT_IN`` without a measurement of what leaving it
     on would cost.
+
+    ``game.belt_collide`` is in there on exactly that measurement, and the two
+    are the same story one step apart: a Splitter's footprint is 1x1 against a
+    2.38-unit collider, so both strategies route belts one tile from one and the
+    check refuses them.  See :data:`OPT_IN` for the numbers.  It comes out the
+    way ``geom.collide`` did -- by fixing the spacing, not by widening a bound.
     """
     from flab2bp.layout.validate import OPT_IN
 
-    assert set() == OPT_IN
+    assert {"game.belt_collide"} == OPT_IN
     r = validate(place(machine(0, 0), machine(3, 0)))
     assert "geom.collide" in r.checks_run
     assert "geom.collide" not in r.skipped
@@ -1937,28 +1944,46 @@ def test_flow_lane_attribution_clean_on_single_item_lanes() -> None:
 
 
 def decode_fixture_to_placement(name: str) -> Placement:
-    """Round a real blueprint into tile space, dropping what has no footprint."""
+    """Round a real blueprint into tile space, dropping what has no footprint.
+
+    The belt links come across too, remapped onto the surviving indices.  They
+    are not decoration: ``game.belt_crossing`` excuses a belt against a building
+    its own run reaches, so a placement with the links stripped would convict
+    every belt that ends at a machine and the negative control would be a test
+    of the stripping rather than of the rule.  A link into something this drops
+    (a sorter, a belt addon) becomes ``None``, which is the honest reading -- the
+    game would see the preview and this placement does not contain it.
+    """
     from flab2bp.dsp import catalog
     from flab2bp.dsp.codec import decode
 
     text = (Path("tests/fixtures") / f"{name}.txt").read_text()
-    out: list[PlacedBuilding] = []
-    for b in decode(text).buildings:
+    raw = decode(text).buildings
+
+    def usable(item_id: int) -> bool:
         try:
-            info = catalog.building(b.item_id)
+            info = catalog.building(item_id)
         except KeyError:
-            continue
-        if not info.occupies_tiles or catalog.is_sorter(b.item_id):
-            continue
+            return False
+        return info.occupies_tiles and not catalog.is_sorter(item_id)
+
+    kept = [i for i, b in enumerate(raw) if usable(b.item_id)]
+    keep = {old: new for new, old in enumerate(kept)}
+    out: list[PlacedBuilding] = []
+    for i in kept:
+        b = raw[i]
+        info = catalog.building(b.item_id)
         out.append(
             PlacedBuilding(
                 item_id=b.item_id,
                 model_index=b.model_index,
                 x=round(b.x - info.width / 2 + 0.5),
                 y=round(b.y - info.height / 2 + 0.5),
-                z=Fraction(round(b.z * 2)),
+                z=Fraction(round(b.z * 2), 2),
                 width=info.width,
                 height=info.height,
+                output_obj=keep.get(b.output_obj_idx),
+                input_obj=keep.get(b.input_obj_idx),
             )
         )
     return Placement(buildings=tuple(out))
@@ -3285,10 +3310,48 @@ def test_belt_crossing_names_the_height_it_needs() -> None:
     assert f.detail["needs_z_above"] == "3.5325"
 
 
-@pytest.mark.parametrize("name", GEOMETRY_SAFE_FIXTURES)
-def test_real_blueprint_has_no_belt_crossing_findings(name: str) -> None:
-    """Negative control: the game's own blueprints must survive the rule."""
+#: Every fixture whose coordinates survive rounding into tile space, so that a
+#: finding against one is about the RULE and not about the rounding.  The union
+#: of the two derived sets the repository already keeps: `GEOMETRY_SAFE_FIXTURES`
+#: (integer-centred, cardinal yaw) and `test_local_offset.GEOMETRY_CORPUS`
+#: (that, plus no two buildings collapsing onto one cell).  The four excluded
+#: fixtures are latitude-distorted -- `heretical-smelter-block` alone puts 376
+#: of its 591 buildings off the half-grid -- and rounding those puts belts inside
+#: machines before any rule is applied.  `tests/dsp/test_colliders.py` asks the
+#: same question of all five single-area fixtures at their RAW coordinates,
+#: which is the control that does not depend on this choice at all.
+BELT_CROSSING_CONTROL = tuple(dict.fromkeys(GEOMETRY_SAFE_FIXTURES + GEOMETRY_CORPUS))
+
+
+@pytest.mark.parametrize("name", BELT_CROSSING_CONTROL)
+@pytest.mark.parametrize("cid", ["game.belt_crossing", "game.belt_collide"])
+def test_real_blueprint_has_no_belt_crossing_findings(cid: str, name: str) -> None:
+    """Negative control: the game's own blueprints must survive the rule.
+
+    Both strengths of it.  `game.belt_collide` is the one that matters -- it is
+    the lateral half, the half that used to flag 1189 belts here.
+    """
     p = decode_fixture_to_placement(name)
     assert p.buildings, "fixture decoded to nothing"
-    r = validate(p, only={"game.belt_crossing"})
-    assert not r.by_check("game.belt_crossing"), [f.message for f in r.findings[:5]]
+    r = validate(p, only={cid})
+    assert not r.by_check(cid), [f.message for f in r.findings[:5]]
+
+
+def test_belt_crossing_control_is_not_vacuous() -> None:
+    """The control fixtures DO contain belts beside and over real colliders.
+
+    Without this the negative control above could pass on blueprints that never
+    put a belt near anything.  Stripping the preview links -- the excusal's only
+    input -- must convict, on the very fixtures the rule clears.
+    """
+    total = 0
+    for name in BELT_CROSSING_CONTROL:
+        p = decode_fixture_to_placement(name)
+        blind = Placement(
+            buildings=tuple(
+                dataclasses.replace(b, output_obj=None, input_obj=None) for b in p.buildings
+            )
+        )
+        r = validate(blind, only={"game.belt_collide"})
+        total += len(r.by_check("game.belt_collide"))
+    assert total >= 20, total

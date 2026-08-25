@@ -721,7 +721,20 @@ NEEDS_SPEC: set[str] = set()
 #:
 #: Anything put back in here needs the same shape of evidence: a measurement of
 #: what it costs to leave on, not a note that it is inconvenient.
-OPT_IN: set[str] = set()
+#:
+#: ``game.belt_collide`` is here on exactly that evidence, and for exactly the
+#: shape of defect ``geom.collide`` was here for.  It is the paste's whole belt
+#: rule, lateral half included, and it is clean on the corpus: zero findings on
+#: every single-area fixture, against 1189 for the same geometry with nothing
+#: excused.  On our own output it turns 15 ``spine`` tests red -- the strategy's
+#: own self-check refuses every plan it emits for ``magnetic-ring``,
+#: ``quantum-chip/no-proliferator`` and ``free-proliferation`` -- because a
+#: Splitter's
+#: ``catalog.footprint`` is 1x1 against a 2.38-unit collider and both strategies
+#: therefore route belts one tile from one.  Spacing is what fixed
+#: ``geom.collide``; the same fix -- steps 1 and 2 of the "our footprints are a
+#: tile grid" backlog entry -- is what takes this out of here.
+OPT_IN: set[str] = {"game.belt_collide"}
 
 #: Check ids whose COVERAGE depends on matching each placed machine to the spec
 #: group it realises.  When any machine cannot be matched, these checks still
@@ -1724,14 +1737,6 @@ def _addon_supply(ctx: Context) -> Iterable[Finding]:
             )
 
 
-def _stacks(item_id: int) -> bool:
-    """``PrefabDesc.multiLevel`` -- may another building stand on this one."""
-    try:
-        return bool(cat.building(item_id).multi_level)
-    except KeyError:
-        return False
-
-
 @check("game.belt_crossing")
 def _belt_crossing(ctx: Context) -> Iterable[Finding]:
     """A belt over a building must clear its build collider -- and it may.
@@ -1764,65 +1769,86 @@ def _belt_crossing(ctx: Context) -> Iterable[Finding]:
     over a machine is an ordinary box-against-box question, and ``geom.collide``
     is where it is asked.
 
-    Scope, and why it is a LOWER bound on what the game rejects.
+    THE LATERAL HALF IS NOT ASKED HERE.  It exists now -- the excusal that made
+    it tractable was found, and ``game.belt_collide`` below is the same rule
+    without this narrowing -- but that check is in :data:`OPT_IN` and this one is
+    not, so this one keeps the narrowing it always had: only belts whose probe
+    centre stands INSIDE a collider's footprint, and only above it.
 
-    * Only belts directly OVER a collider's footprint, and only where the belt
-      is higher than the building it passes over.  A belt level with or below a
-      building is the lateral question, and there the same test contradicts
-      blueprints the game wrote: it flags the belt that runs through a Storage
-      Tank in ``factory-quick-start-step-3-red-cube`` and every belt a Splitter
-      sits on, both already recorded on ``geom.overlap`` as real.  Something
-      excuses those that this port has not found -- ``BuildTool_Path`` line
-      157683 excuses the first and last two nodes of a drag against the object
-      they connect to, and three for a station, but the paste has no such clause
-      and previews carry no drag index.  This check does not pretend to it.
+    What HAS changed is that the excusals now apply here too, which can only
+    make this weaker and more correct: a belt over the building its own run
+    reaches is no longer convicted for reaching it.
+
+    Scope, and where it is still a LOWER bound.
+
     * Sorters and belt addons are left out entirely because the game excuses
-      them (lines 145871 and 145885); belt on belt is
+      them (145871 and ``AddonPass`` at 145885/147454); belt on belt is
       ``geom.belt_single_occupancy``'s question, not this one.
-    * ``multiLevel`` buildings are left out.  The game lets another building
-      stand ON a Splitter, Depot, Storage Tank, Matrix Lab or Spray Coater, and
-      their belt ports rise with the stack -- so a belt one level above one of
-      those is a connection, not a crossing, and the corpus is full of them.
     * ``catalog.LOW_CONFIDENCE_FOOTPRINTS`` is left out, for the reason already
-      recorded there: those colliders do not reproduce real blueprints.
+      recorded there.
+    * ``multiLevel`` buildings are left out HERE, because a belt one level above
+      a Splitter or Storage Tank is on its raised port rather than crossing it
+      and this check cannot tell the two apart.  ``game.belt_collide`` can: the
+      connection is what excuses it there, so it needs no such guess.
 
-    Negative control: zero findings on both ``catalog.GEOMETRY_SAFE_FIXTURES``.
-    Not vacuous -- over the single-area fixtures 42 belts pass over a collider
-    and clear it, and every remaining pair that does NOT clear is one of the two
-    excluded classes above.
+    Negative control: zero findings on ``catalog.GEOMETRY_SAFE_FIXTURES`` and on
+    the derived ``test_local_offset.GEOMETRY_CORPUS``.  Not vacuous -- 133 belts
+    in the single-area fixtures pass over or under a collider and clear it, and
+    the positive controls in ``tests/layout/test_validate.py`` still fire.
     """
+    yield from _belt_collide_findings(ctx, "game.belt_crossing", crossings_only=True)
+
+
+@check("game.belt_collide")
+def _belt_collide(ctx: Context) -> Iterable[Finding]:
+    """The same rule with the LATERAL half on: a belt beside a building, too.
+
+    ``game.belt_crossing`` above is this check narrowed to belts standing over a
+    collider's footprint.  The narrowing was never part of the game's rule; it
+    was there because the excusal that makes the lateral half tractable had not
+    been found.  It has, and it is the pass at 147257 --
+    :func:`flab2bp.dsp.colliders.belt_collisions` holds it with the C#.
+
+    WHY THIS IS IN :data:`OPT_IN` AND ``game.belt_crossing`` IS NOT, with the
+    measurement OPT_IN asks for.  On the fixture corpus it is clean: zero
+    findings on every single-area fixture, against 1189 for the same geometry
+    with nothing excused.  On OUR OWN output it is not, and the reason is the
+    defect the backlog entry this came from exists to fix.  A Splitter's
+    ``catalog.footprint`` is 1x1; its build collider is a 2.38-unit cross, which
+    needs two tiles.  So both strategies route belts one tile from a Splitter --
+    at ground level and, on ramps, one level up, where the probe still catches
+    the 1.19-unit arm by 0.16 of its 0.23 radius.  Turning this on turns 15
+    ``spine`` tests red -- ``magnetic-ring``, ``quantum-chip/no-proliferator``
+    and ``free-proliferation`` -- because the strategy's own self-check then
+    refuses every plan it emits.  That is a ROUTER bug, not a rule bug: the belt
+    needs
+    ``z > 1.7475`` or one more tile of clearance, and neither is this check's to
+    arrange.  Fix the footprints (steps 1 and 2 of the entry) and this comes on
+    by name first, then by default.
+    """
+    yield from _belt_collide_findings(ctx, "game.belt_collide", crossings_only=False)
+
+
+def _belt_collide_findings(
+    ctx: Context, cid: str, *, crossings_only: bool
+) -> Iterable[Finding]:
+    """The paste's belt verdict, optionally narrowed to the crossing question."""
     bs = ctx.placement.buildings
-    belts = [
-        (i, dsp_colliders.Placed(b.model_index, *codec.tile_to_local_offset(
-            b.x, b.y, b.z, b.width, b.height
-        ), b.yaw))
-        for i, b in enumerate(bs)
-        if ctx.kinds[i] is Kind.BELT
-    ]
-    under = [
-        (i, dsp_colliders.Placed(b.model_index, *codec.tile_to_local_offset(
-            b.x, b.y, b.z, b.width, b.height
-        ), b.yaw))
-        for i, b in enumerate(bs)
-        if ctx.kinds[i] not in (Kind.BELT, Kind.SORTER, Kind.ADDON)
-        and b.item_id not in cat.LOW_CONFIDENCE_FOOTPRINTS
-        and not _stacks(b.item_id)
-    ]
-    if not belts or not under:
+    previews = _paste_previews(ctx)
+    if not any(p.is_belt for p in previews):
         return
-    pairs = dsp_colliders.belt_crossings(
-        [p for _i, p in belts], [p for _i, p in under], directly_over_only=True
-    )
-    for a, c in pairs:
-        ia, ba = belts[a]
-        ic, bc = under[c]
-        if bs[ia].z <= bs[ic].z:
+    for ia, ic in dsp_colliders.belt_collisions(previews):
+        if bs[ic].item_id in cat.LOW_CONFIDENCE_FOOTPRINTS:
             continue
-        need = dsp_colliders.belt_crossing_height(bc.model_index) + float(bs[ic].z)
+        over = _probe_inside(previews[ia], previews[ic]) and bs[ia].z > bs[ic].z
+        if crossings_only and (not over or _stacks(bs[ic].item_id)):
+            continue
+        need = dsp_colliders.belt_crossing_height(bs[ic].model_index) + float(bs[ic].z)
+        how = "passes over" if over else "grazes"
         yield Finding(
-            "game.belt_crossing",
+            cid,
             Severity.ERROR,
-            f"belt at ({ba.x}, {ba.y}) z={bs[ia].z} passes over "
+            f"belt at ({bs[ia].x}, {bs[ia].y}) z={bs[ia].z} {how} "
             f"{cat.building(bs[ic].item_id).name} at ({bs[ic].x}, {bs[ic].y}) "
             f"without clearing its build collider; the game needs z > {need:.4f}",
             (ia, ic),
@@ -1832,6 +1858,57 @@ def _belt_crossing(ctx: Context) -> Iterable[Finding]:
                 "under": str((bs[ic].x, bs[ic].y, str(bs[ic].z))),
             },
         )
+
+
+def _stacks(item_id: int) -> bool:
+    """``PrefabDesc.multiLevel`` -- may another building stand on this one.
+
+    Only ``game.belt_crossing`` asks: the game lets a building stand ON a
+    Splitter, Depot, Storage Tank, Matrix Lab or Spray Coater, and their belt
+    ports rise with the stack, so a belt a level above one is a connection
+    rather than a crossing.  ``game.belt_collide`` does not need the guess --
+    the connection is what excuses it there.
+    """
+    try:
+        return bool(cat.building(item_id).multi_level)
+    except KeyError:
+        return False
+
+
+def _paste_previews(ctx: Context) -> tuple[dsp_colliders.Preview, ...]:
+    """This placement as the paste sees it: world poses plus the preview graph.
+
+    Index-preserving, because a ``Finding`` names building indices and because
+    the excusal at 147451 is expressed in preview links, which are indices too.
+    """
+    return tuple(
+        dsp_colliders.Preview(
+            b.model_index,
+            *codec.tile_to_local_offset(b.x, b.y, b.z, b.width, b.height),
+            b.yaw,
+            is_belt=ctx.kinds[i] is Kind.BELT,
+            is_inserter=ctx.kinds[i] is Kind.SORTER,
+            is_splitter=ctx.kinds[i] is Kind.SPLITTER,
+            is_belt_addon=ctx.kinds[i] is Kind.ADDON,
+            output=b.output_obj,
+            input=b.input_obj,
+        )
+        for i, b in enumerate(ctx.placement.buildings)
+    )
+
+
+def _probe_inside(belt: dsp_colliders.Preview, other: dsp_colliders.Preview) -> bool:
+    """Whether the belt's probe centre is inside ``other``'s collider footprint.
+
+    Only decides the wording of a finding: "passes over" reads wrong for a belt
+    that grazes a collider from beside it.
+    """
+    probe = dsp_colliders.belt_probe(belt.x, belt.y, belt.z)
+    pose = dsp_colliders.flat_pose(other.x, other.y, other.z, other.yaw)
+    return any(
+        dsp_colliders.probe_inside_footprint(probe, box)
+        for box in dsp_colliders.target_boxes(other, *pose)
+    )
 
 
 @check("sorter.filter")
