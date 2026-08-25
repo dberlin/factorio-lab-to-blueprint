@@ -30,7 +30,7 @@ from enum import Enum, StrEnum
 from fractions import Fraction
 
 from flab2bp.dsp import catalog as cat
-from flab2bp.dsp import codec, colliders
+from flab2bp.dsp import codec, colliders, params
 from flab2bp.dsp import colliders as dsp_colliders
 from flab2bp.layout import junction as junc
 from flab2bp.layout import slots
@@ -66,10 +66,18 @@ class Finding:
 class Report:
     findings: tuple[Finding, ...]
     #: Check ids that were evaluated.
+    #: Check ids that were evaluated -- and evaluated over EVERYTHING they claim
+    #: to cover.  A check listed here and carrying no finding is a real pass.
     checks_run: tuple[str, ...] = ()
-    #: Check ids that could NOT be evaluated, and are therefore neither passed
-    #: nor failed.  Surfaced explicitly so an unvalidated build never reads as a
-    #: clean one.
+    #: Check ids that could not be evaluated, in whole or in part, and whose
+    #: silence therefore means nothing.  Surfaced explicitly so an unvalidated
+    #: build never reads as a clean one.
+    #:
+    #: "In part" is the half that had to be added.  A check that ran over most
+    #: of a placement and hit one machine it could not resolve used to sit in
+    #: ``checks_run`` looking like a pass -- see :data:`NEEDS_GROUPS`.  Such a
+    #: check still produces findings, and they still count; what it may not do
+    #: is claim coverage it did not have.
     skipped: tuple[str, ...] = ()
 
     @property
@@ -123,6 +131,14 @@ class Kind(Enum):
     OTHER = "other"
 
 
+#: DSP item ids of the buildings a MODE configures rather than a recipe -- the
+#: Energy Exchanger and the Ray Receiver.  Derived from the catalog registry so
+#: adding a mode there cannot leave this behind.
+MODE_DRIVEN_ITEM_IDS = frozenset(
+    entry.machine_item_id for entry in cat.MODE_DRIVEN_MACHINE.values()
+)
+
+
 def _kind(b: PlacedBuilding) -> Kind:
     if cat.is_belt(b.item_id):
         return Kind.BELT
@@ -134,11 +150,37 @@ def _kind(b: PlacedBuilding) -> Kind:
         info = cat.building(b.item_id)
     except KeyError:
         return Kind.OTHER
+    # A mode-driven building is BOTH: DSP gives an Energy Exchanger a cover
+    # radius of 7 and a Ray Receiver one of 10.5, and both also consume and
+    # produce items on belts like any other machine.  `Kind` has room for one
+    # answer, and the machine half is the one every check downstream needs --
+    # `Kind.POWER`'s only consumer is `_tower_centres`, which asks the catalog
+    # directly now.  Answering POWER here is what made an entire class of
+    # machine invisible to ten checks: they iterate `Kind.MACHINE`, so the
+    # exchanger was never handed to any of them and every one of them reported
+    # as having run.
+    if b.item_id in MODE_DRIVEN_ITEM_IDS:
+        return Kind.MACHINE
     if info.cover_radius > 0:
         return Kind.POWER
     if info.is_belt_addon:
         return Kind.ADDON
     return Kind.MACHINE
+
+
+def _supplies_power(b: PlacedBuilding) -> bool:
+    """Whether this building is a node of the power network.
+
+    The catalog fact, asked directly rather than inferred from ``Kind``.  It is
+    the same predicate ``_kind`` used to decide ``Kind.POWER`` with, so the set
+    of towers is unchanged -- see
+    ``test_the_set_of_power_nodes_is_unchanged_by_the_reclassification``, which
+    holds the two together over the whole catalog.
+    """
+    try:
+        return cat.building(b.item_id).cover_radius > 0
+    except KeyError:
+        return False
 
 
 #: Kinds that draw power.  Belts are unpowered in DSP; power nodes supply rather
@@ -213,6 +255,7 @@ class _Cache:
 
     of_kind: dict[Kind, tuple[tuple[int, PlacedBuilding], ...]] = field(default_factory=dict)
     group_for: dict[int, MachineGroup | None] = field(default_factory=dict)
+    unresolved_machines: tuple[int, ...] | None = None
     recipe_names: dict[int, str] | None = None
     item_names: dict[int, str] | None = None
     tower_centres: list[tuple[int, Fraction, Fraction, Fraction, Fraction]] | None = None
@@ -388,10 +431,43 @@ class Context:
         cached[index] = got = self._group_for(index)
         return got
 
+    def unresolved_machines(self) -> tuple[int, ...]:
+        """Placed machines this Context cannot match to a group in the spec.
+
+        Nine checks answer their question by asking what a machine is supposed
+        to be doing, and every one of them opened with ``if g is None:
+        continue``.  That turns "I could not tell" into "I found nothing wrong",
+        which is the one answer a validator must never give silently -- so the
+        set is computed once, reported as an ERROR by ``machine.group_resolved``
+        and used by :func:`validate` to keep those ten checks out of
+        ``checks_run``.
+        """
+        got = self.cache.unresolved_machines
+        if got is None:
+            got = tuple(
+                i for i, _ in self.of_kind(Kind.MACHINE) if self.group_for(i) is None
+            )
+            self.cache.unresolved_machines = got
+        return got
+
+    def recipe_of(self, index: int) -> str | None:
+        """The FactorioLab recipe id a placed machine runs, if determinable.
+
+        One door for the question "what is this machine supposed to be doing",
+        so a caller cannot accidentally ask the half of it that skips a
+        mode-driven machine.  ``prolif.belt_required_edges_not_direct_inserted``
+        asked ``recipe_name(b.recipe_id)`` directly and was the ninth check to
+        lose sight of an exchanger this way.
+        """
+        g = self.group_for(index)
+        return None if g is None else g.recipe_id
+
     def _group_for(self, index: int) -> MachineGroup | None:
         if self.spec is None or self.ids is None:
             return None
         b = self.placement.buildings[index]
+        if b.item_id in MODE_DRIVEN_ITEM_IDS:
+            return self._mode_driven_group(b)
         name = self.recipe_name(b.recipe_id)
         if name is None:
             return None
@@ -399,6 +475,38 @@ class Context:
             if g.recipe_id == name:
                 return g
         return None
+
+    def _mode_driven_group(self, b: PlacedBuilding) -> MachineGroup | None:
+        """The group a mode-driven machine realises, keyed by building and mode.
+
+        There is no recipe id to look up and there never was: DSP has no recipe
+        for a MODE, so ``catalog.recipe_id`` raises for one and
+        ``pipeline._id_map`` carries no entry.  What identifies the machine is
+        the pair the placement does carry -- which building it is, and which
+        mode its parameter block selects.
+
+        The parameter block is part of the key rather than a tie-break.  Charge
+        and discharge run on the same Energy Exchanger and their item flows are
+        exact opposites, so matching on the building alone could hand a
+        charging machine the discharging group's ingredients and call it
+        supplied.
+
+        Returns ``None`` when the pair does not single a group out -- a spec
+        holding both Ray Receiver photon recipes is the real case, since the
+        Graviton Lens that separates them is an ITEM the receiver consumes and
+        not a different setting, so both emit the same block.  Guessing between
+        them would be a fallback; the caller is required to treat ``None`` as
+        "could not be evaluated", never as "nothing wrong here".
+        """
+        assert self.spec is not None
+        matched = [
+            g
+            for g in self.spec.groups
+            if (entry := cat.MODE_DRIVEN_MACHINE.get(g.recipe_id)) is not None
+            and entry.machine_item_id == b.item_id
+            and params.parameters_for(g.recipe_id) == b.parameters
+        ]
+        return matched[0] if len(matched) == 1 else None
 
 
 def _occupied_tiles(b: PlacedBuilding, kind: Kind) -> list[tuple[int, int, Fraction]]:
@@ -615,12 +723,33 @@ NEEDS_SPEC: set[str] = set()
 #: what it costs to leave on, not a note that it is inconvenient.
 OPT_IN: set[str] = set()
 
+#: Check ids whose COVERAGE depends on matching each placed machine to the spec
+#: group it realises.  When any machine cannot be matched, these checks still
+#: run and their findings still stand -- but they are reported in
+#: ``Report.skipped`` rather than ``Report.checks_run``, because they did not
+#: examine everything they claim to cover and their silence proves nothing.
+#:
+#: The membership is not a judgement call.  It is every check that reaches
+#: ``Context.group_for``, transitively, through this module's own call graph.
+#: That is TEN checks where the defect report named three: three call it
+#: directly, five arrive through ``_lane_balance``, ``_sorter_demand``,
+#: ``_run_demand`` and ``_sorter_item``, and two -- ``spec.machine_counts`` and
+#: ``prolif.belt_required_edges_not_direct_inserted`` -- resolved a machine
+#: through the raw recipe id instead and now go through ``recipe_of``.
+#: ``test_every_check_that_consults_group_for_declares_it`` recomputes that
+#: closure and fails if this set drifts from it.
+NEEDS_GROUPS: set[str] = set()
 
-def check(cid: str, *, needs_spec: bool = False) -> Callable[[Check], Check]:
+
+def check(
+    cid: str, *, needs_spec: bool = False, needs_groups: bool = False
+) -> Callable[[Check], Check]:
     def register(fn: Check) -> Check:
         CHECKS[cid] = fn
         if needs_spec:
             NEEDS_SPEC.add(cid)
+        if needs_groups:
+            NEEDS_GROUPS.add(cid)
         return fn
 
     return register
@@ -2018,7 +2147,17 @@ def _tower_centres(ctx: Context) -> list[tuple[int, Fraction, Fraction, Fraction
     if cached is not None:
         return cached
     out: list[tuple[int, Fraction, Fraction, Fraction, Fraction]] = []
-    for i, b in ctx.of_kind(Kind.POWER):
+    # Selected on the catalog fact rather than on `Kind`, because a mode-driven
+    # machine is a power node AND a machine and `Kind` can only say one.  Still
+    # walked in placement order, because `power.connectivity` roots its BFS at
+    # the first tower and reports the complement of THAT tower's component --
+    # reordering this list would change which towers a finding names.  POWER and
+    # MACHINE are the only kinds that can qualify: `_kind` decides BELT, SORTER
+    # and SPLITTER before it ever reads the radius, ADDON and OTHER only after
+    # the radius came back zero or absent.
+    for i, b in enumerate(ctx.placement.buildings):
+        if ctx.kinds[i] not in (Kind.POWER, Kind.MACHINE) or not _supplies_power(b):
+            continue
         info = cat.building(b.item_id)
         cx = Fraction(2 * b.x + b.width, 2)
         cy = Fraction(2 * b.y + b.height, 2)
@@ -2116,7 +2255,28 @@ def _connectivity(ctx: Context) -> Iterable[Finding]:
 
 @check("machine.recipe_valid")
 def _recipe_valid(ctx: Context) -> Iterable[Finding]:
+    """Every machine is configured -- by a recipe id, or by a mode block.
+
+    Exactly one of the two, never half of each: that is ``_machine_config``'s
+    contract, and this is where a placement is held to it.  A mode-driven
+    building carries ``recipe_id == 0`` legitimately -- an Energy Exchanger's
+    charge/discharge and a Ray Receiver's photon mode live in the parameter
+    block -- so demanding a recipe id of one would be a false error.  Demanding
+    NOTHING of one would be worse: an exchanger with neither pastes cleanly and
+    sits idle, which is the very failure this check is named for.
+    """
     for i, b in ctx.of_kind(Kind.MACHINE):
+        if b.item_id in MODE_DRIVEN_ITEM_IDS:
+            if not b.parameters:
+                yield Finding(
+                    "machine.recipe_valid",
+                    Severity.ERROR,
+                    f"machine {i} is mode-driven but carries no parameter block, so "
+                    f"no mode is selected; it would sit idle",
+                    (i,),
+                    {"item_id": b.item_id},
+                )
+            continue
         if b.recipe_id == 0:
             yield Finding(
                 "machine.recipe_valid",
@@ -2127,7 +2287,47 @@ def _recipe_valid(ctx: Context) -> Iterable[Finding]:
             )
 
 
-@check("machine.inputs_supplied", needs_spec=True)
+@check("machine.group_resolved", needs_spec=True)
+def _group_resolved(ctx: Context) -> Iterable[Finding]:
+    """Every placed machine matches a group in the spec it is supposed to realise.
+
+    This exists because the alternative is silence.  Ten checks -- three of
+    them ERROR checks -- answer their question by first asking what a machine is
+    supposed to be doing, and each of them opened with ``if g is None:
+    continue``.  A machine nothing could resolve was therefore not judged
+    leniently; it was not judged, while every one of those checks reported as
+    having run.  Measured on the code before this: a placement of two Energy
+    Exchangers and NOT ONE SORTER anywhere validated clean.
+
+    So the inability is reported once, here, as the ERROR it is -- one finding
+    per machine rather than nine, and a build that cannot be validated fails
+    rather than passing by default.  :data:`NEEDS_GROUPS` carries the other half
+    of the invariant: those ten checks leave ``checks_run`` while this is
+    outstanding.
+
+    It cannot fire on a machine whose recipe is in the spec, because the IdMap
+    is built from the spec's own groups -- so a finding here means one of two
+    real things: a placement holding a machine the spec never asked for, or a
+    mode-driven machine whose building-and-mode pair does not single out a
+    group.
+    """
+    assert ctx.spec is not None
+    bs = ctx.placement.buildings
+    for i in ctx.unresolved_machines():
+        b = bs[i]
+        yield Finding(
+            "machine.group_resolved",
+            Severity.ERROR,
+            f"machine {i} (item {b.item_id}, recipe id {b.recipe_id}, parameters "
+            f"{b.parameters!r}) matches no group in the spec, so nothing can say "
+            f"what it is meant to make; {len(NEEDS_GROUPS)} checks including "
+            f"machine.inputs_supplied and machine.output_removed cannot judge it",
+            (i,),
+            {"item_id": b.item_id, "recipe_id": b.recipe_id},
+        )
+
+
+@check("machine.inputs_supplied", needs_spec=True, needs_groups=True)
 def _inputs_supplied(ctx: Context) -> Iterable[Finding]:
     """Every ingredient has a sorter delivering it.
 
@@ -2298,7 +2498,7 @@ def _close_over_junctions(ctx: Context, seeds: set[int]) -> set[int]:
     return sourced
 
 
-@check("flow.lane_sourced", needs_spec=True)
+@check("flow.lane_sourced", needs_spec=True, needs_groups=True)
 def _lane_sourced(ctx: Context) -> Iterable[Finding]:
     """A belt run that feeds machines must itself be fed by something.
 
@@ -2623,7 +2823,7 @@ def _external_entry_points(ctx: Context) -> Iterable[Finding]:
         )
 
 
-@check("machine.output_removed", needs_spec=True)
+@check("machine.output_removed", needs_spec=True, needs_groups=True)
 def _output_removed(ctx: Context) -> Iterable[Finding]:
     """Every product has a sorter taking it away, or the machine jams."""
     assert ctx.spec is not None
@@ -2650,27 +2850,39 @@ def _output_removed(ctx: Context) -> Iterable[Finding]:
 # --- spec conformance ------------------------------------------------------
 
 
-@check("spec.machine_counts", needs_spec=True)
+@check("spec.machine_counts", needs_spec=True, needs_groups=True)
 def _machine_counts(ctx: Context) -> Iterable[Finding]:
+    """The placement holds the machines the spec asked for, and no others.
+
+    Counted by RESOLVED group rather than by the raw ``(recipe_id, item_id)``
+    pair the buildings carry.  The raw pair cannot count a mode-driven machine
+    at all: its recipe id is zero by design and the spec side has no numeric id
+    to compare against, so the group fell out as an unverifiable WARNING while
+    the placement side counted the exchangers under recipe 0 -- "spec demands 0,
+    placement has 2" for a spec that demands exactly 2.
+    """
     assert ctx.spec is not None and ctx.ids is not None
-    want: dict[tuple[int, int], int] = {}
+    want: dict[tuple[str, int], int] = {}
     for g in ctx.spec.groups:
-        rid = ctx.ids.recipes.get(g.recipe_id)
         mid = ctx.ids.items.get(g.machine_item_id)
-        if rid is None or mid is None:
+        if mid is None:
             yield Finding(
                 "spec.machine_counts",
                 Severity.WARNING,
-                f"no id mapping for recipe {g.recipe_id!r} / machine "
-                f"{g.machine_item_id!r}; cannot verify its count",
+                f"no id mapping for machine {g.machine_item_id!r}; cannot verify "
+                f"the count of {g.recipe_id!r}",
                 (),
                 {"recipe": g.recipe_id, "machine": g.machine_item_id},
             )
             continue
-        want[(rid, mid)] = want.get((rid, mid), 0) + g.count
-    got: dict[tuple[int, int], int] = {}
-    for _i, b in ctx.of_kind(Kind.MACHINE):
-        key = (b.recipe_id, b.item_id)
+        want[(g.recipe_id, mid)] = want.get((g.recipe_id, mid), 0) + g.count
+    got: dict[tuple[str, int], int] = {}
+    for i, b in ctx.of_kind(Kind.MACHINE):
+        name = ctx.recipe_of(i)
+        if name is None:
+            continue  # machine.group_resolved owns this, and this check is
+            # reported in `skipped` for it -- see NEEDS_GROUPS
+        key = (name, b.item_id)
         got[key] = got.get(key, 0) + 1
     for key in sorted(set(want) | set(got)):
         w, g_ = want.get(key, 0), got.get(key, 0)
@@ -2678,7 +2890,8 @@ def _machine_counts(ctx: Context) -> Iterable[Finding]:
             yield Finding(
                 "spec.machine_counts",
                 Severity.ERROR,
-                f"recipe {key[0]} on machine {key[1]}: spec demands {w}, placement has {g_}",
+                f"recipe {key[0]!r} on machine {key[1]}: spec demands {w}, "
+                f"placement has {g_}",
                 (),
                 {"recipe_id": key[0], "machine_id": key[1], "wanted": w, "got": g_},
             )
@@ -2700,7 +2913,7 @@ def _proliferator_input(ctx: Context) -> Iterable[Finding]:
         )
 
 
-@check("prolif.belt_required_edges_not_direct_inserted", needs_spec=True)
+@check("prolif.belt_required_edges_not_direct_inserted", needs_spec=True, needs_groups=True)
 def _belt_required(ctx: Context) -> Iterable[Finding]:
     """A proliferated consumer's inputs must arrive on a belt.
 
@@ -2721,8 +2934,11 @@ def _belt_required(ctx: Context) -> Iterable[Finding]:
             continue
         if ctx.kinds[src] is not Kind.MACHINE or ctx.kinds[dst] is not Kind.MACHINE:
             continue  # a belt is involved somewhere; not a direct insert
-        producer = ctx.recipe_name(bs[src].recipe_id)
-        consumer = ctx.recipe_name(bs[dst].recipe_id)
+        # Through `recipe_of`, not `recipe_name`: a mode-driven machine has no
+        # recipe id to name, and this check reading the raw id was the ninth
+        # place an exchanger became invisible.
+        producer = ctx.recipe_of(src)
+        consumer = ctx.recipe_of(dst)
         if producer is None or consumer is None:
             continue
         if (producer, consumer) in ctx.spec.belt_required_edges:
@@ -2826,7 +3042,7 @@ def _coaters_supplied(ctx: Context) -> Iterable[Finding]:
 # --- flow ------------------------------------------------------------------
 
 
-@check("flow.conservation", needs_spec=True)
+@check("flow.conservation", needs_spec=True, needs_groups=True)
 def _conservation(ctx: Context) -> Iterable[Finding]:
     """Supply meets demand -- first in the spec's arithmetic, then on the belts.
 
@@ -3062,7 +3278,7 @@ def _lane_balance(ctx: Context) -> Iterable[Finding]:
             )
 
 
-@check("flow.belt_capacity", needs_spec=True)
+@check("flow.belt_capacity", needs_spec=True, needs_groups=True)
 def _belt_capacity(ctx: Context) -> Iterable[Finding]:
     """No belt run may be asked to carry more than its tier sustains.
 
@@ -3096,7 +3312,7 @@ def _belt_capacity(ctx: Context) -> Iterable[Finding]:
         )
 
 
-@check("flow.sorter_capacity", needs_spec=True)
+@check("flow.sorter_capacity", needs_spec=True, needs_groups=True)
 def _sorter_capacity(ctx: Context) -> Iterable[Finding]:
     """No sorter may be asked to move more than its tier sustains at its span."""
     assert ctx.spec is not None
@@ -3389,7 +3605,7 @@ def _run_items(ctx: Context, items: Mapping[int, str | None]) -> dict[int, set[s
     return out
 
 
-@check("flow.lane_attribution", needs_spec=True)
+@check("flow.lane_attribution", needs_spec=True, needs_groups=True)
 def _lane_attribution(ctx: Context) -> Iterable[Finding]:
     """A shared lane whose shares cannot be attributed is not judgeable.
 
@@ -3561,7 +3777,7 @@ def _run_demand(ctx: Context) -> dict[int, dict[str | None, Fraction]]:
     return out
 
 
-@check("flow.headroom", needs_spec=True)
+@check("flow.headroom", needs_spec=True, needs_groups=True)
 def _headroom(ctx: Context) -> Iterable[Finding]:
     """Saturation per run, as an exact fraction.
 
@@ -3696,6 +3912,11 @@ def validate(
         placement, spec, ids, soft_width, max_belt_z, belt_vertical_construction
     )
     have_spec = spec is not None and ids is not None
+    # A check that could not resolve every machine did not examine everything it
+    # claims to cover, so it may not be reported as having run.  It still runs:
+    # the findings it DID make are real, and dropping them to preserve a tidy
+    # verdict would trade one silence for another.
+    unresolved = ctx.unresolved_machines() if have_spec else ()
 
     findings: list[Finding] = []
     ran: list[str] = []
@@ -3712,6 +3933,9 @@ def validate(
         if cid in OPT_IN and wanted is None:
             skipped.append(cid)
             continue
-        ran.append(cid)
+        if unresolved and cid in NEEDS_GROUPS:
+            skipped.append(cid)
+        else:
+            ran.append(cid)
         findings.extend(fn(ctx))
     return Report(tuple(findings), tuple(ran), tuple(skipped))

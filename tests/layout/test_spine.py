@@ -2605,7 +2605,19 @@ class TestSortersAreSizedPerItem:
 
     @pytest.mark.slow
     def test_the_real_chain_has_no_starved_sorters(self) -> None:
-        """The repro that shipped: every candidate of the example URL."""
+        """The repro that shipped: every candidate of the example URL.
+
+        Two of this URL's three candidates are proliferated, and spine refuses
+        those outright -- a Spray Coater is supplied by an elevated belt in its
+        own row and spine runs lanes at ground level in a corridor.  See
+        docs/BACKLOG.md, 'spine grows elevated lanes'.
+
+        So each candidate is held to the claim that applies to it, and BOTH
+        counts are asserted at the end.  Simply skipping the refusals would let
+        this test pass over an empty set the day candidate generation changes,
+        which is the failure `mixed_height_spec` spent this branch demonstrating:
+        a fixture that stops containing the shape under test goes on passing.
+        """
         from flab2bp.lab.data import load_vendored
         from flab2bp.lab.url import parse_url
         from flab2bp.pipeline import _id_map
@@ -2616,7 +2628,14 @@ class TestSortersAreSizedPerItem:
             "&ibe=conveyor-belt-2"
             "&mmr=arc-smelter~assembling-machine-2~chemical-plant~matrix-lab&v=11"
         )
+        checked = refused = 0
         for spec in build_candidates(load_vendored(), parse_url(url), count=3).candidates:
+            if spec.spray_lanes:
+                with pytest.raises(NoValidLayout) as exc:
+                    SpineLayout(power=False).lay_out(spec, time_budget_s=0.5)
+                assert "Spray Coater" in exc.value.reason, exc.value.reason
+                refused += 1
+                continue
             p = SpineLayout(power=False).lay_out(spec, time_budget_s=0.5)
             report = validate.validate(
                 p,
@@ -2628,3 +2647,5 @@ class TestSortersAreSizedPerItem:
             assert report.ok, f"{spec.label}: " + "\n".join(
                 f.message for f in report.errors[:5]
             )
+            checked += 1
+        assert (checked, refused) == (1, 2), (checked, refused)

@@ -100,6 +100,180 @@ The other two tests in the class carry a containment assertion for their own
 shape -- sorter tiers, junctions -- so the vacuous case fails loudly instead of
 passing. Both were mutation-checked.
 
+## RESOLVED -- it was ten checks, not three, and the first cause was not `group_for`
+
+The entry below is kept as written, because two of the things it states with
+confidence turned out to be wrong in ways that mattered, and the shape of that
+error is worth more than a tidy summary.
+
+**What the diagnosis got right.** `Context._group_for` really does resolve a
+machine through `recipe_name(b.recipe_id)`, a mode-driven machine really does
+carry `recipe_id == 0` by design, and `IdMap.recipes` really has no entry for
+one. Every caller really did open with `if g is None: continue`.
+
+**What it got wrong, first cause.** Fixing `group_for` alone would have changed
+NOTHING, and the entry's own measurement contains the clue: it reports
+`machine.recipe_valid` as not firing, on a placement of two machines whose
+`recipe_id` is zero -- which is precisely what that check is for. The reason is
+that DSP gives an Energy Exchanger a power cover radius of 7 and a Ray Receiver
+one of 10.5. They are power NODES as well as machines, `_kind` tested
+`cover_radius > 0` before anything else, and both fell out as `Kind.POWER`. Every
+one of these checks iterates `of_kind(Kind.MACHINE)`, so the exchanger was never
+handed to any of them and `group_for` was never reached for it at all.
+
+MEASURED, at 9bc6963, on a hand-built two-exchanger placement with a spec
+attached (both strategies now refuse or crash on the spec, see below):
+
+    kinds: ['power', 'power']     <- classified as power nodes, not machines
+    2 buildings, 2 Energy Exchangers, 0 sorters
+    report.ok = True, errors = []
+    machine.recipe_valid, machine.inputs_supplied, machine.output_removed,
+    flow.lane_sourced, flow.conservation, flow.belt_capacity,
+    flow.sorter_capacity, flow.headroom, flow.lane_attribution,
+    prolif.belt_required_edges_not_direct_inserted
+        -- all ten in checks_run, all ten with 0 findings
+
+and the same placement on this commit:
+
+    kinds: ['machine', 'machine']
+    report.ok = False
+    machine.inputs_supplied  x2   "needs 1 distinct ingredients, but only 0 sorters feed it"
+    machine.output_removed   x2   "only 0 sorters drain it; it would back up"
+
+**What it got wrong, blast radius.** The entry names three ERROR checks and
+three helpers. The transitive closure of `Context.group_for` over this module's
+call graph is TEN checks. Three call it directly; five -- `flow.conservation`,
+`flow.sorter_capacity`, `flow.belt_capacity`, `flow.headroom`,
+`flow.lane_attribution` -- arrive through `_lane_balance`, `_sorter_demand`,
+`_run_demand` and `_sorter_item`; and two more, `spec.machine_counts` and
+`prolif.belt_required_edges_not_direct_inserted`, resolved a machine through the
+raw recipe id by a separate door. That is the third time on this branch that
+counting a subsystem's consumers found roughly twice what was assumed. The count
+is not maintained by hand: `test_every_check_that_consults_group_for_declares_it`
+recomputes the closure from the module's own source and fails if `NEEDS_GROUPS`
+drifts from it.
+
+`spec.machine_counts` is worth naming separately, because making the exchanger
+visible turned it from silent into WRONG: it keyed counts on the raw
+`(recipe_id, item_id)` pair, so it reported "recipe 0 on machine 2209: spec
+demands 0, placement has 2" for a spec demanding exactly 2. It is keyed by
+resolved group now.
+
+**What landed.**
+
+* `_kind` answers MACHINE for a mode-driven building; `_tower_centres` selects
+  power nodes on the catalog fact (`cover_radius > 0`) instead of on `Kind`, in
+  placement order, so the tower set and `power.connectivity`'s BFS root are
+  unchanged. An exchanger still powers itself: corner-to-centre is sqrt(32) =
+  5.66 against a radius of 7.
+* `_group_for` resolves a mode-driven machine by the pair the placement actually
+  carries -- which building it is, and which mode its parameter block selects.
+  The block is part of the key and not a tie-break: charge and discharge run on
+  the same Energy Exchanger and their item flows are exact opposites.
+* `machine.recipe_valid` accepts a mode block as configuration, and now FIRES on
+  a mode-driven machine carrying neither -- which is `_machine_config`'s "exactly
+  one of the two, never half of each" held at the other end.
+* `machine.group_resolved`, a new ERROR check, owns the inability: one finding
+  per unresolvable machine rather than ten, and a build nothing can validate
+  fails instead of passing by default.
+* `NEEDS_GROUPS`: those ten checks still RUN when a machine is unresolvable, and
+  their findings still stand, but they are reported in `Report.skipped` rather
+  than `checks_run`. `checks_run` is a claim of coverage; `skipped` already meant
+  "silence proves nothing here", and now means it for partial coverage too.
+  `scripts/ab_compare.py` already treats any non-power skip as a failed verdict,
+  so this composes with the existing A/B gate without touching it.
+
+**Deliberately NOT guessed.** FactorioLab's two Ray Receiver photon recipes --
+with and without a Graviton Lens -- emit the SAME parameter block, because the
+lens is an item the receiver consumes rather than a different setting. A placed
+receiver therefore carries nothing that says which group it realises, and their
+ingredient lists differ. `_mode_driven_group` returns `None` for that, and
+`machine.group_resolved` reports it. Picking the first candidate is a fallback
+with a wrong answer in it; it is a mutation in the battery and it is killed.
+
+**WHAT THIS CATCHES ON THE CORPUS TODAY: NOTHING, and the reason matters.**
+
+The first A/B run here was worthless in the way four earlier ones on this branch
+were: `--tier small`, three runs before and after, spine 14/30 and freeform
+22/30 with INVALID 0, identical -- over a corpus slice containing not one
+mode-driven machine. It could not have failed.
+
+Counting the shape first: across all 12 corpus entries x 4 candidates, 476
+machine groups, **4 of them are mode-driven, all `critical-photon` on
+`universe-matrix`** -- a stress-tier entry the small tier never reaches. So the
+cell was audited directly, `--only universe-matrix --budget 4`, three runs each
+arm:
+
+    HEAD 9bc6963   spine 0/6 clean (refused 6, invalid 0, crashed 0)
+                   freeform 0/6 clean (refused 0, invalid 0, crashed 6)
+    this commit    identical, all three runs, both arms
+
+Identical, because the only corpus build carrying a Ray Receiver never reaches
+the validator at all: spine refuses it and freeform crashes on it, before and
+after. **INVALID stays 0 everywhere measured.** The fix costs nothing; what it
+catches is not yet demonstrable on the corpus, and the honest statement is that
+the evidence it works is the hand-built measurement above, not the audit.
+
+**Still open, and NOT this branch's to fix.** That is the same gap seen from the
+other side. Neither strategy can produce a mode-driven placement today, which is
+why the measurement above is hand-built rather than laid out: spine refuses the
+two-exchanger spec by design (see the entry below, and
+`test_spine_refuses_the_machine_rather_than_shipping_it_unwired`), and freeform
+raises `IndexError` in `_emit_strip` on it at 9bc6963 --
+`TestModeDrivenMachines::test_it_lays_out` is red on the branch as it stands, in
+a file this work does not own. So the validator can now judge a mode-driven
+machine, and nothing yet hands it one. Closing that from the layout end is what
+would turn the audit into evidence.
+
+One wording nit left alone: `cli.py` prints skipped checks as "could not run",
+which is now sometimes "could not run over everything". Not changed, to keep out
+of a file this work has no business in.
+
+## The original entry, as written
+
+A check that passes a build containing NO SORTERS AT ALL is not doing the job its
+name claims, and `machine.inputs_supplied` does exactly that today.
+
+MEASURED, on the code before the per-side tap charge, with the two-exchanger spec
+from `TestModeDrivenMachines`:
+
+    49 buildings, 2 Energy Exchangers, 0 sorters in the entire placement
+    report.ok = True, errors = []
+    machine.inputs_supplied  ran (it is in checks_run, not skipped) and did NOT fire
+    machine.output_removed   likewise
+
+The cause is one line, and it is not in the check. `Context._group_for` resolves
+a placed machine to its `MachineGroup` through `recipe_name(b.recipe_id)`. A
+mode-driven machine carries `recipe_id == 0` **by design** -- that is the whole
+point of `_machine_config`, the mode lives in the parameter block instead -- and
+`IdMap.recipes` has no entry for such a recipe at all, so there is not even a
+real id to resolve. `group_for` returns `None`, and every caller opens with
+`if g is None: continue`.
+
+So the machine is not judged leniently; it is not judged. Everything that routes
+through `group_for` skips it:
+
+    machine.inputs_supplied     ERROR check
+    machine.output_removed      ERROR check
+    flow.lane_sourced           ERROR check
+    _lane_balance, _sorter_demand, _sorter_item     helpers under other checks
+
+`catalog.MODE_DRIVEN_MACHINE` names the affected recipes -- an Energy Exchanger's
+charge/discharge, a Ray Receiver's photon/power -- so the blast radius is a
+CLASS of machine, not a fluke of this one spec. Any build containing one has
+three of its error checks quietly not applied to it.
+
+Not fixed here, and deliberately: the fix belongs in `validate.py`, which this
+branch does not own. Two shapes to weigh when it is picked up. `group_for` could
+fall back to matching a placed machine to a group by `item_id` plus parameter
+block when the recipe id is zero; or `_group_for` returning `None` for a building
+that IS a machine could itself be a finding, on the ground that "this check could
+not be evaluated here" is information the `skipped` field already exists to
+carry, and silence is the one answer that must not be available.
+
+Related but separate: the machines in the measurement above have no sorters
+because the game gives them no sorter slots -- see the entry below.
+
 ## OPEN -- spine refuses a Ray Receiver and an Energy Exchanger, and the slot table is why
 
 Surfaced by the per-side tap charge, not caused by it. `slot_poses.json`, which
@@ -127,15 +301,29 @@ trade: a blueprint that pastes two idle exchangers is worse than a refusal.
 `_machine_config` still owns the charge/discharge parameter block and is tested
 directly, so that coverage did not go with it.
 
-WHAT IS OPEN is whether the extraction is incomplete. These machines are fed in
-game, so either they carry their slots in an array the extractor does not read
--- `portPoses` and `addonAreas` are both extracted separately already, and a
-Spray Coater's supply lives in `addonAreaPoses` -- or they genuinely take items
-by some other mechanism. **That question belongs in the extractor, not in the tap
-model**, and until it is answered spine's refusal is the honest reading of the
-data we have. Note `validate` did not flag the unwired exchangers either; a
-`machine.inputs_supplied` check that misses a machine with no sorters at all is
-a second thing to look at.
+WHAT IS OPEN is whether the extraction is incomplete, and it is worth being
+precise about why that is genuinely undecided rather than merely unchecked.
+
+Both machines take items in game, so one of two things is true. Either they
+carry their attachment points in an array `scripts/extract_dsp_slot_poses.py`
+does not read -- `portPoses` and `addonAreas` are extracted separately already,
+and a Spray Coater's supply lives in `addonAreaPoses` rather than in `slotPoses`,
+so a third such array is not a hypothetical -- or these buildings genuinely take
+items by a mechanism that is not a sorter slot, the way a Logistics Station takes
+them through ports and a coater through an addon area.
+
+**That question belongs in the extractor, not in the tap model.** What decides it
+is reading the two prefabs in the decompiled source and seeing which array is
+populated; it is not decidable from our end of the pipeline, and it must not be
+guessed at by loosening a reach model, because a charge invented to make these
+two buildings wireable would be wrong for every building that is honestly
+unreachable on a face. Until it is answered, spine's refusal is the honest
+reading of the data we have.
+
+The other half of what the measurement showed -- that `validate` called that
+unwired placement clean -- is its own entry above, and is unrelated to the
+extraction: it would skip these machines just as silently if the slot table were
+complete.
 
 ## RESOLVED -- the tap-capacity model is per side, and two errors cancelling hid it
 
