@@ -2042,6 +2042,18 @@ class _Port:
     #: the shards of one group are rarely the same size.  ``_connect_short_cuts``
     #: needs it to tell an island that balances from one that starves.
     machines: int = 1
+    #: Blueprint z the port sits at.
+    #:
+    #: NOT ALWAYS ZERO, and assuming it was is a real defect this exists to fix.
+    #: A Spray Coater's drop belt is one altitude LEVEL up -- its addon area is
+    #: at ``(0, -1.25, 1)`` -- so a drop port lives at ``z = 1`` while every lane
+    #: port lives at 0.  ``_reserve_port_access`` and ``_net_ends`` both looked
+    #: for a free cell beside a port at level 0 regardless, which for a drop is
+    #: the plane BELOW it, and that plane is solid lane belt.  The port reported
+    #: no free neighbour, the reservation could not hold one, and A* was handed
+    #: an empty start set -- a search that expands zero nodes and so registers no
+    #: congestion for any amount of negotiation to price.
+    z: int = 0
 
     def columns(self) -> range:
         return range(self.x0, self.x1 + 1)
@@ -2063,6 +2075,7 @@ class _Port:
             self.x1,
             self.tiles,
             self.machines,
+            self.z,
         )
 
 
@@ -3611,9 +3624,9 @@ def _route_all(
             []
             if needs_junction and not _can_junction(net.src.x, net.src.y)
             else [
-                (net.src.x + dx, net.src.y + dy, 0)
+                (net.src.x + dx, net.src.y + dy, net.src.z)
                 for dx, dy in _STEPS
-                if canvas.free((net.src.x + dx, net.src.y + dy, 0))
+                if canvas.free((net.src.x + dx, net.src.y + dy, net.src.z))
             ]
         )
         # Leaving from a sibling's belt is as good as leaving from the lane,
@@ -3626,9 +3639,9 @@ def _route_all(
             )
         )
         goals = {
-            (net.dst.x + dx, net.dst.y + dy, 0)
+            (net.dst.x + dx, net.dst.y + dy, net.dst.z)
             for dx, dy in _STEPS
-            if canvas.free((net.dst.x + dx, net.dst.y + dy, 0))
+            if canvas.free((net.dst.x + dx, net.dst.y + dy, net.dst.z))
         }
         # A lane head has one way in. When several producers feed the same
         # lane, only the first can use it; the rest MERGE into whatever
@@ -4140,11 +4153,16 @@ def _reserve_port_access(
     canvas.reserved.clear()
     ports: dict[tuple[int, int], int] = {}
     roles: dict[tuple[int, int], set[str]] = defaultdict(set)
+    level: dict[tuple[int, int], int] = {}
     for net in nets:
         for role, port in (("src", net.src), ("dst", net.dst)):
             key = (port.x, port.y)
             ports[key] = max(ports.get(key, 0), len(port.columns()))
             roles[key].add(role)
+            # A port's access is in the port's OWN plane. A coater drop sits one
+            # level up, and looking for its free neighbour at level 0 finds the
+            # lane belts underneath it and calls the port boxed in.
+            level[key] = max(level.get(key, 0), port.z)
 
     order = sorted(ports, key=lambda k: (ports[k], k))
     wants = {k: len(roles[k]) + (1 if k in twice else 0) for k in order}
@@ -4181,7 +4199,9 @@ def _reserve_port_access(
     options = {
         key: [
             c
-            for c in ((key[0] + dx, key[1] + dy, 0) for dx, dy in _STEPS)
+            for c in (
+                (key[0] + dx, key[1] + dy, level.get(key, 0)) for dx, dy in _STEPS
+            )
             if canvas.free(c)
         ]
         for key in order
@@ -6063,7 +6083,12 @@ def _proliferator_nets(
     while remaining:
         nxt = min(remaining, key=lambda c: abs(c.x - src.x) + abs(c.y - src.y))
         remaining.remove(nxt)
-        dst = _Port(nxt.drop, nxt.x, nxt.y, nxt.x, nxt.x)
+        # The drop is one altitude LEVEL up -- see `_Port.z`. Saying so here is
+        # what lets the reservation and the router look for its access cell in
+        # the plane the drop is actually in.
+        dst = _Port(
+            nxt.drop, nxt.x, nxt.y, nxt.x, nxt.x, (), 1, int(canvas.buildings[nxt.drop].z)
+        )
         if abs(nxt.x - src.x) + abs(nxt.y - src.y) == 1:
             canvas.buildings[src.belt] = _relink(
                 canvas.buildings[src.belt], output_obj=dst.belt

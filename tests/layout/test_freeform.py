@@ -1609,31 +1609,31 @@ class TestRealUrlCandidatesAreSupplied:
         return tuple(out)
 
     @pytest.mark.slow
-    def test_no_corpus_url_yet_yields_a_buildable_proliferated_candidate(self) -> None:
-        """A GUARD ON A COVERAGE GAP, and the honest remains of a test that lied.
+    def test_every_candidate_supplies_its_coaters(self) -> None:
+        """The real assertion, restored -- the gap this guarded has closed.
 
-        `test_every_candidate_supplies_its_coaters` used to assert that every
-        candidate of a real URL had its coaters supplied.  It could not have
-        failed on a coater bug, for two reasons stacked on each other.
+        THE HISTORY MATTERS, because this has been vacuous twice and the shape
+        of that is what the containment assertion below exists to stop.
 
-        First, the only candidate of its URL that freeform ever built is the
-        UNPROLIFERATED one, and that placement contains zero Spray Coaters;
-        `prolif.coaters_are_supplied` yields no finding for a placement with no
-        coater in it, so the assertion ran on an empty set every time.
+        It first asserted that every candidate of a real URL had its coaters
+        supplied, and could not have failed on a coater bug: the only candidate
+        freeform ever built was the UNPROLIFERATED one, which contains zero
+        Spray Coaters, and `prolif.coaters_are_supplied` yields no finding for a
+        placement with no coater in it.  Widening the sample did not rescue it,
+        because every coater a wider sample could offer came from a candidate of
+        a URL carrying no `mps=` -- and asserting against a build FactorioLab
+        never chose is something this project may not do.  So it became a guard
+        that recorded the gap and failed the moment it closed.
 
-        Second -- and this is why widening the sample did not rescue it -- every
-        coater a wider sample can offer comes from a `free-proliferation` or
-        `max-proliferation` candidate of a URL carrying NO `mps=`.  Measured on
-        the whole corpus: `proliferator_from_request` returns a tier for
-        **1 of 12** URLs, `super-magnetic-ring`, and its two proliferated
-        candidates are precisely the ones freeform refuses.  Passing a coater
-        assertion on a candidate the URL never requested would be asserting
-        against a build FactorioLab did not choose, which this project may not
-        do -- so the check is NOT pinned, and this records why with the numbers.
+        It has closed.  A port carries its own `z` now, so a coater's drop belt
+        -- one altitude LEVEL up, in its addon area at `(0, -1.25, 1)` -- is no
+        longer handed an access search in the plane BELOW it, which was solid
+        lane belt.  `super-magnetic-ring`, the one corpus URL that actually
+        requests proliferation, builds its proliferated candidates now.
 
-        This test fails the moment the gap closes, which is the point: restore a
-        real `prolif.coaters_are_supplied` assertion on the newly buildable
-        candidate and delete this guard.
+        The sample is restricted to candidates of URLs that ASKED, and both
+        halves are asserted: that the sample contains coaters at all, and that
+        every one of them is supplied.
         """
         asked = [(spec, p) for spec, p, was_asked in self._built() if was_asked]
         assert asked, "no candidate of a proliferation-requesting URL built at all"
@@ -1643,11 +1643,18 @@ class TestRealUrlCandidatesAreSupplied:
             for b in p.buildings
             if b.item_id == catalog.SPRAY_COATER_ID
         )
-        assert coaters == 0, (
-            "a real proliferated build is available now -- restore "
-            "test_every_candidate_supplies_its_coaters on it, assert "
-            "prolif.coaters_are_supplied there, and delete this guard"
+        # WITHOUT THIS THE TEST IS ABOUT NOTHING -- see the docstring. It has
+        # been zero, and the loop below passed on every one of those runs.
+        assert coaters > 0, (
+            "sample of proliferation-requesting URLs contains no coater, so "
+            "the check below asserts nothing"
         )
+        for spec, p in asked:
+            bad = _full_report(p, spec, power=True).by_check(
+                "prolif.coaters_are_supplied"
+            )
+            assert not bad, f"{spec.label}: " + "; ".join(f.message for f in bad)
+
 
     @pytest.mark.slow
     def test_every_candidate_respects_sorter_capacity(self) -> None:
@@ -3835,3 +3842,77 @@ class TestTheSlopeLimitIsConditional:
         """An absent technology set means every technology researched."""
         assert freeform.FreeformLayout().ramped is False
         assert freeform.FreeformLayout(belt_vertical_construction=False).ramped is True
+
+
+class TestAPortKnowsItsOwnAltitude:
+    """A port's access cell is in the port's OWN plane, not always at z = 0.
+
+    A Spray Coater's proliferator drop belt sits one altitude LEVEL up -- its
+    addon area is at ``(0, -1.25, 1)``.  ``_Port`` carried no ``z``, so both
+    ``_reserve_port_access`` and the router's start/goal construction looked for
+    a free cell beside every port at level 0.  For a drop that is the plane
+    BELOW it, which is solid lane belt.
+
+    The drop therefore reported no free neighbour, no access cell could be
+    held, and A* was handed an EMPTY START SET -- a search that expands zero
+    nodes, registers no congestion, and so cannot be priced by any amount of
+    rip-up or negotiation.  It was measured as 422 of 600 route failures and
+    read as a routing problem for a long time; it was never one.
+    """
+
+    URL = (
+        "https://factoriolab.github.io/dsp/list?z=eJxFyrEKwkAQRdG.meJVM0GxmuYtxk4SQ"
+        "XFbdRGJSyCgaDPfLqJod7jc0XmGqYzOI2ZzBezt598LNPrlDs3vyLBPLo5WqhMq1TNULofil"
+        "Kk8vEPGCQNu4BrcgntwCF6R2kgrpD7SRmqdPAdjGb3c3ewFUJ8mgA__&v=11"
+    )
+
+    @staticmethod
+    def _candidates() -> tuple[BuildSpec, ...]:
+        from flab2bp.lab.data import load_vendored
+        from flab2bp.lab.url import parse_url
+        from flab2bp.rates.candidates import build_candidates
+
+        return build_candidates(
+            load_vendored(), parse_url(TestAPortKnowsItsOwnAltitude.URL), count=3
+        ).candidates
+
+    def test_at_tile_carries_the_level(self) -> None:
+        """Moving a port along its lane must not drop it to the ground."""
+        port = _Port(7, 3, 4, 3, 5, (7, 8, 9), 1, 1)
+        assert port.z == 1
+        assert port.at_tile(2).z == 1, "at_tile lost the port's altitude"
+
+    @pytest.mark.slow
+    def test_the_proliferated_candidates_build(self) -> None:
+        """The spec this was found on, and it could have failed either way.
+
+        Before the fix this URL built ONLY `no-proliferator`; both proliferated
+        candidates refused with "no packing of N strips could be wired at any
+        candidate height".  So a regression puts the refusal straight back and
+        this goes red.
+        """
+        built = {}
+        for spec in self._candidates():
+            with contextlib.suppress(NoValidLayout):
+                built[spec.label] = FreeformLayout(power=False).lay_out(
+                    spec, time_budget_s=8.0
+                )
+        assert "free-proliferation" in built, (
+            f"proliferated candidate refused again; built only {sorted(built)}"
+        )
+        assert "max-proliferation" in built, (
+            f"proliferated candidate refused again; built only {sorted(built)}"
+        )
+
+    @pytest.mark.slow
+    def test_every_coater_on_this_spec_is_supplied(self) -> None:
+        """And the coaters are actually fed, not merely placed."""
+        spec = next(c for c in self._candidates() if c.label == "max-proliferation")
+        p = FreeformLayout(power=False).lay_out(spec, time_budget_s=8.0)
+        coaters = [b for b in p.buildings if b.item_id == catalog.SPRAY_COATER_ID]
+        # `prolif.coaters_are_supplied` yields nothing for a placement with no
+        # coater in it, which is how the previous version of this check passed
+        # for months on an empty set.
+        assert coaters, "no coater placed; the check below would assert nothing"
+        bad = _full_report(p, spec, power=False).by_check("prolif.coaters_are_supplied")
+        assert not bad, "; ".join(f.message for f in bad)
