@@ -96,6 +96,7 @@ __all__ = [
     "assign_belt_slots",
     "assign_sorter_slots",
     "attachable_columns",
+    "attachable_rows",
     "attachment",
     "lane_facing",
     "lane_orientation",
@@ -476,6 +477,29 @@ def attachable_columns(
         got = attachment(machine, (x, lane_y))
         if got is not None:
             out[x] = got
+    return out
+
+
+def attachable_rows(machine: PlacedBuilding, lane_x: int) -> dict[int, Attachment]:
+    """Every row of ``machine`` a sorter from a lane at column ``lane_x`` can use.
+
+    The EAST/WEST twin of :func:`attachable_columns`, and it exists because the
+    east and west faces are not a special case in the game: a Matrix Lab defines
+    twelve poses, three per side, and a layout that reads only two of those
+    sides is reading two thirds of the building.  ``attachment`` has always
+    handled a lane beside a machine -- its first branch takes ``far`` on a shared
+    column, its second ``far`` on a shared ROW -- so nothing new is decided here.
+    What was missing was a way to ASK, in the same shape the planner already asks
+    about the north and south faces.
+
+    Empty is a real answer.  An Oil Refinery turned a quarter offers nothing on
+    its east side and a Chemical Plant nothing on either.
+    """
+    out: dict[int, Attachment] = {}
+    for y in range(machine.y, machine.y + machine.height):
+        got = attachment(machine, (lane_x, y))
+        if got is not None:
+            out[y] = got
     return out
 
 
