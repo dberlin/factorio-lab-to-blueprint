@@ -16,6 +16,7 @@ from flab2bp.bench.corpus import URL_CORPUS, CorpusEntry
 from flab2bp.bench.metrics import measure
 from flab2bp.bench.types import CellResult
 from flab2bp.lab import data as lab_data
+from flab2bp.lab.techs import belt_rules_for_url
 from flab2bp.lab.url import parse_url
 from flab2bp.layout import validate as validator
 from flab2bp.layout.base import LayoutStrategy, NoValidLayout, Placement
@@ -32,12 +33,20 @@ class StrategyHandle:
     strategy: LayoutStrategy
 
 
-def available_strategies(*, power: bool) -> tuple[StrategyHandle, ...]:
+def available_strategies(
+    *, power: bool, belt_vertical_construction: bool = True
+) -> tuple[StrategyHandle, ...]:
     """Discover implemented strategies.
 
     Strategy B may not exist yet, so this imports defensively rather than
     assuming.  A missing strategy is simply absent from the bake-off; it is not
     an error, and it must not be scored as a loss.
+
+    ``belt_vertical_construction`` is the save's slope rule, which
+    :func:`run_corpus` takes from each entry's URL.  It defaults ``True`` to
+    agree with :func:`flab2bp.dsp.catalog.belt_rules_for_technologies` on a URL
+    with no technology set -- FactorioLab reads that as every technology
+    researched, not none.
     """
     handles: list[StrategyHandle] = []
 
@@ -46,7 +55,15 @@ def available_strategies(*, power: bool) -> tuple[StrategyHandle, ...]:
     except ImportError:  # pragma: no cover - spine is implemented
         pass
     else:
-        handles.append(StrategyHandle("spine", SpineLayout(power=power)))
+        handles.append(
+            StrategyHandle(
+                "spine",
+                SpineLayout(
+                    power=power,
+                    belt_vertical_construction=belt_vertical_construction,
+                ),
+            )
+        )
 
     # Imported dynamically, not statically: Strategy B may legitimately not
     # exist yet, and a static import cannot typecheck against a module that is
@@ -57,7 +74,15 @@ def available_strategies(*, power: bool) -> tuple[StrategyHandle, ...]:
     except (ImportError, AttributeError):
         pass
     else:
-        handles.append(StrategyHandle("freeform", freeform_cls(power=power)))
+        handles.append(
+            StrategyHandle(
+                "freeform",
+                freeform_cls(
+                    power=power,
+                    belt_vertical_construction=belt_vertical_construction,
+                ),
+            )
+        )
 
     return tuple(handles)
 
@@ -181,8 +206,14 @@ def run_corpus(
             results.append(_failed_cell(entry, str(exc)))
             continue
 
+        # The save's slope rule is a property of THIS entry's URL, so it is
+        # asked per entry rather than once for the run.
+        rules = belt_rules_for_url(entry.url)
         for power in powers:
-            for handle in available_strategies(power=power):
+            for handle in available_strategies(
+                power=power,
+                belt_vertical_construction=rules.vertical_construction,
+            ):
                 for spec in specs:
                     results.append(
                         _run_cell(

@@ -26,6 +26,7 @@ from flab2bp.lab.flow import (
     unsupplied_inputs,
 )
 from flab2bp.lab.schema import Dataset
+from flab2bp.lab.techs import belt_rules_for_url
 from flab2bp.lab.url import parse_url
 from flab2bp.layout import markers, validate
 from flab2bp.layout.base import NoValidLayout, Placement
@@ -146,10 +147,7 @@ def build(
     # properties of the player's SAVE -- so they come from the technologies
     # FactorioLab already recorded in the URL, not from a flag whose default we
     # would have to guess.
-    belt_rules = catalog.belt_rules_for_technologies(
-        request.researched_technology_ids,
-        {i.id for i in data.items if i.technology is not None},
-    )
+    belt_rules = belt_rules_for_url(url, data)
 
     # A FactorioLab flow export pins WHICH recipe makes what, so we stop
     # re-deriving a decision the player already made. It is applied here, to the
@@ -223,13 +221,20 @@ def build(
     refused: list[str] = []
     for spec in spec_set.candidates:
         for sname in wanted:
-            # `freeform` chooses between the ramped and the dense form; the
-            # slope limit is conditional on the save's technologies.  `spine`
-            # always ramps: its bridges already reserve a ramp column, so the
-            # ramp costs it nothing and is legal either way.
-            kw: dict[str, object] = {"power": power}
-            if sname == "freeform":
-                kw["belt_vertical_construction"] = belt_rules.vertical_construction
+            # BOTH strategies need the save's slope rule now.
+            #
+            # `freeform` chooses between the ramped and the dense form with it.
+            # `spine` used to be exempt, and the reasoning was sound while it
+            # held: its bridges reserve a ramp column, so a bridge is legal
+            # either way. The Spray Coater spur broke the exemption -- it runs
+            # inside a corridor, where there is no column to spare, so whether
+            # it may leave the lane's tail already elevated or must spend
+            # `RAMP_TILES_PER_LEVEL` tiles climbing is the difference between
+            # supplying the coater and refusing.
+            kw: dict[str, object] = {
+                "power": power,
+                "belt_vertical_construction": belt_rules.vertical_construction,
+            }
             layout = _STRATEGIES[sname](**kw)
             try:
                 placement = layout.lay_out(spec, time_budget_s=time_budget_s)

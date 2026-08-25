@@ -57,7 +57,7 @@ from __future__ import annotations
 
 import math
 import time
-from collections import defaultdict
+from collections import defaultdict, deque
 from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 from fractions import Fraction
@@ -1967,8 +1967,20 @@ def _machine_config(factoriolab_recipe_id: str) -> tuple[int, tuple[int, ...]]:
     return catalog.recipe_id(factoriolab_recipe_id), ()
 
 
-def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
-    """Turn a row/lane plan into concrete buildings on the grid."""
+def _emit(
+    spec: BuildSpec,
+    plan: _Plan,
+    *,
+    power: bool,
+    belt_vertical_construction: bool = True,
+) -> Placement:
+    """Turn a row/lane plan into concrete buildings on the grid.
+
+    ``belt_vertical_construction`` is the save's, from the FactorioLab URL's
+    researched technologies.  Only the Spray Coater spur consults it: spine's
+    bridges reserve a ramp column and so are legal either way, but a spur runs
+    inside a corridor where there is no column to spare.
+    """
     groups, edges = _adapt(spec)
     at = _row_index(plan.rows)
     belt_id = BELT_ITEM_IDS.get(spec.belt_item_id, 2001)
@@ -2549,6 +2561,10 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
     coaters = 0
     spray = catalog.building(CONSTANTS.spray_item_id)
     prolif = proliferator_item(spec)
+    #: The elevated proliferator belt's live end, carried between coaters so
+    #: they can share one supply.  The first spur leaves the lane's own tail;
+    #: every later one may chain off this instead when it is nearer.
+    prolif_tail: int | None = None
     for item in spec.spray_lanes:
         # Mount on a lane copy the proliferator can reach.  An item may have
         # several lanes in a corridor, and taking the first one stranded a
@@ -2582,7 +2598,7 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
             # Feed it. A coater with no proliferator sprays nothing, so every
             # proliferated recipe would quietly run unproliferated and the build
             # would miss its rate while looking perfectly healthy.
-            sorters += _feed_coater(
+            belts, prolif_tail = _feed_coater(
                 buildings,
                 lane_tiles,
                 lane_item_of,
@@ -2591,7 +2607,10 @@ def _emit(spec: BuildSpec, plan: _Plan, *, power: bool) -> Placement:
                 coater_depth=depth,
                 corr_y=corr_y,
                 prolif=prolif,
+                belt_vertical_construction=belt_vertical_construction,
+                chain_from=prolif_tail,
             )
+            sorters += belts
             break
 
     # --- coverage top-up --------------------------------------------------
@@ -3501,6 +3520,150 @@ def _coater_tile(
     return min(shared, key=lambda i: abs(buildings[i].x - want))
 
 
+#: The four tiles a belt may step to.  Belts do not run diagonally, so the
+#: coater spur's search must not either.
+_STEP4 = ((1, 0), (-1, 0), (0, 1), (0, -1))
+
+
+def _spur_clear(buildings: list[PlacedBuilding], x: int, y: int, z: Fraction) -> bool:
+    """May an elevated belt tile stand at ``(x, y, z)``?
+
+    Two separate refusals, and the second is the conservative one.
+
+    A building at the SAME ``z`` is a plain collision.  A building BELOW is only
+    allowed to be another belt: ``BELT_CROSSING_CLEARANCE`` is the height a belt
+    needs to pass over a belt, and that much is established.  Whether a belt may
+    cross a MACHINE, and at what height, is a rule this project has not read out
+    of the game -- ``docs/BACKLOG.md`` records it as unextracted, and an
+    elevated Splitter diagonally over an Assembling Machine is one of the two
+    open collider questions.  So a spur declines to fly over anything that is
+    not a belt, rather than guess a clearance and ship geometry the game may
+    refuse.
+
+    Footprint convention follows :func:`_tower_keep_out`: ``(b.x, b.y)`` is the
+    minimum corner, and a belt-integrated building like a Splitter reports
+    ``occupies_tiles`` false and holds only its own tile.
+    """
+    for b in buildings:
+        try:
+            info = catalog.building(b.item_id)
+        except KeyError:
+            continue
+        if info.occupies_tiles:
+            hit = b.x <= x < b.x + b.width and b.y <= y < b.y + b.height
+        else:
+            hit = b.x == x and b.y == y
+        if not hit:
+            continue
+        if b.z == z:
+            return False
+        if not catalog.is_belt(b.item_id):
+            return False
+    return True
+
+
+def _coater_spur(
+    buildings: list[PlacedBuilding],
+    tail: tuple[int, int],
+    drop: tuple[int, int],
+    level: Fraction,
+    *,
+    belt_vertical_construction: bool,
+    start_z: Fraction = Fraction(0),
+) -> list[tuple[int, int, Fraction]] | None:
+    """Tiles from just after ``tail`` to ``drop`` inclusive, or ``None``.
+
+    A breadth-first search, not a pair of L-shaped guesses.  Two Ls was the
+    first attempt and it measured short: the second coater of a chain wants a
+    route past the FIRST coater's spur, and an L that meets it head on has
+    nowhere else to try.  On ``super-magnetic-ring`` that killed the candidate
+    after three of its coaters had already been supplied -- the failure looked
+    like a geometry limit and was a search limit.
+
+    BFS also gives the SHORTEST route for free, which matters here in a way it
+    does not in a router: every spur tile is a belt in the finished blueprint,
+    and density is the whole objective.
+
+    BOUNDED TO THE EXISTING FOOTPRINT.  A spur that wandered outside the
+    placement would enlarge its bounding box, so a coater could be supplied by
+    making the factory bigger -- paying in exactly the currency this project is
+    trying to save, and invisibly.  The box is what the other buildings already
+    occupy; the search may use it and may not grow it.
+
+    The z profile is the save's business.  With ``beltVerticalConstruction`` the
+    spur is at ``level`` throughout.  Without it the climb is metered at
+    :data:`catalog.BELT_CLIMB_PER_TILE` per tile, so the first tiles ramp and a
+    route too short to finish the climb is rejected rather than emitted too
+    steep.  ``start_z`` is what makes a CHAIN work: the first spur leaves the
+    proliferator lane at ground level and climbs, while every later one leaves
+    the previous coater's drop already at ``level`` and has no climb to make.
+
+    All of it in :class:`~fractions.Fraction`, because a climb of ``1/2`` a
+    level per tile against a ``4/5`` slope limit is exactly the arithmetic a
+    float rounds into a blueprint the game rejects at paste time.
+    """
+    rise = level - start_z
+    climb = rise / catalog.BELT_CLIMB_PER_TILE if rise > 0 else Fraction(0)
+
+    def _z_at(n: int) -> Fraction:
+        """Blueprint z of the ``n``-th spur tile, counting from one."""
+        if belt_vertical_construction or not rise:
+            return level
+        return min(level, start_z + catalog.BELT_CLIMB_PER_TILE * n)
+
+    xs = [b.x for b in buildings]
+    ys = [b.y for b in buildings]
+    if not xs:
+        return None
+    lo_x, hi_x = min(xs), max(b.x + b.width - 1 for b in buildings)
+    lo_y, hi_y = min(ys), max(b.y + b.height - 1 for b in buildings)
+
+    #: (x, y) -> the step count it was first reached at, which fixes its z.
+    seen: dict[tuple[int, int], int] = {tail: 0}
+    parent: dict[tuple[int, int], tuple[int, int]] = {}
+    queue: deque[tuple[int, int]] = deque([tail])
+    while queue:
+        here = queue.popleft()
+        step = seen[here] + 1
+        z = _z_at(step)
+        for dx, dy in _STEP4:
+            nxt = (here[0] + dx, here[1] + dy)
+            if nxt in seen:
+                continue
+            if not (lo_x <= nxt[0] <= hi_x and lo_y <= nxt[1] <= hi_y):
+                continue
+            if nxt == drop:
+                # Arriving is only arriving if the climb has finished: a drop
+                # reached too early sits below the addon area and supplies
+                # nothing, which `game.addon_supply` would report and which is
+                # worse than saying so here.
+                if z != level:
+                    continue
+                seen[nxt] = step
+                parent[nxt] = here
+                queue.clear()
+                break
+            if not _spur_clear(buildings, nxt[0], nxt[1], z):
+                continue
+            seen[nxt] = step
+            parent[nxt] = here
+            queue.append(nxt)
+        if drop in seen:
+            break
+
+    if drop not in seen:
+        return None
+    route: list[tuple[int, int]] = []
+    cursor = drop
+    while cursor != tail:
+        route.append(cursor)
+        cursor = parent[cursor]
+    route.reverse()
+    if not belt_vertical_construction and len(route) < climb:
+        return None
+    return [(x, y, _z_at(n)) for n, (x, y) in enumerate(route, start=1)]
+
+
 def _feed_coater(
     buildings: list[PlacedBuilding],
     lane_tiles: dict[tuple[int, int], list[int]],
@@ -3511,8 +3674,10 @@ def _feed_coater(
     coater_depth: int,
     corr_y: list[int],
     prolif: str | None,
-) -> int:
-    """A Spray Coater is fed by BELT, and this cannot yet build the belt.
+    belt_vertical_construction: bool = True,
+    chain_from: int | None = None,
+) -> tuple[int, int | None]:
+    """A Spray Coater is fed by BELT, and this grows the elevated one.
 
     It used to run a sorter from the corridor's proliferator lane into the
     coater.  That connection does not exist in the game.  A coater ships zero
@@ -3526,66 +3691,136 @@ def _feed_coater(
     each: area 0 is the cargo belt the coater rides, area 1 the proliferator
     supply, and for a coater area 1 is at
     :attr:`~flab2bp.dsp.catalog.Building.addon_areas` ``(0, -1.25, 1)`` -- a tile
-    and a quarter behind it and exactly one altitude level UP.  The corpus
-    agrees: every coater there has a belt one level above and one tile to the
-    side.
+    and a quarter behind it and exactly one altitude level UP.
 
-    So the feed is a BELT in that area, and this places it: one tile behind the
-    coater and one level up, linked from the nearest tile of the corridor's
-    proliferator lane.  That link is a single step of climb, which
-    ``beltVerticalConstruction`` makes free -- and where the save lacks it,
-    ``geom.altitude_step`` refuses the step and the candidate with it, rather
-    than this guessing a ramp it has no room for.
+    THE DROP WAS NEVER THE HARD PART.  This function has always placed the drop
+    belt at ``z = 1``; what it could not do was REACH it.  It required a single
+    proliferator tile to satisfy two conditions at once -- to be the lane's tail
+    AND to be orthogonally adjacent to the drop -- and nothing arranges that
+    coincidence.  :func:`_coater_tile` picks the mount column by nearness to the
+    lane MIDPOINT, while this needed the column beside where the lane ENDS, and
+    a lane has essentially one tail because ``_relink_output`` gives every other
+    tile an ``output_obj``.  So the conjunction almost never held and spine
+    refused every proliferated spec.
 
-    Returns the number of BELTS placed, not sorters.  A coater is wired to
-    nothing at all.
+    It is a SPUR now: an elevated run to the drop, at ``z = 1`` on arrival.
+
+    AND THE COATERS SHARE ONE.  A spec has up to ten spray lanes, and the first
+    spur consumed the only tail the lane had -- so coater two found no source
+    and the whole candidate died even though coater one had just been supplied.
+    That is what one belt feeding several coaters looks like in game, and it is
+    the "three coaters on one supply chain" case the corpus already carries.
+    ``chain_from`` is the previous drop, offered alongside the lane's own tails
+    and ranked with them by distance, so a chain forms when it is the nearest
+    source and does not when it is not.
+
+    THE TAIL REQUIREMENT STAYS, and it is load-bearing.  Taking a mid-lane
+    tile's output for the spur orphans everything downstream of it: the lane
+    stops there, its remaining sorters draw from a belt nothing fills, and
+    ``flow.external_entry_reachable`` reports the proliferator as unreachable.
+    A tail has no output to steal -- which is why ``chain_from`` is offered only
+    while it is still one.
+
+    THE CLIMB IS THE SAVE'S BUSINESS.  With ``beltVerticalConstruction`` a level
+    change costs no run at all.  Without it the game's
+    ``!history.beltVerticalConstruction && ratio > 0.8f`` test applies, one level
+    over one tile is about 1.06, and the spur must spend
+    :data:`catalog.RAMP_TILES_PER_LEVEL` tiles climbing at
+    :data:`catalog.BELT_CLIMB_PER_TILE` -- so a spur too short to ramp is
+    refused rather than emitted too steep for the game to accept.
+
+    Returns ``(belts placed, the new tail)``.  The tail is what the next coater
+    chains from; ``None`` means there is nothing to chain from.
     """
     if prolif is None:
-        return 0
+        return 0, chain_from
     coater = buildings[coater_idx]
     adx, ady, adz = catalog.building(coater.item_id).addon_areas[1]
     wx, wy = sorter_slots.to_world((adx, ady), coater.yaw)
     cell = (coater.x + round(wx), coater.y + round(wy))
     level = Fraction(round(adz))
     if any(b.x == cell[0] and b.y == cell[1] and b.z == level for b in buildings):
-        return 0
-    # A source on the same corridor, orthogonally adjacent to the drop, so the
-    # climb is one tile of run and one level -- and it must be the lane's TAIL.
-    # Taking a mid-lane tile's output for the drop orphans everything downstream
-    # of it: the lane stops there, its remaining sorters draw from a belt nothing
-    # fills, and `flow.external_entry_reachable` reports the proliferator as
-    # unreachable. A tail has no output to steal.
+        # Something already sits in the addon area.  If it is the chain's own
+        # belt passing through, the coater is supplied by it and there is
+        # nothing to place; `game.addon_supply` is the check that decides.
+        return 0, chain_from
+
+    # Every tail this drop could hang off: the corridor's proliferator lane
+    # ends, plus the previous coater's drop while it is still a tail.  Nearest
+    # first, so a chain forms when chaining is the short answer.
+    sources: list[int] = []
     for (c, depth), indices in lane_tiles.items():
         if c != corridor or lane_item_of.get((c, depth)) != prolif:
             continue
-        for src in indices:
-            b = buildings[src]
-            if b.output_obj is not None:
-                continue
-            if abs(b.x - cell[0]) + abs(b.y - cell[1]) != 1:
-                continue
-            drop = len(buildings)
+        sources.extend(i for i in indices if buildings[i].output_obj is None)
+    if chain_from is not None and buildings[chain_from].output_obj is None:
+        sources.append(chain_from)
+    sources.sort(
+        key=lambda i: abs(buildings[i].x - cell[0]) + abs(buildings[i].y - cell[1])
+    )
+
+    # THE SHORTEST ROUTE, not the first source that has one.
+    #
+    # Taking the nearest source by straight-line distance and stopping there
+    # measured badly on a ten-coater spec: manhattan said 34 and the route was
+    # 68, because a source that is close as the crow flies can be on the far
+    # side of everything already placed. Those long spurs are belts, so they
+    # cost density directly AND they congest z=1 for every coater after them --
+    # 331 same-level collisions in one run, which is what finally refused the
+    # candidate. Every source is searched and the cheapest kept; the searches
+    # are bounded by the placement's own bounding box, so this is a handful of
+    # BFS per coater rather than anything open-ended.
+    best: tuple[int, list[tuple[int, int, Fraction]]] | None = None
+    for src in sources:
+        source = buildings[src]
+        spur = _coater_spur(
+            buildings,
+            (source.x, source.y),
+            cell,
+            level,
+            belt_vertical_construction=belt_vertical_construction,
+            start_z=source.z if isinstance(source.z, Fraction) else Fraction(source.z),
+        )
+        if spur is None:
+            continue
+        if best is None or len(spur) < len(best[1]):
+            best = (src, spur)
+
+    if best is not None:
+        src, spur = best
+        source = buildings[src]
+        previous = src
+        for x, y, z in spur:
+            here = len(buildings)
             buildings.append(
                 PlacedBuilding(
-                    item_id=b.item_id,
-                    model_index=b.model_index,
-                    x=cell[0],
-                    y=cell[1],
-                    z=level,
+                    item_id=source.item_id,
+                    model_index=source.model_index,
+                    x=x,
+                    y=y,
+                    z=z,
                     width=1,
                     height=1,
                     carries_item=prolif,
                 )
             )
-            buildings[src] = _relink_output(buildings[src], drop)
-            return 1
+            buildings[previous] = _relink_output(buildings[previous], here)
+            previous = here
+        return len(spur), previous
+
     raise NoValidLayout(
         "spine cannot supply a Spray Coater: the game takes an addon's "
-        "proliferator from a belt in its addon area, which is one tile behind "
-        "the coater and one altitude LEVEL up -- so the supply has to be an "
-        "elevated lane in the coater's OWN row, and this strategy can only run "
-        "lanes at ground level in a corridor. Freeform builds it; see "
-        "docs/BACKLOG.md, 'spine grows elevated lanes'."
+        "proliferator from a belt in its addon area, one tile behind the coater "
+        f"and {level} altitude level(s) up, and no elevated spur reaches {cell} "
+        f"from any of the {len(sources)} available source(s). Every route was "
+        "blocked by a building it may not fly over"
+        + (
+            ""
+            if belt_vertical_construction
+            else ", or was too short to climb without exceeding the slope limit "
+            "this save's technologies impose"
+        )
+        + "."
     )
 
 
@@ -3975,12 +4210,29 @@ class SpineLayout:
 
     name = "spine"
 
-    def __init__(self, *, power: bool = True, workers: int | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        power: bool = True,
+        workers: int | None = None,
+        belt_vertical_construction: bool = True,
+    ) -> None:
         self.power = power
         #: CP-SAT search workers. ``None`` takes the module default (all
         #: cores); the bake-off pins ``DETERMINISTIC_WORKERS`` for
         #: reproducibility.
         self.workers = DEFAULT_SEARCH_WORKERS if workers is None else workers
+        #: Whether this save's technologies lift the belt slope limit -- the
+        #: game's ``!history.beltVerticalConstruction && ratio > 0.8f``.  It
+        #: comes from the URL's researched set via
+        #: :func:`catalog.belt_rules_for_technologies`, never from a flag,
+        #: because FactorioLab already recorded the answer and its answer is
+        #: authoritative.
+        #:
+        #: ``True`` by default to agree with that function on a URL carrying no
+        #: technology set at all, which FactorioLab reads as EVERY technology
+        #: researched rather than none.
+        self.belt_vertical_construction = belt_vertical_construction
 
     def lay_out(self, spec: BuildSpec, *, time_budget_s: float = 60.0) -> Placement:
         """Return a solved, emitted ``Placement``, or raise :class:`NoValidLayout`.
@@ -4094,7 +4346,12 @@ class SpineLayout:
                     # would starve the consumer.  So a plan that will not emit is
                     # not a layout: try the next one, then a longer budget, and
                     # refuse if neither works.
-                    placement = _emit(spec, plan, power=self.power)
+                    placement = _emit(
+                        spec,
+                        plan,
+                        power=self.power,
+                        belt_vertical_construction=self.belt_vertical_construction,
+                    )
                 except (ValueError, KeyError) as exc:
                     reason, detail = FALLBACK_EMISSION, str(exc)
                     continue

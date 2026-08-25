@@ -75,6 +75,7 @@ from flab2bp.bench.ab import (  # noqa: E402
 )
 from flab2bp.bench.corpus import URL_CORPUS, CorpusEntry, Tier  # noqa: E402
 from flab2bp.dsp import codec  # noqa: E402
+from flab2bp.lab.techs import belt_rules_for_url  # noqa: E402
 from flab2bp.layout import markers, validate  # noqa: E402
 from flab2bp.layout.base import LayoutStrategy, Placement  # noqa: E402
 from flab2bp.layout.freeform import FreeformLayout  # noqa: E402
@@ -89,9 +90,17 @@ B_NAME = "freeform"
 
 #: Factories rather than classes so the driver never depends on the two
 #: constructors happening to share a signature.
-STRATEGIES: dict[str, Callable[[bool], LayoutStrategy]] = {
-    A_NAME: lambda power: SpineLayout(power=power),
-    B_NAME: lambda power: FreeformLayout(power=power),
+#:
+#: The second argument is the save's slope rule, taken from the entry's URL.
+#: Both arms must get the SAME one or the comparison is measuring the
+#: technology set rather than the strategies.
+STRATEGIES: dict[str, Callable[[bool, bool], LayoutStrategy]] = {
+    A_NAME: lambda power, vertical: SpineLayout(
+        power=power, belt_vertical_construction=vertical
+    ),
+    B_NAME: lambda power, vertical: FreeformLayout(
+        power=power, belt_vertical_construction=vertical
+    ),
 }
 
 Judge = Callable[[Placement], tuple[bool, tuple[str, ...]]]
@@ -193,8 +202,9 @@ def collect(
                 for spec in specs[entry.url_id]:
                     judge: Judge = partial(judge_with, spec, _id_map(spec), power)
                     encode = partial(encode_with, spec)
+                    vertical = belt_rules_for_url(entry.url).vertical_construction
                     for name, make in STRATEGIES.items():
-                        strategy = make(power)
+                        strategy = make(power, vertical)
                         samples.append(
                             sample_once(
                                 url_id=entry.url_id,
