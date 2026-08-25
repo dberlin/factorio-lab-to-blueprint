@@ -52,6 +52,7 @@ from flab2bp.layout.route_feedback import (
     update_feedback,
 )
 from flab2bp.layout.sequence_pair import (
+    TOPOLOGY_MOVE_KINDS,
     AnnealConfig,
     AnnealIncumbent,
     AnnealStageResult,
@@ -640,21 +641,27 @@ class SequenceSolver[PreparedT]:
             moves_per_stage=self.config.moves_per_stage,
             elite_count=max(self.config.global_elites, 1),
         )
+        topology_stage_config = (
+            replace(stage_config, move_kinds=TOPOLOGY_MOVE_KINDS)
+            if self.config.restarts_per_height >= 2
+            else stage_config
+        )
         results: list[_AnnealedRestart] = []
         for restart in restarts:
+            restart_config = topology_stage_config if restart.restart == 0 else stage_config
             stage_start = restart.anneal
             if self.direct_targets_for_state is None:
                 result = anneal_stage(
                     problem,
                     stage_start,
-                    stage_config,
+                    restart_config,
                     context,
                 )
             else:
                 result = anneal_stage(
                     problem,
                     stage_start,
-                    stage_config,
+                    restart_config,
                     context,
                     direct_targets_for_state=self.direct_targets_for_state,
                 )

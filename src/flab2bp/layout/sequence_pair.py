@@ -312,6 +312,15 @@ class MoveKind(Enum):
     CHANGE_VARIANT = "change_variant"
 
 
+TOPOLOGY_MOVE_KINDS = (
+    MoveKind.SWAP_POSITIVE,
+    MoveKind.SWAP_NEGATIVE,
+    MoveKind.SWAP_BOTH,
+    MoveKind.INSERT_POSITIVE,
+    MoveKind.INSERT_NEGATIVE,
+)
+
+
 class EliteCategory(Enum):
     """Deterministic reason an annealing incumbent belongs in the elite archive."""
 
@@ -329,6 +338,7 @@ class AnnealConfig:
     initial_temperature: float = 1.0
     final_temperature: float = 0.01
     elite_count: int = 8
+    move_kinds: tuple[MoveKind, ...] = tuple(MoveKind)
 
     def __post_init__(self) -> None:
         if type(self.moves_per_stage) is not int or self.moves_per_stage <= 0:
@@ -343,6 +353,13 @@ class AnnealConfig:
             raise ValueError("temperatures must be finite, positive, and non-increasing")
         if type(self.elite_count) is not int or self.elite_count <= 0:
             raise ValueError("elite count must be a positive integer")
+        if (
+            not isinstance(self.move_kinds, tuple)
+            or not self.move_kinds
+            or any(not isinstance(kind, MoveKind) for kind in self.move_kinds)
+            or len(set(self.move_kinds)) != len(self.move_kinds)
+        ):
+            raise ValueError("move kinds must be a non-empty tuple of distinct MoveKind values")
 
     @classmethod
     def test(cls) -> AnnealConfig:
@@ -1296,7 +1313,7 @@ def anneal_stage(
     archive_builder = EliteArchiveBuilder(config.elite_count)
     archive_builder.add(current)
     accepted_moves = 0
-    move_kinds = tuple(MoveKind)
+    move_kinds = config.move_kinds
 
     for move_index in range(config.moves_per_stage):
         candidate_state = apply_move(

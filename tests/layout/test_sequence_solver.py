@@ -52,6 +52,7 @@ from flab2bp.layout.sequence_pair import (
     DirectInsertTarget,
     EnergyBreakdown,
     GapProfile,
+    MoveKind,
     PlacementCostContext,
     PlacementKey,
     PlacementProblem,
@@ -324,6 +325,75 @@ def test_grouped_discovery_advances_every_restart_before_exploitation(
         for height in solver._heights
         for restart in height.restarts
     ] == [(1, 1)] * 6
+
+
+def test_two_restart_search_reserves_one_topology_only_lane(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    move_pools: list[tuple[MoveKind, ...]] = []
+    real_anneal_stage = anneal_stage
+
+    def capture_anneal(
+        problem: PlacementProblem,
+        state: AnnealState,
+        config: AnnealConfig,
+        context: PlacementCostContext | None = None,
+    ) -> AnnealStageResult:
+        move_pools.append(config.move_kinds)
+        return real_anneal_stage(problem, state, config, context)
+
+    monkeypatch.setattr(sequence_solver_module, "anneal_stage", capture_anneal)
+    solver = _solver(_FakeRouting(), heights=(40,))
+
+    with pytest.raises(NoValidLayout):
+        solver.search(max_stages=1)
+
+    assert move_pools == [
+        (
+            MoveKind.SWAP_POSITIVE,
+            MoveKind.SWAP_NEGATIVE,
+            MoveKind.SWAP_BOTH,
+            MoveKind.INSERT_POSITIVE,
+            MoveKind.INSERT_NEGATIVE,
+        ),
+        tuple(MoveKind),
+    ]
+    topology_state = solver._heights[0].restarts[0].anneal
+    assert topology_state.gaps == GapProfile.zero(1)
+    assert topology_state.variant_indices == (0,)
+
+
+def test_one_restart_search_retains_the_full_move_pool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    move_pools: list[tuple[MoveKind, ...]] = []
+    real_anneal_stage = anneal_stage
+
+    def capture_anneal(
+        problem: PlacementProblem,
+        state: AnnealState,
+        config: AnnealConfig,
+        context: PlacementCostContext | None = None,
+    ) -> AnnealStageResult:
+        move_pools.append(config.move_kinds)
+        return real_anneal_stage(problem, state, config, context)
+
+    monkeypatch.setattr(sequence_solver_module, "anneal_stage", capture_anneal)
+    solver = _solver(
+        _FakeRouting(),
+        heights=(40,),
+        config=SequenceSolverConfig(
+            stages=1,
+            moves_per_stage=1,
+            restarts_per_height=1,
+            global_elites=1,
+        ),
+    )
+
+    with pytest.raises(NoValidLayout):
+        solver.search(max_stages=1)
+
+    assert move_pools == [tuple(MoveKind)]
 
 
 def test_exploitation_waits_until_every_grouped_discovery_finishes(

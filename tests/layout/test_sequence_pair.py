@@ -1702,6 +1702,39 @@ def test_fixed_seed_reproduces_stage_incumbent_and_accepted_move_count() -> None
     assert a.archive == b.archive
 
 
+def test_fixed_seed_reproduces_stage_with_a_supplied_move_pool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    problem = _tiny_placement_problem()
+    state = AnnealState.initial(problem.size, 17)
+    config = replace(
+        AnnealConfig.test(),
+        move_kinds=(MoveKind.SWAP_BOTH, MoveKind.INSERT_POSITIVE),
+    )
+    traces: list[list[MoveKind]] = [[], []]
+    trace_index = 0
+    real_apply_move = apply_move
+
+    def capture_move(
+        state: AnnealState,
+        kind: MoveKind,
+        rng: random.Random,
+        *,
+        problem: PlacementProblem | None = None,
+    ) -> AnnealState:
+        traces[trace_index].append(kind)
+        return real_apply_move(state, kind, rng, problem=problem)
+
+    monkeypatch.setattr(sequence_pair_module, "apply_move", capture_move)
+    first = anneal_stage(problem, state, config)
+    trace_index = 1
+    second = anneal_stage(problem, state, config)
+
+    assert traces[0] == traces[1]
+    assert set(traces[0]) == set(config.move_kinds)
+    assert first == second
+
+
 def test_anneal_stage_validates_cost_context_once_for_dynamic_targets(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1808,6 +1841,20 @@ def test_anneal_config_rejects_invalid_schedule_values() -> None:
     for kwargs in invalid_kwargs:
         with pytest.raises(ValueError):
             AnnealConfig(**kwargs)
+
+
+@pytest.mark.parametrize(
+    "move_kinds",
+    (
+        (),
+        (MoveKind.SWAP_POSITIVE, MoveKind.SWAP_POSITIVE),
+        (cast(Any, "swap_positive"),),
+        cast(Any, [MoveKind.SWAP_POSITIVE]),
+    ),
+)
+def test_anneal_config_rejects_invalid_move_pools(move_kinds: Any) -> None:
+    with pytest.raises(ValueError):
+        AnnealConfig(move_kinds=move_kinds)
 
 
 def _lns_failure(
