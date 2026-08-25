@@ -11,7 +11,7 @@ import pytest
 import flab2bp.layout.sequence_islands as islands_module
 from flab2bp.layout import validate
 from flab2bp.layout.base import NoValidLayout, PlacedBuilding, Placement
-from flab2bp.layout.compact_seed import CompactSeedConfig
+from flab2bp.layout.compact_seed import CompactSeedConfig, solve_compact_seed
 from flab2bp.layout.sequence_islands import (
     _merge_sequence_island_outcomes,
     _run_sequence_island,
@@ -21,7 +21,7 @@ from flab2bp.layout.sequence_islands import (
     _SequenceIslandOutcome,
     _SequenceIslandRequest,
 )
-from flab2bp.layout.sequence_pair import derive_stage_seed
+from flab2bp.layout.sequence_pair import PlacementProblem, derive_stage_seed
 from flab2bp.layout.sequence_solver import SequencePairLayout, SequenceSolverConfig
 from tests.layout.test_freeform import two_stage_spec
 
@@ -176,6 +176,58 @@ class _PendingExecutor(_ImmediateExecutor):
         return future
 
 
+def test_compact_portfolio_uses_root_seed_once_while_search_seeds_stay_distinct(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = 20260824
+    config = SequenceSolverConfig.test()
+    assert config.seed == root
+    _ImmediateExecutor.instances.clear()
+    _ImmediateExecutor.raised = None
+    monkeypatch.setattr(islands_module, "ProcessPoolExecutor", _ImmediateExecutor)
+
+    SequencePairLayout(islands=8, config=config).lay_out(
+        two_stage_spec(),
+        time_budget_s=2.0,
+    )
+
+    requests = _ImmediateExecutor.instances[-1].requests
+    assert [request.seed for request in requests] == list(_sequence_island_seeds(root, 8))
+    assert len({request.seed for request in requests}) == 8
+    assert requests[0].compact_seed_attempt is None
+    seeded = requests[1:]
+    assert [request.compact_seed_attempt for request in seeded] == list(range(7))
+    assert {request.compact_seed_base_seed for request in seeded} == {root}
+
+    problem = PlacementProblem(
+        sizes=((1, 1),),
+        nets=(),
+        outline_height=1,
+        area_lower_bound=1,
+    )
+    compact_config = CompactSeedConfig(max_deterministic_time=0.01)
+    for request in seeded:
+        attempt = request.compact_seed_attempt
+        assert attempt is not None
+        from_request = solve_compact_seed(
+            problem,
+            base_seed=request.compact_seed_base_seed,
+            attempt=attempt,
+            config=compact_config,
+        )
+        standalone = solve_compact_seed(
+            problem,
+            base_seed=root,
+            attempt=attempt,
+            config=compact_config,
+        )
+        assert from_request.status is standalone.status
+        assert from_request.state == standalone.state
+        assert from_request.diagnostics.solver_seed == (
+            derive_stage_seed(root, attempt) % ((1 << 31) - 1)
+        )
+
+
 @pytest.mark.parametrize("raised", [RuntimeError("worker exploded"), KeyboardInterrupt()])
 def test_worker_failure_or_interrupt_terminates_and_propagates(
     monkeypatch: pytest.MonkeyPatch,
@@ -257,6 +309,9 @@ def test_child_soft_deadline_leaves_parent_time_to_collect_result(
     assert {request.soft_deadline for request in executor.requests} == {111.0}
     assert [request.compact_seed_attempt for request in executor.requests] == [None, 0, 1]
     assert all(request.compact_seed_config is compact_config for request in executor.requests)
+    assert {request.compact_seed_base_seed for request in executor.requests} == {
+        SequenceSolverConfig().seed
+    }
     assert pickle.loads(pickle.dumps(executor.requests[1])) == executor.requests[1]
     assert observed_waits == [4.0]
     assert executor.kwargs["mp_context"].get_start_method() == "spawn"
@@ -320,6 +375,7 @@ def test_two_real_spawned_islands_are_unseeded_then_seeded_and_both_valid() -> N
             island_id=island_id,
             seed=seed,
             compact_seed_attempt=None if island_id == 0 else island_id - 1,
+            compact_seed_base_seed=config.seed,
             compact_seed_config=compact_config,
         )
         for island_id, seed in enumerate(seeds)
@@ -341,6 +397,7 @@ def test_two_real_spawned_islands_are_unseeded_then_seeded_and_both_valid() -> N
     assert "compact_seed_attempt" not in island0.stats
     assert "compact_seed_closures" not in island0.stats
     assert island1.stats["compact_seed_attempt"] == 0.0
+    assert island1.stats["compact_seed_base_seed"] == float(config.seed)
     assert island1.stats["compact_seed_status"] in {"optimal", "feasible"}
     assert island1.stats["compact_seed_decoded_width"] >= 1.0
     assert island1.stats["compact_seed_closures"] == 1.0

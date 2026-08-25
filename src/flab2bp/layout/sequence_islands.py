@@ -36,6 +36,7 @@ class _SequenceIslandRequest:
     island_id: int
     seed: int
     compact_seed_attempt: int | None
+    compact_seed_base_seed: int
     compact_seed_config: CompactSeedConfig
 
 
@@ -125,6 +126,7 @@ def _run_sequence_island(request: _SequenceIslandRequest) -> _SequenceIslandOutc
             config=config,
             absolute_deadline=request.soft_deadline,
             compact_seed_attempt=request.compact_seed_attempt,
+            compact_seed_base_seed=request.compact_seed_base_seed,
             compact_seed_config=request.compact_seed_config,
         )
         result = run.solver.search()
@@ -255,6 +257,7 @@ def run_sequence_islands(
             island_id=island_id,
             seed=seed,
             compact_seed_attempt=None if island_id == 0 else island_id - 1,
+            compact_seed_base_seed=config.seed,
             compact_seed_config=compact_seed_config,
         )
         for island_id, seed in enumerate(seeds)

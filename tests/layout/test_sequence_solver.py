@@ -2381,6 +2381,7 @@ def test_seeded_production_schedules_one_balanced_height_and_reports_compact_wor
         tuple[
             PlacementProblem,
             int,
+            int,
             CompactSeedConfig,
             tuple[VariantDirectInsertTarget, ...],
             float | None,
@@ -2398,10 +2399,10 @@ def test_seeded_production_schedules_one_balanced_height_and_reports_compact_wor
         absolute_deadline: float | None,
         cancelled: Callable[[], bool] | None,
     ) -> CompactSeedResult:
-        del base_seed
         calls.append(
             (
                 problem,
+                base_seed,
                 attempt,
                 config,
                 direct_eligibility,
@@ -2435,7 +2436,11 @@ def test_seeded_production_schedules_one_balanced_height_and_reports_compact_wor
     monkeypatch.setattr(sequence_solver_module, "solve_compact_seed", compact)
     deadline = time.monotonic() + 10.0
     compact_config = CompactSeedConfig(max_deterministic_time=0.125)
-    config = SequenceSolverConfig.test()
+    compact_root_seed = 20260824
+    config = replace(
+        SequenceSolverConfig.test(),
+        seed=derive_stage_seed(compact_root_seed, 1),
+    )
     run = _production_run(
         two_stage_spec(),
         time_budget_s=2.0,
@@ -2444,11 +2449,22 @@ def test_seeded_production_schedules_one_balanced_height_and_reports_compact_wor
         config=config,
         absolute_deadline=deadline,
         compact_seed_attempt=3,
+        compact_seed_base_seed=compact_root_seed,
         compact_seed_config=compact_config,
     )
 
     assert len(calls) == 1
-    problem, attempt, observed_config, eligibility, observed_deadline, cancelled = calls[0]
+    (
+        problem,
+        observed_base_seed,
+        attempt,
+        observed_config,
+        eligibility,
+        observed_deadline,
+        cancelled,
+    ) = calls[0]
+    assert observed_base_seed == compact_root_seed
+    assert config.seed != compact_root_seed
     assert attempt == 3
     assert observed_config is compact_config
     assert observed_deadline == deadline
@@ -2473,6 +2489,7 @@ def test_seeded_production_schedules_one_balanced_height_and_reports_compact_wor
     result = run.solver.search()
     placement = _with_observational_stats(result, run, False, config)
     assert placement.stats["compact_seed_attempt"] == 3.0
+    assert placement.stats["compact_seed_base_seed"] == float(compact_root_seed)
     assert placement.stats["compact_seed_status"] == "feasible"
     assert placement.stats["compact_seed_height"] == float(problem.outline_height)
     assert placement.stats["compact_seed_solved_width"] == 17.0

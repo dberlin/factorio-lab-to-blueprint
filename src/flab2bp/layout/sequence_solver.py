@@ -1781,6 +1781,7 @@ class _ProductionTelemetry:
     pose_feasibility_rejects: int = 0
     elevated_coater_routes: int = 0
     compact_seed_attempt: int | None = None
+    compact_seed_base_seed: int | None = None
     compact_seed_height: int | None = None
     compact_seed_result: CompactSeedResult | None = None
     compact_seed_wall_time_s: float = 0.0
@@ -1872,6 +1873,7 @@ def _production_run(
     belt_vertical_construction: bool = True,
     absolute_deadline: float | None = None,
     compact_seed_attempt: int | None = None,
+    compact_seed_base_seed: int | None = None,
     compact_seed_config: CompactSeedConfig | None = None,
 ) -> _ProductionRun:
     started = time.monotonic()
@@ -1886,6 +1888,11 @@ def _production_run(
         type(compact_seed_attempt) is not int or compact_seed_attempt < 0
     ):
         raise ValueError("compact seed attempt must be a non-negative integer or None")
+    if compact_seed_base_seed is not None and type(compact_seed_base_seed) is not int:
+        raise ValueError("compact seed base seed must be an integer or None")
+    chosen_compact_base_seed = (
+        config.seed if compact_seed_base_seed is None else compact_seed_base_seed
+    )
     if compact_seed_config is None:
         chosen_compact_config = CompactSeedConfig()
     elif type(compact_seed_config) is CompactSeedConfig:
@@ -1973,6 +1980,7 @@ def _production_run(
             template_problem = problems[heights[0]]
             compact_height = _balanced_compact_seed_height(template_problem)
             telemetry.compact_seed_attempt = compact_seed_attempt
+            telemetry.compact_seed_base_seed = chosen_compact_base_seed
             telemetry.compact_seed_height = compact_height
             if compact_height not in seeds:
                 seeds[compact_height] = _greedy_pack(strips, compact_height)
@@ -1999,7 +2007,7 @@ def _production_run(
                 )
                 compact_result = solve_compact_seed(
                     problems[compact_height],
-                    base_seed=config.seed,
+                    base_seed=chosen_compact_base_seed,
                     attempt=compact_seed_attempt,
                     config=chosen_compact_config,
                     direct_eligibility=direct_eligibility,
@@ -2533,12 +2541,16 @@ def _with_observational_stats(
     compact_result = telemetry.compact_seed_result
     compact_height = telemetry.compact_seed_height
     compact_attempt = telemetry.compact_seed_attempt
+    compact_base_seed = telemetry.compact_seed_base_seed
     if compact_result is not None and compact_height is not None and compact_attempt is not None:
         diagnostics = compact_result.diagnostics
         compact_closure = compact_closures[0] if compact_closures else None
         stats.update(
             {
                 "compact_seed_attempt": float(compact_attempt),
+                "compact_seed_base_seed": float(
+                    compact_base_seed if compact_base_seed is not None else config.seed
+                ),
                 "compact_seed_status": compact_result.status.value,
                 "compact_seed_height": float(compact_height),
                 "compact_seed_solved_width": float(
