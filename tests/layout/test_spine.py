@@ -9,12 +9,14 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable
+from dataclasses import replace
 from fractions import Fraction
 
 import pytest
 
 from flab2bp.dsp import catalog
-from flab2bp.layout import validate
+from flab2bp.dsp import colliders as C
+from flab2bp.layout import junction, validate
 from flab2bp.layout.base import (
     DETERMINISTIC_WORKERS,
     NoValidLayout,
@@ -3032,3 +3034,109 @@ class TestSortersAreSizedPerItem:
         # A PROLIFERATED candidate has to be among the ones checked, or this
         # says nothing about sorter sizing on the specs that grew coaters.
         assert sprayed == 1, sprayed
+
+
+class TestABridgePassesUnderAJunctionAndNotOverIt:
+    """`game.belt_collide` on the trunk margin, which is where spine met it.
+
+    A trunk that feeds a lane and carries on needs a Splitter, and a Splitter's
+    build collider is a 2.38-unit cross standing 2.30 units tall against a
+    level's 4/3.  `colliders.belt_keepout_offsets` measures the consequence and
+    it is ASYMMETRIC: the cells a foreign belt may not stand in run from the
+    junction's own level to ONE above it, and there are none below.  So the
+    crossing goes underneath -- `_TRUNK_Z` lifts the trunks and the bridges stay
+    on the ground -- and the clash is gone by construction rather than by search.
+
+    Two items on ADJACENT lane rows is the shape that cannot be ordered away:
+    each trunk's bridges then run a tile from the other's junctions whichever
+    column each takes.
+    """
+
+    def _previews(self, buildings: list[PlacedBuilding]) -> list[C.Preview]:
+        """The placement as `CheckBuildConditions` sees it."""
+        return [
+            C.Preview(
+                b.model_index,
+                float(b.x),
+                float(b.y),
+                float(b.z),
+                float(b.yaw),
+                is_belt=catalog.is_belt(b.item_id),
+                is_inserter=catalog.is_sorter(b.item_id),
+                is_splitter=b.item_id == catalog.SPLITTER_ID,
+                is_belt_addon=False,
+                output=b.output_obj,
+                input=b.input_obj,
+            )
+            for b in buildings
+        ]
+
+    def _scene(self) -> tuple[list[PlacedBuilding], int]:
+        from flab2bp.layout.spine import _assign_columns, _emit_risers, _Riser
+
+        content_w = 6
+        belt_id, belt_model = 2001, 35
+        buildings: list[PlacedBuilding] = []
+        lane_tiles: dict[tuple[int, int], list[int]] = {}
+        # Four lanes, two of them on ADJACENT rows (3 and 4) so the two trunks
+        # tap a tile apart.
+        for key, row in (((0, 0), 0), ((0, 1), 1), ((1, 0), 3), ((1, 1), 4)):
+            tiles = []
+            for x in range(content_w):
+                tiles.append(len(buildings))
+                buildings.append(
+                    PlacedBuilding(
+                        item_id=belt_id, model_index=belt_model, x=x, y=row,
+                        width=1, height=1, carries_item="a",
+                    )
+                )
+            for a, b in zip(tiles, tiles[1:], strict=False):
+                buildings[a] = replace(buildings[a], output_obj=b)
+            lane_tiles[key] = tiles
+        risers = _assign_columns(
+            [
+                _Riser(item="a", taps=((0, 0, 0, True), (3, 1, 0, False), (6, 2, 0, False))),
+                _Riser(item="b", taps=((1, 0, 1, True), (4, 1, 1, False), (7, 2, 1, False))),
+            ]
+        )
+        lane_tiles[(2, 0)] = lane_tiles[(1, 0)]
+        lane_tiles[(2, 1)] = lane_tiles[(1, 1)]
+        _emit_risers(
+            buildings, risers, lane_tiles,
+            content_w=content_w, belt_id=belt_id, belt_model=belt_model,
+        )
+        return buildings, sum(
+            1 for b in buildings if b.item_id == catalog.SPLITTER_ID
+        )
+
+    def test_the_margin_convicts_nothing(self) -> None:
+        buildings, junctions = self._scene()
+        assert junctions == 2, (
+            "the scene stopped producing the junctions it exists to test, so a "
+            "clean verdict below would prove nothing"
+        )
+        hits = C.belt_collisions(self._previews(buildings))
+        named = [
+            (i, j, catalog.building(buildings[j].item_id).name) for i, j in hits[:5]
+        ]
+        assert not hits, named
+
+    def test_every_junction_stands_above_the_bridges_that_cross_it(self) -> None:
+        """The invariant, stated where a future change to the profile would break it."""
+        from flab2bp.layout.spine import _TRUNK_Z
+
+        buildings, _ = self._scene()
+        for b in buildings:
+            if b.item_id != catalog.SPLITTER_ID:
+                continue
+            assert b.z == _TRUNK_Z
+            for cell in junction.keepout_cells(b.x, b.y, int(b.z)):
+                for other in buildings:
+                    if other is b or not catalog.is_belt(other.item_id):
+                        continue
+                    if (other.x, other.y) != cell[:2]:
+                        continue
+                    assert math.floor(other.z) != cell[2] or other.x == b.x, (
+                        f"a belt at ({other.x}, {other.y}, {other.z}) stands in "
+                        f"the keep-out of a junction at ({b.x}, {b.y}, {b.z})"
+                    )

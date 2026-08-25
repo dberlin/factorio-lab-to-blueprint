@@ -2928,16 +2928,28 @@ def _lane_direction(
     )
 
 
-#: Altitude a riser's horizontal bridge rides at while it crosses the trunks of
-#: other items.  Everything else in this skeleton is at ``z = 0``; a bridge is
-#: the one thing that has to pass over something, and belts are the only class of
-#: building that may.  One level is enough for any number of trunks, because a
-#: bridge only ever crosses trunks, never another bridge -- two bridges would
-#: have to share a lane's ``y``, and a lane holds one item.
-#: A bridge only ever crosses a ground-level trunk, so it needs exactly
-#: ``BELT_CROSSING_CLEARANCE`` and no more.  This is NOT the game's ceiling:
-#: a belt goes as high as the save's vertical-construction unlocks allow.
-_BRIDGE_Z = catalog.BELT_CROSSING_CLEARANCE
+#: Altitude the TRUNKS ride at, so that a bridge crossing them passes UNDERNEATH
+#: rather than over.
+#:
+#: This used to be the other way round -- trunks on the ground and bridges a
+#: level up -- and it is the whole of why ``game.belt_collide`` convicted spine.
+#: A trunk that feeds a lane and carries on needs a SPLITTER, and a splitter's
+#: build collider is a 2.38-unit cross standing 2.30 units tall.  A level is
+#: 4/3, so a belt ONE level above a splitter is still inside that cross while a
+#: belt one level below is nowhere near it.  ``colliders.belt_keepout_offsets``
+#: measures exactly that asymmetry: the keep-out runs from the splitter's own
+#: level to one above it and stops, with nothing below.
+#:
+#: So the crossing goes under.  It costs no column and no altitude the old
+#: arrangement did not already spend -- ``BELT_CROSSING_CLEARANCE`` between a
+#: bridge and a trunk either way round -- and it removes the clash by
+#: construction rather than by search.  This is NOT the game's ceiling: a belt
+#: goes as high as the save's vertical-construction unlocks allow.
+#:
+#: One level is enough for any number of trunks, because a bridge only ever
+#: crosses trunks, never another bridge -- two bridges would have to share a
+#: lane's ``y``, and a lane holds one item.
+_TRUNK_Z = catalog.BELT_CROSSING_CLEARANCE
 
 #: Altitude of a bridge's run-up tile: one tile of run buys one tile's worth of
 #: climb, so the tile the change happens across sits at half a level.  This is
@@ -3299,6 +3311,7 @@ def _emit_risers(
                     model_index=belt_model,
                     x=x,
                     y=y,
+                    z=_TRUNK_Z,
                     width=1,
                     height=1,
                     yaw=Facing.SOUTH.value,
@@ -3319,7 +3332,9 @@ def _emit_risers(
                 # that is how the corpus records a belt running through one.
                 arriving = _trunk_belt(xr, y)
                 junction_idx = len(buildings)
-                buildings.append(junction.make_splitter(xr, y, carries_item=riser.item))
+                buildings.append(
+                    junction.make_splitter(xr, y, _TRUNK_Z, carries_item=riser.item)
+                )
                 junctions += 1
                 buildings[arriving] = _with_output(buildings[arriving], junction_idx)
                 here = _trunk_belt(xr, y)
@@ -3388,38 +3403,31 @@ def _bridge(
     Returns ``(head, tail, count)`` in flow order: ``head`` is the tile the
     upstream side hands to and ``tail`` the one that hands on.
 
+    THE BRIDGE STAYS ON THE GROUND AND THE TRUNK IS THE THING AT ALTITUDE, which
+    is the reverse of what this used to do and the reason spine stopped placing
+    belts the game refuses.  See :data:`_TRUNK_Z`: a splitter's collider reaches
+    a level UP and nothing DOWN, so a crossing that passes underneath is clear by
+    construction where one that passes over is not.
+
     The altitude profile spends :data:`catalog.RAMP_TILES_PER_LEVEL` tiles on
     every level change, which for a belt climbing half a level per tile means one
     tile of RUN-UP at the old level before the tile that arrives at the new one.
-    Written from the flow's point of view, so it reverses with the flow:
+    Here there is exactly one change and it is at the TRUNK end, so the profile
+    reads ``0, 0, ..., 0, 1/2`` and then the trunk at :data:`_TRUNK_Z` -- counting
+    the lane's ground at the far end, ``0, 0, ..., 1/2, 1``.  It reverses with
+    the flow without changing shape, because the ramp tile is a property of the
+    tile and not of the direction.
 
-    * eastward (lane -> trunk) the run-up is the first tile, at ``z = 0``,
-      sitting in the ramp column west of trunk 0; everything after it rides at
-      :data:`_BRIDGE_Z`, and the last two of those are the run-out for the drop
-      onto the trunk;
-    * westward (trunk -> lane) the run-up is the LAST tile in ``x`` order -- the
-      one beside the trunk, in that trunk's own ramp column -- and the drop back
-      onto the lane runs out across the two tiles nearest ``content_w``.
-
-    A trunk in column 0 needs no bridge at altitude at all: there is nothing
-    between it and the lane to cross, so its single tile stays on the ground.
+    That run-up tile lands in the free ramp column ``_trunk_x`` reserves west of
+    every trunk, so it never has to clear anything -- which it could not do at
+    half height anyway.  A ONE-TILE bridge is entirely run-up, which is legal
+    here where it was not when the trunk was the ground: half a level of climb
+    across one tile of run.
     """
     made: list[int] = []
     xs = list(range(content_w, xr))
     if not xs:
         return -1, -1, 0
-    #: BOTH ends of a bridge meet the ground -- a lane on one side, a trunk on
-    #: the other -- so both are run-up tiles and both sit half way up.  Only one
-    #: of them used to, which left the far end dropping a whole tile of height
-    #: across one tile of run: the same illegal step freeform emitted, and the
-    #: one ``geom.altitude_step`` now refuses.  The profile reads
-    #: ``0, 1/2, 1, ..., 1, 1/2, 0`` counting the ground at each end, exactly as
-    #: every elevated run in the corpus does.
-    #:
-    #: Both end tiles land in the free ramp column ``_trunk_x`` reserves, so a
-    #: run-up tile never has to clear anything -- which it could not do at half
-    #: height anyway.  A one-tile bridge is entirely run-up: flat, no crossing.
-    ramp_xs = {content_w, xr - 1}
     for x in xs:
         made.append(len(buildings))
         buildings.append(
@@ -3428,13 +3436,7 @@ def _bridge(
                 model_index=belt_model,
                 x=x,
                 y=y,
-                z=(
-                    Fraction(0)
-                    if len(xs) == 1
-                    else _RAMP_Z
-                    if x in ramp_xs
-                    else _BRIDGE_Z
-                ),
+                z=_RAMP_Z if x == xr - 1 else Fraction(0),
                 width=1,
                 height=1,
                 yaw=(Facing.EAST if toward_trunk else Facing.WEST).value,

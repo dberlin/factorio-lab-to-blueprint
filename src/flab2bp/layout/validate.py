@@ -722,34 +722,26 @@ NEEDS_SPEC: set[str] = set()
 #: Anything put back in here needs the same shape of evidence: a measurement of
 #: what it costs to leave on, not a note that it is inconvenient.
 #:
-#: ``game.belt_collide`` is here on exactly that evidence, and for exactly the
+#: ``game.belt_collide`` WAS here, on exactly that evidence and for exactly the
 #: shape of defect ``geom.collide`` was here for: a Splitter's
 #: ``catalog.footprint`` is 1x1 against a build collider that is a 2.38-unit
 #: cross standing 2.30 units tall, so both strategies routed belts a tile from
-#: one -- and one LEVEL above one, which is still inside it --  and the check
-#: refused them.  ``colliders.belt_keepout_offsets`` measures those cells and
-#: ``junction.keepout_cells`` names them.
+#: one -- and one LEVEL above one, which is still inside it.  It came out the
+#: same way ``geom.collide`` did: by giving the layouts the collider, not by
+#: widening a bound.  ``colliders.belt_keepout_offsets`` measures the cells it
+#: denies and ``junction.keepout_cells`` names them.
 #:
-#: FREEFORM IS OUT OF IT.  Its committer stakes every belt before it takes a
-#: tap, so the site test is asked a question that has an answer;
-#: ``_merge_frontier`` steers the router off a tap whose keep-out already holds
-#: a foreign belt; and a junction guards its collider's room against the passes
-#: that come after routing.  Measured over the four corpus URLs that carried
-#: convictions -- ``super-magnetic-ring``, ``information-matrix``,
-#: ``casimir-crystal``, ``quantum-chip`` -- freeform went from 22 convictions
-#: across 9 cells to ZERO.
+#: Freeform stakes every belt before it takes a tap, so its site test is asked a
+#: question that has an answer; ``_merge_frontier`` steers the router off a tap
+#: whose keep-out already holds a foreign belt; and a junction guards its
+#: collider's room against the passes that come after routing.  Spine lifted its
+#: TRUNKS a level instead and left the bridges on the ground -- the keep-out is
+#: asymmetric in ``z``, so a crossing that passes underneath is clear by
+#: construction where one that passes over is not.
 #:
-#: SPINE IS NOT, and the residue is two URLs.  Its trunks stand in a margin two
-#: columns apart and its bridges cross them at ``_BRIDGE_Z = 1``, which is
-#: exactly the level the cross reaches; ``spine._order_columns`` removes every
-#: clash that the column ORDER caused (eight of the ten URLs spine can build go
-#: clean), and what is left is mutual -- two items on adjacent lane rows, each
-#: trunk's bridge beside the other's junction, whichever way round they go.
-#: Taking this check out of here today costs SIX spine cells,
-#: ``super-magnetic-ring`` and ``quantum-chip``, and no freeform cell.  The
-#: backlog entry carries the geometry and why raising a bridge to clear it does
-#: not fit between two trunk columns.
-OPT_IN: set[str] = {"game.belt_collide"}
+#: Measured paired and interleaved against a pristine base checkout: 25 convicted
+#: corpus cells to 0.  See the backlog entry for the distribution.
+OPT_IN: set[str] = set()
 
 #: Check ids whose COVERAGE depends on matching each placed machine to the spec
 #: group it realises.  When any machine cannot be matched, these checks still
