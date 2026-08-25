@@ -1666,7 +1666,7 @@ def build_elite_archive(
     values = tuple(distinct.values())
     mandatory = (
         (EliteCategory.BLENDED, min(values, key=_blended_archive_key)),
-        (EliteCategory.NARROWEST, min(values, key=_narrowest_archive_key)),
+        (EliteCategory.NARROWEST, min(values, key=quality_archive_key)),
         (EliteCategory.LOWEST_HPWL, min(values, key=_lowest_hpwl_archive_key)),
         (EliteCategory.LOWEST_HISTORY, min(values, key=_lowest_history_archive_key)),
     )
@@ -1736,7 +1736,7 @@ def _blended_archive_key(candidate: AnnealIncumbent) -> tuple[SearchEnergy, Plac
     return candidate.energy, candidate.key
 
 
-def _narrowest_archive_key(
+def quality_archive_key(
     candidate: AnnealIncumbent,
 ) -> tuple[int, int, int, int, float, PlacementKey]:
     breakdown = candidate.breakdown

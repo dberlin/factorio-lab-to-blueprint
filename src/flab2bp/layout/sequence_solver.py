@@ -10,6 +10,7 @@ from __future__ import annotations
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
+from enum import StrEnum
 from fractions import Fraction
 from typing import Any, Protocol, cast
 
@@ -57,6 +58,7 @@ from flab2bp.layout.sequence_pair import (
     AnnealState,
     DecodedPlacement,
     DirectInsertTarget,
+    EliteCategory,
     EnergyBreakdown,
     PlacementKey,
     PlacementProblem,
@@ -68,6 +70,7 @@ from flab2bp.layout.sequence_pair import (
     build_elite_archive,
     derive_stage_seed,
     merge_stage_boundary,
+    quality_archive_key,
     repair_neighbourhood,
     split_stage_boundary,
 )
@@ -83,6 +86,18 @@ from flab2bp.layout.strip_variants import (
     variants_for_count,
 )
 from flab2bp.spec import BuildSpec
+
+
+class ObjectiveMode(StrEnum):
+    """Per-height objective used for routing cadence and archive exploitation."""
+
+    EXPLORATION = "exploration"
+    QUALITY = "quality"
+
+
+type QualityArchiveKey = tuple[int, int, int, int, float, PlacementKey]
+
+_QUALITY_REVISIT_AFTER = 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -255,7 +270,7 @@ class StageObservation:
     seed: int
     accepted_moves: int
     global_routes: int
-    global_overflow: int
+    global_overflow: int | None
     detailed_status: DetailedRouteStatus
     stranded: int
     expansions: int
@@ -270,6 +285,11 @@ class StageObservation:
     merge_count: int
     candidate_key: PlacementKey
     breakdown: EnergyBreakdown
+    objective_mode: ObjectiveMode
+    global_skip_reason: str | None
+    quality_entered: bool
+    quality_exited: bool
+    stagnation_count: int
 
     @property
     def energy(self) -> SearchEnergy:
@@ -319,6 +339,9 @@ class _HeightState:
     global_overflow: int = 1 << 60
     estimated_area: int = 1 << 60
     exact_key: tuple[int, int] | None = None
+    objective_mode: ObjectiveMode = ObjectiveMode.EXPLORATION
+    narrowest_key: QualityArchiveKey | None = None
+    quality_stagnation: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -337,14 +360,18 @@ class _AnnealedRestart:
 
 
 @dataclass(frozen=True, slots=True)
-class _GlobalCandidate[PreparedT]:
+class _StageCandidate[PreparedT]:
     prepared: PreparedT
     source: _AnnealedRestart
     state: AnnealState
     decoded: DecodedPlacement
-    result: GlobalRouteResult
     key: PlacementKey
     breakdown: EnergyBreakdown
+
+
+@dataclass(frozen=True, slots=True)
+class _GlobalCandidate[PreparedT](_StageCandidate[PreparedT]):
+    result: GlobalRouteResult
 
 
 StageBoundaryTransform = Callable[
@@ -413,6 +440,7 @@ class SequenceSolver[PreparedT]:
         ]
         self._stage_stats: list[StageObservation] = []
         self._incumbent: _ExactIncumbent | None = None
+        self._last_height: int | None = None
 
     def search(self, *, max_stages: int | None = None) -> SequenceSearchResult:
         """Search until its stage cap, deadline, or searchable budget is exhausted."""
@@ -448,7 +476,7 @@ class SequenceSolver[PreparedT]:
                 if not eligible:
                     termination = "candidates"
                     break
-                height_state = min(eligible, key=_height_priority)
+                height_state = self._select_height(eligible)
                 allowance = self.budget.shared_allowance()
                 restart = min(
                     (run for run in height_state.restarts if run.stages < self.config.stages),
@@ -456,6 +484,7 @@ class SequenceSolver[PreparedT]:
                 )
                 spent, cancelled = self._run_stage(height_state, restart, allowance)
                 self.budget.settle_shared(spent)
+            self._last_height = height_state.height
             if cancelled:
                 termination = "cancelled"
                 break
@@ -478,6 +507,15 @@ class SequenceSolver[PreparedT]:
             stages=tuple(self._stage_stats),
             termination=termination,
         )
+
+    def _select_height(self, eligible: Sequence[_HeightState]) -> _HeightState:
+        """Choose best-first, forcing one deterministic revisit after stagnation."""
+        best = min(eligible, key=_height_priority)
+        if self._last_height == best.height and best.quality_stagnation >= _QUALITY_REVISIT_AFTER:
+            alternatives = tuple(height for height in eligible if height is not best)
+            if alternatives:
+                return min(alternatives, key=_height_priority)
+        return best
 
     def _run_discovery(
         self,
@@ -564,10 +602,52 @@ class SequenceSolver[PreparedT]:
             (tagged.incumbent for source in annealed for tagged in source.result.archive),
             self.config.global_elites,
         )
+        narrowest = next(
+            tagged for tagged in merged if EliteCategory.NARROWEST in tagged.categories
+        )
+        height_state.narrowest_key = quality_archive_key(narrowest.incumbent)
         candidates = tuple(
             (tagged.incumbent, source_by_incumbent[id(tagged.incumbent)]) for tagged in merged
         )
+        if height_state.objective_mode is ObjectiveMode.QUALITY:
+            return self._route_quality_candidate(
+                height_state,
+                narrowest.incumbent,
+                source_by_incumbent[id(narrowest.incumbent)],
+                allowance,
+            )
         return self._route_archive(height_state, candidates, allowance)
+
+    def _route_quality_candidate(
+        self,
+        height_state: _HeightState,
+        elite: AnnealIncumbent,
+        source: _AnnealedRestart,
+        allowance: int,
+    ) -> tuple[int, bool]:
+        """Detailed-route one legal width-first candidate without a proxy pass."""
+        if elite.breakdown.hard_outline_overflow != 0:
+            raise ValueError("quality archive must retain a legal candidate")
+        selected = _StageCandidate(
+            prepared=self.adapters.prepare(height_state.height, elite.decoded),
+            source=source,
+            state=elite.state,
+            decoded=elite.decoded,
+            key=elite.key,
+            breakdown=elite.breakdown,
+        )
+        detailed = self.adapters.detailed_route(selected.prepared, allowance)
+        spent = detailed.routing.expansions
+        _check_spend(spent, allowance)
+        return self._complete_routing_stage(
+            height_state,
+            selected,
+            detailed,
+            spent,
+            global_routes=0,
+            global_overflow=None,
+            global_skip_reason="quality-mode",
+        )
 
     def _route_archive(
         self,
@@ -575,7 +655,6 @@ class SequenceSolver[PreparedT]:
         candidates: Sequence[tuple[AnnealIncumbent, _AnnealedRestart]],
         allowance: int,
     ) -> tuple[int, bool]:
-        problem = height_state.problem
         spent = 0
         global_candidates: list[_GlobalCandidate[PreparedT]] = []
         for elite, source in candidates:
@@ -606,7 +685,30 @@ class SequenceSolver[PreparedT]:
         detailed = self.adapters.detailed_route(selected.prepared, allowance - spent)
         _check_spend(detailed.routing.expansions, allowance - spent)
         spent += detailed.routing.expansions
+        return self._complete_routing_stage(
+            height_state,
+            selected,
+            detailed,
+            spent,
+            global_routes=len(global_candidates),
+            global_overflow=selected.result.total_overflow,
+            global_skip_reason=None,
+        )
 
+    def _complete_routing_stage(
+        self,
+        height_state: _HeightState,
+        selected: _StageCandidate[PreparedT],
+        detailed: DetailedStageResult,
+        spent: int,
+        *,
+        global_routes: int,
+        global_overflow: int | None,
+        global_skip_reason: str | None,
+    ) -> tuple[int, bool]:
+        problem = height_state.problem
+        starting_mode = height_state.objective_mode
+        prior_height_exact = height_state.exact_key
         exact_key: tuple[int, int] | None = None
         validation_failures: tuple[str, ...] = ()
         if detailed.routing.status is DetailedRouteStatus.ROUTED and detailed.placement is not None:
@@ -624,9 +726,27 @@ class SequenceSolver[PreparedT]:
                 if height_state.exact_key is None or exact_key < height_state.exact_key:
                     height_state.exact_key = exact_key
 
-        height_state.feedback = update_feedback(
-            decay_feedback(height_state.feedback), detailed.routing
+        quality_entered = (
+            starting_mode is ObjectiveMode.EXPLORATION
+            and global_routes > 0
+            and global_overflow == 0
+            and exact_key is not None
         )
+        quality_exited = starting_mode is ObjectiveMode.QUALITY and exact_key is None
+        if quality_entered:
+            height_state.objective_mode = ObjectiveMode.QUALITY
+            height_state.quality_stagnation = 0
+        elif starting_mode is ObjectiveMode.QUALITY:
+            if quality_exited:
+                height_state.objective_mode = ObjectiveMode.EXPLORATION
+                height_state.quality_stagnation = 0
+            elif prior_height_exact is None or (
+                exact_key is not None and exact_key < prior_height_exact
+            ):
+                height_state.quality_stagnation = 0
+            else:
+                height_state.quality_stagnation += 1
+
         source = selected.source
         restart = source.restart
         annealed = source.result
@@ -644,13 +764,21 @@ class SequenceSolver[PreparedT]:
                 RouteFailureKind.BUDGET,
             }
         )
-        if signature:
-            restart.feedback_stagnation = (
-                restart.feedback_stagnation + 1 if signature == restart.failure_signature else 1
+        if starting_mode is ObjectiveMode.EXPLORATION:
+            height_state.feedback = update_feedback(
+                decay_feedback(height_state.feedback), detailed.routing
             )
+            if signature:
+                restart.feedback_stagnation = (
+                    restart.feedback_stagnation + 1 if signature == restart.failure_signature else 1
+                )
+            else:
+                restart.feedback_stagnation = 0
+            restart.failure_signature = signature
         else:
+            restart.failure_signature = ()
             restart.feedback_stagnation = 0
-        restart.failure_signature = signature
+
         neighbourhood = frozenset[int]()
         next_anneal = AnnealState(
             pair=selected.state.pair,
@@ -659,7 +787,7 @@ class SequenceSolver[PreparedT]:
             stage_index=annealed.final_state.stage_index,
             variant_indices=selected.state.variant_indices,
         )
-        if 0 < detailed.routing.failed_count <= 3:
+        if starting_mode is ObjectiveMode.EXPLORATION and 0 < detailed.routing.failed_count <= 3:
             neighbourhood = _lns_neighbourhood(
                 detailed.routing, selected.state, problem, selected.decoded
             )
@@ -680,7 +808,11 @@ class SequenceSolver[PreparedT]:
                 )
         split_count = 0
         merge_count = 0
-        if self.stage_boundary_transform is not None and signature:
+        if (
+            starting_mode is ObjectiveMode.EXPLORATION
+            and self.stage_boundary_transform is not None
+            and signature
+        ):
             transformed = self.stage_boundary_transform(
                 height_state.height,
                 problem,
@@ -736,7 +868,8 @@ class SequenceSolver[PreparedT]:
         height_state.stages += 1
         height_state.spent += spent
         height_state.stranded = detailed.routing.failed_count
-        height_state.global_overflow = selected.result.total_overflow
+        if global_overflow is not None:
+            height_state.global_overflow = global_overflow
         height_state.estimated_area = selected.decoded.width * height_state.height
         selected_variant_ids = problem.selected_variant_ids(selected.state.variant_indices)
         selected_pose_yaws = (
@@ -764,8 +897,8 @@ class SequenceSolver[PreparedT]:
                 stage_index=restart.stages - 1,
                 seed=restart.seed,
                 accepted_moves=annealed.accepted_moves,
-                global_routes=len(global_candidates),
-                global_overflow=selected.result.total_overflow,
+                global_routes=global_routes,
+                global_overflow=global_overflow,
                 detailed_status=detailed.routing.status,
                 stranded=detailed.routing.failed_count,
                 expansions=spent,
@@ -780,6 +913,11 @@ class SequenceSolver[PreparedT]:
                 merge_count=merge_count,
                 candidate_key=selected.key,
                 breakdown=selected.breakdown,
+                objective_mode=height_state.objective_mode,
+                global_skip_reason=global_skip_reason,
+                quality_entered=quality_entered,
+                quality_exited=quality_exited,
+                stagnation_count=height_state.quality_stagnation,
             )
         )
         return spent, False
@@ -836,13 +974,25 @@ def _new_height_state(
     )
 
 
-def _height_priority(height: _HeightState) -> tuple[int, int, int, int, int, int]:
-    area = height.exact_key[0] if height.exact_key is not None else height.estimated_area
+def _height_priority(
+    height: _HeightState,
+) -> tuple[
+    int,
+    tuple[int, int],
+    int,
+    int,
+    int,
+    QualityArchiveKey | tuple[()],
+    int,
+    int,
+]:
     return (
         0 if height.exact_key is not None else 1,
+        height.exact_key or (0, 0),
         height.stranded,
         height.global_overflow,
-        area,
+        0 if height.narrowest_key is not None else 1,
+        height.narrowest_key or (),
         height.spent,
         height.order,
     )
@@ -1654,6 +1804,7 @@ def _with_observational_stats(
         None,
     )
     pose_yaws = exact_stage.selected_pose_yaws if exact_stage is not None else ()
+    quality_stages = tuple(stage for stage in result.stages if stage.global_skip_reason is not None)
     pose_counts = {
         yaw: sum(selected == yaw for selected in pose_yaws) for yaw in (0.0, 90.0, 180.0, 270.0)
     }
@@ -1679,7 +1830,24 @@ def _with_observational_stats(
             "lns_max_size": float(max(lns_sizes, default=0)),
             "feedback_nets": float(telemetry.feedback_nets),
             "feedback_cells": float(telemetry.feedback_cells),
-            "feedback_decays": float(stage_count),
+            "feedback_decays": float(sum(stage.global_routes > 0 for stage in result.stages)),
+            "objective_mode": (
+                exact_stage.objective_mode.value
+                if exact_stage is not None
+                else ObjectiveMode.EXPLORATION.value
+            ),
+            "global_skip_reason": (
+                exact_stage.global_skip_reason
+                if exact_stage is not None and exact_stage.global_skip_reason is not None
+                else "none"
+            ),
+            "quality_stages": float(len(quality_stages)),
+            "quality_entries": float(sum(stage.quality_entered for stage in result.stages)),
+            "quality_exits": float(sum(stage.quality_exited for stage in result.stages)),
+            "global_skips": float(len(quality_stages)),
+            "max_quality_stagnation": float(
+                max((stage.stagnation_count for stage in result.stages), default=0)
+            ),
             "variant_moves": float(sum(stage.variant_moves for stage in result.stages)),
             "pose_count": float(len(pose_yaws)),
             "pose_yaw_0": float(pose_counts[0.0]),

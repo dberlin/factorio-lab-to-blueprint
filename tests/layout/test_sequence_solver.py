@@ -378,6 +378,359 @@ def test_default_stage_limit_counts_grouped_discovery_as_one_routing_unit() -> N
     assert [restart.stages for restart in solver._heights[0].restarts] == [2, 2]
 
 
+def test_zero_overflow_validator_clean_exact_enters_quality_mode() -> None:
+    exact = _placement(area=20, belt_tiles=4)
+    fake = _FakeRouting(
+        detailed_results=(DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), exact),)
+    )
+    solver = _solver(
+        fake,
+        heights=(40,),
+        config=SequenceSolverConfig(
+            stages=2,
+            moves_per_stage=1,
+            restarts_per_height=1,
+            global_elites=1,
+        ),
+    )
+
+    result = solver.search(max_stages=1)
+
+    observation = result.stages[0]
+    assert observation.objective_mode is sequence_solver_module.ObjectiveMode.QUALITY
+    assert observation.quality_entered
+    assert not observation.quality_exited
+    assert observation.global_skip_reason is None
+    assert solver._heights[0].objective_mode is sequence_solver_module.ObjectiveMode.QUALITY
+
+
+@pytest.mark.parametrize(
+    ("overflow", "first_valid"),
+    ((1, True), (0, False)),
+)
+def test_quality_mode_requires_zero_overflow_and_validator_clean_exact(
+    overflow: int,
+    first_valid: bool,
+) -> None:
+    first = _placement(area=20, belt_tiles=4, valid=first_valid)
+    second = _placement(area=20, belt_tiles=4)
+    fake = _FakeRouting(
+        detailed_results=(
+            DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), first),
+            DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), second),
+        )
+    )
+    global_calls = 0
+
+    def global_route(
+        prepared: Prepared,
+        feedback: FeedbackState,
+        allowance: int,
+    ) -> GlobalRouteResult:
+        nonlocal global_calls
+        del prepared, feedback, allowance
+        global_calls += 1
+        return _global(overflow=overflow)
+
+    solver = SequenceSolver(
+        heights=(40,),
+        problem_for_height=lambda height: PlacementProblem(
+            sizes=((1, 1),),
+            nets=((0, 0),),
+            outline_height=height,
+            area_lower_bound=1,
+        ),
+        adapters=replace(fake.adapters(), global_route=global_route),
+        expansion_budget=ExpansionBudget(100),
+        config=SequenceSolverConfig(
+            stages=2,
+            moves_per_stage=1,
+            restarts_per_height=1,
+            global_elites=1,
+        ),
+    )
+
+    result = solver.search(max_stages=2)
+
+    first_observation = result.stages[0]
+    assert first_observation.objective_mode is sequence_solver_module.ObjectiveMode.EXPLORATION
+    assert not first_observation.quality_entered
+    assert first_observation.global_skip_reason is None
+    assert global_calls == 2
+
+
+def test_quality_stage_skips_global_routes_narrowest_once_and_settles_detailed_spend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    candidates_by_stage: list[tuple[AnnealIncumbent, AnnealIncumbent]] = []
+
+    def fake_anneal_stage(
+        problem: PlacementProblem,
+        state: AnnealState,
+        config: AnnealConfig,
+        context: PlacementCostContext | None = None,
+    ) -> AnnealStageResult:
+        del config, context
+
+        def incumbent(east_gap: int, scalar: float) -> AnnealIncumbent:
+            candidate_state = replace(
+                state,
+                gaps=GapProfile((east_gap,), (0,)),
+            )
+            decoded = decode_state(problem, candidate_state)
+            return AnnealIncumbent(
+                state=candidate_state,
+                decoded=decoded,
+                breakdown=replace(
+                    _candidate_breakdown(problem, decoded, scalar),
+                    width=east_gap + 1,
+                ),
+                key=PlacementKey(
+                    x=decoded.x,
+                    y=decoded.y,
+                    dimensions=problem.sizes,
+                    east_gaps=candidate_state.gaps.east,
+                    north_gaps=candidate_state.gaps.north,
+                ),
+            )
+
+        blended = incumbent(4, 0.0)
+        narrowest = incumbent(0, 100.0)
+        candidates_by_stage.append((blended, narrowest))
+        return AnnealStageResult(
+            final_state=replace(state, stage_index=state.stage_index + 1),
+            incumbent=blended,
+            accepted_moves=1,
+            elites=(blended, narrowest),
+            archive=(
+                sequence_pair_module.TaggedAnnealIncumbent(
+                    blended,
+                    (sequence_pair_module.EliteCategory.BLENDED,),
+                ),
+                sequence_pair_module.TaggedAnnealIncumbent(
+                    narrowest,
+                    (sequence_pair_module.EliteCategory.NARROWEST,),
+                ),
+            ),
+        )
+
+    monkeypatch.setattr(sequence_solver_module, "anneal_stage", fake_anneal_stage)
+    exact = _placement(area=20, belt_tiles=4)
+    fake = _FakeRouting(
+        detailed_results=(
+            DetailedStageResult(
+                _routing(DetailedRouteStatus.ROUTED, expansions=2),
+                exact,
+            ),
+            DetailedStageResult(
+                _routing(DetailedRouteStatus.ROUTED, expansions=7),
+                exact,
+            ),
+        )
+    )
+    global_candidates: list[Prepared] = []
+    detailed_candidates: list[Prepared] = []
+
+    def global_route(
+        prepared: Prepared,
+        feedback: FeedbackState,
+        allowance: int,
+    ) -> GlobalRouteResult:
+        del feedback, allowance
+        global_candidates.append(prepared)
+        return _global(expansions=1)
+
+    def detailed_route(prepared: Prepared, allowance: int) -> DetailedStageResult:
+        detailed_candidates.append(prepared)
+        return fake.detailed_route(prepared, allowance)
+
+    budget = ExpansionBudget(100)
+    solver = SequenceSolver(
+        heights=(40,),
+        problem_for_height=lambda height: PlacementProblem(
+            sizes=((1, 1),),
+            nets=((0, 0),),
+            outline_height=height,
+            area_lower_bound=1,
+        ),
+        adapters=replace(
+            fake.adapters(),
+            global_route=global_route,
+            detailed_route=detailed_route,
+        ),
+        expansion_budget=budget,
+        config=SequenceSolverConfig(
+            stages=2,
+            moves_per_stage=1,
+            restarts_per_height=1,
+            global_elites=2,
+        ),
+    )
+
+    result = solver.search(max_stages=2)
+
+    first_candidates = candidates_by_stage[0]
+    assert global_candidates == [
+        (40, first_candidates[0].decoded),
+        (40, first_candidates[1].decoded),
+    ]
+    assert detailed_candidates == [
+        (40, first_candidates[1].decoded),
+        (40, candidates_by_stage[1][1].decoded),
+    ]
+    quality = result.stages[1]
+    assert quality.global_routes == 0
+    assert quality.global_overflow is None
+    assert quality.global_skip_reason == "quality-mode"
+    assert quality.expansions == 7
+    assert quality.objective_mode is sequence_solver_module.ObjectiveMode.QUALITY
+    assert budget.spent == 11
+    assert solver._heights[0].restarts[0].anneal.stage_index == 2
+
+
+@pytest.mark.parametrize(
+    "quality_failure",
+    (DetailedRouteStatus.STRANDED, DetailedRouteStatus.BUDGET),
+)
+def test_quality_failure_exits_and_following_stage_restores_global_feedback(
+    quality_failure: DetailedRouteStatus,
+) -> None:
+    exact = _placement(area=20, belt_tiles=4)
+    fake = _FakeRouting(
+        detailed_results=(
+            DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), exact),
+            DetailedStageResult(
+                _routing(quality_failure, geometric_failure=True),
+                None,
+            ),
+            DetailedStageResult(
+                _routing(DetailedRouteStatus.STRANDED, geometric_failure=True),
+                None,
+            ),
+        )
+    )
+    solver = _solver(
+        fake,
+        heights=(40,),
+        config=SequenceSolverConfig(
+            stages=3,
+            moves_per_stage=1,
+            restarts_per_height=1,
+            global_elites=1,
+        ),
+    )
+
+    first_result = solver.search(max_stages=2)
+
+    failure = first_result.stages[1]
+    assert failure.global_routes == 0
+    assert failure.global_skip_reason == "quality-mode"
+    assert failure.objective_mode is sequence_solver_module.ObjectiveMode.EXPLORATION
+    assert failure.quality_exited
+    assert not solver._heights[0].feedback.cell_history
+    assert len(fake.global_allowances) == 1
+
+    final_result = solver.search(max_stages=3)
+
+    restored = final_result.stages[2]
+    assert restored.global_routes == 1
+    assert restored.global_skip_reason is None
+    assert restored.objective_mode is sequence_solver_module.ObjectiveMode.EXPLORATION
+    assert solver._heights[0].feedback.cell_history == {(0, 0, 0): 1.0}
+    assert len(fake.global_allowances) == 2
+
+
+def test_best_height_scheduling_uses_complete_exact_key_before_stable_order() -> None:
+    detailed_heights: list[int] = []
+
+    def detailed_route(prepared: Prepared, allowance: int) -> DetailedStageResult:
+        del allowance
+        height, _decoded = prepared
+        detailed_heights.append(height)
+        return DetailedStageResult(
+            _routing(DetailedRouteStatus.ROUTED),
+            _placement(area=100, belt_tiles=10 if height == 40 else 1),
+        )
+
+    fake = _FakeRouting()
+    solver = SequenceSolver(
+        heights=(40, 60),
+        problem_for_height=lambda height: PlacementProblem(
+            sizes=((1, 1),),
+            nets=((0, 0),),
+            outline_height=height,
+            area_lower_bound=1,
+        ),
+        adapters=replace(fake.adapters(), detailed_route=detailed_route),
+        expansion_budget=ExpansionBudget(100),
+        config=SequenceSolverConfig(
+            stages=2,
+            moves_per_stage=1,
+            restarts_per_height=1,
+            global_elites=1,
+        ),
+    )
+
+    result = solver.search(max_stages=3)
+
+    assert [stage.height for stage in result.stages] == [40, 60, 60]
+    assert detailed_heights == [40, 60, 60]
+    assert result.exact_key == (100, 1)
+
+
+def test_best_height_fallback_order_is_stranded_overflow_narrowest_spend_then_stable() -> None:
+    solver = _solver(_FakeRouting(), heights=(40, 60))
+    first, second = solver._heights
+    placement_key = PlacementKey(
+        x=(0,),
+        y=(0,),
+        dimensions=((1, 1),),
+        east_gaps=(0,),
+        north_gaps=(0,),
+    )
+
+    first.stranded, second.stranded = 0, 1
+    first.global_overflow, second.global_overflow = 5, 0
+    assert min(solver._heights, key=sequence_solver_module._height_priority) is first
+
+    second.stranded = 0
+    assert min(solver._heights, key=sequence_solver_module._height_priority) is second
+
+    first.global_overflow = 0
+    first.narrowest_key = (0, 10, 1, 0, 0.0, placement_key)
+    second.narrowest_key = (0, 9, 1, 0, 0.0, placement_key)
+    assert min(solver._heights, key=sequence_solver_module._height_priority) is second
+
+    first.narrowest_key = second.narrowest_key
+    first.spent, second.spent = 1, 0
+    assert min(solver._heights, key=sequence_solver_module._height_priority) is second
+
+    first.spent = 0
+    assert min(solver._heights, key=sequence_solver_module._height_priority) is first
+
+
+def test_stagnant_best_height_revisits_other_heights_deterministically() -> None:
+    exact = _placement(area=20, belt_tiles=4)
+    fake = _FakeRouting(
+        detailed_results=(DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), exact),)
+    )
+    solver = _solver(
+        fake,
+        heights=(40, 60),
+        config=SequenceSolverConfig(
+            stages=5,
+            moves_per_stage=1,
+            restarts_per_height=1,
+            global_elites=1,
+        ),
+    )
+
+    result = solver.search(max_stages=5)
+
+    assert [stage.height for stage in result.stages] == [40, 60, 40, 40, 60]
+    assert [stage.stagnation_count for stage in result.stages] == [0, 0, 1, 2, 1]
+
+
 def test_grouped_discovery_routes_the_union_and_preserves_restart_identity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1924,6 +2277,13 @@ def test_sequence_backend_returns_only_certified_placements(
         "elevated_coater_routes",
         "lns_max_size",
         "feedback_decays",
+        "objective_mode",
+        "global_skip_reason",
+        "quality_stages",
+        "quality_entries",
+        "quality_exits",
+        "global_skips",
+        "max_quality_stagnation",
         "placement_time_s",
         "preparation_time_s",
         "global_route_time_s",
