@@ -119,12 +119,12 @@ class PlacementProblem:
                     raise ValueError(
                         "strip variants must realize the exact owning instance"
                     )
-                if self.sizes[strip] != (
-                    variants[0].box_width,
-                    variants[0].box_height,
+                if (
+                    self.sizes[strip][0] < variants[0].box_width
+                    or self.sizes[strip][1] < variants[0].box_height
                 ):
                     raise ValueError(
-                        "problem default sizes must match variant index zero"
+                        "problem default sizes must contain variant index zero"
                     )
 
     @property
@@ -149,10 +149,17 @@ class PlacementProblem:
         indices = self._validate_variant_indices(variant_indices)
         if not self.variant_tables:
             return self.sizes
-        return tuple(
-            (self.variant(strip, variant).box_width, self.variant(strip, variant).box_height)
-            for strip, variant in enumerate(indices)
-        )
+        selected: list[tuple[int, int]] = []
+        for strip, variant_index in enumerate(indices):
+            default = self.variant_tables[strip][0]
+            variant = self.variant(strip, variant_index)
+            selected.append(
+                (
+                    variant.box_width + self.sizes[strip][0] - default.box_width,
+                    variant.box_height + self.sizes[strip][1] - default.box_height,
+                )
+            )
+        return tuple(selected)
 
     def selected_variant_ids(
         self, variant_indices: tuple[int, ...]
@@ -592,7 +599,7 @@ def align_direct_inserts(
         if len(matching) > 1:
             raise ValueError(f"duplicate carried direct target geometry for key {key}")
         carried = matching[0]
-        _validate_direct_target(problem, decoded, carried)
+        _validate_direct_target(problem, carried, sizes)
         if not _target_is_direct(decoded, carried):
             raise ValueError(f"carried direct target geometry is not realized for key {key}")
         carried_targets[key] = carried
@@ -613,13 +620,13 @@ def align_direct_inserts(
     )
     realized_targets = carried_targets.copy()
     for target in ordered:
-        _validate_direct_target(problem, current, target)
+        _validate_direct_target(problem, target, sizes)
         if target.key in current.direct:
             continue
         candidate = _align_direct_target(
-            problem,
             current,
             target,
+            sizes,
             outline=(decoded.width, decoded.used_height),
         )
         if candidate is None:
@@ -638,12 +645,13 @@ def align_direct_inserts(
 
 def _validate_direct_target(
     problem: PlacementProblem,
-    decoded: DecodedPlacement,
     target: DirectInsertTarget,
+    sizes: tuple[tuple[int, int], ...],
 ) -> None:
+    if len(sizes) != problem.size:
+        raise ValueError("selected strip sizes must match the placement problem")
     if not 0 <= target.producer < problem.size or not 0 <= target.consumer < problem.size:
         raise ValueError("direct-insert target endpoints must identify placement strips")
-    sizes = problem.selected_sizes(decoded.variant_indices)
     producer_size = sizes[target.producer]
     consumer_size = sizes[target.consumer]
     if (
@@ -656,13 +664,12 @@ def _validate_direct_target(
 
 
 def _align_direct_target(
-    problem: PlacementProblem,
     decoded: DecodedPlacement,
     target: DirectInsertTarget,
+    sizes: tuple[tuple[int, int], ...],
     *,
     outline: tuple[int, int],
 ) -> DecodedPlacement | None:
-    sizes = problem.selected_sizes(decoded.variant_indices)
     producer = target.producer
     consumer = target.consumer
     producer_width, producer_height = sizes[producer]
@@ -992,8 +999,9 @@ def cheap_energy(
         raise ValueError("placement cost context must match the problem net identities")
     if context.history_outline[1] != problem.outline_height:
         raise ValueError("placement cost context must match the problem outline height")
+    sizes = problem.selected_sizes(decoded.variant_indices)
     for target in context.direct_targets:
-        _validate_direct_target(problem, decoded, target)
+        _validate_direct_target(problem, target, sizes)
 
     overflow = max(0, decoded.used_height - problem.outline_height)
     area_ratio = decoded.width * problem.outline_height / max(problem.area_lower_bound, 1)

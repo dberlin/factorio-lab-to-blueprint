@@ -861,19 +861,22 @@ def _production_run(
         )
         direct_candidates = _direct_net_candidates(strips, spec)
         direct_targets = _direct_alignment_targets(direct_candidates)
-        sizes = (
-            tuple(
-                (variants[0].box_width, variants[0].box_height)
-                for variants in variant_tables
-            )
-            if variant_tables
-            else tuple(_box(strip) for strip in strips)
-        )
+        sizes = tuple(_box(strip) for strip in strips)
         nets = tuple(_nets_between(strips))
         area_lower_bound = (
             sum(
-                min(variant.box_width * variant.box_height for variant in variants)
-                for variants in variant_tables
+                min(
+                    (
+                        variant.box_width + sizes[strip][0] - variants[0].box_width
+                    )
+                    * (
+                        variant.box_height
+                        + sizes[strip][1]
+                        - variants[0].box_height
+                    )
+                    for variant in variants
+                )
+                for strip, variants in enumerate(variant_tables)
             )
             if variant_tables
             else sum(width * height for width, height in sizes)

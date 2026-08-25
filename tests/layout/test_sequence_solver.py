@@ -663,6 +663,10 @@ def test_production_preparation_receives_the_complete_selected_physical_plan(
         problem,
         state.variant_indices,
     )
+    assert candidate.decoded.variant_indices == state.variant_indices
+    assert tuple(_box(strip) for strip in selected) == problem.selected_sizes(
+        candidate.decoded.variant_indices
+    )
     for strip, variant_index, physical in zip(
         selected,
         state.variant_indices,

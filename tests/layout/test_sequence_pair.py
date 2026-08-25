@@ -1,6 +1,6 @@
 import random
 from collections.abc import Callable
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 from itertools import combinations, permutations
 from typing import Any, cast
 
@@ -45,7 +45,7 @@ from flab2bp.layout.sequence_pair import (
     derive_stage_seed,
     repair_neighbourhood,
 )
-from flab2bp.layout.strip_variants import StripInstanceId
+from flab2bp.layout.strip_variants import StripInstanceId, StripVariant, _variant_id
 from tests.layout.test_freeform import two_stage_spec
 from tests.layout.test_strip_variants import _family, _single_machine_spec
 
@@ -632,6 +632,122 @@ def test_fixed_seed_reproduces_variant_trace() -> None:
         elite.state.variant_indices for elite in second.elites
     )
     assert first.final_state.variant_indices == second.final_state.variant_indices
+
+
+def _variant_at_width(template: StripVariant, width: int) -> StripVariant:
+    geometry = replace(
+        template.placement_geometry,
+        pitch_x=width,
+        east_halo=(
+            width
+            - template.placement_geometry.footprint_width
+            - template.placement_geometry.west_halo
+        ),
+    )
+    return replace(
+        template,
+        variant_id=_variant_id(
+            template.variant_id.family_id,
+            template.yaw,
+            template.machine_origins_x,
+            geometry,
+            template.lane_plan,
+            template.attachment_plan,
+            width,
+            template.box_height,
+        ),
+        placement_geometry=geometry,
+        box_width=width,
+    )
+
+
+def _alignment_variant_problem(
+    *,
+    default_widths: tuple[int, int, int],
+    selected_widths: tuple[int, int, int],
+    producer_x: int,
+) -> tuple[PlacementProblem, DecodedPlacement, DirectInsertTarget]:
+    family = _family(_single_machine_spec("assembling-machine-1"))
+    template = family.variants[0]
+    tables = tuple(
+        (
+            _variant_at_width(template, default),
+            _variant_at_width(template, selected),
+        )
+        if default != selected
+        else (_variant_at_width(template, default),)
+        for default, selected in zip(default_widths, selected_widths, strict=True)
+    )
+    problem = PlacementProblem(
+        sizes=tuple(
+            (width, template.box_height) for width in default_widths
+        ),
+        nets=((0, 1),),
+        outline_height=template.box_height * 2,
+        area_lower_bound=1,
+        instance_ids=tuple(
+            StripInstanceId(family.family_id, machine_start, 1)
+            for machine_start in range(3)
+        ),
+        variant_tables=tables,
+    )
+    indices = tuple(1 if len(table) > 1 else 0 for table in tables)
+    selected_sizes = problem.selected_sizes(indices)
+    consumer_x = 6
+    x = (producer_x, consumer_x, consumer_x)
+    y = (0, template.box_height, 0)
+    decoded = DecodedPlacement(
+        x=x,
+        y=y,
+        width=max(
+            coordinate + width
+            for coordinate, (width, _height) in zip(x, selected_sizes, strict=True)
+        ),
+        used_height=template.box_height * 2,
+        x_windows=((0, producer_x), (consumer_x, consumer_x), (consumer_x, consumer_x)),
+        y_windows=tuple((coordinate, coordinate) for coordinate in y),
+        gap_area=0,
+        variant_indices=indices,
+    )
+    target = DirectInsertTarget(
+        key=(0, 1),
+        producer=0,
+        consumer=1,
+        producer_row=template.box_height - 1,
+        consumer_row=0,
+        producer_span=selected_sizes[0][0],
+        consumer_span=selected_sizes[1][0],
+    )
+    return problem, decoded, target
+
+
+def test_alignment_rejects_larger_selected_variant_that_would_overlap() -> None:
+    problem, decoded, target = _alignment_variant_problem(
+        default_widths=(4, 4, 3),
+        selected_widths=(5, 4, 4),
+        producer_x=10,
+    )
+
+    aligned = align_direct_inserts(problem, decoded, (target,))
+
+    assert aligned == decoded
+    assert target.key not in aligned.direct
+
+
+def test_alignment_accepts_smaller_selected_variant_without_default_overlap() -> None:
+    problem, decoded, target = _alignment_variant_problem(
+        default_widths=(5, 4, 4),
+        selected_widths=(4, 4, 3),
+        producer_x=9,
+    )
+
+    aligned = align_direct_inserts(problem, decoded, (target,))
+
+    assert target.key in aligned.direct
+    assert aligned.x == decoded.x
+    assert aligned.width == 13
+
+
 
 
 def test_every_move_preserves_both_permutations_and_gap_bounds() -> None:
