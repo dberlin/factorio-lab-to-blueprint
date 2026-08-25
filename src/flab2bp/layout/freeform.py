@@ -72,7 +72,7 @@ from fractions import Fraction
 import numpy as np
 from ortools.sat.python import cp_model
 
-from flab2bp.dsp import catalog, params
+from flab2bp.dsp import catalog, params, rules
 from flab2bp.layout import junction, slots, validate
 from flab2bp.layout.base import (
     DEFAULT_SEARCH_WORKERS,
@@ -4658,7 +4658,7 @@ def _tap_source(
         for c in canvas.buildings
         if c.output_obj == junction_idx or c.input_obj == junction_idx
     )
-    if attached >= junction.MAX_PORTS:
+    if attached >= rules.SPLITTER_MAX_PORTS:
         return False
 
     # The branch belt is ADJACENT to the junction, not on it, and every belt

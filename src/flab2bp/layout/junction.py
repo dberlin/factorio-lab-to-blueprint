@@ -12,14 +12,15 @@ fixture corpus, every one of which agrees:
   ``input_obj`` are both ``-1``.  It is a passive junction; the belts around it
   do the naming.
 * ``input_to_slot = 14`` and ``output_from_slot = 15`` on all 25, with both
-  offsets ``0``.  These are constants, not geometry.
+  offsets ``0``.  These are constants, not geometry --
+  ``rules.SPLITTER_INPUT_TO_SLOT`` and ``rules.SPLITTER_OUTPUT_FROM_SLOT``.
 * Every belt attached to it sits at **exactly the same tile**: ``dx = dy = 0``.
   A belt that runs *through* a splitter is recorded as two belt buildings on
   that tile, one ending at the junction and one starting from it.
 * A belt feeding the junction names it as that belt's ``output_obj``; a belt
   drawing from it names it as that belt's ``input_obj``.
 * Observed fan-in was 1 or 2 belts.  The game's splitter has four ports, so up
-  to four attachments on a tile is legal; :data:`MAX_PORTS` records that and
+  to four attachments on a tile is legal; ``rules.SPLITTER_MAX_PORTS`` records that and
   :func:`check_ports` enforces it, because exceeding it would paste as a
   splitter quietly dropping connections rather than as an error.
 
@@ -34,16 +35,18 @@ from collections.abc import Sequence
 from fractions import Fraction
 
 from flab2bp.dsp import catalog
+from flab2bp.dsp.rules import (
+    SPLITTER_INPUT_TO_SLOT,
+    SPLITTER_MAX_PORTS,
+    SPLITTER_OUTPUT_FROM_SLOT,
+)
 from flab2bp.layout.base import PlacedBuilding
 
-#: Slot indices every splitter in the corpus uses, without exception.
-INPUT_TO_SLOT = 14
-OUTPUT_FROM_SLOT = 15
-
-#: Ports on a DSP splitter.  Four sides, so at most four belts may attach to one
-#: junction tile -- counting both the ones feeding it and the ones drawing from
-#: it, since each occupies a side.
-MAX_PORTS = 4
+# The splitter's slot indices and its port count are the GAME's rules, stated
+# with their provenance in `flab2bp.dsp.rules`.  They were named
+# `INPUT_TO_SLOT`/`OUTPUT_FROM_SLOT` here -- the same two names `layout.slots`
+# uses for a SORTER's own ends, holding different values -- and carry the
+# `SPLITTER_` prefix now so the two can never be confused again.
 
 
 class TooManyPorts(ValueError):
@@ -138,8 +141,8 @@ def make_splitter(
         # nobody, and the belts around it name it.
         input_obj=None,
         output_obj=None,
-        input_to_slot=INPUT_TO_SLOT,
-        output_from_slot=OUTPUT_FROM_SLOT,
+        input_to_slot=SPLITTER_INPUT_TO_SLOT,
+        output_from_slot=SPLITTER_OUTPUT_FROM_SLOT,
         carries_item=carries_item,
     )
 
@@ -162,12 +165,12 @@ def check_ports(buildings: list[PlacedBuilding] | tuple[PlacedBuilding, ...]) ->
         for link in (b.output_obj, b.input_obj):
             if link is not None and link in ports:
                 ports[link] += 1
-    over = {i: n for i, n in ports.items() if n > MAX_PORTS}
+    over = {i: n for i, n in ports.items() if n > SPLITTER_MAX_PORTS}
     if over:
         first = next(iter(over))
         raise TooManyPorts(
             f"splitter {first} at ({buildings[first].x}, {buildings[first].y}) has "
-            f"{over[first]} belts attached but a splitter has {MAX_PORTS} sides; "
+            f"{over[first]} belts attached but a splitter has {SPLITTER_MAX_PORTS} sides; "
             f"{len(over)} junction(s) over the limit"
         )
 

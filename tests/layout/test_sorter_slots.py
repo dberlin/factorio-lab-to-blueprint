@@ -20,11 +20,11 @@ import pytest
 
 from flab2bp.dsp import catalog as cat
 from flab2bp.dsp import colliders
+from flab2bp.dsp import rules as R
 from flab2bp.dsp.codec import decode
 from flab2bp.dsp.envelope import BlueprintFormatError
 from flab2bp.dsp.records import Blueprint, BlueprintBuilding
 from flab2bp.layout import slots as S
-from flab2bp.layout import validate as V
 from flab2bp.layout.base import PlacedBuilding
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
@@ -240,7 +240,7 @@ def test_world_gap_scales_tiles_and_levels_differently() -> None:
     """
     assert S.world_gap(1.0, 0.0) == pytest.approx(colliders.GRID_ARC)
     assert S.world_gap(0.0, 1.0) == pytest.approx(colliders.GRID_ARC)
-    assert S.world_gap(0.0, 0.0, 1.0) == pytest.approx(cat.WORLD_UNITS_PER_LEVEL)
+    assert S.world_gap(0.0, 0.0, 1.0) == pytest.approx(R.WORLD_UNITS_PER_LEVEL)
     assert pytest.approx(1.2566, abs=1e-4) == colliders.GRID_ARC
     assert S.world_gap(1.0, 1.0) == pytest.approx(colliders.GRID_ARC * math.sqrt(2))
 
@@ -282,7 +282,7 @@ def test_the_length_and_skew_ladder_reads_the_raw_blueprint() -> None:
                 continue
             belts = sum(1 for p in peers if cat.is_belt(p.item_id))
             length = math.dist((s.x, s.y), (s.x2, s.y2))
-            low, high = V._SORTER_LENGTH[belts]
+            low, high = R.SORTER_LENGTH[belts]
             assert length <= high, f"{length} over {high}"
             slack = min(slack, length - low)
             f1 = _forward(s.yaw)
@@ -293,8 +293,8 @@ def test_the_length_and_skew_ladder_reads_the_raw_blueprint() -> None:
             checked += 1
     assert checked == 940
     assert slack >= 0.5, f"tightest length clears its floor by only {slack}"
-    assert worst_pair <= V._SKEW_PAIR_DEG, worst_pair
-    assert worst_axis <= V._SKEW_AXIS_DEG, worst_axis
+    assert worst_pair <= R.SKEW_PAIR_DEG, worst_pair
+    assert worst_axis <= R.SKEW_AXIS_DEG, worst_axis
 
 
 def _forward(yaw: float) -> tuple[float, float]:

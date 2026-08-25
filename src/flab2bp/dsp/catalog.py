@@ -49,6 +49,8 @@ from functools import cache
 from pathlib import Path
 from typing import Any
 
+from flab2bp.dsp.rules import WORLD_UNITS_PER_LEVEL
+
 _DATA = Path(__file__).parent / "data" / "buildings.json"
 _SLOT_POSES = Path(__file__).parent / "data" / "slot_poses.json"
 
@@ -834,15 +836,6 @@ def _slot_poses_for(prefab: str, table: Mapping[str, Any]) -> tuple[SlotPose, ..
         )
         for p in (table.get(prefab) or {}).get("slotPoses", ())
     )
-
-
-#: World units per altitude level, from the blueprint paste path::
-#:
-#:     lpos = dir * (localOffset_z * 1.3333333f + 0.2f + realRadius)
-#:
-#: Only :func:`_addon_areas_for` uses it, to turn the prefab's world-space addon
-#: offsets into the levels the rest of this project counts in.
-WORLD_UNITS_PER_LEVEL = 4.0 / 3.0
 
 
 def _addon_areas_for(

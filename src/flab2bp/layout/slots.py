@@ -9,11 +9,13 @@ at these fields at all.
 THE THREE CONSTANTS
 -------------------
 ``output_from_slot == 0`` and ``input_to_slot == 1`` on all 1288 sorters in
-``tests/fixtures/*.txt``, without a single exception.  These are the sorter's
-*own* ends and never vary; the game requires exactly this ordering, and rejects
-the sorter outright when it is reversed (``CheckInserterDataLegal``, first two
-tests).  The BELT side of a connection is always ``-1`` (849 belt inputs, 391
-belt outputs, no other value).  Only the MACHINE side carries a real index.
+``tests/fixtures/*.txt``, without a single exception.  The BELT side of a
+connection is always ``-1``.  Only the MACHINE side carries a real index.
+
+Those three, the ``0.8`` reach and the ``24``-degree alignment are the GAME's
+rules rather than this module's, and they are stated with their provenance in
+:mod:`flab2bp.dsp.rules`.  This module imports them from there so that what we
+EMIT and what ``layout.validate`` CHECKS can never drift apart.
 
 THE MACHINE SIDE IS NOW READ FROM THE GAME, NOT INFERRED
 --------------------------------------------------------
@@ -41,14 +43,15 @@ The Chemical Plant is why a three-building blueprint containing one pasted with
 "Sorter data error" while the same shape built from 3x3 Assembling Machines
 pasted clean.  No ring rule could have produced that; only the table does.
 
-WHAT "NEAREST" MEANS, AND WHY 0.8
----------------------------------
-The game's own tolerance.  ``BuildTool_BlueprintCopy.CheckInserterDataLegal``
-rejects a sorter whose end lands more than ``0.8`` from the pose it names, and
-the paste path (``BlueprintData``, ``EBuildCondition.ErrorInserterData``) snaps
-the end onto the pose and rejects the same distance with a wider allowance for a
-purely radial offset.  Both are ported in ``layout.validate``; this module uses
-the ``0.8`` figure so that what we emit and what we check agree.
+WHAT "NEAREST" MEANS
+--------------------
+The game's own tolerance, :data:`flab2bp.dsp.rules.SLOT_REACH`.
+``BuildTool_BlueprintCopy.CheckInserterDataLegal`` rejects a sorter whose end
+lands more than that from the pose it names, and the paste path
+(``BlueprintData``, ``EBuildCondition.ErrorInserterData``) snaps the end onto
+the pose and rejects a comparable distance with a wider allowance for a purely
+radial offset.  Both are ported in ``layout.validate``; this module uses the
+same figure so that what we emit and what we check agree.
 
 :func:`machine_slot` returns the nearest slot even when the nearest is further
 than that, rather than raising.  A sorter whose end is nowhere near any slot is
@@ -66,6 +69,17 @@ from dataclasses import dataclass, replace
 
 from flab2bp.dsp import catalog as cat
 from flab2bp.dsp import colliders
+from flab2bp.dsp.rules import (
+    ADDON_FROM_SLOT,
+    ADDON_TO_SLOT,
+    BELT_SLOT,
+    INPUT_TO_SLOT,
+    OUTPUT_FROM_SLOT,
+    SLOT_ALIGN_COS,
+    SLOT_REACH,
+    WORLD_UNITS_PER_LEVEL,
+    world_gap,
+)
 from flab2bp.layout.base import PlacedBuilding
 
 __all__ = [
@@ -92,47 +106,11 @@ __all__ = [
     "to_world",
 ]
 
-#: The sorter's own ends.  Constant on all 1288 real sorters.
-OUTPUT_FROM_SLOT = 0
-INPUT_TO_SLOT = 1
-
-#: What the belt side of a connection carries.  Also constant on all 1288.
-BELT_SLOT = -1
-
-#: What a belt ADDON carries in all four of its slot fields.
-#:
-#: A Spray Coater is not wired to anything.  All eight in the corpus record
-#: ``input_obj = output_obj = -1`` with ``(15, 14)`` on both ends, and nothing
-#: anywhere names one as a connection.  The game writes the same pair in
-#: ``BuildTool_Addon`` (``outputToSlot = 14; inputFromSlot = 15``) and again in
-#: the blueprint paste path.  It rides the belt it sits on; the association is
-#: positional, and there is no sorter in it.
-ADDON_FROM_SLOT = 15
-ADDON_TO_SLOT = 14
-
-#: How far a sorter end may sit from the slot pose it names, in WORLD UNITS.
-#:
-#: ``0.8f`` in ``BuildTool_BlueprintCopy.CheckInserterDataLegal`` and again in
-#: the blueprint-paste path.  A game constant, not one of ours -- and a
-#: ``Vector3.magnitude`` in Unity world space, which is NOT tiles.
-#:
-#: A tile is ``colliders.GRID_ARC`` = 1.2566 world units, so a distance in tiles
-#: has to be scaled before it is compared with this.  The first version of this
-#: module compared them directly and reported the corpus's worst gap as 0.774
-#: against 0.8 -- "just inside", and cited as evidence the port was right.  It
-#: was evidence of nothing: 0.8 is loose enough that BOTH readings pass, so the
-#: control could not tell them apart.  Read correctly the worst real gap is
-#: **0.113**, which is what it should look like when the game snaps a sorter end
-#: onto a pose.  What settled it was not the corpus but the collider work: an
-#: Assembling Machine's 3.82-wide box does not fit a 3-tile pitch at 1.2566 per
-#: tile, and real blueprints never pack one at 3.
-SLOT_REACH = 0.8
-
-#: How far off a slot's facing a sorter may run, in degrees, and the cosine of
-#: it.  ``24f`` in ``BuildTool_BlueprintPaste``, where exceeding it is
-#: ``EBuildCondition.TooSkew``.
-SLOT_ALIGN_DEG = 24.0
-SLOT_ALIGN_COS = math.cos(math.radians(SLOT_ALIGN_DEG))
+# Every constant below is the GAME's, stated with its provenance in
+# `flab2bp.dsp.rules`.  They are imported rather than restated so that this
+# module and `layout.validate` can never hold two different readings of the
+# same rule -- which is exactly what happened when the 24-degree skew limit was
+# written here as `SLOT_ALIGN_DEG` and again there as `_SKEW_AXIS_DEG`.
 
 
 class SlotUndetermined(ValueError):
@@ -191,21 +169,8 @@ def slot_offset(item_id: int, yaw: float, slot: int) -> tuple[float, float, floa
     return (
         wx / colliders.GRID_ARC,
         wy / colliders.GRID_ARC,
-        p.dz / cat.WORLD_UNITS_PER_LEVEL,
+        p.dz / WORLD_UNITS_PER_LEVEL,
     )
-
-
-def world_gap(dx: float, dy: float, dz: float = 0.0) -> float:
-    """A grid-frame offset as the world distance the game would measure.
-
-    Tiles and levels have different sizes in world units, so a bare Euclidean
-    distance over the grid frame is not a distance at all.  Every comparison
-    against :data:`SLOT_REACH` goes through this.
-    """
-    ex = dx * colliders.GRID_ARC
-    ey = dy * colliders.GRID_ARC
-    ez = dz * cat.WORLD_UNITS_PER_LEVEL
-    return math.sqrt(ex * ex + ey * ey + ez * ez)
 
 
 def slot_forward(item_id: int, yaw: float, slot: int) -> tuple[float, float, float]:
@@ -339,7 +304,8 @@ def attachment(machine: PlacedBuilding, far: tuple[int, int]) -> Attachment | No
       names (``sorter.endpoint_pair``);
     * the end is within :data:`SLOT_REACH` of the pose -- the game's
       ``CheckInserterDataLegal``, and the paste path's ladder with it;
-    * the slot faces back along the run to within :data:`SLOT_ALIGN_DEG` -- the
+    * the slot faces back along the run to within
+      :data:`flab2bp.dsp.rules.SKEW_AXIS_DEG` -- the
       game's ``TooSkew``, and the sign half of ``CheckInserterDataLegal``;
     * the span is within ``catalog.SORTER_MAX_REACH``.
 

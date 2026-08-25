@@ -30,9 +30,8 @@ from enum import Enum, StrEnum
 from fractions import Fraction
 
 from flab2bp.dsp import catalog as cat
-from flab2bp.dsp import codec, colliders, params
+from flab2bp.dsp import codec, colliders, params, rules
 from flab2bp.dsp import colliders as dsp_colliders
-from flab2bp.layout import junction as junc
 from flab2bp.layout import slots
 from flab2bp.layout.base import PlacedBuilding, Placement
 from flab2bp.spec import BuildSpec, MachineGroup
@@ -373,7 +372,8 @@ class Context:
         """Every belt attached to ``junction``, on either side.
 
         Each attachment occupies one side of the splitter, which is why the two
-        directions are counted together against :data:`junction.MAX_PORTS`.
+        directions are counted together against
+        :data:`flab2bp.dsp.rules.SPLITTER_MAX_PORTS`.
         """
         return _dedup_ints(
             (*self.junction_in.get(junction, ()), *self.junction_out.get(junction, ()))
@@ -1195,15 +1195,15 @@ def _own_slots(ctx: Context) -> Iterable[Finding]:
     """
     for i, b in ctx.of_kind(Kind.SORTER):
         if (b.output_from_slot, b.input_to_slot) != (
-            slots.OUTPUT_FROM_SLOT,
-            slots.INPUT_TO_SLOT,
+            rules.OUTPUT_FROM_SLOT,
+            rules.INPUT_TO_SLOT,
         ):
             yield Finding(
                 "sorter.own_slots",
                 Severity.ERROR,
                 f"sorter {i} has (output_from_slot, input_to_slot) = "
                 f"({b.output_from_slot}, {b.input_to_slot}); the game writes "
-                f"({slots.OUTPUT_FROM_SLOT}, {slots.INPUT_TO_SLOT}) on all 1288 "
+                f"({rules.OUTPUT_FROM_SLOT}, {rules.INPUT_TO_SLOT}) on all 1288 "
                 f"sorters in the corpus",
                 (i,),
                 {
@@ -1239,12 +1239,12 @@ def _peer_slots(ctx: Context) -> Iterable[Finding]:
                 continue
             peer = bs[link]
             if cat.is_belt(peer.item_id):
-                if recorded != slots.BELT_SLOT:
+                if recorded != rules.BELT_SLOT:
                     yield Finding(
                         "sorter.peer_slots",
                         Severity.ERROR,
                         f"sorter {i}'s {label} end names belt {link} with slot "
-                        f"{recorded}; a belt end is always {slots.BELT_SLOT}",
+                        f"{recorded}; a belt end is always {rules.BELT_SLOT}",
                         (i, link),
                         {"end": label, "slot": recorded},
                     )
@@ -1427,7 +1427,7 @@ def _inserter_data(ctx: Context) -> Iterable[Finding]:
             continue
         pose, pose2 = _fpoint(anchors[0]), _fpoint(anchors[1])
 
-        if b.output_obj is not None and b.output_from_slot != slots.OUTPUT_FROM_SLOT:
+        if b.output_obj is not None and b.output_from_slot != rules.OUTPUT_FROM_SLOT:
             yield Finding(
                 "game.inserter_data",
                 Severity.ERROR,
@@ -1437,7 +1437,7 @@ def _inserter_data(ctx: Context) -> Iterable[Finding]:
                 (i,),
                 {"output_from_slot": b.output_from_slot},
             )
-        if b.input_obj is not None and b.input_to_slot != slots.INPUT_TO_SLOT:
+        if b.input_obj is not None and b.input_to_slot != rules.INPUT_TO_SLOT:
             yield Finding(
                 "game.inserter_data",
                 Severity.ERROR,
@@ -1457,17 +1457,17 @@ def _inserter_data(ctx: Context) -> Iterable[Finding]:
             if got is None:
                 continue
             slot_pos, slot_fwd = got
-            gap = slots.world_gap(
+            gap = rules.world_gap(
                 slot_pos[0] - end[0], slot_pos[1] - end[1], slot_pos[2] - end[2]
             )
-            if gap > slots.SLOT_REACH:
+            if gap > rules.SLOT_REACH:
                 yield Finding(
                     "game.inserter_data",
                     Severity.ERROR,
                     f"sorter {i}'s {label} end is {gap:.2f} tiles from slot {slot} "
                     f"of building {link} "
                     f"({cat.building(ctx.placement.buildings[link].item_id).name}), "
-                    f"over the game's {slots.SLOT_REACH} limit",
+                    f"over the game's {rules.SLOT_REACH} limit",
                     (i, link),
                     {"end": label, "slot": slot, "gap": round(gap, 3)},
                 )
@@ -1486,18 +1486,6 @@ def _inserter_data(ctx: Context) -> Iterable[Finding]:
                 )
 
 
-#: The paste path's allowances, in tiles.  ``num40``/``num41`` in the source.
-#:
-#: ``_PASTE_LATERAL`` is UNREACHABLE for anything but a silo, and it is here
-#: anyway.  Its branch runs only when ``snap`` is already over ``_PASTE_SNAP``,
-#: and at that point a lateral of ``_PASTE_LATERAL_EPS`` or more is refused by
-#: the third branch and a lateral below it never reaches the first -- so no
-#: input can distinguish 0.5 from any larger value.  Dropping it would make the
-#: ladder shorter and the port a paraphrase.
-_PASTE_SNAP = 0.8
-_PASTE_LATERAL = 0.5
-_PASTE_RADIAL = 1.6
-_PASTE_LATERAL_EPS = 0.1
 
 
 @check("game.inserter_paste")
@@ -1506,41 +1494,18 @@ def _inserter_paste(ctx: Context) -> Iterable[Finding]:
 
     A different predicate from ``game.inserter_data`` and the one that actually
     fires on a paste, which is what our users do with what we emit.  Pasting
-    does not merely test a sorter's end -- it SNAPS it onto the slot pose::
+    does not merely test a sorter's end -- it SNAPS it onto the slot pose, and
+    then runs a three-branch ladder on the correction.  The game's own source
+    for that ladder, and the caveat about which of its two quantities is in
+    tiles and which in world units, are stated with the constants in
+    :mod:`flab2bp.dsp.rules`; this function only applies them.
 
-        transformedBy = slotPoses[inputFromSlot].GetTransformedBy(input pose)
-        zero          = transformedBy.position - lpos    # the correction
-        lpos          = transformedBy.position
-        num38         = CalcLocalGridSize(...)           # one tile
-        num40         = zero.magnitude / num38
-        num41         = Abs(Dot(transformedBy.right, zero))
-        if (num40 > 0.8f) {
-            if      (num41 >  0.5f)                 -> ErrorInserterData
-            else if (num41 <  0.1f && num40 > 1.6f) -> ErrorInserterData
-            else if (num41 >= 0.1f && num40 > 0.8f) -> ErrorInserterData
-        }
-        if (Dot(transformedBy.forward, (lpos2 - lpos).normalized) < 0f)
-                                                    -> ErrorInserterData
-
-    So the paste is *looser* than the copy check in one band and identical
-    everywhere else: a correction that is purely radial -- straight out of the
-    machine's face, ``num41`` under a tenth of a tile -- is tolerated out to 1.6
-    tiles, and anything with real sideways slide is capped at 0.5.  This is the
-    band that decides real pastes.  Measured on our own output: with every
-    machine-side slot forced to 0, 41 of 60 ends landed 1.87 tiles out and the
-    game reported "Sorter data error"; with the slot the geometry implies they
-    land 0.24 and it does not.  1.87 is over ``_PASTE_RADIAL`` however square the
-    approach, which is why forcing 0 could never have worked.
-
-    ``transformedBy.right`` is reconstructed as the slot's forward turned a
+    ``transformedBy.right`` is reconstructed here as the slot's forward turned a
     quarter turn in the build plane.  Unity's ``right`` is ``Cross(up, forward)``
     and every slot pose is upright to within a degree, so the two agree to
-    better than the ``0.1`` the ladder discriminates on -- and the ladder takes
-    an absolute value, so the sign the axis mapping flips does not matter.
-
-    The silo branch (``isSilo``, 2.5/2.4) is not ported: we never emit a Vertical
-    Launching Silo, and porting a branch with no way to test it is how the last
-    round of guesses got in.
+    better than the :data:`~flab2bp.dsp.rules.PASTE_LATERAL_EPS` the ladder
+    discriminates on -- and the ladder takes an absolute value, so the sign the
+    axis mapping flips does not matter.
     """
     for i, b in ctx.of_kind(Kind.SORTER):
         anchors = _anchors(b)
@@ -1566,13 +1531,13 @@ def _inserter_paste(ctx: Context) -> Iterable[Finding]:
             name = cat.building(ctx.placement.buildings[link].item_id).name
 
             zero = (slot_pos[0] - end[0], slot_pos[1] - end[1], slot_pos[2] - end[2])
-            snap = slots.world_gap(*zero)
+            snap = rules.world_gap(*zero)
             right = (slot_fwd[1], -slot_fwd[0], 0.0)
             lateral = abs(_dot(right, zero)) * colliders.GRID_ARC
-            if snap > _PASTE_SNAP and (
-                lateral > _PASTE_LATERAL
-                or (lateral < _PASTE_LATERAL_EPS and snap > _PASTE_RADIAL)
-                or (lateral >= _PASTE_LATERAL_EPS and snap > _PASTE_SNAP)
+            if snap > rules.PASTE_SNAP and (
+                lateral > rules.PASTE_LATERAL
+                or (lateral < rules.PASTE_LATERAL_EPS and snap > rules.PASTE_RADIAL)
+                or (lateral >= rules.PASTE_LATERAL_EPS and snap > rules.PASTE_SNAP)
             ):
                 yield Finding(
                     "game.inserter_paste",
@@ -1606,14 +1571,6 @@ def _inserter_paste(ctx: Context) -> Iterable[Finding]:
                 )
 
 
-#: ``(minLength, maxLength)`` a pasted sorter is allowed, in tiles, keyed by how
-#: many of its two ends land on a BELT.  ``num132``/``num131`` in the source.
-_SORTER_LENGTH = {2: (0.4, 5.0), 1: (0.6, 5.5), 0: (0.9, 7.5)}
-
-#: Degrees.  ``Quaternion.Angle(lrot, lrot2) > 30f`` and the pair of
-#: ``Acos(Abs(Dot(axis, forward))) > 24f`` tests, both reporting TooSkew.
-_SKEW_PAIR_DEG = 30.0
-_SKEW_AXIS_DEG = 24.0
 
 
 @check("game.inserter_skew")
@@ -1641,34 +1598,14 @@ def _inserter_skew(ctx: Context) -> Iterable[Finding]:
     writing 69 of 125 backwards -- but that rests on the corpus being unanimous,
     not on any ported predicate refusing it.
 
-    ``EBuildCondition.TooSkew`` is "Deflection too much" (``偏角太大``,
-    condition 15 -- NOT ``TooBend``/``弯曲过度``)::
-
-        magnitude = (lpos2 - lpos).magnitude
-        if (magnitude > num131) -> TooFar
-        if (magnitude < num132) -> TooClose
-        ...
-        if (Quaternion.Angle(lrot, lrot2) > 30f) -> TooSkew
-        normalized4 = (lpos2 - lpos).normalized
-        num135 = Acos(Abs(Dot(normalized4, lrot .Forward()))) in degrees
-        num136 = Acos(Abs(Dot(normalized4, lrot2.Forward()))) in degrees
-        if (num135 > 24f || num136 > 24f) -> TooSkew
-
-    The thresholds move with how many ends are on a belt, which is the
-    ``flag21``/``flag22`` pair: belt-to-belt is the tightest at 0.4..5.0,
-    machine-to-machine the loosest at 0.9..7.5.
+    The game's source for the ladder, the thresholds it uses, which of its tests
+    are NOT ported and why, and the caveat about what units
+    :data:`~flab2bp.dsp.rules.SORTER_LENGTH` is in are all stated with the
+    constants in :mod:`flab2bp.dsp.rules`; this function only applies them.
 
     ``Quaternion.Angle`` between two rotations that share an up axis is the angle
     between their forwards, and both of ours are upright, so the 30-degree test
-    is done on forwards.
-
-    Two of the game's tests are NOT ported, both because they need the planet's
-    grid rather than ours: ``CalcSegmentsAcross`` counts the grid segments a
-    sorter crosses, which is a function of latitude, and the combined
-    ``sqrt(segments^2 + altitude^2)`` minimum built on it.  Our sorters never
-    change level (``sorter.altitude``) and sit on a uniform grid, where the
-    length test above is the same statement; near a pole it would not be, and
-    nothing we emit goes near one.
+    is done on forwards here.
     """
     bs = ctx.placement.buildings
     for i, b in ctx.of_kind(Kind.SORTER):
@@ -1686,7 +1623,7 @@ def _inserter_skew(ctx: Context) -> Iterable[Finding]:
             if link is not None and 0 <= link < len(bs) and cat.is_belt(bs[link].item_id):
                 belts += 1
 
-        low, high = _SORTER_LENGTH[belts]
+        low, high = rules.SORTER_LENGTH[belts]
         length = math.dist(lpos, lpos2)
         if length > high:
             yield Finding(
@@ -1710,52 +1647,39 @@ def _inserter_skew(ctx: Context) -> Iterable[Finding]:
             continue
 
         pair = math.degrees(math.acos(max(-1.0, min(1.0, _dot(fwd, fwd2)))))
-        if pair > _SKEW_PAIR_DEG:
+        if pair > rules.SKEW_PAIR_DEG:
             yield Finding(
                 "game.inserter_skew",
                 Severity.ERROR,
                 f"sorter {i}'s two ends face {pair:.0f} degrees apart, over the "
-                f"{_SKEW_PAIR_DEG:.0f} the game allows (deflection too much)",
+                f"{rules.SKEW_PAIR_DEG:.0f} the game allows (deflection too much)",
                 (i,),
                 {"pair_deg": round(pair, 1)},
             )
         axis = _unit(lpos2, lpos)
         for label, f in (("input", fwd), ("output", fwd2)):
             off = math.degrees(math.acos(min(1.0, abs(_dot(axis, f)))))
-            if off > _SKEW_AXIS_DEG:
+            if off > rules.SKEW_AXIS_DEG:
                 yield Finding(
                     "game.inserter_skew",
                     Severity.ERROR,
                     f"sorter {i}'s {label} end faces {off:.0f} degrees off the line "
-                    f"it runs along, over the {_SKEW_AXIS_DEG:.0f} the game allows "
+                    f"it runs along, over the {rules.SKEW_AXIS_DEG:.0f} the game allows "
                     f"(deflection too much)",
                     (i,),
                     {"end": label, "off_axis_deg": round(off, 1)},
                 )
 
 
-#: How near a belt must pass an addon area for the game to attach it, and how
-#: near the area's centre must be to the belt's own line.  ``sqrMagnitude < 1f``
-#: and ``Maths.DistancePointLine(...) < 0.3f`` in ``PlanetFactory``.
-#:
-#: WORLD units, like every other literal the game compares a ``Vector3`` with.
-#: Both checks below reach it through ``slots.world_gap``: this file once
-#: compared a tile distance with ``0.8f`` the same way, and getting the frames
-#: wrong there cost a retraction, so there is exactly one conversion and both
-#: callers use it.
-_ADDON_AREA_RADIUS = 1.0
 
 
 @check("game.addon_supply")
 def _addon_supply(ctx: Context) -> Iterable[Finding]:
     """A belt addon is fed by BELT, and the game finds that belt by position.
 
-    Port of the addon-connection pass in ``PlanetFactory``::
-
-        Pose pose = prefabDesc.addonAreaPoses[i];
-        Pose transformedBy = pose.GetTransformedBy(entity pose);
-        if (sqrMagnitude < 1f && DistancePointLine(...) < 0.3f) -> nearest belt
-        WriteObjectConn(entityId, i, isOutput: true, num2, 13);
+    Port of the addon-connection pass in ``PlanetFactory``, whose source and
+    whose ``sqrMagnitude < 1f`` radius are stated with
+    :data:`~flab2bp.dsp.rules.ADDON_AREA_RADIUS`.
 
     So a Spray Coater carries no connection of its own -- all eight in the
     fixture corpus have ``input_obj`` and ``output_obj`` unset -- and is
@@ -1784,8 +1708,8 @@ def _addon_supply(ctx: Context) -> Iterable[Finding]:
             wx, wy = slots.to_world((adx, ady), b.yaw)
             want = (b.x + wx, b.y + wy, float(b.z) + adz)
             if any(
-                slots.world_gap(want[0] - p[0], want[1] - p[1], want[2] - p[2])
-                < _ADDON_AREA_RADIUS
+                rules.world_gap(want[0] - p[0], want[1] - p[1], want[2] - p[2])
+                < rules.ADDON_AREA_RADIUS
                 for p in belts
             ):
                 continue
@@ -1889,16 +1813,16 @@ def _junction_ports(ctx: Context) -> Iterable[Finding]:
     """
     for j, b in ctx.of_kind(Kind.SPLITTER):
         attached = ctx.junction_attachments(j)
-        if len(attached) <= junc.MAX_PORTS:
+        if len(attached) <= rules.SPLITTER_MAX_PORTS:
             continue
         yield Finding(
             "junction.ports",
             Severity.ERROR,
             f"splitter {j} at ({b.x},{b.y}) has {len(attached)} belts attached but a "
-            f"splitter has {junc.MAX_PORTS} sides; it would paste as a junction "
-            f"silently dropping {len(attached) - junc.MAX_PORTS} connection(s)",
+            f"splitter has {rules.SPLITTER_MAX_PORTS} sides; it would paste as a junction "
+            f"silently dropping {len(attached) - rules.SPLITTER_MAX_PORTS} connection(s)",
             (j, *attached),
-            {"junction": j, "attached": len(attached), "max": junc.MAX_PORTS},
+            {"junction": j, "attached": len(attached), "max": rules.SPLITTER_MAX_PORTS},
         )
 
 
@@ -3022,8 +2946,8 @@ def _coaters_supplied(ctx: Context) -> Iterable[Finding]:
             wx, wy = slots.to_world((adx, ady), b.yaw)
             want = (b.x + wx, b.y + wy, float(b.z) + adz)
             ok = ok or any(
-                slots.world_gap(want[0] - p[0], want[1] - p[1], want[2] - p[2])
-                < _ADDON_AREA_RADIUS
+                rules.world_gap(want[0] - p[0], want[1] - p[1], want[2] - p[2])
+                < rules.ADDON_AREA_RADIUS
                 for p in supply_at
             )
         if not ok:
