@@ -115,23 +115,32 @@ from __future__ import annotations
 
 import json
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
+from typing import Protocol
 
 __all__ = [
     "BELT_PROBE_LIFT",
     "BELT_PROBE_RADIUS",
-    "GRID_ARC",
     "Box",
+    "GRID_ARC",
+    "Preview",
+    "belt_chain_excuses",
+    "belt_collisions",
     "belt_crossing_height",
     "belt_crossings",
     "belt_probe",
+    "belt_run_ends_in_a_building",
     "build_colliders",
     "collisions",
     "obb_overlap",
+    "paste_input_links",
     "preview_pose",
+    "probe_inside_footprint",
     "sphere_box_overlap",
+    "target_boxes",
 ]
 
 _DATA = Path(__file__).parent / "data" / "colliders.json"
@@ -150,6 +159,13 @@ GRID_ARC = 2.0 * math.pi / 5.0
 #: 200 is the standard terrestrial planet.
 PLANET_RADIUS = 200.0
 PLANET_SEGMENT = 200
+
+
+class HasModel(Protocol):
+    """Anything that names a model, so a caller need not build a :class:`Placed`."""
+
+    @property
+    def model_index(self) -> int: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -408,7 +424,7 @@ def _query_boxes(p: Placed, lpos: Vec3, lrot: Quat) -> list[Box]:
     return out
 
 
-def _target_boxes(p: Placed, lpos: Vec3, lrot: Quat) -> list[Box]:
+def target_boxes(p: HasModel, lpos: Vec3, lrot: Quat) -> list[Box]:
     """The preview model's colliders, ``BuildPreviewModel.SetCollider``.
 
     Centre and size only -- the collider's own ``q`` never reaches the
@@ -468,7 +484,7 @@ def collisions(
         )
         for b in buildings
     ]
-    targets = [_target_boxes(b, *poses[i]) for i, b in enumerate(buildings)]
+    targets = [target_boxes(b, *poses[i]) for i, b in enumerate(buildings)]
 
     # Broad phase.  Every build collider is well under this, so one cell plus
     # its 26 neighbours bounds any overlap.
@@ -603,7 +619,7 @@ def belt_crossing_height(model_index: int) -> float:
     return (top + BELT_PROBE_RADIUS - BELT_PROBE_LIFT) * 3.0 / 4.0
 
 
-def _horizontally_inside(centre: Vec3, box: Box) -> bool:
+def probe_inside_footprint(centre: Vec3, box: Box) -> bool:
     """Whether a point is inside a box's footprint, ignoring height."""
     inv = (-box.rot[0], -box.rot[1], -box.rot[2], box.rot[3])
     d = _qrot(
@@ -627,35 +643,273 @@ def belt_crossings(
     and 146029), other belts (line 145875) and a belt a building covers (lines
     145970-146003).
 
-    ``directly_over_only`` narrows the answer to belts whose probe centre is
-    inside the collider's FOOTPRINT -- the crossing question, "how high must a
-    belt be to pass over this".  Use it, because the full test over-reports and
-    the narrowed one does not.  Measured over the whole fixture corpus, the full
-    test flags 1189 belts in blueprints the game itself wrote; the narrowed one
-    flags 11, all of them either a building in
-    ``catalog.LOW_CONFIDENCE_FOOTPRINTS`` or a pair separated in longitude,
-    where the flat grid is not the real spacing.  In the same corpus 133 belts
-    pass over or under a collider and clear it, so the narrowed test is not
-    vacuous.
+    The excusal that matters most is not in this file at all, because it is a
+    property of the preview GRAPH rather than of geometry: a belt marked
+    ``Collide`` here is re-probed at 147384 and put back to ``Ok`` when every
+    hit is a building it reaches within three belt hops along its own run
+    (147451), or when the run ends in a buildable non-belt building (147492).
+    ``layout.validate.game.belt_crossing`` is where that lives, with the C#.
+    Raw, this function flags 1189 belts across the fixture corpus in blueprints
+    the game itself wrote; with those excusals applied, zero, on every fixture
+    whose geometry the model can place.
 
-    The residue is entirely LATERAL: a belt one tile from a Splitter grazes its
-    1.19-unit arm by 0.16 of the 0.23 probe, and every blueprint with a splitter
-    in it does that.  Something excuses it that is not in the paste path as read
-    -- ``BuildTool_Path`` line 157683 excuses the first and last two nodes of a
-    drag against the object they connect to, and three for a station, but the
-    paste has no such clause and previews carry no drag index.  Until that is
-    found the lateral half is not modelled, and this is a LOWER bound on what
-    the game rejects, never an upper one.
+    ``directly_over_only`` narrows the answer to belts whose probe centre is
+    inside the collider's FOOTPRINT -- the crossing question alone, "how high
+    must a belt be to pass over this".  It is not the shipped rule any more; it
+    remains because the crossing question is still worth asking on its own, and
+    because ``belt_crossing_height`` answers it in closed form.  Over the
+    single-area fixtures 133 belts pass over or under a collider and clear it,
+    so neither form of the test is vacuous.
     """
     hits: list[tuple[int, int]] = []
     for i, belt in enumerate(belts):
         probe = belt_probe(belt.x, belt.y, belt.z)
         for j, b in enumerate(buildings):
             lpos, lrot = flat_pose(b.x, b.y, b.z, b.yaw)
-            for box in _target_boxes(b, lpos, lrot):
-                if directly_over_only and not _horizontally_inside(probe, box):
+            for box in target_boxes(b, lpos, lrot):
+                if directly_over_only and not probe_inside_footprint(probe, box):
                     continue
                 if sphere_box_overlap(probe, BELT_PROBE_RADIUS, box):
                     hits.append((i, j))
                     break
+    return hits
+
+
+# --- the whole belt verdict, excusals included ------------------------------
+
+
+@dataclass(frozen=True)
+class Preview:
+    """One paste preview, carrying what ``CheckBuildConditions`` asks of it.
+
+    The flags are ``PrefabDesc``'s own, not a taxonomy invented here: the rule
+    branches on ``isBelt``, ``isInserter``, ``isSplitter`` and
+    ``addonType == EAddonType.Belt`` and on nothing else about what a building
+    is.  ``output`` and ``input`` are indices into the same sequence -- the
+    blueprint's ``outputObj`` / ``inputObj``, which is what
+    ``BlueprintUtils.InitBuildPreviewByBPData`` (179570-179572) loads them from.
+    """
+
+    model_index: int
+    x: float
+    y: float
+    z: float
+    yaw: float = 0.0
+    is_belt: bool = False
+    is_inserter: bool = False
+    is_splitter: bool = False
+    is_belt_addon: bool = False
+    output: int | None = None
+    input: int | None = None
+
+
+def _resolve(previews: Sequence[Preview], j: int | None) -> int | None:
+    """A link, or ``None`` when it names nothing in this sequence.
+
+    A blueprint the game wrote never dangles, but a placement under validation
+    may: ``geom.belt_continuity`` exists to report exactly that, and this rule
+    must not crash before that check gets to speak.
+    """
+    return j if j is not None and 0 <= j < len(previews) else None
+
+
+def paste_input_links(previews: Sequence[Preview]) -> tuple[int | None, ...]:
+    """``BuildPreview.input`` as the paste path leaves it, per preview.
+
+    A DSP blueprint records a belt chain in ONE direction: every belt names its
+    successor in ``outputObj`` and almost every belt's ``inputObj`` is empty.
+    The paste materialises the reverse links itself, before any condition is
+    checked (``BuildTool_BlueprintPaste.ArrangeOverlapBP``, 144472-144479)::
+
+        if (buildPreview.desc.isBelt && buildPreview.output != null
+            && buildPreview.output.desc.isBelt)
+        {
+            buildPreview.output.input = buildPreview;
+        }
+
+    Ascending, so a merge leaves the last feeder in place, and it OVERWRITES a
+    belt's recorded non-belt input.  See :func:`belt_collisions` for why this is
+    load-bearing and for the one thing about it that is not settled.
+    """
+    links: list[int | None] = [_resolve(previews, p.input) for p in previews]
+    for i, p in enumerate(previews):
+        j = _resolve(previews, p.output)
+        if p.is_belt and j is not None and previews[j].is_belt:
+            links[j] = i
+    return tuple(links)
+
+
+def _hops(
+    previews: Sequence[Preview],
+    links: Sequence[int | None],
+    belt: int,
+    *,
+    downstream: bool,
+) -> tuple[int | None, int | None, int | None]:
+    """The 1st, 2nd and 3rd preview along a belt's own run from ``belt``.
+
+    ``CheckBuildConditions`` 147451 spells the walk out longhand and guards each
+    step on the PREVIOUS node being a belt -- ``bp.output.output`` is only
+    consulted when ``bp.output.desc.isBelt`` -- so a chain that reaches a
+    machine stops there rather than continuing through its ports.
+    """
+    out: list[int | None] = [None, None, None]
+    cur = belt
+    for n in range(3):
+        nxt = _resolve(previews, previews[cur].output) if downstream else links[cur]
+        out[n] = nxt
+        if nxt is None or not previews[nxt].is_belt:
+            break
+        cur = nxt
+    return out[0], out[1], out[2]
+
+
+def belt_chain_excuses(
+    previews: Sequence[Preview], links: Sequence[int | None], belt: int, other: int
+) -> bool:
+    """``CheckBuildConditions`` 147443-147453, for one belt against one hit.
+
+    ``other`` is a preview the belt's probe overlapped, and the answer is
+    whether the belt's own run reaches it within three hops -- or, when it is a
+    Splitter, reaches either of the previews that Splitter is linked to within
+    two::
+
+        int num156 = ((bp13.previewIndex == -1) ? (-2) : bp13.previewIndex);
+        int num157 = ((bp13.desc.isSplitter && bp13.output != null)
+                          ? bp13.output.previewIndex : (-2));
+        int num158 = ((bp13.desc.isSplitter && bp13.input != null)
+                          ? bp13.input.previewIndex : (-2));
+        if ((bp12.output != null
+                && (bp12.output.previewIndex == num156 || == num157 || == num158))
+            || (bp12.output != null && bp12.output.desc.isBelt
+                && bp12.output.output != null && (... == num156 || num157 || num158))
+            || (... && bp12.output.output.output.previewIndex == num156)
+            || (bp12.input != null && (... == num156 || num157 || num158))
+            || (bp12.input != null && bp12.input.desc.isBelt
+                && bp12.input.input != null && (... == num156 || num157 || num158))
+            || (... && bp12.input.input.input.previewIndex == num156))
+        {
+            continue;
+        }
+
+    The third hop matches only the hit itself, never the Splitter's neighbours;
+    that asymmetry is the game's and is reproduced.
+    """
+    near: set[int | None] = {other}
+    if previews[other].is_splitter:
+        near.add(_resolve(previews, previews[other].output))
+        near.add(links[other])
+    near.discard(None)
+    for downstream in (True, False):
+        one, two, three = _hops(previews, links, belt, downstream=downstream)
+        if one in near or two in near or three == other:
+            return True
+    return False
+
+
+def belt_run_ends_in_a_building(
+    previews: Sequence[Preview], links: Sequence[int | None], belt: int
+) -> bool:
+    """``CheckBuildConditions`` 147492-147500.
+
+    After the excusals, a belt with an unexcused hit left is STILL let off when
+    the thing it feeds or draws from is a non-belt building the game can
+    build::
+
+        if (buildPreview12.output != null && !buildPreview12.output.desc.isBelt
+            && buildPreview12.output.condition == EBuildCondition.Ok)
+        { buildPreview12.condition = ...EBuildCondition.Ok; }
+
+    with the mirror clause for ``input`` two lines down.  The game consults that
+    building's own ``condition``; a caller validating a placement has separate
+    findings for whether a building is legal, so this reads it as legal.
+
+    Measured, this clause costs nothing on the corpus: with it removed the
+    single-area fixtures still give zero.  It is here because the game has it,
+    and leaving it out would make the check STRICTER than the game -- a refusal
+    where the game builds.
+    """
+    for j in (_resolve(previews, previews[belt].output), links[belt]):
+        if j is not None and not previews[j].is_belt:
+            return True
+    return False
+
+
+def belt_collisions(previews: Sequence[Preview]) -> list[tuple[int, int]]:
+    """``(belt, building)`` pairs a blueprint paste would call ``Collide``.
+
+    The whole belt verdict, lateral half included: the 0.23 probe of
+    :func:`belt_crossings` and every excusal the paste path applies to it.
+
+    A hit is not the verdict.  ``CheckBuildConditions`` sets a belt's condition
+    to ``Collide`` at 146072 WITHOUT calling ``AddErrorMessage`` -- the one
+    branch in that method that stays silent -- because a later pass over the
+    belts, at 147257, re-probes every belt already marked ``Collide`` and can
+    put it back to ``Ok``.  That pass is what the lateral half was missing, and
+    :func:`belt_chain_excuses` and :func:`belt_run_ends_in_a_building` are its
+    two clauses.  Before them, the same loop excuses by ``PrefabDesc`` flag:
+    a sorter (the ``isInserter`` asymmetry at 147437, in both directions) and a
+    belt addon (147454, ``AddonPass``'s twin) are never a collision for a belt.
+    Belt on belt is left out here -- it is a single-occupancy question, and the
+    game's own answer to it turns on ``dotsCursor``.
+
+    ONE DETAIL IS READ BUT NOT SETTLED, and it decides whether the upstream half
+    of 147451 is reachable at all.  ``ArrangeOverlapBP`` materialises the
+    reverse belt links at 144472-144479 (:func:`paste_input_links`) and then
+    CLEARS them again at 144554-144560::
+
+        if (buildPreview5.desc.isBelt && buildPreview5.input != null
+            && buildPreview5.input.desc.isBelt)
+        {
+            buildPreview5.input = null;
+        }
+
+    Taken at face value that makes the three ``input`` clauses dead on a paste.
+    The corpus refutes it.  With them dead, 25 belts across the single-area
+    fixtures are convicted in blueprints the game itself wrote -- 4 against a
+    Splitter at exact, uncontaminated spacing, 21 against a station -- and each
+    of the 4 is the second or third node of a run leaving a Splitter, which is
+    exactly what those clauses describe.  With the reverse links live, ZERO are
+    convicted across every fixture whose geometry this model can place.  So
+    either the clearing does not survive to 147384 or something restores it;
+    what is MEASURED is that the rule is symmetric, and that is what is here.
+
+    Not vacuous, and the falsifier is the same measurement run the other way:
+    the raw probe flags 1189 belts over the fixture corpus, so a sample that
+    could not have shown a residue is not what this is.
+    """
+    links = paste_input_links(previews)
+    poses = [flat_pose(p.x, p.y, p.z, p.yaw) for p in previews]
+    boxes = [
+        target_boxes(p, *poses[i]) if not p.is_belt else [] for i, p in enumerate(previews)
+    ]
+    cell = 8.0
+    grid: dict[tuple[int, int], list[int]] = {}
+    for j, bxs in enumerate(boxes):
+        for box in bxs:
+            key = (int(box.centre[0] // cell), int(box.centre[2] // cell))
+            for dx in (-1, 0, 1):
+                for dy in (-1, 0, 1):
+                    grid.setdefault((key[0] + dx, key[1] + dy), []).append(j)
+    hits: list[tuple[int, int]] = []
+    for i, belt in enumerate(previews):
+        if not belt.is_belt:
+            continue
+        probe = belt_probe(belt.x, belt.y, belt.z)
+        key = (int(probe[0] // cell), int(probe[2] // cell))
+        bad: list[int] = []
+        for j in dict.fromkeys(grid.get(key, ())):
+            if j == i:
+                continue
+            other = previews[j]
+            if other.is_inserter or other.is_belt_addon:
+                continue
+            if not any(sphere_box_overlap(probe, BELT_PROBE_RADIUS, b) for b in boxes[j]):
+                continue
+            if belt_chain_excuses(previews, links, i, j):
+                continue
+            bad.append(j)
+        if not bad or belt_run_ends_in_a_building(previews, links, i):
+            continue
+        hits.extend((i, j) for j in sorted(bad))
     return hits
