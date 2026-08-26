@@ -356,6 +356,35 @@ class Fit:
     columns: int
 
 
+def widest_band_for_extent(
+    width: int, height: int, segment: int = colliders.PLANET_SEGMENT
+) -> Fit:
+    """The LARGEST band the extent fits -- the answer for a caller that has not
+    checked legality.
+
+    :func:`band_for_extent` gives the smallest band the extent fits, which is
+    only a useful answer once something has verified the layout is legal there;
+    on its own it is the most compressed geometry on the planet and, for a small
+    blueprint, a band nothing at all can be built in.  A caller with no verdict
+    to declare should declare the band it can honestly claim the area fits, which
+    is the widest one, and that is what the encoder wrote as the literal 200 for
+    every blueprint before any of this existed.
+
+    Still refuses when nothing fits: an extent that crosses a tropic at every
+    anchor on the planet has no honest band either.
+    """
+    best: Fit | None = None
+    for band in bands(segment):
+        for rotated, (cols, rows) in ((False, (width, height)), (True, (height, width))):
+            if rows > band.rows or cols > band.columns:
+                continue
+            if best is None or band.area_segments > best.band.area_segments:
+                best = Fit(band=band, rotated=rotated, rows=rows, columns=cols)
+    if best is None:
+        return band_for_extent(width, height, segment)  # raises, with the message
+    return best
+
+
 def band_for_extent(width: int, height: int, segment: int = colliders.PLANET_SEGMENT) -> Fit:
     """The SMALLEST band a ``width x height`` extent fits, either orientation.
 
@@ -541,22 +570,30 @@ class Projection:
     #: sorter in a quarter-turned paste face 90 degrees off the line it runs
     #: along, which reads as ``TooSkew`` on the entire blueprint.  That was this
     #: model's own first answer, and it was this model's bug, not the game's.
+    #:
+    #: ONLY 0 AND 1 ARE MODELLED, and that is a completeness claim rather than a
+    #: shortcut.  Quadrant 2 differs from quadrant 0 by flipping BOTH signs
+    #: (``num2`` and ``num3``, both ``-1``) and turning every yaw by 180
+    #: degrees -- which is exactly a half turn of the whole layout about the
+    #: anchor's own up axis, an isometry of the sphere.  It maps the
+    #: configuration to a congruent one, so no predicate here can tell them
+    #: apart.  Quadrant 3 stands in the same relation to quadrant 1.
+    #:
+    #: Modelling the signs SEPARATELY, without moving the anchor, is wrong and
+    #: was wrong here: with ``num3 = -1`` the extent grows southward from the
+    #: anchor while :meth:`Band.anchors` hands out anchors that grow northward,
+    #: so rows land outside the band entirely and get clamped at the pole. The
+    #: game does not have that problem because
+    #: ``RecalculateRotateStartAndEndRad`` (``BlueprintUtils.cs:2424-2435``)
+    #: swaps start and end whenever a sign is negative, so its ``_startLat`` is
+    #: always the southern edge.  Dropping the signs and keeping the anchor
+    #: convention is the same statement with nothing left to get wrong.
     quadrant: int = 0
 
     @property
     def rotated(self) -> bool:
         """Whether this quadrant swaps the two axes."""
-        return self.quadrant in (1, 3)
-
-    @property
-    def _longitude_sign(self) -> float:
-        """``num2`` -- ``-1`` at quadrants 1 and 2."""
-        return -1.0 if self.quadrant in (1, 2) else 1.0
-
-    @property
-    def _latitude_sign(self) -> float:
-        """``num3`` -- ``-1`` at quadrants 2 and 3."""
-        return -1.0 if self.quadrant in (2, 3) else 1.0
+        return self.quadrant == 1
 
     @property
     def yaw_offset(self) -> float:
@@ -582,11 +619,11 @@ class Projection:
     def _transition(self, x: float, y: float) -> tuple[float, float]:
         """``TransitionWidthAndHeight`` and the two signs, as one step.
 
-        Returns ``(longitude offset, latitude offset)`` -- the swap and the
-        signs the paste applies before the steps are multiplied in.
+        Returns ``(longitude offset, latitude offset)``.  Only the SWAP is
+        here; see :attr:`Projection.quadrant` for why the two sign flips are
+        not, and why leaving them out loses nothing.
         """
-        dx, dy = (y, x) if self.rotated else (x, y)
-        return dx * self._longitude_sign, dy * self._latitude_sign
+        return (y, x) if self.rotated else (x, y)
 
     def latitude(self, x: float, y: float) -> float:
         _, dy = self._transition(x, y)
@@ -655,12 +692,11 @@ def projections_for(
     itself.
 
     The anchors come from :meth:`Band.anchors`, which covers both hemispheres.
-    Both quadrants of the fitting orientation are enumerated -- 0 and 2 upright,
-    1 and 3 turned -- because the sign pair that separates them is a REFLECTION
-    of the layout, not a rotation of it, and a mirrored blueprint is a different
-    configuration of the same buildings.
+    One quadrant per orientation: 0 upright, 1 turned.  Quadrants 2 and 3 are
+    half turns of those two and so congruent to them -- see
+    :attr:`Projection.quadrant`.
     """
-    quadrants = (1, 3) if fit.rotated else (0, 2)
+    quadrants = (1,) if fit.rotated else (0,)
     return tuple(
         Projection(band=fit.band, anchor_row=a, segment=segment, radius=radius, quadrant=q)
         for q in quadrants

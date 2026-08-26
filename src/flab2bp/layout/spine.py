@@ -173,6 +173,55 @@ UNIFORM_ROW_PITCH = False
 MIN_DIRECT_INSERT_GAP = 2
 
 
+@cache
+def _equatorial_min_column() -> float:
+    """How narrow a COLUMN gets inside the equatorial band, as a fraction of a tile.
+
+    ``cos`` of the band's poleward edge -- grid row 80 on a terrestrial planet,
+    which is 0.8763.  Derived from :func:`flab2bp.dsp.planet.bands` rather than
+    written down, so a planet with a different segment count gets its own.
+    """
+    band = planet.bands(colliders.PLANET_SEGMENT)[0]
+    step = planet.latitude_rad_per_grid(colliders.PLANET_SEGMENT)
+    return math.cos(band.grid_hi * step)
+
+
+def _band_clearance(item_id: int, yaw: float) -> tuple[int, int]:
+    """:func:`catalog.clearance`, widened for the band the paste will land in.
+
+    ``catalog.clearance`` reserves ``ceil(extent / GRID_ARC)`` tiles, and
+    ``GRID_ARC`` is the column arc AT THE EQUATOR -- the widest a column ever
+    gets in the equatorial band.  A paste 80 rows north of it gets
+    :func:`_equatorial_min_column` of that, so a pitch computed at ``GRID_ARC``
+    is up to 12.4% too tight for most of the band it will be pasted into.
+
+    Measured, on ``casimir-crystal``: a Chemical Plant's collider is 8.30 world
+    units across and the packer reserved 7 tiles for it.  Seven tiles is 8.80
+    units at the equator -- clear by half a unit -- and 7.72 at row 80, where the
+    two boxes overlap by 0.58.  ``geom.collide`` passed the layout and the game
+    would have refused it at four fifths of the anchors in its own band.
+
+    ROWS ARE NOT WIDENED.  The latitude step is constant over the whole planet
+    (``GetLatitudeRadPerGrid`` takes no latitude), so the height reservation was
+    already right and paying for it twice would be waste, not caution.
+
+    The equatorial band specifically, and not the worst band on the planet: 0.783
+    is achievable in the 32-segment band and reserving for it would cost 28% of
+    the width on every build to protect a paste nobody makes.  A layout that ends
+    up in a narrower band is caught by :func:`_band_rejected`, which checks the
+    band it actually lands in rather than the one this assumed.
+    """
+    pw, ph = catalog.clearance(item_id, yaw)
+    try:
+        ex, _ez = colliders.own_centre_extent(catalog.building(item_id).model_index, yaw)
+    except Exception:  # noqa: BLE001 - an unreadable model must not stop a layout
+        return pw, ph
+    if not ex:
+        return pw, ph
+    need = math.ceil(ex / (colliders.GRID_ARC * _equatorial_min_column()))
+    return max(pw, need), ph
+
+
 def _charged_pitch(groups: dict[str, _Group], key: str) -> int:
     """The pitch the width model charges ``key``, matching what `_pack_row` does.
 
@@ -354,7 +403,7 @@ def _adapt(spec: BuildSpec) -> tuple[dict[str, _Group], list[_Edge]]:
         key = f"{mg.recipe_id}#{i}"
         yaw = sorter_slots.lane_orientation(item_id)
         w, h = catalog.oriented_footprint(item_id, yaw)
-        pw, ph = catalog.clearance(item_id, yaw)
+        pw, ph = _band_clearance(item_id, yaw)
         groups[key] = _Group(
             key=key,
             recipe_id=mg.recipe_id,

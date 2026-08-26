@@ -207,8 +207,14 @@ def _area_for(placement: Placement) -> BlueprintArea:
     A strategy that has VERIFIED which band its layout pastes in records the
     answer in ``stats["area_segments"]`` and that wins, because it is a stronger
     claim: the extent-only answer says the area fits, the verified one says the
-    game accepts it.  ``layout.spine._band_rejected`` is what sets it.  Without
-    it the extent is all there is to go on.
+    game accepts it.  ``layout.spine._band_rejected`` is what sets it.
+
+    Without a verdict the WIDEST fitting band is declared, not the smallest.
+    The smallest is only meaningful once something has checked the layout is
+    legal there, and for a small blueprint it is the 4-segment polar band, which
+    is 20 tiles around the entire planet and where nothing can be built.  The
+    widest is the claim the extent alone supports, and for anything up to 161
+    rows it is 200 -- the number that used to be a literal.
 
     An extent that fits NO band raises :class:`~flab2bp.dsp.planet.BandRefusal`
     rather than falling back to 200.  Such a blueprint crosses a tropic at every
@@ -227,7 +233,7 @@ def _area_for(placement: Placement) -> BlueprintArea:
         area_segments=(
             int(verified)
             if verified is not None
-            else planet.band_for_extent(width, height).band.area_segments
+            else planet.widest_band_for_extent(width, height).band.area_segments
         ),
         anchor_local_offset_x=0,
         anchor_local_offset_y=0,
