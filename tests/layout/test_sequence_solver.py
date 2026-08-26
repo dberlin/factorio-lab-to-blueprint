@@ -922,6 +922,37 @@ def test_later_cancelled_proxy_closes_the_best_completed_candidate(
     assert solver.budget.spent == 75
 
 
+def test_unseatable_prepared_candidate_remains_searchable_refusal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def refuse_preparation(*_args: Any, **_kwargs: Any) -> Any:
+        raise freeform_module._Unseatable("positional coater collision")
+
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "_prepare_routing_problem",
+        refuse_preparation,
+    )
+    run = _production_run(
+        two_stage_spec(),
+        time_budget_s=2.0,
+        power=False,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+    )
+    height_state = run.solver._heights[0]
+    candidate = run.solver.adapters.prepare(
+        height_state.height,
+        decode_state(
+            height_state.problem,
+            AnnealState.initial(height_state.problem.size, 7),
+        ),
+    )
+
+    assert candidate.prepared is None
+    assert candidate.preparation_error == "unseatable"
+
+
 def test_cancelled_proxy_without_an_exact_candidate_remains_an_honest_refusal() -> None:
     detailed_allowances: list[int] = []
 
@@ -1087,6 +1118,13 @@ def test_serial_layout_uses_a_budgeted_root_compact_seed(
     assert compact_config.max_deterministic_time == 1.0
 
 
+def test_serial_attempt_policy_selects_only_measured_dense_spray_topology() -> None:
+    assert sequence_solver_module._serial_compact_seed_attempt(95, 27) == 4
+    assert sequence_solver_module._serial_compact_seed_attempt(146, 47) == 4
+    assert sequence_solver_module._serial_compact_seed_attempt(168, 2) == 0
+    assert sequence_solver_module._serial_compact_seed_attempt(58, 23) == 0
+
+
 def test_production_seed_has_its_own_wall_and_deterministic_caps(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1110,7 +1148,7 @@ def test_production_seed_has_its_own_wall_and_deterministic_caps(
         )
 
     monkeypatch.setattr(sequence_solver_module, "solve_compact_seed", capture_seed)
-    _production_run(
+    run = _production_run(
         two_stage_spec(),
         time_budget_s=2.0,
         power=False,
@@ -1118,6 +1156,7 @@ def test_production_seed_has_its_own_wall_and_deterministic_caps(
         config=SequenceSolverConfig.test(),
         compact_seed_attempt=0,
     )
+    assert run.heights[0] == run.telemetry.compact_seed_height
 
     compact_config = captured["config"]
     assert isinstance(compact_config, sequence_solver_module.CompactSeedConfig)
@@ -1126,6 +1165,31 @@ def test_production_seed_has_its_own_wall_and_deterministic_caps(
     assert captured["direct_eligibility"] == ()
     assert isinstance(compact_deadline, float)
     assert 0.0 < compact_deadline - captured["called_at"] <= 5.0
+
+
+def test_validator_started_before_deadline_may_finish_exact_certification(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Report:
+        errors: tuple[()] = ()
+
+    def slow_certify(*_args: Any, **_kwargs: Any) -> Report:
+        time.sleep(0.1)
+        return Report()
+
+    monkeypatch.setattr(sequence_solver_module.validate, "certify", slow_certify)
+    run = _production_run(
+        two_stage_spec(),
+        time_budget_s=2.0,
+        power=False,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+        absolute_deadline=time.monotonic() + 0.05,
+    )
+
+    verdict = run.solver.adapters.validate(_placement(area=1, belt_tiles=1))
+
+    assert verdict == ValidationVerdict(True, ())
 
 
 def test_deadline_without_an_exact_incumbent_raises() -> None:
@@ -2015,6 +2079,43 @@ def test_production_observability_preserves_categories_and_all_grouped_work() ->
     assert result.placement.stats == original_stats
     assert result.placement is not placement
     assert result.exact_candidate_key == exact_stage.candidate_key
+
+
+def test_sequence_reuses_adaptive_coarse_strip_partition_before_problem_identity() -> None:
+    unit = Fraction(1)
+    spec = BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id="iron-ingot",
+                machine_item_id="arc-smelter",
+                count=240,
+                inputs_per_machine={"iron-ore": unit},
+                outputs_per_machine={"iron-ingot": unit},
+            ),
+        ),
+        external_inputs={"iron-ore": Fraction(240)},
+        outputs={"iron-ingot": Fraction(240)},
+        belt_item_id="conveyor-belt-3",
+        belt_items_per_second=Fraction(30),
+        label="coarse-sequence-partition",
+    )
+    fine = plan_strips(spec, strip_len=6)
+    assert len(fine) == 40
+
+    run = _production_run(
+        spec,
+        time_budget_s=2.0,
+        power=False,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+    )
+    problem = run.solver._heights[0].problem
+
+    assert problem.size == 1
+    assert sum(instance.machine_count for instance in problem.instance_ids) == 240
+    assert {instance.family_id for instance in problem.instance_ids} == {
+        strip.family_id for strip in fine
+    }
 
 
 def _single_real_machine_spec(

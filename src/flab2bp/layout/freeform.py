@@ -1809,6 +1809,22 @@ def plan_strips(spec: BuildSpec, *, strip_len: int = 6) -> list[Strip]:
     return strips
 
 
+_COARSE_STRIP_THRESHOLD = 40
+
+
+def _coarsen_saturated_strip_plan(
+    spec: BuildSpec,
+    strips: list[Strip],
+    *,
+    strip_len: int,
+) -> tuple[list[Strip], int]:
+    """Repartition redundant stress strips before packing or routing."""
+    if len(strips) < _COARSE_STRIP_THRESHOLD or strip_len >= spec.machine_count:
+        return strips, strip_len
+    coarse_len = max(strip_len, spec.machine_count)
+    return plan_strips(spec, strip_len=coarse_len), coarse_len
+
+
 # --- direct insertion ------------------------------------------------------
 
 
@@ -9256,11 +9272,11 @@ class FreeformLayout:
         # one-net/zero-expansion misses; the same authoritative families
         # partitioned coarsely are 27-46 strips and route in one round.
         # Choose that representation before packing, not as a rescue afterward.
-        if len(strips) >= 40 and self.strip_len < spec.machine_count:
-            strips = plan_strips(
-                spec,
-                strip_len=max(self.strip_len, spec.machine_count),
-            )
+        strips, _effective_strip_len = _coarsen_saturated_strip_plan(
+            spec,
+            strips,
+            strip_len=self.strip_len,
+        )
         if not strips:
             raise NoValidLayout(
                 "the spec contains no machine groups",

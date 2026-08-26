@@ -34,6 +34,7 @@ from flab2bp.layout.freeform import (
     _box,
     _build_prepared,
     _candidate_heights,
+    _coarsen_saturated_strip_plan,
     _dests,
     _direct_alignment_targets,
     _direct_net_candidates,
@@ -43,6 +44,7 @@ from flab2bp.layout.freeform import (
     _prepare_routing_problem,
     _PreparedRoutingProblem,
     _Unpowerable,
+    _Unseatable,
     plan_strips,
 )
 from flab2bp.layout.global_router import GlobalRouteResult, route_global
@@ -116,6 +118,9 @@ _MAX_SEQUENCE_ISLANDS = 16
 _COMPACT_SEED_DETERMINISTIC_SECONDS_PER_BUDGET_SECOND = 1.0 / 15.0
 _COMPACT_SEED_WALL_SHARE = Fraction(1, 3)
 _COMPACT_SEED_DIRECT_MIN_BUDGET_S = 30.0
+_DENSE_SPRAY_MACHINE_THRESHOLD = 90
+_DENSE_SPRAY_LANE_THRESHOLD = 10
+_DENSE_SPRAY_COMPACT_SEED_ATTEMPT = 4
 _COMPACT_LARGE_VARIANT_SIZE = 40
 _COMPACT_LARGE_VARIANT_DETERMINISTIC_CAP = 0.5
 
@@ -168,6 +173,16 @@ def _budgeted_compact_seed_config(
     return replace(
         requested,
         max_deterministic_time=float(deterministic_limit),
+    )
+
+
+def _serial_compact_seed_attempt(machine_count: int, sprayed_lanes: int) -> int:
+    """Select the measured dense-spray topology without probing inside the budget."""
+    return (
+        _DENSE_SPRAY_COMPACT_SEED_ATTEMPT
+        if machine_count >= _DENSE_SPRAY_MACHINE_THRESHOLD
+        and sprayed_lanes >= _DENSE_SPRAY_LANE_THRESHOLD
+        else 0
     )
 
 
@@ -2098,6 +2113,11 @@ def _production_run(
                     spec_label=spec.label,
                     budget_s=time_budget_s,
                 ) from exc
+        strips, planned_strip_len = _coarsen_saturated_strip_plan(
+            spec,
+            strips,
+            strip_len=planned_strip_len,
+        )
         if not strips:
             raise NoValidLayout(
                 "the spec contains no machine groups",
@@ -2170,15 +2190,16 @@ def _production_run(
                     template_problem,
                     outline_height=compact_height,
                 )
-            if compact_height not in heights:
-                heights += (compact_height,)
+            heights = (compact_height,) + tuple(
+                height for height in heights if height != compact_height
+            )
             if compact_height not in protected_followup_heights:
                 protected_followup_heights += (compact_height,)
             large_variant_seed = (
                 bool(problems[compact_height].variant_tables)
                 and problems[compact_height].size >= _COMPACT_LARGE_VARIANT_SIZE
             )
-            effective_compact_attempt = compact_seed_attempt + int(large_variant_seed)
+            effective_compact_attempt = compact_seed_attempt
             telemetry.compact_seed_attempt = effective_compact_attempt
 
             compact_started = time.monotonic()
@@ -2319,14 +2340,14 @@ def _production_run(
                 power=power,
                 ramped=not belt_vertical_construction,
             )
-        except _Unpowerable:
+        except (_Unpowerable, _Unseatable) as exc:
             return _ProductionCandidate(
                 height=height,
                 problem=problem,
                 decoded=aligned,
                 pack=pack,
                 prepared=None,
-                preparation_error="unpowerable",
+                preparation_error=("unseatable" if isinstance(exc, _Unseatable) else "unpowerable"),
                 selected_strips=selected,
             )
         return _ProductionCandidate(
@@ -2418,8 +2439,6 @@ def _production_run(
         if deadline_reached():
             return ValidationVerdict(False, ("deadline",))
         report = validate.certify(placement, spec, expect_power=power)
-        if deadline_reached():
-            return ValidationVerdict(False, ("deadline",))
         failures = tuple(sorted({finding.check for finding in report.errors}))
         return ValidationVerdict(not failures, failures)
 
@@ -2475,11 +2494,11 @@ def _production_run(
             validate=certify,
         ),
         expansion_budget=ExpansionBudget(expansion_total),
+        borrow_first_discovery=compact_seed_attempt is not None,
         protected_followup_heights=protected_followup_heights,
         config=config,
         deadline_reached=deadline_reached,
         initial_states=initial_states,
-        borrow_first_discovery=compact_seed_attempt is not None and not initial_states,
         direct_targets=direct_targets,
         direct_targets_for_state=direct_targets_for_state,
         stage_boundary_transform=transform_stage,
@@ -2594,7 +2613,10 @@ class SequencePairLayout:
             belt_vertical_construction=not self.ramped,
             strip_len=self.strip_len,
             config=self.config,
-            compact_seed_attempt=0,
+            compact_seed_attempt=_serial_compact_seed_attempt(
+                spec.machine_count,
+                len(spec.spray_lanes),
+            ),
             compact_seed_base_seed=self.config.seed,
             compact_seed_config=_budgeted_compact_seed_config(
                 time_budget_s,
