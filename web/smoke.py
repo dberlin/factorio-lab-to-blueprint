@@ -57,7 +57,13 @@ WEB = Path(__file__).resolve().parent
 # written again here. Both arms now mount the SAME viewer (web/src/embed.tsx),
 # which is what makes one implementation of the check correct for both.
 sys.path.insert(0, str(WEB.parent / "scripts"))
-from web_smoke import REFUSE_URL, SmokeFailure, _canvas_variety  # noqa: E402
+from web_smoke import (  # noqa: E402
+    FLOW_CSV,
+    FLOW_URL,
+    REFUSE_URL,
+    SmokeFailure,
+    _canvas_variety,
+)
 
 #: The user's own URL: freeform / max-proliferation, ~1200 tiles, 20 coaters.
 DEFAULT_URL = (
@@ -231,13 +237,28 @@ async def drive(args: argparse.Namespace) -> dict[str, object]:
             report["bootSeconds"] = round(time.perf_counter() - boot_started, 1)
             report["boot"] = json.loads(await page.evaluate("JSON.stringify(window.__flab.boot)"))
 
-            url = args.url if not args.refusal else REFUSAL_URL
+            url = args.url
+            if args.refusal:
+                url = REFUSAL_URL
+            elif args.flow_pin:
+                url = FLOW_URL
             # Same knobs the server arm drives the same URL with: one
             # candidate, freeform, so the refusal is the layout model's and
             # not a budget the page happened to be set low on.
             if args.refusal:
                 args.strategy, args.candidates, args.budget = "freeform", 1, 4.0
+            if args.flow_pin:
+                args.strategy, args.candidates, args.budget = "freeform", 1, 4.0
             await page.evaluate(f"document.getElementById('url').value = {json.dumps(url)}")
+            # Always set it, empty included: a flow left in the box from a
+            # previous run would be submitted with this run's URL, where
+            # `flow_from_text` rightly refuses it as an export for a different
+            # URL and the case fails on that instead of on what it meant to test.
+            flow_csv = FLOW_CSV.read_text(encoding="utf-8-sig") if args.flow_pin else ""
+            await page.evaluate(
+                f"document.getElementById('flow').value = {json.dumps(flow_csv)}"
+            )
+            report["flowChars"] = len(flow_csv)
             await page.evaluate(
                 f"document.getElementById('strategy').value = {json.dumps(args.strategy)};"
                 f"document.getElementById('candidates').value = {args.candidates};"
@@ -260,6 +281,12 @@ async def drive(args: argparse.Namespace) -> dict[str, object]:
             raw = await page.evaluate("JSON.stringify(window.__flab.snapshot)")
             snapshot = json.loads(raw) if raw and raw != "null" else None
             report["fatal"] = json.loads(await page.evaluate("JSON.stringify(window.__flab.error)"))
+            # What the page ACTUALLY submitted, read back off the snapshot --
+            # not what this script asked for. The two differ the moment a
+            # control is set in a way the page does not read, and a bake-off
+            # number attributed to the wrong budget is worse than no number.
+            if snapshot is not None:
+                report["submitted"] = snapshot["options"]
 
             if snapshot is None:
                 report["result"] = None
@@ -446,6 +473,14 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--no-power", action="store_true")
     ap.add_argument("--refusal", action="store_true", help="drive the refusal path instead")
     ap.add_argument(
+        "--flow-pin",
+        action="store_true",
+        help="paste `scripts/web_smoke.py`'s FactorioLab flow export and check the "
+        "recipe selection comes back PINNED. `--flow` is the half of the flow story a "
+        "page can do; `--fetch-flow` is the half it cannot, because it drives a headless "
+        "browser to make FactorioLab run its own solve.",
+    )
+    ap.add_argument(
         "--no-isolation",
         action="store_true",
         help="serve without COOP/COEP, the way GitHub Pages does, so the "
@@ -476,6 +511,20 @@ def main(argv: list[str] | None = None) -> int:
     print(json.dumps(printable, indent=2))
 
     decoded = report.get("decoded")
+    if args.flow_pin:
+        # Falsifiable: a page that dropped the paste would come back
+        # flow_pinned false, which is what an unpinned build reports and is
+        # exactly the silent weaker guarantee this exists to catch.
+        if report.get("flowPinned") is not True:
+            print(f"FAILED: the pasted flow did not pin; flow_pinned={report.get('flowPinned')!r}")
+            return 1
+        if report.get("candidate") != "flow-pinned":
+            print(f"FAILED: the winning candidate is {report.get('candidate')!r}, not flow-pinned")
+            return 1
+        if not isinstance(decoded, dict) or not decoded["buildings"]:
+            print("FAILED: the flow-pinned build handed out nothing that decodes")
+            return 1
+        return 0
     if args.refusal:
         return 0 if report.get("refusal") else 1
     if not isinstance(decoded, dict) or not decoded["buildings"]:

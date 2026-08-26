@@ -8,6 +8,8 @@ because by the time there is a return value the answer is "none of them".
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from flab2bp import pipeline
@@ -138,4 +140,59 @@ def test_no_proliferator_refuses_rather_than_quietly_spraying() -> None:
                 candidates=3,
                 time_budget_s=3.0,
                 no_proliferator=True,
+            )
+
+
+#: The graphene spec and the FactorioLab export captured from it.  Paired: the
+#: provenance check ties a flow to the URL it was generated from, so a fixture
+#: is only usable with its own URL.
+GRAPHENE_URL = (
+    "https://factoriolab.github.io/dsp/list?o=graphene*60&ibe=conveyor-belt-2"
+    "&mmr=arc-smelter~assembling-machine-2~chemical-plant~matrix-lab&v=11"
+)
+GRAPHENE_FLOW = Path(__file__).parent / "fixtures" / "flow_graphene_real_capture.csv"
+
+
+class TestFlowText:
+    """``flow_text`` exists because the web front ends have no file to name.
+
+    A paste and an upload are both text.  Writing that to a temporary path just
+    so it could be read back would put a filesystem between the user's bytes and
+    the parser, and would put its failure modes in the build's error surface.
+    """
+
+    @pytest.mark.slow
+    def test_text_pins_exactly_as_a_path_does(self) -> None:
+        from_text = pipeline.build(
+            GRAPHENE_URL,
+            strategy="freeform",
+            candidates=1,
+            time_budget_s=2.0,
+            flow_text=GRAPHENE_FLOW.read_text(encoding="utf-8-sig"),
+        )
+        assert from_text.flow_pinned is True
+        assert from_text.flow_findings == ()
+        assert from_text.spec.label == "flow-pinned"
+
+    def test_a_flow_from_a_different_url_is_refused_not_ignored(self) -> None:
+        # The whole value of a pin is that it is FactorioLab's own selection.
+        # Accepting an export from somewhere else would pin the build to a
+        # decision nobody made for it.
+        with pytest.raises(ValueError):
+            pipeline.build(
+                SMALL_URL,
+                strategy="freeform",
+                candidates=1,
+                time_budget_s=0.5,
+                flow_text=GRAPHENE_FLOW.read_text(encoding="utf-8-sig"),
+            )
+
+    def test_a_path_and_text_together_are_a_refusal(self) -> None:
+        # Two flows are two different recipe selections. There is no right
+        # guess, so there is no guess.
+        with pytest.raises(ValueError, match="Pass one"):
+            pipeline.build(
+                GRAPHENE_URL,
+                flow=GRAPHENE_FLOW,
+                flow_text=GRAPHENE_FLOW.read_text(encoding="utf-8-sig"),
             )

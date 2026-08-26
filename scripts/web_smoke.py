@@ -69,6 +69,21 @@ REFUSE_URL = (
     "&mmr=plane-smelter~assembling-machine-3~quantum-chemical-plant~matrix-lab&v=11"
 )
 
+#: The graphene spec and the FactorioLab export captured from it, used to
+#: drive the ``--flow`` path through the page.  Paired: ``flow_from_text``
+#: verifies the export was generated from this URL and refuses otherwise, so a
+#: fixture is only usable with its own URL.  Small, and it lays out in seconds.
+FLOW_URL = (
+    "https://factoriolab.github.io/dsp/list?o=graphene*60&ibe=conveyor-belt-2"
+    "&mmr=arc-smelter~assembling-machine-2~chemical-plant~matrix-lab&v=11"
+)
+FLOW_CSV = (
+    Path(__file__).resolve().parents[1]
+    / "tests"
+    / "fixtures"
+    / "flow_graphene_real_capture.csv"
+)
+
 #: How long to wait for a build to settle in the page.  Both cases below stay
 #: well inside it; nothing in this repo may run with a timeout over 300s.
 SETTLE_TIMEOUT_S = 240.0
@@ -115,6 +130,7 @@ _STATE_JS = """JSON.stringify({
   warnings: (document.querySelector('[data-testid="validation-warnings"]')||{}).textContent || null,
   alert: Array.from(document.querySelectorAll('[role="alert"]')).map(n => n.textContent),
   hasString: !!document.querySelector('[data-testid="blueprint-string"]'),
+  flowText: (document.querySelector('[data-testid="flow-text"]')||{}).value || null,
   canvasEmpty: !!document.querySelector('.canvas-empty'),
   canvas: (() => {
     const c = document.querySelector('canvas');
@@ -133,6 +149,20 @@ _FILL_JS = """((url) => {
   // React's onChange actually listens for.
   setter.call(input, url);
   input.dispatchEvent(new Event('input', {bubbles: true}));
+  return 'ok';
+})(%s)"""
+
+_SET_FLOW_JS = """((csv) => {
+  const area = document.querySelector('[data-testid="flow-text"]');
+  if (!area) return 'no flow textarea';
+  // Same reason as _FILL_JS: React owns the value, and a direct assignment
+  // updates the DOM node while React keeps the old state -- so the submit
+  // would carry no flow and the report would say "derived" while the page
+  // showed a pasted export. The native setter plus a bubbled input event is
+  // what onChange listens for.
+  Object.getOwnPropertyDescriptor(
+    window.HTMLTextAreaElement.prototype, 'value').set.call(area, csv);
+  area.dispatchEvent(new Event('input', {bubbles: true}));
   return 'ok';
 })(%s)"""
 
@@ -386,8 +416,16 @@ async def _drive(
     budget_s: float,
     out: Path,
     tag: str,
+    flow: str | None = None,
 ) -> dict[str, Any]:
     await _expect_ok(page, _FILL_JS % json.dumps(url), "filling the URL")
+    # Always set it, including to empty. The three cases share one page, and a
+    # flow left in the box by the previous case is submitted with the next
+    # one's URL -- where `flow_from_text` rightly refuses it as an export for a
+    # different URL, and the case that meant to test something else fails on
+    # that instead. (Found exactly that way; the page's message was correct and
+    # this harness was not.)
+    await _expect_ok(page, _SET_FLOW_JS % json.dumps(flow or ""), "setting the flow export")
     await _expect_ok(
         page, _SET_OPTION_JS % (json.dumps("Strategy"), json.dumps(strategy)), "setting strategy"
     )
@@ -580,8 +618,9 @@ async def _run(base: str, out: Path, browser_path: str, headless: bool) -> dict[
             raise SmokeFailure(f"the page never rendered a build panel. Body was: {body!r}")
 
         success = await _case_success(page, cdp, out)
+        flow = await _case_flow_pin(page, out)
         refusal = await _case_refusal(page, cdp, out)
-        return {"success": success, "refusal": refusal}
+        return {"success": success, "flow": flow, "refusal": refusal}
     finally:
         if browser is not None:
             browser.stop()
@@ -591,6 +630,40 @@ async def _run(base: str, out: Path, browser_path: str, headless: bool) -> dict[
         except subprocess.TimeoutExpired:  # pragma: no cover - kill is a backstop
             process.kill()
         shutil.rmtree(profile, ignore_errors=True)
+
+
+async def _case_flow_pin(page: Any, out: Path) -> dict[str, Any]:
+    """``--flow``, pasted into the page.
+
+    The point of a pin is that WHICH recipe makes what is FactorioLab's own
+    decision rather than one re-derived here, and the difference is invisible
+    in the blueprint: both builds emit a string, and only the report says which
+    guarantee it carries.  So the check is the report, and it is falsifiable --
+    a page that dropped the paste would say "derived, not pinned" here.
+    """
+    settled = await _drive(
+        page,
+        url=FLOW_URL,
+        strategy="freeform",
+        candidates=1,
+        budget_s=4,
+        out=out,
+        tag="flow",
+        flow=FLOW_CSV.read_text(encoding="utf-8-sig"),
+    )
+    if settled.get("refusal"):
+        raise SmokeFailure(f"the flow-pinned build refused: {settled}")
+    report = settled.get("report") or ""
+    if "derived, not pinned" in report:
+        raise SmokeFailure(
+            "the pasted flow never reached the solver: the report says the "
+            f"selection was derived. Report: {report[:400]!r}"
+        )
+    if "pinned to the supplied flow" not in report:
+        raise SmokeFailure(f"the report does not say the flow was pinned: {report[:400]!r}")
+    if not settled.get("hasString"):
+        raise SmokeFailure("the flow-pinned build produced no blueprint string")
+    return {"report": report[:300], "flow_chars": len(FLOW_CSV.read_bytes())}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -633,6 +706,10 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  screenshot               {good['screenshot']}")
     print(f"  report                   {good['report']}")
     print(f"  warnings on the page     {good['warnings'] or '(none)'}")
+    pinned = report["flow"]
+    print("\n-- the flow pin --")
+    print(f"  flow pasted              {pinned['flow_chars']} bytes")
+    print(f"  report                   {pinned['report']}")
     print("\n-- the refusal --")
     print(f"  reason                   {bad['refusal']}")
     print(f"  screenshot               {bad['screenshot']}")

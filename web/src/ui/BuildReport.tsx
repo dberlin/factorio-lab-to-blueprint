@@ -108,8 +108,9 @@ export function BuildReportPanel({
       ) : (
         <p className="note">
           Recipe selection <strong>derived, not pinned</strong> — FactorioLab's own choice of which
-          recipe makes what was re-solved here rather than read from a flow export. The CLI's{' '}
-          <code>--flow</code> / <code>--fetch-flow</code> pin it; this page does not offer them yet.
+          recipe makes what was re-solved here rather than read from a flow export. Paste or upload
+          one above to pin it (the CLI's <code>--flow</code>). <code>--fetch-flow</code>, which
+          drives a headless browser to make FactorioLab run its own solve, is not offered here.
         </p>
       )}
 

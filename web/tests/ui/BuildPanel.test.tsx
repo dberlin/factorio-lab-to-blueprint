@@ -262,3 +262,42 @@ test('warnings from a VALID build are shown, not swallowed by the string being e
   expect(warnings).toHaveTextContent('belt run 14 runs 118 tiles and never terminates');
   expect(warnings).toHaveTextContent("'copper-ingot' is belted in at 2 separate lanes");
 });
+
+/**
+ * A refusal keeps the previous blueprint on the canvas, which is right —
+ * clearing it would throw away the thing you were looking at. What is not
+ * right is the label above it going on naming a result that a refusal has
+ * since superseded, so the provider marks it stale and the Toolbar says so.
+ */
+test('a refusal marks the blueprint on screen as the previous build', async () => {
+  const Staleness = () => {
+    const { stale, blueprint } = useBlueprint();
+    return (
+      <span data-testid="staleness">{blueprint ? (stale ? 'stale' : 'current') : 'empty'}</span>
+    );
+  };
+  render(
+    <BlueprintProvider catalog={realCatalog}>
+      <BuildPanel />
+      <Staleness />
+    </BlueprintProvider>,
+  );
+
+  serving({ status: 202, body: aJob({ result: aResult({ blueprint: A_BLUEPRINT }) }) });
+  build();
+  await waitFor(() => expect(screen.getByTestId('staleness')).toHaveTextContent('current'));
+
+  restoreFetch();
+  serving({
+    status: 202,
+    body: aJob({
+      state: 'refused',
+      result: null,
+      refusal: { message: 'no valid layout', reasons: ['freeform/x: unroutable'] },
+    }),
+  });
+  build();
+  await screen.findByTestId('refusal');
+  // Still rendered — and no longer claiming to be the current result.
+  await waitFor(() => expect(screen.getByTestId('staleness')).toHaveTextContent('stale'));
+});

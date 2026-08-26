@@ -133,6 +133,9 @@ def solve(options_json: str) -> str:
             "power": options["power"],
             "allow_invalid": bool(options.get("allow_invalid", False)),
             "name": options.get("name", ""),
+            # Not the CSV itself: it can be hundreds of kB and the page
+            # already has it. `result.flow_pinned` is the proof it was used.
+            "flow_supplied": bool((options.get("flow") or "").strip()),
         },
         "solver_ceiling_s": options["candidates"] * per_spec * options["budget"],
         "result": None,
@@ -162,6 +165,12 @@ def solve(options_json: str) -> str:
                 candidates=options["candidates"],
                 time_budget_s=options["budget"],
                 name=options.get("name", ""),
+                # `--flow`, pasted rather than named. `--fetch-flow` is the one
+                # that cannot exist here: it drives a headless browser to make
+                # FactorioLab run its own solve, and a page cannot do that to
+                # itself. Same provenance check either way -- a flow that was
+                # not generated from this URL is refused, not shrugged at.
+                flow_text=(options.get("flow") or "").strip() or None,
                 on_progress=on_progress,
             )
         except NoValidLayout as exc:

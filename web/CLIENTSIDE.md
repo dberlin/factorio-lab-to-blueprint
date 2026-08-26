@@ -235,31 +235,54 @@ workers against a wall-clock budget buy materially less search -- which is
 where this arm's measured area deficit came from, and all of where it came
 from.  It is a knob:
 
-| budget/layout | area, tiles, 3 runs | wall clock |
-| --- | --- | --- |
-| 2 s (the CLI's default) | 1292, 1292, 1292 | 61, 71, 69 s |
-| **6 s (this page's default)** | **1210, 1210, 1210** | 56, 64, 59 s |
-| 12 s | 1210 | 94 s |
+| budget/layout | area, tiles, every run | median | wall clock |
+| --- | --- | --- | --- |
+| 2 s (the CLI's default) | 1292 x 6 | 1292 | 59-71 s |
+| **6 s (this page's default)** | 1210 x 7, 1232, 1292, 1292 | **1210** | 59-63 s |
+| 12 s | 1210 | -- | 94 s |
 
-At 6 s this arm is 1.8% *denser* than the server arm at its own default
-(1232 tiles), for the same wall clock.  At 12 s it buys nothing more and costs
-50%.  The page's note under the controls says all of this, because a default
-that differs from the CLI's and does not explain itself is a trap.
+Four-thread CP-SAT is a portfolio with a race in it, so the 6 s cell is a
+distribution and not a number -- three runs agreeing is not three runs of
+evidence, and an earlier draft of this table said 1210 flat on exactly that
+mistake.  The median at 6 s is 1.5% denser than the server arm's median at its
+own default (1228 tiles), for the same wall clock, and no 6 s run was worse
+than the best 2 s run.  At 12 s it buys nothing more and costs 50%.  The page's
+note under the controls says all of this, because a default that differs from
+the CLI's and does not explain itself is a trap.
+
+The budget is wall-clock, so these have to be measured on an idle box: a run
+taken right after a heavy server-arm solve came back with the 2 s area.
 
 The full comparison, including the native four-worker simulation that
 established the cause without a browser, is in `docs/WEB_UI.md`.
 
 ## What does not work here
 
-* **`--flow` / `--fetch-flow`.**  Pinning the recipe selection to FactorioLab's
-  own export means driving a headless browser to run FactorioLab's solve, and a
-  page cannot do that to itself.  The page says so in its notes rather than
-  quietly deriving and calling it pinned.
+* **`--fetch-flow`.**  Making FactorioLab produce its own export means driving
+  a headless browser to run FactorioLab's solve, and a page cannot do that to
+  itself.  This is the one genuine impossibility here rather than a thing
+  nobody got to.
+
+  **`--flow` does work.**  Paste the CSV into the flow box, or choose the file:
+  it goes to `pipeline.build(flow_text=...)` and through the same
+  `flow_from_text` provenance check a file named on the command line gets, so
+  an export from a different URL is refused with the difference spelled out
+  rather than quietly ignored.  Proved end to end by `smoke.py --flow-pin`:
+  `flow_pinned: true`, candidate `flow-pinned`, 238 tiles, 77 buildings,
+  decoded and re-encoded byte for byte in native Python.
 * **Per-solution and log callbacks.**  The wasm seam is one call in, one
   response out.  `swig_helper` raises if one is asked for rather than
   installing a callback that never fires.
 * **`model_stats`, `solver_response_stats`, LP/MPS export.**  Formatters that
   live in `libortools` with no wasm entry point.  They raise.
+
+  `model_stats` is worth a warning: there IS a `CpSat.modelStats` in
+  `vendor/ortools/browser/cp-sat.js`, and it is not the same function.  It
+  decodes the proto in JavaScript with protobufjs and returns
+  `{name, variables, constraints, hasObjective}` as JSON; libortools'
+  `CpModelStats` is a multi-line text report on the presolved model.  Same
+  name, unrelated output.  `solver_response_stats` has no counterpart under
+  any spelling -- checked against the bundle, not assumed.
 
 ## Traps already paid for here
 

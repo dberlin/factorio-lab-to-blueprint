@@ -209,6 +209,13 @@ def build(
     dataset: Dataset | None = None,
     name: str = "",
     flow: Path | None = None,
+    #: A FactorioLab flow export as TEXT rather than a path.  Same pin, same
+    #: provenance check, same door -- ``flow_from_text`` is what ``load_flow``
+    #: calls once it has read the file.  It exists because the web front ends
+    #: receive an upload or a paste and have no file to name: writing that to a
+    #: temporary path just to read it back would put a filesystem, and its
+    #: failure modes, between the user's bytes and the parser.
+    flow_text: str | None = None,
     fetch_flow: bool = False,
     fetch_timeout_s: float = 90.0,
     browser: str | None = None,
@@ -248,9 +255,19 @@ def build(
     # `--flow` wins over `--fetch-flow`: a file the user chose to hand us is a
     # deliberate act, and silently going to the network instead would be
     # surprising. Both routes end at the same `verify_provenance`.
+    if flow is not None and flow_text is not None:
+        # Not a precedence rule. Two flows are two different recipe selections,
+        # and picking one silently would pin the build to a selection the
+        # caller did not choose -- the exact failure `--flow` exists to remove.
+        raise ValueError(
+            "both a flow file and flow text were supplied. Pass one: they are "
+            "two different recipe selections and there is no right guess."
+        )
     selection: FlowSelection | None = None
     if flow is not None:
         selection = load_flow(flow, url=url)
+    elif flow_text is not None:
+        selection = flow_from_text(flow_text, url=url)
     elif fetch_flow:
         selection = flow_from_text(
             capture_flow_csv(url, timeout_s=fetch_timeout_s, browser=browser), url=url

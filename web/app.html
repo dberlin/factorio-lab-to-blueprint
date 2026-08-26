@@ -93,6 +93,12 @@
       </div>
     </div>
 
+    <label for="flow">FactorioLab flow export (optional)</label>
+    <textarea id="flow" spellcheck="false" style="min-height:70px"
+      placeholder="Paste the CSV, or choose the file below -- pins WHICH recipe makes what"></textarea>
+    <input id="flowfile" type="file" accept=".csv,.tsv,.txt,text/csv,text/plain"
+      aria-label="flow export file" style="margin-top:6px;padding:4px">
+
     <label for="name">Blueprint short description (optional)</label>
     <input id="name" type="text" placeholder="left blank: named for what it makes">
 
@@ -176,9 +182,26 @@ const options = (extra = {}) => ({
   budget: Number($('budget').value),
   power: $('power').checked,
   name: $('name').value,
+  // `--flow`. `--fetch-flow` is the one that cannot exist in a page: it drives
+  // a headless browser to make FactorioLab run its own solve. The provenance
+  // check is the same either way -- an export from a different URL is refused.
+  flow: $('flow').value,
   allow_invalid: false,
   ...extra,
 });
+
+$('flowfile').onchange = async (event) => {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  try {
+    $('flow').value = await file.text();
+    statusLine.textContent = `read ${file.name} (${file.size} bytes) as the flow export`;
+  } catch (error) {
+    // Say so. A silently empty textarea would submit an unpinned build and
+    // report it as one, which is the weaker guarantee arriving unannounced.
+    statusLine.textContent = `could not read ${file.name}: ${error}`;
+  }
+};
 
 function budgetNote() {
   const o = options();
@@ -390,9 +413,10 @@ function flowNote(r) {
   if (!r.flow_pinned) {
     return `<p class="note">Recipe selection <strong>derived, not pinned</strong> -- ` +
       `FactorioLab's own choice of which recipe makes what was re-solved here rather than ` +
-      `read from a flow export. The CLI's <code>--flow</code> / <code>--fetch-flow</code> ` +
-      `pin it; a page cannot, because <code>--fetch-flow</code> drives a headless browser ` +
-      `and a page cannot drive one against itself.</p>`;
+      `read from a flow export. Paste or choose one above to pin it (the CLI's ` +
+      `<code>--flow</code>). <code>--fetch-flow</code> cannot exist here: it drives a ` +
+      `headless browser to make FactorioLab run its own solve, and a page cannot drive ` +
+      `one against itself.</p>`;
   }
   if (r.flow_findings.length) {
     return `<p>${r.flow_findings.length} difference(s) from the pinned flow:</p>` +

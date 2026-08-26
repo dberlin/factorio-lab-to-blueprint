@@ -138,10 +138,10 @@ def capped_subtraction(x: int, y: int) -> int:
     if y == 0:
         return x
     if x == y:
-        if x == INT_MAX or x == INT_MIN:
+        if x in (INT_MAX, INT_MIN):
             raise OverflowError("Integer NaN: subtracting infinities of the same sign")
         return 0
-    if x == INT_MAX or x == INT_MIN:
+    if x in (INT_MAX, INT_MIN):
         return x
     if y == INT_MAX:
         return INT_MIN
