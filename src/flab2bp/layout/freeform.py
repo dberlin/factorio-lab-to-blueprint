@@ -141,15 +141,11 @@ WEST_CHANNEL = 1
 #: ``RAMP_TILES_PER_LEVEL`` tiles to gain one.
 _LEVEL_HEIGHT = catalog.BELT_CLIMB_PER_TILE * catalog.RAMP_TILES_PER_LEVEL
 
-#: Levels this router's lattice offers: ground plus two.
+#: Levels this router's lattice offers: ground plus three.
 #:
 #: NOT the game's ceiling, which is ``catalog.belt_max_z`` -- 8.55 on a new save
-#: and 38.55 on the user's.  This is how much of it THIS router can use, and it
-#: is small for a reason particular to the router rather than to the game: the
-#: only thing it climbs for is to cross, that costs
-#: ``BELT_CROSSING_CLEARANCE``, and it treats machines as solid at every
-#: altitude, so headroom beyond a crossing plus one buys it nothing it can
-#: spend.
+#: and 26.55 at the corpus's lab level 9.  This is how much of it THIS router
+#: can use.
 #:
 #: It was 1 + crossing clearance = 2 while the ceiling was believed to be 1.
 #: Measured at 2 the freeform suite failed 12, then 2, then 5 tests on
@@ -157,7 +153,93 @@ _LEVEL_HEIGHT = catalog.BELT_CLIMB_PER_TILE * catalog.RAMP_TILES_PER_LEVEL
 #: plane leaves no slack.  At 3 the same suite is 0.  The game's slope rule
 #: says a ramp to z=2 is legal on any save (world slope 2/3 against a limit of
 #: 4/5), so the third level costs nothing in legality.
-LEVELS = 3
+#:
+#: **THE FOURTH LEVEL IS THE ONE THAT LETS A BELT CROSS A MACHINE**, and it is
+#: worth nothing without :func:`_crossing_ban_levels`.  This comment used to
+#: justify the value with "it treats machines as solid at every altitude, so
+#: headroom beyond a crossing plus one buys it nothing" -- circular, and the
+#: constraint under it was invented.  With the real rule in place the shortest
+#: collider in the packable set is a Mining Machine's at 2.610 and the tallest
+#: that still fits under level 3 is a Self-evolution Lab's at 2.947, so level 3
+#: is the FIRST altitude at which any production machine may be crossed at all.
+#:
+#: Measured on the 72-cell corpus audit, paired and interleaved, four arms
+#: rotated so none always ran first -- 14 rounds, then 8 more with two extra
+#: arms, `--budget 4 --jobs 16`:
+#:
+#: * The null arm is the calibration.  The band rule at ``LEVELS = 3`` is
+#:   PROVABLY the same geometry as the blanket ban (nothing packable clears
+#:   level 2) and it still "won" 45 discordant cells to 42, share 0.517,
+#:   p = 0.83, and still measured 0.63% denser cell-for-cell.  Read every
+#:   number below against that: a 0.6% density delta here is what nothing looks
+#:   like.
+#: * ``LEVELS = 4`` with the rule: clean 62.36/72 against 61.43 over 14 rounds,
+#:   better in 9 rounds and worse in 2 (p = 0.065); pooled over both runs, 46
+#:   discordant cells to 29, share 0.613, p = 0.064.  Two independent runs, the
+#:   same direction, the same size.
+#: * ``LEVELS = 4`` WITHOUT the rule -- more altitude that machines still
+#:   block -- is worse than shipped master: -1.12 clean cells, and it loses to
+#:   the rule 21 discordant cells to 8.  So the gain is the crossing, not the
+#:   lattice.
+#: * ``LEVELS = 5`` gives back the gain: 61.50 clean, share 0.519 against
+#:   master.  The search cost of the fifth plane exceeds what an Assembling
+#:   Machine crossing (3.532, so level 4) returns.
+#: * **Density did not move.** -0.91% cell-for-cell against master, versus the
+#:   null arm's -0.63% and a same-arm noise floor of 1.33% median / 3.59% p90
+#:   over 273 same-arm pairs.  What the fourth level buys is REFUSALS, not area.
+#: * INVALID stayed 0 in all 62 rounds -- 4,464 cells -- and the crossings are
+#:   real: 254 belt tiles stand over a machine's footprint across 30 placements
+#:   at ``LEVELS = 4``, against 0 at ``LEVELS = 3``.
+LEVELS = 4
+
+
+def _crossing_ban_levels(b: PlacedBuilding) -> tuple[int, ...]:
+    r"""Routing levels no belt may stand on over ``b``. **The game's rule.**
+
+    A machine is NOT solid at every altitude.  Nothing in the game says so.
+    The belt-versus-building test on a blueprint paste is one sphere against
+    the building's build collider and nothing else --
+    ``BuildTool_BlueprintPaste.cs`` line 2179 in the decompiled assembly (dump
+    line 145760; the per-file offset for this type is +143581, established
+    against the three citations this repo already carries into it)::
+
+        int num17 = ((!buildPreview2.desc.isBelt)
+            ? Physics.OverlapBoxNonAlloc(colliderData.pos, colliderData.ext,
+                  BuildTool._tmp_cols, colliderData.q, mask, ...)
+            : Physics.OverlapSphereNonAlloc(
+                  buildPreview2.lpos + buildPreview2.lpos.normalized * 0.2f,
+                  0.23f, BuildTool._tmp_cols, 395264, ...));
+
+    There is no footprint term, no tile test, and no altitude ceiling: a belt
+    whose 0.23-radius probe misses the collider is ``Ok`` however far inside the
+    machine's FOOTPRINT it sits.  Colliders start at the ground and rise
+    (:func:`colliders.belt_keepout_offsets` searches negative ``dz`` and comes
+    back empty for every model in the catalog), so "misses the collider" is
+    purely a question of height, and
+    :func:`flab2bp.dsp.colliders.belt_crossing_height` solves it in closed form
+    against the collider's own top.  ``spine`` has priced crossings this way in
+    ``_belt_floor_over`` all along; this is freeform being brought level with
+    it.
+
+    **What the rule depends on**, since a KEEP row owes that and not only a
+    number: the crossed building's ``model_index``, through its build collider.
+    It is a lookup, never a constant -- 0.758 over a Sorter, 1.747 over a
+    Splitter, 2.797 over an Arc Smelter, 3.532 over an Assembling Machine of
+    any of the three tiers, 4.973 over a Chemical Plant, 7.785 over an Oil
+    Refinery.  Tiers within a family often share a collider (Mk.I/II/III
+    assemblers all read 3.532) and often do not (Depot Mk.I 1.897, Mk.II
+    2.835), so a single constant here would be right by coincidence.  The
+    building's own ``z`` is added because the bound is measured from ITS
+    ground.  Whether the answer is REACHABLE is a second, save-dependent
+    question that :class:`catalog.BeltAltitudeRules` owns -- ``max_z`` from lab
+    level and ``vertical_construction`` from Super Magnetic Field Generator --
+    and it is FactorioLab's technology set that decides it, never this module.
+
+    Strictly greater clears, which is why a level exactly ON the bound is
+    banned.
+    """
+    top = colliders.belt_crossing_height(b.model_index) + b.z
+    return tuple(lvl for lvl in range(LEVELS) if lvl * _LEVEL_HEIGHT <= top)
 
 #: Rip-up-and-reroute iterations before a placement is declared unroutable.
 RRR_MAX = 8
@@ -327,8 +409,9 @@ _ROUTING_EXPANSIONS_PER_SECOND = 400_000
 
 #: Toll a path pays per tile for occupying GROUND LEVEL.
 #:
-#: Only machines are solid at every altitude, so a belt at z=0 leaves z=1 and
-#: z=2 open above it -- but a plain step costs 1 and a ramp costs 3, so A* has
+#: A belt at z=0 leaves z=1 and z=2 open above it -- only a machine denies all
+#: three, and only because its collider outreaches this lattice
+#: (:func:`_crossing_ban_levels`) -- but a plain step costs 1 and a ramp 3, so A* has
 #: no reason to climb and never does unless it is blocked.  The whole block
 #: therefore wires on one plane, and a route that crosses it CUTS that plane:
 #: ramping over a belt needs two free tiles of run on each side, and a dense
@@ -2071,7 +2154,15 @@ class _Canvas:
     #: clash and this can.  Measured on a real URL candidate, where it showed up
     #: as ``geom.belt_single_occupancy`` and cost the whole layout a refusal.
     world_taken: set[tuple[int, int, Fraction]] = field(default_factory=set)
-    #: Cells a machine occupies, which block *every* level.
+    #: Cells a machine occupies. Ground truth for "is there a machine here",
+    #: which several passes ask; NOT a routing refusal.
+    #:
+    #: It blocked every level and that was an invented rule -- see
+    #: :func:`_crossing_ban_levels`.  What a machine actually denies is the
+    #: BAND under its collider's top, and ``add`` writes exactly that band into
+    #: ``blocked``, so ``free`` and the flat grid both learn it from there.
+    #: A membership test on this set says a machine stands on the tile and
+    #: says nothing about altitude.
     solid: set[tuple[int, int]] = field(default_factory=set)
 
     #: ``cell -> port (x, y)``: one way in or out, held for that port's nets.
@@ -2129,8 +2220,10 @@ class _Canvas:
     #: is forbidden is the band between: above the addon and under its
     #: clearance.
     #:
-    #: Machines never need this -- ``solid`` keeps the router off them at every
-    #: level.  A belt ADDON does, because it reserves no tile at all: it rides
+    #: Machines never need this -- ``add`` writes their band straight into
+    #: ``blocked``, from :func:`_crossing_ban_levels`, which is the same rule
+    #: expressed on the cells they actually own.  A belt ADDON does need it,
+    #: because it reserves no tile at all: it rides
     #: its belt, and its collider is still 1.8975 high and three tiles long.  A
     #: route crossing a Spray Coater at level 1 pastes as
     #: ``EBuildCondition.Collide`` on the crossing BELT, confirmed in game on a
@@ -2172,9 +2265,15 @@ class _Canvas:
         #: `world_taken` forbids exactly that, one cell rather than one level.
         held = (cell_z,)
         if solid:
+            # NOT every level.  :func:`_crossing_ban_levels` is the game's own
+            # rule and it is a BAND from the ground to the collider's top, so a
+            # belt with the altitude to clear that top may cross this building
+            # -- which is what the game allows, what `spine` has always priced,
+            # and what this router used to forbid on no authority at all.
+            banned = _crossing_ban_levels(b)
             for x, y, _ in b.tiles():
                 self.solid.add((x, y))
-                for lvl in range(LEVELS):
+                for lvl in banned:
                     self.blocked[x, y, lvl] = idx
         else:
             for x, y, _ in b.tiles():
@@ -2197,7 +2296,10 @@ class _Canvas:
 
     def free(self, cell: tuple[int, int, int]) -> bool:
         x, y, z = cell
-        if cell in self.blocked or (x, y) in self.solid or (x, y) in self.keep_out:
+        # `solid` is deliberately NOT consulted: a machine denies the levels
+        # `add` wrote into `blocked`, and the ones above its collider are the
+        # game's to sell.  `_make_grid` must agree, and does.
+        if cell in self.blocked or (x, y) in self.keep_out:
             return False
         # Two independent refusals, added by two branches to the same gate and
         # kept both: `belt_ban` is the height a belt owes whatever it crosses
@@ -3293,10 +3395,11 @@ def _make_grid(
     for cx, cy, clvl in canvas.blocked:
         if lo_x <= cx <= hi_x and lo_y <= cy <= hi_y and 0 <= clvl < LEVELS:
             occ[(cx - gx0) * xstep + (cy - gy0) * LEVELS + clvl] = 0
-    for cx, cy in canvas.solid:
-        if lo_x <= cx <= hi_x and lo_y <= cy <= hi_y:
-            at = (cx - gx0) * xstep + (cy - gy0) * LEVELS
-            occ[at : at + LEVELS] = holes
+    # `canvas.solid` is NOT punched out here, and must not be: the band a
+    # machine really denies is already in `blocked` above, level by level, and
+    # blanking the whole column would put this grid back in disagreement with
+    # `_Canvas.free` -- in the other direction from the bug documented below,
+    # but the same bug.
     for cx, cy in canvas.keep_out:
         if lo_x <= cx <= hi_x and lo_y <= cy <= hi_y:
             at = (cx - gx0) * xstep + (cy - gy0) * LEVELS
@@ -5769,8 +5872,11 @@ def _power_plan(canvas: _Canvas, core: tuple[int, int, int, int]) -> list[tuple[
         # likes "open ground, and open ground is exactly the corridor a belt
         # wanted".  That sentence conflates two opposite things.  The scarce
         # routing resource here is the ONE-ROW CHANNEL on a strip's south face
-        # -- a strip's machine band is solid at every level, so that row is the
-        # only way past it (see `_sweep`, and `WEST_CHANNEL`).  A cell in such a
+        # -- a strip's machine band denies the bottom three levels, so that row
+        # is nearly the only way past it (see `_sweep`, and `WEST_CHANNEL`).
+        # Not because a machine is solid to the sky -- it is not, see
+        # `_crossing_ban_levels` -- but because the lowest level that clears a
+        # production machine's collider is 3.  A cell in such a
         # channel has free neighbours east and west and blocked ones north and
         # south: `openness == 2`.  A cell in the middle of a wide field has
         # `openness == 4` and cutting it out disconnects nothing.  Preferring
@@ -7504,14 +7610,16 @@ class FreeformLayout:
         # quietly deleted, because the numbers under it are still real.
         #
         # The story was that the scarce resource is the east-west corridor: a
-        # strip's machine band blocks every level, so the only way past a strip
-        # is the one-row channel on its south face, and a wide pack asks its nets
-        # to cross the whole width through those. That is not what the failures
-        # are. Flooding from the start cells of failing searches says the median
-        # reachable region is ONE CELL -- see `_reserve_port_access`, which now
-        # holds the way out of it. Nothing is crossing anything; the source port
-        # cannot leave its own access cell. A one-row corridor also carries three
-        # belts, not one, since only machines are solid at every level.
+        # strip's machine band blocks the bottom three levels, so the only way
+        # past a strip is the one-row channel on its south face, and a wide pack
+        # asks its nets to cross the whole width through those. That is not what
+        # the failures are. Flooding from the start cells of failing searches
+        # says the median reachable region is ONE CELL -- see
+        # `_reserve_port_access`, which now holds the way out of it. Nothing is
+        # crossing anything; the source port cannot leave its own access cell. A
+        # one-row corridor also carries several belts, not one, since only a
+        # machine denies the whole band -- and since `LEVELS` rose to 4 a net
+        # can go OVER the strip as well as around it.
         #
         # What the measurement under it DOES show is that some heights wire and
         # others do not, unpredictably, and shortest-first can spend the whole
