@@ -223,6 +223,36 @@ def _assigned_belt_slots() -> Any:
     ]
 
 
+def _assigned_port_slots() -> Any:
+    host = _b(catalog.RAY_RECEIVER_ID, 0, 0)
+    feeder = replace(
+        _b(BELT, 0, 0),
+        output_obj=0,
+        output_to_slot=0,
+    )
+    drawer = replace(
+        _b(BELT, 1, 0),
+        input_obj=0,
+        input_from_slot=1,
+    )
+    wired = slots.assign_belt_slots((host, feeder, drawer))
+    return [
+        (b.output_from_slot, b.input_to_slot)
+        for b in wired[1:]
+    ]
+
+
+def _assigned_addon_slots() -> Any:
+    coater = _b(catalog.SPRAY_COATER_ID, 0, 0)
+    (wired,) = slots.assign_sorter_slots((coater,))
+    return (
+        wired.output_to_slot,
+        wired.input_from_slot,
+        wired.output_from_slot,
+        wired.input_to_slot,
+    )
+
+
 def _splitter_ports() -> Any:
     j = junction.make_splitter(2, 9, Fraction(0))
     out: list[Any] = [
@@ -275,6 +305,8 @@ PROBES: dict[str, Callable[[], Any]] = {
     "slots.sorter_seat_boxes": _sorter_seats,
     "slots.assign_sorter_slots": _assigned_sorter_slots,
     "slots.assign_belt_slots": _assigned_belt_slots,
+    "slots.assign_port_slots": _assigned_port_slots,
+    "slots.assign_addon_slots": _assigned_addon_slots,
     "junction.keepout_cells": _junction_keepout,
     "junction.attach_input": _splitter_ports,
     "spine._belt_floor_over": _belt_floor_over,

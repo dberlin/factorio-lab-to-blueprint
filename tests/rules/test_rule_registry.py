@@ -37,6 +37,8 @@ BASELINE_CONSULTED_BY_BOTH = 24
 #: matches exactly, so a rule that gains a reader must be struck off here and a
 #: rule that loses its last reader fails the suite.
 EXPECTED_UNCONSULTED = {
+    # Centralized values/predicates not yet consumed by emitted paste.
+    "catalog.DEFAULT_STORAGE_LEVEL",
     # Paste-applicable rules centralized here but not yet migrated into
     # strategy/validation.  The report prints each registry reason.
     "catalog.belt_slope_allowed",
@@ -121,6 +123,13 @@ def test_derived_entries_name_the_thing_they_project() -> None:
         assert entry.projection_of in symbols, (
             f"{entry.symbol} projects {entry.projection_of}, which is not declared"
         )
+
+
+def test_mutation_exemptions_are_explicit_rule_scope() -> None:
+    exempt = [e for e in registry.ENTRIES if e.mutation_exempt_because]
+    assert exempt
+    assert all(e.kind is Kind.RULE for e in exempt)
+    assert all(e.mutation_exempt_because.strip() for e in exempt)
 
 
 def test_a_rule_that_varies_says_what_resolves_the_variation() -> None:

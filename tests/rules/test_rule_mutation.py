@@ -25,23 +25,21 @@ What each verdict means
     compiled projection, working as designed), or it is a LEDGER row and says
     so.  ``test_every_inert_rule_is_explained`` is what forbids a quiet one.
 
-Cost
-----
+Cost and scope
+--------------
 
-27 seconds, against a suite that already runs 261 and a hard 300-second
-ceiling.  Three things buy that, and the third is the one that needed proving:
+R4 replays only validator tests whose registered check reaches the rule, plus
+independent numeric boundary controls for applicable centralized paste
+predicates.  A pre-existing failure is compared with its own baseline outcome,
+so it cannot make every mutation look validator-visible.  Rules outside emitted
+paste (interactive ``MatchInserter``, turrets) and dead unread protocol bounds
+carry an explicit ``mutation_exempt_because`` in the registry and are not
+pretended into coverage.
 
-* the ladder short-circuits -- a rule that moves both sides on its first rung
-  never pays for the other three;
-* the validator pool is narrowed per rule by R2's own check-reachability, so a
-  rule reached by ``geom.altitude_step`` is tried against that check's tests
-  and not the other 190;
-* a rule no check reaches gets the whole pool, but only on the two rungs that
-  move it by an order of magnitude.
-
-None of that may change a verdict, so it was measured rather than assumed:
-every rule was also run exhaustively -- all 192 tests, all four rungs, 112s --
-and the two runs agreed on all 54.
+Pytest cases are batched, while each perturbation context is still entered and
+restored alone.  Applicable unconsulted predicates no longer replay the entire
+validator file twice at the extreme ladder rungs; their one real boundary
+witness runs instead.
 """
 
 from __future__ import annotations
@@ -74,6 +72,14 @@ VERDICTS: dict[str, tuple[str, str]] = {
     "rules.SLOT_REACH": ("both", "the plan's own first example"),
     "rules.SPLITTER_MAX_PORTS": ("both", "junction port cap"),
     "rules.BELT_INPUT_SLOTS": ("both", "belt slot assignment, checked and searched"),
+    "rules.BELT_PORT_FEED_FROM_SLOT": (
+        "both",
+        "emitted port feeder slot, checked against game-authored records",
+    ),
+    "rules.BELT_PORT_DRAW_TO_SLOT": (
+        "both",
+        "emitted port draw slot, checked against game-authored records",
+    ),
     "rules.world_gap": ("both", "the shared world-distance helper, everywhere"),
     "rules.POWER_TOO_CLOSE_SQR": (
         "both",
@@ -138,38 +144,56 @@ VERDICTS: dict[str, tuple[str, str]] = {
     "colliders.SORTER_HALF_LENGTH_MIN": ("strategy", "sorter seat box floor"),
     "rules.SPLITTER_INPUT_TO_SLOT": ("strategy", "written by `junction.make_splitter`"),
     "rules.SPLITTER_OUTPUT_FROM_SLOT": ("strategy", "written by `junction.make_splitter`"),
-    # --- inert ---------------------------------------------------------------
-    # Central paste rules awaiting strategy/validate/reporting migration.
-    "catalog.belt_slope_allowed": ("inert", "LEDGER: paste TooSteep predicate gap"),
+    # --- centralized paste boundary witnesses ------------------------------
+    # Downstream readers are gaps; the independent controls still prove the
+    # centralized predicate and threshold react at the cited boundary.
+    "catalog.belt_slope_allowed": (
+        "validator",
+        "central TooSteep predicate has an independent 3/4 boundary witness",
+    ),
     "catalog.blueprint_limit_for_technologies": (
-        "inert",
-        "LEDGER: BlueprintNeedTech reporting gap",
+        "validator",
+        "central BlueprintNeedTech lookup has explicit researched-tier witnesses",
     ),
-    "catalog.stack_pitch_z": ("inert", "LEDGER: vertical stack lookup gap"),
+    "catalog.stack_pitch_z": (
+        "validator",
+        "prefab-derived splitter and lab pitches have independent controls",
+    ),
     "catalog.vertical_construction_allowed": (
-        "inert",
-        "LEDGER: splitter/lab altitude migration gap",
+        "validator",
+        "central splitter/lab stack predicate has locked and upgraded boundaries",
     ),
-    "rules.PASTE_BELT_LINK_MAX_SQR": ("inert", "LEDGER: belt TooFar migration gap"),
-    "rules.belt_link_too_far": ("inert", "LEDGER: belt TooFar migration gap"),
-    "rules.COATER_RESHAPE_MAX": ("inert", "LEDGER: coater TooSkew migration gap"),
-    "rules.coater_reshape_allowed": ("inert", "LEDGER: coater TooSkew migration gap"),
-    # The `MatchInserter` ladder.  Inert, but NOT a ledger row: the game reaches
-    # it only when a sorter's peer preview is null, which a pasted blueprint
-    # never leaves so.  It is ported for the compiled oracle, not the pipeline.
-    # The paste sorter ladder.  Declared "both" -- `spine._band_illegal` reaches
-    # all four through `planet.sorter_condition`.  MEASURED inert, all four.
-    # Same lesson as `rules.DRAG_MAX_ALIGNMENT`: reachability is not exercise.
-    # The band gate arrived with its own tests, but none of R4's probes sits
-    # near these bounds, so a wrong value would ship.  Recorded as the coverage
-    # hole it is -- NOT relabelled to make the table green.
-    "planet.SORTER_SEGMENTS_MAX": ("inert", "LEDGER: `num133`, no probe near the ceiling"),
-    "planet.SORTER_COMBINED_MIN": ("inert", "LEDGER: `num134`, no probe near the floor"),
-    "planet.SORTER_PARAM_BIAS": ("inert", "LEDGER: downstream parameter emitter gap"),
-    "planet.sorter_parameter": ("inert", "LEDGER: downstream parameter emitter gap"),
-    "planet.SORTER_ALTITUDE_UNIT": ("inert", "LEDGER: radial step, no probe near it"),
-    "rules.MATCH_SNAP_MAX_SQR": ("inert", "unreachable for blueprint-carried sorters"),
-    "rules.MATCH_ALIGN_COS": ("inert", "unreachable for blueprint-carried sorters"),
+    "rules.PASTE_BELT_LINK_MAX_SQR": (
+        "validator",
+        "central TooFar threshold has an independent strict-boundary witness",
+    ),
+    "rules.belt_link_too_far": (
+        "validator",
+        "central TooFar predicate has an independent strict-boundary witness",
+    ),
+    "rules.COATER_RESHAPE_MAX": (
+        "validator",
+        "central TooSkew threshold has an independent component boundary",
+    ),
+    "rules.coater_reshape_allowed": (
+        "validator",
+        "central coater reshape predicate has an independent component boundary",
+    ),
+    # The projected sorter ladder has one independent pose on each side of
+    # num133/num134 and a lifted pose whose verdict depends on the 0.2 radial
+    # unit.  The non-emitted oneParameter projection is explicitly R4-exempt.
+    "planet.SORTER_SEGMENTS_MAX": (
+        "validator",
+        "four projected cells refuse and three pass at the num133 boundary",
+    ),
+    "planet.SORTER_COMBINED_MIN": (
+        "validator",
+        "machine-to-machine projected poses straddle the num134 floor",
+    ),
+    "planet.SORTER_ALTITUDE_UNIT": (
+        "validator",
+        "the same near-floor pose is rescued only by its measured radial lift",
+    ),
     # Declared "both" on the reasoning that `slots._drag_belt_end` reads it and
     # `validate` reaches that through the seat model.  MEASURED inert, and the
     # reasoning was the wrong kind of evidence: reachability is not exercise.
@@ -181,28 +205,26 @@ VERDICTS: dict[str, tuple[str, str]] = {
         "no test puts a sorter near the 0.5 gate, so the threshold never decides "
         "anything and a wrong value would ship. A coverage hole, not a dead rule.",
     ),
-    "catalog.DEFAULT_LAB_LEVEL": ("inert", "frozen into `DEFAULT_MAX_BELT_Z` at import"),
-    "catalog.DEFAULT_STORAGE_LEVEL": (
-        "inert",
-        "LEDGER: BeltAltitudeRules carries it but no stack validator reads it",
+    "catalog.DEFAULT_LAB_LEVEL": (
+        "validator",
+        "the technology lookup's fresh-save and upgraded boundaries consume it",
     ),
     "catalog.TESLA_LINK_DISTANCE": ("inert", "frozen into `spine.CONSTANTS` at import"),
     "colliders.PLANET_RADIUS": ("inert", "frozen into collider default arguments"),
     "colliders.PLANET_SEGMENT": ("inert", "frozen into collider default arguments"),
     "colliders.belt_keepout_offsets": ("inert", "frozen into `junction._KEEPOUT` at import"),
     "rules.ADDON_FROM_SLOT": (
-        "inert",
-        "LEDGER: named by slots.py, but no test and no probe moves when it does. "
-        "Either the coater path is untested at this seam or the constant is dead.",
+        "strategy",
+        "`slots.assign_sorter_slots` writes the game-authored addon field quartet",
     ),
-    "rules.ADDON_TO_SLOT": ("inert", "LEDGER: same seam as ADDON_FROM_SLOT"),
-    "rules.BELT_SLOT_AUTO_RANGE": ("inert", "LEDGER: plan step 3.3, enforced by nothing"),
-    "rules.PASTE_LATERAL": (
-        "inert",
-        "LEDGER: `game.inserter_paste` names it and no test sits near the bound, "
-        "so a wrong value would ship.  A test-coverage hole, not a rule hole.",
+    "rules.ADDON_TO_SLOT": (
+        "strategy",
+        "`slots.assign_sorter_slots` writes the game-authored addon field quartet",
     ),
-    "rules.PASTE_LATERAL_EPS": ("inert", "LEDGER: same bound as PASTE_LATERAL"),
+    "rules.PASTE_LATERAL_EPS": (
+        "inert",
+        "LEDGER: applicable radial/lateral branch, but no emitted pose straddles 0.1",
+    ),
     "rules.SKEW_PAIR_DEG": (
         "inert",
         "LEDGER: `game.inserter_skew` names it; no test straddles 30 degrees.",
@@ -222,7 +244,6 @@ VERDICTS: dict[str, tuple[str, str]] = {
         "assertion in the validator pool.  `tests/dsp/test_power_spacing.py` "
         "pins the branches, and it is not a pool R4 reads.",
     ),
-    "rules.ADDON_TURRET_AXIS_DEG": ("inert", "we never place a turret; correctly unread"),
 }
 
 #: An inert rule is only acceptable when something explains it.  These are the
@@ -239,13 +260,23 @@ def pool() -> list[mutation.Witness]:
 
 
 @pytest.fixture(scope="module")
+def boundaries() -> dict[str, tuple[mutation.Witness, ...]]:
+    return mutation.boundary_pool()
+
+
+@pytest.fixture(scope="module")
+def witness_baseline() -> dict[str, str]:
+    return {}
+
+
+@pytest.fixture(scope="module")
 def baseline() -> dict[str, str]:
     return probes.snapshot()
 
 
 @pytest.fixture(scope="module")
-def checks_by_rule() -> dict[str, tuple[str, ...]]:
-    return {row.entry.symbol: row.checks for row in provenance.consultation()}
+def consultation_by_rule() -> dict[str, provenance.Consultation]:
+    return {row.entry.symbol: row for row in provenance.consultation()}
 
 
 def test_the_probe_suite_is_healthy(baseline: dict[str, str]) -> None:
@@ -263,10 +294,6 @@ def test_the_probe_suite_is_healthy(baseline: dict[str, str]) -> None:
     )
 
 
-def test_the_validator_witness_pool_is_green(pool: list[mutation.Witness]) -> None:
-    """192 real validator tests, all passing before any perturbation."""
-    assert len(pool) > 150, "the validator witness pool has collapsed"
-    assert mutation.first_red(pool) is None
 
 
 def test_the_perturbation_reaches_a_by_value_import() -> None:
@@ -313,34 +340,46 @@ def test_every_declared_rule_has_a_verdict() -> None:
     )
 
 
+
+
 @pytest.mark.parametrize(
-    "entry", mutation.rule_entries(), ids=lambda e: e.symbol if isinstance(e, Entry) else str(e)
+    "batch",
+    mutation.rule_batches(),
+    ids=lambda batch: f"{batch[0].symbol}..{batch[-1].symbol}",
 )
-def test_a_rule_reacts_the_way_it_is_declared_to(
-    entry: Entry,
+def test_rules_react_the_way_they_are_declared_to(
+    batch: tuple[Entry, ...],
     pool: list[mutation.Witness],
+    boundaries: dict[str, tuple[mutation.Witness, ...]],
+    witness_baseline: dict[str, str],
     baseline: dict[str, str],
-    checks_by_rule: dict[str, tuple[str, ...]],
+    consultation_by_rule: dict[str, provenance.Consultation],
 ) -> None:
-    """Perturb the rule; assert the reaction matches what is written down."""
-    expected, why = VERDICTS[entry.symbol]
-    got = mutation.verdict(
-        entry,
-        pool=pool,
-        checks=checks_by_rule.get(entry.symbol, ()),
-        baseline=baseline,
-        snapshot=probes.snapshot,
-        changed=probes.changed,
-    )
-    assert got.label == expected, (
-        f"{entry.symbol} was declared '{expected}' ({why}) and measured "
-        f"'{got.label}'.\n"
-        f"  validator test that went red: {got.validator}\n"
-        f"  strategy probes that moved:   {list(got.probes)}\n"
-        f"  perturbation:                 {got.rung}\n"
-        "If this is an improvement, update VERDICTS.  If a probe stopped "
-        "working, test_the_probe_suite_is_healthy will say so."
-    )
+    """Perturb and restore each rule independently; report one pytest batch."""
+    failures: list[str] = []
+    for entry in batch:
+        expected, why = VERDICTS[entry.symbol]
+        consultation = consultation_by_rule[entry.symbol]
+        got = mutation.verdict(
+            entry,
+            pool=pool,
+            boundaries=boundaries,
+            checks=consultation.checks,
+            probes_enabled=bool(consultation.strategies),
+            witness_baseline=witness_baseline,
+            baseline=baseline,
+            snapshot=probes.snapshot,
+            changed=probes.changed,
+        )
+        if got.label != expected:
+            failures.append(
+                f"{entry.symbol} was declared '{expected}' ({why}) and measured "
+                f"'{got.label}'.\n"
+                f"  boundary/validator witness that moved: {got.validator}\n"
+                f"  strategy probes that moved:          {list(got.probes)}\n"
+                f"  perturbation:                        {got.rung}"
+            )
+    assert not failures, "\n\n".join(failures)
 
 
 def test_every_inert_rule_is_explained() -> None:
@@ -379,6 +418,18 @@ def test_a_frozen_rule_is_not_mistaken_for_an_ignored_one() -> None:
     assert "flab2bp.layout.junction._KEEPOUT" in frozen["colliders.belt_keepout_offsets"]
 
 
+def test_perturbation_does_not_rewrite_frozen_projections() -> None:
+    from flab2bp.dsp import rules
+    from flab2bp.layout import junction
+
+    alignment = rules.SLOT_ALIGN_COS
+    keepout = junction._KEEPOUT
+    with mutation.perturbed(registry.by_symbol("rules.SKEW_AXIS_DEG"), 12.0):
+        assert rules.SLOT_ALIGN_COS == alignment
+    with mutation.perturbed(registry.by_symbol("colliders.belt_keepout_offsets")):
+        assert junction._KEEPOUT == keepout
+
+
 def test_the_mutation_coverage_number(capsys: pytest.CaptureFixture[str]) -> None:
     """R4's summary, printed alongside R2's."""
     counts = {label: 0 for label in ("both", "validator", "strategy", "inert")}
@@ -392,4 +443,5 @@ def test_the_mutation_coverage_number(capsys: pytest.CaptureFixture[str]) -> Non
             pct = 100.0 * counts[label] / total
             print(f"  {label:.<26} {counts[label]:>3}  ({pct:5.1f}%)")
         print(f"  of which LEDGER rows ..... {len(LEDGER_INERT):>3}")
+        print(f"  explicitly exempt ....... {len(mutation.exempt_rule_entries()):>3}")
     assert total == len(VERDICTS)

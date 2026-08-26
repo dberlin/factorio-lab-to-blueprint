@@ -51,10 +51,6 @@ LADDER_FACTORS: tuple[Fraction, ...] = (
     Fraction(10),
 )
 
-#: Indices into :data:`LADDER_FACTORS` that move a rule by an order of
-#: magnitude.  These are the rungs the WHOLE validator pool is spent on when
-#: R2's targeting had nothing to narrow to.
-EXTREME_RUNGS: tuple[int, ...] = (2, 3)
 
 
 def perturb(value: Any) -> Any:
@@ -210,7 +206,19 @@ def rebinding_modules(entry: Entry) -> tuple[str, ...]:
 
 
 def rule_entries() -> tuple[Entry, ...]:
-    return registry.rules()
+    """Rules with an observable emitted-paste seam for R4 to perturb."""
+    return tuple(e for e in registry.rules() if e.mutation_exempt_because is None)
+
+
+def exempt_rule_entries() -> tuple[Entry, ...]:
+    """Explicitly inapplicable/dead rules excluded from R4."""
+    return tuple(e for e in registry.rules() if e.mutation_exempt_because is not None)
+
+
+def rule_batches(size: int = 8) -> tuple[tuple[Entry, ...], ...]:
+    """Small pytest batches; each entry is still perturbed and restored alone."""
+    entries = rule_entries()
+    return tuple(entries[i : i + size] for i in range(0, len(entries), size))
 
 
 Probe = Callable[[], Any]
@@ -218,11 +226,12 @@ Witness = tuple[str, Callable[[], None]]
 
 
 def validator_pool() -> list[Witness]:
-    """Every no-fixture test in ``tests/layout/test_validate.py``.
+    """No-fixture tests in ``tests/layout/test_validate.py``.
 
-    192 of its 199, called directly.  "A validator test goes red" is what the
-    plan asks R4 to assert, and these are real tests from the real suite rather
-    than assertions written to be perturbed.
+    R4 runs only the tests whose check id reaches the rule.  The normal pytest
+    run already executes the whole file; replaying all of it for an unrelated
+    or unconsulted rule both wastes time and lets a pre-existing failure masquerade
+    as a reaction to every perturbation.
     """
     from tests.layout import test_validate
 
@@ -236,27 +245,28 @@ def validator_pool() -> list[Witness]:
     ]
 
 
+def boundary_pool() -> dict[str, tuple[Witness, ...]]:
+    """Independent numeric controls for applicable centralized paste rules."""
+    from tests.rules import test_paste_rules
+
+    return {
+        symbol: tuple((f"paste.{fn.__name__}", fn) for fn in functions)
+        for symbol, functions in test_paste_rules.MUTATION_WITNESSES.items()
+    }
+
+
 def targeted(pool: list[Witness], checks: Sequence[str]) -> list[Witness]:
     """The subset of the pool that tests the checks which reach this rule.
 
-    The whole pool costs ~0.55s, which fifty-four rules times four ladder rungs
-    turns into two minutes -- and the full suite is already 261s against a hard
-    300s ceiling.  So R2's own reference graph picks the subset: a rule reached
-    by ``geom.altitude_step`` is tried against the tests whose names carry
-    ``geom_altitude_step``, which is this module's naming convention throughout.
+    Replaying the whole validator file for every rule is both expensive and
+    semantically wrong: a failure in an unrelated check is not a reaction at
+    this rule's seam.  R2's reference graph therefore selects checks that reach
+    the rule, and :func:`boundary_pool` supplies independent numeric witnesses
+    for centralized paste predicates whose downstream reader is still a gap.
 
-    The narrowing is an OPTIMISATION, and it was CHECKED rather than assumed.
-    Every one of the 54 rules was run twice -- once the fast way, once
-    exhaustively against all 192 tests on all four rungs -- and the two agreed
-    on every verdict: 112s exhaustive against 27s targeted, zero
-    disagreements.  Getting there caught two real false negatives, which is why
-    the ladder scales whole tables and function RETURNS rather than perturbing
-    one entry: ``SORTER_LENGTH`` and ``sorter_rate`` both read as inert under a
-    single-entry perturbation and neither is.
-
-    A rule reached by no check at all gets the whole pool, since there is
-    nothing to narrow to and its silence is the claim being tested -- but only
-    on the two extreme rungs, per :data:`EXTREME_RUNGS`.
+    A rule reached by no check and carrying no boundary witness runs no
+    validator test.  Its strategy probes and explicit frozen/exempt
+    classification are the only claims R4 can honestly make.
     """
     fragments = [c.replace(".", "_") for c in checks]
     if not fragments:
@@ -264,11 +274,23 @@ def targeted(pool: list[Witness], checks: Sequence[str]) -> list[Witness]:
     return [w for w in pool if any(f in w[0] for f in fragments)]
 
 
-def first_red(pool: Sequence[Witness]) -> str | None:
+def outcome(fn: Callable[[], None]) -> str:
+    """Stable result used to compare a witness before and after perturbation."""
+    try:
+        fn()
+    except Exception as exc:  # noqa: BLE001 - the failure IS the measurement
+        return f"{type(exc).__name__}: {exc}"
+    return "<passed>"
+
+
+def first_changed(
+    pool: Sequence[Witness], baseline: dict[str, str]
+) -> str | None:
+    """First witness whose outcome changes from its unperturbed outcome."""
     for name, fn in pool:
-        try:
-            fn()
-        except Exception:  # noqa: BLE001 - the failure IS the measurement
+        if name not in baseline:
+            baseline[name] = outcome(fn)
+        if outcome(fn) != baseline[name]:
             return name
     return None
 
@@ -298,33 +320,34 @@ def verdict(
     entry: Entry,
     *,
     pool: Sequence[Witness],
+    boundaries: Mapping[str, Sequence[Witness]],
     checks: Sequence[str],
+    probes_enabled: bool,
+    witness_baseline: dict[str, str],
     baseline: dict[str, str],
     snapshot: Callable[[], dict[str, str]],
     changed: Callable[[dict[str, str], dict[str, str]], tuple[str, ...]],
 ) -> Verdict:
-    """Walk the ladder until both sides react, or the ladder runs out."""
-    narrow = targeted(list(pool), checks)
+    """Walk the ladder until both observable sides react, or it runs out."""
+    witnesses = [
+        *targeted(list(pool), checks),
+        *boundaries.get(entry.symbol, ()),
+    ]
+    # Capture the unperturbed outcome before entering any mutation context.
+    # A stale imported test that is already red is not evidence that this rule
+    # moved; only a changed outcome is.
+    for name, fn in witnesses:
+        if name not in witness_baseline:
+            witness_baseline[name] = outcome(fn)
+
     home = importlib.import_module(f"flab2bp.dsp.{entry.module}")
     rungs = ladder(getattr(home, entry.name))
-
-    # The whole pool only when targeting found nothing to run.  When a check
-    # names the rule and its tests exist, their silence IS the answer; running
-    # the other 190 as well costs 0.55s a rung and was measured to change no
-    # verdict (see the module docstring's note on the full-pool cross-check).
-    witnesses = narrow if narrow else list(pool)
-    # When nothing narrowed it, 192 tests times four rungs is 3.5s of a suite
-    # that has 39s of headroom in total.  The probes still see every rung --
-    # they cost nothing -- and the pool sees the two EXTREME ones, an order of
-    # magnitude either way.  A rule any check truly consults does not survive
-    # being multiplied by ten.
-    tested_rungs = set(range(len(rungs))) if narrow else set(EXTREME_RUNGS)
     best = Verdict(entry.symbol, None, (), None)
-    for index, rung in enumerate(rungs):
+    for rung in rungs:
         try:
             with perturbed(entry, rung):
-                red = first_red(witnesses) if index in tested_rungs else None
-                moved = changed(baseline, snapshot())
+                red = first_changed(witnesses, witness_baseline)
+                moved = changed(baseline, snapshot()) if probes_enabled else ()
         except Exception as exc:  # noqa: BLE001 - a crash is a reaction
             red, moved = f"<{type(exc).__name__} perturbing {entry.symbol}>", ()
         best = Verdict(

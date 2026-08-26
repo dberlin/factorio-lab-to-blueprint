@@ -126,6 +126,11 @@ class Entry:
     #: Set for a ``RULE`` that is knowingly consulted by nothing, with the
     #: reason.  R2 counts these separately; it does not excuse them.
     unconsulted_because: str | None = None
+    #: Why R4 deliberately does not perturb this RULE.  Reserved for a rule
+    #: outside emitted-blueprint paste, or a dead protocol bound with no reader;
+    #: applicable paste rules stay in R4 even while their downstream reader is
+    #: a declared gap.
+    mutation_exempt_because: str | None = None
 
     @property
     def module(self) -> str:
@@ -252,6 +257,14 @@ _CATALOG: tuple[Entry, ...] = (
         Kind.RULE,
         depends_on=(_TECH_LAB,),
         resolved_by="catalog.belt_rules_for_technologies",
+        unconsulted_because=(
+            "BeltAltitudeRules carries the derived storage level, but no emitted-"
+            "paste strategy or validator consumes that field yet."
+        ),
+        mutation_exempt_because=(
+            "R4 perturbs observable emitted-paste seams; carrying this value in an "
+            "otherwise-read dataclass is not an observable seam."
+        ),
         note="GameHistoryData.Init: storageLevel = 2 on a new save.",
     ),
     _e("catalog.MASS_CONSTRUCTION_PREFIX", Kind.DATA),
@@ -400,6 +413,10 @@ _COLLIDERS: tuple[Entry, ...] = (
             "PASTE GAP sorter parameter emission: sorter_parameter owns the "
             "projection, but no downstream emitter consumes it yet."
         ),
+        mutation_exempt_because=(
+            "The centralized projection has a direct boundary control, but emitted "
+            "blueprints do not consume the parameter yet."
+        ),
         note="`num129 -= 0.3f` in the machine-to-machine case.",
     ),
     _e(
@@ -409,6 +426,10 @@ _COLLIDERS: tuple[Entry, ...] = (
         unconsulted_because=(
             "PASTE GAP sorter parameter emission: migrate the blueprint emitter "
             "from its span approximation to this paste projection."
+        ),
+        mutation_exempt_because=(
+            "The centralized projection has a direct boundary control, but emitted "
+            "blueprints do not call it yet."
         ),
     ),
     _e(
@@ -478,6 +499,30 @@ _RULES: tuple[Entry, ...] = (
     _e("rules.SPLITTER_OUTPUT_FROM_SLOT", Kind.RULE, note=_SLOT_INDEX_NOTE),
     _e("rules.BELT_INPUT_SLOTS", Kind.RULE, note=_SLOT_INDEX_NOTE),
     _e(
+        "rules.BELT_PORT_FEED_FROM_SLOT",
+        Kind.RULE,
+        note=(
+            "The belt's own output pool cell when it feeds a building port; all "
+            "70 game-authored records use slot 0."
+        ),
+    ),
+    _e(
+        "rules.BELT_PORT_DRAW_TO_SLOT",
+        Kind.RULE,
+        note=(
+            "The belt's own input pool cell when it draws from a building port; "
+            "all 108 game-authored records use slot 1."
+        ),
+    ),
+    _e(
+        "rules.BELT_PORT_MAX_TILE_GAP",
+        Kind.KNOB,
+        note=(
+            "A corpus-derived validator bound, not a paste threshold: the game "
+            "replays the recorded port link without re-deriving its pose."
+        ),
+    ),
+    _e(
         "rules.BELT_SLOT_AUTO_RANGE",
         Kind.RULE,
         unconsulted_because=(
@@ -485,11 +530,22 @@ _RULES: tuple[Entry, ...] = (
             "the 9th auto-slot connection -- is enforced by nothing.  Corpus "
             "worst is 6, so it has never bound."
         ),
+        mutation_exempt_because=(
+            "No emitted-paste reader consults the silent auto-slot pool bound; R2 "
+            "keeps the dead protocol rule explicit."
+        ),
     ),
     _e("rules.SPLITTER_MAX_PORTS", Kind.RULE),
     _e("rules.SLOT_REACH", Kind.RULE, lint=True),
     _e("rules.PASTE_SNAP", Kind.RULE, lint=True),
-    _e("rules.PASTE_LATERAL", Kind.RULE),
+    _e(
+        "rules.PASTE_LATERAL",
+        Kind.RULE,
+        mutation_exempt_because=(
+            "The branch is reachable only for a silo, and this project emits no "
+            "silo; the applicable snap/epsilon/radial branches remain in R4."
+        ),
+    ),
     _e("rules.PASTE_RADIAL", Kind.RULE, lint=True),
     _e("rules.PASTE_LATERAL_EPS", Kind.RULE, lint=True),
     _e(
@@ -552,10 +608,10 @@ _RULES: tuple[Entry, ...] = (
         lint=True,
         unconsulted_because=(
             "The same limit for a turret.  We never place a turret, so nothing "
-            "can consult it and no perturbation can turn anything red.  This is "
-            "the one row where zero readers is the correct state -- but it is "
-            "declared, so R2 counts it as unconsulted rather than hiding it."
+            "can consult it.  This is declared for R2/R1 rather than mutated as "
+            "though a blueprint emitted by this project could reach it."
         ),
+        mutation_exempt_because="Turret addon placement is outside emitted blueprints.",
     ),
     _e("rules.ADDON_NEIGHBOUR_RADIAL_GAP", Kind.RULE, lint=True),
     # The three Phase V added after this registry was written.  MATCH_* are the
@@ -582,6 +638,10 @@ _RULES: tuple[Entry, ...] = (
             "because the compiled oracle checks us against it (15488/15488); "
             "unread by the pipeline BY THE RULE'S OWN TERMS, not by neglect."
         ),
+        mutation_exempt_because=(
+            "MatchInserter is an interactive missing-peer recovery path; every "
+            "sorter this project emits carries both peers."
+        ),
         note=(
             "BuildTool_BlueprintPaste.cs:1588 `if (num4 < 6f && ...)` -- a "
             "SQUARED world distance, so 2.449 world units, NOT a sibling of "
@@ -593,6 +653,10 @@ _RULES: tuple[Entry, ...] = (
         Kind.RULE,
         lint=True,  # 0.9702957 is distinctive; a bare copy of it IS a defect.
         unconsulted_because="Same ladder, same reachability condition, same reason.",
+        mutation_exempt_because=(
+            "MatchInserter is an interactive missing-peer recovery path; every "
+            "sorter this project emits carries both peers."
+        ),
         note="BuildTool_BlueprintPaste.cs:1536, cos 14 on BOTH dots.",
     ),
     _e(
@@ -783,13 +847,12 @@ class LintException:
     why: str
 
 
-#: Measured, not assumed.  Running R1 with no exceptions at all produced exactly
-#: thirteen hits across the twelve sites below and nothing else, and every one
-#: of them is a quality knob
-#: whose number happens to coincide with a game constant.  That is the finding
-#: R1 actually produced: the plan expected it to "start green", and it does --
-#: but only once the coincidences are written down, because the game's constants
-#: are ordinary numbers.  ``0.8`` remains ``SLOT_REACH`` even though the
+#: Measured, not assumed.  Running R1 with no exceptions produced the sites
+#: below and nothing else.  Each is a quality knob, timeout, or integer infinity
+#: sentinel whose number happens to coincide with a game constant.  That is the
+#: finding R1 actually produced: the game's constants are ordinary numbers.
+#: The plan expected R1 to start green; it does once these coincidences are
+#: written down.  ``0.8`` remains ``SLOT_REACH`` even though the
 #: paste-authoritative belt slope is now ``3/4``.
 #:
 #: The teeth are still there.  These suppress a value AT A SITE, not the value.
@@ -818,6 +881,12 @@ LINT_EXCEPTIONS: tuple[LintException, ...] = (
         "_astar",
         30.0,
         "`1 << 30` as an infinity sentinel for the heuristic; not degrees",
+    ),
+    LintException(
+        "flab2bp.layout.global_router",
+        "_search_relaxed",
+        30.0,
+        "`1 << 30` is an integer infinity sentinel for A*; not a sorter angle",
     ),
     LintException(
         "flab2bp.layout.freeform",
