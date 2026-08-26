@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The differential oracle for BuildTool_BlueprintPaste.MatchInserter.
+
+    It references the SHIPPED game assemblies by absolute path rather than
+    vendoring them, so nothing copyrighted enters the repository.  The paths are
+    overridable with -p:DspManaged=<dir> for a machine that installed the game
+    somewhere else; `flab2bp.bench.snaporacle` passes the directory it resolved.
+  -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <AssemblyName>snaporacle</AssemblyName>
+    <RootNamespace>SnapOracle</RootNamespace>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <WarningLevel>4</WarningLevel>
+    <!-- The game assemblies are compiled against an older BCL and carry
+         [Obsolete] members we never touch; the reference itself warns. -->
+    <NoWarn>CS0618;CS0612;NU1701</NoWarn>
+    <DspManaged Condition="'$(DspManaged)' == ''">/home/dannyb/Dyson Sphere Program/DSPGAME_Data/Managed</DspManaged>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="Assembly-CSharp">
+      <HintPath>$(DspManaged)/Assembly-CSharp.dll</HintPath>
+    </Reference>
+    <Reference Include="UnityEngine.CoreModule">
+      <HintPath>$(DspManaged)/UnityEngine.CoreModule.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+
+</Project>

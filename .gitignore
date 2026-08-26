@@ -20,3 +20,8 @@ wheels/
 node_modules/
 /web/.rsbuild/
 /web/coverage/
+
+# The C# snap oracle builds against the game DLLs; neither the build output
+# nor the copied-in engine assemblies belong in the repository.
+/oracle/bin/
+/oracle/obj/
