@@ -142,6 +142,31 @@ Phase 1 for relocation.
 resolves in the decompiled source, and every REMOVE row is gone from the
 codebase rather than merely documented.
 
+### Phase V is DONE. The ledger is `docs/RULE_LEDGER.md`.
+
+Zero UNVERIFIED rows. Four invented rules deleted (`sorter.altitude` and
+`catalog.SORTER_SPANS_ALTITUDE`; the `geom.altitude_range` quantum clause;
+`catalog.BELT_CROSSING_CLEARANCE`), two partial ports completed
+(`PlanetGrid.segmentTable`, 8 of 512 entries → all 512; `TooBendToLift`, ported
+with a consumer), one latent format bug fixed with a citation (`geom.bounds`'
+parameter cap was 32768 against a signed Int16), one constant upgraded from
+"corpus measurement" to a cited game rule (`SORTER_MAX_REACH`), and the last
+game constant moved out of `layout/` (`DRAG_MAX_ALIGNMENT`). Density: paired,
+interleaved, three reps against a separate checkout — spine identical on all 48
+cells, freeform inside its own rerun noise, INVALID 0 in all six arms.
+
+**Two of this plan's own claims were retracted by it**, both because a row
+recorded a threshold without recording which code path reaches it: Step 4.2's
+cos(24°) item, and the framing of the `MatchInserter` disagreements as
+replacements for `SLOT_REACH`. Every ledger row now carries an applicability
+condition for that reason.
+
+**One row is OPEN and it is the highest-value experiment on the board.** Step
+0.1 — does `TooBendToLift` bind on a paste? — is no longer a formality: measured
+corpus-wide, the rule would convict 213 of 7114 spine belts across 21 of 24
+cells, and 139 of 5761 freeform belts across 18 of 24. If it binds, it is a
+router item (Step 2.2), not a validator item.
+
 ---
 
 # Phase 0 — Settle the one open question about the game
@@ -310,11 +335,22 @@ objective. It is also the most likely to move layouts in both directions, so it
 gets the most careful measurement: paired, interleaved, all three tiers,
 cell-for-cell area, INVALID 0 in every round.
 
-### Step 4.2 — Retire the remaining invented constraints. [BP, zero cost today]
+### Step 4.2 — Retire the remaining invented constraints. [DONE, in part; the other half was wrong]
 
-Belt `z` quantisation as a *game* rule (the game quantises nothing — keep the
-ceiling, move the quantum next to the emitters), and `slots.attachment`'s
-cos(24°) alignment, which is stricter than the game's sign test.
+Belt `z` quantisation as a *game* rule — **DONE in Phase V.** The game quantises
+nothing (`BuildTool_Path.cs:388,444,176`); the `geom.altitude_range` quantum
+clause is deleted, the ceiling half kept, and `catalog.BELT_Z_QUANTUM` relabelled
+as the emitters' step. Physically moving it next to the emitters still wants a
+`freeform.py` edit and is handed to that owner.
+
+`slots.attachment`'s cos(24°) alignment — **this item was WRONG and is
+withdrawn.** It is not stricter than the game: the paste snaps the sorter end
+onto the slot *and takes the slot's rotation*
+(`BlueprintUtils.cs:2096-2097`), so `TooSkew` at
+`BuildTool_BlueprintPaste.cs:3494-3501` then applies 24° to exactly that pair.
+Relaxing it to the sign test makes an Oil Refinery servable from the north,
+which the game refuses. Tried, caught by the suite, reverted. See
+`docs/RULE_LEDGER.md` §1a and the retraction at the head of `RULE_AUDIT.md` D5.
 
 ---
 

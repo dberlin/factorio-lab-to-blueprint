@@ -1092,15 +1092,23 @@ def _altitude_range(ctx: Context) -> Iterable[Finding]:
                 (i,),
                 {"z": b.z, "max": ceiling},
             )
-        elif b.z % cat.BELT_Z_QUANTUM != 0:
-            yield Finding(
-                "geom.altitude_range",
-                Severity.ERROR,
-                f"belt {i} at altitude {b.z}, not a multiple of "
-                f"{cat.BELT_Z_QUANTUM}",
-                (i,),
-                {"z": b.z, "quantum": cat.BELT_Z_QUANTUM},
-            )
+        # The `b.z % cat.BELT_Z_QUANTUM != 0` clause was here, refusing a belt
+        # whose altitude was not a multiple of a half level.  The game
+        # quantises nothing.  Its own altitude is an integer counter that the
+        # path tool increments (`BuildTool_Path.cs:388`, `altitude++`) and
+        # clamps (`:444`, `if (altitude > 60) { altitude = 60; }`), converted to
+        # a world radius at `:176`::
+        #
+        #     ... (float)altitude * 1.3333333f + ...
+        #
+        # and no branch anywhere compares a belt's height against a step size.
+        # What bounds a belt vertically is the ceiling above -- `buildMaxHeight`
+        # -- and the slope limit in `geom.altitude_step`; between them there is
+        # no third rule for this one to be.
+        #
+        # `catalog.BELT_Z_QUANTUM` survives as what it always was: the step
+        # OUR emitters climb in, which is a quality knob and is documented as
+        # one at its definition.  It is no longer anything a blueprint can fail.
 
 
 @check("geom.altitude_step")
@@ -1183,12 +1191,28 @@ def _bounds(ctx: Context) -> Iterable[Finding]:
             (),
             {"buildings": n},
         )
+    # 32767, not 32768.  The count is written as a SIGNED Int16 and read back as
+    # one, so 32768 does not round-trip -- it is written as -32768 and the game
+    # allocates a negative array.  `BlueprintBuilding.cs:304-305`::
+    #
+    #     int num = ((parameters != null) ? parameters.Length : 0);
+    #     w.Write((short)num);
+    #
+    # and back at `:121-122`::
+    #
+    #     int num2 = r.ReadInt16();
+    #     parameters = new int[num2];
+    #
+    # `flab2bp.dsp.records` writes the same field the same way (`w.i16(...)`), so
+    # the cap is a property of the format both ends share.  The old bound let
+    # through the one value that corrupts.
     for i, b in enumerate(ctx.placement.buildings):
-        if len(b.parameters) > 32768:
+        if len(b.parameters) > 32767:
             yield Finding(
                 "geom.bounds",
                 Severity.ERROR,
-                f"building {i} carries {len(b.parameters)} parameters, cap is 32768",
+                f"building {i} carries {len(b.parameters)} parameters, cap is 32767 "
+                f"(the count is a signed Int16; 32768 writes as -32768)",
                 (i,),
                 {"parameters": len(b.parameters)},
             )
@@ -1264,24 +1288,30 @@ def _reach(ctx: Context) -> Iterable[Finding]:
             )
 
 
-@check("sorter.altitude")
-def _sorter_altitude(ctx: Context) -> Iterable[Finding]:
-    if cat.SORTER_SPANS_ALTITUDE:
-        return
-    for i, b in ctx.of_kind(Kind.SORTER):
-        a = _anchors(b)
-        if a is None:
-            continue
-        (_, _, z1), (_, _, z2) = a
-        if z1 != z2:
-            yield Finding(
-                "sorter.altitude",
-                Severity.ERROR,
-                f"sorter {i} spans altitudes {z1}->{z2}; sorters never change level "
-                f"(z2-z is exactly 0 for all 1288 sorters in the real corpus)",
-                (i,),
-                {"z": z1, "z2": z2},
-            )
+# `sorter.altitude` was here.  It refused a sorter whose two ends sat at
+# different altitudes, on the evidence that `z2 - z` is exactly 0 for all 1288
+# sorters in the fixture corpus.  That is a habit of the corpus's builders and
+# not a rule: the game models an altitude-spanning sorter explicitly, and
+# measures it.  `BuildTool_Inserter.cs:1311`::
+#
+#     float num4 = Mathf.Abs(lpos.magnitude - lpos2.magnitude) / 0.2f;
+#
+# -- the ends' difference in RADIUS, i.e. exactly the quantity the deleted check
+# required to be zero -- and `:1347` uses it::
+#
+#     if (Mathf.Sqrt(num2 * num2 + num4 * num4) < num8)
+#     {
+#         buildPreview.condition = EBuildCondition.TooClose;
+#         continue;
+#     }
+#
+# where `num2` is the segments the sorter crosses.  That is a MINIMUM on the
+# combined span, so altitude only ever helps a sorter satisfy it; no branch
+# anywhere caps it.  A sorter reaching up to a raised belt is ordinary DSP.
+#
+# Nothing this repository emits produces one, so deleting the check changes no
+# blueprint.  What it removes is an invented rule that would have refused a
+# correct one.
 
 
 @check("sorter.endpoints")

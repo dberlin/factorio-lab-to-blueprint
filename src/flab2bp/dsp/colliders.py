@@ -266,26 +266,94 @@ def _spherical_rotation(pos: Vec3, angle_deg: float) -> Quat:
 
 # --- the planet grid --------------------------------------------------------
 
-#: ``PlanetGrid.segmentTable``, decompiled line 102624.  Only entry 200 is
-#: reached at the equator, but the whole prefix is needed away from it.
-_SEGMENT_TABLE_HEAD = (1, 4, 4, 4, 4, 4, 4, 4)
+#: ``PlanetGrid.segmentTable``, ``PlanetGrid.cs:19-80``.  All 512 entries.
+#:
+#: This was ``_SEGMENT_TABLE_HEAD``, the first EIGHT entries, cited as
+#: "decompiled line 102624" -- a number that resolves under neither line-number
+#: convention this repository uses; the table is at ``PlanetGrid.cs:19``.
+#: :func:`_longitude_segment_count` fell through to ``return raw`` for every
+#: index from 8 to 499, and ``segmentTable[i] != i`` for **478 of those 492**.
+#: The port was right at exactly the indices where the table happens to be the
+#: identity, and ``200`` -- the only one the equatorial model reaches -- is one
+#: of them.  That is why nothing caught it.
+#:
+#: The table takes only 17 distinct values, so it maps the 512 latitude indices
+#: onto 17 BANDS.  A blueprint's recorded ``area_segments`` is an output of this
+#: table, and therefore names a band and not a latitude; fitting a single
+#: latitude to one is fitting a point to a band.
+_SEGMENT_TABLE = (
+    1, 4, 4, 4, 4, 4, 4, 4, 8, 8, 8, 8, 8, 8, 8, 8,
+    16, 16, 16, 16, 20, 20, 20, 20, 20, 20, 20, 20, 32, 32, 32, 32,
+    32, 32, 32, 32, 32, 32, 32, 32, 40, 40, 40, 40, 40, 40, 40, 40,
+    40, 40, 40, 40, 40, 40, 60, 60, 60, 60, 60, 60, 60, 60, 60, 60,
+    60, 60, 60, 60, 60, 60, 60, 60, 60, 80, 80, 80, 80, 80, 80, 80,
+    80, 80, 80, 80, 80, 80, 80, 80, 80, 80, 80, 100, 100, 100, 100, 100,
+    100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100,
+    100, 100, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120,
+    120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 160, 160, 160, 160,
+    160, 160, 160, 160, 160, 160, 160, 160, 160, 160, 160, 160, 160, 160, 160, 160,
+    160, 160, 160, 160, 160, 160, 160, 160, 160, 160, 160, 160, 160, 160, 160, 160,
+    160, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200,
+    200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200,
+    200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 240, 240, 240,
+    240, 240, 240, 240, 240, 240, 240, 240, 240, 240, 240, 240, 240, 240, 240, 240,
+    240, 240, 240, 240, 240, 240, 240, 240, 240, 240, 240, 240, 240, 240, 240, 240,
+    240, 240, 240, 240, 240, 240, 240, 240, 240, 240, 240, 240, 240, 240, 240, 300,
+    300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300,
+    300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300,
+    300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300,
+    300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300,
+    300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 400,
+    400, 400, 400, 400, 400, 400, 400, 400, 400, 400, 400, 400, 400, 400, 400, 400,
+    400, 400, 400, 400, 400, 400, 400, 400, 400, 400, 400, 400, 400, 400, 400, 400,
+    400, 400, 400, 400, 400, 400, 400, 400, 400, 400, 400, 400, 400, 400, 400, 400,
+    400, 400, 400, 400, 400, 400, 400, 400, 400, 400, 400, 400, 400, 400, 400, 400,
+    400, 400, 400, 400, 400, 400, 400, 400, 400, 400, 400, 400, 400, 400, 400, 400,
+    400, 400, 400, 400, 400, 400, 400, 400, 400, 400, 400, 400, 400, 400, 400, 400,
+    400, 400, 400, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500,
+    500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500,
+    500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500,
+    500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500,
+)
 
 
 def _longitude_segment_count(latitude_rad: float, segment: int) -> int:
     """``PlanetGrid.DetermineLongitudeSegmentCount``, decompiled line 103293.
 
-    The table it consults snaps the raw count to a "nice" value.  Reproducing
-    the whole 512-entry table here would be dead weight: the model is evaluated
-    at the equator (see :func:`collisions`), where ``cos`` is 1 and the raw count
-    is already ``segment``.
+    ``PlanetGrid.cs:1838``::
+
+        public static int DetermineLongitudeSegmentCount(int latitudeIndex, int segment)
+        {
+            int num = Mathf.CeilToInt(Mathf.Abs(Mathf.Cos((float)latitudeIndex
+                        / ((float)segment / 4f) * MathF.PI * 0.5f)) * (float)segment);
+            if (num < 500)
+            {
+                return segmentTable[num];
+            }
+            return (num + 49) / 100 * 100;
+        }
+
+    The count is COSINE-based and then snapped through :data:`_SEGMENT_TABLE`,
+    so it is quantised, not continuous.  This is the function the paste-time
+    geometry actually goes through: ``BlueprintUtils.RefreshBuildPreview`` takes
+    the longitude step from ``GetLongitudeRadPerGrid``
+    (``BlueprintUtils.cs:270-273``)::
+
+        return MathF.PI * 2f / (float)(GetLongitudeSegmentCount(_latitudeRad, _segmentCnt) * 5);
+
+    which resolves to this.  So the quantisation is part of the rule and not an
+    artefact of grid construction.
+
+    :func:`collisions` still evaluates at the equator, where the raw count is
+    ``segment`` and ``segmentTable[200]`` is ``200``, so the flat model is
+    unaffected -- but :func:`preview_pose` takes an ``anchor_lat`` and was
+    silently wrong for it everywhere else.
     """
     lat_index = int(abs(latitude_rad) / _latitude_rad_per_grid(segment) / 5)
     raw = math.ceil(abs(math.cos(lat_index / (segment / 4.0) * math.pi * 0.5)) * segment - 1e-9)
     if raw >= 500:
         return (raw + 49) // 100 * 100
-    if raw < len(_SEGMENT_TABLE_HEAD):
-        return _SEGMENT_TABLE_HEAD[raw]
-    return raw
+    return _SEGMENT_TABLE[raw]
 
 
 def _latitude_rad_per_grid(segment: int) -> float:

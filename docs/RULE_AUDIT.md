@@ -296,6 +296,37 @@ Consequences:
 
 ### D5 — One constant, two different rules: `SKEW_AXIS_DEG`
 
+> **RETRACTED by the Phase V provenance ledger. Read the retraction below before
+> the section.** D5's headline — that `slots.attachment` uses `SKEW_AXIS_DEG` as
+> "a hand-chosen tolerance on a different quantity" — is **wrong**, and so is the
+> consolidation plan's Phase 4.2 item built on it ("`slots.attachment`'s cos(24°)
+> alignment, which is stricter than the game's sign test"). It was tried, and the
+> suite caught it: relaxing the gate to the sign test makes an Oil Refinery
+> servable from the north, which the game refuses as `TooSkew`.
+>
+> What both missed is that the paste **snaps the sorter end onto the slot and
+> takes the slot's rotation with it** — `BlueprintUtils.cs:2096-2097`:
+>
+> ```csharp
+> buildPreview2.lpos = transformedBy.position;
+> buildPreview2.lrot = transformedBy.rotation;
+> ```
+>
+> `TooSkew` then runs on the snapped values at
+> `BuildTool_BlueprintPaste.cs:3494-3501`, where `lrot` **is** the slot's
+> rotation and `lpos` **is** the pose — so `num135` is the angle between the
+> slot's forward and the run measured from the pose, against 24°. That is
+> `slots.attachment`'s test exactly, origin included. `Mathf.Abs` makes the
+> game's form unsigned and the ladder's sign test at `BlueprintUtils.cs:2136`
+> supplies the sign, so ours is the conjunction of the two.
+>
+> `SKEW_AXIS_DEG` is **one rule with two consumers after all**. The section below
+> is kept for its measurements — the 196-slot-pose survey and the 0.9996 planar
+> minimum are still good — but its conclusion is not. See
+> `docs/RULE_LEDGER.md` §1a. The addendum at the end of this section, about
+> `MatchInserter`, remains correct and is refined there.
+
+
 `rules.py:398-405` says explicitly:
 
 > This is ONE rule with two consumers. `layout.validate` checks against it and
