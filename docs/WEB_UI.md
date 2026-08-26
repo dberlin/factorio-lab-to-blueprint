@@ -122,10 +122,18 @@ canvas is not the outcome of the last build, which covers a refusal, an error, a
 string was withheld for failing validation. (The client-side arm rebuilds its whole output
 column per solve, so it never had this to fix.)
 
-**`/api/fetch` is an open relay**, inherited from the viewer's `src/server/proxy.ts` and
-reimplemented in Python for parity. It follows redirects, so an allowed http(s) URL can still
-reach a loopback address. Mitigated only by binding to 127.0.0.1. Anything public needs this
-closed first, along with rate limiting on `/api/build`.
+**`/api/fetch` is a relay, and it no longer relays into this machine.** Inherited from the
+viewer's `src/server/proxy.ts`, which followed redirects blind — so an allowed public URL could
+answer `302 Location: http://127.0.0.1:8000/api/build` and be fetched, which is the entire
+redirect-based SSRF. Redirects are now followed by hand and every hop is resolved and rejected
+if it lands on a loopback, private, link-local or reserved address; all of a name's addresses
+are checked, not just the first.
+
+It is deliberately **not** offered as a complete defence: the address is resolved in
+`private_address` and connected to by httpx a moment later, so a DNS entry that changes between
+the two still gets through. Closing that needs a transport pinned to the address it checked.
+What is closed is the redirect hop, which needed no race at all. Anything public still needs
+rate limiting on `/api/build` before it goes anywhere.
 
 **`web/node_modules` is not committed.** It was, on master, and it was *broken*: the root
 `.gitignore`'s unanchored `dist/` pattern stripped every package's `dist/` directory on the way

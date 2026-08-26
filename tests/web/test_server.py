@@ -7,12 +7,14 @@ import json
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Callable, Iterator
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 
 from flab2bp import pipeline
@@ -250,3 +252,152 @@ def test_a_small_json_poll_is_not_gzipped(start: Callable[..., Client]) -> None:
     with urllib.request.urlopen(request, timeout=10) as response:
         assert response.headers.get("Content-Encoding") is None
         assert json.loads(response.read())["ok"] is True
+
+
+class TestTheProxyWillNotRelayIntoThisMachine:
+    """``/api/fetch`` is a relay, and a relay into localhost is the whole trick.
+
+    The viewer's ``proxy.ts`` followed redirects blind, so an allowed public URL
+    could hand back a ``302`` to ``http://127.0.0.1:.../api/build`` and be
+    fetched.  Every hop is checked now.  This is not a complete SSRF defence --
+    the address is resolved here and connected to a moment later, so a DNS entry
+    that changes in between still gets through -- and it does not pretend to be:
+    what it closes is the redirect hop, which needed no race at all.
+    """
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "http://127.0.0.1:9/x",
+            "http://localhost:9/x",
+            "http://10.1.2.3/x",
+            "http://192.168.0.1/x",
+            "http://169.254.169.254/latest/meta-data/",
+            "http://[::1]:9/x",
+        ],
+    )
+    def test_a_non_public_target_is_refused(
+        self, start: Callable[..., Client], url: str
+    ) -> None:
+        client = start()
+        status, body = client.failing(f"/api/fetch?url={urllib.parse.quote(url, safe='')}")
+        assert status == 400
+        assert "not a public address" in body
+
+    def test_a_public_target_is_still_fetched(
+        self, start: Callable[..., Client], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The check must not have closed the feature it guards. An IP literal
+        # needs no DNS, so this runs offline.
+        def fake_get(url: str, **_: object) -> httpx.Response:
+            return httpx.Response(200, text="a blueprint page", request=httpx.Request("GET", url))
+
+        monkeypatch.setattr(httpx, "get", fake_get)
+        client = start()
+        status, body = client.get("/api/fetch?url=http%3A%2F%2F93.184.216.34%2Fpage")
+        assert (status, body) == (200, "a blueprint page")
+
+    def test_a_redirect_into_loopback_is_refused_at_the_second_hop(
+        self, start: Callable[..., Client], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The falsifiable one. The first hop is a public IP literal and passes;
+        # only a check applied to hops AFTER the first can catch this. Before
+        # the fix httpx followed it and returned the loopback body.
+        def fake_get(url: str, **_: object) -> httpx.Response:
+            return httpx.Response(
+                302,
+                headers={"location": "http://127.0.0.1:9/api/build"},
+                request=httpx.Request("GET", url),
+            )
+
+        monkeypatch.setattr(httpx, "get", fake_get)
+        client = start()
+        status, body = client.failing("/api/fetch?url=http%3A%2F%2F93.184.216.34%2Fpage")
+        assert status == 400
+        assert "127.0.0.1" in body and "not a public address" in body
+
+    def test_a_redirect_loop_gives_up_rather_than_spinning(
+        self, start: Callable[..., Client], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def fake_get(url: str, **_: object) -> httpx.Response:
+            return httpx.Response(
+                302,
+                headers={"location": "http://93.184.216.34/again"},
+                request=httpx.Request("GET", url),
+            )
+
+        monkeypatch.setattr(httpx, "get", fake_get)
+        client = start()
+        status, body = client.failing("/api/fetch?url=http%3A%2F%2F93.184.216.34%2Fpage")
+        assert status == 502
+        assert "Too many redirects" in body
+
+    def test_the_hop_is_ours_to_follow_not_httpx_s(
+        self, start: Callable[..., Client], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A real upstream, a real redirect, and real httpx.
+
+        The tests above fake ``httpx.get``, which means they would pass even if
+        ``follow_redirects`` were back to ``True`` -- a fake returns its 302
+        either way.  This one does not fake it: an actual server answers an
+        actual redirect into this machine, so the only thing standing between
+        the request and ``/api/health`` is that the loop, and not httpx, is
+        what follows the hop.
+
+        ``private_address`` is stubbed for the first hop alone.  Without that
+        the upstream would be refused for being on loopback itself, which is
+        true and is not what this is measuring.
+        """
+        import flab2bp.web.server as server_module
+
+        client = start()
+        target = client.base + "/api/health"
+        upstream = _redirecting_server(target)
+        try:
+            real = server_module.private_address
+
+            def allow_the_first_hop(url: str) -> str | None:
+                return None if url.startswith(upstream) else real(url)
+
+            monkeypatch.setattr(server_module, "private_address", allow_the_first_hop)
+            status, body = client.failing(
+                f"/api/fetch?url={urllib.parse.quote(upstream + '/go', safe='')}"
+            )
+            assert status == 400
+            assert "not a public address" in body
+            # And the thing it was protecting was never reached.
+            assert "front_end_built" not in str(body)
+        finally:
+            _stop(upstream)
+
+
+_UPSTREAMS: dict[str, ThreadingHTTPServer] = {}
+
+
+def _redirecting_server(location: str) -> str:
+    """A one-route server that answers everything with a 302 to ``location``."""
+    from http.server import BaseHTTPRequestHandler
+
+    class Redirect(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802 - http.server's spelling
+            self.send_response(302)
+            self.send_header("Location", location)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, *args: object) -> None:
+            return
+
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), Redirect)
+    httpd.daemon_threads = True
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{httpd.server_address[1]}"
+    _UPSTREAMS[base] = httpd
+    return base
+
+
+def _stop(base: str) -> None:
+    httpd = _UPSTREAMS.pop(base, None)
+    if httpd is not None:
+        httpd.shutdown()
+        httpd.server_close()
