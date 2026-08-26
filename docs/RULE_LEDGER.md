@@ -146,15 +146,23 @@ Three things this row records that a bare constant would have lost:
   ones, and `test_the_scan_window_excludes_a_power_node_that_is_really_a_power
   _node` exists so the "obviously redundant" reading cannot delete it later.
 
-**Falsification, and it is the whole reason to believe the row.** Over the seven
-single-area blueprints in `tests/fixtures` — 75 power nodes, 1468 pairs, written
-by the game itself — the rule convicts **zero**. The sample is not vacuous in
-kind: one of them carries 54 Tesla Towers, and the closest real pair anywhere in
-it is 6.00 tiles against a bound of 2.785. It does **not** pin the unit: 6.00
-tiles clears both the world reading and the tile reading, so the control proves
-the rule refuses nothing the game accepts and nothing more. What pins the unit
-is the citation plus `test_the_bound_is_world_units_not_tiles`, which brackets
-`(2, 1)` refused and `(2, 2)` cleared — a pair no tile reading can satisfy.
+**Falsification, and it is the whole reason to believe the row.** Over the six
+single-area blueprints in `tests/fixtures` that **the game itself wrote** — 70
+power nodes, 1458 pairs — the rule convicts **zero**. The sample is not vacuous
+in kind: one of them carries 54 Tesla Towers, and the closest real pair anywhere
+in it is 6.00 tiles against a bound of 2.785.
+
+Our own six committed single-area blueprints are counted **separately** — 30
+more nodes, 60 pairs, also zero, closest 9.22 tiles — because they are not a
+control. A conviction in one of those would be our defect, which is precisely
+what `power-too-close-freeform.txt` is; folding them into the game's number
+would be assuming the conclusion.
+
+The control does **not** pin the unit: 6.00 tiles clears both the world reading
+and the tile reading, so it proves the rule refuses nothing the game accepts and
+nothing more. What pins the unit is the citation plus
+`test_the_bound_is_world_units_not_tiles`, which brackets `(2, 1)` refused and
+`(2, 2)` cleared — a pair no tile reading can satisfy.
 
 The four multi-area fixtures are excluded, for the reason
 `tests/dsp/test_colliders.py` already excludes them from every geometric test: a

@@ -15,8 +15,10 @@ So this file does three things, in order of how much they are worth:
    on no other -- the other four towers must stay clean, or the rule is
    over-explaining the failure it was written from.
 2. **Clears every blueprint the GAME wrote.**  That control is what separates
-   this from a plausible-sounding rule: any conviction in ``tests/fixtures`` is
-   this port being wrong, not the game breaking its own rules.
+   this from a plausible-sounding rule: any conviction there is this port being
+   wrong, not the game breaking its own rules.  Our own committed blueprints are
+   reported separately -- a conviction in one of THOSE is a defect of ours, and
+   counting them alongside the game's would assume the conclusion.
 3. Pins the ladder case by case against the decompiled branches, including the
    two tiers nothing we emit reaches -- a flattened rule is right by coincidence
    at one tier and silently wrong at the others.
@@ -44,27 +46,47 @@ FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
 #: The blueprint the game refused, kept byte-for-byte as it was pasted.
 THE_PASTE = FIXTURES / "ours" / "power-too-close-freeform.txt"
 
-#: Blueprints whose coordinates this model can place.  The same restriction
-#: ``tests/dsp/test_colliders.py`` applies, for the same reason: a building's
-#: local offset is relative to its OWN area, and a multi-area blueprint
-#: additionally goes through the tropic-anchor re-basing at decompiled
-#: 179769-179806.  Dropped into one flat frame its buildings land tens of tiles
-#: from where they belong, and the answer is noise rather than evidence.
-#:
-#: Measured, not assumed: over the four multi-area fixtures the flat frame
-#: reports 102,875 convicting pairs, including Wind Turbines it places 0.30
-#: world units apart -- inside their own 3x3 footprints, which is impossible.
-#: Restricting to pairs within ONE area drops two of the four to zero on its
-#: own; the other two are whole-planet captures whose areas form a
-#: ``parentIndex`` chain, and no single frame exists for them at all.
-SINGLE_AREA = (
+# WHY MULTI-AREA FIXTURES ARE NOT IN EITHER LIST BELOW.
+#
+# The same restriction ``tests/dsp/test_colliders.py`` applies, for the same
+# reason: a building's local offset is relative to its OWN area, and a
+# multi-area blueprint additionally goes through the tropic-anchor re-basing at
+# decompiled 179769-179806.  Dropped into one flat frame its buildings land tens
+# of tiles from where they belong, and the answer is noise rather than evidence.
+#
+# Measured, not assumed: over the four multi-area fixtures the flat frame
+# reports 102,875 convicting pairs, including Wind Turbines it places 0.30 world
+# units apart -- inside their own 3x3 footprints, which is impossible.
+# Restricting to pairs within ONE area drops two of the four to zero on its own;
+# the other two are whole-planet captures whose areas form a ``parentIndex``
+# chain, and no single frame exists for them at all.
+
+#: Blueprints the GAME wrote.  This is the control proper: a conviction here is
+#: this port being wrong, because the game does not break its own rules.
+#: ``ours/sorter-collide-built`` belongs here and not below -- the user
+#: force-built one of ours and blueprinted the RESULT back out, so its
+#: coordinates are the game's.
+GAME_WRITTEN = (
     "12-s-purple-science-from-smelted-refined-products",
     "factory-heretical-smelter-block",
     "factory-quick-start-step-1-minimum-blue-cube-automation",
     "factory-quick-start-step-3-red-cube",
     "falk-v7-mall-full",
     "ours/sorter-collide-built",
+)
+
+#: Blueprints WE wrote, kept separate because they are not a control.  A
+#: conviction in one of these is our own past defect, which is the whole point
+#: of ``power-too-close-freeform.txt`` -- so counting them alongside the game's
+#: would be assuming the conclusion.  Reported anyway, because "our older output
+#: happens to be clean" is a fact worth having and not one to hide.
+SINGLE_AREA_OURS = (
     "ours/sorter-collide-freeform",
+    "ours/test-pair-21-162",
+    "ours/test-pair-21-163-control",
+    "ours/test-pair-46-162-control",
+    "ours/test-pair-46-163",
+    "ours/test-pair-55-162",
 )
 
 TESLA = R.PowerNode(is_power_node=True)
@@ -107,12 +129,17 @@ def _convictions(
     latitude, and the flat frame is the one ``validate.game.power_too_close``
     and ``validate.geom.collide`` both use.
     """
+    lo, hi = R.PASTE_POWER_NODE_IDS
     out = []
     for (ia, a, na), (ib, b, nb) in itertools.combinations(nodes, 2):
         pa = C.flat_pose(a.x, a.y, a.z, 0.0)[0]
         pb = C.flat_pose(b.x, b.y, b.z, 0.0)[0]
         d2 = sum((p - q) ** 2 for p, q in zip(pa, pb, strict=True))
-        cond = R.power_node_condition(na, nb, d2) or R.power_node_condition(nb, na, d2)
+        cond = None
+        if lo <= b.item_id < hi:
+            cond = R.power_node_condition(na, nb, d2)
+        if cond is None and lo <= a.item_id < hi:
+            cond = R.power_node_condition(nb, na, d2)
         if cond is not None:
             out.append((ia, ib, d2, cond))
     return out
@@ -204,34 +231,50 @@ def test_the_validator_check_convicts_the_committed_fixture() -> None:
 # --- 2. the control: blueprints the game itself wrote ------------------------
 
 
-@pytest.mark.parametrize("name", SINGLE_AREA)
+@pytest.mark.parametrize("name", GAME_WRITTEN)
 def test_the_rule_convicts_nothing_the_game_wrote(name: str) -> None:
+    assert _convictions(_nodes(FIXTURES / f"{name}.txt")) == []
+
+
+@pytest.mark.parametrize("name", SINGLE_AREA_OURS)
+def test_our_other_committed_blueprints_are_clean_too(name: str) -> None:
+    """Not a control -- a report.  See :data:`SINGLE_AREA_OURS`."""
     assert _convictions(_nodes(FIXTURES / f"{name}.txt")) == []
 
 
 def test_that_control_could_have_failed() -> None:
     """A sample that cannot produce a conviction proves nothing.
 
-    75 power nodes over 1468 pairs, and they are not all far apart: the closest
-    real pair in the corpus is 6.00 tiles, which is 2.15 times the bound.  A
-    rule that read 12.25 as a squared TILE distance -- 3.5 tiles -- would still
-    clear them, so this control does NOT pin the unit; that is
+    **70 power nodes over 1458 pairs** in the six blueprints the game wrote, and
+    they are not all far apart: the closest real pair is **6.00 tiles**, which is
+    2.15 times the bound.  (Our own six single-area blueprints add 30 nodes and
+    60 pairs, closest 9.22 tiles, and are counted separately because they are
+    not evidence about the game.)
+
+    A rule that read 12.25 as a squared TILE distance -- 3.5 tiles -- would still
+    clear all of them, so this control does NOT pin the unit; that is
     ``test_the_bound_is_world_units_not_tiles``' job.  What it does establish is
     that the rule refuses nothing the game accepts.
     """
-    total = 0
-    closest = math.inf
-    for name in SINGLE_AREA:
-        nodes = _nodes(FIXTURES / f"{name}.txt")
-        total += len(nodes)
-        for (_ia, a, _na), (_ib, b, _nb) in itertools.combinations(nodes, 2):
-            pa = C.flat_pose(a.x, a.y, a.z, 0.0)[0]
-            pb = C.flat_pose(b.x, b.y, b.z, 0.0)[0]
-            closest = min(closest, sum((p - q) ** 2 for p, q in zip(pa, pb, strict=True)))
-    assert total == 75
+    counts = {}
+    for label, names in (("game", GAME_WRITTEN), ("ours", SINGLE_AREA_OURS)):
+        total = pairs = 0
+        closest = math.inf
+        for name in names:
+            nodes = _nodes(FIXTURES / f"{name}.txt")
+            total += len(nodes)
+            for (_ia, a, _na), (_ib, b, _nb) in itertools.combinations(nodes, 2):
+                pairs += 1
+                pa = C.flat_pose(a.x, a.y, a.z, 0.0)[0]
+                pb = C.flat_pose(b.x, b.y, b.z, 0.0)[0]
+                closest = min(closest, sum((p - q) ** 2 for p, q in zip(pa, pb, strict=True)))
+        counts[label] = (total, pairs, math.sqrt(closest) / C.GRID_ARC)
     # 5.99999 rather than 6: the corpus records float positions with terrain
     # jitter in them, so this is six tiles as the game wrote them.
-    assert math.sqrt(closest) / C.GRID_ARC == pytest.approx(6.0, abs=1e-4)
+    assert counts["game"][:2] == (70, 1458)
+    assert counts["game"][2] == pytest.approx(6.0, abs=1e-4)
+    assert counts["ours"][:2] == (30, 60)
+    assert counts["ours"][2] == pytest.approx(9.2195, abs=1e-3)
 
 
 # --- 3. the ladder, branch by branch -----------------------------------------
