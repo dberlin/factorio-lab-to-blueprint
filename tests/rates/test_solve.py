@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import warnings
 from collections.abc import Mapping, Sequence
 from fractions import Fraction
 
@@ -616,17 +617,17 @@ def test_no_machines_means_no_rates() -> None:
     assert _exact_rates([loop], [0.0], ["x"], {"x": Fraction(1)}) == [Fraction(0)]
 
 
-# --- continuous production solve ------------------------------------------
+# --- production oracle and continuous opt-out -----------------------------
 
 
-def test_continuous_default_recovers_exact_rates_then_ceils_capacity(
+def test_explicit_continuous_path_recovers_exact_rates_then_ceils_capacity(
     data: Dataset, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     def reject_milp(*_args: object, **_kwargs: object) -> object:
-        raise AssertionError("the default production solve must not invoke the MILP oracle")
+        raise AssertionError("the explicit continuous solve must not invoke the MILP oracle")
 
     monkeypatch.setattr(solve_module, "_run_milp", reject_milp)
-    solution = solve(data, parse_url(LOW_RATE_URL))
+    solution = solve(data, parse_url(LOW_RATE_URL), prove_minimal=False)
 
     assert solution.outputs["magnetic-coil"] == Fraction(1, 60)
     assert solution.groups
@@ -649,11 +650,14 @@ def test_continuous_default_recovers_exact_rates_then_ceils_capacity(
         assert produced[item_id] >= consumed[item_id]
 
 
-def test_continuous_default_uses_the_expected_fractional_route(data: Dataset) -> None:
+def test_explicit_continuous_path_uses_the_expected_fractional_route(
+    data: Dataset,
+) -> None:
     solution = solve(
         data,
         parse_url(CONTINUOUS_ROUTE_URL),
         tier=ProliferatorTier.MK2,
+        prove_minimal=False,
     )
     recipes = {group.recipe_id for group in solution.groups}
     assert recipes == CONTINUOUS_ROUTE_RECIPES
@@ -679,7 +683,7 @@ def test_unrecoverable_continuous_pass_falls_back_to_fixed_charge(
         "_run_continuous_lp",
         reject_continuous,
     )
-    solution = solve(data, parse_url(LOW_RATE_URL))
+    solution = solve(data, parse_url(LOW_RATE_URL), prove_minimal=False)
 
     assert solution.outputs["magnetic-coil"] == Fraction(1, 60)
     assert all(
@@ -689,7 +693,7 @@ def test_unrecoverable_continuous_pass_falls_back_to_fixed_charge(
 
 
 
-def test_prove_minimal_explicitly_uses_the_fixed_charge_oracle(
+def test_default_solve_uses_the_fixed_charge_oracle(
     data: Dataset, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     original = solve_module._run_milp
@@ -712,9 +716,12 @@ def test_prove_minimal_explicitly_uses_the_fixed_charge_oracle(
         )
 
     monkeypatch.setattr(solve_module, "_run_milp", recording_milp)
-    _ = solve(data, parse_url(LOW_RATE_URL), prove_minimal=True)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        _ = solve(data, parse_url(LOW_RATE_URL))
 
     assert calls == 1
+    assert not any("feasible but unproven-minimal" in str(item.message) for item in caught)
 
 
 # --- hitting the clock is not the same as being infeasible -----------------

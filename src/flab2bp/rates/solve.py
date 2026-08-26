@@ -1,21 +1,19 @@
-"""The production solve: continuous optimum in, exact physical groups out.
+"""The production solve: exact minimum rounded footprint and exact flows out.
 
-Production follows FactorioLab's semantics: minimise continuous footprint over
-recipe/mode craft rates, recover the selected support with an exact Rational LP,
-then ceil each exact machine requirement. A machine whose output backs up
-simply idles, so upstream demand follows the exact craft rate rather than spare
-capacity. Candidate ranking happens afterward on the actual rounded footprint.
+Each candidate fixes one proliferator mode per recipe before solving. That
+removes mode-activation binaries and leaves a small fixed-charge MILP over craft
+rates and integer physical machine counts. The production default proves the
+minimum rounded footprint; with the deterministic policies this takes tens of
+milliseconds rather than spending the old 30-second cap on mode combinations.
 
-The float LP supplies support only. Documented tolerances remove numerical
-epsilon columns; exact recovery expands to every column if a discarded tiny
-flow is required for balance. Every materially positive LP column remains a
-physical group, and no float reaches ``BuildSpec``.
+Every rate leaving the solver is recovered by an exact Rational LP inside the
+bought capacities. Machines may idle, so upstream demand follows exact craft
+rates rather than spare capacity, and no float reaches ``BuildSpec``.
 
-The former fixed-charge MILP remains behind ``prove_minimal=True`` and as a
-fallback when continuous support cannot be recovered. It minimises rounded
-machine footprint directly and is useful as a slow oracle, but proving its weak
-integer relaxation can consume the whole time limit after a valid incumbent is
-already available.
+``prove_minimal=False`` is the explicit FactorioLab-style alternative:
+continuous footprint optimum, tolerance-based support, exact Rational recovery,
+then exact machine ceiling. It preserves every material support column and
+expands exact recovery if a discarded tiny flow is required for balance.
 
 Both solvers come from ortools. Do not reintroduce ``highspy``: it and ortools
 cannot safely share a process because ortools bundles its own incompatible
@@ -635,18 +633,18 @@ def solve(
     fixed_modes: Mapping[str, ProliferatorMode] | None = None,
     mode_policy: ProliferatorMode = ProliferatorMode.NONE,
     time_limit_s: float = 30.0,
-    prove_minimal: bool = False,
+    prove_minimal: bool = True,
 ) -> RateSolution:
     """Solve ``request`` into exact flows and exact-ceiling machine counts.
 
-    Production follows FactorioLab's continuous footprint semantics, then
-    recovers every positive recipe/mode rate over exact rationals and ceilings
-    its physical machine requirement exactly. Extra capacity idles.
+    Production defaults to the fixed-charge MILP and proves the minimum rounded
+    footprint under the already-fixed mode policy. Every selected structure's
+    rates are recovered exactly inside its bought capacities.
 
-    ``prove_minimal=True`` selects the slower fixed-charge MILP whose objective
-    is the rounded footprint. The MILP is also the fallback when the continuous
-    support cannot be recovered exactly. ``time_limit_s`` applies to both the
-    continuous pass and any explicit/fallback MILP.
+    ``prove_minimal=False`` selects the FactorioLab-style continuous footprint
+    optimum followed by exact support recovery and exact machine ceiling. If
+    continuous support cannot be recovered, the fixed-charge model is the
+    fallback. ``time_limit_s`` applies to either path.
 
     ``mode_policy`` deterministically applies one mode to every legal recipe in
     ``proliferable`` (or every recipe when it is ``None``), falling back to

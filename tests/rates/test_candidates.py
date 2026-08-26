@@ -109,9 +109,9 @@ def test_diagnosed_url_has_exact_fixed_policy_counts_and_rates(data: Dataset) ->
     specs = build_candidates(data, parse_url(DIAGNOSED_URL)).candidates
 
     assert {spec.label: spec.machine_count for spec in specs} == {
-        "no-proliferator": 25,
-        "all-products": 25,
-        "output-products": 25,
+        "no-proliferator": 13,
+        "all-products": 13,
+        "output-products": 13,
     }
     assert {
         spec.label: sum(
@@ -120,12 +120,11 @@ def test_diagnosed_url_has_exact_fixed_policy_counts_and_rates(data: Dataset) ->
         )
         for spec in specs
     } == {
-        "no-proliferator": 391,
-        "all-products": 391,
-        "output-products": 391,
+        "no-proliferator": 215,
+        "all-products": 215,
+        "output-products": 215,
     }
     assert all(dict(spec.outputs) == {"space-warper": Fraction(1, 60)} for spec in specs)
-
 
 
 def test_every_proliferated_recipe_declares_its_internal_edges(
