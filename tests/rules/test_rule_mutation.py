@@ -139,12 +139,21 @@ VERDICTS: dict[str, tuple[str, str]] = {
     "rules.SPLITTER_INPUT_TO_SLOT": ("strategy", "written by `junction.make_splitter`"),
     "rules.SPLITTER_OUTPUT_FROM_SLOT": ("strategy", "written by `junction.make_splitter`"),
     # --- inert ---------------------------------------------------------------
-    "catalog.UNPOWERED_ITEM_IDS": ("inert", "LEDGER: `validate._POWERED` restates it"),
-    # `catalog.BELT_CROSSING_CLEARANCE` had a row here.  Phase V deleted the
-    # rule -- no citation, no validator ever read it -- so there is nothing left
-    # to mutate.  The two below moved catalog -> rules and kept their verdicts.
-    "rules.BEND_MIN_ANGLE_WHEN_SLOPED_RAD": ("inert", "LEDGER: the audit's headline row"),
-    "rules.SLOPE_DEADZONE": ("inert", "LEDGER: companion to the bend rule"),
+    # Central paste rules awaiting strategy/validate/reporting migration.
+    "catalog.belt_slope_allowed": ("inert", "LEDGER: paste TooSteep predicate gap"),
+    "catalog.blueprint_limit_for_technologies": (
+        "inert",
+        "LEDGER: BlueprintNeedTech reporting gap",
+    ),
+    "catalog.stack_pitch_z": ("inert", "LEDGER: vertical stack lookup gap"),
+    "catalog.vertical_construction_allowed": (
+        "inert",
+        "LEDGER: splitter/lab altitude migration gap",
+    ),
+    "rules.PASTE_BELT_LINK_MAX_SQR": ("inert", "LEDGER: belt TooFar migration gap"),
+    "rules.belt_link_too_far": ("inert", "LEDGER: belt TooFar migration gap"),
+    "rules.COATER_RESHAPE_MAX": ("inert", "LEDGER: coater TooSkew migration gap"),
+    "rules.coater_reshape_allowed": ("inert", "LEDGER: coater TooSkew migration gap"),
     # The `MatchInserter` ladder.  Inert, but NOT a ledger row: the game reaches
     # it only when a sorter's peer preview is null, which a pasted blueprint
     # never leaves so.  It is ported for the compiled oracle, not the pipeline.
@@ -156,7 +165,8 @@ VERDICTS: dict[str, tuple[str, str]] = {
     # hole it is -- NOT relabelled to make the table green.
     "planet.SORTER_SEGMENTS_MAX": ("inert", "LEDGER: `num133`, no probe near the ceiling"),
     "planet.SORTER_COMBINED_MIN": ("inert", "LEDGER: `num134`, no probe near the floor"),
-    "planet.SORTER_PARAM_BIAS": ("inert", "LEDGER: `num129` bias, no probe reaches it"),
+    "planet.SORTER_PARAM_BIAS": ("inert", "LEDGER: downstream parameter emitter gap"),
+    "planet.sorter_parameter": ("inert", "LEDGER: downstream parameter emitter gap"),
     "planet.SORTER_ALTITUDE_UNIT": ("inert", "LEDGER: radial step, no probe near it"),
     "rules.MATCH_SNAP_MAX_SQR": ("inert", "unreachable for blueprint-carried sorters"),
     "rules.MATCH_ALIGN_COS": ("inert", "unreachable for blueprint-carried sorters"),
@@ -172,6 +182,10 @@ VERDICTS: dict[str, tuple[str, str]] = {
         "anything and a wrong value would ship. A coverage hole, not a dead rule.",
     ),
     "catalog.DEFAULT_LAB_LEVEL": ("inert", "frozen into `DEFAULT_MAX_BELT_Z` at import"),
+    "catalog.DEFAULT_STORAGE_LEVEL": (
+        "inert",
+        "LEDGER: BeltAltitudeRules carries it but no stack validator reads it",
+    ),
     "catalog.TESLA_LINK_DISTANCE": ("inert", "frozen into `spine.CONSTANTS` at import"),
     "colliders.PLANET_RADIUS": ("inert", "frozen into collider default arguments"),
     "colliders.PLANET_SEGMENT": ("inert", "frozen into collider default arguments"),
@@ -182,7 +196,6 @@ VERDICTS: dict[str, tuple[str, str]] = {
         "Either the coater path is untested at this seam or the constant is dead.",
     ),
     "rules.ADDON_TO_SLOT": ("inert", "LEDGER: same seam as ADDON_FROM_SLOT"),
-    "rules.CONN_SLOTS_PER_OBJECT": ("inert", "LEDGER: read by no code at all"),
     "rules.BELT_SLOT_AUTO_RANGE": ("inert", "LEDGER: plan step 3.3, enforced by nothing"),
     "rules.PASTE_LATERAL": (
         "inert",

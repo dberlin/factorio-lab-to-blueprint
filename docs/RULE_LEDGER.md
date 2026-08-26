@@ -80,11 +80,13 @@ level, the row names the tech, where the game reads it, and what we assume.
 | `ADDON_FROM_SLOT = 15` / `ADDON_TO_SLOT = 14` | KEEP | `BuildTool_Addon.cs:443-445` `buildPreview.outputToSlot = 14; ... buildPreview.inputFromSlot = 15;` | — |
 | `SPLITTER_INPUT_TO_SLOT = 14` / `SPLITTER_OUTPUT_FROM_SLOT = 15` | KEEP | same pair, splitter side; corpus-unanimous 25/25 | — |
 | `BELT_INPUT_SLOTS = (1, 4)` | KEEP | `BuildTool_Path.cs:1911` `for (int num23 = 1; num23 < 4; num23++)` | — |
-| `CONN_SLOTS_PER_OBJECT = 16` | KEEP | `PlanetFactory.cs:2582` `int num = entityConnPool[objId * 16 + slot];`, written at `:2637`; eviction at `:2726-2727` `ClearObjectConn(objId, slot); ClearObjectConn(otherObjId, otherSlot);` | — |
+| `CONN_SLOTS_PER_OBJECT = 16` | **REMOVE — deleted** | The `* 16 + slot` storage address is real (`PlanetFactory.cs:2582,2637`) but no predicate compares against 16. Slot uniqueness is already represented by `game.slot_occupancy`; retaining an unread cardinality constant duplicated protocol prose without enforcing anything. | — |
 | `BELT_SLOT_AUTO_RANGE = (4, 12)` | KEEP | `PlanetFactory.cs:2703` `for (int i = 4; i < 12; i++)` | — |
 | `SPLITTER_MAX_PORTS = 4` | KEEP | `PlanetFactory.cs:810-813` reads conns 0..3 only; `CargoTraffic.cs:660` `... && slot >= 0 && slot <= 3` — out-of-range is silently ignored, which is the "pastes and drops connections" failure | — |
 | `SLOT_REACH = 0.8` | KEEP | `BuildTool_BlueprintCopy.cs:1791` `if ((objectPose2.position - transformedBy.position).magnitude > 0.8f) return false;` (again `:1815`) | — |
 | `PASTE_SNAP / PASTE_LATERAL / PASTE_RADIAL / PASTE_LATERAL_EPS` | KEEP | `BlueprintUtils.cs:2114-2140`, the `ErrorInserterData` ladder | — |
+| `PASTE_BELT_LINK_MAX_SQR = 5.3` / `belt_link_too_far` | KEEP — downstream gap | `BuildTool_BlueprintPaste.cs:2083-2089` assigns `TooFar` on squared WORLD distance `> 5.3f`; outside the tech gate | projected 3-D belt-link distance |
+| `COATER_RESHAPE_MAX = 0.265` / `coater_reshape_allowed` | KEEP — downstream gap | `BuildTool_BlueprintPaste.cs:1863-1868` assigns `TooSkew` when either reshape component is `> 0.265f` | selected band and coater pose |
 | `SORTER_LENGTH` | KEEP | `BuildTool_Inserter.cs:1313-1329` (`num5`/`num6`), applied `:1332`/`:1338`; paste twin `BuildTool_BlueprintPaste.cs:3462-3472` | — |
 | `SKEW_PAIR_DEG = 30` | KEEP | `BuildTool_BlueprintPaste.cs:3488` | — |
 | `SKEW_AXIS_DEG = 24` / `SLOT_ALIGN_COS` | KEEP | `BuildTool_BlueprintPaste.cs:3499` `if (num135 > 24f \|\| num136 > 24f)` | — |
@@ -309,16 +311,19 @@ moves 440 of them, `SLOT_REACH**2` moves 576.
 | rule | verdict | citation / disposition | depends on |
 |---|---|---|---|
 | `GRID_ARC = 2π/5` (in `colliders`) | KEEP | `PlanetGrid.cs:1063` `MathF.PI * 2f / (float)(segment * 5)` | planet segment (200 for a terrestrial) |
-| `MAX_BELT_SLOPE = 4/5` | KEEP | `BuildTool_Path.cs:1954` `if (!history.beltVerticalConstruction && num25 > 0.8f) ... TooSteep` (again `:1963`) | **TECH** — `beltVerticalConstruction`, `GameHistoryData.cs:558` default false, unlocked `:1956`; FactorioLab tech `super-magnetic-field-generator` |
-| `BELT_Z_PER_WORLD_UNIT = 3/4` | KEEP | inverse of `BuildTool_Path.cs:176`'s `1.3333333f` | — |
-| `belt_max_z()` / `DEFAULT_LAB_LEVEL = 3` | KEEP | `GameHistoryData.cs:228-238` `if (labLevel < 15) return (float)labLevel * 4f - 0.6f; return (float)labLevel * 4f + 4f;`; default `:577`; raised `:1889` `case 25: labLevel += num;`. Applied `BuildTool_BlueprintPaste.cs:2075` → `:2078 OutOfReach` | **TECH** — `labLevel`, Vertical Construction |
-| `BELT_SLOPE_UNLOCK_TECH` | KEEP | `GameHistoryData.cs:1956`; locale line quoted in place | **TECH** |
-| `VERTICAL_CONSTRUCTION_PREFIX` | KEEP | `GameHistoryData.cs:1889` | **TECH** |
-| `BEND_MIN_ANGLE_WHEN_SLOPED_RAD = 5/2`, `SLOPE_DEADZONE = 1/10` | KEEP (citation) — **but zero readers** | `BuildTool_Path.cs:1980` `if (num21 < 2.5f && num25 > 0.1f) { buildPreview2.condition = EBuildCondition.TooBendToLift; }` | — |
-| **`SORTER_MAX_REACH = 3`** | **KEEP — upgraded from "corpus measurement"** | `BuildTool_Inserter.cs:1316-1329` (`num7` = 3.499 / 3.2 / 3.799) applied `:1341` `if (num2 > num7) ... TooFar`; span recorded clamped at `:1352` `Mathf.RoundToInt(Mathf.Clamp(num3, 1f, 3f))` | **not** tier-dependent — no `num5/6/7/8` reads `inserterGrade` |
+| `MAX_BELT_SLOPE = 3/4` / `belt_slope_allowed` | KEEP — corrected to paste authority | `BuildTool_BlueprintPaste.cs:2093-2095` compares radial sine `> 0.6f`, equivalent to tangent `> 3/4`. The former `4/5` came from interactive `BuildTool_Path` and was the wrong tool. | **TECH** — `beltVerticalConstruction`, default false, unlocked `GameHistoryData.cs:1956` |
+| `BELT_Z_PER_WORLD_UNIT = 3/4` | KEEP | inverse of `BlueprintUtils.cs:2048`'s `localOffset_z * 1.3333333f` | — |
+| `belt_max_z()` / `DEFAULT_LAB_LEVEL = 3` | KEEP | `GameHistoryData.cs:228-238` `buildMaxHeight`; default `:577`; raised `:1889`; applied at `BuildTool_BlueprintPaste.cs:2075-2078` | **TECH** — Vertical Construction |
+| `DEFAULT_STORAGE_LEVEL = 2` / `vertical_construction_allowed` | KEEP — downstream gap | `GameHistoryData.cs:576`; paste assignment `BuildTool_BlueprintPaste.cs:2036-2068`, using prefab `stackHeight` | **TECH** — Vertical Construction; building tier (`Splitter` vs lab) |
+| `BLUEPRINT_LIMIT_BY_LEVEL` / `blueprint_limit_for_technologies` | KEEP — downstream gap | paste comparison `BuildTool_BlueprintPaste.cs:1122`; assignment `GameHistoryData.cs:1898`; finite/unlimited display boundary `UITechTree.cs:1625` | **TECH** — Mass Construction 1..5 |
+| `BELT_SLOPE_UNLOCK_TECH`, `VERTICAL_CONSTRUCTION_PREFIX`, `MASS_CONSTRUCTION_PREFIX` | KEEP | `GameHistoryData.cs:1889,1956`; FactorioLab technology ids | **TECH** |
+| `BEND_MIN_ANGLE_WHEN_SLOPED_RAD`, `SLOPE_DEADZONE`, `too_bend_to_lift` | **REMOVE — deleted** | `BuildTool_Path.cs:1980` only; `BuildTool_BlueprintPaste` never assigns `TooBendToLift` | interactive tool, inapplicable to emitted paste |
+| **`SORTER_MAX_REACH = 3`** | **KEEP — upgraded from corpus measurement** | `BuildTool_Inserter.cs:1316-1329`, applied `:1341`, paste twin `BuildTool_BlueprintPaste.cs:3474` | **not** sorter tier-dependent |
+| `SORTER_PARAM_BIAS` / `planet.sorter_parameter` | KEEP — downstream gap | `BuildTool_BlueprintPaste.cs:3460,3486` subtracts 0.3 for machine-to-machine, clamps and rounds 1..3 | belt-end class and projected grid span |
 | `TESLA_COVER_RADIUS = 21/2` | KEEP | `PowerDesc.cs:10` `coverRadius` → `PrefabDesc.cs:1440` → `PowerSystem.cs:921,961` `if (num11 <= coverRadius)` on squares | building prefab, not tech |
 | `TESLA_LINK_DISTANCE = 45/2` | KEEP | `PowerDesc.cs:8` → `PrefabDesc.cs:1439` → `PowerSystem.cs:920,940-945`, `max` of the pair confirmed at `:940-944` | building prefab |
 | `SORTER_RATE_AT_1`, `BELT_RATE` | KEEP (tier-indexed, already) | prefab `inserterSTT`/`inserterStackSize` (`PrefabDesc.cs:1356-1360`) | **TIER**, already a dict. *Not* research-scaled: `inserterStackCountObsolete` (`GameHistoryData.cs:42`) is obsolete and nothing else scales belt throughput |
+| `UNPOWERED_ITEM_IDS` | **REMOVE — deleted** | no production reader; `validate._POWERED` was the actual powered-kind source, so the catalog constant was a duplicate that could drift | downstream power classification still needs one authoritative source |
 | **`SORTER_SPANS_ALTITUDE = False`** | **REMOVE — deleted** | contradicted: `BuildTool_Inserter.cs:1311` `float num4 = Mathf.Abs(lpos.magnitude - lpos2.magnitude) / 0.2f;` used at `:1347` as a **minimum** | — |
 | **`BELT_CROSSING_CLEARANCE = 1`** | **REMOVE — deleted** | no citation; no validator ever read it; `colliders.belt_crossing_height` is the real rule and gives 2.80-4.97, not 1 | — |
 | `BELT_Z_QUANTUM` | **OURS** — relabelled, check deleted | the game's altitude is an integer counter (`BuildTool_Path.cs:388` `altitude++`, clamp `:444`); nothing compares a height to a step | — |
@@ -544,66 +549,29 @@ Enumerated in full; the interesting rows only are reproduced here.
 
 ---
 
-# 5c. `TooBendToLift` — the row that turned out to matter most
+# 5c. `TooBendToLift` — removed after paste-applicability audit
 
-`BEND_MIN_ANGLE_WHEN_SLOPED_RAD` and `SLOPE_DEADZONE` carried the decompiled C#
-and had **zero readers anywhere**. The brief was: earn a citation *and* a
-consumer, or go. The citation is real —
-`BuildTool_Path.cs:1980` — so it cannot go; it needed a consumer.
-
-Done: the rule is now a predicate, `rules.too_bend_to_lift`, and the two
-constants moved from `catalog.py` (whose remit is rules read against the
-building table or parameterised by tech — these are neither) into `rules.py`
-beside it. `tests/dsp/test_rules.py` is the consumer.
-
-**Then I measured how often it fires on our own output, and the number changes
-the priority of Step 0.1.** Over trivial+small+mid, 24 cells per strategy:
-
-| strategy | belts examined | convictions | cells with ≥1 |
-|---|---|---|---|
-| `spine` | 7114 | **213** (3.0%) | **21 of 24** |
-| `freeform` | 5761 | **139** (2.4%) | **18 of 24** |
-
-The plan sized this from the user's pasted blueprint as "exactly two instances".
-Corpus-wide it is pervasive. If Step 0.1 comes back **red**, nearly every
-blueprint either strategy ships today is invalid, and this stops being a
-validator item and becomes a router item (Step 2.2's legal-move table) —
-because a rule that convicts 39 of 48 cells cannot be enforced as a late
-refusal without refusing almost everything.
-
-**That is also why the check is not wired.** Adding a default-ERROR
-`geom.bend_while_sloped` now would take the audit from INVALID 0 to INVALID in
-39 of 48 cells on the strength of a rule we have not yet confirmed applies to a
-paste rather than only to the interactive path tool. Enforcing an unconfirmed
-rule is the same class of error as inventing one. The predicate is ready and the
-wiring is one line the moment Step 0.1 reports.
-
-Control on the port: it convicts **zero** belts in the game's own blueprints,
-over 500+ belts that survive scoping and that contain both turns and slopes.
-Mutation-checked — moving the constant to 3.2 convicts 178.
+The thresholds were real, and the former predicate reproduced
+`BuildTool_Path.cs:1980`. The decisive fact is the tool: the condition is
+assigned only by the interactive path builder, never by
+`BuildTool_BlueprintPaste`. Keeping it in the paste rule registry made 213 spine
+and 139 freeform belts look illegal even though the paste never evaluates that
+branch. The constants, predicate, and mutation rows are deleted; the 59-row
+coverage matrix records `TooBendToLift` as INAPPLICABLE with the path-only
+citation.
 
 ---
 
-# 5d. Clause 4 — every rule constant in `dsp/` now has a reader
+# 5d. Explicit downstream gaps
 
-The plan's clause 4 ("a constant with no readers is an unported rule wearing a
-ported rule's clothes") was failing on three constants at the start of this
-phase: `BEND_MIN_ANGLE_WHEN_SLOPED_RAD`, `SLOPE_DEADZONE` and
-`ADDON_TURRET_AXIS_DEG`. The first two now have `rules.too_bend_to_lift` and
-`tests/dsp/test_rules.py`.
-
-**`ADDON_TURRET_AXIS_DEG = 18.0` still has no code reader, and that is correct.**
-It is the turret's value of the same `BuildTool_Addon.cs:877` ternary that gives
-`ADDON_AXIS_DEG` its 20.5; `rules.addon_axis_aligned` takes the limit as a
-parameter, so the turret value is reachable but never passed, because **we never
-place a turret**. Keeping it is what makes the ported ternary complete rather
-than half-quoted — the same reason `PASTE_LATERAL` is kept although it is
-unreachable for anything but a silo. Recorded here so that a registry test (Step
-R2, another agent's) knows it is a deliberate exemption with a reason, not a hole.
-
-That distinction matters and my own check nearly missed it: a naive "is the name
-mentioned anywhere else" scan passes on a docstring mention. Clause 4 wants a
-constant *consulted*, and only R2's registry test can assert that properly.
+The registry now marks each centralized but unconsumed paste rule with a
+`PASTE GAP` reason. `scripts/rule_report.py` prints those migrations rather than
+letting a literal's presence masquerade as implementation. The current gaps are
+the belt-to-belt 5.3 squared-world cap, spray-coater reshape 0.265, splitter/lab
+vertical stack level, Mass Construction blueprint limit, authoritative paste
+slope predicate, and sorter parameter bias. Terrain-dependent `NeedGround` and
+the live/prebuild halves of power spacing remain explicit ambiguities because a
+blueprint cannot certify the player's planet state.
 
 ---
 

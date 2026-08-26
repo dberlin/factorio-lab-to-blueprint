@@ -71,6 +71,8 @@ SPLITTER_ID = 2020
 SPRAY_COATER_ID = 2313
 FRACTIONATOR_ID = 2314
 TESLA_TOWER_ID = 2201
+MATRIX_LAB_IDS = (2901, 2902)
+STORAGE_STACK_IDS = (2020, 2101, 2102, 2106)
 
 
 def is_belt(item_id: int) -> bool:
@@ -168,26 +170,37 @@ BELT_RATE = {
 #: rise of 1/2 over one tile is a world slope of 2/3, not 1/2.
 BELT_Z_PER_WORLD_UNIT = Fraction(3, 4)
 
-#: The steepest a belt may be built without the vertical-construction unlock,
-#: as ``world rise / horizontal run``.  Straight from ``BuildTool_Path``::
+#: The steepest a BELT-TO-BELT LINK may be pasted without the
+#: vertical-construction unlock, as ``world rise / horizontal run``.
 #:
-#:     if (!history.beltVerticalConstruction && num25 > 0.8f)
-#:         buildPreview2.condition = EBuildCondition.TooSteep;
+#: This must come from ``BuildTool_BlueprintPaste``, not ``BuildTool_Path``:
+#: the path tool compares its rise/run ratio with ``0.8f``, while the paste at
+#: ``BuildTool_BlueprintPaste.cs:2093-2095`` compares the sine directly::
 #:
-#: where ``num25`` is ``|Maths.SphericalSlopeRatio(a, b)|``, which is
-#: ``(|b| - |a|) / horizontal distance``.  With the unlock the test is skipped
-#: entirely -- there is then NO slope limit, which is what lets a belt climb
-#: straight up.
+#:     if (!history.beltVerticalConstruction
+#:         && Abs(Dot(lpos.normalized, (output.lpos - lpos).normalized)) > 0.6f)
+#:         condition = EBuildCondition.TooSteep;
 #:
-#: This one number settles what the fixtures could not.  A blueprint rise of
-#: 1/2 across one tile is a world slope of ``(1/2)/(3/4) / 1 = 2/3``, inside
-#: the limit; the ``dz = 1`` across one tile we shipped is ``4/3``, outside it,
-#: and the game rejects it as ``TooSteep``.  The fix and the bug are both
-#: confirmed by the same line of the game's own code.
-MAX_BELT_SLOPE = Fraction(4, 5)
+#: The dot is the radial component of the unit link vector, so it is
+#: ``sin(theta)``.  ``sin(theta) <= 3/5`` is exactly
+#: ``tan(theta) <= 3/4``.  With the unlock the test is skipped entirely.
+MAX_BELT_SLOPE = Fraction(3, 4)
+
+def belt_slope_allowed(
+    world_rise: Fraction | int,
+    horizontal_run: Fraction | int,
+    *,
+    unlocked: bool,
+) -> bool:
+    """Whether the paste's ``TooSteep`` clause accepts one belt link."""
+    if unlocked:
+        return True
+    rise = abs(Fraction(world_rise))
+    run = abs(Fraction(horizontal_run))
+    return run > 0 and rise <= MAX_BELT_SLOPE * run
 
 #: A belt climbs this much per tile of run at the steepest slope the corpus
-#: uses.  NOT a cap: ``MAX_BELT_SLOPE`` allows up to ``3/5`` of blueprint z per
+#: uses.  NOT a cap: ``MAX_BELT_SLOPE`` allows up to ``9/16`` of blueprint z per
 #: tile, and with the unlock, any amount.  This is the value we EMIT, chosen
 #: because it lands altitudes on :data:`BELT_Z_QUANTUM` and because all 118
 #: clean ramp steps in the corpus use it.
@@ -218,14 +231,29 @@ VERTICAL_STEP = Fraction(1)
 # altitude it really set now lives in `layout.spine`, next to the other
 # structural choices, where it is legible as the knob it is.
 
-# `BEND_MIN_ANGLE_WHEN_SLOPED_RAD` and `SLOPE_DEADZONE` moved to
-# `flab2bp.dsp.rules`, where `rules.too_bend_to_lift` applies them.  They are
-# bare `EBuildCondition` thresholds -- not read against the building table and
-# not parameterised by technology -- so this module was never their home, and
-# they sat here for a year with no reader anywhere in the repository.
+# Path-only ``TooBendToLift`` constants used to live here.  The applicability
+# audit proved BlueprintPaste never assigns that condition, so the dead
+# definitions were deleted rather than promoted into the paste registry.
 
 #: Lab level on a NEW save, from ``GameHistoryData.Init``: ``labLevel = 3``.
 DEFAULT_LAB_LEVEL = 3
+
+#: Storage level on a new save, ``GameHistoryData.cs:576``.
+DEFAULT_STORAGE_LEVEL = 2
+
+#: FactorioLab prefix for Mass Construction, whose five levels set
+#: ``GameHistoryData.blueprintLimit`` through ``UnlockTechFunction`` case 28.
+MASS_CONSTRUCTION_PREFIX = "mass-construction-"
+
+#: Facility-count cap by Mass Construction level.  Index 0 is an explicitly
+#: unresearched save; level 5 is unlimited and therefore represented by
+#: ``None`` rather than by an invented finite sentinel.
+#:
+#: The paste compares this value literally at
+#: ``BuildTool_BlueprintPaste.cs:1122``.  ``GameHistoryData.cs:1898`` is the
+#: assignment, and ``UITechTree.cs:1625`` distinguishes finite values through
+#: 3600 from the unlimited tier.
+BLUEPRINT_LIMIT_BY_LEVEL: tuple[int | None, ...] = (0, 150, 300, 900, 3600, None)
 
 
 def belt_max_z(lab_level: int = DEFAULT_LAB_LEVEL) -> Fraction:
@@ -289,13 +317,35 @@ class BeltAltitudeRules:
     #: Whether the slope limit is lifted -- i.e. whether a belt may climb with
     #: no horizontal run at all.
     vertical_construction: bool
-    #: Lab level the ceiling was derived from, for error messages.
+    #: Storage/splitter stack level derived from Vertical Construction.
+    storage_level: int
+    #: Lab level the ceiling and lab stack threshold were derived from.
     lab_level: int
     #: False when the URL carried no technology set at all.  The values above
     #: are then FactorioLab's own default -- every technology researched -- not
-    #: a guess of ours and not a new save.  Kept separate from an explicitly
-    #: empty set, which is a real save with nothing researched.
+    #: a guess of ours and not a new save.
     from_url: bool
+
+
+def _technology_level(technology_ids: Set[str], prefix: str) -> int:
+    """Highest numeric suffix researched for one levelled technology."""
+    levels = (
+        int(suffix)
+        for technology_id in technology_ids
+        if technology_id.startswith(prefix)
+        and (suffix := technology_id.removeprefix(prefix)).isdigit()
+    )
+    return max(levels, default=0)
+
+
+def blueprint_limit_for_technologies(
+    technology_ids: Set[str] | None,
+    all_technology_ids: Set[str],
+) -> int | None:
+    """Paste facility-count cap for the FactorioLab technology selection."""
+    effective = all_technology_ids if technology_ids is None else technology_ids
+    level = min(_technology_level(effective, MASS_CONSTRUCTION_PREFIX), 5)
+    return BLUEPRINT_LIMIT_BY_LEVEL[level]
 
 
 def belt_rules_for_technologies(
@@ -345,21 +395,22 @@ def belt_rules_for_technologies(
     An explicit empty set still means a save with nothing researched, and is
     honoured as such.
 
-    The lab level is the starting 3 plus one per researched Vertical
-    Construction level.  ``UnlockValues`` lives in the game's binary asset
-    protos and could not be read, so "one per level" is an ASSUMPTION -- its
-    checkable consequence is that FactorioLab models 6 levels, giving at most
-    lab 9 and a ceiling of 26.55, while the user's own save reaches 38.55 at
-    lab 13.  So it UNDER-estimates a developed save, which is the safe
-    direction: it refuses altitudes the save would allow and never emits one it
-    would not.
+    The lab and storage levels are their starting values plus the highest
+    researched Vertical Construction level.  ``UnlockValues`` lives in the
+    game's binary asset protos and could not be read, so "one per level" remains
+    an explicit assumption.  FactorioLab models six levels, giving at most lab
+    9 and a ceiling of 26.55, while the user's own save reaches 38.55 at lab 13.
+    This under-estimates a developed save, the safe direction: it refuses
+    altitudes the save would allow and never emits one it would not.
     """
     effective = all_technology_ids if technology_ids is None else technology_ids
-    levels = sum(1 for t in effective if t.startswith(VERTICAL_CONSTRUCTION_PREFIX))
+    levels = _technology_level(effective, VERTICAL_CONSTRUCTION_PREFIX)
     lab_level = DEFAULT_LAB_LEVEL + levels
+    storage_level = DEFAULT_STORAGE_LEVEL + levels
     return BeltAltitudeRules(
         max_z=belt_max_z(lab_level),
         vertical_construction=BELT_SLOPE_UNLOCK_TECH in effective,
+        storage_level=storage_level,
         lab_level=lab_level,
         from_url=technology_ids is not None,
     )
@@ -453,8 +504,6 @@ TESLA_COVER_RADIUS = Fraction(21, 2)
 #: this constant is only usable on flat, non-polar layouts.
 TESLA_LINK_DISTANCE = Fraction(45, 2)
 
-#: Belts are unpowered in DSP.  Sorters and spray coaters are not.
-UNPOWERED_ITEM_IDS = frozenset(BELT_IDS)
 
 
 # --- fixtures safe for geometric validation --------------------------------
@@ -807,6 +856,9 @@ class Building:
     #: belt sitting a level above one of these is a CONNECTION rather than a
     #: crossing.  ``game.belt_crossing`` needs to know the difference.
     multi_level: int
+    #: ``PrefabDesc.stackHeight`` in world units.  ``None`` for buildings the
+    #: paste does not subject to the vertical-construction stack ladder.
+    stack_height: Fraction | None
     #: Belt and fluid PORT poses -- ``PrefabDesc.portPoses``, which is
     #: ``SlotConfig.slotPoses`` in the prefab.  The name is the game's and it is
     #: a trap: these are where a belt or a pipe meets the building, and they are
@@ -1038,6 +1090,58 @@ def _asset_altitude_level(value: object) -> Fraction:
     if abs(level - nearest) <= Fraction(1, 10_000):
         return Fraction(nearest)
     return level.limit_denominator(10_000)
+
+
+def _asset_stack_height(value: object) -> Fraction:
+    """Recover the game's stack pitch from the two-decimal asset dump.
+
+    ``buildings.json`` records the Splitter's ``2.666667f`` as ``2.67``.  In
+    blueprint z that is 2.0025 rather than the exact two-level pitch used by
+    ``BuildTool_BlueprintPaste.cs:2063``.  Snap only when the converted pitch is
+    within the dump's half-cent precision of an integer, then convert back to
+    world units.
+    """
+    height = Fraction(str(value))
+    pitch = height * BELT_Z_PER_WORLD_UNIT
+    nearest = round(pitch)
+    if abs(pitch - nearest) <= Fraction(1, 200):
+        return Fraction(nearest) / BELT_Z_PER_WORLD_UNIT
+    return height
+
+
+def stack_pitch_z(item_id: int) -> Fraction | None:
+    """One vertical stack step in blueprint ``z``, from prefab data."""
+    height = building(item_id).stack_height
+    if height is None:
+        return None
+    return (height * BELT_Z_PER_WORLD_UNIT).limit_denominator(10_000)
+
+
+def vertical_construction_allowed(
+    item_id: int,
+    z: Fraction | int,
+    altitude_rules: BeltAltitudeRules,
+) -> bool:
+    """Whether the paste's ``OutOfVerticalConstructionHeight`` ladder accepts it.
+
+    ``BuildTool_BlueprintPaste.cs:2036-2068`` converts world altitude to a
+    rounded stack index and refuses when that index is at least the save's lab
+    or storage level.  Python's :func:`round` and ``Mathf.RoundToInt`` both use
+    midpoint-to-even.
+    """
+    pitch = stack_pitch_z(item_id)
+    if pitch is None:
+        return True
+    if item_id not in STORAGE_STACK_IDS and item_id not in MATRIX_LAB_IDS:
+        return True
+    level = (
+        altitude_rules.lab_level
+        if item_id in MATRIX_LAB_IDS
+        else altitude_rules.storage_level
+    )
+    return round(Fraction(z) / pitch) < level
+
+
 def _addon_areas_for(
     prefab: str, table: Mapping[str, Any]
 ) -> tuple[AddonSupplyPose, ...]:
@@ -1084,12 +1188,19 @@ def _load() -> dict[int, Building]:
             height=int(h),
             addon_type=row.get("addonType", 0),
             multi_level=row.get("multiLevel") or 0,
+            stack_height=(
+                _asset_stack_height(row["stackHeight"])
+                if row.get("stackHeight") is not None
+                else None
+            ),
             slots=tuple(row.get("slots") or ()),
             port_poses=_port_poses_for(row["prefab"], poses),
             slot_poses=_slot_poses_for(row["prefab"], poses),
             addon_areas=_addon_areas_for(row["prefab"], poses),
             cover_radius=Fraction(power.get("coverRadius") or 0).limit_denominator(100),
-            connect_distance=Fraction(power.get("connectDistance") or 0).limit_denominator(100),
+            connect_distance=Fraction(power.get("connectDistance") or 0).limit_denominator(
+                100
+            ),
             is_power_node=bool(power.get("node")),
             is_accumulator=bool(power.get("accumulator")),
             wind_forced_power=bool(power.get("wind")),
@@ -1107,6 +1218,7 @@ def _load() -> dict[int, Building]:
             height=1,
             addon_type=0,
             multi_level=0,
+            stack_height=None,
             slots=(),
             port_poses=(),
             slot_poses=(),

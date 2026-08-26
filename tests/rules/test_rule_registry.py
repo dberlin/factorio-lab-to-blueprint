@@ -37,24 +37,23 @@ BASELINE_CONSULTED_BY_BOTH = 24
 #: matches exactly, so a rule that gains a reader must be struck off here and a
 #: rule that loses its last reader fails the suite.
 EXPECTED_UNCONSULTED = {
-    # Phase V moved both out of `catalog` into `rules`, where the paste rules
-    # live.  Still unread by anything -- the move relocated the row, it did not
-    # settle it.
-    "rules.BEND_MIN_ANGLE_WHEN_SLOPED_RAD",
-    "rules.SLOPE_DEADZONE",
-    # The `MatchInserter` ladder.  Unread for a REASON, unlike the two above:
-    # the game reaches it only when a sorter's peer preview is null, and a
-    # pasted blueprint always supplies one, so it cannot fire on our output.
-    # These rows should stay here.  The two above should not.
+    # Paste-applicable rules centralized here but not yet migrated into
+    # strategy/validation.  The report prints each registry reason.
+    "catalog.belt_slope_allowed",
+    "catalog.blueprint_limit_for_technologies",
+    "catalog.stack_pitch_z",
+    "catalog.vertical_construction_allowed",
+    "planet.SORTER_PARAM_BIAS",
+    "planet.sorter_parameter",
+    "rules.PASTE_BELT_LINK_MAX_SQR",
+    "rules.belt_link_too_far",
+    "rules.COATER_RESHAPE_MAX",
+    "rules.coater_reshape_allowed",
+    # MatchInserter is unreachable for blueprint-carried sorter peers.
     "rules.MATCH_SNAP_MAX_SQR",
     "rules.MATCH_ALIGN_COS",
-    # Landed with the band model and read by nothing: `planet.sorter_condition`
-    # ports the `num129` bias inline instead of through the mapping, so the
-    # constant drifted from its own implementation on day one.
-    "planet.SORTER_PARAM_BIAS",
-    "catalog.UNPOWERED_ITEM_IDS",
+    # These model non-refusing/silent protocol behavior or an unemitted turret.
     "rules.BELT_SLOT_AUTO_RANGE",
-    "rules.CONN_SLOTS_PER_OBJECT",
     "rules.ADDON_TURRET_AXIS_DEG",
 }
 
@@ -174,8 +173,8 @@ def test_the_lint_would_catch_a_planted_constant() -> None:
 
 
 def test_the_lint_would_catch_a_fraction_spelling_of_one() -> None:
-    """``Fraction(4, 5)`` is ``MAX_BELT_SLOPE`` written out, and must not hide."""
-    planted = "def _step() -> object:\n    return Fraction(4, 5)\n"
+    """``Fraction(3, 4)`` is ``MAX_BELT_SLOPE`` written out, and must not hide."""
+    planted = "def _step() -> object:\n    return Fraction(3, 4)\n"
     hits = provenance.scan_source("flab2bp.layout.planted", planted)
     assert any("catalog.MAX_BELT_SLOPE" in h.matches for h in hits)
 
