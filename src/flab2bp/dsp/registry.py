@@ -434,6 +434,53 @@ _RULES: tuple[Entry, ...] = (
         ),
     ),
     _e("rules.ADDON_NEIGHBOUR_RADIAL_GAP", Kind.RULE, lint=True),
+    # The three Phase V added after this registry was written.  MATCH_* are the
+    # `MatchInserter` ladder, which is REACHED ONLY when the peer preview is
+    # null -- and `BlueprintUtils.cs:1623-1624` fills that from the blueprint's
+    # own records, so it never runs on anything we emit.  That applicability
+    # condition is the rule, as much as the number is: recording the constant
+    # without it is how RULE_AUDIT D5 came to conflate this ladder with
+    # `CheckInserterDataLegal`'s 0.8.
+    _e(
+        "rules.MATCH_SNAP_MAX_SQR",
+        Kind.RULE,
+        # NOT linted: the value is 6.0, and `bench.corpus` and three sites in
+        # `freeform` legitimately hold 6.0 as a budget or a count.  This
+        # registry's own finding is that the game's constants are ordinary
+        # numbers; linting one this common buys three declared coincidences per
+        # site and teaches the next reader that R1 cries wolf.  Lint earns its
+        # keep on DISTINCTIVE values -- 1.8975, 0.9702957 -- not on 6.
+        lint=False,
+        unconsulted_because=(
+            "`MatchInserter` is reached only when the peer preview is null, and "
+            "`BlueprintUtils.cs:1623-1624` fills that from the blueprint's own "
+            "records -- so the ladder never runs on anything we emit.  Ported "
+            "because the compiled oracle checks us against it (15488/15488); "
+            "unread by the pipeline BY THE RULE'S OWN TERMS, not by neglect."
+        ),
+        note=(
+            "BuildTool_BlueprintPaste.cs:1588 `if (num4 < 6f && ...)` -- a "
+            "SQUARED world distance, so 2.449 world units, NOT a sibling of "
+            "SLOT_REACH.  Conflating the two is RULE_AUDIT D5's error."
+        ),
+    ),
+    _e(
+        "rules.MATCH_ALIGN_COS",
+        Kind.RULE,
+        lint=True,  # 0.9702957 is distinctive; a bare copy of it IS a defect.
+        unconsulted_because="Same ladder, same reachability condition, same reason.",
+        note="BuildTool_BlueprintPaste.cs:1536, cos 14 on BOTH dots.",
+    ),
+    _e(
+        "rules.DRAG_MAX_ALIGNMENT",
+        Kind.RULE,
+        # NOT linted, same reasoning: the value is 0.5.
+        lint=False,
+        note=(
+            "The belt-end drag's alignment gate, moved out of layout/ by Phase "
+            "V so the rule lives where the other paste rules do."
+        ),
+    ),
     _e("rules.world_gap", Kind.RULE, depends_on=("dx", "dy", "dz")),
     _e("rules.addon_axis_aligned", Kind.RULE, depends_on=("yaw", "dx", "dy")),
     _e(

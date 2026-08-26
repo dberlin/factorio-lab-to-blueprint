@@ -76,10 +76,11 @@ VERDICTS: dict[str, tuple[str, str]] = {
     "rules.BELT_INPUT_SLOTS": ("both", "belt slot assignment, checked and searched"),
     "rules.world_gap": ("both", "the shared world-distance helper, everywhere"),
     # --- validator only ------------------------------------------------------
-    "catalog.SORTER_SPANS_ALTITUDE": (
-        "validator",
-        "a refusal, not a search input: no strategy ever proposes a sloped sorter",
-    ),
+    # `catalog.SORTER_SPANS_ALTITUDE` had a row here reading "a refusal, not a
+    # search input".  Phase V found there was no rule to refuse on: the game
+    # MEASURES a sorter's altitude span (`BuildTool_Inserter.cs:1311`) and
+    # applies a MINIMUM to it (`:1347`).  Nothing caps it.  Rule and check both
+    # deleted, so there is nothing left to mutate.
     "catalog.MAX_BELT_SLOPE": (
         "validator",
         "LEDGER: freeform's `_legal_link` is probed and does NOT move.  Step 2.2 "
@@ -114,9 +115,27 @@ VERDICTS: dict[str, tuple[str, str]] = {
     "rules.SPLITTER_OUTPUT_FROM_SLOT": ("strategy", "written by `junction.make_splitter`"),
     # --- inert ---------------------------------------------------------------
     "catalog.UNPOWERED_ITEM_IDS": ("inert", "LEDGER: `validate._POWERED` restates it"),
-    "catalog.BELT_CROSSING_CLEARANCE": ("inert", "frozen into `spine._TRUNK_Z` at import"),
-    "catalog.BEND_MIN_ANGLE_WHEN_SLOPED_RAD": ("inert", "LEDGER: the audit's headline row"),
-    "catalog.SLOPE_DEADZONE": ("inert", "LEDGER: companion to the bend rule"),
+    # `catalog.BELT_CROSSING_CLEARANCE` had a row here.  Phase V deleted the
+    # rule -- no citation, no validator ever read it -- so there is nothing left
+    # to mutate.  The two below moved catalog -> rules and kept their verdicts.
+    "rules.BEND_MIN_ANGLE_WHEN_SLOPED_RAD": ("inert", "LEDGER: the audit's headline row"),
+    "rules.SLOPE_DEADZONE": ("inert", "LEDGER: companion to the bend rule"),
+    # The `MatchInserter` ladder.  Inert, but NOT a ledger row: the game reaches
+    # it only when a sorter's peer preview is null, which a pasted blueprint
+    # never leaves so.  It is ported for the compiled oracle, not the pipeline.
+    "rules.MATCH_SNAP_MAX_SQR": ("inert", "unreachable for blueprint-carried sorters"),
+    "rules.MATCH_ALIGN_COS": ("inert", "unreachable for blueprint-carried sorters"),
+    # Declared "both" on the reasoning that `slots._drag_belt_end` reads it and
+    # `validate` reaches that through the seat model.  MEASURED inert, and the
+    # reasoning was the wrong kind of evidence: reachability is not exercise.
+    # No test puts a sorter near the 0.5 gate, so the drag runs but the
+    # threshold never decides anything.  A wrong value would ship.
+    "rules.DRAG_MAX_ALIGNMENT": (
+        "inert",
+        "LEDGER: read by `slots._drag_belt_end` and reachable from validate, but "
+        "no test puts a sorter near the 0.5 gate, so the threshold never decides "
+        "anything and a wrong value would ship. A coverage hole, not a dead rule.",
+    ),
     "catalog.DEFAULT_LAB_LEVEL": ("inert", "frozen into `DEFAULT_MAX_BELT_Z` at import"),
     "catalog.TESLA_LINK_DISTANCE": ("inert", "frozen into `spine.CONSTANTS` at import"),
     "colliders.PLANET_RADIUS": ("inert", "frozen into collider default arguments"),

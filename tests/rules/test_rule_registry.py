@@ -37,8 +37,17 @@ BASELINE_CONSULTED_BY_BOTH = 24
 #: matches exactly, so a rule that gains a reader must be struck off here and a
 #: rule that loses its last reader fails the suite.
 EXPECTED_UNCONSULTED = {
-    "catalog.BEND_MIN_ANGLE_WHEN_SLOPED_RAD",
-    "catalog.SLOPE_DEADZONE",
+    # Phase V moved both out of `catalog` into `rules`, where the paste rules
+    # live.  Still unread by anything -- the move relocated the row, it did not
+    # settle it.
+    "rules.BEND_MIN_ANGLE_WHEN_SLOPED_RAD",
+    "rules.SLOPE_DEADZONE",
+    # The `MatchInserter` ladder.  Unread for a REASON, unlike the two above:
+    # the game reaches it only when a sorter's peer preview is null, and a
+    # pasted blueprint always supplies one, so it cannot fire on our output.
+    # These rows should stay here.  The two above should not.
+    "rules.MATCH_SNAP_MAX_SQR",
+    "rules.MATCH_ALIGN_COS",
     "catalog.UNPOWERED_ITEM_IDS",
     "rules.BELT_SLOT_AUTO_RANGE",
     "rules.CONN_SLOTS_PER_OBJECT",
