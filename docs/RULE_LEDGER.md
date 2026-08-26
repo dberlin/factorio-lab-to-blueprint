@@ -93,6 +93,72 @@ level, the row names the tech, where the game reads it, and what we assume.
 | `ADDON_NEIGHBOUR_RADIAL_GAP = 0.6` | KEEP | `BuildTool_Addon.cs:897,905` `flag &= Mathf.Abs(objectPose.position.magnitude - beltOutputBeltPose.position.magnitude) < 0.6f;` | — |
 | **`MATCH_SNAP_MAX_SQR = 6.0`** (new) | KEEP | `BuildTool_BlueprintPaste.cs:1588` `if (num4 < 6f && ...)` — a SQUARED world distance, 2.449 world units | reached **only** when the peer is absent |
 | **`MATCH_ALIGN_COS = 0.9702957`** (new) | KEEP | `BuildTool_BlueprintPaste.cs:1536` `if (num13 > 0.9702957f && num14 > 0.9702957f)` — cos 14, on BOTH dots | same |
+| **`POWER_TOO_CLOSE_SQR = 12.25`** (new) | KEEP | `BuildTool_BlueprintPaste.cs:2547` `float num37 = (geothermal ? 144f : (windForcedPower ? 110.25f : 12.25f));`, applied at `:2677`/`:2681` → `EBuildCondition.PowerTooClose` (`EBuildCondition.cs:8`) | `PrefabDesc.isPowerNode && !isAccumulator`, `:2527` |
+| **`WIND_TOO_CLOSE_SQR = 110.25`** (new) | KEEP | same `num37`; `:2667` `if (windForcedPower && item.prefabDesc.windForcedPower && num35 < 110.25f)` | `windForcedPower` on **both** buildings |
+| **`GEOTHERMAL_TOO_CLOSE_SQR = 144.0`** (new) | KEEP | same `num37`; `:2672` `if (geothermal && item.prefabDesc.geothermal && num35 < 144f)` | `geothermal` on **both** buildings |
+
+## 1c. `PowerTooClose` — the row a shipped blueprint wrote
+
+This one is not a tidy-up. **The user pasted a blueprint this repository
+generated into a real game. All 366 belts, sorters, splitters and machines
+built. Two of its six Tesla Towers were refused** for standing 1.777 world units
+apart — `tests/fixtures/ours/power-too-close-freeform.txt`, towers #367 at
+(21, 15) and #371 at (22, 16). The other four sit 11.24 units and further from
+everything and built.
+
+**Nothing in the repository could have seen it, and not for want of checking.**
+`colliders.build_colliders(2201)` returns `()`: a Tesla Tower has *no build
+collider at all*, so `geom.collide` is blind to two of them however they are
+stacked. Collision was never the right question; the game has a dedicated
+predicate with its own three-tier ladder, and we had not ported it.
+
+Three things this row records that a bare constant would have lost:
+
+* **The units, which are the trap.** `num35 = dx*dx + dy*dy + dz*dz` over two
+  Unity `Vector3` positions — SQUARED, WORLD, three-dimensional. `sqrt(12.25)`
+  is 3.5 world units and a tile is `GRID_ARC` = 1.2566, so the bound is **2.785
+  tiles**. Reading 12.25 as a squared tile distance would refuse legal geometry
+  by 26%. This project already paid for that mistake once with `SLOT_REACH`, so
+  every caller reaches the rule through `rules.world_gap`.
+* **The tiers, kept as tiers.** `num37` is a lookup on two `PrefabDesc` flags of
+  the building being placed, and the two upper branches additionally require the
+  same flag on the building it is placed against. A Wind Turbine keeps 10.5
+  world units from another Wind Turbine and 3.5 from a Tesla Tower. Flattening
+  the three to 12.25 would let a wind farm pack four times too tightly — right
+  by coincidence for the one building we emit, silently wrong for the other
+  twelve. `scripts/extract_dsp_power.py` reads the flags off the shipped
+  prefabs (`PrefabDesc.cs:1438-1453`) rather than hand-writing "the wind one is
+  2203".
+* **A term that is in the game and provably cannot change a verdict.**
+  `isPowerGen` is read at `:2677`, and the branch below it at `:2681` assigns
+  the same condition under the identical `num35 < 12.25f`. The pair collapses.
+  It is **not ported**, and this row says why, so nobody re-adds it as a
+  correction.
+
+**Falsification, and it is the whole reason to believe the row.** Over the seven
+single-area blueprints in `tests/fixtures` — 75 power nodes, 1468 pairs, written
+by the game itself — the rule convicts **zero**. The sample is not vacuous in
+kind: one of them carries 54 Tesla Towers, and the closest real pair anywhere in
+it is 6.00 tiles against a bound of 2.785. It does **not** pin the unit: 6.00
+tiles clears both the world reading and the tile reading, so the control proves
+the rule refuses nothing the game accepts and nothing more. What pins the unit
+is the citation plus `test_the_bound_is_world_units_not_tiles`, which brackets
+`(2, 1)` refused and `(2, 2)` cleared — a pair no tile reading can satisfy.
+
+The four multi-area fixtures are excluded, for the reason
+`tests/dsp/test_colliders.py` already excludes them from every geometric test: a
+building's local offset is relative to its own area, and a whole-planet capture
+chains areas through `parentIndex`. Dropped into one flat frame they report
+**102,875** convicting pairs, including Wind Turbines placed 0.30 world units
+apart — inside their own 3×3 footprints, which is impossible. Restricting to
+pairs within one area takes two of the four to zero on its own.
+
+`OPEN`, recorded and not fixed: loops one and two of the three
+(`:2549-2591` against the planet's live power network, `:2593-2640` against
+ghosted prebuilds) are **not** modelled, because we do not know what is already
+on the player's planet. Only loop three, paste-against-paste, is portable. A
+blueprint that is clean by this rule can still be refused when pasted next to an
+existing tower, and no amount of work here can change that.
 
 ## 1a. The `SKEW_AXIS_DEG` row is the one this phase got wrong twice
 

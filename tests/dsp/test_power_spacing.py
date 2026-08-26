@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import itertools
 import math
+from fractions import Fraction
 from pathlib import Path
 
 import pytest
@@ -35,6 +36,8 @@ from flab2bp.dsp import colliders as C
 from flab2bp.dsp import rules as R
 from flab2bp.dsp.codec import decode
 from flab2bp.dsp.records import BlueprintBuilding
+from flab2bp.layout.base import PlacedBuilding, Placement
+from flab2bp.layout.validate import Severity, validate
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
 
@@ -163,6 +166,39 @@ def test_the_rule_does_not_over_explain_the_failure() -> None:
 def test_no_build_collider_is_why_geom_collide_could_not_see_it() -> None:
     """The reason this needed its own rule rather than a fix to an old one."""
     assert C.build_colliders(cat.TESLA_TOWER_ID) == ()
+
+
+def test_the_validator_check_convicts_the_committed_fixture() -> None:
+    """The end-to-end statement: ``game.power_too_close`` refuses THIS paste.
+
+    The six towers are lifted out of the fixture at their own coordinates and
+    put through ``validate`` -- so this exercises the check, its pose model and
+    its ordered-pair walk, not just the predicate underneath them.  The rest of
+    the blueprint is left out on purpose: 372 buildings would drag in every
+    other check and the finding under test would be one line in a hundred.
+    """
+    tower = cat.building(cat.TESLA_TOWER_ID)
+    placed = [
+        PlacedBuilding(
+            item_id=b.item_id,
+            model_index=b.model_index,
+            x=int(b.x),
+            y=int(b.y),
+            z=Fraction(int(b.z)),
+            width=tower.width,
+            height=tower.height,
+        )
+        for _i, b, _n in _nodes(THE_PASTE)
+    ]
+    assert [(b.x, b.y) for b in placed] == [
+        (11, 10), (21, 15), (7, 18), (17, 3), (3, 0), (22, 16)
+    ]
+    report = validate(Placement(buildings=tuple(placed)))
+    findings = report.by_check("game.power_too_close")
+    assert len(findings) == 1, [f.message for f in findings]
+    assert findings[0].severity is Severity.ERROR
+    assert findings[0].buildings == (1, 5), "towers #367 and #371 of the paste"
+    assert "PowerTooClose" in findings[0].message
 
 
 # --- 2. the control: blueprints the game itself wrote ------------------------

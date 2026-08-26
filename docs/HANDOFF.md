@@ -407,6 +407,15 @@ New today:
   world unit; a tile is `GRID_ARC` = 1.2566.)
 - **Exactly 2 of 493 recipes consume an item they also produce:** `reforming-refine` and
   `x-ray-cracking`. Both are refined-oil/hydrogen. Any cycle bug will involve them.
+- **Two power nodes may not stand within 3.5 WORLD units of each other**, which
+  is 2.785 tiles — `EBuildCondition.PowerTooClose`,
+  `BuildTool_BlueprintPaste.cs:2547`. Wind-to-wind is 10.5 and
+  geothermal-to-geothermal 12.0; accumulators are exempt. **A Tesla Tower has no
+  build collider at all**, so `geom.collide` can never see this and the rule
+  needs its own check (`game.power_too_close`). Found by shipping: a blueprint
+  we generated pasted with all 366 of its other buildings green and two of its
+  six towers red. See `docs/RULE_LEDGER.md` §1c and
+  `tests/fixtures/ours/power-too-close-freeform.txt`.
 - **Sphere projection does not threaten power.** DSP compares a 3D chord between
   sphere-projected nodes, and a chord is always shorter than the surface arc: at 22.5 tiles on
   a standard planet the chord is 22.488, 0.05% short. So our flat check errs **safe** — anything
