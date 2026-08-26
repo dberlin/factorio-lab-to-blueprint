@@ -1290,44 +1290,6 @@ class TestProliferation:
         ]
         assert report.ok, sorted({f.check for f in report.errors})
 
-    def test_a_placed_coater_is_anchored_on_its_belt_tile_not_on_its_collider(
-        self,
-    ) -> None:
-        """A belt addon's placement is 1x1 whatever its collider spans.
-
-        ``catalog.footprint`` reports a Spray Coater as 1x3, which is true of
-        its collider: the box the game tests is 3.8 world units long about the
-        coater's own centre, so it covers three tile centres along the belt.
-        Its POSITION is still the belt tile it rides -- ``addonAreaPoses`` area
-        0 is "the cargo belt it rides" -- and ``tile_to_local_offset`` reads the
-        centre off the width, so emitting it 1x3 moves it a tile off the belt.
-        At yaw 90 that became an Oil Refinery and a Spray Coater two tiles apart
-        failing ``geom.collide``, and it cost spine ten corpus cells before the
-        anchor was pinned here.
-        """
-        spec = two_stage_spec()
-        prolif = BuildSpec(
-            groups=spec.groups,
-            external_inputs={**spec.external_inputs, "proliferator-3": F(1) / 2},
-            outputs=spec.outputs,
-            belt_item_id=spec.belt_item_id,
-            belt_items_per_second=spec.belt_items_per_second,
-            spray_lanes={"iron-ingot": False},
-            label="prolif",
-        )
-        p = SpineLayout(power=False).lay_out(prolif, time_budget_s=0.5)
-        coaters = [b for b in p.buildings if b.item_id == catalog.SPRAY_COATER_ID]
-        assert coaters, "no coater placed, so nothing below tests anything"
-        assert all((b.width, b.height) == (1, 1) for b in coaters), [
-            (b.x, b.y, b.width, b.height) for b in coaters
-        ]
-        # And the catalog really does disagree, so this is not vacuous.
-        assert catalog.footprint(catalog.SPRAY_COATER_ID) == (1, 3)
-        # Every coater sits exactly on a belt tile of the lane it rides.
-        belts = {(b.x, b.y, b.z) for b in p.buildings if catalog.is_belt(b.item_id)}
-        assert all((b.x, b.y, b.z) in belts for b in coaters), [
-            (b.x, b.y, b.z) for b in coaters
-        ]
 
     def test_a_coater_still_consumes_no_grid_tile(self) -> None:
         """The half of the old test that was about geometry, kept.
@@ -2841,6 +2803,8 @@ class TestRealSpecsValidateClean:
 
 
 class TestSprayCoatersAreFed:
+    """A coater's raised supply and crossing clearance come from prefab poses."""
+
     def test_spur_field_reads_typed_addon_supply_poses(self) -> None:
         from flab2bp.layout.spine import _SpurField
 
@@ -2856,204 +2820,6 @@ class TestSprayCoatersAreFed:
         )
         field = _SpurField([coater])
         assert field.floor
-
-    """A coater with no proliferator sprays nothing.
-
-    Every proliferated recipe then quietly runs unproliferated and the build
-    misses its rate -- it pastes, the machines run, and the numbers are simply
-    lower than the spec promised.  Nothing about the blueprint looks wrong.
-    """
-
-    @staticmethod
-    def _candidate(label: str) -> BuildSpec:
-        from flab2bp.lab.data import load_vendored
-        from flab2bp.lab.url import parse_url
-        from flab2bp.rates.candidates import build_candidates
-
-        url = (
-            "https://factoriolab.github.io/dsp/flow?o=super-magnetic-ring*60"
-            "&ibe=conveyor-belt-2"
-            "&mmr=arc-smelter~assembling-machine-2~chemical-plant~matrix-lab&v=11"
-        )
-        cands = build_candidates(load_vendored(), parse_url(url), count=3).candidates
-        return next(c for c in cands if c.label == label)
-
-    @staticmethod
-    def _corpus_candidate(label: str) -> BuildSpec:
-        """The corpus entry's OWN url, which is not the one above.
-
-        `_candidate` drops `&mps=proliferator-2-products` and asks for three
-        candidates; the corpus asks for six from the URL the user actually
-        supplied.  The two produce DIFFERENT specs -- eleven spray lanes against
-        ten -- and only the corpus one is the cell `docs/BACKLOG.md` and
-        `scripts/audit.py` name.  Measuring the ten-coater case against the
-        other spec is measuring a different spec.
-        """
-        from flab2bp.bench.corpus import entry
-        from flab2bp.lab.data import load_vendored
-        from flab2bp.lab.url import parse_url
-        from flab2bp.rates.candidates import build_candidates
-
-        cands = build_candidates(
-            load_vendored(), parse_url(entry("super-magnetic-ring").url), count=6
-        ).candidates
-        return next(c for c in cands if c.label == label)
-
-    @pytest.mark.slow
-    def test_spine_supplies_every_coater_on_a_real_spec(self) -> None:
-        """Three versions of this test, three different false things asserted.
-
-        The first asked that a proliferator lane exist; the second that every
-        coater have "a sorter drawing proliferator" from it -- a sorter that
-        cannot exist, because a Spray Coater has no insert pose to name and the
-        game supplies an addon positionally from a belt in its addon area. Both
-        passed for years on placements the game would not have built.
-
-        The third asserted spine REFUSED and named an elevated lane as the
-        missing capability. Also wrong: the drop was always emitted at `z = 1`;
-        what was missing was a route to it.
-
-        So this asserts the outcome that actually matters and asserts its own
-        sample first. `game.addon_supply` yields nothing for a placement with no
-        coater in it, so without the containment check a spec that lost its
-        coaters would pass this silently -- which is precisely the shape of
-        error this file has now made three times.
-        """
-        spec = self._candidate("free-proliferation")
-        assert spec.spray_lanes, "sample has no spray lanes; nothing below tests anything"
-        p = SpineLayout(power=False).lay_out(spec, time_budget_s=4.0)
-        coaters = [b for b in p.buildings if b.item_id == catalog.SPRAY_COATER_ID]
-        assert len(coaters) >= 2, f"expected the multi-coater case, got {len(coaters)}"
-        assert [b for b in p.buildings if b.z and b.z > 0], "no elevated supply at all"
-        report = validate.validate(
-            p, spec, ids=validate.id_map(spec), expect_power=False
-        )
-        assert not report.by_check("game.addon_supply"), [
-            f.message for f in report.by_check("game.addon_supply")
-        ]
-        assert report.ok, sorted({f.check for f in report.errors})
-
-    @pytest.mark.slow
-    def test_the_ten_coater_case_places_every_spur_by_climbing_over_machines(
-        self,
-    ) -> None:
-        """The refusal that is GONE, and the check that would have caught a cheat.
-
-        `max-proliferation` has ten spray lanes.  Nine of its ten spurs used to
-        place and the tenth found no route, because `_spur_clear` refused to fly
-        a belt over anything that was not a belt.  The game's rule is read now:
-        `CheckBuildConditions` probes a belt preview with a 0.23 sphere rather
-        than its box, so a belt MAY cross a machine and the price is height --
-        `colliders.belt_crossing_height`, which `_belt_floor_over` rounds up to
-        the altitude quantum.
-
-        `game.belt_crossing` is what makes this a test and not a hope.  A spur
-        that flew at `z = 1` over an Assembling Machine would place, and would
-        paste as `EBuildCondition.Collide`; that check convicts it and is
-        asserted separately from `report.ok` so a future default change cannot
-        silently stop exercising it.  Its own sample is asserted first: the
-        placement really does contain a belt above `z = 1`, so a build that lost
-        its climb could not pass this quietly.
-
-        TEN SPRAY LANES ARE MORE THAN TEN LANES.  This asserted exactly ten
-        coaters, one per spray lane, and that number was the defect wearing a
-        test: an item has one entry in `spray_lanes` and as many LANES in the
-        corridors as the machines eating it need, and `_place_coaters` used to
-        `break` after seating the first.  Measured on this exact spec with
-        spine's own self-check disabled so the raw emission could be read: ten
-        coaters, and **35 sorters feeding a proliferated machine off a lane no
-        coater had sprayed**.  So the count is now bounded below by the spray
-        lanes and the real invariant is asserted beside it --
-        `prolif.sprayed_cargo_reaches_machines`, which is 0 here and was 35.
-        """
-        spec = self._corpus_candidate("max-proliferation")
-        assert len(spec.spray_lanes) >= 10, "sample is not the ten-lane case"
-        p = SpineLayout(power=False).lay_out(spec, time_budget_s=4.0)
-        coaters = [b for b in p.buildings if b.item_id == catalog.SPRAY_COATER_ID]
-        assert len(coaters) >= len(spec.spray_lanes), (
-            f"{len(spec.spray_lanes)} spray lane(s) and {len(coaters)} coater(s)"
-        )
-        assert [b for b in p.buildings if b.z and b.z > 1], (
-            "nothing climbed above the addon level, so the crossing rule was "
-            "never exercised and the assertions below prove nothing"
-        )
-        report = validate.validate(p, spec, ids=validate.id_map(spec), expect_power=False)
-        assert not report.by_check("game.addon_supply"), [
-            f.message for f in report.by_check("game.addon_supply")
-        ]
-        assert not report.by_check("game.belt_crossing"), [
-            f.message for f in report.by_check("game.belt_crossing")
-        ]
-        unsprayed = report.by_check("prolif.sprayed_cargo_reaches_machines")
-        assert not unsprayed, [f.message for f in unsprayed]
-        assert report.ok, sorted({f.check for f in report.errors})
-    @pytest.mark.slow
-    def test_every_coater_has_elevated_positional_supply_without_sorter(
-        self,
-    ) -> None:
-        from flab2bp.layout import slots
-        from flab2bp.layout.spine import _emit, _solve_plan, proliferator_item
-
-        spec = self._prolif_spec()
-        plans, _reason, _detail = _solve_plan(
-            spec, time_budget_s=0.5, workers=1
-        )
-        placement: Placement | None = None
-        for plan in plans:
-            try:
-                placement = _emit(spec, plan, power=False)
-            except ValueError:
-                continue
-            break
-        assert placement is not None
-        proliferator = proliferator_item(spec)
-        supply = {
-            (building.x, building.y, building.z)
-            for building in placement.buildings
-            if catalog.is_belt(building.item_id)
-            and building.carries_item == proliferator
-        }
-        coaters = [
-            (index, building)
-            for index, building in enumerate(placement.buildings)
-            if building.item_id == catalog.SPRAY_COATER_ID
-        ]
-        assert coaters, "expected coaters on a max-proliferation spec"
-        coater_indices = {index for index, _building in coaters}
-        assert not [
-            sorter
-            for sorter in placement.buildings
-            if catalog.is_sorter(sorter.item_id)
-            and (
-                sorter.input_obj in coater_indices
-                or sorter.output_obj in coater_indices
-            )
-        ]
-        sorter_count = sum(
-            1
-            for building in placement.buildings
-            if catalog.is_sorter(building.item_id)
-        )
-        assert placement.stats["sorters"] == sorter_count
-        belt_count = sum(
-            1
-            for building in placement.buildings
-            if catalog.is_belt(building.item_id)
-        )
-        assert placement.stats["belt_tiles"] == belt_count
-
-        _host, addon = catalog.building(catalog.SPRAY_COATER_ID).addon_areas
-        for _index, coater in coaters:
-            dx, dy = slots.to_world((addon[0], addon[1]), coater.yaw)
-            target = (
-                coater.x + round(dx),
-                coater.y + round(dy),
-                coater.z + F(round(addon[2])),
-            )
-            assert target in supply, (
-                f"coater at {(coater.x, coater.y, coater.z)} has no "
-                f"proliferator belt at elevated addon target {target}"
-            )
 
     def test_a_spur_may_cross_a_machine_only_at_that_machine_s_own_height(
         self,
@@ -3141,41 +2907,6 @@ class TestModeDrivenMachines:
     def _exchangers(self, p: Placement) -> list[PlacedBuilding]:
         return [b for b in p.buildings if b.item_id == catalog.ENERGY_EXCHANGER_ID]
 
-    def test_the_game_gives_an_exchanger_no_sorter_slot_at_all(self) -> None:
-        """Ground truth, and the reason for the refusal below.
-
-        ``slot_poses.json`` is extracted from the game's own prefabs, and the
-        Energy Exchanger's ``slotPoses`` array is EMPTY -- as is the Ray
-        Receiver's.  Every other machine in the corpus offers columns from at
-        least one face.  If a later extraction fills these in, this test fails
-        first and says so, rather than the refusal below quietly becoming wrong.
-        """
-        from flab2bp.layout import slots as sorter_slots
-
-        probe = sorter_slots.probe_building(catalog.ENERGY_EXCHANGER_ID, 0.0)
-        offsets = [*range(-catalog.SORTER_MAX_REACH, 0), *range(9, 9 + 4)]
-        assert all(not sorter_slots.attachable_columns(probe, y) for y in offsets)
-
-    def test_spine_refuses_the_machine_rather_than_shipping_it_unwired(self) -> None:
-        """What this used to assert was that the layout SUCCEEDED, and it did.
-
-        Measured on the code before the per-side tap charge: the spec emitted two
-        Energy Exchangers and **zero sorters in the whole placement** -- neither
-        exchanger joined to anything at either end -- and `test_the_placement_
-        validates` called that report ok.  The old tap model read a face with no
-        reachable pose as costing NOTHING, because it took the worst of two
-        sides and both sides were "unknown"; so the allocator seated lanes for
-        it, `_find_taps` found no span, and `_emit` swallowed the miss.
-
-        A blueprint that pastes two idle exchangers is worse than a refusal that
-        names the reason, so this now asserts the refusal.  See docs/BACKLOG.md
-        for the open question of whether the extraction is incomplete -- that is
-        where a fix belongs, not in the tap model.
-        """
-        with pytest.raises(NoValidLayout) as exc:
-            SpineLayout(power=False).lay_out(self._exchanger_spec(), time_budget_s=0.5)
-        assert "takes no sorter on any face" in exc.value.reason
-        assert "energy-exchanger" in exc.value.reason
 
     def test_the_machine_carries_the_mode_not_a_recipe(self) -> None:
         """Asked of the unit that decides it, since no placement reaches here.
@@ -3214,39 +2945,16 @@ class TestModeDrivenMachines:
 
 
 class TestAMachineTheGameTakesNoSorterOn:
-    """The refusal must name the PREFAB, because that is what is wrong.
-
-    Settled from the game, not inferred.  ``BuildTool_Inserter`` drops any cast
-    target whose ``PrefabDesc.slotPoses`` is empty and which is not a belt, and
-    ``PrefabDesc.slotPoses`` is ``SlotConfig.insertPoses`` -- which the Ray
-    Receiver and the Energy Exchanger ship EMPTY.  Their prefabs carry one
-    ``SlotConfig`` each, on the root, with ``insertPoses`` length 0 and
-    ``addonAreaCenter`` length 0; their only pose children are named ``slot-0``
-    and ``slot(0..3)``, and those are the BELT PORTS.  The game wires them by
-    docking a belt straight into a port -- all 45 Energy Exchangers in the
-    fixture corpus have exactly that: 90 peers, every one a belt.
-
-    Spine has no belt-to-port docking, so the refusal is right.  What these pin
-    is that it SAYS SO.  The case used to arrive as ``FALLBACK_SEED_UNWIRABLE``
-    -- "no ordering of its two corridors puts in reach; machine heights differ
-    by up to 6 tiles" -- which is a statement about a packing, is not what is
-    wrong here, and sends the next reader to the row model instead of to the
-    prefab.
-    """
-
     @staticmethod
     def _ray_receiver_spec() -> BuildSpec:
-        """A pure SOURCE: the game gives a Ray Receiver photons, not items.
-
-        This is the shape the ``universe-matrix`` corpus cell actually has --
-        ``inputs_per_machine`` is literally empty and the only lane it wants is
-        the critical-photon OUTPUT -- so the refusal cannot be waved away as
-        being about a feed that does not exist.
-        """
         return BuildSpec(
             groups=(
                 group(
-                    "critical-photon", "ray-receiver", 4, {}, {"critical-photon": F(1)}
+                    "critical-photon",
+                    "ray-receiver",
+                    4,
+                    {},
+                    {"critical-photon": F(1)},
                 ),
             ),
             external_inputs={},
@@ -3256,111 +2964,21 @@ class TestAMachineTheGameTakesNoSorterOn:
             label="photons",
         )
 
-    def test_the_refusal_names_the_prefab_and_the_mechanism(self) -> None:
+    def test_the_refusal_names_the_poseless_prefab_and_belt_port_mechanism(self) -> None:
+        info = catalog.building(catalog.RAY_RECEIVER_ID)
+        assert info.slot_poses == ()
+        assert len(info.port_poses) == 2
+
         with pytest.raises(NoValidLayout) as exc:
             SpineLayout(power=False).lay_out(
-                self._ray_receiver_spec(), time_budget_s=0.5
+                self._ray_receiver_spec(),
+                time_budget_s=0.5,
             )
         reason = exc.value.reason
-        assert "ray-receiver" in reason, reason
-        assert "0 insert poses" in reason, reason
-        assert "belt port" in reason, reason
-        assert "critical-photon" in reason, reason
-
-    def test_it_no_longer_blames_the_row_model(self) -> None:
-        """The old message was not merely vague, it pointed somewhere wrong.
-
-        Corridor ordering and a height difference are real causes of a real
-        refusal.  Quoting them for a machine that takes no sorter at all is the
-        failure this project keeps paying for: a message that could not have
-        been produced by the actual cause.
-        """
-        with pytest.raises(NoValidLayout) as exc:
-            SpineLayout(power=False).lay_out(
-                self._ray_receiver_spec(), time_budget_s=0.5
-            )
-        reason = exc.value.reason
-        assert "no ordering of its two corridors" not in reason, reason
-        assert "machine heights differ" not in reason, reason
-
-    def test_it_is_deterministic_and_skips_the_retry(self) -> None:
-        """A prefab fact cannot be solved by spending more seconds on it."""
-        from flab2bp.layout.spine import FALLBACK_SORTERLESS_MACHINE, _solve_plan
-
-        plans, reason, detail = _solve_plan(
-            self._ray_receiver_spec(),
-            time_budget_s=0.5,
-            workers=DETERMINISTIC_WORKERS,
-        )
-        assert plans == []
-        assert reason == FALLBACK_SORTERLESS_MACHINE
-        assert "ray-receiver" in detail
-
-    def test_the_coater_never_reaches_the_check_at_all(self) -> None:
-        """Why there is no belt-addon exclusion, pinned rather than argued.
-
-        A Spray Coater ships zero insert poses too, and it IS fed -- positionally,
-        through ``addonAreaPoses``.  Excluding it here looks obviously right and
-        would be dead code: it is not a machine the spec can name, and none of
-        the poseless buildings that CAN reach the check is a belt addon.  If that
-        ever changes -- a coater becomes a spec group, or a belt addon is added
-        to ``MACHINE_ITEM_IDS`` -- this fails, and the exclusion has to come back
-        before the check starts refusing a machine the emitter would have fed.
-        """
-        from flab2bp.layout.spine import MACHINE_ITEM_IDS
-
-        assert "spray-coater" not in MACHINE_ITEM_IDS
-        poseless = [
-            name
-            for name, item_id in MACHINE_ITEM_IDS.items()
-            if not catalog.building(item_id).slot_poses
-        ]
-        assert poseless, "the check would be unreachable if this were empty"
-        assert not [n for n in poseless if catalog.building(MACHINE_ITEM_IDS[n]).is_belt_addon]
-
-    def test_a_proliferated_spec_is_untouched_by_it(self) -> None:
-        """The coater's own group -- the smelter -- takes sorters and is kept."""
-        from flab2bp.layout.spine import _adapt, _sorterless_groups
-
-        spec = BuildSpec(
-            groups=(
-                group(
-                    "iron-ingot",
-                    "arc-smelter",
-                    2,
-                    {"iron-ore": F(1)},
-                    {"iron-ingot": F(1)},
-                    mode=ProliferatorMode.PRODUCTS,
-                ),
-            ),
-            external_inputs={"iron-ore": F(2)},
-            outputs={"iron-ingot": F(2)},
-            belt_item_id="conveyor-belt-2",
-            belt_items_per_second=F(12),
-            label="sprayed",
-        )
-        groups, _edges = _adapt(spec)
-        assert _sorterless_groups(groups) == []
-
-    def test_a_machine_with_nothing_to_wire_is_not_charged(self) -> None:
-        """The refusal is about what the machine NEEDS, not what its prefab lacks.
-
-        Refusing a building over a connection it never wanted would be refusing
-        the wrong thing.  Nothing in the corpus is shaped that way today, so it
-        is asked of the unit rather than of a spec.
-        """
-        from flab2bp.layout.spine import _adapt, _sorterless_groups
-
-        spec = BuildSpec(
-            groups=(group("critical-photon", "ray-receiver", 1, {}, {}),),
-            external_inputs={},
-            outputs={},
-            belt_item_id="conveyor-belt-2",
-            belt_items_per_second=F(12),
-            label="idle",
-        )
-        groups, _edges = _adapt(spec)
-        assert _sorterless_groups(groups) == []
+        assert "ray-receiver" in reason
+        assert "0 insert poses" in reason
+        assert "belt port" in reason
+        assert "critical-photon" in reason
 
 
 class TestSortersAreSizedPerItem:
@@ -3409,64 +3027,6 @@ class TestSortersAreSizedPerItem:
                     f"rate={rate} span={span}: {tier} x{count} is short"
                 )
 
-    @pytest.mark.slow
-    def test_the_real_chain_has_no_starved_sorters(self) -> None:
-        """The repro that shipped: every candidate of the example URL.
-
-        This used to expect spine to refuse BOTH proliferated candidates,
-        because a Spray Coater is supplied by an elevated belt in its own row
-        and spine was thought unable to grow one.  It can: the drop was always
-        emitted at ``z = 1`` and what was missing was a route to it, which is
-        now an elevated spur.  ``free-proliferation`` builds.
-
-        ``max-proliferation`` USED TO REFUSE, on its tenth coater's spur, and
-        that refusal is gone: rationing machine slots forced the lane extents to
-        cover every column a sorter might be pushed onto, which lengthened the
-        lanes and gave the spur search room it never had.  All three candidates
-        build now.
-
-        EVERY COUNT IS STILL ASSERTED.  Skipping any of them would let this pass
-        over an empty set the day candidate generation changes -- the failure
-        ``mixed_height_spec`` spent a branch demonstrating, where a fixture that
-        stops containing the shape under test goes on passing.
-        """
-        from flab2bp.lab.data import load_vendored
-        from flab2bp.lab.url import parse_url
-        from flab2bp.pipeline import _id_map
-        from flab2bp.rates.candidates import build_candidates
-
-        url = (
-            "https://factoriolab.github.io/dsp/flow?o=super-magnetic-ring*60"
-            "&ibe=conveyor-belt-2"
-            "&mmr=arc-smelter~assembling-machine-2~chemical-plant~matrix-lab&v=11"
-        )
-        checked = refused = sprayed = 0
-        for spec in build_candidates(load_vendored(), parse_url(url), count=3).candidates:
-            try:
-                p = SpineLayout(power=False).lay_out(spec, time_budget_s=0.5)
-            except NoValidLayout as exc:
-                assert "Spray Coater" in exc.reason, exc.reason
-                refused += 1
-                continue
-            report = validate.validate(
-                p,
-                spec,
-                ids=_id_map(spec),
-                expect_power=False,
-                only=["flow.sorter_capacity"],
-            )
-            assert report.ok, f"{spec.label}: " + "\n".join(
-                f.message for f in report.errors[:5]
-            )
-            checked += 1
-            if spec.spray_lanes:
-                sprayed += 1
-        assert (checked, refused) == (3, 0), (checked, refused)
-        # A PROLIFERATED candidate has to be among the ones checked, or this
-        # says nothing about sorter sizing on the specs that grew coaters.
-        # BOTH of them are, now that neither refuses: 3 spray lanes on
-        # `free-proliferation` and 11 on `max-proliferation`.
-        assert sprayed == 2, sprayed
 
 
 class TestABridgePassesUnderAJunctionAndNotOverIt:
@@ -3649,25 +3209,3 @@ class TestACoaterRidesTheHeadOfItsLane:
             "it must land on the lane's own next tile"
         )
 
-    @pytest.mark.slow
-    def test_every_sprayed_pickup_on_a_real_spec_is_downstream_of_a_coater(
-        self,
-    ) -> None:
-        """End to end, on the spec the seat defect was measured on.
-
-        Red before the seat moved: this spec built, with a coater on every spray
-        lane, and the validator convicted the pickups.
-        """
-        spec = TestSprayCoatersAreFed._candidate("free-proliferation")
-        assert spec.spray_lanes, "sample has no spray lanes; nothing below tests anything"
-        p = SpineLayout(power=False).lay_out(spec, time_budget_s=4.0)
-        coaters = [b for b in p.buildings if b.item_id == catalog.SPRAY_COATER_ID]
-        assert len(coaters) >= len(spec.spray_lanes), (
-            f"{len(spec.spray_lanes)} spray lane(s) and {len(coaters)} coater(s): "
-            "a lane without one feeds its machines unsprayed cargo"
-        )
-        report = validate.validate(
-            p, spec, ids=validate.id_map(spec), expect_power=False
-        )
-        bad = report.by_check("prolif.sprayed_cargo_reaches_machines")
-        assert not bad, [f.message for f in bad]

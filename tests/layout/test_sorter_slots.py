@@ -707,7 +707,7 @@ def _on_sphere(tile: tuple[float, float], off: tuple[float, float]) -> tuple[flo
     )
 
 
-def _placed(bs: Sequence[BlueprintBuilding]) -> list[PlacedBuilding]:
+def _placed_blueprint(bs: Sequence[BlueprintBuilding]) -> list[PlacedBuilding]:
     """A decoded blueprint as PlacedBuildings, index-aligned so links resolve."""
     out = []
     for b in bs:
@@ -739,7 +739,7 @@ def _answer_key() -> list[tuple[PlacedBuilding, BlueprintBuilding, list[PlacedBu
     """Our 38 sorters paired with the 33 the game built, matched by POSITION."""
     ours = decode(OURS.read_text(encoding="utf-8")).buildings
     built = decode(BUILT.read_text(encoding="utf-8")).buildings
-    placed = _placed(ours)
+    placed = _placed_blueprint(ours)
     mine = [b for b in ours if cat.is_sorter(b.item_id)]
     theirs = [b for b in built if cat.is_sorter(b.item_id)]
     scored = []

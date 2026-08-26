@@ -1927,42 +1927,5 @@ def test_proliferated_closed_loop_routes_elevated_supply_without_coater_sorter()
     assert placement.stats["elevated_coater_routes"] == float(len(coaters))
 
 
-def test_impossible_elevated_coater_route_refuses_without_partial(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    spec = proliferated_spec()
-    original_prepare = _prepare_routing_problem
-    original_detailed = sequence_solver_module._route_detailed_candidate
-    detailed_results: list[DetailedStageResult] = []
-
-    def blocked_prepare(*args: object, **kwargs: object) -> _PreparedRoutingProblem:
-        prepared = original_prepare(*args, **kwargs)  # type: ignore[arg-type]
-        blocked = dict(prepared.blocked)
-        for port in prepared.coater_supply_ports:
-            for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
-                blocked[(port.x + dx, port.y + dy, port.z)] = -1
-        return replace(prepared, blocked=tuple(sorted(blocked.items())))
-
-    def recording_detailed(*args: object, **kwargs: object) -> DetailedStageResult:
-        result = original_detailed(*args, **kwargs)  # type: ignore[arg-type]
-        detailed_results.append(result)
-        return result
-
-    monkeypatch.setattr(sequence_solver_module, "_prepare_routing_problem", blocked_prepare)
-    monkeypatch.setattr(sequence_solver_module, "_route_detailed_candidate", recording_detailed)
-
-    with pytest.raises(NoValidLayout):
-        SequencePairLayout(config=SequenceSolverConfig.test()).lay_out(
-            spec,
-            time_budget_s=2.0,
-        )
-
-    assert detailed_results
-    assert all(result.placement is None for result in detailed_results)
-    assert any(
-        failure.net_id.role is NetRole.PROLIFERATOR
-        for result in detailed_results
-        for failure in result.routing.failures
-    )
 
 

@@ -1116,15 +1116,16 @@ def _altitude_range(ctx: Context) -> Iterable[Finding]:
 def _altitude_step(ctx: Context) -> Iterable[Finding]:
     """A belt's slope may not exceed what the game allows.
 
-    This is the game's own rule, from ``BuildTool_Path``::
+    This is the game's own blueprint-paste rule::
 
-        num25 = Mathf.Abs(Maths.SphericalSlopeRatio(a, b));
-        if (!history.beltVerticalConstruction && num25 > 0.8f)
-            buildPreview2.condition = EBuildCondition.TooSteep;
+        if (!history.beltVerticalConstruction
+            && Abs(Dot(lpos.normalized, (output.lpos - lpos).normalized)) > 0.6f)
+            condition = EBuildCondition.TooSteep;
 
-    ``SphericalSlopeRatio`` is ``(|b| - |a|) / horizontal distance`` -- WORLD
-    rise over run -- and blueprint z is ``3/4`` of world height, so a link's
-    slope is ``(dz / BELT_Z_PER_WORLD_UNIT) / dxy``.
+    The dot is the radial component of the unit link vector: ``sin(theta)``.
+    The accepted ``sin(theta) <= 3/5`` is exactly ``tan(theta) <= 3/4``.
+    Blueprint z is ``3/4`` of world height, so callers convert the link's rise
+    before asking :func:`catalog.belt_slope_allowed`.
 
     Three earlier versions of this check were all wrong, in instructive ways:
 
@@ -1141,7 +1142,6 @@ def _altitude_step(ctx: Context) -> Iterable[Finding]:
     is declared per run alongside the height ceiling, never assumed.
     """
     bs = ctx.placement.buildings
-    limit = cat.MAX_BELT_SLOPE
     for i, b in ctx.of_kind(Kind.BELT):
         o = b.output_obj
         if o is None or not (0 <= o < len(bs)) or ctx.kinds[o] is not Kind.BELT:
@@ -1152,33 +1152,35 @@ def _altitude_step(ctx: Context) -> Iterable[Finding]:
             continue
         dxy = abs(nxt.x - b.x) + abs(nxt.y - b.y)
         world_rise = abs(dz) / cat.BELT_Z_PER_WORLD_UNIT
+        if cat.belt_slope_allowed(
+            world_rise,
+            dxy,
+            unlocked=ctx.belt_vertical_construction,
+        ):
+            continue
         if dxy == 0:
-            if not ctx.belt_vertical_construction:
-                yield Finding(
-                    "geom.altitude_step",
-                    Severity.ERROR,
-                    f"belt {i} rises {dz} to belt {o} without moving, which is "
-                    f"an infinite slope; only the beltVerticalConstruction "
-                    f"unlock permits that (pass --belt-vertical-construction "
-                    f"if this save has it)",
-                    (i, o),
-                    {"dz": dz, "dxy": dxy},
-                )
-            continue
-        if ctx.belt_vertical_construction:
-            continue
-        slope = world_rise / dxy
-        if slope > limit:
             yield Finding(
                 "geom.altitude_step",
                 Severity.ERROR,
-                f"belt {i} climbs {dz} to belt {o} across {dxy} tile(s): a "
-                f"world slope of {float(slope):.3f}, over the {float(limit)} "
-                f"the game allows without the beltVerticalConstruction unlock "
-                f"(TooSteep)",
+                f"belt {i} rises {dz} to belt {o} without moving, which is "
+                f"an infinite slope; only the beltVerticalConstruction "
+                f"unlock permits that (pass --belt-vertical-construction "
+                f"if this save has it)",
                 (i, o),
-                {"dz": dz, "dxy": dxy, "slope": float(slope)},
+                {"dz": dz, "dxy": dxy},
             )
+            continue
+        slope = world_rise / dxy
+        yield Finding(
+            "geom.altitude_step",
+            Severity.ERROR,
+            f"belt {i} climbs {dz} to belt {o} across {dxy} tile(s): a "
+            f"world slope of {float(slope):.3f}, over the "
+            f"{float(cat.MAX_BELT_SLOPE)} the game allows without the "
+            f"beltVerticalConstruction unlock (TooSteep)",
+            (i, o),
+            {"dz": dz, "dxy": dxy, "slope": float(slope)},
+        )
 
 
 @check("geom.bounds")
@@ -4305,10 +4307,11 @@ def _sprayed_cargo_reaches_machines(ctx: Context) -> Iterable[Finding]:
     simply misses its rate: the same silent class as a coater at the tail of its
     own lane and as two sorters on one machine slot, both of which shipped.
 
-    So the question is asked from the MACHINE's end, which is where the
-    correctness lives.  For each proliferated group and each of its ingredients
-    that ``spray_lanes`` names, every belt a sorter feeds that machine from must
-    be downstream of a coater -- :func:`_unsprayed_belts` decides which are not.
+    So the question is asked from the MACHINE's end, which is where correctness
+    lives.  A proliferated group must draw each sprayed ingredient downstream
+    of a coater.  For an item in ``lanes_requiring_split``, an unproliferated
+    group must draw upstream of every coater; sharing the sprayed branch would
+    silently over-produce it.
 
     ``prolif.coaters_are_supplied`` cannot answer this and never could.  It asks
     whether proliferator reaches the coater; it says nothing about whether the
@@ -4342,10 +4345,14 @@ def _sprayed_cargo_reaches_machines(ctx: Context) -> Iterable[Finding]:
     unsprayed: dict[str, set[int]] = {}
     for m, _b in ctx.of_kind(Kind.MACHINE):
         g = ctx.group_for(m)
-        if g is None or not g.is_proliferated:
+        if g is None:
             continue
         for item in g.inputs_per_machine:
-            if item not in spec.spray_lanes:
+            requires_spray = g.is_proliferated and item in spec.spray_lanes
+            forbids_spray = (
+                not g.is_proliferated and item in spec.lanes_requiring_split
+            )
+            if not requires_spray and not forbids_spray:
                 continue
             # An unresolvable sorter is INCLUDED, not skipped.  "I could not
             # tell what this one carries" is the answer a validator may never
@@ -4357,20 +4364,33 @@ def _sprayed_cargo_reaches_machines(ctx: Context) -> Iterable[Finding]:
             ]
             if not candidates:
                 continue  # `machine.inputs_supplied` owns the missing-feed case
-            bad = unsprayed.get(item)
-            if bad is None:
-                bad = unsprayed[item] = _unsprayed_belts(ctx, item)
+            dirty = unsprayed.get(item)
+            if dirty is None:
+                dirty = unsprayed[item] = _unsprayed_belts(ctx, item)
             for i, src in candidates:
-                if src not in bad:
+                wrong_side = src in dirty if requires_spray else src not in dirty
+                if not wrong_side:
                     continue
+                if requires_spray:
+                    message = (
+                        f"sorter {i} feeds machine {m} with {item}, which "
+                        f"{ctx.recipe_of(m)} is proliferated on, from belt {src} at "
+                        f"({bs[src].x}, {bs[src].y}) -- and that belt is reachable "
+                        f"by {item} that has not passed a Spray Coater. The build "
+                        "would paste, run, and quietly miss its rate"
+                    )
+                else:
+                    message = (
+                        f"sorter {i} feeds unproliferated machine {m} with {item} "
+                        f"from belt {src} at ({bs[src].x}, {bs[src].y}) after it "
+                        "passed a Spray Coater. This item requires physically split "
+                        "sprayed and unsprayed lanes; sharing this branch would "
+                        "silently over-produce"
+                    )
                 yield Finding(
                     "prolif.sprayed_cargo_reaches_machines",
                     Severity.ERROR,
-                    f"sorter {i} feeds machine {m} with {item}, which "
-                    f"{ctx.recipe_of(m)} is proliferated on, from belt {src} at "
-                    f"({bs[src].x}, {bs[src].y}) -- and that belt is reachable by "
-                    f"{item} that has not passed a Spray Coater. The build would "
-                    f"paste, run, and quietly miss its rate",
+                    message,
                     (i, m, src),
                     {"item": item, "machine": m, "belt": src},
                 )

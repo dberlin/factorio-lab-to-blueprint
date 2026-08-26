@@ -4314,8 +4314,8 @@ def _addon_area_step(yaw: float) -> tuple[int, int]:
     Read off ``addonAreaPoses`` area 1 rather than written down, so a yaw this
     module did not anticipate cannot silently aim the drop at the wrong tile.
     """
-    adx, ady, _adz = catalog.building(CONSTANTS.spray_item_id).addon_areas[1]
-    wx, wy = sorter_slots.to_world((adx, ady), yaw)
+    pose = catalog.addon_supply_pose(CONSTANTS.spray_item_id, area=1)
+    wx, wy = sorter_slots.to_world((pose.dx, pose.dy), yaw)
     return round(wx), round(wy)
 
 
@@ -4540,14 +4540,14 @@ class _SpurField:
                 # moved to their lanes' heads,
                 # `electromagnetic-matrix/max-proliferation` emitted three and
                 # refused on exactly this check.
-                for adx, ady, adz in info.addon_areas:
-                    if adz <= 0:
+                for supply_pose in info.addon_areas:
+                    if supply_pose.dz <= 0:
                         continue
-                    wx, wy = sorter_slots.to_world((adx, ady), b.yaw)
-                    tile = (b.x + round(wx), b.y + round(wy))
-                    self.attached.setdefault(tile, set()).add(
-                        b.z + Fraction(round(adz))
+                    wx, wy = sorter_slots.to_world(
+                        (supply_pose.dx, supply_pose.dy), b.yaw
                     )
+                    tile = (b.x + round(wx), b.y + round(wy))
+                    self.attached.setdefault(tile, set()).add(b.z + supply_pose.dz)
             floor = _belt_floor_over(b)
             for tile in tiles:
                 self.taken.setdefault(tile, set()).add(b.z)
@@ -4644,8 +4644,8 @@ def _coater_spur(
     per candidate source.
 
     All of it in :class:`~fractions.Fraction`, because a climb of ``1/2`` a
-    level per tile against a ``4/5`` slope limit is exactly the arithmetic a
-    float rounds into a blueprint the game rejects at paste time.
+    level per tile against the paste path's ``3/4`` slope limit is exactly the
+    arithmetic a float rounds into a blueprint the game rejects at paste time.
     """
     xs = [b.x for b in buildings]
     ys = [b.y for b in buildings]
@@ -4671,7 +4671,16 @@ def _coater_spur(
                 return (level,)
             lo = fld.lowest(cell[0], cell[1], level, ceiling)
             return () if lo is None else (lo,)
-        reach = [nz for nz in (z, z + quantum, z - quantum) if _GROUND <= nz <= ceiling]
+        reach = [
+            nz
+            for nz in (z, z + quantum, z - quantum)
+            if _GROUND <= nz <= ceiling
+            and catalog.belt_slope_allowed(
+                abs(nz - z) / catalog.BELT_Z_PER_WORLD_UNIT,
+                1,
+                unlocked=belt_vertical_construction,
+            )
+        ]
         if cell == drop:
             return tuple(nz for nz in reach if nz == level)
         return tuple(
@@ -5141,15 +5150,32 @@ def _tower_keep_out(buildings: list[PlacedBuilding]) -> set[tuple[int, int]]:
             # a tower: two of the three we can emit are mode-driven MACHINES.
             peer = info.power_node
             if peer not in spacing:
-                # BOTH directions.  The gate `num37` is read off the building
-                # being PLACED, so a Wind Turbine scans 10.5 world units for a
-                # tower while the tower scans 3.5 for it; the union is the set of
-                # cells at which either preview would be reddened.
+                # The integer projection supplies the finite search radius.  A
+                # building's blueprint anchor is its lower-left tile, though,
+                # while PowerTooClose measures its centre.  Projecting offsets
+                # from ``b.x, b.y`` displaced every 3x3+ power node's halo.
                 spacing[peer] = _spacing_offsets(tower_node, peer) | _spacing_offsets(
                     peer, tower_node
                 )
-            for dx, dy in spacing[peer]:
-                out.add((b.x + dx, b.y + dy))
+            offsets = spacing[peer]
+            radius = max(
+                (max(abs(dx), abs(dy)) for dx, dy in offsets),
+                default=0,
+            ) + 1
+            for hx in range(
+                math.floor(centre_x - radius), math.ceil(centre_x + radius) + 1
+            ):
+                for hy in range(
+                    math.floor(centre_y - radius), math.ceil(centre_y + radius) + 1
+                ):
+                    gap = rules.world_gap(hx - centre_x, hy - centre_y)
+                    if (
+                        rules.power_node_condition(tower_node, peer, gap * gap)
+                        is not None
+                        or rules.power_node_condition(peer, tower_node, gap * gap)
+                        is not None
+                    ):
+                        out.add((hx, hy))
     return out
 
 
@@ -5439,6 +5465,17 @@ class SpineLayout:
                 spec_label=spec.label,
                 budget_s=time_budget_s,
             )
+        if spec.lanes_requiring_split:
+            lanes = ", ".join(sorted(spec.lanes_requiring_split))
+            raise NoValidLayout(
+                "spine cannot preserve mixed proliferation on shared corridor "
+                f"lane(s) {lanes}: the same item feeds proliferated and "
+                "unproliferated consumers, so those consumers require physically "
+                "separate lanes",
+                spec_label=spec.label,
+                budget_s=time_budget_s,
+            )
+
 
         deadline = time.monotonic() + max(time_budget_s, RETRY_BUDGET_S)
         budgets = [time_budget_s]

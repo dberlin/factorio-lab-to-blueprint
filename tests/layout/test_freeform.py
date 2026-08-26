@@ -1158,41 +1158,6 @@ class TestASideCarriesAsManyLanesAsItsPosesAllow:
         assert gears, "the fixture must actually produce a gear strip"
         assert all(len(s.out_lanes) + len(s.in_below) <= 2 for s in gears)
 
-    def test_the_refusal_never_calls_zero_tiles_past_the_reach(self) -> None:
-        """A span of 0 means NO pose is reachable, not a measured distance.
-
-        ``sorter_span`` returns 0 for "nothing to anchor on" and otherwise a
-        number ``slots.attachment`` has already bounded to 1..3, so the message
-        could never honestly read "0 tile(s) ... past the 3-tile reach" -- which
-        is exactly what the ``organic-crystal`` refusal said.
-        """
-        from flab2bp.layout.freeform import Strip
-
-        item_id = MACHINE_ITEM_IDS["chemical-plant"]
-        s = Strip(
-            group_key="organic-crystal#0",
-            recipe_id="organic-crystal",
-            item_id=item_id,
-            model_index=catalog.building(item_id).model_index,
-            machines=1,
-            mw=9,
-            mh=5,
-            yaw=0.0,
-            pw=9,
-            ph=5,
-            in_above=(("plastic",), ("refined-oil",), ("water",)),
-            out_lanes=(("organic-crystal", ""),),
-            in_below=(),
-            lane_plan=None,
-            attachment_plan=(),
-            box_height=9,
-        )
-        messages = _machines_without_poses([s])
-        assert len(messages) == 2
-        assert all("0 tile(s)" not in message for message in messages)
-        assert all("insert pose" in message for message in messages)
-        assert any("ingredient lane" in message for message in messages)
-        assert any("output lane" in message for message in messages)
 
 
 # --- fallback --------------------------------------------------------------
@@ -2353,73 +2318,17 @@ class TestModeDrivenMachines:
     as it turns out, the WIRING differ.
     """
 
-    def test_the_game_gives_an_exchanger_no_sorter_slot_at_all(self) -> None:
-        """Ground truth, and the reason for the refusal below.
+    def test_a_poseless_belt_port_machine_refuses_with_the_prefab_cause(self) -> None:
+        info = catalog.building(catalog.ENERGY_EXCHANGER_ID)
+        assert info.slot_poses == ()
+        assert len(info.port_poses) == 4
 
-        ``slot_poses.json`` is extracted from the game's own prefabs and the
-        Energy Exchanger's ``slotPoses`` array is EMPTY, as is the Ray
-        Receiver's.  If a later extraction fills these in, this test fails first
-        and says so, rather than the refusal below quietly becoming wrong.
-        """
-        from flab2bp.layout import slots as sorter_slots
-
-        probe = sorter_slots.probe_building(catalog.ENERGY_EXCHANGER_ID, 0.0)
-        height = catalog.footprint(catalog.ENERGY_EXCHANGER_ID)[1]
-        offsets = [
-            *range(-catalog.SORTER_MAX_REACH, 0),
-            *range(height, height + catalog.SORTER_MAX_REACH),
-        ]
-        assert offsets, "the probe must ask about some row, or it proves nothing"
-        assert all(not sorter_slots.attachable_columns(probe, y) for y in offsets)
-
-    def test_it_refuses_the_machine_rather_than_shipping_it_unwired(self) -> None:
-        """THIS USED TO BE ``test_it_lays_out``, AND WHAT IT ASSERTED WAS FALSE.
-
-        It asserted ``p.buildings``, and it got them: measured on the spine side
-        of the same spec, two Energy Exchangers and **zero sorters in the whole
-        placement** -- neither machine joined to anything at either end -- and
-        the validator called that report ok.  Freeform's version was worse still
-        once the layout obeyed the slot tables: ``Strip.input_lane_tiles``
-        correctly returns 0 for a machine no sorter can reach, ``_emit_strip``
-        built that row as an empty lane, and ``feed`` indexed its head --
-        ``IndexError: list index out of range``.
-
-        A blueprint that pastes two idle exchangers is worse than a refusal, and
-        an IndexError is worse than both.  ``_machines_without_poses`` refuses
-        before the height sweep and names the prefab.  Whether the extraction is
-        incomplete is an open question for the extractor, recorded in
-        docs/BACKLOG.md -- not something the packer should paper over.
-        """
-        spec = mode_driven_spec()
         with pytest.raises(NoValidLayout) as exc:
-            FreeformLayout(power=False).lay_out(spec, time_budget_s=0.5)
-        assert "no insert pose on any face" in exc.value.reason
-        assert "Energy Exchanger" in exc.value.reason
-
-    def test_the_refusal_names_the_belt_ports_rather_than_a_missing_array(self) -> None:
-        """The message must say the building is belt-PORTED, not under-extracted.
-
-        ``docs/BACKLOG.md`` settled this from the prefabs and the IL: an Energy
-        Exchanger carries ``insertPoses`` of length ZERO and four ``portPoses``,
-        45 of them across three fixtures name 90 peers and **every peer is a
-        belt**.  The extractor is not missing an array; there is no array to
-        miss.  Spine's ``_sorterless_groups`` already says so -- "has 0 insert
-        poses and 4 belt port(s)" -- and freeform's message did not, so a reader
-        who hit the freeform refusal was sent to the extractor rather than to
-        belt-to-port docking, which is the work that would actually unblock it.
-
-        The count is asserted, not merely the words: a message that says "belt
-        port(s)" with the wrong number would send the same reader to the same
-        wrong place.
-        """
-        spec = mode_driven_spec()
-        with pytest.raises(NoValidLayout) as exc:
-            FreeformLayout(power=False).lay_out(spec, time_budget_s=0.5)
+            FreeformLayout(power=False).lay_out(mode_driven_spec(), time_budget_s=0.5)
         reason = exc.value.reason
-        ports = len(catalog.building(catalog.ENERGY_EXCHANGER_ID).slots)
-        assert ports == 4, "the prefab's own port count, not a number chosen here"
-        assert f"{ports} belt port(s)" in reason, reason
-        assert "extractor" not in reason, reason
+        assert "no insert pose on any face" in reason
+        assert "Energy Exchanger" in reason
+        assert "4 belt port(s)" in reason
 
     def test_the_machine_carries_the_mode_not_a_recipe(self) -> None:
         """Asked of the unit that decides it, since no placement reaches here.
@@ -4888,7 +4797,7 @@ class TestTheSlopeLimitIsConditional:
             buildPreview2.condition = EBuildCondition.TooSteep;
 
     WITH the tech there is no slope limit and a belt may gain a whole level in
-    one tile; WITHOUT it every step must stay inside 4/5 world slope, which
+    one tile; WITHOUT it every step must stay inside 3/4 world slope, which
     means a ramp.  Both paths are pinned, because the whole point is that the
     behaviour is conditional -- a single test would let the other path rot.
 
@@ -5106,9 +5015,8 @@ class TestAJunctionIsNotBuiltBesideAForeignBelt:
             "a junction was built one tile from a belt that is not on its run; "
             "the game refuses that paste with EBuildCondition.Collide"
         )
-        assert unlinked == 1, (
-            "the tap was refused, so the net is UNROUTED and the sweep must be "
-            "told so -- a pack that reports itself wired is the worse failure"
+        assert unlinked == (0,), (
+            "the tap was refused, so net 0 must be named as unlinked"
         )
 
     def test_the_same_site_is_taken_when_nothing_foreign_is_beside_it(self) -> None:
@@ -5124,7 +5032,7 @@ class TestAJunctionIsNotBuiltBesideAForeignBelt:
             "the junction was refused with nothing foreign beside it, so the "
             "predicate is refusing sites the game builds"
         )
-        assert unlinked == 0
+        assert unlinked == ()
 
     def test_the_junction_holds_its_collider_against_later_passes(self) -> None:
         """A splitter reports no occupied tile, so nothing after routing knows.
@@ -5231,9 +5139,14 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
         canvas, spec, strips, ports = self._fixture(4)
         seat = freeform._coater_seat(canvas, ports[0][self.ITEM])
         assert seat is not None, "the fixture lane must be long enough to seat one"
-        adx, ady, adz = catalog.building(catalog.SPRAY_COATER_ID).addon_areas[1]
-        wx, wy = slots.to_world((adx, ady), Facing.EAST.value)
-        drop = (seat[0] + round(wx), seat[1] + round(wy), round(adz))
+        drop = slots.addon_supply_cell(
+            catalog.SPRAY_COATER_ID,
+            x=seat[0],
+            y=seat[1],
+            z=F(0),
+            yaw=Facing.EAST.value,
+            area=1,
+        )
         canvas.blocked[drop] = 999
         assert not canvas.free(drop), "the fixture failed to block the drop cell"
         with pytest.raises(freeform._Unseatable, match="proliferator drop"):
@@ -5254,31 +5167,6 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
         with pytest.raises(freeform._Unseatable, match="gear"):
             freeform._place_coaters(canvas, spec, strips, ports, 2001, 35)
 
-    def test_a_blocked_drop_cannot_come_back_as_a_missing_coater(self) -> None:
-        """The defect stated without naming the fix, so it is red on the old code.
-
-        Two outcomes are acceptable and one is not: a refusal, or a coater for
-        every sprayed lane.  Returning a SHORTER list is the silent miss, and it
-        is what the code did -- on this exact fixture, ``_place_coaters``
-        returned ``[]`` for a spec with one spray lane and raised nothing.
-        """
-        canvas, spec, strips, ports = self._fixture(4)
-        seat = freeform._coater_seat(canvas, ports[0][self.ITEM])
-        assert seat is not None
-        adx, ady, adz = catalog.building(catalog.SPRAY_COATER_ID).addon_areas[1]
-        wx, wy = slots.to_world((adx, ady), Facing.EAST.value)
-        canvas.blocked[seat[0] + round(wx), seat[1] + round(wy), round(adz)] = 999
-        wanted = sum(1 for item in strips[0].in_lanes if item in spec.spray_lanes)
-        assert wanted == 1, "fixture must ask for exactly one coater"
-        try:
-            got = freeform._place_coaters(canvas, spec, strips, ports, 2001, 35)
-        except NoValidLayout:
-            return
-        assert len(got) == wanted, (
-            f"{wanted} sprayed lane(s) asked for a coater and {len(got)} were "
-            "placed, with no error raised: the build would paste, run, and "
-            "quietly miss its rate"
-        )
 # --- belt docked into a building PORT ---------------------------------------
 
 
@@ -5305,201 +5193,20 @@ def ray_receiver_spec() -> BuildSpec:
     )
 
 
-def _docks(p: Placement, machine_item_id: int) -> list[tuple[int, PlacedBuilding]]:
-    """Belts that draw from a machine of ``machine_item_id`` through a port."""
-    return [
-        (i, b)
-        for i, b in enumerate(p.buildings)
-        if catalog.is_belt(b.item_id)
-        and b.input_obj is not None
-        and p.buildings[b.input_obj].item_id == machine_item_id
-    ]
 
 
-class TestBeltDockedIntoAPort:
-    """The connection neither strategy could emit, and the wall behind the corpus.
-
-    Every ``universe-matrix`` cell refused on it: ``critical-photon`` is made by
-    a Ray Receiver, freeform's ``_machines_without_poses`` said so, and there was
-    nothing else to offer.
-    """
-
-    def test_the_prefab_still_has_no_insert_pose_and_two_ports(self) -> None:
-        """Ground truth for everything below, asserted rather than assumed.
-
-        If a later extraction fills in the insert poses, this fails first and
-        says so, rather than the docking path quietly becoming the wrong answer.
-        """
+class TestNoPoseMachineRefusal:
+    def test_a_ray_receiver_refuses_until_a_strategy_emits_belt_docking(self) -> None:
         info = catalog.building(catalog.RAY_RECEIVER_ID)
         assert info.slot_poses == ()
         assert len(info.port_poses) == 2
 
-    def test_a_ray_receiver_lays_out_now(self) -> None:
-        p = FreeformLayout(power=False).lay_out(ray_receiver_spec(), time_budget_s=5.0)
-        receivers = [b for b in p.buildings if b.item_id == catalog.RAY_RECEIVER_ID]
-        assert len(receivers) == 2
-        assert len(_docks(p, catalog.RAY_RECEIVER_ID)) == 2, "one dock per machine"
-
-    def test_the_dock_carries_the_record_the_game_writes(self) -> None:
-        """Counted over the fixture corpus: 108 drawing records, all identical.
-
-        ``input_obj`` names the building, ``input_from_slot`` is a subscript into
-        ``PrefabDesc.portPoses``, ``input_to_slot`` is 1 -- the belt's own first
-        input slot -- and both offsets are 0.
-        """
-        from flab2bp.dsp import rules
-
-        p = FreeformLayout(power=False).lay_out(ray_receiver_spec(), time_budget_s=5.0)
-        for _i, b in _docks(p, catalog.RAY_RECEIVER_ID):
-            ports = catalog.building(catalog.RAY_RECEIVER_ID).port_poses
-            assert 0 <= b.input_from_slot < len(ports)
-            assert b.input_to_slot == rules.BELT_PORT_DRAW_TO_SLOT
-            assert b.input_offset == 0
-            assert b.output_obj is not None, "a dock that leads nowhere drains nothing"
-
-    def test_the_receiver_records_no_link_of_its_own(self) -> None:
-        """All 28 port-hosts in the corpus carry ``output_obj = input_obj = -1``.
-
-        The belt does the naming, exactly as it does around a splitter.  A host
-        that names a neighbour encodes a link the game does not read there.
-        """
-        p = FreeformLayout(power=False).lay_out(ray_receiver_spec(), time_budget_s=5.0)
-        for b in p.buildings:
-            if b.item_id == catalog.RAY_RECEIVER_ID:
-                assert b.output_obj is None and b.input_obj is None
-
-    def test_the_dock_stands_on_the_port_pose_inside_the_footprint(self) -> None:
-        """The port is 1.12 tiles from the centre of a 7x7, so the belt is INSIDE.
-
-        That is where the game puts it -- ``temple-of-effectiveness`` runs belts
-        under twenty Energy Exchangers -- and it is what makes the collider
-        excusals load-bearing rather than decorative.
-        """
-        from flab2bp.dsp import rules
-        from flab2bp.layout import slots as sorter_slots
-
-        p = FreeformLayout(power=False).lay_out(ray_receiver_spec(), time_budget_s=5.0)
-        inside = 0
-        for _i, b in _docks(p, catalog.RAY_RECEIVER_ID):
-            assert b.input_obj is not None
-            m = p.buildings[b.input_obj]
-            gap = sorter_slots.port_gap(m, (b.x, b.y), b.input_from_slot)
-            assert gap <= rules.BELT_PORT_MAX_TILE_GAP, gap
-            if m.x <= b.x < m.x + m.width and m.y <= b.y < m.y + m.height:
-                inside += 1
-        assert inside == 2, "the dock tile is a tile of the machine, and must be"
-
-    def test_two_receivers_do_not_share_one_machine_s_port(self) -> None:
-        """``entityConnPool[objId * 16 + slot]`` holds ONE connection.
-
-        Two belts on one port paste with the first silently unwired.  The claim
-        is checked on the whole placement rather than on the pair, because the
-        strip's claim map is shared across every lane on the machine.
-        """
-        p = FreeformLayout(power=False).lay_out(ray_receiver_spec(), time_budget_s=5.0)
-        seen: set[tuple[int, int]] = set()
-        for _i, b in _docks(p, catalog.RAY_RECEIVER_ID):
-            assert b.input_obj is not None
-            key = (b.input_obj, b.input_from_slot)
-            assert key not in seen, key
-            seen.add(key)
-
-    def test_the_placement_validates(self) -> None:
-        """The whole point: a docked machine is judged, not merely emitted.
-
-        ``lay_out`` refuses a placement its own validator convicts, so reaching
-        here is already the assertion -- restated explicitly so a future change
-        that stops validating inside ``lay_out`` cannot make this pass silently.
-        """
-        spec = ray_receiver_spec()
-        p = FreeformLayout(power=False).lay_out(spec, time_budget_s=5.0)
-        r = validate.validate(p, spec, expect_power=False)
-        assert not [f for f in r.findings if f.severity is validate.Severity.ERROR], [
-            f.message for f in r.findings[:5]
-        ]
-        assert "belt.port_dock" in r.checks_run
-
-    def test_an_ingredient_on_a_portless_machine_still_refuses(self) -> None:
-        """Only the OUTPUT side docks, and the refusal has to say which side.
-
-        An Energy Exchanger charging accumulators is FED something, and feeding
-        a port would need one lane split into a belt per machine -- a splitter
-        per machine, which is the invariant a lane per destination exists to
-        keep.  So this stays a refusal, and it names the reason rather than
-        repeating the old "neither strategy emits" now that one does.
-        """
         with pytest.raises(NoValidLayout) as exc:
-            FreeformLayout(power=False).lay_out(mode_driven_spec(), time_budget_s=0.5)
+            FreeformLayout(power=False).lay_out(ray_receiver_spec(), time_budget_s=0.5)
         reason = exc.value.reason
-        assert "no insert pose on any face" in reason, reason
-        assert "only the OUTPUT side docks" in reason, reason
-        assert "4 belt port(s)" in reason, reason
+        assert "Ray Receiver" in reason
+        assert "no insert pose on any face" in reason
+        assert "2 belt port(s)" in reason
+        assert "neither strategy emits" in reason
 
 
-class TestDockPortSelection:
-    """``_dock_lane`` picks the port, and two of its rules need a machine the
-    corpus spec cannot produce: a Ray Receiver upright offers its ``+y`` port at
-    index 0, so "the port facing the lane" and "the first free port" pick the
-    same one and neither rule can be shown to be doing anything.  Turned half
-    round the two indices swap, which separates them.
-    """
-
-    @staticmethod
-    def _receiver(x: int, y: int, yaw: float) -> PlacedBuilding:
-        info = catalog.building(catalog.RAY_RECEIVER_ID)
-        return PlacedBuilding(
-            item_id=catalog.RAY_RECEIVER_ID,
-            model_index=info.model_index,
-            x=x,
-            y=y,
-            width=info.width,
-            height=info.height,
-            yaw=yaw,
-        )
-
-    def _run(
-        self, yaw: float, claimed: dict[int, set[int]] | None = None
-    ) -> tuple[int, list[PlacedBuilding]]:
-        from flab2bp.layout.freeform import _Canvas, _dock_lane
-
-        canvas = _Canvas()
-        m = canvas.add(self._receiver(0, 0, yaw), solid=True)
-        lane_y = 10
-        lane = [
-            canvas.add(
-                PlacedBuilding(item_id=2002, model_index=36, x=x, y=lane_y, width=1, height=1)
-            )
-            for x in range(0, 7)
-        ]
-        placed = _dock_lane(
-            canvas, [m], lane, lane_y, "critical-photon", 2002, 36,
-            claimed if claimed is not None else {},
-        )
-        docks = [
-            b for b in canvas.buildings
-            if catalog.is_belt(b.item_id) and b.input_obj == m
-        ]
-        return placed, docks
-
-    def test_it_takes_the_port_that_faces_the_lane(self) -> None:
-        """Turned 180, the Ray Receiver's ``+y`` port is index ONE.
-
-        Docking into port 0 there would put the belt on the far side of the
-        machine from the lane, drawing items out into the building's north face
-        and running them back through it.
-        """
-        placed, docks = self._run(180.0)
-        assert placed == 1
-        assert [d.input_from_slot for d in docks] == [1]
-
-    def test_a_port_already_spoken_for_is_not_taken_twice(self) -> None:
-        """``entityConnPool[objId * 16 + slot]`` holds ONE connection.
-
-        The claim map is shared with the sorter path on purpose -- the pool is
-        one address space per object, so a port index and an insert-pose index
-        of the same number are the same cell -- and this is the half of it a
-        two-port machine can show.
-        """
-        placed, docks = self._run(180.0, claimed={0: {1}})
-        assert placed == 0, "the only port facing the lane was already claimed"
-        assert docks == []

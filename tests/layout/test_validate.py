@@ -466,7 +466,7 @@ def test_geom_altitude_step_fires_on_a_full_level_across_one_tile() -> None:
     """The exact step that shipped red, refused by the game's own rule.
 
     A blueprint rise of 1 across one tile is a WORLD slope of 4/3 -- blueprint
-    z is 3/4 of world height -- against the 4/5 the game allows.  It is
+    z is 3/4 of world height -- against the 3/4 the paste allows.  It is
     `EBuildCondition.TooSteep`, and the old `dz > 1` test scored it exactly 1
     and let it pass.
     """
@@ -478,7 +478,7 @@ def test_geom_altitude_step_fires_on_a_full_level_across_one_tile() -> None:
 
 
 def test_geom_altitude_step_allows_the_ramp_we_emit() -> None:
-    """1/2 across one tile is a world slope of 2/3, inside the 4/5 limit."""
+    """1/2 across one tile is a world slope of 2/3, inside the 3/4 limit."""
     r = validate(place(belt(0, 0, 0, out=1), belt(1, 0, Fraction(1, 2))))
     assert not fired(r, "geom.altitude_step")
 
@@ -496,14 +496,14 @@ def test_geom_altitude_step_allows_a_ramp_at_any_height() -> None:
 
 
 def test_geom_altitude_step_fires_just_past_the_slope_limit() -> None:
-    """3/5 of blueprint z per tile is exactly 4/5 world; 7/10 is over it."""
+    """9/16 of blueprint z is exactly 3/4 world slope; 3/5 is over it."""
     ok = validate(
-        place(belt(0, 0, 0, out=1), belt(1, 0, Fraction(3, 5))),
+        place(belt(0, 0, 0, out=1), belt(1, 0, Fraction(9, 16))),
         belt_vertical_construction=False,
     )
     assert not fired(ok, "geom.altitude_step")
     over = validate(
-        place(belt(0, 0, 0, out=1), belt(1, 0, Fraction(7, 10))),
+        place(belt(0, 0, 0, out=1), belt(1, 0, Fraction(3, 5))),
         belt_vertical_construction=False,
     )
     assert fired(over, "geom.altitude_step")
