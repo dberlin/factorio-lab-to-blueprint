@@ -11,7 +11,7 @@ import pytest
 
 import flab2bp.layout.freeform as freeform_module
 import flab2bp.layout.sequence_solver as sequence_solver_module
-from flab2bp.dsp import catalog
+from flab2bp.dsp import catalog, rules
 from flab2bp.layout import slots, validate
 from flab2bp.layout.base import NoValidLayout, PlacedBuilding, Placement
 from flab2bp.layout.compact_seed import VariantDirectInsertTarget
@@ -20,7 +20,6 @@ from flab2bp.layout.freeform import (
     _greedy_pack,
     _nets_between,
     _prepare_routing_problem,
-    _PreparedRoutingProblem,
     plan_strips,
 )
 from flab2bp.layout.global_router import GlobalRouteResult
@@ -43,11 +42,11 @@ from flab2bp.layout.sequence_pair import (
     PlacementProblem,
     SequencePair,
     StageBoundaryUpdate,
+    TaggedAnnealIncumbent,
     apply_variant_move,
     decode_sequence_pair,
     decode_state,
     split_stage_boundary,
-    TaggedAnnealIncumbent,
 )
 from flab2bp.layout.sequence_solver import (
     DetailedStageResult,
@@ -71,7 +70,11 @@ from flab2bp.layout.strip_variants import (
     variants_for_count,
 )
 from flab2bp.spec import BuildSpec, MachineGroup
-from tests.layout.test_freeform import proliferated_spec, two_stage_spec
+from tests.layout.test_freeform import (
+    proliferated_spec,
+    ray_receiver_spec,
+    two_stage_spec,
+)
 
 Prepared = tuple[int, DecodedPlacement]
 
@@ -147,8 +150,6 @@ def _global(
         hot_regions=(),
         cancelled=cancelled,
     )
-
-
 
 
 @dataclass
@@ -263,8 +264,6 @@ def _repeat_merged_elite(monkeypatch: pytest.MonkeyPatch, count: int) -> None:
     monkeypatch.setattr(sequence_solver_module, "build_elite_archive", repeat)
 
 
-
-
 def test_absent_initial_state_keeps_exact_anneal_initial_and_mapping_is_validated() -> None:
     solver = _solver(_FakeRouting(), heights=(40,))
     for restart in solver._heights[0].restarts:
@@ -276,8 +275,6 @@ def test_absent_initial_state_keeps_exact_anneal_initial_and_mapping_is_validate
             heights=(40,),
             initial_states={60: AnnealState.initial(1, 1)},
         )
-
-
 
 
 def test_validator_rejected_compact_seed_never_escapes_and_discovery_recovers() -> None:
@@ -338,8 +335,6 @@ def test_compact_exact_incumbent_cannot_be_displaced_by_worse_discovery() -> Non
     assert result.stages[1].exact_key == (30, 1)
 
 
-
-
 def test_unseeded_solver_has_no_compact_closure() -> None:
     exact = _placement(area=20, belt_tiles=4)
     solver = _solver(
@@ -360,8 +355,6 @@ def test_unseeded_solver_has_no_compact_closure() -> None:
     assert result.stages[0].global_skip_reason is None
     assert result.stages[0].anneal_stages == 1
     assert result.stages[0].anneal_moves == 1
-
-
 
 
 def test_default_stage_limit_counts_grouped_discovery_as_one_routing_unit() -> None:
@@ -468,8 +461,6 @@ def test_quality_mode_requires_zero_overflow_and_validator_clean_exact(
     assert global_calls == 2
 
 
-
-
 @pytest.mark.parametrize(
     "quality_failure",
     (DetailedRouteStatus.STRANDED, DetailedRouteStatus.BUDGET),
@@ -520,10 +511,6 @@ def test_quality_failure_exits_and_following_stage_restores_global_feedback(
     assert restored.objective_mode is sequence_solver_module.ObjectiveMode.EXPLORATION
     assert solver._heights[0].feedback.cell_history == {(0, 0, 0): 1.0}
     assert len(fake.global_allowances) == 2
-
-
-
-
 
 
 def test_best_height_scheduling_uses_complete_exact_key_before_stable_order() -> None:
@@ -652,8 +639,6 @@ def test_best_height_fallback_order_is_stranded_overflow_narrowest_spend_then_st
     assert min(solver._heights, key=sequence_solver_module._height_priority) is first
 
 
-
-
 def test_detailed_route_retains_positive_work_when_global_spends_its_proxy_allowance() -> None:
     exact = _placement(area=20, belt_tiles=4)
     fake = _FakeRouting(
@@ -759,8 +744,6 @@ def test_validator_rejection_never_establishes_an_exact_incumbent() -> None:
     )
     with pytest.raises(NoValidLayout):
         _solver(fake, heights=(40,)).search(max_stages=1)
-
-
 
 
 def test_stage_routes_preserve_the_final_twenty_five_percent() -> None:
@@ -1024,8 +1007,6 @@ def test_deadline_without_an_exact_incumbent_raises() -> None:
         _solver(_FakeRouting(), deadline_reached=lambda: True).search(max_stages=5)
 
 
-
-
 def _two_stage_variant_problem() -> tuple[
     BuildSpec,
     list[freeform_module.Strip],
@@ -1140,8 +1121,6 @@ def test_compact_direct_eligibility_contains_exactly_authoritative_variant_targe
     assert actual
     assert set(actual) == expected
     assert len(actual) == len(expected)
-
-
 
 
 def test_selected_strips_rebuild_from_child_instance_ranges() -> None:
@@ -1320,8 +1299,6 @@ def test_production_stage_boundary_rebuilds_preparation_for_children() -> None:
         )
         for instance in alternate.problem.instance_ids
     )
-
-
 
 
 def test_feedback_stagnation_rebuilds_the_next_fixed_cardinality_stage() -> None:
@@ -1682,8 +1659,6 @@ def test_fixed_size_problem_skips_pose_boundary_transforms_without_metadata() ->
     assert solver._heights[0].problem == problem
 
 
-
-
 @pytest.mark.parametrize("power", [False, True])
 @pytest.mark.parametrize("belt_vertical_construction", [False, True])
 def test_sequence_backend_returns_only_certified_placements(
@@ -1916,8 +1891,6 @@ def test_production_observability_preserves_categories_and_all_grouped_work() ->
     assert result.exact_candidate_key == exact_stage.candidate_key
 
 
-
-
 def _single_real_machine_spec(
     *,
     recipe: str,
@@ -2058,5 +2031,119 @@ def test_proliferated_closed_loop_routes_elevated_supply_without_coater_sorter()
     assert placement.stats["elevated_coater_routes"] == float(len(coaters))
 
 
+def test_port_docked_output_has_stable_sequence_variant_identity() -> None:
+    spec = ray_receiver_spec()
+    first = generate_strip_families(spec)
+    second = generate_strip_families(spec)
+    receiver = next(family for family in first if family.machine_item_id == catalog.RAY_RECEIVER_ID)
+
+    assert receiver.variants
+    assert tuple(variant.variant_id for variant in receiver.variants) == tuple(
+        variant.variant_id
+        for family in second
+        if family.family_id == receiver.family_id
+        for variant in family.variants
+    )
+    for variant in receiver.variants:
+        assert variant.attachment_plan == ()
+        assert len(variant.port_dock_plan) == 1
+        dock = variant.port_dock_plan[0]
+        assert dock.lane == receiver.output_lanes[0]
+        assert dock.lane_y == variant.lane_plan.row_for(dock.lane.lane_id)
+        assert dock.facing.delta[1] > 0
+        assert dock.cell[1] < dock.lane_y
+        assert variant.variant_id.port_docks == (dock.identity,)
 
 
+def test_selected_port_variant_reaches_shared_prepared_docking_geometry() -> None:
+    spec = ray_receiver_spec()
+    strips = plan_strips(spec)
+    instance_ids, variant_tables = _variant_search_inputs(spec, strips, strip_len=6)
+    problem = PlacementProblem(
+        sizes=tuple(_box(strip) for strip in strips),
+        nets=tuple(_nets_between(strips)),
+        outline_height=sum(_box(strip)[1] for strip in strips),
+        area_lower_bound=sum(width * height for width, height in map(_box, strips)),
+        instance_ids=instance_ids,
+        variant_tables=variant_tables,
+    )
+    selected = _selected_strips(strips, problem, (0,) * problem.size)
+    receiver_index, receiver = next(
+        (index, strip)
+        for index, strip in enumerate(selected)
+        if strip.item_id == catalog.RAY_RECEIVER_ID
+    )
+    pack = _greedy_pack(selected, problem.outline_height)
+
+    prepared = _prepare_routing_problem(spec, selected, pack, power=False)
+    docks = [
+        building
+        for building in prepared.building_templates
+        if catalog.is_belt(building.item_id)
+        and building.input_obj is not None
+        and prepared.building_templates[building.input_obj].item_id == catalog.RAY_RECEIVER_ID
+    ]
+
+    assert receiver.port_dock_plan == problem.variant(receiver_index, 0).port_dock_plan
+    assert (
+        _selected_direct_targets(
+            spec,
+            strips,
+            problem,
+            (0,) * problem.size,
+        )
+        == ()
+    )
+    assert len(docks) == receiver.machines
+    assert all(dock.input_to_slot == rules.BELT_PORT_DRAW_TO_SLOT for dock in docks)
+    assert {dock.input_from_slot for dock in docks} == {receiver.port_dock_plan[0].port}
+
+
+def test_sequence_preparation_consumes_elevated_machine_and_tesla_junction_bans() -> None:
+    run = _production_run(
+        two_stage_spec(),
+        time_budget_s=2.0,
+        power=True,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+    )
+    height = run.heights[0]
+    problem = run.solver._heights[0].problem
+    candidate = run.solver.adapters.prepare(
+        height,
+        decode_state(
+            problem,
+            AnnealState.initial(problem.size, run.solver.config.seed),
+        ),
+    )
+
+    assert candidate.prepared is not None
+    prepared = candidate.prepared
+    workspace = prepared.new_workspace()
+    assert prepared.junction_ban
+    assert any(level > 0 for _x, _y, level in prepared.junction_ban)
+    assert workspace.canvas.junction_geometry_prepared
+    assert workspace.canvas.junction_ban == set(prepared.junction_ban)
+    assert prepared.junction_ban == freeform_module._prepared_junction_ban(
+        prepared.building_templates,
+        prepared.power_sites,
+    )
+
+
+def test_ray_receiver_sequence_closed_loop_routes_and_validates_exactly() -> None:
+    spec = ray_receiver_spec()
+
+    placement = SequencePairLayout(config=SequenceSolverConfig.test()).lay_out(
+        spec,
+        time_budget_s=2.0,
+    )
+    docks = [
+        building
+        for building in placement.buildings
+        if catalog.is_belt(building.item_id)
+        and building.input_obj is not None
+        and placement.buildings[building.input_obj].item_id == catalog.RAY_RECEIVER_ID
+    ]
+
+    assert len(docks) == 2
+    assert not validate.certify(placement, spec, expect_power=False).errors

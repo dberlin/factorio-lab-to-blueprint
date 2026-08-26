@@ -15,6 +15,7 @@ from typing import Literal
 
 from flab2bp.dsp import catalog
 from flab2bp.layout import slots
+from flab2bp.layout.base import Facing
 from flab2bp.layout.freeform import _dests, _logical_strip_plans, _LogicalStripPlan
 from flab2bp.spec import BuildSpec
 
@@ -184,6 +185,35 @@ class LaneAttachmentPlan:
         return (self.lane.lane_id, self.lane_y, self.attachments)
 
 
+@dataclass(frozen=True, slots=True)
+class LanePortDockPlan:
+    """One output lane bound to an authoritative prefab belt port."""
+
+    lane: LogicalLane
+    lane_y: int
+    port: int
+    cell: tuple[int, int]
+    facing: Facing
+
+    def __post_init__(self) -> None:
+        if self.lane.kind != "output":
+            raise ValueError("belt ports may drain only an output lane")
+        if self.port < 0:
+            raise ValueError("belt port index must be non-negative")
+        if self.facing.delta[1] <= 0 or self.cell[1] >= self.lane_y:
+            raise ValueError("drawing belt port must face and reach its lane below")
+
+    @property
+    def identity(self) -> tuple[str, int, int, tuple[int, int], float]:
+        return (
+            self.lane.lane_id,
+            self.lane_y,
+            self.port,
+            self.cell,
+            self.facing.value,
+        )
+
+
 @dataclass(frozen=True, order=True, slots=True)
 class LanePlan:
     """Current logical lane assignment bound atomically to a machine pose."""
@@ -216,12 +246,13 @@ class StripVariantId:
     placement_geometry: tuple[int, ...]
     lane_rows: tuple[tuple[str, int], ...]
     attachments: tuple[tuple[str, int, tuple[LaneSorterAttachment, ...]], ...]
+    port_docks: tuple[tuple[str, int, int, tuple[int, int], float], ...]
     box: tuple[int, int]
 
 
 @dataclass(frozen=True, slots=True)
 class StripVariant:
-    """One atomic pose, exclusion envelope, lane plan, and attachment plan."""
+    """One atomic pose, exclusion envelope, lane plan, and endpoint plan."""
 
     variant_id: StripVariantId
     yaw: float
@@ -233,6 +264,7 @@ class StripVariant:
     box_height: int
     attachment_plan: tuple[LaneAttachmentPlan, ...]
     machine_origins_x: tuple[int, ...]
+    port_dock_plan: tuple[LanePortDockPlan, ...] = ()
 
     def __post_init__(self) -> None:
         if self.yaw not in _CARDINAL_YAWS:
@@ -250,22 +282,28 @@ class StripVariant:
         if not expected_origins or self.machine_origins_x != expected_origins:
             raise ValueError("machine origins must advance by collider pitch")
         planned_rows = dict(self.lane_plan.lane_rows)
-        if tuple(plan.lane.lane_id for plan in self.attachment_plan) != tuple(
-            lane_id for lane_id, _row in self.lane_plan.lane_rows
-        ):
-            raise ValueError("variant lane and attachment plans disagree")
-        if any(planned_rows[plan.lane.lane_id] != plan.lane_y for plan in self.attachment_plan):
-            raise ValueError("variant attachments must use their planned lane rows")
+        attachment_ids = tuple(plan.lane.lane_id for plan in self.attachment_plan)
+        port_ids = tuple(plan.lane.lane_id for plan in self.port_dock_plan)
+        endpoint_ids = attachment_ids + port_ids
+        if len(set(endpoint_ids)) != len(endpoint_ids) or set(endpoint_ids) != set(planned_rows):
+            raise ValueError("variant lane and endpoint plans disagree")
+        if any(
+            planned_rows[plan.lane.lane_id] != plan.lane_y for plan in self.attachment_plan
+        ) or any(planned_rows[plan.lane.lane_id] != plan.lane_y for plan in self.port_dock_plan):
+            raise ValueError("variant endpoints must use their planned lane rows")
         attachment_slots = tuple(
             attachment.slot for plan in self.attachment_plan for attachment in plan.attachments
         )
         if len(set(attachment_slots)) != len(attachment_slots):
             raise ValueError("variant attachments must use globally distinct machine slots")
-        lane_ys = tuple(plan.lane_y for plan in self.attachment_plan)
+        lane_ys = tuple(plan.lane_y for plan in self.attachment_plan) + tuple(
+            plan.lane_y for plan in self.port_dock_plan
+        )
         envelope_top = -self.placement_geometry.north_halo
         envelope_bottom = self.footprint_height + self.placement_geometry.south_halo
-        if any(envelope_top <= lane_y < envelope_bottom for lane_y in lane_ys):
-            raise ValueError("variant lane enters the collider exclusion envelope")
+        sorter_lane_ys = tuple(plan.lane_y for plan in self.attachment_plan)
+        if any(envelope_top <= lane_y < envelope_bottom for lane_y in sorter_lane_ys):
+            raise ValueError("sorter lane enters the collider exclusion envelope")
         minimum_y = min(envelope_top, *lane_ys)
         maximum_y = max(envelope_bottom, *(lane_y + 1 for lane_y in lane_ys))
         if self.lane_plan.machine_row != -minimum_y or self.box_height != maximum_y - minimum_y:
@@ -277,6 +315,7 @@ class StripVariant:
             self.placement_geometry,
             self.lane_plan,
             self.attachment_plan,
+            self.port_dock_plan,
             self.box_width,
             self.box_height,
         ):
@@ -301,6 +340,7 @@ class StripVariant:
             self.placement_geometry.identity,
             self.lane_plan,
             self.attachment_plan,
+            self.port_dock_plan,
             self.box_height,
         )
 
@@ -311,6 +351,7 @@ class StripVariant:
             self.yaw,
             self.lane_plan.lane_rows,
             tuple(plan.identity for plan in self.attachment_plan),
+            tuple(plan.identity for plan in self.port_dock_plan),
             self.box_width,
             self.box_height,
             self.placement_geometry.identity,
@@ -348,8 +389,11 @@ class StripFamily:
                 raise ValueError("strip family contains a variant from another family")
             if len(variant.machine_origins_x) != self.total_machine_count:
                 raise ValueError("strip family variant machine count is inconsistent")
-            if {plan.lane for plan in variant.attachment_plan} != set(lanes):
-                raise ValueError("strip family variant does not attach every logical lane")
+            endpoints = {plan.lane for plan in variant.attachment_plan} | {
+                plan.lane for plan in variant.port_dock_plan
+            }
+            if endpoints != set(lanes):
+                raise ValueError("strip family variant does not serve every logical lane")
 
 
 @dataclass(frozen=True, order=True, slots=True)
@@ -622,6 +666,7 @@ def _variant_id(
     geometry: MachinePlacementGeometry,
     lane_plan: LanePlan,
     attachments: tuple[LaneAttachmentPlan, ...],
+    port_docks: tuple[LanePortDockPlan, ...],
     box_width: int,
     box_height: int,
 ) -> StripVariantId:
@@ -633,7 +678,80 @@ def _variant_id(
         placement_geometry=geometry.identity,
         lane_rows=lane_plan.lane_rows,
         attachments=tuple(plan.identity for plan in attachments),
+        port_docks=tuple(plan.identity for plan in port_docks),
         box=(box_width, box_height),
+    )
+
+
+def _port_variants(
+    family_id: StripFamilyId,
+    item_id: int,
+    machine_count: int,
+    input_lanes: tuple[LogicalLane, ...],
+    output_lanes: tuple[LogicalLane, ...],
+    yaw: float,
+) -> tuple[StripVariant, ...]:
+    """Bind sorterless pure-source lanes to the prefab's drawing belt ports."""
+    if input_lanes or not output_lanes:
+        return ()
+    geometry = placement_geometry(item_id, yaw)
+    available = tuple(
+        dock
+        for _port, dock in sorted(slots.port_docks(slots.probe_building(item_id, yaw)).items())
+        if dock.facing.delta[1] > 0
+    )
+    ordered_lanes = tuple(sorted(output_lanes, key=lambda lane: (lane.side_index, lane.lane_id)))
+    if len(available) < len(ordered_lanes):
+        return ()
+    lane_start = max(
+        geometry.footprint_height + geometry.south_halo,
+        *(dock.cell[1] + 1 for dock in available[: len(ordered_lanes)]),
+    )
+    port_docks = tuple(
+        LanePortDockPlan(
+            lane=lane,
+            lane_y=lane_start + index,
+            port=dock.port,
+            cell=dock.cell,
+            facing=dock.facing,
+        )
+        for index, (lane, dock) in enumerate(zip(ordered_lanes, available, strict=False))
+    )
+    lane_rows = tuple((plan.lane.lane_id, plan.lane_y) for plan in port_docks)
+    minimum_y = -geometry.north_halo
+    maximum_y = max(
+        geometry.footprint_height + geometry.south_halo,
+        *(plan.lane_y + 1 for plan in port_docks),
+    )
+    lane_plan = LanePlan(machine_row=-minimum_y, lane_rows=lane_rows)
+    box_width = machine_count * geometry.pitch_x
+    box_height = maximum_y - minimum_y
+    machine_origins_x = tuple(range(0, machine_count * geometry.pitch_x, geometry.pitch_x))
+    variant_id = _variant_id(
+        family_id,
+        yaw,
+        machine_origins_x,
+        geometry,
+        lane_plan,
+        (),
+        port_docks,
+        box_width,
+        box_height,
+    )
+    return (
+        StripVariant(
+            variant_id=variant_id,
+            yaw=yaw,
+            footprint_width=geometry.footprint_width,
+            footprint_height=geometry.footprint_height,
+            placement_geometry=geometry,
+            lane_plan=lane_plan,
+            box_width=box_width,
+            box_height=box_height,
+            attachment_plan=(),
+            port_dock_plan=port_docks,
+            machine_origins_x=machine_origins_x,
+        ),
     )
 
 
@@ -664,6 +782,7 @@ def _variants(
             geometry,
             lane_plan,
             attachments,
+            (),
             box_width,
             box_height,
         )
@@ -678,6 +797,7 @@ def _variants(
                 box_width=box_width,
                 box_height=box_height,
                 attachment_plan=attachments,
+                port_dock_plan=(),
                 machine_origins_x=machine_origins_x,
             )
         )
@@ -691,10 +811,25 @@ def generate_strip_families(spec: BuildSpec) -> tuple[StripFamily, ...]:
         family_id = StripFamilyId(plan.group_key, plan.shard_index)
         input_lanes, output_lanes = _logical_lanes(plan)
         lanes = input_lanes + output_lanes
-        generated = (
-            ()
-            if plan.flank_outputs
-            else tuple(
+        building = catalog.building(plan.item_id)
+        generated: tuple[StripVariant, ...]
+        if plan.flank_outputs:
+            generated = ()
+        elif building.takes_belt_ports and not building.slot_poses:
+            generated = tuple(
+                candidate
+                for yaw in _CARDINAL_YAWS
+                for candidate in _port_variants(
+                    family_id,
+                    plan.item_id,
+                    plan.total_machine_count,
+                    input_lanes,
+                    output_lanes,
+                    yaw,
+                )
+            )
+        else:
+            generated = tuple(
                 candidate
                 for yaw in _CARDINAL_YAWS
                 for candidate in _variants(
@@ -705,7 +840,6 @@ def generate_strip_families(spec: BuildSpec) -> tuple[StripFamily, ...]:
                     yaw,
                 )
             )
-        )
         unique = {candidate.variant_id: candidate for candidate in generated}
         variants = tuple(sorted(unique.values(), key=lambda candidate: candidate.sort_key))
         families.append(
@@ -747,6 +881,7 @@ def _variant_for_count(template: StripVariant, machine_count: int) -> StripVaria
         template.placement_geometry,
         template.lane_plan,
         template.attachment_plan,
+        template.port_dock_plan,
         box_width,
         template.box_height,
     )
@@ -760,6 +895,7 @@ def _variant_for_count(template: StripVariant, machine_count: int) -> StripVaria
         box_width=box_width,
         box_height=template.box_height,
         attachment_plan=template.attachment_plan,
+        port_dock_plan=template.port_dock_plan,
         machine_origins_x=machine_origins_x,
     )
 
@@ -920,6 +1056,7 @@ def validate_instance_partition(
 
 __all__ = [
     "LaneAttachmentPlan",
+    "LanePortDockPlan",
     "LanePlan",
     "LaneReachProfile",
     "LaneSorterAttachment",

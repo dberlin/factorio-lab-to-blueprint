@@ -955,9 +955,7 @@ class SequenceSolver[PreparedT]:
                 break
 
             remaining_candidates = len(candidates) - index
-            proxy_allowance = (
-                proxy_left + remaining_candidates - 1
-            ) // remaining_candidates
+            proxy_allowance = (proxy_left + remaining_candidates - 1) // remaining_candidates
             global_started = time.perf_counter()
             global_result = self.adapters.global_route(
                 prepared,
@@ -1615,6 +1613,7 @@ def _selected_strips(
                 ph=variant.pitch_y,
                 lane_plan=variant.lane_plan,
                 attachment_plan=variant.attachment_plan,
+                port_dock_plan=variant.port_dock_plan,
                 box_height=variant.box_height,
                 family_id=instance_id.family_id,
                 machine_start=instance_id.machine_start,

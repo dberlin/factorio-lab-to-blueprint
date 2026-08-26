@@ -104,6 +104,7 @@ if TYPE_CHECKING:
     from flab2bp.layout.strip_variants import (
         LaneAttachmentPlan,
         LanePlan,
+        LanePortDockPlan,
         LaneSorterAttachment,
         StripFamilyId,
     )
@@ -752,6 +753,8 @@ class Strip:
     attachment_plan: tuple[LaneAttachmentPlan, ...]
     #: Exact selected variant box height, including collider halos and lanes.
     box_height: int
+    #: The authoritative drawing port and relative dock cell for port-backed outputs.
+    port_dock_plan: tuple[LanePortDockPlan, ...] = ()
     #: Parameter block for a machine configured by a MODE rather than a recipe
     #: (Energy Exchanger, Ray Receiver).  Empty for an ordinary craft.
     mode_params: tuple[int, ...] = ()
@@ -995,6 +998,16 @@ class Strip:
 
     def row_of_output(self, k: int) -> int:
         """Row index of the ``k``-th output lane, relative to the strip's top."""
+        planned = next(
+            (
+                plan
+                for plan in self.port_dock_plan
+                if plan.lane.kind == "output" and plan.lane.side_index == k
+            ),
+            None,
+        )
+        if planned is not None:
+            return self.machine_row + planned.lane_y
         if self.flank_outputs or self.takes_belt_ports:
             return self.first_row_below_band + k
         return self.machine_row + self._output_attachment_plan(k).lane_y
@@ -1696,6 +1709,7 @@ def plan_strips(spec: BuildSpec, *, strip_len: int = 6) -> list[Strip]:
             pitch_height = variant.pitch_y
             lane_plan = variant.lane_plan
             attachment_plan = variant.attachment_plan
+            port_dock_plan = variant.port_dock_plan
             box_height = variant.box_height
         else:
             # Compatibility only: a mode-driven building with no sorter poses
@@ -1726,6 +1740,7 @@ def plan_strips(spec: BuildSpec, *, strip_len: int = 6) -> list[Strip]:
             pitch_height = group.pitch_h
             lane_plan = None
             attachment_plan = ()
+            port_dock_plan = ()
             box_height = (
                 len(inputs_above)
                 + pitch_height
@@ -1756,6 +1771,7 @@ def plan_strips(spec: BuildSpec, *, strip_len: int = 6) -> list[Strip]:
                     in_below=inputs_below,
                     lane_plan=lane_plan,
                     attachment_plan=attachment_plan,
+                    port_dock_plan=port_dock_plan,
                     box_height=box_height,
                     mode_params=family.mode_params,
                     flank_outputs=family.flank_outputs,
@@ -1838,6 +1854,8 @@ def _direct_net_candidates(
     out: dict[tuple[int, int], _DirectCandidate] = {}
     for i, j in _nets_between(strips):
         src, dst = strips[i], strips[j]
+        if src.takes_belt_ports:
+            continue  # a prefab belt port cannot become a machine-to-machine sorter
         if (src.recipe_id, dst.recipe_id) not in eligible:
             continue
         # The producer's output lane dedicated to this destination.
@@ -3017,6 +3035,14 @@ def _emit_strip(
                 belt_id,
                 belt_model,
                 claimed,
+                next(
+                    (
+                        plan
+                        for plan in s.port_dock_plan
+                        if plan.lane.kind == "output" and plan.lane.side_index == j
+                    ),
+                    None,
+                ),
             )
             continue
         if s.flank_outputs:
@@ -3161,6 +3187,7 @@ def _dock_lane(
     belt_id: int,
     belt_model: int,
     claimed: dict[int, set[int]],
+    planned: LanePortDockPlan | None = None,
 ) -> int:
     """Draw each machine's product through its authoritative belt port.
 
@@ -3173,16 +3200,32 @@ def _dock_lane(
     for machine_index in machines:
         machine = canvas.buildings[machine_index]
         taken = claimed.setdefault(machine_index, set())
-        dock = next(
-            (
-                candidate
-                for _port, candidate in sorted(slots.port_docks(machine).items())
-                if candidate.port not in taken
-                and candidate.facing.delta[1] > 0
-                and candidate.cell[1] < lane_y
-            ),
-            None,
-        )
+        available = slots.port_docks(machine)
+        if planned is None:
+            dock = next(
+                (
+                    candidate
+                    for _port, candidate in sorted(available.items())
+                    if candidate.port not in taken
+                    and candidate.facing.delta[1] > 0
+                    and candidate.cell[1] < lane_y
+                ),
+                None,
+            )
+        else:
+            dock = available.get(planned.port)
+            expected_cell = (
+                machine.x + planned.cell[0],
+                machine.y + planned.cell[1],
+            )
+            if (
+                dock is None
+                or dock.port in taken
+                or dock.cell != expected_cell
+                or dock.facing is not planned.facing
+                or machine.y + planned.lane_y != lane_y
+            ):
+                dock = None
         if dock is None:
             continue
         lane_tail = next(
@@ -8636,6 +8679,12 @@ def _machines_without_poses(strips: list[Strip]) -> list[str]:
     seen: set[tuple[int, str, int]] = set()
     out: list[str] = []
     for s in strips:
+        if (
+            s.port_dock_plan
+            and not s.in_lanes
+            and len(s.port_dock_plan) == len(s.out_lanes)
+        ):
+            continue
         if s.lane_plan is None:
             if s.flank_outputs:
                 continue
@@ -8696,7 +8745,7 @@ def _machines_without_poses(strips: list[Strip]) -> list[str]:
             seen.add(key)
             building = catalog.building(s.item_id)
             name = building.name
-            if not s.attachable_columns:
+            if not building.slot_poses:
                 out.append(
                     f"{name} ({s.recipe_id}): the game's prefab gives it no "
                     f"insert pose on any face and {len(building.slots)} belt "
