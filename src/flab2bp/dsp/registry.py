@@ -919,10 +919,10 @@ LINT_EXCEPTIONS: tuple[LintException, ...] = (
         "`1 << 30` as an infinity sentinel for the heuristic; not degrees",
     ),
     LintException(
-        "flab2bp.layout.global_router",
-        "_search_relaxed",
+        "flab2bp.layout.sequence_pair",
+        "derive_stage_seed",
         30.0,
-        "`1 << 30` is an integer infinity sentinel for A*; not a sorter angle",
+        "`value >> 30` bit-mixing shift; not the sorter skew angle",
     ),
     LintException(
         "flab2bp.layout.freeform",
