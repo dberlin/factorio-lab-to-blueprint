@@ -25,6 +25,24 @@ ten-coater cell this file already has two entries about -- with spine's own
 self-check disabled so the raw emission could be read: **ten coaters and 35
 unsprayed pickups.**  Zero after.
 
+**IT COST NOTHING AND SPINE GOT SMALLER.**  Paired and interleaved against
+`8a842135`, two rounds, `--tier mid --budget 4`, both power settings -- 48 cells
+per strategy, 32 of them proliferated.  Every cell CLEAN in every run of both
+arms, INVALID 0 in all four, so the area below is over all 48 cells both arms
+wire:
+
+| arm | spine area | freeform area |
+|---|---|---|
+| master, round 1 / 2 | 33463 / 33475 | 30103 / 29905 |
+| this branch, round 1 / 2 | 33031 / 33031 | 29993 / 30009 |
+| **delta** | **-1.31%** | **-0.01%** |
+
+Spine places MORE coaters and is SMALLER: the head seat puts them at the
+corridor's edge where the spur is short, and the transit filter drops the copies
+that bought nothing.  Freeform's `-0.01%` is two rounds that disagree in sign
+(`-0.37%`, `+0.35%`), which is what "the emitted geometry did not change" looks
+like -- `_Unseatable` never fires on the corpus.
+
 **Freeform's miss is real and had to be constructed to see.**  `_place_coaters`
 `continue`d past four separate failures and the fifth never entered the loop at
 all.  On a fixture with the coater's drop cell blocked it returned `[]` for a
