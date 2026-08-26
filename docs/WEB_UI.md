@@ -85,9 +85,13 @@ spends its retry budget as well, so it is a scale for the wait, never a finish t
 
 ## What it does NOT do
 
-**`--fetch-flow` is not wired, and on the client arm cannot be.** It drives a headless browser
-to make FactorioLab run its own solve, which is a much larger surface than a build here and is
-arithmetically impossible in a page — a page cannot drive a headless browser against itself.
+**`--fetch-flow` is not wired, for two different reasons.** On the client arm it is impossible:
+it drives a headless browser to make FactorioLab run its own solve, and a page cannot drive one
+against itself. On this arm it is possible and is declined, which is a decision with a reason
+rather than work nobody got to. `/api/build` has no authentication; wiring `--fetch-flow` would
+turn it into *render any URL you like in a headless Chromium on this machine*, since the browser
+goes to whatever URL the request supplied. That is strictly more power than solving, and it is
+not power this endpoint should have before it has an answer to who is calling it.
 
 `--flow` **is** wired, on both arms. Paste FactorioLab's CSV export into the flow box, or choose
 the file; the API takes it as text and it reaches `flow_from_text` and its provenance check
@@ -105,8 +109,10 @@ every finished result. For one person on localhost that is the right trade; anyt
 longer-lived wants the job state somewhere it can be re-read, and that is a different program.
 
 **A running solve cannot be cancelled.** "Stop watching" stops the polling, not the solve:
-CP-SAT holds its worker until its budget expires. Interrupting it means a `SolutionCallback` or
-a solve interrupter inside `src/flab2bp/layout/`. The button is named for what it actually does.
+CP-SAT holds its worker until its budget expires. The button is named for what it actually does,
+which is the honest half. The fix is not in this package at all — it needs a `SolutionCallback`
+or a solve interrupter threaded through `src/flab2bp/layout/`, where both strategies build and
+run their `CpSolver`. It is the one item on this list that is unfinished rather than decided.
 
 **Concurrency is a queue, not parallelism, and that is deliberate.** One CP-SAT solve already
 runs at ~700% CPU (see the note in `pyproject.toml` about why the test suite is not `-n auto`).
@@ -157,70 +163,73 @@ now the same application over two solvers. Same options, same report from the sa
 server arm's own component tree, mounted by the client page), same refusal rendering, same
 proof gate.
 
-### The measurement
+### The measurement, and what it is safe to conclude from it
 
 One URL — the `space-warper 10/min` spec at the top of this file — `best`, 3 candidates,
-Tesla Towers on, on a 128-core box.
+Tesla Towers on, on a 128-core box shared with other work.
 
-**Two things bite, and an earlier draft of this section got both wrong.** The budget is
-wall-clock, so CPU contention takes search away exactly as a smaller budget does: a browser run
-at 6 s taken immediately after a heavy server-arm run came back with the 2 s area. And the
-browser's result is *not* deterministic — four-thread CP-SAT is a portfolio with a race in it.
-Three runs agreeing is not three runs of evidence. So these are the full distributions, taken
-with the box otherwise idle, and any re-measurement has to be too.
+**Two things bite, and an earlier draft of this section got both wrong.**
 
-| arm | budget/layout | area, tiles, every run | median |
-| --- | --- | --- | --- |
-| server, CP-SAT on every core | 2s | 1178, 1178, 1216, 1224, 1232, 1232, 1232, 1232 | **1228** |
-| browser, CP-SAT on 4 wasm threads | 2s | 1292 × 6 | **1292** |
-| browser | **6s** | 1210 × 7, 1232, 1292, 1292 | **1210** |
-| browser | 12s | 1210 | — |
+*The budget is wall-clock, so load is a variable.* CPU contention takes search away exactly as a
+smaller budget does. A browser run at 6 s taken immediately after a heavy server-arm run came
+back with the 2 s area; two native runs taken at load 128 and 137 came back 1372 and 1316 where
+the same command at load 35–77 gives 1178–1232. Every figure below carries the load it was taken
+at, and a re-measurement that does not is measuring the load.
 
-Wall clock, browser: 59–71 s at 2 s and 59–63 s at 6 s — indistinguishable, because most of a
-browser build is not CP-SAT. 94 s at 12 s. Server: 33–55 s.
+*The result is not deterministic.* Four-thread CP-SAT is a portfolio with a race in it. "Three
+runs agreeing" is not three runs of evidence — this section said 1210 flat on exactly that
+mistake, and the eighth run said 1232.
 
-**The area gap was a knob.** At 2 s the browser is 5.2% worse than the server arm's median and
-is worse on every single run. At 6 s its median is 1.5% *better*, for the same wall clock. The
-knob is not free of variance: 3 of the 10 runs at 6 s landed at or above the server arm's
-median, and 2 of those got no further than the 2 s figure. What is not in doubt is the
-direction — no 6 s run was worse than the best 2 s run, and 7 of 10 beat every server-arm run
-but one. Past 6 s the extra budget bought no area on this spec and 50% more wall clock, which is
-why 6 is what `web/app.html` now defaults to and what the page's note explains.
+#### The part that is load-controlled
 
-### Why, and how that was established without a browser
-
-`web/vendor/ortools`'s CP-SAT runtime is built with `pthreadPoolSize=4`. Native CP-SAT runs
-with `num_search_workers = 0`, meaning every core. Parallel CP-SAT is a **portfolio** — the
-extra workers explore genuinely different regions rather than merely going faster, which
-`src/flab2bp/layout/base.py` already records as 23% of area on one spec — so four workers
-against a wall-clock budget buy materially less search.
-
-That predicts the whole gap, and it can be tested natively in 30 seconds a run instead of 90 in
-a browser: pin `DEFAULT_SEARCH_WORKERS` to 4 and leave everything else alone.
+The cause was established natively, and this is the measurement to trust: `DEFAULT_SEARCH_WORKERS`
+pinned to 4 — the wasm runtime's `pthreadPoolSize` — against the default of 0, meaning every
+core. Each row below was measured *inside a single command alongside its own baseline*, so the
+two arms of every pair saw the same machine at the same moment.
 
 | native CP-SAT | budget/layout | area, tiles |
 | --- | --- | --- |
 | every core | 2s | 1232, 1232, 1178, 1224 |
-| **4 workers** | 2s | 1400, 1232, 1344, **2193** |
-| 4 workers | 6s | 1254, 1232, 1232 |
+| **4 workers** | 2s | 1232, 1344, 1400, **2193** |
+| 4 workers | 6s | 1232, 1232, 1254 |
 | 4 workers | 12s | 1110 |
 
-Four workers at three times the budget lands on 1232 — the same number every-core reaches at
-2s — and at six times it beats it. The prediction transferred to the real browser exactly.
+Four workers at three times the budget lands on 1232, the same number every core reaches at 1x,
+and at six times it beats it. The **2193** is the sharper finding: that run is not a worse
+layout, it is a run where the winning pair — `max-proliferation` / `freeform` — produced *no
+layout at all* and the build fell back to a 78%-larger candidate. Under-budgeted four-worker
+CP-SAT does not degrade smoothly; it refuses.
 
-The **2193** is the more interesting number. That run is not a worse layout: it is a run where
-the winning pair, `max-proliferation` / `freeform`, produced *no layout at all* and the build
-fell back to a 78%-larger candidate. Under-budgeted four-worker CP-SAT does not degrade
-smoothly; it refuses.
+What would have falsified this: four workers matching every core at the same budget. They did
+not — 14% worse at the median, and once refused outright.
 
-What would falsify this: native at 4 workers matching native at every core. It did not — it was
-14% worse, and once refused outright.
+#### The part that transferred to the real browser
+
+| arm | budget/layout | area, tiles, every run | median |
+| --- | --- | --- | --- |
+| browser, CP-SAT on 4 wasm threads | 2s | 1292 × 6 | **1292** |
+| browser | **6s** | 1210 × 7, 1232, 1292, 1292 | **1210** |
+| browser | 12s | 1210 | — |
+
+At 2 s the browser is remarkably stable and always at 1292. At 6 s the median falls to 1210, and
+the three runs that did not — 1232 and 1292 twice — are the same portfolio race, plus the load
+effect above. No 6 s run was worse than any 2 s run. Past 6 s the extra budget bought no area on
+this spec and 50% more wall clock: 94 s against 59–63 s. **So 6 is what `web/app.html` defaults
+to**, against the CLI's 2, and the note under the controls says why.
+
+Wall clock: the browser is 59–71 s at 2 s and 59–63 s at 6 s — indistinguishable, because most
+of a browser build is not CP-SAT at all. The server arm does the same spec in 33–55 s.
+
+The two arms' *absolute* areas are within a few percent of each other and both move with load,
+so the honest statement is that at their shipped defaults they are comparable on density and the
+browser is roughly twice the wall clock. What is not within noise, and is the point, is that at
+the CLI's 2 s the browser was worse on every single run, and raising the budget fixed it at no
+cost in wall clock.
 
 ### The recommendation: ship the server arm, keep the client arm
 
-Not because of density. Density is settled: at the 6 s default the browser's median is 1.5%
-better than the server arm's, and it is more variable. The reasons that survive the measurement
-are:
+Not because of density. Density is settled: at the shipped defaults the two are comparable, and
+the browser is the more variable of the two. The reasons that survive the measurement are:
 
 1. **57.6 MB over 46 files, cold, every time the cache is.** Measured by `web/serve.py`'s own
    byte tally, largest first: `mp_solver_runtime.wasm` 18.5, `pyodide.asm.wasm` 8.3,

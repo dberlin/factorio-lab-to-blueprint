@@ -244,14 +244,17 @@ from.  It is a knob:
 Four-thread CP-SAT is a portfolio with a race in it, so the 6 s cell is a
 distribution and not a number -- three runs agreeing is not three runs of
 evidence, and an earlier draft of this table said 1210 flat on exactly that
-mistake.  The median at 6 s is 1.5% denser than the server arm's median at its
-own default (1228 tiles), for the same wall clock, and no 6 s run was worse
-than the best 2 s run.  At 12 s it buys nothing more and costs 50%.  The page's
-note under the controls says all of this, because a default that differs from
-the CLI's and does not explain itself is a trap.
+mistake.  What holds is that no 6 s run was worse than any 2 s run, and the
+wall clock did not move: the extra 24 s of solver ceiling costs nothing,
+because most of a browser build is not CP-SAT.  At 12 s it buys nothing more
+and costs 50%.  The page's note under the controls says all of this, because a
+default that differs from the CLI's and does not explain itself is a trap.
 
 The budget is wall-clock, so these have to be measured on an idle box: a run
-taken right after a heavy server-arm solve came back with the 2 s area.
+taken right after a heavy server-arm solve came back with the 2 s area.  The
+cause -- the runtime's four-thread pool against native CP-SAT's every core --
+was pinned down natively, where a baseline can be measured in the same command
+as the thing it baselines.  `docs/WEB_UI.md` has that experiment.
 
 The full comparison, including the native four-worker simulation that
 established the cause without a browser, is in `docs/WEB_UI.md`.
