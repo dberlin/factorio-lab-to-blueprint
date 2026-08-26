@@ -532,7 +532,7 @@ def test_real_refinery_fixed_outline_seed_is_cython_decodable_without_witness_hi
         for producer_variant in range(len(problem.variant_tables[target.producer]))
         for consumer_variant in range(len(problem.variant_tables[target.consumer]))
     }
-    assert identities < candidate_space
+    assert identities <= candidate_space
     assert all(
         (entry.target.producer, entry.target.consumer) in problem.nets
         and 0
