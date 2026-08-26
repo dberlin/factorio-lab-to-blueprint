@@ -20,6 +20,10 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 _LOCK = threading.Lock()
 TALLY: dict[str, int] = {}
+#: Every request this server ever answered, in order.  It is the corroborating
+#: witness for "no server solved this": the browser's own network log says
+#: nothing left the page, and this says nothing but files arrived here.
+LOG: list[str] = []
 
 MIME_EXTRA = {
     ".wasm": "application/wasm",
@@ -54,7 +58,24 @@ class Handler(SimpleHTTPRequestHandler):
             TALLY[self.path] = TALLY.get(self.path, 0) + len(data)
         outputfile.write(data)
 
+    def do_POST(self) -> None:  # noqa: N802 - http.server's name
+        # There is no POST handler on purpose: a solve would have to be one.
+        with _LOCK:
+            LOG.append(f"POST {self.path}")
+        self.send_error(405, "this server only hands out files")
+
     def do_GET(self) -> None:
+        if self.path not in ("/__tally__", "/__reset__", "/__log__"):
+            with _LOCK:
+                LOG.append(self.path)
+        if self.path == "/__log__":
+            body = json.dumps({"paths": list(LOG)}, indent=2).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if self.path == "/__tally__":
             body = json.dumps(
                 {"total": sum(TALLY.values()), "by_path": TALLY}, indent=2
@@ -68,6 +89,7 @@ class Handler(SimpleHTTPRequestHandler):
         if self.path == "/__reset__":
             with _LOCK:
                 TALLY.clear()
+                LOG.clear()
             self.send_response(200)
             self.send_header("Content-Length", "2")
             self.end_headers()

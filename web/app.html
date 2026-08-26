@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>flab2bp -- FactorioLab URL to DSP blueprint, entirely in your browser</title>
+<script src="./coi-serviceworker.js"></script>
+<style>
+  :root {
+    --bg: #12151a; --panel: #1a1f27; --line: #2c333f; --ink: #e6eaf0;
+    --dim: #97a2b3; --accent: #6fd3a2; --warn: #f0c674; --bad: #ef7a7a;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { padding: 18px 24px 10px; border-bottom: 1px solid var(--line); }
+  h1 { margin: 0; font-size: 17px; font-weight: 620; letter-spacing: .01em; }
+  header p { margin: 4px 0 0; color: var(--dim); font-size: 12.5px; }
+  main { display: grid; grid-template-columns: minmax(340px, 420px) 1fr; gap: 0; min-height: calc(100vh - 74px); }
+  .controls { padding: 20px 24px; border-right: 1px solid var(--line); }
+  .out { padding: 20px 24px; overflow: auto; }
+  label { display: block; margin: 14px 0 5px; font-size: 12px; color: var(--dim);
+          text-transform: uppercase; letter-spacing: .06em; }
+  textarea, input, select {
+    width: 100%; background: var(--panel); color: var(--ink);
+    border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px;
+    font: inherit;
+  }
+  textarea { min-height: 92px; font-family: ui-monospace, monospace; font-size: 12px; resize: vertical; }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .check { display: flex; align-items: center; gap: 8px; margin-top: 14px; color: var(--ink); }
+  .check input { width: auto; }
+  button {
+    margin-top: 18px; width: 100%; padding: 10px 14px; border-radius: 6px;
+    border: 1px solid #2f6b52; background: var(--accent); color: #06130d;
+    font: inherit; font-weight: 640; cursor: pointer;
+  }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.secondary { background: var(--panel); color: var(--ink); border-color: var(--line); }
+  #status { margin-top: 14px; font-size: 12.5px; color: var(--dim); min-height: 20px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+          padding: 14px 16px; margin-bottom: 14px; }
+  .card h2 { margin: 0 0 10px; font-size: 13px; letter-spacing: .05em;
+             text-transform: uppercase; color: var(--dim); font-weight: 600; }
+  .stats { display: flex; flex-wrap: wrap; gap: 22px; }
+  .stat b { display: block; font-size: 22px; font-weight: 640; }
+  .stat span { font-size: 11.5px; color: var(--dim); text-transform: uppercase; letter-spacing: .06em; }
+  ul { margin: 0; padding-left: 18px; }
+  li { margin: 3px 0; }
+  .warn { color: var(--warn); }
+  .bad { color: var(--bad); }
+  .refusal { border-color: #6a3a3a; }
+  .refusal h2 { color: var(--bad); }
+  pre { white-space: pre-wrap; word-break: break-word; margin: 0; font-size: 12px; }
+  svg { width: 100%; height: auto; background: #0c0f13; border-radius: 6px; display: block; }
+  table { border-collapse: collapse; font-size: 12.5px; width: 100%; }
+  th, td { text-align: left; padding: 3px 10px 3px 0; color: var(--dim); }
+  th { color: var(--ink); font-weight: 600; }
+</style>
+
+<header>
+  <h1>flab2bp, client-side</h1>
+  <p>CPython, CP-SAT and SCIP all run in this tab. The server only ever hands out static files.</p>
+</header>
+
+<main>
+  <section class="controls">
+    <label for="url">FactorioLab URL</label>
+    <textarea id="url" spellcheck="false" placeholder="https://factoriolab.github.io/dsp/list?z=..."></textarea>
+
+    <label for="strategy">Layout strategy</label>
+    <select id="strategy">
+      <option value="best">best -- lay out every candidate both ways, keep the smallest valid</option>
+      <option value="freeform">freeform</option>
+      <option value="spine">spine</option>
+    </select>
+
+    <div class="row">
+      <div>
+        <label for="candidates">Proliferation candidates</label>
+        <input id="candidates" type="number" min="1" max="8" value="3">
+      </div>
+      <div>
+        <label for="budget">Solver seconds per layout</label>
+        <input id="budget" type="number" min="0.2" max="60" step="0.1" value="2">
+      </div>
+    </div>
+
+    <label for="name">Blueprint short description (optional)</label>
+    <input id="name" type="text" placeholder="left blank: named for what it makes">
+
+    <div class="check">
+      <input id="power" type="checkbox" checked>
+      <label for="power" style="margin:0;text-transform:none;letter-spacing:0;color:var(--ink);font-size:14px">Include Tesla Towers</label>
+    </div>
+
+    <button id="solve" disabled>Solve</button>
+    <button id="copy" class="secondary" disabled>Copy blueprint string</button>
+    <div id="status">booting...</div>
+  </section>
+
+  <section class="out" id="out"></section>
+</main>
+
+<script type="module">
+const $ = (id) => document.getElementById(id);
+const out = $('out');
+const statusLine = $('status');
+
+const DEFAULT_URL = 'https://factoriolab.github.io/dsp/list?z=eJxFyr0KwkAQReG3meJWO8GQapq7GDtJBMVt1UUkLoGAEpt5dhH.uo.DGY1naJDReMSiDoC-.Pi7QRU-3KH6HQn6zSTqt7OhlWJEkGIJQS6HbJQpz9Yh4YQBN3ANbsE9ODiviK3HFWLvcSOlTJacvvRe7qb6BOgIKRo_&v=11';
+$('url').value = DEFAULT_URL;
+
+// Everything the automated smoke test reads lives here, so the proof does not
+// depend on scraping the DOM.
+const state = window.__flab = {
+  ready: false, booting: true, solving: false, done: false,
+  boot: null, result: null, error: null, copied: null, copyError: null,
+  wallMs: null, stages: [],
+};
+
+const worker = new Worker('./worker.js', { type: 'module' });
+
+worker.onmessage = (event) => {
+  const message = event.data;
+  if (message.type === 'stage') {
+    state.stages.push(message.text);
+    statusLine.textContent = message.text + '...';
+  } else if (message.type === 'ready') {
+    state.ready = true; state.booting = false; state.boot = message;
+    $('solve').disabled = false;
+    statusLine.textContent =
+      `ready in ${(message.timings.totalMs / 1000).toFixed(1)}s ` +
+      `(python ${(message.timings.pyodideMs / 1000).toFixed(1)}s, ` +
+      `wheels ${(message.timings.packagesMs / 1000).toFixed(1)}s, ` +
+      `import ${(message.timings.importMs / 1000).toFixed(1)}s) -- ` +
+      `isolated: ${message.crossOriginIsolated}, JSPI: ${message.jspi}`;
+  } else if (message.type === 'result') {
+    state.solving = false; state.done = true;
+    state.result = message.result; state.wallMs = message.wallMs;
+    $('solve').disabled = false;
+    render(message.result, message.wallMs);
+  } else if (message.type === 'fatal') {
+    state.solving = false; state.booting = false; state.done = true;
+    state.error = message.error;
+    $('solve').disabled = false;
+    statusLine.textContent = 'failed';
+    out.innerHTML = '';
+    out.appendChild(card('Failure', `<pre class="bad">${escape(message.error)}</pre>`, 'refusal'));
+  }
+};
+
+worker.postMessage({ type: 'boot' });
+
+$('solve').onclick = () => {
+  state.solving = true; state.done = false; state.result = null; state.error = null;
+  state.copied = null;
+  $('solve').disabled = true; $('copy').disabled = true;
+  out.innerHTML = '';
+  statusLine.textContent = 'solving -- this runs the whole pipeline in this tab...';
+  worker.postMessage({ type: 'solve', options: {
+    url: $('url').value.trim(),
+    strategy: $('strategy').value,
+    candidates: Number($('candidates').value),
+    budget: Number($('budget').value),
+    power: $('power').checked,
+    name: $('name').value,
+  }});
+};
+
+$('copy').onclick = async () => {
+  const text = state.result && state.result.blueprint;
+  if (!text) return;
+  try {
+    await navigator.clipboard.writeText(text);
+    state.copied = text;
+    statusLine.textContent = `copied ${text.length} characters to the clipboard`;
+  } catch (error) {
+    // Clipboard permission can be refused; say so rather than pretending.
+    state.copied = null;
+    state.copyError = String(error);
+    statusLine.textContent = 'clipboard refused: ' + String(error);
+  }
+};
+
+const escape = (s) => String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+
+function card(title, html, cls = '') {
+  const el = document.createElement('div');
+  el.className = 'card ' + cls;
+  el.innerHTML = `<h2>${escape(title)}</h2>${html}`;
+  return el;
+}
+
+function render(result, wallMs) {
+  out.innerHTML = '';
+  if (!result.ok) {
+    statusLine.textContent = `refused after ${(wallMs / 1000).toFixed(1)}s`;
+    out.appendChild(card(
+      result.kind === 'NoValidLayout' ? 'Refused: no valid layout' : `Refused: ${result.kind}`,
+      `<pre class="bad">${escape(result.refusal)}</pre>` +
+      (result.traceback ? `<pre class="dim">${escape(result.traceback)}</pre>` : ''),
+      'refusal',
+    ));
+    return;
+  }
+
+  statusLine.textContent = `solved in ${(wallMs / 1000).toFixed(1)}s`;
+  $('copy').disabled = false;
+
+  out.appendChild(card(result.viewer.title || '(untitled)', `
+    <div class="stats">
+      <div class="stat"><b>${result.machines}</b><span>machines</span></div>
+      <div class="stat"><b>${result.tiles}</b><span>tiles</span></div>
+      <div class="stat"><b>${result.buildings}</b><span>buildings</span></div>
+      <div class="stat"><b>${escape(result.strategy)}</b><span>strategy</span></div>
+      <div class="stat"><b>${escape(result.candidate)}</b><span>candidate</span></div>
+      <div class="stat"><b>${(result.elapsed).toFixed(1)}s</b><span>solve</span></div>
+    </div>`));
+
+  if (result.notes.length || result.refused.length || result.errors.length || result.skipped.length) {
+    let html = '<ul>';
+    for (const note of result.notes) {
+      const bad = note.startsWith('WARNING');
+      html += `<li class="${bad ? 'warn' : ''}">${escape(note)}</li>`;
+    }
+    for (const r of result.refused) html += `<li class="warn">refused: ${escape(r)}</li>`;
+    for (const s of result.skipped) html += `<li class="warn">check could not run: ${escape(s)}</li>`;
+    for (const e of result.errors) html += `<li class="bad">VALIDATION ERROR -- ${escape(e)}</li>`;
+    html += '</ul>';
+    out.appendChild(card('Pipeline notes', html));
+  }
+
+  out.appendChild(card(
+    'Blueprint viewer',
+    viewerSvg(result.viewer) +
+    `<p style="color:var(--dim);font-size:12px;margin:8px 0 0">` +
+    `Drawn from <code>codec.decode()</code> of the exact string the Copy button ` +
+    `puts on your clipboard -- ${result.viewer.buildings.length} buildings, ` +
+    `payload hash ${result.viewer.hashValid ? 'valid' : 'INVALID'}.</p>`,
+  ));
+
+  if (result.attempts.length) {
+    let rows = '<table><tr><th>candidate</th><th>strategy</th><th>area</th><th>errors</th></tr>';
+    for (const a of [...result.attempts].sort((x, y) => x.area - y.area)) {
+      rows += `<tr><td>${escape(a.candidate)}</td><td>${escape(a.strategy)}</td>` +
+              `<td>${a.area}</td><td>${a.errors}</td></tr>`;
+    }
+    out.appendChild(card('Every attempt', rows + '</table>'));
+  }
+}
+
+function viewerSvg(viewer) {
+  const items = viewer.buildings;
+  if (!items.length) return '<p class="bad">the decoded blueprint holds no buildings</p>';
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const b of items) {
+    minX = Math.min(minX, b.x - b.w / 2); maxX = Math.max(maxX, b.x + b.w / 2);
+    minY = Math.min(minY, b.y - b.h / 2); maxY = Math.max(maxY, b.y + b.h / 2);
+  }
+  const pad = 2;
+  const w = (maxX - minX) + pad * 2, h = (maxY - minY) + pad * 2;
+  const colour = (b) => b.belt ? '#4a7fb5' : b.sorter ? '#c8a15a'
+    : b.id === 2201 ? '#8f6fd0' : b.id === 2313 ? '#48a58a' : '#6a7f99';
+  let svg = `<svg viewBox="${(minX - pad).toFixed(2)} ${(minY - pad).toFixed(2)} ` +
+            `${w.toFixed(2)} ${h.toFixed(2)}" preserveAspectRatio="xMidYMid meet" ` +
+            `role="img" aria-label="decoded blueprint">`;
+  // y is flipped so the render reads the way the game's map does.
+  svg += `<g transform="translate(0 ${(2 * (minY - pad) + h).toFixed(3)}) scale(1 -1)">`;
+  for (const b of items) {
+    const rw = Math.max(b.w, 0.35), rh = Math.max(b.h, 0.35);
+    svg += `<rect x="${(b.x - rw / 2).toFixed(3)}" y="${(b.y - rh / 2).toFixed(3)}" ` +
+           `width="${rw.toFixed(3)}" height="${rh.toFixed(3)}" rx="0.2" ` +
+           `fill="${colour(b)}" fill-opacity="${b.belt ? 0.85 : 0.95}" ` +
+           `stroke="#0c0f13" stroke-width="0.08"><title>${escape(b.name)} @ ` +
+           `${b.x.toFixed(1)},${b.y.toFixed(1)},${b.z.toFixed(2)}</title></rect>`;
+  }
+  svg += '</g></svg>';
+  return svg;
+}
+</script>
+</html>
