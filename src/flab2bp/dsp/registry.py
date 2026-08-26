@@ -907,6 +907,12 @@ LINT_EXCEPTIONS: tuple[LintException, ...] = (
         "history-cost objective coefficient; not BELT_PROBE_LIFT geometry",
     ),
     LintException(
+        "flab2bp.layout.sequence_pair",
+        "SearchEnergy",
+        0.1,
+        "direct-insert miss objective coefficient; not sorter geometry or paste epsilon",
+    ),
+    LintException(
         "flab2bp.layout.freeform",
         "_astar",
         30.0,
