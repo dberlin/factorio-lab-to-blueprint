@@ -52,8 +52,10 @@ R4's job (``tests/rules/test_rule_mutation.py``), and it is why R4 exists.
 from __future__ import annotations
 
 import ast
+import functools
 import importlib
 import math
+import types
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from fractions import Fraction
@@ -138,6 +140,19 @@ class Graph:
 
     edges: Mapping[str, frozenset[str]]
     owner: Mapping[str, str]
+    #: Node -> ``"const" | "func" | "class" | "method" | "module" | "default"``.
+    #: ``const`` and ``default`` are the two that run at IMPORT time, which is
+    #: what :func:`frozen_captures` needs to know.
+    kind: Mapping[str, str] = types.MappingProxyType({})
+    #: Node -> the subset of its references that appear in CALL position.
+    #:
+    #: Only recorded for import-time nodes, and the distinction is the whole
+    #: reason :func:`frozen_captures` gives a usable answer.
+    #: ``pipeline._STRATEGIES = (SpineLayout, FreeformLayout)`` NAMES two
+    #: classes at import; it does not RUN them, so it freezes nothing.
+    #: ``junction._KEEPOUT = tuple(sorted(_keepout()))`` calls, so everything
+    #: ``_keepout`` reaches really is resolved once and kept.
+    calls: Mapping[str, frozenset[str]] = types.MappingProxyType({})
 
     def closure(self, roots: Iterable[str], *, block: Iterable[str] = ()) -> frozenset[str]:
         """Everything reachable from ``roots``, never entering a blocked module."""
@@ -207,11 +222,73 @@ def _refs(
     return found
 
 
+def _call_refs(
+    node: ast.AST,
+    *,
+    module: str,
+    imports: Mapping[str, str],
+    local: frozenset[str],
+    modules: frozenset[str],
+) -> set[str]:
+    """References in CALL position -- the ones an import-time expression runs."""
+    kw = {"module": module, "imports": imports, "local": local, "modules": modules}
+    out: set[str] = set()
+    for sub in ast.walk(node):
+        if isinstance(sub, ast.Call):
+            out |= _refs(sub.func, **kw)  # type: ignore[arg-type]
+    return out
+
+
+def _default_refs(
+    fn: ast.FunctionDef | ast.AsyncFunctionDef,
+    *,
+    module: str,
+    imports: Mapping[str, str],
+    local: frozenset[str],
+    modules: frozenset[str],
+) -> set[str]:
+    """Rules captured in a signature's DEFAULT values.
+
+    ``def addon_axis_aligned(..., *, limit_deg: float = ADDON_AXIS_DEG)`` reads
+    the constant once, when the ``def`` executes.  Rebinding the constant
+    afterwards cannot move it, which is why R4 sees such a rule as inert even
+    though it is plainly consulted.
+    """
+    out: set[str] = set()
+    kw = {"module": module, "imports": imports, "local": local, "modules": modules}
+    for default in (*fn.args.defaults, *(d for d in fn.args.kw_defaults if d is not None)):
+        out |= _refs(default, **kw)  # type: ignore[arg-type]
+    return out
+
+
+def _default_call_refs(
+    fn: ast.FunctionDef | ast.AsyncFunctionDef,
+    *,
+    module: str,
+    imports: Mapping[str, str],
+    local: frozenset[str],
+    modules: frozenset[str],
+) -> set[str]:
+    out: set[str] = set()
+    kw = {"module": module, "imports": imports, "local": local, "modules": modules}
+    for default in (*fn.args.defaults, *(d for d in fn.args.kw_defaults if d is not None)):
+        out |= _call_refs(default, **kw)  # type: ignore[arg-type]
+    return out
+
+
+@functools.lru_cache(maxsize=1)
 def build_graph() -> Graph:
+    """Parse the whole package once and index what names what.
+
+    Cached because four mechanisms want the same graph and parsing 108 modules
+    for each of them is a second apiece out of a suite with 17 to spare.
+    """
     files = _source_files()
     modules = frozenset(files)
     edges: dict[str, set[str]] = {}
     owner: dict[str, str] = {}
+    kind: dict[str, str] = {}
+    calls: dict[str, set[str]] = {}
 
     parsed: dict[str, ast.Module] = {
         name: ast.parse(path.read_text(encoding="utf-8")) for name, path in files.items()
@@ -224,28 +301,55 @@ def build_graph() -> Graph:
         imports = _import_map(module, tree, modules)
         local = locals_by_module[module]
 
-        def add(node_name: str, refs: set[str], *, owning: str = module) -> None:
+        def add(
+            node_name: str,
+            refs: set[str],
+            node_kind: str,
+            *,
+            owning: str = module,
+            called: set[str] | None = None,
+        ) -> None:
             edges.setdefault(node_name, set()).update(refs)
             owner[node_name] = owning
+            kind[node_name] = node_kind
+            if called:
+                calls.setdefault(node_name, set()).update(called)
 
         loose: set[str] = set()
         for stmt in tree.body:
             kw = {"module": module, "imports": imports, "local": local, "modules": modules}
             if isinstance(stmt, ast.FunctionDef | ast.AsyncFunctionDef):
-                add(f"{module}.{stmt.name}", _refs(stmt, **kw))  # type: ignore[arg-type]
+                node = f"{module}.{stmt.name}"
+                add(node, _refs(stmt, **kw), "func")  # type: ignore[arg-type]
+                defaults = _default_refs(stmt, **kw)  # type: ignore[arg-type]
+                if defaults:
+                    add(
+                        f"{node}.<defaults>",
+                        defaults,
+                        "default",
+                        called=_default_call_refs(stmt, **kw),  # type: ignore[arg-type]
+                    )
             elif isinstance(stmt, ast.ClassDef):
                 cls = f"{module}.{stmt.name}"
                 body_refs: set[str] = set()
                 for inner in stmt.body:
                     if isinstance(inner, ast.FunctionDef | ast.AsyncFunctionDef):
                         method = f"{cls}.{inner.name}"
-                        add(method, _refs(inner, **kw))  # type: ignore[arg-type]
+                        add(method, _refs(inner, **kw), "method")  # type: ignore[arg-type]
                         body_refs.add(method)
+                        defaults = _default_refs(inner, **kw)  # type: ignore[arg-type]
+                        if defaults:
+                            add(
+                                f"{method}.<defaults>",
+                                defaults,
+                                "default",
+                                called=_default_call_refs(inner, **kw),  # type: ignore[arg-type]
+                            )
                     else:
                         body_refs |= _refs(inner, **kw)  # type: ignore[arg-type]
                 for deco in stmt.decorator_list:
                     body_refs |= _refs(deco, **kw)  # type: ignore[arg-type]
-                add(cls, body_refs)
+                add(cls, body_refs, "class")
             elif isinstance(stmt, ast.Assign | ast.AnnAssign):
                 targets = (
                     [t for t in stmt.targets if isinstance(t, ast.Name)]
@@ -253,18 +357,23 @@ def build_graph() -> Graph:
                     else ([stmt.target] if isinstance(stmt.target, ast.Name) else [])
                 )
                 value_refs = _refs(stmt.value, **kw) if stmt.value is not None else set()  # type: ignore[arg-type]
+                called = (
+                    _call_refs(stmt.value, **kw) if stmt.value is not None else set()  # type: ignore[arg-type]
+                )
                 if targets:
                     for t in targets:
-                        add(f"{module}.{t.id}", set(value_refs))
+                        add(f"{module}.{t.id}", set(value_refs), "const", called=set(called))
                 else:
                     loose |= value_refs
             else:
                 loose |= _refs(stmt, **kw)  # type: ignore[arg-type]
-        add(module, loose)
+        add(module, loose, "module")
 
     return Graph(
         edges={k: frozenset(v) for k, v in edges.items()},
         owner=dict(owner),
+        kind=dict(kind),
+        calls={k: frozenset(v) for k, v in calls.items()},
     )
 
 
@@ -365,6 +474,42 @@ def flattened() -> tuple[Entry, ...]:
         if not _is_lookup(registry.resolve(entry)):
             out.append(entry)
     return tuple(out)
+
+
+def frozen_captures(graph: Graph | None = None) -> dict[str, tuple[str, ...]]:
+    """Where each rule is read ONCE, at import, and cached forever after.
+
+    Two shapes, both of which look identical to a mutation test and neither of
+    which is a defect on its own:
+
+    * a module-level constant computed from the rule --
+      ``junction._KEEPOUT = tuple(sorted(_keepout()))`` and
+      ``rules.SLOT_ALIGN_COS = cos(SKEW_AXIS_DEG)``.  This is Phase 2's
+      "compile, don't call" pattern, working as designed.
+    * a rule used as a DEFAULT ARGUMENT --
+      ``addon_axis_aligned(..., limit_deg=ADDON_AXIS_DEG)``.  Same effect,
+      much less obviously deliberate.
+
+    R4 needs this because without it a frozen rule is indistinguishable from an
+    ignored one, and reporting "the search does not consult ADDON_AXIS_DEG"
+    when the truth is "it consults a copy taken at import" is the kind of
+    confident wrong answer this whole plan exists to stop.
+    """
+    g = graph if graph is not None else build_graph()
+    captured: dict[str, frozenset[str]] = {}
+    for node, node_kind in g.kind.items():
+        if node_kind not in {"const", "default"}:
+            continue
+        direct = g.edges.get(node, frozenset())
+        run = g.closure(g.calls.get(node, frozenset()))
+        captured[node] = direct | run
+    out: dict[str, tuple[str, ...]] = {}
+    for entry in registry.rules():
+        node = entry.dotted
+        holders = [n for n, reach in captured.items() if n != node and node in reach]
+        if holders:
+            out[entry.symbol] = tuple(sorted(holders))
+    return out
 
 
 def hardcoding_readers(graph: Graph | None = None) -> dict[str, tuple[str, ...]]:
