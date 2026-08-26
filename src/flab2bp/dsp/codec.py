@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 from fractions import Fraction
 
+from flab2bp.dsp import planet
 from flab2bp.dsp.envelope import (
     BlueprintFormatError,
     build_envelope,
@@ -194,16 +195,44 @@ def tile_to_local_offset(
 
 
 def _area_for(placement: Placement) -> BlueprintArea:
+    """The single area record, with the band this extent actually belongs to.
+
+    ``area_segments`` was the literal 200 for every blueprint we have ever
+    written, which says "this was copied from the equatorial band" whatever the
+    extent is.  The game writes the band it copied FROM
+    (``BlueprintUtils.cs:1426``), and :func:`flab2bp.dsp.planet.band_for_extent`
+    is the same quantisation run forwards: the smallest band the extent fits, in
+    either orientation.
+
+    A strategy that has VERIFIED which band its layout pastes in records the
+    answer in ``stats["area_segments"]`` and that wins, because it is a stronger
+    claim: the extent-only answer says the area fits, the verified one says the
+    game accepts it.  ``layout.spine._band_rejected`` is what sets it.  Without
+    it the extent is all there is to go on.
+
+    An extent that fits NO band raises :class:`~flab2bp.dsp.planet.BandRefusal`
+    rather than falling back to 200.  Such a blueprint crosses a tropic at every
+    anchor on the planet and the game refuses it with
+    ``EBuildCondition.BlueprintAreaCrossTropic``; writing 200 would encode a
+    blueprint that cannot be pasted anywhere and say nothing about it.
+    """
     min_x, min_y, max_x, max_y = placement.bounds
+    width = max(1, max_x - min_x + 1)
+    height = max(1, max_y - min_y + 1)
+    verified = placement.stats.get("area_segments")
     return BlueprintArea(
         index=0,
         parent_index=-1,
         tropic_anchor=0,
-        area_segments=200,
+        area_segments=(
+            int(verified)
+            if verified is not None
+            else planet.band_for_extent(width, height).band.area_segments
+        ),
         anchor_local_offset_x=0,
         anchor_local_offset_y=0,
-        width=max(1, max_x - min_x + 1),
-        height=max(1, max_y - min_y + 1),
+        width=width,
+        height=height,
     )
 
 
