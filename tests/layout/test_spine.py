@@ -2222,6 +2222,36 @@ class TestLinkingATowerTheNetworkCannotReach:
         for dx, dy in ((2, 2), (3, 0), (0, 3)):
             assert (dx, 10 + dy) not in keep, f"({dx},{dy}) is legal and denied"
 
+    def test_the_keep_out_covers_a_power_node_that_is_not_a_tower(self) -> None:
+        """A Ray Receiver and an Energy Exchanger join the network too.
+
+        The spacing rule is keyed on ``PrefabDesc.isPowerNode``, not on being a
+        Tesla Tower, and two of the three power nodes this pipeline can emit are
+        mode-driven MACHINES.  Exercised on a 3x3 Solar Panel because that is
+        the smallest node whose halo reaches past its own footprint -- for the
+        7x7 Ray Receiver and the 9x9 Energy Exchanger the 2-tile halo is inside
+        the footprint, so the term is real and a no-op for them.
+        """
+        from flab2bp.layout.spine import _tower_keep_out
+
+        panel = catalog.building(2205)
+        assert panel.is_power_node and (panel.width, panel.height) == (3, 3)
+        keep = _tower_keep_out(
+            [
+                PlacedBuilding(
+                    item_id=2205,
+                    model_index=panel.model_index,
+                    x=10,
+                    y=10,
+                    width=panel.width,
+                    height=panel.height,
+                )
+            ]
+        )
+        # Centre (11, 11); the footprint alone would stop at +/-1.
+        assert (13, 11) in keep and (11, 13) in keep, "the halo must reach past 3x3"
+        assert (14, 11) not in keep, "and stop where the rule stops"
+
     def test_the_coverage_top_up_never_stands_two_towers_too_close(self) -> None:
         """The pass that could, end to end, on ground built to force the case.
 

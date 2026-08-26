@@ -164,6 +164,23 @@ chains areas through `parentIndex`. Dropped into one flat frame they report
 apart — inside their own 3×3 footprints, which is impossible. Restricting to
 pairs within one area takes two of the four to zero on its own.
 
+### A power node is not only a tower, and one term is a no-op today
+
+`validate._supplies_power` and both packers had "power node" and "Tesla Tower"
+as the same idea. They are not: **thirteen** buildings carry
+`PrefabDesc.isPowerNode`, and two of the three this pipeline can emit — the Ray
+Receiver and the Energy Exchanger — are mode-driven *machines*. Both packers now
+keep their spacing against every power node they have placed, keyed on that
+node's own flags rather than on the tower's.
+
+**And for those two it changes nothing, which is worth saying rather than
+leaving a passing test to imply otherwise.** The ordinary halo reaches 2 tiles;
+a Ray Receiver is 7×7 and an Energy Exchanger 9×9, so the halo lies entirely
+inside their own footprints and the footprint already excluded it. The smallest
+node that separates the two is a 3×3 **Solar Panel**, and that is what the tests
+exercise the mechanism on. The term is ported because it is the rule, not
+because it was costing anything.
+
 ### What complying with it cost
 
 Both packers were changed to consult `rules.power_node_keepout_offsets`, so the

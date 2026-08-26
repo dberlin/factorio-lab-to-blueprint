@@ -2510,7 +2510,13 @@ def _emit(
     # a tower in the row above, or in the top band, or a band step of 2 when the
     # reach table bottoms out at 1.  So every tower this function places goes
     # through one gate, and the gate reads the rule rather than a pitch.
-    placed_towers: set[tuple[int, int]] = set()
+    # `(centre_x, centre_y, offsets)` per power node already committed.  A power
+    # node is not only a tower: a Ray Receiver and an Energy Exchanger are
+    # mode-driven MACHINES that join the network, and the rule does not care
+    # which of the two a building is.  The offsets are computed per peer, so a
+    # node on a wider tier keeps its own distance rather than the tower's.
+    placed_nodes: list[tuple[int, int, frozenset[tuple[int, int]]]] = []
+    tower_node = catalog.building(CONSTANTS.tesla_item_id).power_node
     tower_spacing = _tower_spacing()
 
     def stand_tower(x: int, ys: Sequence[int]) -> tuple[int, int] | None:
@@ -2525,7 +2531,9 @@ def _emit(
         judge either way.
         """
         for y in ys:
-            if not any((x + dx, y + dy) in placed_towers for dx, dy in tower_spacing):
+            if not any(
+                (x - cx, y - cy) in offsets for cx, cy, offsets in placed_nodes
+            ):
                 return (x, y)
         return None
 
@@ -2545,6 +2553,31 @@ def _emit(
         packed.append(slots)
         row_widths.append(width)
     content_w = max([*row_widths, 1])
+
+    # Every MACHINE that is a power node, before any tower is placed.  A Ray
+    # Receiver and an Energy Exchanger both join the network, both are subject to
+    # `EBuildCondition.PowerTooClose`, and both are things this strategy packs
+    # into a row as an ordinary machine -- so a tower slot beside one is the same
+    # defect as a tower slot beside another tower.  Seeded FIRST because the row
+    # walk interleaves towers with machines and a tower may be emitted before the
+    # machine that will stand next to it.
+    if power:
+        for r, slots in enumerate(packed):
+            for s in slots:
+                if s.key is None:
+                    continue
+                g = groups[s.key]
+                peer = catalog.building(g.item_id).power_node
+                if not peer.is_power_node:
+                    continue
+                placed_nodes.append(
+                    (
+                        s.x + g.width // 2,
+                        row_y[r] + g.height // 2,
+                        _spacing_offsets(tower_node, peer)
+                        | _spacing_offsets(peer, tower_node),
+                    )
+                )
 
     # --- top tower band ---------------------------------------------------
     # Sits above the first corridor, covering the external input lanes that row 0
@@ -2569,7 +2602,7 @@ def _emit(
             x += 2 * band_hr
             if site is None:
                 continue
-            placed_towers.add(site)
+            placed_nodes.append((site[0], site[1], tower_spacing))
             buildings.append(
                 PlacedBuilding(
                     item_id=CONSTANTS.tesla_item_id,
@@ -2597,7 +2630,7 @@ def _emit(
                 site = stand_tower(s.x, sorted(band, key=lambda y: (abs(y - centre), y)))
                 if site is None:
                     continue
-                placed_towers.add(site)
+                placed_nodes.append((site[0], site[1], tower_spacing))
                 buildings.append(
                     PlacedBuilding(
                         item_id=CONSTANTS.tesla_item_id,
@@ -5062,12 +5095,19 @@ def _tower_keep_out(buildings: list[PlacedBuilding]) -> set[tuple[int, int]]:
                     if math.hypot(hx - tx, hy - ty) < need:
                         out.add((hx, hy))
         if info.is_power_node:
-            # Keyed on the OTHER node's flags as well as the tower's, so a
-            # future Wind Turbine in a spine build gets its own 8.36-tile tier
-            # rather than the Tesla Tower's 2.785.
+            # Keyed on the OTHER node's flags as well as the tower's, so a Ray
+            # Receiver, an Energy Exchanger or a future Wind Turbine gets its own
+            # tier rather than the Tesla Tower's 2.785.  A power node is not only
+            # a tower: two of the three we can emit are mode-driven MACHINES.
             peer = info.power_node
             if peer not in spacing:
-                spacing[peer] = _spacing_offsets(tower_node, peer)
+                # BOTH directions.  The gate `num37` is read off the building
+                # being PLACED, so a Wind Turbine scans 10.5 world units for a
+                # tower while the tower scans 3.5 for it; the union is the set of
+                # cells at which either preview would be reddened.
+                spacing[peer] = _spacing_offsets(tower_node, peer) | _spacing_offsets(
+                    peer, tower_node
+                )
             for dx, dy in spacing[peer]:
                 out.add((b.x + dx, b.y + dy))
     return out

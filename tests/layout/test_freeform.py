@@ -3222,6 +3222,59 @@ class TestPowerClaimsItsGroundBeforeRouting:
                 "that paste with EBuildCondition.PowerTooClose"
             )
 
+    def test_no_planned_tower_stands_too_close_to_a_power_NODE_MACHINE(self) -> None:
+        """A power node is not only a tower, and the greedy did not know that.
+
+        The pack places mode-driven MACHINES that join the network -- a Ray
+        Receiver, an Energy Exchanger -- and ``free`` knew only that their own
+        tiles were taken.  ``EBuildCondition.PowerTooClose`` does not care which
+        of the two a building is.
+
+        **The two we actually emit cannot show it, and that is worth writing
+        down rather than hiding behind a passing test.**  A Ray Receiver is 7x7
+        and an Energy Exchanger 9x9, while the ordinary spacing halo reaches
+        only 2 tiles, so for both of them the halo lies entirely inside their own
+        footprint and the footprint already excluded it.  The term is a no-op
+        today.  It is ported because it is the rule, and a 3x3 Solar Panel --
+        also a power node, halo reach 2 against a footprint of 1 either side --
+        is the smallest building that separates the two, so the mechanism is
+        exercised on that.
+        """
+        panel = catalog.building(2205)
+        assert panel.is_power_node and (panel.width, panel.height) == (3, 3)
+        canvas = _Canvas(limit=(0, 0, 20, 20))
+        canvas.add(
+            PlacedBuilding(
+                item_id=2205,
+                model_index=panel.model_index,
+                x=9,
+                y=9,
+                width=panel.width,
+                height=panel.height,
+            ),
+            solid=True,
+        )
+        sites = _power_plan(canvas, (0, 0, 20, 20))
+        assert sites
+        cx, cy = 9 + panel.width // 2, 9 + panel.height // 2
+        keepout = {
+            (dx, dy)
+            for dx, dy, dz in rules.power_node_keepout_offsets(
+                panel.power_node,
+                catalog.building(catalog.TESLA_TOWER_ID).power_node,
+            )
+            if dz == 0
+        }
+        assert any(abs(dx) > 1 or abs(dy) > 1 for dx, dy in keepout), (
+            "a 3x3 building whose halo is inside its own footprint would make "
+            "this test vacuous"
+        )
+        for x, y in sites:
+            assert (x - cx, y - cy) not in keepout, (
+                f"tower planned at {(x, y)} against a Solar Panel centred at "
+                f"{(cx, cy)}; the game refuses that paste"
+            )
+
     def test_a_tie_is_broken_towards_open_ground_not_into_a_channel(self) -> None:
         """The tie-break points away from the corridors, and that is the point.
 

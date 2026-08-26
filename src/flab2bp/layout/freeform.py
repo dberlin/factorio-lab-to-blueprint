@@ -5841,6 +5841,27 @@ def _power_plan(canvas: _Canvas, core: tuple[int, int, int, int]) -> list[tuple[
     if spacing_reach > pad:  # pragma: no cover - the pad is link + reach + 1
         raise AssertionError("the tower-spacing stamp does not fit inside the pad")
 
+    # AND THE POWER NODES THAT ARE ALREADY HERE, which are not all towers.  A Ray
+    # Receiver and an Energy Exchanger are mode-driven MACHINES that join the
+    # network and are subject to the same rule; the pack has already placed them
+    # and `free` knows only that their own tiles are taken.  Their spacing is
+    # keyed on their own flags, so a node on a wider tier keeps its own distance.
+    for b in canvas.buildings:
+        try:
+            peer = catalog.building(b.item_id).power_node
+        except KeyError:
+            continue
+        if not peer.is_power_node:
+            continue
+        cx = b.x + b.width // 2 - min_x + pad
+        cy = b.y + b.height // 2 - min_y + pad
+        for dx, dy, dz in rules.power_node_keepout_offsets(peer, tower.power_node):
+            if dz:
+                continue
+            gx, gy = cx + dx, cy + dy
+            if 0 <= gx < shape[0] and 0 <= gy < shape[1]:
+                free[gx, gy] = False
+
     def spread(mask: np.ndarray) -> np.ndarray:
         """Cells within tower reach of anything in ``mask``."""
         out = np.zeros(shape, dtype=bool)
