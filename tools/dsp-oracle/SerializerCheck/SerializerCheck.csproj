@@ -1,0 +1,49 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Not shipped. A desktop harness that links the plugin's serialiser sources and
+    runs them against real game types, so the JSON shape and the float formatting
+    are verified here rather than discovered in the middle of a play session.
+
+      dotnet run -c Release (from tools/dsp-oracle/SerializerCheck)
+  -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <AssemblyName>SerializerCheck</AssemblyName>
+    <RootNamespace>FlabOracle.Check</RootNamespace>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <DspManagedDir Condition="'$(DspManagedDir)' == ''">$(HOME)/Dyson Sphere Program/DSPGAME_Data/Managed/</DspManagedDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <!-- The plugin's BepInEx-free sources, compiled in so their internals are reachable. -->
+    <Compile Include="../Json.cs" />
+    <Compile Include="../Capture.cs" />
+    <Compile Include="../Dumper.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="Assembly-CSharp">
+      <HintPath>$(DspManagedDir)Assembly-CSharp.dll</HintPath>
+    </Reference>
+    <Reference Include="UnityEngine">
+      <HintPath>$(DspManagedDir)UnityEngine.dll</HintPath>
+    </Reference>
+    <Reference Include="UnityEngine.CoreModule">
+      <HintPath>$(DspManagedDir)UnityEngine.CoreModule.dll</HintPath>
+    </Reference>
+    <Reference Include="UnityEngine.PhysicsModule">
+      <HintPath>$(DspManagedDir)UnityEngine.PhysicsModule.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+
+</Project>
