@@ -13,7 +13,8 @@ from __future__ import annotations
 
 import collections
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+from fractions import Fraction
 from pathlib import Path
 
 import pytest
@@ -605,3 +606,311 @@ def test_the_chemical_plant_table_is_the_games_and_not_a_ring() -> None:
     # The north face slots face north, the inner row faces south.
     assert all(p.fy > 0.9 for p in poses if p.dy > 0)
     assert all(p.fy < -0.9 for p in poses if p.dy < 0)
+
+
+# --- the seat, against the only blueprint the game has answered --------------
+#
+# The user pasted `tests/fixtures/ours/sorter-collide-freeform.txt`, force-built
+# it, and blueprinted the result back out as `sorter-collide-built.txt`.  The
+# game built 33 of our 38 sorters, and where it put their ends is the only
+# direct evidence anywhere of what `RefreshBuildPreview` does to a sorter we
+# wrote.  These tests hold `slots.seated_sorter` to it.
+
+OURS = FIXTURES / "ours" / "sorter-collide-freeform.txt"
+BUILT = FIXTURES / "ours" / "sorter-collide-built.txt"
+
+#: The built copy is a quarter turn and a translation off ours, solved against
+#: all 17 machines and exact to 2e-5.  Buildings are also REORDERED by the game,
+#: so nothing may be matched by index.
+def _as_built(x: float, y: float) -> tuple[float, float]:
+    return (y + 3.0, -x + 27.0)
+
+
+#: The latitude the COPY was taken at, and the one free parameter in the
+#: comparison below.  It is recovered from the 32 machine ends and falls inside
+#: the band the built blueprint's own ``area_segments`` of 160 requires -- the
+#: game's longitude step is fixed at the anchor's latitude, so a column away
+#: from the equator is ``area_segments / 200 / cos(lat)`` of a tile rather than
+#: a tile.  Undoing that is what separates the seat model from where the user
+#: happened to be standing; `geom.collide` documents the same effect.
+_BUILT_LAT = -0.7916790
+_BUILT_LNG_STEP = 2.0 * math.pi / (160 * 5)
+_LAT_STEP = 2.0 * math.pi / 1000
+
+
+def _on_sphere(tile: tuple[float, float], off: tuple[float, float]) -> tuple[float, float]:
+    """A flat sub-tile offset, carried onto the sphere the copy was taken on.
+
+    ``tile`` is a grid node in the BUILT frame, which maps tile-for-tile; only
+    the sub-tile remainder takes the column compression, and it takes it as a
+    world displacement rather than as a number of columns.
+    """
+    lat = _BUILT_LAT + tile[1] * _LAT_STEP
+    lng = tile[0] * _BUILT_LNG_STEP
+    scale = 0.2 + colliders.PLANET_RADIUS
+    base = (
+        math.cos(lat) * math.sin(lng) * scale,
+        math.sin(lat) * scale,
+        math.cos(lat) * -math.cos(lng) * scale,
+    )
+    # our +y (north) is the built frame's +x (east) after the quarter turn
+    east, north = off[1] * colliders.GRID_ARC, -off[0] * colliders.GRID_ARC
+    e = (math.cos(lng), 0.0, math.sin(lng))
+    n = (-math.sin(lat) * math.sin(lng), math.cos(lat), math.sin(lat) * math.cos(lng))
+    p = tuple(base[i] + e[i] * east + n[i] * north for i in range(3))
+    norm = math.sqrt(sum(c * c for c in p))
+    return (
+        math.atan2(p[0], -p[2]) / _BUILT_LNG_STEP,
+        (math.asin(p[1] / norm) - _BUILT_LAT) / _LAT_STEP,
+    )
+
+
+def _placed(bs: Sequence[BlueprintBuilding]) -> list[PlacedBuilding]:
+    """A decoded blueprint as PlacedBuildings, index-aligned so links resolve."""
+    out = []
+    for b in bs:
+        d = cat.building(b.item_id)
+        out.append(
+            PlacedBuilding(
+                item_id=b.item_id,
+                model_index=b.model_index,
+                x=b.x - (d.width - 1) / 2,  # type: ignore[arg-type]
+                y=b.y - (d.height - 1) / 2,  # type: ignore[arg-type]
+                z=b.z,  # type: ignore[arg-type]
+                width=d.width,
+                height=d.height,
+                yaw=b.yaw,
+                x2=b.x2,  # type: ignore[arg-type]
+                y2=b.y2,  # type: ignore[arg-type]
+                z2=b.z2,  # type: ignore[arg-type]
+                yaw2=b.yaw2,
+                input_obj=b.input_obj_idx if b.input_obj_idx >= 0 else None,
+                output_obj=b.output_obj_idx if b.output_obj_idx >= 0 else None,
+                input_from_slot=b.input_from_slot,
+                output_to_slot=b.output_to_slot,
+            )
+        )
+    return out
+
+
+def _answer_key() -> list[tuple[PlacedBuilding, BlueprintBuilding, list[PlacedBuilding]]]:
+    """Our 38 sorters paired with the 33 the game built, matched by POSITION."""
+    ours = decode(OURS.read_text(encoding="utf-8")).buildings
+    built = decode(BUILT.read_text(encoding="utf-8")).buildings
+    placed = _placed(ours)
+    mine = [b for b in ours if cat.is_sorter(b.item_id)]
+    theirs = [b for b in built if cat.is_sorter(b.item_id)]
+    scored = []
+    for b in mine:
+        assert b.x2 is not None and b.y2 is not None
+        e1, e2 = _as_built(b.x, b.y), _as_built(b.x2, b.y2)
+        d, c = min(
+            (max(math.dist(e1, (c.x, c.y)), math.dist(e2, (c.x2, c.y2))), c)
+            for c in theirs
+        )
+        scored.append((d, b, c))
+    out, used = [], set()
+    for d, b, c in sorted(scored, key=lambda r: r[0]):
+        if d > 1.0 or c.index in used:
+            continue
+        used.add(c.index)
+        out.append((placed[b.index], c, placed))
+    return out
+
+
+def _seat_errors(*, drag: bool) -> list[float]:
+    """How far each of the 66 built ends is from where the seat says it is."""
+    real = S._drag_belt_end
+    if not drag:
+        S._drag_belt_end = lambda *a, **k: None
+    try:
+        errs = []
+        for b, c, placed in _answer_key():
+            seat = S.seated_sorter(b, placed)
+            assert seat is not None
+            assert b.x2 is not None and b.y2 is not None
+            pre = [(b.x, b.y), (b.x2, b.y2)]
+            got = [(seat.x, seat.y), (seat.x2, seat.y2)]
+            rec = [(c.x, c.y), (c.x2, c.y2)]
+            peers = [
+                placed[b.input_obj] if b.input_obj is not None else None,
+                placed[b.output_obj] if b.output_obj is not None else None,
+            ]
+            for k in (0, 1):
+                p = peers[k]
+                anchor = (
+                    pre[k]
+                    if p is None or cat.is_belt(p.item_id)
+                    else (p.x + (p.width - 1) / 2, p.y + (p.height - 1) / 2)
+                )
+                off = (got[k][0] - anchor[0], got[k][1] - anchor[1])
+                errs.append(math.dist(_on_sphere(_as_built(*anchor), off), rec[k]))
+    finally:
+        S._drag_belt_end = real
+    return errs
+
+
+def test_the_seat_reproduces_every_end_the_game_built() -> None:
+    """33 sorters, 66 ends, and the game put every one where this says.
+
+    The five it refused are not here: they are the ones `game.sorter_collide`
+    convicts, and the game created no record for them to be compared against.
+    """
+    errs = _seat_errors(drag=True)
+    assert len(errs) == 66
+    assert max(errs) < 0.01, f"worst end off by {max(errs):.5f} tiles"
+
+
+def test_without_the_belt_end_drag_the_seat_is_wrong_by_two_thirds_of_a_tile() -> None:
+    """The mutation check on :func:`slots._drag_belt_end`.
+
+    Seating the machine end and leaving the belt end on the tile we wrote is
+    not a smaller model, it is a wrong one: `RefreshBuildPreview` slides the
+    belt end by the part of the seat delta that is ACROSS the sorter, and on
+    this blueprint that is up to 0.638 of a tile.
+    """
+    errs = _seat_errors(drag=False)
+    assert max(errs) > 0.6
+    assert sum(e < 0.01 for e in errs) == 41, "only the ends the drag would not have moved"
+
+
+def _bench() -> tuple[list[PlacedBuilding], PlacedBuilding]:
+    """A 3x3 Assembling Machine centred on (5, 5) with a lane two tiles south.
+
+    ``buildings[0]`` is the machine, ``[1..3]`` are lane tiles at y = 2, 0 and
+    -2, and the sorter returned reaches from the first of them into the
+    machine's south face.
+    """
+    machine = PlacedBuilding(
+        item_id=2304,
+        model_index=cat.building(2304).model_index,
+        x=4,
+        y=4,
+        width=3,
+        height=3,
+    )
+    belts = [
+        PlacedBuilding(
+            item_id=2001, model_index=cat.building(2001).model_index, x=5, y=y
+        )
+        for y in (2, 0, -2)
+    ]
+    into = PlacedBuilding(
+        item_id=2011,
+        model_index=cat.building(2011).model_index,
+        x=5,
+        y=2,
+        x2=5,
+        y2=4,
+        z2=Fraction(0),
+        input_obj=1,
+        output_obj=0,
+    )
+    return [machine, *belts], into
+
+
+def test_a_sorter_still_carrying_its_default_slots_seats_on_the_real_one() -> None:
+    """The seat is the SLOT, and a strategy has not assigned one yet.
+
+    A sorter comes out of a strategy with the dataclass default of zero in all
+    four slot fields; ``assign_sorter_slots`` fills them in as the last pass
+    before emission.  Seating on the recorded zero would put every machine end
+    on one arbitrary corner of the machine, which is how freeform's bridge guard
+    came to pass bridges the game then refused.
+    """
+    buildings, fresh = _bench()
+    assert fresh.output_to_slot == 0, "the default a strategy leaves behind"
+    assert S.emitted_sorter(fresh, buildings).output_to_slot == 7
+    seat = S.seated_sorter(fresh, buildings)
+    assert seat is not None
+    # Slot 7 is the middle of the south face, an eighth of a tile inside the
+    # tile we wrote.  Slot 0 -- the recorded default -- is its western corner,
+    # four fifths of a tile away across the face.
+    assert (seat.x2, seat.y2) == pytest.approx((5.0, 4.1246), abs=1e-3)
+    on_slot_zero = S.slot_offset(2304, fresh.yaw, 0)
+    assert abs(on_slot_zero[0]) == pytest.approx(0.7958, abs=1e-3)
+
+
+def test_two_sorters_meeting_on_one_belt_tile_are_not_clear() -> None:
+    """The predicate both strategies ask before they take a column.
+
+    Two ends on the same belt tile is the shape that trips the paste: both grow
+    :data:`~flab2bp.dsp.colliders.SORTER_END_EXTENSION` past that tile, so they
+    overlap by twice it however short the two sorters are.
+    """
+    buildings, into = _bench()
+    buildings = [*buildings, into]
+    standing = S.sorter_seat_boxes(buildings)
+    assert len(standing) == 1
+    meeting = PlacedBuilding(
+        item_id=2011,
+        model_index=cat.building(2011).model_index,
+        x=5,
+        y=0,
+        x2=5,
+        y2=2,
+        z2=Fraction(0),
+        input_obj=2,
+        output_obj=1,
+    )
+    assert not S.sorter_seat_is_clear(meeting, buildings, standing)
+    apart = PlacedBuilding(
+        item_id=2011,
+        model_index=cat.building(2011).model_index,
+        x=5,
+        y=-2,
+        x2=5,
+        y2=0,
+        z2=Fraction(0),
+        input_obj=3,
+        output_obj=2,
+    )
+    assert S.sorter_seat_is_clear(apart, buildings, standing)
+
+
+def test_two_columns_of_one_machine_face_are_clear_of_each_other() -> None:
+    """The other half of the same rule, and the one a wrong slot gets wrong.
+
+    Two sorters feeding one machine from adjacent columns of the same face is
+    the commonest shape freeform builds, and it is legal: the paste seats their
+    machine ends on the two slots they name, four fifths of a tile apart, and
+    the boxes clear each other.  Seat them on the RECORDED slot instead -- which
+    is zero on both until ``assign_sorter_slots`` runs -- and both ends land on
+    the same pose, so the pair reads as a collision that is not there.
+    """
+    machine = PlacedBuilding(
+        item_id=2304,
+        model_index=cat.building(2304).model_index,
+        x=4,
+        y=4,
+        width=3,
+        height=3,
+    )
+    belts = [
+        PlacedBuilding(item_id=2001, model_index=cat.building(2001).model_index, x=x, y=2)
+        for x in (4, 5)
+    ]
+
+    def feeder(column: int, belt: int) -> PlacedBuilding:
+        return PlacedBuilding(
+            item_id=2011,
+            model_index=cat.building(2011).model_index,
+            x=column,
+            y=2,
+            x2=column,
+            y2=4,
+            z2=Fraction(0),
+            input_obj=belt,
+            output_obj=0,
+        )
+
+    standing = feeder(5, 2)
+    buildings = [machine, belts[0], belts[1], standing]
+    slots_named = {
+        S.emitted_sorter(standing, buildings).output_to_slot,
+        S.emitted_sorter(feeder(4, 1), buildings).output_to_slot,
+    }
+    assert len(slots_named) == 2, "adjacent columns must name different slots"
+    assert S.sorter_seat_is_clear(
+        feeder(4, 1), buildings, S.sorter_seat_boxes(buildings)
+    )

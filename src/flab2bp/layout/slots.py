@@ -102,7 +102,10 @@ __all__ = [
     "lane_orientation",
     "machine_slot",
     "probe_building",
+    "emitted_sorter",
     "seated_sorter",
+    "sorter_seat_is_clear",
+    "sorter_seat_boxes",
     "slot_forward",
     "slot_offset",
     "sorter_yaw",
@@ -537,32 +540,73 @@ def seated_sorter(
     ``None`` when the sorter has no second anchor, which
     ``sorter.anchors_present`` reports by name.
 
-    ONE TERM IS LEFT OUT, and it is named on
-    :func:`flab2bp.dsp.colliders.sorter_collisions`: when the OTHER end is a
-    belt lying across the sorter, the game drags that end sideways by the
-    seating delta.  It is bounded by the delta, and on the blueprint this was
-    built for it moves the collision depth from 0.300 to 0.263 units without
-    changing a verdict.
+    THE OTHER END COMES WITH IT.  Seating a machine end does not stretch the
+    sorter: three lines later the paste slides the BELT end sideways by the same
+    delta, so the sorter stays straight (``RefreshBuildPreview`` 2100-2107, and
+    the mirror image at 2151-2158)::
+
+        if (buildPreview2.output != null && buildPreview2.output.desc.isBelt)
+        {
+            if (Mathf.Abs(Vector3.Dot((buildPreview2.lpos2 - buildPreview2.lpos)
+                    .normalized, buildPreview2.output.lrot.Forward())) < 0.5f)
+            {
+                Vector3 vector6 = buildPreview2.lrot2.Forward();
+                float num39 = Vector3.Dot(zero, vector6);
+                buildPreview2.lpos2 += zero - vector6 * num39;
+            }
+        }
+
+    ``zero`` is the seating delta of the end just moved, and what is added back
+    is its component ACROSS the sorter's own axis, so the lateral part of the
+    seat carries and the along-axis part does not.  It is not a small term: it
+    is what puts the belt end 0.605 tiles off the tile we wrote for it on the
+    blueprint this was built for.
+
+    :data:`DRAG_MAX_ALIGNMENT` is the branch's own threshold, and the direction
+    it is measured against is the belt's RECORDED yaw -- the pose the paste
+    reads out of the blueprint, not the direction the belt turns out to run.
+    The two differ on one of the 33 sorters the game built, and the recorded
+    yaw is the one that predicts where it landed.
+
+    HOW EXACT THIS IS, on the only sample that can say.  The user force-built a
+    refused paste and blueprinted the result back out; the game built 33 of our
+    38 sorters, and every one of those 66 ends is where this function says it
+    is, to 2e-5 of a tile.  That comparison has to undo one thing first, and it
+    is not a fitted correction: the copy was taken at 45 degrees of latitude,
+    where a column is ``area_segments / 200 / cos(lat)`` of a tile rather than a
+    tile, which is the same fixed-longitude-step effect ``geom.collide``
+    documents.  ``area_segments`` is in the blueprint; the latitude is one
+    unknown recovered from the 32 machine ends, and it lands inside the band the
+    recorded ``area_segments`` requires.  A wrong seat model would not have
+    admitted any latitude at all.
     """
-    if sorter.x2 is None or sorter.y2 is None or sorter.z2 is None:
+    x2, y2, z2 = sorter.x2, sorter.y2, sorter.z2
+    if x2 is None or y2 is None or z2 is None:
         return None
+    # THE SLOT INDEX IS THE SEAT, so it is derived rather than read: a strategy
+    # asking this about a sorter it has just built carries the dataclass default
+    # of zero in all four fields until `assign_sorter_slots` runs.  After that
+    # pass the derivation returns what is already recorded, so this costs
+    # nothing and cannot disagree with what is emitted.
+    sorter = emitted_sorter(sorter, buildings)
     ends = [
         [float(sorter.x), float(sorter.y), float(sorter.z)],
-        [float(sorter.x2), float(sorter.y2), float(sorter.z2)],
+        [float(x2), float(y2), float(z2)],
+    ]
+    yaws = (sorter.yaw, sorter.yaw if sorter.yaw2 is None else sorter.yaw2)
+    links = (
+        (sorter.input_obj, sorter.input_from_slot),
+        (sorter.output_obj, sorter.output_to_slot),
+    )
+    peers = [
+        buildings[link] if link is not None and 0 <= link < len(buildings) else None
+        for link, _slot in links
     ]
     # True where the game's own branch is true: the end meets a belt, or meets
     # nothing.  Both grow the collider; a machine end does not.
     open_end = [True, True]
-    for k, (link, slot) in enumerate(
-        (
-            (sorter.input_obj, sorter.input_from_slot),
-            (sorter.output_obj, sorter.output_to_slot),
-        )
-    ):
-        if link is None or not 0 <= link < len(buildings):
-            continue
-        peer = buildings[link]
-        if cat.is_belt(peer.item_id):
+    for k, (peer, (_link, slot)) in enumerate(zip(peers, links, strict=True)):
+        if peer is None or cat.is_belt(peer.item_id):
             continue
         open_end[k] = False
         poses = cat.building(peer.item_id).slot_poses
@@ -573,7 +617,14 @@ def seated_sorter(
             continue
         dx, dy, dz = slot_offset(peer.item_id, peer.yaw, slot)
         cx, cy = _centre(peer)
-        ends[k] = [cx + dx, cy + dy, float(peer.z) + dz]
+        seated = [cx + dx, cy + dy, float(peer.z) + dz]
+        zero = (
+            seated[0] - ends[k][0],
+            seated[1] - ends[k][1],
+            seated[2] - ends[k][2],
+        )
+        ends[k] = seated
+        _drag_belt_end(ends, zero, k, peers, yaws)
     return colliders.SorterPreview(
         sorter.model_index,
         ends[0][0],
@@ -585,6 +636,124 @@ def seated_sorter(
         open_end[0],
         open_end[1],
     )
+
+
+def sorter_seat_boxes(
+    buildings: Sequence[PlacedBuilding], *, skip: int | None = None
+) -> list[colliders.Box]:
+    """The build collider of every sorter already standing, seated.
+
+    The list a strategy tests a candidate sorter against.  Building it once per
+    placement pass rather than once per candidate is the whole reason it is a
+    separate function: seating and boxing are quaternion arithmetic, and a
+    strategy that rebuilt this inside its column loop would be cubic in the
+    sorter count.
+
+    ``skip`` leaves one index out, for a caller re-testing a sorter it has
+    already appended.
+    """
+    out = []
+    for i, b in enumerate(buildings):
+        if i == skip or not cat.is_sorter(b.item_id):
+            continue
+        seat = seated_sorter(b, buildings)
+        if seat is not None:
+            out.append(colliders.sorter_box(seat))
+    return out
+
+
+def sorter_seat_is_clear(
+    candidate: PlacedBuilding,
+    buildings: Sequence[PlacedBuilding],
+    standing: Sequence[colliders.Box],
+) -> bool:
+    """May ``candidate`` be added without the paste refusing it as ``Collide``?
+
+    THE ONE PAIRING THE PASTE DOES NOT EXCUSE is sorter against sorter -- the
+    excusal in ``CheckBuildConditions`` is an exclusive OR on ``isInserter``, so
+    a sorter is forgiven against every other kind of building and against
+    nothing else.  :func:`flab2bp.dsp.colliders.sorter_collisions` carries the
+    C# for that and for the box, which is not the prefab box at the record's
+    position but one stretched between the sorter's two SEATED ends and grown
+    past any end that meets a belt or meets nothing.
+
+    Two ends that meet at the same belt tile are the shape that trips it: both
+    grow :data:`~flab2bp.dsp.colliders.SORTER_END_EXTENSION` past that tile, so
+    they overlap by twice it however short the sorters are.  A strategy that
+    places a sorter without asking this emits a blueprint the game draws red,
+    which is what ``game.sorter_collide`` then refuses -- and a refusal after
+    the fact costs a whole packing, so every site that appends a sorter asks
+    here first.
+
+    ``standing`` comes from :func:`sorter_seat_boxes`; the candidate must
+    already carry its links, because they are what decides where its ends sit.
+    """
+    seat = seated_sorter(candidate, buildings)
+    if seat is None:
+        return True
+    box = colliders.sorter_box(seat)
+    return not any(colliders.obb_overlap(box, other) for other in standing)
+
+
+#: ``RefreshBuildPreview`` 2102 and 2153 -- the belt end follows the seat only
+#: when the belt lies ACROSS the sorter rather than along it.  A belt running
+#: with the sorter is left where the record put it.
+DRAG_MAX_ALIGNMENT = 0.5
+
+
+def _forward(yaw: float) -> tuple[float, float]:
+    """``Quaternion.Euler(0, yaw, 0).Forward()``, in ``(east, north)`` tiles.
+
+    Unity's ``Vector3.forward`` is local ``+z``, which is north on our grid, so
+    a yaw of 0 points north and a yaw of 90 points east.
+    """
+    r = math.radians(yaw)
+    return (math.sin(r), math.cos(r))
+
+
+def _drag_belt_end(
+    ends: list[list[float]],
+    zero: tuple[float, float, float],
+    seated: int,
+    peers: Sequence[PlacedBuilding | None],
+    yaws: tuple[float, float],
+) -> None:
+    """Slide the belt end of a sorter whose other end has just been seated.
+
+    ``RefreshBuildPreview`` 2100-2107, and its mirror at 2151-2158.  ``zero`` is
+    the delta the seat just applied to end ``seated``; the belt end gains the
+    part of it that is ACROSS the sorter's own axis.  The vertical part of
+    ``zero`` carries whole, because the axis the game projects onto is the
+    tangent forward and has no radial component to remove.
+
+    Nothing happens unless the other end really is a belt.  The ``else if
+    (buildPreview2.output == null)`` arm three lines down does something else
+    entirely -- it rebuilds the far end out of the sorter's own length -- and is
+    not ported, because neither strategy emits a sorter with an end attached to
+    nothing: 0 of the 4076 sorters over 96 corpus cells of both strategies.
+    """
+    other = 1 - seated
+    belt = peers[other]
+    if belt is None or not cat.is_belt(belt.item_id):
+        return
+    # ``(lpos2 - lpos).normalized`` -- in world units, so the height difference
+    # counts at its own scale rather than at the tile pitch.
+    axis = (
+        (ends[1][0] - ends[0][0]) * colliders.GRID_ARC,
+        (ends[1][1] - ends[0][1]) * colliders.GRID_ARC,
+        (ends[1][2] - ends[0][2]) * WORLD_UNITS_PER_LEVEL,
+    )
+    length = math.sqrt(axis[0] ** 2 + axis[1] ** 2 + axis[2] ** 2)
+    if length < 1e-9:
+        return
+    bfx, bfy = _forward(belt.yaw)
+    if abs((axis[0] * bfx + axis[1] * bfy) / length) >= DRAG_MAX_ALIGNMENT:
+        return
+    vfx, vfy = _forward(yaws[other])
+    along = zero[0] * vfx + zero[1] * vfy
+    ends[other][0] += zero[0] - vfx * along
+    ends[other][1] += zero[1] - vfy * along
+    ends[other][2] += zero[2]
 
 
 def _peer_slot(
@@ -757,30 +926,72 @@ def _assign_sorter_slots_only(
                 "sorter is missing its second anchor, so neither end can be "
                 "attributed to a building"
             )
-        head = (b.x, b.y)
-        tail = (b.x2, b.y2)
-        # `input_obj` is what the sorter draws from and sits under the first
-        # anchor; `output_obj` is what it feeds and sits under the second.
-        input_from = (
-            b.input_from_slot
-            if b.input_obj is None
-            else _peer_slot(buildings[b.input_obj], head, tail)
-        )
-        output_to = (
-            b.output_to_slot
-            if b.output_obj is None
-            else _peer_slot(buildings[b.output_obj], tail, head)
-        )
-        yaw = sorter_yaw(head, tail)
-        out.append(
-            replace(
-                b,
-                output_to_slot=output_to,
-                input_from_slot=input_from,
-                output_from_slot=OUTPUT_FROM_SLOT,
-                input_to_slot=INPUT_TO_SLOT,
-                yaw=yaw,
-                yaw2=yaw,
-            )
-        )
+        out.append(emitted_sorter(b, buildings, strict=True))
     return tuple(out)
+
+
+def emitted_sorter(
+    sorter: PlacedBuilding,
+    buildings: Sequence[PlacedBuilding],
+    *,
+    strict: bool = False,
+) -> PlacedBuilding:
+    """One sorter with the slot indices and yaw EMISSION will give it.
+
+    A strategy builds a sorter out of two anchors and two links and leaves the
+    four slot fields at the dataclass default of zero; the yaw it sets is a
+    placeholder.  :func:`assign_sorter_slots` fills all of them in from geometry
+    as the last pass before emission, so what the game finally reads is derived
+    here and nowhere else.
+
+    WHICH MATTERS BEFORE THAT PASS, and that is why this is public.  A slot
+    index is not decoration: it is WHERE the paste seats the sorter's machine
+    end (:func:`seated_sorter`), so a strategy asking a geometry question about
+    a sorter it has just built would otherwise be asking it about slot 0 of
+    every machine -- one arbitrary corner -- and get an answer with no bearing
+    on the sorter it is about to emit.  Measured on the corpus: freeform's
+    bridge guard ran on those defaults and passed bridges that
+    ``game.sorter_collide`` then convicted on 15 of 96 mid cells.
+
+    ``strict`` raises :class:`SlotUndetermined` for a link whose slot cannot be
+    derived, which is what the emission pass wants -- a guess there is a
+    connection the game will not write.  Lenient is what a geometry question
+    wants: it keeps the recorded value and lets the check that owns that failure
+    report it by name.
+    """
+    if sorter.x2 is None or sorter.y2 is None:
+        return sorter
+    head = (sorter.x, sorter.y)
+    tail = (sorter.x2, sorter.y2)
+    yaw = sorter_yaw(head, tail)
+
+    def derive(
+        link: int | None,
+        end: tuple[int, int],
+        other: tuple[int, int],
+        fallback: int,
+    ) -> int:
+        if link is None:
+            return fallback
+        if not 0 <= link < len(buildings):
+            if strict:
+                raise SlotUndetermined(f"sorter names building {link}, which does not exist")
+            return fallback
+        try:
+            return _peer_slot(buildings[link], end, other)
+        except SlotUndetermined:
+            if strict:
+                raise
+            return fallback
+
+    # `input_obj` is what the sorter draws from and sits under the first
+    # anchor; `output_obj` is what it feeds and sits under the second.
+    return replace(
+        sorter,
+        input_from_slot=derive(sorter.input_obj, head, tail, sorter.input_from_slot),
+        output_to_slot=derive(sorter.output_obj, tail, head, sorter.output_to_slot),
+        output_from_slot=OUTPUT_FROM_SLOT,
+        input_to_slot=INPUT_TO_SLOT,
+        yaw=yaw,
+        yaw2=yaw,
+    )

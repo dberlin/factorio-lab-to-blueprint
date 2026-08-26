@@ -6564,12 +6564,7 @@ def _bridge(
         return False
 
     tier, _ = _pick_sorter(rates.get(item, Fraction(1)), span, 1)
-    standing = [
-        colliders.sorter_box(seat)
-        for b in canvas.buildings
-        if catalog.is_sorter(b.item_id)
-        and (seat := slots.seated_sorter(b, canvas.buildings)) is not None
-    ]
+    standing = slots.sorter_seat_boxes(canvas.buildings)
     for column in range(max(src.x0, dst.x0), min(src.x1, dst.x1) + 1):
         if (column, src.y, 0) not in canvas.blocked:
             continue
@@ -6594,11 +6589,7 @@ def _bridge(
             input_obj=src_belt,
             output_obj=dst_belt,
         )
-        seat = slots.seated_sorter(bridge, canvas.buildings)
-        if seat is None:
-            continue
-        box = colliders.sorter_box(seat)
-        if any(colliders.obb_overlap(box, other) for other in standing):
+        if not slots.sorter_seat_is_clear(bridge, canvas.buildings, standing):
             continue
         canvas.buildings.append(bridge)
         return True
