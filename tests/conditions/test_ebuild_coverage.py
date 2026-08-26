@@ -27,6 +27,7 @@ also what the coverage test reads.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -44,7 +45,8 @@ VERDICTS = frozenset({"IMPLEMENTED", "INAPPLICABLE", "MISSING"})
 
 _MEMBER = re.compile(r"^\t(?P<name>\w+) = (?P<value>\d+),?$", re.MULTILINE)
 _ROW = re.compile(
-    r"^\|\s*(?P<value>\d+)\s*\|\s*`(?P<name>\w+)`\s*\|\s*(?P<verdict>[A-Z]+)\s*\|",
+    r"^\|\s*(?P<value>\d+)\s*\|\s*`(?P<name>\w+)`\s*\|\s*(?P<verdict>[A-Z]+)\s*"
+    r"\|\s*(?P<where>[^|]+?)\s*\|",
     re.MULTILINE,
 )
 _COUNT_ROW = re.compile(
@@ -101,19 +103,30 @@ def _enum_members(source: str) -> dict[str, int]:
     return {m["name"]: int(m["value"]) for m in _MEMBER.finditer(source)}
 
 
-def _verdict_table(text: str) -> dict[str, tuple[int, str]]:
-    """The rows between the two HTML markers, as ``name -> (value, verdict)``.
+@dataclass(frozen=True, slots=True)
+class Row:
+    """One line of the verdict table."""
+
+    value: int
+    verdict: str
+    #: The section that argues it -- a letter for an INAPPLICABLE group,
+    #: ``MISSING #n``, or the literal ``IMPLEMENTED``.
+    where: str
+
+
+def _verdict_table(text: str) -> dict[str, Row]:
+    """The rows between the two HTML markers, as ``name -> Row``.
 
     Scoped to the markers so a table elsewhere in the file -- the band table, the
     emit-set table -- cannot accidentally become a verdict.
     """
     begin = text.index("<!-- BEGIN VERDICT TABLE -->")
     end = text.index("<!-- END VERDICT TABLE -->")
-    out: dict[str, tuple[int, str]] = {}
+    out: dict[str, Row] = {}
     for row in _ROW.finditer(text[begin:end]):
         name = row["name"]
         assert name not in out, f"{name} has more than one row in the verdict table"
-        out[name] = (int(row["value"]), row["verdict"])
+        out[name] = Row(value=int(row["value"]), verdict=row["verdict"], where=row["where"])
     return out
 
 
@@ -175,10 +188,12 @@ def test_no_verdict_names_a_condition_the_game_does_not_have(
 def test_every_verdict_row_agrees_with_the_enum(
     members: dict[str, int], matrix: str
 ) -> None:
-    for name, (value, verdict) in _verdict_table(matrix).items():
-        assert verdict in VERDICTS, f"{name} has verdict {verdict!r}, not one of {VERDICTS}"
-        assert members[name] == value, (
-            f"{name} is {members[name]} in the enum but the matrix says {value}"
+    for name, row in _verdict_table(matrix).items():
+        assert row.verdict in VERDICTS, (
+            f"{name} has verdict {row.verdict!r}, not one of {VERDICTS}"
+        )
+        assert members[name] == row.value, (
+            f"{name} is {members[name]} in the enum but the matrix says {row.value}"
         )
 
 
@@ -186,14 +201,46 @@ def test_the_headline_counts_match_the_table(members: dict[str, int], matrix: st
     """The three numbers the report leads with are derived, not asserted."""
     table = _verdict_table(matrix)
     actual = {v: 0 for v in VERDICTS}
-    for _value, verdict in table.values():
-        actual[verdict] += 1
+    for row in table.values():
+        actual[row.verdict] += 1
     declared = {m["verdict"]: int(m["n"]) for m in _COUNT_ROW.finditer(matrix)}
     assert declared == actual, (
         f"the count table at the top of docs/EBUILD_COVERAGE.md says {declared} "
         f"but the verdict table says {actual}"
     )
     assert sum(actual.values()) == len(members)
+
+
+def test_every_row_points_at_a_section_that_exists_and_counts_it(matrix: str) -> None:
+    """The verdict table's "argued in" column is a link, not a label.
+
+    A row that says ``D`` and a section D that does not contain it is how a
+    matrix rots: the verdict survives, the argument behind it quietly does not.
+    Each lettered section states its own size in its heading, so the two can be
+    reconciled without parsing the sections' bodies.
+    """
+    table = _verdict_table(matrix)
+    sections = {
+        m["letter"]: int(m["n"])
+        for m in re.finditer(r"^### (?P<letter>[A-G])\. .+? — (?P<n>\d+)$", matrix, re.MULTILINE)
+    }
+    assert sections, "no lettered INAPPLICABLE sections found"
+    counted = dict.fromkeys(sections, 0)
+    for name, row in table.items():
+        where = row.where
+        if row.verdict == "INAPPLICABLE":
+            assert where in sections, f"{name} is argued in section {where!r}, which does not exist"
+            counted[where] += 1
+        elif row.verdict == "MISSING":
+            n = where.removeprefix("MISSING #")
+            assert re.search(rf"^### {re.escape(n)}\. ", matrix, re.MULTILINE), (
+                f"{name} points at {where!r}, which is not a MISSING section heading"
+            )
+        else:
+            assert where == "IMPLEMENTED", f"{name} is IMPLEMENTED but points at {where!r}"
+    assert counted == sections, (
+        f"the lettered sections declare {sections} but the verdict table sends them {counted}"
+    )
 
 
 def test_every_citation_resolves(matrix: str) -> None:

@@ -443,8 +443,8 @@ returns early for every link, and that unlock is exactly the setting under which
 a two-level link becomes reachable. Without the unlock the slope rule already
 forbids any `dz != 0` at `dxy <= 1`, which is why this has never bitten.
 
-**Measured.** 1783 belt-to-belt links over the first eight corpus builds, `dz`
-histogram `{-1: 54, 0: 1670, +1: 59}` — **zero** over the cap. Our routers climb
+**Measured.** 6373 belt-to-belt links over all 11 corpus builds, `dz` histogram
+`{-1: 172, 0: 6000, +1: 201}` — **zero** over the cap. Our routers climb
 one level per tile. That is a property of the emitters, not a checked invariant,
 and the recent freeform work is precisely about how the router spends altitude.
 
