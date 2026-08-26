@@ -15,13 +15,25 @@ wheels/
 # Serena's local index.
 /.serena/
 
+# Agent worktrees the harness creates. They are real git checkouts, so a stray
+# `git add -A` stages them as embedded repositories.
+/.claude/worktrees/
+
 # The web front end's build output and dependencies. `dist/` above already
 # covers web/dist; these are the rest of what bun and rsbuild leave behind.
 node_modules/
 /web/.rsbuild/
 /web/coverage/
 
-# The C# snap oracle builds against the game DLLs; neither the build output
-# nor the copied-in engine assemblies belong in the repository.
+# Two C# projects build against the game's DLLs -- `/oracle/` (the headless snap
+# ladder) and `/tools/dsp-oracle/` (the BepInEx plugin).  Neither the build
+# output nor any copied-in engine assembly belongs in the repository.  Anchored
+# per project rather than a bare `bin/`: an unanchored `dist/` on line 5 is what
+# let 14,760 files of `web/node_modules` in once already.
 /oracle/bin/
 /oracle/obj/
+/tools/dsp-oracle/bin/
+/tools/dsp-oracle/obj/
+/tools/dsp-oracle/SerializerCheck/bin/
+/tools/dsp-oracle/SerializerCheck/obj/
+# `dist/` above already covers tools/dsp-oracle/dist.
