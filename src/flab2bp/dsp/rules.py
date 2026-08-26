@@ -106,6 +106,8 @@ __all__ = [
     "BELT_SLOT_AUTO_RANGE",
     "CONN_SLOTS_PER_OBJECT",
     "INPUT_TO_SLOT",
+    "MATCH_ALIGN_COS",
+    "MATCH_SNAP_MAX_SQR",
     "OUTPUT_FROM_SLOT",
     "PASTE_LATERAL",
     "PASTE_LATERAL_EPS",
@@ -299,8 +301,17 @@ SPLITTER_MAX_PORTS = 4
 
 #: How far a sorter end may sit from the slot pose it names, in WORLD UNITS.
 #:
-#: ``0.8f`` in ``BuildTool_BlueprintCopy.CheckInserterDataLegal``.  A game
-#: constant, not one of ours -- and a ``Vector3.magnitude`` in Unity world
+#: ``BuildTool_BlueprintCopy.cs:1791`` (and again at ``:1815`` for the other
+#: end), in ``CheckInserterDataLegal``::
+#:
+#:     Pose transformedBy = pose.GetTransformedBy(new Pose(objectPose3.position,
+#:                                                         objectPose3.rotation));
+#:     if ((objectPose2.position - transformedBy.position).magnitude > 0.8f)
+#:     {
+#:         return false;
+#:     }
+#:
+#: A game constant, not one of ours -- and a ``Vector3.magnitude`` in Unity world
 #: space, which is NOT tiles.
 #:
 #: A tile is ``colliders.GRID_ARC`` = 1.2566 world units, so a distance in tiles
@@ -363,6 +374,66 @@ PASTE_SNAP = 0.8
 PASTE_LATERAL = 0.5
 PASTE_RADIAL = 1.6
 PASTE_LATERAL_EPS = 0.1
+
+
+# --- BuildTool_BlueprintPaste.MatchInserter --------------------------------
+#
+# A THIRD predicate on a sorter end, and the one most easily mistaken for the
+# two above.  It does not judge an end -- it CHOOSES the slot for an end whose
+# peer the blueprint did not name.  ``BuildTool_BlueprintPaste.cs:1793-1810``::
+#
+#     if (buildPreview.condition == EBuildCondition.Ok && buildPreview.desc.isInserter)
+#     {
+#         bool num = buildPreview.input == null;
+#         bool flag3 = buildPreview.output == null;
+#         if (num)   { buildPreview.inputObjId  = 0; MatchInserter(buildPreview); }
+#         if (flag3) { buildPreview.outputObjId = 0; MatchInserter(buildPreview); }
+#     }
+#
+# and ``BlueprintUtils.cs:1623-1624`` fills those two fields straight from the
+# blueprint's own records::
+#
+#     buildPreview.output = ((blueprintBuilding.outputObj == null) ? null : _bpArray[...]);
+#     buildPreview.input  = ((blueprintBuilding.inputObj  == null) ? null : _bpArray[...]);
+#
+# So for a sorter whose BOTH peers are inside the blueprint -- which is every
+# sorter either strategy emits -- ``MatchInserter`` never runs, and neither
+# constant below binds.  They bind the moment we emit a sorter reaching for
+# something the blueprint does not contain.  Recorded with that condition
+# stated, because the alternative is somebody "correcting" `SLOT_REACH` or
+# `SLOT_ALIGN_COS` to these values and tightening a rule that is not the one
+# those constants port.
+
+#: The squared WORLD distance inside which ``MatchInserter`` will drag an end
+#: onto a slot.  ``BuildTool_BlueprintPaste.cs:1588``::
+#:
+#:     if (num4 < 6f && (num5 != 0 || buildPreview2 != null))
+#:
+#: ``num4`` accumulates ``(slotPos - end).sqrMagnitude`` (``:1539``, ``:1568``,
+#: ``:1580``), so the gate is ``sqrt(6)`` = 2.449 WORLD units -- three times
+#: :data:`SLOT_REACH`, and a different code path.  The candidates it ranges over
+#: are whatever ``Physics.OverlapSphereNonAlloc(vector, 0.8f, ...)``
+#: (``:1491``) put in the buffer, so 0.8 appears here too, as a PhysX query
+#: radius rather than as a legality threshold.
+MATCH_SNAP_MAX_SQR = 6.0
+
+#: The alignment ``MatchInserter`` demands of a candidate slot, as a cosine.
+#: ``BuildTool_BlueprintPaste.cs:1536`` (machine) and ``:1564`` (a peer still in
+#: preview), with ``BuildTool_Click.cs:831``/``:859`` the hand-tool twins::
+#:
+#:     float num13 = Vector3.Dot(lhs, rhs2);
+#:     float num14 = Vector3.Dot((vector6 - vector2).normalized, rhs2);
+#:     if (num13 > 0.9702957f && num14 > 0.9702957f)
+#:
+#: ``rhs2`` is the slot's own ``-forward``, ``lhs`` the sorter's axis and
+#: ``vector2`` its far end.  TWO dots, both strictly above ``cos 14``.  Our
+#: :data:`SLOT_ALIGN_COS` is ``cos 24`` on ONE of the two, and the two numbers
+#: are unrelated: 24 is ``TooSkew``'s limit on a sorter's END ROTATIONS, not on
+#: a slot's facing.  ``tests/bench/test_snap_oracle.py`` drives 15488 synthetic
+#: ends through the game's own compiled ``MatchInserter`` and pins the
+#: disagreement at 584 ends it connects and we refuse, 256 we accept and it
+#: refuses, and 8 where both connect to different slots.
+MATCH_ALIGN_COS = 0.9702957
 
 
 # --- EBuildCondition.TooSkew, in BuildTool_BlueprintPaste -------------------
