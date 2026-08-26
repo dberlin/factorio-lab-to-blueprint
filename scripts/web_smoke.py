@@ -241,9 +241,18 @@ async def _settle(page: Any, out: Path, tag: str) -> dict[str, Any]:
     raise SmokeFailure(f"[{tag}] nothing settled within {SETTLE_TIMEOUT_S:.0f}s; last: {last}")
 
 
-async def _capture(page: Any, cdp: Any, clip: Any = None) -> bytes:
-    """A PNG of the page, or of one box on it, from the compositor."""
-    shot = await page.send(cdp.page.capture_screenshot(format_="png", clip=clip))
+async def _capture(page: Any, cdp: Any, clip: Any = None, *, beyond: bool = False) -> bytes:
+    """A PNG of the page, or of one box on it, from the compositor.
+
+    ``beyond`` is ``Page.captureScreenshot``'s ``captureBeyondViewport``, and a
+    clip below the fold needs it: without it the compositor answers with a
+    blank box rather than an error.  Measured -- the client arm's canvas sits at
+    y=854 under a long report in a headless window that is shorter than that,
+    and the clip came back as a 2.2kB blank PNG against 97kB with it.
+    """
+    shot = await page.send(
+        cdp.page.capture_screenshot(format_="png", clip=clip, capture_beyond_viewport=beyond)
+    )
     return base64.b64decode(shot)
 
 
@@ -327,13 +336,21 @@ async def _canvas_variety(page: Any, cdp: Any) -> tuple[int, dict[str, int]]:
     from JavaScript is entitled to come back blank whatever is on screen.  The
     compositor's own capture is not.
     """
+    # PAGE coordinates, not viewport coordinates: the clip below is captured
+    # with `captureBeyondViewport`, which measures from the document origin. On
+    # the server arm the difference is nil -- the canvas is in a 100vh grid that
+    # never scrolls -- but on the client arm it sits under a long report at
+    # y=854 in a headless window shorter than that, and a viewport clip there
+    # comes back blank. One flat colour is what this function calls a failure,
+    # so the wrong coordinate space would fail a viewer that had drawn fine.
     box_raw = await _js(
         page,
         """(() => {
           const c = document.querySelector('canvas');
           if (!c) return 'null';
           const r = c.getBoundingClientRect();
-          return JSON.stringify({x: Math.round(r.x), y: Math.round(r.y),
+          return JSON.stringify({x: Math.round(r.x + window.scrollX),
+                                 y: Math.round(r.y + window.scrollY),
                                  width: Math.round(r.width), height: Math.round(r.height)});
         })()""",
     )
@@ -345,7 +362,7 @@ async def _canvas_variety(page: Any, cdp: Any) -> tuple[int, dict[str, int]]:
     clip = cdp.page.Viewport(
         x=box["x"], y=box["y"], width=box["width"], height=box["height"], scale=1
     )
-    return _png_variety(await _capture(page, cdp, clip)), box
+    return _png_variety(await _capture(page, cdp, clip, beyond=True)), box
 
 
 async def _console(page: Any) -> list[dict[str, str]]:

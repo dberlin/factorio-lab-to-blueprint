@@ -23,10 +23,15 @@ What it asserts, in order:
    logs every request it answered; and Chrome's CDP network log is captured
    too, though it only covers the top-level document -- the worker and the
    wasm runtimes' own workers are separate CDP targets it does not see.
-6. The viewer drew a real SVG.
+6. The viewer drew something. It is the SERVER arm's viewer -- the same
+   React/three.js tree, mounted from `web/src/embed.tsx` -- so the check is
+   `scripts/web_smoke.py`'s own: screenshot the canvas through CDP and count
+   distinct colours, because a WebGL surface that never drew is one flat
+   colour and one flat colour is exactly 1.
 
-``--refusal`` runs the same flow against a URL the pipeline refuses, so the
-refusal path is exercised and screenshotted too.
+``--refusal`` runs the same flow against ``scripts/web_smoke.py``'s own
+refusal fixture -- one spec, both arms -- so the refusal path is exercised and
+screenshotted too.
 """
 
 from __future__ import annotations
@@ -52,7 +57,7 @@ WEB = Path(__file__).resolve().parent
 # written again here. Both arms now mount the SAME viewer (web/src/embed.tsx),
 # which is what makes one implementation of the check correct for both.
 sys.path.insert(0, str(WEB.parent / "scripts"))
-from web_smoke import SmokeFailure, _canvas_variety  # noqa: E402
+from web_smoke import REFUSE_URL, SmokeFailure, _canvas_variety  # noqa: E402
 
 #: The user's own URL: freeform / max-proliferation, ~1200 tiles, 20 coaters.
 DEFAULT_URL = (
@@ -61,9 +66,16 @@ DEFAULT_URL = (
     "Yh4YQBN3ANbsE9ODiviK3HFWLvcSOlTJacvvRe7qb6BOgIKRo_&v=11"
 )
 
-#: A URL whose objective the pipeline cannot build, used to exercise the
-#: refusal path.  A refusal is a correct outcome here, never an error.
-REFUSAL_URL = "https://factoriolab.github.io/dsp/list?z=not-a-real-payload&v=11"
+#: The corpus's ``universe-matrix``, imported from ``scripts/web_smoke.py`` so
+#: that both arms are driven onto the refusal path by the same spec.
+#:
+#: It used to be ``z=not-a-real-payload``, which is a different thing entirely:
+#: an unparseable URL raises ``ValueError`` before any layout is attempted, and
+#: the page rightly calls that an ERROR. A refusal is what happens when the
+#: pipeline ran, tried every strategy on every candidate, and none of them
+#: produced a layout -- the reason text is the product, and only this URL
+#: exercises the path that carries it.
+REFUSAL_URL = REFUSE_URL
 
 BROWSER_CANDIDATES = (
     "/usr/lib64/chromium-browser/chromium-browser",
@@ -211,6 +223,11 @@ async def drive(args: argparse.Namespace) -> dict[str, object]:
             report["boot"] = json.loads(await page.evaluate("JSON.stringify(window.__flab.boot)"))
 
             url = args.url if not args.refusal else REFUSAL_URL
+            # Same knobs the server arm drives the same URL with: one
+            # candidate, freeform, so the refusal is the layout model's and
+            # not a budget the page happened to be set low on.
+            if args.refusal:
+                args.strategy, args.candidates, args.budget = "freeform", 1, 4.0
             await page.evaluate(f"document.getElementById('url').value = {json.dumps(url)}")
             await page.evaluate(
                 f"document.getElementById('strategy').value = {json.dumps(args.strategy)};"
