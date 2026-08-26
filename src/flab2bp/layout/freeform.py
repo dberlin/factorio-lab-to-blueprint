@@ -2382,6 +2382,9 @@ def _emit_strip(
     #: their last sorter (see ``Strip.input_lane_tiles``); output lanes run the
     #: full width because their port is the east end.
     lane_tiles_of: dict[int, int] = {}
+    #: Rows whose lane starts one tile WEST of the strip, in the reserved
+    #: ``WEST_CHANNEL`` column.  See the comment at the assignment below.
+    lane_starts_west: set[int] = set()
     for lane in s.in_above + s.in_below:
         row = s.row_of_input(lane[0])
         lane_item_of[row] = lane[0]
@@ -2403,8 +2406,28 @@ def _emit_strip(
         # `min(..., width)` keeps it there.  It is dead belt in the sense
         # `input_lane_tiles` means -- no sorter draws from it -- which is the
         # price of a coater the game will accept.
+        #
+        # AND IT STARTS ONE TILE WEST OF THE STRIP, which is the other half and
+        # the one that was missing.  A second tile fixes the SUCCESSOR; the
+        # coater's PREDECESSOR is still whichever cell the router arrived from,
+        # and the router is free to come down the west channel and turn east on
+        # the head tile.  That is a belt turning ON THE ADDON'S OWN TILE, which
+        # `game.addon_corner` convicts and `BuildTool_Addon` refuses outright --
+        # measured at six of twenty coaters on the blueprint the user pasted,
+        # every one of them entering (0, 1) and leaving (1, 0).
+        #
+        # Prepending one tile moves the turn OFF the coater: the router sinks
+        # into the new head at `ox - 1`, the coater rides `ox` with a lane tile
+        # on both sides, and a plain belt tile is free to turn.  The coater
+        # stays at column 0, so it is still upstream of every sorter on the lane
+        # -- which seating it at the second tile instead would have given up.
+        # The tile is inside the strip's own reserved box: `_size` adds
+        # `WEST_CHANNEL` and `_pack` offsets every strip by it, so `ox - 1` is
+        # this strip's channel column and belongs to nobody else.  The drop
+        # cell is unchanged, still `(ox - 1, y)` one LEVEL up.
         if need and any(it in sprayed for it in lane):
             need = min(max(need, 2), width)
+            lane_starts_west.add(row)
         lane_tiles_of[row] = need
     for k, (item, _dest) in enumerate(s.out_lanes):
         lane_item_of[s.row_of_output(k)] = item
@@ -2416,7 +2439,8 @@ def _emit_strip(
         if n_above <= row < s.first_row_below_band:
             continue  # machine band, clearance rows included
         indices = []
-        for k in range(lane_tiles_of.get(row, width)):
+        start = -1 if row in lane_starts_west else 0
+        for k in range(start, lane_tiles_of.get(row, width)):
             indices.append(
                 canvas.add(
                     PlacedBuilding(
@@ -2490,12 +2514,19 @@ def _emit_strip(
         shared = len(lane) > 1
         offset = s.column_offset(lane)
         for slot, item in enumerate(lane):
+            # The port is the lane's OWN first tile, read off the canvas rather
+            # than assumed to be `ox`.  A sprayed lane starts one column west,
+            # and a port that named `ox` would have the router sink its net into
+            # the coater's tile instead of the head -- giving that tile a second
+            # input, which the game refuses an addon on outright
+            # (`GetBeltInputCount(num19) < 2`, decompiled 145812).
+            head = canvas.buildings[lane_idx[row][0]]
             in_ports[item] = _Port(
                 lane_idx[row][0],
-                ox,
+                head.x,
                 oy + row,
-                ox,
-                ox + len(lane_idx[row]) - 1,
+                head.x,
+                head.x + len(lane_idx[row]) - 1,
                 tuple(lane_idx[row]),
                 s.machines,
             )
@@ -6564,8 +6595,26 @@ class _Coater:
     y: int
 
 
-def _coater_seat(port: _Port) -> tuple[int, int]:
-    """The lane tile a Spray Coater rides: its HEAD, where the items arrive.
+def _coater_seat(canvas: _Canvas, port: _Port) -> tuple[int, int] | None:
+    """The lane tile a Spray Coater rides: its SECOND, one east of the head.
+
+    THE SECOND TILE IS THE FIRST ONE WITH A LANE TILE ON BOTH SIDES, and that is
+    the whole of why it is not the first.  A sprayed lane is emitted starting one
+    column west of the strip (see ``_emit_strip``), so its head is the tile the
+    router sinks into and its second tile is column 0 of the strip -- upstream of
+    every sorter, exactly where the head used to be, and with a predecessor that
+    is a lane tile running east rather than whatever direction the router
+    happened to arrive from.
+
+    The predecessor is the half that was missing.  The game reads BOTH ends of
+    the belt an addon rides -- ``GetBeltInputBeltPose`` and
+    ``GetBeltOutputBeltPose``, each tested against the addon's axis -- and
+    refuses the addon when either disagrees.  Six of the twenty coaters on the
+    blueprint the user pasted arrived from the south and left to the east on the
+    coater's own tile.  See :func:`flab2bp.dsp.rules.addon_ride_is_straight`.
+
+    ``None`` when the lane is too short to offer such a tile, which a caller
+    must treat as "no coater here" rather than seating one anyway.
 
     **A coater sprays what passes THROUGH it, so everything a machine takes has
     to reach the coater first.**  An input lane is emitted west to east and
@@ -6592,9 +6641,16 @@ def _coater_seat(port: _Port) -> tuple[int, int]:
     one tile BEHIND the coater, so a tail seat put the drop *inside* the lane,
     hemmed between the machine band and the neighbouring lanes' coater bans; a
     head seat puts it one tile west of the strip, in the ``WEST_CHANNEL``
-    column, which is reserved corridor at level 0 and empty at level 1.
+    column, which is reserved corridor at level 0 and empty at level 1.  The
+    second-tile seat keeps that cell exactly.  The coater has not moved at all
+    -- it still rides column 0 of the strip; what moved is the lane's HEAD,
+    west into the channel -- so the drop cell is the same tile it always was,
+    one level above the new head.
     """
-    return port.x, port.y
+    if len(port.tiles) < 2:
+        return None
+    b = canvas.buildings[port.tiles[1]]
+    return b.x, b.y
 
 
 def _place_coaters(
@@ -6641,7 +6697,10 @@ def _place_coaters(
             port = in_ports.get(item)
             if port is None:
                 continue
-            cx, cy = _coater_seat(port)
+            seat = _coater_seat(canvas, port)
+            if seat is None:
+                continue
+            cx, cy = seat
             host = belt_at.get((cx, cy, 0))
             # WHERE the proliferator belt has to be, from the coater's own addon
             # area rather than from convenience. The game attaches an addon's

@@ -156,12 +156,21 @@ run. **This is the permanent guard for the entire `_make_grid` class of bug.**
 
 Rules this repository quotes in its own comments and enforces with nothing.
 
-### Step 3.1 — The addon corner rule (decompiled 145812). [CHANGE]
+### Step 3.1 — The addon corner rule (decompiled 145812). [DONE]
 
-The `AddonPass` excusal requires the ridden belt's own *input and output* belts
-to lie within 0.3 of the addon's line, so a coater on a corner is refused.
-`game.addon_facing` tests one direction only. Our coaters sit on straight runs,
-so today this is **silence, not a pass** — the check does not test it.
+`rules.ADDON_AXIS_DEG` / `ADDON_NEIGHBOUR_RADIAL_GAP` /
+`rules.addon_ride_is_straight`, checked by `validate.game.addon_corner` and
+consulted by `freeform._coater_seat`.
+
+Two things this step's own description got wrong, both corrected in
+`docs/RULE_AUDIT.md` section 4:
+
+* "Our coaters sit on straight runs" was **false** — six of twenty on the
+  blueprint the user pasted turned on the coater's own tile.
+* The rule is **not in `AddonPass`**. It is at 145812 (addon against an
+  existing belt or prebuild) and in `BuildTool_Addon.CheckBuildConditions`
+  (hand placement). `AddonPass` excuses a belt and an addon from the same
+  paste without testing either neighbour.
 
 ### Step 3.2 — The `DistancePointLine < 0.3f` clause. [CHANGE]
 

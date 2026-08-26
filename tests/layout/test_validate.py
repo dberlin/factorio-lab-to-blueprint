@@ -915,6 +915,144 @@ def test_real_blueprint_coaters_face_along_their_belt(name: str) -> None:
     assert seen >= 5, seen
 
 
+CORNER = {"game.addon_corner"}
+
+
+def _coater_on_a_corner(
+    yaw: float, *, straight: bool = False, climb: Fraction = Fraction(0)
+) -> Placement:
+    """A three-tile belt run with a Spray Coater on its MIDDLE tile.
+
+    ``straight=False`` bends the run on the coater's own tile: it arrives from
+    the south (0, 1) and leaves to the east (1, 0), which is the shape six of
+    ``freeform``'s twenty coaters were in on the reported blueprint.  With
+    ``straight=True`` the same three tiles run west to east and nothing turns.
+    """
+    tail = (0, 0) if straight else (1, -1)
+    return Placement(
+        buildings=(
+            belt(tail[0], tail[1], out=1),
+            belt(1, 0, z=climb, out=2),
+            belt(2, 0, z=climb),
+            PlacedBuilding(
+                item_id=COATER,
+                model_index=catalog_building(COATER).model_index,
+                x=1,
+                y=0,
+                z=climb,
+                width=1,
+                height=1,
+                yaw=yaw,
+            ),
+        )
+    )
+
+
+def test_game_addon_corner_fires_on_a_belt_that_turns_under_it() -> None:
+    """The defect the user found by pasting, in its smallest form.
+
+    The belt arrives from the south and leaves to the east; the coater is yawed
+    90, which agrees with the OUTGOING step and disagrees with the incoming one.
+    """
+    r = validate(_coater_on_a_corner(90.0), only=CORNER)
+    assert fired(r, "game.addon_corner")
+    assert not r.ok
+    f = r.by_check("game.addon_corner")[0]
+    assert f.detail["incoming"] == [0, 1, 0.0]
+    assert f.detail["outgoing"] == [1, 0, 0.0]
+    assert "Spray Coater" in f.message
+
+
+def test_game_addon_facing_alone_passes_the_corner_this_check_convicts() -> None:
+    """Guards the guard: the gap is real and this is the check that closes it.
+
+    ``game.addon_facing`` reads the ridden belt's successor and stops.  On this
+    placement the successor agrees with the yaw, so that check is silent -- which
+    is exactly how six coaters reached a blueprint the user pasted.  If this
+    assertion ever fails, ``game.addon_corner`` has stopped being load-bearing.
+    """
+    p = _coater_on_a_corner(90.0)
+    assert not fired(validate(p, only=FACING), "game.addon_facing")
+    assert fired(validate(p, only=CORNER), "game.addon_corner")
+
+
+def test_game_addon_corner_silent_on_a_straight_run() -> None:
+    """The negative control, both ways along the axis.
+
+    The game brackets the angle from both ends (``< 20.5`` or ``> 159.5``), so a
+    coater turned end-for-end on a straight belt still passes.
+    """
+    for yaw in (90.0, 270.0):
+        r = validate(_coater_on_a_corner(yaw, straight=True), only=CORNER)
+        assert not fired(r, "game.addon_corner"), yaw
+
+
+def test_game_addon_corner_silent_at_the_end_of_a_run() -> None:
+    """One neighbour is ``game.addon_facing``'s question, not this one.
+
+    The game tests ``hasInput`` and ``hasOutput`` independently and a belt that
+    is an end of its run has only one of them, so there are no two directions
+    for this clause to disagree about.
+    """
+    assert not fired(validate(_coater_on_a_run(90.0), only=CORNER), "game.addon_corner")
+
+
+def test_game_addon_corner_fires_when_the_ridden_belt_changes_height() -> None:
+    """The altitude half of the same clause, which is easy to forget it has.
+
+    ``flag &= Mathf.Abs(objectPose.position.magnitude - neighbour.magnitude)
+    < 0.6f``.  A half level is 0.6667 world units, so a belt that climbs across
+    the coater's tile fails it while running perfectly straight in plan.
+    """
+    p = _coater_on_a_corner(90.0, straight=True, climb=Fraction(1, 2))
+    r = validate(p, only=CORNER)
+    assert fired(r, "game.addon_corner")
+    f = r.by_check("game.addon_corner")[0]
+    assert f.detail["incoming"] == [1, 0, 0.5]
+
+
+@pytest.mark.parametrize(
+    "name",
+    (
+        "factory-heretical-smelter-block",
+        "tillable-blackbox-module-polar-artificial-stars-x85-warper-production-x24",
+    ),
+)
+def test_real_blueprint_coaters_ride_a_straight_belt(name: str) -> None:
+    """GROUND TRUTH, and the measurement that refuted the assumption.
+
+    ``docs/RULE_AUDIT.md`` recorded "our coaters sit on straight runs, so this is
+    silence rather than a pass".  The half of that sentence about the GAME is
+    true and is what this asserts: across the two fixtures that contain any, all
+    eight of the game's own Spray Coaters ride a belt whose incoming step equals
+    its outgoing step.  Zero corners.  The half about OUR coaters was false --
+    six of twenty on the reported blueprint turned.
+    """
+    from flab2bp.dsp.codec import decode
+    from flab2bp.dsp.records import is_belt as _is_belt
+
+    raw = decode((Path("tests/fixtures") / f"{name}.txt").read_text()).buildings
+    by = {b.index: b for b in raw}
+    pred: dict[int, int] = {}
+    for b in raw:
+        if _is_belt(b.item_id) and b.output_obj_idx in by:
+            pred.setdefault(b.output_obj_idx, b.index)
+    seen = 0
+    for c in (b for b in raw if b.item_id == COATER):
+        ride = min(
+            (b for b in raw if _is_belt(b.item_id)),
+            key=lambda b: (b.x - c.x) ** 2 + (b.y - c.y) ** 2 + (b.z - c.z) ** 2,
+        )
+        assert abs(ride.x - c.x) < 0.2 and abs(ride.y - c.y) < 0.2, c.index
+        nxt, prv = by.get(ride.output_obj_idx), by.get(pred.get(ride.index, -1))
+        assert nxt is not None and prv is not None, f"coater {c.index} rides an end"
+        incoming = (round(ride.x - prv.x, 3), round(ride.y - prv.y, 3))
+        outgoing = (round(nxt.x - ride.x, 3), round(nxt.y - ride.y, 3))
+        assert incoming == outgoing, (c.index, incoming, outgoing)
+        seen += 1
+    assert seen >= 3, seen
+
+
 CROSSING = {"game.belt_crossing"}
 
 

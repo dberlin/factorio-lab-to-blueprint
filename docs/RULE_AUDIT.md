@@ -90,7 +90,7 @@ would be worse*. Only the first column belongs in `dsp/`.
 | Addon attach radius | `rules.ADDON_AREA_RADIUS` (`rules.py:414-432`) | `validate._addon_supply`, `validate._coaters_supplied` | Agree | LOW |
 | Addon attach line clause (`DistancePointLine < 0.3f`) | **No constant, no port** — recorded as unported in `rules.py:428-431` | — | Unported | MED |
 | Addon may not lie across its belt (`AddonPass`) | **`validate._addon_facing` (`validate.py:1906-2029`) IS the authority** — `0.95` lives only in its docstring, the code is `off in (0, 180)` | `spine._feed_coater` picks the flow yaw; `freeform._place_coaters` writes one yaw for every coater | Rule lives in the validator, not in `dsp/` — see D4 | MED |
-| Addon corner rule (decompiled 145812: ridden belt's own input AND output on the addon line) | **Unported.** Recorded in `docs/BACKLOG.md:100-105` | — | Unported | MED |
+| Addon corner rule (decompiled 145812: ridden belt's own input AND output on the addon line) | `rules.ADDON_AXIS_DEG` / `ADDON_NEIGHBOUR_RADIAL_GAP` / `rules.addon_ride_is_straight` | `validate.game.addon_corner` convicts; `freeform._coater_seat` seats so as to satisfy it; `spine` already did | Agree | — |
 | Belt single occupancy | `validate._belt_single` (ours; the game's own answer turns on `dotsCursor`, per `colliders.py:944`) | freeform `world_taken` + `blocked`; spine `_SpurField.taken` | Agree | LOW |
 | Power coverage radius | `catalog.building(id).cover_radius`, from extracted `data/buildings.json` | `validate._coverage` and `freeform._power_plan` (`freeform.py:5367-5369`) both read the extracted value and both use the identical doubled-integer form `floor((2*r)**2)`. **`spine` reads the hand-typed `catalog.TESLA_COVER_RADIUS` (`catalog.py:377`) via `CONSTANTS.supply_radius` (`spine.py:133`)** and linearises it through `geometry.reach_table` | Agree — I verified the hand-typed `21/2` equals the extracted value, and `reach_table`'s `floor(sqrt(r^2-d^2))` is the same disc as the validator's `d2 <= (2r)^2` for a 1x1 tower | LOW |
 | Power link distance | `catalog.building(id).connect_distance`, extracted | Same split: `validate` and `freeform` read the extracted value, `spine` reads `catalog.TESLA_LINK_DISTANCE` (`catalog.py:411`) via `CONSTANTS.link_distance` (`spine.py:4508`) | Agree today; the copy is redundant | LOW |
@@ -503,11 +503,37 @@ Everything here is quoted in this repository's own comments and enforced by
 nothing.
 
 1. **`TooBendToLift`** — `catalog.py:187-196`. See D1. **Highest.**
-2. **The addon corner rule (decompiled 145812)** — `BACKLOG.md:100-105`: the
-   `AddonPass` excusal requires the ridden belt's own *input* and *output* belts
-   to lie within 0.3 of the addon's line, so a coater on a corner is refused.
-   `game.addon_facing` tests one direction only (`validate.py:1999-2010`). Our
-   coaters sit on straight runs, so this is silence rather than a pass.
+2. ~~**The addon corner rule (decompiled 145812)**~~ — **PORTED, and the
+   sentence this entry used to end with was FALSE.** It read: "Our coaters sit
+   on straight runs, so this is silence rather than a pass." They did not. The
+   user found it by pasting, and the census confirms it: on the reported
+   `max-proliferation` blueprint, of twenty `freeform` coaters **fourteen rode a
+   straight belt and SIX rode a belt that turned on the coater's own tile**,
+   entering `(0, 1)` and leaving `(1, 0)` under a yaw of 90, at `(30,13)`,
+   `(7,1)`, `(30,7)`, `(19,0)`, `(25,19)` and `(13,1)`. `game.addon_facing`
+   passed all six because it reads the outgoing step only.
+
+   Ground truth, measured the same way: the game's own eight Spray Coaters ride
+   a straight belt **8 of 8**, zero corners. `spine`, re-measured under the
+   corner test rather than the outgoing-only one, is **38 of 38**.
+
+   Two corrections to how this entry described the rule, from the decompiled
+   source itself:
+
+   * It is **not in `AddonPass`**. `AddonPass` has no corner clause at all, and
+     its one direction test is dead for a mid-run belt — `flag` is set only when
+     exactly one of `input`/`output` is null, so a belt with both leaves `num3`
+     at `1f`. A first paste of a self-contained blueprint onto bare ground is
+     therefore *not* rejected by this geometry.
+   * It is at **145812** in the addon-versus-existing-belt branch (both
+     neighbours within `0.3f` of the addon's line when the belt is within
+     `2.5f`), and in `BuildTool_Addon.CheckBuildConditions` as an angle
+     (`20.5f`, plus a `0.6f` radial clause) for hand placement. So it binds on
+     hand placement and on a paste that meets an existing belt or the prebuilds
+     an earlier paste left — which is why it is enforced at ERROR.
+
+   Now `rules.ADDON_AXIS_DEG` and `rules.addon_ride_is_straight`, checked by
+   `validate.game.addon_corner`.
 3. **`Maths.DistancePointLine(...) < 0.3f`**, the companion to
    `ADDON_AREA_RADIUS` — `rules.py:428-431` records it as unported by name. It
    is what would decide whether a belt *two* tiles behind a coater counts as
@@ -527,7 +553,8 @@ nothing.
    `colliders.py:968-983` states the simplification and argues it is
    conservative. Correct; listed for completeness.
 
-Items 5–7 are principled omissions with arguments. Items 1–4 are holes.
+Items 5–7 are principled omissions with arguments. Items 1, 3 and 4 are still
+holes; item 2 is closed.
 
 ---
 
