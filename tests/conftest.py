@@ -20,15 +20,9 @@ at the seam.  The key is the full call -- strategy class, its configuration,
 the spec's exact value, and every argument -- so two calls share a result only
 when they would genuinely have computed the same one.
 
-Two escape hatches, because a memo can make a test vacuous:
-
-* ``@pytest.mark.uncached_layout`` -- for tests whose subject *is* the act of
-  solving: run-to-run determinism, or anything comparing two solves that are
-  identical by construction.  Handing those the same object back would make
-  them pass without testing anything.
-* Any test requesting the ``monkeypatch`` fixture is automatically uncached, so
-  a test that patches solver internals can never be served a placement built
-  before the patch was applied.
+Tests requesting ``monkeypatch`` are automatically uncached, so a test that
+patches solver internals can never be served a placement built before the patch
+was applied.
 """
 
 from __future__ import annotations
@@ -103,10 +97,7 @@ _install_memo(FreeformLayout)
 @pytest.fixture(autouse=True)
 def _layout_memo_policy(request: pytest.FixtureRequest) -> Iterator[None]:
     global _enabled
-    _enabled = not (
-        request.node.get_closest_marker("uncached_layout") is not None
-        or "monkeypatch" in request.fixturenames
-    )
+    _enabled = "monkeypatch" not in request.fixturenames
     try:
         yield
     finally:

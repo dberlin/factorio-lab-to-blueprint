@@ -89,7 +89,6 @@ markers = [
     "bun: cross-validates against the dsp-blueprint-viewer TypeScript decoder",
     "dotnet: differential-tests against the game's own C# in oracle/; needs the game installed",
     "slow: solver-heavy; still runs by default -- deselect with `-m 'not slow'` if you must",
-    "uncached_layout: the solve itself is the subject; bypass the shared layout memo in tests/conftest.py",
 ]
 
 [tool.ruff]

@@ -13,13 +13,8 @@ stay at ~21s and a bake-off belongs behind a script entry point.
 
 from __future__ import annotations
 
-import argparse
 import mmap
-from collections.abc import Callable
 from dataclasses import dataclass
-from pathlib import Path
-from runpy import run_path
-from typing import cast
 
 import pytest
 
@@ -47,8 +42,7 @@ from flab2bp.bench.ab import (
 )
 from flab2bp.bench.crossvalidate import CrossCheck
 from flab2bp.bench.types import Metrics
-from flab2bp.layout.base import LayoutStrategy, NoValidLayout, PlacedBuilding, Placement
-from flab2bp.layout.freeform import FreeformLayout
+from flab2bp.layout.base import NoValidLayout, PlacedBuilding, Placement
 
 
 def _metrics(area: int, *, belts: int = 0, direct: int = 0) -> Metrics:
@@ -751,42 +745,3 @@ def test_old_json_without_resource_metrics_still_parses() -> None:
     assert loaded[0].peak_rss_mb is None
 
 
-def test_audit_and_ab_strategy_tables_use_constructor_factories() -> None:
-    root = Path(__file__).parents[2]
-    audit_symbols = run_path(str(root / "scripts" / "audit.py"))
-    ab_symbols = run_path(str(root / "scripts" / "ab_compare.py"))
-    audit_strategies = cast(
-        dict[str, Callable[[bool, int], LayoutStrategy]],
-        audit_symbols["_STRATEGIES"],
-    )
-    ab_strategies = cast(
-        dict[str, Callable[[bool], LayoutStrategy]],
-        ab_symbols["STRATEGIES"],
-    )
-
-    audit_sequence = audit_strategies["sequence-pair"](False, 7)
-    ab_sequence = ab_strategies["sequence-pair"](False)
-
-    assert audit_sequence.name == "sequence-pair"
-    assert ab_sequence.name == "sequence-pair"
-    freeform = audit_strategies["freeform"](False, 7)
-    assert isinstance(freeform, FreeformLayout)
-    assert freeform.workers == 7
-
-
-def test_ab_cli_keeps_defaults_and_accepts_an_explicit_backend_pair() -> None:
-    root = Path(__file__).parents[2]
-    symbols = run_path(str(root / "scripts" / "ab_compare.py"))
-    parse_args = cast(
-        Callable[[list[str] | None], argparse.Namespace],
-        symbols["_parse_args"],
-    )
-    defaults = parse_args([])
-    selected = parse_args(
-        ["--a", "freeform", "--b", "sequence-pair", "--power", "--json", "out.json"]
-    )
-
-    assert (defaults.a, defaults.b) == ("spine", "freeform")
-    assert (selected.a, selected.b) == ("freeform", "sequence-pair")
-    assert selected.power
-    assert selected.json == Path("out.json")

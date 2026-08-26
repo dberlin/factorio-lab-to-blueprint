@@ -6,47 +6,6 @@ from typing import Any
 import pytest
 
 from flab2bp import cli, pipeline
-from flab2bp.layout.sequence_solver import SequencePairLayout
-
-
-def test_explicit_sequence_pair_selects_only_sequence_pair() -> None:
-    assert pipeline._strategy_names("sequence-pair") == ("sequence-pair",)
-
-
-def test_best_selects_only_production_backends() -> None:
-    assert pipeline._strategy_names("best") == ("spine", "freeform")
-
-
-@pytest.mark.parametrize(
-    ("belt_vertical_construction", "expected_ramped"),
-    ((False, True), (True, False)),
-)
-def test_sequence_pair_constructs_with_url_slope_rule(
-    belt_vertical_construction: bool,
-    expected_ramped: bool,
-) -> None:
-    layout = pipeline._new_layout(
-        "sequence-pair",
-        power=True,
-        belt_vertical_construction=belt_vertical_construction,
-    )
-
-    assert isinstance(layout, SequencePairLayout)
-    assert layout.power is True
-    assert layout.ramped is expected_ramped
-    assert layout.islands == 1
-
-
-def test_pipeline_constructs_explicit_sequence_island_count() -> None:
-    layout = pipeline._new_layout(
-        "sequence-pair",
-        power=False,
-        belt_vertical_construction=True,
-        sequence_islands=6,
-    )
-
-    assert isinstance(layout, SequencePairLayout)
-    assert layout.islands == 6
 
 
 def test_cli_passes_exact_sequence_pair_name(

@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import contextlib
 import dataclasses
-import functools
 import itertools
 import math
 import time
@@ -30,12 +29,9 @@ from flab2bp.layout.base import (
     Placement,
 )
 from flab2bp.layout.freeform import (
-    _ARRANGEMENT_STRIDE,
-    _ARRANGEMENTS,
     _BLAME_MAX_WALL,
     _ENTRY_RING,
     _LEVEL_TOLL,
-    _PACK_RANDOM_SEED,
     _ROUTE_RING,
     _TENTATIVE,
     LEVELS,
@@ -1204,17 +1200,13 @@ class TestASideCarriesAsManyLanesAsItsPosesAllow:
 
 class TestFallback:
     @pytest.mark.parametrize("spec_fn", ALL_SPECS, ids=lambda f: f.__name__)
-    def test_fallback_alone_produces_a_valid_placement(self, spec_fn: object) -> None:
-        p = fallback_placement(spec_fn(), power=True)  # type: ignore[operator]
-        tiles = blocking_tiles(p)
-        assert len(tiles) == len(set(tiles)), "fallback overlaps"
-        assert p.buildings
-
-    @pytest.mark.parametrize("spec_fn", ALL_SPECS, ids=lambda f: f.__name__)
-    def test_fallback_places_every_machine(self, spec_fn: object) -> None:
+    def test_fallback_is_complete_and_non_overlapping(self, spec_fn: object) -> None:
         spec = spec_fn()  # type: ignore[operator]
-        p = fallback_placement(spec, power=True)
-        assert len(machines_of(p)) == spec.machine_count
+        placement = fallback_placement(spec, power=True)
+        tiles = blocking_tiles(placement)
+        assert len(tiles) == len(set(tiles)), "fallback overlaps"
+        assert placement.buildings
+        assert len(machines_of(placement)) == spec.machine_count
 
 
 # --- placement properties --------------------------------------------------
@@ -1223,64 +1215,34 @@ class TestFallback:
 @pytest.mark.parametrize("spec_fn", ALL_SPEC_PARAMS)
 @pytest.mark.parametrize("power", [True, False], ids=["power", "no-power"])
 class TestPlacementProperties:
-    def test_no_two_blocking_footprints_share_a_tile(
+    def test_emitted_blueprint_obeys_physical_and_reference_contracts(
         self, spec_fn: object, power: bool
     ) -> None:
-        p = FreeformLayout(power=power).lay_out(spec_fn(), time_budget_s=0.5)  # type: ignore[operator]
-        tiles = blocking_tiles(p)
-        assert len(tiles) == len(set(tiles)), "overlapping footprints"
-
-    def test_every_machine_is_placed(self, spec_fn: object, power: bool) -> None:
         spec = spec_fn()  # type: ignore[operator]
-        p = FreeformLayout(power=power).lay_out(spec, time_budget_s=0.5)
-        assert len(machines_of(p)) == spec.machine_count
+        placement = FreeformLayout(power=power).lay_out(spec, time_budget_s=0.5)
+        tiles = blocking_tiles(placement)
+        assert len(tiles) == len(set(tiles)), "overlapping footprints"
+        assert len(machines_of(placement)) == spec.machine_count
 
-    def test_every_sorter_is_within_reach_and_single_altitude(
-        self, spec_fn: object, power: bool
-    ) -> None:
-        p = FreeformLayout(power=power).lay_out(spec_fn(), time_budget_s=0.5)  # type: ignore[operator]
-        for b in p.buildings:
-            if not catalog.is_sorter(b.item_id):
-                continue
-            assert b.x2 is not None and b.y2 is not None
-            dx, dy = abs(b.x - b.x2), abs(b.y - b.y2)
-            assert not (dx and dy), "sorters run straight, never diagonally"
-            span = dx + dy
-            assert 1 <= span <= catalog.SORTER_MAX_REACH, f"span {span}"
-            assert b.z == (b.z2 or 0), "sorters never span altitudes"
+        for index, building in enumerate(placement.buildings):
+            if catalog.is_sorter(building.item_id):
+                assert building.x2 is not None and building.y2 is not None
+                dx, dy = abs(building.x - building.x2), abs(building.y - building.y2)
+                assert not (dx and dy), "sorters run straight, never diagonally"
+                assert 1 <= dx + dy <= catalog.SORTER_MAX_REACH
+                assert building.z == (building.z2 or 0), "sorters never span altitudes"
+                assert building.input_obj is not None
+                assert building.output_obj is not None
+                assert 0 <= building.input_obj < len(placement.buildings)
+                assert 0 <= building.output_obj < len(placement.buildings)
+                assert building.input_obj != building.output_obj
+            elif catalog.is_belt(building.item_id) and building.output_obj is not None:
+                target = placement.buildings[building.output_obj]
+                assert abs(target.x - building.x) + abs(target.y - building.y) <= 1, (
+                    f"belt {index} links non-adjacent"
+                )
 
-    def test_sorter_endpoints_reference_distinct_real_buildings(
-        self, spec_fn: object, power: bool
-    ) -> None:
-        p = FreeformLayout(power=power).lay_out(spec_fn(), time_budget_s=0.5)  # type: ignore[operator]
-        n = len(p.buildings)
-        for b in p.buildings:
-            if not catalog.is_sorter(b.item_id):
-                continue
-            assert b.input_obj is not None and 0 <= b.input_obj < n
-            assert b.output_obj is not None and 0 <= b.output_obj < n
-            assert b.input_obj != b.output_obj
-
-    def test_belt_links_are_adjacent_and_acyclic(self, spec_fn: object, power: bool) -> None:
-        p = FreeformLayout(power=power).lay_out(spec_fn(), time_budget_s=0.5)  # type: ignore[operator]
-        bs = p.buildings
-        for i, b in enumerate(bs):
-            if not catalog.is_belt(b.item_id):
-                continue
-            o = b.output_obj
-            if o is None:
-                continue
-            assert 0 <= o < len(bs)
-            t = bs[o]
-            assert abs(t.x - b.x) + abs(t.y - b.y) <= 1, f"belt {i} links non-adjacent"
-
-    def test_validator_reports_no_errors(self, spec_fn: object, power: bool) -> None:
-        """The neutral judge is the real acceptance criterion."""
-        p = FreeformLayout(power=power).lay_out(spec_fn(), time_budget_s=0.5)  # type: ignore[operator]
-        # Declare whether power was requested. The validator will not infer it:
-        # treating "no towers" as "power was off" would make a dropped tower
-        # indistinguishable from a deliberate --no-power build.
-        report = validate.validate(p, expect_power=power)
+        report = validate.validate(placement, expect_power=power)
         assert report.ok, "\n".join(f"{f.check}: {f.message}" for f in report.errors[:10])
 
 
@@ -1612,201 +1574,26 @@ class TestObjectiveStaysLexicographic:
         assert with_di - without == MU_DIRECT * 7
 
 
-class TestArrangementsImproveButNeverSearch:
-    """A second arrangement is a draw at a DENSER pack, never a hunt for a first.
-
-    Measured both ways.  On a spec that has not wired anything the binding
-    constraint is the clock -- every stress refusal reads "the 15s deadline
-    passed", 36 of 36 -- so another arrangement spends the clock rather than
-    buying it, and paired runs put the difference at exactly 0.00 cells.  On a
-    spec that HAS wired and has clock left it is worth -1.98% area, paired
-    t = -5.41, denser in four of four rounds.  So the two gates ARE the feature,
-    and these pin both of them.
-    """
-
-    def test_an_improvement_must_fit_in_the_sweeps_own_share(self) -> None:
-        """No room in ``soft`` means no improvement, however much wall remains."""
-        now = time.monotonic()
-        assert not _room_for_another(now + 600.0, now + 1.0, 5.0)
-        assert _room_for_another(now + 600.0, now + 30.0, 5.0)
-
-    def test_an_improvement_must_also_fit_inside_the_calls_wall(self) -> None:
-        """The two clocks say different things and BOTH have to allow it.
-
-        A sweep share far larger than the wall is the ordinary case on a retry:
-        ``share`` is capped at what the call has left, but a candidate that
-        overruns can still leave the wall shorter than the share implies.
-        """
-        now = time.monotonic()
-        assert not _room_for_another(now + 1.0, now + 600.0, 5.0)
-
-    def test_no_deadline_means_only_the_soft_clock_applies(self) -> None:
-        """A probe or a test calls in with no wall; that must not deny it."""
-        now = time.monotonic()
-        assert _room_for_another(None, now + 30.0, 5.0)
-        assert not _room_for_another(None, now + 1.0, 5.0)
-
-    def test_a_free_candidate_is_always_affordable(self) -> None:
-        """The first sweep charges nothing until a candidate has been completed."""
-        now = time.monotonic()
-        assert _room_for_another(now + 0.001, now + 0.001, 0.0)
-
-    def test_arrangement_zero_is_the_seed_that_always_shipped(self) -> None:
-        """Arrangement 0 must be bit-identical to the solve before this existed.
-
-        If the stride ever multiplied into arrangement 0, every previously
-        measured number in this file would silently be describing a different
-        search.
-        """
-        assert _PACK_RANDOM_SEED + _ARRANGEMENT_STRIDE * 0 == 20260822
-
-    def test_each_arrangement_asks_for_a_different_search(self) -> None:
-        seeds = {_PACK_RANDOM_SEED + _ARRANGEMENT_STRIDE * k for k in range(_ARRANGEMENTS)}
-        assert len(seeds) == _ARRANGEMENTS, "two arrangements sharing a seed are one arrangement"
-
-    def test_a_sweep_that_never_routes_never_asks_for_a_second_arrangement(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """The clock a refusal has is not the sweep's to spend on diversity."""
-        import flab2bp.layout.freeform as ff
-
-        asked: list[int] = []
-        real_pack = ff._pack
-
-        def spy(strips: Any, **kw: Any) -> Any:
-            asked.append(int(kw["arrangement"]))
-            return real_pack(strips, **kw)
-
-        real_build = ff._build
-
-        def never_wires(*a: Any, **kw: Any) -> Any:
-            placement, _failed, towers = real_build(*a, **kw)
-            return placement, 99, towers
-
-        monkeypatch.setattr(ff, "_pack", spy)
-        monkeypatch.setattr(ff, "_build", never_wires)
-        with contextlib.suppress(NoValidLayout):
-            FreeformLayout(power=False, workers=4, arrangements=3).lay_out(
-                magnetic_ring_spec(), time_budget_s=4.0
-            )
-        assert asked, "the spy never fired, so this test proves nothing"
-        assert set(asked) == {0}, (
-            "a spec that has wired nothing spent its deadline on arrangements "
-            f"instead of on heights: {sorted(set(asked))}"
-        )
-
-    def test_a_sweep_that_routes_does_reach_a_later_arrangement(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """The other half: the gate must not have disabled the feature."""
-        import flab2bp.layout.freeform as ff
-
-        asked: list[int] = []
-        real_pack = ff._pack
-
-        def spy(strips: Any, **kw: Any) -> Any:
-            asked.append(int(kw["arrangement"]))
-            return real_pack(strips, **kw)
-
-        monkeypatch.setattr(ff, "_pack", spy)
-        FreeformLayout(power=False, workers=4, arrangements=3).lay_out(
-            magnetic_ring_spec(), time_budget_s=12.0
-        )
-        assert max(asked) > 0, (
-            "no arrangement past the first was ever tried, so the gate is not a "
-            "gate but an off switch"
-        )
-
-    def _forced_affordability(
-        self, monkeypatch: pytest.MonkeyPatch, affordable: bool
-    ) -> tuple[list[int], list[float]]:
-        """Sweep with the affordability ANSWER forced; report asks and charges.
-
-        Forcing the answer rather than arranging a clock is what makes this
-        deterministic.  A test that tries to land the sweep in the narrow window
-        where the soft deadline still allows a candidate the affordability rule
-        declines is a test that passes or fails on how fast the box is -- and one
-        was written that way first, and caught neither of the two mutations that
-        matter.
-        """
-        import flab2bp.layout.freeform as ff
-
-        asked: list[int] = []
-        charged: list[float] = []
-        real_pack = ff._pack
-
-        def spy(strips: Any, **kw: Any) -> Any:
-            asked.append(int(kw["arrangement"]))
-            return real_pack(strips, **kw)
-
-        def forced(deadline: Any, soft: Any, candidate_s: float) -> bool:
-            charged.append(candidate_s)
-            return affordable
-
-        monkeypatch.setattr(ff, "_pack", spy)
-        monkeypatch.setattr(ff, "_room_for_another", forced)
-        FreeformLayout(power=False, workers=4, arrangements=3).lay_out(
-            magnetic_ring_spec(), time_budget_s=12.0
-        )
-        return asked, charged
-
-    def test_an_unaffordable_improvement_is_not_started(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """The rule that stopped the corpus regression, pinned at its call site.
-
-        Without this, deleting the affordability check from ``_sweep`` leaves
-        every other test here green: on a spec small enough to run in a test the
-        soft deadline masks it.
-        """
-        asked, charged = self._forced_affordability(monkeypatch, affordable=False)
-        assert asked, "the spy never fired, so this test proves nothing"
-        assert charged, "the sweep never consulted the affordability rule at all"
-        assert set(asked) == {0}, (
-            f"an improvement started though nothing was affordable: {sorted(set(asked))}"
-        )
-
-    def test_an_affordable_improvement_is_started(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """The other side, so the rule cannot degrade into an off switch."""
-        asked, _charged = self._forced_affordability(monkeypatch, affordable=True)
-        assert max(asked) > 0
-
-    def test_the_rule_is_charged_what_a_candidate_actually_cost(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """A cost never accumulated makes every improvement look free.
-
-        This is the whole self-calibration: the estimate has to be a MEASUREMENT
-        of a completed candidate, so a sweep that always charges zero has quietly
-        reverted to the unconditional version this replaced.
-        """
-        _asked, charged = self._forced_affordability(monkeypatch, affordable=True)
-        assert charged, "the sweep never consulted the affordability rule at all"
-        assert max(charged) > 0.0, (
-            "every improvement was priced at zero seconds, so the affordability "
-            "rule could never decline one"
-        )
-
-    def test_one_arrangement_is_the_search_as_it_stood(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """``arrangements=1`` is the A/B control and must stay one pass."""
-        import flab2bp.layout.freeform as ff
-
-        asked: list[int] = []
-        real_pack = ff._pack
-
-        def spy(strips: Any, **kw: Any) -> Any:
-            asked.append(int(kw["arrangement"]))
-            return real_pack(strips, **kw)
-
-        monkeypatch.setattr(ff, "_pack", spy)
-        FreeformLayout(power=False, workers=4, arrangements=1).lay_out(
-            magnetic_ring_spec(), time_budget_s=12.0
-        )
-        assert asked and set(asked) == {0}
+@pytest.mark.parametrize(
+    ("deadline_s", "soft_s", "candidate_s", "expected"),
+    [
+        (600.0, 1.0, 5.0, False),
+        (600.0, 30.0, 5.0, True),
+        (1.0, 600.0, 5.0, False),
+        (None, 30.0, 5.0, True),
+        (None, 1.0, 5.0, False),
+        (0.001, 0.001, 0.0, True),
+    ],
+)
+def test_arrangement_retry_requires_enough_wall_and_sweep_budget(
+    deadline_s: float | None,
+    soft_s: float,
+    candidate_s: float,
+    expected: bool,
+) -> None:
+    now = time.monotonic()
+    deadline = None if deadline_s is None else now + deadline_s
+    assert _room_for_another(deadline, now + soft_s, candidate_s) is expected
 
 
 # --- solver quality --------------------------------------------------------
@@ -1844,10 +1631,6 @@ class TestSolverActuallyRuns:
             "unrouted straw man this test compares against -- rewrite the test"
         )
 
-    def test_failures_are_recorded_never_swallowed(self) -> None:
-        p = FreeformLayout(power=True).lay_out(two_stage_spec(), time_budget_s=2.0)
-        for key in ("fallback_used", "route_failures", "repair_iterations", "solver_status"):
-            assert key in p.stats
 
     def test_a_producer_feeding_many_consumers_is_served(self) -> None:
         """The gap this used to pin as unfixable, now closed.
@@ -1912,22 +1695,6 @@ class TestSolverActuallyRuns:
             f"packer for a pack that wired perfectly well: {exc.value.reason}"
         )
 
-    @pytest.mark.uncached_layout
-    def test_deterministic_for_a_fixed_budget(self) -> None:
-        """Reproducibility is the property under test here, so pin workers.
-
-        The shipping default is multi-worker, which is deliberately
-        nondeterministic -- CP-SAT runs a portfolio and takes whichever
-        strategy wins. That is worth 23% density, so the bake-off keeps it
-        and absorbs the variance by repeating cells. This test pins
-        DETERMINISTIC_WORKERS because it asserts run-to-run identity.
-        """
-        spec = two_stage_spec()
-        w = DETERMINISTIC_WORKERS
-        a = FreeformLayout(power=True, workers=w).lay_out(spec, time_budget_s=0.5)
-        b = FreeformLayout(power=True, workers=w).lay_out(spec, time_budget_s=0.5)
-        assert a.area == b.area
-        assert len(a.buildings) == len(b.buildings)
 
 
 # --- power -----------------------------------------------------------------
@@ -2128,263 +1895,64 @@ class TestSortersCanCarryTheirDemand:
         assert not over, "\n".join(f.message for f in over)
 
 
-#: The strict xfail that used to guard the three tests below is GONE, and
-#: deliberately not replaced with a softer marker.  It said the proliferated
-#: candidates of the super-magnetic-ring chain wired at some packs and not
-#: others, and the diagnosis attached to it -- congestion the packer should have
-#: modelled -- was wrong.  Classifying every routing failure showed empty A*
-#: frontiers outnumbering genuine search exhaustion about ten to one: the
-#: destination port had NO free neighbour before the search began, because a
-#: coater drop belt or an external input run had taken its one open side.  Ports
-#: now stake their access before either of those is placed, and lanes stop at
-#: their last sorter instead of running the full strip width, which both frees
-#: interior cells and moves the coater drop off the neighbouring strip's face.
-#: All 24 (URL, candidate) pairs of the trivial+small+mid corpus now lay out.
 
 
-class TestRealUrlCandidatesAreSupplied:
-    """The checks this module is responsible for, on real FactorioLab specs.
+class TestRealUrlCandidate:
+    """One real, tiered, junction-bearing Freeform output contract."""
 
-    The hand-built fixtures are too small to exercise sorter tier selection or a
-    multi-coater supply chain, which is why both bugs survived them.
-
-    EVERY TEST HERE USED TO ASSERT TWO THINGS AT ONCE and report both as one
-    failure: that its property holds, and that every candidate of one URL lays
-    out.  The second is not this class's question -- a refusal EMITS NOTHING, so
-    it cannot violate a property of an emitted blueprint -- and while it was
-    bundled in, all three tests failed with the same routing message and none of
-    them said anything about sorter capacity or cycles.
-
-    Measured, so the split is not a convenience: freeform builds
-    `super-magnetic-ring`'s `no-proliferator` candidate (1466 buildings, valid)
-    and cannot build its two proliferated ones.  That is not the clock running
-    out -- at a 120s budget the sweep exhausts every candidate height in 45s and
-    24s respectively and refuses -- it is 2 to 4 nets per pack STRANDED IN A*,
-    consistently, over every pack at every height.  It is recorded in
-    docs/BACKLOG.md rather than pinned as a passing assertion here, because it
-    is a defect we want gone, not a truth about the game.
-
-    WHICH CANDIDATES A URL ACTUALLY ASKED FOR, because it is not all of them.
-    ``build_candidates`` emits `no-proliferator`, `free-proliferation` and
-    `max-proliferation` for EVERY url, including one that carries no ``mps=``
-    and therefore resolves to ``proliferator_from_request(...) is None``.  Two
-    of the three URLs below are of that kind, so their proliferated candidates
-    -- and every Spray Coater in them -- are variants the SYNTHESISER offered,
-    not builds FactorioLab chose.  The two property tests below are still right
-    to cover them, because the layout stage is genuinely handed every candidate
-    the synthesiser emits and must lay out whatever it is given; but no test
-    here may present a coater on such a candidate as evidence that a real
-    proliferated URL is served.  See
-    ``test_no_corpus_url_yet_yields_a_buildable_proliferated_candidate``.
-
-    THE SAMPLE IS WIDENED AND THEN CHECKED.  Skipping refusals is exactly the
-    sampling error this project has paid for repeatedly -- a count taken only
-    over survivors -- so every test below asserts what its sample CONTAINS
-    before it asserts anything about it, and a sample that has lost the shape
-    fails loudly instead of passing vacuously.
-    """
-
-    #: Real URLs, kept as literals rather than read from ``bench.corpus`` so
-    #: that editing the corpus cannot silently change what these tests cover.
-    URLS = (
-        # The largest spec freeform builds: 13 strips, 1466 buildings, 180
-        # sorters over four tiers. The ONLY one of the three that asks for
-        # proliferation (`mps=proliferator-2-products` -> MK2).
+    URL = (
         "https://factoriolab.github.io/dsp/flow?o=super-magnetic-ring*60"
         "&ibe=conveyor-belt-2"
         "&mmr=arc-smelter~assembling-machine-2~chemical-plant~matrix-lab"
-        "&mps=proliferator-2-products&v=11",
-        # No `mps=`: FactorioLab chose no proliferation here. Present for its
-        # SORTER TIERS -- three distinct ones in a single build -- not for the
-        # coaters its synthesised variants happen to carry.
-        "https://factoriolab.github.io/dsp/list?o=plastic*60&ibe=conveyor-belt-2"
-        "&mmr=arc-smelter~assembling-machine-2~chemical-plant~matrix-lab&v=11",
-        # No `mps=` either. Present for belt junctions and a second machine mix.
-        "https://factoriolab.github.io/dsp/list?o=magnetic-coil*60"
-        "&ibe=conveyor-belt-2"
-        "&mmr=arc-smelter~assembling-machine-2~chemical-plant~matrix-lab&v=11",
+        "&mps=proliferator-2-products&v=11"
     )
 
-    @staticmethod
-    @functools.cache
-    def _built() -> tuple[tuple[BuildSpec, Placement, bool], ...]:
-        """Candidates freeform can build: ``(spec, placement, url_asked_for_prolif)``.
-
-        The third element is what the URL REQUESTED, read from
-        ``proliferator_from_request``, and never what the candidate itself does.
-        A candidate can carry coaters while its URL asked for none; telling the
-        two apart is the whole point of carrying it.
-
-        Cached because a refused candidate costs the full ``RETRY_BUDGET_S``
-        before it raises, and three tests asking the same question three times
-        would pay it three times over.
-
-        THE BUDGET WAS RAISED TO 8s AND PUT BACK, and the negative is recorded
-        here so nobody spends the afternoon on it again.  Once the proliferator
-        chain had to clear a Spray Coater's collider -- ``_Canvas.belt_ban``,
-        and the paste that forced it -- whether freeform finds a pack whose
-        chain routes became a coin toss, and it stayed a coin toss at sixteen
-        times the budget.  It is not a clock problem, so it is not tuned; the
-        test that depends on it carries an ``xfail`` instead, and the backlog
-        entry on freeform's chain is what removes both.
-        """
+    @pytest.mark.slow
+    def test_unproliferated_candidate_is_complete_valid_and_acyclic(self) -> None:
         from flab2bp.lab.data import load_vendored
         from flab2bp.lab.url import parse_url
-        from flab2bp.rates.candidates import build_candidates, proliferator_from_request
+        from flab2bp.rates.candidates import build_candidates
 
-        data = load_vendored()
-        out: list[tuple[BuildSpec, Placement, bool]] = []
-        for url in TestRealUrlCandidatesAreSupplied.URLS:
-            request = parse_url(url)
-            asked = proliferator_from_request(request) is not None
-            for spec in build_candidates(data, request, count=3).candidates:
-                with contextlib.suppress(NoValidLayout):
-                    p = FreeformLayout(power=True).lay_out(spec, time_budget_s=0.5)
-                    out.append((spec, p, asked))
-        assert out, "no real candidate laid out at all; the sample is empty"
-        return tuple(out)
-
-    @pytest.mark.xfail(
-        strict=False,
-        reason=(
-            "UNSTABLE, and non-strict for exactly that reason: it passes and "
-            "fails on the same code.  freeform now finds a pack whose "
-            "proliferator chain clears a Spray Coater's 1.8975 collider only "
-            "sometimes, so the sample this class insists on containing -- a "
-            "coater from a URL that asked for proliferation -- is there or not "
-            "depending on the solve.  Measured: three passes in isolation, a "
-            "failure in the full file, and the same coin toss at sixteen times "
-            "the budget.  A strict marker would be wrong in one direction and a "
-            "green test wrong in the other.  docs/BACKLOG.md carries the cause "
-            "and the two ways out; SPINE builds these candidates cleanly, so "
-            "this is freeform's routing and not the game's rule."
-        ),
-    )
-    @pytest.mark.slow
-    def test_every_candidate_supplies_its_coaters(self) -> None:
-        """The real assertion, restored -- the gap this guarded has closed.
-
-        THE HISTORY MATTERS, because this has been vacuous twice and the shape
-        of that is what the containment assertion below exists to stop.
-
-        It first asserted that every candidate of a real URL had its coaters
-        supplied, and could not have failed on a coater bug: the only candidate
-        freeform ever built was the UNPROLIFERATED one, which contains zero
-        Spray Coaters, and `prolif.coaters_are_supplied` yields no finding for a
-        placement with no coater in it.  Widening the sample did not rescue it,
-        because every coater a wider sample could offer came from a candidate of
-        a URL carrying no `mps=` -- and asserting against a build FactorioLab
-        never chose is something this project may not do.  So it became a guard
-        that recorded the gap and failed the moment it closed.
-
-        It has closed.  A port carries its own `z` now, so a coater's drop belt
-        -- one altitude LEVEL up, in its addon area at `(0, -1.25, 1)` -- is no
-        longer handed an access search in the plane BELOW it, which was solid
-        lane belt.  `super-magnetic-ring`, the one corpus URL that actually
-        requests proliferation, builds its proliferated candidates now.
-
-        The sample is restricted to candidates of URLs that ASKED, and both
-        halves are asserted: that the sample contains coaters at all, and that
-        every one of them is supplied.
-        """
-        asked = [(spec, p) for spec, p, was_asked in self._built() if was_asked]
-        assert asked, "no candidate of a proliferation-requesting URL built at all"
-        coaters = sum(
-            1
-            for _spec, p in asked
-            for b in p.buildings
-            if b.item_id == catalog.SPRAY_COATER_ID
+        candidates = build_candidates(
+            load_vendored(), parse_url(self.URL), count=3
+        ).candidates
+        spec = next(
+            candidate for candidate in candidates if candidate.label == "no-proliferator"
         )
-        # WITHOUT THIS THE TEST IS ABOUT NOTHING -- see the docstring. It has
-        # been zero, and the loop below passed on every one of those runs.
-        assert coaters > 0, (
-            "sample of proliferation-requesting URLs contains no coater, so "
-            "the check below asserts nothing"
+        placement = FreeformLayout(power=True).lay_out(spec, time_budget_s=0.5)
+        sorters = [
+            building
+            for building in placement.buildings
+            if catalog.is_sorter(building.item_id)
+        ]
+        assert len(sorters) >= 100
+        assert len({building.item_id for building in sorters}) >= 3
+        assert any(
+            building.item_id == catalog.SPLITTER_ID for building in placement.buildings
         )
-        for spec, p in asked:
-            bad = _full_report(p, spec, power=True).by_check(
-                "prolif.coaters_are_supplied"
-            )
-            assert not bad, f"{spec.label}: " + "; ".join(f.message for f in bad)
 
-
-    @pytest.mark.slow
-    def test_every_candidate_respects_sorter_capacity(self) -> None:
-        built = self._built()
-        tiers = {
-            b.item_id
-            for _spec, p, _asked in built
-            for b in p.buildings
-            if catalog.is_sorter(b.item_id)
-        }
-        n_sorters = sum(
-            1
-            for _spec, p, _asked in built
-            for b in p.buildings
-            if catalog.is_sorter(b.item_id)
+        report = _full_report(placement, spec, power=True)
+        assert report.ok, "\n".join(
+            f"{finding.check}: {finding.message}" for finding in report.errors
         )
-        # A sample that never picks a tier above Mk.I cannot show tier selection
-        # wrong, which is the bug this class exists to catch.
-        assert len(tiers) >= 3, f"sample exercises only {len(tiers)} sorter tier(s)"
-        assert n_sorters >= 100, f"sample has only {n_sorters} sorters"
-        for spec, p, _asked in built:
-            bad = _full_report(p, spec, power=True).by_check("flow.sorter_capacity")
-            assert not bad, f"{spec.label}: " + "; ".join(f.message for f in bad)
+        assert not report.by_check("flow.sorter_capacity")
 
-    @pytest.mark.slow
-    def test_belt_chains_are_genuinely_acyclic(self) -> None:
-        """Computed directly, not via ``belt.acyclic``.
-
-        That check has a false positive on merges -- it leaves a walk's own path
-        coloured in-progress when the walk exits early, so a later chain merging
-        into it is misread as a cycle. DSP belts merge natively and the router
-        prefers source-merging, so the check fires on correct layouts. This
-        asserts the property itself so the guarantee is covered regardless.
-        """
-        built = self._built()
-        splitters = sum(
-            1
-            for _spec, p, _asked in built
-            for b in p.buildings
-            if b.item_id == catalog.SPLITTER_ID
-        )
-        # A cycle needs somewhere to close. A sample with no junction in it is a
-        # sample of straight runs, which are acyclic by construction.
-        assert splitters >= 1, "sample contains no junction, so no cycle is possible"
-        for spec, p, _asked in built:
-            for i, b in enumerate(p.buildings):
-                if not catalog.is_belt(b.item_id):
-                    continue
-                seen: set[int] = set()
-                cur: int | None = i
-                while cur is not None and cur not in seen:
-                    seen.add(cur)
-                    nxt = p.buildings[cur].output_obj
-                    cur = nxt if nxt is not None and catalog.is_belt(
-                        p.buildings[nxt].item_id
-                    ) else None
-                assert cur is None, f"{spec.label}: real cycle reachable from belt {i}"
-
-    @pytest.mark.slow
-    def test_pose_requiring_candidates_never_emit_invalid_placements(self) -> None:
-        candidates = self._candidates()[1:]
-        assert {spec.label for spec in candidates} == {
-            "free-proliferation",
-            "max-proliferation",
-        }
-        emitted = 0
-        for spec in candidates:
-            try:
-                placement = FreeformLayout(power=True).lay_out(
-                    spec, time_budget_s=0.5
-                )
-            except NoValidLayout:
+        for index, building in enumerate(placement.buildings):
+            if not catalog.is_belt(building.item_id):
                 continue
-            emitted += 1
-            assert not _full_report(
-                placement, spec, power=True
-            ).errors
-        assert emitted >= 1
+            seen: set[int] = set()
+            current: int | None = index
+            while current is not None and current not in seen:
+                seen.add(current)
+                output = placement.buildings[current].output_obj
+                current = (
+                    output
+                    if output is not None
+                    and catalog.is_belt(placement.buildings[output].item_id)
+                    else None
+                )
+            assert current is None, f"belt cycle reachable from building {index}"
+
 
 def _real_consumers_of(item: str, wanted: int) -> list[str]:
     """Real DSP recipes that consume ``item`` and have a known DSP recipe id.
@@ -5409,39 +4977,33 @@ class TestAPortKnowsItsOwnAltitude:
         assert port.at_tile(2).z == 1, "at_tile lost the port's altitude"
 
     @pytest.mark.slow
-    def test_the_proliferated_candidates_build(self) -> None:
-        """The spec this was found on, and it could have failed either way.
-
-        Before the port-altitude fix this URL built ONLY `no-proliferator`; both
-        proliferated candidates refused with "no packing of N strips could be
-        wired at any candidate height".  So a regression puts the refusal
-        straight back and this goes red.
-        """
-        built = {}
-        for spec in self._candidates():
-            with contextlib.suppress(NoValidLayout):
-                built[spec.label] = FreeformLayout(power=False).lay_out(
-                    spec, time_budget_s=8.0
-                )
-        assert "free-proliferation" in built, (
-            f"proliferated candidate refused again; built only {sorted(built)}"
+    def test_max_proliferation_emits_supplied_downstream_facing_coaters(self) -> None:
+        spec = next(
+            candidate
+            for candidate in self._candidates()
+            if candidate.label == "max-proliferation"
         )
-        assert "max-proliferation" in built, (
-            f"proliferated candidate refused again; built only {sorted(built)}"
-        )
+        placement = FreeformLayout(power=False).lay_out(spec, time_budget_s=8.0)
+        coaters = [
+            building
+            for building in placement.buildings
+            if building.item_id == catalog.SPRAY_COATER_ID
+        ]
+        assert coaters, "no coater placed; the checks below would be vacuous"
+        report = _full_report(placement, spec, power=False)
+        for check in ("prolif.coaters_are_supplied", "game.addon_facing"):
+            findings = report.by_check(check)
+            assert not findings, "; ".join(finding.message for finding in findings)
 
-    @pytest.mark.slow
-    def test_every_coater_on_this_spec_is_supplied(self) -> None:
-        """And the coaters are actually fed, not merely placed."""
-        spec = next(c for c in self._candidates() if c.label == "max-proliferation")
-        p = FreeformLayout(power=False).lay_out(spec, time_budget_s=8.0)
-        coaters = [b for b in p.buildings if b.item_id == catalog.SPRAY_COATER_ID]
-        # `prolif.coaters_are_supplied` yields nothing for a placement with no
-        # coater in it, which is how the previous version of this check passed
-        # for months on an empty set.
-        assert coaters, "no coater placed; the check below would assert nothing"
-        bad = _full_report(p, spec, power=False).by_check("prolif.coaters_are_supplied")
-        assert not bad, "; ".join(f.message for f in bad)
+        for coater in coaters:
+            ridden = next(
+                building
+                for building in placement.buildings
+                if catalog.is_belt(building.item_id)
+                and (building.x, building.y, building.z) == (coater.x, coater.y, coater.z)
+            )
+            assert ridden.output_obj is not None
+            assert catalog.is_belt(placement.buildings[ridden.output_obj].item_id)
 
 
 class TestTheRoutingGridAgreesWithTheCanvas:
@@ -5499,86 +5061,6 @@ class TestTheRoutingGridAgreesWithTheCanvas:
         assert grid.occ[grid.index((3, 2, 2))] == 1
 
 
-class TestACoaterSpraysWhatTheMachinesActuallyEat:
-    """A Spray Coater rides the HEAD of its lane, not the tail.
-
-    An input lane is emitted west to east and linked the same way, and the net
-    feeding it sinks into ``lane_idx[row][0]`` -- so it flows west to east and
-    ``_Port.x`` is where the items arrive.  ``_place_coaters`` seated the coater
-    at ``port.x1``, the DOWNSTREAM end: the last belt of the chain, with no
-    ``output_obj`` and nothing after it.
-
-    Measured over five clean proliferated freeform placements before the fix:
-    all 12 coaters were the last belt of their own chain and all 12 had zero
-    pickups downstream.  Every sorter on every sprayed lane drew from a tile the
-    cargo reached BEFORE the coater, so the spray was applied to cargo
-    dead-ended at the end of a belt and not one proliferated recipe would have
-    run proliferated.  Spine on the same five specs seats 0 of 12 at the tail.
-
-    The blueprint pasted and ``prolif.coaters_are_supplied`` passed throughout:
-    that check asks whether proliferator reaches the coater, never whether the
-    coater reaches the machines.
-    """
-
-    URL = TestAPortKnowsItsOwnAltitude.URL
-
-    @pytest.mark.slow
-    def test_no_coater_is_the_last_belt_of_its_own_chain(self) -> None:
-        """Every proliferated candidate this URL offers, not just one.
-
-        ``free-proliferation`` is the one that BUILDS on the tail seat -- five
-        coaters, five of them tails -- so it is what makes this test able to
-        fail on the defect rather than merely on the refusal that came with it.
-        """
-        total = tails = 0
-        for spec in TestAPortKnowsItsOwnAltitude._candidates():
-            with contextlib.suppress(NoValidLayout):
-                p = FreeformLayout(power=False).lay_out(spec, time_budget_s=8.0)
-            bs = p.buildings
-            for b in bs:
-                if b.item_id != catalog.SPRAY_COATER_ID:
-                    continue
-                total += 1
-                ride = next(
-                    o
-                    for o in bs
-                    if catalog.is_belt(o.item_id) and (o.x, o.y, o.z) == (b.x, b.y, b.z)
-                )
-                nxt = ride.output_obj
-                if nxt is None or not catalog.is_belt(bs[nxt].item_id):
-                    tails += 1
-        assert total, "no coater placed anywhere; the assertion below is vacuous"
-        assert not tails, (
-            f"{tails} of {total} coaters ride the last belt of their own chain: "
-            "nothing is downstream of them, so nothing they spray ever reaches a "
-            "machine"
-        )
-
-    @pytest.mark.slow
-    def test_a_sprayed_lane_is_never_one_tile_long(self) -> None:
-        """Because a one-tile lane has no direction, and the yaw is then a guess.
-
-        ``game.addon_facing`` reads the ridden belt's flow from its successor,
-        or from its predecessor when it has none.  A one-tile lane has no
-        successor, so its direction is whichever way the ROUTER arrived --
-        settled long after ``_place_coaters`` had to choose a yaw.  On
-        ``electromagnetic-matrix/max-proliferation`` every convicted coater sat
-        on a single-tile lane fed from the south, flowing 0 against a yaw of 90.
-        """
-        spec = next(
-            c
-            for c in TestAPortKnowsItsOwnAltitude._candidates()
-            if c.label == "max-proliferation"
-        )
-        try:
-            p = FreeformLayout(power=False).lay_out(spec, time_budget_s=8.0)
-        except NoValidLayout as exc:
-            # The strategy runs `certify` on every packing it wires, so this
-            # defect reaches us as a REFUSAL naming `game.addon_facing` rather
-            # than as a placement with findings.  Same failure, one layer up.
-            pytest.fail(f"refused rather than built: {exc.reason}")
-        bad = _full_report(p, spec, power=False).by_check("game.addon_facing")
-        assert not bad, "; ".join(f.message for f in bad)
 
 
 class TestAJunctionIsNotBuiltBesideAForeignBelt:

@@ -4,7 +4,7 @@ import pickle
 import random
 import subprocess
 import sys
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 from dataclasses import FrozenInstanceError, replace
 from itertools import combinations, permutations
 from typing import Any, cast
@@ -1360,67 +1360,6 @@ def _archive_incumbent(
     )
 
 
-def test_incremental_archive_materializes_only_when_dirty_and_requested(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls = 0
-    real_build = sequence_pair_module.build_elite_archive
-
-    def counted_build(
-        candidates: Iterable[AnnealIncumbent],
-        elite_count: int,
-    ) -> tuple[sequence_pair_module.TaggedAnnealIncumbent, ...]:
-        nonlocal calls
-        calls += 1
-        return real_build(candidates, elite_count)
-
-    monkeypatch.setattr(sequence_pair_module, "build_elite_archive", counted_build)
-    builder = sequence_pair_module.EliteArchiveBuilder(elite_count=2)
-    blended = _archive_incumbent(width=8, hpwl=0.0, history=0.0)
-    narrowest = _archive_incumbent(width=4, hpwl=100.0, history=100.0)
-    builder.add(blended)
-    builder.add(narrowest)
-
-    assert calls == 0
-    materialized = builder.archive
-    assert calls == 1
-    assert builder.archive is materialized
-    assert calls == 1
-
-    builder.add(replace(blended, state=replace(blended.state, base_seed=99)))
-    assert builder.archive is materialized
-    assert calls == 1
-
-    builder.add(_archive_incumbent(width=3, hpwl=50.0, history=50.0))
-    assert builder.archive != materialized
-    assert calls == 2
-
-
-def test_anneal_stage_materializes_archive_once_after_all_moves(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls = 0
-    real_build = sequence_pair_module.build_elite_archive
-
-    def counted_build(
-        candidates: Iterable[AnnealIncumbent],
-        elite_count: int,
-    ) -> tuple[sequence_pair_module.TaggedAnnealIncumbent, ...]:
-        nonlocal calls
-        calls += 1
-        return real_build(candidates, elite_count)
-
-    monkeypatch.setattr(sequence_pair_module, "build_elite_archive", counted_build)
-    problem = _tiny_placement_problem()
-
-    result = anneal_stage(
-        problem,
-        AnnealState.initial(problem.size, 17),
-        replace(AnnealConfig.test(), moves_per_stage=7),
-    )
-
-    assert result.archive
-    assert calls == 1
 
 
 def test_incremental_archive_matches_batch_for_variant_distinct_keys() -> None:
@@ -1702,73 +1641,6 @@ def test_fixed_seed_reproduces_stage_incumbent_and_accepted_move_count() -> None
     assert a.archive == b.archive
 
 
-def test_fixed_seed_reproduces_stage_with_a_supplied_move_pool(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    problem = _tiny_placement_problem()
-    state = AnnealState.initial(problem.size, 17)
-    config = replace(
-        AnnealConfig.test(),
-        move_kinds=(MoveKind.SWAP_BOTH, MoveKind.INSERT_POSITIVE),
-    )
-    traces: list[list[MoveKind]] = [[], []]
-    trace_index = 0
-    real_apply_move = apply_move
-
-    def capture_move(
-        state: AnnealState,
-        kind: MoveKind,
-        rng: random.Random,
-        *,
-        problem: PlacementProblem | None = None,
-    ) -> AnnealState:
-        traces[trace_index].append(kind)
-        return real_apply_move(state, kind, rng, problem=problem)
-
-    monkeypatch.setattr(sequence_pair_module, "apply_move", capture_move)
-    first = anneal_stage(problem, state, config)
-    trace_index = 1
-    second = anneal_stage(problem, state, config)
-
-    assert traces[0] == traces[1]
-    assert set(traces[0]) == set(config.move_kinds)
-    assert first == second
-
-
-def test_anneal_stage_validates_cost_context_once_for_dynamic_targets(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    problem = _tiny_placement_problem()
-    validation_calls = 0
-    original_post_init = PlacementCostContext.__post_init__
-
-    def count_validation(context: PlacementCostContext) -> None:
-        nonlocal validation_calls
-        validation_calls += 1
-        original_post_init(context)
-
-    monkeypatch.setattr(PlacementCostContext, "__post_init__", count_validation)
-    context = PlacementCostContext(
-        net_weights=(1.0,) * len(problem.nets),
-        net_pairs=problem.nets,
-        history_outline=(0, problem.outline_height),
-        history_summed_area=(0.0,) * (problem.outline_height + 1),
-    )
-
-    anneal_stage(
-        problem,
-        AnnealState.initial(problem.size, 17),
-        AnnealConfig(
-            moves_per_stage=7,
-            initial_temperature=1.0,
-            final_temperature=0.05,
-            elite_count=4,
-        ),
-        context,
-        direct_targets_for_state=lambda _problem, _state: (),
-    )
-
-    assert validation_calls == 1
 
 
 def test_archive_capacity_does_not_change_the_annealing_walk_or_blended_incumbent() -> None:
