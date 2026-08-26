@@ -113,7 +113,16 @@ _STRATEGIES: dict[str, _StrategyFactory] = {
         belt_vertical_construction=vertical,
     ),
 }
-_DEFAULT_STRATEGIES = ("spine", "freeform")
+_DEFAULT_STRATEGIES = ("freeform", "sequence-pair")
+
+
+def strategy_names(requested: str) -> tuple[str, ...]:
+    """Resolve ``both`` to active alternatives while keeping Spine explicit."""
+    if requested == "both":
+        return _DEFAULT_STRATEGIES
+    if requested not in _STRATEGIES:
+        raise ValueError(f"unknown strategy: {requested}")
+    return (requested,)
 
 #: A cell slower than this is worth NAMING in the summary even when it passes.
 #: This is a reporting threshold, not a defect threshold: see :func:`_slow_note`
@@ -502,7 +511,7 @@ def main() -> int:
     cutoff = _TIER_ORDER.index(Tier(args.tier))
     tiers = set(_TIER_ORDER[: cutoff + 1])
     budgets = [float(b) for b in args.budget.split(",")]
-    names = list(_DEFAULT_STRATEGIES) if args.strategy == "both" else [args.strategy]
+    names = list(strategy_names(args.strategy))
 
     cores = _available_cores()
     jobs_n = args.jobs if args.jobs > 0 else max(1, cores // 4)
