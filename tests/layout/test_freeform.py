@@ -8,6 +8,7 @@ would let a rates regression masquerade as a layout one.
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import functools
 import math
 import time
@@ -2447,6 +2448,119 @@ def _belt(x: int, y: int, *, item: str | None = None) -> PlacedBuilding:
     return PlacedBuilding(
         item_id=2001, model_index=35, x=x, y=y, width=1, height=1, carries_item=item
     )
+
+
+class TestABuildingDeniesOnlyTheBandUnderItsCollider:
+    """A machine is not solid at every altitude, and the game never said it was.
+
+    The belt half of a blueprint paste is ONE sphere against the build
+    collider -- ``BuildTool_BlueprintPaste.cs:2179``, dump line 145760 -- with
+    no footprint term and no ceiling.  Colliders start at the ground and rise,
+    so what a building denies a belt is a BAND, and
+    :func:`colliders.belt_crossing_height` is where its top comes from.
+    ``freeform`` used to blank the whole column instead, which is the invented
+    constraint this class exists to keep deleted.
+    """
+
+    @staticmethod
+    def _at(item_id: int, x: int, y: int) -> PlacedBuilding:
+        b = catalog.building(item_id)
+        return PlacedBuilding(
+            item_id=item_id,
+            model_index=b.model_index,
+            x=x,
+            y=y,
+            width=b.width,
+            height=b.height,
+        )
+
+    def test_a_belt_may_stand_above_a_splitters_collider(self) -> None:
+        """The whole of it, on the cell that used to be blanked.
+
+        A Splitter's collider tops out at blueprint ``z = 1.7475``, so level 2
+        clears it and levels 0 and 1 do not.  Before this rule was the game's,
+        all three read blocked.
+        """
+        top = LEVELS - 1
+        assert top * freeform._LEVEL_HEIGHT > colliders.belt_crossing_height(
+            catalog.building(2020).model_index
+        ), "pick a shorter building: this one does not fit under the lattice"
+        canvas = _Canvas()
+        canvas.add(self._at(2020, 5, 5), solid=True)
+        assert canvas.free((5, 5, top)), (
+            f"level {top} sits above a Splitter's collider and the game sells "
+            "the crossing; freeform refused it"
+        )
+        assert not canvas.free((5, 5, 0)) and not canvas.free((5, 5, 1)), (
+            "the band under the collider is still the game's rule and must "
+            "still be refused"
+        )
+
+    def test_the_flat_grid_agrees_with_free_about_that_cell(self) -> None:
+        """The grid is what A* searches, so a grid that disagrees is the bug.
+
+        Documented in ``_make_grid``: when the two disagreed the other way, A*
+        returned paths ``_commit_paths`` then refused, and the net was dropped
+        round after round with nothing learning anything.
+        """
+        canvas = _Canvas(limit=(0, 0, 10, 10))
+        canvas.add(self._at(2020, 5, 5), solid=True)
+        grid = _make_grid(canvas, (0, 0, 10, 10), (0, 0, 10, 10), {})
+        for lvl in range(LEVELS):
+            cell = (5, 5, lvl)
+            assert bool(grid.occ[grid.index(cell)]) == canvas.free(cell), (
+                f"grid and _Canvas.free disagree at {cell}"
+            )
+
+    def test_a_production_machine_still_denies_every_level_on_offer(self) -> None:
+        """Deleting an invented rule must not delete the real one under it.
+
+        An Arc Smelter is the SHORTEST machine freeform packs and its collider
+        still tops out at 2.7975 -- above level 2, the highest this lattice
+        offers.  So at ``LEVELS = 3`` the band is the whole column and the
+        shipped geometry is unchanged; anything else here would be a belt the
+        game pastes as ``EBuildCondition.Collide``.
+        """
+        for item_id in (2302, 2303, 2901, 2309, 2308):
+            canvas = _Canvas()
+            canvas.add(self._at(item_id, 5, 5), solid=True)
+            for lvl in range(LEVELS):
+                assert not canvas.free((5, 5, lvl)), (
+                    f"{catalog.building(item_id).name} reads passable at level "
+                    f"{lvl}; its collider tops out at "
+                    f"{colliders.belt_crossing_height(catalog.building(item_id).model_index)}"
+                )
+
+    def test_the_bound_is_a_lookup_and_not_one_constant(self) -> None:
+        """A rule that varies by model may not be flattened to a literal.
+
+        Depot Mk.I and Mk.II are the same family and do not share a collider
+        (1.897 against 2.835), so a single number here would be right by
+        coincidence for one of them.  Assembling Machine Mk.I/II/III DO share
+        one, which is why "it varies by tier" cannot be assumed either -- only
+        the model's own collider answers.
+        """
+        got = {
+            item_id: freeform._crossing_ban_levels(self._at(item_id, 0, 0))
+            for item_id in (2011, 2020, 2101, 2102, 2303, 2305)
+        }
+        assert got[2011] != got[2020], "Sorter and Splitter share a ban band"
+        assert got[2101] != got[2102], "Depot Mk.I and Mk.II share a ban band"
+        assert got[2303] == got[2305], (
+            "Assembling Machine Mk.I and Mk.III share a collider, so they must "
+            "share a band -- a per-tier guess would separate them"
+        )
+
+    def test_the_band_rises_with_the_buildings_own_altitude(self) -> None:
+        """The bound is measured from the building's ground, not the world's."""
+        low = freeform._crossing_ban_levels(self._at(2011, 0, 0))
+        high = freeform._crossing_ban_levels(
+            dataclasses.replace(self._at(2011, 0, 0), z=F(2))
+        )
+        assert len(high) > len(low), (
+            f"a Sorter lifted to z=2 must deny more of the lattice than one on "
+            f"the ground; got {low} then {high}"
+        )
 
 
 class TestPortAccessIsReservedForEveryRole:
