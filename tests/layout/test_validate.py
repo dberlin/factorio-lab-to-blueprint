@@ -3987,3 +3987,41 @@ def test_sprayed_cargo_says_nothing_about_an_unproliferated_consumer() -> None:
     assert not fired(r, SPRAYED_REACHES), [
         f.message for f in r.by_check(SPRAYED_REACHES)
     ]
+
+
+def _hop_scene(coated: bool) -> Placement:
+    """Two lanes joined by a belt-to-belt SORTER, with the coater on the first.
+
+    Such a hop carries whatever it draws, sprayed or not.  Treating its target
+    as a fresh unfed run head -- which is what it looks like, since no belt
+    hands to it -- would convict the second lane for cargo the coater on the
+    first had already sprayed.  Neither strategy emits this shape today, which
+    is exactly why it needs a fixture: an untested clause is a guess.
+    """
+    parts: list[PlacedBuilding] = [
+        belt(0, 0, out=1, carries="copper-ore"),  # 0
+        belt(1, 0, carries="copper-ore"),  # 1  -- tail of the first lane
+        belt(3, 0, out=3, carries="copper-ore"),  # 2  -- head of the second
+        belt(4, 0, carries="copper-ore"),  # 3
+        machine(3, 1, recipe_id=6),  # 4  -- 4x4, x3..6 y1..4
+        sorter(1, 0, 3, 0, inp=1, out=2),  # 5  -- the belt-to-belt hop
+        sorter(4, 0, 4, 1, inp=3, out=4),  # 6  -- the pickup
+        belt(-1, 0, 1, carries="proliferator-3"),  # 7
+    ]
+    if coated:
+        parts.append(_coater(0, 0))
+    return place(*parts)
+
+
+def test_sprayed_cargo_follows_a_belt_to_belt_sorter_hop() -> None:
+    """The coater is two lanes upstream and a sorter apart, and that is fine."""
+    r = validate(_hop_scene(coated=True), _sprayed_spec(), ids=_SPRAYED_IDS)
+    assert not fired(r, SPRAYED_REACHES), [
+        f.message for f in r.by_check(SPRAYED_REACHES)
+    ]
+
+
+def test_sprayed_cargo_still_fires_across_a_hop_with_no_coater_anywhere() -> None:
+    """Without this the clause above could be passing by switching the check off."""
+    r = validate(_hop_scene(coated=False), _sprayed_spec(), ids=_SPRAYED_IDS)
+    assert fired(r, SPRAYED_REACHES), errors(r)

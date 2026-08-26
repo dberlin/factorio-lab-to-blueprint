@@ -1,5 +1,120 @@
 # Backlog
 
+## RESOLVED -- a sprayed lane could get no coater, and spine's coaters sprayed nothing the machines ate
+
+"freeform's coater was at the wrong END of its lane", further down this file,
+recorded this as LATENT in `freeform._place_coaters` and asked for a check that
+every `spec.spray_lanes` item carries a coater.  Latent it was, in freeform.
+**Spine had the same hole open and running.**
+
+**MEASURED, over the first six mid-tier corpus URLs and every proliferated
+candidate they offer -- ten candidates, 61 sorters feeding a proliferated
+machine a sprayed ingredient off a belt:**
+
+| | freeform | spine (before) | spine (after) |
+|---|---|---|---|
+| sprayed pickups | 61 | 61 | 61 |
+| **fed cargo no coater had sprayed** | **0** | **15** | **0** |
+| candidates affected | 0 / 10 | 9 / 10 | 0 / 10 |
+| candidates built | 10 | 10 | 10 |
+
+All fifteen were the same shape: the lane HAD its coater, the coater HAD its
+proliferator, `prolif.coaters_are_supplied` passed, and the sorter drew from a
+tile upstream of the coater.  On `super-magnetic-ring/max-proliferation` -- the
+ten-coater cell this file already has two entries about -- with spine's own
+self-check disabled so the raw emission could be read: **ten coaters and 35
+unsprayed pickups.**  Zero after.
+
+**Freeform's miss is real and had to be constructed to see.**  `_place_coaters`
+`continue`d past four separate failures and the fifth never entered the loop at
+all.  On a fixture with the coater's drop cell blocked it returned `[]` for a
+spec with one spray lane and raised nothing -- that is
+`test_a_blocked_drop_cannot_come_back_as_a_missing_coater`, and it is red on
+`8a842135`.
+
+### The check
+
+`prolif.sprayed_cargo_reaches_machines`, default ERROR, asked from the MACHINE's
+end because that is where the correctness is.  It walks unsprayed cargo FORWARD
+over the belt graph from every point that cargo can enter it -- a run head
+nothing feeds, a sorter putting on from a machine, a head fed only by unsprayed
+runs -- stops at every coater, and convicts any belt a proliferated machine is
+fed from that unsprayed cargo still reaches.  An unresolvable sorter counts
+against the machine rather than being skipped.
+
+`prolif.coaters_are_supplied` was left alone and its docstring now says why: it
+asks whether proliferator reaches the coater, it is vacuous on a placement with
+no coater, and both of those are correct for the question it asks.
+
+### Four causes in spine, and the fourth was not about coaters at all
+
+1. `_coater_tile` mounted on the column nearest the lane MIDPOINT that the
+   corridor's proliferator lane also covered -- a supply convenience from before
+   `_feed_coater` grew a spur.  It reads the lane's HEAD now, from the LINKS:
+   `lane_tiles` keeps x order whichever way a lane runs, so a westward lane's
+   head is its last entry and taking `lane[0]` would have been right half the
+   time.
+2. The coater faced EAST regardless of the lane.  Area 1 sits BEHIND the addon,
+   so a head seat facing WITH the flow puts the drop one tile off the upstream
+   end of the corridor -- `x = -1` on a lane starting at column 0, outside the
+   bounding box `_coater_spur` may use.  Measured: with the seat moved and the
+   yaw left alone, all ten candidates refused with "no elevated spur reaches
+   (-1, y)".  It faces AGAINST the flow now and the drop lands over the lane's
+   own second tile.
+3. `_place_coaters` `break`ed after the first lane copy of an item.  An item has
+   one `spray_lanes` entry and as many LANES as the machines eating it need: ten
+   spray lanes on the ten-coater cell are sixteen lanes a machine eats off.  A
+   pure transit copy still gets none -- whatever it hands on is sprayed at the
+   head of the lane that does feed a machine.
+4. `_SpurField` took an addon's attached tile out of collider pricing
+   ALTOGETHER, when what the game excuses is a belt on that tile at that area's
+   OWN altitude.  So a spur could cross the drop column at `z = 3/2` with 1.8975
+   of coater collider under it.  With the coaters moved to their lane heads,
+   `electromagnetic-matrix/max-proliferation` emitted three of those and refused
+   on `game.belt_crossing`.
+
+And the ORDER: every coater is seated before the first spur is routed.  A spur
+is priced against the buildings that exist when it is built, so seating and
+feeding one at a time let spur N fly at `z = 1` over ground coater N + 1 was
+then placed on.
+
+### Freeform
+
+Each of the five ways a seat could be skipped raises `_Unseatable`, a
+`NoValidLayout`.  The sweep discards that height exactly as it does an
+unpowerable pack, and a spec no height can seat is refused.  It does not fire on
+the corpus, which is what "latent" meant.
+
+## OPEN -- `lanes_requiring_split` is computed and no strategy reads it
+
+`rates/candidates.py` works out which sprayed lanes ALSO feed an unproliferated
+consumer, and says in its own docstring why it matters: "an unproliferated
+consumer drinking from a sprayed lane quietly receives a bonus nobody costed --
+it over-produces, and the running factory stops matching the numbers in this
+`BuildSpec`".  It is on `BuildSpec.lanes_requiring_split`, and
+`grep -rn lanes_requiring_split src/` finds it in `spec.py`, `candidates.py` and
+`rates/__init__.py` and **nowhere in `layout/`**.  Neither strategy splits such
+a lane; both spray it whole.
+
+Measured: 1 of the 14 proliferated candidates over the trivial+small+mid corpus
+carries a non-empty `lanes_requiring_split` --
+`electromagnetic-matrix/free-proliferation`, on `iron-ore`.
+`candidates.lanes_requiring_split`'s own docstring counts 42 of 151 craftable
+end products needing at least one.
+
+Found while closing the coater-seat entry above and recorded rather than fixed,
+because it is the OPPOSITE defect and needs different machinery.  That entry is
+about a machine eating cargo that was never sprayed -- it under-produces, and
+the fix is where the coater sits.  This is about a machine eating cargo that
+should not have been sprayed -- it over-produces, and the fix is a splitter, a
+second lane, and the rate arithmetic to divide the flow between them.  Nothing
+in the coater fix makes it better or worse; `prolif.sprayed_cargo_reaches_machines`
+speaks only about proliferated consumers and is silent here by design.
+
+There is no validator check for it either, which is the first thing to write:
+a proliferated and an unproliferated consumer of the same item drawing from
+belts a single coater is upstream of.
+
 ## RESOLVED -- six coaters rode a belt that turned on their own tile, and the rule that forbids it was recorded as satisfied
 
 From the user, looking at a pasted blueprint: *"spray coaters are still broken

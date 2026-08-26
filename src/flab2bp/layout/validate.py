@@ -3733,6 +3733,15 @@ def _unsprayed_belts(ctx: Context, item: str) -> set[int]:
       just forced onto a belt precisely so it can be sprayed;
     * a run head fed only by junctions or runs that are themselves unsprayed.
 
+    A SORTER FROM BELT TO BELT IS AN EDGE, NOT A SOURCE -- a lane-to-lane
+    transfer, which is how a trunk is tapped onto a branch without spending a
+    splitter.  It carries whatever it draws, sprayed or not, so it has to be
+    FOLLOWED: ``_belt_successors`` reads ``output_obj`` and splitters and stops
+    dead at one of these, which would leave every branch fed only by a transfer
+    reading as clean whatever its trunk carries.  ``_build_graph`` already links
+    the two runs, so the branch's head is not mistaken for a source; what is
+    missing there is the tile-level edge, and that is what ``hops`` is.
+
     Cargo AT the coater's own tile counts as sprayed.  The coater is an addon on
     that belt and the items pass through it there, which is why both strategies
     aim to seat one at the first tile of a lane rather than the tile before it.
@@ -3755,6 +3764,24 @@ def _unsprayed_belts(ctx: Context, item: str) -> set[int]:
         return not known or item in known
 
     entry: set[int] = set()
+    #: belt -> belts a sorter moves cargo onto from it.  An edge, not a source.
+    hops: dict[int, list[int]] = defaultdict(list)
+    # An internally produced ingredient arrives through a sorter off a machine;
+    # a belt-to-belt sorter is a hop, and the run it lands on is already NOT a
+    # source here because ``_build_graph`` links the two runs, so its head has a
+    # predecessor and the clause below passes it over.
+    for _i, s in ctx.of_kind(Kind.SORTER):
+        src, dst = s.input_obj, s.output_obj
+        if src is None or dst is None:
+            continue
+        if not (0 <= src < len(bs) and 0 <= dst < len(bs)):
+            continue
+        if ctx.kinds[dst] is not Kind.BELT or not carries(dst):
+            continue
+        if ctx.kinds[src] is Kind.MACHINE:
+            entry.add(dst)
+        elif ctx.kinds[src] is Kind.BELT:
+            hops[src].append(dst)
     # An external ingredient arrives on a run nothing inside feeds.
     for r, run in enumerate(ctx.runs):
         head = run.head
@@ -3762,17 +3789,6 @@ def _unsprayed_belts(ctx: Context, item: str) -> set[int]:
             continue
         if not ctx.pred.get((RUN, r)):
             entry.add(head)
-    # An internally produced ingredient arrives through a sorter off a machine.
-    for _i, s in ctx.of_kind(Kind.SORTER):
-        src, dst = s.input_obj, s.output_obj
-        if src is None or dst is None:
-            continue
-        if not (0 <= src < len(bs) and 0 <= dst < len(bs)):
-            continue
-        if ctx.kinds[src] is not Kind.MACHINE or ctx.kinds[dst] is not Kind.BELT:
-            continue
-        if carries(dst):
-            entry.add(dst)
 
     dirty: set[int] = set()
     stack = [b for b in entry if b not in rides]
@@ -3781,7 +3797,7 @@ def _unsprayed_belts(ctx: Context, item: str) -> set[int]:
         if b in dirty:
             continue
         dirty.add(b)
-        for nxt in _belt_successors(ctx, b):
+        for nxt in (*_belt_successors(ctx, b), *hops.get(b, ())):
             if nxt in dirty or nxt in rides or not carries(nxt):
                 continue
             stack.append(nxt)

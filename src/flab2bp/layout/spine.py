@@ -3800,7 +3800,26 @@ def _lane_flow_order(buildings: list[PlacedBuilding], lane: list[int]) -> list[i
     return order if len(order) == len(lane) else list(lane)
 
 
-def _ride_is_legal(buildings: list[PlacedBuilding], tile: int, yaw: float) -> bool:
+def _belt_backward(buildings: list[PlacedBuilding]) -> dict[int, int]:
+    """belt -> the belt that hands to it.  Built once, not scanned per tile."""
+    back: dict[int, int] = {}
+    for i, b in enumerate(buildings):
+        if not catalog.is_belt(b.item_id):
+            continue
+        j = b.output_obj
+        if j is not None and 0 <= j < len(buildings) and catalog.is_belt(
+            buildings[j].item_id
+        ):
+            back.setdefault(j, i)
+    return back
+
+
+def _ride_is_legal(
+    buildings: list[PlacedBuilding],
+    tile: int,
+    yaw: float,
+    backward: dict[int, int],
+) -> bool:
     """Whether an addon yawed ``yaw`` may ride belt ``tile``.
 
     The same pair of questions ``game.addon_facing`` and ``game.addon_corner``
@@ -3817,10 +3836,9 @@ def _ride_is_legal(buildings: list[PlacedBuilding], tile: int, yaw: float) -> bo
         if catalog.is_belt(o.item_id):
             outgoing = (o.x - b.x, o.y - b.y, float(o.z - b.z))
     incoming = None
-    for prv in buildings:
-        if prv.output_obj == tile and catalog.is_belt(prv.item_id):
-            incoming = (b.x - prv.x, b.y - prv.y, float(b.z - prv.z))
-            break
+    if (p := backward.get(tile)) is not None:
+        prv = buildings[p]
+        incoming = (b.x - prv.x, b.y - prv.y, float(b.z - prv.z))
     if incoming is None and outgoing is None:
         return True
     return bool(rules.addon_ride_is_straight(yaw, incoming, outgoing))
@@ -3908,8 +3926,9 @@ def _coater_tile(
     quiet miss.
     """
     order = _lane_flow_order(buildings, lane)
+    backward = _belt_backward(buildings)
     for i in order:
-        if _ride_is_legal(buildings, i, yaw):
+        if _ride_is_legal(buildings, i, yaw, backward):
             return i
     raise NoValidLayout(
         f"spine cannot seat a Spray Coater on the lane at "
