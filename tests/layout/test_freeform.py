@@ -14,11 +14,12 @@ import math
 import time
 from dataclasses import replace
 from fractions import Fraction as F
+from pathlib import Path
 from typing import Any
 
 import pytest
 
-from flab2bp.dsp import catalog, colliders, rules
+from flab2bp.dsp import catalog, codec, colliders, rules
 from flab2bp.layout import freeform, junction, slots, validate
 from flab2bp.layout.base import (
     DETERMINISTIC_WORKERS,
@@ -5136,6 +5137,7 @@ class TestPreparedJunctionLegalityIsThreeDimensional:
             ("assembling-machine-2", 35, 8, 38, 11, 1),
             ("assembling-machine-3", 54, 11, 53, 10, 2),
             ("arc-smelter", 22, 34, 25, 34, 1),
+            ("matrix-lab", 37, 82, 36, 82, 1),
         ],
     )
     def test_static_machine_collisions_are_banned_at_the_splitter_level(
@@ -5239,6 +5241,10 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
             indices[0], 0, 0, 0, tiles - 1, tuple(indices), strips[0].machines, 0
         )
         return canvas, spec, strips[:1], [{self.ITEM: port}]
+    def test_sprayed_lane_reserves_the_full_coater_body_west(self) -> None:
+        _canvas, _spec, strips, _ports = self._fixture(4)
+        assert strips[0].west_channel == freeform._COATER_WEST_CHANNEL == 3
+
 
     def test_a_lane_too_short_to_seat_a_coater_is_refused(self) -> None:
         """One tile: ``_coater_seat`` has no tile with a lane tile either side."""
@@ -5268,11 +5274,107 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
         with pytest.raises(freeform._Unseatable, match="proliferator drop"):
             freeform._place_coaters(canvas, spec, strips, ports, 2001, 35)
 
+    def test_reported_coater_assembler_pair_is_refused_before_emission(
+        self,
+    ) -> None:
+        fixture = Path("tests/fixtures/ours/coater-assembler-collision.txt")
+        blueprint = codec.decode(fixture.read_text(encoding="utf-8").strip())
+        assert blueprint.hash_valid
+        coater_record = blueprint.buildings[162]
+        assembler_record = blueprint.buildings[134]
+        assert (
+            coater_record.index,
+            coater_record.item_id,
+            coater_record.x,
+            coater_record.y,
+            coater_record.yaw,
+        ) == (162, catalog.SPRAY_COATER_ID, 13.0, 7.0, 90.0)
+        assembler_id = catalog.item_id("assembling-machine-2")
+        assert (
+            assembler_record.index,
+            assembler_record.item_id,
+            assembler_record.x,
+            assembler_record.y,
+        ) == (134, assembler_id, 14.0, 9.0)
+
+        _old_canvas, spec, strips, _old_ports = self._fixture(4)
+        canvas = _Canvas()
+        assembler_info = catalog.building(assembler_id)
+        assembler = PlacedBuilding(
+            item_id=assembler_id,
+            model_index=assembler_record.model_index,
+            x=round(assembler_record.x - (assembler_info.width - 1) / 2),
+            y=round(assembler_record.y - (assembler_info.height - 1) / 2),
+            width=assembler_info.width,
+            height=assembler_info.height,
+            yaw=assembler_record.yaw,
+        )
+        assembler_index = canvas.add(assembler, solid=True)
+        indices = [
+            canvas.add(_belt(x, 7, item=self.ITEM))
+            for x in (12, 13, 14)
+        ]
+        port = _Port(
+            indices[0],
+            12,
+            7,
+            12,
+            14,
+            tuple(indices),
+            strips[0].machines,
+            0,
+        )
+        proposed = PlacedBuilding(
+            item_id=catalog.SPRAY_COATER_ID,
+            model_index=coater_record.model_index,
+            x=round(coater_record.x),
+            y=round(coater_record.y),
+            yaw=coater_record.yaw,
+        )
+        assert freeform._coater_keepout_hits(
+            canvas.buildings,
+            proposed,
+        ) == (assembler_index,)
+
+        with pytest.raises(freeform._Unseatable, match="keepout"):
+            freeform._place_coaters(
+                canvas,
+                spec,
+                strips,
+                [{self.ITEM: port}],
+                2001,
+                35,
+            )
+
     def test_the_same_fixture_unblocked_seats_one(self) -> None:
         """Without this the two above pass for a fixture that seats nothing."""
         canvas, spec, strips, ports = self._fixture(4)
         got = freeform._place_coaters(canvas, spec, strips, ports, 2001, 35)
         assert len(got) == 1, f"expected one coater on the sprayed lane, got {got}"
+
+    def test_items_sharing_one_lane_share_one_positional_coater(self) -> None:
+        canvas, spec, strips, ports = self._fixture(4)
+        other = "gear"
+        spec = spec.model_copy(
+            update={"spray_lanes": {self.ITEM: False, other: False}}
+        )
+        strips[0] = replace(
+            strips[0],
+            in_above=((self.ITEM, other),),
+            in_below=(),
+        )
+        ports[0][other] = ports[0][self.ITEM]
+
+        got = freeform._place_coaters(canvas, spec, strips, ports, 2001, 35)
+
+        assert len(got) == 1
+        assert len(
+            [
+                building
+                for building in canvas.buildings
+                if building.item_id == catalog.SPRAY_COATER_ID
+            ]
+        ) == 1
 
     def test_a_sprayed_item_no_strip_carries_is_refused(self) -> None:
         """The loop never reaches such an item, so the clauses inside cannot fire."""
