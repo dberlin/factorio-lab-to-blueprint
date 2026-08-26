@@ -901,6 +901,12 @@ LINT_EXCEPTIONS: tuple[LintException, ...] = (
         "weighted-HPWL objective coefficient; not SORTER_END_EXTENSION geometry",
     ),
     LintException(
+        "flab2bp.layout.sequence_pair",
+        "SearchEnergy",
+        0.2,
+        "history-cost objective coefficient; not BELT_PROBE_LIFT geometry",
+    ),
+    LintException(
         "flab2bp.layout.freeform",
         "_astar",
         30.0,
