@@ -2932,6 +2932,22 @@ class TestRealSpecsValidateClean:
 
 
 class TestSprayCoatersAreFed:
+    def test_spur_field_reads_typed_addon_supply_poses(self) -> None:
+        from flab2bp.layout.spine import _SpurField
+
+        info = catalog.building(catalog.SPRAY_COATER_ID)
+        coater = PlacedBuilding(
+            item_id=catalog.SPRAY_COATER_ID,
+            model_index=info.model_index,
+            x=0,
+            y=0,
+            width=1,
+            height=1,
+            yaw=90.0,
+        )
+        field = _SpurField([coater])
+        assert field.floor
+
     """A coater with no proliferator sprays nothing.
 
     Every proliferated recipe then quietly runs unproliferated and the build

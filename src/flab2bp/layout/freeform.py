@@ -5617,7 +5617,7 @@ def _commit_paths(
         ok = True
         altitudes = _altitude_profile(path, ramped=canvas.ramped)
         if altitudes is None:
-            unlinked += 1
+            unlinked.append(i)
             continue
         for (x, y, lvl), z in zip(path, altitudes, strict=True):
             if not canvas.free((x, y, lvl)) or not canvas.free_world(x, y, z):
@@ -8205,6 +8205,32 @@ def _machines_without_poses(strips: list[Strip]) -> list[str]:
     seen: set[tuple[int, str, int]] = set()
     out: list[str] = []
     for s in strips:
+        if s.lane_plan is None:
+            building = catalog.building(s.item_id)
+            kinds = {
+                *(("ingredient",) if s.in_lanes else ()),
+                *(("output",) if s.out_lanes else ()),
+            }
+            for kind in sorted(kinds):
+                key = (s.item_id, kind, 0)
+                if key in seen:
+                    continue
+                seen.add(key)
+                if not building.slots:
+                    out.append(
+                        f"{building.name} ({s.recipe_id}): the game's prefab "
+                        f"gives it no insert pose on any face and "
+                        f"{len(building.slots)} belt port(s), so its {kind} lane "
+                        "cannot be joined to it by a sorter -- it takes a belt "
+                        "docked into a port, which neither strategy emits"
+                    )
+                else:
+                    out.append(
+                        f"{building.name} ({s.recipe_id}): its {kind} lane has "
+                        f"no insert pose within the {reach}-tile reach of any "
+                        "sorter tier on any column of the machine"
+                    )
+            continue
         rows: list[tuple[int, str]] = [(j, "ingredient") for j in range(len(s.in_above))]
         rows += [(s.row_of_output(k), "output") for k in range(len(s.out_lanes))]
         rows += [(s.row_of_input(lane[0]), "ingredient") for lane in s.in_below]

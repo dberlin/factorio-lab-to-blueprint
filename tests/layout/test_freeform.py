@@ -1122,11 +1122,17 @@ class TestASideCarriesAsManyLanesAsItsPosesAllow:
             ph=5,
             in_above=(("plastic",), ("refined-oil",), ("water",)),
             out_lanes=(("organic-crystal", ""),),
+            in_below=(),
+            lane_plan=None,
+            attachment_plan=(),
+            box_height=9,
         )
-        assert s.sorter_span(0) == 0, "the fixture must really have no pose in reach"
-        (message,) = _machines_without_poses([s])
-        assert "0 tile(s)" not in message
-        assert "no insert pose within the" in message
+        messages = _machines_without_poses([s])
+        assert len(messages) == 2
+        assert all("0 tile(s)" not in message for message in messages)
+        assert all("insert pose" in message for message in messages)
+        assert any("ingredient lane" in message for message in messages)
+        assert any("output lane" in message for message in messages)
 
 
 # --- fallback --------------------------------------------------------------
@@ -5218,6 +5224,20 @@ class TestAltitudeProfile:
             )
             is None
         )
+
+    def test_commit_records_a_path_with_no_legal_altitude_profile(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(freeform, "_altitude_profile", lambda *_args, **_kwargs: None)
+        canvas = _Canvas(ramped=True)
+        source = _Port(0, 0, 0, 0, 0)
+        destination = _Port(0, 2, 0, 2, 2)
+        net = _Net(source, destination, "iron")
+
+        assert _commit_paths(
+            canvas, [net], {0: ((1, 0, 0),)}, 2001, 35
+        ) == (0,)
+
 
     def test_ramps_separated_by_a_flat_cell_are_fine(self) -> None:
         path = [(0, 0, 0), (1, 0, 0), (2, 0, 1), (3, 0, 1), (4, 0, 2)]

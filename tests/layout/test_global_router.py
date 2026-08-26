@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from collections.abc import Iterable
 from dataclasses import replace
 
@@ -72,7 +73,10 @@ def _problem(
     )
     blocked_cells = {cell: -1 for cell in blocked}
     blocked_cells.update(
-        {(building.x, building.y, building.z): index for index, building in enumerate(buildings)}
+        {
+            (building.x, building.y, math.floor(building.z)): index
+            for index, building in enumerate(buildings)
+        }
     )
     return _PreparedRoutingProblem(
         building_templates=buildings,
