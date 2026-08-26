@@ -58,6 +58,17 @@ To re-run the whole proof, headless, and check what came out:
   "solver" that answered without a solver would be the worst failure this
   project could have.
 
+### The dataset question, which turned out not to be one
+
+`cors.html` exists to ask whether an isolated static page can fetch
+FactorioLab's `data.json`.  It does not need to: flab2bp already **vendors**
+the dataset inside its own package (`flab2bp/lab/vendored/data.json`, 264 KB,
+plus a 33 KB hash index), and `pipeline.build` loads it from there --
+`load_vendored`, not the network.  The whole dataset therefore arrives inside
+the 0.47 MB wheel, no cross-origin fetch happens, and under cross-origin
+isolation none is even attempted.  That is the same copy the CLI uses offline,
+so the browser and the terminal are reading identical data.
+
 ### The two things that make it possible
 
 **SCIP is in the wasm build.**  flab2bp needs two solvers, not one: CP-SAT for
@@ -169,7 +180,16 @@ Cross-origin isolation is **required**, so a host that cannot set headers needs
 on the second.  `web/smoke.py --no-isolation` serves without COOP/COEP -- the
 way GitHub Pages does -- and drives that path.
 
-@@ISOLATION@@
+**It works, and therefore GitHub Pages works.**  Served with no COOP/COEP at
+all, the page reported `crossOriginIsolated: true`, `SharedArrayBuffer:
+available` and JSPI on its second load, booted in 13.3 s, solved in 65.5 s,
+and produced a blueprint that decoded to 823 buildings and re-encoded to
+itself.  Same result as the header-served run, one extra page load.
+
+The cost is that first load: the service worker installs, then reloads the
+page, so a cold visitor pays the navigation twice.  Nothing else differs.  A
+host that *can* set the headers (Netlify, Cloudflare Pages, S3+CloudFront, a
+plain nginx) skips that and is otherwise identical.
 
 ## Proving no server solved it
 
@@ -217,10 +237,15 @@ way GitHub Pages does -- and drives that path.
   `Uncaught TypeError: "<your whole python file>" is not a function`.  It lives
   in `web/bootstrap.py` and is fetched.
 * ortools 9.11 writes `add_allowed_assignments` as `TableConstraintProto.vars`;
-  9.15 writes it as single-term `exprs`.  Both fields exist and CP-SAT reads
-  both, but it is the one place the vendored 9.11 model differs from what the
-  installed ortools would build, and `tests/clientside/` pins it so it cannot
-  quietly become two places.
+  9.15 writes it as single-term `exprs`.  This is the one place the vendored
+  9.11 model differs from what the installed ortools would build, and it is
+  the shape of bug that would never announce itself -- a dropped table
+  constraint just yields a different, still-valid-looking layout.  Checked
+  directly against the wasm build: a model with `vars` and no `exprs` and
+  allowed pairs `{(3,4), (7,8)}`, minimising `x`, comes back `OPTIMAL` with
+  `x, y = 3, 4`.  Honoured.  (It matters: `spine.py` uses
+  `add_allowed_assignments` to pin row heights.)  `tests/clientside/` pins the
+  difference so it cannot quietly become two places.
 * Pyodide 0.28.3 ships `protobuf` **6.31.1**, and ortools 9.15's generated code
   declares gencode 6.33.1, which the runtime refuses.  9.11's gencode is 5.26.1
   and loads fine -- another reason the shim is 9.11 and not 9.15.
