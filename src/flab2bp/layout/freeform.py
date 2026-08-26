@@ -141,10 +141,11 @@ WEST_CHANNEL = 1
 #: ``RAMP_TILES_PER_LEVEL`` tiles to gain one.
 _LEVEL_HEIGHT = catalog.BELT_CLIMB_PER_TILE * catalog.RAMP_TILES_PER_LEVEL
 
-#: Levels this router's lattice offers: ground plus two.
+#: Levels this router's lattice offers: ground plus three.
 #:
 #: NOT the game's ceiling, which is ``catalog.belt_max_z`` -- 8.55 on a new save
-#: and 38.55 on the user's.  This is how much of it THIS router can use.
+#: and 26.55 at the corpus's lab level 9.  This is how much of it THIS router
+#: can use.
 #:
 #: It was 1 + crossing clearance = 2 while the ceiling was believed to be 1.
 #: Measured at 2 the freeform suite failed 12, then 2, then 5 tests on
@@ -153,16 +154,43 @@ _LEVEL_HEIGHT = catalog.BELT_CLIMB_PER_TILE * catalog.RAMP_TILES_PER_LEVEL
 #: says a ramp to z=2 is legal on any save (world slope 2/3 against a limit of
 #: 4/5), so the third level costs nothing in legality.
 #:
-#: This comment used to justify the value with "it treats machines as solid at
-#: every altitude, so headroom beyond a crossing plus one buys it nothing".
-#: That justification was circular and the constraint under it was invented:
-#: see :func:`_crossing_ban_levels` for what the game actually forbids.  What
-#: bounds the useful value now is measurement, not an invented rule -- and
-#: :func:`_crossing_ban_levels` says the first level that clears ANY production
-#: machine is 3 (an Arc Smelter's collider tops out at blueprint z 2.797), so
-#: at 3 no belt can cross one and raising it is the only way to find out
-#: whether crossing is worth what a ramp to that altitude costs.
-LEVELS = 3
+#: **THE FOURTH LEVEL IS THE ONE THAT LETS A BELT CROSS A MACHINE**, and it is
+#: worth nothing without :func:`_crossing_ban_levels`.  This comment used to
+#: justify the value with "it treats machines as solid at every altitude, so
+#: headroom beyond a crossing plus one buys it nothing" -- circular, and the
+#: constraint under it was invented.  With the real rule in place the shortest
+#: collider in the packable set is a Mining Machine's at 2.610 and the tallest
+#: that still fits under level 3 is a Self-evolution Lab's at 2.947, so level 3
+#: is the FIRST altitude at which any production machine may be crossed at all.
+#:
+#: Measured on the 72-cell corpus audit, paired and interleaved, four arms
+#: rotated so none always ran first -- 14 rounds, then 8 more with two extra
+#: arms, `--budget 4 --jobs 16`:
+#:
+#: * The null arm is the calibration.  The band rule at ``LEVELS = 3`` is
+#:   PROVABLY the same geometry as the blanket ban (nothing packable clears
+#:   level 2) and it still "won" 45 discordant cells to 42, share 0.517,
+#:   p = 0.83, and still measured 0.63% denser cell-for-cell.  Read every
+#:   number below against that: a 0.6% density delta here is what nothing looks
+#:   like.
+#: * ``LEVELS = 4`` with the rule: clean 62.36/72 against 61.43 over 14 rounds,
+#:   better in 9 rounds and worse in 2 (p = 0.065); pooled over both runs, 46
+#:   discordant cells to 29, share 0.613, p = 0.064.  Two independent runs, the
+#:   same direction, the same size.
+#: * ``LEVELS = 4`` WITHOUT the rule -- more altitude that machines still
+#:   block -- is worse than shipped master: -1.12 clean cells, and it loses to
+#:   the rule 21 discordant cells to 8.  So the gain is the crossing, not the
+#:   lattice.
+#: * ``LEVELS = 5`` gives back the gain: 61.50 clean, share 0.519 against
+#:   master.  The search cost of the fifth plane exceeds what an Assembling
+#:   Machine crossing (3.532, so level 4) returns.
+#: * **Density did not move.** -0.91% cell-for-cell against master, versus the
+#:   null arm's -0.63% and a same-arm noise floor of 1.33% median / 3.59% p90
+#:   over 273 same-arm pairs.  What the fourth level buys is REFUSALS, not area.
+#: * INVALID stayed 0 in all 62 rounds -- 4,464 cells -- and the crossings are
+#:   real: 254 belt tiles stand over a machine's footprint across 30 placements
+#:   at ``LEVELS = 4``, against 0 at ``LEVELS = 3``.
+LEVELS = 4
 
 
 def _crossing_ban_levels(b: PlacedBuilding) -> tuple[int, ...]:
@@ -5844,11 +5872,11 @@ def _power_plan(canvas: _Canvas, core: tuple[int, int, int, int]) -> list[tuple[
         # likes "open ground, and open ground is exactly the corridor a belt
         # wanted".  That sentence conflates two opposite things.  The scarce
         # routing resource here is the ONE-ROW CHANNEL on a strip's south face
-        # -- a strip's machine band denies every level this lattice offers, so
-        # that row is the only way past it (see `_sweep`, and `WEST_CHANNEL`).
+        # -- a strip's machine band denies the bottom three levels, so that row
+        # is nearly the only way past it (see `_sweep`, and `WEST_CHANNEL`).
         # Not because a machine is solid to the sky -- it is not, see
         # `_crossing_ban_levels` -- but because the lowest level that clears a
-        # production machine's collider is 3 and `LEVELS` is 3.  A cell in such a
+        # production machine's collider is 3.  A cell in such a
         # channel has free neighbours east and west and blocked ones north and
         # south: `openness == 2`.  A cell in the middle of a wide field has
         # `openness == 4` and cutting it out disconnects nothing.  Preferring
@@ -7582,15 +7610,16 @@ class FreeformLayout:
         # quietly deleted, because the numbers under it are still real.
         #
         # The story was that the scarce resource is the east-west corridor: a
-        # strip's machine band blocks every level this lattice offers, so the
-        # only way past a strip
-        # is the one-row channel on its south face, and a wide pack asks its nets
-        # to cross the whole width through those. That is not what the failures
-        # are. Flooding from the start cells of failing searches says the median
-        # reachable region is ONE CELL -- see `_reserve_port_access`, which now
-        # holds the way out of it. Nothing is crossing anything; the source port
-        # cannot leave its own access cell. A one-row corridor also carries three
-        # belts, not one, since only a machine denies all three levels.
+        # strip's machine band blocks the bottom three levels, so the only way
+        # past a strip is the one-row channel on its south face, and a wide pack
+        # asks its nets to cross the whole width through those. That is not what
+        # the failures are. Flooding from the start cells of failing searches
+        # says the median reachable region is ONE CELL -- see
+        # `_reserve_port_access`, which now holds the way out of it. Nothing is
+        # crossing anything; the source port cannot leave its own access cell. A
+        # one-row corridor also carries several belts, not one, since only a
+        # machine denies the whole band -- and since `LEVELS` rose to 4 a net
+        # can go OVER the strip as well as around it.
         #
         # What the measurement under it DOES show is that some heights wire and
         # others do not, unpredictably, and shortest-first can spend the whole

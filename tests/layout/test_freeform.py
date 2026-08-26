@@ -2527,19 +2527,23 @@ class TestABuildingDeniesOnlyTheBandUnderItsCollider:
                 f"grid and _Canvas.free disagree at {cell}"
             )
 
-    def test_a_production_machine_still_denies_every_level_on_offer(self) -> None:
+    def test_no_machine_is_ever_crossable_below_level_three(self) -> None:
         """Deleting an invented rule must not delete the real one under it.
 
-        An Arc Smelter is the SHORTEST machine freeform packs and its collider
-        still tops out at 2.7975 -- above level 2, the highest this lattice
-        offers.  So at ``LEVELS = 3`` the band is the whole column and the
-        shipped geometry is unchanged; anything else here would be a belt the
-        game pastes as ``EBuildCondition.Collide``.
+        The SHORTEST collider in the packable set is a Mining Machine's at
+        2.6100, so levels 0, 1 and 2 are under every production machine there
+        is and a belt on any of them pastes as ``EBuildCondition.Collide``.
+        That is the floor this class defends, and it is stated in levels rather
+        than in ``LEVELS`` so it keeps meaning the same thing when the lattice
+        grows: it was the whole column at ``LEVELS = 3``, which is why the rule
+        change shipped no geometry at all, and it is still the bottom three
+        when the lattice offers more.
         """
+        forced = {lvl for lvl in range(LEVELS) if lvl <= 2}
         for item_id in _packable_machine_ids() | {catalog.TESLA_TOWER_ID}:
             canvas = _Canvas()
             canvas.add(self._at(item_id, 5, 5), solid=True)
-            for lvl in range(LEVELS):
+            for lvl in forced:
                 assert not canvas.free((5, 5, lvl)), (
                     f"{catalog.building(item_id).name} reads passable at level "
                     f"{lvl}; its collider tops out at "
