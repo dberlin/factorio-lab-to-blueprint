@@ -113,6 +113,11 @@ type QualityArchiveKey = tuple[int, int, int, int, float, PlacementKey]
 
 _QUALITY_REVISIT_AFTER = 2
 _MAX_SEQUENCE_ISLANDS = 16
+_COMPACT_SEED_DETERMINISTIC_SECONDS_PER_BUDGET_SECOND = 1.0 / 15.0
+_COMPACT_SEED_WALL_SHARE = Fraction(1, 3)
+_COMPACT_SEED_DIRECT_MIN_BUDGET_S = 30.0
+_COMPACT_LARGE_VARIANT_SIZE = 40
+_COMPACT_LARGE_VARIANT_DETERMINISTIC_CAP = 0.5
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,14 +155,31 @@ class SequenceSolverConfig:
         return cls(stages=2, moves_per_stage=16, restarts_per_height=1, global_elites=2)
 
 
+def _budgeted_compact_seed_config(
+    time_budget_s: float,
+    requested: CompactSeedConfig,
+) -> CompactSeedConfig:
+    """Cap CP seed work so a short solve retains most of its wall for routing."""
+    ceiling = max(time_budget_s, RETRY_BUDGET_S)
+    deterministic_limit = min(
+        requested.max_deterministic_time,
+        ceiling * _COMPACT_SEED_DETERMINISTIC_SECONDS_PER_BUDGET_SECOND,
+    )
+    return replace(
+        requested,
+        max_deterministic_time=float(deterministic_limit),
+    )
+
+
 @dataclass(slots=True)
 class ExpansionBudget:
-    """One deterministic expansion ledger with a stage-inaccessible reserve."""
+    """One deterministic ledger with a proxy-inaccessible closure reserve."""
 
     total: int
     discovery_by_height: dict[int, int] = field(default_factory=dict, init=False)
     shared_left: int = field(init=False)
     final_reserved: int = field(init=False)
+    final_left: int = field(init=False)
     _spent: int = field(default=0, init=False, repr=False)
     _unsettled_discovery: set[int] = field(default_factory=set, init=False, repr=False)
     _discovery_spent: dict[int, int] = field(default_factory=dict, init=False, repr=False)
@@ -168,16 +190,17 @@ class ExpansionBudget:
         if type(self.total) is not int or self.total < 0:
             raise ValueError("total expansion budget must be a non-negative integer")
         self.final_reserved = _fraction_ceiling(self.total, Fraction(1, 4))
+        self.final_left = self.final_reserved
         self.shared_left = self.total - self.final_reserved
 
     @property
     def spent(self) -> int:
-        """Expansions actually charged to discovery and shared stage routing."""
+        """Expansions charged exactly once across every routing role."""
         return self._spent
 
     @property
     def searchable_total(self) -> int:
-        """Budget visible to stage routing; the final reserve is excluded."""
+        """Budget visible to discovery/proxy stages before authoritative borrowing."""
         return self.total - self.final_reserved
 
     @property
@@ -196,6 +219,7 @@ class ExpansionBudget:
             raise ValueError("reserve fraction must be a Fraction from zero to one")
 
         self.final_reserved = _fraction_ceiling(self.total, reserve_fraction)
+        self.final_left = self.final_reserved
         searchable = self.total - self.final_reserved
         discovery_slice, remainder = divmod(searchable, len(heights))
         self.discovery_by_height = {height: discovery_slice for height in heights}
@@ -215,6 +239,59 @@ class ExpansionBudget:
         _check_spend(spent, allowance)
         self._discovery_spent[height] += spent
         self._spent += spent
+
+    def detailed_discovery_allowance(self, height: int) -> int:
+        """All remaining work, exposed only to one authoritative seed closure."""
+        self.discovery_allowance(height)
+        return (
+            sum(
+                self.discovery_allowance(candidate)
+                for candidate in self.discovery_by_height
+                if candidate in self._unsettled_discovery
+            )
+            + self.final_left
+            + self.shared_left
+        )
+
+    def charge_detailed_discovery(self, height: int, spent: int) -> None:
+        """Atomically charge closure without exposing borrowed work to proxies."""
+        _check_spend(spent, self.detailed_discovery_allowance(height))
+        remaining = spent
+
+        current = self.discovery_allowance(height)
+        take = min(remaining, current)
+        self._discovery_spent[height] += take
+        remaining -= take
+
+        take = min(remaining, self.final_left)
+        self.final_left -= take
+        remaining -= take
+
+        for candidate in self.discovery_by_height:
+            if remaining == 0:
+                break
+            if candidate == height or candidate not in self._unsettled_discovery:
+                continue
+            allowance = self.discovery_allowance(candidate)
+            take = min(remaining, allowance)
+            self._discovery_spent[candidate] += take
+            remaining -= take
+
+        take = min(remaining, self.shared_left)
+        self.shared_left -= take
+        remaining -= take
+        if remaining:
+            raise AssertionError("detailed closure charge exceeded decomposed budget")
+        self._spent += spent
+
+    def settle_detailed_discovery(self, height: int, spent: int) -> None:
+        """Close one discovery after its authoritative route borrowed future work."""
+        self.charge_detailed_discovery(height, spent)
+        self._pending_discovery_return += self.discovery_allowance(height)
+        self._unsettled_discovery.remove(height)
+        if not self._unsettled_discovery:
+            self.shared_left += self._pending_discovery_return
+            self._pending_discovery_return = 0
 
     def settle_discovery(self, height: int, spent: int) -> None:
         allowance = self.discovery_allowance(height)
@@ -462,6 +539,7 @@ class SequenceSolver[PreparedT]:
         | None = None,
         stage_boundary_transform: StageBoundaryTransform | None = None,
         stage_boundary_commit: StageBoundaryCommit | None = None,
+        borrow_first_discovery: bool = False,
     ) -> None:
         if (
             not isinstance(heights, tuple)
@@ -481,6 +559,8 @@ class SequenceSolver[PreparedT]:
             raise ValueError(
                 "protected follow-up heights must be unique scheduled integers in a tuple"
             )
+        if type(borrow_first_discovery) is not bool:
+            raise ValueError("borrow-first-discovery mode must be a bool")
         self.config = config or SequenceSolverConfig()
         self.adapters = adapters
         self.budget = expansion_budget
@@ -498,6 +578,7 @@ class SequenceSolver[PreparedT]:
         )
         self.budget.configure(heights, self.config.final_reserve_fraction)
         self._protected_followup_heights = protected_followup_heights
+        self._borrow_first_discovery = borrow_first_discovery
         feedback_factory = initial_feedback or _default_feedback
         self._heights = [
             _new_height_state(
@@ -540,9 +621,9 @@ class SequenceSolver[PreparedT]:
             )
             if seed_height is not None:
                 seed_height.routing_seed_closed = True
-                allowance = self.budget.discovery_allowance(seed_height.height)
+                allowance = self.budget.detailed_discovery_allowance(seed_height.height)
                 spent, cancelled = self._route_seed_closure(seed_height, allowance)
-                self.budget.charge_discovery(seed_height.height, spent)
+                self.budget.charge_detailed_discovery(seed_height.height, spent)
                 self._last_height = seed_height.height
                 if cancelled:
                     termination = "cancelled"
@@ -556,8 +637,23 @@ class SequenceSolver[PreparedT]:
             if discovery is not None:
                 height_state = discovery
                 allowance = self.budget.discovery_allowance(height_state.height)
-                spent, cancelled = self._run_discovery(height_state, allowance)
-                self.budget.settle_discovery(height_state.height, spent)
+                if self._borrow_first_discovery:
+                    closure_allowance = self.budget.detailed_discovery_allowance(
+                        height_state.height
+                    )
+                    spent, cancelled = self._run_discovery(
+                        height_state,
+                        allowance,
+                        closure_allowance=closure_allowance,
+                    )
+                    self.budget.settle_detailed_discovery(
+                        height_state.height,
+                        spent,
+                    )
+                    self._borrow_first_discovery = False
+                else:
+                    spent, cancelled = self._run_discovery(height_state, allowance)
+                    self.budget.settle_discovery(height_state.height, spent)
             else:
                 if self.budget.shared_left == 0:
                     termination = "budget"
@@ -734,11 +830,18 @@ class SequenceSolver[PreparedT]:
         self,
         height_state: _HeightState,
         allowance: int,
+        *,
+        closure_allowance: int | None = None,
     ) -> tuple[int, bool]:
         """Advance every restart, then route their deterministic archive union once."""
         annealed = self._anneal_restarts(height_state, height_state.restarts)
         self._persist_annealed_restarts(annealed)
-        return self._route_annealed(height_state, annealed, allowance)
+        return self._route_annealed(
+            height_state,
+            annealed,
+            allowance,
+            closure_allowance=closure_allowance,
+        )
 
     def _run_stage(
         self,
@@ -818,6 +921,8 @@ class SequenceSolver[PreparedT]:
         height_state: _HeightState,
         annealed: Sequence[_AnnealedRestart],
         allowance: int,
+        *,
+        closure_allowance: int | None = None,
     ) -> tuple[int, bool]:
         source_by_incumbent: dict[int, _AnnealedRestart] = {}
         for source in annealed:
@@ -846,7 +951,13 @@ class SequenceSolver[PreparedT]:
             height_state.quality_restart = None
             height_state.quality_stagnation = 0
             height_state.pending_quality_exit = True
-        return self._route_archive(height_state, candidates, annealed, allowance)
+        return self._route_archive(
+            height_state,
+            candidates,
+            annealed,
+            allowance,
+            closure_allowance=closure_allowance,
+        )
 
     def _route_quality_candidate(
         self,
@@ -904,6 +1015,8 @@ class SequenceSolver[PreparedT]:
         candidates: Sequence[tuple[TaggedAnnealIncumbent, _AnnealedRestart]],
         annealed: Sequence[_AnnealedRestart],
         allowance: int,
+        *,
+        closure_allowance: int | None = None,
     ) -> tuple[int, bool]:
         """Proxy-score an archive without consuming its detailed closure work."""
         spent = 0
@@ -927,7 +1040,7 @@ class SequenceSolver[PreparedT]:
             if allowance
             else 0
         )
-        proxy_left = allowance - detailed_reserve
+        proxy_left = 0 if closure_allowance is not None else allowance - detailed_reserve
         prepared_candidates: list[_StageCandidate[PreparedT]] = []
         global_candidates: list[_GlobalCandidate[PreparedT]] = []
         for index, (tagged, source) in enumerate(candidates):
@@ -1002,7 +1115,10 @@ class SequenceSolver[PreparedT]:
         else:
             raise ValueError("archive routing requires at least one candidate")
 
-        detailed_allowance = allowance - spent
+        available_for_detail = allowance if closure_allowance is None else closure_allowance
+        if available_for_detail < allowance:
+            raise ValueError("detailed closure allowance cannot be smaller than proxy allowance")
+        detailed_allowance = available_for_detail - spent
         detailed_started = time.perf_counter()
         detailed = self.adapters.detailed_route(selected.prepared, detailed_allowance)
         detailed_route_time_s = time.perf_counter() - detailed_started
@@ -1961,6 +2077,10 @@ def _production_run(
         chosen_compact_config = compact_seed_config
     else:
         raise ValueError("compact seed config must be exactly CompactSeedConfig")
+    chosen_compact_config = _budgeted_compact_seed_config(
+        time_budget_s,
+        chosen_compact_config,
+    )
     initial_states: dict[int, AnnealState] = {}
 
     planning_started = time.monotonic()
@@ -2041,7 +2161,6 @@ def _production_run(
         if compact_seed_attempt is not None:
             template_problem = problems[heights[0]]
             compact_height = _balanced_compact_seed_height(template_problem)
-            telemetry.compact_seed_attempt = compact_seed_attempt
             telemetry.compact_seed_base_seed = chosen_compact_base_seed
             telemetry.compact_seed_height = compact_height
             if compact_height not in seeds:
@@ -2055,25 +2174,49 @@ def _production_run(
                 heights += (compact_height,)
             if compact_height not in protected_followup_heights:
                 protected_followup_heights += (compact_height,)
+            large_variant_seed = (
+                bool(problems[compact_height].variant_tables)
+                and problems[compact_height].size >= _COMPACT_LARGE_VARIANT_SIZE
+            )
+            effective_compact_attempt = compact_seed_attempt + int(large_variant_seed)
+            telemetry.compact_seed_attempt = effective_compact_attempt
 
             compact_started = time.monotonic()
+            compact_deadline = min(
+                deadline,
+                compact_started
+                + ceiling
+                * _COMPACT_SEED_WALL_SHARE.numerator
+                / _COMPACT_SEED_WALL_SHARE.denominator,
+            )
             try:
                 direct_eligibility = (
-                    ()
-                    if deadline_reached()
-                    else _variant_direct_eligibility(
+                    _variant_direct_eligibility(
                         spec,
                         strips,
                         problems[compact_height],
                     )
+                    if ceiling >= _COMPACT_SEED_DIRECT_MIN_BUDGET_S and not deadline_reached()
+                    else ()
+                )
+                seed_config = (
+                    replace(
+                        chosen_compact_config,
+                        max_deterministic_time=min(
+                            chosen_compact_config.max_deterministic_time,
+                            _COMPACT_LARGE_VARIANT_DETERMINISTIC_CAP,
+                        ),
+                    )
+                    if large_variant_seed
+                    else chosen_compact_config
                 )
                 compact_result = solve_compact_seed(
                     problems[compact_height],
                     base_seed=chosen_compact_base_seed,
-                    attempt=compact_seed_attempt,
-                    config=chosen_compact_config,
+                    attempt=effective_compact_attempt,
+                    config=seed_config,
                     direct_eligibility=direct_eligibility,
-                    absolute_deadline=deadline,
+                    absolute_deadline=compact_deadline,
                     cancelled=deadline_reached,
                 )
             except Exception as exc:
@@ -2336,6 +2479,7 @@ def _production_run(
         config=config,
         deadline_reached=deadline_reached,
         initial_states=initial_states,
+        borrow_first_discovery=compact_seed_attempt is not None and not initial_states,
         direct_targets=direct_targets,
         direct_targets_for_state=direct_targets_for_state,
         stage_boundary_transform=transform_stage,
@@ -2450,6 +2594,12 @@ class SequencePairLayout:
             belt_vertical_construction=not self.ramped,
             strip_len=self.strip_len,
             config=self.config,
+            compact_seed_attempt=0,
+            compact_seed_base_seed=self.config.seed,
+            compact_seed_config=_budgeted_compact_seed_config(
+                time_budget_s,
+                self.compact_seed_config,
+            ),
         )
         try:
             result = run.solver.search()

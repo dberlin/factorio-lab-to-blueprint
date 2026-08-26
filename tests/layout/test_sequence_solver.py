@@ -5,7 +5,7 @@ import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field, replace
 from fractions import Fraction
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
@@ -221,6 +221,7 @@ def _solver(
     config: SequenceSolverConfig | None = None,
     deadline_reached: Callable[[], bool] | None = None,
     initial_states: dict[int, AnnealState] | None = None,
+    borrow_first_discovery: bool = False,
 ) -> SequenceSolver[Prepared]:
     return SequenceSolver(
         heights=heights,
@@ -241,6 +242,7 @@ def _solver(
         ),
         deadline_reached=deadline_reached or (lambda: False),
         initial_states=initial_states,
+        borrow_first_discovery=borrow_first_discovery,
     )
 
 
@@ -758,6 +760,65 @@ def test_stage_routes_preserve_the_final_twenty_five_percent() -> None:
     assert sum(fake.global_allowances) + sum(fake.detailed_allowances) == 75
 
 
+def test_compact_seed_closure_can_charge_the_detailed_final_reserve_once() -> None:
+    budget = ExpansionBudget(total=100)
+    fake = _FakeRouting(spend_allowance=True)
+    solver = _solver(
+        fake,
+        heights=(40,),
+        budget=budget,
+        initial_states={40: AnnealState.initial(1, 7)},
+    )
+
+    with pytest.raises(NoValidLayout, match="no scheduled stage"):
+        solver.search(max_stages=1)
+
+    assert fake.global_allowances == []
+    assert fake.detailed_allowances == [100]
+    assert budget.spent == 100
+    assert budget.final_reserved == 25
+    assert budget.final_left == 0
+
+
+def test_seed_closure_borrows_future_slices_in_stable_height_order() -> None:
+    budget = ExpansionBudget(total=100)
+    budget.configure((40, 60, 80), Fraction(1, 4))
+
+    assert budget.detailed_discovery_allowance(40) == 100
+    budget.charge_detailed_discovery(40, 90)
+
+    assert budget.spent == 90
+    assert budget.final_left == 0
+    assert budget.discovery_allowance(40) == 0
+    assert budget.discovery_allowance(60) == 0
+    assert budget.discovery_allowance(80) == 10
+    assert (
+        budget.spent
+        + budget.final_left
+        + budget.shared_left
+        + sum(budget.discovery_allowance(height) for height in budget.discovery_by_height)
+        == budget.total
+    )
+
+
+def test_terminal_seed_fallback_borrows_only_for_detailed_closure() -> None:
+    budget = ExpansionBudget(total=100)
+    fake = _FakeRouting(spend_allowance=True)
+    solver = _solver(
+        fake,
+        budget=budget,
+        borrow_first_discovery=True,
+    )
+
+    with pytest.raises(NoValidLayout, match="no scheduled stage"):
+        solver.search(max_stages=1)
+
+    assert fake.global_allowances == []
+    assert fake.detailed_allowances == [100]
+    assert budget.spent == 100
+    assert budget.final_left == 0
+
+
 def test_casimir_sized_discovery_slices_conserve_900k_and_protect_detailed_work(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1000,6 +1061,71 @@ def test_production_run_uses_supplied_absolute_deadline_without_shrinking_ledger
     assert run.solver.deadline_reached()
     assert run.ceiling == 15.0
     assert run.solver.budget.total == 6_000_000
+
+
+def test_serial_layout_uses_a_budgeted_root_compact_seed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    def stop_after_arguments(_spec: BuildSpec, **kwargs: Any) -> Any:
+        captured.update(kwargs)
+        raise RuntimeError("captured production arguments")
+
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "_production_run",
+        stop_after_arguments,
+    )
+
+    with pytest.raises(RuntimeError, match="captured production arguments"):
+        SequencePairLayout().lay_out(two_stage_spec(), time_budget_s=2.0)
+
+    assert captured["compact_seed_attempt"] == 0
+    compact_config = captured["compact_seed_config"]
+    assert isinstance(compact_config, sequence_solver_module.CompactSeedConfig)
+    assert compact_config.max_deterministic_time == 1.0
+
+
+def test_production_seed_has_its_own_wall_and_deterministic_caps(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    def capture_seed(
+        _problem: PlacementProblem,
+        **kwargs: Any,
+    ) -> sequence_solver_module.CompactSeedResult:
+        captured["called_at"] = time.monotonic()
+        captured.update(kwargs)
+        return sequence_solver_module.CompactSeedResult(
+            sequence_solver_module.CompactSeedStatus.CANCELLED,
+            None,
+            sequence_solver_module.CompactSeedDiagnostics(
+                solver_seed=0,
+                status_name="CANCELLED",
+                width_weight=1,
+                secondary_upper_bound=0,
+            ),
+        )
+
+    monkeypatch.setattr(sequence_solver_module, "solve_compact_seed", capture_seed)
+    _production_run(
+        two_stage_spec(),
+        time_budget_s=2.0,
+        power=False,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+        compact_seed_attempt=0,
+    )
+
+    compact_config = captured["config"]
+    assert isinstance(compact_config, sequence_solver_module.CompactSeedConfig)
+    assert compact_config.max_deterministic_time == 1.0
+    compact_deadline = captured["absolute_deadline"]
+    assert captured["direct_eligibility"] == ()
+    assert isinstance(compact_deadline, float)
+    assert 0.0 < compact_deadline - captured["called_at"] <= 5.0
 
 
 def test_deadline_without_an_exact_incumbent_raises() -> None:
