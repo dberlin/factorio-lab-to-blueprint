@@ -6285,6 +6285,11 @@ def _build(
     # BELT index, which is what makes a lane serving several destinations one
     # node instead of several.
     joined: dict[str, list[tuple[int, int]]] = defaultdict(list)
+    # Every sorter already standing, as the PASTE will test it.  Built once and
+    # extended by each bridge that lands: `_bridge` is asked once per lane pair
+    # and rebuilding this inside it is quadratic in the sorter count, which on a
+    # stress spec is thousands.
+    standing = slots.sorter_seat_boxes(canvas.buildings)
     for (src_key, item, dest_group), srcs in out_ports.items():
         # One output lane may serve SEVERAL destination groups -- see
         # `_merge_lanes` -- and each of them is its own set of consumer strips to
@@ -6306,7 +6311,7 @@ def _build(
                 lane_of[sink.belt] = sink
                 lane_demand[item][sink.belt] = sink.machines * in_rate
                 if (src_key, dest) in direct_keys and _bridge(
-                    canvas, port, sink, rates, item
+                    canvas, port, sink, rates, item, standing
                 ):
                     direct_placed += 1
                     continue
@@ -6532,6 +6537,7 @@ def _bridge(
     dst: _Port,
     rates: dict[str, Fraction],
     item: str,
+    standing: list[colliders.Box],
 ) -> bool:
     """Span two lane ends with one sorter, replacing a whole belt route.
 
@@ -6553,8 +6559,10 @@ def _bridge(
     same belt tile a smelter's output sorter was already using; see
     ``validate.game.sorter_collide``.
 
-    So every shared column is tried, west to east, and the first one whose
-    seated box clears every sorter already standing is the one taken.  When none
+    ``standing`` is that answer prepared: the seated box of every sorter already
+    placed, which the caller builds once and this extends.  Every shared column
+    is tried, west to east, and the first one whose seated box clears them all
+    is the one taken.  When none
     does, ``False`` -- and the caller routes a belt instead, which is the same
     thing it does when the lanes are out of reach.  That is not a fallback: a
     belt route is the general case and a bridge is the optimisation.
@@ -6564,7 +6572,6 @@ def _bridge(
         return False
 
     tier, _ = _pick_sorter(rates.get(item, Fraction(1)), span, 1)
-    standing = slots.sorter_seat_boxes(canvas.buildings)
     for column in range(max(src.x0, dst.x0), min(src.x1, dst.x1) + 1):
         if (column, src.y, 0) not in canvas.blocked:
             continue
@@ -6592,6 +6599,9 @@ def _bridge(
         if not slots.sorter_seat_is_clear(bridge, canvas.buildings, standing):
             continue
         canvas.buildings.append(bridge)
+        seat = slots.seated_sorter(bridge, canvas.buildings)
+        if seat is not None:
+            standing.append(colliders.sorter_box(seat))
         return True
     return False
 

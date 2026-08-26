@@ -970,7 +970,8 @@ class TestDirectInsertion:
         }
         src = _Port(3, 5, 0, 5, 6, (3, 4), 1)
         dst = _Port(1, 5, 2, 5, 6, (1, 2), 1)
-        assert _bridge(canvas, src, dst, {"iron-ingot": F(1)}, "iron-ingot")
+        boxes = slots.sorter_seat_boxes(canvas.buildings)
+        assert _bridge(canvas, src, dst, {"iron-ingot": F(1)}, "iron-ingot", boxes)
         bridge = canvas.buildings[-1]
         assert catalog.is_sorter(bridge.item_id)
         assert bridge.x == 6, "took the column a standing sorter already meets"
