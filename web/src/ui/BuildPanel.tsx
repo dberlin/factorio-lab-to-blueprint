@@ -236,7 +236,7 @@ export function BuildPanel() {
               {copyError}
             </p>
           )}
-          <BuildReportPanel result={job.result} />
+          <BuildReportPanel result={job.result} elapsedS={job.elapsed_s} />
         </>
       )}
     </section>

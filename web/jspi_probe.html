@@ -85,7 +85,7 @@ _deep_solve
     R.ok = true;
   } catch (e) {
     R.ok = false;
-    R.error = String(e && e.stack ? e.stack : e).slice(0, 1500);
+    R.error = String(e?.stack ? e.stack : e).slice(0, 1500);
   } finally {
     window.__probe.done = true; show();
   }

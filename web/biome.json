@@ -1,7 +1,18 @@
 {
   "$schema": "https://biomejs.dev/schemas/2.5.8/schema.json",
   "files": {
-    "includes": ["**", "!dist", "!public", "!node_modules", "!tests/fixtures/catalog"]
+    "includes": [
+      "**",
+      "!dist",
+      "!payload",
+      "!public",
+      "!node_modules",
+      "!tests/fixtures/catalog",
+      "_comment: vendor/ is emscripten output fetched by fetch_assets.py -- 5528 findings that nobody here can act on, and they hid the one finding in src/ that mattered",
+      "!vendor",
+      "_comment: coi-serviceworker.js is Guido Zuidhof's file, vendored verbatim so it can be diffed against upstream; reformatting it to house style would destroy that",
+      "!coi-serviceworker.js"
+    ]
   },
   "formatter": { "enabled": true, "indentStyle": "space", "indentWidth": 2, "lineWidth": 100 },
   "linter": {

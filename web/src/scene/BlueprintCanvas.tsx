@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import { type Texture, TextureLoader } from 'three';
 import { buildOverlays } from '../model/overlays';
 import type { Atlas } from '../model/schemas';
-import { isAbortError, loadAtlas } from '../state/assets';
+import { assetPath, isAbortError, loadAtlas } from '../state/assets';
 import { useBlueprint } from '../state/BlueprintProvider';
 import { BeltChevrons } from './BeltChevrons';
 import { BuildingInstances } from './BuildingInstances';
@@ -40,7 +40,7 @@ export function BlueprintCanvas() {
     // mechanism). Loading once here and passing the resolved texture down
     // as a prop avoids that entirely.
     new TextureLoader().load(
-      '/assets/icons/atlas.png',
+      assetPath('icons/atlas.png'),
       (texture) => {
         // Nobody will render it, so release the GPU handle rather than leak it.
         if (cancelled) texture.dispose();

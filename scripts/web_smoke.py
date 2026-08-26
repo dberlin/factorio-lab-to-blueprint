@@ -431,8 +431,13 @@ async def _case_success(page: Any, cdp: Any, out: Path) -> dict[str, Any]:
     buildings = len(blueprint.buildings)
     if buildings <= 0:
         raise SmokeFailure("the copied string decoded to a blueprint with no buildings")
-    if decode(encode_blueprint(blueprint)) != blueprint:
-        raise SmokeFailure("the copied string does not round-trip through the codec")
+    # Byte for byte, not merely structurally. `decode(encode(decode(x))) ==
+    # decode(x)` passes for an encoder that drops a field both times; only
+    # `encode(decode(x)) == x` says the string the user was handed is the
+    # string this codec would produce. The client arm's proof already asserted
+    # the stronger form, and the two gates must be the same gate.
+    if encode_blueprint(blueprint) != clipboard:
+        raise SmokeFailure("the copied string does not re-encode to itself, byte for byte")
 
     if settled.get("canvasEmpty"):
         raise SmokeFailure("the viewer is still showing 'Load a blueprint to see it.'")

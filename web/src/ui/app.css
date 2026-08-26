@@ -291,3 +291,13 @@ body {
 .attempts tr.chosen td {
   color: #9ad6a0;
 }
+
+/* The viewer mounted into a page that is not this app -- see src/embed.tsx.
+   There is no build sidebar there, because the host page owns the form, so the
+   canvas takes the full width; and the overlay panels anchor to this box
+   rather than to the host's viewport, which is not theirs to cover. */
+.layout.embedded {
+  grid-template-columns: 1fr;
+  height: 100%;
+  position: relative;
+}

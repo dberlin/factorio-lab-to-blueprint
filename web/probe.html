@@ -21,11 +21,11 @@ R.env = {
   hardwareConcurrency: navigator.hardwareConcurrency,
   model: MODEL, mode: MODE, limitS: LIMIT, workersRequested: WORKERS,
 };
-say('env ' + JSON.stringify(R.env));
+say(`env ${JSON.stringify(R.env)}`);
 
 try { new WebAssembly.Memory({ initial: 256, maximum: 32768, shared: true }); R.sharedMemOk = true; }
 catch (e) { R.sharedMemOk = false; R.sharedMemErr = String(e); }
-say('shared WebAssembly.Memory creatable: ' + R.sharedMemOk + (R.sharedMemErr || ''));
+say(`shared WebAssembly.Memory creatable: ${R.sharedMemOk}${R.sharedMemErr || ''}`);
 
 (async () => {
   try {
@@ -36,7 +36,7 @@ say('shared WebAssembly.Memory creatable: ' + R.sharedMemOk + (R.sharedMemErr ||
 
     if (MODE === 'main') setWorkerBridgeEnabled(false);
     R.bridgeEnabled = isWorkerBridgeEnabled();
-    say('worker bridge enabled: ' + R.bridgeEnabled);
+    say(`worker bridge enabled: ${R.bridgeEnabled}`);
 
     const t1 = performance.now();
     if (!R.bridgeEnabled) {
@@ -44,26 +44,26 @@ say('shared WebAssembly.Memory creatable: ' + R.sharedMemOk + (R.sharedMemErr ||
       await CpSat.loadModule();
     }
     R.loadModuleMs = Math.round(performance.now() - t1);
-    say('loadModule OK in ' + R.loadModuleMs + 'ms');
+    say(`loadModule OK in ${R.loadModuleMs}ms`);
 
     // real CpModelProto bytes produced by our Python (ortools 9.15 schema)
-    const modelBytes = new Uint8Array(await (await fetch('./models/' + MODEL + '.pb')).arrayBuffer());
+    const modelBytes = new Uint8Array(await (await fetch(`./models/${MODEL}.pb`)).arrayBuffer());
     R.modelBytes = modelBytes.length;
-    say('model ' + MODEL + '.pb = ' + modelBytes.length + ' bytes');
+    say(`model ${MODEL}.pb = ${modelBytes.length} bytes`);
 
     const v = await CpSat.validate(modelBytes);
     R.validate = v;
-    say('validate: ' + JSON.stringify(v));
+    say(`validate: ${JSON.stringify(v)}`);
     R.modelStats = (await CpSat.modelStats(modelBytes)).split('\n').slice(0, 6).join(' | ');
-    say('stats: ' + R.modelStats);
+    say(`stats: ${R.modelStats}`);
 
     // SatParameters serialized by Python. Hand-rolling this is a trap:
     // max_time_in_seconds is field 36 and num_workers is field 206, not 1 and 8.
-    const pName = params.get('params') || ('params_' + LIMIT + 's_w' + (WORKERS || 1) + '.pb');
-    const paramBytes = new Uint8Array(await (await fetch('./models/' + pName)).arrayBuffer());
+    const pName = params.get('params') || `params_${LIMIT}s_w${WORKERS || 1}.pb`;
+    const paramBytes = new Uint8Array(await (await fetch(`./models/${pName}`)).arrayBuffer());
     R.paramFile = pName;
     R.paramBytes = paramBytes.length;
-    say('params ' + pName + ' = ' + paramBytes.length + ' bytes');
+    say(`params ${pName} = ${paramBytes.length} bytes`);
 
     // ONE solve: bytes in, bytes out -- the seam, timed.
     const solveLog = [];
@@ -73,19 +73,19 @@ say('shared WebAssembly.Memory creatable: ' + R.sharedMemOk + (R.sharedMemErr ||
     });
     R.solveLog = solveLog;
     R.solveMs = Math.round(performance.now() - t2);
-    R.respBytes = res.bytes && res.bytes.length;
-    R.status = String(res.response && res.response.status);
-    R.objective = res.response && res.response.objectiveValue;
-    R.wallTime = res.response && res.response.wallTime;
-    R.solutionInfo = res.response && res.response.solutionInfo;
-    say('solve -> ' + R.respBytes + ' bytes in ' + R.solveMs + 'ms status=' + R.status +
-        ' obj=' + R.objective + ' wasmWall=' + R.wallTime + ' info=' + R.solutionInfo);
+    R.respBytes = res.bytes?.length;
+    R.status = String(res.response?.status);
+    R.objective = res.response?.objectiveValue;
+    R.wallTime = res.response?.wallTime;
+    R.solutionInfo = res.response?.solutionInfo;
+    say(`solve -> ${R.respBytes} bytes in ${R.solveMs}ms status=${R.status}` +
+        ` obj=${R.objective} wasmWall=${R.wallTime} info=${R.solutionInfo}`);
 
     R.ok = true;
   } catch (e) {
     R.ok = false;
-    R.error = String(e && e.stack ? e.stack : e);
-    say('FAILED ' + R.error);
+    R.error = String(e?.stack ? e.stack : e);
+    say(`FAILED ${R.error}`);
   } finally {
     window.__probe.done = true;
     say('__done__');

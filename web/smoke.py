@@ -45,6 +45,15 @@ import nodriver
 
 WEB = Path(__file__).resolve().parent
 
+# The two arms are proved by two scripts, but "did the viewer actually draw
+# anything" must not be two different questions. `scripts/web_smoke.py` already
+# owns that check -- screenshot the canvas through CDP, count distinct colours,
+# refuse a surface that is one flat colour -- so it is imported rather than
+# written again here. Both arms now mount the SAME viewer (web/src/embed.tsx),
+# which is what makes one implementation of the check correct for both.
+sys.path.insert(0, str(WEB.parent / "scripts"))
+from web_smoke import SmokeFailure, _canvas_variety  # noqa: E402
+
 #: The user's own URL: freeform / max-proliferation, ~1200 tiles, 20 coaters.
 DEFAULT_URL = (
     "https://factoriolab.github.io/dsp/list?z=eJxFyr0KwkAQReG3meJWO8GQapq7GDtJBMVt1"
@@ -214,24 +223,43 @@ async def drive(args: argparse.Namespace) -> dict[str, object]:
             await wait_for(page, "window.__flab.done === true", args.solve_timeout)
             report["solveSeconds"] = round(time.perf_counter() - solve_started, 1)
 
-            raw = await page.evaluate("JSON.stringify(window.__flab.result)")
-            result = json.loads(raw) if raw and raw != "null" else None
+            # The job snapshot, field for field what the server arm's
+            # `GET /api/build/<id>` returns -- see web/bootstrap.py.
+            raw = await page.evaluate("JSON.stringify(window.__flab.snapshot)")
+            snapshot = json.loads(raw) if raw and raw != "null" else None
             report["fatal"] = json.loads(await page.evaluate("JSON.stringify(window.__flab.error)"))
 
-            if result is None:
+            if snapshot is None:
                 report["result"] = None
-            elif not result["ok"]:
-                report["refusal"] = result["refusal"]
-                report["refusalKind"] = result["kind"]
+            elif snapshot["state"] == "refused":
+                report["refusal"] = snapshot["refusal"]["message"]
+                report["refusalReasons"] = snapshot["refusal"]["reasons"]
+            elif snapshot["state"] == "error":
+                report["error"] = snapshot["error"]
             else:
+                result = snapshot["result"]
                 report["strategy"] = result["strategy"]
                 report["candidate"] = result["candidate"]
                 report["machines"] = result["machines"]
-                report["tiles"] = result["tiles"]
+                report["tiles"] = result["area"]
                 report["buildings"] = result["buildings"]
-                report["notes"] = result["notes"]
-                report["errors"] = result["errors"]
+                report["title"] = result["title"]
+                report["valid"] = result["valid"]
                 report["refused"] = result["refused"]
+                report["skipped"] = result["report"]["skipped"]
+                # Warnings were the drift this unification caught: a check that
+                # RAN and found something to act on was serialised by the
+                # server arm and by nothing at all here.
+                report["validationWarnings"] = [
+                    f"{f['check']}: {f['message']}" for f in result["report"]["warnings"]
+                ]
+                report["validationErrors"] = [
+                    f"{f['check']}: {f['message']}" for f in result["report"]["errors"]
+                ]
+                report["beltRulesFromUrl"] = (result["belt_rules"] or {}).get("from_url")
+                report["flowPinned"] = result["flow_pinned"]
+                report["runtimeWarnings"] = snapshot.get("runtime_warnings", [])
+                report["settled"] = snapshot["settled"]
 
                 await page.evaluate("document.getElementById('copy').click()")
                 await asyncio.sleep(0.5)
@@ -240,9 +268,30 @@ async def drive(args: argparse.Namespace) -> dict[str, object]:
                 report["clipboardChars"] = len(clipboard or "")
                 report["clipboardError"] = await page.evaluate("window.__flab.copyError")
                 report["blueprint"] = clipboard
-                report["viewerRects"] = int(
-                    await page.evaluate("document.querySelectorAll('svg rect').length")
+                # The string in the DOM, not the one in `state`: the button
+                # reads the same object the panel rendered from, so comparing
+                # them is what catches a panel showing one build's string while
+                # the button copies another's.
+                report["domString"] = await page.evaluate(
+                    "(document.querySelector('[data-testid=blueprint-string]')||{}).value || null"
                 )
+
+                await wait_for(
+                    page,
+                    "window.__flab.viewerMounted === true || window.__flab.viewerError !== null",
+                    args.viewer_timeout,
+                )
+                report["viewerError"] = await page.evaluate("window.__flab.viewerError")
+                if report["viewerError"] is None:
+                    try:
+                        colours, box = await _canvas_variety(page, cdp)
+                    except SmokeFailure as exc:
+                        # Reported, never swallowed: `main` turns a missing or
+                        # flat canvas into a non-zero exit.
+                        report["viewerError"] = str(exc)
+                    else:
+                        report["canvasColours"] = colours
+                        report["canvas"] = box
 
             await page.save_screenshot(
                 str(shots / ("refusal.png" if args.refusal else "success.png")),
@@ -357,7 +406,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--port", type=int, default=8493)
     ap.add_argument("--strategy", default="best", choices=("best", "spine", "freeform"))
     ap.add_argument("--candidates", type=int, default=3)
-    ap.add_argument("--budget", type=float, default=2.0)
+    # 6, not the CLI's 2, because the page's default is 6: the wasm CP-SAT
+    # runtime has a four-thread pool and CP-SAT is a portfolio, so the same
+    # wall-clock budget buys materially less search here. Measured, in
+    # docs/WEB_UI.md. The proof runs what the page ships with.
+    ap.add_argument("--budget", type=float, default=6.0)
     ap.add_argument("--no-power", action="store_true")
     ap.add_argument("--refusal", action="store_true", help="drive the refusal path instead")
     ap.add_argument(
@@ -370,6 +423,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--browser")
     ap.add_argument("--boot-timeout", type=float, default=240.0)
     ap.add_argument("--solve-timeout", type=float, default=280.0)
+    ap.add_argument("--viewer-timeout", type=float, default=120.0)
     ap.add_argument("--shots", default=str(WEB / "shots"))
     ap.add_argument("--json", help="write the full report here")
     args = ap.parse_args(argv)
@@ -394,6 +448,21 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if report.get("refusal") else 1
     if not isinstance(decoded, dict) or not decoded["buildings"]:
         print("FAILED: the clipboard string did not decode to a blueprint with buildings")
+        return 1
+    if not decoded["roundTrips"]:
+        print("FAILED: the clipboard string does not re-encode to itself, byte for byte")
+        return 1
+    if report.get("domString") != blueprint:
+        print("FAILED: the button copied something other than the string on the page")
+        return 1
+    if report.get("viewerError") is not None:
+        print(f"FAILED: the viewer did not mount: {report['viewerError']}")
+        return 1
+    # A WebGL surface that never drew is one flat colour, and one flat colour
+    # is exactly 1. This is the check that could have caught a canvas mounted
+    # over an empty scene.
+    if int(report.get("canvasColours") or 0) < 2:
+        print(f"FAILED: the canvas is one flat colour ({report.get('canvasColours')})")
         return 1
     if report["noServerSolveProblems"]:
         print("FAILED: something other than a static file was requested")
