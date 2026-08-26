@@ -78,6 +78,7 @@ from flab2bp.layout.freeform import (
 )
 from flab2bp.layout.route_feedback import (
     DetailedRouteStatus,
+    NetFailure,
     NetId,
     NetRole,
     RouteFailureKind,
@@ -191,6 +192,46 @@ def test_prepared_net_ids_are_stable() -> None:
     b = _prepare_routing_problem(spec, strips, pack, power=False)
 
     assert tuple(net.net_id for net in a.nets) == tuple(net.net_id for net in b.nets)
+
+
+def test_prepared_static_access_failure_spends_no_route_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = two_stage_spec()
+    strips = plan_strips(spec, strip_len=6)
+    pack = _greedy_pack(strips, _height_seed(strips))
+    prepared = _prepare_routing_problem(spec, strips, pack, power=False)
+    net_id = prepared.nets[0].net_id
+    failed = replace(
+        prepared,
+        preparation_failures=(
+            NetFailure(
+                net_id,
+                RouteFailureKind.STATIC_ACCESS,
+                ((prepared.nets[0].dst.x, prepared.nets[0].dst.y, 0),),
+                (),
+                0,
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        freeform,
+        "_route_all",
+        lambda *args, **kwargs: pytest.fail("static impossibility reached routing"),
+    )
+
+    result = _build_prepared(
+        spec,
+        strips,
+        failed,
+        power=False,
+        route=True,
+        budget={"left": 10_000},
+    )
+
+    assert result.routing.status is DetailedRouteStatus.STRANDED
+    assert result.routing.failures == failed.preparation_failures
+    assert result.routing.expansions == 0
 
 
 def test_strip_emission_reproduces_every_precomputed_attachment() -> None:
@@ -489,6 +530,74 @@ def test_detailed_route_terminates_at_elevated_port() -> None:
     assert result.status is DetailedRouteStatus.ROUTED
     assert result.routed == (net_id,)
     assert any(building.z > 0 for building in canvas.buildings[2:])
+
+
+def test_commit_link_rejection_reroutes_the_same_net_before_emission(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    canvas = _Canvas(limit=(0, -2, 6, 2))
+    source_index = canvas.add(
+        PlacedBuilding(2001, 35, 0, 0, carries_item="ore"),
+        level=0,
+    )
+    destination_index = canvas.add(
+        PlacedBuilding(2001, 35, 6, 0, carries_item="ore"),
+        level=0,
+    )
+    net_id = NetId(0, 1, "ore", NetRole.INTERNAL, 0)
+    net = _Net(
+        src=_Port(source_index, 0, 0, 0, 0),
+        dst=_Port(destination_index, 6, 0, 6, 6),
+        item="ore",
+        net_id=net_id,
+    )
+    original = freeform._commit_paths
+    attempts: list[tuple[tuple[int, int, int], ...]] = []
+
+    def reject_first(
+        attempt_canvas: _Canvas,
+        attempt_nets: list[_Net],
+        paths: dict[int, tuple[tuple[int, int, int], ...]],
+        belt_id: int,
+        belt_model: int,
+        *args: Any,
+        **kwargs: Any,
+    ) -> tuple[int, ...]:
+        attempts.append(tuple(paths[0]))
+        if len(attempts) == 1:
+            details = kwargs["failure_details"]
+            details[0] = freeform._CommitFailure(
+                cell=paths[0][0],
+                side="source",
+                blocking_indices=(),
+            )
+            return (0,)
+        return original(
+            attempt_canvas,
+            attempt_nets,
+            paths,
+            belt_id,
+            belt_model,
+            *args,
+            **kwargs,
+        )
+
+    monkeypatch.setattr(freeform, "_commit_paths", reject_first)
+    result = _route_all(
+        canvas,
+        [net],
+        2001,
+        35,
+        (0, -2, 6, 2),
+        budget={"left": 50_000},
+    )
+
+    assert result.status is DetailedRouteStatus.ROUTED
+    assert result.routed == (net_id,)
+    assert len(attempts) >= 3, "preflight rejection did not trigger same-pack repair"
+    assert attempts[0][0] != attempts[1][0], (
+        "the rejected endpoint was offered again instead of withdrawing it"
+    )
 
 
 def test_unreachable_elevated_port_returns_structured_failure_without_route() -> None:
@@ -5007,6 +5116,52 @@ class TestAJunctionIsNotBuiltBesideAForeignBelt:
         assert canvas.free((0, 0, 2)), "two levels up clears and must stay routable"
 
 
+class TestPreparedJunctionLegalityIsThreeDimensional:
+    @staticmethod
+    def _building(item: str, x: int, y: int) -> PlacedBuilding:
+        item_id = catalog.item_id(item)
+        info = catalog.building(item_id)
+        return PlacedBuilding(
+            item_id=item_id,
+            model_index=info.model_index,
+            x=x,
+            y=y,
+            width=info.width,
+            height=info.height,
+        )
+
+    @pytest.mark.parametrize(
+        ("item", "machine_x", "machine_y", "splitter_x", "splitter_y", "level"),
+        [
+            ("assembling-machine-2", 35, 8, 38, 11, 1),
+            ("assembling-machine-3", 54, 11, 53, 10, 2),
+            ("arc-smelter", 22, 34, 25, 34, 1),
+        ],
+    )
+    def test_static_machine_collisions_are_banned_at_the_splitter_level(
+        self,
+        item: str,
+        machine_x: int,
+        machine_y: int,
+        splitter_x: int,
+        splitter_y: int,
+        level: int,
+    ) -> None:
+        machine = self._building(item, machine_x, machine_y)
+        ban = freeform._prepared_junction_ban((machine,), ())
+
+        assert (splitter_x, splitter_y, level) in ban
+        assert not freeform._junction_site_is_clear(
+            (machine,), splitter_x, splitter_y, level
+        )
+
+    def test_a_reserved_tesla_tower_bans_an_elevated_neighbour(self) -> None:
+        site = (30, 26)
+        ban = freeform._prepared_junction_ban((), (site,))
+
+        assert (29, 26, 2) in ban
+
+
 class TestTheMergeFrontierWithdrawsSitesAJunctionCannotHold:
     """The routing-time half, which is the half that had to exist.
 
@@ -5029,7 +5184,9 @@ class TestTheMergeFrontierWithdrawsSitesAJunctionCannotHold:
 
     def test_a_cell_whose_tap_is_dirty_is_not_offered(self) -> None:
         canvas, paths = self._scene()
-        got = freeform._merge_frontier(canvas, paths, (5,), lambda x, y: True)
+        got = freeform._merge_frontier(
+            canvas, paths, (5,), lambda x, y, level: True
+        )
         assert (-1, 0, 0) not in got and (0, -1, 0) not in got, (
             "a merge was offered whose junction would stand beside a foreign "
             f"belt: {sorted(got)}"
@@ -5045,7 +5202,9 @@ class TestTheMergeFrontierWithdrawsSitesAJunctionCannotHold:
         path = [(0, 0, 0), (1, 0, 0), (2, 0, 0)]
         for cell in path:
             canvas.blocked[cell] = _TENTATIVE
-        got = freeform._merge_frontier(canvas, {5: path}, (5,), lambda x, y: True)
+        got = freeform._merge_frontier(
+            canvas, {5: path}, (5,), lambda x, y, level: True
+        )
         assert {(-1, 0, 0), (0, -1, 0), (0, 1, 0)} <= got, sorted(got)
 
 
@@ -5151,19 +5310,124 @@ def ray_receiver_spec() -> BuildSpec:
 
 
 
+def _port_docks(
+    buildings: tuple[PlacedBuilding, ...] | list[PlacedBuilding],
+) -> list[tuple[int, PlacedBuilding]]:
+    return [
+        (index, building)
+        for index, building in enumerate(buildings)
+        if catalog.is_belt(building.item_id)
+        and building.input_obj is not None
+        and buildings[building.input_obj].item_id == catalog.RAY_RECEIVER_ID
+    ]
 
-class TestNoPoseMachineRefusal:
-    def test_a_ray_receiver_refuses_until_a_strategy_emits_belt_docking(self) -> None:
+
+class TestPreparedBeltPortDocking:
+    def test_preparation_emits_the_game_record_for_every_receiver(self) -> None:
+        spec = ray_receiver_spec()
+        strips = plan_strips(spec)
+        assert _machines_without_poses(strips) == []
+        pack = _greedy_pack(strips, _height_seed(strips))
+
+        prepared = _prepare_routing_problem(spec, strips, pack, power=False)
+        buildings = prepared.building_templates
+        receivers = [
+            building
+            for building in buildings
+            if building.item_id == catalog.RAY_RECEIVER_ID
+        ]
+        docks = _port_docks(buildings)
+
+        assert len(receivers) == 2
+        assert len(docks) == len(receivers)
+        for _index, dock in docks:
+            assert dock.input_obj is not None
+            host = buildings[dock.input_obj]
+            assert dock.input_to_slot == rules.BELT_PORT_DRAW_TO_SLOT
+            assert 0 <= dock.input_from_slot < len(
+                catalog.building(catalog.RAY_RECEIVER_ID).port_poses
+            )
+            assert slots.port_gap(
+                host, (dock.x, dock.y), dock.input_from_slot
+            ) <= rules.BELT_PORT_MAX_TILE_GAP
+            assert dock.output_obj is not None
+            assert host.input_obj is None and host.output_obj is None
+
+        workspace = prepared.new_workspace()
+        rebound = _port_docks(workspace.buildings)
+        assert [
+            (
+                dock.input_obj,
+                dock.input_from_slot,
+                dock.input_to_slot,
+                dock.output_obj,
+            )
+            for _index, dock in rebound
+        ] == [
+            (
+                dock.input_obj,
+                dock.input_from_slot,
+                dock.input_to_slot,
+                dock.output_obj,
+            )
+            for _index, dock in docks
+        ]
+
+    @pytest.mark.parametrize(
+        ("yaw", "port"),
+        [(0.0, 0), (180.0, 1)],
+    )
+    def test_docking_uses_the_port_facing_the_lane(
+        self, yaw: float, port: int
+    ) -> None:
         info = catalog.building(catalog.RAY_RECEIVER_ID)
-        assert info.slot_poses == ()
-        assert len(info.port_poses) == 2
+        canvas = _Canvas()
+        machine = canvas.add(
+            PlacedBuilding(
+                item_id=catalog.RAY_RECEIVER_ID,
+                model_index=info.model_index,
+                x=0,
+                y=0,
+                width=info.width,
+                height=info.height,
+                yaw=yaw,
+            ),
+            solid=True,
+        )
+        lane_y = 10
+        lane = [
+            canvas.add(
+                PlacedBuilding(
+                    item_id=2002,
+                    model_index=36,
+                    x=x,
+                    y=lane_y,
+                    width=1,
+                    height=1,
+                )
+            )
+            for x in range(info.width)
+        ]
 
-        with pytest.raises(NoValidLayout) as exc:
-            FreeformLayout(power=False).lay_out(ray_receiver_spec(), time_budget_s=0.5)
-        reason = exc.value.reason
-        assert "Ray Receiver" in reason
-        assert "no insert pose on any face" in reason
-        assert "2 belt port(s)" in reason
-        assert "neither strategy emits" in reason
+        assert (
+            freeform._dock_lane(
+                canvas,
+                [machine],
+                lane,
+                lane_y,
+                "critical-photon",
+                2002,
+                36,
+                {},
+            )
+            == 1
+        )
+        docks = [
+            building
+            for building in canvas.buildings
+            if catalog.is_belt(building.item_id)
+            and building.input_obj == machine
+        ]
+        assert [dock.input_from_slot for dock in docks] == [port]
 
 
