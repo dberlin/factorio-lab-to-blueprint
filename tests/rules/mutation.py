@@ -133,6 +133,17 @@ def _scale(value: Any, factor: Fraction) -> Any:
     if isinstance(value, tuple):
         items = [_scale(v, factor) for v in value]
         return _UNSCALABLE if any(p is _UNSCALABLE for p in items) else tuple(items)
+    if isinstance(value, frozenset | set):
+        # A COMPILED PROJECTION is a set of offsets, and until this clause
+        # existed the ladder could not move one: `_scale` fell through to
+        # `_UNSCALABLE`, and for a CALLABLE returning a set that is invisible --
+        # the `scaled` wrapper below hands back the unscaled value and every
+        # rung reads as no reaction.  `rules.power_node_keepout_offsets` was
+        # measured inert for exactly that reason while both packers read it.
+        scaled_items = [_scale(v, factor) for v in value]
+        if any(p is _UNSCALABLE for p in scaled_items):
+            return _UNSCALABLE
+        return frozenset(scaled_items)
     if isinstance(value, Mapping):
         pairs = {k: _scale(v, factor) for k, v in value.items()}
         return _UNSCALABLE if any(p is _UNSCALABLE for p in pairs.values()) else pairs

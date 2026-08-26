@@ -5815,6 +5815,32 @@ def _power_plan(canvas: _Canvas, core: tuple[int, int, int, int]) -> list[tuple[
             if (2 * dx) ** 2 + (2 * dy) ** 2 <= link2:
                 link_stamp[dx + link, dy + link] = True
 
+    # WHERE A TOWER MAY NOT STAND BECAUSE ANOTHER TOWER IS ALREADY THERE.
+    #
+    # `EBuildCondition.PowerTooClose`: two power nodes closer than 3.5 WORLD
+    # units are refused by the paste, and a Tesla Tower has no build collider,
+    # so nothing else in this file or in the validator's geometry could see it.
+    # A blueprint this greedy produced was pasted into a real game and had two
+    # of its six towers reddened -- `tests/fixtures/ours/power-too-close-
+    # freeform.txt`, and `dsp.rules.power_node_keepout_offsets` is the rule.
+    #
+    # Consulted, not restated: the offsets come from the rule, so the greedy and
+    # `validate.game.power_too_close` cannot disagree about the radius.  On the
+    # ground it is 21 cells -- every `dx**2 + dy**2 <= 7` -- against a coverage
+    # disc of 346, so the greedy loses about one site in sixteen of the ground
+    # it could otherwise stand on, and only next to a tower it has just placed.
+    spacing = [
+        (dx, dy)
+        for dx, dy, dz in rules.power_node_keepout_offsets(tower.power_node, tower.power_node)
+        if dz == 0
+    ]
+    spacing_reach = max(max(abs(dx), abs(dy)) for dx, dy in spacing)
+    spacing_stamp = np.zeros((2 * spacing_reach + 1, 2 * spacing_reach + 1), dtype=bool)
+    for dx, dy in spacing:
+        spacing_stamp[dx + spacing_reach, dy + spacing_reach] = True
+    if spacing_reach > pad:  # pragma: no cover - the pad is link + reach + 1
+        raise AssertionError("the tower-spacing stamp does not fit inside the pad")
+
     def spread(mask: np.ndarray) -> np.ndarray:
         """Cells within tower reach of anything in ``mask``."""
         out = np.zeros(shape, dtype=bool)
@@ -5950,7 +5976,13 @@ def _power_plan(canvas: _Canvas, core: tuple[int, int, int, int]) -> list[tuple[
             target = np.argwhere(remaining)[0]
             gx, gy = cand[np.argmin(((cand - target) ** 2).sum(axis=1))].tolist()
         sites.append((gx - pad + min_x, gy - pad + min_y))
-        free[gx, gy] = False
+        # The cell itself AND every cell inside the paste's power-node spacing
+        # rule.  Marking only the cell is what shipped a blueprint the game
+        # refused; the halo is what makes this greedy incapable of producing one.
+        free[
+            gx - spacing_reach : gx + spacing_reach + 1,
+            gy - spacing_reach : gy + spacing_reach + 1,
+        ] &= ~spacing_stamp
         linked[
             gx - link : gx + link + 1, gy - link : gy + link + 1
         ] |= link_stamp

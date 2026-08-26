@@ -2497,6 +2497,38 @@ def _emit(
     machine_at: dict[str, list[int]] = defaultdict(list)
     towers = 0
 
+    # --- the paste's power-node spacing, applied while towers are placed ----
+    #
+    # `EBuildCondition.PowerTooClose` refuses two power nodes closer than 3.5
+    # WORLD units = 2.785 tiles, and a Tesla Tower has NO build collider, so
+    # neither `geom.collide` nor `_tower_keep_out`'s clearance halo (0.3 units)
+    # can see it.  A blueprint we emitted was pasted into a real game with two
+    # of its six towers reddened for exactly this.
+    #
+    # The row interleave already keeps `tower_width + 2 * horizontal_reach` >= 3
+    # between towers on ONE row, which clears the rule; what it never checked is
+    # a tower in the row above, or in the top band, or a band step of 2 when the
+    # reach table bottoms out at 1.  So every tower this function places goes
+    # through one gate, and the gate reads the rule rather than a pitch.
+    placed_towers: set[tuple[int, int]] = set()
+    tower_spacing = _tower_spacing()
+
+    def stand_tower(x: int, ys: Sequence[int]) -> tuple[int, int] | None:
+        """The first ``y`` in preference order at which a tower may stand.
+
+        ``None`` when every candidate is inside a placed tower's spacing halo.
+        Skipping is safe and is not a degradation: a site refused here is within
+        2.785 tiles of a tower that already covers a 10.5 radius, so the two
+        discs differ by a sliver -- and `_top_up_coverage` measures the REAL
+        coverage afterwards and adds towers wherever it actually falls short,
+        reporting `power_uncovered` when it cannot.  `power.coverage` is the
+        judge either way.
+        """
+        for y in ys:
+            if not any((x + dx, y + dy) in placed_towers for dx, dy in tower_spacing):
+                return (x, y)
+        return None
+
     # --- machines, with towers interleaved as blocks in the row -----------
     # A tower placed in a row blocks no belt, which is what makes power nearly
     # free here.  Towers must therefore be packed *with* the machines rather
@@ -2504,24 +2536,74 @@ def _emit(
     _tw, th = CONSTANTS.tower_size
     tower_model = catalog.building(CONSTANTS.tesla_item_id).model_index
     row_widths: list[int] = []
+    packed: list[list[_Slot]] = []
     for r, row in enumerate(plan.rows):
         hr = _horizontal_reach(r, row_heights, corridor_heights) if power else 0
         slots, width = _pack_row(
             row, groups, hr=hr, power=power, pitch_of=_insert_pitch(groups, plan.direct)
         )
+        packed.append(slots)
+        row_widths.append(width)
+    content_w = max([*row_widths, 1])
+
+    # --- top tower band ---------------------------------------------------
+    # Sits above the first corridor, covering the external input lanes that row 0
+    # alone cannot reach.  Spacing comes from the same reach table, evaluated at
+    # the depth of the deepest lane it has to serve.
+    #
+    # PLACED BEFORE THE ROWS, which is why the packing above is a separate pass.
+    # The band and row 0 are one tile apart vertically -- the band sits at y=0
+    # and a 3-tall row 0 centres its towers at y=2 -- and 2 tiles is inside the
+    # paste's power-node spacing.  So one of the two has to yield, and it must be
+    # the row: the band exists precisely because row 0's towers CANNOT reach the
+    # top corridor, whereas a row tower nudged one tile down the row still can.
+    if power and top_band:
+        band_dy = min(corridor_heights[0], _max_dy())
+        band_hr = max(1, _REACH_TABLE[band_dy])
+        x = band_hr
+        while x < content_w + band_hr:
+            # The clamp can put two band towers on the same column, which
+            # `stand_tower` refuses rather than emitting a paste the game will
+            # redden.  The band is one tile tall, so `y` cannot move.
+            site = stand_tower(min(x, max(0, content_w - 1)), (0,))
+            x += 2 * band_hr
+            if site is None:
+                continue
+            placed_towers.add(site)
+            buildings.append(
+                PlacedBuilding(
+                    item_id=CONSTANTS.tesla_item_id,
+                    model_index=tower_model,
+                    x=site[0],
+                    y=site[1],
+                    width=1,
+                    height=th,
+                )
+            )
+            towers += 1
+
+    for r, slots in enumerate(packed):
         for s in slots:
             if s.key is None:
+                # Centred in the row, not pinned to its top edge.
+                # `_horizontal_reach` budgets half the row height, which only
+                # holds for a centred tower: at the top edge the far side is
+                # `row_height - 1` away, so an 11-tall row spends the entire
+                # 10.5 radius before any corridor is counted.  The centre is
+                # therefore tried FIRST and the rest of the row only as fallback
+                # positions when a tower in the row above is too close.
+                centre = row_y[r] + max(0, (row_heights[r] - th) // 2)
+                band = range(row_y[r], row_y[r] + max(1, row_heights[r] - th + 1))
+                site = stand_tower(s.x, sorted(band, key=lambda y: (abs(y - centre), y)))
+                if site is None:
+                    continue
+                placed_towers.add(site)
                 buildings.append(
                     PlacedBuilding(
                         item_id=CONSTANTS.tesla_item_id,
                         model_index=tower_model,
-                        x=s.x,
-                        # Centred in the row, not pinned to its top edge.
-                        # `_horizontal_reach` budgets half the row height, which
-                        # only holds for a centred tower: at the top edge the far
-                        # side is `row_height - 1` away, so an 11-tall row spends
-                        # the entire 10.5 radius before any corridor is counted.
-                        y=row_y[r] + max(0, (row_heights[r] - th) // 2),
+                        x=site[0],
+                        y=site[1],
                         width=s.width,
                         height=th,
                     )
@@ -2547,30 +2629,6 @@ def _emit(
                     parameters=parameters,
                 )
             )
-        row_widths.append(width)
-    content_w = max([*row_widths, 1])
-
-    # --- top tower band ---------------------------------------------------
-    # Sits above the first corridor, covering the external input lanes that row 0
-    # alone cannot reach.  Spacing comes from the same reach table, evaluated at
-    # the depth of the deepest lane it has to serve.
-    if power and top_band:
-        band_dy = min(corridor_heights[0], _max_dy())
-        band_hr = max(1, _REACH_TABLE[band_dy])
-        x = band_hr
-        while x < content_w + band_hr:
-            buildings.append(
-                PlacedBuilding(
-                    item_id=CONSTANTS.tesla_item_id,
-                    model_index=tower_model,
-                    x=min(x, max(0, content_w - 1)),
-                    y=0,
-                    width=1,
-                    height=th,
-                )
-            )
-            towers += 1
-            x += 2 * band_hr
 
     # --- what taps what ---------------------------------------------------
     # Which lane each group reaches, for each of its items, computed ONCE.  The
@@ -4952,7 +5010,7 @@ def _nearest_free(
 
 
 def _tower_keep_out(buildings: list[PlacedBuilding]) -> set[tuple[int, int]]:
-    """Cells a Tesla Tower may not stand on, footprints AND clearance halos.
+    """Cells a Tesla Tower may not stand on: footprints, clearance AND spacing.
 
     Footprints alone are not enough, and a Splitter is why.  It is
     belt-integrated, so it reports no occupied tile at all -- but its collider is
@@ -4966,8 +5024,24 @@ def _tower_keep_out(buildings: list[PlacedBuilding]) -> set[tuple[int, int]]:
     Splitter that is 1.5, which takes out the four neighbours and the four
     diagonals; for a machine the halo is inside its own footprint and adds
     nothing.
+
+    AND A POWER NODE CONTRIBUTES A SECOND, LARGER HALO THAT IS NOT A COLLISION.
+    ``EBuildCondition.PowerTooClose`` refuses two power nodes closer than 3.5
+    WORLD units, and clearance cannot stand in for it: a Tesla Tower has no
+    build collider at all, so its clearance is 0.3 and its spacing requirement
+    is 2.785 TILES -- nine times as wide.  This is what let a blueprint we
+    emitted be pasted into a real game with two of its six towers reddened; see
+    ``tests/fixtures/ours/power-too-close-freeform.txt``.  The offsets come from
+    :func:`flab2bp.dsp.rules.power_node_keepout_offsets` rather than from a
+    radius restated here, so this and ``validate.game.power_too_close`` cannot
+    disagree.
     """
     tower_cl = max(catalog.clearance(CONSTANTS.tesla_item_id, 0.0))
+    tower_node = catalog.building(CONSTANTS.tesla_item_id).power_node
+    # Memoised per CALL rather than globally: the projection is a triple loop
+    # over the rule and a big build carries 141 towers, but a module-level cache
+    # would freeze the rule at import and make R4 blind to it.
+    spacing: dict[rules.PowerNode, frozenset[tuple[int, int]]] = {}
     out: set[tuple[int, int]] = set()
     for b in buildings:
         try:
@@ -4987,7 +5061,40 @@ def _tower_keep_out(buildings: list[PlacedBuilding]) -> set[tuple[int, int]]:
                 for hy in range(ty - reach, ty + reach + 1):
                     if math.hypot(hx - tx, hy - ty) < need:
                         out.add((hx, hy))
+        if info.is_power_node:
+            # Keyed on the OTHER node's flags as well as the tower's, so a
+            # future Wind Turbine in a spine build gets its own 8.36-tile tier
+            # rather than the Tesla Tower's 2.785.
+            peer = info.power_node
+            if peer not in spacing:
+                spacing[peer] = _spacing_offsets(tower_node, peer)
+            for dx, dy in spacing[peer]:
+                out.add((b.x + dx, b.y + dy))
     return out
+
+
+def _tower_spacing() -> frozenset[tuple[int, int]]:
+    """Tesla-Tower-to-Tesla-Tower spacing offsets, which is every pair we emit.
+
+    21 cells -- every ``dx**2 + dy**2 <= 7``.  Deliberately NOT cached at module
+    level: a frozen projection is invisible to the rule-mutation suite, which is
+    the only mechanism that proves the search consults a rule rather than merely
+    naming it.  Callers hoist it out of their own loops instead.
+    """
+    node = catalog.building(CONSTANTS.tesla_item_id).power_node
+    return _spacing_offsets(node, node)
+
+
+def _spacing_offsets(a: rules.PowerNode, b: rules.PowerNode) -> frozenset[tuple[int, int]]:
+    """``power_node_keepout_offsets`` on the ground, which is where we build.
+
+    Every tower this strategy places sits at ``z = 0``; the ``dz`` term of the
+    rule is real and is exercised by ``validate.game.power_too_close``, not
+    here, because a spine layout has nothing to stack a tower on.
+    """
+    return frozenset(
+        (dx, dy) for dx, dy, dz in rules.power_node_keepout_offsets(a, b) if dz == 0
+    )
 
 
 def _top_up_coverage(buildings: list[PlacedBuilding], tower_model: int) -> tuple[int, int]:
@@ -5010,6 +5117,7 @@ def _top_up_coverage(buildings: list[PlacedBuilding], tower_model: int) -> tuple
     """
     radius = float(CONSTANTS.supply_radius)
     occupied = _tower_keep_out(buildings)
+    tower_spacing = _tower_spacing()
 
     towers = [(b.x, b.y) for b in buildings if b.item_id == CONSTANTS.tesla_item_id]
 
@@ -5036,7 +5144,9 @@ def _top_up_coverage(buildings: list[PlacedBuilding], tower_model: int) -> tuple
         if spot is None:
             unfixable += 1
             continue
-        occupied.add(spot)
+        # The cell AND its power-spacing halo: the next top-up tower may not
+        # stand beside this one any more than beside one `_emit` placed.
+        occupied.update((spot[0] + dx, spot[1] + dy) for dx, dy in tower_spacing)
         towers.append(spot)
         buildings.append(
             PlacedBuilding(
@@ -5078,8 +5188,10 @@ def _link_towers(buildings: list[PlacedBuilding], tower_model: int) -> int:
     """
     link = float(CONSTANTS.link_distance)
     # The same halo the coverage pass uses: a relay tower next to a junction
-    # collides with it exactly as a coverage tower does.
+    # collides with it exactly as a coverage tower does, and stands too close to
+    # a tower exactly as one does.
     occupied = _tower_keep_out(buildings)
+    tower_spacing = _tower_spacing()
 
     towers = [
         (b.x + b.width / 2, b.y + b.height / 2)
@@ -5124,7 +5236,7 @@ def _link_towers(buildings: list[PlacedBuilding], tower_model: int) -> int:
         centre = (spot[0] + 0.5, spot[1] + 0.5)
         if math.dist(centre, towers[near]) > link:
             break  # the relay would be stranded too; say so rather than pile up
-        occupied.add(spot)
+        occupied.update((spot[0] + dx, spot[1] + dy) for dx, dy in tower_spacing)
         towers.append(centre)
         buildings.append(
             PlacedBuilding(

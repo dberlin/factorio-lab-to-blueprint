@@ -7,6 +7,7 @@ rate solver's.
 
 from __future__ import annotations
 
+import itertools
 import math
 from collections.abc import Callable
 from dataclasses import replace
@@ -14,7 +15,7 @@ from fractions import Fraction
 
 import pytest
 
-from flab2bp.dsp import catalog
+from flab2bp.dsp import catalog, rules
 from flab2bp.dsp import colliders as C
 from flab2bp.layout import junction, validate
 from flab2bp.layout.base import (
@@ -2198,6 +2199,86 @@ class TestLinkingATowerTheNetworkCannotReach:
         buildings = self._towers(0, 30)
         assert _link_towers(buildings, model) == 1
         assert self._stray(buildings) == 0
+
+    def test_a_tower_keeps_the_pastes_power_spacing_from_another_tower(self) -> None:
+        """``EBuildCondition.PowerTooClose``, in the set every tower pass reads.
+
+        A Tesla Tower has NO build collider, so its CLEARANCE halo is 0.3 world
+        units -- inside its own tile -- and until this rule was ported nothing
+        stopped the coverage top-up or a link relay from standing one beside
+        another.  A blueprint we emitted was pasted into a real game and had two
+        of its six towers reddened for exactly that;
+        ``tests/fixtures/ours/power-too-close-freeform.txt`` is the paste.
+
+        The bound is 3.5 WORLD units = 2.785 tiles, so the diagonal and the
+        knight's move are refused and ``(2, 2)`` is not.  Bracketing both sides
+        is what separates it from a tile-distance reading of the same constant.
+        """
+        from flab2bp.layout.spine import _tower_keep_out
+
+        keep = _tower_keep_out(self._towers(10))  # one tower, at (0, 10)
+        for dx, dy in ((1, 0), (1, 1), (2, 0), (2, 1), (0, 2)):
+            assert (dx, 10 + dy) in keep, f"({dx},{dy}) is PowerTooClose"
+        for dx, dy in ((2, 2), (3, 0), (0, 3)):
+            assert (dx, 10 + dy) not in keep, f"({dx},{dy}) is legal and denied"
+
+    def test_the_coverage_top_up_never_stands_two_towers_too_close(self) -> None:
+        """The pass that could, end to end, on ground built to force the case.
+
+        ``_top_up_coverage`` places a tower on the nearest FREE tile to an
+        uncovered building, and a tower covers 10.5 tiles -- so two of its
+        towers only end up adjacent when the ground gives it no choice.  This
+        gives it exactly that: solid belt everywhere except two neighbouring
+        cells, and two machines positioned so the first cell covers one of them
+        and misses the other by half a tile.
+
+        Under the unfixed pass this stands towers at (20, 17) and (21, 17),
+        1.777 world units apart, which the game refuses.  With the rule applied
+        the second machine is genuinely unpowerable -- the only cell that could
+        have covered it is inside the first tower's spacing -- so the pass says
+        so through ``unfixable``, which is what ``power_uncovered`` reports and
+        ``power.coverage`` refuses on.  A refusal, not an invalid paste, and
+        that direction is the whole point: this ground is contrived, and a real
+        build has somewhere else to stand.
+        """
+        from flab2bp.layout.spine import CONSTANTS, _top_up_coverage
+
+        model = catalog.building(CONSTANTS.tesla_item_id).model_index
+        free = {(20, 17), (21, 17)}
+        machines = ((12, 12), (31, 17))
+        buildings: list[PlacedBuilding] = [
+            PlacedBuilding(item_id=2002, model_index=37, x=x, y=y)
+            for x in range(-15, 55)
+            for y in range(2, 33)
+            if (x, y) not in free and (x, y) not in machines
+        ]
+        buildings += [
+            PlacedBuilding(item_id=2303, model_index=65, x=x, y=y, width=1, height=1)
+            for x, y in machines
+        ]
+        added, unfixable = _top_up_coverage(buildings, model)
+        assert added + unfixable == 2, "the ground must ask the pass for two towers"
+        assert unfixable == 1, (
+            "the second machine's only free cell is inside the first tower's "
+            "spacing, so it must be REPORTED unpowerable rather than covered by "
+            "a tower the game will refuse"
+        )
+        towers = [
+            (b.x, b.y) for b in buildings if b.item_id == CONSTANTS.tesla_item_id
+        ]
+        assert len(towers) == 1
+        keep = {
+            (dx, dy)
+            for dx, dy, dz in rules.power_node_keepout_offsets(
+                catalog.building(CONSTANTS.tesla_item_id).power_node,
+                catalog.building(CONSTANTS.tesla_item_id).power_node,
+            )
+            if dz == 0
+        }
+        for (ax, ay), (bx, by) in itertools.combinations(towers, 2):
+            assert (bx - ax, by - ay) not in keep, (
+                f"top-up stood towers at {(ax, ay)} and {(bx, by)}"
+            )
 
 
 class TestThereIsNoSeedFallback:

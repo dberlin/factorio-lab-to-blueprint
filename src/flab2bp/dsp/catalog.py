@@ -56,7 +56,7 @@ from functools import cache
 from pathlib import Path
 from typing import Any
 
-from flab2bp.dsp.rules import WORLD_UNITS_PER_LEVEL
+from flab2bp.dsp.rules import WORLD_UNITS_PER_LEVEL, PowerNode
 
 _DATA = Path(__file__).parent / "data" / "buildings.json"
 _SLOT_POSES = Path(__file__).parent / "data" / "slot_poses.json"
@@ -840,6 +840,21 @@ class Building:
     #: ``PrefabDesc.geothermal``.  Raises it to
     #: :data:`flab2bp.dsp.rules.GEOTHERMAL_TOO_CLOSE_SQR`.
     geothermal: bool = False
+
+    @property
+    def power_node(self) -> PowerNode:
+        """This building as the four flags ``EBuildCondition.PowerTooClose`` reads.
+
+        One conversion, so a caller cannot pass the booleans in the wrong order
+        and the check and the two packers cannot drift apart on which flags
+        matter.  See :func:`flab2bp.dsp.rules.power_node_condition`.
+        """
+        return PowerNode(
+            is_power_node=self.is_power_node,
+            is_accumulator=self.is_accumulator,
+            wind_forced_power=self.wind_forced_power,
+            geothermal=self.geothermal,
+        )
 
     @property
     def is_belt_addon(self) -> bool:

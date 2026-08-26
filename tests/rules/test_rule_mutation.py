@@ -75,6 +75,12 @@ VERDICTS: dict[str, tuple[str, str]] = {
     "rules.SPLITTER_MAX_PORTS": ("both", "junction port cap"),
     "rules.BELT_INPUT_SLOTS": ("both", "belt slot assignment, checked and searched"),
     "rules.world_gap": ("both", "the shared world-distance helper, everywhere"),
+    "rules.POWER_TOO_CLOSE_SQR": (
+        "both",
+        "EBuildCondition.PowerTooClose: checked by `game.power_too_close` and "
+        "read by both packers through `power_node_keepout_offsets`",
+    ),
+    "rules.power_node_gate_sqr": ("both", "`num37`, the tier lookup the ladder opens with"),
     # --- validator only ------------------------------------------------------
     # `catalog.SORTER_SPANS_ALTITUDE` had a row here reading "a refusal, not a
     # search input".  Phase V found there was no rule to refuse on: the game
@@ -99,11 +105,26 @@ VERDICTS: dict[str, tuple[str, str]] = {
         "frozen_captures.  Plan step 1.5 splits this constant anyway.",
     ),
     "rules.ADDON_AREA_RADIUS": ("validator", "addon supply geometry, checked only"),
+    # The two upper spacing tiers.  Neither strategy places a Wind Turbine or a
+    # Geothermal Power Station, so no probe can move -- and both are checked, on
+    # buildings the validator constructs, precisely so a tier we do not emit
+    # cannot rot into a wrong number nobody notices.
+    "rules.WIND_TOO_CLOSE_SQR": ("validator", "wind-to-wind spacing; we place no turbine"),
+    "rules.GEOTHERMAL_TOO_CLOSE_SQR": (
+        "validator",
+        "geothermal-to-geothermal spacing; we place no geothermal station",
+    ),
     "rules.ADDON_NEIGHBOUR_RADIAL_GAP": ("validator", "addon corner rule, checked only"),
     "rules.addon_axis_aligned": ("validator", "addon axis predicate"),
     "rules.addon_ride_is_straight": ("validator", "the addon corner rule itself"),
     # --- strategy only -------------------------------------------------------
     "catalog.VERTICAL_STEP": ("strategy", "freeform's `_legal_link` consults it; no check does"),
+    "rules.power_node_keepout_offsets": (
+        "strategy",
+        "the compiled projection both packers read; no CHECK reaches it, because "
+        "`game.power_too_close` asks the predicate directly rather than the "
+        "projection -- which is the right way round for a lower bound",
+    ),
     "catalog.TESLA_COVER_RADIUS": (
         "strategy",
         "LEDGER: `power.coverage` takes a radius rather than consulting the rule, "
@@ -170,6 +191,20 @@ VERDICTS: dict[str, tuple[str, str]] = {
         "LEDGER: `game.inserter_skew` names it; no test straddles 30 degrees.",
     ),
     "rules.ADDON_AXIS_DEG": ("inert", "frozen into two `rules` default arguments"),
+    "rules.power_node_condition": (
+        "inert",
+        "LEDGER, and the row is against R4 rather than against the rule.  This "
+        "predicate returns `PowerSpacing | None`, and the ladder has no "
+        "perturbation for that shape: `_scale` cannot move an enum or a None, "
+        "so a callable returning one hands back its own answer on every rung "
+        "and reads as no reaction.  What it does is nonetheless proven "
+        "consulted -- the three thresholds it reads are `both`/`validator`, and "
+        "`power_node_keepout_offsets`, which is nothing but a loop over this "
+        "predicate, is `strategy`.  The gap is that a wrong BRANCH ORDER here "
+        "would ship: reporting Wind where the game reports Power changes no "
+        "assertion in the validator pool.  `tests/dsp/test_power_spacing.py` "
+        "pins the branches, and it is not a pool R4 reads.",
+    ),
     "rules.ADDON_TURRET_AXIS_DEG": ("inert", "we never place a turret; correctly unread"),
 }
 

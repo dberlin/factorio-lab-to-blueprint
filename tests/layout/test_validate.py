@@ -51,6 +51,7 @@ WIRELESS_TOWER = 2202  # Wireless Power Tower, the long-reach node: link 45.5
 WIND_TURBINE = 2203  # windForcedPower: the 110.25 spacing tier
 SOLAR_PANEL = 2205  # a power NODE with cover_radius 0 -- not a "tower"
 ACCUMULATOR = 2206  # isAccumulator: the one exemption from the spacing rule
+GEOTHERMAL = 2213  # geothermal: the widest spacing tier, 12.0 world units
 CHEM_PLANT = 2309  # Chemical Plant, 9x5 -- big enough to distinguish
                    # centre-based from tile-based power coverage
 BELT_REQUIRED = "prolif.belt_required_edges_not_direct_inserted"
@@ -1514,6 +1515,32 @@ def test_game_power_too_close_holds_wind_turbines_to_the_wider_tier() -> None:
     assert not fired(validate(place(a, dataclasses.replace(a, x=9))), "game.power_too_close")
     # 4 tiles = 5.03 units: over the ordinary 3.5, under the wind 10.5.
     assert not fired(validate(place(a, tower(4, 0))), "game.power_too_close")
+
+
+def test_game_power_too_close_holds_geothermal_to_the_widest_tier() -> None:
+    """The third tier, 12.0 world units = 9.55 tiles, both ends geothermal.
+
+    Neither strategy places a Geothermal Power Station and it is checked anyway.
+    A rule flattened to its ordinary case is right by coincidence for the
+    building we happen to emit and silently wrong for the other twelve; this is
+    the assertion that would notice.
+    """
+    station = catalog_building(GEOTHERMAL)
+    assert station.geothermal and not station.wind_forced_power
+    a = PlacedBuilding(
+        item_id=GEOTHERMAL, model_index=station.model_index, x=0, y=0,
+        width=station.width, height=station.height,
+    )
+    assert fired(validate(place(a, dataclasses.replace(a, x=9))), "game.power_too_close")
+    assert not fired(validate(place(a, dataclasses.replace(a, x=10))), "game.power_too_close")
+    # Against a Wind Turbine neither upper branch applies, so the pair falls to
+    # the ordinary 3.5 and five tiles clears it.
+    turbine = catalog_building(WIND_TURBINE)
+    other = PlacedBuilding(
+        item_id=WIND_TURBINE, model_index=turbine.model_index, x=5, y=0,
+        width=turbine.width, height=turbine.height,
+    )
+    assert not fired(validate(place(a, other)), "game.power_too_close")
 
 
 def test_game_power_too_close_counts_altitude() -> None:

@@ -144,6 +144,31 @@ def _tower_reach() -> Any:
     )
 
 
+def _tower_spacing() -> Any:
+    """Where spine will not stand a second power node, and freeform's stamp.
+
+    Both packers consult ``rules.power_node_keepout_offsets`` -- spine through
+    ``_tower_keep_out`` and the emission gate, freeform through the stamp its
+    greedy clears from ``free`` -- so a perturbation of the rule must move this.
+    The freeform half is asked of the rule at the same reach the planner reads
+    it at, because the planner's own copy lives inside a closure.
+    """
+    tower = catalog.building(catalog.TESLA_TOWER_ID)
+    stand = PlacedBuilding(
+        item_id=catalog.TESLA_TOWER_ID,
+        model_index=tower.model_index,
+        x=10,
+        y=10,
+        width=tower.width,
+        height=tower.height,
+    )
+    return (
+        sorted(spine._tower_spacing()),
+        sorted(spine._tower_keep_out([stand])),
+        sorted(rules.power_node_keepout_offsets(tower.power_node, tower.power_node)),
+    )
+
+
 def _addon_area_step() -> Any:
     return [spine._addon_area_step(yaw) for yaw in (0.0, 90.0, 180.0, 270.0)]
 
@@ -254,6 +279,7 @@ PROBES: dict[str, Callable[[], Any]] = {
     "junction.attach_input": _splitter_ports,
     "spine._belt_floor_over": _belt_floor_over,
     "geometry.tower_reach": _tower_reach,
+    "spine._tower_keep_out": _tower_spacing,
     "spine._addon_area_step": _addon_area_step,
     "freeform._legal_link": _legal_links,
     "freeform._altitude_profile": _altitude_profiles,

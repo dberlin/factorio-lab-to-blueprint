@@ -10,6 +10,7 @@ from __future__ import annotations
 import contextlib
 import dataclasses
 import functools
+import itertools
 import math
 import time
 from fractions import Fraction as F
@@ -17,7 +18,7 @@ from typing import Any
 
 import pytest
 
-from flab2bp.dsp import catalog, colliders
+from flab2bp.dsp import catalog, colliders, rules
 from flab2bp.layout import freeform, junction, slots, validate
 from flab2bp.layout.base import (
     DETERMINISTIC_WORKERS,
@@ -3177,6 +3178,49 @@ class TestPowerClaimsItsGroundBeforeRouting:
         assert 0 < len(sites) < lattice, (
             f"covering by need took {len(sites)}, the 9-spaced grid took {lattice}"
         )
+
+    def test_no_two_planned_towers_are_close_enough_for_the_game_to_refuse(self) -> None:
+        """``EBuildCondition.PowerTooClose``, which the greedy used to ignore.
+
+        THE REGRESSION.  A blueprint this planner produced was pasted into a
+        real game and two of its six towers were reddened at 1.777 world units
+        -- ``tests/fixtures/ours/power-too-close-freeform.txt``.  Nothing could
+        see it: a Tesla Tower has no build collider, so it is invisible to
+        ``geom.collide``, and the greedy marked only the cell it stood on.
+
+        The geometry is a WIDE, SHALLOW core -- 61 by 10, sown with powered
+        tiles -- because that is the shape that produces it: the greedy walks
+        left to right, and when what is still dark is a thin tail off the end of
+        the last disc, the cell that covers most of it is the one right beside
+        the tower it just placed.  Found by search rather than by reasoning, and
+        the six other shapes tried (a 60x4 strip, a 60x1 line, a crowded field,
+        a one-row corridor, two pockets, and a 30-cell size sweep) produce
+        between zero and one such pair each.  Under the unfixed greedy this
+        plans towers at (31, 4) and (32, 4), 1.777 world units apart.
+        """
+        core = (0, 0, 60, 9)
+        canvas = _Canvas(limit=core)
+        for x in range(0, 61, 3):
+            for y in range(0, 10, 3):
+                canvas.add(
+                    PlacedBuilding(item_id=2303, model_index=65, x=x, y=y, width=1, height=1),
+                    solid=True,
+                )
+        sites = _power_plan(canvas, core)
+        assert len(sites) >= 3, "the sample must contain several towers to be a test"
+        keepout = {
+            (dx, dy)
+            for dx, dy, dz in rules.power_node_keepout_offsets(
+                catalog.building(catalog.TESLA_TOWER_ID).power_node,
+                catalog.building(catalog.TESLA_TOWER_ID).power_node,
+            )
+            if dz == 0
+        }
+        for (ax, ay), (bx, by) in itertools.combinations(sites, 2):
+            assert (bx - ax, by - ay) not in keepout, (
+                f"towers planned at {(ax, ay)} and {(bx, by)}; the game refuses "
+                "that paste with EBuildCondition.PowerTooClose"
+            )
 
     def test_a_tie_is_broken_towards_open_ground_not_into_a_channel(self) -> None:
         """The tie-break points away from the corridors, and that is the point.
