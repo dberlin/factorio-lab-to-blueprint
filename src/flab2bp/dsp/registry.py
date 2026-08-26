@@ -195,7 +195,10 @@ _CATALOG: tuple[Entry, ...] = (
         resolved_by="catalog.sorter_rate",
         note="Keyed by item id; sorter_rate divides by span.",
     ),
-    _e("catalog.SORTER_SPANS_ALTITUDE", Kind.RULE),
+    # `catalog.SORTER_SPANS_ALTITUDE` was declared here.  Phase V deleted it:
+    # the game MEASURES a sorter's altitude span (`BuildTool_Inserter.cs:1311`)
+    # and applies a MINIMUM to it (`:1347`).  Nothing caps it, so the rule we
+    # declared never existed.  See `docs/RULE_LEDGER.md`.
     _e(
         "catalog.BELT_RATE",
         Kind.RULE,
@@ -234,17 +237,12 @@ _CATALOG: tuple[Entry, ...] = (
         depends_on=(_TECH_SLOPE,),
         resolved_by="catalog.belt_rules_for_technologies",
     ),
+    # `catalog.BELT_CROSSING_CLEARANCE` was declared here as a RULE whose fix
+    # was "the ledger's".  Phase V's answer was that there is no rule: no
+    # citation exists and no validator ever read it.  It survives only as a
+    # spine-local trunk-altitude knob, which is not this registry's business.
     _e(
-        "catalog.BELT_CROSSING_CLEARANCE",
-        Kind.RULE,
-        note=(
-            "Plan step 1.2: hand-typed, and the wrong number for a coater "
-            "(1.8975).  Kept as a declared RULE so the mechanisms can see it; "
-            "the fix is the ledger's."
-        ),
-    ),
-    _e(
-        "catalog.BEND_MIN_ANGLE_WHEN_SLOPED_RAD",
+        "rules.BEND_MIN_ANGLE_WHEN_SLOPED_RAD",
         Kind.RULE,
         lint=True,
         unconsulted_because=(
@@ -254,7 +252,7 @@ _CATALOG: tuple[Entry, ...] = (
         ),
     ),
     _e(
-        "catalog.SLOPE_DEADZONE",
+        "rules.SLOPE_DEADZONE",
         Kind.RULE,
         lint=True,
         unconsulted_because="Companion to BEND_MIN_ANGLE_WHEN_SLOPED_RAD; same row.",
