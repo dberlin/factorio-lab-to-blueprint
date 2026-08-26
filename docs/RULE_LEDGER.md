@@ -101,8 +101,8 @@ level, the row names the tech, where the game reads it, and what we assume.
 ## 1c. `PowerTooClose` — the row a shipped blueprint wrote
 
 This one is not a tidy-up. **The user pasted a blueprint this repository
-generated into a real game. All 366 belts, sorters, splitters and machines
-built. Two of its six Tesla Towers were refused** for standing 1.777 world units
+generated into a real game. All 366 of its belts, sorters and machines
+built (319 belts, 35 sorters, 12 machines; it carries no splitters). Two of its six Tesla Towers were refused** for standing 1.777 world units
 apart — `tests/fixtures/ours/power-too-close-freeform.txt`, towers #367 at
 (21, 15) and #371 at (22, 16). The other four sit 11.24 units and further from
 everything and built.

@@ -2,7 +2,7 @@
 
 THE DEFECT THIS MODULE EXISTS FOR.  The user pasted
 ``tests/fixtures/ours/power-too-close-freeform.txt`` -- 372 buildings we
-generated -- into a real game.  Every belt, sorter, splitter and machine built.
+generated -- into a real game.  All 366 of its belts, sorters and machines built.
 Two of its six Tesla Towers were refused for standing 1.777 world units apart.
 Nothing in the repository could see it: a Tesla Tower has NO build collider, so
 ``geom.collide`` is blind to two of them however they are stacked, and the rule
