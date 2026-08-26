@@ -311,17 +311,35 @@ or what we refuse?**
   network is a half-powered build. `PowerSystem.cs:990` proves the *game* does
   not object; that makes it our requirement, which is exactly what it is now
   labelled.
-* **`geom.overlap` is a lead I did not chase, and I am flagging it rather than
-  closing it.** It is a coarse discretisation of `geom.collide`: the footprint
-  it compares is itself derived from `buildColliders` (`catalog.derive_footprint`),
-  so it is a projection of the real rule, not an independent one — which is why
-  it is OURS and not REMOVE. But the projection rounds *outward*
-  (`width = 2 * ceil(e / GRID_ARC) - 1`, always odd), so there are pairs whose
-  tiles overlap and whose colliders do not, and `geom.overlap` refuses those.
-  **How many, and what they are worth in area, is unmeasured.** It is a genuine
-  Phase 4 density candidate and it needs a packer experiment, not a ledger entry.
-  Recording it as an open lead is honest; calling it verified either way would
-  not be.
+* **`geom.overlap` — measured, and the first answer I wrote here was wrong.**
+
+  I first recorded it as "a coarse discretisation of `geom.collide`, a
+  projection of the real rule, not an independent one", on the reasoning that
+  the footprint is derived from `buildColliders` and rounds outward. That
+  predicts disagreement in exactly one direction. So I measured it: every
+  ordered pair of the 11 building types the generator actually places (read off
+  real `SpineLayout` output, not guessed), at both cardinal yaws, at every
+  integer offset in range — 14156 combinations.
+
+  | | count |
+  |---|---|
+  | both permit | 9938 |
+  | both refuse | 3716 |
+  | **`overlap` refuses, `collide` permits** | **406** (2.9%) |
+  | **`collide` refuses, `overlap` permits** | **96** (0.7%) |
+
+  **It disagrees in both directions, so it is not a projection.** The 96 are the
+  half that matters: `geom.overlap` is *not* a conservative superset of the game's
+  rule, and a model that trusted tile occupancy alone would emit 96 placements
+  the game draws red. `geom.collide` is doing genuine independent work, which is
+  also why deleting `geom.overlap` could not produce an INVALID blueprint.
+
+  Verdict stays **OURS** — it is our one-building-per-tile model invariant, which
+  much of the layout code assumes — but the "projection" justification is
+  withdrawn, and the density lead is now a number rather than a hunch: **406
+  combinations (2.9%) that we refuse and the game permits.** Realising it is a
+  packer change, so it stays a Phase 4 item; what this phase owed was the
+  measurement, not the guess.
 | `prolif.*`, `flow.*`, `machine.*`, `spec.*`, `belt.*` | **OURS** | rate, spec and routing correctness. Out of the legality set by the plan's own line. |
 
 ## 4a. `game.sorter_collide` — KEEP, with the fitting risk stated
@@ -529,6 +547,10 @@ all six arms, delta exactly 0. A real behaviour change would have shown there.
 expected result and not a disappointment — none of the four removed rules was
 reachable by what we emit. They cost nothing in area today; what they cost was
 the next person's confidence that a rule in `dsp/` is a rule.
+
+Full suite alongside: **1487 passed, 4 skipped, 1 xfailed, 1 xpassed**, exit 0
+on four separate runs. `ruff check src tests scripts` clean, bare `uv run mypy`
+clean.
 
 ---
 
