@@ -3021,15 +3021,25 @@ def _lane_direction(
 #: level to one above it and stops, with nothing below.
 #:
 #: So the crossing goes under.  It costs no column and no altitude the old
-#: arrangement did not already spend -- ``BELT_CROSSING_CLEARANCE`` between a
-#: bridge and a trunk either way round -- and it removes the clash by
-#: construction rather than by search.  This is NOT the game's ceiling: a belt
-#: goes as high as the save's vertical-construction unlocks allow.
+#: arrangement did not already spend -- one level between a bridge and a trunk
+#: either way round -- and it removes the clash by construction rather than by
+#: search.  This is NOT the game's ceiling: a belt goes as high as the save's
+#: vertical-construction unlocks allow.
 #:
 #: One level is enough for any number of trunks, because a bridge only ever
 #: crosses trunks, never another bridge -- two bridges would have to share a
 #: lane's ``y``, and a lane holds one item.
-_TRUNK_Z = catalog.BELT_CROSSING_CLEARANCE
+#:
+#: This used to read ``catalog.BELT_CROSSING_CLEARANCE``, a ``dsp/`` constant
+#: presented as the height a belt needs to clear an obstruction.  The provenance
+#: audit found no game rule of that shape -- what the game applies is the
+#: collider query, and ``colliders.belt_crossing_height`` answers "how high over
+#: THIS building" per model (2.80-4.97 world units, and 1.8975 for a Spray
+#: Coater) -- so the constant was deleted.  The number that survived is this
+#: one: the altitude spine chooses to run its trunks at, which is a structural
+#: choice of this layout and not a rule anything could fail.  A belt that has to
+#: clear a specific building asks the collider, as ``_belt_floor_over`` does.
+_TRUNK_Z = Fraction(1)
 
 #: Altitude of a bridge's run-up tile: one tile of run buys one tile's worth of
 #: climb, so the tile the change happens across sits at half a level.  This is

@@ -454,13 +454,29 @@ MATCH_ALIGN_COS = 0.9702957
 # between their forwards, and both of ours are upright, so the 30-degree test is
 # done on forwards.
 #
-# Two of the game's tests are NOT ported, both because they need the planet's
-# grid rather than ours: `CalcSegmentsAcross` counts the grid segments a sorter
-# crosses, which is a function of latitude, and the combined
-# `sqrt(segments^2 + altitude^2)` minimum built on it.  Our sorters never change
-# level (`catalog.SORTER_SPANS_ALTITUDE`) and sit on a uniform grid, where the
-# length test above is the same statement; near a pole it would not be, and
-# nothing we emit goes near one.
+# The same passage carries a THIRD and a FOURTH bound, on the same three-way
+# key, and only the first has been ported as a threshold.
+# `BuildTool_Inserter.cs:1313-1329` sets all four together::
+#
+#     float num5 = 5.5f;  float num6 = 0.6f;  float num7 = 3.499f;  float num8 = 0.88f;
+#     if (belt && belt)        { num6 = 0.4f; num5 = 5f;   num7 = 3.2f;   num8 = 0.8f;   }
+#     else if (!belt && !belt) { num6 = 0.9f; num5 = 7.5f; num7 = 3.799f;
+#                                num8 = 1.451f; num3 -= 0.3f; }
+#
+# `num5`/`num6` are `SORTER_LENGTH` below.  `num7` bounds the grid segments the
+# sorter crosses (`:1341`, `if (num2 > num7) -> TooFar`) and is the citation
+# behind `catalog.SORTER_MAX_REACH = 3`; a span of 4 is over it in all three
+# classes and a span of 3 under it in all three.  `num8` is a MINIMUM on
+# `sqrt(segments^2 + altitude^2)` (`:1347`, reporting `TooClose`), where
+# altitude is `num4 = Abs(lpos.magnitude - lpos2.magnitude) / 0.2f` -- which is
+# the line that establishes the game models an altitude-spanning sorter, and so
+# the line that retired our invented `sorter.altitude` check.
+#
+# `num7` and `num8` are not ported AS THRESHOLDS because `CalcSegmentsAcross` is
+# a function of latitude and our grid is uniform, where the length test above is
+# the same statement; near a pole it would not be, and nothing we emit goes near
+# one.  On a uniform grid `num7` reduces exactly to `SORTER_MAX_REACH`, which is
+# ported, and `num8`'s floor is below the 1-tile minimum span in every class.
 
 #: ``(minLength, maxLength)`` a pasted sorter is allowed, keyed by how many of
 #: its two ends land on a BELT -- the ``flag21``/``flag22`` pair.  Belt-to-belt

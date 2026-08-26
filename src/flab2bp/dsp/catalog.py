@@ -95,11 +95,41 @@ def is_belt_integrated(item_id: int) -> bool:
 
 # --- sorters ---------------------------------------------------------------
 
-#: Maximum sorter span in tiles.  Measured over all 1,288 sorters in the fixture
-#: corpus: spans cluster at 1, 2 and 3 with nothing at 4.  Critically this is
-#: **not tier-dependent** -- Mk.I reaches 3.4 while Mk.II tops out at 2.2 in the
-#: corpus, which shows the cap belongs to sorters generally and Mk.II simply is
-#: not used at full stretch there.
+#: Maximum sorter span in tiles.
+#:
+#: This was recorded as a corpus measurement -- "spans cluster at 1, 2 and 3
+#: with nothing at 4" -- and listed in ``dsp.rules``' docstring under "not game
+#: rules".  It IS a game rule, and the corpus was agreeing with it rather than
+#: establishing it.  ``BuildTool_Inserter.cs:1316-1329`` sets a per-class bound
+#: on the grid segments a sorter crosses, alongside the world-length pair that
+#: :data:`flab2bp.dsp.rules.SORTER_LENGTH` already ports::
+#:
+#:     float num5 = 5.5f;  float num6 = 0.6f;  float num7 = 3.499f;  ...
+#:     if (belt && belt)     { num6 = 0.4f; num5 = 5f;   num7 = 3.2f;   ... }
+#:     else if (!belt && !belt) { num6 = 0.9f; num5 = 7.5f; num7 = 3.799f; ... }
+#:
+#: and applies it at ``:1341``::
+#:
+#:     if (num2 > num7)
+#:     {
+#:         buildPreview.condition = EBuildCondition.TooFar;
+#:         continue;
+#:     }
+#:
+#: where ``num2 = CalcSegmentsAcross(...)``.  A span of 4 is over ``num7`` in
+#: every one of the three classes -- 4 > 3.799 is the loosest failure -- and a
+#: span of 3 is under it in every one.  The paste path repeats the same table
+#: and the same test at ``BuildTool_BlueprintPaste.cs:3474``.
+#:
+#: The game then clamps the span it RECORDS to the same 3,
+#: ``BuildTool_Inserter.cs:1352``::
+#:
+#:     int num9 = Mathf.RoundToInt(Mathf.Clamp(num3, 1f, 3f));
+#:     buildPreview.SetOneParameter(num9);
+#:
+#: **Not tier-dependent, and now known rather than inferred:** none of ``num5``,
+#: ``num6``, ``num7`` or ``num8`` reads ``inserterGrade``.  The corpus reading
+#: (Mk.I at 3.4, Mk.II at 2.2) was the right conclusion from the wrong evidence.
 SORTER_MAX_REACH = 3
 
 #: Items/second at a span of one tile, by item id.  Derived from
@@ -111,12 +141,6 @@ SORTER_RATE_AT_1 = {
     2013: Fraction(6),      # Sorter Mk.III
     2014: Fraction(20),     # Pile Sorter
 }
-
-#: Sorters never span altitudes.  ``z2 - z`` is exactly 0.0 for all 1,288
-#: sorters in the corpus, across five game versions and ten builders, including
-#: blueprints that stack belts.  Treated as a hard constraint; it fails safe.
-SORTER_SPANS_ALTITUDE = False
-
 
 def sorter_rate(item_id: int, span: int) -> Fraction:
     """Items/second a sorter of this tier sustains across ``span`` tiles."""
@@ -178,11 +202,21 @@ RAMP_TILES_PER_LEVEL = 2
 #: max-height blueprint is exactly this.
 VERTICAL_STEP = Fraction(1)
 
-#: Height a belt must gain to pass OVER a ground-level obstruction, per the
-#: user: a belt at ``1/2`` still fouls one at ``0``, so a crossing tile has to
-#: be a full ``1`` above what it crosses and the climb has to start two tiles
-#: out.  That is why the corpus profile reads ``0, 1/2, 1, ... 1, 1/2, 0``.
-BELT_CROSSING_CLEARANCE = Fraction(1)
+# `BELT_CROSSING_CLEARANCE = Fraction(1)` was here, described as "height a belt
+# must gain to pass OVER a ground-level obstruction, per the user".  It carried
+# no citation because there is no rule of that shape to cite: what the game
+# applies is the collider query, and how high a belt must ride to clear a
+# particular building is a property of that building's box.
+# `dsp.colliders.belt_crossing_height` answers it per model and returns
+# 2.80-4.97 world units where this said a flat 1 -- it is not even the right
+# number for a Spray Coater, whose box is 1.8975 high.
+#
+# Its only readers were `spine._TRUNK_Z` and two comments.  No validator ever
+# consulted it, so it enforced nothing; a constant in `dsp/` with no check
+# behind it is an unported rule wearing a ported rule's clothes, which is
+# exactly what the consolidation plan's clause 4 exists to catch.  The trunk
+# altitude it really set now lives in `layout.spine`, next to the other
+# structural choices, where it is legible as the knob it is.
 
 #: A sloped belt may not TURN.  ``BuildTool_Path``::
 #:
@@ -344,8 +378,22 @@ def belt_rules_for_technologies(
 #: built to this default pastes on any save, because no save starts lower.
 DEFAULT_MAX_BELT_Z = belt_max_z()
 
-#: Altitudes are multiples of this.  Every one of the 7,502 corpus records lands
-#: on one once terrain jitter (max 0.0235) is denoised with ``round(z * 2) / 2``.
+#: The altitude step OUR emitters climb in.  **Not a game rule**, and no longer
+#: checked as one.
+#:
+#: It used to read "altitudes are multiples of this", on the evidence that every
+#: one of the 7,502 corpus records lands on one after terrain jitter (max
+#: 0.0235) is denoised with ``round(z * 2) / 2``.  That is a fact about the
+#: corpus and about our own denoising, not a constraint the game applies: the
+#: game's belt altitude is an integer counter (``BuildTool_Path.cs:388``,
+#: ``altitude++``; clamped at ``:444`` to 60) turned into a radius at ``:176``,
+#: and nothing anywhere compares a belt's height to a step size.
+#: ``validate.geom.altitude_range`` enforced it until the provenance audit; the
+#: ceiling half of that check is real (``GameHistoryData.buildMaxHeight``) and
+#: the quantum half was not.
+#:
+#: Kept because the emitters genuinely do step in halves -- see
+#: :data:`BELT_CLIMB_PER_TILE`, which it aliases -- and a router needs a step.
 BELT_Z_QUANTUM = BELT_CLIMB_PER_TILE
 
 #: There is NO useful bound on how many belts share one ``(x, y)``.

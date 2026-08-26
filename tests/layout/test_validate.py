@@ -422,9 +422,39 @@ def test_geom_altitude_range_allows_what_the_run_declares() -> None:
     assert not fired(validate(high, max_belt_z=Fraction(38)), "geom.altitude_range")
 
 
-def test_geom_altitude_range_fires_between_quanta() -> None:
-    r = validate(place(belt(0, 0, Fraction(1, 3))), )
-    assert fired(r, "geom.altitude_range")
+def test_a_belt_off_the_half_quantum_is_not_refused() -> None:
+    """The quantum half of ``geom.altitude_range`` was invented and is gone.
+
+    It refused any belt whose ``z`` was not a multiple of ``BELT_Z_QUANTUM``,
+    on the evidence that every corpus record lands on one -- after our own
+    denoising rounds it there.  The game quantises nothing: its belt altitude is
+    an integer counter (``BuildTool_Path.cs:388`` ``altitude++``, clamped at
+    ``:444``) converted to a radius at ``:176``, and no branch compares a belt's
+    height against a step size.
+
+    The CEILING half is real and stays -- see the two tests above, which are the
+    control that this deletion did not take the whole check with it.
+    """
+    r = validate(place(belt(0, 0, Fraction(1, 3))))
+    assert not fired(r, "geom.altitude_range")
+
+
+def test_geom_bounds_parameter_cap_is_the_signed_int16_maximum() -> None:
+    """32767, not 32768: the count is written as a signed Int16 both ends.
+
+    ``BlueprintBuilding.cs:305`` writes ``w.Write((short)num)`` and ``:121``
+    reads ``r.ReadInt16()``, so a count of 32768 is written as -32768 and the
+    game allocates ``new int[-32768]``.  ``flab2bp.dsp.records`` writes the same
+    field the same way.  The old bound was ``> 32768``, which let through the
+    one value that corrupts.
+
+    Red before the fix at exactly 32768, green after; 32767 stays clean.
+    """
+    at_cap = place(dataclasses.replace(belt(0, 0), parameters=tuple(range(32767))))
+    assert not fired(validate(at_cap), "geom.bounds")
+
+    over = place(dataclasses.replace(belt(0, 0), parameters=tuple(range(32768))))
+    assert fired(validate(over), "geom.bounds")
 
 
 def test_geom_altitude_step_fires_on_a_full_level_across_one_tile() -> None:
@@ -530,15 +560,26 @@ def test_sorter_reach_fires_on_diagonal() -> None:
     assert fired(r, "sorter.reach")
 
 
-def test_sorter_altitude_fires_when_spanning_levels() -> None:
-    # sorters never change altitude: z2 - z is exactly 0 for all 1288 corpus sorters
+def test_a_sorter_reaching_up_a_level_is_not_refused() -> None:
+    """``sorter.altitude`` was an invented rule and is gone.
+
+    It refused any sorter whose two ends sat at different altitudes, citing
+    "z2 - z is exactly 0 for all 1288 sorters in the real corpus".  That is a
+    habit of the corpus's builders.  The game measures the difference and uses
+    it -- ``BuildTool_Inserter.cs:1311``::
+
+        float num4 = Mathf.Abs(lpos.magnitude - lpos2.magnitude) / 0.2f;
+
+    which ``:1347`` feeds into ``Sqrt(num2 * num2 + num4 * num4) < num8``, a
+    MINIMUM on the combined span.  Altitude only ever helps a sorter satisfy it;
+    nothing caps it.  A sorter reaching up to a raised belt is ordinary DSP.
+
+    Red before the deletion, green after, and it fails again the moment anybody
+    reintroduces the check.
+    """
     r = validate(place(machine(0, 0), belt(4, 0, 1), sorter(3, 0, 4, 0, z=0, z2=1, inp=0, out=1)))
-    assert fired(r, "sorter.altitude")
-
-
-def test_sorter_altitude_clean_when_level() -> None:
-    r = validate(place(machine(0, 0), belt(4, 0), sorter(3, 0, 4, 0, inp=0, out=1)))
     assert not fired(r, "sorter.altitude")
+    assert "sorter.altitude" not in {f.check for f in r.findings}
 
 
 def test_sorter_endpoints_fires_on_dangling_end() -> None:

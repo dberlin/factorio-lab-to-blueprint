@@ -311,11 +311,13 @@ def attachment(machine: PlacedBuilding, far: tuple[int, int]) -> Attachment | No
     * the anchor is a tile of ``machine``, so the end lands on the building it
       names (``sorter.endpoint_pair``);
     * the end is within :data:`SLOT_REACH` of the pose -- the game's
-      ``CheckInserterDataLegal``, and the paste path's ladder with it;
-    * the slot faces back along the run to within
-      :data:`flab2bp.dsp.rules.SKEW_AXIS_DEG` -- the
-      game's ``TooSkew``, and the sign half of ``CheckInserterDataLegal``;
-    * the span is within ``catalog.SORTER_MAX_REACH``.
+      ``CheckInserterDataLegal`` (``BuildTool_BlueprintCopy.cs:1791``), and the
+      paste path's ladder with it;
+    * the slot faces *forward along* the run rather than away from it -- the
+      sign test at threshold zero, ``BuildTool_BlueprintCopy.cs:1795`` and
+      ``BlueprintUtils.cs:2136``.  Not a cosine: see the comment at the test;
+    * the span is within ``catalog.SORTER_MAX_REACH``
+      (``BuildTool_Inserter.cs:1341``, ``num2 > num7`` reporting ``TooFar``).
 
     The game's LENGTH window is deliberately not applied.  Its loosest floor is
     0.9 and its tightest ceiling 5.0, while an axis-aligned sorter on a tile
@@ -361,6 +363,40 @@ def attachment(machine: PlacedBuilding, far: tuple[int, int]) -> Attachment | No
         reach = world_gap(pose[0] - cell[0], pose[1] - cell[1], sz)
         if reach > SLOT_REACH:
             continue
+        # `SLOT_ALIGN_COS` = cos 24, and the origin is the POSE, not the cell.
+        # Both were doubted and both are right, so the reasoning is written down
+        # rather than left to be re-derived.
+        #
+        # The paste SNAPS this end onto the slot and takes the slot's rotation
+        # with it -- `BlueprintUtils.RefreshBuildPreview`, `BlueprintUtils.cs`
+        # `:2096-2097`::
+        #
+        #     buildPreview2.lpos = transformedBy.position;
+        #     buildPreview2.lrot = transformedBy.rotation;
+        #
+        # so from that point on the sorter end's rotation IS the slot's rotation
+        # and its position IS the pose.  `TooSkew` then runs on the snapped
+        # values, `BuildTool_BlueprintPaste.cs:3494-3501`::
+        #
+        #     Vector3 normalized4 = (buildPreview2.lpos2 - buildPreview2.lpos).normalized;
+        #     float f = Mathf.Abs(Vector3.Dot(normalized4, buildPreview2.lrot.Forward()));
+        #     ...
+        #     if (num135 > 24f || num136 > 24f) -> EBuildCondition.TooSkew
+        #
+        # which is `Dot(slot forward, run direction measured FROM THE POSE)`
+        # against cos 24.  That is exactly this test.  `Mathf.Abs` makes the
+        # game's form unsigned, and the paste ladder's sign test three lines
+        # earlier (`BlueprintUtils.cs:2136`, `Dot(...) < 0f` reporting
+        # `ErrorInserterData`) supplies the sign, so the signed comparison here
+        # is the conjunction of the two.
+        #
+        # `docs/RULE_AUDIT.md` D5 called this "a hand-chosen tolerance on a
+        # different quantity" and Phase 4.2 of the consolidation plan called it
+        # "stricter than the game's sign test".  Both were wrong, and the same
+        # way: they read `CheckInserterDataLegal`'s sign test as the only game
+        # test on this pair and missed that the snap routes `TooSkew` onto it.
+        # Relaxing this to the sign test makes an Oil Refinery servable from the
+        # north, which the game refuses as `TooSkew`.
         wx, wy, _wz = slot_forward(machine.item_id, machine.yaw, slot)
         ax, ay = fx - pose[0], fy - pose[1]
         n = (ax * ax + ay * ay) ** 0.5

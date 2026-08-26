@@ -808,3 +808,38 @@ def test_what_the_game_actually_built_is_clean() -> None:
     previews = _sorter_previews(decode(BUILT_RESULT.read_text(encoding="utf-8")).buildings)
     assert len(previews) == 33
     assert C.sorter_collisions([p for _i, p in previews]) == []
+
+
+def test_the_longitude_segment_count_is_quantised_through_the_whole_table() -> None:
+    """``PlanetGrid.segmentTable`` is 512 entries and takes 17 distinct values.
+
+    The port used to hold the first EIGHT and then fall through to ``return
+    raw``.  ``segmentTable[i] != i`` for 478 of the 492 indices in that
+    fall-through range, so the old code was right only where the table happens
+    to be the identity -- including at 200, the one index the equatorial model
+    reaches, which is why it was never caught.
+
+    This pins three things a partial port would fail:
+
+    * the table is complete (512 entries);
+    * it is genuinely a snapping table, not the identity;
+    * ``200`` still maps to ``200``, so :func:`C.collisions` and every
+      area figure derived from it are unchanged by the completion.
+    """
+    assert len(C._SEGMENT_TABLE) == 512
+    assert set(C._SEGMENT_TABLE) == {
+        1, 4, 8, 16, 20, 32, 40, 60, 80, 100, 120, 160, 200, 240, 300, 400, 500
+    }
+    # The equator is untouched: this is the control for the whole change.
+    assert C._SEGMENT_TABLE[200] == 200
+    assert C._longitude_segment_count(0.0, 200) == 200
+
+    # ... and away from it the table now bites where `return raw` did not.
+    identity = sum(1 for i in range(8, 500) if C._SEGMENT_TABLE[i] == i)
+    assert identity == 14, identity
+
+    # Every index resolves to a table value, never to a raw count.
+    step = C._latitude_rad_per_grid(200)
+    for lat_index in range(0, 200):
+        got = C._longitude_segment_count(lat_index * step * 5, 200)
+        assert got in set(C._SEGMENT_TABLE), (lat_index, got)
