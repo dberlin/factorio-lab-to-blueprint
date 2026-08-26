@@ -25,15 +25,44 @@ import resource
 import sys
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sized
 from pathlib import Path
-from typing import Any
+from typing import Literal, TypedDict
 
 _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT))
 sys.path.insert(0, str(_ROOT / "src"))
 
-from ortools.sat.python import cp_model  # noqa: E402
+from ortools.sat.python import cp_model, cp_model_helper  # noqa: E402
+
+from flab2bp.layout.base import LayoutStrategy  # noqa: E402
+
+_Solve = Callable[
+    [
+        cp_model.CpSolver,
+        cp_model.CpModel,
+        cp_model.CpSolverSolutionCallback | None,
+    ],
+    cp_model.CpSolverStatus,
+]
+
+
+class SolveMeasurement(TypedDict):
+    vars: int
+    constraints: int
+    wall: float
+
+
+class _Args(argparse.Namespace):
+    strategy: Literal["spine", "freeform"] = "spine"
+    workers: int = 8
+    budget: float = 10.0
+    total_budget: float | None = None
+    power: bool = True
+    log: bool = True
+    dump_model: bool = False
+    watchdog: float = 0.0
+    hard_kill: float = 0.0
 
 
 def _rss_gb() -> float:
@@ -42,35 +71,42 @@ def _rss_gb() -> float:
     return raw / 1e9 if sys.platform == "darwin" else raw / 1e6
 
 
-def _call_any(obj: Any, *names: str, default: Any = None) -> Any:
+def _call_first(obj: object, *names: str, default: object = None) -> object:
     """First of ``names`` that exists on ``obj``, called if callable.
 
     ortools renamed its CamelCase API to snake_case; which spelling exists
     depends on the version, so never bind to just one.
     """
     for name in names:
-        attr = getattr(obj, name, None)
+        attr: object = getattr(obj, name, None)
         if attr is None:
             continue
         try:
-            return attr() if callable(attr) else attr
+            if callable(attr):
+                result: object = attr()
+                return result
+            return attr
         except Exception:  # noqa: BLE001 - diagnostics must not break the probe
             continue
     return default
 
 
-def _model_size(model: Any) -> tuple[int, int]:
-    proto = _call_any(model, "Proto", "proto", default=None)
-    if proto is None:
+def _model_size(model: cp_model.CpModel) -> tuple[int, int]:
+    proto = _call_first(model, "Proto", "proto", default=None)
+    if not isinstance(proto, cp_model_helper.CpModelProto):
         return (0, 0)
-    return (len(proto.variables), len(proto.constraints))
+    variables: object = getattr(proto, "variables", None)
+    constraints: object = getattr(proto, "constraints", None)
+    if not isinstance(variables, Sized) or not isinstance(constraints, Sized):
+        return (0, 0)
+    return (len(variables), len(constraints))
 
 
 def install_probe(
     *, workers: int, budget: float, log: bool, dump_only: bool
-) -> list[dict[str, float]]:
+) -> list[SolveMeasurement]:
     """Patch every CpSolver solve entry point to report size and force params."""
-    solves: list[dict[str, float]] = []
+    solves: list[SolveMeasurement] = []
 
     # Patch exactly ONE entry point. ortools keeps the CamelCase name as an
     # alias that delegates to the snake_case one, so wrapping both double-counts
@@ -79,8 +115,12 @@ def install_probe(
     if not names:
         raise RuntimeError("CpSolver exposes neither Solve nor solve")
 
-    def make_probe(real: Callable[..., Any]) -> Callable[..., Any]:
-        def probed(self: Any, model: Any, *a: Any, **kw: Any) -> Any:
+    def make_probe(real: _Solve) -> _Solve:
+        def probed(
+            self: cp_model.CpSolver,
+            model: cp_model.CpModel,
+            solution_callback: cp_model.CpSolverSolutionCallback | None = None,
+        ) -> cp_model.CpSolverStatus:
             n_vars, n_cons = _model_size(model)
 
             self.parameters.num_search_workers = workers
@@ -99,16 +139,19 @@ def install_probe(
                 return cp_model.UNKNOWN
 
             t0 = time.time()
-            status = real(self, model, *a, **kw)
+            status = real(self, model, solution_callback)
             wall = time.time() - t0
 
             solved = status in (cp_model.OPTIMAL, cp_model.FEASIBLE)
-            obj = _call_any(self, "ObjectiveValue", "objective_value") if solved else None
+            obj = _call_first(self, "ObjectiveValue", "objective_value") if solved else None
             bound = (
-                _call_any(self, "BestObjectiveBound", "best_objective_bound") if solved else None
+                _call_first(self, "BestObjectiveBound", "best_objective_bound")
+                if solved
+                else None
             )
             print(
-                f"--- solve #{idx}: {_call_any(self, 'StatusName', 'status_name', default=status)}"
+                f"--- solve #{idx}: "
+                f"{_call_first(self, 'StatusName', 'status_name', default=status)}"
                 f"  obj={obj}  bound={bound}  wall={wall:.2f}s",
                 flush=True,
             )
@@ -119,8 +162,28 @@ def install_probe(
 
         return probed
 
-    for name in names:
-        setattr(cp_model.CpSolver, name, make_probe(getattr(cp_model.CpSolver, name)))
+    name = names[0]
+    real: _Solve
+    if name == "solve":
+        real = cp_model.CpSolver.solve
+    else:
+        legacy: object = getattr(cp_model.CpSolver, name)
+        if not callable(legacy):
+            raise RuntimeError(f"CpSolver.{name} is not callable")
+
+        def legacy_solve(
+            self: cp_model.CpSolver,
+            model: cp_model.CpModel,
+            solution_callback: cp_model.CpSolverSolutionCallback | None = None,
+        ) -> cp_model.CpSolverStatus:
+            status: object = legacy(self, model, solution_callback)
+            if not isinstance(status, cp_model.CpSolverStatus):
+                raise TypeError(f"CpSolver.{name} returned invalid status {status!r}")
+            return status
+
+        real = legacy_solve
+
+    setattr(cp_model.CpSolver, name, make_probe(real))
     return solves
 
 
@@ -149,7 +212,7 @@ def main() -> int:
         default=0.0,
         help="abort with a traceback after N seconds total",
     )
-    args = ap.parse_args()
+    args = ap.parse_args(namespace=_Args())
 
     # Only ONE faulthandler timer can be armed -- a second call cancels the
     # first -- so the periodic dump owns it and the hard kill runs on a thread.
@@ -182,7 +245,7 @@ def main() -> int:
         flush=True,
     )
 
-    strategy: Any
+    strategy: LayoutStrategy
     if args.strategy == "spine":
         from flab2bp.layout.spine import SpineLayout
 

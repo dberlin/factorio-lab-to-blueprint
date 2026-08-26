@@ -54,12 +54,173 @@ from dataclasses import dataclass
 from fractions import Fraction
 from functools import cache
 from pathlib import Path
-from typing import Any
+from typing import Protocol, TypedDict, TypeGuard
 
 from flab2bp.dsp.rules import WORLD_UNITS_PER_LEVEL, PowerNode
 
 _DATA = Path(__file__).parent / "data" / "buildings.json"
 _SLOT_POSES = Path(__file__).parent / "data" / "slot_poses.json"
+
+
+class _JsonLoads(Protocol):
+    def __call__(self, value: str | bytes | bytearray, /) -> object: ...
+
+
+_JSON_LOADS: _JsonLoads = json.loads
+
+
+class _CatalogDataError(ValueError):
+    """A bundled asset has the wrong JSON shape."""
+
+
+class _PoseData(TypedDict):
+    pos: tuple[float, float, float]
+    fwd: tuple[float, float, float]
+
+
+class _PoseEntry(TypedDict):
+    slotPoses: tuple[_PoseData, ...]
+    portPoses: tuple[_PoseData, ...]
+    addonAreas: tuple[tuple[float, float, float], ...]
+
+
+type _PoseTable = dict[str, _PoseEntry]
+
+
+def _json(path: Path) -> object:
+    return _JSON_LOADS(path.read_bytes())
+
+
+def _is_object_mapping(value: object) -> TypeGuard[Mapping[object, object]]:
+    return isinstance(value, Mapping)
+
+
+def _is_object_list(value: object) -> TypeGuard[list[object]]:
+    return isinstance(value, list)
+
+
+def _mapping(value: object, path: str) -> Mapping[object, object]:
+    if not _is_object_mapping(value):
+        raise _CatalogDataError(f"{path} must be an object, got {type(value).__name__}")
+    return value
+
+
+def _array(value: object, path: str) -> list[object]:
+    if not _is_object_list(value):
+        raise _CatalogDataError(f"{path} must be an array, got {type(value).__name__}")
+    return value
+
+
+def _required(row: Mapping[object, object], key: str, path: str) -> object:
+    if key not in row:
+        raise _CatalogDataError(f"{path}.{key} is required")
+    return row[key]
+
+
+def _string(value: object, path: str) -> str:
+    if not isinstance(value, str):
+        raise _CatalogDataError(f"{path} must be a string, got {type(value).__name__}")
+    return value
+
+
+def _integer(value: object, path: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise _CatalogDataError(f"{path} must be an integer, got {type(value).__name__}")
+    return value
+
+
+def _number(value: object, path: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise _CatalogDataError(f"{path} must be a number, got {type(value).__name__}")
+    return float(value)
+
+
+def _boolean(value: object, path: str) -> bool:
+    if not isinstance(value, bool):
+        raise _CatalogDataError(f"{path} must be a boolean, got {type(value).__name__}")
+    return value
+
+
+def _tuple3(value: object, path: str) -> tuple[float, float, float]:
+    parts = _array(value, path)
+    if len(parts) != 3:
+        raise _CatalogDataError(f"{path} must contain exactly three numbers")
+    return (
+        _number(parts[0], f"{path}[0]"),
+        _number(parts[1], f"{path}[1]"),
+        _number(parts[2], f"{path}[2]"),
+    )
+
+
+def _optional_integer(
+    row: Mapping[object, object], key: str, path: str, default: int
+) -> int:
+    if key not in row:
+        return default
+    return _integer(row[key], f"{path}.{key}")
+
+
+def _pose_data(value: object, path: str) -> _PoseData:
+    row = _mapping(value, path)
+    return {
+        "pos": _tuple3(_required(row, "pos", path), f"{path}.pos"),
+        "fwd": _tuple3(_required(row, "fwd", path), f"{path}.fwd"),
+    }
+
+
+def _parse_pose_table(value: object) -> _PoseTable:
+    raw = _mapping(value, str(_SLOT_POSES))
+    table: _PoseTable = {}
+    for key, entry_value in raw.items():
+        prefab = _string(key, f"{_SLOT_POSES} key")
+        path = f"{_SLOT_POSES}.{prefab}"
+        entry = _mapping(entry_value, path)
+        slot_values = (
+            _array(entry["slotPoses"], f"{path}.slotPoses")
+            if "slotPoses" in entry
+            else []
+        )
+        port_values = (
+            _array(entry["portPoses"], f"{path}.portPoses")
+            if "portPoses" in entry
+            else []
+        )
+        addon_values = (
+            _array(entry["addonAreas"], f"{path}.addonAreas")
+            if "addonAreas" in entry
+            else []
+        )
+        table[prefab] = {
+            "slotPoses": tuple(
+                _pose_data(item, f"{path}.slotPoses[{index}]")
+                for index, item in enumerate(slot_values)
+            ),
+            "portPoses": tuple(
+                _pose_data(item, f"{path}.portPoses[{index}]")
+                for index, item in enumerate(port_values)
+            ),
+            "addonAreas": tuple(
+                _tuple3(item, f"{path}.addonAreas[{index}]")
+                for index, item in enumerate(addon_values)
+            ),
+        }
+    return table
+
+
+def _optional_number(
+    row: Mapping[object, object], key: str, path: str
+) -> float | None:
+    if key not in row or row[key] is None:
+        return None
+    return _number(row[key], f"{path}.{key}")
+
+
+def _optional_boolean(
+    row: Mapping[object, object], key: str, path: str
+) -> bool:
+    if key not in row:
+        return False
+    return _boolean(row[key], f"{path}.{key}")
 
 
 # --- id ranges -------------------------------------------------------------
@@ -686,9 +847,16 @@ def _kebab(name: str) -> str:
 
 @cache
 def _recipe_ids() -> dict[str, int]:
-    raw = json.loads(_RECIPES.read_text())
-    table = {_kebab(r["name"]): int(r["id"]) for r in raw}
-    by_name = {r["name"]: int(r["id"]) for r in raw}
+    values = _array(_json(_RECIPES), str(_RECIPES))
+    table: dict[str, int] = {}
+    by_name: dict[str, int] = {}
+    for index, value in enumerate(values):
+        path = f"{_RECIPES}[{index}]"
+        row = _mapping(value, path)
+        name = _string(_required(row, "name", path), f"{path}.name")
+        dsp_id = _integer(_required(row, "id", path), f"{path}.id")
+        table[_kebab(name)] = dsp_id
+        by_name[name] = dsp_id
     for factoriolab_id, dsp_name in _RECIPE_ALIASES.items():
         if dsp_name in by_name:
             table[factoriolab_id] = by_name[dsp_name]
@@ -750,9 +918,16 @@ _ITEMS = Path(__file__).parent / "data" / "items.json"
 
 @cache
 def _item_ids() -> dict[str, int]:
-    raw = json.loads(_ITEMS.read_text())
-    table = {_kebab(i["name"]): int(i["id"]) for i in raw}
-    by_name = {i["name"]: int(i["id"]) for i in raw}
+    values = _array(_json(_ITEMS), str(_ITEMS))
+    table: dict[str, int] = {}
+    by_name: dict[str, int] = {}
+    for index, value in enumerate(values):
+        path = f"{_ITEMS}[{index}]"
+        row = _mapping(value, path)
+        name = _string(_required(row, "name", path), f"{path}.name")
+        dsp_id = _integer(_required(row, "id", path), f"{path}.id")
+        table[_kebab(name)] = dsp_id
+        by_name[name] = dsp_id
     for factoriolab_id, dsp_name in _ITEM_ALIASES.items():
         if dsp_name in by_name:
             table[factoriolab_id] = by_name[dsp_name]
@@ -1035,22 +1210,26 @@ _BELT_ENTRIES = {
 }
 
 
-def _slot_poses_for(prefab: str, table: Mapping[str, Any]) -> tuple[SlotPose, ...]:
-    """``prefab``'s sorter slots, with Unity's model axes mapped onto the grid."""
-    return tuple(
-        SlotPose(
-            dx=float(p["pos"][0]),
-            dy=float(p["pos"][2]),
-            dz=float(p["pos"][1]),
-            fx=float(p["fwd"][0]),
-            fy=float(p["fwd"][2]),
-            fz=float(p["fwd"][1]),
-        )
-        for p in (table.get(prefab) or {}).get("slotPoses", ())
+def _pose(data: _PoseData) -> SlotPose:
+    pos = data["pos"]
+    fwd = data["fwd"]
+    return SlotPose(
+        dx=pos[0],
+        dy=pos[2],
+        dz=pos[1],
+        fx=fwd[0],
+        fy=fwd[2],
+        fz=fwd[1],
     )
 
 
-def _port_poses_for(prefab: str, table: Mapping[str, Any]) -> tuple[SlotPose, ...]:
+def _slot_poses_for(prefab: str, table: _PoseTable) -> tuple[SlotPose, ...]:
+    """``prefab``'s sorter slots, with Unity's model axes mapped onto the grid."""
+    entry = table.get(prefab)
+    return () if entry is None else tuple(_pose(data) for data in entry["slotPoses"])
+
+
+def _port_poses_for(prefab: str, table: _PoseTable) -> tuple[SlotPose, ...]:
     """``prefab``'s BELT ports, in the same grid frame as :func:`_slot_poses_for`.
 
     ``SlotConfig.slotPoses``, which ``PrefabDesc`` calls ``portPoses`` -- the
@@ -1062,17 +1241,8 @@ def _port_poses_for(prefab: str, table: Mapping[str, Any]) -> tuple[SlotPose, ..
     the building it is on, and the ``yaw`` field in ``slots`` is a rounded
     degree where the forward is the vector the game itself dots against.
     """
-    return tuple(
-        SlotPose(
-            dx=float(p["pos"][0]),
-            dy=float(p["pos"][2]),
-            dz=float(p["pos"][1]),
-            fx=float(p["fwd"][0]),
-            fy=float(p["fwd"][2]),
-            fz=float(p["fwd"][1]),
-        )
-        for p in (table.get(prefab) or {}).get("portPoses", ())
-    )
+    entry = table.get(prefab)
+    return () if entry is None else tuple(_pose(data) for data in entry["portPoses"])
 
 
 #: World units per altitude level, from the blueprint paste path::
@@ -1143,68 +1313,133 @@ def vertical_construction_allowed(
 
 
 def _addon_areas_for(
-    prefab: str, table: Mapping[str, Any]
+    prefab: str, table: _PoseTable
 ) -> tuple[AddonSupplyPose, ...]:
     """``prefab``'s addon areas, in tiles across and altitude levels up."""
+    entry = table.get(prefab)
+    if entry is None:
+        return ()
     return tuple(
         AddonSupplyPose(
-            dx=Fraction(str(a[0])),
-            dy=Fraction(str(a[2])),
-            dz=_asset_altitude_level(a[1]),
+            dx=Fraction(str(pose[0])),
+            dy=Fraction(str(pose[2])),
+            dz=_asset_altitude_level(pose[1]),
             area=area,
         )
-        for area, a in enumerate((table.get(prefab) or {}).get("addonAreas", ()))
+        for area, pose in enumerate(entry["addonAreas"])
     )
+
+
+def _number_or_default(
+    row: Mapping[object, object], key: str, path: str, default: float = 0.0
+) -> float:
+    if key not in row:
+        return default
+    return _number(row[key], f"{path}.{key}")
+
+
+def _building_slot(value: object, path: str) -> dict[str, float]:
+    row = _mapping(value, path)
+    return {
+        key: _number(_required(row, key, path), f"{path}.{key}")
+        for key in ("x", "y", "z", "yaw")
+    }
 
 
 @cache
 def _load() -> dict[int, Building]:
     from flab2bp.dsp import colliders
 
-    raw = json.loads(_DATA.read_text())
-    poses = json.loads(_SLOT_POSES.read_text())
+    values = _array(_json(_DATA), str(_DATA))
+    poses = _parse_pose_table(_json(_SLOT_POSES))
     out: dict[int, Building] = {}
-    for row in raw:
-        item_id = row.get("itemId")
-        if item_id is None:
+    for index, value in enumerate(values):
+        path = f"{_DATA}[{index}]"
+        row = _mapping(value, path)
+        item_id_value = _required(row, "itemId", path)
+        if item_id_value is None:
             continue  # prefab variant with no item of its own
+        item_id = _integer(item_id_value, f"{path}.itemId")
         if item_id in out:
             # Several prefab variants can share one item id (splitter-a/b/c).
             # The first is authoritative; later ones are alternate models.
             continue
+        prefab = _string(_required(row, "prefab", path), f"{path}.prefab")
+        name = _string(_required(row, "name", path), f"{path}.name")
+        model_index_value = _required(row, "modelIndex", path)
+        if model_index_value is None:
+            raise _CatalogDataError(f"buildable prefab {prefab!r} has no modelIndex")
+        model_index = _integer(model_index_value, f"{path}.modelIndex")
+
         # NOT `row["blueprintBoxSize"]`: the game computes that field from a
         # single collider (`ReadPrefab` 217456) and keeps the LAST Build box,
         # which for a prefab with three or more boxes is precisely the box
         # `buildColliders` leaves out.  Read the colliders instead.
-        ex, ez = colliders.own_centre_extent(row["modelIndex"], 0.0)
+        ex, ez = colliders.own_centre_extent(model_index, 0.0)
         w, h = derive_footprint(ex), derive_footprint(ez)
-        power = row.get("power") or {}
+
+        slot_values = (
+            _array(row["slots"], f"{path}.slots") if "slots" in row else []
+        )
+        stack_height = _optional_number(row, "stackHeight", path)
+        power_value = row.get("power")
+        power = (
+            None
+            if power_value is None
+            else _mapping(power_value, f"{path}.power")
+        )
+        power_path = f"{path}.power"
         building = Building(
-            prefab=row["prefab"],
+            prefab=prefab,
             item_id=item_id,
-            name=row["name"],
-            model_index=row["modelIndex"],
+            name=name,
+            model_index=model_index,
             width=int(w),
             height=int(h),
-            addon_type=row.get("addonType", 0),
-            multi_level=row.get("multiLevel") or 0,
+            addon_type=_optional_integer(row, "addonType", path, 0),
+            multi_level=_optional_integer(row, "multiLevel", path, 0),
             stack_height=(
-                _asset_stack_height(row["stackHeight"])
-                if row.get("stackHeight") is not None
+                _asset_stack_height(stack_height)
+                if stack_height is not None
                 else None
             ),
-            slots=tuple(row.get("slots") or ()),
-            port_poses=_port_poses_for(row["prefab"], poses),
-            slot_poses=_slot_poses_for(row["prefab"], poses),
-            addon_areas=_addon_areas_for(row["prefab"], poses),
-            cover_radius=Fraction(power.get("coverRadius") or 0).limit_denominator(100),
-            connect_distance=Fraction(power.get("connectDistance") or 0).limit_denominator(
-                100
+            slots=tuple(
+                _building_slot(slot, f"{path}.slots[{slot_index}]")
+                for slot_index, slot in enumerate(slot_values)
             ),
-            is_power_node=bool(power.get("node")),
-            is_accumulator=bool(power.get("accumulator")),
-            wind_forced_power=bool(power.get("wind")),
-            geothermal=bool(power.get("geothermal")),
+            port_poses=_port_poses_for(prefab, poses),
+            slot_poses=_slot_poses_for(prefab, poses),
+            addon_areas=_addon_areas_for(prefab, poses),
+            cover_radius=Fraction(
+                _number_or_default(power, "coverRadius", power_path)
+                if power is not None
+                else 0
+            ).limit_denominator(100),
+            connect_distance=Fraction(
+                _number_or_default(power, "connectDistance", power_path)
+                if power is not None
+                else 0
+            ).limit_denominator(100),
+            is_power_node=(
+                _optional_boolean(power, "node", power_path)
+                if power is not None
+                else False
+            ),
+            is_accumulator=(
+                _optional_boolean(power, "accumulator", power_path)
+                if power is not None
+                else False
+            ),
+            wind_forced_power=(
+                _optional_boolean(power, "wind", power_path)
+                if power is not None
+                else False
+            ),
+            geothermal=(
+                _optional_boolean(power, "geothermal", power_path)
+                if power is not None
+                else False
+            ),
         )
         out[item_id] = building
 

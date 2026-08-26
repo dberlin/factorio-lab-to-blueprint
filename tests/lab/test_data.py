@@ -13,6 +13,7 @@ from fractions import Fraction
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from flab2bp.lab.data import (
     DATA_URL,
@@ -66,6 +67,22 @@ def test_load_dataset_honours_explicit_path(tmp_path: Path) -> None:
 
     ds = load_dataset(path=target, allow_network=False)
     assert len(ds.items) == 3
+
+
+def test_load_dataset_validates_raw_json_shape(tmp_path: Path) -> None:
+    target = tmp_path / "invalid.json"
+    target.write_text('{"items": [{"id": 7}]}')
+
+    with pytest.raises(ValidationError):
+        load_dataset(path=target, allow_network=False)
+
+
+def test_load_hash_index_validates_raw_json_shape(tmp_path: Path) -> None:
+    target = tmp_path / "invalid-hash.json"
+    target.write_text('{"items": ["iron-ingot", 7]}')
+
+    with pytest.raises(ValidationError):
+        load_hash_index(path=target, allow_network=False)
 
 
 def test_load_dataset_prefers_disk_cache_over_vendored(tmp_path: Path) -> None:

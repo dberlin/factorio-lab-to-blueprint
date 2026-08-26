@@ -5,7 +5,6 @@ from __future__ import annotations
 import pytest
 
 from flab2bp import pipeline
-
 from flab2bp.web.jobs import MAX_SOLVER_SECONDS, InvalidOptions, Options, parse_options
 from flab2bp.web.payload import JsonValue
 

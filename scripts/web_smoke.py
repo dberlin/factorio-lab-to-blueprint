@@ -46,9 +46,12 @@ import sys
 import tempfile
 import time
 import zlib
+from collections.abc import Generator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Literal, NotRequired, Protocol, TypedDict, runtime_checkable
+
+from pydantic import TypeAdapter, ValidationError
 
 from flab2bp.dsp.codec import decode, encode_blueprint
 from flab2bp.lab.capture import _ARGS, _await_devtools, _free_port, find_browser
@@ -93,6 +96,188 @@ _POLL_S = 0.5
 class SmokeFailure(AssertionError):
     """Something the page promised did not hold."""
 
+
+
+type JsonValue = None | bool | int | float | str | list[JsonValue] | dict[str, JsonValue]
+type CdpPayload = dict[str, JsonValue]
+type CdpCommand = Generator[CdpPayload, CdpPayload, object]
+type Strategy = Literal["freeform", "sequence-pair"]
+
+
+class CanvasSize(TypedDict):
+    w: int
+    h: int
+
+
+class CanvasBox(TypedDict):
+    x: int
+    y: int
+    width: int
+    height: int
+
+
+class ConsoleMessage(TypedDict):
+    level: str
+    text: str
+
+
+class PageState(TypedDict):
+    progress: str | None
+    title: str | None
+    report: str | None
+    refusal: str | None
+    errors: str | None
+    warnings: str | None
+    alert: list[str]
+    hasString: bool
+    flowText: str | None
+    canvasEmpty: bool
+    canvas: CanvasSize | None
+    saw_progress: NotRequired[bool]
+
+
+class SuccessResult(TypedDict):
+    screenshot: str
+    clipboard_chars: int
+    buildings: int
+    round_trips: bool
+    canvas: CanvasBox
+    canvas_distinct_colours: int
+    title: str
+    report: str
+    warnings: str
+    console: list[ConsoleMessage]
+
+
+class RefusalResult(TypedDict):
+    screenshot: str
+    refusal: str
+    console: list[ConsoleMessage]
+
+
+class FlowResult(TypedDict):
+    report: str
+    flow_chars: int
+
+
+class SmokeReport(TypedDict):
+    success: SuccessResult
+    flow: FlowResult
+    refusal: RefusalResult
+
+
+class _Page(Protocol):
+    async def evaluate(
+        self,
+        expression: str,
+        *,
+        await_promise: bool = False,
+        return_by_value: bool = False,
+    ) -> object: ...
+
+    async def send(
+        self, cdp_obj: CdpCommand, _attach: bool = False, **kwargs: object
+    ) -> object: ...
+
+
+class _Browser(Protocol):
+    async def get(
+        self, url: str = "chrome://welcome", new_tab: bool = False, new_window: bool = False
+    ) -> _Page: ...
+
+    async def send(
+        self, cdp_obj: CdpCommand, _attach: bool = False, **kwargs: object
+    ) -> object: ...
+
+    def stop(self) -> None: ...
+
+
+class _PermissionType(Protocol):
+    CLIPBOARD_READ_WRITE: object
+    CLIPBOARD_SANITIZED_WRITE: object
+
+
+@runtime_checkable
+class _BrowserDomain(Protocol):
+    PermissionType: _PermissionType
+
+    def grant_permissions(
+        self, *, permissions: list[object], origin: str
+    ) -> CdpCommand: ...
+
+
+@runtime_checkable
+class _EmulationDomain(Protocol):
+    def set_device_metrics_override(
+        self, width: int, height: int, device_scale_factor: float, mobile: bool
+    ) -> CdpCommand: ...
+
+    def set_focus_emulation_enabled(self, *, enabled: bool) -> CdpCommand: ...
+
+
+@runtime_checkable
+class _PageDomain(Protocol):
+    def capture_screenshot(
+        self,
+        *,
+        format_: str,
+        clip: object | None,
+        capture_beyond_viewport: bool,
+    ) -> CdpCommand: ...
+
+    def Viewport(
+        self, *, x: int, y: int, width: int, height: int, scale: float
+    ) -> object: ...
+
+    def enable(self) -> CdpCommand: ...
+
+    def add_script_to_evaluate_on_new_document(self, *, source: str) -> CdpCommand: ...
+
+
+class _Cdp(Protocol):
+    @property
+    def browser(self) -> _BrowserDomain: ...
+
+    @property
+    def emulation(self) -> _EmulationDomain: ...
+
+    @property
+    def page(self) -> _PageDomain: ...
+
+
+class _CdpFacade:
+    """Runtime-narrow nodriver's untyped CDP module once at browser ingress."""
+
+    browser: _BrowserDomain
+    emulation: _EmulationDomain
+    page: _PageDomain
+
+    def __init__(self, module: object) -> None:
+        browser: object = getattr(module, "browser", None)
+        emulation: object = getattr(module, "emulation", None)
+        page: object = getattr(module, "page", None)
+        if not isinstance(browser, _BrowserDomain):
+            raise SmokeFailure("nodriver's CDP module has no compatible browser domain")
+        if not isinstance(emulation, _EmulationDomain):
+            raise SmokeFailure("nodriver's CDP module has no compatible emulation domain")
+        if not isinstance(page, _PageDomain):
+            raise SmokeFailure("nodriver's CDP module has no compatible page domain")
+        self.browser = browser
+        self.emulation = emulation
+        self.page = page
+
+
+_PAGE_STATE_ADAPTER = TypeAdapter(PageState)
+_CANVAS_BOX_ADAPTER = TypeAdapter(CanvasBox)
+_CONSOLE_ADAPTER = TypeAdapter(list[ConsoleMessage])
+
+
+class _Args(argparse.Namespace):
+    out: Path = Path("out/web-smoke")
+    port: int | None = None
+    server: str | None = None
+    browser: str | None = None
+    headed: bool = False
 
 # ---- what runs in the page -------------------------------------------------
 
@@ -238,40 +423,84 @@ def start_server(port: int | None) -> Server:
 # ---- the browser -----------------------------------------------------------
 
 
-async def _js(page: Any, script: str) -> Any:
+async def _js(page: _Page, script: str) -> object:
     return await page.evaluate(script, return_by_value=True, await_promise=False)
 
 
-async def _state(page: Any) -> dict[str, Any]:
+def _validated_json[PayloadT](
+    adapter: TypeAdapter[PayloadT], raw: object, what: str
+) -> PayloadT:
+    if not isinstance(raw, str):
+        raise SmokeFailure(f"{what} returned {raw!r}, not JSON")
+    try:
+        return adapter.validate_json(raw)
+    except ValidationError as exc:
+        raise SmokeFailure(f"{what} returned invalid JSON: {raw!r}") from exc
+
+
+def _json_object(raw: str, what: str) -> dict[str, object]:
+    try:
+        parsed: object = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise SmokeFailure(f"{what} returned malformed JSON: {raw!r}") from exc
+    if not isinstance(parsed, dict):
+        raise SmokeFailure(f"{what} returned a JSON {type(parsed).__name__}, not an object")
+    result: dict[str, object] = {}
+    for raw_key, raw_value in parsed.items():
+        if not isinstance(raw_key, str):
+            raise SmokeFailure(f"{what} returned a JSON object with a non-text key")
+        value: object = raw_value
+        result[raw_key] = value
+    return result
+
+async def _state_json(page: _Page) -> str:
     raw = await _js(page, _STATE_JS)
     if not isinstance(raw, str):
         raise SmokeFailure(f"the page's state probe returned {raw!r}, not JSON")
-    parsed: dict[str, Any] = json.loads(raw)
-    return parsed
+    return raw
 
 
-async def _settle(page: Any, out: Path, tag: str) -> dict[str, Any]:
+async def _state(page: _Page) -> PageState:
+    return _validated_json(
+        _PAGE_STATE_ADAPTER, await _state_json(page), "the page's state probe"
+    )
+
+
+async def _settle(page: _Page, out: Path, tag: str) -> PageState:
     """Poll until the panel shows a result, a refusal or an error.
 
     Never a fixed sleep: a build is seconds to minutes and the whole point of
-    the submit-and-poll design is that nobody knows which.
+    the submit-and-poll design is that nobody knows which. Polls use the JSON
+    decoder's native value types; the cached schema adapter validates exactly
+    once, when a terminal state crosses into the result.
     """
     deadline = time.monotonic() + SETTLE_TIMEOUT_S
-    last: dict[str, Any] = {}
+    last_raw = "{}"
+    last: dict[str, object] = {}
     seen_progress = False
+    settled_raw: str | None = None
     while time.monotonic() < deadline:
-        last = await _state(page)
+        last_raw = await _state_json(page)
+        last = _json_object(last_raw, "the page's state probe")
         if last.get("progress"):
             seen_progress = True
         if last.get("report") or last.get("refusal") or last.get("alert"):
-            last["saw_progress"] = seen_progress
-            return last
+            settled_raw = last_raw
+            break
         await asyncio.sleep(_POLL_S)
+    if settled_raw is not None:
+        settled = _validated_json(
+            _PAGE_STATE_ADAPTER, settled_raw, "the page's settled state"
+        )
+        settled["saw_progress"] = seen_progress
+        return settled
     (out / f"{tag}-timeout-state.json").write_text(json.dumps(last, indent=2))
     raise SmokeFailure(f"[{tag}] nothing settled within {SETTLE_TIMEOUT_S:.0f}s; last: {last}")
 
 
-async def _capture(page: Any, cdp: Any, clip: Any = None, *, beyond: bool = False) -> bytes:
+async def _capture(
+    page: _Page, cdp: _Cdp, clip: object | None = None, *, beyond: bool = False
+) -> bytes:
     """A PNG of the page, or of one box on it, from the compositor.
 
     ``beyond`` is ``Page.captureScreenshot``'s ``captureBeyondViewport``. A
@@ -281,10 +510,12 @@ async def _capture(page: Any, cdp: Any, clip: Any = None, *, beyond: bool = Fals
     shot = await page.send(
         cdp.page.capture_screenshot(format_="png", clip=clip, capture_beyond_viewport=beyond)
     )
+    if not isinstance(shot, str):
+        raise SmokeFailure(f"CDP returned a non-text screenshot payload: {shot!r}")
     return base64.b64decode(shot)
 
 
-async def _shot(page: Any, cdp: Any, path: Path) -> None:
+async def _shot(page: _Page, cdp: _Cdp, path: Path) -> None:
     path.write_bytes(await _capture(page, cdp))
     if not path.is_file() or path.stat().st_size == 0:
         raise SmokeFailure(f"no screenshot was written to {path}")
@@ -356,7 +587,7 @@ def _png_variety(png: bytes) -> int:
     return int(np.unique(pixels, axis=0).shape[0])
 
 
-async def _canvas_variety(page: Any, cdp: Any) -> tuple[int, dict[str, int]]:
+async def _canvas_variety(page: _Page, cdp: _Cdp) -> tuple[int, CanvasBox]:
     """How many distinct colours the 3D canvas is actually showing.
 
     Screenshotted through CDP rather than read with ``toDataURL``: the viewer's
@@ -378,9 +609,9 @@ async def _canvas_variety(page: Any, cdp: Any) -> tuple[int, dict[str, int]]:
                                  width: Math.round(r.width), height: Math.round(r.height)});
         })()""",
     )
-    if not isinstance(box_raw, str) or box_raw == "null":
+    if box_raw == "null":
         raise SmokeFailure("there is no <canvas> on the page at all")
-    box: dict[str, int] = json.loads(box_raw)
+    box = _validated_json(_CANVAS_BOX_ADAPTER, box_raw, "the canvas bounds probe")
     if box["width"] <= 0 or box["height"] <= 0:
         raise SmokeFailure(f"the canvas has no size: {box}")
     clip = cdp.page.Viewport(
@@ -389,28 +620,28 @@ async def _canvas_variety(page: Any, cdp: Any) -> tuple[int, dict[str, int]]:
     return _png_variety(await _capture(page, cdp, clip, beyond=True)), box
 
 
-async def _console(page: Any) -> list[dict[str, str]]:
+async def _console(page: _Page) -> list[ConsoleMessage]:
     raw = await _js(page, "JSON.stringify(window.__smoke || [])")
-    return list(json.loads(raw)) if isinstance(raw, str) else []
+    return _validated_json(_CONSOLE_ADAPTER, raw, "the console probe")
 
 
-async def _expect_ok(page: Any, script: str, what: str) -> None:
+async def _expect_ok(page: _Page, script: str, what: str) -> None:
     answer = await _js(page, script)
     if answer != "ok":
         raise SmokeFailure(f"{what}: {answer!r}\n--- the script was ---\n{script}")
 
 
 async def _drive(
-    page: Any,
+    page: _Page,
     *,
     url: str,
-    strategy: str,
+    strategy: Strategy,
     candidates: int,
     budget_s: float,
     out: Path,
     tag: str,
     flow: str | None = None,
-) -> dict[str, Any]:
+) -> PageState:
     await _expect_ok(page, _FILL_JS % json.dumps(url), "filling the URL")
     # Always set it, including to empty. The three cases share one page, and a
     # flow left in the box by the previous case is submitted with the next
@@ -438,7 +669,7 @@ async def _drive(
 # ---- the two cases ---------------------------------------------------------
 
 
-async def _case_success(page: Any, cdp: Any, out: Path) -> dict[str, Any]:
+async def _case_success(page: _Page, cdp: _Cdp, out: Path) -> SuccessResult:
     settled = await _drive(
         page,
         url=BUILD_URL,
@@ -509,7 +740,7 @@ async def _case_success(page: Any, cdp: Any, out: Path) -> dict[str, Any]:
     }
 
 
-async def _case_refusal(page: Any, cdp: Any, out: Path) -> dict[str, Any]:
+async def _case_refusal(page: _Page, cdp: _Cdp, out: Path) -> RefusalResult:
     settled = await _drive(
         page,
         url=REFUSE_URL,
@@ -519,7 +750,8 @@ async def _case_refusal(page: Any, cdp: Any, out: Path) -> dict[str, Any]:
         out=out,
         tag="refusal",
     )
-    if not settled.get("refusal"):
+    refusal = settled["refusal"]
+    if not refusal:
         raise SmokeFailure(
             "the refusal URL did not refuse. That is not necessarily a bug in the "
             f"page -- the layout model may have improved -- but this case then "
@@ -531,14 +763,16 @@ async def _case_refusal(page: Any, cdp: Any, out: Path) -> dict[str, Any]:
     await _shot(page, cdp, shot)
     return {
         "screenshot": str(shot),
-        "refusal": " ".join(settled["refusal"].split())[:600],
+        "refusal": " ".join(refusal.split())[:600],
         "console": await _console(page),
     }
 
 
-async def _run(base: str, out: Path, browser_path: str, headless: bool) -> dict[str, Any]:
-    import nodriver  # type: ignore[import-untyped]
-    from nodriver import cdp  # type: ignore[import-untyped]
+async def _run(base: str, out: Path, browser_path: str, headless: bool) -> SmokeReport:
+    import nodriver
+    from nodriver import cdp
+
+    cdp_api: _Cdp = _CdpFacade(cdp)
 
     port = _free_port()
     profile = tempfile.mkdtemp(prefix="flab2bp-smoke-")
@@ -553,7 +787,7 @@ async def _run(base: str, out: Path, browser_path: str, headless: bool) -> dict[
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
-    browser = None
+    browser: _Browser | None = None
     try:
         await _await_devtools(port, process, 30.0)
         browser = await nodriver.start(host="127.0.0.1", port=port)
@@ -569,25 +803,29 @@ async def _run(base: str, out: Path, browser_path: str, headless: bool) -> dict[
         # so -- which is correct behaviour, and useless as a proof.  Sent on the
         # browser connection, which nodriver only opens once a tab exists.
         await browser.send(
-            cdp.browser.grant_permissions(
+            cdp_api.browser.grant_permissions(
                 permissions=[
-                    cdp.browser.PermissionType.CLIPBOARD_READ_WRITE,
-                    cdp.browser.PermissionType.CLIPBOARD_SANITIZED_WRITE,
+                    cdp_api.browser.PermissionType.CLIPBOARD_READ_WRITE,
+                    cdp_api.browser.PermissionType.CLIPBOARD_SANITIZED_WRITE,
                 ],
                 origin=base,
             )
         )
-        await page.send(cdp.emulation.set_device_metrics_override(1600, 1000, 1.0, False))
+        await page.send(
+            cdp_api.emulation.set_device_metrics_override(1600, 1000, 1.0, False)
+        )
         # A headless page is never focused, and `navigator.clipboard.readText`
         # refuses on an unfocused document ("Document is not focused").  The
         # WRITE the button does is unaffected; this is only so the proof can
         # read back what the button wrote.
-        await page.send(cdp.emulation.set_focus_emulation_enabled(enabled=True))
+        await page.send(cdp_api.emulation.set_focus_emulation_enabled(enabled=True))
         # Before the bundle, so an error thrown while it loads is still caught.
         # `Page.enable` first: without the domain enabled the script is accepted
         # and then never runs, which reads as a page that threw nothing.
-        await page.send(cdp.page.enable())
-        await page.send(cdp.page.add_script_to_evaluate_on_new_document(source=_CONSOLE_HOOK))
+        await page.send(cdp_api.page.enable())
+        await page.send(
+            cdp_api.page.add_script_to_evaluate_on_new_document(source=_CONSOLE_HOOK)
+        )
 
         page = await browser.get(base)
 
@@ -609,9 +847,9 @@ async def _run(base: str, out: Path, browser_path: str, headless: bool) -> dict[
             body = await _js(page, "document.body.innerText.slice(0, 400)")
             raise SmokeFailure(f"the page never rendered a build panel. Body was: {body!r}")
 
-        success = await _case_success(page, cdp, out)
+        success = await _case_success(page, cdp_api, out)
         flow = await _case_flow_pin(page, out)
-        refusal = await _case_refusal(page, cdp, out)
+        refusal = await _case_refusal(page, cdp_api, out)
         return {"success": success, "flow": flow, "refusal": refusal}
     finally:
         if browser is not None:
@@ -624,7 +862,7 @@ async def _run(base: str, out: Path, browser_path: str, headless: bool) -> dict[
         shutil.rmtree(profile, ignore_errors=True)
 
 
-async def _case_flow_pin(page: Any, out: Path) -> dict[str, Any]:
+async def _case_flow_pin(page: _Page, out: Path) -> FlowResult:
     """``--flow``, pasted into the page.
 
     The point of a pin is that WHICH recipe makes what is FactorioLab's own
@@ -665,7 +903,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--server", help="drive an already-running server instead, e.g. 127.0.0.1:8000")
     ap.add_argument("--browser", help="Chromium/Chrome path (default: the usual search)")
     ap.add_argument("--headed", action="store_true", help="show the browser window")
-    args = ap.parse_args(argv)
+    args = ap.parse_args(argv, namespace=_Args())
 
     args.out.mkdir(parents=True, exist_ok=True)
     browser_path = find_browser(args.browser)

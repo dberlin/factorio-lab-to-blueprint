@@ -25,7 +25,6 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import replace
 from fractions import Fraction
-from typing import Any
 
 from flab2bp.dsp import catalog, rules
 from flab2bp.layout import freeform, geometry, junction, slots, spine
@@ -38,6 +37,11 @@ SMELTER = 2302
 CHEMICAL_PLANT = 2309
 BELT = 2001
 SORTER = 2012
+_SplitterProbeRow = (
+    tuple[int, int, int, str, int, int]
+    | tuple[int | None, int, int]
+    | str
+)
 
 
 def _b(item_id: int, x: int, y: int, *, z: int = 0, yaw: float = 0.0) -> PlacedBuilding:
@@ -88,18 +92,18 @@ def scene() -> tuple[PlacedBuilding, ...]:
     return (machine, _b(SMELTER, 6, 0), *belts, sorter)
 
 
-def _attachment() -> Any:
+def _attachment() -> list[tuple[int, str]]:
     machine = slots.probe_building(ASSEMBLER, 0.0)
     return [(d, str(slots.attachment(machine, (0, d)))) for d in range(2, 7)]
 
 
-def _attachable_columns() -> Any:
+def _attachable_columns() -> dict[int, list[int]]:
     machine = slots.probe_building(ASSEMBLER, 0.0)
     return {y: sorted(slots.attachable_columns(machine, y)) for y in (3, 4, 5, 6)}
 
 
-def _machine_slots() -> Any:
-    out: list[Any] = []
+def _machine_slots() -> list[int | str]:
+    out: list[int | str] = []
     for item_id in (ASSEMBLER, SMELTER, CHEMICAL_PLANT):
         for yaw in (0.0, 90.0):
             for offset in ((0.0, -1.5), (1.5, 0.0), (0.0, 1.5)):
@@ -110,7 +114,7 @@ def _machine_slots() -> Any:
     return out
 
 
-def _slot_poses() -> Any:
+def _slot_poses() -> list[tuple[float, float, float]]:
     return [
         slots.slot_offset(item_id, yaw, slot)
         for item_id in (ASSEMBLER, SMELTER)
@@ -119,23 +123,23 @@ def _slot_poses() -> Any:
     ]
 
 
-def _slot_forwards() -> Any:
+def _slot_forwards() -> list[tuple[float, float, float]]:
     return [slots.slot_forward(ASSEMBLER, yaw, slot) for yaw in (0.0, 90.0) for slot in (0, 1)]
 
 
-def _lane_facing() -> Any:
+def _lane_facing() -> list[tuple[bool, bool]]:
     return [slots.lane_facing(i, yaw) for i in (ASSEMBLER, SMELTER) for yaw in (0.0, 90.0, 180.0)]
 
 
-def _junction_keepout() -> Any:
+def _junction_keepout() -> list[tuple[tuple[int, int, int], ...]]:
     return [junction.keepout_cells(0, 0, lvl) for lvl in (0, 1, 2)]
 
 
-def _belt_floor_over() -> Any:
+def _belt_floor_over() -> list[str]:
     return [str(spine._belt_floor_over(b)) for b in scene()]
 
 
-def _tower_reach() -> Any:
+def _tower_reach() -> tuple[list[int], list[int], bool]:
     radius = Fraction(catalog.TESLA_COVER_RADIUS)
     return (
         geometry.reach_table(radius),
@@ -144,7 +148,11 @@ def _tower_reach() -> Any:
     )
 
 
-def _tower_spacing() -> Any:
+def _tower_spacing() -> tuple[
+    list[tuple[int, int]],
+    list[tuple[int, int]],
+    list[tuple[int, int, int]],
+]:
     """Where spine will not stand a second power node, and freeform's stamp.
 
     Both packers consult ``rules.power_node_keepout_offsets`` -- spine through
@@ -169,11 +177,11 @@ def _tower_spacing() -> Any:
     )
 
 
-def _addon_area_step() -> Any:
+def _addon_area_step() -> list[tuple[int, int]]:
     return [spine._addon_area_step(yaw) for yaw in (0.0, 90.0, 180.0, 270.0)]
 
 
-def _legal_links() -> Any:
+def _legal_links() -> list[tuple[str, int, bool, bool]]:
     """Freeform's own step-legality table, which is what routes belts.
 
     The only probe that reaches the router.  Plan step 2.2 wants
@@ -190,13 +198,13 @@ def _legal_links() -> Any:
     ]
 
 
-def _altitude_profiles() -> Any:
-    paths = [
+def _altitude_profiles() -> list[list[str] | None]:
+    paths: list[list[tuple[int, int, int]]] = [
         [(0, 0, 0), (1, 0, 0), (2, 0, 1), (3, 0, 1), (4, 0, 0)],
         [(0, 0, 0), (1, 0, 1), (2, 0, 2)],
         [(0, 0, 2), (1, 0, 2), (2, 0, 1), (3, 0, 0)],
     ]
-    out: list[Any] = []
+    out: list[list[str] | None] = []
     for path in paths:
         for ramped in (True, False):
             got = freeform._altitude_profile(path, ramped=ramped)
@@ -204,26 +212,26 @@ def _altitude_profiles() -> Any:
     return out
 
 
-def _sorter_seats() -> Any:
+def _sorter_seats() -> list[str]:
     buildings = scene()
     return [str(b) for b in slots.sorter_seat_boxes(buildings)]
 
 
-def _assigned_sorter_slots() -> Any:
+def _assigned_sorter_slots() -> list[tuple[int | None, int, int | None, int]]:
     return [
         (b.output_obj, b.output_to_slot, b.input_obj, b.input_from_slot)
         for b in slots.assign_sorter_slots(scene())
     ]
 
 
-def _assigned_belt_slots() -> Any:
+def _assigned_belt_slots() -> list[tuple[int | None, int, int | None, int]]:
     return [
         (b.output_obj, b.output_to_slot, b.input_obj, b.input_from_slot)
         for b in slots.assign_belt_slots(scene())
     ]
 
 
-def _assigned_port_slots() -> Any:
+def _assigned_port_slots() -> list[tuple[int, int]]:
     host = _b(catalog.RAY_RECEIVER_ID, 0, 0)
     feeder = replace(
         _b(BELT, 0, 0),
@@ -242,7 +250,7 @@ def _assigned_port_slots() -> Any:
     ]
 
 
-def _assigned_addon_slots() -> Any:
+def _assigned_addon_slots() -> tuple[int, int, int, int]:
     coater = _b(catalog.SPRAY_COATER_ID, 0, 0)
     (wired,) = slots.assign_sorter_slots((coater,))
     return (
@@ -253,9 +261,9 @@ def _assigned_addon_slots() -> Any:
     )
 
 
-def _splitter_ports() -> Any:
+def _splitter_ports() -> list[_SplitterProbeRow]:
     j = junction.make_splitter(2, 9, Fraction(0))
-    out: list[Any] = [
+    out: list[_SplitterProbeRow] = [
         (j.item_id, j.x, j.y, str(j.z), j.input_to_slot, j.output_from_slot),
     ]
     belts = [_b(BELT, x, 8) for x in range(int(rules.SPLITTER_MAX_PORTS) + 2)]
@@ -273,7 +281,9 @@ def _splitter_ports() -> Any:
     return out
 
 
-def _footprints_and_clearance() -> Any:
+def _footprints_and_clearance() -> list[
+    tuple[tuple[int, int], tuple[int, int]]
+]:
     return [
         (catalog.footprint(i), catalog.clearance(i, yaw))
         for i in (ASSEMBLER, SMELTER, CHEMICAL_PLANT, BELT)
@@ -281,7 +291,7 @@ def _footprints_and_clearance() -> Any:
     ]
 
 
-def _belt_rates() -> Any:
+def _belt_rates() -> list[tuple[int, str, str]]:
     return [
         (i, str(catalog.BELT_RATE[i]), str(catalog.sorter_rate(SORTER, span)))
         for i in catalog.BELT_RATE
@@ -289,13 +299,13 @@ def _belt_rates() -> Any:
     ]
 
 
-def _belt_ceiling() -> Any:
+def _belt_ceiling() -> list[str]:
     return [str(catalog.belt_max_z(level)) for level in (3, 9, 13, 15)]
 
 
 #: Every probe, run against every perturbation.  Adding one can only make R4
 #: stricter, so it is always the right move when a rule reports as ignored.
-PROBES: dict[str, Callable[[], Any]] = {
+PROBES: dict[str, Callable[[], object]] = {
     "slots.attachment": _attachment,
     "slots.attachable_columns": _attachable_columns,
     "slots.machine_slot": _machine_slots,

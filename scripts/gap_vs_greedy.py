@@ -29,8 +29,9 @@ import argparse
 import statistics
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Final
 
 _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT))
@@ -44,25 +45,50 @@ from flab2bp.lab.url import parse_url  # noqa: E402
 from flab2bp.layout.freeform import FreeformLayout  # noqa: E402
 from flab2bp.layout.spine import SpineLayout  # noqa: E402
 from flab2bp.rates.candidates import build_candidates  # noqa: E402
+from flab2bp.spec import BuildSpec  # noqa: E402
+
+_Solve = Callable[
+    [
+        cp_model.CpSolver,
+        cp_model.CpModel,
+        cp_model.CpSolverSolutionCallback | None,
+    ],
+    cp_model.CpSolverStatus,
+]
+_REAL_SOLVE: Final[_Solve] = cp_model.CpSolver.solve
+
+
+class _Args(argparse.Namespace):
+    url_id: str | None = None
+    budget: float = 2.0
+    repeat: int = 3
+    gap: float = 0.10
 
 
 def install_gap(limit: float | None) -> None:
     """Force ``relative_gap_limit`` on every solve, or restore the default."""
-    real = getattr(cp_model.CpSolver, "_flab_real_solve", None)
-    if real is None:
-        real = cp_model.CpSolver.solve
-        cp_model.CpSolver._flab_real_solve = real  # type: ignore[attr-defined]
 
-    def probed(self: Any, model: Any, *a: Any, **kw: Any) -> Any:
+    def probed(
+        self: cp_model.CpSolver,
+        model: cp_model.CpModel,
+        solution_callback: cp_model.CpSolverSolutionCallback | None = None,
+    ) -> cp_model.CpSolverStatus:
         if limit is not None:
             self.parameters.relative_gap_limit = limit
-        return real(self, model, *a, **kw)
+        return _REAL_SOLVE(self, model, solution_callback)
 
     cp_model.CpSolver.solve = probed  # type: ignore[method-assign]
 
 
-def measure(cls: Any, spec: Any, budget: float, repeat: int) -> tuple[int, str, float, int]:
-    areas, walls, belts = [], [], []
+def measure(
+    cls: type[FreeformLayout | SpineLayout],
+    spec: BuildSpec,
+    budget: float,
+    repeat: int,
+) -> tuple[int, str, float, int]:
+    areas: list[int] = []
+    walls: list[float] = []
+    belts: list[int] = []
     for _ in range(repeat):
         t = time.time()
         p = cls(power=False).lay_out(spec, time_budget_s=budget)
@@ -81,7 +107,7 @@ def main() -> int:
     ap.add_argument("--budget", type=float, default=2.0)
     ap.add_argument("--repeat", type=int, default=3)
     ap.add_argument("--gap", type=float, default=0.10)
-    args = ap.parse_args()
+    args = ap.parse_args(namespace=_Args())
 
     entry = next(
         (e for e in URL_CORPUS if e.url_id == args.url_id),
@@ -100,7 +126,7 @@ def main() -> int:
     print("-" * len(hdr))
 
     for name, cls in (("spine", SpineLayout), ("freeform", FreeformLayout)):
-        rows = []
+        rows: list[tuple[str, int, str, float, int]] = []
         install_gap(None)
         rows.append(("greedy", *measure(cls, spec, 0.0, 1)))
         install_gap(args.gap)

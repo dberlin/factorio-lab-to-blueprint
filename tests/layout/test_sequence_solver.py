@@ -5,7 +5,7 @@ import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field, replace
 from fractions import Fraction
-from typing import Any, cast
+from typing import Never, TypedDict
 
 import pytest
 
@@ -14,7 +14,13 @@ import flab2bp.layout.sequence_solver as sequence_solver_module
 from flab2bp.dsp import catalog, rules
 from flab2bp.layout import slots, validate
 from flab2bp.layout.base import NoValidLayout, PlacedBuilding, Placement
-from flab2bp.layout.compact_seed import VariantDirectInsertTarget
+from flab2bp.layout.compact_seed import (
+    CompactSeedConfig,
+    CompactSeedDiagnostics,
+    CompactSeedResult,
+    CompactSeedStatus,
+    VariantDirectInsertTarget,
+)
 from flab2bp.layout.freeform import (
     _box,
     _greedy_pack,
@@ -37,6 +43,7 @@ from flab2bp.layout.sequence_pair import (
     AnnealIncumbent,
     AnnealState,
     DecodedPlacement,
+    EliteCategory,
     GapProfile,
     PlacementKey,
     PlacementProblem,
@@ -44,6 +51,7 @@ from flab2bp.layout.sequence_pair import (
     StageBoundaryUpdate,
     TaggedAnnealIncumbent,
     apply_variant_move,
+    build_elite_archive,
     decode_sequence_pair,
     decode_state,
     split_stage_boundary,
@@ -77,6 +85,18 @@ from tests.layout.test_freeform import (
 )
 
 Prepared = tuple[int, DecodedPlacement]
+
+
+class _ProductionRunCapture(TypedDict, total=False):
+    compact_seed_attempt: int | None
+    compact_seed_config: CompactSeedConfig | None
+
+
+class _CompactSeedCapture(TypedDict, total=False):
+    called_at: float
+    config: CompactSeedConfig | None
+    direct_eligibility: tuple[VariantDirectInsertTarget, ...]
+    absolute_deadline: float | None
 
 
 def _placement(*, area: int, belt_tiles: int, valid: bool = True) -> Placement:
@@ -247,7 +267,7 @@ def _solver(
 
 
 def _repeat_merged_elite(monkeypatch: pytest.MonkeyPatch, count: int) -> None:
-    original = sequence_solver_module.build_elite_archive
+    original = build_elite_archive
 
     def repeat(
         candidates: Iterable[AnnealIncumbent],
@@ -258,7 +278,7 @@ def _repeat_merged_elite(monkeypatch: pytest.MonkeyPatch, count: int) -> None:
             narrowest = next(
                 tagged
                 for tagged in archived
-                if sequence_solver_module.EliteCategory.NARROWEST in tagged.categories
+                if EliteCategory.NARROWEST in tagged.categories
             )
             return (narrowest,) * count
         return archived
@@ -925,7 +945,16 @@ def test_later_cancelled_proxy_closes_the_best_completed_candidate(
 def test_unseatable_prepared_candidate_remains_searchable_refusal(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def refuse_preparation(*_args: Any, **_kwargs: Any) -> Any:
+    def refuse_preparation(
+        _spec: BuildSpec,
+        _strips: list[freeform_module.Strip],
+        _pack: freeform_module._Pack,
+        *,
+        power: bool,
+        ramped: bool = False,
+        _reserve_ports: bool = True,
+    ) -> Never:
+        del power, ramped, _reserve_ports
         raise freeform_module._Unseatable("positional coater collision")
 
     monkeypatch.setattr(
@@ -1013,6 +1042,27 @@ def test_parent_deadline_after_proxy_closure_is_not_proxy_cancellation() -> None
     assert fake.detailed_allowances == [75]
 
 
+def test_decoded_pack_uses_each_selected_strip_west_channel() -> None:
+    problem = PlacementProblem(
+        sizes=((4, 3), (5, 2)),
+        nets=(),
+        outline_height=5,
+        area_lower_bound=22,
+    )
+    decoded = decode_state(problem, AnnealState.initial(problem.size, 11))
+
+    pack = _decoded_pack(
+        problem.outline_height,
+        decoded,
+        west_channels=(3, 1),
+    )
+
+    assert pack.at == {
+        0: (decoded.x[0] + 3, decoded.y[0]),
+        1: (decoded.x[1] + 1, decoded.y[1]),
+    }
+
+
 def test_deadline_empty_global_is_cancelled_without_budget_exhaustion() -> None:
     problem = PlacementProblem(((1, 1),), (), 1, 1)
     state = AnnealState.initial(1, 1)
@@ -1097,10 +1147,32 @@ def test_production_run_uses_supplied_absolute_deadline_without_shrinking_ledger
 def test_serial_layout_uses_a_budgeted_root_compact_seed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    captured: dict[str, Any] = {}
+    captured: _ProductionRunCapture = {}
 
-    def stop_after_arguments(_spec: BuildSpec, **kwargs: Any) -> Any:
-        captured.update(kwargs)
+    def stop_after_arguments(
+        _spec: BuildSpec,
+        *,
+        time_budget_s: float,
+        power: bool,
+        strip_len: int,
+        config: SequenceSolverConfig,
+        belt_vertical_construction: bool = True,
+        absolute_deadline: float | None = None,
+        compact_seed_attempt: int | None = None,
+        compact_seed_base_seed: int | None = None,
+        compact_seed_config: CompactSeedConfig | None = None,
+    ) -> Never:
+        del (
+            time_budget_s,
+            power,
+            strip_len,
+            config,
+            belt_vertical_construction,
+            absolute_deadline,
+            compact_seed_base_seed,
+        )
+        captured["compact_seed_attempt"] = compact_seed_attempt
+        captured["compact_seed_config"] = compact_seed_config
         raise RuntimeError("captured production arguments")
 
     monkeypatch.setattr(
@@ -1114,7 +1186,7 @@ def test_serial_layout_uses_a_budgeted_root_compact_seed(
 
     assert captured["compact_seed_attempt"] == 0
     compact_config = captured["compact_seed_config"]
-    assert isinstance(compact_config, sequence_solver_module.CompactSeedConfig)
+    assert isinstance(compact_config, CompactSeedConfig)
     assert compact_config.max_deterministic_time == 1.0
 
 
@@ -1128,18 +1200,27 @@ def test_serial_attempt_policy_selects_only_measured_dense_spray_topology() -> N
 def test_production_seed_has_its_own_wall_and_deterministic_caps(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    captured: dict[str, Any] = {}
+    captured: _CompactSeedCapture = {}
 
     def capture_seed(
         _problem: PlacementProblem,
-        **kwargs: Any,
-    ) -> sequence_solver_module.CompactSeedResult:
+        *,
+        base_seed: int,
+        attempt: int,
+        config: CompactSeedConfig | None = None,
+        direct_eligibility: tuple[VariantDirectInsertTarget, ...] = (),
+        absolute_deadline: float | None = None,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> CompactSeedResult:
+        del base_seed, attempt, cancelled
         captured["called_at"] = time.monotonic()
-        captured.update(kwargs)
-        return sequence_solver_module.CompactSeedResult(
-            sequence_solver_module.CompactSeedStatus.CANCELLED,
+        captured["config"] = config
+        captured["direct_eligibility"] = direct_eligibility
+        captured["absolute_deadline"] = absolute_deadline
+        return CompactSeedResult(
+            CompactSeedStatus.CANCELLED,
             None,
-            sequence_solver_module.CompactSeedDiagnostics(
+            CompactSeedDiagnostics(
                 solver_seed=0,
                 status_name="CANCELLED",
                 width_weight=1,
@@ -1159,12 +1240,13 @@ def test_production_seed_has_its_own_wall_and_deterministic_caps(
     assert run.heights[0] == run.telemetry.compact_seed_height
 
     compact_config = captured["config"]
-    assert isinstance(compact_config, sequence_solver_module.CompactSeedConfig)
+    assert isinstance(compact_config, CompactSeedConfig)
     assert compact_config.max_deterministic_time == 1.0
     compact_deadline = captured["absolute_deadline"]
+    called_at = captured["called_at"]
     assert captured["direct_eligibility"] == ()
     assert isinstance(compact_deadline, float)
-    assert 0.0 < compact_deadline - captured["called_at"] <= 5.0
+    assert 0.0 < compact_deadline - called_at <= 5.0
 
 
 def test_validator_started_before_deadline_may_finish_exact_certification(
@@ -1173,11 +1255,17 @@ def test_validator_started_before_deadline_may_finish_exact_certification(
     class Report:
         errors: tuple[()] = ()
 
-    def slow_certify(*_args: Any, **_kwargs: Any) -> Report:
+    def slow_certify(
+        _placement: Placement,
+        _spec: BuildSpec,
+        *,
+        expect_power: bool,
+    ) -> Report:
+        del expect_power
         time.sleep(0.1)
         return Report()
 
-    monkeypatch.setattr(sequence_solver_module.validate, "certify", slow_certify)
+    monkeypatch.setattr(validate, "certify", slow_certify)
     run = _production_run(
         two_stage_spec(),
         time_budget_s=2.0,
@@ -1869,7 +1957,8 @@ def test_sequence_backend_returns_only_certified_placements(
         expect_power=power,
         belt_vertical_construction=belt_vertical_construction,
     ).errors
-    assert cast(object, placement.stats["backend"]) == "sequence-pair"
+    backend: object = placement.stats["backend"]
+    assert backend == "sequence-pair"
     assert placement.stats["detailed_routes"] >= 1.0
     assert placement.stats["direct_candidates"] == 1.0
     assert 0.0 <= placement.stats["direct_inserts"] <= 1.0
@@ -1977,7 +2066,8 @@ def test_production_observability_preserves_categories_and_all_grouped_work() ->
         False,
         config,
     )
-    assert cast(object, placement.stats["accelerator"]) == "cython"
+    cython_accelerator: object = placement.stats["accelerator"]
+    assert cython_accelerator == "cython"
     assert type(placement.stats["seed"]) is int
     assert placement.stats["seed"] == exact_seed
     assert json.loads(json.dumps(placement.stats))["seed"] == exact_seed
@@ -1993,7 +2083,8 @@ def test_production_observability_preserves_categories_and_all_grouped_work() ->
         False,
         config,
     )
-    assert cast(object, python_placement.stats["accelerator"]) == "python"
+    python_accelerator: object = python_placement.stats["accelerator"]
+    assert python_accelerator == "python"
 
     assert len(result.stages) > 1
     mixed_result = replace(
@@ -2007,7 +2098,8 @@ def test_production_observability_preserves_categories_and_all_grouped_work() ->
         False,
         config,
     )
-    assert cast(object, mixed_placement.stats["accelerator"]) == "mixed"
+    mixed_accelerator: object = mixed_placement.stats["accelerator"]
+    assert mixed_accelerator == "mixed"
 
     discovery = tuple(stage for stage in result.stages if stage.anneal_stages == 2)
     executed_global = tuple(stage for stage in result.stages if stage.global_routes > 0)
@@ -2039,8 +2131,10 @@ def test_production_observability_preserves_categories_and_all_grouped_work() ->
 
     assert result.exact_archive_categories
     expected_categories = [category.value for category in result.exact_archive_categories]
-    assert cast(object, placement.stats["archive_categories"]) == expected_categories
-    assert cast(object, placement.stats["archive_category"]) == expected_categories[0]
+    archive_categories: object = placement.stats["archive_categories"]
+    archive_category: object = placement.stats["archive_category"]
+    assert archive_categories == expected_categories
+    assert archive_category == expected_categories[0]
     exact_stage = next(
         stage
         for stage in result.stages

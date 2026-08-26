@@ -26,7 +26,11 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
-from typing import Any
+from typing import Final
+
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+
+type ParamValue = str | list[str]
 
 __all__ = [
     "ZARRAYSEP",
@@ -37,6 +41,7 @@ __all__ = [
     "ZTRUE",
     "LabUrlError",
     "ModHash",
+    "ParamValue",
     "base64_to_bytes",
     "bytes_to_base64",
     "deflate",
@@ -182,7 +187,7 @@ def inflate_query_value(value: str) -> str:
 # --- router-sync.ts: param string <-> mapping --------------------------------
 
 
-def to_params(value: str) -> dict[str, str | list[str]]:
+def to_params(value: str) -> dict[str, ParamValue]:
     """Split an inflated ``k=v&k=v`` payload into a parameter mapping.
 
     Pre-V11 hashed payloads have no ``=`` delimiter at all -- the key is the
@@ -193,7 +198,7 @@ def to_params(value: str) -> dict[str, str | list[str]]:
     if any("=" not in s for s in sections):
         return {s[0]: s[1:] for s in sections if s}
 
-    result: dict[str, str | list[str]] = {}
+    result: dict[str, ParamValue] = {}
     for section in sections:
         if not section:
             continue
@@ -210,14 +215,15 @@ def to_params(value: str) -> dict[str, str | list[str]]:
     return result
 
 
-def to_string(value: Mapping[str, Any]) -> str:
+def to_string(value: Mapping[str, str | Sequence[str] | None]) -> str:
     """Render a parameter mapping back to ``k=v&k=v``, dropping empty values."""
     out: list[str] = []
     for key, val in value.items():
-        if isinstance(val, list):
-            out.extend(f"{key}={v}" for v in val)
-        elif val:
-            out.append(f"{key}={val}")
+        if isinstance(val, str):
+            if val:
+                out.append(f"{key}={val}")
+        elif val is not None:
+            out.extend(f"{key}={item}" for item in val)
     return "&".join(out)
 
 
@@ -285,7 +291,8 @@ def parse_array(
 def parse_indices[T](
     value: str | None,
     arr: Sequence[T],
-    empty: Callable[[], Any] = dict,
+    *,
+    empty: Callable[[], T],
 ) -> list[T] | None:
     """Resolve ``~``-joined integer indices into *arr*.
 
@@ -360,6 +367,24 @@ def parse_subset(value: str | None, hash_list: Sequence[str | None]) -> set[str]
 # --- hash.json ---------------------------------------------------------------
 
 
+class _RawModHash(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
+
+    items: list[str | None] = Field(default_factory=list)
+    beacons: list[str | None] = Field(default_factory=list)
+    belts: list[str | None] = Field(default_factory=list)
+    fuels: list[str | None] = Field(default_factory=list)
+    machines: list[str | None] = Field(default_factory=list)
+    modules: list[str | None] = Field(default_factory=list)
+    recipes: list[str | None] = Field(default_factory=list)
+    technologies: list[str | None] = Field(default_factory=list)
+    wagons: list[str | None] = Field(default_factory=list)
+    locations: list[str | None] = Field(default_factory=list)
+
+
+_MOD_HASH_ADAPTER: Final[TypeAdapter[_RawModHash]] = TypeAdapter(_RawModHash)
+
+
 @dataclass(frozen=True, slots=True)
 class ModHash:
     """The id tables a compressed URL indexes into.
@@ -380,21 +405,19 @@ class ModHash:
     locations: list[str | None]
 
     @classmethod
-    def from_json(cls, data: Mapping[str, Any]) -> ModHash:
-        def table(key: str) -> list[str | None]:
-            return list(data.get(key) or [])
-
+    def from_json(cls, data: object) -> ModHash:
+        parsed = _MOD_HASH_ADAPTER.validate_python(data)
         return cls(
-            items=table("items"),
-            beacons=table("beacons"),
-            belts=table("belts"),
-            fuels=table("fuels"),
-            machines=table("machines"),
-            modules=table("modules"),
-            recipes=table("recipes"),
-            technologies=table("technologies"),
-            wagons=table("wagons"),
-            locations=table("locations"),
+            items=list(parsed.items),
+            beacons=list(parsed.beacons),
+            belts=list(parsed.belts),
+            fuels=list(parsed.fuels),
+            machines=list(parsed.machines),
+            modules=list(parsed.modules),
+            recipes=list(parsed.recipes),
+            technologies=list(parsed.technologies),
+            wagons=list(parsed.wagons),
+            locations=list(parsed.locations),
         )
 
 
@@ -426,7 +449,8 @@ def load_mod_hash(mod_id: str = "dsp", *, path: Path | None = None) -> ModHash:
     if source is None or not source.is_file():
         raise LabUrlError(f"no vendored hash.json for dataset {mod_id!r}; looked under {_VENDORED}")
 
-    mod_hash = ModHash.from_json(json.loads(source.read_text(encoding="utf-8")))
+    raw: object = json.loads(source.read_text(encoding="utf-8"))
+    mod_hash = ModHash.from_json(raw)
     if path is None:
         _HASH_CACHE[mod_id] = mod_hash
     return mod_hash

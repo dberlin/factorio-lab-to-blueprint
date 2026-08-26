@@ -12,8 +12,10 @@ import json
 import math
 import pathlib
 from fractions import Fraction
+from typing import ClassVar
 
 import pytest
+from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 from flab2bp.dsp import catalog, colliders
 from flab2bp.dsp.codec import decode
@@ -21,12 +23,30 @@ from flab2bp.dsp.codec import decode
 FIXTURES = pathlib.Path(__file__).parent.parent / "fixtures"
 
 
+class _AssetRow(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="allow")
+
+
+class _BuildingBoxRow(_AssetRow):
+    itemId: int | None
+    blueprintBoxSize: tuple[float, float]
+
+
+class _NamedIdRow(_AssetRow):
+    id: int
+    name: str
+
+
+_BUILDING_BOX_ROWS_ADAPTER = TypeAdapter(tuple[_BuildingBoxRow, ...])
+_NAMED_ID_ROWS_ADAPTER = TypeAdapter(tuple[_NamedIdRow, ...])
+
+
 def _blueprint_box_size(item_id: int) -> tuple[float, float]:
     """The field the footprint deliberately no longer reads, for contrast."""
     data = pathlib.Path(catalog.__file__).parent / "data" / "buildings.json"
-    for row in json.loads(data.read_text()):
-        if row.get("itemId") == item_id:
-            return (float(row["blueprintBoxSize"][0]), float(row["blueprintBoxSize"][1]))
+    for row in _BUILDING_BOX_ROWS_ADAPTER.validate_json(data.read_bytes()):
+        if row.itemId == item_id:
+            return row.blueprintBoxSize
     raise AssertionError(f"no row for item {item_id}")
 
 
@@ -34,6 +54,67 @@ def test_table_loads() -> None:
     buildings = catalog.all_buildings()
     assert len(buildings) > 50
     assert all(b.width >= 1 and b.height >= 1 for b in buildings)
+
+
+def test_catalog_validates_bundled_building_json(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    malformed = tmp_path / "buildings.json"
+    _ = malformed.write_text(
+        json.dumps(
+            [
+                {
+                    "prefab": "bad",
+                    "itemId": 1,
+                    "name": "Bad",
+                    "modelIndex": "not-an-integer",
+                }
+            ]
+        )
+    )
+    monkeypatch.setattr(catalog, "_DATA", malformed)
+    catalog._load.cache_clear()
+
+    with pytest.raises(ValueError, match="modelIndex"):
+        _ = catalog.all_buildings()
+
+    catalog._load.cache_clear()
+
+
+def test_catalog_validates_bundled_slot_pose_json(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    malformed = tmp_path / "slot_poses.json"
+    _ = malformed.write_text(
+        json.dumps(
+            {
+                "bad": {
+                    "slotPoses": [{"pos": [0.0, 0.0], "fwd": [0.0, 0.0, 1.0]}]
+                }
+            }
+        )
+    )
+    monkeypatch.setattr(catalog, "_SLOT_POSES", malformed)
+    catalog._load.cache_clear()
+
+    with pytest.raises(ValueError, match="pos"):
+        _ = catalog.all_buildings()
+
+    catalog._load.cache_clear()
+
+
+def test_catalog_validates_bundled_name_id_json(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    malformed = tmp_path / "recipes.json"
+    _ = malformed.write_text(json.dumps([{"name": "Bad", "id": "not-an-integer"}]))
+    monkeypatch.setattr(catalog, "_RECIPES", malformed)
+    catalog._recipe_ids.cache_clear()
+
+    with pytest.raises(ValueError, match="id"):
+        _ = catalog.recipe_id("bad")
+
+    catalog._recipe_ids.cache_clear()
 
 
 @pytest.mark.parametrize(
@@ -400,11 +481,9 @@ def test_item_aliases_resolve(factoriolab_id: str, dsp_item_id: int) -> None:
 
 def test_every_dsp_recipe_is_reachable_by_its_factoriolab_id() -> None:
     """No DSP recipe should be stranded behind a name the mapping cannot form."""
-    import json
-
-    raw = json.loads((catalog._RECIPES).read_text())
+    raw = _NAMED_ID_ROWS_ADAPTER.validate_json(catalog._RECIPES.read_bytes())
     known = catalog.known_recipe_ids()
-    stranded = [r["name"] for r in raw if catalog._kebab(r["name"]) not in known]
+    stranded = [row.name for row in raw if catalog._kebab(row.name) not in known]
     assert not stranded, f"DSP recipes no FactorioLab id reaches: {stranded}"
 
 
@@ -441,9 +520,10 @@ def test_table_covers_every_recipe_real_blueprints_use() -> None:
     means the extraction missed something -- which no amount of internal
     consistency would reveal.
     """
-    import json
-
-    known = {r["id"] for r in json.loads((catalog._RECIPES).read_text())}
+    known = {
+        row.id
+        for row in _NAMED_ID_ROWS_ADAPTER.validate_json(catalog._RECIPES.read_bytes())
+    }
     used: set[int] = set()
     for path in sorted(pathlib.Path("tests/fixtures").glob("*.txt")):
         try:

@@ -75,7 +75,7 @@ import importlib
 from collections.abc import Iterator
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any
+from typing import TypedDict, Unpack, cast
 
 __all__ = [
     "ENTRIES",
@@ -145,7 +145,19 @@ class Entry:
         return f"flab2bp.dsp.{self.symbol}"
 
 
-def _e(symbol: str, kind: Kind, **kw: Any) -> Entry:
+class _EntryOptions(TypedDict, total=False):
+    depends_on: tuple[str, ...]
+    resolved_by: str | None
+    projection_of: str | None
+    hardcodes: tuple[str, ...]
+    lint: bool
+    lint_enumerate: str | None
+    note: str
+    unconsulted_because: str | None
+    mutation_exempt_because: str | None
+
+
+def _e(symbol: str, kind: Kind, **kw: Unpack[_EntryOptions]) -> Entry:
     return Entry(symbol=symbol, kind=kind, **kw)
 
 
@@ -831,7 +843,8 @@ def rules() -> tuple[Entry, ...]:
 def resolve(entry: Entry) -> object:
     """The live object an entry names.  Raises if the declaration has rotted."""
     module = importlib.import_module(f"flab2bp.dsp.{entry.module}")
-    return getattr(module, entry.name)
+    # Erase reflection's dynamic type only to top-type object; callers must narrow.
+    return cast(object, getattr(module, entry.name))
 
 
 def declared_symbols() -> Iterator[str]:
@@ -895,6 +908,12 @@ LINT_EXCEPTIONS: tuple[LintException, ...] = (
         "_PACK_SHARE: CP-SAT's share of a sweep's clock, set by measurement",
     ),
     LintException(
+        "flab2bp.layout.freeform",
+        "<module>",
+        24.0,
+        "_DETERMINISTIC_PACK_STRIPS: empirical packing-worker threshold; not skew degrees",
+    ),
+    LintException(
         "flab2bp.layout.sequence_pair",
         "SearchEnergy",
         0.35,
@@ -911,6 +930,12 @@ LINT_EXCEPTIONS: tuple[LintException, ...] = (
         "SearchEnergy",
         0.1,
         "direct-insert miss objective coefficient; not sorter geometry or paste epsilon",
+    ),
+    LintException(
+        "flab2bp.layout.sequence_solver",
+        "<module>",
+        30.0,
+        "_COMPACT_SEED_DIRECT_MIN_BUDGET_S: wall seconds; not skew degrees",
     ),
     LintException(
         "flab2bp.layout.freeform",

@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import zlib
 from fractions import Fraction
+from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from flab2bp.lab import params as P
 
@@ -156,6 +158,9 @@ class TestToParams:
         params = {"o": ["a", "b"], "v": "11"}
         assert P.to_params(P.to_string(params)) == params
 
+    def test_to_string_accepts_general_string_sequences(self) -> None:
+        assert P.to_string({"o": ("a", "b"), "v": "11"}) == "o=a&o=b&v=11"
+
     def test_to_string_drops_empty_values(self) -> None:
         assert P.to_string({"a": "1", "b": "", "c": None}) == "a=1"
 
@@ -195,12 +200,22 @@ class TestFieldParsers:
 
     def test_parse_indices(self) -> None:
         arr = [{"id": "x"}, {"id": "y"}]
-        assert P.parse_indices("0~1", arr) == [{"id": "x"}, {"id": "y"}]
-        assert P.parse_indices(P.ZEMPTY, arr) == []
-        assert P.parse_indices("", arr) is None
+
+        def empty_entry() -> dict[str, str]:
+            return {}
+
+        assert P.parse_indices("0~1", arr, empty=empty_entry) == [
+            {"id": "x"},
+            {"id": "y"},
+        ]
+        assert P.parse_indices(P.ZEMPTY, arr, empty=empty_entry) == []
+        assert P.parse_indices("", arr, empty=empty_entry) is None
 
     def test_parse_indices_out_of_range_yields_empty_entry(self) -> None:
-        assert P.parse_indices("5", [{"id": "x"}]) == [{}]
+        def empty_entry() -> dict[str, str]:
+            return {}
+
+        assert P.parse_indices("5", [{"id": "x"}], empty=empty_entry) == [{}]
 
 
 class TestParseSubset:
@@ -258,6 +273,13 @@ class TestModHash:
         """Index positions matter, so JSON nulls must not be filtered out."""
         mh = P.load_mod_hash("dsp")
         assert mh.items[2] is None
+
+    def test_validates_raw_hash_shape(self, tmp_path: Path) -> None:
+        source = tmp_path / "hash.json"
+        source.write_text('{"items": ["iron-ingot", 7]}')
+
+        with pytest.raises(ValidationError):
+            P.load_mod_hash(path=source)
 
     def test_unknown_mod_raises(self) -> None:
         with pytest.raises(P.LabUrlError):

@@ -20,8 +20,8 @@ from pydantic import TypeAdapter
 
 from flab2bp import pipeline
 from flab2bp.web.jobs import Builder, Options, Solve, run_build
-from flab2bp.web.server import serve
 from flab2bp.web.payload import Json
+from flab2bp.web.server import serve
 
 URL = "https://factoriolab.github.io/dsp/flow?o=graphene*60&v=11"
 

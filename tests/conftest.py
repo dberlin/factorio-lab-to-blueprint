@@ -29,23 +29,26 @@ from __future__ import annotations
 
 import functools
 from collections.abc import Iterator
-from typing import Any, cast
+from typing import Protocol
 
 import pytest
 
-from flab2bp.layout.base import NoValidLayout
+from flab2bp.layout.base import NoValidLayout, Placement
 from flab2bp.layout.freeform import FreeformLayout
 from flab2bp.layout.spine import SpineLayout
+from flab2bp.spec import BuildSpec
 
-_MISS = object()
-_CACHE: dict[tuple[str, ...], Any] = {}
+
+class _Layout(Protocol):
+    def lay_out(self, spec: BuildSpec, *, time_budget_s: float = 60.0) -> Placement: ...
+
+
+_CACHE: dict[tuple[str, ...], Placement | NoValidLayout] = {}
 #: Flipped per-test by the autouse policy fixture below.
 _enabled = True
 
 
-def _key(
-    layout: object, spec: Any, args: tuple[Any, ...], kwargs: dict[str, Any]
-) -> tuple[str, ...]:
+def _key(layout: _Layout, spec: BuildSpec, time_budget_s: float) -> tuple[str, ...]:
     """Identify a ``lay_out`` call by everything that can change its result.
 
     ``BuildSpec`` is frozen but unhashable (it holds ``dict`` fields), so its
@@ -58,24 +61,26 @@ def _key(
     return (
         f"{type(layout).__module__}.{type(layout).__qualname__}",
         repr(sorted(vars(layout).items(), key=lambda kv: kv[0])),
-        cast(str, spec.model_dump_json()),
-        repr(args),
-        repr(sorted(kwargs.items())),
+        spec.model_dump_json(),
+        repr(time_budget_s),
     )
 
 
-def _install_memo(cls: type) -> None:
-    original = cls.lay_out  # type: ignore[attr-defined]
+def _install_memo(cls: type[_Layout]) -> None:
+    original = cls.lay_out
 
     @functools.wraps(original)
-    def lay_out(self: object, spec: Any, *args: Any, **kwargs: Any) -> Any:
+    def lay_out(
+        self: _Layout, spec: BuildSpec, *, time_budget_s: float = 60.0
+    ) -> Placement:
         if not _enabled:
-            return original(self, spec, *args, **kwargs)
-        key = _key(self, spec, args, kwargs)
-        hit = _CACHE.get(key, _MISS)
-        if hit is _MISS:
+            return original(self, spec, time_budget_s=time_budget_s)
+        key = _key(self, spec, time_budget_s)
+        try:
+            hit = _CACHE[key]
+        except KeyError:
             try:
-                hit = original(self, spec, *args, **kwargs)
+                hit = original(self, spec, time_budget_s=time_budget_s)
             except NoValidLayout as refusal:
                 # A refusal is an outcome, not a transient error, and it is the
                 # *expensive* one: the strategy burns its budget, retries for
@@ -87,7 +92,7 @@ def _install_memo(cls: type) -> None:
             raise hit
         return hit
 
-    cls.lay_out = lay_out  # type: ignore[attr-defined]
+    cls.lay_out = lay_out
 
 
 _install_memo(SpineLayout)

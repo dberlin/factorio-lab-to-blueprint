@@ -12,10 +12,10 @@ import dataclasses
 import itertools
 import math
 import time
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from fractions import Fraction as F
 from pathlib import Path
-from typing import Any
 
 import pytest
 
@@ -39,6 +39,7 @@ from flab2bp.layout.freeform import (
     MU_DIRECT,
     CoaterSupplyPort,
     FreeformLayout,
+    Strip,
     _astar,
     _bridge,
     _build,
@@ -51,6 +52,7 @@ from flab2bp.layout.freeform import (
     _direct_net_candidates,
     _emit_strip,
     _greedy_pack,
+    _Grid,
     _height_seed,
     _join_shard_islands,
     _machines_without_poses,
@@ -78,6 +80,7 @@ from flab2bp.layout.freeform import (
     tie_break_cap,
 )
 from flab2bp.layout.route_feedback import (
+    Cell,
     DetailedRouteStatus,
     NetFailure,
     NetId,
@@ -558,20 +561,24 @@ def test_commit_link_rejection_reroutes_the_same_net_before_emission(
     def reject_first(
         attempt_canvas: _Canvas,
         attempt_nets: list[_Net],
-        paths: dict[int, tuple[tuple[int, int, int], ...]],
+        paths: Mapping[int, Sequence[Cell]],
         belt_id: int,
         belt_model: int,
-        *args: Any,
-        **kwargs: Any,
+        src_group: Mapping[int, tuple[int, ...]] | None = None,
+        dst_group: Mapping[int, tuple[int, ...]] | None = None,
+        *,
+        source_hints: Mapping[int, Cell] | None = None,
+        sink_hints: Mapping[int, Cell] | None = None,
+        failure_details: dict[int, freeform._CommitFailure] | None = None,
     ) -> tuple[int, ...]:
         attempts.append(tuple(paths[0]))
         if len(attempts) == 1:
-            details = kwargs["failure_details"]
-            details[0] = freeform._CommitFailure(
-                cell=paths[0][0],
-                side="source",
-                blocking_indices=(),
-            )
+            if failure_details is not None:
+                failure_details[0] = freeform._CommitFailure(
+                    cell=paths[0][0],
+                    side="source",
+                    blocking_indices=(),
+                )
             return (0,)
         return original(
             attempt_canvas,
@@ -579,8 +586,11 @@ def test_commit_link_rejection_reroutes_the_same_net_before_emission(
             paths,
             belt_id,
             belt_model,
-            *args,
-            **kwargs,
+            src_group,
+            dst_group,
+            source_hints=source_hints,
+            sink_hints=sink_hints,
+            failure_details=failure_details,
         )
 
     monkeypatch.setattr(freeform, "_commit_paths", reject_first)
@@ -1186,7 +1196,7 @@ class TestASideCarriesAsManyLanesAsItsPosesAllow:
     """
 
     @staticmethod
-    def _unreachable(strips: list[Any]) -> list[tuple[str, int, int]]:
+    def _unreachable(strips: list[Strip]) -> list[tuple[str, int, int]]:
         """Every lane row of every strip that no sorter tier could join."""
         out = []
         for s in strips:
@@ -5001,7 +5011,7 @@ class TestTheRoutingGridAgreesWithTheCanvas:
     """
 
     @staticmethod
-    def _grid_and_canvas() -> tuple[Any, _Canvas]:
+    def _grid_and_canvas() -> tuple[_Grid, _Canvas]:
         canvas = _Canvas()
         canvas.limit = (0, 0, 6, 4)
         canvas.belt_ban[3, 2] = {1}
@@ -5230,7 +5240,9 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
 
     ITEM = "iron-ingot"
 
-    def _fixture(self, tiles: int) -> tuple[_Canvas, Any, list[Any], list[Any]]:
+    def _fixture(
+        self, tiles: int
+    ) -> tuple[_Canvas, BuildSpec, list[Strip], list[dict[str, _Port]]]:
         spec = proliferated_spec()
         assert self.ITEM in spec.spray_lanes, "fixture stopped asking for a coater"
         strips = [s for s in plan_strips(spec) if self.ITEM in s.in_lanes]

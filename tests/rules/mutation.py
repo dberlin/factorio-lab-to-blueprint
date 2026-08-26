@@ -36,12 +36,42 @@ import sys
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from fractions import Fraction
-from typing import Any
+from types import CodeType, ModuleType
+from typing import Protocol, TypeGuard
 
 from flab2bp.dsp import registry
 from flab2bp.dsp.registry import Entry
 
 _MISSING = object()
+
+
+class _ZeroArgTest(Protocol):
+    def __call__(self) -> None: ...
+
+
+def _is_zero_arg_test(value: object) -> TypeGuard[_ZeroArgTest]:
+    code: object = getattr(value, "__code__", None)
+    return callable(value) and isinstance(code, CodeType) and code.co_argcount == 0
+
+
+def _perturb_callable[**P](fn: Callable[P, object]) -> Callable[P, object]:
+    @functools.wraps(fn)
+    def wrapped(*args: P.args, **kwargs: P.kwargs) -> object:
+        return perturb(fn(*args, **kwargs))
+
+    return wrapped
+
+
+def _scale_callable[**P](
+    fn: Callable[P, object], factor: Fraction
+) -> Callable[P, object]:
+    @functools.wraps(fn)
+    def wrapped(*args: P.args, **kwargs: P.kwargs) -> object:
+        got = _scale(fn(*args, **kwargs), factor)
+        return fn(*args, **kwargs) if got is _UNSCALABLE else got
+
+    return wrapped
+
 
 #: What the ladder multiplies a rule by, in order.
 LADDER_FACTORS: tuple[Fraction, ...] = (
@@ -52,8 +82,7 @@ LADDER_FACTORS: tuple[Fraction, ...] = (
 )
 
 
-
-def perturb(value: Any) -> Any:
+def perturb(value: object) -> object:
     """A different value of the same shape, chosen to TIGHTEN where it can.
 
     Halving a reach or a radius makes a rule refuse things it used to allow,
@@ -79,17 +108,11 @@ def perturb(value: Any) -> Any:
     if isinstance(value, Mapping):
         return {k: perturb(v) for k, v in value.items()}
     if callable(value):
-        fn = value
-
-        @functools.wraps(fn)
-        def perturbed(*args: Any, **kwargs: Any) -> Any:
-            return perturb(fn(*args, **kwargs))
-
-        return perturbed
+        return _perturb_callable(value)
     raise TypeError(f"no perturbation declared for {type(value).__name__}")
 
 
-def ladder(value: Any) -> list[Any]:
+def ladder(value: object) -> list[object]:
     """Perturbations to try, in order, until something reacts.
 
     One perturbation is not enough to conclude anything.  ``SLOT_REACH`` 0.8 ->
@@ -108,7 +131,7 @@ def ladder(value: Any) -> list[Any]:
 _UNSCALABLE = object()
 
 
-def _scale(value: Any, factor: Fraction) -> Any:
+def _scale(value: object, factor: Fraction) -> object:
     """``value`` with every number in it multiplied, shape preserved.
 
     A rule is often a TABLE -- ``SORTER_LENGTH`` keyed by endpoint kind,
@@ -144,39 +167,33 @@ def _scale(value: Any, factor: Fraction) -> Any:
         pairs = {k: _scale(v, factor) for k, v in value.items()}
         return _UNSCALABLE if any(p is _UNSCALABLE for p in pairs.values()) else pairs
     if callable(value):
-        fn = value
-
-        @functools.wraps(fn)
-        def scaled(*args: Any, **kwargs: Any) -> Any:
-            got = _scale(fn(*args, **kwargs), factor)
-            return fn(*args, **kwargs) if got is _UNSCALABLE else got
-
-        return scaled
+        return _scale_callable(value, factor)
     return _UNSCALABLE
 
 
-def _flab2bp_modules() -> list[Any]:
+def _flab2bp_modules() -> list[ModuleType]:
     return [
-        m
-        for name, m in list(sys.modules.items())
-        if name.startswith("flab2bp") and m is not None
+        module
+        for name, module in list(sys.modules.items())
+        if name.startswith("flab2bp") and module is not None
     ]
 
 
 def _clear_caches() -> None:
     for module in _flab2bp_modules():
-        for obj in list(vars(module).values()):
-            clear = getattr(obj, "cache_clear", None)
+        for value in list(vars(module).values()):
+            obj: object = value
+            clear: object = getattr(obj, "cache_clear", None)
             if callable(clear) and hasattr(obj, "cache_info"):
                 clear()
 
 
 @contextlib.contextmanager
-def perturbed(entry: Entry, value: Any = _MISSING) -> Iterator[Any]:
+def perturbed(entry: Entry, value: object = _MISSING) -> Iterator[object]:
     """Rebind ``entry`` to a perturbed value everywhere in the package."""
     home = importlib.import_module(f"flab2bp.dsp.{entry.module}")
-    original = getattr(home, entry.name)
-    replacement = perturb(original) if value is _MISSING else value
+    original: object = getattr(home, entry.name)
+    replacement: object = perturb(original) if value is _MISSING else value
 
     holders = [
         m for m in _flab2bp_modules() if getattr(m, entry.name, _MISSING) is original
@@ -195,7 +212,7 @@ def perturbed(entry: Entry, value: Any = _MISSING) -> Iterator[Any]:
 def rebinding_modules(entry: Entry) -> tuple[str, ...]:
     """Every module holding its own reference to this rule.  Diagnostics only."""
     home = importlib.import_module(f"flab2bp.dsp.{entry.module}")
-    original = getattr(home, entry.name)
+    original: object = getattr(home, entry.name)
     return tuple(
         sorted(
             m.__name__
@@ -221,7 +238,7 @@ def rule_batches(size: int = 8) -> tuple[tuple[Entry, ...], ...]:
     return tuple(entries[i : i + size] for i in range(0, len(entries), size))
 
 
-Probe = Callable[[], Any]
+Probe = Callable[[], object]
 Witness = tuple[str, Callable[[], None]]
 
 
@@ -238,10 +255,7 @@ def validator_pool() -> list[Witness]:
     return [
         (name, fn)
         for name, fn in sorted(vars(test_validate).items())
-        if name.startswith("test_")
-        and callable(fn)
-        and getattr(fn, "__code__", None) is not None
-        and fn.__code__.co_argcount == 0
+        if name.startswith("test_") and _is_zero_arg_test(fn)
     ]
 
 
@@ -341,7 +355,8 @@ def verdict(
             witness_baseline[name] = outcome(fn)
 
     home = importlib.import_module(f"flab2bp.dsp.{entry.module}")
-    rungs = ladder(getattr(home, entry.name))
+    original: object = getattr(home, entry.name)
+    rungs = ladder(original)
     best = Verdict(entry.symbol, None, (), None)
     for rung in rungs:
         try:

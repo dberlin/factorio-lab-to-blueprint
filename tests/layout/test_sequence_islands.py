@@ -3,9 +3,11 @@ from __future__ import annotations
 import multiprocessing
 import pickle
 import time
+from collections.abc import Callable, Mapping
 from concurrent.futures import Future, ProcessPoolExecutor
 from dataclasses import replace
-from typing import Any
+from multiprocessing.context import BaseContext
+from typing import Never, TypedDict
 
 import pytest
 
@@ -24,6 +26,7 @@ from flab2bp.layout.sequence_islands import (
 )
 from flab2bp.layout.sequence_pair import PlacementProblem, derive_stage_seed
 from flab2bp.layout.sequence_solver import SequencePairLayout, SequenceSolverConfig
+from flab2bp.spec import BuildSpec
 from tests.layout.test_freeform import two_stage_spec
 
 
@@ -48,7 +51,15 @@ def test_island_count_is_bounded_and_solver_factory_stays_serial() -> None:
         with pytest.raises(ValueError, match="islands must be an integer from 1 to 16"):
             SequencePairLayout(islands=islands)
 
-    def factory(*args: Any, **kwargs: Any) -> Any:
+    def factory(
+        spec: BuildSpec,
+        *,
+        time_budget_s: float,
+        power: bool,
+        strip_len: int,
+        config: SequenceSolverConfig,
+    ) -> Never:
+        del spec, time_budget_s, power, strip_len, config
         raise AssertionError("factory must not be called")
 
     with pytest.raises(ValueError, match="solver factory requires exactly one island"):
@@ -131,19 +142,39 @@ def test_all_refused_raises_structured_no_valid_layout() -> None:
     )
 
 
+class _ExecutorKwargs(TypedDict):
+    max_workers: int
+    mp_context: BaseContext
+    max_tasks_per_child: int
+
+
 class _ImmediateExecutor:
     raised: BaseException | None = None
     instances: list[_ImmediateExecutor] = []
 
-    def __init__(self, **kwargs: Any) -> None:
-        self.kwargs = kwargs
-        self.requests: list[Any] = []
+    def __init__(
+        self,
+        *,
+        max_workers: int,
+        mp_context: BaseContext,
+        max_tasks_per_child: int,
+    ) -> None:
+        self.kwargs: _ExecutorKwargs = {
+            "max_workers": max_workers,
+            "mp_context": mp_context,
+            "max_tasks_per_child": max_tasks_per_child,
+        }
+        self.requests: list[_SequenceIslandRequest] = []
         self.terminated = False
         self.killed = False
         self.shutdown_calls: list[tuple[bool, bool]] = []
         type(self).instances.append(self)
 
-    def submit(self, fn: Any, request: Any) -> Future[_SequenceIslandOutcome]:
+    def submit(
+        self,
+        fn: Callable[[_SequenceIslandRequest], _SequenceIslandOutcome],
+        request: _SequenceIslandRequest,
+    ) -> Future[_SequenceIslandOutcome]:
         del fn
         self.requests.append(request)
         future: Future[_SequenceIslandOutcome] = Future()
@@ -170,7 +201,11 @@ class _ImmediateExecutor:
 
 
 class _PendingExecutor(_ImmediateExecutor):
-    def submit(self, fn: Any, request: Any) -> Future[_SequenceIslandOutcome]:
+    def submit(
+        self,
+        fn: Callable[[_SequenceIslandRequest], _SequenceIslandOutcome],
+        request: _SequenceIslandRequest,
+    ) -> Future[_SequenceIslandOutcome]:
         del fn
         self.requests.append(request)
         future: Future[_SequenceIslandOutcome] = Future()
@@ -399,9 +434,10 @@ def test_two_real_spawned_islands_are_unseeded_then_seeded_and_both_valid() -> N
     assert "compact_seed_closures" not in island0.stats
     assert island1.stats["compact_seed_attempt"] == 0.0
     assert island1.stats["compact_seed_base_seed"] == config.seed
-    assert island1.stats["compact_seed_status"] in {"optimal", "feasible"}
+    observational_stats: Mapping[str, object] = island1.stats
+    assert observational_stats["compact_seed_status"] in {"optimal", "feasible"}
     assert island1.stats["compact_seed_decoded_width"] >= 1.0
     assert island1.stats["compact_seed_closures"] == 1.0
-    assert island1.stats["compact_seed_closure_status"] == "routed"
-    assert island1.stats["compact_seed_closure_backend"] == "cython"
+    assert observational_stats["compact_seed_closure_status"] == "routed"
+    assert observational_stats["compact_seed_closure_backend"] == "cython"
     assert island1.stats["compact_seed_closure_exact"] == 1.0

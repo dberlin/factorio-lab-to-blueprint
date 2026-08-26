@@ -1,11 +1,30 @@
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import TypedDict, Unpack
 
 import pytest
 
 from flab2bp import cli, pipeline
+from flab2bp.lab.schema import Dataset
+
+
+class _BuildKwargs(TypedDict, total=False):
+    strategy: pipeline.StrategyName
+    power: bool
+    candidates: int
+    time_budget_s: float
+    sequence_islands: int
+    dataset: Dataset | None
+    name: str
+    flow: Path | None
+    flow_text: str | None
+    fetch_flow: bool
+    fetch_timeout_s: float
+    browser: str | None
+    no_proliferator: bool
+    on_progress: pipeline.ProgressSink | None
 
 
 @pytest.mark.parametrize("strategy", ("spine", "sequence-pair"))
@@ -14,9 +33,9 @@ def test_cli_passes_exact_explicit_strategy_name(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    received: dict[str, Any] = {}
+    received: dict[str, object] = {}
 
-    def fake_build(url: str, **kwargs: Any) -> SimpleNamespace:
+    def fake_build(url: str, **kwargs: Unpack[_BuildKwargs]) -> SimpleNamespace:
         received["url"] = url
         received.update(kwargs)
         return SimpleNamespace(
@@ -39,9 +58,9 @@ def test_cli_sequence_pair_uses_affinity_capped_auto_islands(
     affinity: int,
     expected: int,
 ) -> None:
-    received: dict[str, Any] = {}
+    received: dict[str, object] = {}
 
-    def fake_build(url: str, **kwargs: Any) -> SimpleNamespace:
+    def fake_build(url: str, **kwargs: Unpack[_BuildKwargs]) -> SimpleNamespace:
         del url
         received.update(kwargs)
         return SimpleNamespace(
@@ -60,9 +79,9 @@ def test_cli_sequence_pair_uses_affinity_capped_auto_islands(
 def test_cli_sequence_island_override_accepts_sixteen(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    received: dict[str, Any] = {}
+    received: dict[str, object] = {}
 
-    def fake_build(url: str, **kwargs: Any) -> SimpleNamespace:
+    def fake_build(url: str, **kwargs: Unpack[_BuildKwargs]) -> SimpleNamespace:
         del url
         received.update(kwargs)
         return SimpleNamespace(
