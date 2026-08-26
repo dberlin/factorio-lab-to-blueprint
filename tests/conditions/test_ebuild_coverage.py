@@ -1,17 +1,23 @@
 """Every ``EBuildCondition`` has exactly one verdict, and the verdict resolves.
 
 ``docs/EBUILD_COVERAGE.md`` is only worth having if it cannot silently fall
-behind the game.  Three things can make it lie, and there is a test for each:
+behind the game.  Four things can make it lie, and there is a test for each:
 
 * **a value with no verdict** -- a game update adds a condition and nobody
   notices.  :func:`test_every_condition_has_exactly_one_verdict` fails the build
   instead;
 * **a verdict with no value** -- a row survives a rename, so the matrix claims
   coverage of something that no longer exists;
+* **a verdict with no argument** -- the row still says ``INAPPLICABLE`` and
+  points at section D, and section D no longer contains it.  The headline counts
+  and the per-section counts are both derived from the table rather than typed
+  in, so the two cannot drift apart quietly;
 * **a citation that does not resolve** -- the "+143582" offset that circulates
   on this project is not universal (see ``docs/RULE_LEDGER.md``), so a line
   number copied under the wrong convention lands in the wrong function and reads
-  as evidence.  :func:`test_every_citation_resolves` re-greps them.
+  as evidence.  :func:`test_every_citation_resolves` re-greps them, and
+  :func:`test_the_load_bearing_citations_contain_what_they_are_cited_for`
+  requires the twenty-odd that carry a threshold to hold their literal.
 
 THE ENUM IS VENDORED, and that is the point rather than a convenience.
 ``tests/conditions/EBuildCondition.cs`` is a byte-for-byte copy of the
