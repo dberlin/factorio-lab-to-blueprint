@@ -32,7 +32,16 @@ export function RefusalReport({ refusal }: { refusal: Refusal }) {
   );
 }
 
-export function BuildReportPanel({ result }: { result: BuildResult }) {
+export function BuildReportPanel({
+  result,
+  elapsedS,
+}: {
+  result: BuildResult;
+  /** Wall clock for the whole build. Reported because the two arms are being
+      compared on exactly this and on area, and a number nobody can read off
+      the page is a number nobody checks. */
+  elapsedS?: number;
+}) {
   const inputs = Object.keys(result.external_inputs);
   const belt = result.belt_rules;
 
@@ -65,6 +74,12 @@ export function BuildReportPanel({ result }: { result: BuildResult }) {
           {inputs.length > 0 ? inputs.join(', ') : 'nothing'}
           {inputs.length > 0 && ` (${result.input_markers} marked with icons)`}
         </dd>
+        {elapsedS !== undefined && (
+          <>
+            <dt>Solved in</dt>
+            <dd>{elapsedS.toFixed(1)}s on the server</dd>
+          </>
+        )}
       </dl>
 
       {result.unmarked_inputs.length > 0 && (
@@ -93,8 +108,9 @@ export function BuildReportPanel({ result }: { result: BuildResult }) {
       ) : (
         <p className="note">
           Recipe selection <strong>derived, not pinned</strong> — FactorioLab's own choice of which
-          recipe makes what was re-solved here rather than read from a flow export. The CLI's{' '}
-          <code>--flow</code> / <code>--fetch-flow</code> pin it; this page does not offer them yet.
+          recipe makes what was re-solved here rather than read from a flow export. Paste or upload
+          one above to pin it (the CLI's <code>--flow</code>). <code>--fetch-flow</code>, which
+          drives a headless browser to make FactorioLab run its own solve, is not offered here.
         </p>
       )}
 

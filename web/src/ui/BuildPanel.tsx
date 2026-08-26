@@ -19,7 +19,7 @@ import { useBlueprint } from '../state/BlueprintProvider';
 import { BuildReportPanel, RefusalReport } from './BuildReport';
 
 export function BuildPanel() {
-  const { load } = useBlueprint();
+  const { load, markStale } = useBlueprint();
   const [options, setOptions] = useState<BuildOptions>(DEFAULT_OPTIONS);
   const [job, setJob] = useState<Job | null>(null);
   const [busy, setBusy] = useState(false);
@@ -32,6 +32,7 @@ export function BuildPanel() {
   const strategyId = useId();
   const candidatesId = useId();
   const budgetId = useId();
+  const flowId = useId();
 
   // A build outlives the panel if the page changes under it; aborting on
   // unmount stops the poll loop rather than leaving it talking to nobody.
@@ -54,6 +55,11 @@ export function BuildPanel() {
       // Render it the moment it exists. The point of having the viewer in the
       // same page is not having to copy the string somewhere to look at it.
       if (settled.result?.blueprint) load(settled.result.blueprint);
+      // A refusal, an error, or a build whose string was withheld leaves the
+      // canvas showing the build before it. Keeping it is the right call --
+      // clearing would throw away what you were looking at -- but the toolbar
+      // then names a result that has been superseded, so it is told.
+      else markStale();
     } catch (cause) {
       if (controller.signal.aborted) return;
       setRequestError(
@@ -175,6 +181,50 @@ export function BuildPanel() {
         />
       </div>
 
+      {/* `--flow`, as a paste or an upload. This is the stronger of the two
+          guarantees the report can make: with a flow pinned, WHICH recipe makes
+          what is FactorioLab's own decision rather than one re-derived here.
+          The export has to have come from this URL — `flow_from_text` checks
+          that and refuses otherwise, so a stale paste is an error and never a
+          quiet mis-pin. */}
+      <div className="row flow">
+        <label htmlFor={flowId}>Flow export (optional)</label>
+        <textarea
+          id={flowId}
+          value={options.flow}
+          spellCheck={false}
+          rows={3}
+          placeholder="Paste FactorioLab's CSV export, or choose the file — pins WHICH recipe makes what"
+          onChange={(e) => set('flow', e.target.value)}
+          data-testid="flow-text"
+        />
+        <input
+          type="file"
+          accept=".csv,.tsv,.txt,text/csv,text/plain"
+          aria-label="flow export file"
+          data-testid="flow-file"
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            if (!file) return;
+            // Read here rather than uploading the File: the API takes the CSV
+            // text, and a browser that cannot read a local file it was handed
+            // should say so rather than submit an empty pin.
+            file.text().then(
+              (text) => set('flow', text),
+              (cause: unknown) =>
+                setRequestError(
+                  `Could not read ${file.name}: ${cause instanceof Error ? cause.message : String(cause)}`,
+                ),
+            );
+          }}
+        />
+        {options.flow.trim() && (
+          <button type="button" onClick={() => set('flow', '')}>
+            Clear flow
+          </button>
+        )}
+      </div>
+
       <p className="note">
         Budget is per layout, and <code>best</code> lays out every candidate with both strategies —
         so {options.candidates} × {options.strategy === 'best' ? 2 : 1} × {options.budget_s}s is up
@@ -236,7 +286,7 @@ export function BuildPanel() {
               {copyError}
             </p>
           )}
-          <BuildReportPanel result={job.result} />
+          <BuildReportPanel result={job.result} elapsedS={job.elapsed_s} />
         </>
       )}
     </section>

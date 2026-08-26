@@ -5,9 +5,11 @@ from __future__ import annotations
 import threading
 import time
 
+import pytest
+
 from flab2bp import pipeline
 from flab2bp.layout.base import NoValidLayout
-from flab2bp.web.jobs import Builder, Options
+from flab2bp.web.jobs import Builder, Options, run_build
 
 URL = "https://factoriolab.github.io/dsp/flow?o=graphene*60&v=11"
 
@@ -193,3 +195,57 @@ def test_a_job_that_has_not_started_laying_out_claims_no_progress(
         assert snap["settled"] == []
     finally:
         builder.shutdown()
+
+
+class TestFlowReachesTheSolver:
+    """``run_build`` is the one call into ``pipeline.build``.
+
+    Checked by intercepting that call rather than by solving: what matters here
+    is that the CSV the request carried arrives as ``flow_text`` and is not
+    quietly dropped, which would report a derived build as though it were the
+    pinned one the user asked for.
+    """
+
+    def test_the_csv_arrives_as_flow_text(
+        self, monkeypatch: pytest.MonkeyPatch, small_build: pipeline.Build
+    ) -> None:
+        seen: dict[str, object] = {}
+
+        def spy(url: str, **kwargs: object) -> pipeline.Build:
+            seen.update(kwargs)
+            return small_build
+
+        monkeypatch.setattr(pipeline, "build", spy)
+        csv = "Recipes\nid,name\ngraphene,Graphene\n"
+        run_build(Options(url=URL, flow=csv), lambda _s: None)
+        assert seen["flow_text"] == csv
+
+    def test_no_flow_means_none_not_an_empty_string(
+        self, monkeypatch: pytest.MonkeyPatch, small_build: pipeline.Build
+    ) -> None:
+        # `flow_text=""` would reach `flow_from_text("")` and refuse. Absent
+        # has to stay absent.
+        seen: dict[str, object] = {}
+
+        def spy(url: str, **kwargs: object) -> pipeline.Build:
+            seen.update(kwargs)
+            return small_build
+
+        monkeypatch.setattr(pipeline, "build", spy)
+        run_build(Options(url=URL), lambda _s: None)
+        assert seen["flow_text"] is None
+
+    def test_the_snapshot_says_whether_one_was_supplied(self, small_build: pipeline.Build) -> None:
+        # The CSV itself is not echoed back -- it can be hundreds of kB and the
+        # page already has it -- but silence about whether one was used would
+        # leave a poller unable to tell a dropped flow from an absent one.
+        builder = Builder(solve=lambda _o, _p: small_build)
+        try:
+            job = builder.submit(Options(url=URL, flow="Recipes\nid,name\ngraphene,Graphene\n"))
+            snap = _settled(builder, job.id)
+            options = snap["options"]
+            assert isinstance(options, dict)
+            assert options["flow_supplied"] is True
+            assert "flow" not in options
+        finally:
+            builder.shutdown()

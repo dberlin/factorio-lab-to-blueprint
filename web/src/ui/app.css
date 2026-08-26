@@ -291,3 +291,33 @@ body {
 .attempts tr.chosen td {
   color: #9ad6a0;
 }
+
+/* The viewer mounted into a page that is not this app -- see src/embed.tsx.
+   There is no build sidebar there, because the host page owns the form, so the
+   canvas takes the full width; and the overlay panels anchor to this box
+   rather than to the host's viewport, which is not theirs to cover. */
+.layout.embedded {
+  grid-template-columns: 1fr;
+  height: 100%;
+  position: relative;
+}
+
+/* `--flow` as a paste or an upload. Its own row because a CSV export is not a
+   one-line option: it wants a textarea, and squeezing one into the grid of
+   numbers above it made both unreadable. */
+.build-panel .row.flow {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.35rem;
+}
+.build-panel .row.flow textarea {
+  width: 100%;
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  background: #0c1016;
+  color: inherit;
+  border: 1px solid #26313d;
+  border-radius: 4px;
+  padding: 0.4rem;
+  resize: vertical;
+}

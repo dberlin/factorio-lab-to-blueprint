@@ -13,13 +13,13 @@
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--ink);
          font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
-  header { padding: 18px 24px 10px; border-bottom: 1px solid var(--line); }
+  header.page { padding: 18px 24px 10px; border-bottom: 1px solid var(--line); }
   h1 { margin: 0; font-size: 17px; font-weight: 620; letter-spacing: .01em; }
-  header p { margin: 4px 0 0; color: var(--dim); font-size: 12.5px; }
+  header.page p { margin: 4px 0 0; color: var(--dim); font-size: 12.5px; }
   main { display: grid; grid-template-columns: minmax(340px, 420px) 1fr; gap: 0; min-height: calc(100vh - 74px); }
   .controls { padding: 20px 24px; border-right: 1px solid var(--line); }
   .out { padding: 20px 24px; overflow: auto; }
-  label { display: block; margin: 14px 0 5px; font-size: 12px; color: var(--dim);
+  .controls label { display: block; margin: 14px 0 5px; font-size: 12px; color: var(--dim);
           text-transform: uppercase; letter-spacing: .06em; }
   textarea, input, select {
     width: 100%; background: var(--panel); color: var(--ink);
@@ -27,7 +27,7 @@
     font: inherit;
   }
   textarea { min-height: 92px; font-family: ui-monospace, monospace; font-size: 12px; resize: vertical; }
-  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
   .check { display: flex; align-items: center; gap: 8px; margin-top: 14px; color: var(--ink); }
   .check input { width: auto; }
   button {
@@ -42,23 +42,30 @@
           padding: 14px 16px; margin-bottom: 14px; }
   .card h2 { margin: 0 0 10px; font-size: 13px; letter-spacing: .05em;
              text-transform: uppercase; color: var(--dim); font-weight: 600; }
-  .stats { display: flex; flex-wrap: wrap; gap: 22px; }
-  .stat b { display: block; font-size: 22px; font-weight: 640; }
-  .stat span { font-size: 11.5px; color: var(--dim); text-transform: uppercase; letter-spacing: .06em; }
+  dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 16px; margin: 0; }
+  dt { color: var(--dim); }
+  dd { margin: 0; }
   ul { margin: 0; padding-left: 18px; }
   li { margin: 3px 0; }
+  .note { color: var(--dim); font-size: 12.5px; margin: 8px 0 0; }
   .warn { color: var(--warn); }
   .bad { color: var(--bad); }
   .refusal { border-color: #6a3a3a; }
   .refusal h2 { color: var(--bad); }
   pre { white-space: pre-wrap; word-break: break-word; margin: 0; font-size: 12px; }
-  svg { width: 100%; height: auto; background: #0c0f13; border-radius: 6px; display: block; }
   table { border-collapse: collapse; font-size: 12.5px; width: 100%; }
   th, td { text-align: left; padding: 3px 10px 3px 0; color: var(--dim); }
   th { color: var(--ink); font-weight: 600; }
+  tr.chosen td { color: var(--accent); font-weight: 620; }
+  .bar { height: 6px; background: #0c0f13; border-radius: 3px; overflow: hidden; margin-top: 8px; }
+  .bar .fill { height: 100%; background: var(--accent); }
+  .bp-title { font-size: 15px; font-weight: 640; display: block; margin-bottom: 8px; }
+  .blueprint-out { font-family: ui-monospace, monospace; font-size: 11px; }
+  #viewer { height: 560px; border-radius: 6px; overflow: hidden; background: #10141a; }
+  code { font-family: ui-monospace, monospace; font-size: 12px; }
 </style>
 
-<header>
+<header class="page">
   <h1>flab2bp, client-side</h1>
   <p>CPython, CP-SAT and SCIP all run in this tab. The server only ever hands out static files.</p>
 </header>
@@ -75,16 +82,22 @@
       <option value="spine">spine</option>
     </select>
 
-    <div class="row">
+    <div class="row2">
       <div>
         <label for="candidates">Proliferation candidates</label>
         <input id="candidates" type="number" min="1" max="8" value="3">
       </div>
       <div>
         <label for="budget">Solver seconds per layout</label>
-        <input id="budget" type="number" min="0.2" max="60" step="0.1" value="2">
+        <input id="budget" type="number" min="0.2" max="60" step="0.1" value="6">
       </div>
     </div>
+
+    <label for="flow">FactorioLab flow export (optional)</label>
+    <textarea id="flow" spellcheck="false" style="min-height:70px"
+      placeholder="Paste the CSV, or choose the file below -- pins WHICH recipe makes what"></textarea>
+    <input id="flowfile" type="file" accept=".csv,.tsv,.txt,text/csv,text/plain"
+      aria-label="flow export file" style="margin-top:6px;padding:4px">
 
     <label for="name">Blueprint short description (optional)</label>
     <input id="name" type="text" placeholder="left blank: named for what it makes">
@@ -94,9 +107,10 @@
       <label for="power" style="margin:0;text-transform:none;letter-spacing:0;color:var(--ink);font-size:14px">Include Tesla Towers</label>
     </div>
 
-    <button id="solve" disabled>Solve</button>
-    <button id="copy" class="secondary" disabled>Copy blueprint string</button>
+    <button type="button" id="solve" disabled>Solve</button>
+    <button type="button" id="copy" class="secondary" disabled>Copy blueprint string</button>
     <div id="status">booting...</div>
+    <p class="note" id="budget-note"></p>
   </section>
 
   <section class="out" id="out"></section>
@@ -111,12 +125,16 @@ const DEFAULT_URL = 'https://factoriolab.github.io/dsp/list?z=eJxFyr0KwkAQReG3me
 $('url').value = DEFAULT_URL;
 
 // Everything the automated smoke test reads lives here, so the proof does not
-// depend on scraping the DOM.
-const state = window.__flab = {
+// depend on scraping the DOM. `snapshot` is deliberately the SAME object the
+// server arm's `/api/build/<id>` returns -- state, elapsed_s, options, result,
+// refusal, error, settled -- so the two smoke scripts assert the same fields.
+const state = {
   ready: false, booting: true, solving: false, done: false,
-  boot: null, result: null, error: null, copied: null, copyError: null,
-  wallMs: null, stages: [],
+  boot: null, snapshot: null, error: null, copied: null, copyError: null,
+  wallMs: null, stages: [], progress: null, settled: [],
+  viewerMounted: false, viewerError: null,
 };
+window.__flab = state;
 
 const worker = new Worker('./worker.js', { type: 'module' });
 
@@ -124,7 +142,7 @@ worker.onmessage = (event) => {
   const message = event.data;
   if (message.type === 'stage') {
     state.stages.push(message.text);
-    statusLine.textContent = message.text + '...';
+    statusLine.textContent = `${message.text}...`;
   } else if (message.type === 'ready') {
     state.ready = true; state.booting = false; state.boot = message;
     $('solve').disabled = false;
@@ -134,41 +152,87 @@ worker.onmessage = (event) => {
       `wheels ${(message.timings.packagesMs / 1000).toFixed(1)}s, ` +
       `import ${(message.timings.importMs / 1000).toFixed(1)}s) -- ` +
       `isolated: ${message.crossOriginIsolated}, JSPI: ${message.jspi}`;
+  } else if (message.type === 'progress') {
+    state.progress = message.step;
+    if (message.step.phase !== 'started') state.settled.push(message.step);
+    renderProgress();
   } else if (message.type === 'result') {
     state.solving = false; state.done = true;
-    state.result = message.result; state.wallMs = message.wallMs;
+    state.snapshot = message.snapshot; state.wallMs = message.wallMs;
     $('solve').disabled = false;
-    render(message.result, message.wallMs);
+    render(message.snapshot, message.wallMs);
   } else if (message.type === 'fatal') {
+    // A boot or bridge failure. Not a refusal and not a build error: the
+    // pipeline never ran, so there is nothing to report but the stack.
     state.solving = false; state.booting = false; state.done = true;
     state.error = message.error;
     $('solve').disabled = false;
     statusLine.textContent = 'failed';
     out.innerHTML = '';
-    out.appendChild(card('Failure', `<pre class="bad">${escape(message.error)}</pre>`, 'refusal'));
+    out.appendChild(card('Failure', `<pre class="bad">${esc(message.error)}</pre>`, 'refusal'));
   }
 };
 
 worker.postMessage({ type: 'boot' });
 
-$('solve').onclick = () => {
-  state.solving = true; state.done = false; state.result = null; state.error = null;
-  state.copied = null;
+const options = (extra = {}) => ({
+  url: $('url').value.trim(),
+  strategy: $('strategy').value,
+  candidates: Number($('candidates').value),
+  budget: Number($('budget').value),
+  power: $('power').checked,
+  name: $('name').value,
+  // `--flow`. `--fetch-flow` is the one that cannot exist in a page: it drives
+  // a headless browser to make FactorioLab run its own solve. The provenance
+  // check is the same either way -- an export from a different URL is refused.
+  flow: $('flow').value,
+  allow_invalid: false,
+  ...extra,
+});
+
+$('flowfile').onchange = async (event) => {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  try {
+    $('flow').value = await file.text();
+    statusLine.textContent = `read ${file.name} (${file.size} bytes) as the flow export`;
+  } catch (error) {
+    // Say so. A silently empty textarea would submit an unpinned build and
+    // report it as one, which is the weaker guarantee arriving unannounced.
+    statusLine.textContent = `could not read ${file.name}: ${error}`;
+  }
+};
+
+function budgetNote() {
+  const o = options();
+  const per = o.strategy === 'best' ? 2 : 1;
+  $('budget-note').textContent =
+    `Budget is per layout, and best lays out every candidate with both strategies -- ` +
+    `so ${o.candidates} x ${per} x ${o.budget}s is up to ${o.candidates * per * o.budget}s of ` +
+    `solving, plus rates, validation and encoding on top. CP-SAT here gets 4 threads ` +
+    `(the wasm runtime's pool), against every core natively, and CP-SAT is a portfolio -- ` +
+    `so the same budget buys less search. See docs/WEB_UI.md for what that costs in area.`;
+}
+for (const id of ['strategy', 'candidates', 'budget']) $(id).oninput = budgetNote;
+budgetNote();
+
+function start(extra = {}) {
+  // Recomputed here as well as on input: the note describes the build about to
+  // run, and a page driven programmatically (or by autofill) changes the
+  // controls without firing `input`. A stale note is a wrong claim.
+  budgetNote();
+  state.solving = true; state.done = false; state.snapshot = null; state.error = null;
+  state.copied = null; state.copyError = null; state.progress = null; state.settled = [];
   $('solve').disabled = true; $('copy').disabled = true;
   out.innerHTML = '';
   statusLine.textContent = 'solving -- this runs the whole pipeline in this tab...';
-  worker.postMessage({ type: 'solve', options: {
-    url: $('url').value.trim(),
-    strategy: $('strategy').value,
-    candidates: Number($('candidates').value),
-    budget: Number($('budget').value),
-    power: $('power').checked,
-    name: $('name').value,
-  }});
-};
+  worker.postMessage({ type: 'solve', options: options(extra) });
+}
+
+$('solve').onclick = () => start();
 
 $('copy').onclick = async () => {
-  const text = state.result && state.result.blueprint;
+  const text = state.snapshot?.result?.blueprint;
   if (!text) return;
   try {
     await navigator.clipboard.writeText(text);
@@ -178,104 +242,249 @@ $('copy').onclick = async () => {
     // Clipboard permission can be refused; say so rather than pretending.
     state.copied = null;
     state.copyError = String(error);
-    statusLine.textContent = 'clipboard refused: ' + String(error);
+    statusLine.textContent = `clipboard refused: ${error}`;
   }
 };
 
-const escape = (s) => String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+// `esc`, not `escape`: the global of that name is a deprecated URL encoder,
+// and shadowing it makes every call site ambiguous to a reader.
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) =>
+  ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
 
 function card(title, html, cls = '') {
   const el = document.createElement('div');
-  el.className = 'card ' + cls;
-  el.innerHTML = `<h2>${escape(title)}</h2>${html}`;
+  el.className = `card ${cls}`;
+  el.innerHTML = `<h2>${esc(title)}</h2>${html}`;
   return el;
 }
 
-function render(result, wallMs) {
+const list = (items, cls = '') =>
+  `<ul>${items.map((i) => `<li class="${cls}">${esc(i)}</li>`).join('')}</ul>`;
+
+/**
+ * Where the solve is, pair by pair.
+ *
+ * `pipeline.build` reports each (candidate, strategy) pair as it starts and as
+ * it settles, and the worker forwards those straight through. So the bar is a
+ * real count of work FINISHED -- 2 of 6 means two pairs are done -- exactly as
+ * the server arm's bar is. Before the first pair there is nothing to count:
+ * parsing the URL and solving the rates come first and take an unknown time,
+ * so the page says that rather than inventing a fraction.
+ */
+function renderProgress() {
+  const step = state.progress;
+  const done = state.settled.length;
+  let el = document.getElementById('progress');
+  if (!el) {
+    el = document.createElement('div');
+    el.className = 'card';
+    el.id = 'progress';
+    out.appendChild(el);
+  }
+  const fraction = step ? done / step.total : 0;
+  el.innerHTML =
+    `<h2>Progress</h2><p>${step
+      ? `Laying out ${esc(step.index)} of ${esc(step.total)}: ` +
+        `${esc(step.candidate)} / ${esc(step.strategy)}.`
+      : 'Reading the URL and solving the rates...'}</p>` +
+    `<div class="bar"><div class="fill" style="width:${(fraction * 100).toFixed(1)}%"></div></div>` +
+    (done ? list(state.settled.map((s) => s.phase === 'refused'
+      ? `${s.candidate} / ${s.strategy}: no layout -- ${s.reason || 'no reason given'}`
+      : `${s.candidate} / ${s.strategy}: ${s.area} tiles, ${s.ok ? 'valid' : 'INVALID'}`)) : '');
+}
+
+/**
+ * The settled job.
+ *
+ * Section for section what `web/src/ui/BuildReport.tsx` renders on the server
+ * arm, because both are fed by the same `flab2bp.web.payload.describe`. The
+ * parts that are easy to leave out are the parts that read as silence: which
+ * pairs produced no layout, whether the belt ceiling was READ or ASSUMED,
+ * whether the recipe selection was pinned or re-derived, and every validator
+ * warning -- a check that RAN and found something to act on.
+ */
+function render(snapshot, wallMs) {
   out.innerHTML = '';
-  if (!result.ok) {
-    statusLine.textContent = `refused after ${(wallMs / 1000).toFixed(1)}s`;
-    out.appendChild(card(
-      result.kind === 'NoValidLayout' ? 'Refused: no valid layout' : `Refused: ${result.kind}`,
-      `<pre class="bad">${escape(result.refusal)}</pre>` +
-      (result.traceback ? `<pre class="dim">${escape(result.traceback)}</pre>` : ''),
-      'refusal',
-    ));
+  const seconds = (wallMs / 1000).toFixed(1);
+
+  if (snapshot.state === 'error') {
+    statusLine.textContent = `failed after ${seconds}s`;
+    out.appendChild(card('Failure', `<pre class="bad">${esc(snapshot.error)}</pre>` +
+      (snapshot.traceback ? `<pre class="note">${esc(snapshot.traceback)}</pre>` : ''), 'refusal'));
     return;
   }
 
-  statusLine.textContent = `solved in ${(wallMs / 1000).toFixed(1)}s`;
-  $('copy').disabled = false;
-
-  out.appendChild(card(result.viewer.title || '(untitled)', `
-    <div class="stats">
-      <div class="stat"><b>${result.machines}</b><span>machines</span></div>
-      <div class="stat"><b>${result.tiles}</b><span>tiles</span></div>
-      <div class="stat"><b>${result.buildings}</b><span>buildings</span></div>
-      <div class="stat"><b>${escape(result.strategy)}</b><span>strategy</span></div>
-      <div class="stat"><b>${escape(result.candidate)}</b><span>candidate</span></div>
-      <div class="stat"><b>${(result.elapsed).toFixed(1)}s</b><span>solve</span></div>
-    </div>`));
-
-  if (result.notes.length || result.refused.length || result.errors.length || result.skipped.length) {
-    let html = '<ul>';
-    for (const note of result.notes) {
-      const bad = note.startsWith('WARNING');
-      html += `<li class="${bad ? 'warn' : ''}">${escape(note)}</li>`;
-    }
-    for (const r of result.refused) html += `<li class="warn">refused: ${escape(r)}</li>`;
-    for (const s of result.skipped) html += `<li class="warn">check could not run: ${escape(s)}</li>`;
-    for (const e of result.errors) html += `<li class="bad">VALIDATION ERROR -- ${escape(e)}</li>`;
-    html += '</ul>';
-    out.appendChild(card('Pipeline notes', html));
+  if (snapshot.state === 'refused') {
+    statusLine.textContent = `refused after ${seconds}s`;
+    out.appendChild(card('No layout for this spec',
+      `<p>${esc(snapshot.refusal.message)}</p>` +
+      (snapshot.refusal.reasons.length ? list(snapshot.refusal.reasons) : '') +
+      `<p class="note">A refusal is a result, not a crash: each line above is one strategy ` +
+      `trying one candidate and saying why it gave up. Raising the budget or the candidate ` +
+      `count sometimes helps; a spec that never lays out is more likely a defect in the ` +
+      `layout model than a hard instance.</p>`, 'refusal'));
+    return;
   }
 
-  out.appendChild(card(
-    'Blueprint viewer',
-    viewerSvg(result.viewer) +
-    `<p style="color:var(--dim);font-size:12px;margin:8px 0 0">` +
-    `Drawn from <code>codec.decode()</code> of the exact string the Copy button ` +
-    `puts on your clipboard -- ${result.viewer.buildings.length} buildings, ` +
-    `payload hash ${result.viewer.hashValid ? 'valid' : 'INVALID'}.</p>`,
-  ));
+  const r = snapshot.result;
+  statusLine.textContent = `solved in ${seconds}s`;
 
-  if (result.attempts.length) {
+  // The string first, because it is what the page is for -- but only when
+  // there is one. `describe` withholds it from an invalid build, and the way
+  // out is an explicit second build, not a quieter message.
+  if (r.blueprint) {
+    $('copy').disabled = false;
+    const head = card(r.title || '(untitled)',
+      `<input class="blueprint-out" readonly spellcheck="false" data-testid="blueprint-string" ` +
+      `aria-label="blueprint string" value="${esc(r.blueprint)}">`);
+    head.querySelector('h2').classList.add('bp-title');
+    out.appendChild(head);
+  } else {
+    const el = card('The string is withheld',
+      `<p class="bad">This build did not validate. A blueprint that pastes cleanly and then ` +
+      `does not run is worse than not having one, so the string is withheld unless you ask ` +
+      `for it.</p><button type="button" id="anyway">Build it anyway and show me the string</button>` +
+      `<p class="note">It will paste, and it will not run correctly.</p>`, 'refusal');
+    out.appendChild(el);
+    el.querySelector('#anyway').onclick = () => start({ allow_invalid: true });
+  }
+
+  const inputs = Object.keys(r.external_inputs);
+  const makes = Object.entries(r.outputs)
+    .map(([item, rate]) => `${item} ${round(rate.per_minute)}/min`).join(', ') || 'nothing declared';
+  out.appendChild(card('Build report',
+    `<dl>` +
+    `<dt>Won with</dt><dd>${esc(r.strategy)} / ${esc(r.candidate)}</dd>` +
+    `<dt>Machines</dt><dd>${r.machines}</dd>` +
+    `<dt>Area</dt><dd>${r.area} tiles</dd>` +
+    `<dt>Buildings</dt><dd>${r.buildings}</dd>` +
+    `<dt>Makes</dt><dd>${esc(makes)}</dd>` +
+    `<dt>Belt in</dt><dd>${inputs.length ? esc(inputs.join(', ')) +
+      ` (${r.input_markers} marked with icons)` : 'nothing'}</dd>` +
+    `<dt>Solved in</dt><dd>${seconds}s in this tab</dd>` +
+    `</dl>` +
+    (r.unmarked_inputs.length
+      ? `<p class="warn">No icon placed for ${esc(r.unmarked_inputs.join(', '))} -- ` +
+        `those input belts are unlabelled.</p>` : '') +
+    flowNote(r) + beltNote(r)));
+
+  // "No differences" and "nothing was checked" read identically in silence,
+  // and only one of them is reassuring -- so every one of these prints its
+  // section whenever it is non-empty, and nothing collapses them together.
+  if (r.refused.length) {
+    out.appendChild(card(`${r.refused.length} strategy/candidate pair(s) produced no layout`,
+      list(r.refused, 'warn')));
+  }
+  if (r.report.skipped.length) {
+    out.appendChild(card(`${r.report.skipped.length} check(s) could not run`,
+      list(r.report.skipped, 'warn')));
+  }
+  if (r.report.warnings.length) {
+    out.appendChild(card(`${r.report.warnings.length} validation warning(s)`,
+      `<p class="note">The blueprint is valid and will run; these are things to look at ` +
+      `before you paste it.</p>` +
+      list(r.report.warnings.map((f) => `${f.check}: ${f.message}`), 'warn')));
+  }
+  if (r.report.errors.length) {
+    out.appendChild(card(`${r.report.errors.length} validation error(s)`,
+      list(r.report.errors.map((f) => `${f.check}: ${f.message}`), 'bad'), 'refusal'));
+  }
+  if (snapshot.runtime_warnings?.length) {
+    // The one thing this arm reports that the server arm does not, and the
+    // reason is structural rather than an omission: `warnings.catch_warnings`
+    // is process-global, and the server runs its builds in a thread pool.
+    out.appendChild(card('Python runtime warnings',
+      list(snapshot.runtime_warnings, 'warn')));
+  }
+
+  if (r.attempts.length > 1) {
     let rows = '<table><tr><th>candidate</th><th>strategy</th><th>area</th><th>errors</th></tr>';
-    for (const a of [...result.attempts].sort((x, y) => x.area - y.area)) {
-      rows += `<tr><td>${escape(a.candidate)}</td><td>${escape(a.strategy)}</td>` +
-              `<td>${a.area}</td><td>${a.errors}</td></tr>`;
+    for (const a of r.attempts) {
+      rows += `<tr class="${a.chosen ? 'chosen' : ''}"><td>${esc(a.candidate)}</td>` +
+              `<td>${esc(a.strategy)}</td><td>${a.area}</td><td>${a.errors}</td></tr>`;
     }
-    out.appendChild(card('Every attempt', rows + '</table>'));
+    out.appendChild(card('Every attempt', `${rows}</table>`));
   }
+
+  if (r.blueprint) mountViewer(r.blueprint, snapshot.viewer);
 }
 
-function viewerSvg(viewer) {
-  const items = viewer.buildings;
-  if (!items.length) return '<p class="bad">the decoded blueprint holds no buildings</p>';
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  for (const b of items) {
-    minX = Math.min(minX, b.x - b.w / 2); maxX = Math.max(maxX, b.x + b.w / 2);
-    minY = Math.min(minY, b.y - b.h / 2); maxY = Math.max(maxY, b.y + b.h / 2);
+function flowNote(r) {
+  if (!r.flow_pinned) {
+    return `<p class="note">Recipe selection <strong>derived, not pinned</strong> -- ` +
+      `FactorioLab's own choice of which recipe makes what was re-solved here rather than ` +
+      `read from a flow export. Paste or choose one above to pin it (the CLI's ` +
+      `<code>--flow</code>). <code>--fetch-flow</code> cannot exist here: it drives a ` +
+      `headless browser to make FactorioLab run its own solve, and a page cannot drive ` +
+      `one against itself.</p>`;
   }
-  const pad = 2;
-  const w = (maxX - minX) + pad * 2, h = (maxY - minY) + pad * 2;
-  const colour = (b) => b.belt ? '#4a7fb5' : b.sorter ? '#c8a15a'
-    : b.id === 2201 ? '#8f6fd0' : b.id === 2313 ? '#48a58a' : '#6a7f99';
-  let svg = `<svg viewBox="${(minX - pad).toFixed(2)} ${(minY - pad).toFixed(2)} ` +
-            `${w.toFixed(2)} ${h.toFixed(2)}" preserveAspectRatio="xMidYMid meet" ` +
-            `role="img" aria-label="decoded blueprint">`;
-  // y is flipped so the render reads the way the game's map does.
-  svg += `<g transform="translate(0 ${(2 * (minY - pad) + h).toFixed(3)}) scale(1 -1)">`;
-  for (const b of items) {
-    const rw = Math.max(b.w, 0.35), rh = Math.max(b.h, 0.35);
-    svg += `<rect x="${(b.x - rw / 2).toFixed(3)}" y="${(b.y - rh / 2).toFixed(3)}" ` +
-           `width="${rw.toFixed(3)}" height="${rh.toFixed(3)}" rx="0.2" ` +
-           `fill="${colour(b)}" fill-opacity="${b.belt ? 0.85 : 0.95}" ` +
-           `stroke="#0c0f13" stroke-width="0.08"><title>${escape(b.name)} @ ` +
-           `${b.x.toFixed(1)},${b.y.toFixed(1)},${b.z.toFixed(2)}</title></rect>`;
+  if (r.flow_findings.length) {
+    return `<p>${r.flow_findings.length} difference(s) from the pinned flow:</p>` +
+      list(r.flow_findings, 'warn');
   }
-  svg += '</g></svg>';
-  return svg;
+  return `<p class="note">Recipe selection pinned to the supplied flow, no differences.</p>`;
+}
+
+function beltNote(r) {
+  const b = r.belt_rules;
+  if (!b) return '';
+  const vertical = b.vertical_construction ? 'yes' : 'no';
+  return b.from_url
+    ? `<p class="note">Belt ceiling ${b.max_z} (lab level ${b.lab_level}), vertical belt ` +
+      `construction ${vertical} -- read from the URL's researched technologies.</p>`
+    : `<p class="warn">This URL carried no technology set, so a <strong>fully-researched ` +
+      `save is assumed</strong>: belt ceiling ${b.max_z} (lab level ${b.lab_level}), ` +
+      `vertical belt construction ${vertical}. If your save is not fully researched, the ` +
+      `belts here may climb higher than it allows.</p>`;
+}
+
+function round(value) {
+  return Number.isInteger(value) ? String(value) : value.toFixed(2).replace(/\.?0+$/, '');
+}
+
+/**
+ * The server arm's viewer, in this page.
+ *
+ * Not a second renderer: `web/src/embed.tsx` is built by the same rsbuild
+ * config as the server arm's app and exports the same component tree, so both
+ * arms draw a result with identical code and only the SOLVING differs. It is
+ * handed the exact string the Copy button copies -- and `viewer.buildings`,
+ * which Python produced by decoding that same string, is what the count under
+ * the canvas reports, so a string that does not decode cannot be drawn.
+ */
+async function mountViewer(blueprint, viewer) {
+  const el = card('Blueprint viewer', `<div id="viewer"></div>` +
+    (viewer ? `<p class="note">Drawn from the exact string the Copy button puts on your ` +
+      `clipboard. <code>codec.decode()</code> of it, in Python, in this tab, found ` +
+      `${viewer.buildings.length} buildings and a ` +
+      `${viewer.hashValid ? 'valid' : 'INVALID'} payload hash.</p>` : ''));
+  out.appendChild(el);
+  const host = el.querySelector('#viewer');
+  try {
+    if (!window.flab2bpViewer) {
+      const manifest = await fetch('./dist/manifest.json');
+      if (!manifest.ok) throw new Error(`web/dist is not built (HTTP ${manifest.status})`);
+      const entry = (await manifest.json()).entries.embed.initial;
+      for (const href of entry.css || []) {
+        const link = document.createElement('link');
+        link.rel = 'stylesheet';
+        link.href = `./dist/${href}`;
+        document.head.appendChild(link);
+      }
+      for (const src of entry.js) await import(`./dist/${src}`);
+    }
+    window.flab2bpViewer.mount(host, { assetBase: './dist/assets' });
+    window.flab2bpViewer.load(blueprint);
+    state.viewerMounted = true;
+  } catch (error) {
+    // No silent degradation to a lesser drawing: the arms are being compared,
+    // and a page that quietly rendered something else would make the
+    // comparison a lie. It says what is missing and how to build it.
+    state.viewerError = String(error);
+    host.innerHTML = `<p class="bad" style="padding:16px">The viewer bundle is not built, ` +
+      `so there is nothing to draw with: ${esc(String(error))}.<br>Run: ` +
+      `<code>cd web && bun install && bun run build</code></p>`;
+  }
 }
 </script>
 </html>

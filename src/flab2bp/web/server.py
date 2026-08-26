@@ -12,19 +12,23 @@ worker thread, which is the entire concurrency requirement.
     GET  /api/fetch?url=...  the viewer's own blueprint-page proxy
     GET  /*                  the built front end, with an SPA fallback
 
-Bound to 127.0.0.1 by default.  ``/api/fetch`` is an open relay to any http(s)
-URL -- inherited from the viewer, where the same caveat already applied -- and
-``/api/build`` will spend every core on a CP-SAT solve for anyone who asks.
-Neither belongs on a public interface without work this does not do.
+Bound to 127.0.0.1 by default.  ``/api/fetch`` is a relay to any http(s) URL
+whose host resolves to a public address -- every redirect hop is checked, but
+the address is resolved and connected to separately, so a name that changes
+between the two still gets through -- and ``/api/build`` will spend every core
+on a CP-SAT solve for anyone who asks.  Neither belongs on a public interface
+without work this does not do.
 """
 
 from __future__ import annotations
 
 import argparse
 import gzip
+import ipaddress
 import json
 import mimetypes
 import shutil
+import socket
 import subprocess
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -52,6 +56,35 @@ DIST = Path("web") / "dist"
 #: Below this, a response is sent uncompressed: the headers cost more than the
 #: saving, and every job poll is a few hundred bytes.
 GZIP_MIN_BYTES = 1024
+
+#: How many redirects ``/api/fetch`` will follow before giving up.  Followed by
+#: hand rather than by httpx so every hop can be checked; see :meth:`_proxy`.
+MAX_REDIRECTS = 5
+
+
+def private_address(url: str) -> str | None:
+    """The first non-public address ``url``'s host resolves to, or ``None``.
+
+    Every address is checked, not just the first: a name that answers with one
+    public address and one loopback address is the whole trick, and connecting
+    to "the one we liked" is not something this code gets to choose.
+
+    A host that does not resolve is reported as ``None`` -- there is nothing to
+    block, and the fetch that follows will fail with the real DNS error rather
+    than with a misleading "not a public address".
+    """
+    host = urlparse(url).hostname
+    if host is None:
+        return None
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except OSError:
+        return None
+    for info in infos:
+        address = ipaddress.ip_address(info[4][0])
+        if not address.is_global or address.is_loopback or address.is_private:
+            return str(address)
+    return None
 
 
 def _compressible(content_type: str) -> bool:
@@ -193,27 +226,58 @@ class Handler(BaseHTTPRequestHandler):
         dropping it while serving the same page from Python would have been a
         silent regression in an inherited app.  Same shape as the original: the
         page body as plain text, 400 on bad input, 502 carrying the real reason
-        when the upstream is unreachable.  Same known limitation, too --
-        redirects are followed, so it is not hardened against a local-to-local
-        SSRF, which is one of the reasons this binds to localhost.
+        when the upstream is unreachable.
+
+        Unlike the original, every hop is checked.  The viewer followed
+        redirects blind, so an allowed public URL could hand back a `302` to
+        `http://127.0.0.1:.../api/build` and the proxy would dutifully fetch it
+        -- the whole point of a redirect-based SSRF.  Redirects are followed by
+        hand instead, and each target is resolved and rejected if it lands on a
+        loopback, private, link-local or otherwise reserved address.
+
+        This is not a complete SSRF defence and is not offered as one: the
+        address is resolved here and connected to by httpx a moment later, so a
+        DNS entry that changes between the two still gets through.  Closing
+        that needs a transport that pins the socket to the address it checked,
+        which is a different piece of work.  What this closes is the redirect
+        hop, which needed no race at all.
         """
         if not target:
             self._text(HTTPStatus.BAD_REQUEST, "Missing url")
             return
-        if urlparse(target).scheme not in ("http", "https"):
-            self._text(HTTPStatus.BAD_REQUEST, "Only http/https are allowed")
-            return
+
+        seen = target
         try:
-            upstream = httpx.get(
-                target,
-                timeout=FETCH_TIMEOUT_S,
-                follow_redirects=True,
-                headers={"user-agent": "dsp-blueprint-viewer"},
-            )
+            for _ in range(MAX_REDIRECTS + 1):
+                if urlparse(seen).scheme not in ("http", "https"):
+                    self._text(HTTPStatus.BAD_REQUEST, "Only http/https are allowed")
+                    return
+                blocked = private_address(seen)
+                if blocked is not None:
+                    self._text(
+                        HTTPStatus.BAD_REQUEST,
+                        f"Refusing to fetch {seen}: it resolves to {blocked}, which is not a "
+                        f"public address. This endpoint is a relay, and a relay into the "
+                        f"machine it runs on is how a page reaches an API it could not "
+                        f"otherwise call.",
+                    )
+                    return
+                upstream = httpx.get(
+                    seen,
+                    timeout=FETCH_TIMEOUT_S,
+                    follow_redirects=False,
+                    headers={"user-agent": "dsp-blueprint-viewer"},
+                )
+                location = upstream.headers.get("location")
+                if not upstream.is_redirect or not location:
+                    self._send(
+                        upstream.status_code, upstream.text.encode(), "text/plain; charset=utf-8"
+                    )
+                    return
+                seen = str(upstream.url.join(location))
+            self._text(HTTPStatus.BAD_GATEWAY, f"Too many redirects starting at {target}")
         except httpx.HTTPError as exc:
-            self._text(HTTPStatus.BAD_GATEWAY, f"Could not reach {target}: {exc}")
-            return
-        self._send(upstream.status_code, upstream.text.encode(), "text/plain; charset=utf-8")
+            self._text(HTTPStatus.BAD_GATEWAY, f"Could not reach {seen}: {exc}")
 
     # ---- static ---------------------------------------------------------
 

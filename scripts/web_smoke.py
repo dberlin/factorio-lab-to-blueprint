@@ -22,8 +22,9 @@ Why every step is what it is
   the grant fails it says so and fails, rather than quietly reading the DOM
   instead.
 * **Decode, do not eyeball.**  A 10kB base64 string that is subtly wrong looks
-  exactly like one that is right.  ``decode`` -> re-``encode`` -> ``decode``
-  round-trip is the only check that could have come back false.
+  exactly like one that is right.  ``encode(decode(x)) == x``, byte for byte,
+  is the only check that could have come back false -- and it is the same check
+  ``web/smoke.py`` makes, so the two arms are held to one gate.
 * **nodriver, not Playwright.**  Same reason ``flab2bp.lab.capture`` uses it:
   Playwright ships its own browser builds and none are available for Fedora, so
   a proof driven through Playwright is a proof nobody on this machine can
@@ -66,6 +67,21 @@ BUILD_URL = (
 REFUSE_URL = (
     "https://factoriolab.github.io/dsp/list?o=universe-matrix*60&ibe=conveyor-belt-3"
     "&mmr=plane-smelter~assembling-machine-3~quantum-chemical-plant~matrix-lab&v=11"
+)
+
+#: The graphene spec and the FactorioLab export captured from it, used to
+#: drive the ``--flow`` path through the page.  Paired: ``flow_from_text``
+#: verifies the export was generated from this URL and refuses otherwise, so a
+#: fixture is only usable with its own URL.  Small, and it lays out in seconds.
+FLOW_URL = (
+    "https://factoriolab.github.io/dsp/list?o=graphene*60&ibe=conveyor-belt-2"
+    "&mmr=arc-smelter~assembling-machine-2~chemical-plant~matrix-lab&v=11"
+)
+FLOW_CSV = (
+    Path(__file__).resolve().parents[1]
+    / "tests"
+    / "fixtures"
+    / "flow_graphene_real_capture.csv"
 )
 
 #: How long to wait for a build to settle in the page.  Both cases below stay
@@ -114,6 +130,7 @@ _STATE_JS = """JSON.stringify({
   warnings: (document.querySelector('[data-testid="validation-warnings"]')||{}).textContent || null,
   alert: Array.from(document.querySelectorAll('[role="alert"]')).map(n => n.textContent),
   hasString: !!document.querySelector('[data-testid="blueprint-string"]'),
+  flowText: (document.querySelector('[data-testid="flow-text"]')||{}).value || null,
   canvasEmpty: !!document.querySelector('.canvas-empty'),
   canvas: (() => {
     const c = document.querySelector('canvas');
@@ -132,6 +149,20 @@ _FILL_JS = """((url) => {
   // React's onChange actually listens for.
   setter.call(input, url);
   input.dispatchEvent(new Event('input', {bubbles: true}));
+  return 'ok';
+})(%s)"""
+
+_SET_FLOW_JS = """((csv) => {
+  const area = document.querySelector('[data-testid="flow-text"]');
+  if (!area) return 'no flow textarea';
+  // Same reason as _FILL_JS: React owns the value, and a direct assignment
+  // updates the DOM node while React keeps the old state -- so the submit
+  // would carry no flow and the report would say "derived" while the page
+  // showed a pasted export. The native setter plus a bubbled input event is
+  // what onChange listens for.
+  Object.getOwnPropertyDescriptor(
+    window.HTMLTextAreaElement.prototype, 'value').set.call(area, csv);
+  area.dispatchEvent(new Event('input', {bubbles: true}));
   return 'ok';
 })(%s)"""
 
@@ -241,9 +272,18 @@ async def _settle(page: Any, out: Path, tag: str) -> dict[str, Any]:
     raise SmokeFailure(f"[{tag}] nothing settled within {SETTLE_TIMEOUT_S:.0f}s; last: {last}")
 
 
-async def _capture(page: Any, cdp: Any, clip: Any = None) -> bytes:
-    """A PNG of the page, or of one box on it, from the compositor."""
-    shot = await page.send(cdp.page.capture_screenshot(format_="png", clip=clip))
+async def _capture(page: Any, cdp: Any, clip: Any = None, *, beyond: bool = False) -> bytes:
+    """A PNG of the page, or of one box on it, from the compositor.
+
+    ``beyond`` is ``Page.captureScreenshot``'s ``captureBeyondViewport``, and a
+    clip below the fold needs it: without it the compositor answers with a
+    blank box rather than an error.  Measured -- the client arm's canvas sits at
+    y=854 under a long report in a headless window that is shorter than that,
+    and the clip came back as a 2.2kB blank PNG against 97kB with it.
+    """
+    shot = await page.send(
+        cdp.page.capture_screenshot(format_="png", clip=clip, capture_beyond_viewport=beyond)
+    )
     return base64.b64decode(shot)
 
 
@@ -327,13 +367,21 @@ async def _canvas_variety(page: Any, cdp: Any) -> tuple[int, dict[str, int]]:
     from JavaScript is entitled to come back blank whatever is on screen.  The
     compositor's own capture is not.
     """
+    # PAGE coordinates, not viewport coordinates: the clip below is captured
+    # with `captureBeyondViewport`, which measures from the document origin. On
+    # the server arm the difference is nil -- the canvas is in a 100vh grid that
+    # never scrolls -- but on the client arm it sits under a long report at
+    # y=854 in a headless window shorter than that, and a viewport clip there
+    # comes back blank. One flat colour is what this function calls a failure,
+    # so the wrong coordinate space would fail a viewer that had drawn fine.
     box_raw = await _js(
         page,
         """(() => {
           const c = document.querySelector('canvas');
           if (!c) return 'null';
           const r = c.getBoundingClientRect();
-          return JSON.stringify({x: Math.round(r.x), y: Math.round(r.y),
+          return JSON.stringify({x: Math.round(r.x + window.scrollX),
+                                 y: Math.round(r.y + window.scrollY),
                                  width: Math.round(r.width), height: Math.round(r.height)});
         })()""",
     )
@@ -345,7 +393,7 @@ async def _canvas_variety(page: Any, cdp: Any) -> tuple[int, dict[str, int]]:
     clip = cdp.page.Viewport(
         x=box["x"], y=box["y"], width=box["width"], height=box["height"], scale=1
     )
-    return _png_variety(await _capture(page, cdp, clip)), box
+    return _png_variety(await _capture(page, cdp, clip, beyond=True)), box
 
 
 async def _console(page: Any) -> list[dict[str, str]]:
@@ -368,8 +416,16 @@ async def _drive(
     budget_s: float,
     out: Path,
     tag: str,
+    flow: str | None = None,
 ) -> dict[str, Any]:
     await _expect_ok(page, _FILL_JS % json.dumps(url), "filling the URL")
+    # Always set it, including to empty. The three cases share one page, and a
+    # flow left in the box by the previous case is submitted with the next
+    # one's URL -- where `flow_from_text` rightly refuses it as an export for a
+    # different URL, and the case that meant to test something else fails on
+    # that instead. (Found exactly that way; the page's message was correct and
+    # this harness was not.)
+    await _expect_ok(page, _SET_FLOW_JS % json.dumps(flow or ""), "setting the flow export")
     await _expect_ok(
         page, _SET_OPTION_JS % (json.dumps("Strategy"), json.dumps(strategy)), "setting strategy"
     )
@@ -431,8 +487,13 @@ async def _case_success(page: Any, cdp: Any, out: Path) -> dict[str, Any]:
     buildings = len(blueprint.buildings)
     if buildings <= 0:
         raise SmokeFailure("the copied string decoded to a blueprint with no buildings")
-    if decode(encode_blueprint(blueprint)) != blueprint:
-        raise SmokeFailure("the copied string does not round-trip through the codec")
+    # Byte for byte, not merely structurally. `decode(encode(decode(x))) ==
+    # decode(x)` passes for an encoder that drops a field both times; only
+    # `encode(decode(x)) == x` says the string the user was handed is the
+    # string this codec would produce. The client arm's proof already asserted
+    # the stronger form, and the two gates must be the same gate.
+    if encode_blueprint(blueprint) != clipboard:
+        raise SmokeFailure("the copied string does not re-encode to itself, byte for byte")
 
     if settled.get("canvasEmpty"):
         raise SmokeFailure("the viewer is still showing 'Load a blueprint to see it.'")
@@ -557,8 +618,9 @@ async def _run(base: str, out: Path, browser_path: str, headless: bool) -> dict[
             raise SmokeFailure(f"the page never rendered a build panel. Body was: {body!r}")
 
         success = await _case_success(page, cdp, out)
+        flow = await _case_flow_pin(page, out)
         refusal = await _case_refusal(page, cdp, out)
-        return {"success": success, "refusal": refusal}
+        return {"success": success, "flow": flow, "refusal": refusal}
     finally:
         if browser is not None:
             browser.stop()
@@ -568,6 +630,40 @@ async def _run(base: str, out: Path, browser_path: str, headless: bool) -> dict[
         except subprocess.TimeoutExpired:  # pragma: no cover - kill is a backstop
             process.kill()
         shutil.rmtree(profile, ignore_errors=True)
+
+
+async def _case_flow_pin(page: Any, out: Path) -> dict[str, Any]:
+    """``--flow``, pasted into the page.
+
+    The point of a pin is that WHICH recipe makes what is FactorioLab's own
+    decision rather than one re-derived here, and the difference is invisible
+    in the blueprint: both builds emit a string, and only the report says which
+    guarantee it carries.  So the check is the report, and it is falsifiable --
+    a page that dropped the paste would say "derived, not pinned" here.
+    """
+    settled = await _drive(
+        page,
+        url=FLOW_URL,
+        strategy="freeform",
+        candidates=1,
+        budget_s=4,
+        out=out,
+        tag="flow",
+        flow=FLOW_CSV.read_text(encoding="utf-8-sig"),
+    )
+    if settled.get("refusal"):
+        raise SmokeFailure(f"the flow-pinned build refused: {settled}")
+    report = settled.get("report") or ""
+    if "derived, not pinned" in report:
+        raise SmokeFailure(
+            "the pasted flow never reached the solver: the report says the "
+            f"selection was derived. Report: {report[:400]!r}"
+        )
+    if "pinned to the supplied flow" not in report:
+        raise SmokeFailure(f"the report does not say the flow was pinned: {report[:400]!r}")
+    if not settled.get("hasString"):
+        raise SmokeFailure("the flow-pinned build produced no blueprint string")
+    return {"report": report[:300], "flow_chars": len(FLOW_CSV.read_bytes())}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -610,6 +706,10 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  screenshot               {good['screenshot']}")
     print(f"  report                   {good['report']}")
     print(f"  warnings on the page     {good['warnings'] or '(none)'}")
+    pinned = report["flow"]
+    print("\n-- the flow pin --")
+    print(f"  flow pasted              {pinned['flow_chars']} bytes")
+    print(f"  report                   {pinned['report']}")
     print("\n-- the refusal --")
     print(f"  reason                   {bad['refusal']}")
     print(f"  screenshot               {bad['screenshot']}")

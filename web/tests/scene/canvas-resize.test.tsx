@@ -33,6 +33,10 @@ rstest.mock('../../src/state/BlueprintProvider', () => ({
 rstest.mock('../../src/state/assets', () => ({
   loadAtlas: () => Promise.resolve({ cell: 64, cols: 1, rows: 1, entries: {} }),
   isAbortError: () => false,
+  // The atlas PNG goes through `assetPath` so the client-side arm can point
+  // the viewer at `./dist/assets` — see src/embed.tsx. A mock of this module
+  // has to carry it, or the component throws before it renders anything.
+  assetPath: (relative: string) => `/assets/${relative}`,
 }));
 
 test('opts out of the debounced/scroll-shared measurement that leaves the canvas unsized', () => {

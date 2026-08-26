@@ -23,10 +23,15 @@ What it asserts, in order:
    logs every request it answered; and Chrome's CDP network log is captured
    too, though it only covers the top-level document -- the worker and the
    wasm runtimes' own workers are separate CDP targets it does not see.
-6. The viewer drew a real SVG.
+6. The viewer drew something. It is the SERVER arm's viewer -- the same
+   React/three.js tree, mounted from `web/src/embed.tsx` -- so the check is
+   `scripts/web_smoke.py`'s own: screenshot the canvas through CDP and count
+   distinct colours, because a WebGL surface that never drew is one flat
+   colour and one flat colour is exactly 1.
 
-``--refusal`` runs the same flow against a URL the pipeline refuses, so the
-refusal path is exercised and screenshotted too.
+``--refusal`` runs the same flow against ``scripts/web_smoke.py``'s own
+refusal fixture -- one spec, both arms -- so the refusal path is exercised and
+screenshotted too.
 """
 
 from __future__ import annotations
@@ -45,6 +50,21 @@ import nodriver
 
 WEB = Path(__file__).resolve().parent
 
+# The two arms are proved by two scripts, but "did the viewer actually draw
+# anything" must not be two different questions. `scripts/web_smoke.py` already
+# owns that check -- screenshot the canvas through CDP, count distinct colours,
+# refuse a surface that is one flat colour -- so it is imported rather than
+# written again here. Both arms now mount the SAME viewer (web/src/embed.tsx),
+# which is what makes one implementation of the check correct for both.
+sys.path.insert(0, str(WEB.parent / "scripts"))
+from web_smoke import (  # noqa: E402
+    FLOW_CSV,
+    FLOW_URL,
+    REFUSE_URL,
+    SmokeFailure,
+    _canvas_variety,
+)
+
 #: The user's own URL: freeform / max-proliferation, ~1200 tiles, 20 coaters.
 DEFAULT_URL = (
     "https://factoriolab.github.io/dsp/list?z=eJxFyr0KwkAQReG3meJWO8GQapq7GDtJBMVt1"
@@ -52,9 +72,16 @@ DEFAULT_URL = (
     "Yh4YQBN3ANbsE9ODiviK3HFWLvcSOlTJacvvRe7qb6BOgIKRo_&v=11"
 )
 
-#: A URL whose objective the pipeline cannot build, used to exercise the
-#: refusal path.  A refusal is a correct outcome here, never an error.
-REFUSAL_URL = "https://factoriolab.github.io/dsp/list?z=not-a-real-payload&v=11"
+#: The corpus's ``universe-matrix``, imported from ``scripts/web_smoke.py`` so
+#: that both arms are driven onto the refusal path by the same spec.
+#:
+#: It used to be ``z=not-a-real-payload``, which is a different thing entirely:
+#: an unparseable URL raises ``ValueError`` before any layout is attempted, and
+#: the page rightly calls that an ERROR. A refusal is what happens when the
+#: pipeline ran, tried every strategy on every candidate, and none of them
+#: produced a layout -- the reason text is the product, and only this URL
+#: exercises the path that carries it.
+REFUSAL_URL = REFUSE_URL
 
 BROWSER_CANDIDATES = (
     "/usr/lib64/chromium-browser/chromium-browser",
@@ -136,6 +163,15 @@ async def drive(args: argparse.Namespace) -> dict[str, object]:
                 "--disable-gpu",
                 # Headless Chrome will not hand out clipboard-read without it;
                 # the write the button performs needs no permission.
+                # A no-op on Chromium 151, which ships JSPI unconditionally, and
+                # kept for older builds that still gate it. Measured: neither
+                # `--disable-features=WebAssemblyJSPromiseIntegration` nor
+                # `--js-flags=--no-wasm-jspi` nor
+                # `--js-flags=--no-experimental-wasm-jspi` turns it back off
+                # here -- `typeof WebAssembly.Suspending` reads `function` under
+                # all three -- so the no-JSPI path cannot be driven from a
+                # browser on this box. What happens without it is on record in
+                # web/CLIENTSIDE.md, measured when it could still be switched.
                 "--enable-features=WebAssemblyJSPromiseIntegration",
                 f"--unsafely-treat-insecure-origin-as-secure=http://127.0.0.1:{args.port}",
                 # The strongest form of "no server solved this": every hostname
@@ -201,37 +237,88 @@ async def drive(args: argparse.Namespace) -> dict[str, object]:
             report["bootSeconds"] = round(time.perf_counter() - boot_started, 1)
             report["boot"] = json.loads(await page.evaluate("JSON.stringify(window.__flab.boot)"))
 
-            url = args.url if not args.refusal else REFUSAL_URL
+            url = args.url
+            if args.refusal:
+                url = REFUSAL_URL
+            elif args.flow_pin:
+                url = FLOW_URL
+            # Same knobs the server arm drives the same URL with: one
+            # candidate, freeform, so the refusal is the layout model's and
+            # not a budget the page happened to be set low on.
+            if args.refusal:
+                args.strategy, args.candidates, args.budget = "freeform", 1, 4.0
+            if args.flow_pin:
+                args.strategy, args.candidates, args.budget = "freeform", 1, 4.0
             await page.evaluate(f"document.getElementById('url').value = {json.dumps(url)}")
+            # Always set it, empty included: a flow left in the box from a
+            # previous run would be submitted with this run's URL, where
+            # `flow_from_text` rightly refuses it as an export for a different
+            # URL and the case fails on that instead of on what it meant to test.
+            flow_csv = FLOW_CSV.read_text(encoding="utf-8-sig") if args.flow_pin else ""
+            await page.evaluate(
+                f"document.getElementById('flow').value = {json.dumps(flow_csv)}"
+            )
+            report["flowChars"] = len(flow_csv)
             await page.evaluate(
                 f"document.getElementById('strategy').value = {json.dumps(args.strategy)};"
                 f"document.getElementById('candidates').value = {args.candidates};"
                 f"document.getElementById('budget').value = {args.budget};"
                 f"document.getElementById('power').checked = {str(not args.no_power).lower()};"
+                # Setting `.value` does not fire `input`, and the page's budget
+                # note is computed from these. Dispatched so the screenshot
+                # shows the note for the build that actually ran.
+                "for (const id of ['strategy','candidates','budget'])"
+                " document.getElementById(id)"
+                ".dispatchEvent(new Event('input', {bubbles: true}));"
             )
             solve_started = time.perf_counter()
             await page.evaluate("document.getElementById('solve').click()")
             await wait_for(page, "window.__flab.done === true", args.solve_timeout)
             report["solveSeconds"] = round(time.perf_counter() - solve_started, 1)
 
-            raw = await page.evaluate("JSON.stringify(window.__flab.result)")
-            result = json.loads(raw) if raw and raw != "null" else None
+            # The job snapshot, field for field what the server arm's
+            # `GET /api/build/<id>` returns -- see web/bootstrap.py.
+            raw = await page.evaluate("JSON.stringify(window.__flab.snapshot)")
+            snapshot = json.loads(raw) if raw and raw != "null" else None
             report["fatal"] = json.loads(await page.evaluate("JSON.stringify(window.__flab.error)"))
+            # What the page ACTUALLY submitted, read back off the snapshot --
+            # not what this script asked for. The two differ the moment a
+            # control is set in a way the page does not read, and a bake-off
+            # number attributed to the wrong budget is worse than no number.
+            if snapshot is not None:
+                report["submitted"] = snapshot["options"]
 
-            if result is None:
+            if snapshot is None:
                 report["result"] = None
-            elif not result["ok"]:
-                report["refusal"] = result["refusal"]
-                report["refusalKind"] = result["kind"]
+            elif snapshot["state"] == "refused":
+                report["refusal"] = snapshot["refusal"]["message"]
+                report["refusalReasons"] = snapshot["refusal"]["reasons"]
+            elif snapshot["state"] == "error":
+                report["error"] = snapshot["error"]
             else:
+                result = snapshot["result"]
                 report["strategy"] = result["strategy"]
                 report["candidate"] = result["candidate"]
                 report["machines"] = result["machines"]
-                report["tiles"] = result["tiles"]
+                report["tiles"] = result["area"]
                 report["buildings"] = result["buildings"]
-                report["notes"] = result["notes"]
-                report["errors"] = result["errors"]
+                report["title"] = result["title"]
+                report["valid"] = result["valid"]
                 report["refused"] = result["refused"]
+                report["skipped"] = result["report"]["skipped"]
+                # Warnings were the drift this unification caught: a check that
+                # RAN and found something to act on was serialised by the
+                # server arm and by nothing at all here.
+                report["validationWarnings"] = [
+                    f"{f['check']}: {f['message']}" for f in result["report"]["warnings"]
+                ]
+                report["validationErrors"] = [
+                    f"{f['check']}: {f['message']}" for f in result["report"]["errors"]
+                ]
+                report["beltRulesFromUrl"] = (result["belt_rules"] or {}).get("from_url")
+                report["flowPinned"] = result["flow_pinned"]
+                report["runtimeWarnings"] = snapshot.get("runtime_warnings", [])
+                report["settled"] = snapshot["settled"]
 
                 await page.evaluate("document.getElementById('copy').click()")
                 await asyncio.sleep(0.5)
@@ -240,9 +327,30 @@ async def drive(args: argparse.Namespace) -> dict[str, object]:
                 report["clipboardChars"] = len(clipboard or "")
                 report["clipboardError"] = await page.evaluate("window.__flab.copyError")
                 report["blueprint"] = clipboard
-                report["viewerRects"] = int(
-                    await page.evaluate("document.querySelectorAll('svg rect').length")
+                # The string in the DOM, not the one in `state`: the button
+                # reads the same object the panel rendered from, so comparing
+                # them is what catches a panel showing one build's string while
+                # the button copies another's.
+                report["domString"] = await page.evaluate(
+                    "(document.querySelector('[data-testid=blueprint-string]')||{}).value || null"
                 )
+
+                await wait_for(
+                    page,
+                    "window.__flab.viewerMounted === true || window.__flab.viewerError !== null",
+                    args.viewer_timeout,
+                )
+                report["viewerError"] = await page.evaluate("window.__flab.viewerError")
+                if report["viewerError"] is None:
+                    try:
+                        colours, box = await _canvas_variety(page, cdp)
+                    except SmokeFailure as exc:
+                        # Reported, never swallowed: `main` turns a missing or
+                        # flat canvas into a non-zero exit.
+                        report["viewerError"] = str(exc)
+                    else:
+                        report["canvasColours"] = colours
+                        report["canvas"] = box
 
             await page.save_screenshot(
                 str(shots / ("refusal.png" if args.refusal else "success.png")),
@@ -357,9 +465,21 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--port", type=int, default=8493)
     ap.add_argument("--strategy", default="best", choices=("best", "spine", "freeform"))
     ap.add_argument("--candidates", type=int, default=3)
-    ap.add_argument("--budget", type=float, default=2.0)
+    # 6, not the CLI's 2, because the page's default is 6: the wasm CP-SAT
+    # runtime has a four-thread pool and CP-SAT is a portfolio, so the same
+    # wall-clock budget buys materially less search here. Measured, in
+    # docs/WEB_UI.md. The proof runs what the page ships with.
+    ap.add_argument("--budget", type=float, default=6.0)
     ap.add_argument("--no-power", action="store_true")
     ap.add_argument("--refusal", action="store_true", help="drive the refusal path instead")
+    ap.add_argument(
+        "--flow-pin",
+        action="store_true",
+        help="paste `scripts/web_smoke.py`'s FactorioLab flow export and check the "
+        "recipe selection comes back PINNED. `--flow` is the half of the flow story a "
+        "page can do; `--fetch-flow` is the half it cannot, because it drives a headless "
+        "browser to make FactorioLab run its own solve.",
+    )
     ap.add_argument(
         "--no-isolation",
         action="store_true",
@@ -370,6 +490,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--browser")
     ap.add_argument("--boot-timeout", type=float, default=240.0)
     ap.add_argument("--solve-timeout", type=float, default=280.0)
+    ap.add_argument("--viewer-timeout", type=float, default=120.0)
     ap.add_argument("--shots", default=str(WEB / "shots"))
     ap.add_argument("--json", help="write the full report here")
     args = ap.parse_args(argv)
@@ -390,10 +511,39 @@ def main(argv: list[str] | None = None) -> int:
     print(json.dumps(printable, indent=2))
 
     decoded = report.get("decoded")
+    if args.flow_pin:
+        # Falsifiable: a page that dropped the paste would come back
+        # flow_pinned false, which is what an unpinned build reports and is
+        # exactly the silent weaker guarantee this exists to catch.
+        if report.get("flowPinned") is not True:
+            print(f"FAILED: the pasted flow did not pin; flow_pinned={report.get('flowPinned')!r}")
+            return 1
+        if report.get("candidate") != "flow-pinned":
+            print(f"FAILED: the winning candidate is {report.get('candidate')!r}, not flow-pinned")
+            return 1
+        if not isinstance(decoded, dict) or not decoded["buildings"]:
+            print("FAILED: the flow-pinned build handed out nothing that decodes")
+            return 1
+        return 0
     if args.refusal:
         return 0 if report.get("refusal") else 1
     if not isinstance(decoded, dict) or not decoded["buildings"]:
         print("FAILED: the clipboard string did not decode to a blueprint with buildings")
+        return 1
+    if not decoded["roundTrips"]:
+        print("FAILED: the clipboard string does not re-encode to itself, byte for byte")
+        return 1
+    if report.get("domString") != blueprint:
+        print("FAILED: the button copied something other than the string on the page")
+        return 1
+    if report.get("viewerError") is not None:
+        print(f"FAILED: the viewer did not mount: {report['viewerError']}")
+        return 1
+    # A WebGL surface that never drew is one flat colour, and one flat colour
+    # is exactly 1. This is the check that could have caught a canvas mounted
+    # over an empty scene.
+    if int(report.get("canvasColours") or 0) < 2:
+        print(f"FAILED: the canvas is one flat colour ({report.get('canvasColours')})")
         return 1
     if report["noServerSolveProblems"]:
         print("FAILED: something other than a static file was requested")

@@ -93,10 +93,25 @@ class CpSatHelper:
 
     @staticmethod
     def model_stats(model_proto: cp_model_pb2.CpModelProto) -> str:
-        raise NotImplementedError("model_stats is a libortools formatter with no wasm entry point")
+        # There IS a `CpSat.modelStats` in `vendor/ortools/browser/cp-sat.js`,
+        # and it is a trap. Read it: it decodes the proto with protobufjs in
+        # JavaScript and returns `{name, variables, constraints, hasObjective}`
+        # as JSON. libortools' `CpModelStats` is a multi-line text report about
+        # the presolved model -- constraint breakdown by type, domain sizes,
+        # the objective's terms. They share a name and nothing else, and
+        # returning the first where a caller expects the second would be a
+        # different thing wearing the right label.
+        raise NotImplementedError(
+            "model_stats is libortools' CpModelStats text report, and the wasm "
+            "build has no entry point for it. (`CpSat.modelStats` in the vendored "
+            "JS is an unrelated protobufjs summary -- variable and constraint "
+            "COUNTS as JSON -- and is not this.)"
+        )
 
     @staticmethod
     def solver_response_stats(response: cp_model_pb2.CpSolverResponse) -> str:
+        # Checked in the vendored bundle: no `solverResponseStats`, no
+        # `responseStats` on CpSat, nothing under any spelling.
         raise NotImplementedError(
             "solver_response_stats is a libortools formatter with no wasm entry point"
         )

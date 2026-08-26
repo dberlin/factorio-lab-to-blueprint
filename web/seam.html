@@ -19,7 +19,7 @@ const IDX = 'https://cdn.jsdelivr.net/pyodide/v0.28.3/full/';
     // ---- 2. the modelling side: CPython in the browser ----
     await new Promise((res, rej) => {
       const s = document.createElement('script');
-      s.src = IDX + 'pyodide.js'; s.onload = res; s.onerror = rej;
+      s.src = `${IDX}pyodide.js`; s.onload = res; s.onerror = rej;
       document.head.appendChild(s);
     });
     let t = performance.now();
@@ -110,7 +110,7 @@ json.dumps({
     R.ok = true;
   } catch (e) {
     R.ok = false;
-    R.error = String(e && e.stack ? e.stack : e).slice(0, 1500);
+    R.error = String(e?.stack ? e.stack : e).slice(0, 1500);
   } finally {
     window.__probe.done = true; show();
   }

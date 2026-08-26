@@ -18,7 +18,7 @@ function say(k, v) { R[k] = v; out.textContent = JSON.stringify(R, null, 2); }
     const t0 = performance.now();
     await new Promise((res, rej) => {
       const s = document.createElement('script');
-      s.src = IDX + 'pyodide.js'; s.onload = res; s.onerror = rej;
+      s.src = `${IDX}pyodide.js`; s.onload = res; s.onerror = rej;
       document.head.appendChild(s);
     });
     say('loaderJsMs', Math.round(performance.now() - t0));
@@ -48,7 +48,7 @@ json.dumps(mods)
     R.ok = true;
   } catch (e) {
     R.ok = false;
-    R.error = String(e && e.stack ? e.stack : e);
+    R.error = String(e?.stack ? e.stack : e);
   } finally {
     window.__probe.done = true;
     out.textContent = JSON.stringify(R, null, 2);

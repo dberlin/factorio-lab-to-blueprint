@@ -116,6 +116,9 @@ export interface BuildOptions {
   power: boolean;
   name: string;
   allow_invalid: boolean;
+  /** A FactorioLab flow export's CSV text. Empty means the recipe selection is
+      derived rather than pinned, which the report says out loud. */
+  flow: string;
 }
 
 export const DEFAULT_OPTIONS: BuildOptions = {
@@ -128,6 +131,7 @@ export const DEFAULT_OPTIONS: BuildOptions = {
   // Off by default, exactly as the CLI has it: a blueprint that pastes cleanly
   // and then does not run is the worst outcome available here.
   allow_invalid: false,
+  flow: '',
 };
 
 /** A job has settled when it will never change again. */

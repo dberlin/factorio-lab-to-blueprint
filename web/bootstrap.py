@@ -4,9 +4,19 @@ Fetched and ``runPython``-ed by ``worker.js``.  It lives in a real ``.py``
 file rather than a JavaScript string so it is readable, lintable, and cannot
 be mangled by whichever quoting the host page happens to use.
 
-It does two jobs: wire ``ortools._wasm_bridge`` to the page's JS bridge, and
-expose a single ``solve`` entry point that returns JSON.  Nothing else in the
-browser build touches flab2bp -- the package itself is installed unmodified.
+It does three jobs: wire ``ortools._wasm_bridge`` to the page's JS bridge,
+report each strategy/candidate pair as the pipeline settles it, and expose a
+single ``solve`` entry point that returns JSON.  Nothing else in the browser
+build touches flab2bp -- the package itself is installed unmodified.
+
+**The JSON it returns is deliberately the server arm's job snapshot.**  The
+build is described by ``flab2bp.web.payload.describe``, the same function
+``flab2bp.web.jobs`` calls, and a refusal by ``flab2bp.web.payload.refusal``.
+That is not a convenience: the two arms exist to be compared, and a comparison
+between two arms that report different things measures the reporting.  Anything
+this file added by hand would be a second implementation of the CLI's report,
+free to drift -- and it had already drifted, silently dropping every validator
+*warning* the build produced.
 """
 
 from __future__ import annotations
@@ -37,6 +47,12 @@ _wasm_bridge.set_bridge(_bridge)
 from flab2bp import pipeline  # noqa: E402
 from flab2bp.dsp import catalog, codec  # noqa: E402
 from flab2bp.layout.base import NoValidLayout  # noqa: E402
+from flab2bp.web.payload import describe, refusal  # noqa: E402
+
+#: ``best`` lays out every candidate with both strategies.  Mirrors
+#: ``flab2bp.web.jobs._STRATEGIES_FOR_BEST`` so both arms scale the wait the
+#: same way.
+_STRATEGIES_FOR_BEST = 2
 
 
 def _viewer_payload(blueprint_text: str) -> dict[str, object]:
@@ -75,38 +91,70 @@ def _viewer_payload(blueprint_text: str) -> dict[str, object]:
     }
 
 
-def _notes(build: pipeline.Build, caught: list[warnings.WarningMessage]) -> list[str]:
-    notes: list[str] = []
-    rules = build.belt_rules
-    if rules is not None and not rules.from_url:
-        notes.append(
-            "WARNING: this URL carried no technology set, so a FULLY-RESEARCHED "
-            f"save is ASSUMED: belt ceiling {float(rules.max_z)} (lab level "
-            f"{rules.lab_level}), vertical belt construction "
-            f"{'YES' if rules.vertical_construction else 'no'}. A URL exported "
-            "from FactorioLab normally does carry one; if yours did, the belts "
-            "here may climb higher than your save allows."
-        )
-    elif rules is not None:
-        notes.append(
-            f"belt altitude ceiling {float(rules.max_z)} (lab level "
-            f"{rules.lab_level}), vertical belt construction "
-            f"{'YES' if rules.vertical_construction else 'no'} -- read from the "
-            "URL's researched technologies"
-        )
-    if not build.flow_pinned:
-        notes.append(
-            "recipe selection DERIVED, not pinned -- FactorioLab's own flow export "
-            "is produced by driving a headless browser, which a page cannot do to "
-            "itself, so this is the tool's own recipe choice"
-        )
-    notes.extend(f"{w.category.__name__}: {w.message}" for w in caught)
-    return notes
+def _step(step: pipeline.AttemptProgress) -> dict[str, object]:
+    """One :class:`~flab2bp.pipeline.AttemptProgress` as JSON.
+
+    Field for field what ``flab2bp.web.jobs._step`` emits, so the page renders
+    a browser solve's progress with the same code that renders a server one's.
+    """
+    return {
+        "index": step.index,
+        "total": step.total,
+        "candidate": step.candidate,
+        "strategy": step.strategy,
+        "phase": step.phase,
+        "area": step.area,
+        "ok": step.ok,
+        "reason": step.reason,
+    }
 
 
 def solve(options_json: str) -> str:
     options = json.loads(options_json)
     started = time.perf_counter()
+    settled: list[dict[str, object]] = []
+
+    def on_progress(step: pipeline.AttemptProgress) -> None:
+        # Straight out to the worker's message channel. The solve holds a
+        # suspendable stack, not the event loop, so this arrives while the
+        # build is still running rather than in a batch at the end.
+        as_json = _step(step)
+        if step.phase != "started":
+            settled.append(as_json)
+        js.__flabProgress(json.dumps(as_json))
+
+    per_spec = _STRATEGIES_FOR_BEST if options["strategy"] == "best" else 1
+    envelope: dict[str, object] = {
+        "options": {
+            "url": options["url"],
+            "strategy": options["strategy"],
+            "candidates": options["candidates"],
+            "budget_s": options["budget"],
+            "power": options["power"],
+            "allow_invalid": bool(options.get("allow_invalid", False)),
+            "name": options.get("name", ""),
+            # Not the CSV itself: it can be hundreds of kB and the page
+            # already has it. `result.flow_pinned` is the proof it was used.
+            "flow_supplied": bool((options.get("flow") or "").strip()),
+        },
+        "solver_ceiling_s": options["candidates"] * per_spec * options["budget"],
+        "result": None,
+        "refusal": None,
+        "error": None,
+        "viewer": None,
+        "settled": settled,
+    }
+
+    def finish(state: str, **rest: object) -> str:
+        envelope["state"] = state
+        envelope["elapsed_s"] = round(time.perf_counter() - started, 2)
+        envelope.update(rest)
+        return json.dumps(envelope)
+
+    # `catch_warnings` is process-global and not thread-safe, which is exactly
+    # why the server arm does not do this: its builds run in a thread pool. One
+    # tab runs one solve at a time, so here it is sound -- and a warning the
+    # pipeline raised is otherwise printed to a console nobody is reading.
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         try:
@@ -117,60 +165,36 @@ def solve(options_json: str) -> str:
                 candidates=options["candidates"],
                 time_budget_s=options["budget"],
                 name=options.get("name", ""),
+                # `--flow`, pasted rather than named. `--fetch-flow` is the one
+                # that cannot exist here: it drives a headless browser to make
+                # FactorioLab run its own solve, and a page cannot do that to
+                # itself. Same provenance check either way -- a flow that was
+                # not generated from this URL is refused, not shrugged at.
+                flow_text=(options.get("flow") or "").strip() or None,
+                on_progress=on_progress,
             )
         except NoValidLayout as exc:
-            return json.dumps(
-                {
-                    "ok": False,
-                    "kind": "NoValidLayout",
-                    "refusal": str(exc),
-                    "elapsed": time.perf_counter() - started,
-                }
-            )
+            # Not an error. Split back into one line per pair exactly as
+            # `jobs._reasons` does, so the refusal renders identically.
+            reasons = [part.strip() for part in exc.reason.split(";") if part.strip()]
+            return finish("refused", refusal=refusal(reasons, message=str(exc)))
         except (ValueError, KeyError) as exc:
-            return json.dumps(
-                {
-                    "ok": False,
-                    "kind": type(exc).__name__,
-                    "refusal": str(exc),
-                    "elapsed": time.perf_counter() - started,
-                }
-            )
+            return finish("error", error=str(exc))
         except Exception as exc:  # noqa: BLE001 - surfaced verbatim, never hidden
-            return json.dumps(
-                {
-                    "ok": False,
-                    "kind": "error",
-                    "refusal": f"{type(exc).__name__}: {exc}",
-                    "traceback": traceback.format_exc(),
-                    "elapsed": time.perf_counter() - started,
-                }
+            return finish(
+                "error",
+                error=f"{type(exc).__name__}: {exc}",
+                traceback=traceback.format_exc(),
             )
-        notes = _notes(build, list(caught))
+        runtime_warnings = [f"{w.category.__name__}: {w.message}" for w in caught]
 
-    return json.dumps(
-        {
-            "ok": True,
-            "elapsed": time.perf_counter() - started,
-            "strategy": build.strategy,
-            "candidate": build.spec.label,
-            "machines": build.spec.machine_count,
-            "tiles": build.placement.area,
-            "buildings": len(build.placement.buildings),
-            "blueprint": build.blueprint,
-            "notes": notes,
-            "refused": list(build.refused),
-            "errors": [f"{f.check}: {f.message}" for f in build.report.errors],
-            "skipped": sorted(build.report.skipped),
-            "attempts": [
-                {
-                    "candidate": a.candidate,
-                    "strategy": a.strategy,
-                    "area": a.area,
-                    "errors": len(a.report.errors),
-                }
-                for a in build.attempts
-            ],
-            "viewer": _viewer_payload(build.blueprint),
-        }
+    described = describe(build, allow_invalid=bool(options.get("allow_invalid", False)))
+    return finish(
+        "done",
+        result=described,
+        runtime_warnings=runtime_warnings,
+        # Only when there is a string to decode. `describe` withholds it when
+        # the build did not validate, and drawing the placement we still had in
+        # hand instead would draw something the user was never given.
+        viewer=_viewer_payload(described["blueprint"]) if described["blueprint"] else None,
     )

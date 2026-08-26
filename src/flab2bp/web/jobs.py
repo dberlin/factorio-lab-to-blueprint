@@ -61,6 +61,12 @@ class Options:
     #: Mirrors ``--allow-invalid``.  Off by default: a blueprint that pastes
     #: cleanly and then does not run is the worst outcome available here.
     allow_invalid: bool = False
+    #: A FactorioLab flow export, as the CSV text itself.  This is ``--flow``:
+    #: the CLI names a file, a browser pastes or uploads one, and both end at
+    #: the same ``flow_from_text`` with the same provenance check against the
+    #: URL.  Empty means the recipe selection is DERIVED, which the report says
+    #: rather than leaving it to be inferred.
+    flow: str = ""
 
     @property
     def solver_ceiling_s(self) -> float:
@@ -118,6 +124,10 @@ def parse_options(raw: object) -> Options:
     if not isinstance(name, str):
         raise InvalidOptions("'name' must be a string")
 
+    flow = raw.get("flow", "")
+    if not isinstance(flow, str):
+        raise InvalidOptions("'flow' must be a string: a FactorioLab flow export's CSV text")
+
     options = Options(
         url=url.strip(),
         strategy=strategy,
@@ -126,6 +136,7 @@ def parse_options(raw: object) -> Options:
         budget_s=float(budget),
         name=name,
         allow_invalid=allow_invalid,
+        flow=flow.strip(),
     )
     if options.solver_ceiling_s > MAX_SOLVER_SECONDS:
         raise InvalidOptions(
@@ -178,10 +189,13 @@ class Job:
 def run_build(options: Options, on_progress: pipeline.ProgressSink) -> pipeline.Build:
     """The one call into the solver.
 
-    ``--flow`` and ``--fetch-flow`` are deliberately not wired: the latter
-    drives a headless browser, which is a much larger surface than a build, and
-    the former needs a file upload.  The result says ``flow_pinned: false`` and
-    the UI says what that means, rather than the omission reading as silence.
+    ``--flow`` is wired: the export arrives as CSV text, pasted or uploaded,
+    and goes through ``flow_from_text``'s provenance check exactly as a file
+    named on the command line does.  ``--fetch-flow`` is not, and on the
+    client-side arm cannot be -- it drives a headless browser to make
+    FactorioLab do its own solve, which a page cannot do to itself.  A build
+    with no flow reports ``flow_pinned: false`` and the UI says what that
+    means, rather than the omission reading as silence.
     """
     return pipeline.build(
         options.url,
@@ -190,6 +204,7 @@ def run_build(options: Options, on_progress: pipeline.ProgressSink) -> pipeline.
         candidates=options.candidates,
         time_budget_s=options.budget_s,
         name=options.name,
+        flow_text=options.flow or None,
         on_progress=on_progress,
     )
 
@@ -294,6 +309,11 @@ class Builder:
                     "power": job.options.power,
                     "allow_invalid": job.options.allow_invalid,
                     "name": job.options.name,
+                    # The CSV itself is not echoed -- it is up to 256kB and the
+                    # page already has it. Whether one was supplied is the fact
+                    # a poller needs, and `result.flow_pinned` is the proof it
+                    # was honoured.
+                    "flow_supplied": bool(job.options.flow),
                 },
                 "result": job.result,
                 "refusal": job.refusal,

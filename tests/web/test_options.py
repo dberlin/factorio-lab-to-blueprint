@@ -62,3 +62,28 @@ def test_ceiling_counts_both_strategies_for_best() -> None:
     both = Options(url=URL, strategy="best", candidates=2, budget_s=5.0)
     assert single.solver_ceiling_s == 10.0
     assert both.solver_ceiling_s == 20.0
+
+
+class TestFlowIsAnOptionNow:
+    """``--flow``, as CSV text rather than a path.
+
+    The CLI names a file; a browser pastes or uploads one.  Both reach
+    ``flow_from_text`` and its provenance check, so neither can acquire a
+    pinned selection without the URL having been verified.
+    """
+
+    def test_absent_means_derived_not_pinned(self) -> None:
+        assert parse_options({"url": URL}).flow == ""
+
+    def test_the_csv_text_is_carried_whole(self) -> None:
+        csv = "Recipes\nid,name\ngraphene,Graphene\n"
+        assert parse_options({"url": URL, "flow": csv}).flow == csv.strip()
+
+    def test_a_non_string_flow_is_a_refusal(self) -> None:
+        with pytest.raises(InvalidOptions, match="'flow' must be a string"):
+            parse_options({"url": URL, "flow": ["a", "b"]})
+
+    def test_whitespace_only_is_the_same_as_absent(self) -> None:
+        # Otherwise an empty textarea would submit a "flow" that parses to
+        # nothing and refuses, instead of the derived build the user asked for.
+        assert parse_options({"url": URL, "flow": "  \n\t "}).flow == ""
