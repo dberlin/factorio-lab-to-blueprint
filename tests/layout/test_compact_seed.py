@@ -469,7 +469,7 @@ _REFINERY_URL = "https://factoriolab.github.io/dsp/list?z=eJxFyrEKwkAQRdG.meJVM0
 
 
 @pytest.mark.slow
-def test_real_refinery_height_30_seed_is_cython_decodable_without_witness_hint() -> None:
+def test_real_refinery_fixed_outline_seed_is_cython_decodable_without_witness_hint() -> None:
     spec = build_candidates(load_vendored(), parse_url(_REFINERY_URL), count=3).candidates[2]
     strips = plan_strips(spec, strip_len=4)
     instance_ids, variant_tables = _variant_search_inputs(spec, strips, strip_len=4)
@@ -492,13 +492,6 @@ def test_real_refinery_height_30_seed_is_cython_decodable_without_witness_hint()
         variant_tables=variant_tables,
     )
 
-    balanced_height = getattr(
-        sequence_solver_module,
-        "_balanced_compact_seed_height",
-        None,
-    )
-    assert balanced_height is not None
-    assert balanced_height(problem) == 30
     enumerate_eligibility = getattr(
         sequence_solver_module,
         "_variant_direct_eligibility",
@@ -535,4 +528,9 @@ def test_real_refinery_height_30_seed_is_cython_decodable_without_witness_hint()
     assert kernel.backend == "cython"
     incumbent = kernel.score_state(result.state)
     assert incumbent.decoded.used_height <= problem.outline_height
+    assert _boxes_do_not_overlap(
+        incumbent.decoded.x,
+        incumbent.decoded.y,
+        problem.selected_sizes(incumbent.state.variant_indices),
+    )
     assert incumbent.state.pair == result.state.pair

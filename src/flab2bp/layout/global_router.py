@@ -487,8 +487,9 @@ def _search_relaxed(
 
     def heuristic(index: int) -> int:
         x, y = _local_xy(grid, index)
-        closest = 1 << 30
-        for goal_x, goal_y in goal_coordinates:
+        first_goal_x, first_goal_y = goal_coordinates[0]
+        closest = abs(x - first_goal_x) + abs(y - first_goal_y)
+        for goal_x, goal_y in goal_coordinates[1:]:
             distance = abs(x - goal_x) + abs(y - goal_y)
             if distance < closest:
                 closest = distance

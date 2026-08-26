@@ -38,7 +38,6 @@ def _problem(
     *,
     bounds: tuple[int, int, int, int],
     blocked: Iterable[Cell] = (),
-    solid: Iterable[tuple[int, int]] = (),
     reserved: Iterable[tuple[Cell, tuple[int, int, int]]] = (),
     keep_out: Iterable[tuple[int, int]] = (),
 ) -> _PreparedRoutingProblem:
@@ -81,7 +80,7 @@ def _problem(
     return _PreparedRoutingProblem(
         building_templates=buildings,
         blocked=tuple(sorted(blocked_cells.items())),
-        solid=frozenset(solid),
+        solid=frozenset(),
         reserved=tuple(sorted(reserved)),
         keep_out=frozenset(keep_out),
         nets=nets,
@@ -204,20 +203,23 @@ def test_global_router_uses_current_detailed_moves_deterministically() -> None:
     assert second.expansions == first.expansions
 
 
-def test_hard_solids_and_foreign_reserved_ports_remain_impassable() -> None:
+def test_prepared_blocked_cells_and_foreign_reserved_ports_remain_impassable() -> None:
     net_id = NetId(0, 1, "iron", NetRole.INTERNAL, 0)
     reserved = ((4, 2, 0), (99, 99, 0))
+    blocked = tuple((3, 2, level) for level in range(LEVELS))
     problem = _problem(
         ((net_id, (0, 2), (7, 2), (), (), ()),),
         bounds=(0, 0, 7, 4),
-        solid=((3, 2),),
+        blocked=blocked,
         reserved=(reserved,),
     )
 
     result = route_global_once(problem, _feedback(problem), budget=20_000)
 
-    hard_cells = {(3, 2, level) for level in range(LEVELS)} | {reserved[0]}
-    assert set(result.paths[net_id]).isdisjoint(hard_cells)
+    hard_cells = set(blocked) | {reserved[0]}
+    path = result.paths[net_id]
+    assert set(path).isdisjoint(hard_cells)
+    _assert_current_detailed_legal_walk(path)
 
 
 def test_one_pass_records_one_cell_overflow_instead_of_blocking() -> None:
@@ -361,17 +363,22 @@ def test_external_net_routes_inward_from_prepared_boundary_goals() -> None:
 
 def test_feedback_history_prices_legal_cells_without_blocking_them() -> None:
     net_id = NetId(0, 1, "iron", NetRole.INTERNAL, 0)
+    priced_cell = (2, 1, 0)
     problem = _problem(
-        ((net_id, (0, 2), (4, 2), (), (), ()),),
-        bounds=(0, 0, 4, 4),
-        solid=((2, 2),),
+        ((net_id, (0, 1), (4, 1), (), (), ()),),
+        bounds=(0, 0, 4, 2),
+        keep_out={(x, y) for x in range(5) for y in (0, 2)},
     )
-    upper = {(x, 1, 0): 10.0 for x in range(1, 4)}
 
-    result = route_global_once(problem, _feedback(problem, upper), budget=20_000)
+    result = route_global_once(
+        problem,
+        _feedback(problem, {priced_cell: 10.0}),
+        budget=20_000,
+    )
 
-    assert set(result.paths[net_id]).isdisjoint(upper)
-    assert any(y == 3 for _x, y, _level in result.paths[net_id])
+    path = result.paths[net_id]
+    assert priced_cell in path
+    _assert_current_detailed_legal_walk(path)
 
 
 def test_expansion_budget_is_exact_and_returns_partial_metrics() -> None:
@@ -518,19 +525,26 @@ def test_external_length_order_uses_its_closest_boundary_goal() -> None:
 
 def test_detailed_feedback_history_changes_the_global_route_choice() -> None:
     net_id = NetId(0, 1, "iron", NetRole.INTERNAL, 0)
+    blocked = tuple((2, 2, level) for level in range(LEVELS))
     problem = _problem(
         ((net_id, (0, 2), (4, 2), (), (), ()),),
         bounds=(0, 0, 4, 4),
-        solid=((2, 2),),
+        blocked=blocked,
     )
-    upper = {(x, 1, 0): 10.0 for x in range(1, 4)}
 
     baseline = route_global(problem, _feedback(problem), budget=20_000)
-    changed = route_global(problem, _feedback(problem, upper), budget=20_000)
+    baseline_path = baseline.paths[net_id]
+    priced = {cell: 10.0 for cell in baseline_path[1:-1]}
+    changed = route_global(problem, _feedback(problem, priced), budget=20_000)
+    changed_path = changed.paths[net_id]
 
-    assert any(y == 1 for _x, y, _level in baseline.paths[net_id])
-    assert set(changed.paths[net_id]).isdisjoint(upper)
-    assert changed.paths[net_id] != baseline.paths[net_id]
+    assert priced
+    assert changed_path != baseline_path
+    assert any(cell not in changed_path for cell in priced)
+    assert set(baseline_path).isdisjoint(blocked)
+    assert set(changed_path).isdisjoint(blocked)
+    _assert_current_detailed_legal_walk(baseline_path)
+    _assert_current_detailed_legal_walk(changed_path)
 
 
 def test_hot_cells_are_history_ordered_bounded_and_boxed_deterministically() -> None:

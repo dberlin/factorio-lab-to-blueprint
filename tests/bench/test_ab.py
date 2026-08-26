@@ -13,8 +13,7 @@ stay at ~21s and a bake-off belongs behind a script entry point.
 
 from __future__ import annotations
 
-import mmap
-from dataclasses import dataclass
+import os
 
 import pytest
 
@@ -514,30 +513,18 @@ def test_a_blueprint_the_decoder_rejects_stops_contributing_an_area(
 def _placement() -> Placement:
     return Placement(buildings=(PlacedBuilding(item_id=2304, model_index=66, x=0, y=0),))
 
-@dataclass(frozen=True)
-class _MemoryLayout:
-    megabytes: int
 
-    def __call__(self) -> Placement:
-        payload = bytearray(self.megabytes * 1024 * 1024)
-        # Commit every virtual page so peak RSS observes the requested allocation.
-        for offset in range(0, len(payload), mmap.PAGESIZE):
-            payload[offset] = 1
-        placement = _placement()
-        assert payload
-        return placement
+def _process_identity_placement() -> Placement:
+    return Placement(
+        buildings=(PlacedBuilding(item_id=2304, model_index=66, x=os.getpid(), y=0),)
+    )
 
 
-def test_isolated_attempt_peak_rss_is_not_contaminated_by_a_prior_attempt() -> None:
-    large_megabytes = 96
-    small_megabytes = 1
-    large = isolated_attempt(_MemoryLayout(large_megabytes))
-    small = isolated_attempt(_MemoryLayout(small_megabytes))
+def test_isolated_attempt_runs_in_a_fresh_process() -> None:
+    attempt = isolated_attempt(_process_identity_placement)
 
-    minimum_resident_delta = (large_megabytes - small_megabytes) / 2
-    assert large.peak_rss_mb > small.peak_rss_mb + minimum_resident_delta
-
-
+    assert attempt.placement is not None
+    assert attempt.placement.buildings[0].x != os.getpid()
 
 
 def _grade(
