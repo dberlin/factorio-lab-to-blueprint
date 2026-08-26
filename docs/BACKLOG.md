@@ -2565,9 +2565,13 @@ check that both strategies pass on the whole corpus.
 
    Seating is `RefreshBuildPreview` 2090-2190: `lpos =
    slotPoses[inputFromSlot].GetTransformedBy(input pose).position`, guarded by
-   `!input.desc.isBelt`. We emit tile centres and the paste moves them, so the
-   test has to be asked about the seated sorter. `slots.seated_sorter` is that,
-   shared by the check and by `freeform._bridge`.
+   `!input.desc.isBelt`, and then 2100-2107 slides the OTHER end -- when it is a
+   belt lying across the sorter -- by the part of that delta which runs across
+   the sorter's own axis, so the sorter stays straight. We emit tile centres and
+   the paste moves both ends, so the test has to be asked about the seated
+   sorter. `slots.seated_sorter` is that, shared by the check and by
+   `freeform._bridge`, and it derives the slot indices first because they are
+   what decides the seat and a strategy has not assigned them yet.
 
    **The answer key, from the game.** The user force-built a refused paste and
    blueprinted the result back out. The game built all 297 belts, all 17
@@ -2585,19 +2589,76 @@ check that both strategies pass on the whole corpus.
    necessary nor sufficient for the collision.** What the box convicts is the
    overlap, and the failing clusters shared an anchor only incidentally.
 
-   **What is left, and it is worth having.** `slots.seated_sorter` is a
-   PARTIAL model of the seat. Measured against the built blueprint -- our 38
-   sorters seated, mapped through the built copy's quarter-turn, matched against
-   the 33 the game created -- it predicts every survivor to within 0.61 tiles and
-   6 of them to within 0.02, against 1 of 33 unseated. So it moves the answer the
-   right way and it is not yet the game's arithmetic. Two terms are known to be
-   missing: the belt-end drag (`RefreshBuildPreview` 2100-2106), and whatever the
-   BELT end's own pose contributes, which we leave on the tile centre. Neither
-   changes a verdict on the labelled sample -- the five failures are 1.0 to 4.8
-   tiles from anything the game built, an order clear of the 0.61 -- but a
-   tighter check would want them. The falsifier is committed: the two blueprints
-   under `tests/fixtures/ours/` are an input and its in-game result, and any
-   improvement to the seat can be scored directly against them.
+   ~~**What is left, and it is worth having.** `slots.seated_sorter` is a
+   PARTIAL model of the seat.~~ **RESOLVED.** It is the whole seat now, and the
+   answer key says so: our 38 sorters seated, carried through the built copy's
+   quarter turn, matched by position against the 33 the game created --
+   **every one of those 66 ends within 0.0091 of a tile, from 0.605.**
+   `test_the_seat_reproduces_every_end_the_game_built` is that measurement.
+
+   One of the two named terms was real. `RefreshBuildPreview` 2100-2107 does not
+   stop at moving the machine end onto its slot pose: three lines later it
+   slides the BELT end by the part of that same delta which runs ACROSS the
+   sorter, so the sorter stays straight. `slots._drag_belt_end` is that, with
+   the branch's own 0.5 alignment threshold. The direction the threshold is
+   measured against is the belt's **recorded** yaw, not the direction the belt
+   turns out to run: one of the 33 has a belt where the two disagree, and only
+   the recorded one predicts where the game put that sorter.
+
+   The other named term did not exist. What looked like a residual of up to
+   0.202 tiles on the MACHINE ends was the copy's own latitude -- the user built
+   at 45 degrees south, where a column is `area_segments / 200 / cos(lat)` of a
+   tile because the longitude step is fixed at the paste anchor (the same effect
+   `geom.collide` documents below). `area_segments` is 160 in the blueprint;
+   recover the one remaining unknown from the 32 machine ends and it lands
+   inside the band that 160 requires, and the residual goes to 2e-5. The same
+   undoing collapses three of the five single-area fixtures to 2e-5 as well.
+   So the machine end was already exact and the belt end was the entire gap.
+
+   **The verdicts did not move.** `game.sorter_collide` names 21, 46, 55, 162
+   and 163 and nothing else on our blueprint, is silent on the built one and on
+   all ten of the game's, and over 96 corpus cells of both strategies the drag
+   changes not one pair either way.
+
+   **What the accurate seat DID change is freeform, and it found a second
+   defect.** THE SLOT INDEX IS THE SEAT, and `_bridge` was asking about slot 0.
+   A strategy builds a sorter and leaves all four slot fields at the dataclass
+   default; `slots.assign_sorter_slots` fills them in from geometry as the last
+   pass before emission. So the bridge guard -- which has checked since it was
+   written -- was seating every standing machine end on one arbitrary corner and
+   getting an answer about a sorter nobody would build. Measured: 15 of 96 mid
+   cells came out carrying bridges the paste refuses, discarded afterwards by
+   freeform's own `certify` at the cost of a whole packing.
+   `slots.emitted_sorter` is the sorter as emission will write it,
+   `seated_sorter` runs it first, and the guard now asks about the real thing:
+   **0 of 96.** It is idempotent once the assignment pass has run, so nothing
+   downstream moves.
+
+   `slots.sorter_seat_is_clear` and `slots.sorter_seat_boxes` are that question
+   asked once, in `slots`, where the rest of the rule lives; `_bridge` calls them
+   instead of carrying a copy. Spine needed no change -- it emits no colliding
+   sorter over the same 96 cells, measured rather than assumed.
+
+   Paired and interleaved, mid tier, both strategies: 48/48 clean in both arms
+   in every round, area straddling zero against a same-arm noise floor of about
+   1%. Stress freeform over five paired rounds: 60.2 mean against 60.2, INVALID
+   0 throughout. That parity needed one thing beyond correctness -- `_bridge`
+   rebuilt every standing box on each call, which is quadratic in the sorter
+   count; hoisted to the caller it costs nothing.
+
+   **Still open, and genuinely separate: two of the five single-area fixtures do
+   not collapse.** `12-s-purple-science-...` (670 machine-side ends, max 0.027
+   tiles, mean 0.014) and `falk-v7-mall-full` (229 ends, max 0.024, mean 0.009)
+   keep a residual that no single latitude removes, and letting the longitude
+   step float as a second free parameter does not remove it either. The offending
+   pairs are `Assembling Machine Mk.III` slots 0/1/2/6/7/8 and
+   `Assembling Machine Mk.I` slots 0-11, so it is the slot-pose TABLE or those
+   two blueprints' provenance rather than the seat rule -- the three fixtures
+   that do collapse include a 200-record one, and the answer key collapses to
+   2e-5. It cannot move a verdict on its own: 0.027 tiles is 0.034 world units
+   against a box half-width of 0.26. It is recorded here rather than fixed
+   because it is a different artefact from the seat, and the seat is what was
+   asked for.
 
 **Not a defect, and worth not re-discovering:** columns compress by `cos(lat)`
 away from the paste anchor, because the longitude step is fixed at the anchor's
