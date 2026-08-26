@@ -329,6 +329,40 @@ being used as a hand-chosen tolerance on a different quantity. If someone
 "corrects" `SKEW_AXIS_DEG` to match the game more closely, `slots.attachment`
 changes behaviour for no reason connected to that correction.
 
+#### D5 addendum — there is a THIRD game test on that pair, and it is tighter
+
+Added after the audit, from the differential oracle in `oracle/`
+(`tests/bench/test_snap_oracle.py`). D5 found one game test on the
+slot-forward-versus-run pair -- `CheckInserterDataLegal`'s sign test at
+threshold 0 -- and concluded we are the stricter of the two, so the difference
+can only cost an avoidable refusal.
+
+`BuildTool_BlueprintPaste.MatchInserter` (decompiled lines 1534-1536) is a
+second game test on the same pair, and it goes the other way:
+
+```csharp
+float num13 = Vector3.Dot(lhs, rhs2);                              // run vs -slotFwd
+float num14 = Vector3.Dot((vector6 - vector2).normalized, rhs2);   // slot-from-far-end vs -slotFwd
+if (num13 > 0.9702957f && num14 > 0.9702957f)
+```
+
+`0.9702957` is `cos 14`, against our `cos 24`; there are TWO dots where we test
+one; and a slot that passes neither is not merely deprioritised, it is dropped,
+so a sorter with no passing slot gets `EBuildCondition.NeedConn`. The oracle
+ran 15488 synthetic ends past both models: **256 we accept and the ladder
+refuses**, and separately **584 the ladder accepts and we refuse**, that second
+class because `MatchInserter`'s own reach gate is `num4 < 6f` on a SQUARED
+world-unit distance -- 2.449 world units, against `SLOT_REACH = 0.8`.
+
+So `SKEW_AXIS_DEG` is not one rule with two consumers and not two rules; it is a
+number standing in for three different game predicates with three different
+thresholds. **Status: still LATENT for what we emit** -- `BlueprintUtils` line
+1623 hands a pasted sorter its peer preview straight from the blueprint, and
+`BuildTool_BlueprintPaste` line 1795 calls `MatchInserter` only when that
+preview came back null, so a sorter whose peer is inside the same blueprint
+never reaches this test at all. It binds the moment we emit a sorter reaching
+for something the blueprint does not contain.
+
 ### D6 — Three hand-rolled copies of `CONN_SLOTS_PER_OBJECT`
 
 `rules.CONN_SLOTS_PER_OBJECT = 16` (`rules.py:210-264`) carries the C# showing
