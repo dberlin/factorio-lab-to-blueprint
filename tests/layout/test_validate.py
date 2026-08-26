@@ -3870,3 +3870,120 @@ def test_belt_crossing_control_is_not_vacuous() -> None:
         r = validate(blind, only={"game.belt_collide"})
         total += len(r.by_check("game.belt_collide"))
     assert total >= 20, total
+
+
+# --- prolif.sprayed_cargo_reaches_machines ----------------------------------
+
+SPRAYED_REACHES = "prolif.sprayed_cargo_reaches_machines"
+
+
+def _sprayed_spec() -> BuildSpec:
+    """One proliferated group eating one external, sprayed ingredient."""
+    return BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id="magnetic-coil",
+                machine_item_id="assembling-machine-2",
+                count=1,
+                proliferator_mode=ProliferatorMode.SPEED,
+                inputs_per_machine={"copper-ore": Fraction(1)},
+                outputs_per_machine={"magnetic-coil": Fraction(1)},
+            ),
+        ),
+        external_inputs={"copper-ore": Fraction(4), "proliferator-3": Fraction(1, 2)},
+        spray_lanes={"copper-ore": True},
+    )
+
+
+_SPRAYED_IDS = IdMap(
+    recipes={"magnetic-coil": 6},
+    items={"assembling-machine-2": ASSEMBLER, "copper-ore": 1001},
+)
+
+
+def _sprayed_scene(coater_at: int | None) -> Placement:
+    """A four-tile ``copper-ore`` lane feeding a proliferated machine.
+
+    The lane runs west to east along ``y = 0``; the machine sits under it and a
+    sorter taps the lane's SECOND tile, so a coater on tile 2 or 3 is downstream
+    of the pickup and sprays cargo the machine never sees.  That is the shape
+    ``spine`` shipped: a coater on every spray lane, supplied, and behind the
+    sorter drawing from it.
+
+    ``coater_at`` is the lane tile index a Spray Coater rides, or ``None`` for
+    the case both strategies could produce silently -- no coater at all.
+    """
+    lane = [belt(x, 0, out=x + 1 if x < 3 else None, carries="copper-ore")
+            for x in range(4)]
+    parts: list[PlacedBuilding] = [
+        *lane,
+        machine(0, 1, recipe_id=6),  # 4x4, x0..3 y1..4
+        sorter(1, 0, 1, 1, inp=1, out=4),
+        # The proliferator the coater rides on, one level up and a tile behind.
+        # Not what this check reads -- that is `game.addon_supply` -- but a
+        # fixture without it is a placement no strategy would emit.
+        belt(-1, 0, 1, carries="proliferator-3"),
+    ]
+    if coater_at is not None:
+        parts.append(_coater(coater_at, 0))
+    return place(*parts)
+
+
+def test_sprayed_cargo_fires_when_the_lane_has_no_coater_at_all() -> None:
+    """The silent miss: a spray lane with nothing riding it.
+
+    ``prolif.coaters_are_supplied`` yields NOTHING here -- it iterates the
+    coaters that exist and there are none -- which is how a strategy that
+    skipped a coater shipped a build that pasted, ran, and missed its rate.
+    """
+    r = validate(_sprayed_scene(None), _sprayed_spec(), ids=_SPRAYED_IDS)
+    assert fired(r, SPRAYED_REACHES), errors(r)
+    assert Severity.ERROR in {f.severity for f in r.by_check(SPRAYED_REACHES)}
+    assert not fired(r, "prolif.coaters_are_supplied"), (
+        "the older check convicted this, so it was never vacuous and this one "
+        "is redundant"
+    )
+
+
+def test_sprayed_cargo_fires_when_the_coater_is_downstream_of_the_pickup() -> None:
+    """A coater behind the sorter sprays cargo the machine has already been fed."""
+    r = validate(_sprayed_scene(2), _sprayed_spec(), ids=_SPRAYED_IDS)
+    assert fired(r, SPRAYED_REACHES), errors(r)
+
+
+def test_sprayed_cargo_clean_when_the_coater_rides_the_lane_head() -> None:
+    r = validate(_sprayed_scene(0), _sprayed_spec(), ids=_SPRAYED_IDS)
+    assert not fired(r, SPRAYED_REACHES), [
+        f.message for f in r.by_check(SPRAYED_REACHES)
+    ]
+
+
+def test_sprayed_cargo_clean_when_the_coater_rides_the_pickup_tile_itself() -> None:
+    """Cargo AT the coater's tile counts as sprayed.
+
+    The items pass through the addon on that tile, which is why both strategies
+    may seat a coater on the first tile a sorter draws from rather than needing
+    one before it.  If this ever became a conviction, every head seat would
+    become a refusal.
+    """
+    r = validate(_sprayed_scene(1), _sprayed_spec(), ids=_SPRAYED_IDS)
+    assert not fired(r, SPRAYED_REACHES), [
+        f.message for f in r.by_check(SPRAYED_REACHES)
+    ]
+
+
+def test_sprayed_cargo_says_nothing_about_an_unproliferated_consumer() -> None:
+    """Spray costs proliferator, so a machine that wants none must not demand it."""
+    spec = _sprayed_spec().model_copy(
+        update={
+            "groups": (
+                _sprayed_spec().groups[0].model_copy(
+                    update={"proliferator_mode": ProliferatorMode.NONE}
+                ),
+            )
+        }
+    )
+    r = validate(_sprayed_scene(None), spec, ids=_SPRAYED_IDS)
+    assert not fired(r, SPRAYED_REACHES), [
+        f.message for f in r.by_check(SPRAYED_REACHES)
+    ]

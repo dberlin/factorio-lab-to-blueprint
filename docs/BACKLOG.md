@@ -295,12 +295,12 @@ was wrong about where the problem was.  Both are recorded below with why.
 
 **LATENT, not fixed, and worth knowing.**
 
-* `_place_coaters` still `continue`s when a drop cell is not free, so a lane
-  the spec wants sprayed can silently get no coater at all.  **Nothing checks
-  that a sprayed lane HAS one** -- `prolif.coaters_are_supplied` yields nothing
-  for a placement with no coater in it, and `game.addon_supply` only speaks
-  about coaters that exist.  A check that every `spec.spray_lanes` item carries
-  a coater would close it.
+* ~~`_place_coaters` still `continue`s when a drop cell is not free~~ --
+  **RESOLVED**, and the half of this bullet that called it freeform's problem
+  was the smaller half.  See the entry at the top of this file: freeform's miss
+  was latent, spine's was live on 15 of 61 pickups over six corpus URLs and on
+  35 of them on the ten-coater cell.  `prolif.sprayed_cargo_reaches_machines`
+  is the check.
 * The addon area admits a belt **TWO tiles behind** as well as one:
   `world_gap` for the two-tile offset is 0.94 against `ADDON_AREA_RADIUS` 1.0.
   Not used, because the unported `DistancePointLine < 0.3f` companion clause is

@@ -65,7 +65,7 @@ from functools import cache
 
 from ortools.sat.python import cp_model
 
-from flab2bp.dsp import catalog, colliders, params
+from flab2bp.dsp import catalog, colliders, params, rules
 from flab2bp.layout import junction, validate
 from flab2bp.layout import slots as sorter_slots
 from flab2bp.layout.base import (
@@ -111,6 +111,9 @@ MACHINE_ITEM_IDS: dict[str, int] = {
     "water-pump": 2306,
     "oil-extractor": 2307,
 }
+
+#: The same machines, as the ids a ``PlacedBuilding`` actually carries.
+_MACHINE_IDS: frozenset[int] = frozenset(MACHINE_ITEM_IDS.values())
 
 BELT_ITEM_IDS: dict[str, int] = {
     "conveyor-belt-1": 2001,
@@ -2756,23 +2759,55 @@ def _emit(
     #: they can share one supply.  The first spur leaves the lane's own tail;
     #: every later one may chain off this instead when it is nearer.
     prolif_tail: int | None = None
+    #: (coater index, corridor, depth), seated before any of them is fed.
+    #:
+    #: EVERY COATER GOES DOWN BEFORE THE FIRST SPUR IS ROUTED.  A spur is routed
+    #: against ``_SpurField``, which prices the colliders of the buildings that
+    #: exist WHEN IT IS BUILT -- so seating a coater and feeding it before
+    #: seating the next one lets spur N fly at z = 1 over ground coater N + 1 is
+    #: then placed on, and a coater's collider is 1.8975 high.  It pastes as
+    #: ``EBuildCondition.Collide`` on the belt, which is the failure the user
+    #: confirmed in game.  Interleaved, it refused ``electromagnetic-matrix``
+    #: and ``processor`` at ``max-proliferation`` on ``game.belt_crossing``;
+    #: seated first, both build.
+    seated: list[tuple[int, int, int]] = []
+    #: Lane tiles a sorter draws from into a machine.  A lane copy nothing eats
+    #: off is pure transit and needs no coater of its own: whatever it hands on
+    #: is sprayed at the head of the lane that DOES feed a machine.  Measured on
+    #: `super-magnetic-ring/max-proliferation` -- ten spray lanes, sixteen lanes
+    #: a machine eats off, twenty-four lanes carrying one of those items.
+    drawn_from = {
+        b.input_obj
+        for b in buildings
+        if catalog.is_sorter(b.item_id)
+        and b.input_obj is not None
+        and b.output_obj is not None
+        and 0 <= b.output_obj < len(buildings)
+        and buildings[b.output_obj].item_id in _MACHINE_IDS
+    }
     for item in spec.spray_lanes:
-        # Mount on a lane copy the proliferator can reach.  An item may have
-        # several lanes in a corridor, and taking the first one stranded a
-        # coater whenever that copy sat further from the proliferator lane than
-        # a sorter can span, even though a reachable copy existed.
+        # EVERY lane carrying the item that a machine eats off, not the first
+        # one that could be supplied.  Spray rides on the items, so a second
+        # copy of the lane with no coater on it feeds its own machines unsprayed
+        # cargo -- the same silent miss as no coater at all, in a build that
+        # reports one coater per spray lane and looks complete.  This used to
+        # `break` after the first, back when the coater had to share a column
+        # with the proliferator lane and a second one was usually unfeedable;
+        # the spur in `_feed_coater` removed that constraint and the `break`
+        # outlived it.
         for lane_key, indices in _coater_lane_candidates(
             lane_tiles, lane_item_of, item, prolif
         ):
-            if not indices:
+            if not indices or not drawn_from.intersection(indices):
                 continue
             c, depth = lane_key
-            # Mount the coater where the proliferator lane can actually reach
-            # it. Defaulting to the lane's midpoint stranded any coater whose
-            # column the proliferator lane did not extend to.
-            mid = buildings[
-                _coater_tile(buildings, indices, lane_tiles, lane_item_of, c, prolif)
-            ]
+            # THE HEAD OF THE LANE, so every sorter drawing this item sits
+            # downstream of the coater and eats cargo that went through it.
+            seat = _coater_tile(buildings, indices, Facing.EAST.value)
+            mid = buildings[seat]
+            # AGAINST THE FLOW, so the proliferator drop lands over the lane's
+            # own second tile rather than off the upstream end of the corridor.
+            coater_yaw = _coater_yaw(buildings, seat)
             coater_idx = len(buildings)
             buildings.append(
                 PlacedBuilding(
@@ -2793,27 +2828,29 @@ def _emit(
                     y=mid.y,
                     width=1,
                     height=1,
-                    yaw=Facing.EAST.value,
+                    yaw=coater_yaw,
                 )
             )
             coaters += 1
-            # Feed it. A coater with no proliferator sprays nothing, so every
-            # proliferated recipe would quietly run unproliferated and the build
-            # would miss its rate while looking perfectly healthy.
-            belts, prolif_tail = _feed_coater(
-                buildings,
-                lane_tiles,
-                lane_item_of,
-                coater_idx=coater_idx,
-                corridor=c,
-                coater_depth=depth,
-                corr_y=corr_y,
-                prolif=prolif,
-                belt_vertical_construction=belt_vertical_construction,
-                chain_from=prolif_tail,
-            )
-            sorters += belts
-            break
+            seated.append((coater_idx, c, depth))
+
+    # Feed them. A coater with no proliferator sprays nothing, so every
+    # proliferated recipe would quietly run unproliferated and the build would
+    # miss its rate while looking perfectly healthy.
+    for coater_idx, c, depth in seated:
+        belts, prolif_tail = _feed_coater(
+            buildings,
+            lane_tiles,
+            lane_item_of,
+            coater_idx=coater_idx,
+            corridor=c,
+            coater_depth=depth,
+            corr_y=corr_y,
+            prolif=prolif,
+            belt_vertical_construction=belt_vertical_construction,
+            chain_from=prolif_tail,
+        )
+        sorters += belts
 
     # --- coverage top-up --------------------------------------------------
     # The analytic reach model budgets a worst-case vertical offset, which is
@@ -3728,35 +3765,158 @@ def _coater_lane_candidates(
     return [(k, lane_tiles[k]) for k in sorted(keys, key=reachable)]
 
 
+def _lane_flow_order(buildings: list[PlacedBuilding], lane: list[int]) -> list[int]:
+    """``lane`` re-ordered head first, along the direction cargo travels.
+
+    ``lane_tiles`` holds a lane in X ORDER whichever way it runs -- everything
+    else on a corridor looks a tile up by column, so emission keeps x order and
+    reverses only the ``output_obj`` chain.  A westward lane's head is therefore
+    its LAST entry, and anything that wants "where the items arrive" has to read
+    the links rather than the list.
+
+    The head is the tile no other tile of this lane hands to.  Derived from the
+    links rather than from the emitted yaw, because a riser may relink a lane
+    after emission and the yaw would then be stale.
+    """
+    members = set(lane)
+    fed = {
+        out
+        for i in lane
+        if (out := buildings[i].output_obj) is not None and out in members
+    }
+    heads = [i for i in lane if i not in fed]
+    if len(heads) != 1:
+        # A lane that is not one chain is not something to guess about.  X order
+        # is what the caller had before; the coater rules and the validator get
+        # the last word either way.
+        return list(lane)
+    order = [heads[0]]
+    seen = set(order)
+    while (nxt := buildings[order[-1]].output_obj) is not None and nxt in members:
+        if nxt in seen:
+            break
+        order.append(nxt)
+        seen.add(nxt)
+    return order if len(order) == len(lane) else list(lane)
+
+
+def _ride_is_legal(buildings: list[PlacedBuilding], tile: int, yaw: float) -> bool:
+    """Whether an addon yawed ``yaw`` may ride belt ``tile``.
+
+    The same pair of questions ``game.addon_facing`` and ``game.addon_corner``
+    ask of the finished placement, asked here so a seat is chosen that passes
+    them rather than discovered to fail them: the ridden belt's own input and
+    output belts must both lie along the addon's axis.  An end of a run has only
+    the one neighbour and the game tests only the neighbours that exist.
+    """
+    b = buildings[tile]
+    nxt = b.output_obj
+    outgoing = None
+    if nxt is not None and 0 <= nxt < len(buildings):
+        o = buildings[nxt]
+        if catalog.is_belt(o.item_id):
+            outgoing = (o.x - b.x, o.y - b.y, float(o.z - b.z))
+    incoming = None
+    for prv in buildings:
+        if prv.output_obj == tile and catalog.is_belt(prv.item_id):
+            incoming = (b.x - prv.x, b.y - prv.y, float(b.z - prv.z))
+            break
+    if incoming is None and outgoing is None:
+        return True
+    return bool(rules.addon_ride_is_straight(yaw, incoming, outgoing))
+
+
+def _addon_area_step(yaw: float) -> tuple[int, int]:
+    """Grid step from a coater at ``yaw`` to the tile its proliferator sits on.
+
+    Read off ``addonAreaPoses`` area 1 rather than written down, so a yaw this
+    module did not anticipate cannot silently aim the drop at the wrong tile.
+    """
+    adx, ady, _adz = catalog.building(CONSTANTS.spray_item_id).addon_areas[1]
+    wx, wy = sorter_slots.to_world((adx, ady), yaw)
+    return round(wx), round(wy)
+
+
+def _coater_yaw(buildings: list[PlacedBuilding], tile: int) -> float:
+    """Which way to face a coater riding ``tile``, so its drop lands ON the lane.
+
+    THE AXIS IS FIXED BY THE BELT; only which END of it carries the proliferator
+    is ours to pick, and the game accepts both -- ``game.addon_facing`` convicts
+    a right angle and explicitly not a reversal, because the test is
+    ``Mathf.Abs`` of the dot.
+
+    Facing AGAINST the flow is what makes seating at the lane's HEAD possible at
+    all.  Area 1 sits BEHIND the coater, so a head-seated coater facing WITH the
+    flow puts its drop one tile upstream of the lane -- off the end of the
+    corridor, which on a lane starting at column 0 is x = -1, outside the
+    bounding box the spur search is allowed to use.  Measured: with the seat
+    moved to the head and the yaw left at EAST, all ten proliferated candidates
+    over the first six corpus URLs refused with "no elevated spur reaches
+    (-1, y)".  Facing against the flow puts the drop over the lane's SECOND
+    tile instead -- inside the box, one level up, on ground the corridor already
+    owns.
+
+    Directly over the lane is legal for exactly this cell and no other: an
+    addon's own area cells are excused from ``game.belt_crossing``, and the
+    coater's collider reaches 1.51 tiles along its facing and nothing behind it.
+    """
+    b = buildings[tile]
+    nxt = b.output_obj
+    step: tuple[int, int] | None = None
+    if nxt is not None and 0 <= nxt < len(buildings):
+        o = buildings[nxt]
+        if catalog.is_belt(o.item_id):
+            step = (o.x - b.x, o.y - b.y)
+    if step is None or step == (0, 0):
+        return float(Facing.EAST.value)
+    for facing in (Facing.EAST, Facing.WEST, Facing.NORTH, Facing.SOUTH):
+        if _addon_area_step(float(facing.value)) == step:
+            return float(facing.value)
+    return float(Facing.EAST.value)
+
+
 def _coater_tile(
     buildings: list[PlacedBuilding],
     lane: list[int],
-    lane_tiles: dict[tuple[int, int], list[int]],
-    lane_item_of: dict[tuple[int, int], str],
-    corridor: int,
-    prolif: str | None,
+    yaw: float,
 ) -> int:
-    """Index of the lane tile to mount a coater on.
+    """Index of the lane tile to mount a Spray Coater on: the HEAD of the lane.
 
-    Prefers a column the corridor's proliferator lane also covers, so the feed
-    sorter has somewhere to come from; falls back to the lane midpoint when no
-    such column exists, leaving the validator to report the unfed coater rather
-    than hiding it.
+    A COATER SPRAYS WHAT PASSES THROUGH IT, so every sorter that draws the
+    sprayed item off this lane has to sit downstream of it.  This used to pick
+    the column nearest the lane's MIDPOINT that the corridor's proliferator lane
+    also covered -- a supply convenience, chosen before the spur existed -- and
+    every sorter west of that column then fed its machine cargo that had not
+    been sprayed.  Measured over the first six corpus URLs and every
+    proliferated candidate they offer: 15 of 61 pickups drew from upstream of
+    their own coater, on nine separate candidates, each of which had a coater
+    for every spray lane and passed ``prolif.coaters_are_supplied``.  The build
+    pasted, ran, and quietly missed its rate --
+    ``prolif.sprayed_cargo_reaches_machines`` is the check that now says so.
+
+    The supply convenience is not needed and has not been since
+    :func:`_feed_coater` became a SPUR: it searches an elevated route from any
+    proliferator tail to the coater's addon area, so the mount column no longer
+    has to coincide with the supply lane's.
+
+    The head is not always legal to ride.  ``game.addon_corner`` refuses an
+    addon on a belt that TURNS on its tile, which a riser feeding a lane head
+    from another corridor produces, so the search walks downstream to the first
+    tile that is straight.  That tile is the most upstream one a coater may
+    legally sit on; whether it is upstream of every sorter is then the
+    validator's question, and a lane where it is not is a refusal rather than a
+    quiet miss.
     """
-    midpoint = lane[len(lane) // 2]
-    if prolif is None:
-        return midpoint
-    supply_xs: set[int] = set()
-    for (c, depth), indices in lane_tiles.items():
-        if c == corridor and lane_item_of.get((c, depth)) == prolif:
-            supply_xs |= {buildings[i].x for i in indices}
-    if not supply_xs:
-        return midpoint
-    shared = [i for i in lane if buildings[i].x in supply_xs]
-    if not shared:
-        return midpoint
-    want = buildings[midpoint].x
-    return min(shared, key=lambda i: abs(buildings[i].x - want))
+    order = _lane_flow_order(buildings, lane)
+    for i in order:
+        if _ride_is_legal(buildings, i, yaw):
+            return i
+    raise NoValidLayout(
+        f"spine cannot seat a Spray Coater on the lane at "
+        f"({buildings[order[0]].x}, {buildings[order[0]].y}): every one of its "
+        f"{len(order)} tiles is a belt that turns under the addon, and the game "
+        f"refuses an addon whose ridden belt does not run straight through it"
+    )
 
 
 #: The four tiles a belt may step to.  Belts do not run diagonally, so the
@@ -3832,6 +3992,9 @@ class _SpurField:
       one refusal that survived the rule being read.
     * ``floor`` -- the lowest altitude at which a belt clears everything
       standing on the tile, from :func:`_belt_floor_over`.
+    * ``attached`` -- altitudes at which a belt on the tile is an addon's
+      CONNECTION rather than a crossing, and so owes the collider under it
+      nothing.  One level per raised area and only that one.
 
     Precomputed, because the search is three-dimensional now.  Asking every
     building about every ``(tile, altitude)`` a route might visit was affordable
@@ -3845,6 +4008,10 @@ class _SpurField:
     def __init__(self, buildings: list[PlacedBuilding]) -> None:
         self.floor: dict[tuple[int, int], Fraction] = {}
         self.taken: dict[tuple[int, int], set[Fraction]] = {}
+        #: tile -> the altitudes at which a belt there is an addon's ATTACHMENT
+        #: rather than a crossing.  One level per raised area, and only that
+        #: one; see the note where it is filled in.
+        self.attached: dict[tuple[int, int], set[Fraction]] = {}
         for b in buildings:
             try:
                 info = catalog.building(b.item_id)
@@ -3879,15 +4046,25 @@ class _SpurField:
                 # tile would let an elevated spur fly straight over the coater,
                 # which is the defect this pricing exists to stop.  The ground
                 # belt there is held by `taken` already.
-                attached = {
-                    (
-                        b.x + round(sorter_slots.to_world((adx, ady), b.yaw)[0]),
-                        b.y + round(sorter_slots.to_world((adx, ady), b.yaw)[1]),
+                #
+                # AND THE EXEMPTION IS AN ALTITUDE, NOT A COLUMN.  Dropping the
+                # attached tile out of `priced` was letting a spur fly over that
+                # column at ANY height: the raised area is one cell at ONE
+                # level, with 1.8975 of collider under it.  `game.belt_crossing`
+                # excuses a belt on an area cell only within half a level of
+                # that area's own altitude, so a spur crossing the drop column
+                # at z = 3/2 is a collision -- and it was one.  With the coaters
+                # moved to their lanes' heads,
+                # `electromagnetic-matrix/max-proliferation` emitted three and
+                # refused on exactly this check.
+                for adx, ady, adz in info.addon_areas:
+                    if adz <= 0:
+                        continue
+                    wx, wy = sorter_slots.to_world((adx, ady), b.yaw)
+                    tile = (b.x + round(wx), b.y + round(wy))
+                    self.attached.setdefault(tile, set()).add(
+                        b.z + Fraction(round(adz))
                     )
-                    for adx, ady, adz in info.addon_areas
-                    if adz > 0
-                }
-                priced = [t for t in priced if t not in attached]
             floor = _belt_floor_over(b)
             for tile in tiles:
                 self.taken.setdefault(tile, set()).add(b.z)
@@ -3900,15 +4077,17 @@ class _SpurField:
         """May an elevated belt tile stand at ``(x, y, z)``?"""
         if z in self.taken.get((x, y), ()):
             return False
+        if z in self.attached.get((x, y), ()):
+            return True
         return z >= self.floor.get((x, y), _GROUND)
 
     def lowest(
         self, x: int, y: int, floor: Fraction, ceiling: Fraction
     ) -> Fraction | None:
         """The lowest altitude in ``floor..ceiling`` this tile allows, or ``None``."""
-        z = max(floor, self.floor.get((x, y), _GROUND))
+        z = floor
         while z <= ceiling:
-            if z not in self.taken.get((x, y), ()):
+            if self.allows(x, y, z):
                 return z
             z += catalog.BELT_Z_QUANTUM
         return None

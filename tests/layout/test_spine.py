@@ -2878,12 +2878,25 @@ class TestSprayCoatersAreFed:
         silently stop exercising it.  Its own sample is asserted first: the
         placement really does contain a belt above `z = 1`, so a build that lost
         its climb could not pass this quietly.
+
+        TEN SPRAY LANES ARE MORE THAN TEN LANES.  This asserted exactly ten
+        coaters, one per spray lane, and that number was the defect wearing a
+        test: an item has one entry in `spray_lanes` and as many LANES in the
+        corridors as the machines eating it need, and `_place_coaters` used to
+        `break` after seating the first.  Measured on this exact spec with
+        spine's own self-check disabled so the raw emission could be read: ten
+        coaters, and **35 sorters feeding a proliferated machine off a lane no
+        coater had sprayed**.  So the count is now bounded below by the spray
+        lanes and the real invariant is asserted beside it --
+        `prolif.sprayed_cargo_reaches_machines`, which is 0 here and was 35.
         """
         spec = self._corpus_candidate("max-proliferation")
         assert len(spec.spray_lanes) >= 10, "sample is not the ten-lane case"
         p = SpineLayout(power=False).lay_out(spec, time_budget_s=4.0)
         coaters = [b for b in p.buildings if b.item_id == catalog.SPRAY_COATER_ID]
-        assert len(coaters) == 10, f"expected ten coaters, got {len(coaters)}"
+        assert len(coaters) >= len(spec.spray_lanes), (
+            f"{len(spec.spray_lanes)} spray lane(s) and {len(coaters)} coater(s)"
+        )
         assert [b for b in p.buildings if b.z and b.z > 1], (
             "nothing climbed above the addon level, so the crossing rule was "
             "never exercised and the assertions below prove nothing"
@@ -2895,6 +2908,8 @@ class TestSprayCoatersAreFed:
         assert not report.by_check("game.belt_crossing"), [
             f.message for f in report.by_check("game.belt_crossing")
         ]
+        unsprayed = report.by_check("prolif.sprayed_cargo_reaches_machines")
+        assert not unsprayed, [f.message for f in unsprayed]
         assert report.ok, sorted({f.check for f in report.errors})
 
     def test_a_spur_may_cross_a_machine_only_at_that_machine_s_own_height(
@@ -3415,3 +3430,101 @@ class TestABridgePassesUnderAJunctionAndNotOverIt:
                         f"a belt at ({other.x}, {other.y}, {other.z}) stands in "
                         f"the keep-out of a junction at ({b.x}, {b.y}, {b.z})"
                     )
+
+
+class TestACoaterRidesTheHeadOfItsLane:
+    """A coater sprays what passes THROUGH it, so the sorters must be behind it.
+
+    ``_coater_tile`` used to mount the coater on the column nearest the lane's
+    MIDPOINT that the corridor's proliferator lane also covered -- a supply
+    convenience from before ``_feed_coater`` grew a spur.  Every sorter upstream
+    of that column then fed its machine cargo that had not been sprayed, and
+    nothing said so: the lane had its coater, the coater had its proliferator,
+    and ``prolif.coaters_are_supplied`` passed.
+
+    MEASURED over the first six corpus URLs and every proliferated candidate
+    they offer: 15 of 61 sprayed pickups drew from upstream of their own coater,
+    spread over nine of the ten candidates.  After the seat moved to the lane
+    head: 0 of 61, with all ten still building.
+    """
+
+    @staticmethod
+    def _lane(xs: list[int], *, westward: bool) -> list[PlacedBuilding]:
+        """A lane in X order, forward-linked along its direction of travel.
+
+        ``lane_tiles`` keeps x order whichever way a lane runs and reverses only
+        the ``output_obj`` chain, which is exactly the trap ``_lane_flow_order``
+        exists to avoid: a westward lane's head is its LAST entry.
+        """
+        out = [
+            PlacedBuilding(item_id=2001, model_index=35, x=x, y=0, width=1, height=1)
+            for x in xs
+        ]
+        chain = list(range(len(xs)))[:: -1 if westward else 1]
+        for a, b in zip(chain, chain[1:], strict=False):
+            out[a] = replace(out[a], output_obj=b)
+        return out
+
+    def test_the_head_of_an_eastward_lane_is_its_first_tile(self) -> None:
+        from flab2bp.layout.spine import _coater_tile
+
+        lane = self._lane([0, 1, 2, 3], westward=False)
+        assert _coater_tile(lane, [0, 1, 2, 3], 90.0) == 0
+
+    def test_the_head_of_a_westward_lane_is_its_last_tile(self) -> None:
+        """X order and flow order disagree here, and flow order is the one that counts."""
+        from flab2bp.layout.spine import _coater_tile
+
+        lane = self._lane([0, 1, 2, 3], westward=True)
+        assert _coater_tile(lane, [0, 1, 2, 3], 90.0) == 3
+
+    def test_the_seat_is_never_the_midpoint_of_a_four_tile_lane(self) -> None:
+        """Named explicitly: the midpoint is what the old code returned."""
+        from flab2bp.layout.spine import _coater_tile
+
+        for westward in (False, True):
+            lane = self._lane([0, 1, 2, 3], westward=westward)
+            assert _coater_tile(lane, [0, 1, 2, 3], 90.0) != 2, (
+                "the coater is back on the lane's midpoint, and every sorter "
+                "upstream of it draws unsprayed cargo"
+            )
+
+    def test_the_yaw_puts_the_drop_over_the_lane_and_not_off_its_end(self) -> None:
+        """Area 1 sits BEHIND the coater, so a head seat has to face upstream.
+
+        Facing WITH the flow puts the proliferator drop one tile off the
+        upstream end of the corridor -- x = -1 on a lane starting at column 0,
+        outside the box the spur search may use.  All ten proliferated
+        candidates over the first six corpus URLs refused that way.
+        """
+        from flab2bp.layout.spine import _addon_area_step, _coater_yaw
+
+        lane = self._lane([0, 1, 2, 3], westward=False)
+        yaw = _coater_yaw(lane, 0)
+        assert _addon_area_step(yaw) == (1, 0), (
+            f"yaw {yaw} puts the drop at {_addon_area_step(yaw)} from the seat; "
+            "it must land on the lane's own next tile"
+        )
+
+    @pytest.mark.slow
+    def test_every_sprayed_pickup_on_a_real_spec_is_downstream_of_a_coater(
+        self,
+    ) -> None:
+        """End to end, on the spec the seat defect was measured on.
+
+        Red before the seat moved: this spec built, with a coater on every spray
+        lane, and the validator convicted the pickups.
+        """
+        spec = TestSprayCoatersAreFed._candidate("free-proliferation")
+        assert spec.spray_lanes, "sample has no spray lanes; nothing below tests anything"
+        p = SpineLayout(power=False).lay_out(spec, time_budget_s=4.0)
+        coaters = [b for b in p.buildings if b.item_id == catalog.SPRAY_COATER_ID]
+        assert len(coaters) >= len(spec.spray_lanes), (
+            f"{len(spec.spray_lanes)} spray lane(s) and {len(coaters)} coater(s): "
+            "a lane without one feeds its machines unsprayed cargo"
+        )
+        report = validate.validate(
+            p, spec, ids=validate.id_map(spec), expect_power=False
+        )
+        bad = report.by_check("prolif.sprayed_cargo_reaches_machines")
+        assert not bad, [f.message for f in bad]
