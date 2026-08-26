@@ -381,8 +381,9 @@ _ROUTING_EXPANSIONS_PER_SECOND = 400_000
 
 #: Toll a path pays per tile for occupying GROUND LEVEL.
 #:
-#: Only machines are solid at every altitude, so a belt at z=0 leaves z=1 and
-#: z=2 open above it -- but a plain step costs 1 and a ramp costs 3, so A* has
+#: A belt at z=0 leaves z=1 and z=2 open above it -- only a machine denies all
+#: three, and only because its collider outreaches this lattice
+#: (:func:`_crossing_ban_levels`) -- but a plain step costs 1 and a ramp 3, so A* has
 #: no reason to climb and never does unless it is blocked.  The whole block
 #: therefore wires on one plane, and a route that crosses it CUTS that plane:
 #: ramping over a belt needs two free tiles of run on each side, and a dense

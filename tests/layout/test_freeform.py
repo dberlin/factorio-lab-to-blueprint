@@ -2450,6 +2450,21 @@ def _belt(x: int, y: int, *, item: str | None = None) -> PlacedBuilding:
     )
 
 
+def _packable_machine_ids() -> set[int]:
+    """Every id ``_emit_strip`` can hand to ``_Canvas.add(solid=True)``.
+
+    Resolved rather than listed: the set carries FactorioLab string ids for the
+    Dark Fog variants, and a hand-written list would silently stop covering
+    whatever was added to it next.
+    """
+    out = set()
+    for key in MACHINE_ITEM_IDS:
+        got = catalog.get_item_id(key) if isinstance(key, str) else key
+        if got is not None:
+            out.add(got)
+    return out
+
+
 class TestABuildingDeniesOnlyTheBandUnderItsCollider:
     """A machine is not solid at every altitude, and the game never said it was.
 
@@ -2521,7 +2536,7 @@ class TestABuildingDeniesOnlyTheBandUnderItsCollider:
         shipped geometry is unchanged; anything else here would be a belt the
         game pastes as ``EBuildCondition.Collide``.
         """
-        for item_id in (2302, 2303, 2901, 2309, 2308):
+        for item_id in _packable_machine_ids() | {catalog.TESLA_TOWER_ID}:
             canvas = _Canvas()
             canvas.add(self._at(item_id, 5, 5), solid=True)
             for lvl in range(LEVELS):
@@ -2529,6 +2544,40 @@ class TestABuildingDeniesOnlyTheBandUnderItsCollider:
                     f"{catalog.building(item_id).name} reads passable at level "
                     f"{lvl}; its collider tops out at "
                     f"{colliders.belt_crossing_height(catalog.building(item_id).model_index)}"
+                )
+
+    def test_the_band_is_exactly_what_the_full_collider_probe_says(self) -> None:
+        """The band against the game's own geometry, model by model.
+
+        ``_crossing_ban_levels`` reads one closed-form bound;
+        :func:`colliders.belt_crossings` places the actual 0.23 probe sphere at
+        the actual altitude against the actual collider boxes.  They are
+        independent routes to the same answer, so a disagreement is a real
+        defect in one of them -- under-banning ships belts the game pastes as
+        ``Collide``, over-banning is the invented rule creeping back.
+
+        Swept over the whole footprint plus a ring, because "no footprint term"
+        is itself part of the claim: the collider's top governs at the centre
+        and at the edge alike.
+        """
+        for item_id in _packable_machine_ids() | {catalog.TESLA_TOWER_ID, 2020, 2030}:
+            info = catalog.building(item_id)
+            banned = set(freeform._crossing_ban_levels(self._at(item_id, 0, 0)))
+            placed = colliders.Placed(info.model_index, 0.0, 0.0, 0.0, 0.0)
+            w, h = catalog.footprint(item_id)
+            tiles = [
+                (dx, dy)
+                for dx in range(-(w // 2) - 1, w // 2 + 2)
+                for dy in range(-(h // 2) - 1, h // 2 + 2)
+            ]
+            for lvl in range(LEVELS):
+                z = float(lvl * freeform._LEVEL_HEIGHT)
+                probe = [colliders.Placed(35, dx, dy, z, 0.0) for dx, dy in tiles]
+                hits = bool(colliders.belt_crossings(probe, [placed]))
+                assert (lvl in banned) == hits, (
+                    f"{info.name} at level {lvl}: the band says "
+                    f"{'banned' if lvl in banned else 'free'} and the probe says "
+                    f"{'blocked' if hits else 'clear'}"
                 )
 
     def test_the_bound_is_a_lookup_and_not_one_constant(self) -> None:
