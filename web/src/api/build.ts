@@ -14,6 +14,12 @@
  */
 import { z } from 'zod';
 
+/** Strategies accepted on a web request. Spine remains an audit-only CLI backend. */
+export const RequestStrategy = z.enum(['best', 'freeform', 'sequence-pair']);
+
+/** Strategies the server may report for an actual layout attempt or result. */
+export const ExplicitStrategy = z.enum(['freeform', 'sequence-pair']);
+
 /** Both forms of a rate: the exact one, and the one a player reads. */
 const Rate = z.object({ exact: z.string(), per_minute: z.number() });
 
@@ -21,7 +27,7 @@ const Finding = z.object({ check: z.string(), message: z.string() });
 
 const Attempt = z.object({
   candidate: z.string(),
-  strategy: z.string(),
+  strategy: ExplicitStrategy,
   area: z.number(),
   ok: z.boolean(),
   errors: z.number(),
@@ -40,7 +46,7 @@ const BuildResult = z.object({
   /** Null when validation failed and the caller did not pass allow_invalid. */
   blueprint: z.string().nullable(),
   valid: z.boolean(),
-  strategy: z.string(),
+  strategy: ExplicitStrategy,
   candidate: z.string(),
   machines: z.number(),
   area: z.number(),
@@ -78,7 +84,7 @@ const Step = z.object({
   index: z.number(),
   total: z.number(),
   candidate: z.string(),
-  strategy: z.string(),
+  strategy: ExplicitStrategy,
   phase: z.enum(['started', 'laid-out', 'refused']),
   area: z.number().nullable(),
   ok: z.boolean().nullable(),
@@ -108,18 +114,22 @@ export type BuildResult = z.infer<typeof BuildResult>;
 export type Refusal = z.infer<typeof Refusal>;
 export type Attempt = z.infer<typeof Attempt>;
 
-export interface BuildOptions {
-  url: string;
-  strategy: 'best' | 'spine' | 'freeform';
-  candidates: number;
-  budget_s: number;
-  power: boolean;
-  name: string;
-  allow_invalid: boolean;
+export const BuildOptions = z.object({
+  url: z.string(),
+  strategy: RequestStrategy,
+  candidates: z.number(),
+  budget_s: z.number(),
+  power: z.boolean(),
+  name: z.string(),
+  allow_invalid: z.boolean(),
   /** A FactorioLab flow export's CSV text. Empty means the recipe selection is
       derived rather than pinned, which the report says out loud. */
-  flow: string;
-}
+  flow: z.string(),
+});
+
+export type BuildOptions = z.infer<typeof BuildOptions>;
+export type RequestStrategy = z.infer<typeof RequestStrategy>;
+export type ExplicitStrategy = z.infer<typeof ExplicitStrategy>;
 
 export const DEFAULT_OPTIONS: BuildOptions = {
   url: '',
@@ -147,7 +157,7 @@ async function reason(response: Response): Promise<string> {
   try {
     const parsed: unknown = JSON.parse(text);
     if (parsed && typeof parsed === 'object' && 'error' in parsed) {
-      return String((parsed as { error: unknown }).error);
+      return String(parsed.error);
     }
   } catch {
     // Not JSON; the body is already the best message available.
@@ -157,10 +167,11 @@ async function reason(response: Response): Promise<string> {
 
 /** Submits a build. Resolves once it has an id, NOT once it has a blueprint. */
 export async function submitBuild(options: BuildOptions, signal?: AbortSignal): Promise<Job> {
+  const request = BuildOptions.parse(options);
   const response = await fetch('/api/build', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(options),
+    body: JSON.stringify(request),
     signal,
   });
   if (!response.ok) throw new BuildRequestError(await reason(response));

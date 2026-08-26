@@ -33,13 +33,14 @@ import subprocess
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Final
 from urllib.parse import parse_qs, urlparse
 
 import httpx
+from pydantic import TypeAdapter, ValidationError
 
 from flab2bp.web.jobs import Builder, InvalidOptions, Solve, parse_options, run_build
-from flab2bp.web.payload import Json
+from flab2bp.web.payload import Json, JsonValue
 
 #: Refuse a body larger than this. A FactorioLab URL is long, but not this long.
 MAX_BODY_BYTES = 256 * 1024
@@ -60,6 +61,10 @@ GZIP_MIN_BYTES = 1024
 #: How many redirects ``/api/fetch`` will follow before giving up.  Followed by
 #: hand rather than by httpx so every hop can be checked; see :meth:`_proxy`.
 MAX_REDIRECTS = 5
+
+#: The one untyped JSON ingress.  Validation happens once at the HTTP boundary;
+#: routing and solver code only see the recursive JSON value type.
+_JSON_VALUE_ADAPTER: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 
 
 def private_address(url: str) -> str | None:
@@ -118,7 +123,7 @@ class Handler(BaseHTTPRequestHandler):
     builder: Builder
     dist: Path
 
-    def log_message(self, format: str, *args: Any) -> None:
+    def log_message(self, format: str, *args: object) -> None:
         """Quieter than the default, which would log every poll of every job."""
         if self.command == "GET" and self.path.startswith("/api/build/"):
             return
@@ -158,13 +163,13 @@ class Handler(BaseHTTPRequestHandler):
     def _text(self, status: int, body: str) -> None:
         self._send(status, body.encode(), "text/plain; charset=utf-8")
 
-    def _read_json(self) -> object:
+    def _read_json(self) -> JsonValue:
         length = int(self.headers.get("Content-Length") or 0)
         if length > MAX_BODY_BYTES:
             raise InvalidOptions(f"request body over {MAX_BODY_BYTES} bytes")
         try:
-            return json.loads(self.rfile.read(length) or b"null")
-        except json.JSONDecodeError as exc:
+            return _JSON_VALUE_ADAPTER.validate_json(self.rfile.read(length) or b"null")
+        except ValidationError as exc:
             raise InvalidOptions(f"body is not valid JSON: {exc}") from exc
 
     # ---- routes ---------------------------------------------------------

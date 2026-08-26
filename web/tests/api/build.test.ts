@@ -2,6 +2,7 @@ import { afterEach, expect, test } from '@rstest/core';
 import {
   BuildRequestError,
   DEFAULT_OPTIONS,
+  BuildOptions,
   isSettled,
   pollBuild,
   runBuild,
@@ -11,13 +12,28 @@ import { aJob, aResult, restoreFetch, serving } from '../support/build';
 
 afterEach(restoreFetch);
 
-test('submit posts the options and returns the job', async () => {
+test('submit posts sequence-pair with its exact wire spelling', async () => {
   const calls = serving({ status: 202, body: aJob({ state: 'queued', result: null }) });
-  const job = await submitBuild({ ...DEFAULT_OPTIONS, url: 'https://example.invalid/x' });
+  const job = await submitBuild({
+    ...DEFAULT_OPTIONS,
+    url: 'https://example.invalid/x',
+    strategy: 'sequence-pair',
+  });
 
   expect(job.state).toBe('queued');
   expect(calls[0]?.url).toBe('/api/build');
-  expect(JSON.parse(String(calls[0]?.init?.body)).url).toBe('https://example.invalid/x');
+  const body = BuildOptions.parse(JSON.parse(String(calls[0]?.init?.body)));
+  expect(body.url).toBe('https://example.invalid/x');
+  expect(body.strategy).toBe('sequence-pair');
+});
+
+test('submit rejects spine before making a request', async () => {
+  const calls = serving({ status: 202, body: aJob() });
+  const pending = Reflect.apply(submitBuild, undefined, [
+    { ...DEFAULT_OPTIONS, strategy: 'spine' },
+  ]);
+  await expect(pending).rejects.toThrow();
+  expect(calls).toHaveLength(0);
 });
 
 test('a 400 becomes a BuildRequestError carrying the reason', async () => {
@@ -40,6 +56,35 @@ test('a payload that has drifted from the schema is rejected rather than rendere
   await expect(pollBuild('x')).rejects.toThrow();
 });
 
+
+test('response strategies are limited to active explicit web choices', async () => {
+  serving({
+    status: 200,
+    body: { ...aJob(), result: { ...aResult(), strategy: 'spine' } },
+  });
+  await expect(pollBuild('x')).rejects.toThrow();
+});
+
+
+test('sequence-pair is accepted as an explicit response strategy', async () => {
+  const result = aResult({
+    strategy: 'sequence-pair',
+    attempts: [
+      {
+        candidate: 'no-proliferator',
+        strategy: 'sequence-pair',
+        area: 575,
+        ok: true,
+        errors: 0,
+        chosen: true,
+      },
+    ],
+  });
+  serving({ status: 200, body: aJob({ result }) });
+  const job = await pollBuild('x');
+  expect(job.result?.strategy).toBe('sequence-pair');
+});
+
 test('runBuild polls until the job settles and reports every snapshot', async () => {
   serving(
     { status: 202, body: aJob({ state: 'queued', result: null, elapsed_s: 0 }) },
@@ -60,12 +105,12 @@ test('a refusal settles the job like any other answer', async () => {
     body: aJob({
       state: 'refused',
       result: null,
-      refusal: { message: 'no valid layout', reasons: ['spine/a: too tall'] },
+      refusal: { message: 'no valid layout', reasons: ['freeform/a: too tall'] },
     }),
   });
   const settled = await runBuild({ ...DEFAULT_OPTIONS, url: 'x' }, () => {});
   expect(settled.state).toBe('refused');
-  expect(settled.refusal?.reasons).toEqual(['spine/a: too tall']);
+  expect(settled.refusal?.reasons).toEqual(['freeform/a: too tall']);
 });
 
 test('aborting stops the poll loop', async () => {

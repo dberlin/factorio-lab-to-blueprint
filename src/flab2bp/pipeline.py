@@ -47,13 +47,15 @@ STRATEGY_CHOICES: tuple[StrategyName, ...] = (
     "freeform",
     "sequence-pair",
 )
-_PRODUCTION_STRATEGIES: tuple[ExplicitStrategyName, ...] = ("freeform",)
+#: Explicit strategies included when callers request ``best``.
+PRODUCTION_STRATEGIES: tuple[ExplicitStrategyName, ...] = ("freeform",)
+PRODUCTION_STRATEGY_COUNT = len(PRODUCTION_STRATEGIES)
 
 
 def _strategy_names(strategy: StrategyName) -> tuple[ExplicitStrategyName, ...]:
     """Resolve a request without promoting audit backends into ``best``."""
     if strategy == "best":
-        return _PRODUCTION_STRATEGIES
+        return PRODUCTION_STRATEGIES
     return (strategy,)
 
 

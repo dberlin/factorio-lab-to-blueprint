@@ -1,9 +1,10 @@
 """Submit-and-poll, because a build is seconds to minutes.
 
-``--budget`` is per layout and ``best`` lays out every candidate with both
-strategies, so the wall clock is a multiple of it.  A request that waits for
-that is a request that looks like a hang: browsers and proxies give up long
-before a large spec does, and the connection dying takes the result with it.
+``--budget`` is per layout and ``best`` lays out every candidate with every
+active production strategy, so the wall clock is a multiple of it.  A request
+that waits for that is a request that looks like a hang: browsers and proxies
+give up long before a large spec does, and the connection dying takes the
+result with it.
 So a build is a job -- submitted, then polled.
 
 One worker by default, deliberately.  ``pyproject.toml`` already records what
@@ -15,6 +16,7 @@ A queue is the honest answer -- a job that waits says so, with its position.
 
 from __future__ import annotations
 
+import math
 import threading
 import time
 import uuid
@@ -22,22 +24,18 @@ from collections import OrderedDict
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from typing import Literal, get_args
+from typing import Literal
 
 from flab2bp import pipeline
 from flab2bp.layout.base import NoValidLayout
-from flab2bp.web.payload import Json, describe, refusal
+from flab2bp.web.payload import Json, JsonValue, describe, refusal
 
 State = Literal["queued", "running", "done", "refused", "error"]
-
-#: Strategies ``best`` will try.  Named here rather than imported so estimating
-#: the ceiling never reaches into the layout package.
-_STRATEGIES_FOR_BEST = 2
+WebStrategyName = Literal["best", "freeform", "sequence-pair"]
 
 #: The most solver time one submitted job may ask for, in seconds.  This is a
-#: ceiling on ``candidates * strategies * budget``, not on ``budget`` alone,
-#: because that product is what actually runs: three candidates and both
-#: strategies at a 60s budget is six minutes, not one.
+#: ceiling on ``candidates * strategies * budget``, because that product is
+#: what actually runs.
 MAX_SOLVER_SECONDS = 300.0
 
 #: Jobs kept after they finish, so a poll that arrives late still finds its
@@ -50,10 +48,9 @@ class Options:
     """One build request, already validated."""
 
     url: str
-    #: The pipeline's own Literal, so a strategy name that reached here without
-    #: going through `parse_options` is a type error rather than a KeyError deep
-    #: inside `pipeline.build`.
-    strategy: pipeline.StrategyName = "best"
+    #: The public web subset deliberately excludes the audit-only Spine
+    #: backend, even though the CLI can still request it directly.
+    strategy: WebStrategyName = "best"
     power: bool = True
     candidates: int = 3
     budget_s: float = 2.0
@@ -78,7 +75,11 @@ class Options:
         UI shows elapsed time against this so "still working" has a scale, not
         so it can promise a finish time.
         """
-        per_spec = _STRATEGIES_FOR_BEST if self.strategy == "best" else 1
+        per_spec = (
+            pipeline.PRODUCTION_STRATEGY_COUNT
+            if self.strategy == "best"
+            else 1
+        )
         return self.candidates * per_spec * self.budget_s
 
 
@@ -86,7 +87,7 @@ class InvalidOptions(ValueError):
     """The request could not be turned into a build."""
 
 
-def parse_options(raw: object) -> Options:
+def parse_options(raw: JsonValue) -> Options:
     """Validate a decoded JSON body into :class:`Options`.
 
     Every bound here is a refusal rather than a clamp.  Silently rounding a
@@ -101,16 +102,27 @@ def parse_options(raw: object) -> Options:
         raise InvalidOptions("'url' is required")
 
     strategy = raw.get("strategy", "best")
-    if strategy not in get_args(pipeline.StrategyName):
-        raise InvalidOptions("'strategy' must be one of best, spine, freeform")
+    match strategy:
+        case "best" | "freeform" | "sequence-pair":
+            web_strategy: WebStrategyName = strategy
+        case _:
+            raise InvalidOptions(
+                "'strategy' must be one of best, freeform, sequence-pair"
+            )
 
     candidates = raw.get("candidates", 3)
     if not isinstance(candidates, int) or isinstance(candidates, bool) or not 1 <= candidates <= 8:
         raise InvalidOptions("'candidates' must be an integer from 1 to 8")
 
-    budget = raw.get("budget_s", 2.0)
-    if isinstance(budget, bool) or not isinstance(budget, (int, float)) or budget <= 0:
-        raise InvalidOptions("'budget_s' must be a positive number")
+    raw_budget = raw.get("budget_s", 2.0)
+    if isinstance(raw_budget, bool) or not isinstance(raw_budget, (int, float)):
+        raise InvalidOptions("'budget_s' must be a positive finite number")
+    try:
+        budget = float(raw_budget)
+    except OverflowError as exc:
+        raise InvalidOptions("'budget_s' must be a positive finite number") from exc
+    if not math.isfinite(budget) or budget <= 0:
+        raise InvalidOptions("'budget_s' must be a positive finite number")
 
     power = raw.get("power", True)
     if not isinstance(power, bool):
@@ -130,10 +142,10 @@ def parse_options(raw: object) -> Options:
 
     options = Options(
         url=url.strip(),
-        strategy=strategy,
+        strategy=web_strategy,
         power=power,
         candidates=candidates,
-        budget_s=float(budget),
+        budget_s=budget,
         name=name,
         allow_invalid=allow_invalid,
         flow=flow.strip(),
@@ -143,7 +155,7 @@ def parse_options(raw: object) -> Options:
             f"{options.candidates} candidate(s) x {options.strategy} at "
             f"{options.budget_s:g}s is up to {options.solver_ceiling_s:g}s of solving, "
             f"over the {MAX_SOLVER_SECONDS:g}s ceiling. Lower the budget or the "
-            f"candidate count, or pick a single strategy."
+            f"candidate count, or pick an explicit strategy."
         )
     return options
 
@@ -169,9 +181,9 @@ class Job:
     #: any layout does, and claiming "candidate 1 of 6" during them would be a
     #: guess dressed as a fact.
     progress: pipeline.AttemptProgress | None = None
-    #: Every pair that has settled, newest last.  Kept because "spine refused
-    #: this candidate 40 seconds ago" is worth seeing while the next one runs,
-    #: not only in the report at the end.
+    #: Every pair that has settled, newest last.  Kept because "sequence-pair
+    #: refused this candidate 40 seconds ago" is worth seeing while the next
+    #: one runs, not only in the report at the end.
     settled: list[pipeline.AttemptProgress] = field(default_factory=list)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
@@ -294,6 +306,7 @@ class Builder:
     def snapshot(self, job: Job) -> Json:
         """The job as JSON, including where it is if it is not finished."""
         with job._lock:
+            settled: list[JsonValue] = [_step(step) for step in job.settled]
             body: Json = {
                 "id": job.id,
                 "state": job.state,
@@ -323,7 +336,7 @@ class Builder:
                 # the URL parse and the rate solve come first and nothing knows
                 # how long they take.
                 "progress": _step(job.progress),
-                "settled": [_step(s) for s in job.settled],
+                "settled": settled,
             }
         if job.state == "queued":
             body["queue_position"] = self.queue_position(job)

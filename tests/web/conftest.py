@@ -13,10 +13,10 @@ import pytest
 
 from flab2bp import pipeline
 
-#: A small, known-buildable spec. Nine machines, and both strategies lay it out.
+#: A small, known-buildable spec.
 SMALL_URL = "https://factoriolab.github.io/dsp/flow?o=electromagnetic-matrix*60&v=11"
 
 
 @pytest.fixture(scope="session")
 def small_build() -> pipeline.Build:
-    return pipeline.build(SMALL_URL, strategy="spine", candidates=1, time_budget_s=3.0)
+    return pipeline.build(SMALL_URL, strategy="freeform", candidates=1, time_budget_s=3.0)
