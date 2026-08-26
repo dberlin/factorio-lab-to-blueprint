@@ -123,6 +123,16 @@ VERDICTS: dict[str, tuple[str, str]] = {
     # The `MatchInserter` ladder.  Inert, but NOT a ledger row: the game reaches
     # it only when a sorter's peer preview is null, which a pasted blueprint
     # never leaves so.  It is ported for the compiled oracle, not the pipeline.
+    # The paste sorter ladder.  Declared "both" -- `spine._band_illegal` reaches
+    # all four through `planet.sorter_condition`.  MEASURED inert, all four.
+    # Same lesson as `rules.DRAG_MAX_ALIGNMENT`: reachability is not exercise.
+    # The band gate arrived with its own tests, but none of R4's probes sits
+    # near these bounds, so a wrong value would ship.  Recorded as the coverage
+    # hole it is -- NOT relabelled to make the table green.
+    "planet.SORTER_SEGMENTS_MAX": ("inert", "LEDGER: `num133`, no probe near the ceiling"),
+    "planet.SORTER_COMBINED_MIN": ("inert", "LEDGER: `num134`, no probe near the floor"),
+    "planet.SORTER_PARAM_BIAS": ("inert", "LEDGER: `num129` bias, no probe reaches it"),
+    "planet.SORTER_ALTITUDE_UNIT": ("inert", "LEDGER: radial step, no probe near it"),
     "rules.MATCH_SNAP_MAX_SQR": ("inert", "unreachable for blueprint-carried sorters"),
     "rules.MATCH_ALIGN_COS": ("inert", "unreachable for blueprint-carried sorters"),
     # Declared "both" on the reasoning that `slots._drag_belt_end` reads it and

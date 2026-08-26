@@ -334,6 +334,72 @@ _COLLIDERS: tuple[Entry, ...] = (
     _e("colliders.SORTER_HALF_LENGTH_MIN", Kind.RULE, lint=True),
     _e("colliders.BELT_PROBE_RADIUS", Kind.RULE, lint=True),
     _e("colliders.BELT_PROBE_LIFT", Kind.RULE, lint=True),
+    # --- dsp/planet.py: the longitude-band model and the paste sorter ladder --
+    #
+    # The three SORTER_* mappings are the paste's own tiered limits, keyed by
+    # HOW MANY OF THE SORTER'S TWO ENDS ARE MACHINES (2, 1, 0) -- so they are
+    # modelled as lookups rather than flattened to one number, which is what
+    # `rules.py` did when it recorded `num133`/`num134` as deliberately
+    # unported.  Its reason ("on a uniform grid `num7` reduces to
+    # SORTER_MAX_REACH") fails twice: the grid is not uniform within a band,
+    # and a SEATED sorter's ends are not on tile centres.
+    _e(
+        "planet.SORTER_SEGMENTS_MAX",
+        Kind.RULE,
+        depends_on=("how many ends are machines",),
+        note="`num133`, BuildTool_BlueprintPaste.cs:3446-3459.",
+    ),
+    _e(
+        "planet.SORTER_COMBINED_MIN",
+        Kind.RULE,
+        depends_on=("how many ends are machines",),
+        note=(
+            "`num134`, same passage: a floor on "
+            "sqrt(segmentsAcross^2 + altitudeSteps^2) in GRID CELLS, not world "
+            "units.  This is what convicts a one-tile machine-to-machine direct "
+            "insert at 1.329 against a floor of 1.451."
+        ),
+    ),
+    _e(
+        "planet.SORTER_PARAM_BIAS",
+        Kind.RULE,
+        depends_on=("how many ends are machines",),
+        unconsulted_because=(
+            "LEDGER ROW.  Nothing reads it: `planet.sorter_condition` ports the "
+            "`num129` bias inline rather than through this mapping, so the "
+            "constant and the code that implements it have already drifted "
+            "apart on the day they landed."
+        ),
+        note="`num129 -= 0.3f` in the machine-to-machine case.",
+    ),
+    _e(
+        "planet.SORTER_ALTITUDE_UNIT",
+        Kind.RULE,
+        # 0.2 is far too common a literal to lint on; see MATCH_SNAP_MAX_SQR.
+        lint=False,
+        note=(
+            "`num130 = Abs(lpos.magnitude - lpos2.magnitude) / 0.2f`.  The "
+            "game's own unit for a radial step -- not a tile, not a level."
+        ),
+    ),
+    _e(
+        "planet.SEGMENT_TABLE",
+        Kind.DATA,
+        # Not DERIVED: `projection_of` must name a DECLARED entry, and
+        # `colliders._SEGMENT_TABLE` is private and so not classified.  It is a
+        # re-export, not a projection -- band code reads one table, not two.
+        note="Alias of `colliders._SEGMENT_TABLE`, the game's PlanetGrid table.",
+    ),
+    _e(
+        "planet.MATHF_PI",
+        Kind.DATA,
+        note=(
+            "float32 pi.  Not a rule -- a representation detail, and a "
+            "load-bearing one: the band arithmetic is float32 throughout "
+            "because at segment=144, latIdx=24 double and float disagree about "
+            "which band a row is in."
+        ),
+    ),
     _e(
         "colliders.belt_crossing_height",
         Kind.RULE,

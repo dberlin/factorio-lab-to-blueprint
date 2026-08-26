@@ -48,6 +48,10 @@ EXPECTED_UNCONSULTED = {
     # These rows should stay here.  The two above should not.
     "rules.MATCH_SNAP_MAX_SQR",
     "rules.MATCH_ALIGN_COS",
+    # Landed with the band model and read by nothing: `planet.sorter_condition`
+    # ports the `num129` bias inline instead of through the mapping, so the
+    # constant drifted from its own implementation on day one.
+    "planet.SORTER_PARAM_BIAS",
     "catalog.UNPOWERED_ITEM_IDS",
     "rules.BELT_SLOT_AUTO_RANGE",
     "rules.CONN_SLOTS_PER_OBJECT",
@@ -247,14 +251,27 @@ def test_consultation_is_transitive_through_dsp_helpers(graph: Graph) -> None:
 def test_strategy_reach_does_not_launder_itself_through_the_validator(graph: Graph) -> None:
     """A strategy calling ``certify()`` must not inherit every check's rules.
 
-    ``rules.SORTER_LENGTH`` is read by ``game.inserter_paste`` and by no search
-    code.  If the strategy closure were allowed through ``validate``, this would
-    come back consulted -- and every "the search consults the rule" claim in the
-    R2 table would be worthless.
+    The canary must be a rule a CHECK reads and no search code does.  If the
+    strategy closure were allowed through ``validate``, it would come back
+    consulted -- and every "the search consults the rule" claim in the R2 table
+    would be worthless.
+
+    ``rules.SORTER_LENGTH`` was the original canary and is no longer eligible:
+    the band model made it genuinely reachable from the search, by the honest
+    route ``spine._band_illegal -> planet.sorter_condition ->
+    rules.SORTER_LENGTH``.  That is the consolidation working, not a leak.  So
+    the canary moved rather than the assertion being relaxed -- and it is
+    asserted to still be a valid canary before it is used, so this test cannot
+    quietly decay into one that passes for the wrong reason.
     """
+    canary = "rules.PASTE_SNAP"
     rows = {r.entry.symbol: r for r in provenance.consultation(graph)}
-    assert rows["rules.SORTER_LENGTH"].checks
-    assert not rows["rules.SORTER_LENGTH"].strategies
+    assert rows[canary].checks, f"{canary} is no longer read by any check"
+    assert not rows[canary].strategies, (
+        f"{canary} is now reachable from the search, so it can no longer detect "
+        "laundering. Pick another rule that only a check reads -- "
+        "`provenance.consultation()` lists them -- rather than deleting this test."
+    )
 
 
 def test_the_registry_would_report_a_rule_that_lost_its_last_reader() -> None:
