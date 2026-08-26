@@ -675,6 +675,7 @@ def _variant_at_width(template: StripVariant, width: int) -> StripVariant:
             geometry,
             template.lane_plan,
             template.attachment_plan,
+            template.port_dock_plan,
             width,
             template.box_height,
         ),
