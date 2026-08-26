@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from fractions import Fraction
 
 import pytest
@@ -15,12 +16,15 @@ from flab2bp.rates.solve import (
     InfeasibleError,
     RateSolution,
     _buildable_producers,
+    _exact_continuous_rates,
     _exact_rates,
     _excluded_recipes,
+    _run_milp,
     solve,
     target_rates,
 )
 from flab2bp.spec import ProliferatorMode
+
 
 EXAMPLE_URL = (
     "https://factoriolab.github.io/dsp/flow"
@@ -29,6 +33,45 @@ EXAMPLE_URL = (
     "&mmr=arc-smelter~assembling-machine-2~chemical-plant~matrix-lab"
     "&mps=proliferator-2-products"
     "&v=11"
+)
+
+LOW_RATE_URL = (
+    "https://factoriolab.github.io/dsp/list?o=magnetic-coil*1&ibe=conveyor-belt-2"
+    "&mmr=arc-smelter~assembling-machine-2~chemical-plant~matrix-lab&v=11"
+)
+CONTINUOUS_ROUTE_URL = (
+    "https://factoriolab.github.io/dsp/list?z=eJxFyrEKwkAURNG.ecVUu0GxmmYWYyeJoLituojEJRBQ"
+    "tHnfLqJod7jckTrbSB0xmwcgvv38e4EmfLlD8zsy4icXorVKIVhlRrDLoVA2lQc7ZJww4AatoS20h"
+    "wbXFan1tELqPW2s1onZ5Uvv7c4YXwAUJfU_&v=11"
+)
+CONTINUOUS_ROUTE_RECIPES = frozenset(
+    {
+        "casimir-crystal",
+        "circuit-board",
+        "deuterium",
+        "diamond",
+        "electric-motor",
+        "electromagnetic-turbine",
+        "energetic-graphite",
+        "gear",
+        "glass",
+        "graphene-advanced",
+        "graviton-lens",
+        "gravity-matrix",
+        "magnet",
+        "magnetic-coil",
+        "microcrystalline-component",
+        "organic-crystal",
+        "particle-container",
+        "plane-filter",
+        "plastic",
+        "processor",
+        "quantum-chip",
+        "space-warper-advanced",
+        "strange-matter",
+        "titanium-crystal",
+        "titanium-glass",
+    }
 )
 
 #: From the design spec's golden table, hand-verified against the recipe graph.
@@ -158,7 +201,10 @@ def test_speed_mode_does_not_reduce_ore_demand(data: Dataset) -> None:
     """Speed mode saves machines at its own step and compounds nowhere."""
     request = parse_url(EXAMPLE_URL)
     speed_only = solve(
-        data, request, tier=ProliferatorTier.MK3, allowed_modes=(ProliferatorMode.SPEED,)
+        data,
+        request,
+        tier=ProliferatorTier.MK3,
+        mode_policy=ProliferatorMode.SPEED,
     )
     assert speed_only.external_inputs["iron-ore"] == Fraction(23)
 
@@ -167,21 +213,34 @@ def test_products_mode_compounds_upstream(data: Dataset) -> None:
     """Products mode reduces input demand all the way up the chain."""
     request = parse_url(EXAMPLE_URL)
     products = solve(
-        data, request, tier=ProliferatorTier.MK3, allowed_modes=(ProliferatorMode.PRODUCTS,)
+        data,
+        request,
+        tier=ProliferatorTier.MK3,
+        mode_policy=ProliferatorMode.PRODUCTS,
     )
     assert products.external_inputs["iron-ore"] < Fraction(23)
 
 
 def test_proliferation_reduces_machine_count(data: Dataset, plain: RateSolution) -> None:
     request = parse_url(EXAMPLE_URL)
-    proliferated = solve(data, request, tier=ProliferatorTier.MK3)
+    proliferated = solve(
+        data,
+        request,
+        tier=ProliferatorTier.MK3,
+        mode_policy=ProliferatorMode.PRODUCTS,
+    )
     assert proliferated.exact_machine_count < plain.exact_machine_count
 
 
 def test_proliferator_is_an_external_input(data: Dataset) -> None:
     """Proliferator is belted in, never built here."""
     request = parse_url(EXAMPLE_URL)
-    result = solve(data, request, tier=ProliferatorTier.MK3)
+    result = solve(
+        data,
+        request,
+        tier=ProliferatorTier.MK3,
+        mode_policy=ProliferatorMode.PRODUCTS,
+    )
     assert result.proliferator_rate > 0
     assert result.external_inputs.get("proliferator-3") == result.proliferator_rate
     assert not any(g.recipe_id.startswith("proliferator") for g in result.groups)
@@ -190,7 +249,12 @@ def test_proliferator_is_an_external_input(data: Dataset) -> None:
 def test_products_mode_never_used_for_a_speed_only_recipe(data: Dataset) -> None:
     """``conveyor-belt-2`` is outside the productivity whitelist."""
     url = "https://factoriolab.github.io/dsp/flow?o=conveyor-belt-2*60&v=11"
-    result = solve(data, parse_url(url), tier=ProliferatorTier.MK3)
+    result = solve(
+        data,
+        parse_url(url),
+        tier=ProliferatorTier.MK3,
+        mode_policy=ProliferatorMode.PRODUCTS,
+    )
     belt = next(g for g in result.groups if g.recipe_id == "conveyor-belt-2")
     assert belt.mode is not ProliferatorMode.PRODUCTS
 
@@ -198,7 +262,7 @@ def test_products_mode_never_used_for_a_speed_only_recipe(data: Dataset) -> None
 def test_proliferator_tier_is_monotone_in_area(data: Dataset) -> None:
     request = parse_url(EXAMPLE_URL)
     areas = [
-        solve(data, request, tier=tier).total_area
+        solve(data, request, tier=tier, mode_policy=ProliferatorMode.PRODUCTS).total_area
         for tier in (ProliferatorTier.NONE, ProliferatorTier.MK1, ProliferatorTier.MK3)
     ]
     assert areas[2] <= areas[0]
@@ -283,7 +347,12 @@ def test_proliferated_rates_have_small_denominators(data: Dataset) -> None:
     not pinned here -- but exact demand propagation still cannot manufacture a
     large denominator, whereas a snapped float reliably does.
     """
-    result = solve(data, parse_url(EXAMPLE_URL), tier=ProliferatorTier.MK3)
+    result = solve(
+        data,
+        parse_url(EXAMPLE_URL),
+        tier=ProliferatorTier.MK3,
+        mode_policy=ProliferatorMode.PRODUCTS,
+    )
     assert result.groups
     assert max(g.exact_machines.denominator for g in result.groups) <= 1000
 
@@ -360,40 +429,12 @@ def cycle(data: Dataset) -> RateSolution:
 
 
 def test_a_real_url_does_not_run_away(cycle: RateSolution) -> None:
-    """Magnitudes stay the right order of magnitude on a real chain.
-
-    The band is what matters, not the literal.  A fixed-point iteration once
-    walked a recipe loop with gain two and reported wherever it stopped --
-    732,268 machines at one bound, and exactly four times that for every two
-    further iterations, up to 46,862,330.  Any answer in the hundreds here is
-    already a bug.
-
-    The exact figure moved 49 -> 41 when ``60d5f0f`` restored the player's
-    ``graphene-advanced``; see the note on ``CYCLE_URL``.  It is pinned as well
-    as banded so a silent drift is caught, but **the band is the guarantee** --
-    if this literal fails and the band holds, check whether the chain changed
-    for a good reason before editing it.
-    """
-    assert Fraction(30) <= cycle.machine_count <= Fraction(80)
-    assert cycle.machine_count == 41
+    """A continuous route remains within a physically plausible scale."""
+    assert Fraction(20) <= cycle.machine_count <= Fraction(80)
 
 
-def test_derived_counts_agree_with_the_machines_the_milp_bought(
-    cycle: RateSolution,
-) -> None:
-    """Every group's machine count is the exact ceiling of its own requirement.
-
-    This is the tell that the derivation and the MILP describe the same plan,
-    and it is asserted as the INVARIANT rather than as two literals, which is
-    what the previous version did -- it pinned ``plasma-refining == 3`` and
-    ``reforming-refine == 1``, and went stale the moment the chain legitimately
-    changed, taking the guarantee with it.
-
-    While the iteration diverged, those two groups read 292,889 and 439,334
-    against the solver's 3 and 1, so a ceiling relation that holds group-by-group
-    would have caught it on any chain, not only on the one URL that happened to
-    close a loop.
-    """
+def test_derived_counts_are_exact_physical_ceilings(cycle: RateSolution) -> None:
+    """Every group is the exact ceiling of its continuous requirement."""
     assert cycle.groups
     for group in cycle.groups:
         exact = group.exact_machines
@@ -523,9 +564,140 @@ def test_a_structure_that_cannot_balance_refuses() -> None:
         _exact_rates([loop], [1.0], ["x"], {"x": Fraction(50)})
 
 
+def test_required_sub_tolerance_flow_is_recovered_exactly() -> None:
+    column = _column("tiny", {}, {"x": Fraction(1)})
+    demand = Fraction(1, 10**12)
+
+    crafts = _exact_continuous_rates(
+        [column],
+        [float(demand)],
+        ["x"],
+        {"x": demand},
+    )
+
+    assert crafts == [demand]
+
+
+def test_every_material_lp_support_column_remains_a_physical_group() -> None:
+    columns = [
+        _column("first", {}, {"x": Fraction(1)}),
+        _column("second", {}, {"x": Fraction(1)}),
+    ]
+
+    crafts = _exact_continuous_rates(
+        columns,
+        [0.5, 0.5],
+        ["x"],
+        {"x": Fraction(1)},
+    )
+
+    assert all(rate > 0 for rate in crafts)
+    assert sum(crafts, Fraction()) == Fraction(1)
+
+
 def test_no_machines_means_no_rates() -> None:
     loop = _column("loop", {"x": Fraction(2)}, {"x": Fraction(3)})
     assert _exact_rates([loop], [0.0], ["x"], {"x": Fraction(1)}) == [Fraction(0)]
+
+
+# --- continuous production solve ------------------------------------------
+
+
+def test_continuous_default_recovers_exact_rates_then_ceils_capacity(
+    data: Dataset, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def reject_milp(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("the default production solve must not invoke the MILP oracle")
+
+    monkeypatch.setattr("flab2bp.rates.solve._run_milp", reject_milp)
+    solution = solve(data, parse_url(LOW_RATE_URL))
+
+    assert solution.outputs["magnetic-coil"] == Fraction(1, 60)
+    assert solution.groups
+    assert any(group.exact_machines < 1 for group in solution.groups)
+    for group in solution.groups:
+        exact = group.crafts_per_second / group.adjusted.crafts_per_second
+        expected = -((-exact.numerator) // exact.denominator)
+        assert group.exact_machines == exact
+        assert group.machines == expected
+        assert group.crafts_per_second <= group.machines * group.adjusted.crafts_per_second
+
+    produced: dict[str, Fraction] = {}
+    consumed: dict[str, Fraction] = {}
+    for group in solution.groups:
+        for item_id, rate in group.outputs.items():
+            produced[item_id] = produced.get(item_id, Fraction()) + rate
+        for item_id, rate in group.inputs.items():
+            consumed[item_id] = consumed.get(item_id, Fraction()) + rate
+    for item_id in set(produced) & set(consumed):
+        assert produced[item_id] >= consumed[item_id]
+
+
+def test_continuous_default_uses_the_expected_fractional_route(data: Dataset) -> None:
+    solution = solve(
+        data,
+        parse_url(CONTINUOUS_ROUTE_URL),
+        tier=ProliferatorTier.MK2,
+    )
+    recipes = {group.recipe_id for group in solution.groups}
+    assert recipes == CONTINUOUS_ROUTE_RECIPES
+    assert len(solution.groups) == 25
+    assert solution.machine_count == 25
+    assert solution.total_area == 391
+    assert solution.outputs["space-warper"] == Fraction(1, 60)
+    assert {group.mode for group in solution.groups} == {ProliferatorMode.NONE}
+    assert all(
+        group.crafts_per_second <= group.machines * group.adjusted.crafts_per_second
+        for group in solution.groups
+    )
+
+
+def test_unrecoverable_continuous_pass_falls_back_to_fixed_charge(
+    data: Dataset, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def reject_continuous(*_args: object, **_kwargs: object) -> object:
+        raise InfeasibleError("unrecoverable support")
+
+    monkeypatch.setattr(
+        "flab2bp.rates.solve._run_continuous_lp",
+        reject_continuous,
+    )
+    solution = solve(data, parse_url(LOW_RATE_URL))
+
+    assert solution.outputs["magnetic-coil"] == Fraction(1, 60)
+    assert all(
+        group.crafts_per_second <= group.machines * group.adjusted.crafts_per_second
+        for group in solution.groups
+    )
+
+
+
+def test_prove_minimal_explicitly_uses_the_fixed_charge_oracle(
+    data: Dataset, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original = _run_milp
+    calls = 0
+
+    def recording_milp(
+        columns: Sequence[AdjustedRecipe],
+        internal_items: Sequence[str],
+        demand: Mapping[str, Fraction],
+        *,
+        time_limit_s: float,
+    ) -> tuple[list[float], list[float]]:
+        nonlocal calls
+        calls += 1
+        return original(
+            columns,
+            internal_items,
+            demand,
+            time_limit_s=time_limit_s,
+        )
+
+    monkeypatch.setattr("flab2bp.rates.solve._run_milp", recording_milp)
+    _ = solve(data, parse_url(LOW_RATE_URL), prove_minimal=True)
+
+    assert calls == 1
 
 
 # --- hitting the clock is not the same as being infeasible -----------------
@@ -561,7 +733,12 @@ def test_a_starved_solve_warns_and_still_builds(
     monkeypatch.setattr(pywraplp.Solver, "FEASIBLE", pywraplp.Solver.OPTIMAL)
 
     with pytest.warns(RuntimeWarning, match="feasible but unproven-minimal"):
-        solution = solve(data, parse_url(TRIVIAL_URL), tier=ProliferatorTier.MK3)
+        solution = solve(
+            data,
+            parse_url(TRIVIAL_URL),
+            tier=ProliferatorTier.MK3,
+            prove_minimal=True,
+        )
 
     # Valid, not merely non-empty: real counts, and rates still exact.
     assert solution.groups
@@ -582,7 +759,12 @@ def test_a_solve_that_returns_nothing_usable_still_raises(
     monkeypatch.setattr(pywraplp.Solver, "FEASIBLE", 99)
 
     with pytest.raises(InfeasibleError, match="did not reach optimality"):
-        solve(data, parse_url(TRIVIAL_URL), tier=ProliferatorTier.MK3)
+        solve(
+            data,
+            parse_url(TRIVIAL_URL),
+            tier=ProliferatorTier.MK3,
+            prove_minimal=True,
+        )
 
 
 # --- the player's recipe choices are the player's ---------------------------

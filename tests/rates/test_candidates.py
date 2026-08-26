@@ -9,14 +9,13 @@ import pytest
 from flab2bp.lab.data import load_dataset
 from flab2bp.lab.schema import Dataset
 from flab2bp.lab.url import parse_url
-from flab2bp.rates.adjust import ProliferatorTier
+from flab2bp.rates.adjust import ProliferatorTier, available_modes, machine_footprint
 from flab2bp.rates.candidates import (
     build_candidates,
     lanes_requiring_split,
-    partition_recipes,
     proliferator_from_request,
 )
-from flab2bp.spec import BuildSpecSet
+from flab2bp.spec import BuildSpecSet, ProliferatorMode
 
 EXAMPLE_URL = (
     "https://factoriolab.github.io/dsp/flow"
@@ -25,6 +24,12 @@ EXAMPLE_URL = (
     "&mmr=arc-smelter~assembling-machine-2~chemical-plant~matrix-lab"
     "&mps=proliferator-2-products"
     "&v=11"
+)
+
+DIAGNOSED_URL = (
+    "https://factoriolab.github.io/dsp/list?z=eJxFyrEKwkAURNG.ecVUu0GxmmYWYyeJoLituojEJRBQ"
+    "tHnfLqJod7jckTrbSB0xmwcgvv38e4EmfLlD8zsy4icXorVKIVhlRrDLoVA2lQc7ZJww4AatoS20h"
+    "wbXFan1tELqPW2s1onZ5Uvv7c4YXwAUJfU_&v=11"
 )
 
 
@@ -38,76 +43,89 @@ def candidates(data: Dataset) -> BuildSpecSet:
     return build_candidates(data, parse_url(EXAMPLE_URL), tier=ProliferatorTier.MK3)
 
 
-# --- the partition that drives everything ----------------------------------
-
-
-def test_free_and_costly_partition(data: Dataset) -> None:
-    """Recipes fed entirely from outside can be sprayed for free.
-
-    Their inputs arrive on belts by construction, so a coater costs no direct
-    insertion.  Everything else trades a direct-insertable edge for a belt.
-    """
-    free, costly = partition_recipes(data, parse_url(EXAMPLE_URL))
-    assert free == {"iron-ingot", "copper-ingot", "magnet", "energetic-graphite"}
-    assert costly == {
-        "super-magnetic-ring",
-        "electromagnetic-turbine",
-        "electric-motor",
-        "gear",
-        "magnetic-coil",
-    }
-
-
 # --- the frontier ----------------------------------------------------------
 
 
-def test_default_emits_three_candidates(candidates: BuildSpecSet) -> None:
-    assert [c.label for c in candidates.candidates] == [
-        "no-proliferator",
-        "free-proliferation",
-        "max-proliferation",
-    ]
-
-
-def test_free_proliferation_costs_no_direct_insertion(candidates: BuildSpecSet) -> None:
-    """The defining property of the candidate expected to win.
-
-    If this is ever non-empty the candidate is misgenerated, and its whole
-    reason for existing -- a machine reduction that geometry does not pay for --
-    is gone.
-    """
-    free = next(c for c in candidates.candidates if c.label == "free-proliferation")
-    assert free.belt_required_edges == frozenset()
-    assert free.is_proliferated
-
-
-def test_free_proliferation_sprays_only_external_lanes(candidates: BuildSpecSet) -> None:
-    free = next(c for c in candidates.candidates if c.label == "free-proliferation")
-    assert free.spray_lanes
-    assert all(is_external for is_external in free.spray_lanes.values())
-
-
-def test_free_proliferation_beats_no_proliferator_on_machines(
+def test_default_emits_three_deterministic_candidates_ranked_by_rounded_area(
     candidates: BuildSpecSet,
 ) -> None:
-    baseline = next(c for c in candidates.candidates if c.label == "no-proliferator")
-    free = next(c for c in candidates.candidates if c.label == "free-proliferation")
-    assert free.machine_count < baseline.machine_count
+    assert {candidate.label for candidate in candidates.candidates} == {
+        "no-proliferator",
+        "all-products",
+        "output-products",
+    }
+    rounded_areas = [
+        sum(
+            machine_footprint(group.machine_item_id) * group.count
+            for group in candidate.groups
+        )
+        for candidate in candidates.candidates
+    ]
+    assert rounded_areas == sorted(rounded_areas)
 
 
-def test_max_proliferation_belts_its_internal_edges(candidates: BuildSpecSet) -> None:
-    spec = next(c for c in candidates.candidates if c.label == "max-proliferation")
-    assert spec.belt_required_edges
+def test_all_products_uses_products_everywhere_it_is_legal(
+    candidates: BuildSpecSet, data: Dataset
+) -> None:
+    spec = next(
+        candidate for candidate in candidates.candidates if candidate.label == "all-products"
+    )
+    for group in spec.groups:
+        legal = available_modes(data, data.recipe(group.recipe_id), ProliferatorTier.MK3)
+        expected = (
+            ProliferatorMode.PRODUCTS
+            if ProliferatorMode.PRODUCTS in legal
+            else ProliferatorMode.NONE
+        )
+        assert group.proliferator_mode is expected
+
+
+def test_output_products_sprays_only_final_output_recipes(candidates: BuildSpecSet) -> None:
+    spec = next(
+        candidate for candidate in candidates.candidates if candidate.label == "output-products"
+    )
+    assert {
+        group.recipe_id for group in spec.groups if group.is_proliferated
+    } == {"super-magnetic-ring"}
+    assert {
+        group.proliferator_mode for group in spec.groups if group.is_proliferated
+    } == {ProliferatorMode.PRODUCTS}
 
 
 def test_no_proliferator_candidate_is_unproliferated(candidates: BuildSpecSet) -> None:
-    baseline = next(c for c in candidates.candidates if c.label == "no-proliferator")
+    baseline = next(
+        candidate
+        for candidate in candidates.candidates
+        if candidate.label == "no-proliferator"
+    )
     assert not baseline.is_proliferated
     assert baseline.belt_required_edges == frozenset()
     assert baseline.spray_lanes == {}
 
 
 # --- invariants every candidate must hold ---------------------------------
+
+def test_diagnosed_url_has_exact_fixed_policy_counts_and_rates(data: Dataset) -> None:
+    specs = build_candidates(data, parse_url(DIAGNOSED_URL)).candidates
+
+    assert {spec.label: spec.machine_count for spec in specs} == {
+        "no-proliferator": 25,
+        "all-products": 25,
+        "output-products": 25,
+    }
+    assert {
+        spec.label: sum(
+            machine_footprint(group.machine_item_id) * group.count
+            for group in spec.groups
+        )
+        for spec in specs
+    } == {
+        "no-proliferator": 391,
+        "all-products": 391,
+        "output-products": 391,
+    }
+    assert all(dict(spec.outputs) == {"space-warper": Fraction(1, 60)} for spec in specs)
+
 
 
 def test_every_proliferated_recipe_declares_its_internal_edges(
@@ -205,47 +223,23 @@ def test_split_field_is_populated_on_every_candidate(data: Dataset) -> None:
         assert spec.lanes_requiring_split == lanes_requiring_split(data, spec)
 
 
-def test_this_chain_needs_no_lane_split(candidates: BuildSpecSet) -> None:
-    """The example chain happens to need no splits -- but see the test below.
-
-    Every consumer of its sprayed ore lanes is itself proliferated, so nothing
-    has to be cut.  This is a property of *this chain*, not of the approach.
-    """
-    for spec in candidates.candidates:
-        assert spec.lanes_requiring_split == frozenset()
-
-
-def test_free_proliferation_can_still_need_a_split(data: Dataset) -> None:
-    """Splitting is not a rare corner, and free-proliferation is not exempt.
-
-    Scanning all 151 craftable end products, 42 candidates need at least one
-    split.  ``electromagnetic-matrix`` is one: ``iron-ore`` feeds both a recipe
-    fed purely from outside (proliferated, so its lane is sprayed) and one that
-    also takes a manufactured input (not proliferated, so it must not be).
-    """
-    url = "https://factoriolab.github.io/dsp/flow?o=electromagnetic-matrix*60&v=11"
-    specs = build_candidates(data, parse_url(url), tier=ProliferatorTier.MK3, count=4)
-    free = next(c for c in specs.candidates if c.label == "free-proliferation")
-    assert free.lanes_requiring_split == frozenset({"iron-ore"})
+def test_explicit_policies_report_their_lane_splits(candidates: BuildSpecSet) -> None:
+    assert {
+        spec.label: spec.lanes_requiring_split for spec in candidates.candidates
+    } == {
+        "all-products": frozenset(),
+        "output-products": frozenset({"magnet"}),
+        "no-proliferator": frozenset(),
+    }
 
 
-def test_max_proliferation_can_need_a_split(data: Dataset) -> None:
-    """Even with everything proliferable proliferated, splits still arise.
-
-    A recipe outside the products whitelist that also cannot take speed mode
-    profitably stays unproliferated, and any lane it shares gets cut.
-    """
-    url = "https://factoriolab.github.io/dsp/flow?o=conveyor-belt-3*60&v=11"
-    specs = build_candidates(data, parse_url(url), tier=ProliferatorTier.MK3, count=4)
-    spec = next(c for c in specs.candidates if c.label == "max-proliferation")
-    assert spec.lanes_requiring_split == frozenset({"electromagnetic-turbine"})
 
 
 def test_split_lanes_are_always_a_subset_of_sprayed_lanes(data: Dataset) -> None:
     """Only a sprayed lane can need splitting; an unsprayed one has nothing to cut."""
     for target in ("electromagnetic-matrix", "conveyor-belt-3", "processor"):
         url = f"https://factoriolab.github.io/dsp/flow?o={target}*60&v=11"
-        specs = build_candidates(data, parse_url(url), tier=ProliferatorTier.MK3, count=4)
+        specs = build_candidates(data, parse_url(url), tier=ProliferatorTier.MK3, count=3)
         for spec in specs.candidates:
             assert spec.lanes_requiring_split <= frozenset(spec.spray_lanes)
 
@@ -254,7 +248,7 @@ def test_unproliferated_candidate_never_needs_a_split(data: Dataset) -> None:
     """With nothing sprayed there is no boundary for a lane to straddle."""
     for target in ("electromagnetic-matrix", "conveyor-belt-3"):
         url = f"https://factoriolab.github.io/dsp/flow?o={target}*60&v=11"
-        specs = build_candidates(data, parse_url(url), tier=ProliferatorTier.MK3, count=4)
+        specs = build_candidates(data, parse_url(url), tier=ProliferatorTier.MK3, count=3)
         baseline = next(c for c in specs.candidates if c.label == "no-proliferator")
         assert baseline.lanes_requiring_split == frozenset()
 
@@ -262,12 +256,14 @@ def test_unproliferated_candidate_never_needs_a_split(data: Dataset) -> None:
 # --- knobs -----------------------------------------------------------------
 
 
-def test_candidate_count_can_be_raised(data: Dataset) -> None:
-    specs = build_candidates(
-        data, parse_url(EXAMPLE_URL), tier=ProliferatorTier.MK3, count=4
-    )
-    assert len(specs.candidates) == 4
-    assert "all-speed-mode" in {c.label for c in specs.candidates}
+def test_candidate_count_rejects_removed_speed_policy(data: Dataset) -> None:
+    with pytest.raises(ValueError, match="between 1 and 3"):
+        _ = build_candidates(
+            data,
+            parse_url(EXAMPLE_URL),
+            tier=ProliferatorTier.MK3,
+            count=4,
+        )
 
 
 def test_tier_none_yields_a_single_unproliferated_candidate(data: Dataset) -> None:
@@ -331,8 +327,8 @@ def test_a_url_naming_no_proliferator_keeps_the_whole_frontier(data: Dataset) ->
     this tool exists to find.
     """
     specs = build_candidates(data, parse_url(NO_PROLIFERATOR_NAMED), count=3).candidates
-    labels = [s.label for s in specs]
-    assert labels == ["no-proliferator", "free-proliferation", "max-proliferation"]
+    labels = {spec.label for spec in specs}
+    assert labels == {"no-proliferator", "all-products", "output-products"}
     sprayed = {k for s in specs for k in s.external_inputs if k.startswith("proliferator-")}
     assert sprayed == {"proliferator-3"}, sprayed
 

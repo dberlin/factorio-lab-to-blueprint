@@ -1,29 +1,25 @@
-"""The production solve: objectives in, exact integer machine counts out.
+"""The production solve: continuous optimum in, exact physical groups out.
 
-Formulated as a MILP rather than "solve an LP then round up", because the two
-give different answers and the difference is the deliverable.  Measured on the
-example chain: minimising exact machine count yields 339 tiles, minimising
-footprint area yields 325, and minimising *ceiled* machine count yields 25
-machines occupying 330 tiles -- fewer machines on more ground, since an arc
-smelter is 9 tiles and an assembler 16.  Density is the goal, so area is the
-objective.
+Production follows FactorioLab's semantics: minimise continuous footprint over
+recipe/mode craft rates, recover the selected support with an exact Rational LP,
+then ceil each exact machine requirement. A machine whose output backs up
+simply idles, so upstream demand follows the exact craft rate rather than spare
+capacity. Candidate ranking happens afterward on the actual rounded footprint.
 
-The model carries integer machine counts ``n`` alongside continuous craft rates
-``x``, which is what DSP actually does: a machine whose output backs up
-throttles, so six smelters covering a 5.64 requirement each run at 94%.
-Upstream demand follows ``x`` (what is really consumed), never ``n``.
+The float LP supplies support only. Documented tolerances remove numerical
+epsilon columns; exact recovery expands to every column if a discarded tiny
+flow is required for balance. Every materially positive LP column remains a
+physical group, and no float reaches ``BuildSpec``.
 
-The solver is ortools' SCIP backend rather than HiGHS, and that is not a
-preference.  ``highspy`` and ``ortools`` cannot share a process: ortools bundles
-its *own* HiGHS inside ``libortools``, so importing ``highspy`` first makes
-ortools resolve HiGHS symbols into an incompatible library (ImportError on
-``setLocalOptionValue``), and importing it second segfaults mid-solve.  Since
-the layout stage needs CP-SAT, the rate stage uses a solver from the same
-library.  Do not reintroduce ``highspy``.
+The former fixed-charge MILP remains behind ``prove_minimal=True`` and as a
+fallback when continuous support cannot be recovered. It minimises rounded
+machine footprint directly and is useful as a slow oracle, but proving its weak
+integer relaxation can consume the whole time limit after a valid incumbent is
+already available.
 
-The solver returns floats.  Every rate that leaves this module is re-derived in
-exact ``Fraction`` arithmetic from the integer solution, so no float ever
-reaches ``BuildSpec``.
+Both solvers come from ortools. Do not reintroduce ``highspy``: it and ortools
+cannot safely share a process because ortools bundles its own incompatible
+HiGHS library, while the layout stage also requires ortools' CP-SAT backend.
 """
 
 from __future__ import annotations
@@ -34,6 +30,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from fractions import Fraction
 from types import MappingProxyType
+from typing import cast
 
 # Neither ortools nor sympy ships a py.typed marker, so both read as untyped.
 from ortools.linear_solver import pywraplp  # type: ignore[import-untyped]
@@ -64,6 +61,14 @@ _SECONDS_PER_PERIOD = {
 #: Machines per recipe column.  Generous: the example chain's largest group is
 #: 17, and a 1000x headroom costs the solver nothing at this scale.
 _MAX_MACHINES = 100_000
+
+#: GLOP is float64. Values below both tolerances are treated as solver noise
+#: while selecting support, then every retained magnitude is discarded and
+#: recovered by an exact Rational LP. If that support cannot balance exactly,
+#: recovery retries with every column so a genuinely required tiny flow is
+#: never silently dropped.
+_LP_SUPPORT_ABS_TOLERANCE = 1e-9
+_LP_SUPPORT_REL_TOLERANCE = 1e-9
 
 
 class UnsupportedObjectiveError(ValueError):
@@ -112,8 +117,7 @@ class RateSolution:
     surplus: Mapping[str, Fraction] = field(default_factory=dict)
     target_rates: Mapping[str, Fraction] = field(default_factory=dict)
     tier: ProliferatorTier = ProliferatorTier.NONE
-    #: LP relaxation of the area objective -- a lower bound the layout bake-off
-    #: can score against.
+    #: Exact continuous footprint before each physical group is rounded up.
     lower_bound_area: Fraction = Fraction(0)
 
     @property
@@ -266,6 +270,16 @@ def _buildable_producers(
     )
 
 
+def target_producer_ids(data: Dataset, request: LabRequest) -> frozenset[str]:
+    """Recipes that may directly produce a requested final output."""
+    excluded = _excluded_recipes(data, request)
+    return frozenset(
+        recipe.id
+        for item_id in target_rates(data, request)
+        for recipe in _buildable_producers(data, item_id, excluded)
+    )
+
+
 def _resolve_chain(
     data: Dataset,
     targets: Iterable[str],
@@ -308,25 +322,74 @@ def _columns(
     producers: Mapping[str, tuple[Recipe, ...]],
     request: LabRequest,
     tier: ProliferatorTier,
-    allowed_modes: Sequence[ProliferatorMode] | None,
     proliferable: frozenset[str] | None,
+    fixed_modes: Mapping[str, ProliferatorMode] | None = None,
+    mode_policy: ProliferatorMode | None = ProliferatorMode.NONE,
 ) -> list[AdjustedRecipe]:
-    """One column per (recipe, legal proliferator mode) pair."""
-    recipes = {r.id: r for options in producers.values() for r in options}
+    """Build one deterministic mode column per reachable recipe."""
+    if fixed_modes is not None and proliferable is not None:
+        raise ValueError("fixed_modes cannot be combined with proliferable")
+    if fixed_modes is None and mode_policy is None:
+        raise ValueError("a deterministic mode_policy is required without fixed_modes")
+
+    recipes = {recipe.id: recipe for options in producers.values() for recipe in options}
     columns: list[AdjustedRecipe] = []
     for recipe in recipes.values():
         machine_id = select_machine(data, recipe, request.machine_rank_ids)
-        modes = available_modes(data, recipe, tier)
-        if allowed_modes is not None:
-            permitted = set(allowed_modes) | {ProliferatorMode.NONE}
-            modes = tuple(m for m in modes if m in permitted)
-        if proliferable is not None and recipe.id not in proliferable:
-            modes = (ProliferatorMode.NONE,)
-        if not modes:
-            modes = (ProliferatorMode.NONE,)
-        for mode in modes:
-            columns.append(adjust(data, recipe, machine_id, mode, tier))
+        available = available_modes(data, recipe, tier)
+        if fixed_modes is not None:
+            mode = fixed_modes.get(recipe.id, ProliferatorMode.NONE)
+            if mode not in available:
+                raise InfeasibleError(
+                    f"{recipe.id} cannot use the flow-pinned proliferator mode {mode.value!r}"
+                )
+        else:
+            assert mode_policy is not None
+            applies = proliferable is None or recipe.id in proliferable
+            mode = mode_policy if applies and mode_policy in available else ProliferatorMode.NONE
+        columns.append(adjust(data, recipe, machine_id, mode, tier))
     return columns
+
+
+def _run_continuous_lp(
+    columns: Sequence[AdjustedRecipe],
+    internal_items: Sequence[str],
+    demand: Mapping[str, Fraction],
+    *,
+    time_limit_s: float,
+) -> list[float]:
+    """Find the FactorioLab-style continuous footprint optimum."""
+    model = pywraplp.Solver.CreateSolver("GLOP")
+    if model is None:  # pragma: no cover - GLOP ships with ortools
+        raise InfeasibleError("no continuous LP solver is available")
+    model.SetTimeLimit(int(time_limit_s * 1000))
+    crafts = [model.NumVar(0.0, model.infinity(), f"x{i}") for i in range(len(columns))]
+
+    for item_id in internal_items:
+        terms = []
+        for craft, column in zip(crafts, columns, strict=True):
+            net = column.outputs_per_craft.get(item_id, Fraction()) - column.inputs_per_craft.get(
+                item_id, Fraction()
+            )
+            if net:
+                terms.append(float(net) * craft)
+        if terms:
+            model.Add(model.Sum(terms) >= float(demand.get(item_id, Fraction())))
+
+    if not columns:
+        raise InfeasibleError("no recipes available to build the objective")
+    model.Minimize(
+        model.Sum(
+            float(Fraction(column.footprint_area) / column.crafts_per_second) * craft
+            for craft, column in zip(crafts, columns, strict=True)
+        )
+    )
+    status = model.Solve()
+    if status != pywraplp.Solver.OPTIMAL:
+        raise InfeasibleError(
+            f"the continuous production solve found no optimum (status: {status})"
+        )
+    return [craft.solution_value() for craft in crafts]
 
 
 def _run_milp(
@@ -334,48 +397,19 @@ def _run_milp(
     internal_items: Sequence[str],
     demand: Mapping[str, Fraction],
     *,
-    integer: bool,
     time_limit_s: float,
-    single_mode: bool = True,
 ) -> tuple[list[float], list[float]]:
-    """Solve for craft rates and machine counts, returning ``(x, n)`` per column.
-
-    With ``integer=False`` this is the LP relaxation, used as a lower bound.
-    """
+    """Solve the fixed-charge oracle for craft rates and integer machine counts."""
     model = pywraplp.Solver.CreateSolver("SCIP")
     if model is None:  # pragma: no cover - SCIP ships with ortools
         raise InfeasibleError("no MILP solver is available")
     model.SetTimeLimit(int(time_limit_s * 1000))
 
     crafts = [model.NumVar(0.0, model.infinity(), f"x{i}") for i in range(len(columns))]
-    machines = [
-        model.IntVar(0, _MAX_MACHINES, f"n{i}")
-        if integer
-        else model.NumVar(0.0, _MAX_MACHINES, f"n{i}")
-        for i in range(len(columns))
-    ]
-
+    machines = [model.IntVar(0, _MAX_MACHINES, f"n{i}") for i in range(len(columns))]
     # A group's craft rate may never exceed what its machines can sustain.
     for craft, machine, column in zip(crafts, machines, columns, strict=True):
         model.Add(craft - float(column.crafts_per_second) * machine <= 0)
-
-    if single_mode:
-        # Force one proliferator mode per recipe.  Splitting a recipe across two
-        # modes is legal in DSP (mode is a per-machine setting) and the LP loves
-        # it, but it lands machine counts a hair past an integer -- 2.0032
-        # machines of magnetic-coil costs a whole third machine -- so the split
-        # reliably *costs* area once counts are rounded.  It also doubles the
-        # groups the layout stage has to place for no structural benefit.
-        by_recipe: dict[str, list[int]] = {}
-        for index, column in enumerate(columns):
-            by_recipe.setdefault(column.recipe_id, []).append(index)
-        for indices in by_recipe.values():
-            if len(indices) < 2:
-                continue
-            used = [model.IntVar(0, 1, f"m{index}") for index in indices]
-            for flag, index in zip(used, indices, strict=True):
-                model.Add(machines[index] - _MAX_MACHINES * flag <= 0)
-            model.Add(model.Sum(used) <= 1)
 
     # Item balance. ">=" rather than "==" admits surplus, which joint-product
     # recipes make unavoidable.
@@ -435,7 +469,7 @@ def _run_milp(
 
 def _rational(value: Fraction) -> Rational:
     """``Fraction`` to sympy ``Rational``, exactly."""
-    return Rational(value.numerator, value.denominator)
+    return cast(Rational, Rational(value.numerator, value.denominator))
 
 
 def _fraction(value: Expr) -> Fraction:
@@ -453,125 +487,69 @@ def _fraction(value: Expr) -> Fraction:
     return Fraction(int(number.p), int(number.q))
 
 
-def _exact_rates(
+def _solve_exact_lp(
     columns: Sequence[AdjustedRecipe],
-    raw_machines: Sequence[float],
+    active: Sequence[int],
     internal_items: Sequence[str],
     demand: Mapping[str, Fraction],
+    machine_caps: Sequence[int] | None = None,
+    minimum_rates: Mapping[int, Fraction] | None = None,
 ) -> list[Fraction]:
-    """Re-derive craft rates exactly, taking only *structure* from the solver.
-
-    The MILP decides which columns to run and how many machines each gets.  Its
-    machine counts are exact -- they are ``IntVar``s, so they come back as whole
-    numbers -- and they are taken at face value here, as the capacity each group
-    is allowed to use.  Its *craft* rates are not: they are floats, and belts are
-    sized from craft rates, so a rate wrong in the last bits is a belt wrong in
-    someone's game.  Measured across the 65-cell corpus, the solver's ``x``
-    disagrees with the true requirement on 222 of 533 columns -- ``copper-ingot``
-    came back at ``1.0`` where ``2/5`` is what the chain needs -- because once
-    the machine counts are fixed the area objective no longer prices ``x`` at
-    all, so any feasible rate satisfies it equally.  The magnitudes have to be
-    re-derived.
-
-    So they are re-derived as one exact linear program over ``Rational``:
-
-        minimise   sum_j (footprint_j / crafts_per_second_j) * x_j
-        subject to sum_j net_j(item) * x_j >= demand(item)   for every item made
-                   0 <= x_j <= machines_j * crafts_per_second_j
-
-    which is the MILP's own objective -- floor area -- read continuously, over
-    the structure the MILP already chose.  The upper bound is what keeps the two
-    answers consistent: a group can never be asked to run past the machines that
-    were bought for it, so ``ceil(x_j / crafts_per_second_j) <= machines_j``
-    holds by construction and the derived plan is never larger than the MILP's.
-    Measured on all 533 groups of the corpus, the two now agree exactly.
-
-    This replaces a hand-rolled fixed-point iteration that propagated demand
-    back through the chain a bounded number of times.  That iteration had no
-    handling for cycles in the producer graph, and DSP has one:
-    ``reforming-refine`` turns two refined oil into three, and
-    ``plasma-refining`` also yields refined oil, so refined-oil demand feeds
-    back into itself.  Worse, the iteration charged a maker's own draw on the
-    item it makes to the requirement *and* netted it out of the supply, which
-    counted it twice: the balance read ``x = demand + 2x`` and grew by exactly a
-    factor of two per round.  Measured on the reporting URL at Mk.II, the answer
-    quadrupled for every two extra iterations -- 732,268 machines at the old
-    bound, 46,862,330 six iterations later -- so the figure it printed was only
-    ever a record of where the loop stopped.  To a linear program a cycle is an
-    ordinary pair of matrix entries and needs no special handling at all.
-
-    Solved rather than iterated, that URL comes back at 49 machines, with
-    ``plasma-refining`` at 3 and ``reforming-refine`` at 1 -- exactly the counts
-    the MILP had chosen all along.
-
-    The solver is sympy's, not one written here.  Nothing else in reach solves a
-    linear program in exact rationals -- ``pywraplp``/SCIP is float64 and is the
-    very solver whose rates cannot be trusted at this point, CP-SAT is exact but
-    integer-only and these rates are fractions like ``94895947/324`` whose
-    denominator is not known until after the solve, and numpy is float64 too --
-    and a hand-written simplex is a large piece of subtle numerical code whose
-    bugs look exactly like plausible answers, which is the one failure mode this
-    program is least able to absorb.
-
-    ``linprog`` raises on an infeasible or unbounded program rather than
-    returning something plausible, which is the behaviour wanted: a structure
-    that cannot balance is a degenerate recipe graph, not a rounding problem.
-    Feasibility is not in doubt for a well-formed chain -- the MILP found an
-    integer point inside these very constraints -- so a refusal here names the
-    recipes and stops.
-    """
-    active = [index for index, n in enumerate(raw_machines) if round(n) > 0]
+    """Recover exact rates over selected support and optional exact bounds."""
     if not active:
-        return [Fraction(0)] * len(columns)
+        raise InfeasibleError("the approximate rate solve selected no recipe support")
 
     def net(index: int, item_id: str) -> Fraction:
         column = columns[index]
-        return column.outputs_per_craft.get(item_id, Fraction(0)) - column.inputs_per_craft.get(
-            item_id, Fraction(0)
+        return column.outputs_per_craft.get(item_id, Fraction()) - column.inputs_per_craft.get(
+            item_id, Fraction()
         )
 
-    # One balance row per item something here actually makes.  An item with no
-    # net producer among the active columns is belted in, and constraining it
-    # would be asking the blueprint to make something it never claimed to.
     items = [item_id for item_id in internal_items if any(net(i, item_id) > 0 for i in active)]
-
-    # ``linprog`` minimises over ``A x <= b`` with ``x >= 0`` implied, so the
-    # balances are negated into that form.  Surplus is allowed and deficit is
-    # not, which is what makes joint products expressible at all.
     matrix: list[list[Rational]] = []
     limits: list[Rational] = []
     for item_id in items:
         matrix.append([_rational(-net(index, item_id)) for index in active])
-        limits.append(_rational(-demand.get(item_id, Fraction(0))))
-    for position, index in enumerate(active):
-        row = [Rational(0)] * len(active)
-        row[position] = Rational(1)
-        matrix.append(row)
-        limits.append(
-            _rational(Fraction(round(raw_machines[index])) * columns[index].crafts_per_second)
-        )
+        limits.append(_rational(-demand.get(item_id, Fraction())))
+
+    if minimum_rates:
+        active_positions = {index: position for position, index in enumerate(active)}
+        for index, minimum in minimum_rates.items():
+            position = active_positions.get(index)
+            if position is None:
+                raise ValueError("minimum_rates must name active columns")
+            row = [_rational(Fraction())] * len(active)
+            row[position] = _rational(Fraction(-1))
+            matrix.append(row)
+            limits.append(_rational(-minimum))
+
+    if machine_caps is not None:
+        if len(machine_caps) != len(active):
+            raise ValueError("machine_caps must align with active columns")
+        for position, (index, machines) in enumerate(
+            zip(active, machine_caps, strict=True)
+        ):
+            row = [_rational(Fraction())] * len(active)
+            row[position] = _rational(Fraction(1))
+            matrix.append(row)
+            limits.append(_rational(Fraction(machines) * columns[index].crafts_per_second))
 
     cost = [
         _rational(Fraction(columns[index].footprint_area) / columns[index].crafts_per_second)
         for index in active
     ]
-
     try:
         _optimum, solution = linprog(cost, matrix, limits)
     except (InfeasibleLPError, UnboundedLPError) as exc:
         raise InfeasibleError(
-            "the exact rate solve found no balanced, non-negative set of craft "
-            "rates for the machines the MILP chose, so the recipe graph over "
-            f"{', '.join(sorted({columns[i].recipe_id for i in active}))} does "
-            f"not close ({type(exc).__name__})"
+            "the exact rate solve found no balanced, non-negative craft rates "
+            f"over {', '.join(sorted({columns[i].recipe_id for i in active}))} "
+            f"({type(exc).__name__})"
         ) from exc
 
-    crafts = [Fraction(0)] * len(columns)
+    crafts = [Fraction()] * len(columns)
     for position, index in enumerate(active):
-        rate = _fraction(solution[position])
-        # ``linprog``'s standard form implies ``x >= 0``, but a negative rate
-        # would mean negative machines, and sympy's *other* entry points do not
-        # honour ``nonnegative=True`` symbols -- so this is checked, not assumed.
+        rate = _fraction(cast(Expr, solution[position]))
         if rate < 0:
             raise InfeasibleError(
                 f"the exact rate solve returned a negative craft rate for "
@@ -581,62 +559,173 @@ def _exact_rates(
     return crafts
 
 
+def _exact_rates(
+    columns: Sequence[AdjustedRecipe],
+    raw_machines: Sequence[float],
+    internal_items: Sequence[str],
+    demand: Mapping[str, Fraction],
+) -> list[Fraction]:
+    """Recover exact rates inside the fixed-charge MILP's bought capacities."""
+    active = [index for index, machines in enumerate(raw_machines) if round(machines) > 0]
+    caps = [round(raw_machines[index]) for index in active]
+    if not active:
+        return [Fraction()] * len(columns)
+    return _solve_exact_lp(columns, active, internal_items, demand, caps)
+
+
+def _exact_continuous_rates(
+    columns: Sequence[AdjustedRecipe],
+    raw_crafts: Sequence[float],
+    internal_items: Sequence[str],
+    demand: Mapping[str, Fraction],
+) -> list[Fraction]:
+    """Turn approximate LP support into exact rates without epsilon groups.
+
+    GLOP supplies only the support. Every magnitude is solved again over exact
+    rationals. Values below the documented absolute/relative tolerance are
+    omitted as numerical noise. If that support cannot balance, exact recovery
+    retries with every column so a genuinely required tiny rate is never
+    silently discarded.
+    """
+    scale = max((abs(rate) for rate in raw_crafts), default=0.0)
+    threshold = max(
+        _LP_SUPPORT_ABS_TOLERANCE,
+        scale * _LP_SUPPORT_REL_TOLERANCE,
+    )
+    active = [index for index, rate in enumerate(raw_crafts) if rate > threshold]
+    if not active:
+        return _solve_exact_lp(
+            columns,
+            tuple(range(len(columns))),
+            internal_items,
+            demand,
+        )
+
+    # Preserve every materially positive GLOP column as a physical group. The
+    # floor is three orders below the support cutoff: large enough to be exact
+    # and positive, small enough not to reuse the approximate magnitude.
+    floor = Fraction.from_float(threshold).limit_denominator(10**12) / 1024
+    minimum_rates = {index: floor for index in active}
+    try:
+        return _solve_exact_lp(
+            columns,
+            active,
+            internal_items,
+            demand,
+            minimum_rates=minimum_rates,
+        )
+    except InfeasibleError:
+        # A sub-tolerance column may still be genuinely required for balance.
+        # Expand to all columns, while retaining every material support column.
+        return _solve_exact_lp(
+            columns,
+            tuple(range(len(columns))),
+            internal_items,
+            demand,
+            minimum_rates=minimum_rates,
+        )
+
+
 def solve(
     data: Dataset,
     request: LabRequest,
     *,
     tier: ProliferatorTier = ProliferatorTier.NONE,
-    allowed_modes: Sequence[ProliferatorMode] | None = None,
     proliferable: frozenset[str] | None = None,
-    single_mode: bool = True,
+    fixed_modes: Mapping[str, ProliferatorMode] | None = None,
+    mode_policy: ProliferatorMode = ProliferatorMode.NONE,
     time_limit_s: float = 30.0,
+    prove_minimal: bool = False,
 ) -> RateSolution:
-    """Solve ``request`` into integer machine counts and exact item flows.
+    """Solve ``request`` into exact flows and exact-ceiling machine counts.
 
-    ``proliferable`` restricts which recipes may be proliferated at all, which
-    is how the candidate frontier is generated: proliferating a recipe forces
-    its inputs onto belts, and only the layout stage can price that.
+    Production follows FactorioLab's continuous footprint semantics, then
+    recovers every positive recipe/mode rate over exact rationals and ceilings
+    its physical machine requirement exactly. Extra capacity idles.
+
+    ``prove_minimal=True`` selects the slower fixed-charge MILP whose objective
+    is the rounded footprint. The MILP is also the fallback when the continuous
+    support cannot be recovered exactly. ``time_limit_s`` applies to both the
+    continuous pass and any explicit/fallback MILP.
+
+    ``mode_policy`` deterministically applies one mode to every legal recipe in
+    ``proliferable`` (or every recipe when it is ``None``), falling back to
+    ``NONE`` where products are illegal. ``fixed_modes`` instead preserves
+    authored per-recipe flow modes.
     """
     targets = target_rates(data, request)
     supplied = supplied_rates(data, request)
     excluded = _excluded_recipes(data, request)
     producers, external = _resolve_chain(data, targets, excluded, frozenset(supplied))
     internal_items = sorted(producers)
-    columns = _columns(data, producers, request, tier, allowed_modes, proliferable)
+    columns = _columns(
+        data,
+        producers,
+        request,
+        tier,
+        proliferable,
+        fixed_modes,
+        None if fixed_modes is not None else mode_policy,
+    )
     if not columns:
         raise InfeasibleError("no buildable recipes reach the requested item")
 
-    _, raw_machines = _run_milp(
-        columns,
-        internal_items,
-        targets,
-        integer=True,
-        time_limit_s=time_limit_s,
-        single_mode=single_mode,
-    )
-    crafts = _exact_rates(columns, raw_machines, internal_items, targets)
+    crafts: list[Fraction] = []
+    used_milp = prove_minimal
+    if not used_milp:
+        try:
+            raw_crafts = _run_continuous_lp(
+                columns,
+                internal_items,
+                targets,
+                time_limit_s=time_limit_s,
+            )
+            crafts = _exact_continuous_rates(
+                columns,
+                raw_crafts,
+                internal_items,
+                targets,
+            )
+        except InfeasibleError:
+            used_milp = True
 
-    try:
-        lp_raw, _ = _run_milp(
+    if used_milp:
+        _, raw_machines = _run_milp(
             columns,
             internal_items,
             targets,
-            integer=False,
             time_limit_s=time_limit_s,
-            single_mode=False,
         )
+        crafts = _exact_rates(columns, raw_machines, internal_items, targets)
+
+    if used_milp:
+        try:
+            lower_raw = _run_continuous_lp(
+                columns,
+                internal_items,
+                targets,
+                time_limit_s=time_limit_s,
+            )
+            lower_bound = sum(
+                (
+                    Fraction(rate).limit_denominator(10**6)
+                    / column.crafts_per_second
+                    * column.footprint_area
+                    for rate, column in zip(lower_raw, columns, strict=True)
+                    if rate > _LP_SUPPORT_ABS_TOLERANCE
+                ),
+                Fraction(),
+            )
+        except InfeasibleError:  # pragma: no cover - the MILP already succeeded
+            lower_bound = Fraction()
+    else:
         lower_bound = sum(
             (
-                Fraction(x).limit_denominator(10**6)
-                / column.crafts_per_second
-                * column.footprint_area
-                for x, column in zip(lp_raw, columns, strict=True)
-                if x > 1e-9
+                craft_rate / column.crafts_per_second * column.footprint_area
+                for craft_rate, column in zip(crafts, columns, strict=True)
             ),
-            Fraction(0),
+            Fraction(),
         )
-    except InfeasibleError:  # pragma: no cover - the MILP already succeeded
-        lower_bound = Fraction(0)
 
     groups: list[SolvedGroup] = []
     for column, craft_rate in zip(columns, crafts, strict=True):
@@ -671,6 +760,26 @@ def solve(
             produced[item_id] = produced.get(item_id, Fraction(0)) + rate
         for item_id, rate in group.inputs.items():
             consumed[item_id] = consumed.get(item_id, Fraction(0)) + rate
+
+    # Continuous rates are exact at this boundary. Revalidate both invariants
+    # after ceiling rather than trusting either LP implementation: every group
+    # fits inside its bought capacity and every internally produced item closes
+    # its balance including target demand.
+    for group in groups:
+        capacity = group.machines * group.adjusted.crafts_per_second
+        if group.crafts_per_second > capacity:
+            raise InfeasibleError(
+                f"{group.recipe_id} requires {group.crafts_per_second} crafts/s "
+                f"but {group.machines} machine(s) provide only {capacity}"
+            )
+    for item_id in internal_items:
+        required = consumed.get(item_id, Fraction()) + targets.get(item_id, Fraction())
+        available = produced.get(item_id, Fraction())
+        if available < required:
+            raise InfeasibleError(
+                f"the exact rate solve leaves {item_id} short: "
+                f"produces {available}, requires {required}"
+            )
 
     external_inputs: dict[str, Fraction] = {}
     for item_id, rate in consumed.items():

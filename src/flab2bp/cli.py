@@ -131,8 +131,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument(
         "--candidates",
         type=int,
+        choices=range(1, 4),
         default=3,
-        help="how many proliferation candidates the rate solver emits (default 3)",
+        help="fixed mode policies to emit: none, all-products, output-products "
+        "(1..3; default 3)",
     )
     ap.add_argument(
         "--flow",

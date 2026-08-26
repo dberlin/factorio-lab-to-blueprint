@@ -110,10 +110,8 @@ class BuildSpec(_Frozen):
     #: blueprint that pastes cleanly and then silently under-produces.
     belt_required_edges: frozenset[tuple[str, str]] = Field(default_factory=frozenset)
 
-    #: Lanes needing a Spray Coater, by the item they carry.  ``True`` marks a
-    #: lane that exists anyway (an external input belt, say), where the coater is
-    #: effectively free -- which is what makes "free-proliferation" the candidate
-    #: to beat.
+    #: Lanes needing a Spray Coater, by the item they carry. ``True`` marks a
+    #: lane that exists anyway, such as an external input belt.
     spray_lanes: dict[str, bool] = Field(default_factory=dict)
 
     #: Items whose lane must be physically SPLIT in two, because the same item

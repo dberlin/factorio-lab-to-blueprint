@@ -14,7 +14,6 @@ from flab2bp.rates.adjust import (
 from flab2bp.rates.candidates import (
     build_candidates,
     lanes_requiring_split,
-    partition_recipes,
 )
 from flab2bp.rates.solve import (
     InfeasibleError,
@@ -22,6 +21,7 @@ from flab2bp.rates.solve import (
     SolvedGroup,
     UnsupportedObjectiveError,
     solve,
+    target_producer_ids,
     target_rates,
 )
 
@@ -37,8 +37,8 @@ __all__ = [
     "build_candidates",
     "lanes_requiring_split",
     "machine_footprint",
-    "partition_recipes",
     "select_machine",
     "solve",
+    "target_producer_ids",
     "target_rates",
 ]

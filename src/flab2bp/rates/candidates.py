@@ -1,20 +1,11 @@
-"""The proliferation frontier.
+"""Deterministic proliferation policies, priced after exact machine ceiling.
 
-Proliferating a recipe buys machines and costs geometry, and the rate stage
-cannot see geometry.  Spray is applied by belt-mounted coaters and does not
-survive crafting, so a proliferated recipe needs *its own* inputs belted --
-which forbids direct insertion on exactly those edges.  Whether that trade is
-worth it depends on what a belted edge costs in tiles, and only the layout stage
-knows.
-
-So rather than guess, this module emits several complete, valid builds and lets
-the layout stage lay out each and keep the smallest.
-
-The partition that makes this tractable is the same one that governs mode
-choice.  A recipe fed *entirely* from outside the blueprint has its inputs on
-belts by construction, so spraying it forbids no direct insertion at all.  Those
-recipes proliferate for free, which is why ``free-proliferation`` is the
-candidate to beat rather than a heuristic guess.
+Spray is applied by belt-mounted coaters and does not survive crafting, so a
+proliferated recipe needs its own inputs belted and gives up direct insertion.
+The rate stage cannot price that geometry. It therefore emits three explicit
+policies -- none, products everywhere legal, and products only on final-output
+recipes -- then ranks their physical factories by rounded machine footprint.
+The layout stage still lays out each candidate and keeps the smallest layout.
 """
 
 from __future__ import annotations
@@ -26,75 +17,12 @@ from flab2bp.lab.flow import FlowError, FlowSelection
 from flab2bp.lab.schema import Dataset
 from flab2bp.lab.url import LabRequest
 from flab2bp.rates.adjust import ProliferatorTier
-from flab2bp.rates.solve import RateSolution, solve, target_rates
+from flab2bp.rates.solve import RateSolution, solve, target_producer_ids, target_rates
 from flab2bp.spec import BuildSpec, BuildSpecSet, MachineGroup, ProliferatorMode
 
-#: How many candidates the frontier emits by default.
-#:
-#: Three, not four.  ``all-speed-mode`` exists and is reachable with
-#: ``--candidates 4``; it was measured across the whole corpus and it does not
-#: pay for itself.  2,592 layouts -- 12 URLs x both strategies x 9 repetitions,
-#: at budget 4 with both power settings and again at the CLI's own default
-#: budget of 2.0 -- comparing best-of-3 area against best-of-4 the way
-#: ``pipeline.build`` actually chooses, ``min`` over every (candidate,
-#: strategy) pair:
-#:
-#: * A fourth candidate changed the chosen area not at all in 187 of 216 cells
-#:   at budget 4, and 90 of 108 at budget 2.  Corpus-wide it saved a median
-#:   +0.058%.
-#: * The null arm settles it.  Running the SAME three candidates a second time
-#:   and keeping the smaller saves **1.10%**; adding a fourth saves **0.67%**.
-#:   Both strategies are nondeterministic, so best-of-3 moves 1.84% median and
-#:   up to 21% run-to-run on its own -- a fourth candidate buys less density
-#:   than another roll of the dice on the three already there, and it is the
-#:   noise, not the frontier, that dominates.
-#: * It costs +33% layout wall-clock, because the extra spec is laid out by
-#:   every strategy.  The extra rate solve is not the cost: +0.51s over all 12
-#:   URLs.
-#: * The one durable win in the corpus is ``graphene``: 416 -> 403 tiles, 9/9
-#:   repetitions, zero baseline spread.  Thirteen tiles on a five-machine
-#:   build.
-#:
-#: ``information-matrix`` is both why this looked promising and why it is not.
-#: Spine alone lays ``all-speed-mode`` out ~12% smaller there.  But the CLI
-#: defaults to ``strategy="best"``, and freeform lays that same URL out in
-#: 2,430 tiles against spine's 4,074, so the fourth candidate wins a race
-#: nobody runs: measured gain 0.00% in 9/9 repetitions, both power settings,
-#: both budgets.  A per-strategy area win is not a reason to change a default
-#: that pools strategies.
-#:
-#: None of this is a correctness limit.  ``all-speed-mode`` is produced for all
-#: 12 corpus URLs, never trips ``_is_runaway``, and caused no new refusal --
-#: 0 of 324 build cells lost a valid layout by adding it.
+#: The deterministic mode frontier: none, all legal products, and products only
+#: on recipes that directly produce a requested final output.
 DEFAULT_CANDIDATES = 3
-
-
-def partition_recipes(
-    data: Dataset, request: LabRequest
-) -> tuple[frozenset[str], frozenset[str]]:
-    """Split the chain's recipes into ``(free, costly)`` to proliferate.
-
-    *Free* recipes take every input from outside the blueprint, so their inputs
-    are belted anyway and a coater costs nothing.  *Costly* recipes have at
-    least one internally-produced input, so proliferating them converts a
-    direct-insertable edge into a mandatory belt.
-    """
-    baseline = solve(data, request)
-    internal = {group.recipe_id: group for group in baseline.groups}
-    made_here = {
-        item_id
-        for group in baseline.groups
-        for item_id in group.adjusted.outputs_per_craft
-    }
-    free: set[str] = set()
-    costly: set[str] = set()
-    for recipe_id in internal:
-        inputs = data.recipe(recipe_id).inputs
-        if any(item_id in made_here for item_id in inputs):
-            costly.add(recipe_id)
-        else:
-            free.add(recipe_id)
-    return frozenset(free), frozenset(costly)
 
 
 def _producer_of(solution: RateSolution, item_id: str) -> str | None:
@@ -164,12 +92,9 @@ def lanes_requiring_split(data: Dataset, spec: BuildSpec) -> frozenset[str]:
     quietly receives a bonus nobody costed -- it over-produces, and the running
     factory stops matching the numbers in this ``BuildSpec``.
 
-    This is not a rare corner.  Scanning all 151 craftable end products, 42
-    candidates need at least one split -- and ``free-proliferation`` is among
-    them, despite proliferating only recipes fed from outside.  ``stone``, for
-    instance, feeds ``glass`` (fed purely from outside, so proliferated) and
-    ``sulfuric-acid`` (which also takes refined-oil, so not), and the lane has
-    to be split between them.
+    Explicit policies can still mix proliferated and unproliferated consumers,
+    especially ``output-products`` at the boundary of the final recipe. The
+    lane must be split between those consumers.
     """
     consumers: dict[str, list[MachineGroup]] = {}
     for group in spec.groups:
@@ -228,23 +153,10 @@ def proliferator_from_request(request: LabRequest) -> ProliferatorTier | None:
     return max(tiers, key=lambda t: int(t.value)) if tiers else None
 
 
-def proliferation_from_flow(
+def _proliferation_modes_from_flow(
     flow: FlowSelection,
-) -> tuple[ProliferatorTier, tuple[ProliferatorMode, ...], frozenset[str]]:
-    """What FactorioLab's flow actually sprays: ``(tier, modes, recipes)``.
-
-    ``ProliferatorTier.module_id`` builds exactly the ids FactorioLab carries
-    (``proliferator-2-products`` and friends), so this is that map inverted --
-    the same inversion ``proliferator_from_request`` does for a URL, but reading
-    the solved flow, which is a statement of fact rather than of availability.
-
-    A flow that sprays nothing yields ``ProliferatorTier.NONE``, and that is the
-    case that matters most: it means no proliferator may be belted in at all.
-
-    Mixed tiers are refused.  The rate solver takes one tier for the whole
-    build, so a flow spraying Mk.I on one recipe and Mk.II on another cannot be
-    represented, and quietly picking one would change what the block consumes.
-    """
+) -> tuple[ProliferatorTier, dict[str, ProliferatorMode]]:
+    """Read the exact proliferator mode authored for each flow recipe."""
     by_id = {
         tier.module_id(mode): (tier, mode)
         for tier in ProliferatorTier
@@ -262,7 +174,7 @@ def proliferation_from_flow(
             )
         sprayed[recipe_id] = known
     if not sprayed:
-        return ProliferatorTier.NONE, (), frozenset()
+        return ProliferatorTier.NONE, {}
     tiers = {tier for tier, _ in sprayed.values()}
     if len(tiers) > 1:
         raise FlowError(
@@ -271,11 +183,15 @@ def proliferation_from_flow(
             "so honouring the flow exactly is not possible; choosing one would "
             "change what the block consumes."
         )
-    return (
-        tiers.pop(),
-        tuple(sorted({mode for _, mode in sprayed.values()})),
-        frozenset(sprayed),
-    )
+    return tiers.pop(), {recipe_id: mode for recipe_id, (_, mode) in sprayed.items()}
+
+
+def proliferation_from_flow(
+    flow: FlowSelection,
+) -> tuple[ProliferatorTier, tuple[ProliferatorMode, ...], frozenset[str]]:
+    """What FactorioLab's flow sprays: ``(tier, modes, recipes)``."""
+    tier, by_recipe = _proliferation_modes_from_flow(flow)
+    return tier, tuple(sorted(set(by_recipe.values()))), frozenset(by_recipe)
 
 
 def _pinned_candidates(
@@ -289,9 +205,8 @@ def _pinned_candidates(
     One candidate, not a frontier.  The frontier exists to explore a choice the
     rate stage cannot price; when the player has already made that choice there
     is nothing to explore, and exploring anyway is how a proliferator input the
-    player never asked for gets added.  Measured live: against a flow whose
-    ``Modules`` column is empty, the frontier picked ``max-proliferation`` and
-    asked to belt in ``proliferator-3``.
+    player never asked for gets added. Against an unsprayed captured flow, an
+    unpinned products policy would ask the player to belt in a proliferator.
 
     A proliferator tier is an IMPLIED INPUT -- the sprayed item is belted in from
     outside, so choosing a tier changes what the block consumes -- and the rule
@@ -300,13 +215,12 @@ def _pinned_candidates(
     in a URL "is not a constraint", which is right for a URL: it states what is
     available, not what is used. A solved flow states what is used.
     """
-    tier, modes, recipes = proliferation_from_flow(flow)
+    tier, fixed_modes = _proliferation_modes_from_flow(flow)
     plan = solve(
         data,
         request,
         tier=tier,
-        allowed_modes=modes or None,
-        proliferable=recipes if tier is not ProliferatorTier.NONE else None,
+        fixed_modes=fixed_modes,
         time_limit_s=time_limit_s,
     )
     label = "flow-pinned" if tier is ProliferatorTier.NONE else f"flow-pinned-mk{tier.value}"
@@ -326,10 +240,11 @@ def build_candidates(
 ) -> BuildSpecSet:
     """Emit an ordered frontier of complete, valid builds.
 
-    Ordered ``no-proliferator``, ``free-proliferation``, ``max-proliferation``,
-    then ``all-speed-mode``.  Each is independently valid; they differ only in
-    how much direct-insertion freedom they trade for fewer machines.  Candidates
-    are independent, so the layout stage may lay them out in parallel.
+    The deterministic frontier contains ``no-proliferator``, ``all-products``,
+    then ``output-products``. Each policy fixes one mode per recipe before the
+    continuous solve; products-illegal recipes fall back to ``NONE``. Returned
+    candidates are ranked by their actual rounded machine footprint, and the
+    layout stage may lay them out in parallel.
 
     A candidate whose machine count runs away is dropped rather than returned.
     Proliferation exists to CUT machines, so a proliferated plan can never
@@ -341,6 +256,9 @@ def build_candidates(
     real URL produced 515,396,248 machines this way, and the layout stage then
     sat trying to place them.
     """
+    if count < 1 or count > DEFAULT_CANDIDATES:
+        raise ValueError(f"count must be between 1 and {DEFAULT_CANDIDATES}")
+
     if flow is not None:
         # Everything below this line is the UNPINNED frontier and is reached
         # only when no flow was supplied, so a build without one is unchanged.
@@ -352,40 +270,40 @@ def build_candidates(
     # they may not have -- the plan would be valid and unbuildable.
     chosen: ProliferatorTier = tier or proliferator_from_request(request) or ProliferatorTier.MK3
 
-    baseline = solve(data, request, time_limit_s=time_limit_s)
+    baseline = solve(
+        data,
+        request,
+        mode_policy=ProliferatorMode.NONE,
+        time_limit_s=time_limit_s,
+    )
     specs = [_to_build_spec(data, request, baseline, "no-proliferator")]
+    rounded_areas = {"no-proliferator": baseline.total_area}
     baseline_machines = specs[0].machine_count
     dropped: list[str] = []
 
     if chosen is not ProliferatorTier.NONE and count > 1:
-        free, _costly = partition_recipes(data, request)
-        plans: list[tuple[str, RateSolution]] = []
-
-        plans.append(
+        plans: list[tuple[str, RateSolution]] = [
             (
-                "free-proliferation",
+                "all-products",
                 solve(
                     data,
                     request,
                     tier=chosen,
-                    proliferable=free,
+                    mode_policy=ProliferatorMode.PRODUCTS,
                     time_limit_s=time_limit_s,
                 ),
             )
-        )
+        ]
         if count > 2:
             plans.append(
-                ("max-proliferation", solve(data, request, tier=chosen, time_limit_s=time_limit_s))
-            )
-        if count > 3:
-            plans.append(
                 (
-                    "all-speed-mode",
+                    "output-products",
                     solve(
                         data,
                         request,
                         tier=chosen,
-                        allowed_modes=(ProliferatorMode.SPEED,),
+                        proliferable=target_producer_ids(data, request),
+                        mode_policy=ProliferatorMode.PRODUCTS,
                         time_limit_s=time_limit_s,
                     ),
                 )
@@ -396,6 +314,7 @@ def build_candidates(
                 dropped.append(f"{label} ({spec.machine_count:,} machines)")
                 continue
             specs.append(spec)
+            rounded_areas[label] = plan.total_area
 
     if dropped:
         # Surfaced, not swallowed: a silently missing candidate reads as "the
@@ -408,6 +327,11 @@ def build_candidates(
             RuntimeWarning,
             stacklevel=2,
         )
+
+    # The continuous objective prices fractional machines. Candidate ranking is
+    # deliberately based on the physical factory after every exact requirement
+    # has been ceiled, so fractional LP cost never masquerades as rounded area.
+    specs.sort(key=lambda spec: rounded_areas[spec.label])
 
     _assert_same_objective(data, request, specs)
     return BuildSpecSet(candidates=tuple(specs))

@@ -9,9 +9,9 @@ when a flow is supplied, the frontier is not a frontier any more.
 not a constraint", and that is right *for a URL*, which states what is available
 rather than what is used.  A solved flow states what is used.  The difference is
 not academic: measured against a real export whose ``Modules`` column is empty,
-the unpinned frontier chose ``max-proliferation`` and asked the player to belt
-in ``proliferator-3``.  ``test_unpinned_frontier_would_add_a_proliferator_input``
-pins that, so none of the assertions below can pass vacuously.
+an unpinned products policy asks the player to belt in ``proliferator-3``.
+``test_unpinned_frontier_would_add_a_proliferator_input`` pins that, so none of
+the assertions below can pass vacuously.
 
 A separate file from ``test_candidates.py`` deliberately: another agent is live
 on the unpinned frontier, and new tests in a new file do not collide.
@@ -161,12 +161,13 @@ class TestPinnedFrontier:
         assert spec.label == "flow-pinned-mk2"
         assert spec.is_proliferated
         assert "proliferator-2" in spec.external_inputs
-        # ONLY the recipes the flow sprays. Spraying a recipe FactorioLab left
-        # alone changes that recipe's input rates -- productivity or speed both
-        # move what the block draws -- so "proliferated at the right tier" is not
-        # enough on its own. A mutation dropping `proliferable` survived every
-        # other assertion in this file until this line existed.
+        # ONLY the recipes the flow sprays, in each recipe's authored mode.
+        # Spraying a recipe FactorioLab left alone changes its input rates, so
+        # the per-recipe fixed-mode map is part of the observable pin.
         assert {g.recipe_id for g in spec.groups if g.is_proliferated} == {"graphene"}
+        assert {
+            group.proliferator_mode for group in spec.groups if group.is_proliferated
+        } == {ProliferatorMode.SPEED}
         # And the belted proliferator is legal precisely because the flow sprays.
         assert flow.uses_proliferator
         assert unsupplied_inputs(
@@ -178,7 +179,8 @@ class TestPinnedFrontier:
             ),
         ) == ()
 
-    def test_no_flow_leaves_the_frontier_untouched(self, data: Dataset) -> None:
-        """The no-flow path must be byte-identical, so the corpus cannot move."""
-        labels = [s.label for s in build_candidates(data, parse_url(URL), count=3).candidates]
-        assert labels == ["no-proliferator", "free-proliferation", "max-proliferation"]
+    def test_no_flow_keeps_all_frontier_choices(self, data: Dataset) -> None:
+        labels = {
+            spec.label for spec in build_candidates(data, parse_url(URL), count=3).candidates
+        }
+        assert labels == {"no-proliferator", "all-products", "output-products"}

@@ -26,7 +26,13 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="include the large and stress tiers (slow; excluded from CI)",
     )
-    parser.add_argument("--candidates", type=int, default=3)
+    parser.add_argument(
+        "--candidates",
+        type=int,
+        choices=range(1, 4),
+        default=3,
+        help="fixed rate policies to emit (1..3)",
+    )
     parser.add_argument(
         "--time-budget", type=float, default=None, help="override the per-tier budget"
     )

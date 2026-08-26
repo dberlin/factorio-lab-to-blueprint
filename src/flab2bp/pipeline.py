@@ -63,10 +63,10 @@ def _rate_per_minute(per_second: Fraction) -> str:
 def _title(spec: BuildSpec) -> str:
     """What this blueprint MAKES, which is what a player is looking for.
 
-    The candidate label -- ``max-proliferation``, ``no-proliferator`` -- says how
-    the rates were solved, not what comes out, and it used to be the whole
-    title.  Two blueprints in a library both called ``max-proliferation`` are
-    indistinguishable; ``super-magnetic-ring 60/min`` is not.
+    The candidate label -- ``all-products``, ``output-products`` or
+    ``no-proliferator`` -- says how the rates were solved, not what comes out,
+    and it used to be the whole title. Two blueprints in a library both called
+    ``all-products`` are indistinguishable; ``super-magnetic-ring 60/min`` is not.
 
     The label is not thrown away: it stays in the description, where provenance
     belongs, and a proliferated candidate still says so here -- but after the
@@ -85,8 +85,8 @@ def _title(spec: BuildSpec) -> str:
     # Only when there is something to say. Every spec has a proliferation
     # answer; only two of the three are worth a player's attention.
     note = {
-        "max-proliferation": " (max prolif)",
-        "free-proliferation": " (prolif)",
+        "all-products": " (all products)",
+        "output-products": " (output products)",
     }.get(spec.label or "", "")
     return named + note
 
@@ -281,10 +281,8 @@ def build(
     # flow does not is not a legal candidate for this build -- the boundary rule
     # outranks density, and this is where it bites. The frontier trades machines
     # for proliferation, and proliferator arrives on a belt: against an
-    # unproliferated flow, choosing `max-proliferation` would quietly add an
-    # input the player never asked for. Caught by the first real capture, which
-    # picked exactly that candidate and asked for proliferator-3 against a flow
-    # whose Modules column is empty.
+    # unproliferated flow, either products policy would quietly add an input the
+    # player never asked for.
     #
     # Filtered rather than refused outright: the unproliferated candidate is
     # legal and present, so dropping the illegal ones keeps the build while
@@ -339,7 +337,7 @@ def build(
                 "every candidate this URL produced sprays something, so "
                 "--no-proliferator cannot be honoured: "
                 + ", ".join(spec.label or "?" for spec in spec_set.candidates)
-                + ". Raising --candidates may surface an unsprayed one."
+                + ". The fixed frontier must always include no-proliferator."
             )
         spec_set = BuildSpecSet(candidates=unsprayed)
 

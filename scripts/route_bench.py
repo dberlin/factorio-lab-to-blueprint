@@ -74,7 +74,7 @@ def _snapshot(canvas, grid, history):
 def capture(url_id: str, power: int, budget: float, every: int, cap: int, out: Path):
     entry = next(e for e in URL_CORPUS if e.url_id == url_id)
     spec = build_candidates(
-        load_vendored(), parse_url(entry.url), count=4
+        load_vendored(), parse_url(entry.url), count=3
     ).candidates[0]
 
     orig = freeform._astar

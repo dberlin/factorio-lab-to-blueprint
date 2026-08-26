@@ -49,7 +49,7 @@ def _strategy(name: str):
 
 def _spec(url_id: str, index: int):
     entry = next(e for e in URL_CORPUS if e.url_id == url_id)
-    cands = build_candidates(load_vendored(), parse_url(entry.url), count=4).candidates
+    cands = build_candidates(load_vendored(), parse_url(entry.url), count=3).candidates
     return cands[index]
 
 
