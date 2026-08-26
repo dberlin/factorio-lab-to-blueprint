@@ -3,16 +3,8 @@ node_modules/
 *.log
 coverage/
 
-# `dist/` is rsbuild's output -- the SERVER arm's built front end.
+# `dist/` is rsbuild's production front-end output.
 dist/
-
-# `payload/` is what `build_payload.py` writes -- the CLIENT arm's pyshim zip,
-# the flab2bp wheel and their manifest. It is deliberately NOT `dist/`: rsbuild
-# cleans its own output directory on every production build, so while the two
-# arms shared `dist/` a single `bun run build` -- which `flab2bp-web` runs by
-# itself on first start -- silently deleted the client arm's payload and left
-# `worker.js` fetching a 404.
-payload/
 
 # NOTE: `public/` was ignored in the standalone dsp-blueprint-viewer repo,
 # because there it is regenerated from a local Dyson Sphere Program install by

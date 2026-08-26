@@ -43,9 +43,6 @@ refuses and checks the reason reaches the page, and a third that pastes a Factor
 export and checks the report comes back **pinned** rather than derived. Two screenshots and a
 `report.json` land in `--out`; it exits non-zero on the first thing that does not hold.
 
-The client arm's `web/smoke.py` is the same gate — it imports the canvas check and the refusal
-fixture from this file rather than reimplementing either, so the two arms cannot be held to two
-standards.
 
 `nodriver` rather than Playwright for the same reason `flab2bp.lab.capture` uses it: Playwright
 ships its own browser builds and none work on Fedora, so a proof driven through it is a proof
@@ -85,15 +82,13 @@ spends its retry budget as well, so it is a scale for the wait, never a finish t
 
 ## What it does NOT do
 
-**`--fetch-flow` is not wired, for two different reasons.** On the client arm it is impossible:
-it drives a headless browser to make FactorioLab run its own solve, and a page cannot drive one
-against itself. On this arm it is possible and is declined, which is a decision with a reason
-rather than work nobody got to. `/api/build` has no authentication; wiring `--fetch-flow` would
-turn it into *render any URL you like in a headless Chromium on this machine*, since the browser
-goes to whatever URL the request supplied. That is strictly more power than solving, and it is
-not power this endpoint should have before it has an answer to who is calling it.
+**`--fetch-flow` is not wired.** It drives a headless browser to make FactorioLab run its own
+solve. `/api/build` has no authentication; wiring `--fetch-flow` would turn it into *render any
+URL you like in a headless Chromium on this machine*, since the browser goes to whatever URL the
+request supplied. That is strictly more power than solving, and it is not power this endpoint
+should have before it has an answer to who is calling it.
 
-`--flow` **is** wired, on both arms. Paste FactorioLab's CSV export into the flow box, or choose
+`--flow` **is** wired. Paste FactorioLab's CSV export into the flow box, or choose
 the file; the API takes it as text and it reaches `flow_from_text` and its provenance check
 exactly as a file named on the command line does. An export generated from a *different* URL is
 refused with the difference spelled out parameter by parameter — it is never quietly ignored,
@@ -125,8 +120,7 @@ rendering whatever was loaded last, because clearing it would throw away the thi
 looking at. What used to be wrong was the label: the toolbar went on naming a build a refusal
 had superseded. It now reads *previous build — the last one produced no blueprint* whenever the
 canvas is not the outcome of the last build, which covers a refusal, an error, and a build whose
-string was withheld for failing validation. (The client-side arm rebuilds its whole output
-column per solve, so it never had this to fix.)
+string was withheld for failing validation.
 
 **`/api/fetch` is a relay, and it no longer relays into this machine.** Inherited from the
 viewer's `src/server/proxy.ts`, which followed redirects blind — so an allowed public URL could
@@ -148,118 +142,6 @@ reported "no changes" and incomplete enough that `bun run build` died on
 `Cannot find module '@rsbuild/core/dist/index.js'`. `web/.gitignore` already said
 `node_modules/`; this branch makes that true. `bun.lock` is the declaration.
 
-**It does not run the solver client-side — but something else here does.** That was recorded on
-this page as *considered and dropped*, and it was then built anyway: `web/CLIENTSIDE.md`
-describes a second arm where CPython, CP-SAT and SCIP all run in the tab and the server hands
-out nothing but files. The two are measured against each other below.
-
-## Two arms, and which one to ship
-
-There are two of these. This one solves on a server. `web/CLIENTSIDE.md` describes the other:
-Pyodide plus or-tools-wasm, the whole pipeline inside the tab, the server handing out nothing
-but files. They were built by different agents and had drifted into two applications; they are
-now the same application over two solvers. Same options, same report from the same
-`flab2bp.web.payload.describe`, same progress sink, same viewer (`web/src/embed.tsx` is the
-server arm's own component tree, mounted by the client page), same refusal rendering, same
-proof gate.
-
-### The measurement, and what it is safe to conclude from it
-
-One URL — the `space-warper 10/min` spec at the top of this file — `best`, 3 candidates,
-Tesla Towers on, on a 128-core box shared with other work.
-
-**Two things bite, and an earlier draft of this section got both wrong.**
-
-*The budget is wall-clock, so load is a variable.* CPU contention takes search away exactly as a
-smaller budget does. A browser run at 6 s taken immediately after a heavy server-arm run came
-back with the 2 s area; two native runs taken at load 128 and 137 came back 1372 and 1316 where
-the same command at load 35–77 gives 1178–1232. Every figure below carries the load it was taken
-at, and a re-measurement that does not is measuring the load.
-
-*The result is not deterministic.* Four-thread CP-SAT is a portfolio with a race in it. "Three
-runs agreeing" is not three runs of evidence — this section said 1210 flat on exactly that
-mistake, and the eighth run said 1232.
-
-#### The part that is load-controlled
-
-The cause was established natively, and this is the measurement to trust: `DEFAULT_SEARCH_WORKERS`
-pinned to 4 — the wasm runtime's `pthreadPoolSize` — against the default of 0, meaning every
-core. Each row below was measured *inside a single command alongside its own baseline*, so the
-two arms of every pair saw the same machine at the same moment.
-
-| native CP-SAT | budget/layout | area, tiles |
-| --- | --- | --- |
-| every core | 2s | 1232, 1232, 1178, 1224 |
-| **4 workers** | 2s | 1232, 1344, 1400, **2193** |
-| 4 workers | 6s | 1232, 1232, 1254 |
-| 4 workers | 12s | 1110 |
-
-Four workers at three times the budget lands on 1232, the same number every core reaches at 1x,
-and at six times it beats it. The **2193** is the sharper finding: that run is not a worse
-layout, it is a run where the winning pair — `max-proliferation` / `freeform` — produced *no
-layout at all* and the build fell back to a 78%-larger candidate. Under-budgeted four-worker
-CP-SAT does not degrade smoothly; it refuses.
-
-What would have falsified this: four workers matching every core at the same budget. They did
-not — 14% worse at the median, and once refused outright.
-
-#### The part that transferred to the real browser
-
-| arm | budget/layout | area, tiles, every run | median |
-| --- | --- | --- | --- |
-| browser, CP-SAT on 4 wasm threads | 2s | 1292 × 6 | **1292** |
-| browser | **6s** | 1210 × 7, 1232, 1292, 1292 | **1210** |
-| browser | 12s | 1210 | — |
-
-At 2 s the browser is remarkably stable and always at 1292. At 6 s the median falls to 1210, and
-the three runs that did not — 1232 and 1292 twice — are the same portfolio race, plus the load
-effect above. No 6 s run was worse than any 2 s run. Past 6 s the extra budget bought no area on
-this spec and 50% more wall clock: 94 s against 59–63 s. **So 6 is what `web/app.html` defaults
-to**, against the CLI's 2, and the note under the controls says why.
-
-Wall clock: the browser is 59–71 s at 2 s and 59–63 s at 6 s — indistinguishable, because most
-of a browser build is not CP-SAT at all. The server arm does the same spec in 33–55 s.
-
-The two arms' *absolute* areas are within a few percent of each other and both move with load,
-so the honest statement is that at their shipped defaults they are comparable on density and the
-browser is roughly twice the wall clock. What is not within noise, and is the point, is that at
-the CLI's 2 s the browser was worse on every single run, and raising the budget fixed it at no
-cost in wall clock.
-
-### The recommendation: ship the server arm, keep the client arm
-
-Not because of density. Density is settled: at the shipped defaults the two are comparable, and
-the browser is the more variable of the two. The reasons that survive the measurement are:
-
-1. **57.6 MB over 46 files, cold, every time the cache is.** Measured by `web/serve.py`'s own
-   byte tally, largest first: `mp_solver_runtime.wasm` 18.5, `pyodide.asm.wasm` 8.3,
-   `cp_sat_runtime.wasm` 7.1, pandas 5.1, sympy 3.9, numpy 3.0, the Python stdlib 2.3, the icon
-   atlas 1.4, pydantic-core 1.3 MB. 10–15 s to interactive. The server arm ships 1.2 MB of
-   JavaScript plus the same 1.6 MB of catalog and icon atlas — about 2.9 MB, and no wasm at all
-   (`find web/dist -name '*.wasm'` is empty). Twenty times less, for the same page.
-2. **A hard capability gate.** The client arm needs WebAssembly stack switching (JSPI),
-   `SharedArrayBuffer` and cross-origin isolation, and it fails loudly without them rather than
-   degrading — which is correct, and which also means it simply does not run where they are
-   absent. This box has one browser, Chromium 151, so no cross-browser claim is made here.
-3. **`--fetch-flow` cannot be wired to it, ever.** Making FactorioLab produce its own export
-   means driving a headless browser, and a page cannot do that to itself. `--flow` — pasting or
-   uploading an export you already have — is wired on both arms and is the same pin; it is the
-   *fetch* half that is arithmetically out of reach, and the page says so rather than
-   mislabelling a derived selection as pinned.
-4. **Nothing gets faster.** 59–71 s against 33–55 s, on a spec the CLI does in 34 s.
-
-None of that argues for deleting the client arm, and it should not be deleted. It is the only
-one of the two that runs on a static host with no Python anywhere, it is now density-competitive
-at its own default, and every claim it makes is re-runnable through `web/smoke.py`.
-
-**What would change the answer.** The payload. 25.6 of the 57.6 MB is the two solver runtimes,
-and `mp_solver_runtime.wasm` alone is 18.5 MB for the MILP that solves the *rates* — a problem
-several orders smaller than the layout, and the one place a smaller backend would pay for
-itself. Another 5.1 MB is pandas, which flab2bp never imports: ortools' own pure-Python
-`cp_model.py` does, at `web/pyshim/ortools/sat/python/cp_model.py:69`, for a dataframe API this
-code path does not use. numpy and sympy are genuinely needed (`layout/freeform.py`,
-`rates/solve.py`). Or `or-tools-wasm` raising its pthread pool, which would remove the reason
-the browser needs a 6 s default at all. None of that is work in this repository.
 
 ## The API
 

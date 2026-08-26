@@ -1,22 +1,10 @@
 import { buildCatalog, type Catalog } from '../model/catalog';
 import { type Atlas, AtlasSchema } from '../model/schemas';
 
-/**
- * Where the extracted game data lives, without a trailing slash.
- *
- * `/assets` is right for the server arm, where rsbuild copies `public/` to the
- * root of what `flab2bp-web` serves. The client-side arm serves the repo's
- * `web/` directory itself, so the same files sit under `./dist/assets` there —
- * which is why this is a variable rather than six string literals.
- */
-let base = '/assets';
-
-export function setAssetBase(next: string): void {
-  base = next.replace(/\/+$/, '');
-}
+const ASSET_BASE = '/assets';
 
 export function assetPath(relative: string): string {
-  return `${base}/${relative}`;
+  return `${ASSET_BASE}/${relative}`;
 }
 
 async function json(path: string, signal?: AbortSignal): Promise<unknown> {

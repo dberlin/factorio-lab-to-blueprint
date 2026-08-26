@@ -191,11 +191,11 @@ def run_build(options: Options, on_progress: pipeline.ProgressSink) -> pipeline.
 
     ``--flow`` is wired: the export arrives as CSV text, pasted or uploaded,
     and goes through ``flow_from_text``'s provenance check exactly as a file
-    named on the command line does.  ``--fetch-flow`` is not, and on the
-    client-side arm cannot be -- it drives a headless browser to make
-    FactorioLab do its own solve, which a page cannot do to itself.  A build
-    with no flow reports ``flow_pinned: false`` and the UI says what that
-    means, rather than the omission reading as silence.
+    named on the command line does.  ``--fetch-flow`` is not: it drives a
+    headless browser to make FactorioLab do its own solve, and exposing that
+    through the unauthenticated build API would let callers navigate Chromium
+    to arbitrary URLs.  A build with no flow reports ``flow_pinned: false`` and
+    the UI says what that means, rather than the omission reading as silence.
     """
     return pipeline.build(
         options.url,
