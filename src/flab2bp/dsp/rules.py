@@ -436,6 +436,28 @@ MATCH_SNAP_MAX_SQR = 6.0
 MATCH_ALIGN_COS = 0.9702957
 
 
+#: How square a belt must lie ACROSS a sorter before the paste drags that end
+#: along with the seat it just applied to the other end.
+#:
+#: ``BlueprintUtils.cs:2102``, in ``RefreshBuildPreview``, and its mirror at
+#: ``:2153``::
+#:
+#:     if (Mathf.Abs(Vector3.Dot((buildPreview2.lpos2 - buildPreview2.lpos).normalized,
+#:                               buildPreview2.output.lrot.Forward())) < 0.5f)
+#:     {
+#:         Vector3 vector6 = buildPreview2.lrot2.Forward();
+#:         float num39 = Vector3.Dot(zero, vector6);
+#:         buildPreview2.lpos2 += zero - vector6 * num39;
+#:     }
+#:
+#: A belt running ALONG the sorter is left where the record put it; one lying
+#: across it follows.  This lived in ``layout.slots`` as ``DRAG_MAX_ALIGNMENT``
+#: -- a game constant with the decompiled source quoted, in the wrong module,
+#: which is the exact shape of defect this module exists to end.  ``slots``
+#: re-exports it under the old name so the call sites read unchanged.
+DRAG_MAX_ALIGNMENT = 0.5
+
+
 # --- EBuildCondition.TooSkew, in BuildTool_BlueprintPaste -------------------
 #
 # "Deflection too much" (`偏角太大`, condition 15 -- NOT `TooBend`/`弯曲过度`)::

@@ -74,6 +74,7 @@ from flab2bp.dsp.rules import (
     ADDON_TO_SLOT,
     BELT_INPUT_SLOTS,
     BELT_SLOT,
+    DRAG_MAX_ALIGNMENT,
     INPUT_TO_SLOT,
     OUTPUT_FROM_SLOT,
     SLOT_ALIGN_COS,
@@ -90,6 +91,7 @@ __all__ = [
     "BELT_SLOT",
     "INPUT_TO_SLOT",
     "OUTPUT_FROM_SLOT",
+    "DRAG_MAX_ALIGNMENT",
     "SLOT_REACH",
     "Attachment",
     "SlotUndetermined",
@@ -731,10 +733,10 @@ def sorter_seat_is_clear(
     return not any(colliders.obb_overlap(box, other) for other in standing)
 
 
-#: ``RefreshBuildPreview`` 2102 and 2153 -- the belt end follows the seat only
-#: when the belt lies ACROSS the sorter rather than along it.  A belt running
-#: with the sorter is left where the record put it.
-DRAG_MAX_ALIGNMENT = 0.5
+# `DRAG_MAX_ALIGNMENT` now lives in `flab2bp.dsp.rules`, with
+# `BlueprintUtils.cs:2102` quoted next to it.  It is a game constant, and a game
+# constant in `layout/` is the defect `dsp.rules` exists to end -- it was the
+# last one.  Imported above and re-exported here so call sites read unchanged.
 
 
 def _forward(yaw: float) -> tuple[float, float]:
