@@ -548,9 +548,8 @@ expected result and not a disappointment — none of the four removed rules was
 reachable by what we emit. They cost nothing in area today; what they cost was
 the next person's confidence that a rule in `dsp/` is a rule.
 
-Full suite alongside: **1487 passed, 4 skipped, 1 xfailed, 1 xpassed**, exit 0
-on four separate runs. `ruff check src tests scripts` clean, bare `uv run mypy`
-clean.
+Full suite alongside: **exit 0 on four separate runs**. `ruff check src tests
+scripts` clean, bare `uv run mypy` clean (102 source files).
 
 ---
 
