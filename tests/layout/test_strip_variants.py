@@ -7,12 +7,16 @@ from fractions import Fraction
 
 import pytest
 
+from flab2bp.dsp import catalog
 from flab2bp.layout import slots
 from flab2bp.layout.freeform import plan_strips
 from flab2bp.layout.strip_variants import (
+    LogicalLane,
     StripFamily,
+    StripFamilyId,
     StripInstance,
     StripVariant,
+    _variants,
     default_strip_variant,
     generate_strip_families,
     lane_reach_profiles,
@@ -152,6 +156,54 @@ def test_shared_lane_items_receive_distinct_authoritative_columns() -> None:
     for plan in shared:
         assert len(plan.attachments) == len(plan.lane.items)
         assert len({attachment.column for attachment in plan.attachments}) == len(plan.attachments)
+
+
+def test_multi_lane_assembler_uses_globally_unique_slots_deterministically() -> None:
+    spec = _single_machine_spec(
+        "assembling-machine-2",
+        inputs=("iron-ingot", "copper-ingot"),
+        outputs=("gear", "magnet"),
+    )
+
+    first = _family(spec)
+    second = _family(spec)
+
+    assert first == second
+    assert first.variants
+    for variant in first.variants:
+        by_row = {
+            profile.lane_y: profile
+            for profile in lane_reach_profiles(first.machine_item_id, variant.yaw)
+        }
+        independent_first_choices = tuple(
+            by_row[plan.lane_y].attachments[0][1].slot
+            for plan in variant.attachment_plan
+            for _item in plan.lane.items
+        )
+        assigned = tuple(
+            attachment.slot for plan in variant.attachment_plan for attachment in plan.attachments
+        )
+
+        assert len(set(independent_first_choices)) < len(independent_first_choices)
+        assert len(set(assigned)) == len(assigned)
+
+
+def test_impossible_global_slot_matching_produces_no_variant() -> None:
+    lanes = (
+        LogicalLane("input:south:0", "input", ("a", "b"), (), "south", 0),
+        LogicalLane("input:south:1", "input", ("c", "d"), (), "south", 1),
+    )
+
+    assert (
+        _variants(
+            StripFamilyId("impossible", 0),
+            catalog.item_id("assembling-machine-2"),
+            1,
+            lanes,
+            0.0,
+        )
+        == ()
+    )
 
 
 def test_machine_row_origins_advance_by_pitch_and_reserve_edge_halo() -> None:

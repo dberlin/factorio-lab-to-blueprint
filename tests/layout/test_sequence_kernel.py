@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import hashlib
+import pickle
 import random
 import struct
 from array import array
 from collections.abc import Iterator
+from dataclasses import replace
 from typing import cast
 
 import pytest
@@ -69,6 +72,10 @@ def _assert_exact(actual: AnnealIncumbent, expected: AnnealIncumbent) -> None:
         expected.breakdown.history_cost,
         expected.energy.scalar,
     )
+
+
+def _stage_digest(stage: object) -> bytes:
+    return hashlib.sha256(pickle.dumps(stage, protocol=5)).digest()
 
 
 def _real_case(name: str) -> tuple[PlacementProblem, AnnealState, PlacementCostContext]:
@@ -279,6 +286,52 @@ def test_backend_selection_falls_back_cleanly(monkeypatch: pytest.MonkeyPatch) -
     fallback_stage = anneal_stage(problem, state, config, context)
     assert fallback_stage.backend == "python"
     assert fallback_stage == compiled_stage
+
+
+def test_catastrophic_scale_hpwl_is_bit_exact_for_scores_and_full_stage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    order = (0, 1, 2, 3)
+    problem = PlacementProblem(
+        sizes=((1, 1),) * 4,
+        nets=((0, 1), (1, 2), (2, 3)),
+        outline_height=1,
+        area_lower_bound=4,
+    )
+    context = PlacementCostContext(
+        net_weights=(1e16, 1.0, 1.0),
+        net_pairs=problem.nets,
+        history_outline=(0, 1),
+        history_summed_area=(0.0, 0.0),
+    )
+    state = AnnealState(
+        pair=SequencePair(order, order),
+        gaps=GapProfile.zero(4),
+        base_seed=9007199254740993,
+        variant_indices=(0,) * 4,
+    )
+
+    expected = PythonSequenceKernel(problem, context).score_state(state)
+    actual = CompiledSequenceKernel(problem, context).score_state(state)
+    expected_hpwl = sum((1e16, 1.0, 1.0))
+
+    assert struct.pack("=d", expected.breakdown.weighted_hpwl) == struct.pack("=d", expected_hpwl)
+    assert struct.pack("=d", actual.breakdown.weighted_hpwl) == struct.pack("=d", expected_hpwl)
+    _assert_exact(actual, expected)
+
+    config = AnnealConfig(
+        moves_per_stage=48,
+        initial_temperature=1.0,
+        final_temperature=0.05,
+        elite_count=4,
+    )
+    compiled_stage = anneal_stage(problem, state, config, context)
+    monkeypatch.setattr(sequence_kernel_module, "_compiled_decode_score", None)
+    python_stage = anneal_stage(problem, state, config, context)
+
+    assert compiled_stage.backend == "cython"
+    assert python_stage.backend == "python"
+    assert _stage_digest(replace(compiled_stage, backend="python")) == _stage_digest(python_stage)
 
 
 def test_backend_selection_falls_back_before_signed_64_geometry_overflow() -> None:

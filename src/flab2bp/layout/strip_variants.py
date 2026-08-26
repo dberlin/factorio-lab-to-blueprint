@@ -256,6 +256,11 @@ class StripVariant:
             raise ValueError("variant lane and attachment plans disagree")
         if any(planned_rows[plan.lane.lane_id] != plan.lane_y for plan in self.attachment_plan):
             raise ValueError("variant attachments must use their planned lane rows")
+        attachment_slots = tuple(
+            attachment.slot for plan in self.attachment_plan for attachment in plan.attachments
+        )
+        if len(set(attachment_slots)) != len(attachment_slots):
+            raise ValueError("variant attachments must use globally distinct machine slots")
         lane_ys = tuple(plan.lane_y for plan in self.attachment_plan)
         envelope_top = -self.placement_geometry.north_halo
         envelope_bottom = self.footprint_height + self.placement_geometry.south_halo
@@ -501,38 +506,73 @@ def _logical_lanes(
     return inputs, outputs
 
 
-def _lane_attachment(
-    lane: LogicalLane,
-    profile: LaneReachProfile,
-) -> LaneAttachmentPlan | None:
-    if len(profile.attachments) < len(lane.items):
+def _match_attachment_plans(
+    seatings: tuple[tuple[LogicalLane, LaneReachProfile], ...],
+) -> tuple[LaneAttachmentPlan, ...] | None:
+    """Choose the lexicographically first complete one-sorter-per-slot matching."""
+    demands = tuple((lane, profile, item) for lane, profile in seatings for item in lane.items)
+    available_slots = {
+        attachment.slot
+        for _lane, profile in seatings
+        for _column, attachment in profile.attachments
+    }
+    if len(demands) > len(available_slots):
         return None
-    selected = profile.attachments[: len(lane.items)]
-    return LaneAttachmentPlan(
-        lane=lane,
-        lane_y=profile.lane_y,
-        attachments=tuple(
-            LaneSorterAttachment(
-                item=item,
-                column=column,
-                cell=attachment.cell,
-                slot=attachment.slot,
-                span=attachment.span,
+
+    selected: list[tuple[int, slots.Attachment] | None] = [None] * len(demands)
+    used_slots: set[int] = set()
+
+    def match(index: int) -> bool:
+        if index == len(demands):
+            return True
+        _lane, profile, _item = demands[index]
+        for candidate in profile.attachments:
+            slot = candidate[1].slot
+            if slot in used_slots:
+                continue
+            selected[index] = candidate
+            used_slots.add(slot)
+            if match(index + 1):
+                return True
+            used_slots.remove(slot)
+            selected[index] = None
+        return False
+
+    if not match(0):
+        return None
+
+    plans: list[LaneAttachmentPlan] = []
+    offset = 0
+    for lane, profile in seatings:
+        chosen = selected[offset : offset + len(lane.items)]
+        offset += len(lane.items)
+        if any(candidate is None for candidate in chosen):
+            raise AssertionError("complete sorter-slot matching left an item unmatched")
+        plans.append(
+            LaneAttachmentPlan(
+                lane=lane,
+                lane_y=profile.lane_y,
+                attachments=tuple(
+                    LaneSorterAttachment(
+                        item=item,
+                        column=candidate[0],
+                        cell=candidate[1].cell,
+                        slot=candidate[1].slot,
+                        span=candidate[1].span,
+                    )
+                    for item, possible in zip(lane.items, chosen, strict=True)
+                    if (candidate := possible) is not None
+                ),
             )
-            for item, (column, attachment) in zip(
-                lane.items,
-                selected,
-                strict=True,
-            )
-        ),
-    )
+        )
+    return tuple(plans)
 
 
 def _side_seatings(
     lanes: tuple[LogicalLane, ...],
     profiles: tuple[LaneReachProfile, ...],
     side: LaneSide,
-) -> tuple[tuple[LaneAttachmentPlan, ...], ...]:
+) -> tuple[tuple[tuple[LogicalLane, LaneReachProfile], ...], ...]:
     side_lanes = tuple(
         sorted(
             (lane for lane in lanes if lane.side == side),
@@ -542,16 +582,14 @@ def _side_seatings(
     if not side_lanes:
         return ((),)
     side_profiles = tuple(profile for profile in profiles if profile.side == side)
-    seatings: list[tuple[LaneAttachmentPlan, ...]] = []
+    seatings: list[tuple[tuple[LogicalLane, LaneReachProfile], ...]] = []
     for selected in combinations(side_profiles, len(side_lanes)):
         ordered = tuple(sorted(selected, key=lambda profile: profile.lane_y))
-        plans = tuple(
-            plan
+        if all(
+            len(profile.attachments) >= len(lane.items)
             for lane, profile in zip(side_lanes, ordered, strict=True)
-            if (plan := _lane_attachment(lane, profile)) is not None
-        )
-        if len(plans) == len(side_lanes):
-            seatings.append(plans)
+        ):
+            seatings.append(tuple(zip(side_lanes, ordered, strict=True)))
     return tuple(seatings)
 
 
@@ -563,15 +601,18 @@ def _attachment_plan_seatings(
     profiles = lane_reach_profiles(item_id, yaw)
     south = _side_seatings(lanes, profiles, "south")
     north = _side_seatings(lanes, profiles, "north")
-    return tuple(
-        tuple(
+    seatings: list[tuple[LaneAttachmentPlan, ...]] = []
+    for south_seatings, north_seatings in product(south, north):
+        selected = tuple(
             sorted(
-                south_plans + north_plans,
-                key=lambda plan: (plan.lane_y, plan.lane.lane_id),
+                south_seatings + north_seatings,
+                key=lambda seating: (seating[1].lane_y, seating[0].lane_id),
             )
         )
-        for south_plans, north_plans in product(south, north)
-    )
+        plans = _match_attachment_plans(selected)
+        if plans is not None:
+            seatings.append(plans)
+    return tuple(seatings)
 
 
 def _variant_id(

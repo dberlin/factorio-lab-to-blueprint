@@ -2455,7 +2455,7 @@ def _with_observational_stats(
         {
             "backend": "sequence-pair",
             "accelerator": accelerator,
-            "seed": float(config.seed),
+            "seed": config.seed,
             "seeds": float(len(anneal_seeds)),
             "heights": float(len(run.heights)),
             "restarts": float(len(run.heights) * config.restarts_per_height),

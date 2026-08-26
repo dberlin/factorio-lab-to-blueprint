@@ -891,6 +891,20 @@ class Strip:
                 return lane
         raise KeyError(f"{item!r} is not an ingredient of {self.recipe_id!r}")
 
+    def column_offset(self, lane: tuple[str, ...]) -> int:
+        """Return the first face-local column available to this input lane."""
+        seen = 0
+        for other in self.in_above:
+            if other is lane or other == lane:
+                return seen
+            seen += len(other)
+        seen = 0 if self.flank_outputs else len(self.out_lanes)
+        for other in self.in_below:
+            if other is lane or other == lane:
+                return seen
+            seen += len(other)
+        raise KeyError(f"{lane!r} is not an input lane of {self.recipe_id!r}")
+
     def input_is_shared(self, item: str) -> bool:
         """Does ``item`` ride a lane with other items?
 
@@ -917,13 +931,13 @@ class Strip:
             index = self.in_above.index(lane)
             row = index
             side: Literal["north", "south"] = "south"
-            offset = sum(len(other) for other in self.in_above[:index])
+            side_index = index
         else:
             index = self.in_below.index(lane)
             row = self.first_row_below_band + len(self.out_lanes) + index
             side = "north"
             side_index = len(self.out_lanes) + index
-            offset = sum(len(other) for other in self.in_below[:index])
+        offset = self.column_offset(lane)
         lane_y = row - self.machine_row
         reachable = sorted(
             slots.attachable_columns(
@@ -8142,7 +8156,7 @@ def _drainable_by_port(s: Strip) -> bool:
 def _machines_without_poses(strips: list[Strip]) -> list[str]:
     """Lanes seated where no sorter of any tier can join them to their machine.
 
-    Two shapes, and they are worth telling apart in the message because they
+    Three shapes, and they are worth telling apart in the message because they
     call for different fixes.
 
     THE MACHINE HAS NO INSERT POSE AT ALL.  ``slots.attachment`` reads the
@@ -8167,6 +8181,12 @@ def _machines_without_poses(strips: list[Strip]) -> list[str]:
     which is `ValueError: span 4 outside 1..3` and is the crash every
     `universe-matrix` stress cell reported.
 
+    THE LANES HAVE POSES BUT NO COMPLETE DISTINCT-SLOT ASSIGNMENT.  Variant
+    generation matches every logical item across all lane rows before accepting
+    a pose.  If that matching fails, no physical variant exists: falling back to
+    each row's first attachment would put multiple sorters in one machine slot,
+    and the game would evict all but the last connection written there.
+
     THE MESSAGE NEVER QUOTES A DISTANCE, because it has none to quote.
     ``sorter_span`` reads the slot table through ``slots.attachment``, which has
     already rejected anything outside ``1..SORTER_MAX_REACH``, so the only
@@ -8176,7 +8196,7 @@ def _machines_without_poses(strips: list[Strip]) -> list[str]:
     ``_side_lane_caps`` now keeps seating inside what the poses reach, so this
     is a guard against a future seating bug rather than a routine outcome.
 
-    BOTH ARE REFUSALS RATHER THAN REPAIRS, and deliberately so.
+    ALL THREE ARE REFUSALS RATHER THAN REPAIRS, and deliberately so.
 
     THIS DOCSTRING USED TO ARGUE FROM A FALSE PREMISE, and the message it
     justified sent readers to the wrong place: *"a Ray Receiver IS fed in game,
@@ -8198,38 +8218,46 @@ def _machines_without_poses(strips: list[Strip]) -> list[str]:
     spine's :func:`_sorterless_groups` does, and a blueprint that pastes idle
     machines stays worse than a refusal that names the prefab.
 
-    Returns one description per distinct offending (building, lane kind), empty
-    when every lane in the plan can be joined to its machine.
+    Returns one description per distinct offending building and combined lane
+    role, empty when every lane in the plan can be joined to its machine.
     """
     reach = catalog.SORTER_MAX_REACH
     seen: set[tuple[int, str, int]] = set()
     out: list[str] = []
     for s in strips:
         if s.lane_plan is None:
+            if s.flank_outputs:
+                continue
             building = catalog.building(s.item_id)
-            kinds = {
-                *(("ingredient",) if s.in_lanes else ()),
-                *(("output",) if s.out_lanes else ()),
-            }
-            for kind in sorted(kinds):
-                key = (s.item_id, kind, 0)
-                if key in seen:
-                    continue
-                seen.add(key)
-                if not building.slots:
-                    out.append(
-                        f"{building.name} ({s.recipe_id}): the game's prefab "
-                        f"gives it no insert pose on any face and "
-                        f"{len(building.slots)} belt port(s), so its {kind} lane "
-                        "cannot be joined to it by a sorter -- it takes a belt "
-                        "docked into a port, which neither strategy emits"
-                    )
-                else:
-                    out.append(
-                        f"{building.name} ({s.recipe_id}): its {kind} lane has "
-                        f"no insert pose within the {reach}-tile reach of any "
-                        "sorter tier on any column of the machine"
-                    )
+            kinds = tuple(
+                kind
+                for kind, present in (
+                    ("ingredient", bool(s.in_lanes)),
+                    ("output", bool(s.out_lanes)),
+                )
+                if present
+            )
+            if not kinds:
+                continue
+            kind_phrase = " and ".join(kinds)
+            key = (s.item_id, kind_phrase, 0)
+            if key in seen:
+                continue
+            seen.add(key)
+            if not building.slot_poses:
+                out.append(
+                    f"{building.name} ({s.recipe_id}): the game's prefab gives "
+                    "it no insert pose on any face and "
+                    f"{len(building.slots)} belt port(s), so its {kind_phrase} "
+                    "lanes cannot be joined to it by a sorter -- it takes a belt "
+                    "docked into a port, which neither strategy emits"
+                )
+            else:
+                out.append(
+                    f"{building.name} ({s.recipe_id}): its {kind_phrase} lanes "
+                    "cannot be assigned distinct legal sorter slots across all "
+                    "lanes; a machine slot holds one connection"
+                )
             continue
         rows: list[tuple[int, str]] = [(j, "ingredient") for j in range(len(s.in_above))]
         rows += [(s.row_of_output(k), "output") for k in range(len(s.out_lanes))]

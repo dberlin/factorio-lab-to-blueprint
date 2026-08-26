@@ -620,17 +620,14 @@ def test_attachment_is_empty_for_a_building_that_takes_no_sorter() -> None:
     assert S.attachment(_at(2209), (4, -1)) is None  # Energy Exchanger
 
 
-def test_a_building_with_no_sorter_slots_is_refused() -> None:
-    """Storage Tank: four belt PORTS, and not one insert pose.
+def test_a_belt_ported_building_with_no_sorter_slots_is_refused() -> None:
+    """Energy Exchanger: four belt ports, and not one authoritative sorter pose."""
+    exchanger = cat.building(cat.ENERGY_EXCHANGER_ID)
 
-    This is the distinction ``buildings.json`` blurred -- its ``slots`` field is
-    the port table -- and naming a slot on a building that has none is the shape
-    of guess this module exists to stop.
-    """
-    assert cat.building(2106).slots, "Storage Tank does have belt ports"
-    assert not cat.building(2106).slot_poses
-    with pytest.raises(S.SlotUndetermined):
-        S.machine_slot(2106, 0.0, (0, 3), (0, 1))
+    assert len(exchanger.slots) == 4, "the Energy Exchanger does have belt ports"
+    assert exchanger.slot_poses == ()
+    with pytest.raises(S.SlotUndetermined, match="defines no sorter slots at all"):
+        S.machine_slot(cat.ENERGY_EXCHANGER_ID, 0.0, (0, 4), (0, 1))
 
 
 def test_the_chemical_plant_table_is_the_games_and_not_a_ring() -> None:

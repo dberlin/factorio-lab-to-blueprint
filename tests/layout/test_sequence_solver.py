@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import json
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
@@ -3669,12 +3670,14 @@ def test_sequence_backend_returns_only_certified_placements(
 
 
 def test_production_observability_preserves_categories_and_all_grouped_work() -> None:
+    exact_seed = 9007199254740993
     config = SequenceSolverConfig(
         stages=2,
         moves_per_stage=1,
         restarts_per_height=2,
         global_elites=1,
         global_rounds=1,
+        seed=exact_seed,
     )
     run = _production_run(
         two_stage_spec(),
@@ -3693,6 +3696,9 @@ def test_production_observability_preserves_categories_and_all_grouped_work() ->
         config,
     )
     assert cast(object, placement.stats["accelerator"]) == "cython"
+    assert type(placement.stats["seed"]) is int
+    assert placement.stats["seed"] == exact_seed
+    assert json.loads(json.dumps(placement.stats))["seed"] == exact_seed
     assert {stage.backend for stage in result.stages} == {"cython"}
 
     python_result = replace(

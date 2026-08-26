@@ -259,6 +259,70 @@ def test_strip_emission_reproduces_every_precomputed_attachment() -> None:
     assert sorted(actual) == sorted(expected)
 
 
+def multi_lane_assembler_spec() -> BuildSpec:
+    return BuildSpec(
+        groups=(
+            group(
+                "gear",
+                "assembling-machine-2",
+                1,
+                {"iron-ingot": F(1), "copper-ingot": F(1)},
+                {"gear": F(1), "magnet": F(1)},
+            ),
+        ),
+        external_inputs={"iron-ingot": F(1), "copper-ingot": F(1)},
+        outputs={"gear": F(1), "magnet": F(1)},
+        belt_item_id="conveyor-belt-2",
+        belt_items_per_second=F(12),
+        label="multi-lane-assembler",
+    )
+
+
+def test_multi_lane_assembler_emission_uses_one_slot_per_sorter() -> None:
+    spec = multi_lane_assembler_spec()
+    strip = plan_strips(spec)[0]
+    canvas = _Canvas()
+    belt_id = catalog.item_id(spec.belt_item_id)
+
+    _inputs, _outputs, sorter_count = _emit_strip(
+        canvas,
+        strip,
+        0,
+        0,
+        belt_id,
+        catalog.building(belt_id).model_index,
+        {},
+    )
+    wired = slots.assign_sorter_slots(canvas.buildings)
+    machine_index = next(
+        index for index, building in enumerate(wired) if building.item_id == strip.item_id
+    )
+    machine_slots = tuple(
+        sorter.output_to_slot if sorter.output_obj == machine_index else sorter.input_from_slot
+        for sorter in wired
+        if catalog.is_sorter(sorter.item_id)
+        and (sorter.input_obj == machine_index or sorter.output_obj == machine_index)
+    )
+
+    assert sorter_count == 4
+    assert machine_slots == (8, 7, 0, 1)
+    assert len(set(machine_slots)) == len(machine_slots)
+
+
+def test_an_unmatched_variant_has_a_structured_unique_slot_refusal() -> None:
+    strip = replace(
+        plan_strips(multi_lane_assembler_spec())[0],
+        lane_plan=None,
+        attachment_plan=(),
+    )
+
+    assert _machines_without_poses([strip]) == [
+        "Assembling Machine Mk.II (gear): its ingredient and output lanes cannot "
+        "be assigned distinct legal sorter slots across all lanes; a machine slot "
+        "holds one connection"
+    ]
+
+
 def test_input_lane_emission_uses_precomputed_attachment_span() -> None:
     spec = two_stage_spec()
     strip = next(strip for strip in plan_strips(spec) if strip.recipe_id == "gear")
