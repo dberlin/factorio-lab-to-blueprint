@@ -460,6 +460,63 @@ the next person's confidence that a rule in `dsp/` is a rule.
 
 ---
 
+# 6b. Handover — rows whose fix is in a file this phase does not own
+
+`freeform.py` belongs to the Phase 4.1 agent and `scripts/` plus the lint and
+registry tests to the R1+R2 agent. These rows are recorded precisely, and the
+code is untouched.
+
+### To the Phase 4.1 agent (`freeform.py`)
+
+1. **`_Canvas.add`, `freeform.py:2174-2178` — "machines are solid at every
+   altitude".** REMOVE row, no citation. The rule the game applies is the
+   collider query, and `colliders.belt_crossing_height` prices a crossing per
+   model. Delete the `for lvl in range(LEVELS)` solidity stamp and consult the
+   collider instead. This is your row and the ledger's largest density item.
+
+2. **`_make_grid`, `freeform.py:3293-3329`** is a hand-written duplicate of
+   `_Canvas.free` — same rule, second implementation. Its own docstring records
+   the bug that caused (missing `belt_ban`/`guard`, A* routing through a
+   coater's band). Whatever you do to (1) must land in both, or in neither by
+   making one a projection of the other (Phase 2.1).
+
+3. **`_Canvas.ramped: bool = False`, `freeform.py:2053` — a tech-level
+   assumption nobody declared.** With `ramped` false, `_altitude_profile`
+   returns a whole level in one tile of run, which needs
+   `beltVerticalConstruction`. The default therefore *assumes the unlock*.
+   `catalog.belt_rules_for_technologies` already derives this from the
+   FactorioLab URL and is not consulted for the default. Under THE HARD RULE we
+   consume what FactorioLab chose; we do not pick. This is a correctness bug on
+   any save without Super Magnetic Field Generator.
+
+4. **No check against `catalog.belt_max_z` anywhere in `freeform.py`** — the
+   name appears once, in a docstring at `:2891`. `LEVELS = 3` bounds altitude
+   for router reasons, not legality reasons, so nothing enforces the ceiling on
+   the freeform path. `spine` has it (`_MAX_SPUR_Z`).
+
+5. Two prose defects: `freeform.py:1905-1907` claims the gap floor is
+   `MARGIN + 1` while `:1924` enforces `>= 1`; `freeform.py:6573` says
+   `SORTER_END_EXTENSION` is "0.7 units at each end" when it is `0.35`.
+
+### To whoever takes Phase 1 (`spine.py`, unowned — I edited it, see below)
+
+6. `spine.py:3065` `_trunk_x` hardcodes `2` where `catalog.RAMP_TILES_PER_LEVEL`
+   is 2, and its own docstring names the constant the code does not read.
+7. `spine.py` never calls `junction.site_is_clear`, `junction.keepout_cells`, or
+   `slots.sorter_seat_is_clear` — three finished legality gates that only
+   `freeform` uses. Junction siting and sorter-vs-sorter collision are unguarded
+   on the spine path.
+8. Three different tower-centre conventions in one file (`spine.py:4674` raw,
+   `:4753` `+width/2`, `:4785` `+0.5`) feeding the same radius comparisons.
+
+**Files I edited outside `dsp/` and `validate.py`:** `spine.py` (one constant,
+`_TRUNK_Z`, now local instead of `catalog.BELT_CROSSING_CLEARANCE` — same value,
+spine is unowned) and `slots.py` (the `DRAG_MAX_ALIGNMENT` move to `dsp/rules.py`
+plus a comment at the alignment test; no behaviour change, verified by the
+audit's zero delta on all 48 spine cells).
+
+---
+
 # 7. Unported halves, recorded so they are not rediscovered
 
 * `TooBendToLift` — `BuildTool_Path.cs:1980`. Constants ported, **zero readers**.
