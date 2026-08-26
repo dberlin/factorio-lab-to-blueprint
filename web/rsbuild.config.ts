@@ -14,24 +14,7 @@ export default defineConfig({
   source: {
     entry: {
       index: './src/index.tsx',
-      // The viewer, mountable into a page that is not this app. The
-      // client-side arm's `web/app.html` loads it so that both arms draw a
-      // result with the same code -- see src/embed.tsx.
-      embed: './src/embed.tsx',
     },
-  },
-  output: {
-    // 'auto' resolves split chunks against the URL of the script that is
-    // running, not against the site root. Load-bearing for `embed`: the server
-    // arm serves dist/ AS the root, while `web/app.html` loads the same bundle
-    // from `./dist/static/...` one level up. A fixed prefix can be right for
-    // exactly one of those.
-    assetPrefix: 'auto',
-    // Asset filenames are content-hashed, so `web/app.html` -- which is not
-    // built by rsbuild and cannot be rewritten by it -- reads this to find the
-    // `embed` entry's script and stylesheet instead of hardcoding a hash that
-    // changes on every build.
-    manifest: true,
   },
   server: {
     // The API it proxies to will spend every core on a CP-SAT solve for anyone

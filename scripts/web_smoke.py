@@ -23,8 +23,7 @@ Why every step is what it is
   instead.
 * **Decode, do not eyeball.**  A 10kB base64 string that is subtly wrong looks
   exactly like one that is right.  ``encode(decode(x)) == x``, byte for byte,
-  is the only check that could have come back false -- and it is the same check
-  ``web/smoke.py`` makes, so the two arms are held to one gate.
+  is the only check that could have come back false.
 * **nodriver, not Playwright.**  Same reason ``flab2bp.lab.capture`` uses it:
   Playwright ships its own browser builds and none are available for Fedora, so
   a proof driven through Playwright is a proof nobody on this machine can
@@ -275,11 +274,9 @@ async def _settle(page: Any, out: Path, tag: str) -> dict[str, Any]:
 async def _capture(page: Any, cdp: Any, clip: Any = None, *, beyond: bool = False) -> bytes:
     """A PNG of the page, or of one box on it, from the compositor.
 
-    ``beyond`` is ``Page.captureScreenshot``'s ``captureBeyondViewport``, and a
+    ``beyond`` is ``Page.captureScreenshot``'s ``captureBeyondViewport``. A
     clip below the fold needs it: without it the compositor answers with a
-    blank box rather than an error.  Measured -- the client arm's canvas sits at
-    y=854 under a long report in a headless window that is shorter than that,
-    and the clip came back as a 2.2kB blank PNG against 97kB with it.
+    blank box rather than an error.
     """
     shot = await page.send(
         cdp.page.capture_screenshot(format_="png", clip=clip, capture_beyond_viewport=beyond)
@@ -367,13 +364,9 @@ async def _canvas_variety(page: Any, cdp: Any) -> tuple[int, dict[str, int]]:
     from JavaScript is entitled to come back blank whatever is on screen.  The
     compositor's own capture is not.
     """
-    # PAGE coordinates, not viewport coordinates: the clip below is captured
-    # with `captureBeyondViewport`, which measures from the document origin. On
-    # the server arm the difference is nil -- the canvas is in a 100vh grid that
-    # never scrolls -- but on the client arm it sits under a long report at
-    # y=854 in a headless window shorter than that, and a viewport clip there
-    # comes back blank. One flat colour is what this function calls a failure,
-    # so the wrong coordinate space would fail a viewer that had drawn fine.
+    # PAGE coordinates, not viewport coordinates: `captureBeyondViewport`
+    # measures from the document origin. Using viewport coordinates can capture
+    # a blank box and falsely report that a viewer which drew correctly failed.
     box_raw = await _js(
         page,
         """(() => {
@@ -489,9 +482,8 @@ async def _case_success(page: Any, cdp: Any, out: Path) -> dict[str, Any]:
         raise SmokeFailure("the copied string decoded to a blueprint with no buildings")
     # Byte for byte, not merely structurally. `decode(encode(decode(x))) ==
     # decode(x)` passes for an encoder that drops a field both times; only
-    # `encode(decode(x)) == x` says the string the user was handed is the
-    # string this codec would produce. The client arm's proof already asserted
-    # the stronger form, and the two gates must be the same gate.
+    # `encode(decode(x)) == x` proves the string handed to the user is exactly
+    # what this codec would produce.
     if encode_blueprint(blueprint) != clipboard:
         raise SmokeFailure("the copied string does not re-encode to itself, byte for byte")
 

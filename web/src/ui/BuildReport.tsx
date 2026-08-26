@@ -37,9 +37,7 @@ export function BuildReportPanel({
   elapsedS,
 }: {
   result: BuildResult;
-  /** Wall clock for the whole build. Reported because the two arms are being
-      compared on exactly this and on area, and a number nobody can read off
-      the page is a number nobody checks. */
+  /** Optional server wall clock for the whole build. */
   elapsedS?: number;
 }) {
   const inputs = Object.keys(result.external_inputs);
