@@ -41,7 +41,7 @@ Three forms remain, deliberately, because each is the right home for its kind:
   algorithm.  ``validate.geom.collide`` applies it.
 
 * **Quantities in** :mod:`flab2bp.dsp.catalog` -- belt and sorter throughput,
-  ``MAX_BELT_SLOPE`` and the ``TooSteep``/``TooBendToLift`` family,
+  ``MAX_BELT_SLOPE`` and the ``TooSteep`` family, ``SORTER_MAX_REACH``,
   ``BELT_Z_PER_WORLD_UNIT``, ``belt_max_z`` and ``BeltAltitudeRules``,
   ``TESLA_COVER_RADIUS``/``TESLA_LINK_DISTANCE``, footprint derivation.  Those
   are game rules too, and they stay with the building table they are read
@@ -49,12 +49,20 @@ Three forms remain, deliberately, because each is the right home for its kind:
   here so that this docstring is a complete index; if you are looking for a rule
   and it is not below, it is there.
 
-Not game rules, and not to be moved here: ``catalog.SORTER_MAX_REACH`` (a
-corpus measurement -- spans cluster at 1..3 with nothing at 4),
-``catalog.BELT_CLIMB_PER_TILE`` (what we EMIT, not a cap),
-``catalog.LOW_CONFIDENCE_FOOTPRINTS`` and ``catalog.GEOMETRY_SAFE_FIXTURES``
-(statements about our evidence), and every constant in ``layout.spine`` and
-``layout.freeform`` (search parameters).
+Not game rules, and not to be moved here: ``catalog.BELT_CLIMB_PER_TILE`` and
+``catalog.BELT_Z_QUANTUM`` (what we EMIT, not a cap -- the game quantises
+nothing), ``catalog.LOW_CONFIDENCE_FOOTPRINTS`` and
+``catalog.GEOMETRY_SAFE_FIXTURES`` (statements about our evidence), and every
+constant in ``layout.spine`` and ``layout.freeform`` (search parameters).
+
+``catalog.SORTER_MAX_REACH`` used to head that list, as "a corpus measurement --
+spans cluster at 1..3 with nothing at 4".  It is a GAME rule and the corpus was
+agreeing with it, not establishing it: ``BuildTool_Inserter.cs:1341`` refuses a
+sorter crossing more than ``num7`` grid segments, ``num7`` being 3.2 / 3.499 /
+3.799 by how many ends land on a belt.  The citation is now in ``catalog.py``
+next to the constant.  A constant filed under "not a rule" for want of anyone
+looking is the same defect as one filed as a rule for want of anyone checking,
+and this module's docstring had one of each.
 
 TWO THINGS THE PORTS DISAGREE ABOUT, RECORDED RATHER THAN SILENTLY PICKED
 ------------------------------------------------------------------------
@@ -104,6 +112,7 @@ __all__ = [
     "BELT_INPUT_SLOTS",
     "BELT_SLOT",
     "BELT_SLOT_AUTO_RANGE",
+    "BEND_MIN_ANGLE_WHEN_SLOPED_RAD",
     "CONN_SLOTS_PER_OBJECT",
     "INPUT_TO_SLOT",
     "MATCH_ALIGN_COS",
@@ -116,6 +125,7 @@ __all__ = [
     "SKEW_AXIS_DEG",
     "SKEW_PAIR_DEG",
     "SLOT_ALIGN_COS",
+    "SLOPE_DEADZONE",
     "SLOT_REACH",
     "SORTER_LENGTH",
     "SPLITTER_INPUT_TO_SLOT",
@@ -125,6 +135,7 @@ __all__ = [
     "addon_axis_aligned",
     "addon_axis_offset_deg",
     "addon_ride_is_straight",
+    "too_bend_to_lift",
     "world_gap",
 ]
 
@@ -604,6 +615,102 @@ ADDON_TURRET_AXIS_DEG = 18.0
 #: The ``< 0.6f`` clause quoted above.  An altitude LEVEL is 1.3333 and a half
 #: level 0.6667, so this refuses a belt that changes height across the addon.
 ADDON_NEIGHBOUR_RADIAL_GAP = 0.6
+
+
+#: ``EBuildCondition.TooBendToLift``'s two thresholds.  ``BuildTool_Path.cs:1980``::
+#:
+#:     if (num21 < 2.5f && num25 > 0.1f)
+#:     {
+#:         buildPreview2.condition = EBuildCondition.TooBendToLift;
+#:         continue;
+#:     }
+#:
+#: These lived in :mod:`flab2bp.dsp.catalog`, which is the home for a rule read
+#: against the building table or parameterised by technology.  These are neither:
+#: they are bare ``EBuildCondition`` thresholds, so they belong here, next to the
+#: predicate that applies them.  Moving them was free -- they had no readers at
+#: all, anywhere, which is what :func:`too_bend_to_lift` now fixes.
+BEND_MIN_ANGLE_WHEN_SLOPED_RAD = 2.5
+SLOPE_DEADZONE = 0.1
+
+
+def too_bend_to_lift(
+    incoming: tuple[float, float] | None,
+    outgoing: tuple[float, float] | None,
+    slope: float,
+) -> bool:
+    """``EBuildCondition.TooBendToLift``: a belt may not TURN while sloped.
+
+    ``BuildTool_Path.cs:1980``::
+
+        if (num21 < 2.5f && num25 > 0.1f)
+        {
+            buildPreview2.condition = EBuildCondition.TooBendToLift;
+            continue;
+        }
+
+    ``num21`` is the angle at this belt between its input and its output, in
+    radians -- ``Maths.SphericalAngleAOBInRAD(buildPreview2.lpos, vector9,
+    vector10)`` at ``:1892``, defaulting to ``MathF.PI`` at ``:1889`` when the
+    belt has only one neighbour.  ``num25`` is the steeper of the two slopes,
+    ``Mathf.Abs(Maths.SphericalSlopeRatio(...))`` at ``:1953`` and ``:1962``.
+
+    So a straight belt is ``pi`` and always legal; a quarter turn is ``pi/2``
+    and illegal above :data:`~flab2bp.dsp.catalog.SLOPE_DEADZONE`; a belt
+    reversing on its own tile is ``0``.  Anything bending more than
+    ``pi - 2.5`` = 36.6 degrees off straight must be level.
+
+    ``incoming`` is the grid step INTO this belt, ``outgoing`` the step out of
+    it; either may be ``None`` for an end of a run, which the game treats as the
+    ``pi`` default.  ``slope`` is the steeper adjacent slope as world rise over
+    world run -- the same quantity :data:`~flab2bp.dsp.catalog.MAX_BELT_SLOPE`
+    is compared against, so callers already have it.
+
+    .. warning::
+       **No check consults this yet, deliberately, and the number below is why
+       that decision is load-bearing rather than cautious.**
+
+       Whether the rule binds on a PASTE -- rather than only on the interactive
+       path tool it is decompiled from -- is Step 0.1 of
+       ``docs/RULE_CONSOLIDATION_PLAN.md``, an in-game experiment the user is
+       running.  Measured over the trivial+small+mid corpus, 24 cells per
+       strategy, this predicate convicts:
+
+       ===========  ==========  =============  ======================
+       strategy     belts       convictions    cells with >= 1
+       ===========  ==========  =============  ======================
+       ``spine``    7114        **213** (3.0%)  **21 of 24**
+       ``freeform`` 5761        **139** (2.4%)  **18 of 24**
+       ===========  ==========  =============  ======================
+
+       So this is not an edge case waiting on a formality.  If Step 0.1 comes
+       back RED, nearly every blueprint either strategy currently ships is
+       invalid, and both routers need the constraint at search time (Step 2.2)
+       rather than as a late refusal.  Wiring a default-ERROR check *now* would
+       take the audit from INVALID 0 to INVALID in 39 of 48 cells on the
+       strength of a rule we have not yet confirmed applies to a paste -- which
+       is a guess in the opposite direction, and an expensive one.
+
+       ``tests/dsp/test_rules.py`` is the consumer: it pins the predicate
+       case-by-case against the decompiled branch and checks it convicts nothing
+       in blueprints the game itself wrote.
+    """
+    if slope <= SLOPE_DEADZONE:
+        return False
+    if incoming is None or outgoing is None:
+        return False  # `num21` keeps its `MathF.PI` default: no bend to measure
+    ax, ay = incoming
+    bx, by = outgoing
+    na = math.hypot(ax, ay)
+    nb = math.hypot(bx, by)
+    if na == 0.0 or nb == 0.0:
+        return False
+    # `SphericalAngleAOBInRAD` is the angle at the belt subtended by its two
+    # neighbours, so the vectors run OUTWARD from it: back along `incoming` and
+    # forward along `outgoing`.
+    cos = (-ax * bx - ay * by) / (na * nb)
+    angle = math.acos(max(-1.0, min(1.0, cos)))
+    return angle < BEND_MIN_ANGLE_WHEN_SLOPED_RAD
 
 
 def addon_axis_offset_deg(yaw_deg: float, dx: float, dy: float) -> float:

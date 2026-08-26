@@ -347,6 +347,46 @@ Enumerated in full; the interesting rows only are reproduced here.
 
 ---
 
+# 5c. `TooBendToLift` — the row that turned out to matter most
+
+`BEND_MIN_ANGLE_WHEN_SLOPED_RAD` and `SLOPE_DEADZONE` carried the decompiled C#
+and had **zero readers anywhere**. The brief was: earn a citation *and* a
+consumer, or go. The citation is real —
+`BuildTool_Path.cs:1980` — so it cannot go; it needed a consumer.
+
+Done: the rule is now a predicate, `rules.too_bend_to_lift`, and the two
+constants moved from `catalog.py` (whose remit is rules read against the
+building table or parameterised by tech — these are neither) into `rules.py`
+beside it. `tests/dsp/test_rules.py` is the consumer.
+
+**Then I measured how often it fires on our own output, and the number changes
+the priority of Step 0.1.** Over trivial+small+mid, 24 cells per strategy:
+
+| strategy | belts examined | convictions | cells with ≥1 |
+|---|---|---|---|
+| `spine` | 7114 | **213** (3.0%) | **21 of 24** |
+| `freeform` | 5761 | **139** (2.4%) | **18 of 24** |
+
+The plan sized this from the user's pasted blueprint as "exactly two instances".
+Corpus-wide it is pervasive. If Step 0.1 comes back **red**, nearly every
+blueprint either strategy ships today is invalid, and this stops being a
+validator item and becomes a router item (Step 2.2's legal-move table) —
+because a rule that convicts 39 of 48 cells cannot be enforced as a late
+refusal without refusing almost everything.
+
+**That is also why the check is not wired.** Adding a default-ERROR
+`geom.bend_while_sloped` now would take the audit from INVALID 0 to INVALID in
+39 of 48 cells on the strength of a rule we have not yet confirmed applies to a
+paste rather than only to the interactive path tool. Enforcing an unconfirmed
+rule is the same class of error as inventing one. The predicate is ready and the
+wiring is one line the moment Step 0.1 reports.
+
+Control on the port: it convicts **zero** belts in the game's own blueprints,
+over 500+ belts that survive scoping and that contain both turns and slopes.
+Mutation-checked — moving the constant to 3.2 convicts 178.
+
+---
+
 # 6. OPEN — reported, not parked
 
 1. **How much does one Vertical Construction level raise `labLevel`?**
@@ -367,6 +407,56 @@ Enumerated in full; the interesting rows only are reproduced here.
    faithful, and it is now confirmed rather than suspected. Left as-is because
    correcting it loosens a check, which is a behaviour change that wants its own
    measurement.
+
+---
+
+# 6a. The density measurement for the deletions
+
+Paired and interleaved — `base, mine, base, mine, base, mine` — against a
+**genuinely separate checkout** of `26f5969c` at
+`/home/dannyb/.claude/jobs/66c2051c/tmp/ledger-agent/base`, with its own
+`uv sync`, and the import path asserted on both sides:
+
+```
+BASE imports: .../tmp/ledger-agent/base/src/flab2bp/__init__.py
+MINE imports: .../worktrees/agent-ae558885a22a96f01/src/flab2bp/__init__.py
+```
+
+`scripts/audit.py --tier mid --jobs 4`, 96 cells, 3 reps per arm.
+**All six arms CLEAN: refused 0, INVALID 0, crashed 0, not run 0.**
+
+Cell-for-cell over the 96 cells CLEAN in **all six** arms:
+
+| | cells | base | mine | delta |
+|---|---|---|---|---|
+| `spine` | 48 | 99093 | 99093 | **0** |
+| `freeform` | 48 | 88217 | 88327 | +110 (+0.12%) |
+| both | 96 | 187310 | 187420 | +110 (+0.059%) |
+
+* 87 cells identical and deterministic across all three reps;
+* 1 cell same multiset;
+* 8 cells DIFFERENT — **and those 8 are exactly the 8 whose area also varies
+  between reps within the base arm alone.**
+
+**The falsification control.** A "no change" result is worthless unless the
+measurement could have shown a change. It could: those 8 freeform cells move by
+up to 156 tiles under plain reruns. And the null — the same statistic computed
+base-against-base — is *larger* than the between-arm difference:
+
+```
+base rep1 vs base rep2: -177     mine rep1 vs mine rep2: +68
+base rep1 vs base rep3: -214     mine rep1 vs mine rep3:  -7
+base rep2 vs base rep3:  -37     mine rep2 vs mine rep3: -75
+between-arm mean difference: +36.7
+```
+
+`spine` is the clean half: deterministic, every one of its 48 cells identical in
+all six arms, delta exactly 0. A real behaviour change would have shown there.
+
+**Conclusion: the deletions are behaviour-neutral, as predicted.** That is the
+expected result and not a disappointment — none of the four removed rules was
+reachable by what we emit. They cost nothing in area today; what they cost was
+the next person's confidence that a rule in `dsp/` is a rule.
 
 ---
 

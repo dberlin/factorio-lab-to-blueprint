@@ -218,16 +218,11 @@ VERTICAL_STEP = Fraction(1)
 # altitude it really set now lives in `layout.spine`, next to the other
 # structural choices, where it is legible as the knob it is.
 
-#: A sloped belt may not TURN.  ``BuildTool_Path``::
-#:
-#:     if (num21 < 2.5f && num25 > 0.1f)
-#:         buildPreview2.condition = EBuildCondition.TooBendToLift;
-#:
-#: ``num21`` is the angle at this belt between its input and its output, in
-#: radians, so anything bending more than ``pi - 2.5 ~= 36 degrees`` off
-#: straight must be level.  Slopes below ``0.1`` do not count as sloped.
-BEND_MIN_ANGLE_WHEN_SLOPED_RAD = Fraction(5, 2)
-SLOPE_DEADZONE = Fraction(1, 10)
+# `BEND_MIN_ANGLE_WHEN_SLOPED_RAD` and `SLOPE_DEADZONE` moved to
+# `flab2bp.dsp.rules`, where `rules.too_bend_to_lift` applies them.  They are
+# bare `EBuildCondition` thresholds -- not read against the building table and
+# not parameterised by technology -- so this module was never their home, and
+# they sat here for a year with no reader anywhere in the repository.
 
 #: Lab level on a NEW save, from ``GameHistoryData.Init``: ``labLevel = 3``.
 DEFAULT_LAB_LEVEL = 3
