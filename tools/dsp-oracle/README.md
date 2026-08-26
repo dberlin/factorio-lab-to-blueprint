@@ -23,14 +23,31 @@ is wrong, the game is what produced it.
 
 ## Install
 
-Extract the zip at the **game root** — the directory containing `DSPGAME.exe`:
+The zip is a Thunderstore package, so **r2modman** installs it directly:
+
+> Settings → Import local mod → pick `flab2bp_oracle-1.0.0.zip`
+
+r2modman reads `manifest.json` from the archive root and drops `FlabOracle.dll`
+into the profile's `BepInEx/plugins/`. Nothing else to do; it appears in the mod
+list as `flab2bp_oracle` and its toggle works like any other mod's.
+
+The manifest declares `xiaoye97-BepInEx-5.4.17`. A local import does **not**
+resolve dependencies, so BepInEx must already be in the profile — which it will
+be if any other mod is installed there.
+
+<details>
+<summary>Manual install, if you are not using a mod manager</summary>
 
 ```sh
-unzip -o /path/to/flab2bp-oracle-1.0.0.zip -d "$HOME/Dyson Sphere Program"
+mkdir -p "$HOME/Dyson Sphere Program/BepInEx/plugins/flab2bp-oracle"
+unzip -oj /path/to/flab2bp_oracle-1.0.0.zip FlabOracle.dll \
+  -d "$HOME/Dyson Sphere Program/BepInEx/plugins/flab2bp-oracle"
 ```
 
-That lands `BepInEx/plugins/flab2bp-oracle/FlabOracle.dll`. Start the game; the
-BepInEx console should show:
+`-j` matters: the package is flat, and without it the DLL keeps no useful path.
+</details>
+
+Start the game; the BepInEx console should show:
 
 ```
 [Info   : flab2bp build-condition oracle] Patched BuildTool_BlueprintPaste (CheckBuildConditions, MatchInserter, CreatePrebuilds).
@@ -38,7 +55,8 @@ BepInEx console should show:
 [Message: flab2bp build-condition oracle] flab2bp oracle ready. Dump key = F9, output = .../BepInEx/flab2bp-oracle
 ```
 
-To uninstall, delete `BepInEx/plugins/flab2bp-oracle/`.
+To uninstall, disable or delete it in r2modman (or delete
+`BepInEx/plugins/flab2bp-oracle/` for a manual install).
 
 ## Triggering a dump
 
