@@ -16,9 +16,9 @@ the build if a value ever appears without one.
 
 | verdict | n |
 |---|---|
-| **IMPLEMENTED** — we model it | 10 |
+| **IMPLEMENTED** — we model it | 9 |
 | **INAPPLICABLE** — it cannot arise from a paste of what we emit | 44 |
-| **MISSING** — the game can do this to us and we do not model it | 5 |
+| **MISSING** — the game can do this to us and we do not model it | 6 |
 | **total** | **59** |
 
 **The enum has 59 values, not 57.** Values 0-54 are contiguous, then
@@ -53,7 +53,7 @@ is the index. `#` is the enum's own value, not a row number.
 | 11 | `MK2MinerTooClose` | INAPPLICABLE | D |
 | 12 | `PlasmaTooClose` | INAPPLICABLE | D |
 | 13 | `TooClose` | IMPLEMENTED | IMPLEMENTED |
-| 14 | `TooFar` | IMPLEMENTED | IMPLEMENTED |
+| 14 | `TooFar` | MISSING | MISSING #5 |
 | 15 | `TooSkew` | MISSING | MISSING #4 |
 | 16 | `TooSteep` | IMPLEMENTED | IMPLEMENTED |
 | 17 | `TooBend` | INAPPLICABLE | B |
@@ -62,7 +62,7 @@ is the index. `#` is the enum's own value, not a row number.
 | 20 | `JointCannotLift` | INAPPLICABLE | B |
 | 21 | `InputConflict` | INAPPLICABLE | B |
 | 22 | `InputFull` | INAPPLICABLE | B |
-| 23 | `NeedGround` | MISSING | MISSING #5 |
+| 23 | `NeedGround` | MISSING | MISSING #6 |
 | 24 | `NeedWater` | INAPPLICABLE | D |
 | 25 | `NeedGeothermalResource` | INAPPLICABLE | D |
 | 26 | `NeedResource` | INAPPLICABLE | D |
@@ -189,7 +189,7 @@ can refuse a paste.
 
 ---
 
-## MISSING — 5 rows
+## MISSING — 6 rows
 
 Ranked by whether they can fire on what we emit **today**, measured over the
 12-entry bench corpus (`flab2bp.bench.corpus.URL_CORPUS`) through
@@ -405,7 +405,54 @@ within two rungs of each other, and nothing prevents them meeting.
 **Kind.** A validator rule, cheapest as a refusal in `codec._area_for` — a
 placement containing a Spray Coater may not record `area_segments` of 8 or 4.
 
-### 5. `NeedGround = 23` — **real, and provably not a property of a blueprint**
+### 5. `TooFar = 14`, belt-to-belt form — **inert today, and inert only by habit**
+
+*The three inserter forms of `TooFar` are modelled (see IMPLEMENTED). This
+fourth one is not.*
+
+**Where the game sets it.** `BuildTool_BlueprintPaste.cs:2083-2089`:
+
+```csharp
+if (buildPreview2.desc.isBelt)
+{
+    if (buildPreview2.output != null && buildPreview2.output.desc.isBelt)
+    {
+        if ((buildPreview2.output.lpos - buildPreview2.lpos).sqrMagnitude > 5.3f)
+        {
+            buildPreview2.condition = EBuildCondition.TooFar;
+```
+
+Note where the brace closes: this clause sits **outside** the
+`beltVerticalConstruction` gate that guards `TooSteep` four lines later
+(`BuildTool_BlueprintPaste.cs:2093`). It binds on every save, researched or not.
+
+**Threshold, with units.** Squared world distance > 5.3. A latitude row is
+`2π·200/1000 = 1.2566` world units and a level is `4/3`, so for a link of `dxy`
+tiles and `dz` levels the distance is `dxy²·1.579 + dz²·1.778`. `belt.link_adjacent`
+already pins `dxy <= 1`, which leaves exactly one way to exceed the cap:
+
+* `dxy = 0, |dz| >= 2` → 7.11
+* `dxy = 1, |dz| >= 2` → 8.69
+
+so the whole unmodelled rule is **a belt link may not climb two levels at once**.
+
+**Why nothing catches it.** `belt.link_adjacent` measures Manhattan distance in
+x and y and **ignores z entirely**. `geom.altitude_step` bounds the slope, but
+`if ctx.belt_vertical_construction: continue` — once the save has the unlock it
+returns early for every link, and that unlock is exactly the setting under which
+a two-level link becomes reachable. Without the unlock the slope rule already
+forbids any `dz != 0` at `dxy <= 1`, which is why this has never bitten.
+
+**Measured.** 1783 belt-to-belt links over the first eight corpus builds, `dz`
+histogram `{-1: 54, 0: 1670, +1: 59}` — **zero** over the cap. Our routers climb
+one level per tile. That is a property of the emitters, not a checked invariant,
+and the recent freeform work is precisely about how the router spends altitude.
+
+**Kind.** A validator rule, and the cheapest of the six: one `abs(dz) >= 2`
+clause next to `belt.link_adjacent`, which is where the x/y half of the same
+game test already lives.
+
+### 6. `NeedGround = 23` — **real, and provably not a property of a blueprint**
 
 **Where the game sets it.** Six setters at
 `BuildTool_BlueprintPaste.cs:3248`, `:3257`, `:3265`, `:3295`, `:3304`, `:3312`,
@@ -446,7 +493,7 @@ ground, not a check.
 | # | condition | where the game sets it (paste path only) | our model |
 |---|---|---|---|
 | 13 | `TooClose` | `BuildTool_BlueprintPaste.cs:3468-3470` `if (magnitude < num132)`, `num132` = 0.4 / 0.6 / 0.9 by belt-end count (`:3444`, `:3449`, `:3456`) | `rules.SORTER_LENGTH` (min), `sorter.reach`, `game.inserter_paste`, `planet.sorter_condition` |
-| 14 | `TooFar` | `:3462-3464` `if (magnitude > num131)`, `num131` = 5.0 / 5.5 / 7.5 (`:3443`, `:3450`, `:3457`); belt-to-belt `:2087-2089` `sqrMagnitude > 5.3f`; inserter endpoint `:2100-2125` `> 16f` then `> 28f`, with item 2307 exempt | `rules.SORTER_LENGTH` (max), `sorter.reach`, `belt.link_adjacent`, `planet.sorter_condition` |
+| 14 | `TooFar` | `:3462-3464` `if (magnitude > num131)`, `num131` = 5.0 / 5.5 / 7.5 (`:3443`, `:3450`, `:3457`); inserter endpoint `:2100-2125` `> 16f` then `> 28f`, with item 2307 exempt; belt-to-belt `:2087-2089` `sqrMagnitude > 5.3f` | `rules.SORTER_LENGTH` (max), `sorter.reach`, `planet.sorter_condition`. **The belt-to-belt clause is modelled in x/y only** — `belt.link_adjacent` ignores z. See MISSING #5. |
 | 15 | `TooSkew` | `:3488` `Quaternion.Angle(lrot, lrot2) > 30f`; `:3494-3501` `if (num135 > 24f \|\| num136 > 24f)` | `rules.SKEW_PAIR_DEG = 30`, `rules.SKEW_AXIS_DEG = 24`, `game.inserter_skew`, `slots.attachment`. **The spray-coater form at `:1866` is NOT modelled — see MISSING #4.** |
 | 16 | `TooSteep` | `:2093-2095` `if (!history.beltVerticalConstruction && Mathf.Abs(Vector3.Dot(lpos.normalized, (output.lpos - lpos).normalized)) > 0.6f)` | `geom.altitude_step`, `catalog.BeltAltitudeRules.vertical_construction` |
 | 28 | `NeedConn` | `:1738-1740` `if (flag \| flag2) { bp.condition = EBuildCondition.NeedConn; }` after `MatchInserter` fails to seat an end | `rules.MATCH_SNAP_MAX_SQR = 6.0`, `rules.MATCH_ALIGN_COS = 0.9702957`, `game.inserter_paste`, `sorter.anchors_present`, `sorter.endpoints`. **Note it never calls `AddErrorMessage`**: an unseated sorter is silently dropped, not refused, which is exactly the failure `game.inserter_paste` exists to catch. |
@@ -457,10 +504,11 @@ ground, not a check.
 | 51 | `BlueprintBPOverlap` | `BuildTool_BlueprintPaste.cs:908-932`, two previews hashing to the same cell with `buildPreview2.desc == buildPreview3.desc` (`:910`); for belts the weighted centre `0.7f * lpos + 0.15f * (input.lpos + output.lpos)` must be within `sqrMagnitude < 0.25f` (`:917-920`) | `geom.overlap`, `geom.footprint`, `junction.colocated`, `belt.link_adjacent`. **Not a refusal** — `AddErrorMessage` returns early for it (`:4816`) and `:4575`, `:4620` treat it as drawable. It is a *silent drop*: the earlier preview gets `bpgpuiModelId = -1` and is never built. The `desc == desc` guard at `:910` is what lets a Splitter and a belt share a tile, which is the convention `layout/junction.py` reads off 25 real splitters. |
 | 54 | `ErrorInserterData` | `BlueprintUtils.RefreshBuildPreview`, `BlueprintUtils.cs:2114-2141` (input end) and `:2165-2192` (output end): `num40 > 0.8f` then `num41 > 0.5f`, `num41 < 0.1f && num40 > 1.6f`, `num41 >= 0.1f && num40 > 0.8f`, and the reversal test `Vector3.Dot(transformedBy.forward, ...) < 0f` | `rules.PASTE_SNAP = 0.8`, `rules.PASTE_LATERAL = 0.5`, `rules.PASTE_RADIAL = 1.6`, `rules.PASTE_LATERAL_EPS = 0.1`, `game.inserter_data`, `game.slot_occupancy` |
 
-That is 11 rows in the table and 10 in the count, because `TooSkew` is counted
-under MISSING: one of its three paste forms is unmodelled, and a row where the
-game can still refuse us is not an implemented row. It is listed here as well so
-the part that *is* modelled is not lost.
+That is 11 rows in the table and 9 in the count. `TooFar` and `TooSkew` are
+counted under MISSING: each has one paste form nobody has ported, and a row where
+the game can still refuse us is not an implemented row however much of it is
+modelled. They are listed here as well so the part that *is* modelled is not
+lost, and their rows say which clause is which.
 
 ---
 
@@ -528,17 +576,17 @@ argument is checkable rather than asserted.
 |---|---|---|---|
 | 6 | `WindTooClose` | `:2546` `bool windForcedPower = buildPreview2.desc.windForcedPower;` then `:2571`, `:2621`, `:2665` `num35 < 110.25f` | Wind Turbine, 2203. The flag is read off **our own** preview, not the neighbour's, so it is our emit set that decides. |
 | 7 | `GeothermalTooClose` | `:2547` `bool geothermal = buildPreview2.desc.geothermal;` then `:2576`, `:2626`, `:2670` `num35 < 144f` | Geothermal Power Station, 2213 |
-| 8 | `TowerTooClose` | `:2843` `if (buildPreview2.desc.isStation)` → `:2869`, `:2897`, `:2925` | the logistics stations, 2103/2104 |
+| 8 | `TowerTooClose` | `:2843` `if (buildPreview2.desc.isStation)` → `:2869`, `:2897`, `:2925` | Planetary Logistics Station 2103, Interstellar Logistics Station 2104, Orbital Collector 2105 |
 | 9 | `EjectorTooClose` | `:2950` and `BuildTool_Addon.cs`; the paste block is under `desc.isEjector` | EM-Rail Ejector, 2311 |
 | 10 | `BlockTooClose` | `:3005` `if (buildPreview2.desc.isEjector)` → `:3036-3038` | EM-Rail Ejector, 2311 |
-| 11 | `MK2MinerTooClose` | `:2843` `if (buildPreview2.desc.isStation)` → `:2863-2865` | Advanced Mining Machine's collection station |
-| 12 | `PlasmaTooClose` | `:3055` `if (buildPreview2.desc.turretType == ETurretType.Plasma \|\| ... LocalPlasma)` → `:3077`, `:3095`, `:3114` | the plasma turrets, 3003 / 3005 |
+| 11 | `MK2MinerTooClose` | `:2843` `if (buildPreview2.desc.isStation)` → `:2863-2865`. The guard on OUR side is `isStation`; `stationPool[num71].isVeinCollector` only picks which of the two messages the same distance test reports | the same three stations as row 8 |
+| 12 | `PlasmaTooClose` | `:3055` `if (buildPreview2.desc.turretType == ETurretType.Plasma \|\| ... LocalPlasma)` → `:3077`, `:3095`, `:3114` | Plasma Turret 3004, SR Plasma Turret 3010 |
 | 24 | `NeedWater` | `:3317` `for (int num121 = 0; num121 < buildPreview2.desc.waterPoints.Length; num121++)` → `:3336` | Water Pump, 2306 — mining-flagged and cut upstream |
 | 25 | `NeedGeothermalResource` | the same loop, `:3330` `if (buildPreview2.desc.geothermal)` → `:3332` | Geothermal Power Station, 2213 |
 | 26 | `NeedResource` | the `desc.minerType` vein scan, `:1931`-`:2025` | the mining machines, 2301 / 2316 — cut upstream |
 | 27 | `NeedSingleResource` | `:1881` `if (buildPreview2.desc.isVeinCollector)` → `:1914` | Advanced Mining Machine, 2316 — cut upstream |
 | 30 | `NeedAddonStorage` | `:3380` `if (buildPreview2.desc.addonType != EAddonType.None && buildPreview2.desc.addonType == EAddonType.Storage)` → `:3384`; again `:4112-4117` | Logistics Distributor, 2107. Our only addon is the Spray Coater, whose `addonType` is **1 (Belt)**, from `dsp/data/buildings.json`. |
-| 41 | `ExceededMaximum` | `:2715` `if (buildPreview2.desc.isFieldGenerator)` → `:2748` `else if (num3 >= 80)`, and again `:2782` | Planetary Shield Generator, 2107x — the 80 is its per-planet cap |
+| 41 | `ExceededMaximum` | `:2715` `if (buildPreview2.desc.isFieldGenerator)` → `:2748` `else if (num3 >= 80)`, and again `:2782` | Planetary Shield Generator, 3008 — the 80 is its per-planet cap |
 | 42 | `FieldGeneratorTooClose` | `:2715` `if (buildPreview2.desc.isFieldGenerator)` → `:2743-2745` `num48 < num47` with `num47 = 1296f` (36 world units) | Planetary Shield Generator |
 | 43 | `BattleBaseTooClose` | `:2791` `if (buildPreview2.desc.isBattleBase)` → `:2814-2816` `num60 < num59` with `num59 = 100f` (10 world units) | Battlefield Analysis Base, 3009 |
 | 53 | `BlueprintNeedAddonTheCorrectPosition` | `:3391` `if (buildPreview2.desc.isDispenser)` → `:3416-3418` | Logistics Distributor, 2107 |

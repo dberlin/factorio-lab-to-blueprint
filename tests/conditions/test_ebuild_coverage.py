@@ -247,6 +247,10 @@ LOAD_BEARING: tuple[tuple[str, int, str], ...] = (
     # TooSkew, the two inserter forms that ARE modelled.
     ("BuildTool_BlueprintPaste.cs", 3488, "Quaternion.Angle"),
     ("BuildTool_BlueprintPaste.cs", 3499, "24f"),
+    # TooFar, belt-to-belt: the cap, and the line that shows the
+    # beltVerticalConstruction gate starts AFTER it.
+    ("BuildTool_BlueprintPaste.cs", 2087, "sqrMagnitude > 5.3f"),
+    ("BuildTool_BlueprintPaste.cs", 2093, "history.beltVerticalConstruction"),
     # The gate that makes NotEnoughItem and BlueprintBPOverlap non-refusals.
     ("BuildTool_BlueprintPaste.cs", 4816, "EBuildCondition.BlueprintBPOverlap"),
     # BlueprintBPOverlap's same-prefab guard, which is what lets a splitter and a
