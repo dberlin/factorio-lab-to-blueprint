@@ -22,6 +22,46 @@ constant named by at least one check, the mutation suite (Step R4) shows every
 one of them turning both a validator test *and* a strategy test red, and the
 lint (Step R1) is green.
 
+## The provenance rule, which governs every step below
+
+**Every rule is verified against the game's own code. A rule that exists there
+is kept. A rule that does not is removed. No rule is guessed.**
+
+That is a three-way classification, and every rule in the codebase gets exactly
+one of them:
+
+- **KEEP** — a citation into the decompiled assembly (`file.cs:line`, quoted)
+  showing the game applying this rule. The citation goes in the code, next to
+  the rule.
+- **REMOVE** — no such citation exists. Delete it. Not soften it, not gate it
+  behind a flag, not move it to `dsp/` and mark it suspicious. **Delete it.**
+  An invented constraint costs density on every build and protects nothing.
+- **UNVERIFIED** — nobody has looked yet. This is a *temporary* state that must
+  be empty when the plan completes. It is not a resting place.
+
+A rule may not be classified KEEP because it seems prudent, because it has
+always been there, because a test depends on it, or because removing it would
+be a large change. The only evidence that promotes a rule to KEEP is the
+decompiled source, quoted.
+
+**Where the source is:** `/home/dannyb/.claude/jobs/66c2051c/tmp/poseless/full/`,
+one file per type. Note that the "constant offset of 143582" that circulated on
+this project **is not universally true** — it was measured false for
+`BlueprintUtils.cs`, whose line numbers match our citations directly. Verify the
+offset per file rather than assuming it.
+
+**The three known outcomes this rule forces**, so nobody has to rediscover them:
+
+1. `BEND_MIN_ANGLE_WHEN_SLOPED_RAD` / `TooBendToLift` — ported, zero readers.
+   Either it earns a citation *and* a consumer, or it goes.
+2. Freeform's *"machines are solid at every altitude"* — the audit found no
+   game rule behind it. Under this policy it is REMOVE, and it is the largest
+   density item on the board.
+3. The two live disagreements the C# differential found, which are KEEP with
+   citations and so must **replace** what we have: the ladder's gate is
+   `num4 < 6f` on a **squared** distance (2.449, not `SLOT_REACH` 0.8), and it
+   requires **both** dots above `0.9702957` = cos 14° (not one dot at cos 24°).
+
 ## The line, restated because getting it wrong is worse than doing nothing
 
 **Legality → `dsp/`, no exceptions.** Every `game.*` check, `geom.collide`,
@@ -45,6 +85,39 @@ that drags these into `dsp/` has made the codebase worse.
   area measurement, reported cell-for-cell over the cells both arms wire —
   never a total across differing cell sets.
 - **Exact `Fraction` arithmetic** in all rate and capacity paths.
+
+---
+
+# Phase V — The provenance ledger. Everything else waits on this.
+
+Added when the provenance rule was adopted. It runs **first** and it gates
+Phases 1–4: there is no point consolidating a rule that is about to be deleted,
+and no point measuring the density cost of a constraint that has no right to
+exist.
+
+### Step V.1 — Enumerate every rule.
+
+One row per rule, wherever it lives — `dsp/rules.py`, `dsp/colliders.py`, the
+rule half of `dsp/catalog.py`, every `game.*` / `geom.*` / `sorter.*` /
+`junction.*` / `power.*` check in `validate.py`, and every legality predicate
+still embedded in `spine.py` or `freeform.py`. The last group is the one that
+matters most and the one an enumeration is most likely to miss, because those
+rules do not announce themselves as rules.
+
+### Step V.2 — Classify each row KEEP / REMOVE, with the citation quoted.
+
+UNVERIFIED must be empty at the end. A row that cannot be resolved by reading
+the assembly is reported to the user as an open question, not left to sit.
+
+### Step V.3 — Act on the classification.
+
+REMOVE rows are deleted in this phase, with the density change measured paired
+and interleaved. KEEP rows carry their citation into the code and proceed to
+Phase 1 for relocation.
+
+**Done-when:** the ledger has zero UNVERIFIED rows, every KEEP row's citation
+resolves in the decompiled source, and every REMOVE row is gone from the
+codebase rather than merely documented.
 
 ---
 
@@ -269,19 +342,31 @@ anywhere. That is this audit's headline finding, expressed as a test.
 
 Two branches are editing `freeform.py`, `spine.py` and `slots.py` right now:
 `bl-ew-faces` (east/west machine faces, for `universe-matrix`) and
-`bl-spine-repair` (the intermittent `game.slot_occupancy` refusal). **Phase 1
-and Phase 2 must not start until both have merged** — they touch the same
-functions, and this plan's whole value is removing duplicate implementations,
-which is the worst possible thing to be doing during a three-way merge.
+`bl-spine-repair` (the intermittent `game.slot_occupancy` refusal). Both have
+since merged; that constraint is discharged.
 
-Phase 0 is a paste and blocks nothing. Phase R1 and R2 touch only `dsp/` and
-test files and can start immediately and in parallel.
+**Revised order, under the provenance rule:**
 
-**Recommended order:** 0.1 (paste, in flight) → R1 + R2 (start now, independent)
-→ land the two in-flight branches → Phase 1 → Phase 2 → R3, R4 → Phase 3 →
-Phase 4.
+    Phase V (the ledger)  ──┬──> Phase 1 ──> Phase 2 ──> R3, R4 ──> Phase 3
+                            │
+    R1 + R2 (independent) ──┘
 
-Phase 4.1 is the density prize and is deliberately last: it is the step most
-likely to move layouts, and it should land on a codebase where a single
-authoritative rule already prices a machine crossing, rather than on one where
-that price exists in two places.
+    Phase 4.1 runs alongside Phase V: the audit already established that
+    "machines are solid at every altitude" has no rule behind it, so it is a
+    REMOVE row whose verdict does not need the rest of the ledger.
+
+Phase V gates Phases 1–3 because relocating a rule that is about to be deleted
+is wasted work, and because Phase 2's compiled projections must be projections
+of the *surviving* rule set.
+
+R1 and R2 touch only `dsp/`, `scripts/`, and test files, so they run in
+parallel with everything. R2 is the step that answers *"what percentage of the
+game's rules live in one place?"* with a number a test prints — until it exists,
+that question has no honest answer, and saying "100%" would be a guess of
+exactly the kind the provenance rule forbids.
+
+Phase 4.1 was originally scheduled last, on the reasoning that it should land
+on a codebase where a single authoritative rule already prices a machine
+crossing. The provenance rule overrides that: a constraint with no game backing
+is not waiting for a better home, it is waiting to be deleted, and every build
+shipped before then pays for it in area.
