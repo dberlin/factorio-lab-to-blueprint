@@ -288,6 +288,88 @@ def _ours(item_id: int, yaw: float, end: Tile, other: Tile) -> tuple[bool, int |
     return (reach <= R.SLOT_REACH and cos >= R.SLOT_ALIGN_COS, slot)
 
 
+def _ladder_model(item_id: int, yaw: float, end: Tile, other: Tile) -> tuple[bool, int | None]:
+    """``MatchInserter`` rebuilt from the two constants in :mod:`flab2bp.dsp.rules`.
+
+    A transcription of ``BuildTool_BlueprintPaste.cs:1528-1546`` and the gate at
+    ``:1588``, driven by :data:`~flab2bp.dsp.rules.MATCH_ALIGN_COS` and
+    :data:`~flab2bp.dsp.rules.MATCH_SNAP_MAX_SQR` rather than by literals, so
+    that perturbing either constant moves this model off the game's answer.
+
+    The sweep sets ``output_obj_id`` and leaves the input end open, so the
+    game takes ``flag2``: ``vector`` is ``lpos`` (our ``end``), ``vector2`` is
+    ``lpos2`` (our ``other``), and ``lhs`` is ``(end - other).normalized``.
+    Every dot and every distance is in WORLD units, which is what makes
+    ``MATCH_SNAP_MAX_SQR`` a squared world magnitude and not a squared tile one.
+    """
+    g, w = colliders.GRID_ARC, R.WORLD_UNITS_PER_LEVEL
+
+    def unit(v: tuple[float, float, float]) -> tuple[float, float, float] | None:
+        n = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]) ** 0.5
+        return None if n == 0.0 else (v[0] / n, v[1] / n, v[2] / n)
+
+    e = (end[0] * g, end[1] * g, 0.0)
+    f = (other[0] * g, other[1] * g, 0.0)
+    lhs = unit((e[0] - f[0], e[1] - f[1], e[2] - f[2]))
+    if lhs is None:
+        return (False, None)
+
+    best: float | None = None
+    pick: int | None = None
+    for k in range(len(cat.building(item_id).slot_poses)):
+        sx, sy, sz = S.slot_offset(item_id, yaw, k)
+        p = (sx * g, sy * g, sz * w)
+        fx, fy, fz = S.slot_forward(item_id, yaw, k)
+        rhs = (-fx, -fy, -fz)
+        to_slot = unit((p[0] - f[0], p[1] - f[1], p[2] - f[2]))
+        if to_slot is None:
+            continue
+        num13 = lhs[0] * rhs[0] + lhs[1] * rhs[1] + lhs[2] * rhs[2]
+        num14 = to_slot[0] * rhs[0] + to_slot[1] * rhs[1] + to_slot[2] * rhs[2]
+        if num13 > R.MATCH_ALIGN_COS and num14 > R.MATCH_ALIGN_COS:
+            d2 = sum((p[i] - e[i]) ** 2 for i in range(3))
+            if best is None or d2 < best:  # strict: a tie keeps the incumbent
+                best, pick = d2, k
+    if best is None or not best < R.MATCH_SNAP_MAX_SQR:
+        return (False, None)
+    return (True, pick)
+
+
+@pytest.mark.dotnet
+@needs_oracle
+def test_the_two_match_inserter_constants_reproduce_the_compiled_ladder() -> None:
+    """The consumer that makes ``MATCH_ALIGN_COS`` / ``MATCH_SNAP_MAX_SQR`` real.
+
+    A rule constant nobody reads is an unported rule wearing a ported rule's
+    clothes.  These two are read here, by a model of ``MatchInserter`` built
+    only from them, and checked against the game's own compiled ``MatchInserter``
+    over the whole 15488-case sweep.
+
+    Falsifiable, and mutation-checked: setting ``MATCH_ALIGN_COS`` to
+    ``SLOT_ALIGN_COS``'s ``cos 24`` moves 440 of the 15488 off the game's answer,
+    and setting ``MATCH_SNAP_MAX_SQR`` to ``SLOT_REACH**2`` moves 576.  The
+    agreement is EXACT at the real values -- verdict and slot index alike, on
+    every one of the 15488 -- which is the check that the two constants are the
+    whole of the rule and not two thirds of it.
+    """
+    cases, meta = _sweep()
+    tables = {str(i): O.slot_table(i) for i in SWEEP_TYPES}
+    verdicts = O.ask(cases, tables=tables)
+    assert [v.name for v in verdicts if v.error] == []
+
+    tally: collections.Counter[str] = collections.Counter()
+    for v, (item_id, yaw, end, other) in zip(verdicts, meta, strict=True):
+        connected, slot = _ladder_model(item_id, yaw, end, other)
+        if v.connected != connected:
+            tally["verdict differs"] += 1
+        elif connected and slot != v.input_from_slot:
+            tally["slot differs"] += 1
+        else:
+            tally["agree"] += 1
+
+    assert tally["agree"] == 15488, dict(tally)
+
+
 @pytest.mark.dotnet
 @needs_oracle
 def test_where_our_slot_rule_and_the_ladder_part_company() -> None:
@@ -376,7 +458,7 @@ def test_the_ladders_reach_gate_is_the_square_root_of_six() -> None:
     # ladder actually squares. `sz` is the slot's own height above the end.
     worst = max(connected)
     gap = R.world_gap(0.0, worst, sz)
-    assert gap == pytest.approx(6.0**0.5, abs=0.02)
+    assert gap == pytest.approx(R.MATCH_SNAP_MAX_SQR**0.5, abs=0.02)
     # ... and the transition is a single one: everything nearer connects.
     assert connected == [d for d in steps if d <= worst + 1e-9]
 

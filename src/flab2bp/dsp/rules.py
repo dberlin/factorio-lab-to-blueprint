@@ -41,7 +41,7 @@ Three forms remain, deliberately, because each is the right home for its kind:
   algorithm.  ``validate.geom.collide`` applies it.
 
 * **Quantities in** :mod:`flab2bp.dsp.catalog` -- belt and sorter throughput,
-  ``MAX_BELT_SLOPE`` and the ``TooSteep``/``TooBendToLift`` family,
+  ``MAX_BELT_SLOPE`` and the ``TooSteep`` family, ``SORTER_MAX_REACH``,
   ``BELT_Z_PER_WORLD_UNIT``, ``belt_max_z`` and ``BeltAltitudeRules``,
   ``TESLA_COVER_RADIUS``/``TESLA_LINK_DISTANCE``, footprint derivation.  Those
   are game rules too, and they stay with the building table they are read
@@ -49,12 +49,20 @@ Three forms remain, deliberately, because each is the right home for its kind:
   here so that this docstring is a complete index; if you are looking for a rule
   and it is not below, it is there.
 
-Not game rules, and not to be moved here: ``catalog.SORTER_MAX_REACH`` (a
-corpus measurement -- spans cluster at 1..3 with nothing at 4),
-``catalog.BELT_CLIMB_PER_TILE`` (what we EMIT, not a cap),
-``catalog.LOW_CONFIDENCE_FOOTPRINTS`` and ``catalog.GEOMETRY_SAFE_FIXTURES``
-(statements about our evidence), and every constant in ``layout.spine`` and
-``layout.freeform`` (search parameters).
+Not game rules, and not to be moved here: ``catalog.BELT_CLIMB_PER_TILE`` and
+``catalog.BELT_Z_QUANTUM`` (what we EMIT, not a cap -- the game quantises
+nothing), ``catalog.LOW_CONFIDENCE_FOOTPRINTS`` and
+``catalog.GEOMETRY_SAFE_FIXTURES`` (statements about our evidence), and every
+constant in ``layout.spine`` and ``layout.freeform`` (search parameters).
+
+``catalog.SORTER_MAX_REACH`` used to head that list, as "a corpus measurement --
+spans cluster at 1..3 with nothing at 4".  It is a GAME rule and the corpus was
+agreeing with it, not establishing it: ``BuildTool_Inserter.cs:1341`` refuses a
+sorter crossing more than ``num7`` grid segments, ``num7`` being 3.2 / 3.499 /
+3.799 by how many ends land on a belt.  The citation is now in ``catalog.py``
+next to the constant.  A constant filed under "not a rule" for want of anyone
+looking is the same defect as one filed as a rule for want of anyone checking,
+and this module's docstring had one of each.
 
 TWO THINGS THE PORTS DISAGREE ABOUT, RECORDED RATHER THAN SILENTLY PICKED
 ------------------------------------------------------------------------
@@ -104,8 +112,11 @@ __all__ = [
     "BELT_INPUT_SLOTS",
     "BELT_SLOT",
     "BELT_SLOT_AUTO_RANGE",
+    "BEND_MIN_ANGLE_WHEN_SLOPED_RAD",
     "CONN_SLOTS_PER_OBJECT",
     "INPUT_TO_SLOT",
+    "MATCH_ALIGN_COS",
+    "MATCH_SNAP_MAX_SQR",
     "OUTPUT_FROM_SLOT",
     "PASTE_LATERAL",
     "PASTE_LATERAL_EPS",
@@ -114,6 +125,7 @@ __all__ = [
     "SKEW_AXIS_DEG",
     "SKEW_PAIR_DEG",
     "SLOT_ALIGN_COS",
+    "SLOPE_DEADZONE",
     "SLOT_REACH",
     "SORTER_LENGTH",
     "SPLITTER_INPUT_TO_SLOT",
@@ -123,6 +135,7 @@ __all__ = [
     "addon_axis_aligned",
     "addon_axis_offset_deg",
     "addon_ride_is_straight",
+    "too_bend_to_lift",
     "world_gap",
 ]
 
@@ -299,8 +312,17 @@ SPLITTER_MAX_PORTS = 4
 
 #: How far a sorter end may sit from the slot pose it names, in WORLD UNITS.
 #:
-#: ``0.8f`` in ``BuildTool_BlueprintCopy.CheckInserterDataLegal``.  A game
-#: constant, not one of ours -- and a ``Vector3.magnitude`` in Unity world
+#: ``BuildTool_BlueprintCopy.cs:1791`` (and again at ``:1815`` for the other
+#: end), in ``CheckInserterDataLegal``::
+#:
+#:     Pose transformedBy = pose.GetTransformedBy(new Pose(objectPose3.position,
+#:                                                         objectPose3.rotation));
+#:     if ((objectPose2.position - transformedBy.position).magnitude > 0.8f)
+#:     {
+#:         return false;
+#:     }
+#:
+#: A game constant, not one of ours -- and a ``Vector3.magnitude`` in Unity world
 #: space, which is NOT tiles.
 #:
 #: A tile is ``colliders.GRID_ARC`` = 1.2566 world units, so a distance in tiles
@@ -365,6 +387,88 @@ PASTE_RADIAL = 1.6
 PASTE_LATERAL_EPS = 0.1
 
 
+# --- BuildTool_BlueprintPaste.MatchInserter --------------------------------
+#
+# A THIRD predicate on a sorter end, and the one most easily mistaken for the
+# two above.  It does not judge an end -- it CHOOSES the slot for an end whose
+# peer the blueprint did not name.  ``BuildTool_BlueprintPaste.cs:1793-1810``::
+#
+#     if (buildPreview.condition == EBuildCondition.Ok && buildPreview.desc.isInserter)
+#     {
+#         bool num = buildPreview.input == null;
+#         bool flag3 = buildPreview.output == null;
+#         if (num)   { buildPreview.inputObjId  = 0; MatchInserter(buildPreview); }
+#         if (flag3) { buildPreview.outputObjId = 0; MatchInserter(buildPreview); }
+#     }
+#
+# and ``BlueprintUtils.cs:1623-1624`` fills those two fields straight from the
+# blueprint's own records::
+#
+#     buildPreview.output = ((blueprintBuilding.outputObj == null) ? null : _bpArray[...]);
+#     buildPreview.input  = ((blueprintBuilding.inputObj  == null) ? null : _bpArray[...]);
+#
+# So for a sorter whose BOTH peers are inside the blueprint -- which is every
+# sorter either strategy emits -- ``MatchInserter`` never runs, and neither
+# constant below binds.  They bind the moment we emit a sorter reaching for
+# something the blueprint does not contain.  Recorded with that condition
+# stated, because the alternative is somebody "correcting" `SLOT_REACH` or
+# `SLOT_ALIGN_COS` to these values and tightening a rule that is not the one
+# those constants port.
+
+#: The squared WORLD distance inside which ``MatchInserter`` will drag an end
+#: onto a slot.  ``BuildTool_BlueprintPaste.cs:1588``::
+#:
+#:     if (num4 < 6f && (num5 != 0 || buildPreview2 != null))
+#:
+#: ``num4`` accumulates ``(slotPos - end).sqrMagnitude`` (``:1539``, ``:1568``,
+#: ``:1580``), so the gate is ``sqrt(6)`` = 2.449 WORLD units -- three times
+#: :data:`SLOT_REACH`, and a different code path.  The candidates it ranges over
+#: are whatever ``Physics.OverlapSphereNonAlloc(vector, 0.8f, ...)``
+#: (``:1491``) put in the buffer, so 0.8 appears here too, as a PhysX query
+#: radius rather than as a legality threshold.
+MATCH_SNAP_MAX_SQR = 6.0
+
+#: The alignment ``MatchInserter`` demands of a candidate slot, as a cosine.
+#: ``BuildTool_BlueprintPaste.cs:1536`` (machine) and ``:1564`` (a peer still in
+#: preview), with ``BuildTool_Click.cs:831``/``:859`` the hand-tool twins::
+#:
+#:     float num13 = Vector3.Dot(lhs, rhs2);
+#:     float num14 = Vector3.Dot((vector6 - vector2).normalized, rhs2);
+#:     if (num13 > 0.9702957f && num14 > 0.9702957f)
+#:
+#: ``rhs2`` is the slot's own ``-forward``, ``lhs`` the sorter's axis and
+#: ``vector2`` its far end.  TWO dots, both strictly above ``cos 14``.  Our
+#: :data:`SLOT_ALIGN_COS` is ``cos 24`` on ONE of the two, and the two numbers
+#: are unrelated: 24 is ``TooSkew``'s limit on a sorter's END ROTATIONS, not on
+#: a slot's facing.  ``tests/bench/test_snap_oracle.py`` drives 15488 synthetic
+#: ends through the game's own compiled ``MatchInserter`` and pins the
+#: disagreement at 584 ends it connects and we refuse, 256 we accept and it
+#: refuses, and 8 where both connect to different slots.
+MATCH_ALIGN_COS = 0.9702957
+
+
+#: How square a belt must lie ACROSS a sorter before the paste drags that end
+#: along with the seat it just applied to the other end.
+#:
+#: ``BlueprintUtils.cs:2102``, in ``RefreshBuildPreview``, and its mirror at
+#: ``:2153``::
+#:
+#:     if (Mathf.Abs(Vector3.Dot((buildPreview2.lpos2 - buildPreview2.lpos).normalized,
+#:                               buildPreview2.output.lrot.Forward())) < 0.5f)
+#:     {
+#:         Vector3 vector6 = buildPreview2.lrot2.Forward();
+#:         float num39 = Vector3.Dot(zero, vector6);
+#:         buildPreview2.lpos2 += zero - vector6 * num39;
+#:     }
+#:
+#: A belt running ALONG the sorter is left where the record put it; one lying
+#: across it follows.  This lived in ``layout.slots`` as ``DRAG_MAX_ALIGNMENT``
+#: -- a game constant with the decompiled source quoted, in the wrong module,
+#: which is the exact shape of defect this module exists to end.  ``slots``
+#: re-exports it under the old name so the call sites read unchanged.
+DRAG_MAX_ALIGNMENT = 0.5
+
+
 # --- EBuildCondition.TooSkew, in BuildTool_BlueprintPaste -------------------
 #
 # "Deflection too much" (`偏角太大`, condition 15 -- NOT `TooBend`/`弯曲过度`)::
@@ -383,13 +487,29 @@ PASTE_LATERAL_EPS = 0.1
 # between their forwards, and both of ours are upright, so the 30-degree test is
 # done on forwards.
 #
-# Two of the game's tests are NOT ported, both because they need the planet's
-# grid rather than ours: `CalcSegmentsAcross` counts the grid segments a sorter
-# crosses, which is a function of latitude, and the combined
-# `sqrt(segments^2 + altitude^2)` minimum built on it.  Our sorters never change
-# level (`catalog.SORTER_SPANS_ALTITUDE`) and sit on a uniform grid, where the
-# length test above is the same statement; near a pole it would not be, and
-# nothing we emit goes near one.
+# The same passage carries a THIRD and a FOURTH bound, on the same three-way
+# key, and only the first has been ported as a threshold.
+# `BuildTool_Inserter.cs:1313-1329` sets all four together::
+#
+#     float num5 = 5.5f;  float num6 = 0.6f;  float num7 = 3.499f;  float num8 = 0.88f;
+#     if (belt && belt)        { num6 = 0.4f; num5 = 5f;   num7 = 3.2f;   num8 = 0.8f;   }
+#     else if (!belt && !belt) { num6 = 0.9f; num5 = 7.5f; num7 = 3.799f;
+#                                num8 = 1.451f; num3 -= 0.3f; }
+#
+# `num5`/`num6` are `SORTER_LENGTH` below.  `num7` bounds the grid segments the
+# sorter crosses (`:1341`, `if (num2 > num7) -> TooFar`) and is the citation
+# behind `catalog.SORTER_MAX_REACH = 3`; a span of 4 is over it in all three
+# classes and a span of 3 under it in all three.  `num8` is a MINIMUM on
+# `sqrt(segments^2 + altitude^2)` (`:1347`, reporting `TooClose`), where
+# altitude is `num4 = Abs(lpos.magnitude - lpos2.magnitude) / 0.2f` -- which is
+# the line that establishes the game models an altitude-spanning sorter, and so
+# the line that retired our invented `sorter.altitude` check.
+#
+# `num7` and `num8` are not ported AS THRESHOLDS because `CalcSegmentsAcross` is
+# a function of latitude and our grid is uniform, where the length test above is
+# the same statement; near a pole it would not be, and nothing we emit goes near
+# one.  On a uniform grid `num7` reduces exactly to `SORTER_MAX_REACH`, which is
+# ported, and `num8`'s floor is below the 1-tile minimum span in every class.
 
 #: ``(minLength, maxLength)`` a pasted sorter is allowed, keyed by how many of
 #: its two ends land on a BELT -- the ``flag21``/``flag22`` pair.  Belt-to-belt
@@ -495,6 +615,102 @@ ADDON_TURRET_AXIS_DEG = 18.0
 #: The ``< 0.6f`` clause quoted above.  An altitude LEVEL is 1.3333 and a half
 #: level 0.6667, so this refuses a belt that changes height across the addon.
 ADDON_NEIGHBOUR_RADIAL_GAP = 0.6
+
+
+#: ``EBuildCondition.TooBendToLift``'s two thresholds.  ``BuildTool_Path.cs:1980``::
+#:
+#:     if (num21 < 2.5f && num25 > 0.1f)
+#:     {
+#:         buildPreview2.condition = EBuildCondition.TooBendToLift;
+#:         continue;
+#:     }
+#:
+#: These lived in :mod:`flab2bp.dsp.catalog`, which is the home for a rule read
+#: against the building table or parameterised by technology.  These are neither:
+#: they are bare ``EBuildCondition`` thresholds, so they belong here, next to the
+#: predicate that applies them.  Moving them was free -- they had no readers at
+#: all, anywhere, which is what :func:`too_bend_to_lift` now fixes.
+BEND_MIN_ANGLE_WHEN_SLOPED_RAD = 2.5
+SLOPE_DEADZONE = 0.1
+
+
+def too_bend_to_lift(
+    incoming: tuple[float, float] | None,
+    outgoing: tuple[float, float] | None,
+    slope: float,
+) -> bool:
+    """``EBuildCondition.TooBendToLift``: a belt may not TURN while sloped.
+
+    ``BuildTool_Path.cs:1980``::
+
+        if (num21 < 2.5f && num25 > 0.1f)
+        {
+            buildPreview2.condition = EBuildCondition.TooBendToLift;
+            continue;
+        }
+
+    ``num21`` is the angle at this belt between its input and its output, in
+    radians -- ``Maths.SphericalAngleAOBInRAD(buildPreview2.lpos, vector9,
+    vector10)`` at ``:1892``, defaulting to ``MathF.PI`` at ``:1889`` when the
+    belt has only one neighbour.  ``num25`` is the steeper of the two slopes,
+    ``Mathf.Abs(Maths.SphericalSlopeRatio(...))`` at ``:1953`` and ``:1962``.
+
+    So a straight belt is ``pi`` and always legal; a quarter turn is ``pi/2``
+    and illegal above :data:`~flab2bp.dsp.catalog.SLOPE_DEADZONE`; a belt
+    reversing on its own tile is ``0``.  Anything bending more than
+    ``pi - 2.5`` = 36.6 degrees off straight must be level.
+
+    ``incoming`` is the grid step INTO this belt, ``outgoing`` the step out of
+    it; either may be ``None`` for an end of a run, which the game treats as the
+    ``pi`` default.  ``slope`` is the steeper adjacent slope as world rise over
+    world run -- the same quantity :data:`~flab2bp.dsp.catalog.MAX_BELT_SLOPE`
+    is compared against, so callers already have it.
+
+    .. warning::
+       **No check consults this yet, deliberately, and the number below is why
+       that decision is load-bearing rather than cautious.**
+
+       Whether the rule binds on a PASTE -- rather than only on the interactive
+       path tool it is decompiled from -- is Step 0.1 of
+       ``docs/RULE_CONSOLIDATION_PLAN.md``, an in-game experiment the user is
+       running.  Measured over the trivial+small+mid corpus, 24 cells per
+       strategy, this predicate convicts:
+
+       ===========  ==========  =============  ======================
+       strategy     belts       convictions    cells with >= 1
+       ===========  ==========  =============  ======================
+       ``spine``    7114        **213** (3.0%)  **21 of 24**
+       ``freeform`` 5761        **139** (2.4%)  **18 of 24**
+       ===========  ==========  =============  ======================
+
+       So this is not an edge case waiting on a formality.  If Step 0.1 comes
+       back RED, nearly every blueprint either strategy currently ships is
+       invalid, and both routers need the constraint at search time (Step 2.2)
+       rather than as a late refusal.  Wiring a default-ERROR check *now* would
+       take the audit from INVALID 0 to INVALID in 39 of 48 cells on the
+       strength of a rule we have not yet confirmed applies to a paste -- which
+       is a guess in the opposite direction, and an expensive one.
+
+       ``tests/dsp/test_rules.py`` is the consumer: it pins the predicate
+       case-by-case against the decompiled branch and checks it convicts nothing
+       in blueprints the game itself wrote.
+    """
+    if slope <= SLOPE_DEADZONE:
+        return False
+    if incoming is None or outgoing is None:
+        return False  # `num21` keeps its `MathF.PI` default: no bend to measure
+    ax, ay = incoming
+    bx, by = outgoing
+    na = math.hypot(ax, ay)
+    nb = math.hypot(bx, by)
+    if na == 0.0 or nb == 0.0:
+        return False
+    # `SphericalAngleAOBInRAD` is the angle at the belt subtended by its two
+    # neighbours, so the vectors run OUTWARD from it: back along `incoming` and
+    # forward along `outgoing`.
+    cos = (-ax * bx - ay * by) / (na * nb)
+    angle = math.acos(max(-1.0, min(1.0, cos)))
+    return angle < BEND_MIN_ANGLE_WHEN_SLOPED_RAD
 
 
 def addon_axis_offset_deg(yaw_deg: float, dx: float, dy: float) -> float:
