@@ -7,6 +7,10 @@ back `PowerTooClose`, a rule we had never modelled because
 `colliders.build_colliders(2201)` returns `()` and `geom.collide` was therefore
 blind to it.
 
+**That row is now IMPLEMENTED** — ported, checked and complied with by both
+packers; see `docs/RULE_LEDGER.md` §1c. The rest of this file is as the audit
+left it.
+
 This file closes that gap from the other end. `EBuildCondition` is the complete
 list of refusals the game has; nothing outside it can happen. Every value gets
 exactly one verdict here, and `tests/conditions/test_ebuild_coverage.py` fails
@@ -16,9 +20,9 @@ the build if a value ever appears without one.
 
 | verdict | n |
 |---|---|
-| **IMPLEMENTED** — we model it | 9 |
+| **IMPLEMENTED** — we model it | 10 |
 | **INAPPLICABLE** — it cannot arise from a paste of what we emit | 44 |
-| **MISSING** — the game can do this to us and we do not model it | 6 |
+| **MISSING** — the game can do this to us and we do not model it | 5 |
 | **total** | **59** |
 
 **The enum has 59 values, not 57.** Values 0-54 are contiguous, then
@@ -44,7 +48,7 @@ is the index. `#` is the enum's own value, not a row number.
 | 2 | `NotEnoughItem` | INAPPLICABLE | B |
 | 3 | `NeedTech` | INAPPLICABLE | A |
 | 4 | `TooShort` | INAPPLICABLE | B |
-| 5 | `PowerTooClose` | MISSING | MISSING #1 |
+| 5 | `PowerTooClose` | IMPLEMENTED | IMPLEMENTED |
 | 6 | `WindTooClose` | INAPPLICABLE | D |
 | 7 | `GeothermalTooClose` | INAPPLICABLE | D |
 | 8 | `TowerTooClose` | INAPPLICABLE | D |
@@ -52,6 +56,7 @@ is the index. `#` is the enum's own value, not a row number.
 | 10 | `BlockTooClose` | INAPPLICABLE | D |
 | 11 | `MK2MinerTooClose` | INAPPLICABLE | D |
 | 12 | `PlasmaTooClose` | INAPPLICABLE | D |
+| 5 | `PowerTooClose` | `:2527` `if (buildPreview2.desc.isPowerNode && !buildPreview2.desc.isAccumulator)` gates three loops; the blueprint-side one is `:2646-2683`, id-filtered `2199..2299` and thresholded `num37 = (geothermal ? 144f : (windForcedPower ? 110.25f : 12.25f))` at `:2547` | `rules.POWER_TOO_CLOSE_SQR / WIND_TOO_CLOSE_SQR / GEOTHERMAL_TOO_CLOSE_SQR / PASTE_POWER_NODE_IDS`, `rules.power_node_condition`, `rules.power_node_keepout_offsets`, `game.power_too_close`, and BOTH packers (`spine._tower_keep_out`, the `_emit` gate, `freeform._power_plan`). Fixed after this audit was written; see `RULE_LEDGER.md` §1c and MISSING #1 below, which is kept for its citations. |
 | 13 | `TooClose` | IMPLEMENTED | IMPLEMENTED |
 | 14 | `TooFar` | MISSING | MISSING #5 |
 | 15 | `TooSkew` | MISSING | MISSING #4 |
@@ -189,7 +194,7 @@ can refuse a paste.
 
 ---
 
-## MISSING — 6 rows
+## MISSING — 5 rows, plus one now RESOLVED
 
 Ranked by whether they can fire on what we emit **today**, measured over the
 12-entry bench corpus (`flab2bp.bench.corpus.URL_CORPUS`) through
@@ -204,9 +209,16 @@ second. Both passes are reported below rather than the better-looking one. What
 is stable across them is *which* rules fire, which is the question this file
 asks; the counts are not a benchmark.
 
-### 1. `PowerTooClose = 5` — **already firing; another agent is fixing it**
+### 1. `PowerTooClose = 5` — **RESOLVED; it is IMPLEMENTED in the table above**
 
-*Status: IN FLIGHT. Recorded here for completeness; this audit did not touch it.*
+*Status: FIXED. The rule is ported in `dsp/rules.py` with the tiers intact, checked
+by `game.power_too_close` (default ERROR) and complied with by both packers; the
+blueprint that produced it is `tests/fixtures/ours/power-too-close-freeform.txt` and
+the row is `docs/RULE_LEDGER.md` §1c. This section is kept, and kept numbered, for
+the citations below -- `tests/conditions/test_ebuild_coverage.py` reads two of them
+as load-bearing anchors. Its measurement -- 7 pairs closer than 3.5 world units over
+118 power nodes in 11 builds -- was taken independently of the fix and agrees with
+it.*
 
 **Where the game sets it.** Guarded by
 `BuildTool_BlueprintPaste.cs:2527` `if (buildPreview2.desc.isPowerNode && !buildPreview2.desc.isAccumulator)`,
@@ -488,7 +500,7 @@ ground, not a check.
 
 ---
 
-## IMPLEMENTED — 9 in the count, 11 rows here
+## IMPLEMENTED — 10 in the count, 12 rows here
 
 | # | condition | where the game sets it (paste path only) | our model |
 |---|---|---|---|
@@ -504,7 +516,7 @@ ground, not a check.
 | 51 | `BlueprintBPOverlap` | `BuildTool_BlueprintPaste.cs:908-932`, two previews hashing to the same cell with `buildPreview2.desc == buildPreview3.desc` (`:910`); for belts the weighted centre `0.7f * lpos + 0.15f * (input.lpos + output.lpos)` must be within `sqrMagnitude < 0.25f` (`:917-920`) | `geom.overlap`, `geom.footprint`, `junction.colocated`, `belt.link_adjacent`. **Not a refusal** — `AddErrorMessage` returns early for it (`:4816`) and `:4575`, `:4620` treat it as drawable. It is a *silent drop*: the earlier preview gets `bpgpuiModelId = -1` and is never built. The `desc == desc` guard at `:910` is what lets a Splitter and a belt share a tile, which is the convention `layout/junction.py` reads off 25 real splitters. |
 | 54 | `ErrorInserterData` | `BlueprintUtils.RefreshBuildPreview`, `BlueprintUtils.cs:2114-2141` (input end) and `:2165-2192` (output end): `num40 > 0.8f` then `num41 > 0.5f`, `num41 < 0.1f && num40 > 1.6f`, `num41 >= 0.1f && num40 > 0.8f`, and the reversal test `Vector3.Dot(transformedBy.forward, ...) < 0f` | `rules.PASTE_SNAP = 0.8`, `rules.PASTE_LATERAL = 0.5`, `rules.PASTE_RADIAL = 1.6`, `rules.PASTE_LATERAL_EPS = 0.1`, `game.inserter_data`, `game.slot_occupancy` |
 
-That is 11 rows in the table and 9 in the count. `TooFar` and `TooSkew` are
+That is 12 rows in the table and 10 in the count. `TooFar` and `TooSkew` are
 counted under MISSING: each has one paste form nobody has ported, and a row where
 the game can still refuse us is not an implemented row however much of it is
 modelled. They are listed here as well so the part that *is* modelled is not
