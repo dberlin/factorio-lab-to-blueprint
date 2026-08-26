@@ -60,6 +60,7 @@ namespace SnapOracle
             var verdicts = new List<Verdict>();
             foreach (Case c in req.Cases)
             {
+                Resolve(c, req.SlotTables);
                 verdicts.Add(Run(c));
             }
             using (var writer = new StreamWriter(Console.OpenStandardOutput()))
@@ -67,6 +68,23 @@ namespace SnapOracle
                 writer.Write(JsonSerializer.Serialize(verdicts, Opts));
             }
             return 0;
+        }
+
+        /// <summary>Point every <c>slotTable</c> reference at the shared list it names.</summary>
+        private static void Resolve(Case c, Dictionary<string, List<SlotPoseDto>> tables)
+        {
+            foreach (Candidate cand in c.Candidates)
+            {
+                if (string.IsNullOrEmpty(cand.SlotTable))
+                {
+                    continue;
+                }
+                if (!tables.TryGetValue(cand.SlotTable, out List<SlotPoseDto> table))
+                {
+                    throw new KeyNotFoundException($"case '{c.Name}' names slot table '{cand.SlotTable}', which was not supplied");
+                }
+                cand.SlotPoses = table;
+            }
         }
 
         private static Verdict Run(Case c)
@@ -77,9 +95,9 @@ namespace SnapOracle
                 var oracle = new Oracle(c);
                 BuildPreview bp = new BuildPreview();
                 bp.lpos = Json.Vec(c.Lpos);
-                bp.lrot = Json.Quat(c.Lrot);
+                bp.lrot = c.Lrot != null ? Json.Quat(c.Lrot) : Quat.Euler(0f, c.Yaw ?? 0f, 0f);
                 bp.lpos2 = Json.Vec(c.Lpos2);
-                bp.lrot2 = Json.Quat(c.Lrot2);
+                bp.lrot2 = c.Lrot2 != null ? Json.Quat(c.Lrot2) : Quat.Euler(0f, c.Yaw2 ?? 0f, 0f);
                 bp.inputObjId = c.InputObjId;
                 bp.outputObjId = c.OutputObjId;
                 bp.input = c.InputPreview >= 0 ? oracle.Preview(c.Candidates[c.InputPreview]) : null;

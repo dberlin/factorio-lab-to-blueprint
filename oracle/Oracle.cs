@@ -82,7 +82,7 @@ namespace SnapOracle
             {
                 bp = new BuildPreview();
                 bp.lpos = Json.Vec(cand.BpPos ?? cand.Pos);
-                bp.lrot = Json.Quat(cand.BpRot ?? cand.Rot);
+                bp.lrot = cand.BpRot != null ? Json.Quat(cand.BpRot) : Rotation(cand);
                 bp.desc = new PrefabDesc();
                 bp.desc.slotPoses = Slots(cand);
                 this._previews[cand] = bp;
@@ -99,13 +99,38 @@ namespace SnapOracle
             return this._previewIndex.TryGetValue(bp, out int i) ? i : -1;
         }
 
+        /// <summary>A candidate's rotation, from its quaternion or from its yaw.</summary>
+        internal static Quaternion Rotation(Candidate cand)
+        {
+            if (cand.Rot != null)
+            {
+                return Json.Quat(cand.Rot);
+            }
+            return Quat.Euler(0f, cand.Yaw ?? 0f, 0f);
+        }
+
+        /// <summary>
+        /// Built poses per slot table, keyed on the list INSTANCE so a table shared
+        /// by a sweep's thousands of candidates is converted once.  <c>List&lt;T&gt;</c>
+        /// does not override equality, so the default comparer is reference identity
+        /// -- which is what is wanted: two tables with equal contents are still two
+        /// tables, and nothing here depends on collapsing them.
+        /// </summary>
+        private static readonly Dictionary<List<SlotPoseDto>, Pose[]> SlotCache
+            = new Dictionary<List<SlotPoseDto>, Pose[]>();
+
         private static Pose[] Slots(Candidate cand)
         {
+            if (SlotCache.TryGetValue(cand.SlotPoses, out Pose[] cached))
+            {
+                return cached;
+            }
             Pose[] arr = new Pose[cand.SlotPoses.Count];
             for (int i = 0; i < arr.Length; i++)
             {
                 arr[i] = cand.SlotPoses[i].ToPose();
             }
+            SlotCache[cand.SlotPoses] = arr;
             return arr;
         }
 
@@ -130,7 +155,7 @@ namespace SnapOracle
             {
                 return Pose.identity;
             }
-            return new Pose(Json.Vec(c.Pos), Json.Quat(c.Rot));
+            return new Pose(Json.Vec(c.Pos), Rotation(c));
         }
 
         internal Pose[] GetLocalSlots(int objId)
@@ -294,7 +319,7 @@ namespace SnapOracle
                                     Pose[] slotPoses = this.Preview(component).desc.slotPoses;
                                     if (slotPoses != null && slotPoses.Length != 0)
                                     {
-                                        Pose pose = new Pose(Json.Vec(component.Pos), Json.Quat(component.Rot));
+                                        Pose pose = new Pose(Json.Vec(component.Pos), Rotation(component));
                                         for (int l = 0; l < slotPoses.Length; l++)
                                         {
                                             Vector3 vector7 = pose.position + (pose.rotation * slotPoses[l].position);

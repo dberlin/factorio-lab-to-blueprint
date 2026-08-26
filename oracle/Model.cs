@@ -15,6 +15,18 @@ namespace SnapOracle
     /// </summary>
     internal sealed class Request
     {
+        /// <summary>
+        /// Slot tables shared by many candidates, keyed by name.
+        ///
+        /// <para>
+        /// A sweep asks the same building thousands of times at different offsets,
+        /// and its twelve slot poses are the bulk of each case.  Naming the table
+        /// once keeps a dense sweep affordable; it changes nothing the ladder sees.
+        /// </para>
+        /// </summary>
+        public Dictionary<string, List<SlotPoseDto>> SlotTables { get; set; }
+            = new Dictionary<string, List<SlotPoseDto>>();
+
         public List<Case> Cases { get; set; } = new List<Case>();
     }
 
@@ -28,10 +40,16 @@ namespace SnapOracle
 
         public float[] Lrot { get; set; }
 
+        /// <summary>The sorter's own yaw in degrees, when <see cref="Lrot"/> is absent.</summary>
+        public float? Yaw { get; set; }
+
         /// <summary>The sorter's output (second) end, as the blueprint carries it.</summary>
         public float[] Lpos2 { get; set; }
 
         public float[] Lrot2 { get; set; }
+
+        /// <summary>The second end's yaw in degrees, when <see cref="Lrot2"/> is absent.</summary>
+        public float? Yaw2 { get; set; }
 
         /// <summary>Already-known ends, which the ladder leaves alone.</summary>
         public int InputObjId { get; set; }
@@ -87,6 +105,14 @@ namespace SnapOracle
         public float[] Rot { get; set; }
 
         /// <summary>
+        /// The object's yaw in degrees, for a caller that would otherwise have to
+        /// build the quaternion itself.  Used only when <see cref="Rot"/> is absent,
+        /// and turned into a rotation by <see cref="Quat.Euler"/> -- so the driver
+        /// never does quaternion arithmetic of its own.
+        /// </summary>
+        public float? Yaw { get; set; }
+
+        /// <summary>
         /// A preview's <c>buildPreview.lpos</c> / <c>.lrot</c>, when they are not
         /// its model transform's.
         ///
@@ -111,6 +137,9 @@ namespace SnapOracle
         /// </summary>
         public List<SlotPoseDto> SlotPoses { get; set; } = new List<SlotPoseDto>();
 
+        /// <summary>A key into <see cref="Request.SlotTables"/>, used when <see cref="SlotPoses"/> is empty.</summary>
+        public string SlotTable { get; set; }
+
         /// <summary>Set only on a BUILT belt entity; the branch it feeds needs a live path.</summary>
         public BeltPathDto Belt { get; set; }
     }
@@ -119,11 +148,36 @@ namespace SnapOracle
     {
         public float[] Pos { get; set; }
 
+        /// <summary>The slot's own rotation, when the caller has it.</summary>
         public float[] Rot { get; set; }
+
+        /// <summary>
+        /// The slot's <c>Pose.forward</c>, for a caller that has only that.
+        ///
+        /// <para>
+        /// Our extracted table stores forward rather than the quaternion, so the
+        /// rotation is rebuilt here with the game's own managed
+        /// <c>Maths.LookRotation</c>.  That leaves ROLL about the forward axis
+        /// unconstrained -- and roll cannot change any decision the ladder makes,
+        /// because every use of the slot rotation inside the loop is
+        /// <c>rot * (0, 0, -1)</c>, which is the forward axis itself and is fixed
+        /// under rotation about it.  It reaches only the emitted <c>lrot</c>.
+        /// </para>
+        /// </summary>
+        public float[] Fwd { get; set; }
 
         internal Pose ToPose()
         {
-            return new Pose(Json.Vec(this.Pos), Json.Quat(this.Rot));
+            if (this.Rot != null)
+            {
+                return new Pose(Json.Vec(this.Pos), Json.Quat(this.Rot));
+            }
+            if (this.Fwd == null)
+            {
+                throw new System.ArgumentException("a slot pose needs either `rot` or `fwd`");
+            }
+            Maths.LookRotation(Json.Vec(this.Fwd), Vector3.up, out Quaternion q);
+            return new Pose(Json.Vec(this.Pos), q);
         }
     }
 
