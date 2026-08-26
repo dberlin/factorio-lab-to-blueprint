@@ -547,6 +547,9 @@ class SequenceSolver[PreparedT]:
                 if cancelled:
                     termination = "cancelled"
                     break
+                if self.deadline_reached():
+                    termination = "deadline"
+                    break
                 continue
 
             discovery = next((height for height in self._heights if height.stages == 0), None)
@@ -583,6 +586,9 @@ class SequenceSolver[PreparedT]:
             self._last_height = height_state.height
             if cancelled:
                 termination = "cancelled"
+                break
+            if self.deadline_reached():
+                termination = "deadline"
                 break
 
         if self._incumbent is None:
@@ -899,6 +905,7 @@ class SequenceSolver[PreparedT]:
         annealed: Sequence[_AnnealedRestart],
         allowance: int,
     ) -> tuple[int, bool]:
+        """Proxy-score an archive without consuming its detailed closure work."""
         spent = 0
         preparation_time_s = 0.0
         global_route_time_s = 0.0
@@ -906,22 +913,61 @@ class SequenceSolver[PreparedT]:
         anneal_moves = anneal_stages * self.config.moves_per_stage
         accepted_moves = sum(item.result.accepted_moves for item in annealed)
         anneal_seeds = tuple(item.restart.seed for item in annealed)
+        detailed_reserve = (
+            min(
+                allowance,
+                max(
+                    1,
+                    _fraction_ceiling(
+                        allowance,
+                        self.config.final_reserve_fraction,
+                    ),
+                ),
+            )
+            if allowance
+            else 0
+        )
+        proxy_left = allowance - detailed_reserve
+        prepared_candidates: list[_StageCandidate[PreparedT]] = []
         global_candidates: list[_GlobalCandidate[PreparedT]] = []
-        for tagged, source in candidates:
+        for index, (tagged, source) in enumerate(candidates):
+            if proxy_left == 0 and prepared_candidates:
+                break
             elite = tagged.incumbent
             preparation_started = time.perf_counter()
             prepared = self.adapters.prepare(height_state.height, elite.decoded)
             preparation_time_s += time.perf_counter() - preparation_started
-            remaining = allowance - spent
+            prepared_candidate = _StageCandidate(
+                prepared=prepared,
+                source=source,
+                state=elite.state,
+                decoded=elite.decoded,
+                key=elite.key,
+                breakdown=elite.breakdown,
+                archive_categories=tagged.categories,
+                anneal_stages=anneal_stages,
+                anneal_moves=anneal_moves,
+                accepted_moves=accepted_moves,
+                anneal_seeds=anneal_seeds,
+            )
+            prepared_candidates.append(prepared_candidate)
+            if proxy_left == 0:
+                break
+
+            remaining_candidates = len(candidates) - index
+            proxy_allowance = (
+                proxy_left + remaining_candidates - 1
+            ) // remaining_candidates
             global_started = time.perf_counter()
             global_result = self.adapters.global_route(
                 prepared,
                 height_state.feedback,
-                remaining,
+                proxy_allowance,
             )
             global_route_time_s += time.perf_counter() - global_started
-            _check_spend(global_result.expansions, remaining)
+            _check_spend(global_result.expansions, proxy_allowance)
             spent += global_result.expansions
+            proxy_left -= global_result.expansions
             global_candidates.append(
                 _GlobalCandidate(
                     prepared=prepared,
@@ -938,14 +984,31 @@ class SequenceSolver[PreparedT]:
                     result=global_result,
                 )
             )
+            if global_result.cancelled:
+                break
 
-        selected = min(global_candidates, key=_global_priority)
-        if selected.result.cancelled:
-            return spent, True
+        if global_candidates:
+            chosen_global = min(global_candidates, key=_global_priority)
+            selected: _StageCandidate[PreparedT] = chosen_global
+            selected_result = chosen_global.result
+            global_overflow = (
+                selected_result.total_overflow
+                if not selected_result.cancelled and not selected_result.exhausted_budget
+                else None
+            )
+            global_skip_reason = None
+        elif prepared_candidates:
+            selected = prepared_candidates[0]
+            global_overflow = None
+            global_skip_reason = "proxy-budget"
+        else:
+            raise ValueError("archive routing requires at least one candidate")
+
+        detailed_allowance = allowance - spent
         detailed_started = time.perf_counter()
-        detailed = self.adapters.detailed_route(selected.prepared, allowance - spent)
+        detailed = self.adapters.detailed_route(selected.prepared, detailed_allowance)
         detailed_route_time_s = time.perf_counter() - detailed_started
-        _check_spend(detailed.routing.expansions, allowance - spent)
+        _check_spend(detailed.routing.expansions, detailed_allowance)
         spent += detailed.routing.expansions
         selected_source = selected.source
         if selected_source is None:
@@ -962,8 +1025,8 @@ class SequenceSolver[PreparedT]:
                 continue_search=True,
             ),
             global_routes=len(global_candidates),
-            global_overflow=selected.result.total_overflow,
-            global_skip_reason=None,
+            global_overflow=global_overflow,
+            global_skip_reason=global_skip_reason,
             preparation_time_s=preparation_time_s,
             global_route_time_s=global_route_time_s,
             detailed_route_time_s=detailed_route_time_s,

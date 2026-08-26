@@ -393,6 +393,10 @@ def test_expansion_budget_is_exact_and_returns_partial_metrics() -> None:
     assert exact.expansions == 3
     assert exact.unreachable_ports == 0
     assert net_id in exact.paths
+    assert exhausted.exhausted_budget
+    assert not exhausted.cancelled
+    assert not exact.exhausted_budget
+    assert not exact.cancelled
 
 
 def test_zero_budget_expands_nothing() -> None:
@@ -404,6 +408,8 @@ def test_zero_budget_expands_nothing() -> None:
     assert result.unreachable_ports == 1
     assert result.paths == {}
     assert result.rounds == 1
+    assert result.exhausted_budget
+    assert not result.cancelled
 
 
 @pytest.mark.parametrize("budget", [-1, 1.5, True])

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field, replace
 from fractions import Fraction
 from typing import cast
@@ -35,6 +35,7 @@ from flab2bp.layout.route_feedback import (
     select_split_candidate,
 )
 from flab2bp.layout.sequence_pair import (
+    AnnealIncumbent,
     AnnealState,
     DecodedPlacement,
     GapProfile,
@@ -46,6 +47,7 @@ from flab2bp.layout.sequence_pair import (
     decode_sequence_pair,
     decode_state,
     split_stage_boundary,
+    TaggedAnnealIncumbent,
 )
 from flab2bp.layout.sequence_solver import (
     DetailedStageResult,
@@ -125,7 +127,11 @@ def _routing(
 
 
 def _global(
-    *, overflow: int = 0, expansions: int = 0, cancelled: bool = False
+    *,
+    overflow: int = 0,
+    expansions: int = 0,
+    exhausted_budget: bool = False,
+    cancelled: bool = False,
 ) -> GlobalRouteResult:
     return GlobalRouteResult(
         net_results=(),
@@ -136,7 +142,7 @@ def _global(
         unreachable_ports=0,
         rounds=1,
         expansions=expansions,
-        exhausted_budget=False,
+        exhausted_budget=exhausted_budget,
         hot_cells=(),
         hot_regions=(),
         cancelled=cancelled,
@@ -235,6 +241,26 @@ def _solver(
         deadline_reached=deadline_reached or (lambda: False),
         initial_states=initial_states,
     )
+
+
+def _repeat_merged_elite(monkeypatch: pytest.MonkeyPatch, count: int) -> None:
+    original = sequence_solver_module.build_elite_archive
+
+    def repeat(
+        candidates: Iterable[AnnealIncumbent],
+        elite_count: int,
+    ) -> tuple[TaggedAnnealIncumbent, ...]:
+        archived = original(candidates, elite_count)
+        if archived and elite_count == count:
+            narrowest = next(
+                tagged
+                for tagged in archived
+                if sequence_solver_module.EliteCategory.NARROWEST in tagged.categories
+            )
+            return (narrowest,) * count
+        return archived
+
+    monkeypatch.setattr(sequence_solver_module, "build_elite_archive", repeat)
 
 
 
@@ -628,11 +654,22 @@ def test_best_height_fallback_order_is_stranded_overflow_narrowest_spend_then_st
 
 
 
-def test_detailed_route_still_runs_when_global_spends_the_stage_allowance() -> None:
-    fake = _FakeRouting(spend_allowance=True)
-    with pytest.raises(NoValidLayout):
-        _solver(fake, heights=(40,), budget=ExpansionBudget(total=100)).search(max_stages=3)
-    assert fake.detailed_allowances == [0]
+def test_detailed_route_retains_positive_work_when_global_spends_its_proxy_allowance() -> None:
+    exact = _placement(area=20, belt_tiles=4)
+    fake = _FakeRouting(
+        detailed_results=(DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), exact),),
+        spend_allowance=True,
+    )
+
+    result = _solver(
+        fake,
+        heights=(40,),
+        budget=ExpansionBudget(total=100),
+    ).search(max_stages=1)
+
+    assert result.placement is exact
+    assert fake.global_allowances == [56]
+    assert fake.detailed_allowances == [19]
 
 
 def test_proxy_candidate_cannot_displace_exact_incumbent() -> None:
@@ -726,15 +763,43 @@ def test_validator_rejection_never_establishes_an_exact_incumbent() -> None:
 
 
 
-def test_stage_routes_cannot_spend_final_twenty_five_percent() -> None:
+def test_stage_routes_preserve_the_final_twenty_five_percent() -> None:
     budget = ExpansionBudget(total=100)
     fake = _FakeRouting(spend_allowance=True)
     with pytest.raises(NoValidLayout):
         _solver(fake, heights=(40,), budget=budget).search(max_stages=20)
     assert budget.final_reserved == 25
     assert budget.spent == 75
-    assert max(fake.global_allowances) == 75
+    assert max(fake.global_allowances) == 56
+    assert all(allowance > 0 for allowance in fake.detailed_allowances)
     assert sum(fake.global_allowances) + sum(fake.detailed_allowances) == 75
+
+
+def test_casimir_sized_discovery_slices_conserve_900k_and_protect_detailed_work(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _repeat_merged_elite(monkeypatch, 4)
+    budget = ExpansionBudget(total=6_000_000)
+    fake = _FakeRouting(spend_allowance=True)
+    config = SequenceSolverConfig(
+        stages=1,
+        moves_per_stage=1,
+        restarts_per_height=1,
+        global_elites=4,
+    )
+
+    with pytest.raises(NoValidLayout, match="no scheduled stage"):
+        _solver(
+            fake,
+            heights=tuple(range(10, 20)),
+            budget=budget,
+            config=config,
+        ).search(max_stages=2)
+
+    assert budget.discovery_by_height == dict.fromkeys(range(10, 20), 450_000)
+    assert budget.spent == 900_000
+    assert fake.global_allowances == [84_375] * 8
+    assert fake.detailed_allowances == [112_500, 112_500]
 
 
 def test_discovery_reservations_are_equal_and_unused_budget_is_shared_afterward() -> None:
@@ -744,32 +809,43 @@ def test_discovery_reservations_are_equal_and_unused_budget_is_shared_afterward(
         _solver(fake, budget=budget).search(max_stages=4)
     assert budget.discovery_by_height == {40: 25, 60: 25, 80: 25}
     assert budget.final_reserved == 26
-    assert fake.global_allowances[:3] == [25, 25, 25]
-    assert fake.global_allowances[3] == 75
+    assert fake.global_allowances[:3] == [18, 18, 18]
+    assert fake.global_allowances[3] == 56
 
 
-def test_selected_global_cancellation_stops_before_detailed_or_feedback() -> None:
-    feedback_seen: list[FeedbackState] = []
-    detailed_calls = 0
-    budget = ExpansionBudget(100)
+def test_later_cancelled_proxy_closes_the_best_completed_candidate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _repeat_merged_elite(monkeypatch, 3)
+    exact = _placement(area=20, belt_tiles=4)
+    global_allowances: list[int] = []
+    detailed_allowances: list[int] = []
 
     def global_route(
         prepared: Prepared,
         feedback: FeedbackState,
         allowance: int,
     ) -> GlobalRouteResult:
-        del prepared, allowance
-        feedback_seen.append(feedback)
-        return _global(expansions=3, cancelled=True)
+        del prepared, feedback
+        global_allowances.append(allowance)
+        if len(global_allowances) == 1:
+            return _global(
+                overflow=1,
+                expansions=allowance,
+                exhausted_budget=True,
+            )
+        return _global(expansions=1, cancelled=True)
 
     def detailed_route(
         prepared: Prepared,
         allowance: int,
     ) -> DetailedStageResult:
-        nonlocal detailed_calls
-        del prepared, allowance
-        detailed_calls += 1
-        raise AssertionError("cancelled global result reached detailed routing")
+        del prepared
+        detailed_allowances.append(allowance)
+        return DetailedStageResult(
+            _routing(DetailedRouteStatus.ROUTED, expansions=allowance),
+            exact,
+        )
 
     solver = SequenceSolver(
         heights=(40,),
@@ -785,26 +861,81 @@ def test_selected_global_cancellation_stops_before_detailed_or_feedback() -> Non
             detailed_route=detailed_route,
             validate=lambda _placement: ValidationVerdict(True, ()),
         ),
-        expansion_budget=budget,
+        expansion_budget=ExpansionBudget(100),
         config=SequenceSolverConfig(
             stages=1,
             moves_per_stage=1,
-            restarts_per_height=2,
-            global_elites=1,
+            restarts_per_height=1,
+            global_elites=3,
         ),
     )
 
-    with pytest.raises(NoValidLayout, match="routing was cancelled"):
+    result = solver.search(max_stages=1)
+
+    assert result.placement is exact
+    assert global_allowances == [19, 19]
+    assert detailed_allowances == [55]
+    assert solver.budget.spent == 75
+
+
+def test_cancelled_proxy_without_an_exact_candidate_remains_an_honest_refusal() -> None:
+    detailed_allowances: list[int] = []
+
+    def detailed_route(
+        prepared: Prepared,
+        allowance: int,
+    ) -> DetailedStageResult:
+        del prepared
+        detailed_allowances.append(allowance)
+        return DetailedStageResult(_routing(DetailedRouteStatus.UNPOWERABLE), None)
+
+    solver = _solver(
+        _FakeRouting(),
+        heights=(40,),
+        budget=ExpansionBudget(100),
+        config=SequenceSolverConfig(
+            stages=1,
+            moves_per_stage=1,
+            restarts_per_height=1,
+            global_elites=1,
+        ),
+    )
+    solver.adapters = replace(
+        solver.adapters,
+        global_route=lambda _prepared, _feedback, _allowance: _global(cancelled=True),
+        detailed_route=detailed_route,
+    )
+
+    with pytest.raises(NoValidLayout, match="no scheduled stage"):
         solver.search(max_stages=1)
 
-    assert detailed_calls == 0
-    assert budget.spent == 3
-    assert len(feedback_seen) == 1
-    assert not feedback_seen[0].net_weight
-    assert not feedback_seen[0].cell_history
-    assert [
-        (restart.stages, restart.anneal.stage_index) for restart in solver._heights[0].restarts
-    ] == [(1, 1), (1, 1)]
+    assert detailed_allowances == [75]
+
+
+def test_parent_deadline_after_proxy_closure_is_not_proxy_cancellation() -> None:
+    checks = iter((False, True))
+    fake = _FakeRouting()
+    solver = _solver(
+        fake,
+        heights=(40,),
+        budget=ExpansionBudget(100),
+        config=SequenceSolverConfig(
+            stages=1,
+            moves_per_stage=1,
+            restarts_per_height=1,
+            global_elites=1,
+        ),
+        deadline_reached=lambda: next(checks),
+    )
+    solver.adapters = replace(
+        solver.adapters,
+        global_route=lambda _prepared, _feedback, _allowance: _global(cancelled=True),
+    )
+
+    with pytest.raises(NoValidLayout, match="deadline exhausted"):
+        solver.search(max_stages=1)
+
+    assert fake.detailed_allowances == [75]
 
 
 def test_deadline_empty_global_is_cancelled_without_budget_exhaustion() -> None:
