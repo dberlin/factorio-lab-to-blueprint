@@ -2102,7 +2102,9 @@ def test_every_check_that_consults_group_for_declares_it() -> None:
     assert computed == NEEDS_GROUPS, (
         f"declared {sorted(NEEDS_GROUPS)}, call graph says {sorted(computed)}"
     )
-    assert len(computed) == 10, f"expected 10 dependent checks, found {len(computed)}"
+    # Eleven since `prolif.sprayed_cargo_reaches_machines` landed: it asks
+    # `group_for` whether the machine being fed is proliferated at all.
+    assert len(computed) == 11, f"expected 11 dependent checks, found {len(computed)}"
 
 
 # --- machine conformance, continued ----------------------------------------
