@@ -272,7 +272,41 @@ half-width — so this is a correctness-of-model row, not a live bug.
 | `power.coverage` | KEEP (over-strict) | `PowerSystem.cs:921,961`. The game tests the consumer's single `plugPos` (`:954`); we test every tile — tighter than the game, and safe |
 | `power.connectivity` — the link predicate | KEEP | `PowerSystem.cs:940-945`, `max` of the pair |
 | `power.connectivity` — "one network" | **OURS** | `PowerSystem.cs:990` `num17 = NewNetwork();` — the game spawns a second network without complaint. Our blueprints carry no generation, so a stranded tower is a build that does not run. Functional invariant, not a paste rule. |
-| `geom.footprint`, `geom.overlap`, `geom.machine_ground`, `sorter.anchors_present`, `sorter.endpoints`, `sorter.endpoint_pair`, `sorter.filter`, `junction.colocated`, `junction.records_no_links` | **OURS** | none is a game predicate. `EBuildCondition.Occupied` is a belt-junction *port*, not a tile (`BuildTool_Path.cs:1258`, `BuildPreview.cs:125` `"接口已占用"`). They are model and record-integrity invariants and must stop being described as the game's. |
+| `geom.footprint`, `geom.overlap`, `geom.machine_ground`, `sorter.anchors_present`, `sorter.endpoints`, `sorter.endpoint_pair`, `sorter.filter`, `junction.colocated`, `junction.records_no_links` | **OURS** — see §4b | none is a game predicate. `EBuildCondition.Occupied` is a belt-junction *port*, not a tile (`BuildTool_Path.cs:1258`, `BuildPreview.cs:125` `"接口已占用"`). |
+
+## 4b. OURS is a verdict, not an exemption — and one of these rows is a density lead
+
+The ruling is "rules that do not exist in game code are removed". **OURS** is not
+a way around it. It is the plan's own §1.2 category, and it means: *this was
+never a claim about the game, it is a property of our model or of the artifact we
+ship, and it has been relabelled so it can never again be mistaken for a game
+rule.* The four **REMOVE** rows above were deleted precisely because they DID
+claim to be the game's.
+
+The test applied to each row below was: **would deleting it change what we emit
+or what we refuse?**
+
+* `sorter.anchors_present`, `sorter.endpoint_pair`, `junction.records_no_links`,
+  `sorter.filter`, `geom.footprint` — no. They are record-integrity
+  preconditions for the ported checks, or assertions on our own cache. Deleting
+  them removes a guard rail and gains nothing; they are relabelled, not deleted,
+  and none is a constant in `dsp/`.
+* `power.connectivity`'s one-network clause — deleting it would change what we
+  ship, and for the worse. Our blueprints carry no generation, so a second
+  network is a half-powered build. `PowerSystem.cs:990` proves the *game* does
+  not object; that makes it our requirement, which is exactly what it is now
+  labelled.
+* **`geom.overlap` is a lead I did not chase, and I am flagging it rather than
+  closing it.** It is a coarse discretisation of `geom.collide`: the footprint
+  it compares is itself derived from `buildColliders` (`catalog.derive_footprint`),
+  so it is a projection of the real rule, not an independent one — which is why
+  it is OURS and not REMOVE. But the projection rounds *outward*
+  (`width = 2 * ceil(e / GRID_ARC) - 1`, always odd), so there are pairs whose
+  tiles overlap and whose colliders do not, and `geom.overlap` refuses those.
+  **How many, and what they are worth in area, is unmeasured.** It is a genuine
+  Phase 4 density candidate and it needs a packer experiment, not a ledger entry.
+  Recording it as an open lead is honest; calling it verified either way would
+  not be.
 | `prolif.*`, `flow.*`, `machine.*`, `spec.*`, `belt.*` | **OURS** | rate, spec and routing correctness. Out of the legality set by the plan's own line. |
 
 ## 4a. `game.sorter_collide` — KEEP, with the fitting risk stated
