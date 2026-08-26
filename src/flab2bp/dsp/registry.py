@@ -279,9 +279,9 @@ _CATALOG: tuple[Entry, ...] = (
         "catalog.belt_slope_allowed",
         Kind.RULE,
         depends_on=(_TECH_SLOPE, "world rise", "horizontal run"),
-        unconsulted_because=(
-            "PASTE GAP TooSteep: downstream code reads MAX_BELT_SLOPE or fixed "
-            "move tables; migrate strategy/validate to this exact predicate."
+        note=(
+            "The exact TooSteep predicate is now read by validator and spine "
+            "routing; no downstream literal or fixed move table owns the rule."
         ),
     ),
     _e(
@@ -349,7 +349,10 @@ _CATALOG: tuple[Entry, ...] = (
         "catalog.clearance",
         Kind.RULE,
         depends_on=("building item id", "yaw"),
-        note="The compiled projection the plan's Phase 2 holds up as the good case.",
+        note=(
+            "Compiled reservation projection read by packers.  Validation asks "
+            "the underlying collider predicate directly, so R4's seam is strategy-only."
+        ),
     ),
     _e(
         "catalog.sorter_rate",
@@ -375,7 +378,15 @@ _COLLIDERS: tuple[Entry, ...] = (
     ),
     _e("colliders.PLANET_RADIUS", Kind.RULE, lint=True),
     _e("colliders.PLANET_SEGMENT", Kind.RULE, lint=True),
-    _e("colliders.SORTER_END_EXTENSION", Kind.RULE, lint=True),
+    _e(
+        "colliders.SORTER_END_EXTENSION",
+        Kind.RULE,
+        lint=True,
+        note=(
+            "Read by sorter collider construction on both production paths; R4's "
+            "current boundary corpus moves strategy seating only, not a validator verdict."
+        ),
+    ),
     _e("colliders.SORTER_HALF_LENGTH_MIN", Kind.RULE, lint=True),
     _e("colliders.BELT_PROBE_RADIUS", Kind.RULE, lint=True),
     _e("colliders.BELT_PROBE_LIFT", Kind.RULE, lint=True),
@@ -497,7 +508,14 @@ _RULES: tuple[Entry, ...] = (
     _e("rules.ADDON_TO_SLOT", Kind.RULE, note=_SLOT_INDEX_NOTE),
     _e("rules.SPLITTER_INPUT_TO_SLOT", Kind.RULE, note=_SLOT_INDEX_NOTE),
     _e("rules.SPLITTER_OUTPUT_FROM_SLOT", Kind.RULE, note=_SLOT_INDEX_NOTE),
-    _e("rules.BELT_INPUT_SLOTS", Kind.RULE, note=_SLOT_INDEX_NOTE),
+    _e(
+        "rules.BELT_INPUT_SLOTS",
+        Kind.RULE,
+        note=(
+            f"{_SLOT_INDEX_NOTE} Emission allocates this range; validation checks "
+            "the resulting occupied cells rather than consulting the range."
+        ),
+    ),
     _e(
         "rules.BELT_PORT_FEED_FROM_SLOT",
         Kind.RULE,
@@ -875,6 +893,12 @@ LINT_EXCEPTIONS: tuple[LintException, ...] = (
         "<module>",
         0.35,
         "_PACK_SHARE: CP-SAT's share of a sweep's clock, set by measurement",
+    ),
+    LintException(
+        "flab2bp.layout.sequence_pair",
+        "SearchEnergy",
+        0.35,
+        "weighted-HPWL objective coefficient; not SORTER_END_EXTENSION geometry",
     ),
     LintException(
         "flab2bp.layout.freeform",

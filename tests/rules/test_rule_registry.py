@@ -41,7 +41,6 @@ EXPECTED_UNCONSULTED = {
     "catalog.DEFAULT_STORAGE_LEVEL",
     # Paste-applicable rules centralized here but not yet migrated into
     # strategy/validation.  The report prints each registry reason.
-    "catalog.belt_slope_allowed",
     "catalog.blueprint_limit_for_technologies",
     "catalog.stack_pitch_z",
     "catalog.vertical_construction_allowed",
