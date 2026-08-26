@@ -2023,6 +2023,14 @@ def _addon_facing(ctx: Context) -> Iterable[Finding]:
     the six are convicted here; the four reversals are recorded in the finding
     count of neither, because the game accepts them and a check that refused
     them would be ours rather than the game's.
+
+    WHAT THIS CHECK CANNOT SEE, and ``game.addon_corner`` below can.  Reading
+    the successor "or its predecessor when it has none" reads exactly ONE end of
+    the ridden belt.  A belt that arrives from the north and leaves to the east
+    agrees with a coater yawed 90 at the end this reads, so this check passes
+    it.  Six of ``freeform``'s twenty coaters on a later blueprint the user
+    pasted were in that state and this check reported nothing about any of them
+    -- measured, 0 findings here against 6 there on the same file.
     """
     bs = ctx.placement.buildings
     for i, ride, incoming, outgoing in _addon_rides(ctx):
