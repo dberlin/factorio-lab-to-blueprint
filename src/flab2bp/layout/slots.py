@@ -102,6 +102,7 @@ __all__ = [
     "lane_orientation",
     "machine_slot",
     "probe_building",
+    "seated_sorter",
     "slot_forward",
     "slot_offset",
     "sorter_yaw",
@@ -510,6 +511,80 @@ def _centre(b: PlacedBuilding) -> tuple[float, float]:
     (``test_no_catalog_footprint_is_even`` keeps it that way), so this is exact.
     """
     return (b.x + (b.width - 1) / 2, b.y + (b.height - 1) / 2)
+
+
+def seated_sorter(
+    sorter: PlacedBuilding, buildings: Sequence[PlacedBuilding]
+) -> colliders.SorterPreview | None:
+    """One sorter where the PASTE will put it, not where we wrote it.
+
+    ``BlueprintUtils.RefreshBuildPreview`` (2090-2190 of the decompiled
+    ``BlueprintUtils``) moves a sorter's end onto the slot pose it names before
+    any build condition is evaluated::
+
+        Pose pose = buildPreview2.input.desc.slotPoses[buildPreview2.inputFromSlot];
+        Pose transformedBy = pose.GetTransformedBy(
+            new Pose(buildPreview2.input.lpos, buildPreview2.input.lrot));
+        buildPreview2.lpos = transformedBy.position;
+
+    -- guarded by ``!buildPreview2.input.desc.isBelt``, and the same again for
+    ``lpos2`` against ``outputToSlot``.  So the machine end of every sorter we
+    emit is MOVED, typically by a tenth of a tile off the tile centre we chose,
+    and the slot INDEX is what decides where it lands.  Any geometry question
+    about a sorter -- reach, skew, collision -- has to be asked about the seated
+    sorter or it is a question about a building the game will not create.
+
+    ``None`` when the sorter has no second anchor, which
+    ``sorter.anchors_present`` reports by name.
+
+    ONE TERM IS LEFT OUT, and it is named on
+    :func:`flab2bp.dsp.colliders.sorter_collisions`: when the OTHER end is a
+    belt lying across the sorter, the game drags that end sideways by the
+    seating delta.  It is bounded by the delta, and on the blueprint this was
+    built for it moves the collision depth from 0.300 to 0.263 units without
+    changing a verdict.
+    """
+    if sorter.x2 is None or sorter.y2 is None or sorter.z2 is None:
+        return None
+    ends = [
+        [float(sorter.x), float(sorter.y), float(sorter.z)],
+        [float(sorter.x2), float(sorter.y2), float(sorter.z2)],
+    ]
+    # True where the game's own branch is true: the end meets a belt, or meets
+    # nothing.  Both grow the collider; a machine end does not.
+    open_end = [True, True]
+    for k, (link, slot) in enumerate(
+        (
+            (sorter.input_obj, sorter.input_from_slot),
+            (sorter.output_obj, sorter.output_to_slot),
+        )
+    ):
+        if link is None or not 0 <= link < len(buildings):
+            continue
+        peer = buildings[link]
+        if cat.is_belt(peer.item_id):
+            continue
+        open_end[k] = False
+        poses = cat.building(peer.item_id).slot_poses
+        if not 0 <= slot < len(poses):
+            # ``slotPoses.Length > otherSlot`` -- the game skips the seat too,
+            # and leaves the end on the record.  `game.inserter_data` is what
+            # reports a slot the peer does not define.
+            continue
+        dx, dy, dz = slot_offset(peer.item_id, peer.yaw, slot)
+        cx, cy = _centre(peer)
+        ends[k] = [cx + dx, cy + dy, float(peer.z) + dz]
+    return colliders.SorterPreview(
+        sorter.model_index,
+        ends[0][0],
+        ends[0][1],
+        ends[0][2],
+        ends[1][0],
+        ends[1][1],
+        ends[1][2],
+        open_end[0],
+        open_end[1],
+    )
 
 
 def _peer_slot(

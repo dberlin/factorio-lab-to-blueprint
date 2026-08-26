@@ -8,11 +8,15 @@ blueprint the model flags convicts the model, not the blueprint.
 
 from __future__ import annotations
 
+import pathlib
+from collections.abc import Sequence
+
 import pytest
 
 from flab2bp.dsp import catalog as cat
 from flab2bp.dsp import colliders as C
 from flab2bp.dsp.codec import decode
+from flab2bp.dsp.records import BlueprintBuilding
 
 from .conftest import fixture_text
 
@@ -566,3 +570,241 @@ def test_the_keep_out_agrees_with_the_verdict_it_is_derived_from() -> None:
                     ]
                 )
                 assert bool(hits) == ((dx, dy, dz) in keep), (dx, dy, dz, hits)
+
+
+# --- sorter on sorter -------------------------------------------------------
+#
+# The one pairing the paste's excusal does not forgive.  See
+# ``colliders.sorter_collisions`` for the C# and for why this is the ONLY
+# collision a sorter can score.
+
+#: The blueprint the user pasted and the game refused with "Collide with other
+#: object", drawn red on exactly two clusters.  It is a fixture rather than a
+#: regenerated case because CP-SAT does not reproduce it on demand: six straight
+#: regenerations of the same spec did not.
+#:
+#: It lives under ``fixtures/ours/`` and NOT beside the game's blueprints, and
+#: that separation is load-bearing: everything in ``fixtures/`` is evidence
+#: about what the GAME does, and several tests derive corpus-wide statements by
+#: globbing that directory.  A blueprint we wrote -- an INVALID one, at that --
+#: standing in that sample would corrupt every one of them.
+_OURS = pathlib.Path(__file__).resolve().parents[1] / "fixtures" / "ours"
+FAILING_PASTE = _OURS / "sorter-collide-freeform.txt"
+
+#: What the GAME actually built from it, blueprinted back out of the save.
+#: 347 buildings against our 352: every belt and every machine, and 33 of
+#: the 38 sorters.  The five it dropped are the answer key.
+BUILT_RESULT = _OURS / "sorter-collide-built.txt"
+
+#: The built blueprint was copied at a different rotation and anchor.  The
+#: transform is exact and was solved against all 17 machines:
+#: a quarter turn, then a translation.  Buildings are also REORDERED, so
+#: nothing may be matched by index.
+def _as_built(x: float, y: float) -> tuple[float, float]:
+    return (y + 3.0, -x + 27.0)
+
+
+def _sorter_previews(
+    buildings: Sequence[BlueprintBuilding],
+) -> list[tuple[int, C.SorterPreview]]:
+    """Every sorter in a decoded blueprint, as the paste's collision test sees it.
+
+    A blueprint the GAME wrote already carries seated ends -- it recorded what it
+    built, and what it built is where ``RefreshBuildPreview`` put it -- so no
+    seating is applied here.  ``validate.game.sorter_collide`` seats, because
+    what WE emit is a tile centre and the paste moves it.
+    """
+    by_index = {b.index: b for b in buildings}
+
+    def is_open(idx: int) -> bool:
+        other = by_index.get(idx)
+        return other is None or cat.is_belt(other.item_id)
+
+    return [
+        (
+            b.index,
+            C.SorterPreview(
+                cat.building(b.item_id).model_index,
+                b.x, b.y, b.z, b.x2, b.y2, b.z2,
+                is_open(b.input_obj_idx),
+                is_open(b.output_obj_idx),
+            ),
+        )
+        for b in buildings
+        if cat.is_sorter(b.item_id)
+    ]
+
+
+def test_sorter_collisions_are_absent_from_the_games_own_blueprints() -> None:
+    """The counter-measurement, and the proof that it is not vacuous.
+
+    Zero pairs over the whole single-area corpus.  A sample that could not have
+    shown otherwise would be worthless, so the two shapes a coarser rule WOULD
+    have banned are counted here as well: the same 1132 sorters overlap one
+    another's plan tiles 53 times and include belt-to-belt sorters.  Both are
+    legal, both are common, and both survive this predicate untouched -- what
+    separates them from the failing paste is the box, not the topology.
+    """
+    total = shared_tiles = belt_to_belt = hits = 0
+    for name in SINGLE_AREA_FIXTURES:
+        buildings = decode(fixture_text(name)).buildings
+        by_index = {b.index: b for b in buildings}
+        previews = _sorter_previews(buildings)
+        total += len(previews)
+        hits += len(C.sorter_collisions([p for _i, p in previews]))
+
+        sorters = [b for b in buildings if cat.is_sorter(b.item_id)]
+        for b in sorters:
+            src, dst = by_index.get(b.input_obj_idx), by_index.get(b.output_obj_idx)
+            if src is not None and dst is not None:
+                belt_to_belt += cat.is_belt(src.item_id) and cat.is_belt(dst.item_id)
+
+        def body(b: BlueprintBuilding) -> set[tuple[int, int]]:
+            x1, y1 = round(b.x), round(b.y)
+            x2, y2 = round(b.x2), round(b.y2)
+            steps = max(abs(x2 - x1), abs(y2 - y1)) or 1
+            return {
+                (x1 + (x2 - x1) * k // steps, y1 + (y2 - y1) * k // steps)
+                for k in range(steps + 1)
+            }
+
+        bodies = [body(b) for b in sorters]
+        for i in range(len(bodies)):
+            for j in range(i + 1, len(bodies)):
+                shared_tiles += bool(bodies[i] & bodies[j])
+
+    assert total == 1132, "the sample is the whole single-area corpus"
+    assert shared_tiles >= 53, "sorter bodies DO share tiles in blueprints that paste"
+    assert belt_to_belt >= 4, "belt-to-belt sorters ARE legal"
+    assert hits == 0
+
+
+def test_the_paste_the_game_refused_is_convicted() -> None:
+    """The positive half, against the game's own verdict on a real paste.
+
+    The user pasted this blueprint and the game drew two red clusters, naming
+    ``Collide with other object``.  Those clusters are sorters 46/163 and
+    21/55/162, and this predicate names all three pairs and nothing else out of
+    38 sorters.
+    """
+    previews = _sorter_previews(
+        decode(FAILING_PASTE.read_text(encoding="utf-8")).buildings
+    )
+    named = [
+        (previews[i][0], previews[j][0])
+        for i, j in C.sorter_collisions([p for _i, p in previews])
+    ]
+    assert len(previews) == 38
+    assert named == [(21, 162), (46, 163), (55, 162)]
+
+
+def _straight(span: float, offset: float, *, open_ends: bool) -> C.SorterPreview:
+    """A sorter running north from ``(offset, 0)``, ``span`` tiles long."""
+    return C.SorterPreview(
+        41, offset, 0.0, 0.0, offset, span, 0.0, open_ends, open_ends
+    )
+
+
+def test_the_sorter_box_spans_its_two_ends_and_not_its_record() -> None:
+    """The stretch is the rule; a prefab box at the anchor would say otherwise.
+
+    Two collinear sorters that meet head to tail at a shared tile collide -- that
+    is the failing paste's shape.  The same two moved four tiles apart do not.
+    A model that tested the 0.115-deep prefab box where the record sits would
+    report neither.
+    """
+    meeting = [_straight(2.0, 0.0, open_ends=True)] + [
+        C.SorterPreview(41, 0.0, 2.0, 0.0, 0.0, 4.0, 0.0, True, True)
+    ]
+    assert C.sorter_collisions(meeting) == [(0, 1)]
+
+    apart = [_straight(2.0, 0.0, open_ends=True)] + [
+        C.SorterPreview(41, 0.0, 6.0, 0.0, 0.0, 8.0, 0.0, True, True)
+    ]
+    assert C.sorter_collisions(apart) == []
+
+
+def test_an_end_that_meets_a_machine_does_not_extend() -> None:
+    """``SORTER_END_EXTENSION`` applies to a belt end or an open end, not a machine.
+
+    Two one-tile sorters whose facing ends are 0.4 of a tile apart clear each
+    other when both are seated on machines, and collide when both are belt or
+    open ends -- 0.35 units of growth on each of the four ends is 1.4 units
+    against the 0.503 that separates them.  That asymmetry is the
+    ``ObjectIsBelt`` / ``inputObjId == 0 && input == null`` branch pair, and it
+    is what makes a belt-to-belt hop so much wider than its span.
+    """
+    closed = [
+        C.SorterPreview(41, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, False, False),
+        C.SorterPreview(41, 0.0, 1.4, 0.0, 0.0, 2.4, 0.0, False, False),
+    ]
+    assert C.sorter_collisions(closed) == []
+    opened = [
+        C.SorterPreview(41, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, True, True),
+        C.SorterPreview(41, 0.0, 1.4, 0.0, 0.0, 2.4, 0.0, True, True),
+    ]
+    assert C.sorter_collisions(opened) == [(0, 1)]
+
+
+def test_the_check_names_exactly_the_sorters_the_game_refused_to_build() -> None:
+    """The answer key, from the game itself.
+
+    The user force-built the refused paste and blueprinted the result back out.
+    The game created every one of the 297 belts and all 17 machines, and 33 of
+    the 38 sorters.  It dropped five, and this is the whole labelled sample:
+    five positives and thirty-three negatives, decided by the game rather than
+    by anyone's reading of it.
+
+    The five it dropped are named here by matching each of our sorters against
+    the built blueprint through :func:`_as_built`, on BOTH ends and with a
+    tolerance of 0.8 tiles -- the built ends carry the paste seating, which moved
+    32 of the 33 survivors by 0.57 to 1.22 units.
+
+    This predicate names those five and no others.  It is not a fit to them: it
+    is ``EBuildCondition.Collide``'s own box, and the same predicate is silent
+    on all 1132 sorters of the single-area fixture corpus and on the 33 sorters
+    the game did build here.
+    """
+    ours = decode(FAILING_PASTE.read_text(encoding="utf-8")).buildings
+    built = [
+        b
+        for b in decode(BUILT_RESULT.read_text(encoding="utf-8")).buildings
+        if cat.is_sorter(b.item_id)
+    ]
+    assert len(built) == 33
+
+    refused = set()
+    for b in (s for s in ours if cat.is_sorter(s.item_id)):
+        head, tail = _as_built(b.x, b.y), _as_built(b.x2, b.y2)
+        if not any(
+            max(
+                abs(c.x - head[0]),
+                abs(c.y - head[1]),
+                abs(c.x2 - tail[0]),
+                abs(c.y2 - tail[1]),
+            )
+            < 0.8
+            for c in built
+        ):
+            refused.add(b.index)
+    assert refused == {21, 46, 55, 162, 163}, "the game's own verdict"
+
+    previews = _sorter_previews(ours)
+    convicted = {
+        previews[k][0]
+        for pair in C.sorter_collisions([p for _i, p in previews])
+        for k in pair
+    }
+    assert convicted == refused
+
+
+def test_what_the_game_actually_built_is_clean() -> None:
+    """The negative control with the seating baked in, by the game.
+
+    Every end in the built blueprint is where ``RefreshBuildPreview`` put it,
+    not where we asked.  If the predicate were an artefact of testing unseated
+    tile centres it would still fire here; it does not.
+    """
+    previews = _sorter_previews(decode(BUILT_RESULT.read_text(encoding="utf-8")).buildings)
+    assert len(previews) == 33
+    assert C.sorter_collisions([p for _i, p in previews]) == []
