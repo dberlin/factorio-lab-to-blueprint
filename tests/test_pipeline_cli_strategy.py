@@ -8,8 +8,11 @@ import pytest
 from flab2bp import cli, pipeline
 
 
-def test_cli_passes_exact_sequence_pair_name(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+@pytest.mark.parametrize("strategy", ("spine", "sequence-pair"))
+def test_cli_passes_exact_explicit_strategy_name(
+    strategy: str,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     received: dict[str, Any] = {}
 
@@ -24,8 +27,8 @@ def test_cli_passes_exact_sequence_pair_name(
     monkeypatch.setattr(pipeline, "build", fake_build)
     monkeypatch.setattr(cli, "_report", lambda build, *, verbose: None)
 
-    assert cli.main(["iron-ingot", "--strategy", "sequence-pair", "--no-power"]) == 0
-    assert received["strategy"] == "sequence-pair"
+    assert cli.main(["iron-ingot", "--strategy", strategy, "--no-power"]) == 0
+    assert received["strategy"] == strategy
     assert received["power"] is False
     assert capsys.readouterr().out == "BLUEPRINT\n"
 
@@ -109,7 +112,7 @@ def test_cli_rejects_invalid_sequence_island_use(
     assert exc_info.value.code == 2
 
 
-def test_strategy_help_separates_best_from_experimental_backend(
+def test_strategy_help_separates_best_from_explicit_backends(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     with pytest.raises(SystemExit) as exc_info:
@@ -117,5 +120,6 @@ def test_strategy_help_separates_best_from_experimental_backend(
 
     assert exc_info.value.code == 0
     help_text = " ".join(capsys.readouterr().out.split())
-    assert "best evaluates only spine and freeform" in help_text
+    assert "best temporarily runs only freeform" in help_text
+    assert "spine remains available explicitly" in help_text
     assert "sequence-pair is an explicit experimental/audit backend" in help_text

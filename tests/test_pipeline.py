@@ -51,8 +51,8 @@ def test_every_pair_reports_started_and_then_how_it_ended() -> None:
 
 
 @pytest.mark.slow
-def test_the_index_counts_only_pairs_that_will_actually_run() -> None:
-    """``total`` is a promise about how many reports are coming."""
+def test_best_reports_only_freeform_pairs_while_spine_is_disabled() -> None:
+    """``best`` temporarily resolves to Freeform alone."""
     steps: list[pipeline.AttemptProgress] = []
     pipeline.build(
         SMALL_URL,
@@ -62,11 +62,11 @@ def test_the_index_counts_only_pairs_that_will_actually_run() -> None:
         on_progress=steps.append,
     )
     started = [s for s in steps if s.phase == "started"]
-    # One candidate x both strategies.
-    assert len(started) == 2
-    assert [s.index for s in started] == [1, 2]
-    assert {s.total for s in started} == {2}
-    assert {s.strategy for s in started} == {"spine", "freeform"}
+    # One candidate x the sole production strategy.
+    assert len(started) == 1
+    assert [s.index for s in started] == [1]
+    assert {s.total for s in started} == {1}
+    assert {s.strategy for s in started} == {"freeform"}
 
 
 def test_a_sink_that_raises_is_not_swallowed() -> None:

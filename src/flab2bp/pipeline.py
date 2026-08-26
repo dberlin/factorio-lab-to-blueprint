@@ -47,7 +47,7 @@ STRATEGY_CHOICES: tuple[StrategyName, ...] = (
     "freeform",
     "sequence-pair",
 )
-_PRODUCTION_STRATEGIES: tuple[ExplicitStrategyName, ...] = ("spine", "freeform")
+_PRODUCTION_STRATEGIES: tuple[ExplicitStrategyName, ...] = ("freeform",)
 
 
 def _strategy_names(strategy: StrategyName) -> tuple[ExplicitStrategyName, ...]:

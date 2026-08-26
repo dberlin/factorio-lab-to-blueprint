@@ -133,9 +133,9 @@ def main(argv: list[str] | None = None) -> int:
         "--strategy",
         choices=pipeline.STRATEGY_CHOICES,
         default="best",
-        help="layout backend; best evaluates only spine and freeform and keeps "
-        "the smallest VALID result (default); sequence-pair is an explicit "
-        "experimental/audit backend",
+        help="layout backend; best temporarily runs only freeform (default); "
+        "spine remains available explicitly and sequence-pair remains an "
+        "explicit experimental/audit backend",
     )
     ap.add_argument(
         "--sequence-islands",
