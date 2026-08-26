@@ -44,6 +44,29 @@ always been there, because a test depends on it, or because removing it would
 be a large change. The only evidence that promotes a rule to KEEP is the
 decompiled source, quoted.
 
+### A rule may be a function of technology level. That is not a guess.
+
+A rule whose value depends on researched tech, building tier, or unlock state is
+still a rule with a citation — the citation just resolves to a *table or a
+lookup* rather than a literal. Sorter reach by Mk.I/II/III, belt throughput by
+tier, cargo-stacking research, proliferator tiers: these are real, and flattening
+one to a single constant is itself a form of guessing. It quietly assumes a tech
+level nobody declared.
+
+So a KEEP row records **what the rule depends on**, not only its value. When the
+dependency is tech level, the row must say which tech, where the game reads it,
+and what our current code assumes. Three consequences:
+
+- A constant that is really a tech-indexed lookup is a **defect even when its
+  value happens to be right today** — it is right by coincidence, for one tech
+  level, and silently wrong for the others.
+- Our assumed tech level becomes an explicit, declared input rather than an
+  accident of which literal somebody typed. Where FactorioLab's URL implies a
+  tech level, THE HARD RULE applies: we consume what it chose, we do not pick.
+- REMOVE still means REMOVE. "It varies by tech" is a reason to model the
+  variation, never a reason to keep an invented rule alive on the grounds that
+  it might be real at *some* tech level.
+
 **Where the source is:** `/home/dannyb/.claude/jobs/66c2051c/tmp/poseless/full/`,
 one file per type. Note that the "constant offset of 143582" that circulated on
 this project **is not universally true** — it was measured false for
