@@ -244,7 +244,7 @@ is not the number quoted here.
 **Kind.** Both: a validator rule (`power.*`) and a layout constraint (the tower
 placer must keep a 2.79-tile separation in the equatorial band).
 
-### 2. `OutOfVerticalConstructionHeight = 40` — **fires on 4 splitters in the corpus**
+### 2. `OutOfVerticalConstructionHeight = 40` — **fires on splitters in both corpus passes**
 
 **Where the game sets it.** `BuildTool_BlueprintPaste.cs:2036-2068`:
 
@@ -303,7 +303,7 @@ total across eleven builds — so the rule fires on a small absolute number and 
 is tech and so belongs next to `catalog.belt_max_z`) and a layout constraint
 (the junction placer must not put a splitter above z = 2 without the unlock).
 
-### 3. `BlueprintNeedTech = 52` — **every corpus build but one exceeds the first unlock**
+### 3. `BlueprintNeedTech = 52` — **9 of 11 corpus builds exceed the first unlock**
 
 **Where the game sets it.** `BuildTool_BlueprintPaste.cs:1113-1131`, inside
 `CheckBuildConditionsPrestage`, which `return false`s — this refuses the **whole
@@ -488,7 +488,7 @@ ground, not a check.
 
 ---
 
-## IMPLEMENTED — 10 rows
+## IMPLEMENTED — 9 in the count, 11 rows here
 
 | # | condition | where the game sets it (paste path only) | our model |
 |---|---|---|---|
