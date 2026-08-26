@@ -15,10 +15,10 @@ have is a silently different linear program, and a missing method is a much
 better outcome than a plausible wrong answer.
 
 The linear-expression algebra is the one genuinely reimplemented part.
-``tests/web/test_pyshim_mp.py`` builds the same programs through this module
-and through the real ``pywraplp``, exports both models, and asserts they are
-the same linear program -- so a divergence in the algebra is a test failure
-and not a quietly different factory.
+``tests/clientside/test_ortools_shim.py`` builds the same programs through
+this module and through the real ``pywraplp``, exports both models, and
+asserts they are byte-identical protos -- so a divergence in the algebra is a
+test failure and not a quietly different factory.
 
 Expressions are keyed by variable *index*, never by the ``Variable`` object.
 ``Variable.__eq__`` builds a constraint rather than answering a question, so a
@@ -27,6 +27,7 @@ Expressions are keyed by variable *index*, never by the ``Variable`` object.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Iterable
 
 from ortools import _wasm_bridge
@@ -34,7 +35,10 @@ from ortools.linear_solver import linear_solver_pb2 as pb
 
 __all__ = ["Solver"]
 
-INFINITY = 1.7976931348623157e308
+#: MPSolver's infinity is a real IEEE infinity, not DBL_MAX.  Writing DBL_MAX
+#: into the proto is not wrong arithmetically but it is a *different* bound
+#: than the one real pywraplp writes, and the differential test says so.
+INFINITY = math.inf
 
 #: ortools' own name -> ``MPModelRequest.SolverType``.  Only the ones the wasm
 #: build actually has are listed; asking for anything else returns ``None``
@@ -223,7 +227,10 @@ class Solver:
                 f"not {type(constraint).__name__}"
             )
         proto = self._model.constraint.add()
-        proto.name = name
+        # Real pywraplp auto-names an unnamed constraint; matching it keeps the
+        # two models byte-comparable in the differential test.
+        proto.name = name or f"auto_c_{len(self._model.constraint) - 1:09d}"
+        proto.is_lazy = False
         proto.lower_bound = constraint.lower_bound
         proto.upper_bound = constraint.upper_bound
         for index, coefficient in sorted(constraint.expression.terms.items()):
@@ -249,9 +256,12 @@ class Solver:
     def _set_objective(self, expression: LinearExpr | float, *, maximize: bool) -> None:
         expr = LinearExpr._coerce(expression)
         for variable in self._model.variable:
-            variable.objective_coefficient = 0.0
+            # Cleared, not zeroed: the field has explicit presence, and a
+            # present 0.0 is a different proto from an absent one.
+            variable.ClearField("objective_coefficient")
         for index, coefficient in expr.terms.items():
-            self._model.variable[index].objective_coefficient = coefficient
+            if coefficient:
+                self._model.variable[index].objective_coefficient = coefficient
         self._model.objective_offset = expr.constant
         self._model.maximize = maximize
 

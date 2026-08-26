@@ -25,12 +25,17 @@ import sys
 from pathlib import Path
 
 import pytest
-from google.protobuf import text_format
-from ortools.linear_solver import linear_solver_pb2
+
+# Neither protobuf nor ortools ships type information, matching how the rest
+# of this project imports them.
+from google.protobuf import text_format  # type: ignore[import-untyped]
+from ortools.linear_solver import linear_solver_pb2  # type: ignore[import-untyped]
 from ortools.linear_solver import pywraplp as native_pywraplp
 from ortools.sat import cp_model_pb2
 from ortools.sat.python import cp_model as native_cp_model
-from ortools.util.python import sorted_interval_list as native_domain
+from ortools.util.python import (
+    sorted_interval_list as native_domain,  # type: ignore[import-untyped]
+)
 
 from tests.clientside import _shim_child
 

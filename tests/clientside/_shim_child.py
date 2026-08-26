@@ -9,9 +9,11 @@ cross back.
 from __future__ import annotations
 
 import base64
+import importlib
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 SHIM = Path(__file__).resolve().parents[2] / "web" / "pyshim"
 
@@ -22,8 +24,18 @@ def _install_shim() -> None:
         del sys.modules[name]
 
 
+def _module(name: str) -> Any:
+    """Import by name, deliberately untyped.
+
+    Every ortools module here is the *shim's*, which is a different library
+    from the one installed in this environment -- so there is nothing sensible
+    for a type checker to resolve them against.
+    """
+    return importlib.import_module(name)
+
+
 def cp_sat_model() -> str:
-    from ortools.sat.python import cp_model
+    cp_model = _module("ortools.sat.python.cp_model")
 
     assert str(SHIM) in cp_model.__file__, cp_model.__file__
     model = _build_cp_sat(cp_model)
@@ -31,7 +43,7 @@ def cp_sat_model() -> str:
 
 
 def mp_model() -> str:
-    from ortools.linear_solver import pywraplp
+    pywraplp = _module("ortools.linear_solver.pywraplp")
 
     assert str(SHIM) in pywraplp.__file__, pywraplp.__file__
     solver = _build_mp(pywraplp)
@@ -39,8 +51,8 @@ def mp_model() -> str:
 
 
 def helpers() -> dict[str, object]:
-    from ortools.sat.python import cp_model_helper as cmh
-    from ortools.util.python import sorted_interval_list as sil
+    cmh = _module("ortools.sat.python.cp_model_helper")
+    sil = _module("ortools.util.python.sorted_interval_list")
 
     domains = {
         "merge_adjacent": sil.Domain.from_intervals([[1, 2], [3, 4], [9, 9]]).flattened_intervals(),
@@ -74,7 +86,7 @@ def helpers() -> dict[str, object]:
     return {"domains": domains, "numeric": numeric}
 
 
-def _build_cp_sat(cp_model):  # noqa: ANN001, ANN202 - one module, two versions
+def _build_cp_sat(cp_model: Any) -> Any:
     """The constraint kinds flab2bp actually uses, in one model."""
     model = cp_model.CpModel()
     xs = [model.new_int_var(0, 40, f"x{i}") for i in range(4)]
@@ -105,7 +117,7 @@ def _build_cp_sat(cp_model):  # noqa: ANN001, ANN202 - one module, two versions
     return model
 
 
-def _build_mp(pywraplp):  # noqa: ANN001, ANN202
+def _build_mp(pywraplp: Any) -> Any:
     """The shape ``flab2bp.rates.solve`` builds: rates, counts, balances."""
     solver = pywraplp.Solver.CreateSolver("SCIP")
     assert solver is not None
@@ -119,7 +131,7 @@ def _build_mp(pywraplp):  # noqa: ANN001, ANN202
         solver.Add(machine - 100000 * flag <= 0)
     solver.Add(solver.Sum(flags) <= 1)
 
-    expr = None
+    expr: Any = None
     for craft, net in zip(crafts, (2.0, -1.0, 0.5), strict=True):
         term = net * craft
         expr = term if expr is None else expr + term

@@ -4,8 +4,10 @@
 proto-building, but it calls out to this module for eight numeric predicates
 that upstream implements in C++ purely for speed.  There is no algorithm here
 to get subtly wrong -- each one is a range check or an equality test -- and
-``tests/web/test_pyshim_helpers.py`` pins every one of them against the real
-pybind module, so a divergence is a test failure rather than a wrong blueprint.
+``tests/clientside/test_ortools_shim.py`` pins them, and pins the whole model
+the vendored ``cp_model.py`` builds through them against the model the
+installed ortools builds, so a divergence is a test failure rather than a
+wrong blueprint.
 
 The one that carries any weight is ``capped_subtraction``: CP-SAT uses int64
 saturation, not Python's unbounded integers, and a domain bound that silently

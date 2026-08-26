@@ -6,8 +6,8 @@ thing that matters here -- turning ``lb <= expr <= ub`` into the flat
 ``[lb, ub, ...]`` list a ``LinearConstraintProto`` carries -- but it is a real
 set type and getting the normalisation wrong would silently widen or narrow a
 constraint.  So it is a real set type here too: construction merges and sorts,
-and ``tests/web/test_pyshim_helpers.py`` pins the result against the C++ one
-over a spread of overlapping, touching and disjoint inputs.
+and ``tests/clientside/test_ortools_shim.py`` pins the result against the C++
+one over a spread of overlapping, touching and disjoint inputs.
 
 Bounds saturate at int64 rather than growing, matching the C++ type.
 """

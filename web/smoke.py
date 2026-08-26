@@ -16,8 +16,13 @@ What it asserts, in order:
    read back out of the browser, not out of a variable we hoped matched.
 4. That exact string decodes with ``flab2bp.dsp.codec.decode`` *in native
    Python*, carries buildings, and re-encodes to itself.
-5. Nothing but static files was ever requested.  Two independent witnesses:
-   Chrome's own network log via CDP, and the static server's request log.
+5. Nothing but static files was ever requested.  Three witnesses, of which the
+   first is the one that could have falsified the claim: the browser runs with
+   every hostname blackholed, so any dependency on a CDN, an API or
+   FactorioLab itself would have failed the solve outright; the static server
+   logs every request it answered; and Chrome's CDP network log is captured
+   too, though it only covers the top-level document -- the worker and the
+   wasm runtimes' own workers are separate CDP targets it does not see.
 6. The viewer drew a real SVG.
 
 ``--refusal`` runs the same flow against a URL the pipeline refuses, so the
@@ -133,6 +138,18 @@ async def drive(args: argparse.Namespace) -> dict[str, object]:
                 # the write the button performs needs no permission.
                 "--enable-features=WebAssemblyJSPromiseIntegration",
                 f"--unsafely-treat-insecure-origin-as-secure=http://127.0.0.1:{args.port}",
+                # The strongest form of "no server solved this": every hostname
+                # in the browser is a dead end. Only the literal 127.0.0.1 our
+                # static server listens on is reachable, because an IP literal
+                # never goes through the resolver. If the page needed a CDN, an
+                # API or FactorioLab itself, it would fail here rather than
+                # quietly succeed and leave the claim resting on a log.
+                # Both EXCLUDEs are load-bearing. `MAP *` matches IP literals
+                # too, so without them neither the driver's DevTools connection
+                # nor the page's own origin resolves, and the run hangs before
+                # anything has loaded -- which would look like a pass with an
+                # empty request log rather than the failure it is.
+                "--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost, EXCLUDE 127.0.0.1",
             ],
         )
         try:
@@ -140,20 +157,26 @@ async def drive(args: argparse.Namespace) -> dict[str, object]:
 
             origin = f"http://127.0.0.1:{args.port}"
             base = origin + "/app.html"
-            # Headless Chrome refuses clipboard access unless it is granted; the
-            # *write* the button performs is what we are testing, and reading it
-            # back afterwards is how we check the button did it.
-            await browser.connection.send(
-                cdp.browser.grant_permissions(
-                    [
-                        cdp.browser.PermissionType.CLIPBOARD_READ_WRITE,
-                        cdp.browser.PermissionType.CLIPBOARD_SANITIZED_WRITE,
-                    ],
-                    origin=origin,
-                )
-            )
 
             page = await browser.get(base)
+            # `navigator.clipboard.writeText` needs two things headless Chrome
+            # does not give by default: the permission, and a focused document.
+            # Both are granted here so that a failure to copy means the button
+            # is broken rather than that the harness never let it work.
+            try:
+                await page.send(
+                    cdp.browser.grant_permissions(
+                        [
+                            cdp.browser.PermissionType.CLIPBOARD_READ_WRITE,
+                            cdp.browser.PermissionType.CLIPBOARD_SANITIZED_WRITE,
+                        ],
+                        origin=origin,
+                    )
+                )
+            except Exception as error:  # noqa: BLE001 - reported, and focus alone may do
+                report["permissionGrant"] = str(error)
+            await page.send(cdp.emulation.set_focus_emulation_enabled(True))
+            await page.bring_to_front()
             seen: list[str] = []
             console: list[str] = []
             await instrument(page, cdp, seen, console)
@@ -171,6 +194,8 @@ async def drive(args: argparse.Namespace) -> dict[str, object]:
             boot_started = time.perf_counter()
             page = await browser.get(base)
             await instrument(page, cdp, seen, console)
+            await page.send(cdp.emulation.set_focus_emulation_enabled(True))
+            await page.bring_to_front()
 
             await wait_for(page, "window.__flab && window.__flab.ready === true", args.boot_timeout)
             report["bootSeconds"] = round(time.perf_counter() - boot_started, 1)
