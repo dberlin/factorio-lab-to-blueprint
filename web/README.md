@@ -78,23 +78,70 @@ constraint in one line.
 
 ## Measured
 
-Machine: 128 logical cores, Chromium 151, Pyodide 0.28.3, or-tools-wasm 0.9.1.
-**Every number below was taken while three other agents were building and
-solving on the same box (load average 20-40).**  They are honest for this
-machine under that load and are not clean-room figures; the native baseline in
-the paired comparison was taken the same way.
+Machine: 128 logical cores, Chromium 151, Pyodide 0.28.3, or-tools-wasm 0.9.1,
+Linux.  The paired runs below were taken back to back on a quiet box -- native
+CP-SAT reached 2742% CPU, i.e. about 27 cores, during them.  Read the ratio,
+not the absolute seconds: under contention both arms slow down, but not by the
+same factor, because only one of them can use the whole machine.
 
 ### Cold payload
 
-@@COLD_PAYLOAD@@
+**54.98 MB over 33 files**, measured by the static server's own byte tally for
+one cold load with `Cache-Control: no-store`.  Where it goes:
+
+| MB | file |
+|-----:|------|
+| 18.52 | `mp_solver_runtime.wasm` (SCIP, for the rate MILP) |
+| 8.25 | `pyodide.asm.wasm` (CPython) |
+| 7.10 | `cp_sat_runtime.wasm` (CP-SAT, for layout) |
+| 5.05 | `pandas` |
+| 3.93 | `sympy` |
+| 2.97 | `numpy` |
+| 2.30 | `python_stdlib.zip` |
+| 1.28 | `pydantic_core` |
+| 1.02 | `pyodide.asm.js` |
+| 0.95 | `mp_solver_runtime.js` |
+| 0.76 | `cp_sat_runtime.js` |
+| 0.49 | `pytz` |
+| 0.47 | flab2bp's own wheel, vendored dataset included |
+
+Nothing here is gzipped by `serve.py`; a real static host would compress the
+`.js` and the wheels, though not usefully the two `.wasm` files.  `pandas` and
+`numpy` are there only because ortools' own `cp_model.py` imports them at
+module level; `sympy` is the rate stage's exact-rational LP.  The three biggest
+items -- 33.9 MB of wasm -- are the price of running two real solvers.
 
 ### Cold boot to first interactive
 
-@@BOOT@@
+**10-15 s**, cold, from navigation to the Solve button enabling.  Three runs:
+14.1 s, 10.1 s, 11.1 s.  Broken down on the 14.1 s one: Pyodide 2.1 s, the
+thirteen wheels 2.2 s, then 9.7 s for unpacking the shim, `micropip`-installing
+flab2bp's wheel and importing it.  That last figure is dominated by importing
+flab2bp itself -- `layout/freeform.py` alone is 378 KB of Python.
 
 ### Solve, paired with native, same URL and same options
 
-@@SOLVE@@
+`--strategy best --candidates 3 --budget 2`, the user's own space-warper URL,
+three pairs run alternately on the same machine:
+
+| run | native wall | browser solve | native area | browser area | native buildings | browser buildings |
+|----:|-----------:|--------------:|------------:|-------------:|-----------------:|------------------:|
+| 1 | 36.4 s | 70.5 s | 1254 | 1456 | 717 | 803 |
+| 2 | 22.7 s | 69.6 s | 1170 | 1276 | 723 | 897 |
+| 3 | 21.5 s | 62.4 s | 1232 | 1540 | 714 | 809 |
+
+Median 22.7 s native against 69.6 s in the browser: **about 3x slower**, and
+the browser figure excludes the 10-15 s boot, which a user pays once per page
+load rather than once per solve.
+
+**The browser also builds a bigger factory.**  Every run of both arms picked
+`freeform / max-proliferation` with 15 machines and validated with zero errors,
+but the browser's areas (1276-1540) are consistently larger than the native
+ones (1170-1254) -- 4% to 25% worse.  That is not a bug, it is the four-worker
+cap below: `--budget 2` is a wall-clock budget, so fewer search workers means
+less search inside the same two seconds, and CP-SAT returns the best packing it
+found rather than the best that exists.  Raising `--budget` narrows the gap and
+costs wall clock; it is the honest lever, and the page exposes it.
 
 ### Threading
 
@@ -104,6 +151,11 @@ build time, so however many cores the machine has -- 128 here, and
 at most four search workers in the browser.  The server log shows it directly:
 `cp_sat_runtime.js` is fetched five times per solve, once for the module and
 once for each pool worker.
+
+That is the single biggest difference between the two arms.  Native CP-SAT on
+this machine runs at ~2742% CPU -- about 27 cores; the browser is capped at
+four by a build-time constant in somebody else's npm package.  Changing it
+means rebuilding or-tools for wasm, not configuring anything.
 
 That pool needs `SharedArrayBuffer`, which needs cross-origin isolation.  A
 shared `WebAssembly.Memory` can be *constructed* without isolation but cannot
@@ -118,6 +170,26 @@ on the second.  `web/smoke.py --no-isolation` serves without COOP/COEP -- the
 way GitHub Pages does -- and drives that path.
 
 @@ISOLATION@@
+
+## Proving no server solved it
+
+`smoke.py` asserts this three ways, and the first one could have failed:
+
+1. **The browser runs with every hostname blackholed**
+   (`--host-resolver-rules=MAP * ~NOTFOUND`, excluding only `localhost` and
+   `127.0.0.1` so the driver and the page's own origin still resolve).  A
+   dependency on a CDN, an API, or FactorioLab itself would have failed the
+   solve outright rather than leaving the claim resting on a log.  The solve
+   passed under it.
+2. **The static server logs every request it answered.**  A full run is 41
+   requests, all of them files -- `app.html`, `worker.js`, `bootstrap.py`, the
+   Pyodide core and wheels, the two `.wasm` runtimes, `pyshim.zip` and the
+   flab2bp wheel.  `serve.py` has no POST handler; a POST is logged and
+   answered `405`.
+3. **Chrome's own CDP network log** is captured, and contains nothing
+   off-origin.  This is the weakest of the three and is reported as such: the
+   log only covers the top-level document, because the Web Worker and the wasm
+   runtimes' pool workers are separate CDP targets it does not attach to.
 
 ## What does not work here
 
