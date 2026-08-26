@@ -421,6 +421,29 @@ Mutation-checked — moving the constant to 3.2 convicts 178.
 
 ---
 
+# 5d. Clause 4 — every rule constant in `dsp/` now has a reader
+
+The plan's clause 4 ("a constant with no readers is an unported rule wearing a
+ported rule's clothes") was failing on three constants at the start of this
+phase: `BEND_MIN_ANGLE_WHEN_SLOPED_RAD`, `SLOPE_DEADZONE` and
+`ADDON_TURRET_AXIS_DEG`. The first two now have `rules.too_bend_to_lift` and
+`tests/dsp/test_rules.py`.
+
+**`ADDON_TURRET_AXIS_DEG = 18.0` still has no code reader, and that is correct.**
+It is the turret's value of the same `BuildTool_Addon.cs:877` ternary that gives
+`ADDON_AXIS_DEG` its 20.5; `rules.addon_axis_aligned` takes the limit as a
+parameter, so the turret value is reachable but never passed, because **we never
+place a turret**. Keeping it is what makes the ported ternary complete rather
+than half-quoted — the same reason `PASTE_LATERAL` is kept although it is
+unreachable for anything but a silo. Recorded here so that a registry test (Step
+R2, another agent's) knows it is a deliberate exemption with a reason, not a hole.
+
+That distinction matters and my own check nearly missed it: a naive "is the name
+mentioned anywhere else" scan passes on a docstring mention. Clause 4 wants a
+constant *consulted*, and only R2's registry test can assert that properly.
+
+---
+
 # 6. OPEN — reported, not parked
 
 1. **How much does one Vertical Construction level raise `labLevel`?**
