@@ -2676,6 +2676,12 @@ def decode_fixture_to_placement(name: str) -> Placement:
     of the stripping rather than of the rule.  A link into something this drops
     (a sorter, a belt addon) becomes ``None``, which is the honest reading -- the
     game would see the preview and this placement does not contain it.
+
+    THE SLOT FIELDS COME ACROSS TOO.  They used to be dropped, which left every
+    link reading as slot 0 -- and slot 0 of a Ray Receiver is a real port, so a
+    belt drawing from the station's south port arrived here claiming its north
+    one and ``belt.port_dock`` convicted a blueprint the game wrote.  A link
+    without its index is not a faithful copy of the record.
     """
     from flab2bp.dsp import catalog
     from flab2bp.dsp.codec import decode
@@ -2707,6 +2713,10 @@ def decode_fixture_to_placement(name: str) -> Placement:
                 height=info.height,
                 output_obj=keep.get(b.output_obj_idx),
                 input_obj=keep.get(b.input_obj_idx),
+                output_to_slot=b.output_to_slot,
+                input_from_slot=b.input_from_slot,
+                output_from_slot=b.output_from_slot,
+                input_to_slot=b.input_to_slot,
             )
         )
     return Placement(buildings=tuple(out))
@@ -4238,3 +4248,285 @@ def test_sprayed_cargo_still_fires_across_a_hop_with_no_coater_anywhere() -> Non
     """Without this the clause above could be passing by switching the check off."""
     r = validate(_hop_scene(coated=False), _sprayed_spec(), ids=_SPRAYED_IDS)
     assert fired(r, SPRAYED_REACHES), errors(r)
+# --- belt.port_dock: the connection a Ray Receiver takes ---------------------
+#
+# A Ray Receiver's prefab ships ZERO insert poses and two belt PORTS.  Nothing
+# else in this file looks at the resulting connection: `belt.link_adjacent`
+# reads `output_obj` only, and a belt DRAWING from a machine sets `input_obj`.
+
+
+def receiver(x: int, y: int) -> PlacedBuilding:
+    b = catalog_building(RAY_RECEIVER_ID)
+    return PlacedBuilding(
+        item_id=RAY_RECEIVER_ID,
+        model_index=b.model_index,
+        x=x,
+        y=y,
+        width=b.width,
+        height=b.height,
+        recipe_id=1,
+    )
+
+
+def docked(
+    x: int,
+    y: int,
+    peer: int,
+    port: int,
+    *,
+    out: int | None = None,
+    draws: bool = True,
+) -> PlacedBuilding:
+    """A belt carrying the corpus's own belt-to-port record."""
+    from flab2bp.dsp.rules import BELT_PORT_DRAW_TO_SLOT, BELT_PORT_FEED_FROM_SLOT
+
+    if draws:
+        return PlacedBuilding(
+            item_id=BELT2,
+            model_index=36,
+            x=x,
+            y=y,
+            input_obj=peer,
+            input_from_slot=port,
+            input_to_slot=BELT_PORT_DRAW_TO_SLOT,
+            output_obj=out,
+        )
+    return PlacedBuilding(
+        item_id=BELT2,
+        model_index=36,
+        x=x,
+        y=y,
+        output_obj=peer,
+        output_to_slot=port,
+        output_from_slot=BELT_PORT_FEED_FROM_SLOT,
+    )
+
+
+def test_belt_port_dock_clean_on_the_shape_the_corpus_writes() -> None:
+    """A Ray Receiver at (0,0) is 7x7, so its centre is (3,3).
+
+    Port 0 sits at model ``(0, 0, 1.41)``, which is 1.122 tiles north, so the
+    tile nearest the pose is ``(3, 4)`` -- INSIDE the footprint, which is where
+    the game puts it and what this check has to accept.
+    """
+    p = Placement(buildings=(receiver(0, 0), docked(3, 4, 0, 0)))
+    r = validate(p, only={"belt.port_dock"})
+    assert not fired(r, "belt.port_dock"), errors(r)
+
+
+def test_belt_port_dock_fires_on_a_building_with_no_port_at_all() -> None:
+    """An Assembling Machine takes sorters and nothing else.
+
+    ``BuildTool_Path`` drops a cast target whose ``portPoses`` is empty, so the
+    record describes a connection that cannot exist and the lane stops there.
+    """
+    p = Placement(buildings=(machine(0, 0), docked(2, 2, 0, 0)))
+    r = validate(p, only={"belt.port_dock"})
+    assert fired(r, "belt.port_dock")
+    assert "no belt port at all" in r.by_check("belt.port_dock")[0].message
+
+
+def test_belt_port_dock_fires_on_an_index_off_the_end_of_port_poses() -> None:
+    """A Ray Receiver defines TWO ports, so port 4 is not a pose.
+
+    The index is a subscript into ``PrefabDesc.portPoses``; past its length the
+    game reads nothing.
+    """
+    p = Placement(buildings=(receiver(0, 0), docked(3, 4, 0, 4)))
+    r = validate(p, only={"belt.port_dock"})
+    assert fired(r, "belt.port_dock")
+    assert "off the end" in r.by_check("belt.port_dock")[0].message
+
+
+def test_belt_port_dock_fires_when_the_belt_is_not_on_the_port() -> None:
+    """Naming the north port from the south side of the building.
+
+    Port 0 is 1.12 tiles north of the centre and this belt is two tiles SOUTH
+    of it, so the gap is over three tiles -- four times anything the game's own
+    blueprints write.
+    """
+    p = Placement(buildings=(receiver(0, 0), docked(3, 1, 0, 0)))
+    r = validate(p, only={"belt.port_dock"})
+    assert fired(r, "belt.port_dock")
+    assert "not touching the port" in r.by_check("belt.port_dock")[0].message
+
+
+def test_belt_port_dock_fires_on_the_wrong_own_slot() -> None:
+    """The belt's own end of the connection is a pool cell too.
+
+    ``input_to_slot`` is 1 on all 108 drawing records in the fixture corpus.
+    Writing 0 there puts the port link in the cell the belt's OUTPUT link lives
+    in, which is the same defect ``slots.assign_belt_slots`` exists to prevent
+    between two belts.
+    """
+    wrong = dataclasses.replace(docked(3, 4, 0, 0), input_to_slot=0)
+    p = Placement(buildings=(receiver(0, 0), wrong))
+    r = validate(p, only={"belt.port_dock"})
+    assert fired(r, "belt.port_dock")
+    assert "input_to_slot = 0" in r.by_check("belt.port_dock")[0].message
+
+
+def test_belt_port_dock_fires_when_a_feeder_takes_the_docked_belt_s_own_slot() -> None:
+    """``entityConnPool[objId * 16 + slot]`` is one cell, and this names it twice.
+
+    ``game.slot_occupancy`` cannot see this: it keys on the PEER side of every
+    record, and both of these name a different peer -- the dock names the Ray
+    Receiver, the feeder names the belt.  The clash is on the BELT, which is the
+    peer of only one of them.
+    """
+    p = Placement(
+        buildings=(
+            receiver(0, 0),
+            docked(3, 4, 0, 0),
+            belt(3, 5, out=1),  # feeds belt 1, and assign_belt_slots gave it slot 1
+        )
+    )
+    hand = Placement(
+        buildings=(
+            p.buildings[0],
+            p.buildings[1],
+            dataclasses.replace(p.buildings[2], output_to_slot=1),
+        )
+    )
+    r = validate(hand, only={"belt.port_dock"})
+    assert fired(r, "belt.port_dock")
+    assert "already spends that slot" in r.by_check("belt.port_dock")[-1].message
+    assert not fired(validate(hand, only={"game.slot_occupancy"}), "game.slot_occupancy")
+
+
+def test_assign_belt_slots_never_hands_out_a_docked_belt_s_own_slot() -> None:
+    """The emitter's half of the rule above, so the check has nothing to find.
+
+    A belt that draws from a port has spent its own slot 1.  The feeder must be
+    given 2.
+    """
+    from flab2bp.layout.slots import assign_belt_slots
+
+    out = assign_belt_slots((receiver(0, 0), docked(3, 4, 0, 0), belt(3, 5, out=1)))
+    assert out[1].input_to_slot == 1
+    assert out[2].output_to_slot == 2, "slot 1 of the docked belt is already spent"
+
+
+@pytest.mark.parametrize("name", GEOMETRY_CORPUS)
+def test_real_blueprints_pass_belt_port_dock(name: str) -> None:
+    """Negative control: the game's own belt-to-port records must survive.
+
+    Only the single-area fixtures.  A multi-area blueprint stores ``localOffset``
+    per AREA, so a flat read subtracts coordinates from different frames and
+    every gap over one tile in the corpus is one of those -- which is the same
+    reason ``rules.BELT_PORT_MAX_TILE_GAP`` was measured on this subset.
+    """
+    p = decode_fixture_to_placement(name)
+    r = validate(p, only={"belt.port_dock"})
+    assert not r.by_check("belt.port_dock"), [f.message for f in r.findings[:5]]
+
+
+def test_the_port_dock_control_is_not_vacuous() -> None:
+    """The control fixtures really do contain belt-to-port records.
+
+    Without this the negative control above would pass on blueprints holding no
+    dock at all.  Counted through the validator's own reader, so a helper that
+    stopped seeing docks would fail here rather than pass silently there.
+    """
+    from flab2bp.layout.validate import _port_docks
+
+    total = 0
+    for name in GEOMETRY_CORPUS:
+        p = decode_fixture_to_placement(name)
+        ctx = _context(p, None, None, 256, DEFAULT_MAX_BELT_Z, False)
+        total += len(_port_docks(ctx))
+    assert total >= 10, total
+
+
+def test_assign_belt_slots_writes_the_docked_belt_s_own_slot() -> None:
+    """The emitter hands over a bare dock; the slot table fills the belt's end.
+
+    ``slots.assign_belt_slots`` is the single owner of every belt-side slot
+    index in this project, which is what keeps the pool's one-connection-per-cell
+    rule stated once.  A dock arrives carrying ``input_obj`` and the port index
+    and nothing else.
+    """
+    from flab2bp.layout.slots import assign_belt_slots
+
+    bare = dataclasses.replace(docked(3, 4, 0, 0), input_to_slot=0)
+    out = assign_belt_slots((receiver(0, 0), bare))
+    assert out[1].input_to_slot == 1
+
+
+def test_assign_belt_slots_writes_a_feeding_dock_s_own_slot() -> None:
+    """The mirror: a belt FEEDING a port records ``output_from_slot`` 0.
+
+    Zero is also the dataclass default, so this is asserted through a belt whose
+    field has been forced to something else -- otherwise the test could not tell
+    the rule from the default.
+    """
+    from flab2bp.layout.slots import assign_belt_slots
+
+    bare = dataclasses.replace(docked(3, 4, 0, 0, draws=False), output_from_slot=3)
+    out = assign_belt_slots((receiver(0, 0), bare))
+    assert out[1].output_from_slot == 0
+
+
+def test_machine_output_removed_counts_a_belt_docked_into_a_port() -> None:
+    """An Energy Exchanger takes no sorter, so counting only sorters convicts it.
+
+    The exchanger's port 0 sits 2.268 tiles north of the centre of a 9x9, so a
+    9x9 at the origin docks at ``(4, 6)``.  With the dock in place the drain
+    side is satisfied; the FEED side still is not, and that is the honest
+    remaining finding -- only the output side docks today.
+    """
+    p = Placement(
+        buildings=(
+            exchanger(0, 0),
+            docked(4, 6, 0, 0, out=None),
+            exchanger(11, 0),
+            docked(15, 6, 2, 0, out=None),
+        )
+    )
+    r = validate(p, mode_driven_spec(), ids=MODE_DRIVEN_IDS, expect_power=False)
+    assert not fired(r, "machine.output_removed"), [
+        f.message for f in r.by_check("machine.output_removed")
+    ]
+    assert fired(r, "machine.inputs_supplied"), "the feed side is still unwired"
+
+
+def test_machine_output_removed_still_convicts_an_undocked_port_machine() -> None:
+    """The other half: without the dock, the exchanger backs up and is reported.
+
+    Both halves matter.  The check counted sorters only, so it convicted a
+    correct port build; counting docks without keeping this would let an
+    unwired one through, which is the two-idle-exchangers placement the whole
+    mode-driven entry was opened over.
+    """
+    r = validate(
+        unwired_exchangers(), mode_driven_spec(), ids=MODE_DRIVEN_IDS, expect_power=False
+    )
+    assert fired(r, "machine.output_removed")
+    assert "belts docked into its ports" in r.by_check("machine.output_removed")[0].message
+
+
+def test_internal_seeds_counts_a_port_dock_on_both_sides() -> None:
+    """A dock sources the lane it drains INTO and drains the lane it feeds FROM.
+
+    Asked of the helper rather than through a whole build, because on the specs
+    freeform can produce today the answer is over-determined: the dock column
+    joins an output lane that is fed by belts anyway, so ``flow.lane_sourced``
+    is satisfied whether or not this clause exists.  What the clause decides on
+    its own is which lanes the player is expected to FILL -- a lane a Ray
+    Receiver feeds is not an external entry point, and without this it reads as
+    one.
+    """
+    from flab2bp.layout.validate import _internal_seeds
+
+    p = Placement(
+        buildings=(
+            receiver(0, 0),
+            docked(3, 4, 0, 0, out=None),  # draws OUT of the receiver
+            exchanger(20, 0),
+            docked(24, 6, 2, 0, draws=False),  # feeds INTO the exchanger
+        )
+    )
+    ctx = _context(p, None, None, 256, DEFAULT_MAX_BELT_Z, False)
+    drains, seeds = _internal_seeds(ctx)
+    assert seeds == {ctx.run_of[1]}
+    assert drains == {ctx.run_of[3]}

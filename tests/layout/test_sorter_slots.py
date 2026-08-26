@@ -914,3 +914,136 @@ def test_two_columns_of_one_machine_face_are_clear_of_each_other() -> None:
     assert S.sorter_seat_is_clear(
         feeder(4, 1), buildings, S.sorter_seat_boxes(buildings)
     )
+# --- belt ports: the other array --------------------------------------------
+#
+# `slotPoses` in the prefab is `PrefabDesc.portPoses`, which is what a BELT is
+# indexed into.  `insertPoses` in the prefab is `PrefabDesc.slotPoses`, which is
+# what a SORTER is indexed into.  The names cross over and the arrays do not,
+# so everything below asks the port question of the port array.
+
+
+def _placed(item_id: int, x: int, y: int, yaw: float = 0.0) -> PlacedBuilding:
+    w, h = cat.oriented_footprint(item_id, yaw)
+    return PlacedBuilding(
+        item_id=item_id,
+        model_index=cat.building(item_id).model_index,
+        x=x,
+        y=y,
+        width=w,
+        height=h,
+        yaw=yaw,
+    )
+
+
+def test_a_ray_receiver_s_ports_are_north_and_south_of_its_centre() -> None:
+    """7x7 at (10, 20) has centre (13, 23); the poses are 1.122 tiles out.
+
+    The tile NEAREST each pose is therefore inside the footprint, which is where
+    the game puts the belt and what makes the collider excusals load-bearing.
+    """
+    docks = S.port_docks(_placed(cat.RAY_RECEIVER_ID, 10, 20))
+    assert {k: d.cell for k, d in docks.items()} == {0: (13, 24), 1: (13, 22)}
+    assert docks[0].facing.delta == (0, 1)
+    assert docks[1].facing.delta == (0, -1)
+    assert all(d.gap < 0.13 for d in docks.values()), docks
+
+
+def test_a_quarter_turn_turns_the_ports_with_the_building() -> None:
+    """The pose is rotated by the building's yaw, exactly as ``slot_offset`` is.
+
+    Without it a rotated machine's ports would be read on the faces it no longer
+    presents, and the dock belt would be laid a footprint away from the port it
+    names.
+    """
+    docks = S.port_docks(_placed(cat.RAY_RECEIVER_ID, 10, 20, yaw=90.0))
+    assert {k: d.cell for k, d in docks.items()} == {0: (14, 23), 1: (12, 23)}
+    assert docks[0].facing.delta == (1, 0)
+    assert docks[1].facing.delta == (-1, 0)
+
+
+def test_an_energy_exchanger_offers_all_four_sides() -> None:
+    """9x9 at the origin, centre (4, 4), poses 2.268 tiles out on each axis.
+
+    ``temple-of-effectiveness`` puts its belts a whole tile further out than
+    this -- at ``dy = +-3`` against a pose at 2.268 -- which is why
+    ``rules.BELT_PORT_MAX_TILE_GAP`` is a tile rather than the 0.708 a
+    nearest-tile rule can produce.
+    """
+    docks = S.port_docks(_placed(cat.ENERGY_EXCHANGER_ID, 0, 0))
+    assert {k: d.cell for k, d in docks.items()} == {
+        0: (4, 6),
+        1: (6, 4),
+        2: (4, 2),
+        3: (2, 4),
+    }
+    assert all(d.gap < 0.27 for d in docks.values()), docks
+
+
+def test_a_machine_with_no_port_offers_no_dock() -> None:
+    """An Assembling Machine takes sorters and nothing else.
+
+    Empty is the answer, not an exception: a planner asking what a building
+    offers is a different thing from an emitter that has already wired one.
+    """
+    assert S.port_docks(_placed(2303, 0, 0)) == {}
+
+
+def test_naming_a_port_that_does_not_exist_raises() -> None:
+    """No fallback: a guessed index is what made every sorter in the first
+    in-game paste invalid, and a guessed PORT index would be the same defect on
+    the other array."""
+    with pytest.raises(S.SlotUndetermined):
+        S.port_offset(cat.RAY_RECEIVER_ID, 0.0, 2)
+
+
+@pytest.mark.parametrize("name", ["12-s-purple-science-from-smelted-refined-products",
+                                 "factory-heretical-smelter-block",
+                                 "falk-v7-mall-full"])
+def test_the_game_s_own_docks_name_the_port_this_module_computes(name: str) -> None:
+    """The oracle: real blueprints, read at their RAW coordinates.
+
+    Single-area fixtures only.  Seven of the ten store ``localOffset`` per AREA,
+    so a flat read subtracts coordinates from different frames -- that is where
+    every gap over one tile in the corpus comes from, and it is a property of
+    the reading rather than of the game.
+
+    What is asserted is the whole of the port model at once: the array chosen,
+    the Unity-to-grid axis mapping, the yaw rotation, and the bound in
+    ``rules.BELT_PORT_MAX_TILE_GAP``.  Get any of them wrong and the record the
+    game wrote lands somewhere else.
+    """
+    text = (FIXTURES / f"{name}.txt").read_text(encoding="utf-8").strip()
+    raw = decode(text).buildings
+    assert len(decode(text).areas) == 1, "a multi-area fixture cannot be read flat"
+    checked = 0
+    for b in raw:
+        if not cat.is_belt(b.item_id):
+            continue
+        for peer_idx, port in (
+            (b.output_obj_idx, b.output_to_slot),
+            (b.input_obj_idx, b.input_from_slot),
+        ):
+            if not 0 <= peer_idx < len(raw):
+                continue
+            h = raw[peer_idx]
+            try:
+                info = cat.building(h.item_id)
+            except KeyError:
+                continue
+            if not info.port_poses:
+                continue
+            assert 0 <= port < len(info.port_poses), (name, info.prefab, port)
+            # `port_gap` wants the min corner; the fixture stores the centre.
+            host = PlacedBuilding(
+                item_id=h.item_id,
+                model_index=h.model_index,
+                x=round(h.x - (info.width - 1) / 2),
+                y=round(h.y - (info.height - 1) / 2),
+                width=info.width,
+                height=info.height,
+                yaw=h.yaw,
+            )
+            gap = S.port_gap(host, (round(b.x), round(b.y)), port)
+            assert gap <= R.BELT_PORT_MAX_TILE_GAP, (name, info.prefab, port, gap)
+            checked += 1
+    assert checked >= 2, f"{name} exercised {checked} docks"

@@ -73,6 +73,8 @@ from flab2bp.dsp.rules import (
     ADDON_FROM_SLOT,
     ADDON_TO_SLOT,
     BELT_INPUT_SLOTS,
+    BELT_PORT_DRAW_TO_SLOT,
+    BELT_PORT_FEED_FROM_SLOT,
     BELT_SLOT,
     DRAG_MAX_ALIGNMENT,
     INPUT_TO_SLOT,
@@ -83,7 +85,7 @@ from flab2bp.dsp.rules import (
     WORLD_UNITS_PER_LEVEL,
     world_gap,
 )
-from flab2bp.layout.base import PlacedBuilding
+from flab2bp.layout.base import Facing, PlacedBuilding
 
 __all__ = [
     "ADDON_FROM_SLOT",
@@ -94,6 +96,7 @@ __all__ = [
     "DRAG_MAX_ALIGNMENT",
     "SLOT_REACH",
     "Attachment",
+    "PortDock",
     "SlotUndetermined",
     "assign_belt_slots",
     "assign_sorter_slots",
@@ -103,6 +106,11 @@ __all__ = [
     "lane_facing",
     "lane_orientation",
     "machine_slot",
+    "port_dock",
+    "port_docks",
+    "port_forward",
+    "port_gap",
+    "port_offset",
     "probe_building",
     "emitted_sorter",
     "seated_sorter",
@@ -792,6 +800,148 @@ def _drag_belt_end(
     ends[other][0] += zero[0] - vfx * along
     ends[other][1] += zero[1] - vfy * along
     ends[other][2] += zero[2]
+# --- belt ports -------------------------------------------------------------
+#
+# A PORT IS NOT A SLOT, and the two arrays are read by two different tools.
+# `BuildTool_Inserter` refuses a target whose `PrefabDesc.slotPoses` -- our
+# `catalog.Building.slot_poses` -- is empty; `BuildTool_Path` refuses one whose
+# `PrefabDesc.portPoses` -- our `catalog.Building.port_poses` -- is empty.  A
+# Ray Receiver has two of the second and none of the first, so no sorter can
+# touch it on any face at any distance and a BELT docks into it instead.
+#
+# Everything below is the port twin of `slot_offset` / `attachment` above, and
+# deliberately shaped the same way so a reader who knows one knows the other.
+
+
+def port_offset(item_id: int, yaw: float, port: int) -> tuple[float, float, float]:
+    """Port ``port``'s position relative to the building's centre.
+
+    ``(tiles east, tiles north, altitude LEVELS)`` -- :func:`slot_offset`'s
+    frame and conversions exactly, on the other array.
+    """
+    p = _port_pose(item_id, port)
+    wx, wy = to_world((p.dx, p.dy), yaw)
+    return (
+        wx / colliders.GRID_ARC,
+        wy / colliders.GRID_ARC,
+        p.dz / WORLD_UNITS_PER_LEVEL,
+    )
+
+
+def port_forward(item_id: int, yaw: float, port: int) -> tuple[float, float, float]:
+    """Port ``port``'s ``Pose.forward``, in world axes.
+
+    Points OUT of the building, along the side the belt arrives on.  A belt
+    feeding the port travels against it; a belt drawing from the port travels
+    along it.
+    """
+    p = _port_pose(item_id, port)
+    fx, fy = to_world((p.fx, p.fy), yaw)
+    return (fx, fy, p.fz)
+
+
+def _port_pose(item_id: int, port: int) -> cat.SlotPose:
+    poses = cat.building(item_id).port_poses
+    if not 0 <= port < len(poses):
+        raise SlotUndetermined(
+            f"building {item_id} ({cat.building(item_id).name}) defines "
+            f"{len(poses)} belt ports, so port {port} does not exist on it"
+        )
+    return poses[port]
+
+
+def port_gap(machine: PlacedBuilding, cell: tuple[int, int], port: int) -> float:
+    """Tiles between ``cell``'s centre and the pose of ``machine``'s ``port``.
+
+    The figure :data:`~flab2bp.dsp.rules.BELT_PORT_MAX_TILE_GAP` bounds, and the
+    one the corpus was measured in.  Planar: every port on a building sits
+    within a hundredth of a tile of the same height, so the vertical term is
+    common to all of them and cannot separate two.
+    """
+    cx, cy = _centre(machine)
+    px, py, _pz = port_offset(machine.item_id, machine.yaw, port)
+    return math.hypot(cell[0] - (cx + px), cell[1] - (cy + py))
+
+
+@dataclass(frozen=True, slots=True)
+class PortDock:
+    """Where a belt meets a building's belt port, and what it will record.
+
+    ``cell`` is the grid tile the belt occupies.  It is usually INSIDE the
+    building's footprint -- a Ray Receiver's ports are 1.12 tiles from the
+    centre of a 7x7 -- and that is not a defect to design around: the game runs
+    belts under these buildings and ``geom.overlap`` already excuses a belt
+    against anything, because belts are belt-integrated.  What stops a belt
+    standing there is the build-collider probe, and
+    ``colliders.belt_run_ends_in_a_building`` is the game's own excusal for the
+    belt that ends in the port and ``colliders.belt_chain_excuses`` for the two
+    behind it.
+
+    ``port`` is the index into :attr:`catalog.Building.port_poses` the belt
+    writes -- ``output_to_slot`` when it feeds, ``input_from_slot`` when it
+    draws.
+
+    ``facing`` is the way the belt runs when it DRAWS from this port: out of the
+    building along the port's forward.  A belt feeding it runs the opposite way.
+    """
+
+    cell: tuple[int, int]
+    port: int
+    facing: Facing
+    gap: float
+
+
+def port_dock(machine: PlacedBuilding, port: int) -> PortDock | None:
+    """Where a belt docking into ``machine``'s ``port`` has to stand.
+
+    The tile NEAREST the pose, which is what the corpus's clean single-area
+    fixtures do (worst gap 0.28 tiles over 40 records).  ``None`` when the
+    port's forward is not a cardinal direction -- our belts are axis-aligned, so
+    a diagonal port is one we have no belt to offer, and inventing a rounding
+    for it would put a belt where nothing said it goes.
+
+    Every port in the catalog is cardinal today; the guard is here because the
+    array is the game's and a future prefab is not ours to promise.
+    """
+    fx, fy, _fz = port_forward(machine.item_id, machine.yaw, port)
+    facing = _cardinal(fx, fy)
+    if facing is None:
+        return None
+    cx, cy = _centre(machine)
+    px, py, _pz = port_offset(machine.item_id, machine.yaw, port)
+    cell = (round(cx + px), round(cy + py))
+    return PortDock(cell, port, facing, port_gap(machine, cell, port))
+
+
+def port_docks(machine: PlacedBuilding) -> dict[int, PortDock]:
+    """Every port of ``machine`` a belt can dock into, by port index.
+
+    Empty is a real answer and the common one: only the belt-port class of
+    building has any port at all.
+    """
+    out: dict[int, PortDock] = {}
+    for k in range(len(cat.building(machine.item_id).port_poses)):
+        got = port_dock(machine, k)
+        if got is not None:
+            out[k] = got
+    return out
+
+
+def _cardinal(fx: float, fy: float) -> Facing | None:
+    """The compass direction ``(fx, fy)`` points, or ``None`` if it is diagonal.
+
+    Judged at :data:`SLOT_ALIGN_COS`, the game's own 24-degree threshold, so a
+    port carrying the prefab's build-in tilt in the sixth decimal reads as the
+    axis it plainly is.
+    """
+    n = math.hypot(fx, fy)
+    if n == 0.0:
+        return None
+    for facing in Facing:
+        dx, dy = facing.delta
+        if (fx * dx + fy * dy) / n >= SLOT_ALIGN_COS:
+            return facing
+    return None
 
 
 def _peer_slot(
@@ -856,6 +1006,27 @@ def assign_sorter_slots(
     return assign_belt_slots(_assign_sorter_slots_only(buildings))
 
 
+def _docks_into_a_port(buildings: Sequence[PlacedBuilding], link: int | None) -> bool:
+    """Does ``link`` name a building a belt attaches to by PORT rather than slot?
+
+    Splitters are excluded although they carry ports of their own: their two
+    slot indices are the constants
+    :data:`~flab2bp.dsp.rules.SPLITTER_INPUT_TO_SLOT` and
+    :data:`~flab2bp.dsp.rules.SPLITTER_OUTPUT_FROM_SLOT`, unanimous over 25
+    junctions, and :func:`assign_belt_slots` has always assigned the junction
+    side from ``SPLITTER_MAX_PORTS`` rather than from a pose.
+    """
+    if link is None or not 0 <= link < len(buildings):
+        return False
+    peer = buildings[link]
+    if cat.is_belt(peer.item_id) or peer.item_id == cat.SPLITTER_ID:
+        return False
+    try:
+        return cat.building(peer.item_id).takes_belt_ports
+    except KeyError:
+        return False
+
+
 def assign_belt_slots(
     buildings: Sequence[PlacedBuilding],
 ) -> tuple[PlacedBuilding, ...]:
@@ -889,14 +1060,35 @@ def assign_belt_slots(
     A fourth belt feeding one belt tile has nowhere to go: the game would drop
     the link silently, and a dropped link is a blueprint that pastes and then
     starves.
+
+    A BELT DOCKED INTO A BUILDING PORT SPENDS ONE OF ITS OWN SLOTS, and that is
+    why ``taken`` is seeded before the scan rather than filled only by it.  The
+    connection is written on both ends -- ``entityConnPool[objId * 16 + slot]``
+    is addressed once per object -- so a belt drawing from a port occupies its
+    own slot :data:`~flab2bp.dsp.rules.BELT_PORT_DRAW_TO_SLOT`, which is 1, the
+    first index this function would otherwise hand to a belt-to-belt feeder.
+    Handing it out twice would evict the port link and leave a lane that pastes
+    cleanly and carries nothing.  The corpus has no belt that both docks and
+    takes a feeder, so it does not settle the case; it is settled the same way
+    the pool is settled everywhere else, by not sharing a cell.
     """
     taken: dict[int, set[int]] = {}
+    for i, b in enumerate(buildings):
+        if cat.is_belt(b.item_id) and _docks_into_a_port(buildings, b.input_obj):
+            taken.setdefault(i, set()).add(BELT_PORT_DRAW_TO_SLOT)
     out: list[PlacedBuilding] = []
     for i, b in enumerate(buildings):
         if not cat.is_belt(b.item_id):
             out.append(b)
             continue
         changes: dict[str, int] = {}
+        # The belt's OWN end of a port dock. Constant, and counted: 178 records
+        # over the fixture corpus, `(out, 0)` on all 70 that feed a port and
+        # `(in, 1)` on all 108 that draw from one.
+        if _docks_into_a_port(buildings, b.output_obj):
+            changes["output_from_slot"] = BELT_PORT_FEED_FROM_SLOT
+        if _docks_into_a_port(buildings, b.input_obj):
+            changes["input_to_slot"] = BELT_PORT_DRAW_TO_SLOT
         for field, link in (("output_to_slot", b.output_obj), ("input_from_slot", b.input_obj)):
             if link is None or not 0 <= link < len(buildings):
                 continue

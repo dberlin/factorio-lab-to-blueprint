@@ -1513,7 +1513,8 @@ _REFUSAL_TEXT = {
     ),
     FALLBACK_SORTERLESS_MACHINE: (
         "a machine in this spec takes no sorter on any face -- the game wires it "
-        "by docking a belt into a port instead, which this strategy cannot emit"
+        "by docking a belt into a port instead, which THIS strategy cannot emit "
+        "although freeform now can, so try --strategy freeform"
     ),
     FALLBACK_BAND: (
         "every plan that emitted is legal on a flat grid and illegal on the "
@@ -1544,12 +1545,22 @@ def _sorterless_groups(groups: dict[str, _Group]) -> list[str]:
     like the obviously right thing to write.  It would be dead code: a coater is
     never a spec group.  ``spray-coater`` is not in :data:`MACHINE_ITEM_IDS` at
     all, coaters are grown during emission from a proliferated group's lanes,
-    and of the nine poseless buildings that CAN reach here -- fractionator,
-    energy-exchanger, ray-receiver, ray-receiver-pro, orbital-collector, the two
-    mining machines, water-pump, oil-extractor -- not one is a belt addon.  The
+    and not one poseless building that CAN reach here is a belt addon.  The
     check was written with that exclusion, and deleting it changed no test, which
     is the only reason it is gone: a guard that cannot fire is a claim about the
     code that the code does not make.
+
+    THE LIST USED TO SAY NINE AND NAME TWO THINGS THAT ARE NOT THERE.  Counted
+    against the catalog rather than recalled, the poseless buildings reachable
+    through :data:`MACHINE_ITEM_IDS` are EIGHT: fractionator, energy-exchanger,
+    ray-receiver, orbital-collector, the two mining machines, water-pump,
+    oil-extractor.  There is no ``ray-receiver-pro`` prefab in the catalog at
+    all.  And ``orbital-collector`` is not a belt-port building either -- it
+    carries zero ports as well as zero insert poses, which is right for a
+    building fed by logistics vessels in orbit, so belt-to-port docking will
+    never reach it and its refusal here is permanent rather than pending.  Seven
+    of the eight take belts; the eighth takes nothing.
+    ``tests/dsp/test_catalog.py`` pins the list so it cannot drift again.
 
     Returns one line per offending group, deterministically ordered, empty when
     every machine in the spec can take a sorter.

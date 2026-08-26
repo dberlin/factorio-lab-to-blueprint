@@ -112,6 +112,9 @@ __all__ = [
     "ADDON_TO_SLOT",
     "ADDON_TURRET_AXIS_DEG",
     "BELT_INPUT_SLOTS",
+    "BELT_PORT_DRAW_TO_SLOT",
+    "BELT_PORT_FEED_FROM_SLOT",
+    "BELT_PORT_MAX_TILE_GAP",
     "BELT_SLOT",
     "BELT_SLOT_AUTO_RANGE",
     "BEND_MIN_ANGLE_WHEN_SLOPED_RAD",
@@ -311,6 +314,59 @@ CONN_SLOTS_PER_OBJECT = 16
 #: rediscovered.
 BELT_SLOT_AUTO_RANGE = (4, 12)
 
+
+#: What a belt puts in its OWN slot field when it docks into a building PORT.
+#:
+#: A belt that FEEDS a port records ``output_obj = <building>``,
+#: ``output_to_slot = <port index>`` and ``output_from_slot = 0`` -- slot 0
+#: being the belt's own output cell, exactly as it is for a belt-to-belt link.
+#: A belt that DRAWS from a port records ``input_obj = <building>``,
+#: ``input_from_slot = <port index>`` and ``input_to_slot = 1`` -- the first of
+#: the belt's three input slots, :data:`BELT_INPUT_SLOTS`.
+#:
+#: Counted over the fixture corpus rather than reasoned about: 178 belt-to-port
+#: records across five of the ten real blueprints -- 20 Energy Exchangers in
+#: ``temple-of-effectiveness``, one in ``falk-v7-mall-full``, and the
+#: Interstellar Logistic Stations of four more -- and the pair is unanimous,
+#: ``(out, 0)`` on all 70 feeding and ``(in, 1)`` on all 108 drawing.  There is
+#: no counter-example and no second value.
+#:
+#: Both offsets are ``0`` on every one of the 178, which is the dataclass
+#: default, so nothing has to write them.
+BELT_PORT_FEED_FROM_SLOT = 0
+BELT_PORT_DRAW_TO_SLOT = 1
+
+#: How far a docked belt's tile may sit from the port pose it names, in TILES.
+#:
+#: MEASURED, AND THE MEASUREMENT NEEDED CLEANING FIRST.  Read flat across all
+#: ten fixtures the gaps run to 300 tiles, which is not slack: seven of the ten
+#: are MULTI-AREA blueprints whose ``localOffset`` is per area, so a flat read
+#: subtracts coordinates from different frames.  Every gap over one tile, and
+#: every case where the named port is not the nearest one, is in one of those
+#: seven.  On the four single-area fixtures:
+#:
+#:     12-s-purple-science        16 records   worst 0.149
+#:     factory-heretical-smelter  11 records   worst 0.071
+#:     factory-quick-start-3      11 records   worst 0.280
+#:     falk-v7-mall-full           2 records   worst 0.007
+#:
+#: and ``temple-of-effectiveness``'s twenty Energy Exchangers, whose belts sit
+#: at a clean integer ``dy = +-3`` against a port pose at ``+-2.268``, add a
+#: worst of **0.732** -- a whole tile further out than the nearest tile centre.
+#: So the game does not require the nearest tile, and a rule that did would
+#: refuse a shape twenty of its own blueprints use.
+#:
+#: One tile is the bound because it admits both readings and nothing looser: a
+#: belt placed on the tile NEAREST a pose is at most ``sqrt(2)/2`` = 0.708 from
+#: it by construction, and the corpus's own worst is 0.732.  Beyond a tile the
+#: belt is not touching the building any more, and a connection recorded there
+#: is one nothing in the geometry supports.
+#:
+#: This is OUR bound and it is not quoted from the game.  The paste path
+#: replays a recorded ``inputObj``/``outputObj`` rather than re-deriving it from
+#: the pose, so there is no threshold in the IL to port here; what the corpus
+#: fixes is the range the game's own tools produce.
+BELT_PORT_MAX_TILE_GAP = 1.0
 
 #: Ports on a DSP splitter.  Four sides, so at most four belts may attach to one
 #: junction tile -- counting both the ones feeding it and the ones drawing from

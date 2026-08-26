@@ -267,6 +267,7 @@ class _Cache:
     entry_items: dict[int, set[str]] | None = None
     sorter_peers: _SorterPeers | None = None
     coater_rides: dict[int, int] | None = None
+    port_docks: tuple[_Dock, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -2711,6 +2712,194 @@ def _link_adjacent(ctx: Context) -> Iterable[Finding]:
             )
 
 
+@dataclass(frozen=True, slots=True)
+class _Dock:
+    """One belt-to-port connection, as the placement records it.
+
+    ``draws`` is the direction: True when the belt takes items OUT of the
+    building (``input_obj`` names it), False when the belt puts items IN
+    (``output_obj`` names it).
+    """
+
+    belt: int
+    peer: int
+    port: int
+    draws: bool
+
+
+def _port_docks(ctx: Context) -> tuple[_Dock, ...]:
+    """Every belt in the placement that names a building by a BELT PORT.
+
+    A port is not an insert pose and the two arrays are read by two different
+    tools -- ``BuildTool_Inserter`` refuses a target with no ``slotPoses``,
+    ``BuildTool_Path`` one with no ``portPoses`` -- so a Ray Receiver takes a
+    belt and no sorter, and an Assembling Machine the reverse.
+
+    Splitters are excluded: a belt attached to one carries the constants
+    :data:`~flab2bp.dsp.rules.SPLITTER_INPUT_TO_SLOT` /
+    ``SPLITTER_OUTPUT_FROM_SLOT`` rather than a pose index, and
+    ``junction.colocated`` is the check that judges them.
+
+    Every candidate is returned, INCLUDING the ones that name a building with no
+    port at all.  ``belt.port_dock`` is what convicts those, and a helper that
+    filtered them out would make the connection invisible to the check whose job
+    it is to see it.
+    """
+    cached = ctx.cache.port_docks
+    if cached is not None:
+        return cached
+    bs = ctx.placement.buildings
+    out: list[_Dock] = []
+    for i, b in enumerate(bs):
+        if ctx.kinds[i] is not Kind.BELT:
+            continue
+        for link, slot, draws in (
+            (b.input_obj, b.input_from_slot, True),
+            (b.output_obj, b.output_to_slot, False),
+        ):
+            if link is None or not 0 <= link < len(bs):
+                continue
+            if ctx.kinds[link] in (Kind.BELT, Kind.SPLITTER, Kind.SORTER, Kind.ADDON):
+                continue
+            out.append(_Dock(i, link, slot, draws))
+    ctx.cache.port_docks = tuple(out)
+    return ctx.cache.port_docks
+
+
+@check("belt.port_dock")
+def _port_dock(ctx: Context) -> Iterable[Finding]:
+    """A belt that docks into a building must name a port that is really there.
+
+    This is the check for the one connection neither strategy could make until
+    now, and there is nothing else in this file that judges it: a belt drawing
+    from a machine sets ``input_obj``, and ``belt.link_adjacent`` looks only at
+    ``output_obj``, so before this a docked belt was wired by nothing and
+    verified by nothing.
+
+    WHAT THE GAME WRITES, counted over the fixture corpus.  178 belt-to-port
+    records across five of the ten real blueprints -- 20 Energy Exchangers in
+    ``temple-of-effectiveness``, one in ``falk-v7-mall-full``, and the
+    Interstellar Logistic Stations of four more -- unanimous on all four of:
+
+    * the BUILDING records nothing.  ``output_obj = input_obj = -1`` on all 28
+      hosts.  The belt does the naming, as it does for a splitter;
+    * the index is a subscript into ``PrefabDesc.portPoses``, our
+      :attr:`catalog.Building.port_poses`, NOT into the sorter array;
+    * a belt drawing carries ``input_to_slot`` = 1 and a belt feeding carries
+      ``output_from_slot`` = 0 -- :data:`~flab2bp.dsp.rules.BELT_PORT_DRAW_TO_SLOT`
+      and ``BELT_PORT_FEED_FROM_SLOT``;
+    * the belt stands on the port, within
+      :data:`~flab2bp.dsp.rules.BELT_PORT_MAX_TILE_GAP`.
+
+    THE BELT'S OWN SLOT IS A POOL CELL LIKE ANY OTHER.  The game addresses a
+    connection as ``entityConnPool[objId * 16 + slot]`` and writes it on BOTH
+    ends, so a belt drawing from a port has spent its own slot 1 -- the first
+    index ``slots.assign_belt_slots`` hands to a belt-to-belt feeder.  Two
+    connections in that cell means ``WriteObjectConn`` evicts one, and the lane
+    pastes cleanly and carries nothing.  ``game.slot_occupancy`` cannot see it:
+    it keys on the PEER side, which is where every other clash lives.  So the
+    last clause below is the own-side half, scoped to the cells a dock spends.
+
+    A belt naming a building with NO port is the same defect one step earlier.
+    Nothing in the game will attach it -- ``BuildTool_Path`` drops a cast target
+    whose ``portPoses`` is empty -- so the record describes a connection that
+    cannot exist, and the item it carries stops there.
+    """
+    bs = ctx.placement.buildings
+    docks = _port_docks(ctx)
+    # Which of a belt's own slots each dock spends, so the belt-to-belt links
+    # into that same belt can be tested against them.
+    own: dict[int, dict[int, str]] = defaultdict(dict)
+    for d in docks:
+        peer = bs[d.peer]
+        try:
+            info = cat.building(peer.item_id)
+        except KeyError:
+            info = None
+        name = info.name if info is not None else f"item {peer.item_id}"
+        ports = info.port_poses if info is not None else ()
+        side = "draws from" if d.draws else "feeds"
+        b = bs[d.belt]
+        if not ports:
+            yield Finding(
+                "belt.port_dock",
+                Severity.ERROR,
+                f"belt {d.belt} at ({b.x},{b.y}) {side} building {d.peer} "
+                f"({name}), which has no belt port at all; the game drops a cast "
+                f"target whose portPoses is empty, so nothing would attach and "
+                f"whatever this lane carries stops here",
+                (d.belt, d.peer),
+                {"belt": d.belt, "peer": d.peer, "peer_item_id": peer.item_id},
+            )
+            continue
+        if not 0 <= d.port < len(ports):
+            yield Finding(
+                "belt.port_dock",
+                Severity.ERROR,
+                f"belt {d.belt} at ({b.x},{b.y}) {side} port {d.port} of building "
+                f"{d.peer} ({name}), which defines {len(ports)} port(s); the index "
+                f"is a subscript into the prefab's portPoses and this one is off "
+                f"the end of it",
+                (d.belt, d.peer),
+                {"belt": d.belt, "peer": d.peer, "port": d.port, "ports": len(ports)},
+            )
+            continue
+        gap = slots.port_gap(peer, (b.x, b.y), d.port)
+        if gap > rules.BELT_PORT_MAX_TILE_GAP:
+            yield Finding(
+                "belt.port_dock",
+                Severity.ERROR,
+                f"belt {d.belt} at ({b.x},{b.y}) {side} port {d.port} of building "
+                f"{d.peer} ({name}) at ({peer.x},{peer.y}), but that port's pose is "
+                f"{gap:.2f} tiles away and the game's own blueprints never exceed "
+                f"{rules.BELT_PORT_MAX_TILE_GAP:g}; the belt is not touching the "
+                f"port it names",
+                (d.belt, d.peer),
+                {"belt": d.belt, "peer": d.peer, "port": d.port, "gap": f"{gap:.3f}"},
+            )
+            continue
+        want = (
+            rules.BELT_PORT_DRAW_TO_SLOT if d.draws else rules.BELT_PORT_FEED_FROM_SLOT
+        )
+        got = b.input_to_slot if d.draws else b.output_from_slot
+        field_name = "input_to_slot" if d.draws else "output_from_slot"
+        if got != want:
+            yield Finding(
+                "belt.port_dock",
+                Severity.ERROR,
+                f"belt {d.belt} at ({b.x},{b.y}) {side} port {d.port} of building "
+                f"{d.peer} ({name}) with {field_name} = {got}; the game writes "
+                f"{want} on all {'108' if d.draws else '70'} such records in the "
+                f"fixture corpus, and this end of the connection occupies that "
+                f"cell of the BELT's own pool",
+                (d.belt, d.peer),
+                {"belt": d.belt, "peer": d.peer, field_name: got, "expected": want},
+            )
+            continue
+        own[d.belt][want] = f"port {d.port} of building {d.peer}"
+
+    for i, b in enumerate(bs):
+        if ctx.kinds[i] is not Kind.BELT or b.output_obj is None:
+            continue
+        spent = own.get(b.output_obj)
+        if spent is None or ctx.kinds[b.output_obj] is not Kind.BELT:
+            continue
+        held = spent.get(b.output_to_slot)
+        if held is None:
+            continue
+        target = bs[b.output_obj]
+        yield Finding(
+            "belt.port_dock",
+            Severity.ERROR,
+            f"belt {i} at ({b.x},{b.y}) feeds slot {b.output_to_slot} of belt "
+            f"{b.output_obj} at ({target.x},{target.y}), which already spends that "
+            f"slot on {held}. The game stores one connection per (object, slot), "
+            f"so pasting this evicts one of the two and the lane runs empty",
+            (i, b.output_obj),
+            {"belt": i, "target": b.output_obj, "slot": b.output_to_slot},
+        )
+
+
 def _belt_successors(ctx: Context, i: int) -> tuple[int, ...]:
     """Where items on building ``i`` go next, junctions included.
 
@@ -3278,6 +3467,15 @@ def _internal_seeds(ctx: Context) -> tuple[set[int], set[int]]:
         if o is not None and 0 <= o < len(bs) and ctx.kinds[o] is Kind.BELT:
             fed_by_belt.add(o)
     seeds |= {r for r, run in enumerate(ctx.runs) if run.head in fed_by_belt}
+
+    # A belt DOCKED INTO A PORT is a source and a drain in exactly the sense
+    # this function means, and for a Ray Receiver it is the only one there is:
+    # the machine takes no sorter on any face, so a lane fed by a dock read as
+    # fed by nothing and `flow.lane_sourced` convicted a correct build.
+    for d in _port_docks(ctx):
+        if ctx.kinds[d.peer] is not Kind.MACHINE or d.belt not in ctx.run_of:
+            continue
+        (seeds if d.draws else drains).add(ctx.run_of[d.belt])
     return drains, seeds
 
 
@@ -3663,25 +3861,41 @@ def _external_entry_points(ctx: Context) -> Iterable[Finding]:
 
 @check("machine.output_removed", needs_spec=True, needs_groups=True)
 def _output_removed(ctx: Context) -> Iterable[Finding]:
-    """Every product has a sorter taking it away, or the machine jams."""
+    """Every product has something taking it away, or the machine jams.
+
+    Sorters, and BELTS DOCKED INTO A PORT.  A Ray Receiver takes no sorter on
+    any face -- its prefab's insert-pose array has length zero -- so counting
+    only sorters would convict every correct placement of one and, worse, would
+    have gone on calling a placement clean where the machine was joined to
+    nothing at all: that is precisely the two-idle-Energy-Exchanger build this
+    check missed before ``Kind`` stopped answering POWER for them.
+    """
     assert ctx.spec is not None
     drains: dict[int, int] = defaultdict(int)
     for _i, s in ctx.of_kind(Kind.SORTER):
         if s.input_obj is not None:
             drains[s.input_obj] += 1
+    for d in _port_docks(ctx):
+        if d.draws:
+            drains[d.peer] += 1
     for i, _b in ctx.of_kind(Kind.MACHINE):
         g = ctx.group_for(i)
         if g is None:
             continue
         need = len(g.outputs_per_machine)
         if need and drains[i] < need:
+            takes = (
+                "belts docked into its ports"
+                if cat.building(_b.item_id).takes_belt_ports
+                else "sorters"
+            )
             yield Finding(
                 "machine.output_removed",
                 Severity.ERROR,
                 f"machine {i} runs {g.recipe_id}, which yields {need} distinct "
-                f"products, but only {drains[i]} sorters drain it; it would back up",
+                f"products, but only {drains[i]} {takes} drain it; it would back up",
                 (i,),
-                {"recipe": g.recipe_id, "products": need, "sorters": drains[i]},
+                {"recipe": g.recipe_id, "products": need, "drains": drains[i]},
             )
 
 
@@ -4214,6 +4428,17 @@ def _islands(ctx: Context, item: str, items: Mapping[int, str | None]) -> dict[_
                 ends.append(("m", link))
         if len(ends) == 2:
             union(ends[0], ends[1])
+    # A belt DOCKED INTO A PORT joins a machine to a lane exactly as a sorter
+    # does, and it is the only join a Ray Receiver has. Leaving it out put every
+    # such machine in an island of its own, so its product read as reaching
+    # nothing and its consumers as fed by nothing.
+    for d in _port_docks(ctx):
+        if ctx.kinds[d.peer] is not Kind.MACHINE or d.belt not in ctx.run_of:
+            continue
+        moved = bs[d.belt].carries_item
+        if moved is not None and moved != item:
+            continue
+        union(("m", d.peer), ("g", (RUN, ctx.run_of[d.belt])))
     for i, _ in ctx.of_kind(Kind.MACHINE):
         find(("m", i))
     return {k: find(k) for k in list(parent)}

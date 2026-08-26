@@ -797,6 +797,17 @@ class Building:
     #: a trap: these are where a belt or a pipe meets the building, and they are
     #: NOT what a sorter's slot index means.  See :attr:`slot_poses`.
     slots: tuple[dict[str, float], ...]
+    #: The same ports as :attr:`slots`, with Unity's axes mapped onto the tile
+    #: grid and each pose's ``forward`` attached -- see :func:`_port_poses_for`.
+    #:
+    #: THIS IS WHAT A BELT IS INDEXED INTO.  A belt that docks into a building
+    #: names the port's index here in its ``output_to_slot`` (feeding) or
+    #: ``input_from_slot`` (drawing); the two arrays are different arrays and
+    #: giving a belt a :attr:`slot_poses` index would name the wrong pose.
+    #: Non-empty and :attr:`slot_poses` empty is the whole class of building --
+    #: Ray Receiver, Energy Exchanger, Fractionator, the mining machines, the
+    #: logistic stations -- that takes belts and refuses sorters.
+    port_poses: tuple[SlotPose, ...]
     #: Where a sorter may attach -- ``PrefabDesc.slotPoses``, which is
     #: ``SlotConfig.insertPoses`` in the prefab, indexed exactly as a sorter's
     #: ``inputFromSlot`` / ``outputToSlot``.  Empty for a building that accepts
@@ -867,6 +878,21 @@ class Building:
     @property
     def has_explicit_slots(self) -> bool:
         return bool(self.slots)
+
+    @property
+    def takes_belt_ports(self) -> bool:
+        """Does a BELT dock into this building instead of a sorter serving it?
+
+        The two arrays are independent and the game reads them with two
+        different tools -- ``BuildTool_Inserter`` drops a target whose
+        ``slotPoses`` (our :attr:`slot_poses`) is empty, ``BuildTool_Path``
+        drops one whose ``portPoses`` (our :attr:`port_poses`) is empty -- so
+        "has ports" and "takes no sorter" are separate facts and this asks only
+        the first.  A Storage Tank has four ports and no insert pose; a Matrix
+        Lab has twelve insert poses and no port.  Nothing in the catalog has
+        both, but nothing here assumes that either.
+        """
+        return bool(self.port_poses)
 
 
 def derive_footprint(extent: float) -> int:
@@ -959,6 +985,31 @@ def _slot_poses_for(prefab: str, table: Mapping[str, Any]) -> tuple[SlotPose, ..
     )
 
 
+def _port_poses_for(prefab: str, table: Mapping[str, Any]) -> tuple[SlotPose, ...]:
+    """``prefab``'s BELT ports, in the same grid frame as :func:`_slot_poses_for`.
+
+    ``SlotConfig.slotPoses``, which ``PrefabDesc`` calls ``portPoses`` -- the
+    array a BELT is indexed into, not a sorter.  ``buildings.json`` carries the
+    same positions in :attr:`Building.slots`, as raw ``x/y/z/yaw`` dicts, and
+    that field stays as it is because two callers count it.  This is the same
+    data with the axes mapped and the ``Pose.forward`` vector attached, which is
+    what any geometry has to have: a port's forward is what says which SIDE of
+    the building it is on, and the ``yaw`` field in ``slots`` is a rounded
+    degree where the forward is the vector the game itself dots against.
+    """
+    return tuple(
+        SlotPose(
+            dx=float(p["pos"][0]),
+            dy=float(p["pos"][2]),
+            dz=float(p["pos"][1]),
+            fx=float(p["fwd"][0]),
+            fy=float(p["fwd"][2]),
+            fz=float(p["fwd"][1]),
+        )
+        for p in (table.get(prefab) or {}).get("portPoses", ())
+    )
+
+
 def _addon_areas_for(
     prefab: str, table: Mapping[str, Any]
 ) -> tuple[tuple[float, float, float], ...]:
@@ -1001,6 +1052,7 @@ def _load() -> dict[int, Building]:
             addon_type=row.get("addonType", 0),
             multi_level=row.get("multiLevel") or 0,
             slots=tuple(row.get("slots") or ()),
+            port_poses=_port_poses_for(row["prefab"], poses),
             slot_poses=_slot_poses_for(row["prefab"], poses),
             addon_areas=_addon_areas_for(row["prefab"], poses),
             cover_radius=Fraction(power.get("coverRadius") or 0).limit_denominator(100),
@@ -1023,6 +1075,7 @@ def _load() -> dict[int, Building]:
             addon_type=0,
             multi_level=0,
             slots=(),
+            port_poses=(),
             slot_poses=(),
             addon_areas=(),
             cover_radius=Fraction(0),

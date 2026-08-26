@@ -822,6 +822,20 @@ class Strip:
         return len(self.in_above)
 
     @property
+    def takes_belt_ports(self) -> bool:
+        """Is this strip's machine wired by a belt docked into a port?
+
+        True only when the prefab offers ports and NO insert pose, which is the
+        whole of the belt-port class -- Ray Receiver, Energy Exchanger,
+        Fractionator, the mining machines, the water pump, the oil extractor,
+        the logistic stations.  A machine with both would be a machine a sorter
+        can reach, and the sorter path is the denser one; the catalog has none,
+        and this asks rather than assuming.
+        """
+        info = catalog.building(self.item_id)
+        return info.takes_belt_ports and not info.slot_poses
+
+    @property
     def is_mode_driven(self) -> bool:
         return bool(self.mode_params)
 
@@ -2662,6 +2676,22 @@ def _emit_strip(
             tuple(lane_idx[row]),
             s.machines,
         )
+        if s.takes_belt_ports:
+            # No sorter can attach to this machine at all, so the product leaves
+            # by a belt docked into a PORT. Counted with the sorters because the
+            # figure is "connections this strip made", which is what the caller
+            # tests against the machines it asked to wire.
+            sorters += _dock_lane(
+                canvas,
+                machines,
+                lane_idx[row],
+                oy + row,
+                item,
+                belt_id,
+                belt_model,
+                claimed,
+            )
+            continue
         if s.flank_outputs:
             sorters += _flank_lane(
                 canvas,
@@ -2792,6 +2822,131 @@ def _flank_lane(
                 input_obj=m_idx,
                 output_obj=column[0],
             )
+        )
+        placed += 1
+    return placed
+
+
+def _dock_lane(
+    canvas: _Canvas,
+    machines: list[int],
+    out_lane: list[int],
+    lane_y: int,
+    item: str,
+    belt_id: int,
+    belt_model: int,
+    claimed: dict[int, set[int]],
+) -> int:
+    """One BELT per machine, docked into a port and run down to the output lane.
+
+    This is the connection a Ray Receiver takes, and the only one it takes.  Its
+    prefab ships ZERO insert poses and two belt PORTS, and the game's two build
+    tools mirror each other on exactly that: ``BuildTool_Inserter`` drops a cast
+    target whose ``slotPoses`` is empty, ``BuildTool_Path`` drops one whose
+    ``portPoses`` is empty.  So no sorter can attach to such a machine on any
+    face at any distance, and a belt can.
+
+    WHAT THE RECORD LOOKS LIKE, read off the game's own blueprints rather than
+    reasoned out.  178 belt-to-port connections across five of the ten fixtures
+    -- 20 Energy Exchangers in ``temple-of-effectiveness``, one in
+    ``falk-v7-mall-full``, and the Interstellar Logistic Stations of four more
+    -- and they are unanimous:
+
+    * the BUILDING records nothing.  ``output_obj = input_obj = -1`` on all 28
+      hosts, every slot field zero.  The belt does the naming, exactly as it
+      does for a splitter;
+    * a belt DRAWING from a port carries ``input_obj = <building>``,
+      ``input_from_slot = <port index>`` and ``input_to_slot = 1``;
+    * a belt FEEDING one carries ``output_obj = <building>``,
+      ``output_to_slot = <port index>`` and ``output_from_slot = 0``;
+    * both offsets are 0 on all 178.
+
+    The port index is a subscript into ``catalog.Building.port_poses`` and NOT
+    into ``slot_poses``.  They are different arrays; a Ray Receiver's second is
+    empty.
+
+    Geometry, per machine, and it is the mirror of :func:`_flank_lane`:
+
+    * the belt stands on the tile nearest the port POSE, which for a Ray
+      Receiver is 1.12 tiles from the centre of a 7x7 -- INSIDE the footprint.
+      That is not something to design around.  ``geom.overlap`` already excuses
+      a belt against any building, and it says why: a belt running through a
+      Storage Tank appears in blueprints that work in game;
+    * what could still convict it is the build-collider probe, and the game
+      excuses that itself.  ``colliders.belt_run_ends_in_a_building`` lets off
+      the belt whose run ends in the machine, and ``belt_chain_excuses`` lets
+      off the two behind it.  A Ray Receiver's belt keepout reaches two tiles
+      from its centre, so exactly two of this column's tiles are inside it and
+      both are within those excusals -- measured, not hoped;
+    * the column runs to the output lane under the band and joins it, several
+      machines draining into one lane, which is a shape a belt makes natively.
+
+    THE PORT IS CLAIMED IN THE SAME MAP AS A SORTER SLOT, deliberately.  The
+    game addresses a connection as ``entityConnPool[objId * 16 + slot]`` -- ONE
+    address space per object -- so a port index and an insert-pose index of the
+    same number are the SAME cell.  No building in the catalog carries both
+    arrays, so the two can never actually collide; sharing the map is what makes
+    that a fact rather than an assumption.
+
+    A machine whose ports on this side are all spoken for is SKIPPED, silently
+    and beltless, exactly as :func:`_link_lane` and :func:`_flank_lane` skip one
+    whose columns or rows are.  An undrained machine is what the flow checks
+    convict, so the placement is refused rather than shipped short.
+    """
+    placed = 0
+    for m_idx in machines:
+        m = canvas.buildings[m_idx]
+        taken = claimed.setdefault(m_idx, set())
+        # The port that drains TOWARDS the lane: its forward points the way a
+        # drawing belt travels, and the lane is at the larger y.
+        dock = next(
+            (
+                d
+                for _k, d in sorted(slots.port_docks(m).items())
+                if d.port not in taken
+                and d.facing.delta[1] > 0
+                and d.cell[1] < lane_y
+            ),
+            None,
+        )
+        if dock is None:
+            continue
+        gx = dock.cell[0]
+        tail = next((i for i in out_lane if canvas.buildings[i].x == gx), None)
+        if tail is None:
+            continue
+        taken.add(dock.port)
+        column: list[int] = []
+        for y in range(dock.cell[1], lane_y):
+            column.append(
+                canvas.add(
+                    PlacedBuilding(
+                        item_id=belt_id,
+                        model_index=belt_model,
+                        x=gx,
+                        y=y,
+                        width=1,
+                        height=1,
+                        # The direction of TRAVEL, which is the port's own
+                        # forward: `Facing.NORTH.delta` is `(0, 1)` and this
+                        # column climbs in y. Read off the corpus, where a belt
+                        # drawing from a station's +z port at `dy = +2` carries
+                        # yaw 0 and one at `dy = -2` carries 180.
+                        yaw=Facing.NORTH.value,
+                        carries_item=item,
+                    )
+                )
+            )
+        for a, b in zip(column, column[1:], strict=False):
+            canvas.buildings[a] = _relink(canvas.buildings[a], output_obj=b)
+        canvas.buildings[column[-1]] = _relink(
+            canvas.buildings[column[-1]], output_obj=tail
+        )
+        canvas.buildings[column[0]] = replace(
+            canvas.buildings[column[0]],
+            input_obj=m_idx,
+            input_from_slot=dock.port,
+            input_to_slot=rules.BELT_PORT_DRAW_TO_SLOT,
         )
         placed += 1
     return placed
@@ -7215,6 +7370,18 @@ def _fanout_shortfall(strips: list[Strip]) -> list[str]:
     return out
 
 
+def _drainable_by_port(s: Strip) -> bool:
+    """Does one of this strip's machines offer a port facing its output lane?
+
+    Asked of a PROBE rather than of a placed machine, because this runs in
+    planning where nothing is placed yet -- and the answer cannot depend on
+    where the strip lands: a port's side is fixed by the machine's yaw, and the
+    output lane is always the row directly under the band.
+    """
+    probe = slots.probe_building(s.item_id, s.yaw)
+    return any(d.facing.delta[1] > 0 for d in slots.port_docks(probe).values())
+
+
 def _machines_without_poses(strips: list[Strip]) -> list[str]:
     """Lanes seated where no sorter of any tier can join them to their machine.
 
@@ -7288,13 +7455,35 @@ def _machines_without_poses(strips: list[Strip]) -> list[str]:
             span = s.sorter_span(row)
             if 1 <= span <= reach:
                 continue
+            if s.takes_belt_ports and kind == "output" and _drainable_by_port(s):
+                # `_dock_lane` wires this one, and a sorter span is the wrong
+                # question to ask about it.
+                continue
             key = (s.item_id, kind, span)
             if key in seen:
                 continue
             seen.add(key)
             building = catalog.building(s.item_id)
             name = building.name
-            if not s.attachable_columns:
+            if s.takes_belt_ports and kind == "ingredient":
+                out.append(
+                    f"{name} ({s.recipe_id}): the game's prefab gives it no "
+                    f"insert pose on any face, so its {kind} lane can only be "
+                    f"joined to it by a belt docked into one of its "
+                    f"{len(building.port_poses)} belt port(s) -- and only the "
+                    f"OUTPUT side docks today, because an ingredient would have "
+                    f"to SPLIT one lane into a belt per machine and the "
+                    f"no-splitter invariant is what buys the lane-per-"
+                    f"destination design"
+                )
+            elif s.takes_belt_ports:
+                out.append(
+                    f"{name} ({s.recipe_id}): none of its "
+                    f"{len(building.port_poses)} belt port(s) faces the output "
+                    f"lane below the machine band, and it has no insert pose on "
+                    f"any face either, so nothing can carry the product away"
+                )
+            elif not s.attachable_columns:
                 out.append(
                     f"{name} ({s.recipe_id}): the game's prefab gives it no "
                     f"insert pose on any face and {len(building.slots)} belt "
