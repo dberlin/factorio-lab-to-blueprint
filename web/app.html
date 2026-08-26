@@ -194,6 +194,10 @@ for (const id of ['strategy', 'candidates', 'budget']) $(id).oninput = budgetNot
 budgetNote();
 
 function start(extra = {}) {
+  // Recomputed here as well as on input: the note describes the build about to
+  // run, and a page driven programmatically (or by autofill) changes the
+  // controls without firing `input`. A stale note is a wrong claim.
+  budgetNote();
   state.solving = true; state.done = false; state.snapshot = null; state.error = null;
   state.copied = null; state.copyError = null; state.progress = null; state.settled = [];
   $('solve').disabled = true; $('copy').disabled = true;

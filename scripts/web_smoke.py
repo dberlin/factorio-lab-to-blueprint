@@ -22,8 +22,9 @@ Why every step is what it is
   the grant fails it says so and fails, rather than quietly reading the DOM
   instead.
 * **Decode, do not eyeball.**  A 10kB base64 string that is subtly wrong looks
-  exactly like one that is right.  ``decode`` -> re-``encode`` -> ``decode``
-  round-trip is the only check that could have come back false.
+  exactly like one that is right.  ``encode(decode(x)) == x``, byte for byte,
+  is the only check that could have come back false -- and it is the same check
+  ``web/smoke.py`` makes, so the two arms are held to one gate.
 * **nodriver, not Playwright.**  Same reason ``flab2bp.lab.capture`` uses it:
   Playwright ships its own browser builds and none are available for Fedora, so
   a proof driven through Playwright is a proof nobody on this machine can

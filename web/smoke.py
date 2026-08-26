@@ -157,6 +157,15 @@ async def drive(args: argparse.Namespace) -> dict[str, object]:
                 "--disable-gpu",
                 # Headless Chrome will not hand out clipboard-read without it;
                 # the write the button performs needs no permission.
+                # A no-op on Chromium 151, which ships JSPI unconditionally, and
+                # kept for older builds that still gate it. Measured: neither
+                # `--disable-features=WebAssemblyJSPromiseIntegration` nor
+                # `--js-flags=--no-wasm-jspi` nor
+                # `--js-flags=--no-experimental-wasm-jspi` turns it back off
+                # here -- `typeof WebAssembly.Suspending` reads `function` under
+                # all three -- so the no-JSPI path cannot be driven from a
+                # browser on this box. What happens without it is on record in
+                # web/CLIENTSIDE.md, measured when it could still be switched.
                 "--enable-features=WebAssemblyJSPromiseIntegration",
                 f"--unsafely-treat-insecure-origin-as-secure=http://127.0.0.1:{args.port}",
                 # The strongest form of "no server solved this": every hostname
@@ -234,6 +243,12 @@ async def drive(args: argparse.Namespace) -> dict[str, object]:
                 f"document.getElementById('candidates').value = {args.candidates};"
                 f"document.getElementById('budget').value = {args.budget};"
                 f"document.getElementById('power').checked = {str(not args.no_power).lower()};"
+                # Setting `.value` does not fire `input`, and the page's budget
+                # note is computed from these. Dispatched so the screenshot
+                # shows the note for the build that actually ran.
+                "for (const id of ['strategy','candidates','budget'])"
+                " document.getElementById(id)"
+                ".dispatchEvent(new Event('input', {bubbles: true}));"
             )
             solve_started = time.perf_counter()
             await page.evaluate("document.getElementById('solve').click()")
