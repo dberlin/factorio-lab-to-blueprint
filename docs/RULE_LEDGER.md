@@ -39,6 +39,21 @@ confirming the surrounding code**, never by assuming. Three anchors were used:
 which resolves under **neither** convention. The table is at `PlanetGrid.cs:21`.
 Recorded as a citation defect below.
 
+**Every citation was checked mechanically, not by eye.** Two passes over this
+file plus `dsp/rules.py`, `dsp/catalog.py`, `dsp/colliders.py`,
+`layout/validate.py`, `layout/slots.py` and `layout/spine.py`:
+
+* **100 distinct `File.cs:line` citations, 0 unresolvable** — every named file
+  exists in the decompiled tree and every line (and range endpoint) is in bounds;
+* **30 load-bearing citations spot-checked for content, 0 missed** — each was
+  required to contain the literal it is cited for (`0.9702957f` at
+  `BuildTool_BlueprintPaste.cs:1536`, `num21 < 2.5f` at `BuildTool_Path.cs:1980`,
+  `(short)num` at `BlueprintBuilding.cs:305`, and so on) within ±3 lines.
+
+Scripts under `/home/dannyb/.claude/jobs/66c2051c/tmp/ledger-agent/`. An
+in-bounds line number is not a citation; this is what makes "the citation
+resolves" a checked claim.
+
 ## Verdicts used
 
 | verdict | meaning |
