@@ -319,6 +319,8 @@ LOAD_BEARING: tuple[tuple[str, int, str], ...] = (
     ("BuildTool_Path.cs", 1982, "TooBendToLift"),
     # A condition that is text and nothing else.
     ("BuildPreview.cs", 93, "NeedTech"),
+    # TooSteep, where the paste and the path state the same rule differently.
+    ("BuildTool_Path.cs", 1954, "num25 > 0.8f"),
 )
 
 
