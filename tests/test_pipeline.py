@@ -11,6 +11,8 @@ from __future__ import annotations
 import pytest
 
 from flab2bp import pipeline
+from flab2bp.rates.candidates import build_candidates
+from flab2bp.spec import BuildSpecSet
 
 #: Small, and known to lay out.  One candidate and one strategy so the test
 #: costs a second of CP-SAT rather than a minute -- the sequence is the subject,
@@ -82,3 +84,58 @@ def test_a_sink_that_raises_is_not_swallowed() -> None:
         pipeline.build(
             SMALL_URL, strategy="spine", candidates=1, time_budget_s=0.5, on_progress=explode
         )
+
+
+@pytest.mark.slow
+def test_no_proliferator_keeps_only_unsprayed_candidates() -> None:
+    """`--no-proliferator` is read off the MODE, not off the label.
+
+    The candidate labelled `no-proliferator` is that candidate by convention;
+    `MachineGroup.proliferator_mode` is what actually decides whether a Spray
+    Coater gets emitted. Assert the property that matters -- nothing sprayed,
+    and so no coater in the blueprint -- rather than the name.
+    """
+    build = pipeline.build(
+        SMALL_URL,
+        strategy="spine",
+        candidates=3,
+        time_budget_s=3.0,
+        no_proliferator=True,
+    )
+    assert not any(g.is_proliferated for g in build.spec.groups), build.spec.label
+
+    from flab2bp.dsp import catalog
+
+    coaters = sum(
+        1 for b in build.placement.buildings if b.item_id == catalog.SPRAY_COATER_ID
+    )
+    assert coaters == 0
+
+
+@pytest.mark.slow
+def test_no_proliferator_refuses_rather_than_quietly_spraying() -> None:
+    """No unsprayed candidate must be a refusal, never a sprayed build.
+
+    The whole project rule: a fallback hides a bug, a refusal names one. Here
+    the fallback would be worse than usual because it is silent -- the caller
+    asked for no coaters and would get coaters.
+    """
+    def only_sprayed(*args: object, **kwargs: object) -> BuildSpecSet:
+        """Hand back only the candidates that DO spray, so none survives."""
+        spec_set = build_candidates(*args, **kwargs)  # type: ignore[arg-type]
+        sprayed = tuple(
+            s for s in spec_set.candidates if any(g.is_proliferated for g in s.groups)
+        )
+        assert sprayed, "this URL produced no sprayed candidate to filter down to"
+        return BuildSpecSet(candidates=sprayed)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(pipeline, "build_candidates", only_sprayed)
+        with pytest.raises(ValueError, match="every candidate"):
+            pipeline.build(
+                SMALL_URL,
+                strategy="spine",
+                candidates=3,
+                time_budget_s=3.0,
+                no_proliferator=True,
+            )

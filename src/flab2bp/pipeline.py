@@ -212,6 +212,7 @@ def build(
     fetch_flow: bool = False,
     fetch_timeout_s: float = 90.0,
     browser: str | None = None,
+    no_proliferator: bool = False,
     on_progress: ProgressSink | None = None,
 ) -> Build:
     """Turn a FactorioLab URL into a pasteable DSP blueprint.
@@ -300,6 +301,30 @@ def build(
         )
     else:
         flow_dropped = ()
+
+    # Asked for a build with no proliferation at all. Keep the candidates whose
+    # every group is unsprayed, and refuse if none is -- silently building a
+    # sprayed one would be the fallback this project does not do, and a
+    # particularly bad one, since the caller asked for no coaters.
+    #
+    # Read off `MachineGroup.proliferator_mode`, never off the candidate's
+    # label: the label is a name the frontier chose, and `no-proliferator` is
+    # only reliably that candidate by convention. The mode is the thing that
+    # decides whether a Spray Coater is emitted.
+    if no_proliferator:
+        unsprayed = tuple(
+            spec
+            for spec in spec_set.candidates
+            if not any(group.is_proliferated for group in spec.groups)
+        )
+        if not unsprayed:
+            raise ValueError(
+                "every candidate this URL produced sprays something, so "
+                "--no-proliferator cannot be honoured: "
+                + ", ".join(spec.label or "?" for spec in spec_set.candidates)
+                + ". Raising --candidates may surface an unsprayed one."
+            )
+        spec_set = BuildSpecSet(candidates=unsprayed)
 
     wanted = list(_STRATEGIES) if strategy == "best" else [strategy]
 

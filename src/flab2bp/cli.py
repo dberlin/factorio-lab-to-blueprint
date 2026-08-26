@@ -162,6 +162,13 @@ def main(argv: list[str] | None = None) -> int:
         help="path to the Chromium or Chrome executable --fetch-flow should drive "
         "(default: search the usual locations, or $FLAB2BP_BROWSER)",
     )
+    ap.add_argument(
+        "--no-proliferator",
+        action="store_true",
+        help="build only from candidates that spray nothing, so no Spray Coaters "
+        "are emitted. Refuses rather than falling back if every candidate this "
+        "URL produces is proliferated.",
+    )
     ap.add_argument("--budget", type=float, default=2.0, help="solver seconds per layout")
     ap.add_argument("-o", "--out", type=Path, help="write to a file instead of stdout")
     ap.add_argument("-n", "--name", default="", help="blueprint short description")
@@ -186,6 +193,7 @@ def main(argv: list[str] | None = None) -> int:
             fetch_flow=args.fetch_flow,
             fetch_timeout_s=args.fetch_timeout,
             browser=args.browser,
+            no_proliferator=args.no_proliferator,
         )
     except NoValidLayout as exc:
         # Distinct exit code: "no layout exists" is a different outcome from
