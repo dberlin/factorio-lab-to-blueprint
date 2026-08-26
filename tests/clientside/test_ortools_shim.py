@@ -19,6 +19,7 @@ Nothing here needs a browser, a wasm build, or a network.
 from __future__ import annotations
 
 import base64
+import importlib
 import json
 import subprocess
 import sys
@@ -33,9 +34,6 @@ from ortools.linear_solver import linear_solver_pb2  # type: ignore[import-untyp
 from ortools.linear_solver import pywraplp as native_pywraplp
 from ortools.sat import cp_model_pb2
 from ortools.sat.python import cp_model as native_cp_model
-from ortools.util.python import (
-    sorted_interval_list as native_domain,  # type: ignore[import-untyped]
-)
 
 from tests.clientside import _shim_child
 
@@ -157,7 +155,10 @@ def test_the_shim_builds_the_same_milp_as_real_pywraplp() -> None:
 
 def test_the_shim_domain_normalises_exactly_as_the_c_plus_plus_one_does() -> None:
     got = json.loads(_child("helpers"))["domains"]
-    Domain = native_domain.Domain
+    # Imported here rather than at module scope: ortools ships no type
+    # information, and an inline ignore on the import gets moved onto the wrong
+    # line every time the import block is re-sorted.
+    Domain = importlib.import_module("ortools.util.python.sorted_interval_list").Domain
 
     merged = Domain.from_intervals([[1, 2], [3, 4], [9, 9]])
     assert got["merge_adjacent"] == merged.flattened_intervals()
