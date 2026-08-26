@@ -1,5 +1,99 @@
 # Backlog
 
+## RESOLVED -- six coaters rode a belt that turned on their own tile, and the rule that forbids it was recorded as satisfied
+
+From the user, looking at a pasted blueprint: *"spray coaters are still broken
+-- it tries to place belts into the side and then out the front. ie in from
+side to middle and through to front."*
+
+Measured on the exact blueprint they were handed (`freeform`,
+`max-proliferation`, 20 coaters), taking each ridden belt's predecessor from
+the link graph and comparing the incoming step with the outgoing one:
+
+| population | coaters | straight | turning |
+|---|---|---|---|
+| the pasted blueprint | 20 | 14 | **6** |
+| **the game's own**, 5 in `factory-heretical-smelter-block` + 3 in `tillable-blackbox-...` | 8 | **8** | **0** |
+| `spine` on the same URL, four candidates | 38 | 38 | 0 |
+| `freeform` after the fix, four candidates | 52 | 52 | 0 |
+
+The six were at `(30,13)`, `(7,1)`, `(30,7)`, `(19,0)`, `(25,19)` and `(13,1)`,
+every one of them entering `(0, 1)` and leaving `(1, 0)` under a yaw of 90.
+
+**THE ASSUMPTION THAT HID IT.**  `docs/RULE_AUDIT.md` section 4 item 2 and this
+file's own latent bullet both ended with "our coaters sit on straight runs, so
+this is silence rather than a pass".  Nobody had counted.  `game.addon_facing`
+passed all six because it reads the ridden belt's SUCCESSOR -- which agrees
+with the yaw -- and nothing looked at where the cargo came from.
+
+**THE RULE, and two corrections to how this file described it.**  It is real
+and the decompiled source has it twice, but not where the note said:
+
+* At **145812**, in the branch where a pasted addon meets a belt already on the
+  planet or already a prebuild: both the belt's INPUT belt and its OUTPUT belt
+  must lie within `0.3f` of the addon's line when the belt is within `2.5f`,
+  and when that excusal is not taken the addon becomes
+  `EBuildCondition.Collide`.  This part the note had exactly right.
+* In **`BuildTool_Addon.CheckBuildConditions`**, the hand tool, as an ANGLE
+  over the same two neighbours -- `flag &= num9 < 20.5f || num9 > 159.5f` each,
+  plus a `< 0.6f` radial clause each.  That is the form
+  `rules.addon_ride_is_straight` ports; our grid is cardinal and the angle
+  carries the altitude clause with it.
+* **NOT in `AddonPass`**, which the note attributed it to.  `AddonPass` has no
+  corner clause at all, and its one direction test is dead for a mid-run belt:
+  `flag` is set only when exactly one of `input`/`output` is null, so a belt
+  with both leaves `num3` at `1f`.
+
+So the honest scope: a FIRST paste of a self-contained blueprint onto bare
+ground is not rejected by this geometry.  Hand placement is, and so is a paste
+that meets an existing belt or the prebuilds an earlier paste left.  It is
+enforced at ERROR anyway -- the game's own eight coaters never do it, and the
+cost of not doing it measured as zero.
+
+**WHAT IT WAS.**  The coater sat on the lane's HEAD, and the head is the tile
+the feeding net sinks into.  The two-tile lane had already fixed the successor;
+the predecessor was still whichever cell the router arrived from, and the
+router is free to come down the west channel and turn east on the addon's tile.
+A sprayed lane now starts one column WEST of the strip and the coater rides the
+second tile.  The coater itself has not moved -- still column 0, still upstream
+of every sorter, same drop cell one level up.  The head moved into
+`WEST_CHANNEL`, which `_size` already reserves and `_pack` already offsets every
+strip by.  The router still turns; it now turns on a plain belt.
+
+**PAIRED AND INTERLEAVED**, mid tier, `--budget 4`, three rounds each,
+A = `151e266c`'s `freeform.py`, B = the fix, both against a tree carrying
+`game.addon_corner`:
+
+| arm | clean | refused | INVALID |
+|---|---|---|---|
+| master's freeform | 25 / 25 / 25 | 23 | 0 |
+| + the west head | **48 / 48 / 48** | 0 | 0 |
+
+The 23 refusals are the check convicting master, not a regression: every one of
+them names `game.addon_corner`.
+
+That table cannot price the fix, because the arms wire different cells.  So a
+second interleaved run, three rounds each, with `game.addon_corner` opted out so
+that both arms can produce the sprayed cells at all: **both arms 48/48, all 48
+cells common, INVALID 0**, and the area over those 48 cells is
+
+| arm | round totals | mean |
+|---|---|---|
+| master's freeform | 29282 / 29411 / 29553 | 29415 |
+| + the west head | 29733 / 29617 / 29826 | 29725 |
+
+**+1.05%**, and it is a real cost rather than noise: master's own three-round
+range is 271 tiles wide (0.9%) and the two ranges do not overlap.  18 of the 48
+cells moved, in both directions -- the largest single change is
+`energy-matrix/max-proliferation` at +198 and `super-magnetic-ring/free` at
+-118.  One extra belt tile per sprayed lane, plus whatever the router does
+differently once the lane head is a column further west.
+
+Still latent, unchanged by this: `_place_coaters` `continue`s when a drop cell
+is not free, and now also when the lane is too short to offer a seat, so a lane
+the spec wants sprayed can silently get no coater.  Nothing checks that a
+sprayed lane HAS one.
+
 ## RESOLVED -- spine's direct inserts took machine slots and told nobody
 
 The coin-flip refusal on the user's 24-group URL --
@@ -211,12 +305,10 @@ was wrong about where the problem was.  Both are recorded below with why.
   `world_gap` for the two-tile offset is 0.94 against `ADDON_AREA_RADIUS` 1.0.
   Not used, because the unported `DistancePointLine < 0.3f` companion clause is
   what would decide it and nobody has ported it.
-* The real paste rule is STRICTER than `game.addon_facing`.  At decompiled
-  145812 the excusal requires the ridden belt's own INPUT belt and OUTPUT belt
-  to lie within 0.3 of the addon's line as well, when the belt is within 2.5 of
-  the addon -- so a coater on a CORNER is refused even though its successor
-  alone is parallel.  Our coaters now sit on straight runs and satisfy it; the
-  check does not test it, so that is silence rather than a pass.
+* ~~The real paste rule is STRICTER than `game.addon_facing`~~ -- **RESOLVED,
+  and the second half of this bullet was FALSE.**  "Our coaters now sit on
+  straight runs and satisfy it" was not true: six of twenty did not, and the
+  user found them by pasting.  See the entry below.
 
 ## RESOLVED (superseded) -- freeform's proliferator chain crosses a Spray Coater it cannot get around
 
