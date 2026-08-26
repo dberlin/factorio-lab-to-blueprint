@@ -2994,16 +2994,20 @@ def _power_too_close(ctx: Context) -> Iterable[Finding]:
     building's local offset is relative to its own area, and the flat frame puts
     two areas' buildings tens of tiles from where they belong.
 
-    ORDERED pairs, not unordered, because the rule is not symmetric.  The guard
-    at ``:2527`` exempts an ACCUMULATOR being placed; the loop it guards asks
-    only ``isPowerNode`` of the building it looks at.  So an Accumulator may
-    stand on top of another Accumulator, and a Tesla Tower may not stand on top
-    of either -- and the game reaches that verdict when it evaluates the tower's
-    own preview.  Testing one direction would miss exactly that case.
+    ORDERED pairs, not unordered, because the rule is not symmetric -- twice
+    over.  The guard at ``:2527`` exempts an ACCUMULATOR being placed while the
+    loop it guards asks only ``isPowerNode`` of the building it looks at, so an
+    Accumulator may stand on top of another Accumulator and a Tesla Tower may
+    not stand on top of either.  And the loop scans only protos in
+    :data:`~flab2bp.dsp.rules.PASTE_POWER_NODE_IDS`, which the Signal Tower is a
+    power node OUTSIDE of.  Both asymmetries land on the same case: the game
+    reaches its verdict when it evaluates the OTHER preview, so testing one
+    direction would report the pair clean.
     """
     nodes = _power_nodes(ctx)
     if len(nodes) < 2:
         return
+    lo, hi = rules.PASTE_POWER_NODE_IDS
     poses = [
         colliders.flat_pose(*codec.tile_to_local_offset(b.x, b.y, b.z, b.width, b.height), b.yaw)[
             0
@@ -3015,9 +3019,11 @@ def _power_too_close(ctx: Context) -> Iterable[Finding]:
         for c in range(a + 1, len(nodes)):
             ic, bc, nc = nodes[c]
             d2 = sum((p - q) ** 2 for p, q in zip(poses[a], poses[c], strict=True))
-            cond = rules.power_node_condition(na, nc, d2) or rules.power_node_condition(
-                nc, na, d2
-            )
+            cond = None
+            if lo <= bc.item_id < hi:
+                cond = rules.power_node_condition(na, nc, d2)
+            if cond is None and lo <= ba.item_id < hi:
+                cond = rules.power_node_condition(nc, na, d2)
             if cond is None:
                 continue
             yield Finding(

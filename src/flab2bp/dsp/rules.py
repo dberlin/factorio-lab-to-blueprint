@@ -123,6 +123,7 @@ __all__ = [
     "OUTPUT_FROM_SLOT",
     "PASTE_LATERAL",
     "PASTE_LATERAL_EPS",
+    "PASTE_POWER_NODE_IDS",
     "PASTE_RADIAL",
     "PASTE_SNAP",
     "POWER_TOO_CLOSE_SQR",
@@ -921,6 +922,32 @@ WIND_TOO_CLOSE_SQR = 110.25
 #: both buildings ``geothermal``.  The Geothermal Power Station is the only
 #: building in the catalog carrying the flag.
 GEOTHERMAL_TOO_CLOSE_SQR = 144.0
+
+#: The proto-id window the paste's two BLUEPRINT-side loops scan, half-open.
+#: ``BuildTool_BlueprintPaste.cs:2596`` (prebuilds already on the ground) and
+#: ``:2648`` (the other previews of this paste)::
+#:
+#:     if (prebuildPool[num41].id != num41 || prebuildPool[num41].protoId < 2199
+#:         || prebuildPool[num41].protoId > 2299) continue;
+#:     if (buildPreview3.item.ID < 2199 || buildPreview3.item.ID > 2299) continue;
+#:
+#: NOT redundant with ``isPowerNode``, which those loops also test three lines
+#: later, and not a paraphrase of it: the **Signal Tower** (3007) is a power
+#: node -- 60.5 connect distance, 14.5 cover radius -- and it is OUTSIDE this
+#: window.  So the rule is one-sided a second time, on identity rather than on
+#: flags: a Signal Tower being placed sees a Tesla Tower and is refused, the
+#: Tesla Tower being placed does not see the Signal Tower, and two Signal
+#: Towers may be packed solid.
+#:
+#: The FIRST loop -- against the planet's live power network, ``:2549-2591`` --
+#: has no such window, because it walks ``factory.powerSystem`` and everything
+#: in there is a node by construction.  That loop is not ported at all: it tests
+#: a paste against what is ALREADY on the player's ground, which we cannot know.
+#:
+#: A half-open PAIR rather than a ``range`` for the same reason
+#: :data:`BELT_INPUT_SLOTS` is one -- ``tests/rules`` perturbs a rule by scaling
+#: the numbers inside it, and a ``range`` object has none it can reach.
+PASTE_POWER_NODE_IDS = (2199, 2300)
 
 
 def power_node_gate_sqr(*, wind_forced_power: bool = False, geothermal: bool = False) -> float:

@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from flab2bp.dsp import params
+from flab2bp.dsp import params, rules
 from flab2bp.dsp.catalog import (
     DEFAULT_MAX_BELT_Z,
     ENERGY_EXCHANGER_ID,
@@ -52,6 +52,7 @@ WIND_TURBINE = 2203  # windForcedPower: the 110.25 spacing tier
 SOLAR_PANEL = 2205  # a power NODE with cover_radius 0 -- not a "tower"
 ACCUMULATOR = 2206  # isAccumulator: the one exemption from the spacing rule
 GEOTHERMAL = 2213  # geothermal: the widest spacing tier, 12.0 world units
+SIGNAL_TOWER = 3007  # a power node OUTSIDE the paste's 2199..2299 scan window
 CHEM_PLANT = 2309  # Chemical Plant, 9x5 -- big enough to distinguish
                    # centre-based from tile-based power coverage
 BELT_REQUIRED = "prolif.belt_required_edges_not_direct_inserted"
@@ -1541,6 +1542,28 @@ def test_game_power_too_close_holds_geothermal_to_the_widest_tier() -> None:
         width=turbine.width, height=turbine.height,
     )
     assert not fired(validate(place(a, other)), "game.power_too_close")
+
+
+def test_game_power_too_close_ignores_a_peer_outside_the_pastes_id_window() -> None:
+    """``protoId < 2199 || > 2299``, which is identity and not flags.
+
+    The Signal Tower IS a power node -- 60.5 connect distance -- and the paste's
+    blueprint-side loops do not look at it.  So two of them may be packed solid,
+    while a Signal Tower next to a Tesla Tower IS refused: the tower is inside
+    the window, so the Signal Tower's own preview sees it.  This is the second
+    asymmetry in the rule and it is why the check walks ordered pairs.
+    """
+    signal = catalog_building(SIGNAL_TOWER)
+    lo, hi = rules.PASTE_POWER_NODE_IDS
+    assert signal.is_power_node and not (lo <= SIGNAL_TOWER < hi)
+    a = PlacedBuilding(
+        item_id=SIGNAL_TOWER, model_index=signal.model_index, x=0, y=0,
+        width=signal.width, height=signal.height,
+    )
+    # A Signal Tower is 9x9, so `a`'s centre is (4, 4); one tile of centre
+    # separation is 1.257 world units, well inside the 3.5 bound.
+    assert not fired(validate(place(a, dataclasses.replace(a, x=1))), "game.power_too_close")
+    assert fired(validate(place(a, tower(5, 4))), "game.power_too_close")
 
 
 def test_game_power_too_close_counts_altitude() -> None:

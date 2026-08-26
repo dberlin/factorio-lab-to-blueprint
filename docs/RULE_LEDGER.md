@@ -96,6 +96,7 @@ level, the row names the tech, where the game reads it, and what we assume.
 | **`POWER_TOO_CLOSE_SQR = 12.25`** (new) | KEEP | `BuildTool_BlueprintPaste.cs:2547` `float num37 = (geothermal ? 144f : (windForcedPower ? 110.25f : 12.25f));`, applied at `:2677`/`:2681` → `EBuildCondition.PowerTooClose` (`EBuildCondition.cs:8`) | `PrefabDesc.isPowerNode && !isAccumulator`, `:2527` |
 | **`WIND_TOO_CLOSE_SQR = 110.25`** (new) | KEEP | same `num37`; `:2667` `if (windForcedPower && item.prefabDesc.windForcedPower && num35 < 110.25f)` | `windForcedPower` on **both** buildings |
 | **`GEOTHERMAL_TOO_CLOSE_SQR = 144.0`** (new) | KEEP | same `num37`; `:2672` `if (geothermal && item.prefabDesc.geothermal && num35 < 144f)` | `geothermal` on **both** buildings |
+| **`PASTE_POWER_NODE_IDS = (2199, 2300)`** (new) | KEEP | `BuildTool_BlueprintPaste.cs:2596` and `:2648` `if (buildPreview3.item.ID < 2199 \|\| buildPreview3.item.ID > 2299) continue;` | building IDENTITY, not flags — the Signal Tower (3007) is a power node OUTSIDE it |
 
 ## 1c. `PowerTooClose` — the row a shipped blueprint wrote
 
@@ -134,6 +135,16 @@ Three things this row records that a bare constant would have lost:
   the same condition under the identical `num35 < 12.25f`. The pair collapses.
   It is **not ported**, and this row says why, so nobody re-adds it as a
   correction.
+* **A term that looks redundant and is not.** The loops filter
+  `protoId < 2199 || > 2299` *and then* test `isPowerNode`, which reads like
+  belt and braces. It is not: the **Signal Tower** (3007) is a power node — with
+  the longest connect distance in the game, 60.5 — and it sits outside the
+  window. So the rule is one-sided a second time, on identity rather than on
+  flags: two Signal Towers may be packed solid, a Signal Tower next to a Tesla
+  Tower is refused, and the Tesla Tower's own preview never sees the Signal
+  Tower. That is why the check walks **ordered** pairs rather than unordered
+  ones, and `test_the_scan_window_excludes_a_power_node_that_is_really_a_power
+  _node` exists so the "obviously redundant" reading cannot delete it later.
 
 **Falsification, and it is the whole reason to believe the row.** Over the seven
 single-area blueprints in `tests/fixtures` — 75 power nodes, 1468 pairs, written
@@ -152,6 +163,34 @@ chains areas through `parentIndex`. Dropped into one flat frame they report
 **102,875** convicting pairs, including Wind Turbines placed 0.30 world units
 apart — inside their own 3×3 footprints, which is impossible. Restricting to
 pairs within one area takes two of the four to zero on its own.
+
+### What complying with it cost
+
+Both packers were changed to consult `rules.power_node_keepout_offsets`, so the
+question "does refusing this geometry cost density?" has an answer rather than a
+hope. Paired and interleaved against a **separate checkout of `0aa4fad6`** with
+its own `uv sync` — three reps per arm, arms alternating, `--budget 4`, the full
+144-cell corpus — over the **124 cells CLEAN in all six runs**:
+
+| | rep 1 / 2 / 3 | mean | within-arm spread |
+|---|---|---|---|
+| spine, master | 473303 / 475964 / 474382 | 474550 | 0.561% |
+| spine, this branch | 473741 / 473308 / 474533 | 473861 | **0.259%** |
+| freeform, master | 86055 / 85877 / 87411 | 86448 | 1.774% |
+| freeform, this branch | 87437 / 85905 / 85993 | 86445 | **1.772%** |
+
+**spine −0.145%, freeform −0.003%**, and the paired per-rep deltas change sign
+across reps in both — spine `+0.093 / −0.558 / +0.032`, freeform
+`+1.606 / +0.033 / −1.622`. Every one of those is inside the arm's own
+rep-to-rep spread, which is what "no measurable area cost" looks like when it is
+measured rather than asserted.
+
+**INVALID 0 in all six runs.** No refusal in any run of either arm names
+`game.power_too_close` or `power.coverage`: every refusal in the branch arm is
+one of the four families master already has (the freeform 15s deadline,
+`flow.conservation`, `flow.lane_*`, `geom.collide`), and each appears in both
+arms. Clean-cell counts are 128/127/129 for master and 127/128/126 for the
+branch — overlapping ranges, one cell apart on the mean.
 
 `OPEN`, recorded and not fixed: loops one and two of the three
 (`:2549-2591` against the planet's live power network, `:2593-2640` against

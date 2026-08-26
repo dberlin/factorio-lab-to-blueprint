@@ -592,6 +592,17 @@ _RULES: tuple[Entry, ...] = (
         lint=True,
         note="Geothermal Power Station against itself only; 12.0 world units.",
     ),
+    _e(
+        "rules.PASTE_POWER_NODE_IDS",
+        Kind.RULE,
+        lint=False,  # 2199 and 2300 are ids; a bare match would be noise
+        note=(
+            "`protoId < 2199 || protoId > 2299` in both blueprint-side loops of "
+            "the spacing pass.  Identity, not flags: the Signal Tower (3007) is "
+            "a power node and is outside it, which makes the rule one-sided in "
+            "a second way."
+        ),
+    ),
     _e("rules.power_node_gate_sqr", Kind.RULE, depends_on=_POWER_TIER),
     _e(
         "rules.power_node_condition",

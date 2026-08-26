@@ -109,6 +109,10 @@ VERDICTS: dict[str, tuple[str, str]] = {
     # Geothermal Power Station, so no probe can move -- and both are checked, on
     # buildings the validator constructs, precisely so a tier we do not emit
     # cannot rot into a wrong number nobody notices.
+    "rules.PASTE_POWER_NODE_IDS": (
+        "validator",
+        "the proto-id window the spacing loops scan; identity, not flags",
+    ),
     "rules.WIND_TOO_CLOSE_SQR": ("validator", "wind-to-wind spacing; we place no turbine"),
     "rules.GEOTHERMAL_TOO_CLOSE_SQR": (
         "validator",

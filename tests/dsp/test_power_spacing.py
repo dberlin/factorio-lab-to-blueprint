@@ -293,6 +293,26 @@ def test_the_upper_tiers_need_the_flag_on_both_buildings() -> None:
     assert R.power_node_condition(GEOTHERMAL, WIND, gap2(9)) is None
 
 
+def test_the_scan_window_excludes_a_power_node_that_is_really_a_power_node() -> None:
+    """``protoId < 2199 || > 2299`` is identity, and it is not redundant.
+
+    Recorded because the obvious reading -- "that window IS the set of power
+    nodes, so the `isPowerNode` test three lines later is belt and braces" -- is
+    false, and acting on it would delete a real term.  The Signal Tower is the
+    counterexample: a power node with the LONGEST connect distance in the game,
+    sitting outside the window.
+    """
+    lo, hi = R.PASTE_POWER_NODE_IDS
+    assert (lo, hi) == (2199, 2300)
+    nodes = {b.item_id for b in cat.all_buildings() if b.is_power_node}
+    inside = {i for i in nodes if lo <= i < hi}
+    assert nodes - inside == {3007}, "the Signal Tower is the whole of the discrepancy"
+    assert len(inside) == 12
+    assert cat.building(3007).connect_distance == max(
+        b.connect_distance for b in cat.all_buildings()
+    )
+
+
 def test_the_accumulator_exemption_is_one_sided() -> None:
     """``isPowerNode && !isAccumulator`` guards the building being PLACED only."""
     assert R.power_node_condition(ACCUMULATOR, ACCUMULATOR, 0.0) is None
