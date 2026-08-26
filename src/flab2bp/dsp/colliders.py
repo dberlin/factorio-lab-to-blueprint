@@ -566,6 +566,202 @@ def collisions(
     return sorted(hits)
 
 
+# --- sorters ----------------------------------------------------------------
+
+#: How far a sorter's collider grows past an end that meets a BELT, or nothing.
+#: ``CheckBuildConditions`` 2137-2158 of the decompiled
+#: ``BuildTool_BlueprintPaste``.  The shift and the growth are the same number,
+#: so the box grows on that side only -- by ``2 * 0.35``, since the shift moves
+#: the far face out as well.
+SORTER_END_EXTENSION = 0.35
+
+#: Floor on the stretched half-length, same passage.  It does NOT undo the
+#: shift, which is why two very short sorters can still be pushed into contact.
+SORTER_HALF_LENGTH_MIN = 0.1
+
+
+@dataclass(frozen=True)
+class SorterPreview:
+    """One sorter as the paste tests it, in blueprint local-offset coordinates.
+
+    ``(x, y, z)`` is ``BuildPreview.lpos`` -- the end the sorter draws FROM --
+    and ``(x2, y2, z2)`` is ``lpos2``, the end it feeds INTO.  Both must already
+    be SEATED: ``BlueprintUtils.RefreshBuildPreview`` moves each end onto the
+    slot pose it names before any condition is evaluated::
+
+        Pose pose = buildPreview2.input.desc.slotPoses[buildPreview2.inputFromSlot];
+        Pose transformedBy = pose.GetTransformedBy(
+            new Pose(buildPreview2.input.lpos, buildPreview2.input.lrot));
+        buildPreview2.lpos = transformedBy.position;
+
+    guarded by ``!buildPreview2.input.desc.isBelt``, and symmetrically for
+    ``lpos2`` against ``outputToSlot``.  So where WE put a sorter's machine end
+    does not survive the paste: the slot INDEX decides it.  A caller that passes
+    the tile centre it emitted is asking a question about a sorter the game will
+    not build.
+
+    ``input_open`` and ``output_open`` are the branch conditions on that end --
+    true when it meets a belt (``desc.isBelt``) or meets nothing at all
+    (``inputObjId == 0 && input == null``).  Both cases extend the box; a machine
+    end does not.
+    """
+
+    model_index: int
+    x: float
+    y: float
+    z: float
+    x2: float
+    y2: float
+    z2: float
+    input_open: bool = True
+    output_open: bool = True
+
+
+def sorter_box(p: SorterPreview) -> Box:
+    """A sorter's build collider, stretched between its two ends.
+
+    A sorter is the one building whose collider is not the prefab box placed at
+    the record's position.  ``BuildTool_BlueprintPaste.CheckBuildConditions``
+    rebuilds it (decompiled ``BuildTool_BlueprintPaste`` 2136-2166)::
+
+        if (buildPreview2.desc.isInserter)
+        {
+            colliderData.ext = new Vector3(colliderData.ext.x, colliderData.ext.y,
+                Vector3.Distance(lpos2, lpos) * 0.5f + colliderData.ext.z - 0.5f);
+            if (ObjectIsBelt(inputObjId) || (input != null && input.desc.isBelt))
+            { colliderData.pos.z -= 0.35f; colliderData.ext.z += 0.35f; }
+            else if (inputObjId == 0 && input == null)
+            { colliderData.pos.z -= 0.35f; colliderData.ext.z += 0.35f; }
+            if (ObjectIsBelt(outputObjId) || (output != null && output.desc.isBelt))
+            { colliderData.pos.z += 0.35f; colliderData.ext.z += 0.35f; }
+            else if (outputObjId == 0 && output == null)
+            { colliderData.pos.z += 0.35f; colliderData.ext.z += 0.35f; }
+            if (colliderData.ext.z < 0.1f) colliderData.ext.z = 0.1f;
+            colliderData.pos = vector2 + quaternion * colliderData.pos;
+            colliderData.q = quaternion * colliderData.q;
+        }
+
+    with, from the same method 1848-1854::
+
+        Vector3 vector2 = Vector3.Lerp(lpos, lpos2, 0.5f);
+        Vector3 forward2 = lpos2 - lpos;
+        Quaternion quaternion = Quaternion.LookRotation(
+            forward2, (lrot * Vector3.up + lrot2 * Vector3.up).normalized);
+
+    So the box is centred on the MIDPOINT of the two ends, its local ``+z``
+    runs from ``lpos`` toward ``lpos2``, and it is as long as the sorter plus
+    :data:`SORTER_END_EXTENSION` past each open end.  ``ext.x`` and ``ext.y``
+    stay the prefab's -- 0.26 and 0.15, so the box is 0.52 wide, which is
+    0.41 of a 1.2566-unit tile.
+
+    The TARGET side agrees, and that had to be checked separately: the box a
+    query hits belongs to ``BuildPreviewModel.SetCollider``, which repeats this
+    same stretch verbatim, on a transform ``BuildModel.AddPreviewModel`` seats at
+    ``(bp.lpos + bp.lpos2) * 0.5f`` with the same ``LookRotation``.  Both sides
+    of the test are therefore this box.  ``BuildTool_BlueprintPaste`` 1749-1770
+    is what puts those colliders in the world during a paste, so this is the
+    paste's test and not only the interactive tool's.
+    """
+    lpos, _ = flat_pose(p.x, p.y, p.z, 0.0)
+    lpos2, _ = flat_pose(p.x2, p.y2, p.z2, 0.0)
+    (pos, ext, q) = build_colliders(p.model_index)[0]
+
+    half_z = math.dist(lpos, lpos2) * 0.5 + ext[2] - 0.5
+    off_z = pos[2]
+    if p.input_open:
+        off_z -= SORTER_END_EXTENSION
+        half_z += SORTER_END_EXTENSION
+    if p.output_open:
+        off_z += SORTER_END_EXTENSION
+        half_z += SORTER_END_EXTENSION
+    half_z = max(half_z, SORTER_HALF_LENGTH_MIN)
+
+    forward = (lpos2[0] - lpos[0], lpos2[1] - lpos[1], lpos2[2] - lpos[2])
+    if _dot(forward, forward) < 1e-4:
+        # ``forward2 = Maths.SphericalRotation(lpos, 0f).Forward()``, which on
+        # the flat model is local north.
+        forward = (0.0, 0.0, 1.0)
+    rot = _look_rotation(forward, (0.0, 1.0, 0.0))
+    centre = _qrot(rot, (pos[0], pos[1], off_z))
+    mid = (
+        (lpos[0] + lpos2[0]) * 0.5,
+        (lpos[1] + lpos2[1]) * 0.5,
+        (lpos[2] + lpos2[2]) * 0.5,
+    )
+    return Box(
+        (mid[0] + centre[0], mid[1] + centre[1], mid[2] + centre[2]),
+        (ext[0], ext[1], half_z),
+        _qmul(rot, q),
+    )
+
+
+def sorter_collisions(previews: Sequence[SorterPreview]) -> list[tuple[int, int]]:
+    """Index pairs of sorters the game rejects with ``EBuildCondition.Collide``.
+
+    Sorter-on-sorter is the ONE pairing the paste's collision excusal does not
+    forgive.  ``CheckBuildConditions`` 2290 reads::
+
+        if ((buildPreview2.desc.isInserter && !component.buildPreview.desc.isInserter)
+         || (!buildPreview2.desc.isInserter && component.buildPreview.desc.isInserter)
+         || (!buildPreview2.desc.isBelt && component.buildPreview.desc.isBelt))
+            continue;
+
+    -- an exclusive OR.  A sorter is excused against everything that is not a
+    sorter, and everything that is not a sorter is excused against a sorter, so
+    the only un-excused hit a sorter can score is against another sorter, and
+    that one is a real ``Collide``.  Nothing later takes it back: the second pass
+    at 3558-3670 re-runs the identical query and the identical excusal, and only
+    for a sorter one of whose peers is COVERING an existing building.
+
+    This is why the pairing matters at all, and it is not a theory: it is the
+    error the user's game reported, by name, on the two clusters this function
+    convicts in ``tests/fixtures/sorter-collide-freeform.txt``.
+
+    THE FIXTURE COUNTER-MEASUREMENT, which is what makes it safe to raise as an
+    error.  Over the 1132 sorters in the five single-area fixtures -- blueprints
+    the game itself wrote -- this reports ZERO pairs.  That is not a vacuous
+    sample: the same corpus has 97 pairs of sorter BODIES sharing a plan tile and
+    35 belt-to-belt sorters, so a rule that banned either of those would light it
+    up.  The box is what separates them.  ``test_sorter_collisions_are_absent_
+    from_the_game_s_own_blueprints`` pins it.
+
+    Multi-area fixtures are excluded from that statement, and must be: a
+    building's local offset is relative to its own area, so putting two areas in
+    one flat frame moves sorter ends by up to 73 units and the answer is noise.
+
+    ONE TERM IS MODELLED OUT, stated rather than hidden.  When a sorter's
+    machine end is seated and its OTHER end is a belt lying across the sorter
+    (``|Dot(sorter axis, belt forward)| < 0.5``), ``RefreshBuildPreview``
+    2100-2106 drags the belt end sideways by the seating delta.  We seat but do
+    not drag.  Measured on the failing blueprint the difference is 0.263 against
+    0.300 units of penetration on the same three pairs -- it changes no verdict
+    there, and it cannot manufacture one, because the drag is bounded by the
+    seating delta and our seating delta is at most a tile edge.
+    """
+    boxes = [sorter_box(p) for p in previews]
+    cell = 8.0
+    grid: dict[tuple[int, int, int], list[int]] = {}
+    for i, box in enumerate(boxes):
+        reach = max(box.half) + 0.01
+        lo = tuple(int(math.floor((box.centre[k] - reach) / cell)) for k in range(3))
+        hi = tuple(int(math.floor((box.centre[k] + reach) / cell)) for k in range(3))
+        for cx in range(lo[0], hi[0] + 1):
+            for cy in range(lo[1], hi[1] + 1):
+                for cz in range(lo[2], hi[2] + 1):
+                    grid.setdefault((cx, cy, cz), []).append(i)
+    hits: set[tuple[int, int]] = set()
+    for bucket in grid.values():
+        for a in range(len(bucket)):
+            for b in range(a + 1, len(bucket)):
+                i, j = bucket[a], bucket[b]
+                pair = (i, j) if i < j else (j, i)
+                if pair in hits:
+                    continue
+                if obb_overlap(boxes[i], boxes[j]):
+                    hits.add(pair)
+    return sorted(hits)
+
+
 # --- belts ------------------------------------------------------------------
 #
 # A belt is not tested with its build collider.  The SAME query loop in

@@ -949,6 +949,63 @@ def _collide(ctx: Context) -> Iterable[Finding]:
         )
 
 
+@check("game.sorter_collide")
+def _sorter_collide(ctx: Context) -> Iterable[Finding]:
+    """Two sorters whose stretched build colliders intersect.
+
+    ``geom.collide`` leaves sorters out because the game excuses a sorter
+    against everything that is not a sorter.  This is the other half of that
+    sentence: sorter against SORTER is the one pairing the excusal does not
+    forgive, and :func:`flab2bp.dsp.colliders.sorter_collisions` holds the C#
+    for both the excusal and the box.
+
+    Two things this check must do that a naive port would not, and both are
+    load-bearing:
+
+    * **Seat each end on the slot pose it names.**  The paste MOVES a sorter's
+      machine end onto ``slotPoses[slot].GetTransformedBy(machine pose)`` before
+      it tests anything (``BlueprintUtils.RefreshBuildPreview`` 2090-2190).  We
+      emit tile centres; the game does not build them there.  Testing the tile
+      centre would be testing a sorter the game will not paste.  A belt end is
+      NOT seated -- the game's own guard is ``!desc.isBelt``.
+    * **Stretch the box.**  A sorter's collider is not the prefab box at the
+      record's position; it spans the two ends and grows past any end that meets
+      a belt or nothing.
+
+    WHY THIS IS AN ERROR AND NOT OPT-IN, which is the question ``game.belt_collide``
+    answers the other way.  Over the 1132 sorters in the five single-area
+    fixtures this reports ZERO pairs, and the sample is not vacuous -- the same
+    corpus overlaps sorter bodies on a shared tile 97 times and carries 35
+    belt-to-belt sorters, so a rule that convicted either shape would light it
+    up.  Against that, the blueprint in ``tests/fixtures/sorter-collide-freeform.txt``
+    -- which the user pasted and the game refused with "Collide with other
+    object" -- is convicted on exactly the two clusters the game drew red, at
+    0.30 units of penetration against a measured model noise floor of 0.002.
+    """
+    seats: list[tuple[int, dsp_colliders.SorterPreview]] = []
+    for i, b in ctx.of_kind(Kind.SORTER):
+        seat = slots.seated_sorter(b, ctx.placement.buildings)
+        if seat is not None:
+            seats.append((i, seat))
+
+    for a, c in dsp_colliders.sorter_collisions([p for _i, p in seats]):
+        ia, ic = seats[a][0], seats[c][0]
+        ba, bc = ctx.placement.buildings[ia], ctx.placement.buildings[ic]
+        yield Finding(
+            "game.sorter_collide",
+            Severity.ERROR,
+            f"sorter colliders intersect: sorter {ia} "
+            f"({ba.x},{ba.y})->({ba.x2},{ba.y2}) and sorter {ic} "
+            f"({bc.x},{bc.y})->({bc.x2},{bc.y2}); the game excuses a sorter "
+            f"against everything except another sorter",
+            (ia, ic),
+            {
+                "a": str((ba.x, ba.y, ba.x2, ba.y2)),
+                "b": str((bc.x, bc.y, bc.x2, bc.y2)),
+            },
+        )
+
+
 @check("geom.belt_single_occupancy")
 def _belt_single(ctx: Context) -> Iterable[Finding]:
     """One belt per tile -- unless the tile is a junction, where several is how

@@ -6306,6 +6306,11 @@ def _build(
     # BELT index, which is what makes a lane serving several destinations one
     # node instead of several.
     joined: dict[str, list[tuple[int, int]]] = defaultdict(list)
+    # Every sorter already standing, as the PASTE will test it.  Built once and
+    # extended by each bridge that lands: `_bridge` is asked once per lane pair
+    # and rebuilding this inside it is quadratic in the sorter count, which on a
+    # stress spec is thousands.
+    standing = slots.sorter_seat_boxes(canvas.buildings)
     for (src_key, item, dest_group), srcs in out_ports.items():
         # One output lane may serve SEVERAL destination groups -- see
         # `_merge_lanes` -- and each of them is its own set of consumer strips to
@@ -6327,7 +6332,7 @@ def _build(
                 lane_of[sink.belt] = sink
                 lane_demand[item][sink.belt] = sink.machines * in_rate
                 if (src_key, dest) in direct_keys and _bridge(
-                    canvas, port, sink, rates, item
+                    canvas, port, sink, rates, item, standing
                 ):
                     direct_placed += 1
                     continue
@@ -6553,6 +6558,7 @@ def _bridge(
     dst: _Port,
     rates: dict[str, Fraction],
     item: str,
+    standing: list[colliders.Box],
 ) -> bool:
     """Span two lane ends with one sorter, replacing a whole belt route.
 
@@ -6561,32 +6567,42 @@ def _bridge(
     should guarantee it does, but a sorter that cannot exist would produce a
     blueprint that pastes and then does not run -- the worst failure mode -- so
     this is checked rather than assumed.
+
+    **NOT ANY SHARED COLUMN WILL DO**, and this used to take the westmost one.
+    A bridge is a BELT-TO-BELT sorter, so the game grows its collider by
+    ``colliders.SORTER_END_EXTENSION`` past BOTH ends -- 0.7 units, more than
+    half a tile, at each end -- while a sorter serving a machine grows at one
+    end only.  Drop a bridge onto a column where a strip's own sorter already
+    meets one of the two lanes and the two boxes intersect, which the game
+    refuses with ``EBuildCondition.Collide``: sorter against sorter is the one
+    pairing its excusal does not forgive.  That is the defect this argument
+    exists for, reported from the game on a blueprint whose bridge landed on the
+    same belt tile a smelter's output sorter was already using; see
+    ``validate.game.sorter_collide``.
+
+    ``standing`` is that answer prepared: the seated box of every sorter already
+    placed, which the caller builds once and this extends.  Every shared column
+    is tried, west to east, and the first one whose seated box clears them all
+    is the one taken.  When none
+    does, ``False`` -- and the caller routes a belt instead, which is the same
+    thing it does when the lanes are out of reach.  That is not a fallback: a
+    belt route is the general case and a bridge is the optimisation.
     """
     span = dst.y - src.y
     if span < 1 or span > catalog.SORTER_MAX_REACH:
         return False
 
-    # Any column both lanes cover will do, so take the westmost shared one.
-    shared = range(max(src.x0, dst.x0), min(src.x1, dst.x1) + 1)
-    column = next(
-        (
-            x
-            for x in shared
-            if (x, src.y, 0) in canvas.blocked and (x, dst.y, 0) in canvas.blocked
-        ),
-        None,
-    )
-    if column is None:
-        return False
-
-    src_belt = canvas.blocked[column, src.y, 0]
-    dst_belt = canvas.blocked[column, dst.y, 0]
-    if src_belt == dst_belt:
-        return False
-
     tier, _ = _pick_sorter(rates.get(item, Fraction(1)), span, 1)
-    canvas.buildings.append(
-        PlacedBuilding(
+    for column in range(max(src.x0, dst.x0), min(src.x1, dst.x1) + 1):
+        if (column, src.y, 0) not in canvas.blocked:
+            continue
+        if (column, dst.y, 0) not in canvas.blocked:
+            continue
+        src_belt = canvas.blocked[column, src.y, 0]
+        dst_belt = canvas.blocked[column, dst.y, 0]
+        if src_belt == dst_belt:
+            continue
+        bridge = PlacedBuilding(
             item_id=tier,
             model_index=catalog.building(tier).model_index,
             x=column,
@@ -6601,8 +6617,14 @@ def _bridge(
             input_obj=src_belt,
             output_obj=dst_belt,
         )
-    )
-    return True
+        if not slots.sorter_seat_is_clear(bridge, canvas.buildings, standing):
+            continue
+        canvas.buildings.append(bridge)
+        seat = slots.seated_sorter(bridge, canvas.buildings)
+        if seat is not None:
+            standing.append(colliders.sorter_box(seat))
+        return True
+    return False
 
 
 @dataclass(frozen=True, slots=True)

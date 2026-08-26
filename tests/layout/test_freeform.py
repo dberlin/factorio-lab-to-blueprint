@@ -16,7 +16,7 @@ from typing import Any
 
 import pytest
 
-from flab2bp.dsp import catalog
+from flab2bp.dsp import catalog, colliders
 from flab2bp.layout import freeform, junction, slots, validate
 from flab2bp.layout.base import (
     DETERMINISTIC_WORKERS,
@@ -39,6 +39,7 @@ from flab2bp.layout.freeform import (
     MU_DIRECT,
     FreeformLayout,
     _astar,
+    _bridge,
     _build,
     _Canvas,
     _canvas_span,
@@ -920,6 +921,87 @@ class TestDirectInsertion:
             and b.input_obj in machines
             and b.output_obj in machines
         ], "a machine-to-machine sorter appeared; the reach arithmetic above is stale"
+
+    def test_a_bridge_declines_the_column_a_strip_sorter_already_meets(self) -> None:
+        """The guard, asked about the sorter the PASTE will build.
+
+        A bridge is belt-to-belt, so the game grows its collider past BOTH ends;
+        drop one on a lane tile a strip's own sorter already meets and the two
+        boxes overlap by twice ``SORTER_END_EXTENSION``, which the game refuses
+        as ``Collide``.  ``_bridge`` has always asked before taking a column --
+        but it asked about a sorter carrying the dataclass default of zero in
+        every slot field, because ``assign_sorter_slots`` does not run until
+        emission.  Seated on slot 0 the standing sorter's box sits a whole
+        four fifths of a tile west of where the paste will put it, so the
+        colliding column looked free: 15 of 96 corpus cells came out with
+        bridges ``game.sorter_collide`` then convicted.
+
+        Column 5 here is that column.  Column 6 carries the same pair of lanes
+        and nothing standing, so a bridge belongs there and the guard must not
+        refuse the transfer outright.
+        """
+        machine = PlacedBuilding(
+            item_id=2304,
+            model_index=catalog.building(2304).model_index,
+            x=4,
+            y=4,
+            width=3,
+            height=3,
+        )
+        belt = catalog.building(2001)
+        lane = [
+            PlacedBuilding(item_id=2001, model_index=belt.model_index, x=x, y=y)
+            for y in (2, 0)
+            for x in (5, 6)
+        ]
+        standing = PlacedBuilding(
+            item_id=2011,
+            model_index=catalog.building(2011).model_index,
+            x=5,
+            y=2,
+            x2=5,
+            y2=4,
+            z2=F(0),
+            input_obj=1,
+            output_obj=0,
+        )
+        canvas = _Canvas(buildings=[machine, *lane, standing])
+        canvas.blocked = {
+            (b.x, b.y, 0): i + 1 for i, b in enumerate(lane)
+        }
+        src = _Port(3, 5, 0, 5, 6, (3, 4), 1)
+        dst = _Port(1, 5, 2, 5, 6, (1, 2), 1)
+        boxes = slots.sorter_seat_boxes(canvas.buildings)
+        assert _bridge(canvas, src, dst, {"iron-ingot": F(1)}, "iron-ingot", boxes)
+        bridge = canvas.buildings[-1]
+        assert catalog.is_sorter(bridge.item_id)
+        assert bridge.x == 6, "took the column a standing sorter already meets"
+
+    def test_no_bridge_lands_on_a_sorter_the_paste_would_refuse(self) -> None:
+        """The bridge guard, asked about the sorter the PASTE will build.
+
+        A bridge is belt-to-belt, so the game grows its collider past BOTH ends;
+        drop one on a lane tile a strip's own sorter already meets and the two
+        boxes overlap by twice ``SORTER_END_EXTENSION``, which the game refuses
+        as ``Collide``.  ``_bridge`` has always asked before taking a column --
+        but it asked about a sorter carrying the dataclass default of zero in
+        every slot field, because ``assign_sorter_slots`` does not run until
+        emission.  Seated on slot 0 of the wrong corner, the answer had no
+        bearing on the sorter about to be built, and 15 of 96 corpus cells came
+        out with bridges ``game.sorter_collide`` then convicted.
+        """
+        p, _ = self._stacked(two_stage_spec(), direct=True)
+        seats = [
+            (i, seat)
+            for i, b in enumerate(p.buildings)
+            if catalog.is_sorter(b.item_id)
+            and (seat := slots.seated_sorter(b, p.buildings)) is not None
+        ]
+        pairs = [
+            (seats[a][0], seats[c][0])
+            for a, c in colliders.sorter_collisions([s for _i, s in seats])
+        ]
+        assert pairs == [], f"{len(pairs)} sorter pairs the paste would refuse"
 
     def test_an_adjacent_pair_is_actually_direct_inserted(self) -> None:
         p, pack = self._stacked(two_stage_spec(), direct=True)

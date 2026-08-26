@@ -3530,7 +3530,12 @@ def _split_island_common() -> list[PlacedBuilding]:
         belt(0, 3, out=4, carries="iron-ore"),  # 3
         belt(0, 4, carries="iron-ore"),  # 4
         machine(2, 0, item_id=SMELTER, recipe_id=10),  # 5  smelter A, x 2..4, y 0..2
-        machine(2, 4, item_id=SMELTER, recipe_id=10),  # 6  smelter B, x 2..4, y 4..6
+        # Smelter B sits at y 3..5 rather than y 4..6 so that the ingot it drops
+        # and the ingot the second assembler picks up are on DIFFERENT lane
+        # tiles.  Two sorters meeting on one tile is `game.sorter_collide`, and
+        # the game refuses to build them -- measured, five of them, in
+        # `tests/fixtures/ours/`.
+        machine(2, 3, item_id=SMELTER, recipe_id=10),  # 6  smelter B, x 2..4, y 3..5
         sorter(0, 0, 2, 0, inp=0, out=5),  # 7
         sorter(0, 4, 2, 4, inp=4, out=6),  # 8
         # the iron-ingot lane both gear assemblers draw from
@@ -3542,7 +3547,7 @@ def _split_island_common() -> list[PlacedBuilding]:
         sorter(4, 0, 6, 0, inp=5, out=9),  # 14  smelter A onto the lane
         machine(8, 0, recipe_id=20),  # 15  gear 1, x 8..10, y 0..2
         machine(8, 4, recipe_id=20),  # 16  gear 2, x 8..10, y 4..6
-        sorter(6, 0, 8, 0, inp=9, out=15),  # 17
+        sorter(6, 1, 8, 1, inp=10, out=15),  # 17  off tile 9, which 14 feeds
         sorter(6, 4, 8, 4, inp=13, out=16),  # 18
         # gear belted out
         belt(12, 0, out=20, carries="gear"),  # 19
@@ -3567,16 +3572,16 @@ def split_island_placement() -> Placement:
     """
     return place(
         *_split_island_common(),
-        belt(2, 9, out=27, carries="iron-ingot"),  # 26
-        belt(3, 9, out=28, carries="iron-ingot"),  # 27
-        belt(4, 9, carries="iron-ingot"),  # 28
-        sorter(2, 6, 2, 9, inp=6, out=26),  # 29  smelter B onto the stranded lane
+        belt(2, 8, out=27, carries="iron-ingot"),  # 26
+        belt(3, 8, out=28, carries="iron-ingot"),  # 27
+        belt(4, 8, carries="iron-ingot"),  # 28
+        sorter(2, 5, 2, 8, inp=6, out=26),  # 29  smelter B onto the stranded lane
     )
 
 
 def joined_island_placement() -> Placement:
     """The same build with smelter B draining onto the lane that serves them."""
-    return place(*_split_island_common(), sorter(4, 4, 6, 4, inp=6, out=13))
+    return place(*_split_island_common(), sorter(4, 3, 6, 3, inp=6, out=12))
 
 
 def test_flow_conservation_fires_when_a_producer_cannot_reach_its_consumers() -> None:
