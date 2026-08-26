@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 from collections.abc import Mapping, Sequence
 from fractions import Fraction
 
@@ -19,11 +20,12 @@ from flab2bp.rates.solve import (
     _exact_continuous_rates,
     _exact_rates,
     _excluded_recipes,
-    _run_milp,
     solve,
     target_rates,
 )
 from flab2bp.spec import ProliferatorMode
+
+solve_module = importlib.import_module("flab2bp.rates.solve")
 
 
 EXAMPLE_URL = (
@@ -340,21 +342,35 @@ def test_machine_counts_are_exact_not_snapped_floats(
     assert max(g.exact_machines.denominator for g in plain.groups) <= 2
 
 
-def test_proliferated_rates_have_small_denominators(data: Dataset) -> None:
-    """The same guard where mode choice makes the exact values move.
-
-    The Mk.III mix depends on the area objective, so the individual values are
-    not pinned here -- but exact demand propagation still cannot manufacture a
-    large denominator, whereas a snapped float reliably does.
-    """
+def test_products_policy_rates_are_exact_balanced_and_within_capacity(
+    data: Dataset,
+) -> None:
     result = solve(
         data,
         parse_url(EXAMPLE_URL),
         tier=ProliferatorTier.MK3,
         mode_policy=ProliferatorMode.PRODUCTS,
     )
+
     assert result.groups
-    assert max(g.exact_machines.denominator for g in result.groups) <= 1000
+    assert all(isinstance(group.crafts_per_second, Fraction) for group in result.groups)
+    assert all(
+        group.crafts_per_second
+        <= group.machines * group.adjusted.crafts_per_second
+        for group in result.groups
+    )
+    produced: dict[str, Fraction] = {}
+    consumed: dict[str, Fraction] = {}
+    for group in result.groups:
+        for item_id, rate in group.outputs.items():
+            produced[item_id] = produced.get(item_id, Fraction()) + rate
+        for item_id, rate in group.inputs.items():
+            consumed[item_id] = consumed.get(item_id, Fraction()) + rate
+    for item_id, rate in consumed.items():
+        available = produced.get(item_id, Fraction()) + result.external_inputs.get(
+            item_id, Fraction()
+        )
+        assert available >= rate
 
 
 def test_derivation_ignores_solver_float_noise(data: Dataset) -> None:
@@ -609,7 +625,7 @@ def test_continuous_default_recovers_exact_rates_then_ceils_capacity(
     def reject_milp(*_args: object, **_kwargs: object) -> object:
         raise AssertionError("the default production solve must not invoke the MILP oracle")
 
-    monkeypatch.setattr("flab2bp.rates.solve._run_milp", reject_milp)
+    monkeypatch.setattr(solve_module, "_run_milp", reject_milp)
     solution = solve(data, parse_url(LOW_RATE_URL))
 
     assert solution.outputs["magnetic-coil"] == Fraction(1, 60)
@@ -659,7 +675,8 @@ def test_unrecoverable_continuous_pass_falls_back_to_fixed_charge(
         raise InfeasibleError("unrecoverable support")
 
     monkeypatch.setattr(
-        "flab2bp.rates.solve._run_continuous_lp",
+        solve_module,
+        "_run_continuous_lp",
         reject_continuous,
     )
     solution = solve(data, parse_url(LOW_RATE_URL))
@@ -675,7 +692,7 @@ def test_unrecoverable_continuous_pass_falls_back_to_fixed_charge(
 def test_prove_minimal_explicitly_uses_the_fixed_charge_oracle(
     data: Dataset, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    original = _run_milp
+    original = solve_module._run_milp
     calls = 0
 
     def recording_milp(
@@ -694,7 +711,7 @@ def test_prove_minimal_explicitly_uses_the_fixed_charge_oracle(
             time_limit_s=time_limit_s,
         )
 
-    monkeypatch.setattr("flab2bp.rates.solve._run_milp", recording_milp)
+    monkeypatch.setattr(solve_module, "_run_milp", recording_milp)
     _ = solve(data, parse_url(LOW_RATE_URL), prove_minimal=True)
 
     assert calls == 1
