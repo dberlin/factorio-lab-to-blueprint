@@ -99,6 +99,8 @@ resolving either would CHANGE BEHAVIOUR and this module was a move:
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
+from enum import StrEnum
 
 from flab2bp.dsp import colliders
 
@@ -117,11 +119,13 @@ __all__ = [
     "INPUT_TO_SLOT",
     "MATCH_ALIGN_COS",
     "MATCH_SNAP_MAX_SQR",
+    "GEOTHERMAL_TOO_CLOSE_SQR",
     "OUTPUT_FROM_SLOT",
     "PASTE_LATERAL",
     "PASTE_LATERAL_EPS",
     "PASTE_RADIAL",
     "PASTE_SNAP",
+    "POWER_TOO_CLOSE_SQR",
     "SKEW_AXIS_DEG",
     "SKEW_PAIR_DEG",
     "SLOT_ALIGN_COS",
@@ -131,10 +135,16 @@ __all__ = [
     "SPLITTER_INPUT_TO_SLOT",
     "SPLITTER_MAX_PORTS",
     "SPLITTER_OUTPUT_FROM_SLOT",
+    "WIND_TOO_CLOSE_SQR",
     "WORLD_UNITS_PER_LEVEL",
+    "PowerNode",
+    "PowerSpacing",
     "addon_axis_aligned",
     "addon_axis_offset_deg",
     "addon_ride_is_straight",
+    "power_node_condition",
+    "power_node_gate_sqr",
+    "power_node_keepout_offsets",
     "too_bend_to_lift",
     "world_gap",
 ]
@@ -767,3 +777,236 @@ def addon_ride_is_straight(
         if world_gap(0.0, 0.0, dz) >= ADDON_NEIGHBOUR_RADIAL_GAP:
             return False
     return True
+
+
+# --- EBuildCondition.PowerTooClose, and the two tiers above it -------------
+#
+# TWO POWER NODES MAY NOT STAND NEAR EACH OTHER, and this is not a collision.
+# ``colliders.build_colliders(2201)`` returns ``()`` -- a Tesla Tower has no
+# build collider at all -- so ``geom.collide`` cannot see two of them on top of
+# one another, and would be answering the wrong question if it could.  The game
+# has a dedicated predicate, and it cost a real build: a blueprint we emitted
+# (``tests/fixtures/ours/power-too-close-freeform.txt``) pasted with all 366 of
+# its belts, sorters and machines green and TWO of its six Tesla Towers red for
+# being 1.777 world units apart.
+#
+# ``BuildTool_BlueprintPaste.cs:2527`` gates the whole block::
+#
+#     if (buildPreview2.desc.isPowerNode && !buildPreview2.desc.isAccumulator)
+#
+# so an ACCUMULATOR is exempt and may be packed solid, and every other power
+# node is subject to it -- thirteen of them in ``dsp/data/buildings.json``,
+# three of which (Solar Panel, Accumulator, Geothermal Power Station) have a
+# cover radius of exactly zero and so are NOT what ``validate._supplies_power``
+# calls a tower.  The flags come off the prefab's ``PowerDesc`` component,
+# extracted by ``scripts/extract_dsp_power.py``; ``PrefabDesc.cs:1438-1453`` is
+# where the game reads the same fields.
+#
+# ``:2547`` picks the tier::
+#
+#     float num37 = (geothermal ? 144f : (windForcedPower ? 110.25f : 12.25f));
+#
+# and the SAME four-branch ladder is then applied in three loops -- against the
+# planet's live power network (``:2549-2591``), against PREBUILDS already
+# ghosted on the ground (``:2593-2640``), and against the OTHER PREVIEWS OF THIS
+# PASTE (``:2641-2683``).  The third is the one that convicts a self-contained
+# blueprint, and so the one a generator has to satisfy::
+#
+#     for (int num43 = 0; num43 < bpCursor; num43++) {
+#         if (num43 == k) continue;
+#         BuildPreview buildPreview3 = bpPool[num43];
+#         if (buildPreview3.item.ID < 2199 || buildPreview3.item.ID > 2299) continue;
+#         num35 = dx*dx + dy*dy + dz*dz;            // SQUARED, WORLD, 3-D
+#         if (!(num35 < num37) || buildPreview3.coverbp == buildPreview2
+#                              || buildPreview2.coverbp == buildPreview3) continue;
+#         if (item != null && item.prefabDesc.isPowerNode) {
+#             if      (windForcedPower && item.prefabDesc.windForcedPower && num35 < 110.25f)
+#                 condition = WindTooClose;
+#             else if (geothermal && item.prefabDesc.geothermal && num35 < 144f)
+#                 condition = GeothermalTooClose;
+#             else if (!desc.isPowerGen && !item.prefabDesc.isPowerGen && num35 < 12.25f)
+#                 condition = PowerTooClose;
+#             else if (num35 < 12.25f)
+#                 condition = PowerTooClose;
+#         }
+#     }
+#
+# UNITS, which is the trap.  ``num35`` is a SQUARED distance between two Unity
+# ``Vector3`` positions on the planet's surface, in three dimensions -- not
+# tiles, and not a tile distance squared.  ``sqrt(12.25)`` is 3.5 WORLD units,
+# and a tile is ``colliders.GRID_ARC`` = 1.2566 world units, so the ordinary
+# bound is 2.785 TILES.  Reading 12.25 as tiles would put it at 3.5 tiles and
+# refuse legal geometry by 26%; reading 3.5 as tiles would accept illegal
+# geometry by the same margin.  This project has already paid for that mistake
+# once with :data:`SLOT_REACH`, so every caller goes through :func:`world_gap`.
+#
+# ``isPowerGen`` IS READ BY THE LADDER AND CANNOT CHANGE ANY VERDICT.  The last
+# two branches differ only in that test and both assign ``PowerTooClose`` under
+# the identical ``num35 < 12.25f``, so the pair collapses to "closer than 12.25
+# and neither the wind nor the geothermal branch took it".  That is why
+# ``catalog.Building`` carries no ``is_power_gen``: porting it would be porting
+# a term with no consequence, which is how a model acquires unfalsifiable parts.
+#
+# WHAT THE TIER DEPENDS ON, stated because a scalar here would be a flattened
+# rule.  ``num37`` is not a constant: it is a lookup on two ``PrefabDesc`` flags
+# of the building BEING PLACED, and the two upper tiers additionally require the
+# same flag on the building it is placed AGAINST.  A Wind Turbine keeps 10.5
+# world units (8.36 tiles) from another Wind Turbine and 3.5 from a Tesla Tower;
+# a Geothermal Power Station keeps 12.0 (9.55 tiles) from another Geothermal
+# Power Station.  Flattening the three tiers to 12.25 would let a wind farm pack
+# four times too tightly.
+
+
+class PowerSpacing(StrEnum):
+    """The three ``EBuildCondition`` values this ladder can report.
+
+    ``EBuildCondition.cs:8-10``::
+
+        PowerTooClose = 5,
+        WindTooClose = 6,
+        GeothermalTooClose = 7,
+    """
+
+    POWER_TOO_CLOSE = "PowerTooClose"
+    WIND_TOO_CLOSE = "WindTooClose"
+    GEOTHERMAL_TOO_CLOSE = "GeothermalTooClose"
+
+
+@dataclass(frozen=True, slots=True)
+class PowerNode:
+    """The ``PrefabDesc`` flags the spacing ladder reads, and only those.
+
+    Built from a :class:`flab2bp.dsp.catalog.Building`; kept as its own type so
+    this module need not depend on the catalog, and so a caller cannot pass four
+    booleans in the wrong order.
+    """
+
+    is_power_node: bool
+    is_accumulator: bool = False
+    wind_forced_power: bool = False
+    geothermal: bool = False
+
+    @property
+    def spacing_applies(self) -> bool:
+        """``desc.isPowerNode && !desc.isAccumulator`` -- the ``:2527`` guard."""
+        return self.is_power_node and not self.is_accumulator
+
+    @property
+    def gate_sqr(self) -> float:
+        """``num37`` for this building.  See :func:`power_node_gate_sqr`."""
+        return power_node_gate_sqr(
+            wind_forced_power=self.wind_forced_power, geothermal=self.geothermal
+        )
+
+
+#: ``EBuildCondition.PowerTooClose``'s bound, as a SQUARED WORLD distance.
+#: The ordinary tier, which every power node that is neither wind-forced nor
+#: geothermal is held to -- a Tesla Tower, a Wireless Power Tower, a Satellite
+#: Substation, a Thermal Power Plant, an Artificial Star, a Ray Receiver, an
+#: Energy Exchanger, a Solar Panel, a Mini Fusion Power Plant, a Signal Tower.
+#:
+#: 3.5 world units, so ``3.5 / colliders.GRID_ARC`` = **2.785 tiles**.  On a
+#: flat integer grid at ``z = 0`` that makes ``dx**2 + dy**2 >= 8`` legal and
+#: everything below it a refusal: a diagonal neighbour is 1.777 units and a
+#: knight's move 2.810, both inside; ``(2, 2)`` is 3.554 and outside.
+POWER_TOO_CLOSE_SQR = 12.25
+
+#: ``EBuildCondition.WindTooClose``.  10.5 world units = 8.355 tiles, and it
+#: binds only when BOTH buildings are ``windForcedPower`` -- a Wind Turbine
+#: against another Wind Turbine.  Against anything else the pair falls through
+#: to :data:`POWER_TOO_CLOSE_SQR`.
+WIND_TOO_CLOSE_SQR = 110.25
+
+#: ``EBuildCondition.GeothermalTooClose``.  12.0 world units = 9.549 tiles,
+#: both buildings ``geothermal``.  The Geothermal Power Station is the only
+#: building in the catalog carrying the flag.
+GEOTHERMAL_TOO_CLOSE_SQR = 144.0
+
+
+def power_node_gate_sqr(*, wind_forced_power: bool = False, geothermal: bool = False) -> float:
+    """``num37`` -- how far out the game even LOOKS for a neighbouring node.
+
+    ``BuildTool_BlueprintPaste.cs:2547``::
+
+        float num37 = (geothermal ? 144f : (windForcedPower ? 110.25f : 12.25f));
+
+    A squared world distance, keyed on the flags of the building being placed.
+    Note the asymmetry this creates, and that the game keeps: a Wind Turbine
+    scans out to 10.5 units, so it SEES a Tesla Tower at 6 units and then falls
+    through to the ordinary tier, which clears it.  A Tesla Tower scans out to
+    3.5 and never sees the turbine at all.  The verdict is the same either way,
+    which is why :func:`power_node_condition` takes ``a``'s gate rather than the
+    larger of the two.
+    """
+    if geothermal:
+        return GEOTHERMAL_TOO_CLOSE_SQR
+    if wind_forced_power:
+        return WIND_TOO_CLOSE_SQR
+    return POWER_TOO_CLOSE_SQR
+
+
+def power_node_condition(
+    a: PowerNode, b: PowerNode, sqr_world_gap: float
+) -> PowerSpacing | None:
+    """The paste's verdict on placing ``a`` this far from an existing ``b``.
+
+    ``sqr_world_gap`` is ``num35``: the SQUARED distance between the two
+    buildings' ``lpos``, in WORLD units and in three dimensions.  Callers on a
+    grid get it from :func:`world_gap` squared, or -- exactly, with the planet's
+    curvature in it -- from :func:`flab2bp.dsp.colliders.preview_pose`.
+
+    ``None`` means the game raises no condition.  The ladder is the one at
+    ``:2653-2681``, with the ``isPowerGen`` pair collapsed: see the module
+    comment above for why that term cannot change an answer.
+
+    Not symmetric in general, because ``num37`` is read off ``a`` alone -- but
+    the asymmetry is unobservable, since every pair ``a``'s wider gate admits
+    and ``b``'s would not still falls through to the ordinary tier.
+    """
+    if not a.spacing_applies or not b.is_power_node:
+        # `:2527` guards the building being placed; the loop at `:2668` asks
+        # only `isPowerNode` of the other one, accumulator or not.
+        return None
+    if not sqr_world_gap < a.gate_sqr:
+        return None
+    if a.wind_forced_power and b.wind_forced_power and sqr_world_gap < WIND_TOO_CLOSE_SQR:
+        return PowerSpacing.WIND_TOO_CLOSE
+    if a.geothermal and b.geothermal and sqr_world_gap < GEOTHERMAL_TOO_CLOSE_SQR:
+        return PowerSpacing.GEOTHERMAL_TOO_CLOSE
+    if sqr_world_gap < POWER_TOO_CLOSE_SQR:
+        return PowerSpacing.POWER_TOO_CLOSE
+    return None
+
+
+def power_node_keepout_offsets(
+    a: PowerNode, b: PowerNode, *, reach: int = 12, levels: int = 4
+) -> frozenset[tuple[int, int, int]]:
+    """Grid offsets at which ``b`` may not stand relative to ``a``.
+
+    The compiled projection of :func:`power_node_condition` onto our integer
+    grid, produced by ASKING the predicate rather than by re-deriving a radius:
+    a packer that keeps every pair of power nodes out of each other's set cannot
+    be convicted by ``validate.game.power_too_close``.
+
+    ``(dx, dy, dz)`` in tiles and altitude levels, run through
+    :func:`world_gap` -- the flat model, which is
+    :func:`flab2bp.dsp.colliders.flat_pose`'s frame and the one
+    ``validate.geom.collide`` uses by default.  It is the OPTIMISTIC end of the
+    real geometry: away from the paste anchor longitude compresses, so two
+    towers the flat model puts 3.6 units apart are nearer than that in the
+    ground truth.  The equatorial answer is the one both the check and the
+    packers use, and they use the SAME one, so a placement this set admits is a
+    placement the check clears.
+
+    ``reach`` and ``levels`` are the search box, not the answer.  The widest
+    tier is geothermal at 12.0 world units = 9.55 tiles, so 12 clears it with
+    room for a ring at the edge to show if the arithmetic is wrong.
+    """
+    out = set()
+    for dx in range(-reach, reach + 1):
+        for dy in range(-reach, reach + 1):
+            for dz in range(-levels, levels + 1):
+                gap = world_gap(dx, dy, dz)
+                if power_node_condition(a, b, gap * gap) is not None:
+                    out.add((dx, dy, dz))
+    return frozenset(out)

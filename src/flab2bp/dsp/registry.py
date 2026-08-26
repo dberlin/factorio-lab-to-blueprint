@@ -146,6 +146,16 @@ def _e(symbol: str, kind: Kind, **kw: Any) -> Entry:
 _TECH_SLOPE = "technology: super-magnetic-field-generator (belt vertical construction)"
 _TECH_LAB = "technology: vertical-construction-* (lab level)"
 
+#: What ``EBuildCondition.PowerTooClose``'s three tiers vary over.  Not a tech
+#: level -- a pair of ``PrefabDesc`` flags on the buildings themselves, served
+#: by ``catalog.Building.wind_forced_power`` / ``.geothermal``.  A dependency is
+#: a dependency whatever it is a function OF; recording only the 12.25 would be
+#: a flattened rule in exactly the sense this module defines.
+_POWER_TIER = (
+    "building: PrefabDesc.windForcedPower",
+    "building: PrefabDesc.geothermal",
+)
+
 
 # --- catalog ---------------------------------------------------------------
 
@@ -545,6 +555,57 @@ _RULES: tuple[Entry, ...] = (
         note=(
             "The belt-end drag's alignment gate, moved out of layout/ by Phase "
             "V so the rule lives where the other paste rules do."
+        ),
+    ),
+    # --- EBuildCondition.PowerTooClose and its two upper tiers --------------
+    #
+    # A rule this registry's own tech-and-tier clause is about: `num37` is a
+    # LOOKUP on two `PrefabDesc` flags, not a scalar, and flattening the three
+    # tiers to the ordinary one would let a wind farm pack four times too
+    # tightly.  So the three bounds are declared as the three cases of
+    # `power_node_gate_sqr`, which is what `resolved_by` is for.
+    _e(
+        "rules.POWER_TOO_CLOSE_SQR",
+        Kind.RULE,
+        depends_on=_POWER_TIER,
+        resolved_by="rules.power_node_gate_sqr",
+        lint=True,
+        note=(
+            "`num37`'s ordinary case, BuildTool_BlueprintPaste.cs:2547.  A "
+            "SQUARED WORLD distance: 3.5 units, 2.785 tiles.  Reading it as "
+            "tiles is the `SLOT_REACH` mistake again, 26% the other way."
+        ),
+    ),
+    _e(
+        "rules.WIND_TOO_CLOSE_SQR",
+        Kind.RULE,
+        depends_on=_POWER_TIER,
+        resolved_by="rules.power_node_gate_sqr",
+        lint=True,
+        note="Wind Turbine against Wind Turbine only; 10.5 world units.",
+    ),
+    _e(
+        "rules.GEOTHERMAL_TOO_CLOSE_SQR",
+        Kind.RULE,
+        depends_on=_POWER_TIER,
+        resolved_by="rules.power_node_gate_sqr",
+        lint=True,
+        note="Geothermal Power Station against itself only; 12.0 world units.",
+    ),
+    _e("rules.power_node_gate_sqr", Kind.RULE, depends_on=_POWER_TIER),
+    _e(
+        "rules.power_node_condition",
+        Kind.RULE,
+        depends_on=(*_POWER_TIER, "squared world distance between the two lpos"),
+    ),
+    _e(
+        "rules.power_node_keepout_offsets",
+        Kind.RULE,
+        depends_on=_POWER_TIER,
+        note=(
+            "The compiled projection of `power_node_condition` onto the grid, "
+            "the way `colliders.belt_keepout_offsets` projects the collider "
+            "test.  Both packers read it; neither restates the radius."
         ),
     ),
     _e("rules.world_gap", Kind.RULE, depends_on=("dx", "dy", "dz")),

@@ -2936,6 +2936,107 @@ def _coverage(ctx: Context) -> Iterable[Finding]:
                 break
 
 
+def _power_nodes(ctx: Context) -> list[tuple[int, PlacedBuilding, rules.PowerNode]]:
+    """Every ``PrefabDesc.isPowerNode`` in the placement, in placement order.
+
+    NOT :func:`_supplies_power`, which asks ``cover_radius > 0`` and is the
+    right question for ``power.coverage``.  Three of the catalog's thirteen
+    power nodes -- Solar Panel, Accumulator, Geothermal Power Station -- cover
+    nothing and are still nodes, still join the network, and are still subject
+    to ``EBuildCondition.PowerTooClose``.
+    """
+    out: list[tuple[int, PlacedBuilding, rules.PowerNode]] = []
+    for i, b in enumerate(ctx.placement.buildings):
+        try:
+            info = cat.building(b.item_id)
+        except KeyError:
+            continue
+        if not info.is_power_node:
+            continue
+        out.append(
+            (
+                i,
+                b,
+                rules.PowerNode(
+                    is_power_node=True,
+                    is_accumulator=info.is_accumulator,
+                    wind_forced_power=info.wind_forced_power,
+                    geothermal=info.geothermal,
+                ),
+            )
+        )
+    return out
+
+
+@check("game.power_too_close")
+def _power_too_close(ctx: Context) -> Iterable[Finding]:
+    """Two power nodes closer than the game's spacing rule allows.
+
+    ``EBuildCondition.PowerTooClose`` and its wind and geothermal tiers, ported
+    in :func:`flab2bp.dsp.rules.power_node_condition` with the C# quoted.  This
+    is not a collision and ``geom.collide`` cannot stand in for it: a Tesla
+    Tower has NO build collider -- ``colliders.build_colliders(2201)`` is empty
+    -- so two of them may sit on the same tile without any box intersecting.
+
+    WHY THIS IS AN ERROR AND NOT OPT-IN.  It was found by shipping: the user
+    pasted ``tests/fixtures/ours/power-too-close-freeform.txt`` into the game
+    and every sorter, belt and machine built, while two of its six Tesla Towers
+    were refused at 1.777 world units apart.  The other four sit 11.24 units
+    and further from everything and built.  So the bound is bracketed by
+    observation as well as by citation, and the citation puts it at 3.5.
+
+    The control is the corpus.  Over the seven single-area blueprints in
+    ``tests/fixtures`` -- 75 power nodes and 1468 pairs, in blueprints the GAME
+    wrote -- this convicts **zero**, and the sample is not vacuous in kind: it
+    carries 54 Tesla Towers in one blueprint and pairs as close as 6.00 tiles
+    against a bound of 2.785.  Multi-area fixtures are excluded for the reason
+    ``tests/dsp/test_colliders.py`` excludes them from every geometric test: a
+    building's local offset is relative to its own area, and the flat frame puts
+    two areas' buildings tens of tiles from where they belong.
+
+    ORDERED pairs, not unordered, because the rule is not symmetric.  The guard
+    at ``:2527`` exempts an ACCUMULATOR being placed; the loop it guards asks
+    only ``isPowerNode`` of the building it looks at.  So an Accumulator may
+    stand on top of another Accumulator, and a Tesla Tower may not stand on top
+    of either -- and the game reaches that verdict when it evaluates the tower's
+    own preview.  Testing one direction would miss exactly that case.
+    """
+    nodes = _power_nodes(ctx)
+    if len(nodes) < 2:
+        return
+    poses = [
+        colliders.flat_pose(*codec.tile_to_local_offset(b.x, b.y, b.z, b.width, b.height), b.yaw)[
+            0
+        ]
+        for _i, b, _n in nodes
+    ]
+    for a in range(len(nodes)):
+        ia, ba, na = nodes[a]
+        for c in range(a + 1, len(nodes)):
+            ic, bc, nc = nodes[c]
+            d2 = sum((p - q) ** 2 for p, q in zip(poses[a], poses[c], strict=True))
+            cond = rules.power_node_condition(na, nc, d2) or rules.power_node_condition(
+                nc, na, d2
+            )
+            if cond is None:
+                continue
+            yield Finding(
+                "game.power_too_close",
+                Severity.ERROR,
+                f"{cat.building(ba.item_id).name} at ({ba.x},{ba.y}) and "
+                f"{cat.building(bc.item_id).name} at ({bc.x},{bc.y}) are "
+                f"{math.sqrt(d2):.3f} world units apart; the game refuses the paste "
+                f"with EBuildCondition.{cond}",
+                (ia, ic),
+                {
+                    "a": str((ba.x, ba.y, str(ba.z))),
+                    "b": str((bc.x, bc.y, str(bc.z))),
+                    "gap": f"{math.sqrt(d2):.4f}",
+                    "condition": str(cond),
+                },
+            )
+
+
 @check("power.connectivity")
 def _connectivity(ctx: Context) -> Iterable[Finding]:
     towers = _tower_centres(ctx)

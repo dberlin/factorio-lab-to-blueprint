@@ -19,7 +19,10 @@
   "power": {
    "node": true,
    "connectDistance": 4.199999809265137,
-   "coverRadius": 0.0
+   "coverRadius": 0.0,
+   "wind": false,
+   "geothermal": false,
+   "accumulator": true
   }
  },
  {
@@ -137,7 +140,10 @@
   "power": {
    "node": true,
    "connectDistance": 45.5,
-   "coverRadius": 6.5
+   "coverRadius": 6.5,
+   "wind": false,
+   "geothermal": false,
+   "accumulator": false
   }
  },
  {
@@ -261,7 +267,10 @@
   "power": {
    "node": true,
    "connectDistance": 15.5,
-   "coverRadius": 7.0
+   "coverRadius": 7.0,
+   "wind": false,
+   "geothermal": false,
+   "accumulator": false
   }
  },
  {
@@ -322,7 +331,10 @@
   "power": {
    "node": true,
    "connectDistance": 11.75,
-   "coverRadius": 4.5
+   "coverRadius": 4.5,
+   "wind": false,
+   "geothermal": false,
+   "accumulator": false
   }
  },
  {
@@ -345,7 +357,10 @@
   "power": {
    "node": true,
    "connectDistance": 15.0,
-   "coverRadius": 5.0
+   "coverRadius": 5.0,
+   "wind": false,
+   "geothermal": false,
+   "accumulator": false
   }
  },
  {
@@ -368,7 +383,10 @@
   "power": {
    "node": true,
    "connectDistance": 22.0,
-   "coverRadius": 0.0
+   "coverRadius": 0.0,
+   "wind": false,
+   "geothermal": true,
+   "accumulator": false
   }
  },
  {
@@ -910,7 +928,10 @@
   "power": {
    "node": true,
    "connectDistance": 53.5,
-   "coverRadius": 26.5
+   "coverRadius": 26.5,
+   "wind": false,
+   "geothermal": false,
+   "accumulator": false
   }
  },
  {
@@ -965,7 +986,10 @@
   "power": {
    "node": true,
    "connectDistance": 11.75,
-   "coverRadius": 4.5
+   "coverRadius": 4.5,
+   "wind": false,
+   "geothermal": false,
+   "accumulator": false
   }
  },
  {
@@ -1001,7 +1025,10 @@
   "power": {
    "node": true,
    "connectDistance": 22.5,
-   "coverRadius": 10.5
+   "coverRadius": 10.5,
+   "wind": false,
+   "geothermal": false,
+   "accumulator": false
   }
  },
  {
@@ -1081,7 +1108,10 @@
   "power": {
    "node": true,
    "connectDistance": 6.75,
-   "coverRadius": 0.0
+   "coverRadius": 0.0,
+   "wind": false,
+   "geothermal": false,
+   "accumulator": false
   }
  },
  {
@@ -1356,7 +1386,10 @@
   "power": {
    "node": true,
    "connectDistance": 22.5,
-   "coverRadius": 10.5
+   "coverRadius": 10.5,
+   "wind": false,
+   "geothermal": false,
+   "accumulator": false
   }
  },
  {
@@ -1531,7 +1564,10 @@
   "power": {
    "node": true,
    "connectDistance": 60.5,
-   "coverRadius": 14.5
+   "coverRadius": 14.5,
+   "wind": false,
+   "geothermal": false,
+   "accumulator": false
   }
  },
  {
@@ -1599,7 +1635,10 @@
   "power": {
    "node": true,
    "connectDistance": 16.5,
-   "coverRadius": 7.699999809265137
+   "coverRadius": 7.699999809265137,
+   "wind": true,
+   "geothermal": false,
+   "accumulator": false
   }
  }
 ]

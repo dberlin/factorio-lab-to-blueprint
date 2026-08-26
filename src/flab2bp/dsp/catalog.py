@@ -818,6 +818,28 @@ class Building:
     addon_areas: tuple[tuple[float, float, float], ...]
     cover_radius: Fraction
     connect_distance: Fraction
+    #: ``PrefabDesc.isPowerNode`` -- ``PowerDesc.node`` on the prefab, read by
+    #: ``scripts/extract_dsp_power.py``.
+    #:
+    #: NOT the same question as ``cover_radius > 0``, which is what
+    #: ``validate._supplies_power`` asks and which is the right question for
+    #: ``power.coverage``: a Solar Panel, an Accumulator and a Geothermal Power
+    #: Station are all power NODES with a cover radius of exactly zero.  They
+    #: join the network and they are subject to
+    #: ``EBuildCondition.PowerTooClose``; they supply nothing to the machines
+    #: around them.  Three of the thirteen nodes in the table are in that state,
+    #: so the two predicates genuinely differ.
+    is_power_node: bool = False
+    #: ``PrefabDesc.isAccumulator``.  The one exemption from the spacing rule:
+    #: ``BuildTool_BlueprintPaste.cs:2527`` gates the whole block on
+    #: ``isPowerNode && !isAccumulator``, so accumulators may be packed solid.
+    is_accumulator: bool = False
+    #: ``PrefabDesc.windForcedPower``.  Raises this building's spacing gate to
+    #: :data:`flab2bp.dsp.rules.WIND_TOO_CLOSE_SQR`.
+    wind_forced_power: bool = False
+    #: ``PrefabDesc.geothermal``.  Raises it to
+    #: :data:`flab2bp.dsp.rules.GEOTHERMAL_TOO_CLOSE_SQR`.
+    geothermal: bool = False
 
     @property
     def is_belt_addon(self) -> bool:
@@ -968,6 +990,10 @@ def _load() -> dict[int, Building]:
             addon_areas=_addon_areas_for(row["prefab"], poses),
             cover_radius=Fraction(power.get("coverRadius") or 0).limit_denominator(100),
             connect_distance=Fraction(power.get("connectDistance") or 0).limit_denominator(100),
+            is_power_node=bool(power.get("node")),
+            is_accumulator=bool(power.get("accumulator")),
+            wind_forced_power=bool(power.get("wind")),
+            geothermal=bool(power.get("geothermal")),
         )
         out[item_id] = building
 

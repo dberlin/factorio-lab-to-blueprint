@@ -48,6 +48,9 @@ SORTER3 = 2013  # Sorter Mk.III, 6/s at one tile
 SORTER1 = 2011  # Sorter Mk.I, 1.5/s at one tile
 TOWER = 2201  # Tesla Tower, cover radius 10.5, link distance 22.5
 WIRELESS_TOWER = 2202  # Wireless Power Tower, the long-reach node: link 45.5
+WIND_TURBINE = 2203  # windForcedPower: the 110.25 spacing tier
+SOLAR_PANEL = 2205  # a power NODE with cover_radius 0 -- not a "tower"
+ACCUMULATOR = 2206  # isAccumulator: the one exemption from the spacing rule
 CHEM_PLANT = 2309  # Chemical Plant, 9x5 -- big enough to distinguish
                    # centre-based from tile-based power coverage
 BELT_REQUIRED = "prolif.belt_required_edges_not_direct_inserted"
@@ -1418,6 +1421,118 @@ def test_power_coverage_ignores_belts() -> None:
     # belts are unpowered in DSP
     r = validate(place(belt(40, 40)))
     assert not fired(r, "power.coverage")
+
+
+def test_game_power_too_close_fires_on_the_pair_the_game_refused() -> None:
+    """The shipped defect, minimised: two towers a diagonal apart.
+
+    ``tests/fixtures/ours/power-too-close-freeform.txt`` is the real one -- the
+    user pasted it and the game reddened towers #367 (21,15) and #371 (22,16).
+    A diagonal is 1.777 world units, against a bound of 3.5.
+    """
+    r = validate(place(tower(21, 15), tower(22, 16)))
+    assert fired(r, "game.power_too_close")
+
+
+def test_game_power_too_close_clean_at_the_separation_the_corpus_uses() -> None:
+    """Six tiles apart, which is the closest pair of towers in the corpus.
+
+    ``12-s-purple-science`` -- a blueprint the game wrote -- spaces its 54 Tesla
+    Towers exactly six tiles.  A rule that convicted this would be wrong.
+    """
+    r = validate(place(tower(0, 0), tower(6, 0)))
+    assert not fired(r, "game.power_too_close")
+
+
+def test_game_power_too_close_brackets_the_bound_from_both_sides() -> None:
+    """3.5 WORLD units, not 3.5 tiles, and the difference is 26%.
+
+    Mutation-checked by construction.  ``(2, 1)`` is 2.236 tiles = 2.810 world
+    units and is refused; ``(2, 2)`` is 2.828 tiles = 3.554 units and is not.
+    Read as TILES the bound would be 3.5 and ``(2, 2)`` would be refused too, so
+    this pair of assertions separates the two readings -- which is exactly the
+    control ``SLOT_REACH``'s 0.8 never had.
+    """
+    assert fired(validate(place(tower(0, 0), tower(2, 1))), "game.power_too_close")
+    assert not fired(validate(place(tower(0, 0), tower(2, 2))), "game.power_too_close")
+
+
+def test_game_power_too_close_is_an_error_not_a_warning() -> None:
+    r = validate(place(tower(0, 0), tower(1, 1)))
+    assert "game.power_too_close" in errors(r)
+
+
+def test_game_power_too_close_sees_a_node_that_covers_nothing() -> None:
+    """A Solar Panel has ``cover_radius == 0`` and is still a power node.
+
+    ``validate._supplies_power`` -- what ``power.coverage`` selects towers with
+    -- would not see it.  ``PrefabDesc.isPowerNode`` does, so this check must,
+    and three of the catalog's thirteen nodes are in that state.
+    """
+    panel = catalog_building(SOLAR_PANEL)
+    assert panel.cover_radius == 0 and panel.is_power_node
+    a = PlacedBuilding(
+        item_id=SOLAR_PANEL, model_index=panel.model_index, x=0, y=0,
+        width=panel.width, height=panel.height,
+    )
+    b = dataclasses.replace(a, x=1, y=1)
+    assert fired(validate(place(a, b)), "game.power_too_close")
+
+
+def test_game_power_too_close_exempts_a_stacked_pair_of_accumulators() -> None:
+    """``isPowerNode && !isAccumulator`` -- the ``:2527`` guard, in both orders.
+
+    Two Accumulators on adjacent tiles are legal; a Tesla Tower beside one is
+    not, because the guard exempts the building BEING PLACED and the loop it
+    guards asks only ``isPowerNode`` of the other.  Testing one direction only
+    would report this pair clean.
+    """
+    acc = catalog_building(ACCUMULATOR)
+    assert acc.is_accumulator and acc.is_power_node
+    a = PlacedBuilding(
+        item_id=ACCUMULATOR, model_index=acc.model_index, x=0, y=0,
+        width=acc.width, height=acc.height,
+    )
+    assert not fired(validate(place(a, dataclasses.replace(a, x=3, y=0))), "game.power_too_close")
+    assert fired(validate(place(a, tower(2, 0))), "game.power_too_close")
+
+
+def test_game_power_too_close_holds_wind_turbines_to_the_wider_tier() -> None:
+    """The tier structure, which a single constant would have flattened.
+
+    Two Wind Turbines need 10.5 world units = 8.36 tiles, four times the
+    ordinary bound.  A turbine against a TESLA TOWER falls back to the ordinary
+    tier: the wind branch needs ``windForcedPower`` on BOTH.
+    """
+    turbine = catalog_building(WIND_TURBINE)
+    assert turbine.wind_forced_power
+    a = PlacedBuilding(
+        item_id=WIND_TURBINE, model_index=turbine.model_index, x=0, y=0,
+        width=turbine.width, height=turbine.height,
+    )
+    assert fired(validate(place(a, dataclasses.replace(a, x=8))), "game.power_too_close")
+    assert not fired(validate(place(a, dataclasses.replace(a, x=9))), "game.power_too_close")
+    # 4 tiles = 5.03 units: over the ordinary 3.5, under the wind 10.5.
+    assert not fired(validate(place(a, tower(4, 0))), "game.power_too_close")
+
+
+def test_game_power_too_close_counts_altitude() -> None:
+    """``num35`` is three-dimensional; a level is 4/3 world units, not one tile.
+
+    Two towers on the same tile two levels apart are 2.667 units apart and
+    refused; three levels is 4.0 and clear.  Nothing we emit stacks towers
+    today, which is exactly why the ``dz`` term needs a test rather than an
+    assumption.
+    """
+    ground = tower(0, 0)
+    assert fired(
+        validate(place(ground, dataclasses.replace(ground, z=Fraction(2)))),
+        "game.power_too_close",
+    )
+    assert not fired(
+        validate(place(ground, dataclasses.replace(ground, z=Fraction(3)))),
+        "game.power_too_close",
+    )
 
 
 def test_power_connectivity_fires_on_split_network() -> None:
