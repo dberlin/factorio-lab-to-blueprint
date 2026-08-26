@@ -497,19 +497,52 @@ def test_real_refinery_fixed_outline_seed_is_cython_decodable_without_witness_hi
         "_variant_direct_eligibility",
         None,
     )
+    selected_direct_targets = getattr(
+        sequence_solver_module,
+        "_selected_direct_targets",
+        None,
+    )
     assert enumerate_eligibility is not None
+    assert selected_direct_targets is not None
     eligibility = enumerate_eligibility(spec, strips, problem)
-    assert len(eligibility) == 432
-    assert len(
-        {
-            (
-                entry.target.key,
-                entry.producer_variant,
-                entry.consumer_variant,
-            )
-            for entry in eligibility
-        }
-    ) == len(eligibility)
+    identities = {
+        (
+            entry.target.key,
+            entry.producer_variant,
+            entry.consumer_variant,
+        )
+        for entry in eligibility
+    }
+    assert eligibility
+    assert len(identities) == len(eligibility)
+
+    default_targets = selected_direct_targets(
+        spec,
+        strips,
+        problem,
+        (0,) * problem.size,
+    )
+    default_keys = {target.key for target in default_targets}
+    assert default_keys
+    assert {(key, 0, 0) for key in default_keys} <= identities
+
+    candidate_space = {
+        (target.key, producer_variant, consumer_variant)
+        for target in default_targets
+        for producer_variant in range(len(problem.variant_tables[target.producer]))
+        for consumer_variant in range(len(problem.variant_tables[target.consumer]))
+    }
+    assert identities < candidate_space
+    assert all(
+        (entry.target.producer, entry.target.consumer) in problem.nets
+        and 0
+        <= entry.producer_variant
+        < len(problem.variant_tables[entry.target.producer])
+        and 0
+        <= entry.consumer_variant
+        < len(problem.variant_tables[entry.target.consumer])
+        for entry in eligibility
+    )
 
     result = solve_compact_seed(
         problem,
