@@ -38,6 +38,11 @@ class CrossCheck:
     error: str | None = None
 
 
+#: The package the viewer's decoder imports first, and so the one whose absence
+#: is what a half-finished `bun install` actually looks like from out here.
+_BRIDGE_PACKAGE = "fflate"
+
+
 def bun_available() -> bool:
     return shutil.which("bun") is not None
 
@@ -69,7 +74,13 @@ def viewer_deps_installed() -> bool:
     read a resolver error.
     """
     root = viewer_path()
-    return root is not None and (root / "node_modules").is_dir()
+    if root is None:
+        return False
+    # Not `node_modules.is_dir()`: that directory can EXIST and still be missing
+    # what the bridge imports, and it was -- 60 entries present, `fflate` not
+    # among them, so the guard passed and the bridge then died resolving it.
+    # A directory is not an install; the package the decoder actually needs is.
+    return (root / "node_modules" / _BRIDGE_PACKAGE).is_dir()
 
 
 class CrossValidationUnavailable(RuntimeError):
