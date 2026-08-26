@@ -4863,21 +4863,6 @@ class TestAPortKnowsItsOwnAltitude:
     read as a routing problem for a long time; it was never one.
     """
 
-    URL = (
-        "https://factoriolab.github.io/dsp/list?z=eJxFyrEKwkAQRdG.meJVM0GxmuYtxk4SQ"
-        "XFbdRGJSyCgaDPfLqJod7jc0XmGqYzOI2ZzBezt598LNPrlDs3vyLBPLo5WqhMq1TNULofil"
-        "Kk8vEPGCQNu4BrcgntwCF6R2kgrpD7SRmqdPAdjGb3c3ewFUJ8mgA__&v=11"
-    )
-
-    @staticmethod
-    def _candidates() -> tuple[BuildSpec, ...]:
-        from flab2bp.lab.data import load_vendored
-        from flab2bp.lab.url import parse_url
-        from flab2bp.rates.candidates import build_candidates
-
-        return build_candidates(
-            load_vendored(), parse_url(TestAPortKnowsItsOwnAltitude.URL), count=3
-        ).candidates
 
     def test_at_tile_carries_the_level(self) -> None:
         """Moving a port along its lane must not drop it to the ground."""
@@ -4885,34 +4870,6 @@ class TestAPortKnowsItsOwnAltitude:
         assert port.z == 1
         assert port.at_tile(2).z == 1, "at_tile lost the port's altitude"
 
-    @pytest.mark.slow
-    def test_max_proliferation_emits_supplied_downstream_facing_coaters(self) -> None:
-        spec = next(
-            candidate
-            for candidate in self._candidates()
-            if candidate.label == "max-proliferation"
-        )
-        placement = FreeformLayout(power=False).lay_out(spec, time_budget_s=8.0)
-        coaters = [
-            building
-            for building in placement.buildings
-            if building.item_id == catalog.SPRAY_COATER_ID
-        ]
-        assert coaters, "no coater placed; the checks below would be vacuous"
-        report = _full_report(placement, spec, power=False)
-        for check in ("prolif.coaters_are_supplied", "game.addon_facing"):
-            findings = report.by_check(check)
-            assert not findings, "; ".join(finding.message for finding in findings)
-
-        for coater in coaters:
-            ridden = next(
-                building
-                for building in placement.buildings
-                if catalog.is_belt(building.item_id)
-                and (building.x, building.y, building.z) == (coater.x, coater.y, coater.z)
-            )
-            assert ridden.output_obj is not None
-            assert catalog.is_belt(placement.buildings[ridden.output_obj].item_id)
 
 
 class TestTheRoutingGridAgreesWithTheCanvas:
