@@ -17,10 +17,11 @@ from typing import Any
 import pytest
 
 from flab2bp.dsp import catalog
-from flab2bp.layout import freeform, junction, validate
+from flab2bp.layout import freeform, junction, slots, validate
 from flab2bp.layout.base import (
     DETERMINISTIC_WORKERS,
     RETRY_BUDGET_S,
+    Facing,
     NoValidLayout,
     PlacedBuilding,
     Placement,
@@ -4367,3 +4368,100 @@ class TestTheMergeFrontierWithdrawsSitesAJunctionCannotHold:
             canvas.blocked[cell] = _TENTATIVE
         got = freeform._merge_frontier(canvas, {5: path}, (5,), lambda x, y: True)
         assert {(-1, 0, 0), (0, -1, 0), (0, 1, 0)} <= got, sorted(got)
+
+
+class TestASprayedLaneEitherGetsACoaterOrRefuses:
+    """``_place_coaters`` may not ``continue`` past a lane it cannot seat.
+
+    It used to, four times over: no port for the item, a lane too short to offer
+    a straight seat, no belt on the seat tile, a drop cell already taken.  Each
+    left the pack one Spray Coater short of what ``spec.spray_lanes`` asked for,
+    and nothing downstream could tell -- ``game.addon_supply`` and
+    ``prolif.coaters_are_supplied`` both iterate the coaters that EXIST, so a
+    coater never placed is invisible to both.  The blueprint pastes, the
+    machines run, and every recipe on that lane quietly runs unproliferated.
+
+    The two cases below are the ones a caller can construct directly, and both
+    are silent on the code as it stood: ``_place_coaters`` returned a SHORTER
+    list and raised nothing.  So the assertion is on the exception, and the
+    ``lanes`` assertion beside it is what keeps the test from passing because
+    the fixture stopped asking for a coater at all.
+    """
+
+    ITEM = "iron-ingot"
+
+    def _fixture(self, tiles: int) -> tuple[_Canvas, Any, list[Any], list[Any]]:
+        spec = proliferated_spec()
+        assert self.ITEM in spec.spray_lanes, "fixture stopped asking for a coater"
+        strips = [s for s in plan_strips(spec) if self.ITEM in s.in_lanes]
+        assert strips, "no strip carries the sprayed lane; nothing to seat"
+        canvas = _Canvas()
+        indices = [canvas.add(_belt(x, 0, item=self.ITEM)) for x in range(tiles)]
+        port = _Port(
+            indices[0], 0, 0, 0, tiles - 1, tuple(indices), strips[0].machines, 0
+        )
+        return canvas, spec, strips[:1], [{self.ITEM: port}]
+
+    def test_a_lane_too_short_to_seat_a_coater_is_refused(self) -> None:
+        """One tile: ``_coater_seat`` has no tile with a lane tile either side."""
+        canvas, spec, strips, ports = self._fixture(1)
+        with pytest.raises(freeform._Unseatable, match="tile"):
+            freeform._place_coaters(canvas, spec, strips, ports, 2001, 35)
+
+    def test_a_taken_drop_cell_is_refused(self) -> None:
+        """The coater's addon area is the ONLY place its proliferator may sit.
+
+        With the cell occupied there is no supply, and the old code answered by
+        placing no coater -- which reads as "this lane needs none".
+        """
+        canvas, spec, strips, ports = self._fixture(4)
+        seat = freeform._coater_seat(canvas, ports[0][self.ITEM])
+        assert seat is not None, "the fixture lane must be long enough to seat one"
+        adx, ady, adz = catalog.building(catalog.SPRAY_COATER_ID).addon_areas[1]
+        wx, wy = slots.to_world((adx, ady), Facing.EAST.value)
+        drop = (seat[0] + round(wx), seat[1] + round(wy), round(adz))
+        canvas.blocked[drop] = 999
+        assert not canvas.free(drop), "the fixture failed to block the drop cell"
+        with pytest.raises(freeform._Unseatable, match="proliferator drop"):
+            freeform._place_coaters(canvas, spec, strips, ports, 2001, 35)
+
+    def test_the_same_fixture_unblocked_seats_one(self) -> None:
+        """Without this the two above pass for a fixture that seats nothing."""
+        canvas, spec, strips, ports = self._fixture(4)
+        got = freeform._place_coaters(canvas, spec, strips, ports, 2001, 35)
+        assert len(got) == 1, f"expected one coater on the sprayed lane, got {got}"
+
+    def test_a_sprayed_item_no_strip_carries_is_refused(self) -> None:
+        """The loop never reaches such an item, so the clauses inside cannot fire."""
+        canvas, spec, strips, ports = self._fixture(4)
+        spec = spec.model_copy(
+            update={"spray_lanes": {**spec.spray_lanes, "gear": False}}
+        )
+        with pytest.raises(freeform._Unseatable, match="gear"):
+            freeform._place_coaters(canvas, spec, strips, ports, 2001, 35)
+
+    def test_a_blocked_drop_cannot_come_back_as_a_missing_coater(self) -> None:
+        """The defect stated without naming the fix, so it is red on the old code.
+
+        Two outcomes are acceptable and one is not: a refusal, or a coater for
+        every sprayed lane.  Returning a SHORTER list is the silent miss, and it
+        is what the code did -- on this exact fixture, ``_place_coaters``
+        returned ``[]`` for a spec with one spray lane and raised nothing.
+        """
+        canvas, spec, strips, ports = self._fixture(4)
+        seat = freeform._coater_seat(canvas, ports[0][self.ITEM])
+        assert seat is not None
+        adx, ady, adz = catalog.building(catalog.SPRAY_COATER_ID).addon_areas[1]
+        wx, wy = slots.to_world((adx, ady), Facing.EAST.value)
+        canvas.blocked[seat[0] + round(wx), seat[1] + round(wy), round(adz)] = 999
+        wanted = sum(1 for item in strips[0].in_lanes if item in spec.spray_lanes)
+        assert wanted == 1, "fixture must ask for exactly one coater"
+        try:
+            got = freeform._place_coaters(canvas, spec, strips, ports, 2001, 35)
+        except NoValidLayout:
+            return
+        assert len(got) == wanted, (
+            f"{wanted} sprayed lane(s) asked for a coater and {len(got)} were "
+            "placed, with no error raised: the build would paste, run, and "
+            "quietly miss its rate"
+        )

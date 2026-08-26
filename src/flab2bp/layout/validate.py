@@ -266,6 +266,7 @@ class _Cache:
     entry_runs: dict[str, list[int]] | None = None
     entry_items: dict[int, set[str]] | None = None
     sorter_peers: _SorterPeers | None = None
+    coater_rides: dict[int, int] | None = None
 
 
 @dataclass(frozen=True)
@@ -3609,6 +3610,14 @@ def _coaters_supplied(ctx: Context) -> Iterable[Finding]:
     fixes: no proliferator lane exists anywhere (the router never made one), or
     a lane exists but does not pass through some coater's addon area.
 
+    IT IS VACUOUS ON A PLACEMENT WITH NO COATER, and deliberately so: it speaks
+    only about coaters that exist.  Whether a sprayed lane HAS one, and whether
+    the one it has is upstream of the machines drinking from it, is
+    ``prolif.sprayed_cargo_reaches_machines`` below.  The two were confused
+    once already -- a strategy silently skipped a coater it could not seat, this
+    check found no coater to complain about, and the build shipped
+    unproliferated.
+
     It used to look for a SORTER drawing from a proliferator belt.  That
     connection does not exist in the game -- a coater ships zero insert poses and
     `BuildTool_Inserter` will not target a building with none -- so the check was
@@ -3680,6 +3689,203 @@ def _coaters_supplied(ctx: Context) -> Iterable[Finding]:
             tuple(starved),
             {"starved": len(starved), "total": len(coaters)},
         )
+
+
+def _coater_rides(ctx: Context) -> dict[int, int]:
+    """Belt index -> the Spray Coater riding it.
+
+    A coater has no links of its own, so the belt it sprays is the one on its
+    own tile -- ``addonAreaPoses`` area 0.  :func:`_addon_rides` already
+    resolves that, and this is the coater-only slice of it, cached because three
+    clauses of the check below ask for it.
+    """
+    cached = ctx.cache.coater_rides
+    if cached is not None:
+        return cached
+    out: dict[int, int] = {}
+    for i, ride, _incoming, _outgoing in _addon_rides(ctx):
+        if ride is None:
+            continue
+        if ctx.placement.buildings[i].item_id != cat.SPRAY_COATER_ID:
+            continue
+        out[ride] = i
+    ctx.cache.coater_rides = out
+    return out
+
+
+def _unsprayed_belts(ctx: Context, item: str) -> set[int]:
+    """Belt tiles ``item`` can reach WITHOUT having passed a Spray Coater.
+
+    Forward reachability over the belt graph from every point unsprayed cargo
+    can enter it, stopped at each coater.  Spray rides on the items and does not
+    survive crafting, so the question a proliferated machine asks is not "is
+    there a coater on my lane" but "did what I am eating go through one" -- and
+    those differ by exactly the defects this exists to catch: a coater seated
+    downstream of a sorter, and a lane that got no coater at all.
+
+    THREE WAYS UNSPRAYED CARGO GETS ONTO A BELT, and missing any one of them
+    would make this lenient in a way a strategy could sit inside:
+
+    * a run head with no belt or junction feeding it -- cargo from outside the
+      block, which is every external ingredient;
+    * a sorter putting onto a belt from a MACHINE -- an internally produced
+      ingredient, which ``prolif.belt_required_edges_not_direct_inserted`` has
+      just forced onto a belt precisely so it can be sprayed;
+    * a run head fed only by junctions or runs that are themselves unsprayed.
+
+    A SORTER FROM BELT TO BELT IS AN EDGE, NOT A SOURCE -- a lane-to-lane
+    transfer, which is how a trunk is tapped onto a branch without spending a
+    splitter.  It carries whatever it draws, sprayed or not, so it has to be
+    FOLLOWED: ``_belt_successors`` reads ``output_obj`` and splitters and stops
+    dead at one of these, which would leave every branch fed only by a transfer
+    reading as clean whatever its trunk carries.  ``_build_graph`` already links
+    the two runs, so the branch's head is not mistaken for a source; what is
+    missing there is the tile-level edge, and that is what ``hops`` is.
+
+    Cargo AT the coater's own tile counts as sprayed.  The coater is an addon on
+    that belt and the items pass through it there, which is why both strategies
+    aim to seat one at the first tile of a lane rather than the tile before it.
+
+    Restricted to belts that can plausibly carry ``item``: a run whose
+    ``carries_item`` labels name other items and not this one cannot put this
+    item into anything, and treating it as a source of unsprayed cargo would
+    convict a lane for what a neighbouring lane carries.  An UNLABELLED run
+    counts, because "we do not know" is not "nothing here".
+    """
+    bs = ctx.placement.buildings
+    rides = _coater_rides(ctx)
+    labels = _run_labels(ctx)
+
+    def carries(belt: int) -> bool:
+        r = ctx.run_of.get(belt)
+        if r is None:
+            return not bs[belt].carries_item or bs[belt].carries_item == item
+        known = labels.get(r)
+        return not known or item in known
+
+    entry: set[int] = set()
+    #: belt -> belts a sorter moves cargo onto from it.  An edge, not a source.
+    hops: dict[int, list[int]] = defaultdict(list)
+    # An internally produced ingredient arrives through a sorter off a machine;
+    # a belt-to-belt sorter is a hop, and the run it lands on is already NOT a
+    # source here because ``_build_graph`` links the two runs, so its head has a
+    # predecessor and the clause below passes it over.
+    for _i, s in ctx.of_kind(Kind.SORTER):
+        src, dst = s.input_obj, s.output_obj
+        if src is None or dst is None:
+            continue
+        if not (0 <= src < len(bs) and 0 <= dst < len(bs)):
+            continue
+        if ctx.kinds[dst] is not Kind.BELT or not carries(dst):
+            continue
+        if ctx.kinds[src] is Kind.MACHINE:
+            entry.add(dst)
+        elif ctx.kinds[src] is Kind.BELT:
+            hops[src].append(dst)
+    # An external ingredient arrives on a run nothing inside feeds.
+    for r, run in enumerate(ctx.runs):
+        head = run.head
+        if not carries(head):
+            continue
+        if not ctx.pred.get((RUN, r)):
+            entry.add(head)
+
+    dirty: set[int] = set()
+    stack = [b for b in entry if b not in rides]
+    while stack:
+        b = stack.pop()
+        if b in dirty:
+            continue
+        dirty.add(b)
+        for nxt in (*_belt_successors(ctx, b), *hops.get(b, ())):
+            if nxt in dirty or nxt in rides or not carries(nxt):
+                continue
+            stack.append(nxt)
+    return dirty
+
+
+@check("prolif.sprayed_cargo_reaches_machines", needs_spec=True, needs_groups=True)
+def _sprayed_cargo_reaches_machines(ctx: Context) -> Iterable[Finding]:
+    """A proliferated machine must eat cargo that went THROUGH a coater.
+
+    ``spec.spray_lanes`` names the ingredients whose lanes carry a Spray Coater,
+    and until now nothing checked that any of them did.  Both strategies could
+    skip a coater silently -- ``freeform._place_coaters`` ``continue``d when the
+    drop cell was taken or the lane was too short to offer a legal seat, and
+    ``spine`` seated one and then let the sorters draw from upstream of it.  The
+    blueprint pastes either way, the machines run either way, and the build
+    simply misses its rate: the same silent class as a coater at the tail of its
+    own lane and as two sorters on one machine slot, both of which shipped.
+
+    So the question is asked from the MACHINE's end, which is where the
+    correctness lives.  For each proliferated group and each of its ingredients
+    that ``spray_lanes`` names, every belt a sorter feeds that machine from must
+    be downstream of a coater -- :func:`_unsprayed_belts` decides which are not.
+
+    ``prolif.coaters_are_supplied`` cannot answer this and never could.  It asks
+    whether proliferator reaches the coater; it says nothing about whether the
+    coater reaches the machines, and on a placement with no coater at all it
+    yields nothing, because it iterates the coaters that exist.
+
+    MEASURED at the time it landed, over the first six corpus URLs and every
+    proliferated candidate they offer: ``freeform`` 0 of 61 sprayed pickups
+    unsprayed, ``spine`` 15 of 61 -- every one of the fifteen a coater seated
+    DOWNSTREAM of the sorter that drew from its lane, on lanes that each had
+    their coater and each passed ``prolif.coaters_are_supplied``.
+    """
+    assert ctx.spec is not None
+    spec = ctx.spec
+    if not spec.spray_lanes:
+        return
+    bs = ctx.placement.buildings
+    items = _sorter_items(ctx)
+
+    feeds: dict[int, list[tuple[int, int, str | None]]] = defaultdict(list)
+    for i, s in ctx.of_kind(Kind.SORTER):
+        src, dst = s.input_obj, s.output_obj
+        if src is None or dst is None:
+            continue
+        if not (0 <= src < len(bs) and 0 <= dst < len(bs)):
+            continue
+        if ctx.kinds[src] is not Kind.BELT or ctx.kinds[dst] is not Kind.MACHINE:
+            continue
+        feeds[dst].append((i, src, items.get(i)))
+
+    unsprayed: dict[str, set[int]] = {}
+    for m, _b in ctx.of_kind(Kind.MACHINE):
+        g = ctx.group_for(m)
+        if g is None or not g.is_proliferated:
+            continue
+        for item in g.inputs_per_machine:
+            if item not in spec.spray_lanes:
+                continue
+            # An unresolvable sorter is INCLUDED, not skipped.  "I could not
+            # tell what this one carries" is the answer a validator may never
+            # give silently, and a machine whose only feed of a sprayed
+            # ingredient is unattributable is exactly the case where the
+            # geometry needs looking at.
+            candidates = [
+                (i, src) for i, src, got in feeds.get(m, ()) if got in (item, None)
+            ]
+            if not candidates:
+                continue  # `machine.inputs_supplied` owns the missing-feed case
+            bad = unsprayed.get(item)
+            if bad is None:
+                bad = unsprayed[item] = _unsprayed_belts(ctx, item)
+            for i, src in candidates:
+                if src not in bad:
+                    continue
+                yield Finding(
+                    "prolif.sprayed_cargo_reaches_machines",
+                    Severity.ERROR,
+                    f"sorter {i} feeds machine {m} with {item}, which "
+                    f"{ctx.recipe_of(m)} is proliferated on, from belt {src} at "
+                    f"({bs[src].x}, {bs[src].y}) -- and that belt is reachable by "
+                    f"{item} that has not passed a Spray Coater. The build would "
+                    f"paste, run, and quietly miss its rate",
+                    (i, m, src),
+                    {"item": item, "machine": m, "belt": src},
+                )
 
 
 # --- flow ------------------------------------------------------------------

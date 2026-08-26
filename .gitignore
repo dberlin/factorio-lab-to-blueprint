@@ -20,3 +20,8 @@ wheels/
 node_modules/
 /web/.rsbuild/
 /web/coverage/
+
+# C# build output (tools/dsp-oracle, the DSP BepInEx oracle plugin).
+# `dist/` above already covers tools/dsp-oracle/dist.
+bin/
+obj/

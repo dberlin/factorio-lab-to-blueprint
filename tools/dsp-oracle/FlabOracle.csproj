@@ -1,0 +1,77 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- netstandard2.1: needs no reference-assembly package on Linux (unlike
+         net472), and it is the lowest netstandard the game's own assemblies can
+         be referenced from - Assembly-CSharp and the UnityEngine modules
+         themselves reference netstandard 2.1, so a netstandard2.0 target is
+         rejected by the compiler with CS1705. -->
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <AssemblyName>FlabOracle</AssemblyName>
+    <RootNamespace>FlabOracle</RootNamespace>
+    <!-- 7.3: nothing newer is safe to emit for Unity's Mono runtime. -->
+    <LangVersion>7.3</LangVersion>
+    <Nullable>disable</Nullable>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <!-- Explicit source list: the SerializerCheck harness lives in a subdirectory
+         and must not be globbed into the plugin. -->
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <FileVersion>1.0.0.0</FileVersion>
+    <Version>1.0.0</Version>
+    <DebugType>none</DebugType>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <WarningLevel>4</WarningLevel>
+    <!-- The game assembly is compiled with an older compiler; referencing it from
+         netstandard2.0 raises no warnings we want to suppress, so nothing is muted. -->
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <!-- Override on the command line if the game lives elsewhere:
+         dotnet build -p:DspManagedDir=/path/to/DSPGAME_Data/Managed/ -->
+    <DspManagedDir Condition="'$(DspManagedDir)' == ''">$(HOME)/Dyson Sphere Program/DSPGAME_Data/Managed/</DspManagedDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Plugin.cs" />
+    <Compile Include="Patches.cs" />
+    <Compile Include="Capture.cs" />
+    <Compile Include="Dumper.cs" />
+    <Compile Include="DumpSink.cs" />
+    <Compile Include="Json.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Pinned to exactly the BepInEx DSP runs (5.4.17) so the emitted assembly
+         references match the DLLs actually on disk at runtime, rather than
+         asking Mono to satisfy a higher version than the game ships. HarmonyX
+         comes in transitively at whatever 5.4.17 was built against, for the same
+         reason. Reference-only: nothing from these packages is redistributed. -->
+    <PackageReference Include="BepInEx.Core" Version="[5.4.17]" PrivateAssets="all" ExcludeAssets="runtime" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="Assembly-CSharp">
+      <HintPath>$(DspManagedDir)Assembly-CSharp.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine">
+      <HintPath>$(DspManagedDir)UnityEngine.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.CoreModule">
+      <HintPath>$(DspManagedDir)UnityEngine.CoreModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.PhysicsModule">
+      <HintPath>$(DspManagedDir)UnityEngine.PhysicsModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.InputLegacyModule">
+      <HintPath>$(DspManagedDir)UnityEngine.InputLegacyModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+</Project>

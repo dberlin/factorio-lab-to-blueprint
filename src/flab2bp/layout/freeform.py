@@ -5535,6 +5535,27 @@ def _route_external_inputs(
     return missed
 
 
+class _Unseatable(NoValidLayout):
+    """A sprayed lane could not be given a Spray Coater, so this pack is not one.
+
+    :func:`_place_coaters` used to ``continue`` past each of these -- a lane with
+    no port, a lane too short to offer a straight seat, a drop cell already
+    taken -- and the pack went on to route, validate and ship with one fewer
+    coater than the spec asked for.  Nothing downstream noticed:
+    ``prolif.coaters_are_supplied`` iterates the coaters that exist, and a
+    coater that was never placed is not one of them.  The blueprint pastes, the
+    machines run, and every recipe on that lane quietly runs unproliferated --
+    the same silent class as a coater at the tail of its own lane and as two
+    sorters on one machine slot, both of which shipped.
+
+    A :class:`NoValidLayout` rather than a bare exception because that is what
+    it is: this height cannot build what the spec asked for.  The sweep discards
+    it and tries the next, exactly as it does for :class:`_Unpowerable`; if no
+    height can seat the coaters the spec is refused, which is the honest answer
+    and not the quiet one.
+    """
+
+
 class _Unpowerable(Exception):
     """This pack cannot be powered, so it is not a feasible pack.
 
@@ -6679,9 +6700,23 @@ def _place_coaters(
       belt one tile behind it, which a proliferator net is routed to.
     * **It must sit at the lane's HEAD, where the items arrive.**  See
       :func:`_coater_seat`.
+
+    **A LANE THE SPEC WANTS SPRAYED EITHER GETS A COATER OR THIS RAISES.**  Each
+    of the four ways a seat can fail used to be a ``continue``: no port for the
+    item, a lane too short to offer a straight seat, no belt on the seat tile, a
+    drop cell already taken -- and a fifth, an item no strip carries on a lane,
+    which the loop never reaches at all.  Any one of them left the pack one
+    coater short and nothing downstream could tell: ``game.addon_supply`` and
+    ``prolif.coaters_are_supplied`` both iterate the coaters that EXIST.  Each
+    raises :class:`_Unseatable` now, the sweep discards that height, and a spec
+    where no height can seat them is refused.  The validator says the same thing
+    about the finished placement from the other end --
+    ``prolif.sprayed_cargo_reaches_machines`` -- so neither this nor a future
+    strategy can put the miss back.
     """
     coater = catalog.building(catalog.SPRAY_COATER_ID)
     wanted = set(spec.spray_lanes)
+    seen: set[str] = set()
     out: list[_Coater] = []
 
     belt_at: dict[tuple[int, int, int], int] = {
@@ -6696,10 +6731,17 @@ def _place_coaters(
                 continue
             port = in_ports.get(item)
             if port is None:
-                continue
+                raise _Unseatable(
+                    f"the strip feeding {item} has no input port for it, so its "
+                    f"Spray Coater has no lane to ride"
+                )
             seat = _coater_seat(canvas, port)
             if seat is None:
-                continue
+                raise _Unseatable(
+                    f"the {item} lane at ({port.x}, {port.y}) is "
+                    f"{len(port.tiles)} tile(s) long, and a coater needs a tile "
+                    f"with a lane tile on both sides of it to ride straight"
+                )
             cx, cy = seat
             host = belt_at.get((cx, cy, 0))
             # WHERE the proliferator belt has to be, from the coater's own addon
@@ -6713,8 +6755,17 @@ def _place_coaters(
             adx, ady, adz = catalog.building(catalog.SPRAY_COATER_ID).addon_areas[1]
             wx, wy = slots.to_world((adx, ady), Facing.EAST.value)
             drop_cell = (cx + round(wx), cy + round(wy), round(adz))
-            if host is None or not canvas.free(drop_cell):
-                continue
+            if host is None:
+                raise _Unseatable(
+                    f"the {item} lane's seat ({cx}, {cy}) carries no belt at "
+                    f"ground level, so there is nothing for a coater to ride"
+                )
+            if not canvas.free(drop_cell):
+                raise _Unseatable(
+                    f"the {item} coater at ({cx}, {cy}) cannot have its "
+                    f"proliferator drop at {drop_cell}: that cell is taken, and "
+                    f"the game supplies an addon from its area and nowhere else"
+                )
 
             drop = canvas.add(
                 PlacedBuilding(
@@ -6798,6 +6849,7 @@ def _place_coaters(
                         ):
                             canvas.belt_ban.setdefault(tile, set()).add(level)
             out.append(_Coater(coater=idx, drop=drop, x=drop_cell[0], y=drop_cell[1]))
+            seen.add(item)
 
     # EVERY drop is exempt from EVERY ban, not just its own coater's.  Coaters
     # two tiles apart on one row overlap footprints, so coater A's band covered
@@ -6807,6 +6859,20 @@ def _place_coaters(
     # is standing over it.
     for c in out:
         canvas.belt_ban.pop((c.x, c.y), None)
+
+    # AND EVERY SPRAYED ITEM GOT ONE SOMEWHERE.  The loop above walks the lanes
+    # the strips carry, so an item the spec wants sprayed that no strip carries
+    # on a lane is not refused by any of the clauses inside it -- it is simply
+    # never visited.  That is the same silent miss with the loop skipped
+    # entirely, and it is what a direct-inserted sprayed ingredient looks like
+    # from here.
+    missing = wanted - seen
+    if missing:
+        raise _Unseatable(
+            f"the spec sprays {sorted(missing)}, and no strip carries "
+            f"{'them' if len(missing) > 1 else 'it'} on an input lane, so no "
+            f"Spray Coater was placed for {'any' if len(missing) > 1 else 'it'}"
+        )
     return out
 
 
@@ -7716,6 +7782,16 @@ class FreeformLayout:
             except _Unpowerable:
                 if rejected is not None:
                     rejected.add("power.coverage")
+                continue
+            except _Unseatable:
+                # A pack that cannot seat one of its Spray Coaters is not a
+                # pack, for the same reason one that cannot be powered is not:
+                # the spec asked for proliferation and this height cannot
+                # deliver it. Discarding the height is the search doing its job;
+                # what is NOT allowed is emitting the pack with the coater left
+                # out, which is what this replaced.
+                if rejected is not None:
+                    rejected.add("prolif.sprayed_cargo_reaches_machines")
                 continue
             if attempts is not None:
                 attempts.append(failed)
