@@ -58,14 +58,14 @@ from __future__ import annotations
 import math
 import time
 from collections import defaultdict, deque
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field, replace
 from fractions import Fraction
 from functools import cache
 
 from ortools.sat.python import cp_model
 
-from flab2bp.dsp import catalog, colliders, params, rules
+from flab2bp.dsp import catalog, codec, colliders, params, planet, rules
 from flab2bp.layout import junction, validate
 from flab2bp.layout import slots as sorter_slots
 from flab2bp.layout.base import (
@@ -146,6 +146,31 @@ class LayoutConstants:
 #: Pack every machine in a row at the row's widest clearance, or at each type's
 #: own?  Set by measurement -- see the note beside it where it is read.
 UNIFORM_ROW_PITCH = False
+
+#: Fewest tiles of clear ground a MACHINE-TO-MACHINE direct insert needs.
+#:
+#: The packer used to allow one, and one is illegal.  The game's paste bounds a
+#: sorter by the GRID CELLS it reaches across, not only by its world length, and
+#: for a sorter with neither end on a belt the floor is
+#: :data:`~flab2bp.dsp.planet.SORTER_COMBINED_MIN`\ ``[0]`` = 1.451 cells
+#: (``num134``, ``BuildTool_BlueprintPaste.cs:3459``, reporting ``TooClose``).
+#:
+#: Measured, on the two-stage spec: a one-tile gap seats the sorter's ends 2.80
+#: and 4.12 tiles up, which is **1.329** cells across -- under the floor, so the
+#: game refuses the paste.  Two tiles gives 2.329 and pastes.
+#:
+#: Measured the other way too, on the only evidence that can settle it: of the
+#: 48 machine-to-machine sorters in the single-area blueprints the GAME wrote,
+#: the smallest reaches **2.249** cells across and none is under 1.451.  The
+#: real minimum in real blueprints is two tiles of gap, exactly as this says.
+#:
+#: This is a SEARCH BOUND, not the rule.  The rule is exact and lives in
+#: :func:`~flab2bp.dsp.planet.sorter_condition`, which :func:`_band_rejected`
+#: applies to the finished layout; this constant is what stops the search
+#: producing plans that rule will throw away.  A machine whose slot poses sit
+#: further out than the ones measured here would need more, and the gate is what
+#: would catch it.
+MIN_DIRECT_INSERT_GAP = 2
 
 
 def _charged_pitch(groups: dict[str, _Group], key: str) -> int:
@@ -1219,6 +1244,13 @@ FALLBACK_SELF_CHECK = 7.0
 #: meaningless here, and between them enough to send the next reader to the
 #: packer instead of to the prefab.
 FALLBACK_SORTERLESS_MACHINE = 8.0
+#: The placement is legal on a flat grid and illegal on the planet.
+#:
+#: Distinct from :data:`FALLBACK_SELF_CHECK` because the fix is different.  A
+#: self-check failure is a layout our own validator refuses; this is a layout our
+#: validator ACCEPTS and the game will not paste, because the validator's model
+#: is flat and the planet is not.  See :func:`_band_rejected`.
+FALLBACK_BAND = 9.0
 
 def _rejected(placement: Placement, spec: BuildSpec, *, power: bool) -> str:
     """Named checks this placement fails, or ``""`` when it is clean.
@@ -1229,6 +1261,187 @@ def _rejected(placement: Placement, spec: BuildSpec, *, power: bool) -> str:
     """
     report = validate.certify(placement, spec, expect_power=power)
     return ", ".join(sorted({f.check for f in report.errors}))
+
+
+def _band_sorters(placement: Placement) -> list[planet.Sorter]:
+    """Every sorter of this placement, seated, in the form the band model wants.
+
+    Seating is :func:`flab2bp.layout.slots.seated_sorter`, not a second copy of
+    it -- the paste moves a sorter's machine end onto the slot pose it names
+    before any condition is evaluated, and that port is validated to 2e-5
+    against 66 ends the game really built.
+
+    A sorter whose peer link is missing is SKIPPED, and that is not a hole.  The
+    game refuses it earlier, at ``ErrorInserterData``, and never reaches the
+    length ladder for it; ``game.inserter_data`` is the check that reports it.
+    Evaluating the ladder on a sorter the game has already rejected would be
+    answering a question nobody asks.
+    """
+    bs = placement.buildings
+    out: list[planet.Sorter] = []
+    for b in bs:
+        if not catalog.is_sorter(b.item_id):
+            continue
+        seat = sorter_slots.seated_sorter(b, bs)
+        if seat is None:
+            continue
+        peers = [
+            bs[link] if link is not None and 0 <= link < len(bs) else None
+            for link in (b.input_obj, b.output_obj)
+        ]
+        if peers[0] is None or peers[1] is None:
+            continue
+        centres = [
+            (p.x + (p.width - 1) / 2, p.y + (p.height - 1) / 2, float(p.z))
+            for p in peers
+            if p is not None
+        ]
+        input_belt = catalog.is_belt(peers[0].item_id)
+        output_belt = catalog.is_belt(peers[1].item_id)
+        # ``zero``, BuildTool_BlueprintPaste.cs:3438 -- the NON-belt end's peer,
+        # or the midpoint when both ends are alike.
+        if input_belt and not output_belt:
+            reference = centres[1]
+        elif output_belt and not input_belt:
+            reference = centres[0]
+        else:
+            reference = tuple(  # type: ignore[assignment]
+                (centres[0][k] + centres[1][k]) * 0.5 for k in range(3)
+            )
+        out.append(
+            planet.Sorter(
+                x=seat.x, y=seat.y, z=seat.z,
+                x2=seat.x2, y2=seat.y2, z2=seat.z2,
+                yaw=b.yaw, yaw2=b.yaw if b.yaw2 is None else b.yaw2,
+                input_belt=input_belt, output_belt=output_belt,
+                ref_x=reference[0], ref_y=reference[1], ref_z=reference[2],
+            )
+        )
+    return out
+
+
+def _band_rejected(
+    placement: Placement,
+    *,
+    segment: int = colliders.PLANET_SEGMENT,
+    radius: float = colliders.PLANET_RADIUS,
+) -> str:
+    """Named band-legality failures, or ``""`` when this placement pastes.
+
+    THE CHECK THE FLAT MODEL CANNOT MAKE.  ``geom.collide`` and
+    ``game.inserter_skew`` evaluate on a flat grid at ``GRID_ARC`` in both axes,
+    which :mod:`flab2bp.dsp.colliders` identifies as the SUPREMUM of real column
+    spacing inside the equatorial band.  A blueprint that clears them can still
+    be refused by the game, because a real paste lands at a real latitude where
+    columns are up to 12% narrower inside that band -- and a blueprint whose
+    extent does not fit the equatorial band lands somewhere narrower still.
+
+    So this asks the question the user actually has: take the SMALLEST band the
+    finished extent fits, in either orientation, project every building into it
+    with the game's own arithmetic, and run the game's own predicates.  Fail and
+    the layout is illegal, whatever the flat model said.
+
+    EVERY ANCHOR IN THE BAND, not a representative one.  "It works in the
+    smallest band that fits" is a universally quantified claim, and a band holds
+    few enough placements that it can be asked rather than approximated.  There
+    is no margin here and no worst-case proxy.
+
+    WHICH BAND, exactly.  "The smallest band the extent fits" is the wrong
+    target read literally, and the measurement says so rather than the argument:
+    a 14x5 layout fits the 4-segment band on extent alone, and in the 4-segment
+    band a column is 0.31 of a tile, so every machine in it overlaps every
+    neighbour.  That band is 20 tiles around the whole planet -- nothing at all
+    can be built in it.  The rationale for "smallest" was that poleward tiles are
+    narrower and so a layout legal in the narrowest band is legal everywhere;
+    that premise is FALSE, and this module's own table is the counterexample.
+    Columns do not shrink monotonically toward the pole, because the quantisation
+    OVERSHOOTS at each band's equatorward edge: a column is 0.78 of a tile at the
+    top of the 32-segment band and 1.41 of a tile at the bottom of the 8-segment
+    one, which is WIDER than at the equator.  Legality is not monotone across
+    bands in either direction.
+
+    So the satisfiable reading of the same intent is taken instead: the SMALLEST
+    band the layout is actually legal in, searched from the smallest fitting band
+    upward.  The blueprint then declares that band, and the guarantee it carries
+    is a real one -- every anchor, both quadrants, the game's own predicates.
+    Refusal is when NO band works, which is a blueprint that pastes nowhere.
+
+    Returns a comma-joined set of names, so a caller can tell a cross-tropic
+    refusal (the extent is wrong) from a collision (the packing is wrong) from a
+    sorter condition (the wiring is wrong).
+    """
+    bs = placement.buildings
+    if not bs:
+        return ""
+    min_x, min_y, max_x, max_y = placement.bounds
+    width, height = max_x - min_x + 1, max_y - min_y + 1
+    try:
+        planet.band_for_extent(width, height, segment)
+    except planet.BandRefusal as exc:
+        return f"band.cross_tropic: {exc}"
+
+    tested = [
+        b
+        for b in bs
+        if not catalog.is_belt(b.item_id) and not catalog.is_sorter(b.item_id)
+    ]
+    # The encoder's own conversion, for the same reason `geom.collide` uses it:
+    # a check on a differently-centred building is a check on a different
+    # building.
+    placed = [
+        colliders.Placed(
+            b.model_index,
+            *codec.tile_to_local_offset(b.x, b.y, b.z, b.width, b.height),
+            b.yaw,
+        )
+        for b in tested
+    ]
+    sorters = _band_sorters(placement)
+
+    worst: set[str] = set()
+    for band in sorted(planet.bands(segment), key=lambda b: b.area_segments):
+        for rotated in (False, True):
+            rows, cols = (width, height) if rotated else (height, width)
+            if rows > band.rows or cols > band.columns:
+                continue
+            fit = planet.Fit(band=band, rotated=rotated, rows=rows, columns=cols)
+            bad = _band_illegal(placed, sorters, fit, segment, radius)
+            if not bad:
+                # Legal here, and this is the smallest band that fits AND works.
+                placement.stats["area_segments"] = float(band.area_segments)
+                placement.stats["band_rotated"] = float(rotated)
+                return ""
+            worst = bad
+    return ", ".join(sorted(worst))
+
+
+def _band_illegal(
+    placed: list[colliders.Placed],
+    sorters: list[planet.Sorter],
+    fit: planet.Fit,
+    segment: int,
+    radius: float,
+) -> set[str]:
+    """Names of the game predicates this fit fails, empty when it pastes.
+
+    Stops at the first anchor that convicts on both counts; there is nothing
+    further to learn from the rest, and the loop is the expensive part.
+    """
+    bad: set[str] = set()
+    # Once per band, not once per anchor: the filter depends on the band's
+    # narrowest column, which every anchor in it shares.
+    pairs = planet.candidate_pairs(placed, fit.band, segment, radius)
+    for projection in planet.projections_for(fit, segment, radius):
+        if "band.collide" not in bad and planet.collisions_at(placed, projection, pairs):
+            bad.add("band.collide")
+        if "band.sorter" not in bad:
+            for sorter in sorters:
+                if planet.sorter_condition(sorter, projection) is not None:
+                    bad.add("band.sorter")
+                    break
+        if len(bad) == 2:
+            break
+    return bad
 
 
 _REFUSAL_TEXT = {
@@ -1252,6 +1465,11 @@ _REFUSAL_TEXT = {
     FALLBACK_SORTERLESS_MACHINE: (
         "a machine in this spec takes no sorter on any face -- the game wires it "
         "by docking a belt into a port instead, which this strategy cannot emit"
+    ),
+    FALLBACK_BAND: (
+        "every plan that emitted is legal on a flat grid and illegal on the "
+        "planet: projected into the smallest longitude band its own extent fits, "
+        "the game refuses it"
     ),
 }
 
@@ -1783,16 +2001,49 @@ def _solve_one(
         )
         corridor_h.append(ch)
 
-    # A direct insert spans the corridor between the two rows, so that corridor
-    # must be shallow enough for a sorter to cross it: the span is its lane count
-    # plus one.
+    # A CORRIDOR IS NOT ITS LANE COUNT once a direct insert crosses it.
+    #
+    # `corridor_h` above is the number of lanes, and normally that is also the
+    # corridor's height in tiles.  A machine-to-machine direct insert breaks the
+    # identity: the insert exists precisely to REMOVE the lane, and a corridor of
+    # zero lanes seats the sorter 1.329 grid cells across -- under the game's
+    # 1.451 floor, so the paste is refused as `TooClose`.  See
+    # `MIN_DIRECT_INSERT_GAP`.
+    #
+    # Constraining `corridor_h` itself was the first attempt and it is
+    # self-contradictory: it says "carry at least one lane" to a variable whose
+    # whole purpose was to lose one, and CP-SAT resolves the contradiction by
+    # never choosing a direct insert at all.  So the tiles are a SEPARATE
+    # quantity, at least the lane count and at least the gap the insert needs,
+    # and it is the tiles that make up the height.
+    corridor_tiles = []
+    for c, ch in enumerate(corridor_h):
+        t = model.new_int_var(0, sum(lane_copies.values()) + MIN_DIRECT_INSERT_GAP, f"tiles_{c}")
+        model.add(t >= ch)
+        corridor_tiles.append(t)
     for (src, _dst, _item), d in di.items():
         for r in range(n - 1):
-            model.add(corridor_h[r + 1] <= reach - 1).only_enforce_if([d, in_row[src, r]])
+            gate = [d, in_row[src, r]]
+            model.add(corridor_tiles[r + 1] >= MIN_DIRECT_INSERT_GAP - 1).only_enforce_if(gate)
+            # Shallow enough for a sorter to cross: the span is the tiles plus one.
+            model.add(corridor_tiles[r + 1] <= reach - 1).only_enforce_if(gate)
 
-    total_h = model.new_int_var(0, (max_h + len(lane_items)) * (n + 1), "H")
-    model.add(total_h == sum(row_h) + sum(corridor_h))
-    model.minimize(total_h)
+    total_h = model.new_int_var(
+        0, (max_h + len(lane_items) + MIN_DIRECT_INSERT_GAP) * (n + 1), "H"
+    )
+    model.add(total_h == sum(row_h) + sum(corridor_tiles))
+    # Height first, direct inserts as the TIE-BREAK.  The weight is strictly
+    # larger than the number of inserts, so no height is ever traded for one --
+    # this cannot pick a taller layout, only a differently wired one of the same
+    # height.
+    #
+    # It exists because `MIN_DIRECT_INSERT_GAP` made the solver indifferent.
+    # A direct insert used to be strictly cheaper: it needed a corridor of zero
+    # where a belt lane needs one.  Now it needs one too, and on `two_stage` the
+    # solver stopped choosing any -- not because a direct insert had become
+    # expensive but because nothing preferred it, and a belt route is the same
+    # height while costing belt tiles the objective never counted.
+    model.minimize(total_h * (len(di) + 1) - sum(di.values()))
 
     # Warm start from the fallback so the sweep is monotone by construction.
     for k in keys:
@@ -2024,6 +2275,35 @@ def _every_machine_pairs(prod: list[int], w_src: int, cons: list[int], w_dst: in
     )
 
 
+def _corridor_heights(
+    lanes: Sequence[Sequence[str]],
+    rows: list[list[str]],
+    direct: Iterable[tuple[str, str, str]],
+) -> list[int]:
+    """Tiles of clear ground in each corridor, which is NOT always its lane count.
+
+    A corridor is normally as tall as the lanes it carries.  A corridor that a
+    machine-to-machine direct insert crosses is the exception: the insert is
+    there to remove the lane, and a corridor of zero lanes seats the sorter
+    1.329 grid cells across -- under the 1.451 the game allows, so the paste is
+    refused as ``TooClose``.  Such a corridor keeps
+    ``MIN_DIRECT_INSERT_GAP - 1`` tiles of EMPTY ground instead.
+
+    This is the emitted counterpart of the ``corridor_tiles`` variable in
+    :func:`_solve_one`, and the two must agree or the solver is optimising a
+    layout that is not the one built.
+    """
+    out = [len(c) for c in lanes]
+    at = _row_index(rows)
+    for src, dst, _item in direct:
+        if src not in at or dst not in at:
+            continue
+        c = max(at[src], at[dst])
+        if 0 <= c < len(out):
+            out[c] = max(out[c], MIN_DIRECT_INSERT_GAP - 1)
+    return out
+
+
 def _realizable_direct(
     spec: BuildSpec,
     groups: dict[str, _Group],
@@ -2055,7 +2335,7 @@ def _realizable_direct(
     while True:
         lanes, mixed, copies = _lane_requirements(groups, edges, plan.rows, current, spec)
         row_heights = [max((groups[k].pitch_h for k in r), default=1) for r in plan.rows]
-        corridor_heights = [len(c) for c in lanes]
+        corridor_heights = _corridor_heights(lanes, plan.rows, current)
         row_y, _corr_y, _h = band_offsets(row_heights, corridor_heights)
 
         xs: dict[str, list[int]] = defaultdict(list)
@@ -2081,7 +2361,7 @@ def _realizable_direct(
             physical = (
                 prod
                 and cons
-                and 1 <= dy <= reach
+                and MIN_DIRECT_INSERT_GAP <= dy <= reach
                 and _every_machine_pairs(prod, w_src, cons, w_dst)
             )
             excess = dy - reach if physical else reach + 1
@@ -2147,7 +2427,7 @@ def _emit(
     )
 
     row_heights = [max((groups[k].pitch_h for k in r), default=1) for r in plan.rows]
-    corridor_heights = [len(c) for c in plan.lanes]
+    corridor_heights = _corridor_heights(plan.lanes, plan.rows, plan.direct)
     row_y, corr_y, total_h = band_offsets(row_heights, corridor_heights)
 
     # A boundary corridor has only one neighbouring row, and measurement shows
@@ -4980,6 +5260,15 @@ class SpineLayout:
                     # method's contract is a VALID placement or an exception, and
                     # until now that was argued rather than enforced.
                     reason, detail = FALLBACK_SELF_CHECK, bad
+                    continue
+                # Flat-legal is not legal.  The validator's geometry is a flat
+                # grid at `GRID_ARC`; a paste lands on a sphere, in whichever
+                # longitude band this extent fits, where columns are narrower.
+                # Keep sweeping on a failure -- a band refusal is a fact about
+                # THIS packing, and the next plan may not share it.
+                on_planet = _band_rejected(placement)
+                if on_planet:
+                    reason, detail = FALLBACK_BAND, on_planet
                     continue
                 return placement
 

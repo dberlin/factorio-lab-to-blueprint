@@ -2802,3 +2802,146 @@ not of the blueprint -- so `geom.collide` evaluates on a flat grid at
 `GRID_ARC`, the loosest spacing any equatorial paste can give, and reports only
 what no paste can avoid. Asking the other question is `collisions(anchor_lat=)`.
 On one `information-matrix` layout the two differ by 5 pairs against 15.
+
+## OPEN -- `colliders.py` and `freeform.py` still ask the flat question, and `dsp/planet.py` can now answer the real one
+
+`src/flab2bp/dsp/planet.py` exists. It carries the game's longitude
+quantisation, the band table, the smallest band an extent fits in either
+orientation, the exact projection of blueprint tiles into a band, and the paste
+predicates that only become answerable once you have one. `spine.py` consults
+it end to end; nothing else does yet. These are the three handoffs, in the order
+they should land.
+
+### 1. `colliders._longitude_segment_count` takes a LATITUDE and is off by a band
+
+**File:** `src/flab2bp/dsp/colliders.py`, `_longitude_segment_count` (and the
+`_SEGMENT_TABLE` above it).
+**Change:** delete both and import `planet.longitude_segment_count` /
+`planet.SEGMENT_TABLE`. Move the table INTO `planet.py` first and have
+`colliders` import it back -- that is the direction the dependency wants to run,
+since `colliders` needs one band and `planet` needs all of them, and it also
+breaks the current cycle (`planet` imports the table from `colliders` today).
+
+**Two defects it fixes**, both of which only bite away from the equator, which
+is why the flat model never saw them:
+
+* **The band index omits the decrement.** `GetLongitudeSegmentCount`
+  (`BlueprintUtils.cs:229-233`) does `if (idx > 0) idx--;` before dividing by 5.
+  `colliders` does `int(abs(lat) / step / 5)`. They disagree at every band
+  boundary: grid row 80 is the LAST row of the 200-segment band and `colliders`
+  calls it 160.
+* **The `- 1e-9` in the `ceil` is not in the game**, and it changes the answer.
+  Swept over every `(segment, latitude index)` for segments 4..1200: **300
+  disagreements**, including the polar row of every single segment size.
+
+**What to measure:** `preview_pose(..., anchor_lat=...)` and
+`collisions(..., anchor_lat=...)` are the only readers, and both are currently
+wrong outside band 200. Expect the anchored collision counts quoted in
+`collisions`' docstring ("5 pairs flat, 15 anchored at the equator and 28
+anchored at 0.3 radians") to MOVE. They were measured against the broken
+lookup. Re-measure them and update the docstring rather than assuming the shape
+holds.
+**Expected sign:** more collisions found, not fewer -- the broken lookup
+returned an unquantised raw count, which is larger than the table value almost
+everywhere, and a larger segment count means a NARROWER longitude step and so a
+smaller world separation. It was reporting a planet whose columns are too close
+together in some bands and too far apart in others; there is no single sign, so
+measure per band.
+
+### 2. `freeform.py` has no band check at all
+
+**File:** `src/flab2bp/layout/freeform.py`.
+**Change:** the same wiring `spine.py` now has. Concretely, copy the shape of
+`spine._band_sorters` and `spine._band_rejected`: after the layout is final,
+walk `planet.bands(segment)` smallest-first, and for each band and each fitting
+orientation run `planet.collisions_at` and `planet.sorter_condition` over every
+anchor `planet.projections_for` yields. The first band with no findings is the
+one to record in `placement.stats["area_segments"]`; no band means refuse.
+**What to measure:** paired and interleaved, cell for cell, both power settings,
+against freeform with the gate stubbed out. Report the per-cell distribution and
+the same-arm noise floor, never a total across differing cell sets.
+**Expected sign:** area up, and by more than spine paid. Freeform packs
+tighter, so it has more pairs close enough for a 12% column squeeze to matter,
+and it has no equivalent of `MIN_DIRECT_INSERT_GAP` keeping its
+machine-to-machine sorters off the `TooClose` floor. INVALID must stay 0.
+
+### 3. `rules.py`'s two unported clauses are ported, and `validate.py` should read them
+
+**File:** `src/flab2bp/layout/validate.py`; the constants are
+`planet.SORTER_SEGMENTS_MAX` (`num133`) and `planet.SORTER_COMBINED_MIN`
+(`num134`).
+
+`dsp/rules.py` records these as deliberately unported: *"`num7` and `num8` are
+not ported AS THRESHOLDS because `CalcSegmentsAcross` is a function of latitude
+and our grid is uniform ... On a uniform grid `num7` reduces exactly to
+`SORTER_MAX_REACH`."* Both halves of that stop being true once a layout is
+projected into a band, and the second half was never true for a SEATED sorter:
+`slots.seated_sorter` moves a machine end by up to 0.6 of a tile, so
+`CalcSegmentsAcross` is a real number that an integer span check does not bound
+in either direction.
+
+**The check to add:**
+
+* name: `game.inserter_band`
+* severity: `Severity.ERROR`
+* signature: `def _inserter_band(ctx: Context) -> Iterable[Finding]`, a
+  `@check("game.inserter_band")` beside `game.inserter_skew`
+* body: build each sorter with `slots.seated_sorter` plus the peer/`zero`
+  derivation in `spine._band_sorters`, pick the band with
+  `planet.band_for_extent(*extent)` or read
+  `ctx.placement.stats["area_segments"]`, and yield one Finding per
+  `planet.sorter_condition` that is not `None`, naming the condition
+  (`TooFar`/`TooClose`/`TooSkew`) and the anchor it fired at.
+
+**The fixtures that must convict**, so the check is not green for the wrong
+reason:
+
+* a machine-to-machine sorter across a ONE-tile gap -- `across` = 1.329 against
+  the 1.451 floor, `TooClose`. This is what `spine.MIN_DIRECT_INSERT_GAP` now
+  prevents and what the packer emitted before it;
+* a four-cell sorter -- 5.03 world units, inside `rules.SORTER_LENGTH[0]`'s 7.5,
+  and 4.0 cells against 3.799, `TooFar`. `game.inserter_skew` cannot see this
+  one at all;
+* two Matrix Labs five columns apart, which clear the flat model and collide at
+  the poleward edge of the equatorial band (that one is `geom.collide`'s
+  business, not this check's, but it is the same class of miss).
+
+**The control that says the check is not too tight:** run it over the sorters in
+the single-area fixtures the GAME wrote. There are 1131 of them across
+`12-s-purple-science`, `factory-heretical-smelter-block`, `falk-v7-mall-full`,
+`factory-quick-start-step-1` and `factory-quick-start-step-3-red-cube`, and at
+every anchor of the band each blueprint's own `area_segments` names, this port
+convicts **2** -- both the Oil Refinery sorter in
+`factory-quick-start-step-3-red-cube` that `game.inserter_skew`'s docstring
+already records as the one place the seated reading disagrees with a shipped
+blueprint. Anything more than that is a defect in the wiring, not a finding.
+Distribution of `CalcSegmentsAcross` over those 1131, for calibration:
+machine-to-machine n=48 min **2.249** median 3.249 max 3.358; one belt end
+n=1079 min 1.122 median 1.219 max 3.135; belt-to-belt n=4 all 1.000. Not one is
+outside the game's bounds.
+
+### 4. The literal form of the requirement is unsatisfiable, and that is measured
+
+The brief was *"a blueprint of size x*y is laid out so it works in the smallest
+band that can fit x*y"*, on the rationale that poleward tiles are narrower and
+so a layout legal in the narrowest band it can occupy is legal everywhere.
+
+**The rationale is false, and the band table is the counterexample.** Columns do
+not shrink monotonically toward the pole, because the quantisation OVERSHOOTS at
+each band's equatorward edge. Measured over every row of every band on a
+terrestrial planet, as a fraction of a tile:
+
+* narrowest away from a pole: **0.314** (4-segment band, grid row 249)
+* narrowest in a band anything can be built in: **0.783** (32-segment band, row 230)
+* WIDEST anywhere: **1.413** (8-segment band, row 241) -- wider than at the equator
+* inside the equatorial band, where everything we emit lands: 1.000 down to **0.876**
+
+So legality is not monotone in either direction, and "smallest band by extent"
+is worse than non-monotone -- it is degenerate. A 14x5 layout fits the
+4-segment band on extent alone, and that band is 20 tiles around the entire
+planet: every machine in it overlaps every neighbour. `spine._band_rejected`
+therefore takes the satisfiable reading of the same intent -- the smallest band
+the layout is actually LEGAL in, searched from the smallest fitting band upward,
+refusing only when no band works -- and records it for the encoder. If the
+literal reading is wanted anyway, it is a one-line change there, and it will
+refuse every layout.

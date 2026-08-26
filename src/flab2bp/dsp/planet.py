@@ -519,22 +519,49 @@ class Projection:
     anchor_row: int
     segment: int
     radius: float
-    #: ``True`` when the paste turns the blueprint a quarter turn, so that its
-    #: ``x`` runs along LATITUDE and its ``y`` along longitude.  The game does
-    #: this in ``TransitionWidthAndHeight`` (``BlueprintUtils.cs:2441``), which
-    #: ``RefreshBuildPreview`` applies to every local offset before the two
-    #: steps are multiplied in (``BlueprintUtils.cs:2031-2036``)::
+    #: Which quarter turn the paste is at: ``Mathf.FloorToInt(_yaw / 89.9f)``,
+    #: 0 through 3.  It decides three things at once, and all three are modelled
+    #: because only one of them is an isometry.
+    #:
+    #: ``TransitionWidthAndHeight`` (``BlueprintUtils.cs:2441``) SWAPS the local
+    #: offsets at quadrants 1 and 3, and ``RefreshBuildPreview`` multiplies them
+    #: by the two steps and the two signs (``BlueprintUtils.cs:2031-2036``)::
     #:
     #:     Vector2 vector4 = TransitionWidthAndHeight(_yaw, localOffset_x, localOffset_y);
     #:     float longitudeRad = num32 + vector4.x * longitudeRadPerGrid4 * num2;
     #:     float num34        = num33 + vector4.y * latitudeRadPerGrid * num3;
+    #:     ...
+    #:     buildPreview.lrot = Maths.SphericalRotation(dir, blueprintBuilding.yaw - num * 90f);
     #:
     #: WHICH AXIS COMPRESSES IS THE WHOLE DIFFERENCE.  A blueprint that is wide
     #: and short fits a far smaller band turned sideways -- and turned sideways
-    #: it is its WIDTH that gets squeezed, not its height.  A model that picked
-    #: the band from the rotated extent and then projected the unrotated layout
-    #: would be checking a paste that never happens.
-    rotated: bool = False
+    #: it is its WIDTH that gets squeezed, not its height.
+    #:
+    #: AND THE YAW TURNS WITH IT.  Leaving the ``- num * 90f`` out makes every
+    #: sorter in a quarter-turned paste face 90 degrees off the line it runs
+    #: along, which reads as ``TooSkew`` on the entire blueprint.  That was this
+    #: model's own first answer, and it was this model's bug, not the game's.
+    quadrant: int = 0
+
+    @property
+    def rotated(self) -> bool:
+        """Whether this quadrant swaps the two axes."""
+        return self.quadrant in (1, 3)
+
+    @property
+    def _longitude_sign(self) -> float:
+        """``num2`` -- ``-1`` at quadrants 1 and 2."""
+        return -1.0 if self.quadrant in (1, 2) else 1.0
+
+    @property
+    def _latitude_sign(self) -> float:
+        """``num3`` -- ``-1`` at quadrants 2 and 3."""
+        return -1.0 if self.quadrant in (2, 3) else 1.0
+
+    @property
+    def yaw_offset(self) -> float:
+        """``-num * 90`` -- what the paste adds to every building's own yaw."""
+        return -90.0 * self.quadrant
 
     @property
     def latitude_step(self) -> float:
@@ -553,16 +580,13 @@ class Projection:
         return longitude_rad_per_grid(self.band.area_segments)
 
     def _transition(self, x: float, y: float) -> tuple[float, float]:
-        """``TransitionWidthAndHeight`` -- ``(longitude offset, latitude offset)``.
+        """``TransitionWidthAndHeight`` and the two signs, as one step.
 
-        Only the quarter-turn SWAP is modelled, not the sign flips that go with
-        yaw 180 and 270 (``num2``/``num3`` in ``RefreshBuildPreview``).  A sign
-        flip is a reflection of the sphere, which is an isometry: it maps a
-        placement to a congruent one, and :meth:`Band.anchors` already
-        enumerates the latitude reflection's image directly.  The swap is not an
-        isometry -- it changes which axis is compressed -- so it is modelled.
+        Returns ``(longitude offset, latitude offset)`` -- the swap and the
+        signs the paste applies before the steps are multiplied in.
         """
-        return (y, x) if self.rotated else (x, y)
+        dx, dy = (y, x) if self.rotated else (x, y)
+        return dx * self._longitude_sign, dy * self._latitude_sign
 
     def latitude(self, x: float, y: float) -> float:
         _, dy = self._transition(x, y)
@@ -586,7 +610,10 @@ class Projection:
     def pose(self, x: float, y: float, z: float, yaw: float) -> tuple[Vec3, Quat]:
         d = self.direction(x, y)
         scale = z * 4.0 / 3.0 + 0.2 + self.radius
-        return (d[0] * scale, d[1] * scale, d[2] * scale), spherical_rotation(d, yaw)
+        return (
+            (d[0] * scale, d[1] * scale, d[2] * scale),
+            spherical_rotation(d, yaw + self.yaw_offset),
+        )
 
     def _shell(self, z: float) -> float:
         """The radius a building at level ``z`` actually sits on.
@@ -628,11 +655,15 @@ def projections_for(
     itself.
 
     The anchors come from :meth:`Band.anchors`, which covers both hemispheres.
+    Both quadrants of the fitting orientation are enumerated -- 0 and 2 upright,
+    1 and 3 turned -- because the sign pair that separates them is a REFLECTION
+    of the layout, not a rotation of it, and a mirrored blueprint is a different
+    configuration of the same buildings.
     """
+    quadrants = (1, 3) if fit.rotated else (0, 2)
     return tuple(
-        Projection(
-            band=fit.band, anchor_row=a, segment=segment, radius=radius, rotated=fit.rotated
-        )
+        Projection(band=fit.band, anchor_row=a, segment=segment, radius=radius, quadrant=q)
+        for q in quadrants
         for a in fit.band.anchors(fit.rows)
     )
 
@@ -831,8 +862,9 @@ def sorter_condition(sorter: Sorter, projection: Projection) -> str | None:
     if math.hypot(across, altitude) < SORTER_COMBINED_MIN[belts]:
         return "TooClose"
 
-    lrot = spherical_rotation(projection.direction(sorter.x, sorter.y), sorter.yaw)
-    lrot2 = spherical_rotation(projection.direction(sorter.x2, sorter.y2), sorter.yaw2)
+    offset = projection.yaw_offset
+    lrot = spherical_rotation(projection.direction(sorter.x, sorter.y), sorter.yaw + offset)
+    lrot2 = spherical_rotation(projection.direction(sorter.x2, sorter.y2), sorter.yaw2 + offset)
     if quaternion_angle_deg(lrot, lrot2) > rules.SKEW_PAIR_DEG:
         return "TooSkew"
     axis = _norm((lpos2[0] - lpos[0], lpos2[1] - lpos[1], lpos2[2] - lpos[2]))
@@ -850,8 +882,80 @@ def _magnitude(v: Vec3) -> float:
 # --- collisions at a band ---------------------------------------------------
 
 
+def collider_radius(model_index: int) -> float:
+    """A sphere, centred on the building's own origin, containing every collider.
+
+    Used only to rule pairs OUT before the exact test -- see
+    :func:`candidate_pairs`.  Over-estimating it costs time; under-estimating it
+    would lose a collision, so it is the sum of the offset's magnitude and the
+    half-extent's, which is the corner-to-corner bound and cannot be too small.
+    """
+    worst = 0.0
+    for pos, ext, _q in colliders.build_colliders(model_index):
+        worst = max(worst, _magnitude(pos) + _magnitude(ext))
+    return worst
+
+
+def candidate_pairs(
+    buildings: Sequence[colliders.Placed], band: Band, segment: int, radius: float
+) -> list[tuple[int, int]]:
+    """Pairs that could possibly collide SOMEWHERE in this band.
+
+    A filter, never a verdict.  The exact overlap test is
+    :func:`colliders.obb_overlap` and it still runs on everything this returns;
+    all this does is stop the anchor loop rebuilding boxes for the overwhelming
+    majority of pairs that are tens of tiles apart and could not touch at any
+    latitude.
+
+    The bound is a LOWER bound on the world separation, so it can only ever
+    over-include.  Rows are a fixed arc apart everywhere; columns are narrowest
+    at the band's poleward edge; and the chord between two points is shorter than
+    the arc, which is why the arc is scaled down before it is used.  The scale is
+    not a tolerance on the verdict -- make it 0.5 and the answers do not change,
+    only the running time.
+    """
+    if not buildings:
+        return []
+    step = longitude_rad_per_grid(band.area_segments)
+    lat_step = latitude_rad_per_grid(segment)
+    poleward = min(
+        math.cos(min(abs(g), pole_grid_idx(segment)) * lat_step)
+        for g in (band.grid_lo, band.grid_hi)
+    )
+    # 0.9 absorbs chord-against-arc, which is under 4% for the three-columns
+    # case even in the 4-segment band and far less anywhere a collision lives.
+    col = radius * poleward * step * 0.9
+    row = radius * lat_step * 0.9
+    radii = [collider_radius(b.model_index) for b in buildings]
+    reach = max(radii, default=0.0) * 2.0
+    # Bucket by column so the scan is linear in the number of NEAR pairs rather
+    # than quadratic in the number of buildings.
+    span = max(1.0, reach / max(col, 1e-9))
+    grid: dict[int, list[int]] = {}
+    for i, b in enumerate(buildings):
+        grid.setdefault(int(math.floor(b.x / span)), []).append(i)
+    out: set[tuple[int, int]] = set()
+    for key, members in grid.items():
+        others = members + [j for k in (key + 1,) for j in grid.get(k, ())]
+        for a_pos, i in enumerate(members):
+            for j in others[a_pos + 1 :]:
+                if i == j:
+                    continue
+                bi, bj = buildings[i], buildings[j]
+                gap = math.sqrt(
+                    ((bi.x - bj.x) * col) ** 2
+                    + ((bi.y - bj.y) * row) ** 2
+                    + ((bi.z - bj.z) * 4.0 / 3.0) ** 2
+                )
+                if gap <= radii[i] + radii[j]:
+                    out.add((i, j) if i < j else (j, i))
+    return sorted(out)
+
+
 def collisions_at(
-    buildings: Sequence[colliders.Placed], projection: Projection
+    buildings: Sequence[colliders.Placed],
+    projection: Projection,
+    pairs: Sequence[tuple[int, int]] | None = None,
 ) -> list[tuple[int, int]]:
     """``EBuildCondition.Collide`` pairs among machines projected into a band.
 
@@ -877,33 +981,31 @@ def collisions_at(
     ``colliders``' own docstring says so, and
     ``test_every_shipped_collider_quaternion_is_identity`` keeps it true, so this
     shortcut has a guard rather than an assumption.
+
+    ``pairs`` restricts the exact test to a candidate set from
+    :func:`candidate_pairs`.  It changes the running time, not the answer:
+    anything it leaves out is a pair no projection in the band can bring within
+    the sum of its two collider radii.  Passing ``None`` tests everything, at the
+    cost of projecting every building whether or not it has a neighbour.
     """
-    boxes = [
-        colliders.target_boxes(b, *projection.pose(b.x, b.y, b.z, b.yaw)) for b in buildings
+    if pairs is None:
+        pairs = [(i, j) for i in range(len(buildings)) for j in range(i + 1, len(buildings))]
+    if not pairs:
+        return []
+    wanted = {i for pair in pairs for i in pair}
+    boxes = {
+        i: colliders.target_boxes(
+            buildings[i], *projection.pose(*_placed_at(buildings[i]))
+        )
+        for i in wanted
+    }
+    hits = [
+        pair
+        for pair in pairs
+        if any(colliders.obb_overlap(q, t) for q in boxes[pair[0]] for t in boxes[pair[1]])
     ]
-    cell = 32.0
-    grid: dict[tuple[int, int, int], set[int]] = {}
-    for i, group in enumerate(boxes):
-        for box in group:
-            key = tuple(int(math.floor(box.centre[k] / cell)) for k in range(3))
-            for dx in (-1, 0, 1):
-                for dy in (-1, 0, 1):
-                    for dz in (-1, 0, 1):
-                        grid.setdefault((key[0] + dx, key[1] + dy, key[2] + dz), set()).add(i)
-    hits: set[tuple[int, int]] = set()
-    for i, group in enumerate(boxes):
-        for query in group:
-            key = (
-                int(math.floor(query.centre[0] / cell)),
-                int(math.floor(query.centre[1] / cell)),
-                int(math.floor(query.centre[2] / cell)),
-            )
-            for j in grid.get(key, ()):
-                if j == i:
-                    continue
-                pair = (i, j) if i < j else (j, i)
-                if pair in hits:
-                    continue
-                if any(colliders.obb_overlap(query, other) for other in boxes[j]):
-                    hits.add(pair)
     return sorted(hits)
+
+
+def _placed_at(b: colliders.Placed) -> tuple[float, float, float, float]:
+    return (b.x, b.y, b.z, b.yaw)
