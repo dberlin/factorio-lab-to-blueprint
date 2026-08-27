@@ -932,6 +932,30 @@ LINT_EXCEPTIONS: tuple[LintException, ...] = (
         "direct-insert miss objective coefficient; not sorter geometry or paste epsilon",
     ),
     LintException(
+        "flab2bp.layout.compact_seed",
+        "CompactTopologyBeamConfig",
+        0.2,
+        "per-candidate CP deterministic work; not BELT_PROBE_LIFT geometry",
+    ),
+    LintException(
+        "flab2bp.layout.sequence_solver",
+        "<module>",
+        24.0,
+        "_TOPOLOGY_BEAM_MAX_STRIPS: quadratic model-size cap; not skew degrees",
+    ),
+    LintException(
+        "flab2bp.layout.sequence_solver",
+        "<module>",
+        0.2,
+        "_TOPOLOGY_BEAM_DETERMINISTIC_SECONDS: CP work; not BELT_PROBE_LIFT geometry",
+    ),
+    LintException(
+        "flab2bp.layout.sequence_solver",
+        "<module>",
+        200.0,
+        "_SHARED_PACK_MACHINE_MAX: measured seed-role size cap; not planet geometry",
+    ),
+    LintException(
         "flab2bp.layout.sequence_solver",
         "<module>",
         30.0,

@@ -17,12 +17,15 @@ from types import MappingProxyType
 from typing import Protocol, cast
 
 from flab2bp.layout import validate
-from flab2bp.layout.base import RETRY_BUDGET_S, NoValidLayout, Placement
+from flab2bp.layout.base import DETERMINISTIC_WORKERS, RETRY_BUDGET_S, NoValidLayout, Placement
 from flab2bp.layout.compact_seed import (
     CompactSeedConfig,
     CompactSeedDiagnostics,
     CompactSeedResult,
     CompactSeedStatus,
+    CompactTopologyBeam,
+    CompactTopologyBeamConfig,
+    CompactTopologyCandidate,
     VariantDirectInsertTarget,
     solve_compact_seed,
 )
@@ -41,6 +44,7 @@ from flab2bp.layout.freeform import (
     _fanout_shortfall,
     _greedy_pack,
     _Pack,
+    _pack,
     _prepare_routing_problem,
     _PreparedRoutingProblem,
     _Unpowerable,
@@ -88,6 +92,7 @@ from flab2bp.layout.sequence_pair import (
     merge_stage_boundary,
     quality_archive_key,
     repair_neighbourhood,
+    score_candidate,
     split_stage_boundary,
 )
 from flab2bp.layout.strip_variants import (
@@ -127,6 +132,12 @@ _COARSE_SPRAY_NO_POWER_MACHINE_THRESHOLD = 250
 _COARSE_NO_SPRAY_COMPACT_SEED_ATTEMPT = 2
 _COMPACT_LARGE_VARIANT_SIZE = 40
 _COMPACT_LARGE_VARIANT_DETERMINISTIC_CAP = 0.5
+_TOPOLOGY_BEAM_MIN_STRIPS = 7
+_TOPOLOGY_BEAM_MAX_STRIPS = 24
+_TOPOLOGY_BEAM_DETERMINISTIC_SECONDS = 0.2
+_SHARED_PACK_MACHINE_MIN = 75
+_SHARED_PACK_MACHINE_MAX = 200
+_TOPOLOGY_BEAM_CANDIDATES = 8
 
 
 @dataclass(frozen=True, slots=True)
@@ -400,6 +411,7 @@ class StageAdapters[PreparedT]:
     detailed_route: Callable[[PreparedT, int], DetailedStageResult]
     validate: Callable[[Placement], ValidationVerdict]
 
+    prepare_exact: Callable[[int, DecodedPlacement], PreparedT] | None = None
 
 @dataclass(frozen=True, slots=True)
 class StageObservation:
@@ -647,7 +659,10 @@ class SequenceSolver[PreparedT]:
             raise ValueError("maximum stages must be a non-negative integer")
 
         termination = "stage-limit"
-        while len(self._stage_stats) < stage_limit:
+        while sum(
+            stage.global_skip_reason not in ("shared-pack", "topology-beam")
+            for stage in self._stage_stats
+        ) < stage_limit:
             if self.deadline_reached():
                 termination = "deadline"
                 break
@@ -882,6 +897,108 @@ class SequenceSolver[PreparedT]:
             allowance,
             closure_allowance=closure_allowance,
         )
+
+    def close_exact_decoded(
+        self,
+        height: int,
+        decoded: DecodedPlacement,
+        *,
+        reason: str,
+    ) -> DetailedStageResult:
+        """Authoritatively close one exact decoded candidate without re-encoding it."""
+        if type(height) is not int:
+            raise ValueError("exact decoded closure height must be an integer")
+        if not isinstance(decoded, DecodedPlacement):
+            raise ValueError("exact decoded closure requires a decoded placement")
+        if type(reason) is not str or not reason:
+            raise ValueError("exact decoded closure reason must be a non-empty string")
+        height_state = next(
+            (candidate for candidate in self._heights if candidate.height == height),
+            None,
+        )
+        if height_state is None:
+            raise ValueError("exact decoded closure height must be scheduled")
+        problem = height_state.problem
+        if len(decoded.x) != problem.size:
+            raise ValueError("exact decoded closure cardinality must match its problem")
+        variant_indices = decoded.variant_indices or (0,) * problem.size
+        problem._validate_variant_indices(variant_indices)
+        state = replace(
+            height_state.restarts[0].anneal,
+            variant_indices=variant_indices,
+        )
+        direct_targets = (
+            self.direct_targets
+            if self.direct_targets_for_state is None
+            else self.direct_targets_for_state(problem, state)
+        )
+        context = feedback_cost_context(
+            height_state.feedback,
+            problem,
+            direct_targets,
+        )
+        breakdown = score_candidate(
+            problem,
+            decoded,
+            context,
+            direct_targets=direct_targets,
+        )
+        dimensions = problem.selected_sizes(variant_indices)
+        key = PlacementKey(
+            x=decoded.x,
+            y=decoded.y,
+            dimensions=dimensions,
+            east_gaps=(0,) * problem.size,
+            north_gaps=(0,) * problem.size,
+            instance_ids=problem.instance_ids,
+            variant_ids=problem.selected_variant_ids(variant_indices),
+        )
+        preparation_started = time.perf_counter()
+        prepared = (
+            self.adapters.prepare(height, decoded)
+            if self.adapters.prepare_exact is None
+            else self.adapters.prepare_exact(height, decoded)
+        )
+        preparation_time_s = time.perf_counter() - preparation_started
+        selected = _StageCandidate(
+            prepared=prepared,
+            source=None,
+            state=state,
+            decoded=decoded,
+            key=key,
+            breakdown=breakdown,
+            archive_categories=(EliteCategory.BLENDED,),
+            anneal_stages=0,
+            anneal_moves=0,
+            accepted_moves=0,
+            anneal_seeds=(),
+        )
+        allowance = self.budget.detailed_discovery_allowance(height)
+        detailed_started = time.perf_counter()
+        detailed = self.adapters.detailed_route(prepared, allowance)
+        detailed_route_time_s = time.perf_counter() - detailed_started
+        spent = detailed.routing.expansions
+        _check_spend(spent, allowance)
+        self.budget.charge_detailed_discovery(height, spent)
+        self._complete_routing_stage(
+            height_state,
+            selected,
+            detailed,
+            spent,
+            observation=_RoutingObservation(
+                restart=height_state.restarts[0],
+                stage_index=0,
+                backend=build_sequence_kernel(problem, context).backend,
+                continue_search=False,
+            ),
+            global_routes=0,
+            global_overflow=None,
+            global_skip_reason=reason,
+            preparation_time_s=preparation_time_s,
+            global_route_time_s=0.0,
+            detailed_route_time_s=detailed_route_time_s,
+        )
+        return detailed
 
     def _run_stage(
         self,
@@ -1819,6 +1936,147 @@ def _balanced_compact_seed_height(problem: PlacementProblem) -> int:
     return max(minimum_height, balanced_height)
 
 
+def _topology_beam_height(
+    seeds: Mapping[int, _Pack],
+    coarse_heights: tuple[int, ...],
+    *,
+    machine_count: int,
+    strip_count: int,
+    sprayed_lanes: int,
+    power: bool,
+) -> int | None:
+    """Choose a deterministic height role from directness and strip saturation."""
+    if len(coarse_heights) < 2:
+        return None
+    ordered = tuple(sorted(coarse_heights))
+    if (
+        power
+        and strip_count > _TOPOLOGY_BEAM_MAX_STRIPS
+        and sprayed_lanes <= _DENSE_SPRAY_LANE_THRESHOLD
+    ):
+        return ordered[-1]
+    if (
+        sprayed_lanes > _DENSE_SPRAY_LANE_THRESHOLD
+        and strip_count <= 13
+    ):
+        return ordered[-2]
+    if sprayed_lanes > 0 and strip_count <= 13:
+        return ordered[0]
+    if sprayed_lanes == 0 and machine_count >= 5 * strip_count:
+        return ordered[-1]
+    if sprayed_lanes == 0 and machine_count >= 4 * strip_count:
+        return ordered[-2]
+    candidates = ordered[1:]
+    return min(
+        candidates,
+        key=lambda height: (seeds[height].width * height, height),
+    )
+
+
+def _uses_topology_beam(
+    *,
+    strip_count: int,
+    height: int | None,
+    machine_count: int,
+    sprayed_lanes: int,
+    power: bool,
+) -> bool:
+    """Bound relation enumeration, with one measured unpowered mid-scale lane."""
+    if height is None or strip_count < _TOPOLOGY_BEAM_MIN_STRIPS:
+        return False
+    if strip_count <= _TOPOLOGY_BEAM_MAX_STRIPS:
+        return True
+    return (
+        strip_count <= 37
+        and sprayed_lanes <= _DENSE_SPRAY_LANE_THRESHOLD
+        and machine_count <= _SHARED_PACK_MACHINE_MAX
+    )
+
+
+def _uses_shared_pack_candidate(
+    *,
+    machine_count: int,
+    power: bool,
+    sprayed_lanes: int,
+    strip_count: int,
+    direct_candidates: int,
+) -> bool:
+    """Select the measured direct/mid-scale role while excluding stress topology."""
+    return (
+        strip_count <= _COMPACT_LARGE_VARIANT_SIZE
+        and sprayed_lanes <= 3 * _DENSE_SPRAY_LANE_THRESHOLD
+        and machine_count <= _SHARED_PACK_MACHINE_MAX
+        and (
+            (
+                power
+                and sprayed_lanes > 0
+                and machine_count >= _SHARED_PACK_MACHINE_MIN
+                and (
+                    strip_count <= _TOPOLOGY_BEAM_MAX_STRIPS
+                    or sprayed_lanes > _DENSE_SPRAY_LANE_THRESHOLD
+                )
+            )
+            or (direct_candidates > 0 and strip_count <= 8)
+        )
+    )
+
+
+def _exact_pack_decoded(
+    pack: _Pack,
+    strips: Sequence[Strip],
+    problem: PlacementProblem,
+) -> DecodedPlacement:
+    """Project one exact shared packing into fixed routing windows."""
+    if len(strips) != problem.size or len(pack.at) != problem.size:
+        raise ValueError("exact pack cardinality must match its placement problem")
+    variant_indices = (0,) * problem.size
+    sizes = problem.selected_sizes(variant_indices)
+    x = tuple(
+        pack.at[index][0] - strips[index].west_channel
+        for index in range(problem.size)
+    )
+    y = tuple(pack.at[index][1] for index in range(problem.size))
+    return DecodedPlacement(
+        x=x,
+        y=y,
+        width=max(
+            (
+                coordinate + width
+                for coordinate, (width, _height) in zip(x, sizes, strict=True)
+            ),
+            default=0,
+        ),
+        used_height=max(
+            (
+                coordinate + height
+                for coordinate, (_width, height) in zip(y, sizes, strict=True)
+            ),
+            default=0,
+        ),
+        x_windows=tuple((coordinate, coordinate) for coordinate in x),
+        y_windows=tuple((coordinate, coordinate) for coordinate in y),
+        gap_area=0,
+        direct=pack.direct,
+        variant_indices=variant_indices,
+    )
+
+
+def _topology_candidate_decoded(
+    candidate: CompactTopologyCandidate,
+) -> DecodedPlacement:
+    """Retain exact CP coordinates as fixed routing windows."""
+    return DecodedPlacement(
+        x=candidate.x,
+        y=candidate.y,
+        width=candidate.width,
+        used_height=candidate.used_height,
+        x_windows=tuple((coordinate, coordinate) for coordinate in candidate.x),
+        y_windows=tuple((coordinate, coordinate) for coordinate in candidate.y),
+        gap_area=0,
+        variant_indices=candidate.variant_indices,
+    )
+
+
 def _variant_direct_eligibility(
     spec: BuildSpec,
     strips: list[Strip],
@@ -1999,10 +2257,15 @@ class _ProductionTelemetry:
     pose_feasibility_rejects: int = 0
     elevated_coater_routes: int = 0
     compact_seed_attempt: int | None = None
+    shared_pack_candidates: int = 0
+    shared_pack_wall_time_s: float = 0.0
     compact_seed_base_seed: int | None = None
     compact_seed_height: int | None = None
     compact_seed_result: CompactSeedResult | None = None
     compact_seed_wall_time_s: float = 0.0
+    topology_beam_height: int | None = None
+    topology_beam_candidates: int = 0
+    topology_beam_wall_time_s: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -2122,6 +2385,10 @@ def _production_run(
         chosen_compact_config,
     )
     initial_states: dict[int, AnnealState] = {}
+    topology_beam_height: int | None = None
+    use_shared_pack = False
+    topology_beam_width_bound: int | None = None
+    use_topology_beam = False
 
     planning_started = time.monotonic()
     try:
@@ -2183,6 +2450,32 @@ def _production_run(
         seeds = {height: _greedy_pack(strips, height) for height in _candidate_heights(strips)}
         coarse_heights = tuple(
             sorted(seeds, key=lambda height: (seeds[height].width, height))
+        )
+        topology_beam_height = _topology_beam_height(
+            seeds,
+            coarse_heights,
+            machine_count=spec.machine_count,
+            strip_count=len(strips),
+            sprayed_lanes=len(spec.spray_lanes),
+            power=power,
+        )
+        use_topology_beam = _uses_topology_beam(
+            strip_count=len(strips),
+            height=topology_beam_height,
+            machine_count=spec.machine_count,
+            sprayed_lanes=len(spec.spray_lanes),
+            power=power,
+        )
+        if use_topology_beam and topology_beam_height is not None:
+            median_height = sorted(coarse_heights)[len(coarse_heights) // 2]
+            topology_beam_width_bound = max(8, 2 * seeds[median_height].width)
+            telemetry.topology_beam_height = topology_beam_height
+        use_shared_pack = _uses_shared_pack_candidate(
+            machine_count=spec.machine_count,
+            power=power,
+            sprayed_lanes=len(spec.spray_lanes),
+            strip_count=len(strips),
+            direct_candidates=len(direct_candidates),
         )
         neighbor_heights: list[int] = []
         for height in coarse_heights:
@@ -2340,24 +2633,33 @@ def _production_run(
     ) -> tuple[DirectInsertTarget, ...]:
         return selected_direct_targets(problem, state.variant_indices)
 
-    def prepare(height: int, decoded: DecodedPlacement) -> _ProductionCandidate:
+    def prepare_candidate(
+        height: int,
+        decoded: DecodedPlacement,
+        *,
+        align: bool,
+    ) -> _ProductionCandidate:
         problem = problems[height]
         selected = selected_strips(problem, decoded.variant_indices)
-        selected_targets = selected_direct_targets(
-            problem,
-            decoded.variant_indices,
+        routed = (
+            align_direct_inserts(
+                problem,
+                decoded,
+                selected_direct_targets(problem, decoded.variant_indices),
+            )
+            if align
+            else decoded
         )
-        aligned = align_direct_inserts(problem, decoded, selected_targets)
         pack = _decoded_pack(
             height,
-            aligned,
+            routed,
             west_channels=tuple(strip.west_channel for strip in selected),
         )
         if deadline_reached():
             return _ProductionCandidate(
                 height=height,
                 problem=problem,
-                decoded=aligned,
+                decoded=routed,
                 pack=pack,
                 prepared=None,
                 preparation_error="deadline",
@@ -2375,7 +2677,7 @@ def _production_run(
             return _ProductionCandidate(
                 height=height,
                 problem=problem,
-                decoded=aligned,
+                decoded=routed,
                 pack=pack,
                 prepared=None,
                 preparation_error=("unseatable" if isinstance(exc, _Unseatable) else "unpowerable"),
@@ -2384,11 +2686,17 @@ def _production_run(
         return _ProductionCandidate(
             height=height,
             problem=problem,
-            decoded=aligned,
+            decoded=routed,
             pack=pack,
             prepared=prepared,
             selected_strips=selected,
         )
+
+    def prepare(height: int, decoded: DecodedPlacement) -> _ProductionCandidate:
+        return prepare_candidate(height, decoded, align=True)
+
+    def prepare_exact(height: int, decoded: DecodedPlacement) -> _ProductionCandidate:
+        return prepare_candidate(height, decoded, align=False)
 
     def global_route(
         candidate: _ProductionCandidate,
@@ -2521,9 +2829,12 @@ def _production_run(
             global_route=global_route,
             detailed_route=detailed_route,
             validate=certify,
+            prepare_exact=prepare_exact,
         ),
         expansion_budget=ExpansionBudget(expansion_total),
-        borrow_first_discovery=compact_seed_attempt is not None,
+        borrow_first_discovery=(
+            compact_seed_attempt is not None or use_topology_beam or use_shared_pack
+        ),
         protected_followup_heights=protected_followup_heights,
         config=config,
         deadline_reached=deadline_reached,
@@ -2533,6 +2844,115 @@ def _production_run(
         stage_boundary_transform=transform_stage,
         stage_boundary_commit=commit_stage,
     )
+    seed_started = time.monotonic()
+    seed_deadline = min(
+        deadline,
+        seed_started
+        + ceiling
+        * _COMPACT_SEED_WALL_SHARE.numerator
+        / _COMPACT_SEED_WALL_SHARE.denominator,
+    )
+    if use_shared_pack and not deadline_reached():
+        shared_started = time.monotonic()
+        shared_height = coarse_heights[0]
+        shared_seed = seeds[shared_height]
+        shared_left = seed_deadline - time.monotonic()
+        shared_pack = (
+            _pack(
+                strips,
+                height=shared_height,
+                width_bound=shared_seed.width,
+                time_budget_s=shared_left,
+                direct_candidates=direct_candidates,
+                workers=DETERMINISTIC_WORKERS,
+                seed=shared_seed,
+            )
+            if shared_left > 0.05
+            else None
+        )
+        if shared_pack is not None:
+            solver.close_exact_decoded(
+                shared_height,
+                _exact_pack_decoded(shared_pack, strips, problems[shared_height]),
+                reason="shared-pack",
+            )
+            telemetry.shared_pack_candidates = 1
+        telemetry.shared_pack_wall_time_s = time.monotonic() - shared_started
+    if (
+        use_topology_beam
+        and topology_beam_height is not None
+        and topology_beam_width_bound is not None
+        and not deadline_reached()
+    ):
+        beam_started = time.monotonic()
+        beam_problem = problems[topology_beam_height]
+        beam_variants = (0,) * beam_problem.size
+        beam_seed = seeds[topology_beam_height]
+        hint_x = tuple(
+            beam_seed.at[index][0] - strips[index].west_channel
+            for index in range(beam_problem.size)
+        )
+        hint_y = tuple(
+            beam_seed.at[index][1] for index in range(beam_problem.size)
+        )
+        hint_sizes = beam_problem.selected_sizes(beam_variants)
+        hint = DecodedPlacement(
+            x=hint_x,
+            y=hint_y,
+            width=max(
+                (
+                    x + width
+                    for x, (width, _height) in zip(
+                        hint_x,
+                        hint_sizes,
+                        strict=True,
+                    )
+                ),
+                default=0,
+            ),
+            used_height=max(
+                (
+                    y + height
+                    for y, (_width, height) in zip(
+                        hint_y,
+                        hint_sizes,
+                        strict=True,
+                    )
+                ),
+                default=0,
+            ),
+            x_windows=tuple((coordinate, coordinate) for coordinate in hint_x),
+            y_windows=tuple((coordinate, coordinate) for coordinate in hint_y),
+            gap_area=0,
+            variant_indices=beam_variants,
+        )
+        beam = CompactTopologyBeam(
+            beam_problem,
+            variant_indices=beam_variants,
+            width_bound=topology_beam_width_bound,
+            base_seed=config.seed,
+            coordinate_hint=hint,
+            config=CompactTopologyBeamConfig(
+                max_deterministic_time=_TOPOLOGY_BEAM_DETERMINISTIC_SECONDS,
+                max_candidates=_TOPOLOGY_BEAM_CANDIDATES,
+            ),
+        )
+        for topology_index in range(beam.config.max_candidates):
+            candidate = beam.solve_next(
+                absolute_deadline=seed_deadline,
+                cancelled=deadline_reached,
+            )
+            if candidate is None:
+                break
+            solver.close_exact_decoded(
+                topology_beam_height,
+                _topology_candidate_decoded(candidate),
+                reason="topology-beam",
+            )
+            telemetry.topology_beam_candidates += 1
+            if topology_index + 1 < beam.config.max_candidates:
+                beam.exclude(candidate.signature)
+        telemetry.topology_beam_wall_time_s = time.monotonic() - beam_started
     return _ProductionRun(
         solver=solver,
         telemetry=telemetry,
@@ -2702,6 +3122,9 @@ def _with_observational_stats(
     )
     stage_count = len(result.stages)
     anneal_stage_count = sum(stage.anneal_stages for stage in result.stages)
+    shared_pack_closures = tuple(
+        stage for stage in result.stages if stage.global_skip_reason == "shared-pack"
+    )
     anneal_seeds = {seed for stage in result.stages for seed in stage.anneal_seeds}
     lns_sizes = tuple(stage.lns_size for stage in result.stages)
     belt_tiles = _exact_key(placement)[1]
@@ -2724,6 +3147,9 @@ def _with_observational_stats(
     )
     compact_closures = tuple(
         stage for stage in result.stages if stage.global_skip_reason == "compact-seed"
+    )
+    topology_beam_closures = tuple(
+        stage for stage in result.stages if stage.global_skip_reason == "topology-beam"
     )
     pose_counts = {
         yaw: sum(selected == yaw for selected in pose_yaws) for yaw in (0.0, 90.0, 180.0, 270.0)
@@ -2766,6 +3192,9 @@ def _with_observational_stats(
                 if exact_stage is not None and exact_stage.global_skip_reason is not None
                 else "none"
             ),
+            "shared_pack_candidates": float(telemetry.shared_pack_candidates),
+            "shared_pack_closures": float(len(shared_pack_closures)),
+            "shared_pack_wall_time_s": telemetry.shared_pack_wall_time_s,
             "quality_stages": float(len(quality_stages)),
             "quality_entries": float(sum(stage.quality_entered for stage in result.stages)),
             "quality_exits": float(sum(stage.quality_exited for stage in result.stages)),
@@ -2783,6 +3212,10 @@ def _with_observational_stats(
             "merge_count": float(sum(stage.merge_count for stage in result.stages)),
             "pose_feasibility_rejects": float(telemetry.pose_feasibility_rejects),
             "elevated_coater_routes": float(telemetry.elevated_coater_routes),
+            "topology_beam_height": float(telemetry.topology_beam_height or 0),
+            "topology_beam_candidates": float(telemetry.topology_beam_candidates),
+            "topology_beam_closures": float(len(topology_beam_closures)),
+            "topology_beam_wall_time_s": telemetry.topology_beam_wall_time_s,
             "planning_time_s": telemetry.planning_time_s,
             "placement_time_s": max(0.0, total_time_s - adapter_time_s),
             "preparation_time_s": preparation_time_s,

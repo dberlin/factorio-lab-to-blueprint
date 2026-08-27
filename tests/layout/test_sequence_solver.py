@@ -357,6 +357,81 @@ def test_compact_exact_incumbent_cannot_be_displaced_by_worse_discovery() -> Non
     assert result.stages[1].exact_key == (30, 1)
 
 
+def test_exact_decoded_closure_retains_coordinates_without_sequence_reencoding() -> None:
+    exact = _placement(area=20, belt_tiles=4)
+    fake = _FakeRouting(
+        detailed_results=(
+            DetailedStageResult(
+                _routing(DetailedRouteStatus.ROUTED, expansions=7),
+                exact,
+            ),
+        )
+    )
+    budget = ExpansionBudget(total=100)
+    solver = _solver(fake, heights=(40,), budget=budget)
+    decoded = DecodedPlacement(
+        x=(7,),
+        y=(11,),
+        width=8,
+        used_height=12,
+        x_windows=((7, 7),),
+        y_windows=((11, 11),),
+        gap_area=0,
+        variant_indices=(0,),
+    )
+
+    detailed = solver.close_exact_decoded(
+        40,
+        decoded,
+        reason="topology-beam",
+    )
+    result = solver.search(max_stages=0)
+
+    assert detailed.placement is exact
+    assert fake.prepared_candidates == [(40, decoded)]
+    assert result.placement is exact
+    assert result.stages[0].global_skip_reason == "topology-beam"
+    assert budget.spent == 7
+
+
+def test_valid_topology_candidate_does_not_stop_better_exact_enumeration() -> None:
+    first = _placement(area=30, belt_tiles=1)
+    better = _placement(area=20, belt_tiles=4)
+    fake = _FakeRouting(
+        detailed_results=(
+            DetailedStageResult(
+                _routing(DetailedRouteStatus.ROUTED, expansions=7),
+                first,
+            ),
+            DetailedStageResult(
+                _routing(DetailedRouteStatus.ROUTED, expansions=11),
+                better,
+            ),
+        )
+    )
+    budget = ExpansionBudget(total=100)
+    solver = _solver(fake, heights=(40,), budget=budget)
+    decoded = DecodedPlacement(
+        x=(0,),
+        y=(0,),
+        width=1,
+        used_height=1,
+        x_windows=((0, 0),),
+        y_windows=((0, 0),),
+        gap_area=0,
+        variant_indices=(0,),
+    )
+
+    solver.close_exact_decoded(40, decoded, reason="topology-beam")
+    solver.close_exact_decoded(40, decoded, reason="topology-beam")
+    result = solver.search(max_stages=0)
+
+    assert result.placement is better
+    assert [stage.exact_key for stage in result.stages] == [(30, 1), (20, 4)]
+    assert budget.spent == 18
+    assert fake.detailed_allowances == [100, 93]
+
+
 def test_unseeded_solver_has_no_compact_closure() -> None:
     exact = _placement(area=20, belt_tiles=4)
     solver = _solver(

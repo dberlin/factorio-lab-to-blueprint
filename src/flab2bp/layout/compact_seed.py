@@ -8,6 +8,7 @@ production sequence-pair representation; no CP placement is exposed as a layout.
 from __future__ import annotations
 
 import contextlib
+import itertools
 import math
 import threading
 import time
@@ -121,6 +122,325 @@ class CompactSeedResult:
         if has_incumbent != (self.state is not None):
             raise ValueError("compact seed status and incumbent presence disagree")
 
+
+
+type PairwiseRelation = tuple[bool, bool, bool, bool]
+type PairwiseRelationEntry = tuple[tuple[int, int], PairwiseRelation]
+
+
+def _solved_pairwise_relation(
+    solver: cp_model.CpSolver,
+    literals: tuple[cp_model.IntVar, ...],
+) -> PairwiseRelation:
+    if len(literals) != 4:
+        raise ValueError("pairwise relation variables must have cardinality four")
+    return (
+        bool(solver.value(literals[0])),
+        bool(solver.value(literals[1])),
+        bool(solver.value(literals[2])),
+        bool(solver.value(literals[3])),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class PairwiseRelationSignature:
+    """Complete pairwise left/right/below/above identity for one exact packing."""
+
+    entries: tuple[PairwiseRelationEntry, ...]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.entries, tuple):
+            raise ValueError("pairwise relation entries must be an immutable tuple")
+        prior: tuple[int, int] | None = None
+        for pair, relation in self.entries:
+            if (
+                not isinstance(pair, tuple)
+                or len(pair) != 2
+                or any(type(index) is not int or index < 0 for index in pair)
+                or pair[0] >= pair[1]
+            ):
+                raise ValueError("pairwise relations require increasing non-negative pairs")
+            if prior is not None and pair <= prior:
+                raise ValueError("pairwise relation pairs must be strictly ordered")
+            if (
+                not isinstance(relation, tuple)
+                or len(relation) != 4
+                or any(type(value) is not bool for value in relation)
+                or not any(relation)
+            ):
+                raise ValueError(
+                    "pairwise relations require four booleans with one separation"
+                )
+            prior = pair
+
+
+@dataclass(frozen=True, slots=True)
+class CompactTopologyBeamConfig:
+    """Deterministic work and cardinality bounds for exact CP topology candidates."""
+
+    max_candidates: int = 2
+    max_deterministic_time: float = 0.2
+
+    def __post_init__(self) -> None:
+        if type(self.max_candidates) is not int or self.max_candidates <= 0:
+            raise ValueError("maximum topology candidates must be a positive integer")
+        if (
+            type(self.max_deterministic_time) is not float
+            or not math.isfinite(self.max_deterministic_time)
+            or not 0.0 < self.max_deterministic_time <= _MAX_DETERMINISTIC_TIME
+        ):
+            raise ValueError(
+                "topology deterministic time must be a finite float in (0.0, 3600.0]"
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class CompactTopologyCandidate:
+    """One exact CP packing retained without sequence-pair re-encoding."""
+
+    topology_index: int
+    status: CompactSeedStatus
+    x: tuple[int, ...]
+    y: tuple[int, ...]
+    width: int
+    used_height: int
+    variant_indices: tuple[int, ...]
+    signature: PairwiseRelationSignature
+    deterministic_time: float
+
+
+@dataclass(frozen=True, slots=True)
+class _TopologyBeamVariables:
+    x: tuple[cp_model.IntVar, ...]
+    y: tuple[cp_model.IntVar, ...]
+    outline_width: cp_model.IntVar
+    relations: tuple[tuple[cp_model.IntVar, ...], ...]
+
+
+class CompactTopologyBeam:
+    """Enumerate deterministic fixed-height packings through typed relation no-goods."""
+
+    def __init__(
+        self,
+        problem: PlacementProblem,
+        *,
+        variant_indices: tuple[int, ...],
+        width_bound: int,
+        base_seed: int,
+        coordinate_hint: DecodedPlacement | None,
+        config: CompactTopologyBeamConfig | None = None,
+    ) -> None:
+        if not isinstance(problem, PlacementProblem):
+            raise ValueError("topology beam problem must be a PlacementProblem")
+        if type(base_seed) is not int:
+            raise ValueError("topology beam seed must be an integer")
+        if type(width_bound) is not int or width_bound <= 0:
+            raise ValueError("topology width bound must be a positive integer")
+        problem._validate_variant_indices(variant_indices)
+        sizes = problem.selected_sizes(variant_indices)
+        if any(width > width_bound for width, _height in sizes):
+            raise ValueError("topology width bound must hold every selected rectangle")
+        if coordinate_hint is not None:
+            if not isinstance(coordinate_hint, DecodedPlacement):
+                raise ValueError("topology coordinate hint must be a decoded placement")
+            if len(coordinate_hint.x) != problem.size:
+                raise ValueError("topology coordinate hint cardinality must match the problem")
+            if (
+                coordinate_hint.variant_indices
+                and coordinate_hint.variant_indices != variant_indices
+            ):
+                raise ValueError("topology coordinate hint variants must match the problem")
+        if config is None:
+            chosen_config = CompactTopologyBeamConfig()
+        elif type(config) is CompactTopologyBeamConfig:
+            chosen_config = config
+        else:
+            raise ValueError("topology beam config must be exactly CompactTopologyBeamConfig")
+
+        self.problem = problem
+        self.variant_indices = variant_indices
+        self.sizes = sizes
+        self.width_bound = width_bound
+        self.base_seed = base_seed
+        self.config = chosen_config
+        self._pairs = tuple(itertools.combinations(range(problem.size), 2))
+        self._excluded: set[PairwiseRelationSignature] = set()
+        self._solved = 0
+        self._model, self._variables = self._build_model(coordinate_hint)
+
+    def _build_model(
+        self,
+        coordinate_hint: DecodedPlacement | None,
+    ) -> tuple[cp_model.CpModel, _TopologyBeamVariables]:
+        model = cp_model.CpModel()
+        area = sum(width * height for width, height in self.sizes)
+        lower_bound = max(
+            max((width for width, _height in self.sizes), default=0),
+            (area + self.problem.outline_height - 1) // self.problem.outline_height,
+        )
+        outline_width = model.new_int_var(
+            lower_bound,
+            self.width_bound,
+            "beam_outline_width",
+        )
+        x: list[cp_model.IntVar] = []
+        y: list[cp_model.IntVar] = []
+        x_intervals: list[cp_model.IntervalVar] = []
+        y_intervals: list[cp_model.IntervalVar] = []
+        for strip, (width, height) in enumerate(self.sizes):
+            strip_x = model.new_int_var(0, self.width_bound - width, f"beam_x_{strip}")
+            strip_y = model.new_int_var(
+                0,
+                self.problem.outline_height - height,
+                f"beam_y_{strip}",
+            )
+            x.append(strip_x)
+            y.append(strip_y)
+            x_intervals.append(
+                model.new_fixed_size_interval_var(
+                    strip_x,
+                    width,
+                    f"beam_x_interval_{strip}",
+                )
+            )
+            y_intervals.append(
+                model.new_fixed_size_interval_var(
+                    strip_y,
+                    height,
+                    f"beam_y_interval_{strip}",
+                )
+            )
+            model.add(strip_x + width <= outline_width)
+            if coordinate_hint is not None:
+                model.add_hint(
+                    strip_x,
+                    min(max(coordinate_hint.x[strip], 0), self.width_bound - width),
+                )
+                model.add_hint(
+                    strip_y,
+                    min(
+                        max(coordinate_hint.y[strip], 0),
+                        self.problem.outline_height - height,
+                    ),
+                )
+        model.add_no_overlap_2d(x_intervals, y_intervals)
+
+
+        relations: list[tuple[cp_model.IntVar, ...]] = []
+        for first, second in self._pairs:
+            first_width, first_height = self.sizes[first]
+            second_width, second_height = self.sizes[second]
+            literals: list[cp_model.IntVar] = []
+            for name, lhs, rhs in (
+                ("left", x[first] + first_width, x[second]),
+                ("right", x[second] + second_width, x[first]),
+                ("below", y[first] + first_height, y[second]),
+                ("above", y[second] + second_height, y[first]),
+            ):
+                literal = model.new_bool_var(f"beam_{name}_{first}_{second}")
+                model.add(lhs <= rhs).only_enforce_if(literal)
+                model.add(lhs > rhs).only_enforce_if(literal.negated())
+                literals.append(literal)
+            relations.append(tuple(literals))
+
+        model.minimize(outline_width)
+        return model, _TopologyBeamVariables(
+            x=tuple(x),
+            y=tuple(y),
+            outline_width=outline_width,
+            relations=tuple(relations),
+        )
+
+    def solve_next(
+        self,
+        *,
+        absolute_deadline: float | None = None,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> CompactTopologyCandidate | None:
+        """Solve the next not-yet-excluded topology within fixed deterministic work."""
+        if self._solved >= self.config.max_candidates:
+            return None
+        if absolute_deadline is not None and (
+            type(absolute_deadline) is not float or not math.isfinite(absolute_deadline)
+        ):
+            raise ValueError("topology deadline must be a finite monotonic-clock float")
+        if cancelled is not None and not callable(cancelled):
+            raise ValueError("topology cancellation check must be callable")
+        if (cancelled is not None and cancelled()) or _deadline_reached(absolute_deadline):
+            return None
+
+        solver = cp_model.CpSolver()
+        solver.parameters.num_search_workers = 1
+        solver.parameters.random_seed = self.base_seed % _RANDOM_SEED_MODULUS
+        solver.parameters.randomize_search = False
+        solver.parameters.max_deterministic_time = self.config.max_deterministic_time
+        remaining = _remaining_wall_time(absolute_deadline)
+        if remaining is not None:
+            if remaining <= _DEADLINE_SAFETY_SECONDS:
+                return None
+            solver.parameters.max_time_in_seconds = remaining - _DEADLINE_SAFETY_SECONDS
+        status_code = solver.solve(self._model)
+        if (cancelled is not None and cancelled()) or _deadline_reached(absolute_deadline):
+            return None
+        status = _status_from_solver(status_code)
+        if status not in (CompactSeedStatus.FEASIBLE, CompactSeedStatus.OPTIMAL):
+            return None
+
+        x = tuple(solver.value(variable) for variable in self._variables.x)
+        y = tuple(solver.value(variable) for variable in self._variables.y)
+        signature = PairwiseRelationSignature(
+            tuple(
+                (
+                    pair,
+                    _solved_pairwise_relation(solver, relation_literals),
+                )
+                for pair, relation_literals in zip(
+                    self._pairs,
+                    self._variables.relations,
+                    strict=True,
+                )
+            )
+        )
+        candidate = CompactTopologyCandidate(
+            topology_index=self._solved,
+            status=status,
+            x=x,
+            y=y,
+            width=solver.value(self._variables.outline_width),
+            used_height=max(
+                (
+                    strip_y + height
+                    for strip_y, (_width, height) in zip(y, self.sizes, strict=True)
+                ),
+                default=0,
+            ),
+            variant_indices=self.variant_indices,
+            signature=signature,
+            deterministic_time=solver.response_proto.deterministic_time,
+        )
+        self._solved += 1
+        return candidate
+
+    def exclude(self, signature: PairwiseRelationSignature) -> None:
+        """Add one exact pairwise relation-signature no-good to the live model."""
+        if not isinstance(signature, PairwiseRelationSignature):
+            raise ValueError("topology no-good must be a pairwise relation signature")
+        if tuple(pair for pair, _relation in signature.entries) != self._pairs:
+            raise ValueError("topology no-good cardinality must match the beam problem")
+        if signature in self._excluded:
+            raise ValueError("topology relation signature was already excluded")
+        differing: list[cp_model.LiteralT] = []
+        for (_pair, values), literals in zip(
+            signature.entries,
+            self._variables.relations,
+            strict=True,
+        ):
+            differing.extend(
+                literal.negated() if value else literal
+                for literal, value in zip(literals, values, strict=True)
+            )
+        self._model.add_bool_or(differing)
+        self._excluded.add(signature)
 
 @dataclass(frozen=True, slots=True)
 class _ModelVariables:

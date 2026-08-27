@@ -16,6 +16,9 @@ from flab2bp.lab.url import parse_url
 from flab2bp.layout.compact_seed import (
     CompactSeedConfig,
     CompactSeedStatus,
+    CompactTopologyBeam,
+    CompactTopologyBeamConfig,
+    PairwiseRelationSignature,
     VariantDirectInsertTarget,
     solve_compact_seed,
 )
@@ -384,6 +387,74 @@ def test_width_has_lexicographic_dominance_over_every_secondary_proxy_term() -> 
     decoded = decode_state(problem, result.state)
     assert decoded.width == minimum_width
     assert result.diagnostics.width_weight > result.diagnostics.secondary_upper_bound
+
+
+def test_topology_beam_enumerates_distinct_deterministic_relation_signatures() -> None:
+    problem = _fixed_problem(
+        sizes=((3, 2), (2, 2), (1, 2), (2, 1)),
+        height=4,
+        nets=(),
+    )
+    hint = decode_sequence_pair(
+        SequencePair((0, 1, 2, 3), (0, 1, 2, 3)),
+        GapProfile.zero(problem.size),
+        problem.sizes,
+        outline_height=problem.outline_height,
+    )
+    config = CompactTopologyBeamConfig(
+        max_candidates=2,
+        max_deterministic_time=0.2,
+    )
+
+    def enumerate_two() -> tuple[
+        tuple[tuple[int, ...], tuple[int, ...], PairwiseRelationSignature],
+        ...,
+    ]:
+        beam = CompactTopologyBeam(
+            problem,
+            variant_indices=(0,) * problem.size,
+            width_bound=8,
+            base_seed=17,
+            coordinate_hint=hint,
+            config=config,
+        )
+        first = beam.solve_next()
+        assert first is not None
+        beam.exclude(first.signature)
+        second = beam.solve_next()
+        assert second is not None
+        return (
+            (first.x, first.y, first.signature),
+            (second.x, second.y, second.signature),
+        )
+
+    first_run = enumerate_two()
+    second_run = enumerate_two()
+
+    assert first_run == second_run
+    assert first_run[0][2] != first_run[1][2]
+
+
+def test_topology_beam_rejects_foreign_or_duplicate_no_goods() -> None:
+    problem = _fixed_problem(nets=())
+    beam = CompactTopologyBeam(
+        problem,
+        variant_indices=(0,) * problem.size,
+        width_bound=8,
+        base_seed=3,
+        coordinate_hint=None,
+        config=CompactTopologyBeamConfig(
+            max_candidates=2,
+            max_deterministic_time=0.1,
+        ),
+    )
+    first = beam.solve_next()
+    assert first is not None
+    beam.exclude(first.signature)
+    with pytest.raises(ValueError, match="already excluded"):
+        beam.exclude(first.signature)
+    with pytest.raises(ValueError, match="cardinality"):
+        beam.exclude(PairwiseRelationSignature((((0, 1), (True, False, False, False)),)))
 
 
 def test_same_attempt_repeats_identically_and_attempts_derive_diverse_states() -> None:
