@@ -24,6 +24,7 @@ export default defineConfig({
     // Not 3000: that is the standalone viewer's port, and running both at once
     // while working on the two halves is normal.
     port: 3001,
+    strictPort: true,
     // `/api/fetch` used to be answered here, by importing the viewer's own
     // proxy.ts into this config. It now lives in the Python server alongside
     // `/api/build`, so that the built app served by `flab2bp-web` and the app

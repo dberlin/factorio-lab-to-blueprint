@@ -1,12 +1,10 @@
-# dsp-blueprint-viewer
+# flab2bp web interface
 
-A local web viewer for Dyson Sphere Program blueprint strings. Paste a `BLUEPRINT:` string,
-drop a `.txt` file, or give it a blueprint page URL, and it decodes the blueprint and renders
-the buildings in 3D with a bill of materials and a per-building info panel.
+The React and three.js front end for `flab2bp`. It submits FactorioLab URLs to the Python
+solver, reports build progress, and renders the resulting Dyson Sphere Program blueprint.
 
-Runs entirely on your own machine. Nothing is uploaded anywhere; the only outbound request is
-the optional URL fetch, which the local server makes on the page's behalf because blueprint
-sites do not send CORS headers.
+The solver is not implemented in TypeScript. Development therefore requires both the Python
+API and the Rsbuild development server; `bun run dev` starts and supervises both.
 
 ## Prerequisites
 
@@ -18,40 +16,63 @@ sites do not send CORS headers.
 
 ## Setup
 
+From the repository root:
+
 ```sh
+uv sync
+cd web
 bun install
 bun run extract-assets "/path/to/Dyson Sphere Program"
+```
+
+`bun run extract-assets` writes `items.json`, `recipes.json`, `models.json` and an icon atlas
+into `public/assets/`. Run it before opening the viewer. Its output is cached and only needs
+regenerating after a game update. Contributors without the game can use an existing
+`public/assets/` directory copied from someone who has it.
+
+## Run
+
+For normal use, run the integrated server from the repository root:
+
+```sh
+uv run flab2bp-web
+```
+
+Open <http://127.0.0.1:8000>. The command builds the front end when necessary and serves both
+the page and the Python API.
+
+For TypeScript development, run this from `web/`:
+
+```sh
 bun run dev
 ```
 
-`bun run extract-assets` **must run before `bun run dev`.** It writes `items.json`,
-`recipes.json`, `models.json` and an icon atlas into `public/assets/`, which is gitignored
-and therefore absent from a fresh clone. Without it the app fails to start with a
-"Could not load /assets/…" error.
+Open <http://127.0.0.1:3001>. `concurrently` starts `flab2bp-web --no-build` on port
+8000 while `wait-on` holds Rsbuild until `/api/health` responds. Ctrl-C terminates both
+process trees.
 
-The path argument is the game directory containing `DSPGAME_Data/` (pointing directly at a
-`DSPGAME_Data`-shaped folder also works). Omitting it falls back to a hardcoded default that
-is almost certainly not your install path, so pass it explicitly.
+To use an API at a different origin, manage that API separately and run:
 
-Extraction is a one-time step: its output is cached in `public/assets/` and only needs
-rerunning after a game update. Contributors without the game can still run the app from an
-existing `public/assets/` directory copied from someone who has it.
+```sh
+FLAB2BP_API=http://127.0.0.1:9000 bun run dev:frontend
+```
+
+A proxy error for `/api/build` means the configured Python API is not reachable.
 
 ## Scripts
 
 | Script | What it does |
-|---|---|
-| `bun run dev` | Rsbuild dev server on <http://127.0.0.1:3000>, including the `/api/fetch` URL proxy. |
+| `bun run dev` | Starts the Python API, waits for it, and supervises it with Rsbuild. |
+| `bun run dev:frontend` | Starts only Rsbuild for an externally managed API. |
 | `bun run build` | Production bundle into `dist/`. |
-| `bun run serve` | Serves `dist/` plus the same `/api/fetch` proxy via Bun. Run `build` first. |
 | `bun run test` | Rstest suite (`test:watch` for watch mode). |
 | `bun run typecheck` | `tsc --noEmit`. |
 | `bun run lint` | Biome check plus ESLint (React Hooks rules). |
 | `bun run format` | Biome formatter, writing in place. |
 | `bun run extract-assets` | Regenerates `public/assets/` from the game install. |
 
-Both servers bind to `127.0.0.1`. `/api/fetch` is an unauthenticated relay to any http(s)
-URL, so it is deliberately not reachable from the LAN.
+The default development servers bind to `127.0.0.1`. `/api/fetch` is an unauthenticated relay,
+so neither server should be exposed to the LAN.
 
 ## Architecture
 
@@ -63,5 +84,6 @@ three.js, and a guard test in `tests/architecture.test.ts` enforces it; that is 
 parser and the layout maths be covered by plain unit tests over real blueprint fixtures
 instead of by rendering a canvas and squinting at it. `src/scene/` (react-three-fiber),
 `src/ui/` (panels) and `src/state/` (React context, asset loading) sit on top and hold all
-the framework-specific code. `src/server/proxy.ts` is shared, dependency-free, and mounted by
-both the dev server and the production server so URL loading behaves identically in each.
+the framework-specific code. The Python server in `../src/flab2bp/web/` owns `/api/build`,
+`/api/health`, and `/api/fetch`.
+Rsbuild proxies `/api` to that server so development and production use the same endpoints.
