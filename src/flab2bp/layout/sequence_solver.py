@@ -16,7 +16,7 @@ from fractions import Fraction
 from types import MappingProxyType
 from typing import Protocol
 
-from flab2bp.layout import validate
+from flab2bp.layout import finalize, validate
 from flab2bp.layout.base import DETERMINISTIC_WORKERS, RETRY_BUDGET_S, NoValidLayout, Placement
 from flab2bp.layout.compact_seed import (
     CompactSeedConfig,
@@ -139,6 +139,7 @@ _SHARED_PACK_MACHINE_MIN = 75
 _SHARED_PACK_MACHINE_MAX = 200
 _TOPOLOGY_BEAM_CANDIDATES = 8
 _TINY_FAST_PATH_SPRAY_LANES = 2
+_QUALITY_TOPOLOGY_CLOSURE_CAP = 50_000
 
 
 @dataclass(frozen=True, slots=True)
@@ -593,6 +594,7 @@ class SequenceSolver[PreparedT]:
         stage_boundary_transform: StageBoundaryTransform | None = None,
         stage_boundary_commit: StageBoundaryCommit | None = None,
         borrow_first_discovery: bool = False,
+        stop_on_stable_exact: bool = False,
     ) -> None:
         if (
             not isinstance(heights, tuple)
@@ -614,10 +616,13 @@ class SequenceSolver[PreparedT]:
             )
         if type(borrow_first_discovery) is not bool:
             raise ValueError("borrow-first-discovery mode must be a bool")
+        if type(stop_on_stable_exact) is not bool:
+            raise ValueError("stable exact stopping mode must be a bool")
         self.config = config or SequenceSolverConfig()
         self.adapters = adapters
         self.budget = expansion_budget
         self.deadline_reached = deadline_reached or (lambda: False)
+        self.stop_on_stable_exact = stop_on_stable_exact
         if not isinstance(direct_targets, tuple):
             raise ValueError("direct-insert targets must be an immutable tuple")
         self.direct_targets = direct_targets
@@ -668,6 +673,24 @@ class SequenceSolver[PreparedT]:
         )
         return observation.global_skip_reason if observation is not None else None
 
+    def _has_stable_exact_incumbent(self) -> bool:
+        current: tuple[int, int] | None = None
+        snapshots: list[tuple[int, int] | None] = []
+        for stage in self._stage_stats:
+            if stage.exact_key is not None and (
+                current is None or stage.exact_key < current
+            ):
+                current = stage.exact_key
+            if stage.global_skip_reason not in ("shared-pack", "topology-beam"):
+                snapshots.append(current)
+        return (
+            len(snapshots) == 2
+            and snapshots[-1] is not None
+            and snapshots[-1] == snapshots[-2]
+        )
+
+
+
 
     def search(self, *, max_stages: int | None = None) -> SequenceSearchResult:
         """Search until its stage cap, deadline, or searchable budget is exhausted."""
@@ -693,6 +716,9 @@ class SequenceSolver[PreparedT]:
                 break
             if self.deadline_reached():
                 termination = "deadline"
+                break
+            if self.stop_on_stable_exact and self._has_stable_exact_incumbent():
+                termination = "exact-stable"
                 break
             seed_height = next(
                 (
@@ -1962,7 +1988,8 @@ def _balanced_compact_seed_height(problem: PlacementProblem) -> int:
         choices.extend((size,) for size in problem.sizes)
 
     feasible_area = sum(
-        min(width * height for width, height in strip_choices) for strip_choices in choices
+        min(width * height for width, height in strip_choices)
+        for strip_choices in choices
     )
     area = max(problem.area_lower_bound, feasible_area, 1)
     balanced_width = math.isqrt(area)
@@ -1970,10 +1997,41 @@ def _balanced_compact_seed_height(problem: PlacementProblem) -> int:
         balanced_width += 1
     balanced_height = area // balanced_width
     minimum_height = max(
-        (min(height for _width, height in strip_choices) for strip_choices in choices),
+        (
+            min(height for _width, height in strip_choices)
+            for strip_choices in choices
+        ),
         default=1,
     )
     return max(minimum_height, balanced_height)
+
+
+def _uses_tall_topology_height(
+    *,
+    machine_count: int,
+    strip_count: int,
+    sprayed_lanes: int,
+) -> bool:
+    """Use the shared tall saturated role for topology and final cleanup."""
+    return finalize.uses_tall_saturated_role(
+        machine_count=machine_count,
+        strip_count=strip_count,
+        sprayed_lanes=sprayed_lanes,
+    )
+
+
+def _uses_mid_topology_height(
+    *,
+    machine_count: int,
+    strip_count: int,
+    sprayed_lanes: int,
+) -> bool:
+    """Use the median role for high-spray, under-saturated medium plans."""
+    return (
+        sprayed_lanes > _DENSE_SPRAY_LANE_THRESHOLD
+        and 13 < strip_count <= _TOPOLOGY_BEAM_MAX_STRIPS
+        and machine_count < 4 * strip_count
+    )
 
 
 def _topology_beam_height(
@@ -1989,6 +2047,18 @@ def _topology_beam_height(
     if len(coarse_heights) < 2:
         return None
     ordered = tuple(sorted(coarse_heights))
+    if _uses_tall_topology_height(
+        machine_count=machine_count,
+        strip_count=strip_count,
+        sprayed_lanes=sprayed_lanes,
+    ):
+        return coarse_heights[-1]
+    if _uses_mid_topology_height(
+        machine_count=machine_count,
+        strip_count=strip_count,
+        sprayed_lanes=sprayed_lanes,
+    ):
+        return coarse_heights[len(coarse_heights) // 2]
     if (
         power
         and strip_count > _TOPOLOGY_BEAM_MAX_STRIPS
@@ -2070,6 +2140,20 @@ def _search_stage_cap(
     return None
 
 
+def _uses_stable_exact_stop(
+    *,
+    machine_count: int,
+    strip_count: int,
+    sprayed_lanes: int,
+) -> bool:
+    """Enable dynamic convergence only for sufficiently occupied unsprayed strips."""
+    return (
+        strip_count > 0
+        and sprayed_lanes == 0
+        and machine_count >= 2 * strip_count
+    )
+
+
 def _needs_topology_beam(
     *,
     topology_role: bool,
@@ -2080,11 +2164,67 @@ def _needs_topology_beam(
     return topology_role or (shared_role and incumbent_reason is None)
 
 
-def _protected_topology_candidates(strip_count: int, sprayed_lanes: int) -> int:
+def _protected_topology_candidates(
+    strip_count: int,
+    sprayed_lanes: int,
+    *,
+    tall_role: bool = False,
+) -> int:
     """Guarantee measured exact topology roles before wall-limited improvements."""
-    if strip_count <= 13:
+    if tall_role or strip_count <= 13:
         return 7
     return 3 if sprayed_lanes > 0 else 2
+
+
+def _topology_closure_allowance(
+    allowance: int,
+    *,
+    quality_role: bool,
+) -> int:
+    """Cap speculative routing where quality needs late topology enumeration."""
+    return min(allowance, _QUALITY_TOPOLOGY_CLOSURE_CAP) if quality_role else allowance
+
+
+def _small_direct_seed_role(
+    *,
+    direct_candidates: int,
+    strip_count: int,
+    strip_len: int,
+) -> bool:
+    """Use the exact shared pack when direct opportunities dominate a small plan."""
+    return (
+        direct_candidates > 0
+        and strip_count > 0
+        and strip_len > 0
+        and strip_count <= strip_len + 1
+        and 2 * direct_candidates > strip_len
+    )
+
+
+def _shared_pack_height_rank(
+    *,
+    machine_count: int,
+    strip_count: int,
+    strip_len: int,
+    sprayed_lanes: int,
+    direct_candidates: int,
+) -> int:
+    """Select a deterministic bound rank for the exact shared-pack role."""
+    if (
+        direct_candidates == 0
+        and sprayed_lanes > _DENSE_SPRAY_LANE_THRESHOLD
+        and _SHARED_PACK_MACHINE_MIN <= machine_count <= _SHARED_PACK_MACHINE_MAX
+        and strip_count <= _COMPACT_LARGE_VARIANT_SIZE
+    ):
+        return 1
+    if (
+        direct_candidates == 0
+        and strip_count < _TOPOLOGY_BEAM_MIN_STRIPS
+        and sprayed_lanes == _TINY_FAST_PATH_SPRAY_LANES
+        and 2 * machine_count != strip_len * strip_count
+    ):
+        return 2
+    return 0
 
 
 def _uses_shared_pack_candidate(
@@ -2093,15 +2233,21 @@ def _uses_shared_pack_candidate(
     power: bool,
     sprayed_lanes: int,
     strip_count: int,
+    direct_candidates: int,
+    strip_len: int,
 ) -> bool:
-    """Select the measured direct/mid-scale role while excluding stress topology."""
-    return (
-        power
-        and sprayed_lanes > _DENSE_SPRAY_LANE_THRESHOLD
-        and machine_count >= _SHARED_PACK_MACHINE_MIN
-        and machine_count <= _SHARED_PACK_MACHINE_MAX
-        and strip_count <= _COMPACT_LARGE_VARIANT_SIZE
-    )
+    """Select exact shared packs with measured generic non-regression roles."""
+    return _small_direct_seed_role(
+        direct_candidates=direct_candidates,
+        strip_count=strip_count,
+        strip_len=strip_len,
+    ) or _shared_pack_height_rank(
+        machine_count=machine_count,
+        strip_count=strip_count,
+        strip_len=strip_len,
+        sprayed_lanes=sprayed_lanes,
+        direct_candidates=direct_candidates,
+    ) > 0
 
 
 def _exact_pack_decoded(
@@ -2555,6 +2701,8 @@ def _production_run(
             power=power,
             sprayed_lanes=len(spec.spray_lanes),
             strip_count=len(strips),
+            direct_candidates=len(direct_candidates),
+            strip_len=strip_len,
         )
         if (use_topology_beam or use_shared_pack) and topology_beam_height is not None:
             median_height = sorted(coarse_heights)[len(coarse_heights) // 2]
@@ -2930,6 +3078,11 @@ def _production_run(
         direct_targets=direct_targets,
         direct_targets_for_state=direct_targets_for_state,
         stage_boundary_transform=transform_stage,
+        stop_on_stable_exact=_uses_stable_exact_stop(
+            machine_count=spec.machine_count,
+            strip_count=len(strips),
+            sprayed_lanes=len(spec.spray_lanes),
+        ),
         stage_boundary_commit=commit_stage,
     )
     seed_started = time.monotonic()
@@ -2942,7 +3095,16 @@ def _production_run(
     )
     if use_shared_pack and not deadline_reached():
         shared_started = time.monotonic()
-        shared_height = coarse_heights[0]
+        shared_height_rank = _shared_pack_height_rank(
+            machine_count=spec.machine_count,
+            strip_count=len(strips),
+            strip_len=strip_len,
+            sprayed_lanes=len(spec.spray_lanes),
+            direct_candidates=len(direct_candidates),
+        )
+        shared_height = coarse_heights[
+            min(shared_height_rank, len(coarse_heights) - 1)
+        ]
         shared_seed = seeds[shared_height]
         shared_left = seed_deadline - time.monotonic()
         shared_pack = (
@@ -3037,6 +3199,26 @@ def _production_run(
             _protected_topology_candidates(
                 beam_problem.size,
                 len(spec.spray_lanes),
+                tall_role=_uses_tall_topology_height(
+                    machine_count=spec.machine_count,
+                    strip_count=len(strips),
+                    sprayed_lanes=len(spec.spray_lanes),
+                ),
+            ),
+        )
+        topology_allowance = _topology_closure_allowance(
+            exact_candidate_allowance,
+            quality_role=(
+                _uses_tall_topology_height(
+                    machine_count=spec.machine_count,
+                    strip_count=len(strips),
+                    sprayed_lanes=len(spec.spray_lanes),
+                )
+                or _uses_mid_topology_height(
+                    machine_count=spec.machine_count,
+                    strip_count=len(strips),
+                    sprayed_lanes=len(spec.spray_lanes),
+                )
             ),
         )
         for topology_index in range(beam.config.max_candidates):
@@ -3054,7 +3236,7 @@ def _production_run(
                 topology_beam_height,
                 _topology_candidate_decoded(candidate),
                 reason="topology-beam",
-                allowance_cap=exact_candidate_allowance,
+                allowance_cap=topology_allowance,
             )
             telemetry.topology_beam_candidates += 1
             if topology_index + 1 < beam.config.max_candidates:
@@ -3062,10 +3244,17 @@ def _production_run(
         telemetry.topology_beam_wall_time_s = time.monotonic() - beam_started
     max_search_stages = _search_stage_cap(
         exact_seed_terminal=(
-            _topology_seed_is_terminal(
-                machine_count=spec.machine_count,
-                strip_count=len(strips),
-                strip_len=strip_len,
+            (
+                _topology_seed_is_terminal(
+                    machine_count=spec.machine_count,
+                    strip_count=len(strips),
+                    strip_len=strip_len,
+                )
+                or _small_direct_seed_role(
+                    direct_candidates=len(direct_candidates),
+                    strip_count=len(strips),
+                    strip_len=strip_len,
+                )
             )
             and solver.exact_incumbent_reason in ("shared-pack", "topology-beam")
         ),

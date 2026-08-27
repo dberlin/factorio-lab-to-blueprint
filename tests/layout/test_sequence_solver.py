@@ -357,6 +357,70 @@ def test_compact_exact_incumbent_cannot_be_displaced_by_worse_discovery() -> Non
     assert result.stages[1].exact_key == (30, 1)
 
 
+def test_stable_exact_role_stops_before_a_third_non_improving_stage() -> None:
+    compact_exact = _placement(area=20, belt_tiles=4)
+    worse = _placement(area=30, belt_tiles=1)
+    late_better = _placement(area=10, belt_tiles=8)
+    fake = _FakeRouting(
+        detailed_results=(
+            DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), compact_exact),
+            DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), worse),
+            DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), late_better),
+        )
+    )
+    solver = _solver(
+        fake,
+        heights=(40,),
+        config=SequenceSolverConfig(
+            stages=3,
+            moves_per_stage=1,
+            restarts_per_height=1,
+            global_elites=1,
+        ),
+        initial_states={40: AnnealState.initial(1, 17)},
+    )
+    solver.stop_on_stable_exact = True
+
+    result = solver.search(max_stages=3)
+
+    assert result.placement is compact_exact
+    assert result.termination == "exact-stable"
+    assert len(fake.detailed_allowances) == 2
+
+
+def test_stable_exact_role_does_not_stop_after_stage_two_changed_the_incumbent() -> None:
+    compact = _placement(area=30, belt_tiles=1)
+    second_better = _placement(area=20, belt_tiles=4)
+    temporarily_stable = _placement(area=25, belt_tiles=2)
+    late_better = _placement(area=10, belt_tiles=8)
+    fake = _FakeRouting(
+        detailed_results=(
+            DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), compact),
+            DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), second_better),
+            DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), temporarily_stable),
+            DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), late_better),
+        )
+    )
+    solver = _solver(
+        fake,
+        heights=(40,),
+        config=SequenceSolverConfig(
+            stages=4,
+            moves_per_stage=1,
+            restarts_per_height=1,
+            global_elites=1,
+        ),
+        initial_states={40: AnnealState.initial(1, 17)},
+    )
+    solver.stop_on_stable_exact = True
+
+    result = solver.search(max_stages=4)
+
+    assert result.placement is late_better
+    assert result.termination == "stage-limit"
+    assert len(fake.detailed_allowances) == 4
+
+
 def test_exact_decoded_closure_retains_coordinates_without_sequence_reencoding() -> None:
     exact = _placement(area=20, belt_tiles=4)
     fake = _FakeRouting(
@@ -1422,6 +1486,189 @@ def test_search_stage_cap_follows_certified_and_small_complexity_roles(
 
 
 @pytest.mark.parametrize(
+    ("machine_count", "strip_count", "sprayed_lanes", "expected"),
+    (
+        (8, 4, 0, True),
+        (7, 4, 0, False),
+        (8, 4, 1, False),
+    ),
+)
+def test_stable_exact_role_is_unsprayed_with_two_machines_per_strip(
+    machine_count: int,
+    strip_count: int,
+    sprayed_lanes: int,
+    expected: bool,
+) -> None:
+    assert (
+        sequence_solver_module._uses_stable_exact_stop(
+            machine_count=machine_count,
+            strip_count=strip_count,
+            sprayed_lanes=sprayed_lanes,
+        )
+        is expected
+    )
+
+
+@pytest.mark.parametrize(
+    ("direct_candidates", "strip_count", "strip_len", "expected"),
+    (
+        (4, 7, 6, True),
+        (3, 7, 6, False),
+        (4, 8, 6, False),
+    ),
+)
+def test_small_direct_seed_role_requires_dense_direct_opportunity(
+    direct_candidates: int,
+    strip_count: int,
+    strip_len: int,
+    expected: bool,
+) -> None:
+    assert (
+        sequence_solver_module._small_direct_seed_role(
+            direct_candidates=direct_candidates,
+            strip_count=strip_count,
+            strip_len=strip_len,
+        )
+        is expected
+    )
+
+
+@pytest.mark.parametrize(
+    (
+        "machine_count",
+        "strip_count",
+        "strip_len",
+        "sprayed_lanes",
+        "direct_candidates",
+        "expected",
+    ),
+    (
+        (20, 7, 6, 0, 4, 0),
+        (95, 27, 6, 27, 0, 1),
+        (16, 4, 6, 2, 0, 2),
+        (9, 3, 6, 2, 0, 0),
+    ),
+)
+def test_shared_pack_height_rank_follows_structural_role(
+    machine_count: int,
+    strip_count: int,
+    strip_len: int,
+    sprayed_lanes: int,
+    direct_candidates: int,
+    expected: int,
+) -> None:
+    assert (
+        sequence_solver_module._shared_pack_height_rank(
+            machine_count=machine_count,
+            strip_count=strip_count,
+            strip_len=strip_len,
+            sprayed_lanes=sprayed_lanes,
+            direct_candidates=direct_candidates,
+        )
+        == expected
+    )
+
+
+@pytest.mark.parametrize(
+    ("machine_count", "strip_count", "sprayed_lanes", "expected"),
+    (
+        (57, 14, 14, True),
+        (75, 17, 3, True),
+        (95, 27, 27, False),
+        (57, 14, 0, False),
+    ),
+)
+def test_tall_topology_role_is_sprayed_and_saturated(
+    machine_count: int,
+    strip_count: int,
+    sprayed_lanes: int,
+    expected: bool,
+) -> None:
+    assert (
+        sequence_solver_module._uses_tall_topology_height(
+            machine_count=machine_count,
+            strip_count=strip_count,
+            sprayed_lanes=sprayed_lanes,
+        )
+        is expected
+    )
+
+
+def test_tall_topology_height_uses_highest_bound_rank_not_numeric_height() -> None:
+    assert (
+        sequence_solver_module._topology_beam_height(
+            {},
+            (89, 70, 56, 44, 33),
+            machine_count=57,
+            strip_count=14,
+            sprayed_lanes=14,
+            power=False,
+        )
+        == 33
+    )
+
+
+@pytest.mark.parametrize(
+    ("machine_count", "strip_count", "sprayed_lanes", "expected"),
+    (
+        (58, 18, 23, True),
+        (57, 14, 14, False),
+        (95, 27, 27, False),
+        (58, 18, 3, False),
+    ),
+)
+def test_mid_height_topology_role_is_high_spray_and_under_saturated(
+    machine_count: int,
+    strip_count: int,
+    sprayed_lanes: int,
+    expected: bool,
+) -> None:
+    assert (
+        sequence_solver_module._uses_mid_topology_height(
+            machine_count=machine_count,
+            strip_count=strip_count,
+            sprayed_lanes=sprayed_lanes,
+        )
+        is expected
+    )
+
+
+def test_tall_topology_role_protects_every_measured_candidate() -> None:
+    assert sequence_solver_module._protected_topology_candidates(
+        strip_count=14,
+        sprayed_lanes=14,
+        tall_role=True,
+    ) == 7
+    assert sequence_solver_module._protected_topology_candidates(
+        strip_count=14,
+        sprayed_lanes=14,
+        tall_role=False,
+    ) == 3
+
+
+@pytest.mark.parametrize(
+    ("allowance", "quality_role", "expected"),
+    (
+        (333_333, True, 50_000),
+        (40_000, True, 40_000),
+        (333_333, False, 333_333),
+    ),
+)
+def test_quality_topology_roles_cap_speculative_closures(
+    allowance: int,
+    quality_role: bool,
+    expected: int,
+) -> None:
+    assert (
+        sequence_solver_module._topology_closure_allowance(
+            allowance,
+            quality_role=quality_role,
+        )
+        == expected
+    )
+
+
+@pytest.mark.parametrize(
     ("topology_role", "shared_role", "incumbent_reason", "expected"),
     (
         (True, False, None, True),
@@ -2307,6 +2554,9 @@ def test_production_observability_preserves_categories_and_all_grouped_work() ->
         config=config,
     )
 
+    # This test audits every grouped stage; production's safe early stop is not
+    # the behavior under test.
+    run.solver.stop_on_stable_exact = False
     result = run.solver.search()
     original_stats = dict(result.placement.stats)
     placement = sequence_solver_module._with_observational_stats(

@@ -30,7 +30,7 @@ from flab2bp.lab.flow import (
 from flab2bp.lab.schema import Dataset
 from flab2bp.lab.techs import belt_rules_for_url
 from flab2bp.lab.url import parse_url
-from flab2bp.layout import markers, validate
+from flab2bp.layout import finalize, markers, validate
 from flab2bp.layout.base import NoValidLayout, Placement
 from flab2bp.layout.freeform import FreeformLayout
 from flab2bp.layout.sequence_solver import SequencePairLayout
@@ -436,6 +436,11 @@ def build(
                         )
                     )
                 continue
+            placement = finalize.compact_open_boundary_belts(
+                placement,
+                spec,
+                expect_power=power,
+            )
             # Pass the spec AND the id map. Without them the nine
             # spec-dependent checks are skipped, and a build that never ran its
             # throughput or proliferator checks reads as clean.

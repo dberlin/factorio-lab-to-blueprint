@@ -18,6 +18,7 @@ from flab2bp.bench.types import CellResult
 from flab2bp.lab import data as lab_data
 from flab2bp.lab.techs import belt_rules_for_url
 from flab2bp.lab.url import parse_url
+from flab2bp.layout import finalize
 from flab2bp.layout import validate as validator
 from flab2bp.layout.base import LayoutStrategy, NoValidLayout, Placement
 from flab2bp.rates import build_candidates
@@ -116,6 +117,11 @@ def _run_cell(
         # is currently most of them -- and a bake-off that cannot run is worse
         # than one with an honest empty row.
         return _refused_cell(handle, entry, spec, power=power, reason=exc.reason)
+    placement = finalize.compact_open_boundary_belts(
+        placement,
+        spec,
+        expect_power=power,
+    )
     elapsed = time.perf_counter() - started
 
     m = measure(placement)

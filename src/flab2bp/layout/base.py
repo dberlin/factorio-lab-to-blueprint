@@ -177,6 +177,8 @@ class PlacementStats(TypedDict, total=False):
     belt_tiles: float
     best_overflow: float
     best_stranded: float
+    boundary_belts_removed: float
+    boundary_cleanup_time_s: float
     box_area: float
     cache_hits: float
     compact_seed_attempt: float

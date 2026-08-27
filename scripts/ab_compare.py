@@ -78,7 +78,7 @@ from flab2bp.bench.ab import (  # noqa: E402
 from flab2bp.bench.corpus import URL_CORPUS, CorpusEntry, Tier  # noqa: E402
 from flab2bp.dsp import codec  # noqa: E402
 from flab2bp.lab.techs import belt_rules_for_url  # noqa: E402
-from flab2bp.layout import markers, validate  # noqa: E402
+from flab2bp.layout import finalize, markers, validate  # noqa: E402
 from flab2bp.layout.base import LayoutStrategy, Placement  # noqa: E402
 from flab2bp.layout.freeform import FreeformLayout  # noqa: E402
 from flab2bp.layout.sequence_solver import SequencePairLayout  # noqa: E402
@@ -122,8 +122,13 @@ class _LayoutCall:
     budget_s: float
 
     def __call__(self) -> Placement:
-        return STRATEGIES[self.strategy](self.power, self.vertical).lay_out(
+        placement = STRATEGIES[self.strategy](self.power, self.vertical).lay_out(
             self.spec, time_budget_s=self.budget_s
+        )
+        return finalize.compact_open_boundary_belts(
+            placement,
+            self.spec,
+            expect_power=self.power,
         )
 
 

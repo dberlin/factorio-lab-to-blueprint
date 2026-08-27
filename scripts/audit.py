@@ -84,7 +84,7 @@ from flab2bp.dsp import catalog  # noqa: E402
 from flab2bp.lab.data import load_vendored  # noqa: E402
 from flab2bp.lab.techs import belt_rules_for_url  # noqa: E402
 from flab2bp.lab.url import parse_url  # noqa: E402
-from flab2bp.layout import validate  # noqa: E402
+from flab2bp.layout import finalize, validate  # noqa: E402
 from flab2bp.layout.base import (  # noqa: E402
     RETRY_BUDGET_S,
     LayoutStrategy,
@@ -259,6 +259,11 @@ def run_cell(job: Job) -> Result:
             ("<crash>",),
             time.monotonic() - t0,
         )
+    placement = finalize.compact_open_boundary_belts(
+        placement,
+        spec,
+        expect_power=job.power,
+    )
 
     report = validate.validate(
         placement,
