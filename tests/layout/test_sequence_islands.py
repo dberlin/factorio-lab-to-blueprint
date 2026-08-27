@@ -19,7 +19,6 @@ from flab2bp.layout.sequence_islands import (
     _merge_sequence_island_outcomes,
     _run_sequence_island,
     _sequence_island_deadlines,
-    _sequence_island_result_reserve_s,
     _sequence_island_seeds,
     _SequenceIslandOutcome,
     _SequenceIslandRequest,
@@ -230,9 +229,8 @@ def test_compact_portfolio_uses_root_seed_once_while_search_seeds_stay_distinct(
     requests = _ImmediateExecutor.instances[-1].requests
     assert [request.seed for request in requests] == list(_sequence_island_seeds(root, 8))
     assert len({request.seed for request in requests}) == 8
-    assert requests[0].compact_seed_attempt is None
-    seeded = requests[1:]
-    assert [request.compact_seed_attempt for request in seeded] == list(range(7))
+    seeded = requests
+    assert [request.compact_seed_attempt for request in seeded] == list(range(8))
     assert {request.compact_seed_base_seed for request in seeded} == {root}
 
     problem = PlacementProblem(
@@ -306,7 +304,7 @@ def test_child_soft_deadline_leaves_parent_time_to_collect_result(
 ) -> None:
     _PendingExecutor.instances.clear()
     monkeypatch.setattr(islands_module, "ProcessPoolExecutor", _PendingExecutor)
-    ticks = iter((100.0, 111.0))
+    ticks = iter((100.0, 101.0))
     monkeypatch.setattr(
         "flab2bp.layout.sequence_islands.time.monotonic",
         lambda: next(ticks),
@@ -342,14 +340,13 @@ def test_child_soft_deadline_leaves_parent_time_to_collect_result(
     )
 
     executor = _PendingExecutor.instances[-1]
-    assert {request.soft_deadline for request in executor.requests} == {111.0}
-    assert [request.compact_seed_attempt for request in executor.requests] == [None, 0, 1]
-    assert all(request.compact_seed_config is compact_config for request in executor.requests)
+    assert {request.soft_deadline for request in executor.requests} == {102.0}
+    assert [request.compact_seed_attempt for request in executor.requests] == [0, 1, 2]
     assert {request.compact_seed_base_seed for request in executor.requests} == {
         SequenceSolverConfig().seed
     }
     assert pickle.loads(pickle.dumps(executor.requests[1])) == executor.requests[1]
-    assert observed_waits == [4.0]
+    assert observed_waits == [91.0]
     assert executor.kwargs["mp_context"].get_start_method() == "spawn"
     assert executor.kwargs["max_tasks_per_child"] == 1
     assert placement.stats["islands_requested"] == 3.0
@@ -357,16 +354,16 @@ def test_child_soft_deadline_leaves_parent_time_to_collect_result(
     assert placement.stats["islands_refused"] == 0.0
     assert placement.stats["winner_island_id"] == 0
     assert placement.stats["winner_island_seed"] == SequenceSolverConfig().seed
-    assert placement.stats["island_result_reserve_s"] == 4.0
+    assert placement.stats["island_result_reserve_s"] == 90.0
     assert executor.shutdown_calls[-1] == (True, False)
 
 
 @pytest.mark.parametrize(
     ("time_budget_s", "ceiling", "soft_deadline", "hard_deadline"),
     (
-        (0.0, 15.0, 111.0, 115.0),
-        (0.01, 15.0, 111.0, 115.0),
-        (30.0, 30.0, 126.0, 130.0),
+        (0.0, 0.0, 100.0, 100.0),
+        (0.01, 0.01, 100.01, 190.01),
+        (30.0, 30.0, 130.0, 220.0),
     ),
 )
 def test_deadline_split_preserves_the_parent_ceiling(
@@ -382,15 +379,6 @@ def test_deadline_split_preserves_the_parent_ceiling(
     )
 
 
-@pytest.mark.parametrize(
-    ("ceiling", "expected"),
-    ((9.0, 3.0), (12.0, 4.0), (30.0, 4.0), (60.0, 4.0)),
-)
-def test_result_reserve_formula_is_bounded(
-    ceiling: float,
-    expected: float,
-) -> None:
-    assert _sequence_island_result_reserve_s(ceiling) == expected
 
 
 def test_two_real_spawned_islands_are_unseeded_then_seeded_and_both_valid() -> None:

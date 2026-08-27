@@ -804,9 +804,8 @@ def _footprint(ctx: Context) -> Iterable[Finding]:
     A building that OCCUPIES TILES anchors on the minimum corner of its
     footprint, so its declared size must be
     ``catalog.oriented_footprint(item_id, yaw)`` -- the prefab's, with the
-    quarter turn applied.  Copying ``catalog.footprint`` and forgetting the turn
-    is a live hazard rather than a hypothetical: ``layout.spine`` carries a
-    comment about exactly that case.
+    quarter turn applied. Copying ``catalog.footprint`` and forgetting the turn
+    is a live hazard rather than a hypothetical.
 
     A BELT ADDON anchors on the belt tile it RIDES, and must declare ``1x1`` so
     that ``tile_to_local_offset`` leaves its centre on that tile.  This is

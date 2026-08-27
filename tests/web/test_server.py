@@ -199,9 +199,9 @@ def test_sequence_pair_is_accepted_with_exact_wire_spelling(
     assert _object(body, "options")["strategy"] == "sequence-pair"
 
 
-def test_spine_is_rejected_before_submission(start: Callable[..., Client]) -> None:
+def test_unknown_strategy_is_rejected_before_submission(start: Callable[..., Client]) -> None:
     status, body = start().failing_json(
-        "/api/build", {"url": URL, "strategy": "spine"}, method="POST"
+        "/api/build", {"url": URL, "strategy": "unknown"}, method="POST"
     )
     assert status == 400
     assert _string(body, "error") == "'strategy' must be one of best, freeform, sequence-pair"

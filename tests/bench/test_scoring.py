@@ -66,36 +66,36 @@ def test_geometric_mean_of_nothing_is_one() -> None:
 
 def test_validity_beats_density_outright() -> None:
     """A dense invalid blueprint is worth nothing."""
-    a = [_cell("spine", "u1", area=1000), _cell("spine", "u2", area=1000)]
+    a = [_cell("sequence-pair", "u1", area=1000), _cell("sequence-pair", "u2", area=1000)]
     b = [_cell("freeform", "u1", area=10), _cell("freeform", "u2", area=10, valid=False)]
-    verdict = compare(a + b, "spine", "freeform")
-    assert verdict.winner == "spine"
+    verdict = compare(a + b, "sequence-pair", "freeform")
+    assert verdict.winner == "sequence-pair"
     assert verdict.reason is Verdict.Reason.VALIDITY
 
 
 def test_density_wins_when_margin_exceeds_deadband() -> None:
-    a = [_cell("spine", "u1", area=1000)]
+    a = [_cell("sequence-pair", "u1", area=1000)]
     b = [_cell("freeform", "u1", area=500)]
-    verdict = compare(a + b, "spine", "freeform")
+    verdict = compare(a + b, "sequence-pair", "freeform")
     assert verdict.winner == "freeform"
     assert verdict.reason is Verdict.Reason.DENSITY
 
 
 def test_density_tie_inside_deadband_falls_through_to_time() -> None:
     """A 1% area edge is noise, not a win."""
-    a = [_cell("spine", "u1", area=1000, seconds=0.5)]
+    a = [_cell("sequence-pair", "u1", area=1000, seconds=0.5)]
     b = [_cell("freeform", "u1", area=990, seconds=50.0)]
-    verdict = compare(a + b, "spine", "freeform")
+    verdict = compare(a + b, "sequence-pair", "freeform")
     assert verdict.reason is Verdict.Reason.TIME
-    assert verdict.winner == "spine"
+    assert verdict.winner == "sequence-pair"
     assert abs(verdict.area_ratio - 0.99) < 1e-9
     assert 1 - verdict.area_ratio < DENSITY_DEADBAND
 
 
 def test_ratio_uses_only_urls_where_both_strategies_succeeded() -> None:
-    a = [_cell("spine", "u1", area=100), _cell("spine", "u2", area=100)]
+    a = [_cell("sequence-pair", "u1", area=100), _cell("sequence-pair", "u2", area=100)]
     b = [_cell("freeform", "u1", area=50), _cell("freeform", "u2", area=1, valid=False)]
-    verdict = compare(a + b, "spine", "freeform")
+    verdict = compare(a + b, "sequence-pair", "freeform")
     # u2 is excluded from the ratio, so the ratio is u1's alone.
     assert math.isclose(verdict.area_ratio, 0.5)
     assert verdict.comparable == 1
@@ -103,8 +103,8 @@ def test_ratio_uses_only_urls_where_both_strategies_succeeded() -> None:
 
 def test_missing_strategy_is_reported_not_crashed() -> None:
     """Strategy B may not exist yet; the harness must still produce a report."""
-    a = [_cell("spine", "u1", area=100)]
-    verdict = compare(a, "spine", "freeform")
+    a = [_cell("sequence-pair", "u1", area=100)]
+    verdict = compare(a, "sequence-pair", "freeform")
     assert verdict.comparable == 0
     assert verdict.reason is Verdict.Reason.INCOMPARABLE
     assert verdict.winner is None
@@ -112,7 +112,7 @@ def test_missing_strategy_is_reported_not_crashed() -> None:
 
 @pytest.mark.parametrize("ratio", [0.98, 1.02])
 def test_deadband_is_symmetric(ratio: float) -> None:
-    a = [_cell("spine", "u1", area=1000, seconds=1.0)]
+    a = [_cell("sequence-pair", "u1", area=1000, seconds=1.0)]
     b = [_cell("freeform", "u1", area=int(1000 * ratio), seconds=2.0)]
-    verdict = compare(a + b, "spine", "freeform")
+    verdict = compare(a + b, "sequence-pair", "freeform")
     assert verdict.reason is Verdict.Reason.TIME

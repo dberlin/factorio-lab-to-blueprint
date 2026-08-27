@@ -79,7 +79,6 @@ from flab2bp.dsp import catalog, codec, colliders, params, rules
 from flab2bp.layout import junction, slots, validate
 from flab2bp.layout.base import (
     DEFAULT_SEARCH_WORKERS,
-    RETRY_BUDGET_S,
     Facing,
     NoValidLayout,
     PlacedBuilding,
@@ -97,7 +96,6 @@ from flab2bp.layout.route_feedback import (
 )
 from flab2bp.layout.sequence_pair import DirectInsertTarget
 from flab2bp.layout.slots import SlotUndetermined, assign_sorter_slots
-from flab2bp.layout.spine import BELT_ITEM_IDS, MACHINE_ITEM_IDS, SORTER_TIERS
 from flab2bp.spec import BuildSpec
 
 if TYPE_CHECKING:
@@ -1054,14 +1052,36 @@ def _box(s: Strip) -> tuple[int, int]:
 
 
 def _sink_demand(
-    groups: dict[str, _Group], spec: BuildSpec, item: str, dest_key: str
+    groups: dict[str, _Group],
+    spec: BuildSpec,
+    item: str,
+    dest_key: str,
+    *,
+    include_boundary: bool = True,
 ) -> Fraction:
     """Items/second one sink wants of ``item``.
 
-    An empty ``dest_key`` is the build boundary -- the item leaves on an output
-    belt -- so its demand is whatever the spec promises to deliver.
+    An empty ``dest_key`` is the build boundary. Lane-capacity accounting
+    includes that drain; machine allocation treats it as residual so sibling
+    lanes can move their excess to the open boundary lane.
     """
+    if DEST_SEP in dest_key:
+        return sum(
+            (
+                _sink_demand(
+                    groups,
+                    spec,
+                    item,
+                    destination,
+                    include_boundary=include_boundary,
+                )
+                for destination in _dests(dest_key)
+            ),
+            Fraction(0),
+        )
     if not dest_key:
+        if not include_boundary:
+            return Fraction(0)
         return spec.outputs.get(item, Fraction(0)) + spec.surplus_outputs.get(
             item, Fraction(0)
         )
@@ -1288,7 +1308,7 @@ def _adapt(spec: BuildSpec) -> dict[str, _Group]:
             item_id = mode.machine_item_id
             mode_params = params.parameters_for(mg.recipe_id)
         else:
-            resolved = MACHINE_ITEM_IDS.get(mg.machine_item_id)
+            resolved = catalog.get_item_id(mg.machine_item_id)
             if resolved is None:
                 raise KeyError(
                     f"no DSP building known for machine {mg.machine_item_id!r}"
@@ -1552,8 +1572,37 @@ def _logical_strip_plans(spec: BuildSpec) -> tuple[_LogicalStripPlan, ...]:
         sinks: list[tuple[str, str]] = []
         for item in sorted(group.outputs):
             destinations = consumers.get((key, item), [])
-            sinks.extend((item, destination) for destination in destinations)
-            if item in spec.outputs or item in spec.surplus_outputs or not destinations:
+            boundary = item in spec.outputs or item in spec.surplus_outputs
+            shared_boundary: str | None = None
+            if item in spec.surplus_outputs and destinations:
+                surplus = spec.surplus_outputs[item]
+                shareable = [
+                    destination
+                    for destination in destinations
+                    if surplus + _sink_demand(groups, spec, item, destination)
+                    <= spec.belt_items_per_second
+                ]
+                if shareable:
+                    shared_boundary = min(
+                        shareable,
+                        key=lambda destination: (
+                            _sink_demand(groups, spec, item, destination),
+                            destination,
+                        ),
+                    )
+                    boundary = False
+            sinks.extend(
+                (
+                    item,
+                    (
+                        DEST_SEP.join((destination, ""))
+                        if destination == shared_boundary
+                        else destination
+                    ),
+                )
+                for destination in destinations
+            )
+            if boundary or not destinations:
                 sinks.append((item, ""))
 
         columns = (
@@ -1633,8 +1682,18 @@ def _logical_strip_plans(spec: BuildSpec) -> tuple[_LogicalStripPlan, ...]:
             )
             for item, destination in sinks
         }
+        allocation_demand = {
+            (item, destination): _sink_demand(
+                groups,
+                spec,
+                item,
+                destination,
+                include_boundary=False,
+            )
+            for item, destination in sinks
+        }
         per_shard = (
-            _allocate_machines(group.count, shards, demand)
+            _allocate_machines(group.count, shards, allocation_demand)
             if len(shards) > 1
             else [group.count]
         )
@@ -2319,8 +2378,10 @@ def _pack(
             )
             model.add_hint(ys[i], min(max(hy, 0), max(0, height - h)))
 
+    if time_budget_s <= 0:
+        return None
     solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds = max(0.05, time_budget_s)
+    solver.parameters.max_time_in_seconds = time_budget_s
     # Determinism is load-bearing for the bake-off: multi-worker CP-SAT would
     # make the A-vs-B comparison noise rather than measurement.
     solver.parameters.num_search_workers = workers
@@ -2802,10 +2863,10 @@ def _pick_sorter(rate: Fraction, span: int, machines: int) -> tuple[int, int]:
     there is never a reason to pay for a higher tier than the rate needs.
     """
     per_machine = rate / machines if machines else rate
-    for tier in SORTER_TIERS:
+    for tier in catalog.SORTER_TIERS:
         if catalog.sorter_rate(tier, span) >= per_machine:
             return tier, machines
-    return SORTER_TIERS[-1], machines
+    return catalog.SORTER_TIERS[-1], machines
 
 
 @dataclass(frozen=True, slots=True)
@@ -7820,7 +7881,7 @@ def _prepare_routing_problem(
     _reserve_ports: bool = True,
 ) -> _PreparedRoutingProblem:
     """Build immutable exact geometry shared by both routing engines."""
-    belt_id = BELT_ITEM_IDS.get(spec.belt_item_id, 2001)
+    belt_id = catalog.get_item_id(spec.belt_item_id) or 2001
     belt_model = catalog.building(belt_id).model_index
     canvas = _Canvas(ramped=ramped)
 
@@ -8279,7 +8340,7 @@ def _build_prepared(
     """Emit, route, and power one already-prepared immutable problem."""
     workspace = prepared.new_workspace()
     canvas = workspace.canvas
-    belt_id = BELT_ITEM_IDS.get(spec.belt_item_id, 2001)
+    belt_id = catalog.get_item_id(spec.belt_item_id) or 2001
     belt_model = catalog.building(belt_id).model_index
     external_nets = [
         net
@@ -9185,7 +9246,7 @@ class FreeformLayout:
         #: compares against.
         self.arrangements = _ARRANGEMENTS if arrangements is None else arrangements
 
-    def lay_out(self, spec: BuildSpec, *, time_budget_s: float = 60.0) -> Placement:
+    def lay_out(self, spec: BuildSpec, *, time_budget_s: float = 15.0) -> Placement:
         """Return the densest ROUTABLE ``Placement``, or raise :class:`NoValidLayout`.
 
         Routability is a condition for existing, not a ranking key.  It used to
@@ -9206,25 +9267,9 @@ class FreeformLayout:
         to :func:`_pack` as a warm start: same construction, bounding the search
         instead of substituting for it.
 
-        A sweep that produces no routable pack is retried ONCE at
-        :data:`RETRY_BUDGET_S` before refusing.
-
-        ``time_budget_s`` IS A WALL-CLOCK DEADLINE FOR THE WHOLE CALL, not a
-        packing budget.  It used to be the latter, and the difference was
-        measured in minutes: the sweep spent it, the retry spent
-        ``RETRY_BUDGET_S`` on top, the shelf sweep had a budget of its own, and
-        the routing inside every one of them was bounded by an expansion count
-        rather than by a clock.  Every phase was bounded and nothing bounded
-        their sum, so a nominal 4 seconds measured at 34s on
-        ``casimir-crystal``, 80s on ``quantum-chip`` and over 400s on a refusing
-        ``universe-matrix`` cell -- which is what made a full corpus audit an
-        hour and a half.
-
-        The ceiling is ``max(time_budget_s, RETRY_BUDGET_S)``: the escalation to
-        fifteen seconds is a promise this keeps, so a caller asking for less
-        still gets the retry, and a caller asking for more gets what they asked
-        for.  Every phase takes what is left of it, and a phase that finds the
-        clock already spent is not started.
+        ``time_budget_s`` is the wall-clock search deadline for the whole call.
+        Every phase takes what is left of exactly the budget the caller asked
+        for, and a phase that finds the clock already spent is not started.
 
         Running out of it RAISES.  A deadline may cost a placement -- and the
         cells it costs are named in the commit message rather than bought back
@@ -9239,7 +9284,7 @@ class FreeformLayout:
                 budget_s=time_budget_s,
             )
 
-        ceiling = max(time_budget_s, RETRY_BUDGET_S)
+        ceiling = time_budget_s
         started = time.monotonic()
         deadline = started + ceiling
         # ONE routing budget for the call. `_MAX_EXPANSIONS` bounds a single
@@ -9291,9 +9336,9 @@ class FreeformLayout:
         # Refuse a strip plan that no packing can serve BEFORE sweeping heights.
         # This is not an optimisation of the failure path, it is the difference
         # between an error that names the cause and one that blames the packer:
-        # the sweep would try every height, retry the lot at RETRY_BUDGET_S, and
-        # report "left nets unrouted" -- 51s on the magnetic-ring chain to
-        # rediscover something fixed the moment the strips were planned.
+        # The sweep used to retry at a hidden fifteen-second floor and report a
+        # generic routing miss. Structural failures are named before the one
+        # requested-budget sweep instead.
         #
         # Fan-out itself is no longer a shortfall: a lane serving several
         # consumers taps a different tile for each and junctions there. What
@@ -9322,9 +9367,7 @@ class FreeformLayout:
                 budget_s=0.0,
             )
 
-        budgets = [time_budget_s]
-        if time_budget_s < RETRY_BUDGET_S:
-            budgets.append(RETRY_BUDGET_S)
+        budgets = (time_budget_s,)
 
         #: Checks that threw a placement out AFTER it wired -- see `_sweep`.
         rejected: set[str] = set()
@@ -9553,7 +9596,9 @@ class FreeformLayout:
         # This sweep's own share, never more than the CALL has left. A sweep
         # asked for 15s when 3 remain must not spend 15.
         left = time_budget_s if deadline is None else deadline - time.monotonic()
-        share = max(0.1, min(time_budget_s, max(left, 0.0)))
+        share = min(time_budget_s, max(left, 0.0))
+        if share <= 0:
+            return None
         # AND PACKING ONLY GETS PART OF IT.
         #
         # This was `share / len(heights)`, which hands CP-SAT the WHOLE ceiling
@@ -9571,7 +9616,7 @@ class FreeformLayout:
         # generous routing clock -- 0.5s wired 12 of 30, 3.0s wired 6 of 30, and
         # the widths tell the story (`max-proliferation` h=90 power=1: w=134 and
         # 2 nets unrouted at 0.5s, w=83 and 31 unrouted at 3.0s).
-        per_solve = max(0.1, share * _PACK_SHARE / max(len(heights), 1))
+        per_solve = share * _PACK_SHARE / max(len(heights), 1)
         # This sweep's SOFT deadline, and the call's HARD one, and they are not
         # the same rule.
         soft = time.monotonic() + share
@@ -9697,6 +9742,13 @@ class FreeformLayout:
             if _expired(deadline):
                 break
             started_at = time.monotonic()
+            remaining = (
+                per_solve
+                if deadline is None
+                else min(per_solve, deadline - time.monotonic())
+            )
+            if remaining <= 0:
+                break
             # CP-SAT's multi-worker portfolio changes the returned large-plan
             # arrangement with audit job allocation.  Those 24+ strip cells
             # route in one round from the deterministic seed; pin only their
@@ -9705,7 +9757,7 @@ class FreeformLayout:
                 strips,
                 height=height,
                 width_bound=max(bound * 2, 8),
-                time_budget_s=per_solve,
+                time_budget_s=remaining,
                 direct_candidates=net_candidates,
                 workers=(
                     1

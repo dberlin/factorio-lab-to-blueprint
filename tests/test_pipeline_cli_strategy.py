@@ -27,7 +27,7 @@ class _BuildKwargs(TypedDict, total=False):
     on_progress: pipeline.ProgressSink | None
 
 
-@pytest.mark.parametrize("strategy", ("spine", "sequence-pair"))
+@pytest.mark.parametrize("strategy", ("freeform", "sequence-pair"))
 def test_cli_passes_exact_explicit_strategy_name(
     strategy: str,
     monkeypatch: pytest.MonkeyPatch,
@@ -49,6 +49,7 @@ def test_cli_passes_exact_explicit_strategy_name(
     assert cli.main(["iron-ingot", "--strategy", strategy, "--no-power"]) == 0
     assert received["strategy"] == strategy
     assert received["power"] is False
+    assert received["time_budget_s"] == 15.0
     assert capsys.readouterr().out == "BLUEPRINT\n"
 
 
@@ -110,7 +111,7 @@ def test_cli_sequence_island_override_accepts_sixteen(
 @pytest.mark.parametrize(
     "argv",
     (
-        ["iron-ingot", "--strategy", "spine", "--sequence-islands", "2"],
+        ["iron-ingot", "--strategy", "freeform", "--sequence-islands", "2"],
         ["iron-ingot", "--strategy", "sequence-pair", "--sequence-islands", "0"],
         ["iron-ingot", "--strategy", "sequence-pair", "--sequence-islands", "17"],
     ),
@@ -140,5 +141,3 @@ def test_strategy_help_separates_best_from_explicit_backends(
     assert exc_info.value.code == 0
     help_text = " ".join(capsys.readouterr().out.split())
     assert "best runs freeform and sequence-pair" in help_text
-    assert "spine remains available explicitly" in help_text
-    assert "sequence-pair is a promoted production backend" in help_text

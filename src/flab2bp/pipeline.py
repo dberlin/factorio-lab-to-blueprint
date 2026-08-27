@@ -34,16 +34,14 @@ from flab2bp.layout import finalize, markers, validate
 from flab2bp.layout.base import NoValidLayout, Placement
 from flab2bp.layout.freeform import FreeformLayout
 from flab2bp.layout.sequence_solver import SequencePairLayout
-from flab2bp.layout.spine import SpineLayout
 from flab2bp.rates.candidates import build_candidates
 from flab2bp.spec import BuildSpec, BuildSpecSet
 
-ExplicitStrategyName = Literal["spine", "freeform", "sequence-pair"]
-StrategyName = Literal["best", "spine", "freeform", "sequence-pair"]
+ExplicitStrategyName = Literal["freeform", "sequence-pair"]
+StrategyName = Literal["best", "freeform", "sequence-pair"]
 
 STRATEGY_CHOICES: tuple[StrategyName, ...] = (
     "best",
-    "spine",
     "freeform",
     "sequence-pair",
 )
@@ -56,7 +54,7 @@ PRODUCTION_STRATEGY_COUNT = len(PRODUCTION_STRATEGIES)
 
 
 def _strategy_names(strategy: StrategyName) -> tuple[ExplicitStrategyName, ...]:
-    """Resolve a request without promoting audit backends into ``best``."""
+    """Resolve a request to the implemented production strategies."""
     if strategy == "best":
         return PRODUCTION_STRATEGIES
     return (strategy,)
@@ -68,13 +66,8 @@ def _new_layout(
     power: bool,
     belt_vertical_construction: bool,
     sequence_islands: int = 1,
-) -> SpineLayout | FreeformLayout | SequencePairLayout:
+) -> FreeformLayout | SequencePairLayout:
     """Construct one explicitly selected layout backend."""
-    if strategy == "spine":
-        return SpineLayout(
-            power=power,
-            belt_vertical_construction=belt_vertical_construction,
-        )
     if strategy == "freeform":
         return FreeformLayout(
             power=power,
@@ -250,7 +243,7 @@ def build(
     strategy: StrategyName = "best",
     power: bool = True,
     candidates: int = 3,
-    time_budget_s: float = 2.0,
+    time_budget_s: float = 15.0,
     sequence_islands: int = 1,
     dataset: Dataset | None = None,
     name: str = "",

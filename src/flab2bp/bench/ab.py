@@ -1021,7 +1021,7 @@ class RunMeta:
     urls: int
     started: str = ""
     seconds: float = 0.0
-    a_name: str = "spine"
+    a_name: str = "sequence-pair"
     b_name: str = "freeform"
 
     def lines(self) -> list[str]:

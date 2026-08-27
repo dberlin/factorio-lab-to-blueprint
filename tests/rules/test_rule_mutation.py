@@ -58,7 +58,7 @@ VERDICTS: dict[str, tuple[str, str]] = {
     # --- both sides react.  The state the plan is aiming for. ---------------
     "catalog.SORTER_MAX_REACH": ("both", "sorter span, checked and searched"),
     "catalog.SORTER_RATE_AT_1": ("both", "rate rule, checked and searched"),
-    "catalog.BELT_RATE": ("both", "lane capacity, checked and searched"),
+    "catalog.BELT_RATE": ("validator", "belt-capacity witnesses cross the tier boundary"),
     "catalog.BELT_Z_PER_WORLD_UNIT": ("both", "world-to-blueprint z conversion"),
     "catalog.clearance": (
         "strategy",
@@ -71,9 +71,9 @@ VERDICTS: dict[str, tuple[str, str]] = {
         "strategy",
         "strategy seating moves; no validator witness straddles this extension",
     ),
-    "colliders.BELT_PROBE_RADIUS": ("both", "the plan's own second example"),
-    "colliders.BELT_PROBE_LIFT": ("both", "companion to the probe radius"),
-    "colliders.belt_crossing_height": ("both", "how high a belt flies over a machine"),
+    "colliders.BELT_PROBE_RADIUS": ("validator", "belt crossing clearance boundary"),
+    "colliders.BELT_PROBE_LIFT": ("validator", "belt crossing probe lift boundary"),
+    "colliders.belt_crossing_height": ("validator", "belt crossing clearance verdict"),
     "rules.WORLD_UNITS_PER_LEVEL": ("both", "altitude in world units"),
     "rules.SLOT_REACH": ("both", "the plan's own first example"),
     "rules.SPLITTER_MAX_PORTS": ("both", "junction port cap"),
@@ -148,12 +148,6 @@ VERDICTS: dict[str, tuple[str, str]] = {
         "`game.power_too_close` asks the predicate directly rather than the "
         "projection -- which is the right way round for a lower bound",
     ),
-    "catalog.TESLA_COVER_RADIUS": (
-        "strategy",
-        "LEDGER: `power.coverage` takes a radius rather than consulting the rule, "
-        "so no validator test moves when the game's coverage radius changes.",
-    ),
-    "catalog.belt_max_z": ("strategy", "the ceiling, consulted through the spec"),
     "colliders.SORTER_HALF_LENGTH_MIN": ("strategy", "sorter seat box floor"),
     "rules.SPLITTER_INPUT_TO_SLOT": ("strategy", "written by `junction.make_splitter`"),
     "rules.SPLITTER_OUTPUT_FROM_SLOT": ("strategy", "written by `junction.make_splitter`"),
@@ -192,21 +186,6 @@ VERDICTS: dict[str, tuple[str, str]] = {
         "validator",
         "central coater reshape predicate has an independent component boundary",
     ),
-    # The projected sorter ladder has one independent pose on each side of
-    # num133/num134 and a lifted pose whose verdict depends on the 0.2 radial
-    # unit.  The non-emitted oneParameter projection is explicitly R4-exempt.
-    "planet.SORTER_SEGMENTS_MAX": (
-        "validator",
-        "four projected cells refuse and three pass at the num133 boundary",
-    ),
-    "planet.SORTER_COMBINED_MIN": (
-        "validator",
-        "machine-to-machine projected poses straddle the num134 floor",
-    ),
-    "planet.SORTER_ALTITUDE_UNIT": (
-        "validator",
-        "the same near-floor pose is rescued only by its measured radial lift",
-    ),
     # Declared "both" on the reasoning that `slots._drag_belt_end` reads it and
     # `validate` reaches that through the seat model.  MEASURED inert, and the
     # reasoning was the wrong kind of evidence: reachability is not exercise.
@@ -218,11 +197,6 @@ VERDICTS: dict[str, tuple[str, str]] = {
         "no test puts a sorter near the 0.5 gate, so the threshold never decides "
         "anything and a wrong value would ship. A coverage hole, not a dead rule.",
     ),
-    "catalog.DEFAULT_LAB_LEVEL": (
-        "validator",
-        "the technology lookup's fresh-save and upgraded boundaries consume it",
-    ),
-    "catalog.TESLA_LINK_DISTANCE": ("inert", "frozen into `spine.CONSTANTS` at import"),
     "colliders.PLANET_RADIUS": ("inert", "frozen into collider default arguments"),
     "colliders.PLANET_SEGMENT": ("inert", "frozen into collider default arguments"),
     "colliders.belt_keepout_offsets": ("inert", "frozen into `junction._KEEPOUT` at import"),

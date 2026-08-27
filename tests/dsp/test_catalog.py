@@ -349,24 +349,10 @@ def test_splitter_is_belt_integrated() -> None:
     assert not catalog.is_belt_integrated(2303)  # an assembler
 
 
-def test_tesla_cover_radius_is_a_radius() -> None:
-    """A diameter reading would leave machines in working blueprints unpowered."""
-    assert catalog.TESLA_COVER_RADIUS == 10.5
-
-
-def test_tesla_link_distance_tracks_the_extracted_game_table() -> None:
-    """The constant must be the game's ``connectDistance``, not a hand-typed guess.
-
-    See the note on :data:`catalog.TESLA_LINK_DISTANCE` for why 22.5 is a
-    centre-to-centre *distance* and not half of one: the game's own
-    ``PowerSystem.OnNodeAdded`` compares squared node separation against
-    ``max(a.connDistance2, b.connDistance2)``, where ``connDistance2`` is this
-    field squared.  The corpus cannot discriminate 22.5 from 11.25, so tying the
-    constant to the extracted table is the only check available here.
-    """
+def test_tesla_power_distances_track_the_extracted_game_table() -> None:
     tower = catalog.building(catalog.TESLA_TOWER_ID)
-    assert tower.connect_distance == catalog.TESLA_LINK_DISTANCE
-    assert tower.cover_radius == catalog.TESLA_COVER_RADIUS
+    assert tower.connect_distance == 22.5
+    assert tower.cover_radius == 10.5
     # The link rule takes the larger of the two nodes' reaches, so a longer-range
     # node really does exist and really does out-reach the tower.
     wireless = catalog.building(2202)
@@ -839,21 +825,22 @@ def test_the_belt_port_class_is_the_nine_zero_pose_buildings_plus_the_stations()
 
 
 def test_the_poseless_buildings_a_spec_group_can_reach() -> None:
-    """Eight, not nine, and one of them takes no belt either.
+    """Every recipe producer with no sorter pose remains an explicit refusal."""
+    from flab2bp.lab.data import load_vendored
 
-    ``spine._sorterless_groups``'s docstring named nine and listed two things
-    that are not in the catalog as described: there is no ``ray-receiver-pro``
-    prefab at all, and ``orbital-collector`` carries ZERO ports as well as zero
-    insert poses -- which is right for a building fed by logistics vessels in
-    orbit, and means belt-to-port docking will never reach it.  Pinned here
-    because both strategies' refusals quote this set.
-    """
-    from flab2bp.layout.spine import MACHINE_ITEM_IDS
-
+    machine_ids = {
+        item_id
+        for recipe in load_vendored().recipes
+        for producer in recipe.producers
+        if (item_id := catalog.get_item_id(producer)) is not None
+    }
+    machine_ids.update(
+        entry.machine_item_id for entry in catalog.MODE_DRIVEN_MACHINE.values()
+    )
     poseless = sorted(
-        catalog.building(i).prefab
-        for i in set(MACHINE_ITEM_IDS.values())
-        if not catalog.building(i).slot_poses
+        catalog.building(item_id).prefab
+        for item_id in machine_ids
+        if not catalog.building(item_id).slot_poses
     )
     assert poseless == [
         "energy-exchanger",
@@ -866,6 +853,6 @@ def test_the_poseless_buildings_a_spec_group_can_reach() -> None:
         "water-pump",
     ]
     assert not catalog.building(
-        MACHINE_ITEM_IDS["orbital-collector"]
+        catalog.item_id("orbital-collector")
     ).takes_belt_ports, "an Orbital Collector is fed in orbit, not by belt"
     assert all(b.prefab != "ray-receiver-pro" for b in catalog.all_buildings())

@@ -13,7 +13,7 @@ URL = "https://factoriolab.github.io/dsp/flow?o=graphene*60&v=11"
 
 def test_defaults_match_the_cli() -> None:
     options = parse_options({"url": URL})
-    assert (options.strategy, options.candidates, options.budget_s) == ("best", 3, 2.0)
+    assert (options.strategy, options.candidates, options.budget_s) == ("best", 3, 15.0)
     assert options.power is True
     # The CLI refuses to emit an invalid blueprint unless asked; so does this.
     assert options.allow_invalid is False
@@ -25,7 +25,7 @@ def test_defaults_match_the_cli() -> None:
         {},
         {"url": "   "},
         {"url": URL, "strategy": "greedy"},
-        {"url": URL, "strategy": "spine"},
+        {"url": URL, "strategy": "unknown"},
         {"url": URL, "candidates": 0},
         {"url": URL, "candidates": 9},
         {"url": URL, "candidates": 2.5},

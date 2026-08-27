@@ -202,7 +202,7 @@ def _render_matrix(matrix: MatrixReport) -> list[str]:
 def _render_verdict(
     cells: Sequence[CellResult], matrix: MatrixReport | None
 ) -> list[str]:
-    baseline = matrix.baseline if matrix else "spine"
+    baseline = matrix.baseline if matrix else "sequence-pair"
     challenger = matrix.challenger if matrix else "freeform"
     verdict = compare(cells, baseline, challenger)
     lines = ["## Verdict", "", verdict.summary(), ""]

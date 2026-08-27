@@ -500,7 +500,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         document: Mapping[str, object] = raw
         meta = _meta(document)
         pair = (
-            _backend_name(meta, "a", "spine"),
+            _backend_name(meta, "a", "sequence-pair"),
             _backend_name(meta, "b", "freeform"),
         )
         repeat = _positive_integer(meta, "repeat")

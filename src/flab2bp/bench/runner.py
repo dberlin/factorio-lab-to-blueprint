@@ -7,7 +7,6 @@ asked how it did -- the harness measures the placement itself.
 
 from __future__ import annotations
 
-import importlib
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -21,6 +20,8 @@ from flab2bp.lab.url import parse_url
 from flab2bp.layout import finalize
 from flab2bp.layout import validate as validator
 from flab2bp.layout.base import LayoutStrategy, NoValidLayout, Placement
+from flab2bp.layout.freeform import FreeformLayout
+from flab2bp.layout.sequence_solver import SequencePairLayout
 from flab2bp.rates import build_candidates
 from flab2bp.spec import BuildSpec
 
@@ -37,67 +38,28 @@ class StrategyHandle:
 def available_strategies(
     *, power: bool, belt_vertical_construction: bool = True
 ) -> tuple[StrategyHandle, ...]:
-    """Discover implemented strategies.
-
-    Strategy B may not exist yet, so this imports defensively rather than
-    assuming.  A missing strategy is simply absent from the bake-off; it is not
-    an error, and it must not be scored as a loss.
-
-    ``belt_vertical_construction`` is the save's slope rule, which
-    :func:`run_corpus` takes from each entry's URL.  It defaults ``True`` to
-    agree with :func:`flab2bp.dsp.catalog.belt_rules_for_technologies` on a URL
-    with no technology set -- FactorioLab reads that as every technology
-    researched, not none.
-    """
-    handles: list[StrategyHandle] = []
-
-    try:
-        from flab2bp.layout.spine import SpineLayout
-    except ImportError:  # pragma: no cover - spine is implemented
-        pass
-    else:
-        handles.append(
-            StrategyHandle(
-                "spine",
-                SpineLayout(
-                    power=power,
-                    belt_vertical_construction=belt_vertical_construction,
-                ),
-            )
-        )
-
-    # Imported dynamically, not statically: Strategy B may legitimately not
-    # exist yet, and a static import cannot typecheck against a module that is
-    # absent by design.  A missing strategy is simply not in the bake-off.
-    try:
-        module = importlib.import_module("flab2bp.layout.freeform")
-        freeform_cls = module.FreeformLayout
-    except (ImportError, AttributeError):
-        pass
-    else:
-        handles.append(
-            StrategyHandle(
-                "freeform",
-                freeform_cls(
-                    power=power,
-                    belt_vertical_construction=belt_vertical_construction,
-                ),
-            )
-        )
-
-    return tuple(handles)
+    """Return both implemented production strategies."""
+    return (
+        StrategyHandle(
+            "freeform",
+            FreeformLayout(
+                power=power,
+                belt_vertical_construction=belt_vertical_construction,
+            ),
+        ),
+        StrategyHandle(
+            "sequence-pair",
+            SequencePairLayout(
+                power=power,
+                belt_vertical_construction=belt_vertical_construction,
+            ),
+        ),
+    )
 
 
 def _id_map(spec: BuildSpec) -> validator.IdMap:
     """Bridge FactorioLab string ids to the DSP ints a ``Placement`` carries."""
-    from flab2bp.layout.spine import MACHINE_ITEM_IDS
-
-    dataset = lab_data.load_vendored()
-    recipes: dict[str, int] = {}
-    for index, recipe in enumerate(dataset.recipes, start=1):
-        recipes[recipe.id] = index
-    items = dict(MACHINE_ITEM_IDS)
-    return validator.IdMap(recipes=recipes, items=items)
+    return validator.id_map(spec)
 
 
 def _run_cell(
@@ -156,8 +118,8 @@ def _run_cell(
         # the corpus, and why this looked for a while like a feature that never
         # fired rather than a counter that could not see it.
         #
-        # Counting belt-to-belt sorters instead would swap the error round:
-        # spine's trunk taps are belt-to-belt too, and are not direct inserts.
+        # Counting belt-to-belt sorters instead would count ordinary trunk taps
+        # that are not direct inserts.
         direct_inserts=int(stats.get("direct_inserts", m.direct_inserts)),
         towers=m.towers,
         altitude_levels=m.altitude_levels,

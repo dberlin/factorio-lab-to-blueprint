@@ -1358,7 +1358,7 @@ def test_deadline_returns_an_existing_exact_incumbent() -> None:
     assert result.termination == "deadline"
 
 
-def test_production_run_uses_supplied_absolute_deadline_without_shrinking_ledger() -> None:
+def test_production_run_uses_requested_budget_with_supplied_absolute_deadline() -> None:
     run = _production_run(
         two_stage_spec(),
         time_budget_s=2.0,
@@ -1369,8 +1369,8 @@ def test_production_run_uses_supplied_absolute_deadline_without_shrinking_ledger
     )
 
     assert run.solver.deadline_reached()
-    assert run.ceiling == 15.0
-    assert run.solver.budget.total == 6_000_000
+    assert run.ceiling == 2.0
+    assert run.solver.budget.total == 2_000_000
 
 
 def test_serial_layout_uses_a_budgeted_root_compact_seed(
@@ -1416,7 +1416,7 @@ def test_serial_layout_uses_a_budgeted_root_compact_seed(
     assert captured["compact_seed_attempt"] == 0
     compact_config = captured["compact_seed_config"]
     assert isinstance(compact_config, CompactSeedConfig)
-    assert compact_config.max_deterministic_time == 1.0
+    assert compact_config.max_deterministic_time == pytest.approx(2.0 / 15.0)
 
 
 def test_serial_attempt_policy_selects_only_measured_topology_roles() -> None:
@@ -1424,12 +1424,44 @@ def test_serial_attempt_policy_selects_only_measured_topology_roles() -> None:
     assert sequence_solver_module._serial_compact_seed_attempt(95, 27, power=True) == 4
     assert sequence_solver_module._serial_compact_seed_attempt(146, 47, power=False) == 1
     assert sequence_solver_module._serial_compact_seed_attempt(146, 47, power=True) == 4
-    assert sequence_solver_module._serial_compact_seed_attempt(331, 0, power=False) == 2
-    assert sequence_solver_module._serial_compact_seed_attempt(331, 0, power=True) == 2
+    assert sequence_solver_module._serial_compact_seed_attempt(331, 0, power=False) == 0
+    assert sequence_solver_module._serial_compact_seed_attempt(331, 0, power=True) == 0
     assert sequence_solver_module._serial_compact_seed_attempt(278, 6, power=False) == 1
     assert sequence_solver_module._serial_compact_seed_attempt(278, 6, power=True) == 0
     assert sequence_solver_module._serial_compact_seed_attempt(168, 2, power=False) == 0
     assert sequence_solver_module._serial_compact_seed_attempt(58, 23, power=False) == 0
+
+def test_small_direct_shared_pack_uses_the_wider_height_rank() -> None:
+    assert (
+        sequence_solver_module._shared_pack_height_rank(
+            machine_count=21,
+            strip_count=7,
+            strip_len=6,
+            sprayed_lanes=0,
+            direct_candidates=7,
+        )
+        == 3
+    )
+    assert (
+        sequence_solver_module._shared_pack_height_rank(
+            machine_count=18,
+            strip_count=4,
+            strip_len=6,
+            sprayed_lanes=0,
+            direct_candidates=3,
+        )
+        != 3
+    )
+    assert (
+        sequence_solver_module._shared_pack_height_rank(
+            machine_count=9,
+            strip_count=6,
+            strip_len=6,
+            sprayed_lanes=0,
+            direct_candidates=6,
+        )
+        != 3
+    )
 
 
 def test_dense_topology_seed_role_uses_average_strip_occupancy() -> None:
@@ -1817,12 +1849,12 @@ def test_production_seed_has_its_own_wall_and_deterministic_caps(
 
     compact_config = captured["config"]
     assert isinstance(compact_config, CompactSeedConfig)
-    assert compact_config.max_deterministic_time == 1.0
+    assert compact_config.max_deterministic_time == pytest.approx(2.0 / 15.0)
     compact_deadline = captured["absolute_deadline"]
     called_at = captured["called_at"]
     assert captured["direct_eligibility"] == ()
     assert isinstance(compact_deadline, float)
-    assert 0.0 < compact_deadline - called_at <= 5.0
+    assert 0.0 < compact_deadline - called_at <= 2.0 / 3.0
 
 
 def test_validator_started_before_deadline_may_finish_exact_certification(

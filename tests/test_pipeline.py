@@ -27,7 +27,7 @@ def test_every_pair_reports_started_and_then_how_it_ended() -> None:
     steps: list[pipeline.AttemptProgress] = []
     build = pipeline.build(
         SMALL_URL,
-        strategy="spine",
+        strategy="freeform",
         candidates=2,
         time_budget_s=3.0,
         on_progress=steps.append,
@@ -51,8 +51,8 @@ def test_every_pair_reports_started_and_then_how_it_ended() -> None:
 
 
 @pytest.mark.slow
-def test_best_reports_freeform_and_sequence_pairs_while_spine_is_disabled() -> None:
-    """``best`` resolves to the two promoted production strategies."""
+def test_best_reports_freeform_and_sequence_pairs() -> None:
+    """``best`` resolves to both implemented strategies."""
     steps: list[pipeline.AttemptProgress] = []
     build = pipeline.build(
         SMALL_URL,
@@ -87,7 +87,7 @@ def test_a_sink_that_raises_is_not_swallowed() -> None:
 
     with pytest.raises(Boom):
         pipeline.build(
-            SMALL_URL, strategy="spine", candidates=1, time_budget_s=0.5, on_progress=explode
+            SMALL_URL, strategy="freeform", candidates=1, time_budget_s=0.5, on_progress=explode
         )
 
 
@@ -102,7 +102,7 @@ def test_no_proliferator_keeps_only_unsprayed_candidates() -> None:
     """
     build = pipeline.build(
         SMALL_URL,
-        strategy="spine",
+        strategy="freeform",
         candidates=3,
         time_budget_s=3.0,
         no_proliferator=True,
@@ -139,7 +139,7 @@ def test_no_proliferator_refuses_rather_than_quietly_spraying() -> None:
         with pytest.raises(ValueError, match="every candidate"):
             pipeline.build(
                 SMALL_URL,
-                strategy="spine",
+                strategy="freeform",
                 candidates=3,
                 time_budget_s=3.0,
                 no_proliferator=True,

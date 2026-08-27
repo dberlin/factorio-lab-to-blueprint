@@ -52,7 +52,7 @@ def main(argv: list[str] | None = None) -> int:
         entries, time_budget_s=args.time_budget, candidates=args.candidates
     )
 
-    matrix = matrix_report(results, "spine", "freeform")
+    matrix = matrix_report(results, "sequence-pair", "freeform")
     markdown = render_markdown(results, matrix=matrix)
     print(markdown)
 

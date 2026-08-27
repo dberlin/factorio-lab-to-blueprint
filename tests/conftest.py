@@ -1,28 +1,14 @@
 """Suite-wide sharing of the one genuinely expensive thing in these tests.
 
-Almost all of the suite's wall-clock is CP-SAT, and almost all of *that* was
-spent re-deriving placements the suite already had.  The dominant shape is a
-class of six tests that each assert a different property of the *same*
-placement, and each one opened with its own ``lay_out`` call::
+Almost all of the suite's wall-clock is CP-SAT, and repeated assertions often
+ask for the same frozen ``Placement`` from the same frozen ``BuildSpec``.
+Solving once and handing the same object to every assertion preserves each
+assertion while paying for the solve once.
 
-    p = SpineLayout(power=power).lay_out(spec_fn(), time_budget_s=0.5)
-
-Multiplied by the ``(spec, power)`` parametrisations that is dozens of
-identical solves per module.  Nothing in those tests mutates the result --
-``Placement`` and ``BuildSpec`` are both frozen -- so solving once and handing
-the same object to every assertion preserves every assertion exactly while
-paying for the solve once.
-
-Rather than hoist each cluster into its own fixture (which would have meant
-rewriting ~200 call sites across two 1,200-line modules, and re-writing them
-again after every ``lay_out`` signature change), the memo is applied once here,
-at the seam.  The key is the full call -- strategy class, its configuration,
-the spec's exact value, and every argument -- so two calls share a result only
-when they would genuinely have computed the same one.
-
-Tests requesting ``monkeypatch`` are automatically uncached, so a test that
-patches solver internals can never be served a placement built before the patch
-was applied.
+The memo is applied at the strategy seam. Its key is the full call -- strategy
+class, configuration, exact spec value and every argument -- so calls share a
+result only when they would genuinely compute the same one. Tests that
+monkeypatch solver internals disable the memo automatically.
 """
 
 from __future__ import annotations
@@ -35,12 +21,11 @@ import pytest
 
 from flab2bp.layout.base import NoValidLayout, Placement
 from flab2bp.layout.freeform import FreeformLayout
-from flab2bp.layout.spine import SpineLayout
 from flab2bp.spec import BuildSpec
 
 
 class _Layout(Protocol):
-    def lay_out(self, spec: BuildSpec, *, time_budget_s: float = 60.0) -> Placement: ...
+    def lay_out(self, spec: BuildSpec, *, time_budget_s: float = 15.0) -> Placement: ...
 
 
 _CACHE: dict[tuple[str, ...], Placement | NoValidLayout] = {}
@@ -54,9 +39,8 @@ def _key(layout: _Layout, spec: BuildSpec, time_budget_s: float) -> tuple[str, .
     ``BuildSpec`` is frozen but unhashable (it holds ``dict`` fields), so its
     JSON dump stands in for its value; it costs ~8us against solves measured in
     seconds.  Strategy configuration is read straight off the instance rather
-    than from a hand-written field list, so a new knob on ``SpineLayout`` or
-    ``FreeformLayout`` joins the key automatically instead of silently aliasing
-    two different configurations onto one cache entry.
+    than from a hand-written field list, so a new knob joins the key
+    automatically instead of silently aliasing two configurations.
     """
     return (
         f"{type(layout).__module__}.{type(layout).__qualname__}",
@@ -71,7 +55,7 @@ def _install_memo(cls: type[_Layout]) -> None:
 
     @functools.wraps(original)
     def lay_out(
-        self: _Layout, spec: BuildSpec, *, time_budget_s: float = 60.0
+        self: _Layout, spec: BuildSpec, *, time_budget_s: float = 15.0
     ) -> Placement:
         if not _enabled:
             return original(self, spec, time_budget_s=time_budget_s)
@@ -82,10 +66,7 @@ def _install_memo(cls: type[_Layout]) -> None:
             try:
                 hit = original(self, spec, time_budget_s=time_budget_s)
             except NoValidLayout as refusal:
-                # A refusal is an outcome, not a transient error, and it is the
-                # *expensive* one: the strategy burns its budget, retries for
-                # RETRY_BUDGET_S, and only then gives up. Re-deriving a refusal
-                # per test costs far more than re-deriving a success.
+                # Refusals are outcomes and are cached like successful layouts.
                 hit = refusal
             _CACHE[key] = hit
         if isinstance(hit, NoValidLayout):
@@ -96,7 +77,6 @@ def _install_memo(cls: type[_Layout]) -> None:
     setattr(cls, layout_method, lay_out)
 
 
-_install_memo(SpineLayout)
 _install_memo(FreeformLayout)
 
 

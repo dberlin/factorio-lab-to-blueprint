@@ -134,8 +134,7 @@ def main(argv: list[str] | None = None) -> int:
         choices=pipeline.STRATEGY_CHOICES,
         default="best",
         help="layout backend; best runs freeform and sequence-pair and keeps the "
-        "smallest valid result (default); spine remains available explicitly; "
-        "sequence-pair is a promoted production backend",
+        "smallest valid result (default)",
     )
     ap.add_argument(
         "--sequence-islands",
@@ -188,7 +187,7 @@ def main(argv: list[str] | None = None) -> int:
         "are emitted. Refuses rather than falling back if every candidate this "
         "URL produces is proliferated.",
     )
-    ap.add_argument("--budget", type=float, default=2.0, help="solver seconds per layout")
+    ap.add_argument("--budget", type=float, default=15.0, help="solver seconds per layout")
     ap.add_argument("-o", "--out", type=Path, help="write to a file instead of stdout")
     ap.add_argument("-n", "--name", default="", help="blueprint short description")
     ap.add_argument("-v", "--verbose", action="store_true", help="show every attempt")

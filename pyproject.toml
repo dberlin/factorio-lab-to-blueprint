@@ -76,12 +76,10 @@ testpaths = ["tests"]
 # the same placement was re-solved once per worker that happened to receive a
 # test needing it. One process, one cache, one solve.
 #
-# `timeout` is a backstop, not a budget. It is generous on purpose: a strategy
-# that cannot pack a spec spends `time_budget_s + RETRY_BUDGET_S` before raising
-# `NoValidLayout`, and killing it mid-refusal is strictly worse than letting it
-# finish -- the memo never gets to record the refusal, so every subsequent test
-# on that spec pays the full timeout again, and the failure reads as "Timeout"
-# instead of naming the spec the layout model cannot handle.
+# ``timeout`` is a backstop, not a search budget. It is generous on purpose:
+# emission and validation complete atomically after the requested search
+# deadline, so killing the process at that boundary would discard a result the
+# solver already found.
 addopts = "-q"
 timeout = 120
 markers = [

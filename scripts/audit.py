@@ -3,7 +3,7 @@
     uv run python scripts/audit.py                    # every tier, both power settings
     uv run python scripts/audit.py --tier mid         # up to mid
     uv run python scripts/audit.py --budget 1,4,15    # sweep the solver budget
-    uv run python scripts/audit.py --strategy spine
+    uv run python scripts/audit.py --strategy sequence-pair
     uv run python scripts/audit.py --jobs 1           # serial, for honest timing
 
 Exits non-zero if any cell is not clean, so it works as a gate.
@@ -52,12 +52,8 @@ time-limited solver starved of threads explores less in its allotted seconds.
 *Progress.*  Every cell prints when it lands, slowest-first, so a long run is
 visibly working rather than apparently wedged.
 
-*A wall-clock cap.*  ``--max-seconds`` bounds the whole run.  What it exists to
-catch is a strategy overrunning its own ``time_budget_s`` -- which is not
-hypothetical: at ``--budget 4`` a freeform ``quantum-chip`` cell measured 80s,
-and a spine ``universe-matrix`` cell 23s, because the budget bounded packing
-while routing, escalation and last-resort passes each spent their own.  The cap
-turns that from a 100-minute mystery into a named finding.
+*A wall-clock cap.* ``--max-seconds`` bounds the whole run and reports cells
+whose atomic completion work continues after their requested search deadline.
 
 Ordering matters for the pool: the stress tier goes first, because a 34s cell
 picked up last leaves fifteen cores idle waiting for it.
@@ -85,25 +81,15 @@ from flab2bp.lab.data import load_vendored  # noqa: E402
 from flab2bp.lab.techs import belt_rules_for_url  # noqa: E402
 from flab2bp.lab.url import parse_url  # noqa: E402
 from flab2bp.layout import finalize, validate  # noqa: E402
-from flab2bp.layout.base import (  # noqa: E402
-    RETRY_BUDGET_S,
-    LayoutStrategy,
-    NoValidLayout,
-)
+from flab2bp.layout.base import LayoutStrategy, NoValidLayout  # noqa: E402
 from flab2bp.layout.freeform import FreeformLayout  # noqa: E402
 from flab2bp.layout.sequence_solver import SequencePairLayout  # noqa: E402
-from flab2bp.layout.spine import SpineLayout  # noqa: E402
 from flab2bp.rates.candidates import build_candidates  # noqa: E402
 from flab2bp.spec import BuildSpec  # noqa: E402
 
 _TIER_ORDER = (Tier.TRIVIAL, Tier.SMALL, Tier.MID, Tier.LARGE, Tier.STRESS)
 _StrategyFactory = Callable[[bool, int, bool], LayoutStrategy]
 _STRATEGIES: dict[str, _StrategyFactory] = {
-    "spine": lambda power, workers, vertical: SpineLayout(
-        power=power,
-        workers=workers,
-        belt_vertical_construction=vertical,
-    ),
     "freeform": lambda power, workers, vertical: FreeformLayout(
         power=power,
         workers=workers,
@@ -118,7 +104,7 @@ _DEFAULT_STRATEGIES = ("freeform", "sequence-pair")
 
 
 def strategy_names(requested: str) -> tuple[str, ...]:
-    """Resolve ``both`` to active alternatives while keeping Spine explicit."""
+    """Resolve ``both`` to the two implemented strategies."""
     if requested == "both":
         return _DEFAULT_STRATEGIES
     if requested not in _STRATEGIES:
@@ -304,44 +290,20 @@ class Tally:
         return self.clean + self.refused + self.invalid + self.crashed + self.not_run
 
 
-def _slow_note(over: int, budget: float) -> str:
-    """What a slow cell means, which is usually not that a budget was ignored.
-
-    This line used to read "a lay_out that does not honour time_budget_s, not a
-    slow machine".  That was measured and is false, on roughly twenty-five cells
-    a run.  Three legitimate things put a cell above the budget:
-
-    * ``lay_out`` takes ONE deadline of ``max(time_budget_s, RETRY_BUDGET_S)``
-      and threads it through every search phase, so the ceiling is the retry
-      budget, not the nominal one.  A 4s cell is allowed 15s.
-    * A REFUSAL spends that whole deadline by definition, having found nothing
-      worth stopping for.  Every refusing cell lands here.
-    * Emission and the self-check sit outside the deadline on purpose -- neither
-      is a search, neither can be abandoned half-done -- and both scale with the
-      result.  That tail is also allocation-dependent, 22-26s at eight CP-SAT
-      workers against 50s at four.
-
-      This bullet used to read "8.7s to certify a 77,000-tile placement", which
-      is now wrong by more than an order of magnitude: ``validate.certify`` was
-      optimised 15x (18.7x on the largest placement) and a 39,320-building spine
-      build certifies in **0.41s**.  The self-check is no longer a meaningful
-      part of the tail.  Emission has NOT been measured since, so do not read
-      this as "emission is now the tail" -- nobody has checked which half is
-      which, and the honest statement is that the tail is much smaller than it
-      was and nobody has re-attributed it.
-
-    So name the slow cells, because a genuine runaway hides among them, but do
-    not diagnose them.  A cell far above the deadline is worth opening; a cell
-    just above it is the design working.
-    """
-    ceiling = max(budget, RETRY_BUDGET_S)
+def _deadline_note(count: int, max_tail_s: float) -> str:
+    """Explain atomic completion work after each cell's own search deadline."""
     return (
-        f"{over} cells took {SLOW_CELL_S:g}s or more, against a search ceiling of "
-        f"{ceiling:g}s (max(budget, RETRY_BUDGET_S)). Refusals spend that whole "
-        "ceiling, and emission plus the self-check run outside it and scale with "
-        "tile count, so this is not by itself a budget defect -- look at cells "
-        "far above it, not merely above it."
+        f"{count} cells completed after their own requested search deadline; "
+        f"the largest completion tail was {max_tail_s:.1f}s. Emission, detailed "
+        "routing already in flight, and validation finish atomically."
     )
+
+
+def _record_number(record: dict[str, object], key: str) -> float:
+    value = record[key]
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError(f"audit record {key!r} must be numeric")
+    return float(value)
 
 
 def _slugs(raw: str, flag: str) -> set[str]:
@@ -460,21 +422,21 @@ def main() -> int:
     ap.add_argument("--tier", default="stress", choices=[t.value for t in _TIER_ORDER])
     ap.add_argument(
         "--budget",
-        default="4",
+        default="15",
         help="comma-separated solver budgets in seconds; sweeping is the point",
     )
     ap.add_argument("--candidates", type=int, default=3)
     ap.add_argument(
         "--strategy",
         default="both",
-        choices=("both", "spine", "freeform", "sequence-pair"),
+        choices=("both", "freeform", "sequence-pair"),
     )
     ap.add_argument(
         "--jobs",
         type=int,
         default=0,
-        help="cells in parallel (0 = cores//4). Each cell is pinned to "
-        "cores//jobs CP-SAT workers so the machine is not oversubscribed.",
+        help="cells in parallel (0 = cores//16). Sequence cells run two complete "
+        "islands, so the default reserves sixteen cores per cell.",
     )
     ap.add_argument(
         "--max-seconds",
@@ -521,7 +483,7 @@ def main() -> int:
     names = list(strategy_names(args.strategy))
 
     cores = _available_cores()
-    jobs_n = args.jobs if args.jobs > 0 else max(1, cores // 4)
+    jobs_n = args.jobs if args.jobs > 0 else max(1, cores // 16)
     per_cell_workers = max(1, cores // jobs_n)
     only = _slugs(args.only, "--only") if args.only else None
     skip = _slugs(args.skip, "--skip") if args.skip else None
@@ -624,9 +586,13 @@ def main() -> int:
             for rec in _JSONL:
                 fh.write(_json.dumps(rec) + "\n")
     print(f"\n{elapsed:.0f}s wall, {done}/{len(jobs)} cells")
-    over = [s for t in tallies.values() for s in t.slowest if s[0] >= SLOW_CELL_S]
-    if over:
-        print(_slow_note(len(over), max(budgets)))
+    deadline_tails = [
+        _record_number(record, "seconds") - _record_number(record, "budget")
+        for record in _JSONL
+        if _record_number(record, "seconds") > _record_number(record, "budget")
+    ]
+    if deadline_tails:
+        print(_deadline_note(len(deadline_tails), max(deadline_tails)))
     if failed:
         print(
             "\nNOT CLEAN. An INVALID cell is worse than a REFUSED one: refusing "

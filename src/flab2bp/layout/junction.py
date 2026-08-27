@@ -2,8 +2,8 @@
 
 Both layout strategies needed this and neither had it.  A belt tile carries a
 single ``output_obj``, so a lane feeding two consumers could only ever be linked
-to one of them; freeform laid the losing paths down anyway as belts nothing fed,
-and spine never joined an item's corridor copies at all.
+to one of them, so this shared junction primitive provides explicit fan-in and
+fan-out.
 
 The convention below is not invented.  It is read off the 25 splitters in the
 fixture corpus, every one of which agrees:

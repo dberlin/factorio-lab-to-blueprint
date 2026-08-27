@@ -10,16 +10,20 @@ from dataclasses import dataclass, replace
 from typing import Literal
 
 from flab2bp.layout import validate
-from flab2bp.layout.base import RETRY_BUDGET_S, NoValidLayout, Placement
+from flab2bp.layout.base import NoValidLayout, Placement
 from flab2bp.layout.compact_seed import CompactSeedConfig
 from flab2bp.layout.sequence_pair import derive_stage_seed
 from flab2bp.layout.sequence_solver import (
     SequenceSolverConfig,
     _exact_key,
     _production_run,
+    _serial_compact_seed_attempt,
     _with_observational_stats,
 )
 from flab2bp.spec import BuildSpec
+
+_ISLAND_COMPLETION_GRACE_S = 90.0
+
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,9 +100,6 @@ def _sequence_island_seeds(base_seed: int, islands: int) -> tuple[int, ...]:
     )
 
 
-def _sequence_island_result_reserve_s(ceiling: float) -> float:
-    """Reserve measured time for certification, result IPC, and pool shutdown."""
-    return min(4.0, ceiling / 3.0)
 
 
 def _sequence_island_deadlines(
@@ -106,11 +107,11 @@ def _sequence_island_deadlines(
     *,
     started: float,
 ) -> tuple[float, float, float]:
-    """Return the solve ceiling, child soft deadline, and parent hard deadline."""
-    ceiling = max(time_budget_s, RETRY_BUDGET_S)
-    hard_deadline = started + ceiling
-    result_reserve_s = _sequence_island_result_reserve_s(ceiling)
-    return ceiling, hard_deadline - result_reserve_s, hard_deadline
+    """Return requested search time, child deadline, and bounded completion deadline."""
+    ceiling = time_budget_s
+    search_deadline = started + ceiling
+    completion_grace = _ISLAND_COMPLETION_GRACE_S if ceiling > 0 else 0.0
+    return ceiling, search_deadline, search_deadline + completion_grace
 
 
 def _run_sequence_island(request: _SequenceIslandRequest) -> _SequenceIslandOutcome:
@@ -254,6 +255,14 @@ def run_sequence_islands(
         started=time.monotonic(),
     )
     seeds = _sequence_island_seeds(config.seed, islands)
+    serial_attempt = _serial_compact_seed_attempt(
+        spec.machine_count,
+        len(spec.spray_lanes),
+        power=power,
+    )
+    compact_attempts = (serial_attempt,) + tuple(
+        attempt for attempt in range(islands) if attempt != serial_attempt
+    )
     requests = tuple(
         _SequenceIslandRequest(
             spec=spec,
@@ -265,7 +274,7 @@ def run_sequence_islands(
             config=config,
             island_id=island_id,
             seed=seed,
-            compact_seed_attempt=None if island_id == 0 else island_id - 1,
+            compact_seed_attempt=compact_attempts[island_id],
             compact_seed_base_seed=config.seed,
             compact_seed_config=compact_seed_config,
         )

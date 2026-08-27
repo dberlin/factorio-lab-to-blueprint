@@ -17,7 +17,7 @@ from types import MappingProxyType
 from typing import Protocol
 
 from flab2bp.layout import finalize, validate
-from flab2bp.layout.base import DETERMINISTIC_WORKERS, RETRY_BUDGET_S, NoValidLayout, Placement
+from flab2bp.layout.base import DETERMINISTIC_WORKERS, NoValidLayout, Placement
 from flab2bp.layout.compact_seed import (
     CompactSeedConfig,
     CompactSeedDiagnostics,
@@ -128,9 +128,7 @@ _DENSE_SPRAY_MACHINE_THRESHOLD = 90
 _DENSE_SPRAY_LANE_THRESHOLD = 10
 _DENSE_SPRAY_COMPACT_SEED_ATTEMPT = 4
 _DENSE_SPRAY_NO_POWER_MACHINE_THRESHOLD = 120
-_COARSE_NO_SPRAY_MACHINE_THRESHOLD = 300
 _COARSE_SPRAY_NO_POWER_MACHINE_THRESHOLD = 250
-_COARSE_NO_SPRAY_COMPACT_SEED_ATTEMPT = 2
 _COMPACT_LARGE_VARIANT_SIZE = 40
 _COMPACT_LARGE_VARIANT_DETERMINISTIC_CAP = 0.5
 _TOPOLOGY_BEAM_MIN_STRIPS = 7
@@ -143,6 +141,14 @@ _TINY_FAST_PATH_SPRAY_LANES = 2
 _QUALITY_TOPOLOGY_CLOSURE_CAP = 50_000
 _TOPOLOGY_REFINEMENT_CANDIDATES = 1
 _TOPOLOGY_REFINEMENT_DETERMINISTIC_SECONDS = 1.0
+_SMALL_DIRECT_SHARED_PACK_MAX_MACHINES = 25
+_SMALL_DIRECT_SHARED_PACK_MIN_STRIPS = 4
+_SMALL_DIRECT_SHARED_PACK_MAX_STRIPS = 7
+_MID_NO_SPRAY_COMPACT_MIN_MACHINES = 50
+_MID_NO_SPRAY_COMPACT_MAX_MACHINES = 70
+_MID_NO_SPRAY_COMPACT_MIN_STRIPS = 10
+_MID_NO_SPRAY_COMPACT_MAX_STRIPS = 15
+
 
 
 @dataclass(frozen=True, slots=True)
@@ -185,7 +191,7 @@ def _budgeted_compact_seed_config(
     requested: CompactSeedConfig,
 ) -> CompactSeedConfig:
     """Cap CP seed work so a short solve retains most of its wall for routing."""
-    ceiling = max(time_budget_s, RETRY_BUDGET_S)
+    ceiling = time_budget_s
     deterministic_limit = min(
         requested.max_deterministic_time,
         ceiling * _COMPACT_SEED_DETERMINISTIC_SECONDS_PER_BUDGET_SECOND,
@@ -203,8 +209,6 @@ def _serial_compact_seed_attempt(
     power: bool,
 ) -> int:
     """Select one measured topology role without probing inside the budget."""
-    if sprayed_lanes == 0 and machine_count >= _COARSE_NO_SPRAY_MACHINE_THRESHOLD:
-        return _COARSE_NO_SPRAY_COMPACT_SEED_ATTEMPT
     if (
         not power
         and sprayed_lanes > 0
@@ -2243,6 +2247,16 @@ def _shared_pack_height_rank(
 ) -> int:
     """Select a deterministic bound rank for the exact shared-pack role."""
     if (
+        sprayed_lanes == 0
+        and direct_candidates > 0
+        and machine_count <= _SMALL_DIRECT_SHARED_PACK_MAX_MACHINES
+        and strip_count >= _SMALL_DIRECT_SHARED_PACK_MIN_STRIPS
+        and strip_count <= _SMALL_DIRECT_SHARED_PACK_MAX_STRIPS
+        and 4 * direct_candidates >= 3 * strip_count
+        and 2 * strip_count <= machine_count <= 3 * strip_count
+    ):
+        return 3
+    if (
         direct_candidates == 0
         and sprayed_lanes > _DENSE_SPRAY_LANE_THRESHOLD
         and _SHARED_PACK_MACHINE_MIN <= machine_count <= _SHARED_PACK_MACHINE_MAX
@@ -2284,6 +2298,8 @@ def _uses_shared_pack_candidate(
         )
         > 0
     )
+
+
 
 
 def _exact_pack_decoded(
@@ -2615,7 +2631,7 @@ def _production_run(
     compact_seed_config: CompactSeedConfig | None = None,
 ) -> _ProductionRun:
     started = time.monotonic()
-    ceiling = max(time_budget_s, RETRY_BUDGET_S)
+    ceiling = time_budget_s
     deadline = started + ceiling if absolute_deadline is None else absolute_deadline
 
     def deadline_reached() -> bool:
@@ -2662,6 +2678,18 @@ def _production_run(
                     spec_label=spec.label,
                     budget_s=time_budget_s,
                 ) from exc
+        if (
+            planned_strip_len == 6
+            and len(spec.spray_lanes) == 0
+            and _MID_NO_SPRAY_COMPACT_MIN_MACHINES
+            <= spec.machine_count
+            <= _MID_NO_SPRAY_COMPACT_MAX_MACHINES
+            and _MID_NO_SPRAY_COMPACT_MIN_STRIPS
+            <= len(strips)
+            <= _MID_NO_SPRAY_COMPACT_MAX_STRIPS
+        ):
+            planned_strip_len = 4
+            strips = plan_strips(spec, strip_len=planned_strip_len)
         strips, planned_strip_len = _coarsen_saturated_strip_plan(
             spec,
             strips,
@@ -3429,7 +3457,7 @@ class SequencePairLayout:
         self.compact_seed_config = compact_seed_config or CompactSeedConfig()
         self.islands = islands
 
-    def lay_out(self, spec: BuildSpec, *, time_budget_s: float = 60.0) -> Placement:
+    def lay_out(self, spec: BuildSpec, *, time_budget_s: float = 15.0) -> Placement:
         """Return only a detailed-routed, powered, validator-clean placement."""
         if time_budget_s <= 0:
             raise NoValidLayout(

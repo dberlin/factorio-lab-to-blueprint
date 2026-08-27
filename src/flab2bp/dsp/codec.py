@@ -207,7 +207,7 @@ def _area_for(placement: Placement) -> BlueprintArea:
     A strategy that has VERIFIED which band its layout pastes in records the
     answer in ``stats["area_segments"]`` and that wins, because it is a stronger
     claim: the extent-only answer says the area fits, the verified one says the
-    game accepts it.  ``layout.spine._band_rejected`` is what sets it.
+    game accepts it.
 
     Without a verdict the WIDEST fitting band is declared, not the smallest.
     The smallest is only meaningful once something has checked the layout is

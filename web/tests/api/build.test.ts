@@ -27,10 +27,10 @@ test('submit posts sequence-pair with its exact wire spelling', async () => {
   expect(body.strategy).toBe('sequence-pair');
 });
 
-test('submit rejects spine before making a request', async () => {
+test('submit rejects an unknown strategy before making a request', async () => {
   const calls = serving({ status: 202, body: aJob() });
   const pending = Reflect.apply(submitBuild, undefined, [
-    { ...DEFAULT_OPTIONS, strategy: 'spine' },
+    { ...DEFAULT_OPTIONS, strategy: 'unknown' },
   ]);
   await expect(pending).rejects.toThrow();
   expect(calls).toHaveLength(0);
@@ -60,7 +60,7 @@ test('a payload that has drifted from the schema is rejected rather than rendere
 test('response strategies are limited to active explicit web choices', async () => {
   serving({
     status: 200,
-    body: { ...aJob(), result: { ...aResult(), strategy: 'spine' } },
+    body: { ...aJob(), result: { ...aResult(), strategy: 'unknown' } },
   });
   await expect(pollBuild('x')).rejects.toThrow();
 });

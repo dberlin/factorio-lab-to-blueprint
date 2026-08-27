@@ -125,24 +125,23 @@ test('progress says where the job is while it is still running', async () => {
   await waitFor(() => expect(screen.getByTestId('progress')).toHaveTextContent('3.5s elapsed'));
 });
 
-test('the strategy choices expose sequence-pair and never spine', () => {
+test('the strategy choices are exactly the production strategy set', () => {
   mount();
   const strategy = screen.getByLabelText('Strategy');
   expect(strategy).toHaveTextContent('best');
   expect(strategy).toHaveTextContent('freeform');
   expect(strategy).toHaveTextContent('sequence-pair');
-  expect(strategy).not.toHaveTextContent('spine');
 });
 
 test('the budget copy matches the two active best strategies', () => {
   mount();
-  // Defaults: 3 candidates x 2 active production strategies x 2s.
-  expect(screen.getByText(/up to 12s of solving/)).toBeInTheDocument();
+  // Defaults: 3 candidates x 2 active production strategies x 15s.
+  expect(screen.getByText(/up to 90s of solving/)).toBeInTheDocument();
 
   fireEvent.change(screen.getByLabelText('Strategy'), {
     target: { value: 'sequence-pair' },
   });
-  expect(screen.getByText(/up to 6s of solving/)).toBeInTheDocument();
+  expect(screen.getByText(/up to 45s of solving/)).toBeInTheDocument();
 });
 
 test('the blueprint title is what the game will show, and it names the product', async () => {

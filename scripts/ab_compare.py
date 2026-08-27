@@ -1,4 +1,4 @@
-"""Which layout strategy is denser -- A (spine) or B (freeform) -- and by how much?
+"""Compare Freeform and SequencePair density with a validated paired corpus.
 
 A real A-to-B test, not a table of numbers nobody can defend.  The measurement
 logic lives in :mod:`flab2bp.bench.ab`; this file is the driver that feeds it
@@ -82,13 +82,12 @@ from flab2bp.layout import finalize, markers, validate  # noqa: E402
 from flab2bp.layout.base import LayoutStrategy, Placement  # noqa: E402
 from flab2bp.layout.freeform import FreeformLayout  # noqa: E402
 from flab2bp.layout.sequence_solver import SequencePairLayout  # noqa: E402
-from flab2bp.layout.spine import SpineLayout  # noqa: E402
 from flab2bp.pipeline import _id_map  # noqa: E402
 from flab2bp.spec import BuildSpec  # noqa: E402
 
 _TIER_ORDER = (Tier.TRIVIAL, Tier.SMALL, Tier.MID, Tier.LARGE, Tier.STRESS)
 
-A_NAME = "spine"
+A_NAME = "sequence-pair"
 B_NAME = "freeform"
 
 #: Factories rather than classes so the driver never depends on the two
@@ -98,13 +97,10 @@ B_NAME = "freeform"
 #: Both arms must get the same one or the comparison is measuring the
 #: technology set rather than the strategies.
 STRATEGIES: dict[str, Callable[[bool, bool], LayoutStrategy]] = {
-    A_NAME: lambda power, vertical: SpineLayout(
+    A_NAME: lambda power, vertical: SequencePairLayout(
         power=power, belt_vertical_construction=vertical
     ),
     B_NAME: lambda power, vertical: FreeformLayout(
-        power=power, belt_vertical_construction=vertical
-    ),
-    "sequence-pair": lambda power, vertical: SequencePairLayout(
         power=power, belt_vertical_construction=vertical
     ),
 }

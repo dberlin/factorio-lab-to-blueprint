@@ -324,15 +324,6 @@ class Placement:
         return (max_x - min_x + 1) * (max_y - min_y + 1)
 
 
-#: Seconds granted to a retry when the first attempt finds nothing feasible.
-#:
-#: The escalation is deliberately once, and generous.  If a spec is genuinely
-#: solvable, a solver that found nothing in the normal budget will usually find
-#: something here; if fifteen seconds still yields nothing, the working
-#: assumption is a defect in our model rather than a hard instance, and the
-#: error says so.  Treating it as "just a big problem" is how an unroutable
-#: model gets excused indefinitely.
-RETRY_BUDGET_S = 15.0
 
 
 class NoValidLayout(Exception):
@@ -357,9 +348,8 @@ class NoValidLayout(Exception):
     def __init__(self, reason: str, *, spec_label: str = "", budget_s: float = 0.0) -> None:
         super().__init__(
             f"no valid layout for {spec_label or 'this spec'} after "
-            f"{budget_s:g}s: {reason}. A spec that cannot be laid out in "
-            f"{RETRY_BUDGET_S:g}s is more likely a defect in the layout model "
-            f"than a hard instance -- treat it as our bug until shown otherwise."
+            f"{budget_s:g}s: {reason}. Treat a spec that cannot be laid out in "
+            "the requested budget as a layout-model defect until shown otherwise."
         )
         self.reason = reason
         self.spec_label = spec_label
@@ -373,13 +363,11 @@ class LayoutStrategy(Protocol):
     modulo the solver time budget.
 
     ``lay_out`` returns a placement that satisfies the constraints, or raises
-    :class:`NoValidLayout`.  It never returns a degraded one.  On finding nothing
-    feasible it retries ONCE at :data:`RETRY_BUDGET_S` before giving up.
+    :class:`NoValidLayout`. It never returns a degraded one.
     """
-
     name: str
 
-    def lay_out(self, spec: BuildSpec, *, time_budget_s: float = 60.0) -> Placement:
+    def lay_out(self, spec: BuildSpec, *, time_budget_s: float = 15.0) -> Placement:
         """Lay out ``spec``, returning the densest valid ``Placement`` found.
 
         Raises :class:`NoValidLayout` rather than returning a degraded result.

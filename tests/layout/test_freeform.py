@@ -7,7 +7,6 @@ would let a rates regression masquerade as a layout one.
 
 from __future__ import annotations
 
-import contextlib
 import dataclasses
 import itertools
 import math
@@ -23,7 +22,6 @@ from flab2bp.dsp import catalog, codec, colliders, rules
 from flab2bp.layout import freeform, junction, slots, validate
 from flab2bp.layout.base import (
     DETERMINISTIC_WORKERS,
-    RETRY_BUDGET_S,
     Facing,
     NoValidLayout,
     PlacedBuilding,
@@ -87,7 +85,6 @@ from flab2bp.layout.route_feedback import (
     NetRole,
     RouteFailureKind,
 )
-from flab2bp.layout.spine import MACHINE_ITEM_IDS
 from flab2bp.spec import BuildSpec, MachineGroup, ProliferatorMode
 
 SpecFactory = object
@@ -366,6 +363,48 @@ def multi_output_chemical_spec() -> BuildSpec:
         belt_item_id="conveyor-belt-2",
         belt_items_per_second=F(12),
         label="multi-output-chemical",
+    )
+
+def test_surplus_reuses_a_consumer_lane_when_the_combined_rate_fits() -> None:
+    spec = BuildSpec(
+        groups=(
+            group(
+                "plasma-refining",
+                "oil-refinery",
+                1,
+                {"crude-oil": F(2)},
+                {"refined-oil": F(2), "hydrogen": F(1)},
+            ),
+            group(
+                "plastic",
+                "chemical-plant",
+                1,
+                {"refined-oil": F(1)},
+                {"plastic": F(1)},
+            ),
+        ),
+        external_inputs={"crude-oil": F(2)},
+        outputs={"plastic": F(1), "hydrogen": F(1)},
+        surplus_outputs={"refined-oil": F(1)},
+        belt_item_id="conveyor-belt-2",
+        belt_items_per_second=F(12),
+    )
+
+    producer = next(
+        strip for strip in plan_strips(spec) if strip.recipe_id == "plasma-refining"
+    )
+    lanes = [destination for item, destination in producer.out_lanes if item == "refined-oil"]
+    assert len(lanes) == 1
+    assert "" in _dests(lanes[0])
+    assert any(destination for destination in _dests(lanes[0]))
+    assert (
+        freeform._sink_demand(
+            freeform._adapt(spec),
+            spec,
+            "refined-oil",
+            lanes[0],
+        )
+        == 2
     )
 
 
@@ -1288,7 +1327,7 @@ class TestASideCarriesAsManyLanesAsItsPosesAllow:
         """
         from flab2bp.layout import slots as slot_table
 
-        item_id = MACHINE_ITEM_IDS["chemical-plant"]
+        item_id = catalog.item_id("chemical-plant")
         probe = slot_table.probe_building(item_id, slot_table.lane_orientation(item_id))
         assert slot_table.attachable_columns(probe, -1), "the near row must work"
         assert slot_table.attachable_columns(probe, -2), "the middle row must work"
@@ -1359,7 +1398,7 @@ class TestPlacementProperties:
         self, spec_fn: object, power: bool
     ) -> None:
         spec = spec_fn()  # type: ignore[operator]
-        placement = FreeformLayout(power=power).lay_out(spec, time_budget_s=0.5)
+        placement = FreeformLayout(power=power).lay_out(spec, time_budget_s=1.0)
         tiles = blocking_tiles(placement)
         assert len(tiles) == len(set(tiles)), "overlapping footprints"
         assert len(machines_of(placement)) == spec.machine_count
@@ -1882,7 +1921,7 @@ class TestPower:
         assert off.stats["towers"] == 0
 
     def test_every_powered_building_is_covered(self) -> None:
-        p = FreeformLayout(power=True).lay_out(magnetic_ring_spec(), time_budget_s=0.5)
+        p = FreeformLayout(power=True).lay_out(magnetic_ring_spec(), time_budget_s=1.0)
         report = validate.validate(p, only=["power.coverage", "power.connectivity"])
         assert report.ok, "\n".join(f.message for f in report.errors[:5])
 
@@ -1895,9 +1934,9 @@ class TestPower:
         error per machine.  Here a single tower sits far outside its own 10.5
         supply radius of the assembler, which is a genuine defect.
         """
-        assembler = catalog.building(MACHINE_ITEM_IDS["assembling-machine-2"])
+        assembler = catalog.building(catalog.item_id("assembling-machine-2"))
         tower = catalog.building(catalog.TESLA_TOWER_ID)
-        far = int(catalog.TESLA_COVER_RADIUS) + 20
+        far = int(tower.cover_radius) + 20
         p = Placement(
             buildings=(
                 PlacedBuilding(
@@ -2059,7 +2098,7 @@ class TestRealUrlCandidate:
         spec = next(
             candidate for candidate in candidates if candidate.label == "no-proliferator"
         )
-        placement = FreeformLayout(power=True).lay_out(spec, time_budget_s=0.5)
+        placement = FreeformLayout(power=True).lay_out(spec, time_budget_s=2.0)
         sorters = [
             building
             for building in placement.buildings
@@ -2383,13 +2422,13 @@ class TestMixedItemLanes:
         labs = {
             i
             for i, b in enumerate(p.buildings)
-            if b.item_id == MACHINE_ITEM_IDS["matrix-lab"]
+            if b.item_id == catalog.item_id("matrix-lab")
         }
         assert labs, "the spec builds Matrix Labs or this proves nothing"
 
         from flab2bp.layout import slots as slot_table
 
-        item_id = MACHINE_ITEM_IDS["matrix-lab"]
+        item_id = catalog.item_id("matrix-lab")
         yaw = slot_table.lane_orientation(item_id)
         probe = slot_table.probe_building(item_id, yaw)
         lane_reachable: set[int] = set()
@@ -2635,17 +2674,16 @@ def _belt(x: int, y: int, *, item: str | None = None) -> PlacedBuilding:
 
 
 def _packable_machine_ids() -> set[int]:
-    """Every id ``_emit_strip`` can hand to ``_Canvas.add(solid=True)``.
+    """Every machine item a recipe or mode-driven spec group can select."""
+    from flab2bp.lab.data import load_vendored
 
-    Resolved rather than listed: the set carries FactorioLab string ids for the
-    Dark Fog variants, and a hand-written list would silently stop covering
-    whatever was added to it next.
-    """
-    out = set()
-    for key in MACHINE_ITEM_IDS:
-        got = catalog.get_item_id(key) if isinstance(key, str) else key
-        if got is not None:
-            out.add(got)
+    out = {
+        item_id
+        for recipe in load_vendored().recipes
+        for producer in recipe.producers
+        if (item_id := catalog.get_item_id(producer)) is not None
+    }
+    out.update(entry.machine_item_id for entry in catalog.MODE_DRIVEN_MACHINE.values())
     return out
 
 
@@ -3838,32 +3876,34 @@ class TestAShardThatCannotFeedItself:
 
 
 class TestTheTimeBudgetIsAWall:
-    """``time_budget_s`` bounds the CALL, not just the packing.
+    """``time_budget_s`` is the one deadline shared by every search phase."""
 
-    It used to bound only the packer. The sweep spent it, the escalated retry
-    spent ``RETRY_BUDGET_S`` on top, and the routing inside both was bounded by
-    an expansion count rather than by a clock. Every phase was bounded and
-    nothing bounded their sum, so a nominal 4 seconds measured at 34s on
-    ``casimir-crystal``, 80s on ``quantum-chip`` and over 400s on a refusing
-    ``universe-matrix`` cell.
-    """
+    def test_a_refusal_uses_exactly_the_requested_budget(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        observed: list[tuple[float, float]] = []
 
-    def test_a_refusal_cannot_outrun_the_ceiling(self) -> None:
-        """The worst case is the escalation ceiling, not a multiple of it.
+        def refuse(
+            _layout: FreeformLayout,
+            _spec: BuildSpec,
+            _strips: list[Strip],
+            sweep_s: float,
+            deadline: float,
+            *_args: object,
+        ) -> None:
+            observed.append((sweep_s, deadline - time.monotonic()))
+            return None
 
-        ``magnetic_ring_spec`` wires easily, so this uses a budget small enough
-        that the ceiling is what bounds it and asserts the SHAPE: whatever
-        happens, it happens inside the ceiling plus slack for one A* window and
-        the emission that follows it.
-        """
-        spec = magnetic_ring_spec()
-        started = time.monotonic()
-        with contextlib.suppress(NoValidLayout):
-            FreeformLayout(power=True).lay_out(spec, time_budget_s=0.5)
-        spent = time.monotonic() - started
-        assert spent < RETRY_BUDGET_S * 2, (
-            f"a 0.5s call took {spent:.1f}s against a {RETRY_BUDGET_S:g}s ceiling"
-        )
+        monkeypatch.setattr(FreeformLayout, "_sweep", refuse)
+        with pytest.raises(NoValidLayout):
+            FreeformLayout(power=True).lay_out(
+                magnetic_ring_spec(), time_budget_s=0.5
+            )
+
+        assert len(observed) == 1
+        sweep_s, remaining = observed[0]
+        assert sweep_s == 0.5
+        assert 0 < remaining <= 0.5
 
     def test_an_expired_deadline_refuses_and_says_so(self) -> None:
         """A clock running down must be distinguishable from a spec that cannot

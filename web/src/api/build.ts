@@ -14,7 +14,7 @@
  */
 import { z } from 'zod';
 
-/** Strategies accepted on a web request. Spine remains an audit-only CLI backend. */
+/** Strategies accepted on every build request. */
 export const RequestStrategy = z.enum(['best', 'freeform', 'sequence-pair']);
 
 /** Strategies the server may report for an actual layout attempt or result. */
@@ -135,7 +135,7 @@ export const DEFAULT_OPTIONS: BuildOptions = {
   url: '',
   strategy: 'best',
   candidates: 3,
-  budget_s: 2,
+  budget_s: 15,
   power: true,
   name: '',
   // Off by default, exactly as the CLI has it: a blueprint that pastes cleanly

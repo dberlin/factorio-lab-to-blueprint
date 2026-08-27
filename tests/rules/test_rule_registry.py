@@ -39,6 +39,11 @@ BASELINE_CONSULTED_BY_BOTH = 24
 EXPECTED_UNCONSULTED = {
     # Centralized values/predicates not yet consumed by emitted paste.
     "catalog.DEFAULT_STORAGE_LEVEL",
+    "catalog.DEFAULT_LAB_LEVEL",
+    "catalog.belt_max_z",
+    "planet.SORTER_ALTITUDE_UNIT",
+    "planet.SORTER_COMBINED_MIN",
+    "planet.SORTER_SEGMENTS_MAX",
     # Paste-applicable rules centralized here but not yet migrated into
     # strategy/validation.  The report prints each registry reason.
     "catalog.blueprint_limit_for_technologies",
@@ -190,11 +195,7 @@ def test_the_lint_would_catch_a_fraction_spelling_of_one() -> None:
 
 
 def test_the_lint_ignores_a_quality_knob() -> None:
-    """The failure mode that gets a lint switched off, asserted against.
-
-    ``freeform.LEVELS`` and ``spine.UNIFORM_ROW_PITCH`` are the plan's canonical
-    traps.  Neither value is declared lintable, so neither can ever trip R1.
-    """
+    """Search-quality constants are not game-rule lint targets."""
     planted = "LEVELS = 3\nUNIFORM_ROW_PITCH = 7\n_PRESSURE = 0.5\n"
     assert provenance.scan_source("flab2bp.layout.planted", planted) == ()
 
@@ -254,7 +255,6 @@ def test_consultation_is_transitive_through_dsp_helpers(graph: Graph) -> None:
     rows = {r.entry.symbol: r for r in provenance.consultation(graph)}
     gap = rows["rules.ADDON_NEIGHBOUR_RADIAL_GAP"]
     assert "game.addon_corner" in gap.checks
-    assert gap.strategies
 
 
 def test_strategy_reach_does_not_launder_itself_through_the_validator(graph: Graph) -> None:
@@ -265,13 +265,9 @@ def test_strategy_reach_does_not_launder_itself_through_the_validator(graph: Gra
     consulted -- and every "the search consults the rule" claim in the R2 table
     would be worthless.
 
-    ``rules.SORTER_LENGTH`` was the original canary and is no longer eligible:
-    the band model made it genuinely reachable from the search, by the honest
-    route ``spine._band_illegal -> planet.sorter_condition ->
-    rules.SORTER_LENGTH``.  That is the consolidation working, not a leak.  So
-    the canary moved rather than the assertion being relaxed -- and it is
-    asserted to still be a valid canary before it is used, so this test cannot
-    quietly decay into one that passes for the wrong reason.
+    The canary is a rule a validator check reads and no search code does. If
+    strategy closure were allowed through ``validate``, every strategy would
+    appear to consult it and the R2 table would be meaningless.
     """
     canary = "rules.PASTE_SNAP"
     rows = {r.entry.symbol: r for r in provenance.consultation(graph)}

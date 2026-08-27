@@ -6,14 +6,11 @@ The plan's two worked examples are both of this shape: *"bump ``SLOT_REACH`` to
 "a test file goes red" -- a named piece of SEARCH code must compute a different
 answer.  That is what a probe is here.
 
-Direct calls rather than ``lay_out``, for two reasons.  Every test in
-``test_spine.py`` and ``test_freeform.py`` takes a fixture, so none is callable
-without a pytest session; and a full solve costs a CP-SAT budget per constant,
-which fifty-four constants cannot afford inside a 300-second limit.  A probe
-costs microseconds, so R4 can run the WHOLE set against every constant instead
-of guessing which one matters -- which is the property that keeps the mechanism
-honest.  A probe suite that is too narrow reports "the search ignores this
-rule" when the truth is "I did not ask the right question".
+Direct calls rather than ``lay_out`` keep rule mutation probes independent of
+solver fixtures and CP-SAT budgets. A probe costs microseconds, so R4 can run
+the whole set against every constant instead of guessing which one matters. A
+suite that is too narrow reports "the search ignores this rule" when the truth
+is "the probe did not ask the right question".
 
 A probe returns anything comparable.  It may raise: a rule perturbed hard
 enough to make search code throw has demonstrably been consulted, so
@@ -27,7 +24,7 @@ from dataclasses import replace
 from fractions import Fraction
 
 from flab2bp.dsp import catalog, rules
-from flab2bp.layout import freeform, geometry, junction, slots, spine
+from flab2bp.layout import freeform, geometry, junction, slots
 from flab2bp.layout.base import PlacedBuilding
 
 #: Item ids with real colliders, slot poses and footprints, picked once so the
@@ -135,12 +132,9 @@ def _junction_keepout() -> list[tuple[tuple[int, int, int], ...]]:
     return [junction.keepout_cells(0, 0, lvl) for lvl in (0, 1, 2)]
 
 
-def _belt_floor_over() -> list[str]:
-    return [str(spine._belt_floor_over(b)) for b in scene()]
-
 
 def _tower_reach() -> tuple[list[int], list[int], bool]:
-    radius = Fraction(catalog.TESLA_COVER_RADIUS)
+    radius = Fraction(catalog.building(catalog.TESLA_TOWER_ID).cover_radius)
     return (
         geometry.reach_table(radius),
         geometry.greedy_tower_xs(x0=0, width=40, hr=3, tower_w=1),
@@ -148,37 +142,13 @@ def _tower_reach() -> tuple[list[int], list[int], bool]:
     )
 
 
-def _tower_spacing() -> tuple[
-    list[tuple[int, int]],
-    list[tuple[int, int]],
-    list[tuple[int, int, int]],
-]:
-    """Where spine will not stand a second power node, and freeform's stamp.
-
-    Both packers consult ``rules.power_node_keepout_offsets`` -- spine through
-    ``_tower_keep_out`` and the emission gate, freeform through the stamp its
-    greedy clears from ``free`` -- so a perturbation of the rule must move this.
-    The freeform half is asked of the rule at the same reach the planner reads
-    it at, because the planner's own copy lives inside a closure.
-    """
+def _tower_spacing() -> list[tuple[int, int, int]]:
+    """The exact power-node keepout consumed by the surviving strategies."""
     tower = catalog.building(catalog.TESLA_TOWER_ID)
-    stand = PlacedBuilding(
-        item_id=catalog.TESLA_TOWER_ID,
-        model_index=tower.model_index,
-        x=10,
-        y=10,
-        width=tower.width,
-        height=tower.height,
-    )
-    return (
-        sorted(spine._tower_spacing()),
-        sorted(spine._tower_keep_out([stand])),
-        sorted(rules.power_node_keepout_offsets(tower.power_node, tower.power_node)),
+    return sorted(
+        rules.power_node_keepout_offsets(tower.power_node, tower.power_node)
     )
 
-
-def _addon_area_step() -> list[tuple[int, int]]:
-    return [spine._addon_area_step(yaw) for yaw in (0.0, 90.0, 180.0, 270.0)]
 
 
 def _legal_links() -> list[tuple[str, int, bool, bool]]:
@@ -319,10 +289,8 @@ PROBES: dict[str, Callable[[], object]] = {
     "slots.assign_addon_slots": _assigned_addon_slots,
     "junction.keepout_cells": _junction_keepout,
     "junction.attach_input": _splitter_ports,
-    "spine._belt_floor_over": _belt_floor_over,
     "geometry.tower_reach": _tower_reach,
-    "spine._tower_keep_out": _tower_spacing,
-    "spine._addon_area_step": _addon_area_step,
+    "rules.power_node_keepout_offsets": _tower_spacing,
     "freeform._legal_link": _legal_links,
     "freeform._altitude_profile": _altitude_profiles,
     "catalog.footprint/clearance": _footprints_and_clearance,

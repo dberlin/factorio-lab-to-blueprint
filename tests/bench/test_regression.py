@@ -29,7 +29,7 @@ _BASELINE_ADAPTER = TypeAdapter(_BaselinePayload)
 
 def _cell(url_id: str, *, area: int, valid: bool = True) -> CellResult:
     return CellResult(
-        strategy="spine",
+        strategy="sequence-pair",
         url_id=url_id,
         candidate="free-proliferation",
         power=True,

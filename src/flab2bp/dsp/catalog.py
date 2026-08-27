@@ -305,6 +305,11 @@ SORTER_RATE_AT_1 = {
     2014: Fraction(20),     # Pile Sorter
 }
 
+#: Sorter item ids ordered from cheapest/slowest to fastest.
+SORTER_TIERS = tuple(
+    sorted(SORTER_RATE_AT_1, key=SORTER_RATE_AT_1.__getitem__)
+)
+
 def sorter_rate(item_id: int, span: int) -> Fraction:
     """Items/second a sorter of this tier sustains across ``span`` tiles."""
     if span < 1 or span > SORTER_MAX_REACH:
@@ -385,12 +390,8 @@ VERTICAL_STEP = Fraction(1)
 # 2.80-4.97 world units where this said a flat 1 -- it is not even the right
 # number for a Spray Coater, whose box is 1.8975 high.
 #
-# Its only readers were `spine._TRUNK_Z` and two comments.  No validator ever
-# consulted it, so it enforced nothing; a constant in `dsp/` with no check
-# behind it is an unported rule wearing a ported rule's clothes, which is
-# exactly what the consolidation plan's clause 4 exists to catch.  The trunk
-# altitude it really set now lives in `layout.spine`, next to the other
-# structural choices, where it is legible as the knob it is.
+# The scalar was deleted because no validator consulted it; crossing height is
+# derived per collider by ``dsp.colliders.belt_crossing_height``.
 
 # Path-only ``TooBendToLift`` constants used to live here.  The applicability
 # audit proved BlueprintPaste never assigns that condition, so the dead
@@ -619,51 +620,6 @@ BELT_Z_QUANTUM = BELT_CLIMB_PER_TILE
 #: stacks 39 belts at one ``(x, y)`` in the max-height blueprint.  A column
 #: bound would have rejected that, so no constant replaces it.
 
-
-
-# --- power -----------------------------------------------------------------
-
-#: Tesla Tower supply **radius** in tiles -- not a diameter.  Settled two ways.
-#: Game data: ``PrefabDesc.powerCoverRadius`` <- ``PowerDesc.coverRadius`` =
-#: 10.5, with no ``coverArea``/``Diameter`` field existing in either struct.
-#: Empirically: across working published blueprints, 94 machines sit farther
-#: than 5.25 from their nearest tower (which the diameter reading would leave
-#: unpowered) and *zero* machines anywhere exceed 10.5.  Bracketed both sides.
-TESLA_COVER_RADIUS = Fraction(21, 2)
-
-#: Tower-to-tower link distance: the maximum centre-to-centre separation at
-#: which two power nodes connect.  A *distance*, not a diameter.
-#:
-#: Settled from the game's own IL (``DSPGAME_Data/Managed/Assembly-CSharp.dll``,
-#: disassembled with ``ikdasm``), because the corpus provably cannot settle it:
-#: the largest tower nearest-neighbour distance there is 11.00, which fits both
-#: 22.5-as-distance and 11.25-as-half-a-diameter, only 2.2% apart.  The chain
-#: carries the value through with no scaling anywhere:
-#:
-#:   ``PowerDesc.connectDistance`` (Unity component, under a "Power Node"
-#:   header) -> ``PrefabDesc.powerConnectDistance`` -> ``PowerSystem
-#:   .NewNodeComponent(entityId, conn, cover)`` -> ``PowerNodeComponent
-#:   .connectDistance`` -> ``Node.connDistance2 = connectDistance *
-#:   connectDistance``
-#:
-#: and ``PowerSystem.OnNodeAdded`` then links two nodes when
-#:
-#:   ``dx*dx + dy*dy + dz*dz <= max(a.connDistance2, b.connDistance2)``
-#:
-#: i.e. squared centre-to-centre distance against the squared field value.  The
-#: identical shape one branch later tests ``d2 <= coverRadius2`` for consumer
-#: coverage, and ``coverRadius`` is independently proven to be a radius -- so
-#: the two fields have the same units and the diameter reading is refuted.
-#: There is no ``coverArea`` or diameter field in ``PowerDesc`` at all; the sole
-#: "diameter" string in the whole assembly belongs to Unity's TAA settings.
-#:
-#: Two consequences worth knowing.  The test is ``max`` of the pair, not ``min``
-#: or a sum, so a long-reach node pulls a short-reach one into its network: a
-#: Wireless Power Tower (45.5) links to a Tesla Tower at up to 45.5, not 22.5.
-#: And node positions are first projected onto a common sphere of radius
-#: ``realRadius + 0.2``, so the comparison is against a 3D chord -- which is why
-#: this constant is only usable on flat, non-polar layouts.
-TESLA_LINK_DISTANCE = Fraction(45, 2)
 
 
 

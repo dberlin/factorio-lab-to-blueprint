@@ -52,8 +52,8 @@ Three forms remain, deliberately, because each is the right home for its kind:
 Not game rules, and not to be moved here: ``catalog.BELT_CLIMB_PER_TILE`` and
 ``catalog.BELT_Z_QUANTUM`` (what we EMIT, not a cap -- the game quantises
 nothing), ``catalog.LOW_CONFIDENCE_FOOTPRINTS`` and
-``catalog.GEOMETRY_SAFE_FIXTURES`` (statements about our evidence), and every
-constant in ``layout.spine`` and ``layout.freeform`` (search parameters).
+``catalog.GEOMETRY_SAFE_FIXTURES`` (statements about our evidence), and layout
+search parameters.
 
 ``catalog.SORTER_MAX_REACH`` used to head that list, as "a corpus measurement --
 spans cluster at 1..3 with nothing at 4".  It is a GAME rule and the corpus was

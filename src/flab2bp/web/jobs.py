@@ -48,12 +48,11 @@ class Options:
     """One build request, already validated."""
 
     url: str
-    #: The public web subset deliberately excludes the audit-only Spine
-    #: backend, even though the CLI can still request it directly.
+    #: Public and CLI callers share the same production strategy set.
     strategy: WebStrategyName = "best"
     power: bool = True
     candidates: int = 3
-    budget_s: float = 2.0
+    budget_s: float = 15.0
     name: str = ""
     #: Mirrors ``--allow-invalid``.  Off by default: a blueprint that pastes
     #: cleanly and then does not run is the worst outcome available here.
@@ -69,11 +68,10 @@ class Options:
     def solver_ceiling_s(self) -> float:
         """An upper bound on the LAYOUT solving this job will do.
 
-        Deliberately not called an estimate.  It bounds the CP-SAT budgets only:
-        parsing the URL, solving the rates, validating and encoding are all on
-        top, and a strategy that refuses spends its retry budget as well.  The
-        UI shows elapsed time against this so "still working" has a scale, not
-        so it can promise a finish time.
+        It bounds the search budgets only: parsing the URL, solving rates,
+        emission, validation and encoding are all on top. The UI shows elapsed
+        time against this so "still working" has a scale, not so it can promise
+        an exact finish time.
         """
         per_spec = (
             pipeline.PRODUCTION_STRATEGY_COUNT
@@ -114,7 +112,7 @@ def parse_options(raw: JsonValue) -> Options:
     if not isinstance(candidates, int) or isinstance(candidates, bool) or not 1 <= candidates <= 8:
         raise InvalidOptions("'candidates' must be an integer from 1 to 8")
 
-    raw_budget = raw.get("budget_s", 2.0)
+    raw_budget = raw.get("budget_s", 15.0)
     if isinstance(raw_budget, bool) or not isinstance(raw_budget, (int, float)):
         raise InvalidOptions("'budget_s' must be a positive finite number")
     try:

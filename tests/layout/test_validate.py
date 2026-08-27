@@ -19,7 +19,6 @@ from flab2bp.dsp.catalog import (
     ENERGY_EXCHANGER_ID,
     GEOMETRY_SAFE_FIXTURES,
     RAY_RECEIVER_ID,
-    TESLA_COVER_RADIUS,
 )
 from flab2bp.dsp.catalog import building as catalog_building
 from flab2bp.dsp.catalog import oriented_footprint as catalog_oriented_footprint
@@ -52,6 +51,7 @@ BELT2 = 2002  # Conveyor Belt Mk.II, 12/s
 SORTER3 = 2013  # Sorter Mk.III, 6/s at one tile
 SORTER1 = 2011  # Sorter Mk.I, 1.5/s at one tile
 TOWER = 2201  # Tesla Tower, cover radius 10.5, link distance 22.5
+TESLA_COVER_RADIUS = catalog_building(TOWER).cover_radius
 WIRELESS_TOWER = 2202  # Wireless Power Tower, the long-reach node: link 45.5
 WIND_TURBINE = 2203  # windForcedPower: the 110.25 spacing tier
 SOLAR_PANEL = 2205  # a power NODE with cover_radius 0 -- not a "tower"
@@ -288,8 +288,7 @@ def test_geom_footprint_fires_when_a_quarter_turn_is_not_applied() -> None:
     """At yaw 90 a 7x5 is 5x7.  Declaring the unturned pair is still wrong.
 
     Without this the check could be satisfied by copying ``catalog.footprint``
-    and ignoring yaw -- a different bug with the same symptom, and one
-    ``layout.spine`` already carries a comment about.
+    and ignoring yaw.
     """
     p = Placement(
         buildings=(
@@ -3669,11 +3668,7 @@ def test_flow_external_entry_reachable_clean_when_one_side_is_open() -> None:
 
 
 def test_flow_external_entry_points_warns_on_several_lanes_for_one_item() -> None:
-    """Spine's magnetic-ring output asks for `coal` at five separate lanes.
-
-    Legitimate -- the player can belt an item in as many times as asked -- but a
-    real cost that a bounding-box density comparison hides completely.
-    """
+    """Several reachable entries are legal but carry a real connection cost."""
     p = place(
         machine(6, 6, item_id=SMELTER, recipe_id=5),  # 0
         belt(5, 6, carries="copper-ore"),  # 1

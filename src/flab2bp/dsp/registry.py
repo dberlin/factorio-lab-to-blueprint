@@ -212,6 +212,12 @@ _CATALOG: tuple[Entry, ...] = (
         resolved_by="catalog.sorter_rate",
         note="Keyed by item id; sorter_rate divides by span.",
     ),
+    _e(
+        "catalog.SORTER_TIERS",
+        Kind.DERIVED,
+        projection_of="catalog.SORTER_RATE_AT_1",
+        note="Sorter ids ordered by their one-tile throughput.",
+    ),
     # `catalog.SORTER_SPANS_ALTITUDE` was declared here.  Phase V deleted it:
     # the game MEASURES a sorter's altitude span (`BuildTool_Inserter.cs:1311`)
     # and applies a MINIMUM to it (`:1347`).  Nothing caps it, so the rule we
@@ -262,6 +268,12 @@ _CATALOG: tuple[Entry, ...] = (
         Kind.RULE,
         depends_on=(_TECH_LAB,),
         resolved_by="catalog.belt_rules_for_technologies",
+        unconsulted_because=(
+            "Save-rule normalization consumes this outside layout/validator roots."
+        ),
+        mutation_exempt_because=(
+            "R4 measures emitted-layout seams, not request normalization."
+        ),
         note="GameHistoryData.Init: labLevel = 3 on a new save.",
     ),
     _e(
@@ -292,8 +304,8 @@ _CATALOG: tuple[Entry, ...] = (
         Kind.RULE,
         depends_on=(_TECH_SLOPE, "world rise", "horizontal run"),
         note=(
-            "The exact TooSteep predicate is now read by validator and spine "
-            "routing; no downstream literal or fixed move table owns the rule."
+            "The exact TooSteep predicate is read by validation and routing; no "
+            "downstream literal or fixed move table owns the rule."
         ),
     ),
     _e(
@@ -342,8 +354,6 @@ _CATALOG: tuple[Entry, ...] = (
         projection_of="catalog.BELT_CLIMB_PER_TILE",
         note="Plan step 4.2: the game quantises nothing.  This is our emitter's step.",
     ),
-    _e("catalog.TESLA_COVER_RADIUS", Kind.RULE, lint=True),
-    _e("catalog.TESLA_LINK_DISTANCE", Kind.RULE, lint=True),
     _e("catalog.GEOMETRY_SAFE_FIXTURES", Kind.DATA),
     _e("catalog.LOW_CONFIDENCE_FOOTPRINTS", Kind.DATA),
     _e("catalog.NO_DSP_ITEM_PREFIXES", Kind.DATA),
@@ -355,6 +365,12 @@ _CATALOG: tuple[Entry, ...] = (
         Kind.RULE,
         depends_on=("lab level, i.e. researched vertical construction",),
         resolved_by="catalog.belt_rules_for_technologies",
+        unconsulted_because=(
+            "Save-rule normalization resolves this before layout strategies run."
+        ),
+        mutation_exempt_because=(
+            "R4 measures emitted-layout seams, not request normalization."
+        ),
         note="GameHistoryData.buildMaxHeight, quoted in the function's docstring.",
     ),
     _e(
@@ -415,17 +431,27 @@ _COLLIDERS: tuple[Entry, ...] = (
         "planet.SORTER_SEGMENTS_MAX",
         Kind.RULE,
         depends_on=("how many ends are machines",),
+        unconsulted_because=(
+            "The band-specific sorter oracle is not used by current flat layouts."
+        ),
+        mutation_exempt_because=(
+            "No emitted layout currently consumes the band-specific oracle."
+        ),
         note="`num133`, BuildTool_BlueprintPaste.cs:3446-3459.",
     ),
     _e(
         "planet.SORTER_COMBINED_MIN",
         Kind.RULE,
         depends_on=("how many ends are machines",),
+        unconsulted_because=(
+            "The band-specific sorter oracle is not used by current flat layouts."
+        ),
+        mutation_exempt_because=(
+            "No emitted layout currently consumes the band-specific oracle."
+        ),
         note=(
-            "`num134`, same passage: a floor on "
-            "sqrt(segmentsAcross^2 + altitudeSteps^2) in GRID CELLS, not world "
-            "units.  This is what convicts a one-tile machine-to-machine direct "
-            "insert at 1.329 against a floor of 1.451."
+            "`num134`: a floor on sqrt(segmentsAcross^2 + altitudeSteps^2) "
+            "in grid cells."
         ),
     ),
     _e(
@@ -458,11 +484,16 @@ _COLLIDERS: tuple[Entry, ...] = (
     _e(
         "planet.SORTER_ALTITUDE_UNIT",
         Kind.RULE,
-        # 0.2 is far too common a literal to lint on; see MATCH_SNAP_MAX_SQR.
         lint=False,
+        unconsulted_because=(
+            "The band-specific sorter oracle is not used by current flat layouts."
+        ),
+        mutation_exempt_because=(
+            "No emitted layout currently consumes the band-specific oracle."
+        ),
         note=(
-            "`num130 = Abs(lpos.magnitude - lpos2.magnitude) / 0.2f`.  The "
-            "game's own unit for a radial step -- not a tile, not a level."
+            "`num130 = Abs(lpos.magnitude - lpos2.magnitude) / 0.2f`, the "
+            "game's radial-step unit."
         ),
     ),
     _e(
@@ -1017,13 +1048,6 @@ LINT_EXCEPTIONS: tuple[LintException, ...] = (
         "_candidate_heights",
         1.6,
         "height sweep factor; PASTE_RADIAL is world units",
-    ),
-    LintException(
-        "flab2bp.layout.spine",
-        "_link_towers",
-        0.6,
-        "aim a relay 60% of a link out; a fraction of TESLA_LINK_DISTANCE, "
-        "not the addon radial gap",
     ),
     LintException(
         "flab2bp.rates.candidates",
