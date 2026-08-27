@@ -51,10 +51,10 @@ def test_every_pair_reports_started_and_then_how_it_ended() -> None:
 
 
 @pytest.mark.slow
-def test_best_reports_only_freeform_pairs_while_spine_is_disabled() -> None:
-    """``best`` temporarily resolves to Freeform alone."""
+def test_best_reports_freeform_and_sequence_pairs_while_spine_is_disabled() -> None:
+    """``best`` resolves to the two promoted production strategies."""
     steps: list[pipeline.AttemptProgress] = []
-    pipeline.build(
+    build = pipeline.build(
         SMALL_URL,
         strategy="best",
         candidates=1,
@@ -62,11 +62,14 @@ def test_best_reports_only_freeform_pairs_while_spine_is_disabled() -> None:
         on_progress=steps.append,
     )
     started = [s for s in steps if s.phase == "started"]
-    # One candidate x the sole production strategy.
-    assert len(started) == 1
-    assert [s.index for s in started] == [1]
-    assert {s.total for s in started} == {1}
-    assert {s.strategy for s in started} == {"freeform"}
+    # One candidate x the two production strategies.
+    assert len(started) == 2
+    assert [s.index for s in started] == [1, 2]
+    assert {s.total for s in started} == {2}
+    assert [s.strategy for s in started] == ["freeform", "sequence-pair"]
+    valid = [attempt for attempt in build.attempts if attempt.ok]
+    winner = min(valid, key=lambda attempt: attempt.area)
+    assert (build.strategy, build.placement.area) == (winner.strategy, winner.area)
 
 
 def test_a_sink_that_raises_is_not_swallowed() -> None:

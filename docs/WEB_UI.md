@@ -30,14 +30,13 @@ in plain text rather than 404ing.
 ## Strategy choices
 
 The web request contract is `best`, `freeform`, or the exact wire spelling
-`sequence-pair`. `best` currently runs Freeform only; SequencePair is an explicit opt-in until
-it clears the separate production promotion gate. Spine remains an audit-only CLI backend, so
-posting `strategy: "spine"` is a bad request and returns HTTP 400 before a job is submitted.
+`sequence-pair`. `best` runs both Freeform and SequencePair and returns the smallest
+validator-clean result. Spine remains an audit-only CLI backend, so posting
+`strategy: "spine"` is a bad request and returns HTTP 400 before a job is submitted.
 
 The solver ceiling is `candidates × active production strategies × budget` for `best`, using
-the pipeline's canonical active-strategy tuple. It is one strategy today and will change
-automatically if the production portfolio is promoted later. An explicit Freeform or
-SequencePair request always runs one layout per candidate.
+the pipeline's canonical active-strategy tuple. The promoted portfolio has two strategies.
+An explicit Freeform or SequencePair request always runs one layout per candidate.
 
 ## Proving it works
 

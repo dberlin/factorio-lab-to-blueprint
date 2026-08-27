@@ -141,7 +141,7 @@ export function BuildPanel() {
             if (strategy.success) set('strategy', strategy.data);
           }}
         >
-          <option value="best">best (production default: freeform)</option>
+          <option value="best">best (freeform + sequence-pair, smallest valid wins)</option>
           <option value="freeform">freeform</option>
           <option value="sequence-pair">sequence-pair</option>
         </select>
@@ -229,11 +229,11 @@ export function BuildPanel() {
       </div>
 
       <p className="note">
-        Budget is per layout. Every current web strategy runs one layout per candidate, so{' '}
-        {options.candidates} × {options.budget_s}s is up to{' '}
-        {options.candidates * options.budget_s}s of solving, plus rates, validation and encoding
-        on top. <code>best</code> remains Freeform-only until SequencePair clears its promotion
-        gate.
+        Budget is per layout. <code>best</code> runs two layouts per candidate, so{' '}
+        {options.candidates} candidates × {options.strategy === 'best' ? 2 : 1} strategies ×{' '}
+        {options.budget_s}s is up to{' '}
+        {options.candidates * (options.strategy === 'best' ? 2 : 1) * options.budget_s}s of
+        solving, plus rates, validation and encoding on top.
       </p>
 
       {busy && job && <Progress job={job} />}

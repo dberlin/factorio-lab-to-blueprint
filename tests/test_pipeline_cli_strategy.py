@@ -139,7 +139,6 @@ def test_strategy_help_separates_best_from_explicit_backends(
 
     assert exc_info.value.code == 0
     help_text = " ".join(capsys.readouterr().out.split())
-    assert "best temporarily runs only freeform" in help_text
+    assert "best runs freeform and sequence-pair" in help_text
     assert "spine remains available explicitly" in help_text
-    assert "sequence-pair remains" in help_text
-    assert "experimental/audit backend" in help_text
+    assert "sequence-pair is a promoted production backend" in help_text

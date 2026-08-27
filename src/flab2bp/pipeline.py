@@ -48,7 +48,10 @@ STRATEGY_CHOICES: tuple[StrategyName, ...] = (
     "sequence-pair",
 )
 #: Explicit strategies included when callers request ``best``.
-PRODUCTION_STRATEGIES: tuple[ExplicitStrategyName, ...] = ("freeform",)
+PRODUCTION_STRATEGIES: tuple[ExplicitStrategyName, ...] = (
+    "freeform",
+    "sequence-pair",
+)
 PRODUCTION_STRATEGY_COUNT = len(PRODUCTION_STRATEGIES)
 
 
