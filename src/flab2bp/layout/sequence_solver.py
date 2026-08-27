@@ -904,6 +904,7 @@ class SequenceSolver[PreparedT]:
         decoded: DecodedPlacement,
         *,
         reason: str,
+        allowance_cap: int | None = None,
     ) -> DetailedStageResult:
         """Authoritatively close one exact decoded candidate without re-encoding it."""
         if type(height) is not int:
@@ -912,6 +913,12 @@ class SequenceSolver[PreparedT]:
             raise ValueError("exact decoded closure requires a decoded placement")
         if type(reason) is not str or not reason:
             raise ValueError("exact decoded closure reason must be a non-empty string")
+        if allowance_cap is not None and (
+            type(allowance_cap) is not int or allowance_cap < 0
+        ):
+            raise ValueError(
+                "exact decoded closure allowance cap must be a non-negative integer"
+            )
         height_state = next(
             (candidate for candidate in self._heights if candidate.height == height),
             None,
@@ -973,7 +980,12 @@ class SequenceSolver[PreparedT]:
             accepted_moves=0,
             anneal_seeds=(),
         )
-        allowance = self.budget.detailed_discovery_allowance(height)
+        available = self.budget.detailed_discovery_allowance(height)
+        allowance = (
+            available
+            if allowance_cap is None
+            else min(available, allowance_cap)
+        )
         detailed_started = time.perf_counter()
         detailed = self.adapters.detailed_route(prepared, allowance)
         detailed_route_time_s = time.perf_counter() - detailed_started
@@ -1993,31 +2005,27 @@ def _uses_topology_beam(
     )
 
 
+def _protected_topology_candidates(strip_count: int, sprayed_lanes: int) -> int:
+    """Guarantee measured exact topology roles before wall-limited improvements."""
+    if strip_count <= 13:
+        return 7
+    return 3 if sprayed_lanes > 0 else 2
+
+
 def _uses_shared_pack_candidate(
     *,
     machine_count: int,
     power: bool,
     sprayed_lanes: int,
     strip_count: int,
-    direct_candidates: int,
 ) -> bool:
     """Select the measured direct/mid-scale role while excluding stress topology."""
     return (
-        strip_count <= _COMPACT_LARGE_VARIANT_SIZE
-        and sprayed_lanes <= 3 * _DENSE_SPRAY_LANE_THRESHOLD
+        power
+        and sprayed_lanes > _DENSE_SPRAY_LANE_THRESHOLD
+        and machine_count >= _SHARED_PACK_MACHINE_MIN
         and machine_count <= _SHARED_PACK_MACHINE_MAX
-        and (
-            (
-                power
-                and sprayed_lanes > 0
-                and machine_count >= _SHARED_PACK_MACHINE_MIN
-                and (
-                    strip_count <= _TOPOLOGY_BEAM_MAX_STRIPS
-                    or sprayed_lanes > _DENSE_SPRAY_LANE_THRESHOLD
-                )
-            )
-            or (direct_candidates > 0 and strip_count <= 8)
-        )
+        and strip_count <= _COMPACT_LARGE_VARIANT_SIZE
     )
 
 
@@ -2475,7 +2483,6 @@ def _production_run(
             power=power,
             sprayed_lanes=len(spec.spray_lanes),
             strip_count=len(strips),
-            direct_candidates=len(direct_candidates),
         )
         neighbor_heights: list[int] = []
         for height in coarse_heights:
@@ -2498,7 +2505,9 @@ def _production_run(
             )
             for height in heights
         }
-        if compact_seed_attempt is not None:
+        if compact_seed_attempt is not None and not (
+            use_topology_beam or use_shared_pack
+        ):
             template_problem = problems[heights[0]]
             compact_height = _balanced_compact_seed_height(template_problem)
             telemetry.compact_seed_base_seed = chosen_compact_base_seed
@@ -2821,6 +2830,10 @@ def _production_run(
         _ROUTING_BUDGET,
         int(_ROUTING_EXPANSIONS_PER_SECOND * ceiling),
     )
+    exact_candidate_allowance = max(
+        1,
+        expansion_total // (2 * (_TOPOLOGY_BEAM_CANDIDATES + 1)),
+    )
     solver = SequenceSolver(
         heights=heights,
         problem_for_height=problems.__getitem__,
@@ -2875,6 +2888,7 @@ def _production_run(
                 shared_height,
                 _exact_pack_decoded(shared_pack, strips, problems[shared_height]),
                 reason="shared-pack",
+                allowance_cap=exact_candidate_allowance,
             )
             telemetry.shared_pack_candidates = 1
         telemetry.shared_pack_wall_time_s = time.monotonic() - shared_started
@@ -2937,9 +2951,20 @@ def _production_run(
                 max_candidates=_TOPOLOGY_BEAM_CANDIDATES,
             ),
         )
+        protected_candidates = min(
+            beam.config.max_candidates,
+            _protected_topology_candidates(
+                beam_problem.size,
+                len(spec.spray_lanes),
+            ),
+        )
         for topology_index in range(beam.config.max_candidates):
             candidate = beam.solve_next(
-                absolute_deadline=seed_deadline,
+                absolute_deadline=(
+                    deadline
+                    if topology_index < protected_candidates
+                    else seed_deadline
+                ),
                 cancelled=deadline_reached,
             )
             if candidate is None:
@@ -2948,6 +2973,7 @@ def _production_run(
                 topology_beam_height,
                 _topology_candidate_decoded(candidate),
                 reason="topology-beam",
+                allowance_cap=exact_candidate_allowance,
             )
             telemetry.topology_beam_candidates += 1
             if topology_index + 1 < beam.config.max_candidates:

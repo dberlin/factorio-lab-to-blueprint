@@ -432,6 +432,61 @@ def test_valid_topology_candidate_does_not_stop_better_exact_enumeration() -> No
     assert fake.detailed_allowances == [100, 93]
 
 
+def test_exact_candidate_caps_preserve_later_closures_and_fallback_discovery() -> None:
+    exact = _placement(area=20, belt_tiles=4)
+    fallback = _placement(area=25, belt_tiles=3)
+    fake = _FakeRouting(
+        detailed_results=(
+            DetailedStageResult(
+                _routing(DetailedRouteStatus.BUDGET, expansions=10),
+                None,
+            ),
+            DetailedStageResult(
+                _routing(DetailedRouteStatus.ROUTED, expansions=5),
+                exact,
+            ),
+            DetailedStageResult(
+                _routing(DetailedRouteStatus.ROUTED, expansions=7),
+                fallback,
+            ),
+        )
+    )
+    budget = ExpansionBudget(total=100)
+    solver = _solver(fake, heights=(40,), budget=budget)
+    decoded = DecodedPlacement(
+        x=(0,),
+        y=(0,),
+        width=1,
+        used_height=1,
+        x_windows=((0, 0),),
+        y_windows=((0, 0),),
+        gap_area=0,
+        variant_indices=(0,),
+    )
+
+    failed = solver.close_exact_decoded(
+        40,
+        decoded,
+        reason="topology-beam",
+        allowance_cap=10,
+    )
+    routed = solver.close_exact_decoded(
+        40,
+        decoded,
+        reason="topology-beam",
+        allowance_cap=10,
+    )
+    result = solver.search(max_stages=1)
+
+    assert failed.routing.status is DetailedRouteStatus.BUDGET
+    assert routed.placement is exact
+    assert result.placement is exact
+    assert fake.detailed_allowances[:2] == [10, 10]
+    assert fake.detailed_allowances[2] > 0
+    assert budget.spent == 22
+    assert budget.spent < budget.total
+
+
 def test_unseeded_solver_has_no_compact_closure() -> None:
     exact = _placement(area=20, belt_tiles=4)
     solver = _solver(
