@@ -465,6 +465,7 @@ def test_valid_topology_candidate_does_not_stop_better_exact_enumeration() -> No
     assert [stage.exact_key for stage in result.stages] == [(30, 1), (20, 4)]
     assert budget.spent == 18
     assert fake.detailed_allowances == [100, 93]
+    assert solver.exact_incumbent_reason == "topology-beam"
 
 
 def test_exact_candidate_caps_preserve_later_closures_and_fallback_discovery() -> None:
@@ -1366,6 +1367,49 @@ def test_serial_attempt_policy_selects_only_measured_topology_roles() -> None:
     assert sequence_solver_module._serial_compact_seed_attempt(278, 6, power=True) == 0
     assert sequence_solver_module._serial_compact_seed_attempt(168, 2, power=False) == 0
     assert sequence_solver_module._serial_compact_seed_attempt(58, 23, power=False) == 0
+
+
+def test_dense_topology_seed_role_uses_average_strip_occupancy() -> None:
+    assert sequence_solver_module._topology_seed_is_terminal(
+        machine_count=35,
+        strip_count=10,
+        strip_len=6,
+    )
+    assert not sequence_solver_module._topology_seed_is_terminal(
+        machine_count=20,
+        strip_count=7,
+        strip_len=6,
+    )
+    assert not sequence_solver_module._topology_seed_is_terminal(
+        machine_count=21,
+        strip_count=7,
+        strip_len=6,
+    )
+
+
+@pytest.mark.parametrize(
+    ("topology_role", "shared_role", "incumbent_reason", "expected"),
+    (
+        (True, False, None, True),
+        (False, True, None, True),
+        (False, True, "shared-pack", False),
+        (False, False, None, False),
+    ),
+)
+def test_topology_beam_runs_for_its_role_or_a_failed_shared_seed(
+    topology_role: bool,
+    shared_role: bool,
+    incumbent_reason: str | None,
+    expected: bool,
+) -> None:
+    assert (
+        sequence_solver_module._needs_topology_beam(
+            topology_role=topology_role,
+            shared_role=shared_role,
+            incumbent_reason=incumbent_reason,
+        )
+        is expected
+    )
 
 
 def test_production_seed_has_its_own_wall_and_deterministic_caps(

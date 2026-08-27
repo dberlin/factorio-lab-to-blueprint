@@ -650,6 +650,24 @@ class SequenceSolver[PreparedT]:
         self._incumbent: _ExactIncumbent | None = None
         self._last_height: int | None = None
 
+    @property
+    def exact_incumbent_reason(self) -> str | None:
+        """Routing role that produced the current exact incumbent, if one exists."""
+        incumbent = self._incumbent
+        if incumbent is None:
+            return None
+        observation = next(
+            (
+                stage
+                for stage in reversed(self._stage_stats)
+                if stage.exact_key == incumbent.exact_key
+                and stage.candidate_key == incumbent.candidate_key
+            ),
+            None,
+        )
+        return observation.global_skip_reason if observation is not None else None
+
+
     def search(self, *, max_stages: int | None = None) -> SequenceSearchResult:
         """Search until its stage cap, deadline, or searchable budget is exhausted."""
         stage_limit = (
@@ -2014,6 +2032,33 @@ def _uses_topology_beam(
     )
 
 
+def _topology_seed_is_terminal(
+    *,
+    machine_count: int,
+    strip_count: int,
+    strip_len: int,
+) -> bool:
+    """Use an exact topology seed when physical strips average over half full."""
+    return (
+        machine_count > 0
+        and strip_count > 0
+        and strip_len > 0
+        and 2 * machine_count > strip_len * strip_count
+    )
+
+
+
+
+def _needs_topology_beam(
+    *,
+    topology_role: bool,
+    shared_role: bool,
+    incumbent_reason: str | None,
+) -> bool:
+    """Run the beam for its normal role or when the shared exact seed failed."""
+    return topology_role or (shared_role and incumbent_reason is None)
+
+
 def _protected_topology_candidates(strip_count: int, sprayed_lanes: int) -> int:
     """Guarantee measured exact topology roles before wall-limited improvements."""
     if strip_count <= 13:
@@ -2293,6 +2338,7 @@ class _ProductionRun:
     direct_candidates: int
     started: float
     ceiling: float
+    max_search_stages: int | None
 
 
 def _empty_global_result(*, exhausted: bool, cancelled: bool = False) -> GlobalRouteResult:
@@ -2483,16 +2529,15 @@ def _production_run(
             sprayed_lanes=len(spec.spray_lanes),
             power=power,
         )
-        if use_topology_beam and topology_beam_height is not None:
-            median_height = sorted(coarse_heights)[len(coarse_heights) // 2]
-            topology_beam_width_bound = max(8, 2 * seeds[median_height].width)
-            telemetry.topology_beam_height = topology_beam_height
         use_shared_pack = _uses_shared_pack_candidate(
             machine_count=spec.machine_count,
             power=power,
             sprayed_lanes=len(spec.spray_lanes),
             strip_count=len(strips),
         )
+        if (use_topology_beam or use_shared_pack) and topology_beam_height is not None:
+            median_height = sorted(coarse_heights)[len(coarse_heights) // 2]
+            topology_beam_width_bound = max(8, 2 * seeds[median_height].width)
         neighbor_heights: list[int] = []
         for height in coarse_heights:
             neighbor = height + 2
@@ -2901,12 +2946,18 @@ def _production_run(
             )
             telemetry.shared_pack_candidates = 1
         telemetry.shared_pack_wall_time_s = time.monotonic() - shared_started
+    run_topology_beam = _needs_topology_beam(
+        topology_role=use_topology_beam,
+        shared_role=use_shared_pack,
+        incumbent_reason=solver.exact_incumbent_reason,
+    )
     if (
-        use_topology_beam
+        run_topology_beam
         and topology_beam_height is not None
         and topology_beam_width_bound is not None
         and not deadline_reached()
     ):
+        telemetry.topology_beam_height = topology_beam_height
         beam_started = time.monotonic()
         beam_problem = problems[topology_beam_height]
         beam_variants = (0,) * beam_problem.size
@@ -2988,6 +3039,16 @@ def _production_run(
             if topology_index + 1 < beam.config.max_candidates:
                 beam.exclude(candidate.signature)
         telemetry.topology_beam_wall_time_s = time.monotonic() - beam_started
+    max_search_stages = (
+        0
+        if _topology_seed_is_terminal(
+            machine_count=spec.machine_count,
+            strip_count=len(strips),
+            strip_len=strip_len,
+        )
+        and solver.exact_incumbent_reason in ("shared-pack", "topology-beam")
+        else None
+    )
     return _ProductionRun(
         solver=solver,
         telemetry=telemetry,
@@ -2995,6 +3056,7 @@ def _production_run(
         direct_candidates=len(direct_candidates),
         started=started,
         ceiling=ceiling,
+        max_search_stages=max_search_stages,
     )
 
 
@@ -3125,7 +3187,7 @@ class SequencePairLayout:
             ),
         )
         try:
-            result = run.solver.search()
+            result = run.solver.search(max_stages=run.max_search_stages)
         except NoValidLayout as exc:
             raise NoValidLayout(
                 exc.reason,
