@@ -94,6 +94,7 @@ from flab2bp.layout.freeform import FreeformLayout  # noqa: E402
 from flab2bp.layout.sequence_solver import SequencePairLayout  # noqa: E402
 from flab2bp.layout.spine import SpineLayout  # noqa: E402
 from flab2bp.rates.candidates import build_candidates  # noqa: E402
+from flab2bp.spec import BuildSpec  # noqa: E402
 
 _TIER_ORDER = (Tier.TRIVIAL, Tier.SMALL, Tier.MID, Tier.LARGE, Tier.STRESS)
 _StrategyFactory = Callable[[bool, int, bool], LayoutStrategy]
@@ -184,10 +185,10 @@ class Result:
 # Per-process spec cache. Rebuilding candidates for every cell would re-run the
 # rate solver six times per URL; a worker handles several cells of the same URL,
 # so caching here pays for itself and cannot skew the layout timings.
-_SPECS: dict[tuple[str, int], tuple[object, ...]] = {}
+_SPECS: dict[tuple[str, int], tuple[BuildSpec, ...]] = {}
 
 
-def _specs_for(url: str, count: int) -> tuple[object, ...]:
+def _specs_for(url: str, count: int) -> tuple[BuildSpec, ...]:
     key = (url, count)
     if key not in _SPECS:
         _SPECS[key] = build_candidates(
@@ -224,7 +225,7 @@ def run_cell(job: Job) -> Result:
     if job.spec_index >= len(specs):
         return Result(job, "SPEC", "?", "no such candidate", (), time.monotonic() - t0)
     spec = specs[job.spec_index]
-    label = spec.label  # type: ignore[attr-defined]
+    label = spec.label
 
     belt_rules = _belt_rules_for(job.url)
     make_strategy = _STRATEGIES[job.strategy]
@@ -242,7 +243,7 @@ def run_cell(job: Job) -> Result:
                 job.power, job.workers, belt_rules.vertical_construction
             )
         placement = strategy.lay_out(
-            spec,  # type: ignore[arg-type]
+            spec,
             time_budget_s=job.budget,
         )
     except NoValidLayout as exc:
@@ -261,8 +262,8 @@ def run_cell(job: Job) -> Result:
 
     report = validate.validate(
         placement,
-        spec,  # type: ignore[arg-type]
-        ids=validate.id_map(spec),  # type: ignore[arg-type]
+        spec,
+        ids=validate.id_map(spec),
         expect_power=job.power,
         max_belt_z=belt_rules.max_z,
         belt_vertical_construction=belt_rules.vertical_construction,
