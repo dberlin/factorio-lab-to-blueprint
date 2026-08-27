@@ -1388,6 +1388,40 @@ def test_dense_topology_seed_role_uses_average_strip_occupancy() -> None:
 
 
 @pytest.mark.parametrize(
+    (
+        "exact_seed_terminal",
+        "strip_count",
+        "net_count",
+        "sprayed_lanes",
+        "expected",
+    ),
+    (
+        (True, 10, 20, 0, 0),
+        (False, 1, 0, 0, 1),
+        (False, 6, 5, 2, 2),
+        (False, 7, 5, 2, None),
+        (False, 6, 5, 1, None),
+    ),
+)
+def test_search_stage_cap_follows_certified_and_small_complexity_roles(
+    exact_seed_terminal: bool,
+    strip_count: int,
+    net_count: int,
+    sprayed_lanes: int,
+    expected: int | None,
+) -> None:
+    assert (
+        sequence_solver_module._search_stage_cap(
+            exact_seed_terminal=exact_seed_terminal,
+            strip_count=strip_count,
+            net_count=net_count,
+            sprayed_lanes=sprayed_lanes,
+        )
+        == expected
+    )
+
+
+@pytest.mark.parametrize(
     ("topology_role", "shared_role", "incumbent_reason", "expected"),
     (
         (True, False, None, True),

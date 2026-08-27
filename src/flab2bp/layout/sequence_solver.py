@@ -138,6 +138,7 @@ _TOPOLOGY_BEAM_DETERMINISTIC_SECONDS = 0.2
 _SHARED_PACK_MACHINE_MIN = 75
 _SHARED_PACK_MACHINE_MAX = 200
 _TOPOLOGY_BEAM_CANDIDATES = 8
+_TINY_FAST_PATH_SPRAY_LANES = 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -2049,6 +2050,26 @@ def _topology_seed_is_terminal(
 
 
 
+def _search_stage_cap(
+    *,
+    exact_seed_terminal: bool,
+    strip_count: int,
+    net_count: int,
+    sprayed_lanes: int,
+) -> int | None:
+    """Bound search only where exact staged profiles show no quality loss."""
+    if exact_seed_terminal:
+        return 0
+    if net_count == 0:
+        return 1
+    if (
+        strip_count < _TOPOLOGY_BEAM_MIN_STRIPS
+        and sprayed_lanes == _TINY_FAST_PATH_SPRAY_LANES
+    ):
+        return 2
+    return None
+
+
 def _needs_topology_beam(
     *,
     topology_role: bool,
@@ -3039,15 +3060,18 @@ def _production_run(
             if topology_index + 1 < beam.config.max_candidates:
                 beam.exclude(candidate.signature)
         telemetry.topology_beam_wall_time_s = time.monotonic() - beam_started
-    max_search_stages = (
-        0
-        if _topology_seed_is_terminal(
-            machine_count=spec.machine_count,
-            strip_count=len(strips),
-            strip_len=strip_len,
-        )
-        and solver.exact_incumbent_reason in ("shared-pack", "topology-beam")
-        else None
+    max_search_stages = _search_stage_cap(
+        exact_seed_terminal=(
+            _topology_seed_is_terminal(
+                machine_count=spec.machine_count,
+                strip_count=len(strips),
+                strip_len=strip_len,
+            )
+            and solver.exact_incumbent_reason in ("shared-pack", "topology-beam")
+        ),
+        strip_count=len(strips),
+        net_count=len(nets),
+        sprayed_lanes=len(spec.spray_lanes),
     )
     return _ProductionRun(
         solver=solver,
