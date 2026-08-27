@@ -7,7 +7,7 @@ import time
 from collections.abc import Sequence
 from concurrent.futures import Future, ProcessPoolExecutor, wait
 from dataclasses import dataclass, replace
-from typing import Literal, cast
+from typing import Literal
 
 from flab2bp.layout import validate
 from flab2bp.layout.base import RETRY_BUDGET_S, NoValidLayout, Placement
@@ -145,6 +145,15 @@ def _run_sequence_island(request: _SequenceIslandRequest) -> _SequenceIslandOutc
     return _SequenceIslandOutcome.completed(request.island_id, request.seed, placement)
 
 
+def _completed_placement(outcome: _SequenceIslandOutcome) -> Placement:
+    placement = outcome.placement
+    if placement is None:
+        raise RuntimeError(
+            f"completed sequence island {outcome.island_id} returned no placement"
+        )
+    return placement
+
+
 def _merge_sequence_island_outcomes(
     outcomes: Sequence[_SequenceIslandOutcome],
     *,
@@ -162,7 +171,7 @@ def _merge_sequence_island_outcomes(
         return min(
             completed,
             key=lambda outcome: (
-                *_exact_key(cast(Placement, outcome.placement)),
+                *_exact_key(_completed_placement(outcome)),
                 outcome.island_id,
             ),
         )
@@ -213,8 +222,8 @@ def _island_stats(
     requested: int,
     result_reserve_s: float,
 ) -> Placement:
-    placement = cast(Placement, winner.placement)
-    stats: dict[str, object] = dict(placement.stats)
+    placement = _completed_placement(winner)
+    stats = placement.stats.copy()
     stats.update(
         {
             "islands_requested": float(requested),
@@ -225,7 +234,7 @@ def _island_stats(
             "winner_island_seed": winner.seed,
         }
     )
-    return replace(placement, stats=cast(dict[str, float], stats))
+    return replace(placement, stats=stats)
 
 
 def run_sequence_islands(

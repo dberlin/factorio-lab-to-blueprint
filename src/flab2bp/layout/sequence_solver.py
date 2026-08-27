@@ -14,7 +14,7 @@ from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from fractions import Fraction
 from types import MappingProxyType
-from typing import Protocol, cast
+from typing import Protocol
 
 from flab2bp.layout import validate
 from flab2bp.layout.base import DETERMINISTIC_WORKERS, RETRY_BUDGET_S, NoValidLayout, Placement
@@ -3180,7 +3180,7 @@ def _with_observational_stats(
     pose_counts = {
         yaw: sum(selected == yaw for selected in pose_yaws) for yaw in (0.0, 90.0, 180.0, 270.0)
     }
-    stats: dict[str, object] = dict(placement.stats)
+    stats = placement.stats.copy()
     observed_backends = {stage.backend for stage in result.stages}
     accelerator = "mixed" if len(observed_backends) > 1 else next(iter(observed_backends), "python")
     stats.update(
@@ -3317,7 +3317,4 @@ def _with_observational_stats(
                 ),
             }
         )
-    # Placement predates string-valued audit dimensions.  Keep the public
-    # runtime contract required by the audit backend without widening the shared
-    # production type in this audit-only task.
-    return replace(placement, stats=cast(dict[str, float], stats))
+    return replace(placement, stats=stats)
