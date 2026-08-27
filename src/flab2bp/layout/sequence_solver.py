@@ -117,6 +117,7 @@ class ObjectiveMode(StrEnum):
 
 
 type QualityArchiveKey = tuple[int, int, int, int, float, PlacementKey]
+type RefinementHint = tuple[int, tuple[int, int], DecodedPlacement]
 
 _QUALITY_REVISIT_AFTER = 2
 _MAX_SEQUENCE_ISLANDS = 16
@@ -140,6 +141,8 @@ _SHARED_PACK_MACHINE_MAX = 200
 _TOPOLOGY_BEAM_CANDIDATES = 8
 _TINY_FAST_PATH_SPRAY_LANES = 2
 _QUALITY_TOPOLOGY_CLOSURE_CAP = 50_000
+_TOPOLOGY_REFINEMENT_CANDIDATES = 1
+_TOPOLOGY_REFINEMENT_DETERMINISTIC_SECONDS = 1.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -220,8 +223,6 @@ def _serial_compact_seed_attempt(
         and sprayed_lanes >= _DENSE_SPRAY_LANE_THRESHOLD
         else 0
     )
-
-
 
 
 @dataclass(slots=True)
@@ -414,6 +415,7 @@ class StageAdapters[PreparedT]:
     validate: Callable[[Placement], ValidationVerdict]
 
     prepare_exact: Callable[[int, DecodedPlacement], PreparedT] | None = None
+
 
 @dataclass(frozen=True, slots=True)
 class StageObservation:
@@ -677,20 +679,15 @@ class SequenceSolver[PreparedT]:
         current: tuple[int, int] | None = None
         snapshots: list[tuple[int, int] | None] = []
         for stage in self._stage_stats:
-            if stage.exact_key is not None and (
-                current is None or stage.exact_key < current
-            ):
+            if stage.exact_key is not None and (current is None or stage.exact_key < current):
                 current = stage.exact_key
-            if stage.global_skip_reason not in ("shared-pack", "topology-beam"):
+            if stage.global_skip_reason not in (
+                "shared-pack",
+                "topology-beam",
+                "topology-refinement",
+            ):
                 snapshots.append(current)
-        return (
-            len(snapshots) == 2
-            and snapshots[-1] is not None
-            and snapshots[-1] == snapshots[-2]
-        )
-
-
-
+        return len(snapshots) == 2 and snapshots[-1] is not None and snapshots[-1] == snapshots[-2]
 
     def search(self, *, max_stages: int | None = None) -> SequenceSearchResult:
         """Search until its stage cap, deadline, or searchable budget is exhausted."""
@@ -704,10 +701,13 @@ class SequenceSolver[PreparedT]:
             raise ValueError("maximum stages must be a non-negative integer")
 
         termination = "stage-limit"
-        while sum(
-            stage.global_skip_reason not in ("shared-pack", "topology-beam")
-            for stage in self._stage_stats
-        ) < stage_limit:
+        while (
+            sum(
+                stage.global_skip_reason not in ("shared-pack", "topology-beam")
+                for stage in self._stage_stats
+            )
+            < stage_limit
+        ):
             if (
                 self._incumbent is not None
                 and self._incumbent.exact_key[0] == self._area_lower_bound
@@ -967,12 +967,8 @@ class SequenceSolver[PreparedT]:
             raise ValueError("exact decoded closure requires a decoded placement")
         if type(reason) is not str or not reason:
             raise ValueError("exact decoded closure reason must be a non-empty string")
-        if allowance_cap is not None and (
-            type(allowance_cap) is not int or allowance_cap < 0
-        ):
-            raise ValueError(
-                "exact decoded closure allowance cap must be a non-negative integer"
-            )
+        if allowance_cap is not None and (type(allowance_cap) is not int or allowance_cap < 0):
+            raise ValueError("exact decoded closure allowance cap must be a non-negative integer")
         height_state = next(
             (candidate for candidate in self._heights if candidate.height == height),
             None,
@@ -1035,11 +1031,7 @@ class SequenceSolver[PreparedT]:
             anneal_seeds=(),
         )
         available = self.budget.detailed_discovery_allowance(height)
-        allowance = (
-            available
-            if allowance_cap is None
-            else min(available, allowance_cap)
-        )
+        allowance = available if allowance_cap is None else min(available, allowance_cap)
         detailed_started = time.perf_counter()
         detailed = self.adapters.detailed_route(prepared, allowance)
         detailed_route_time_s = time.perf_counter() - detailed_started
@@ -1988,8 +1980,7 @@ def _balanced_compact_seed_height(problem: PlacementProblem) -> int:
         choices.extend((size,) for size in problem.sizes)
 
     feasible_area = sum(
-        min(width * height for width, height in strip_choices)
-        for strip_choices in choices
+        min(width * height for width, height in strip_choices) for strip_choices in choices
     )
     area = max(problem.area_lower_bound, feasible_area, 1)
     balanced_width = math.isqrt(area)
@@ -1997,10 +1988,7 @@ def _balanced_compact_seed_height(problem: PlacementProblem) -> int:
         balanced_width += 1
     balanced_height = area // balanced_width
     minimum_height = max(
-        (
-            min(height for _width, height in strip_choices)
-            for strip_choices in choices
-        ),
+        (min(height for _width, height in strip_choices) for strip_choices in choices),
         default=1,
     )
     return max(minimum_height, balanced_height)
@@ -2065,10 +2053,7 @@ def _topology_beam_height(
         and sprayed_lanes <= _DENSE_SPRAY_LANE_THRESHOLD
     ):
         return ordered[-1]
-    if (
-        sprayed_lanes > _DENSE_SPRAY_LANE_THRESHOLD
-        and strip_count <= 13
-    ):
+    if sprayed_lanes > _DENSE_SPRAY_LANE_THRESHOLD and strip_count <= 13:
         return ordered[-2]
     if sprayed_lanes > 0 and strip_count <= 13:
         return ordered[0]
@@ -2118,8 +2103,6 @@ def _topology_seed_is_terminal(
     )
 
 
-
-
 def _search_stage_cap(
     *,
     exact_seed_terminal: bool,
@@ -2132,10 +2115,7 @@ def _search_stage_cap(
         return 0
     if net_count == 0:
         return 1
-    if (
-        strip_count < _TOPOLOGY_BEAM_MIN_STRIPS
-        and sprayed_lanes == _TINY_FAST_PATH_SPRAY_LANES
-    ):
+    if strip_count < _TOPOLOGY_BEAM_MIN_STRIPS and sprayed_lanes == _TINY_FAST_PATH_SPRAY_LANES:
         return 2
     return None
 
@@ -2147,11 +2127,7 @@ def _uses_stable_exact_stop(
     sprayed_lanes: int,
 ) -> bool:
     """Enable dynamic convergence only for sufficiently occupied unsprayed strips."""
-    return (
-        strip_count > 0
-        and sprayed_lanes == 0
-        and machine_count >= 2 * strip_count
-    )
+    return strip_count > 0 and sprayed_lanes == 0 and machine_count >= 2 * strip_count
 
 
 def _needs_topology_beam(
@@ -2183,6 +2159,62 @@ def _topology_closure_allowance(
 ) -> int:
     """Cap speculative routing where quality needs late topology enumeration."""
     return min(allowance, _QUALITY_TOPOLOGY_CLOSURE_CAP) if quality_role else allowance
+
+
+def _is_running_narrowest(width: int, narrowest_width: int | None) -> bool:
+    """Return whether one topology ties or improves the narrowest width seen."""
+    return narrowest_width is None or width <= narrowest_width
+
+
+def _refinement_direct_targets(
+    direct_targets: tuple[DirectInsertTarget, ...],
+    strips: Sequence[Strip],
+) -> tuple[DirectInsertTarget, ...]:
+    """Express physical strip spans relative to CP box origins."""
+    adjusted: list[DirectInsertTarget] = []
+    for target in direct_targets:
+        producer_offset = strips[target.producer].west_channel
+        consumer_offset = strips[target.consumer].west_channel
+        producer_span = target.producer_span + producer_offset - consumer_offset
+        consumer_span = target.consumer_span + consumer_offset - producer_offset
+        if producer_span > 0 and consumer_span > 0:
+            adjusted.append(
+                replace(
+                    target,
+                    producer_span=producer_span,
+                    consumer_span=consumer_span,
+                )
+            )
+    return tuple(adjusted)
+
+
+def _retain_refinement_hint(
+    retained: RefinementHint | None,
+    *,
+    width: int,
+    exact_key: tuple[int, int] | None,
+    decoded: DecodedPlacement,
+) -> RefinementHint | None:
+    """Retain the narrowest valid normal topology, then its exact-best tie."""
+    if exact_key is None:
+        return retained
+    candidate = (width, exact_key, decoded)
+    if retained is not None and retained[:2] <= candidate[:2]:
+        return retained
+    return candidate
+
+
+def _speculative_exact_allowance(
+    expansion_total: int,
+    *,
+    speculative_candidates: int,
+) -> int:
+    """Reserve at least half the routing ledger after every speculative closure."""
+    if type(expansion_total) is not int or expansion_total <= 0:
+        raise ValueError("expansion total must be a positive integer")
+    if type(speculative_candidates) is not int or speculative_candidates <= 0:
+        raise ValueError("speculative candidate count must be a positive integer")
+    return max(1, expansion_total // (2 * speculative_candidates))
 
 
 def _small_direct_seed_role(
@@ -2237,17 +2269,21 @@ def _uses_shared_pack_candidate(
     strip_len: int,
 ) -> bool:
     """Select exact shared packs with measured generic non-regression roles."""
-    return _small_direct_seed_role(
-        direct_candidates=direct_candidates,
-        strip_count=strip_count,
-        strip_len=strip_len,
-    ) or _shared_pack_height_rank(
-        machine_count=machine_count,
-        strip_count=strip_count,
-        strip_len=strip_len,
-        sprayed_lanes=sprayed_lanes,
-        direct_candidates=direct_candidates,
-    ) > 0
+    return (
+        _small_direct_seed_role(
+            direct_candidates=direct_candidates,
+            strip_count=strip_count,
+            strip_len=strip_len,
+        )
+        or _shared_pack_height_rank(
+            machine_count=machine_count,
+            strip_count=strip_count,
+            strip_len=strip_len,
+            sprayed_lanes=sprayed_lanes,
+            direct_candidates=direct_candidates,
+        )
+        > 0
+    )
 
 
 def _exact_pack_decoded(
@@ -2260,26 +2296,17 @@ def _exact_pack_decoded(
         raise ValueError("exact pack cardinality must match its placement problem")
     variant_indices = (0,) * problem.size
     sizes = problem.selected_sizes(variant_indices)
-    x = tuple(
-        pack.at[index][0] - strips[index].west_channel
-        for index in range(problem.size)
-    )
+    x = tuple(pack.at[index][0] - strips[index].west_channel for index in range(problem.size))
     y = tuple(pack.at[index][1] for index in range(problem.size))
     return DecodedPlacement(
         x=x,
         y=y,
         width=max(
-            (
-                coordinate + width
-                for coordinate, (width, _height) in zip(x, sizes, strict=True)
-            ),
+            (coordinate + width for coordinate, (width, _height) in zip(x, sizes, strict=True)),
             default=0,
         ),
         used_height=max(
-            (
-                coordinate + height
-                for coordinate, (_width, height) in zip(y, sizes, strict=True)
-            ),
+            (coordinate + height for coordinate, (_width, height) in zip(y, sizes, strict=True)),
             default=0,
         ),
         x_windows=tuple((coordinate, coordinate) for coordinate in x),
@@ -2678,9 +2705,7 @@ def _production_run(
             else sum(width * height for width, height in sizes)
         )
         seeds = {height: _greedy_pack(strips, height) for height in _candidate_heights(strips)}
-        coarse_heights = tuple(
-            sorted(seeds, key=lambda height: (seeds[height].width, height))
-        )
+        coarse_heights = tuple(sorted(seeds, key=lambda height: (seeds[height].width, height)))
         topology_beam_height = _topology_beam_height(
             seeds,
             coarse_heights,
@@ -2728,9 +2753,7 @@ def _production_run(
             )
             for height in heights
         }
-        if compact_seed_attempt is not None and not (
-            use_topology_beam or use_shared_pack
-        ):
+        if compact_seed_attempt is not None and not (use_topology_beam or use_shared_pack):
             template_problem = problems[heights[0]]
             compact_height = _balanced_compact_seed_height(template_problem)
             telemetry.compact_seed_base_seed = chosen_compact_base_seed
@@ -3053,9 +3076,9 @@ def _production_run(
         _ROUTING_BUDGET,
         int(_ROUTING_EXPANSIONS_PER_SECOND * ceiling),
     )
-    exact_candidate_allowance = max(
-        1,
-        expansion_total // (2 * (_TOPOLOGY_BEAM_CANDIDATES + 1)),
+    exact_candidate_allowance = _speculative_exact_allowance(
+        expansion_total,
+        speculative_candidates=(1 + _TOPOLOGY_BEAM_CANDIDATES + _TOPOLOGY_REFINEMENT_CANDIDATES),
     )
     solver = SequenceSolver(
         heights=heights,
@@ -3089,9 +3112,7 @@ def _production_run(
     seed_deadline = min(
         deadline,
         seed_started
-        + ceiling
-        * _COMPACT_SEED_WALL_SHARE.numerator
-        / _COMPACT_SEED_WALL_SHARE.denominator,
+        + ceiling * _COMPACT_SEED_WALL_SHARE.numerator / _COMPACT_SEED_WALL_SHARE.denominator,
     )
     if use_shared_pack and not deadline_reached():
         shared_started = time.monotonic()
@@ -3102,9 +3123,7 @@ def _production_run(
             sprayed_lanes=len(spec.spray_lanes),
             direct_candidates=len(direct_candidates),
         )
-        shared_height = coarse_heights[
-            min(shared_height_rank, len(coarse_heights) - 1)
-        ]
+        shared_height = coarse_heights[min(shared_height_rank, len(coarse_heights) - 1)]
         shared_seed = seeds[shared_height]
         shared_left = seed_deadline - time.monotonic()
         shared_pack = (
@@ -3134,6 +3153,14 @@ def _production_run(
         shared_role=use_shared_pack,
         incumbent_reason=solver.exact_incumbent_reason,
     )
+    tall_topology_role = _uses_tall_topology_height(
+        machine_count=spec.machine_count,
+        strip_count=len(strips),
+        sprayed_lanes=len(spec.spray_lanes),
+    )
+    refinement_direct_targets = (
+        _refinement_direct_targets(direct_targets, strips) if tall_topology_role else ()
+    )
     if (
         run_topology_beam
         and topology_beam_height is not None
@@ -3144,14 +3171,13 @@ def _production_run(
         beam_started = time.monotonic()
         beam_problem = problems[topology_beam_height]
         beam_variants = (0,) * beam_problem.size
+        refinement_hint: RefinementHint | None = None
         beam_seed = seeds[topology_beam_height]
         hint_x = tuple(
             beam_seed.at[index][0] - strips[index].west_channel
             for index in range(beam_problem.size)
         )
-        hint_y = tuple(
-            beam_seed.at[index][1] for index in range(beam_problem.size)
-        )
+        hint_y = tuple(beam_seed.at[index][1] for index in range(beam_problem.size))
         hint_sizes = beam_problem.selected_sizes(beam_variants)
         hint = DecodedPlacement(
             x=hint_x,
@@ -3199,21 +3225,13 @@ def _production_run(
             _protected_topology_candidates(
                 beam_problem.size,
                 len(spec.spray_lanes),
-                tall_role=_uses_tall_topology_height(
-                    machine_count=spec.machine_count,
-                    strip_count=len(strips),
-                    sprayed_lanes=len(spec.spray_lanes),
-                ),
+                tall_role=tall_topology_role,
             ),
         )
         topology_allowance = _topology_closure_allowance(
             exact_candidate_allowance,
             quality_role=(
-                _uses_tall_topology_height(
-                    machine_count=spec.machine_count,
-                    strip_count=len(strips),
-                    sprayed_lanes=len(spec.spray_lanes),
-                )
+                tall_topology_role
                 or _uses_mid_topology_height(
                     machine_count=spec.machine_count,
                     strip_count=len(strips),
@@ -3221,24 +3239,89 @@ def _production_run(
                 )
             ),
         )
+        narrowest_width_seen: int | None = None
+        refinement_attempted = False
         for topology_index in range(beam.config.max_candidates):
             candidate = beam.solve_next(
                 absolute_deadline=(
-                    deadline
-                    if topology_index < protected_candidates
-                    else seed_deadline
+                    deadline if topology_index < protected_candidates else seed_deadline
                 ),
                 cancelled=deadline_reached,
             )
             if candidate is None:
                 break
+            close_normal = not tall_topology_role or _is_running_narrowest(
+                candidate.width,
+                narrowest_width_seen,
+            )
+            narrowest_width_seen = (
+                candidate.width
+                if narrowest_width_seen is None
+                else min(narrowest_width_seen, candidate.width)
+            )
+            telemetry.topology_beam_candidates += 1
+            if not close_normal:
+                if topology_index + 1 < beam.config.max_candidates:
+                    beam.exclude(candidate.signature)
+                continue
+            decoded = _topology_candidate_decoded(candidate)
             solver.close_exact_decoded(
                 topology_beam_height,
-                _topology_candidate_decoded(candidate),
+                decoded,
                 reason="topology-beam",
                 allowance_cap=topology_allowance,
             )
-            telemetry.topology_beam_candidates += 1
+            if tall_topology_role:
+                refinement_hint = _retain_refinement_hint(
+                    refinement_hint,
+                    width=candidate.width,
+                    exact_key=solver._stage_stats[-1].exact_key,
+                    decoded=decoded,
+                )
+            if (
+                tall_topology_role
+                and refinement_direct_targets
+                and not refinement_attempted
+                and refinement_hint is not None
+                and refinement_hint[0] == narrowest_width_seen
+                and not deadline_reached()
+            ):
+                refinement_attempted = True
+                retained_width, _retained_exact_key, retained = refinement_hint
+                refinement = CompactTopologyBeam(
+                    beam_problem,
+                    variant_indices=beam_variants,
+                    width_bound=retained_width,
+                    base_seed=config.seed,
+                    coordinate_hint=retained,
+                    direct_targets=refinement_direct_targets,
+                    config=CompactTopologyBeamConfig(
+                        max_deterministic_time=(_TOPOLOGY_REFINEMENT_DETERMINISTIC_SECONDS),
+                        max_candidates=_TOPOLOGY_REFINEMENT_CANDIDATES,
+                        refine_width_first=True,
+                    ),
+                )
+                refined = refinement.solve_next(
+                    absolute_deadline=deadline,
+                    cancelled=deadline_reached,
+                )
+                if refined is not None:
+                    solver.close_exact_decoded(
+                        topology_beam_height,
+                        align_direct_inserts(
+                            beam_problem,
+                            _topology_candidate_decoded(refined),
+                            direct_targets,
+                        ),
+                        reason="topology-refinement",
+                        allowance_cap=min(
+                            exact_candidate_allowance,
+                            _QUALITY_TOPOLOGY_CLOSURE_CAP,
+                        ),
+                    )
+                    telemetry.topology_beam_candidates += 1
+                    if solver._stage_stats[-1].exact_key is not None:
+                        break
             if topology_index + 1 < beam.config.max_candidates:
                 beam.exclude(candidate.signature)
         telemetry.topology_beam_wall_time_s = time.monotonic() - beam_started
@@ -3256,7 +3339,8 @@ def _production_run(
                     strip_len=strip_len,
                 )
             )
-            and solver.exact_incumbent_reason in ("shared-pack", "topology-beam")
+            and solver.exact_incumbent_reason
+            in ("shared-pack", "topology-beam", "topology-refinement")
         ),
         strip_count=len(strips),
         net_count=len(nets),
@@ -3280,11 +3364,7 @@ def _decoded_pack(
     west_channels: tuple[int, ...] | None = None,
 ) -> _Pack:
     """Convert decoded box origins to their selected-strip content origins."""
-    channels = (
-        (WEST_CHANNEL,) * len(decoded.x)
-        if west_channels is None
-        else west_channels
-    )
+    channels = (WEST_CHANNEL,) * len(decoded.x) if west_channels is None else west_channels
     if len(channels) != len(decoded.x):
         raise ValueError("west-channel count must match decoded strip count")
     return _Pack(

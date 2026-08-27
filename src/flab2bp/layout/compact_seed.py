@@ -19,7 +19,6 @@ from enum import StrEnum
 from ortools.sat.python import cp_model
 
 from flab2bp.dsp import catalog
-from flab2bp.layout.freeform import LAMBDA_HPWL, MU_DIRECT
 from flab2bp.layout.sequence_pair import (
     AnnealState,
     DecodedPlacement,
@@ -31,6 +30,9 @@ from flab2bp.layout.sequence_pair import (
     derive_stage_seed,
 )
 from flab2bp.layout.strip_variants import StripVariant, StripVariantId
+
+_HPWL_WEIGHT = 1
+_MISSED_DIRECT_WEIGHT = 4
 
 _CP_INT_MAX = (1 << 63) - 1
 _RANDOM_SEED_MODULUS = (1 << 31) - 1
@@ -123,7 +125,6 @@ class CompactSeedResult:
             raise ValueError("compact seed status and incumbent presence disagree")
 
 
-
 type PairwiseRelation = tuple[bool, bool, bool, bool]
 type PairwiseRelationEntry = tuple[tuple[int, int], PairwiseRelation]
 
@@ -168,9 +169,7 @@ class PairwiseRelationSignature:
                 or any(type(value) is not bool for value in relation)
                 or not any(relation)
             ):
-                raise ValueError(
-                    "pairwise relations require four booleans with one separation"
-                )
+                raise ValueError("pairwise relations require four booleans with one separation")
             prior = pair
 
 
@@ -180,6 +179,7 @@ class CompactTopologyBeamConfig:
 
     max_candidates: int = 2
     max_deterministic_time: float = 0.2
+    refine_width_first: bool = False
 
     def __post_init__(self) -> None:
         if type(self.max_candidates) is not int or self.max_candidates <= 0:
@@ -189,9 +189,9 @@ class CompactTopologyBeamConfig:
             or not math.isfinite(self.max_deterministic_time)
             or not 0.0 < self.max_deterministic_time <= _MAX_DETERMINISTIC_TIME
         ):
-            raise ValueError(
-                "topology deterministic time must be a finite float in (0.0, 3600.0]"
-            )
+            raise ValueError("topology deterministic time must be a finite float in (0.0, 3600.0]")
+        if type(self.refine_width_first) is not bool:
+            raise ValueError("topology refinement flag must be exactly boolean")
 
 
 @dataclass(frozen=True, slots=True)
@@ -228,6 +228,7 @@ class CompactTopologyBeam:
         width_bound: int,
         base_seed: int,
         coordinate_hint: DecodedPlacement | None,
+        direct_targets: tuple[DirectInsertTarget, ...] = (),
         config: CompactTopologyBeamConfig | None = None,
     ) -> None:
         if not isinstance(problem, PlacementProblem):
@@ -250,6 +251,17 @@ class CompactTopologyBeam:
                 and coordinate_hint.variant_indices != variant_indices
             ):
                 raise ValueError("topology coordinate hint variants must match the problem")
+        if not isinstance(direct_targets, tuple):
+            raise ValueError("topology direct targets must be an immutable tuple")
+        if any(not isinstance(target, DirectInsertTarget) for target in direct_targets):
+            raise ValueError("topology direct targets must contain DirectInsertTarget values")
+        if any(
+            target.producer >= problem.size or target.consumer >= problem.size
+            for target in direct_targets
+        ):
+            raise ValueError("topology direct targets must identify problem strips")
+        if len({target.key for target in direct_targets}) != len(direct_targets):
+            raise ValueError("topology direct target keys must be unique")
         if config is None:
             chosen_config = CompactTopologyBeamConfig()
         elif type(config) is CompactTopologyBeamConfig:
@@ -263,6 +275,7 @@ class CompactTopologyBeam:
         self.width_bound = width_bound
         self.base_seed = base_seed
         self.config = chosen_config
+        self.direct_targets = direct_targets
         self._pairs = tuple(itertools.combinations(range(problem.size), 2))
         self._excluded: set[PairwiseRelationSignature] = set()
         self._solved = 0
@@ -325,7 +338,6 @@ class CompactTopologyBeam:
                 )
         model.add_no_overlap_2d(x_intervals, y_intervals)
 
-
         relations: list[tuple[cp_model.IntVar, ...]] = []
         for first, second in self._pairs:
             first_width, first_height = self.sizes[first]
@@ -343,7 +355,61 @@ class CompactTopologyBeam:
                 literals.append(literal)
             relations.append(tuple(literals))
 
-        model.minimize(outline_width)
+        if self.config.refine_width_first:
+            hpwl_terms: list[cp_model.IntVar] = []
+            for source, destination in self.problem.nets:
+                delta_x = model.new_int_var(
+                    0,
+                    self.width_bound,
+                    f"direct_dx{source}_{destination}",
+                )
+                delta_y = model.new_int_var(
+                    0,
+                    self.problem.outline_height,
+                    f"direct_dy{source}_{destination}",
+                )
+                model.add_abs_equality(delta_x, x[source] - x[destination])
+                model.add_abs_equality(delta_y, y[source] - y[destination])
+                source_width, source_height = self.sizes[source]
+                destination_width, destination_height = self.sizes[destination]
+                model.add(
+                    delta_x + delta_y
+                    >= min(
+                        min(source_width, destination_width),
+                        min(source_height, destination_height),
+                    )
+                )
+                hpwl_terms.extend((delta_x, delta_y))
+            direct_successes: list[cp_model.IntVar] = []
+            for target in self.direct_targets:
+                direct = model.new_bool_var(f"beam_di{target.producer}_{target.consumer}")
+                row_gap = (
+                    y[target.consumer]
+                    + target.consumer_row
+                    - y[target.producer]
+                    - target.producer_row
+                )
+                model.add(row_gap >= 1).only_enforce_if(direct)
+                model.add(row_gap <= catalog.SORTER_MAX_REACH).only_enforce_if(direct)
+                model.add(
+                    x[target.producer] <= x[target.consumer] + target.consumer_span - 1
+                ).only_enforce_if(direct)
+                model.add(
+                    x[target.consumer] <= x[target.producer] + target.producer_span - 1
+                ).only_enforce_if(direct)
+                direct_successes.append(direct)
+            width_weight = (
+                len(hpwl_terms) * (self.width_bound + self.problem.outline_height)
+                + _MISSED_DIRECT_WEIGHT * len(direct_successes)
+                + 1
+            )
+            model.minimize(
+                outline_width * width_weight
+                + _HPWL_WEIGHT * sum(hpwl_terms)
+                + _MISSED_DIRECT_WEIGHT * sum(direct.negated() for direct in direct_successes)
+            )
+        else:
+            model.minimize(outline_width)
         return model, _TopologyBeamVariables(
             x=tuple(x),
             y=tuple(y),
@@ -408,10 +474,7 @@ class CompactTopologyBeam:
             y=y,
             width=solver.value(self._variables.outline_width),
             used_height=max(
-                (
-                    strip_y + height
-                    for strip_y, (_width, height) in zip(y, self.sizes, strict=True)
-                ),
+                (strip_y + height for strip_y, (_width, height) in zip(y, self.sizes, strict=True)),
                 default=0,
             ),
             variant_indices=self.variant_indices,
@@ -441,6 +504,7 @@ class CompactTopologyBeam:
             )
         self._model.add_bool_or(differing)
         self._excluded.add(signature)
+
 
 @dataclass(frozen=True, slots=True)
 class _ModelVariables:
@@ -646,7 +710,7 @@ def _prepare_model_plan(
             _require_cp_signed(offset[1], f"net {net_index} y port offset")
 
     net_weights = tuple(
-        LAMBDA_HPWL * (1 + _stable_coefficient(stage_seed, net_index, 0, 3))
+        _HPWL_WEIGHT * (1 + _stable_coefficient(stage_seed, net_index, 0, 3))
         for net_index in range(len(problem.nets))
     )
     by_key: dict[tuple[int, int], list[VariantDirectInsertTarget]] = {}
@@ -665,7 +729,7 @@ def _prepare_model_plan(
     )
 
     secondary_upper_bound = sum(weight * (2 * max_width + 2 * height) for weight in net_weights)
-    secondary_upper_bound += MU_DIRECT * len(direct_groups)
+    secondary_upper_bound += _MISSED_DIRECT_WEIGHT * len(direct_groups)
     secondary_upper_bound += sum(
         x_coefficient * max_width
         + y_coefficient * height
@@ -835,7 +899,7 @@ def _build_model(
             direct_successes.append((key, success))
         missed = model.new_bool_var(f"direct_missed_{direct_index}")
         model.add(missed + sum(successes) == 1)
-        secondary_terms.append(MU_DIRECT * missed)
+        secondary_terms.append(_MISSED_DIRECT_WEIGHT * missed)
 
     for strip, (
         x_coefficient,

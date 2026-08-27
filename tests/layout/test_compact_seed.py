@@ -435,6 +435,74 @@ def test_topology_beam_enumerates_distinct_deterministic_relation_signatures() -
     assert first_run[0][2] != first_run[1][2]
 
 
+def test_topology_refinement_validates_config_and_direct_target_types() -> None:
+    problem = _fixed_problem(sizes=((2, 2), (2, 2)), nets=((0, 1),))
+    target = DirectInsertTarget((0, 1), 0, 1, 0, 0, 2, 2)
+
+    config = CompactTopologyBeamConfig(refine_width_first=True)
+    assert config.refine_width_first
+    with pytest.raises(ValueError, match="refinement"):
+        CompactTopologyBeamConfig(refine_width_first=1)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="immutable tuple"):
+        CompactTopologyBeam(
+            problem,
+            variant_indices=(0, 0),
+            width_bound=4,
+            base_seed=3,
+            coordinate_hint=None,
+            direct_targets=cast(tuple[DirectInsertTarget, ...], [target]),
+            config=config,
+        )
+    with pytest.raises(ValueError, match="identify problem strips"):
+        CompactTopologyBeam(
+            problem,
+            variant_indices=(0, 0),
+            width_bound=4,
+            base_seed=3,
+            coordinate_hint=None,
+            direct_targets=(DirectInsertTarget((0, 2), 0, 2, 0, 0, 2, 2),),
+            config=config,
+        )
+
+
+def test_topology_refinement_is_width_first_direct_and_deterministic() -> None:
+    problem = _fixed_problem(sizes=((2, 2), (2, 2)), height=4, nets=((0, 1),))
+    hint = decode_sequence_pair(
+        SequencePair((0, 1), (1, 0)),
+        GapProfile.zero(problem.size),
+        problem.sizes,
+        outline_height=problem.outline_height,
+    )
+    target = DirectInsertTarget((0, 1), 0, 1, 0, 0, 2, 2)
+    config = CompactTopologyBeamConfig(
+        max_candidates=1,
+        max_deterministic_time=0.2,
+        refine_width_first=True,
+    )
+
+    def solve() -> tuple[tuple[int, ...], tuple[int, ...], int]:
+        beam = CompactTopologyBeam(
+            problem,
+            variant_indices=(0, 0),
+            width_bound=4,
+            base_seed=17,
+            coordinate_hint=hint,
+            direct_targets=(target,),
+            config=config,
+        )
+        candidate = beam.solve_next()
+        assert candidate is not None
+        return candidate.x, candidate.y, candidate.width
+
+    first = solve()
+    assert solve() == first
+    x, y, width = first
+    assert width == 2
+    assert y[0] < y[1]
+    assert x[0] <= x[1] + target.consumer_span - 1
+    assert x[1] <= x[0] + target.producer_span - 1
+
+
 def test_topology_beam_rejects_foreign_or_duplicate_no_goods() -> None:
     problem = _fixed_problem(nets=())
     beam = CompactTopologyBeam(
@@ -606,12 +674,8 @@ def test_real_refinery_fixed_outline_seed_is_cython_decodable_without_witness_hi
     assert identities <= candidate_space
     assert all(
         (entry.target.producer, entry.target.consumer) in problem.nets
-        and 0
-        <= entry.producer_variant
-        < len(problem.variant_tables[entry.target.producer])
-        and 0
-        <= entry.consumer_variant
-        < len(problem.variant_tables[entry.target.consumer])
+        and 0 <= entry.producer_variant < len(problem.variant_tables[entry.target.producer])
+        and 0 <= entry.consumer_variant < len(problem.variant_tables[entry.target.consumer])
         for entry in eligibility
     )
 

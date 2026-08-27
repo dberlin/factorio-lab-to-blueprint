@@ -43,6 +43,7 @@ from flab2bp.layout.sequence_pair import (
     AnnealIncumbent,
     AnnealState,
     DecodedPlacement,
+    DirectInsertTarget,
     EliteCategory,
     GapProfile,
     PlacementKey,
@@ -276,9 +277,7 @@ def _repeat_merged_elite(monkeypatch: pytest.MonkeyPatch, count: int) -> None:
         archived = original(candidates, elite_count)
         if archived and elite_count == count:
             narrowest = next(
-                tagged
-                for tagged in archived
-                if EliteCategory.NARROWEST in tagged.categories
+                tagged for tagged in archived if EliteCategory.NARROWEST in tagged.categories
             )
             return (narrowest,) * count
         return archived
@@ -458,7 +457,6 @@ def test_exact_decoded_closure_retains_coordinates_without_sequence_reencoding()
     assert budget.spent == 7
 
 
-
 def test_search_stops_when_exact_incumbent_meets_certified_area_floor() -> None:
     optimal = _placement(area=1, belt_tiles=1)
     unnecessary = _placement(area=2, belt_tiles=0)
@@ -492,6 +490,7 @@ def test_search_stops_when_exact_incumbent_meets_certified_area_floor() -> None:
     assert result.placement is optimal
     assert result.termination == "area-optimal"
     assert len(fake.detailed_allowances) == 1
+
 
 def test_valid_topology_candidate_does_not_stop_better_exact_enumeration() -> None:
     first = _placement(area=30, belt_tiles=1)
@@ -1634,16 +1633,22 @@ def test_mid_height_topology_role_is_high_spray_and_under_saturated(
 
 
 def test_tall_topology_role_protects_every_measured_candidate() -> None:
-    assert sequence_solver_module._protected_topology_candidates(
-        strip_count=14,
-        sprayed_lanes=14,
-        tall_role=True,
-    ) == 7
-    assert sequence_solver_module._protected_topology_candidates(
-        strip_count=14,
-        sprayed_lanes=14,
-        tall_role=False,
-    ) == 3
+    assert (
+        sequence_solver_module._protected_topology_candidates(
+            strip_count=14,
+            sprayed_lanes=14,
+            tall_role=True,
+        )
+        == 7
+    )
+    assert (
+        sequence_solver_module._protected_topology_candidates(
+            strip_count=14,
+            sprayed_lanes=14,
+            tall_role=False,
+        )
+        == 3
+    )
 
 
 @pytest.mark.parametrize(
@@ -1666,6 +1671,81 @@ def test_quality_topology_roles_cap_speculative_closures(
         )
         == expected
     )
+
+
+def test_refinement_hint_retains_exact_better_belt_tie() -> None:
+    first = DecodedPlacement(
+        (0,),
+        (0,),
+        1,
+        1,
+        ((0, 0),),
+        ((0, 0),),
+        0,
+    )
+    narrower = replace(first, x=(1,), x_windows=((1, 1),), width=2)
+    exact_better = replace(first, y=(1,), y_windows=((1, 1),), used_height=2)
+
+    retained = sequence_solver_module._retain_refinement_hint(
+        None,
+        width=125,
+        exact_key=(20, 4),
+        decoded=first,
+    )
+    assert retained == (125, (20, 4), first)
+    retained = sequence_solver_module._retain_refinement_hint(
+        retained,
+        width=111,
+        exact_key=(21, 0),
+        decoded=narrower,
+    )
+    assert retained == (111, (21, 0), narrower)
+    retained = sequence_solver_module._retain_refinement_hint(
+        retained,
+        width=111,
+        exact_key=(20, 3),
+        decoded=exact_better,
+    )
+    assert retained == (111, (20, 3), exact_better)
+    assert (
+        sequence_solver_module._retain_refinement_hint(
+            retained,
+            width=112,
+            exact_key=(10, 0),
+            decoded=first,
+        )
+        == retained
+    )
+
+
+def test_tall_topology_closes_only_running_narrowest_widths() -> None:
+    assert sequence_solver_module._is_running_narrowest(125, None)
+    assert sequence_solver_module._is_running_narrowest(111, 125)
+    assert sequence_solver_module._is_running_narrowest(111, 111)
+    assert not sequence_solver_module._is_running_narrowest(125, 111)
+
+
+def test_refinement_direct_targets_encode_strip_channel_offsets() -> None:
+    target = DirectInsertTarget((0, 1), 0, 1, 2, 4, 10, 4)
+    strips = (
+        type("StripOffset", (), {"west_channel": 3})(),
+        type("StripOffset", (), {"west_channel": 1})(),
+    )
+
+    assert sequence_solver_module._refinement_direct_targets((target,), strips) == (
+        replace(target, producer_span=12, consumer_span=2),
+    )
+
+
+def test_speculative_closure_allowance_reserves_half_for_fallback() -> None:
+    speculative_candidates = 1 + 8 + 1
+    allowance = sequence_solver_module._speculative_exact_allowance(
+        6_000_000,
+        speculative_candidates=speculative_candidates,
+    )
+
+    assert allowance == 300_000
+    assert allowance * speculative_candidates <= 6_000_000 // 2
 
 
 @pytest.mark.parametrize(
