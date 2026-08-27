@@ -6,6 +6,7 @@ import importlib
 import warnings
 from collections.abc import Mapping, Sequence
 from fractions import Fraction
+from typing import Protocol, TypeGuard
 
 import pytest
 from ortools.linear_solver import pywraplp  # type: ignore[import-untyped]
@@ -26,8 +27,48 @@ from flab2bp.rates.solve import (
 )
 from flab2bp.spec import ProliferatorMode
 
-solve_module = importlib.import_module("flab2bp.rates.solve")
 
+class _ContinuousLp(Protocol):
+    def __call__(
+        self,
+        columns: Sequence[AdjustedRecipe],
+        internal_items: Sequence[str],
+        demand: Mapping[str, Fraction],
+        *,
+        time_limit_s: float,
+    ) -> list[float]: ...
+
+
+class _Milp(Protocol):
+    def __call__(
+        self,
+        columns: Sequence[AdjustedRecipe],
+        internal_items: Sequence[str],
+        demand: Mapping[str, Fraction],
+        *,
+        time_limit_s: float,
+    ) -> tuple[list[float], list[float]]: ...
+
+
+class _SolveModule(Protocol):
+    _run_continuous_lp: _ContinuousLp
+    _run_milp: _Milp
+
+
+def _is_solve_module(module: object) -> TypeGuard[_SolveModule]:
+    return callable(getattr(module, "_run_continuous_lp", None)) and callable(
+        getattr(module, "_run_milp", None)
+    )
+
+
+def _load_solve_module() -> _SolveModule:
+    module: object = importlib.import_module("flab2bp.rates.solve")
+    if not _is_solve_module(module):
+        raise RuntimeError("flab2bp.rates.solve lacks its solver seams")
+    return module
+
+
+solve_module = _load_solve_module()
 
 EXAMPLE_URL = (
     "https://factoriolab.github.io/dsp/flow"

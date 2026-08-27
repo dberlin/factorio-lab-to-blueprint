@@ -92,7 +92,8 @@ def _install_memo(cls: type[_Layout]) -> None:
             raise hit
         return hit
 
-    cls.lay_out = lay_out
+    layout_method = "lay_out"
+    setattr(cls, layout_method, lay_out)
 
 
 _install_memo(SpineLayout)

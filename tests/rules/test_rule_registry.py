@@ -128,7 +128,9 @@ def test_mutation_exemptions_are_explicit_rule_scope() -> None:
     exempt = [e for e in registry.ENTRIES if e.mutation_exempt_because]
     assert exempt
     assert all(e.kind is Kind.RULE for e in exempt)
-    assert all(e.mutation_exempt_because.strip() for e in exempt)
+    for entry in exempt:
+        reason = entry.mutation_exempt_because
+        assert reason is not None and reason.strip()
 
 
 def test_a_rule_that_varies_says_what_resolves_the_variation() -> None:

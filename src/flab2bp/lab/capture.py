@@ -59,6 +59,7 @@ the browser was slow would reintroduce the exact defect this feature removes.
 from __future__ import annotations
 
 import asyncio
+import importlib
 import json
 import os
 import shutil
@@ -66,8 +67,9 @@ import socket
 import subprocess
 import tempfile
 from collections.abc import Sequence
+from importlib.util import find_spec
 from pathlib import Path
-from typing import Final, Protocol, TypedDict
+from typing import Final, Protocol, TypedDict, TypeGuard
 
 from pydantic import TypeAdapter, ValidationError
 
@@ -95,6 +97,20 @@ class _AsyncPage(Protocol):
         await_promise: bool = False,
         return_by_value: bool = False,
     ) -> object: ...
+
+
+class _Browser(Protocol):
+    async def get(self, url: str) -> _AsyncPage: ...
+
+    def stop(self) -> None: ...
+
+
+class _NoDriver(Protocol):
+    async def start(self, *, host: str, port: int) -> _Browser: ...
+
+
+def _is_nodriver(module: object) -> TypeGuard[_NoDriver]:
+    return callable(getattr(module, "start", None))
 
 
 _SOLVE_PROBE_STATE_ADAPTER = TypeAdapter(SolveProbeState)
@@ -290,7 +306,9 @@ async def _await_solve(page: _AsyncPage, url: str, deadline_s: float) -> None:
 
 
 async def _capture(url: str, executable: str, timeout_s: float, headless: bool) -> str:
-    import nodriver
+    nodriver: object = importlib.import_module("nodriver")
+    if not _is_nodriver(nodriver):
+        raise CaptureError("nodriver has no callable start()")
 
     port = _free_port()
     profile = tempfile.mkdtemp(prefix="flab2bp-browser-")
@@ -303,7 +321,7 @@ async def _capture(url: str, executable: str, timeout_s: float, headless: bool) 
     process = subprocess.Popen(  # noqa: S603 - executable resolved by find_browser
         [executable, *args], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
     )
-    browser = None
+    browser: _Browser | None = None
     try:
         await _await_devtools(port, process, min(timeout_s, 30.0))
         browser = await nodriver.start(host="127.0.0.1", port=port)
@@ -361,11 +379,9 @@ def capture_flow_csv(
     to a real export is refusing, not deriving one.
     """
     executable = find_browser(browser)
-    try:
-        import nodriver  # noqa: F401
-    except ImportError as exc:  # pragma: no cover - declared dependency
+    if find_spec("nodriver") is None:  # pragma: no cover - declared dependency
         raise CaptureError(
             "nodriver is not installed, so a flow export cannot be fetched; "
             "pass --flow with a CSV downloaded from FactorioLab instead"
-        ) from exc
+        )
     return asyncio.run(_capture(url, executable, timeout_s, headless))

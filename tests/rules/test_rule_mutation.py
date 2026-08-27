@@ -434,9 +434,9 @@ def test_perturbation_does_not_rewrite_frozen_projections() -> None:
     alignment = rules.SLOT_ALIGN_COS
     keepout = junction._KEEPOUT
     with mutation.perturbed(registry.by_symbol("rules.SKEW_AXIS_DEG"), 12.0):
-        assert rules.SLOT_ALIGN_COS == alignment
+        assert alignment == rules.SLOT_ALIGN_COS
     with mutation.perturbed(registry.by_symbol("colliders.belt_keepout_offsets")):
-        assert junction._KEEPOUT == keepout
+        assert keepout == junction._KEEPOUT
 
 
 def test_the_mutation_coverage_number(capsys: pytest.CaptureFixture[str]) -> None:

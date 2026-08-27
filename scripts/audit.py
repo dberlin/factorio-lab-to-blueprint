@@ -228,6 +228,7 @@ def run_cell(job: Job) -> Result:
 
     belt_rules = _belt_rules_for(job.url)
     make_strategy = _STRATEGIES[job.strategy]
+    strategy: LayoutStrategy
     try:
         if job.arrangements is not None and job.strategy == "freeform":
             strategy = FreeformLayout(
