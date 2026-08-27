@@ -7,7 +7,7 @@ import sys
 from collections.abc import Callable
 from dataclasses import FrozenInstanceError, replace
 from itertools import combinations, permutations
-from typing import Any, cast
+from typing import cast
 
 import pytest
 
@@ -497,15 +497,15 @@ def test_placement_problem_validates_geometry_nets_and_bounds() -> None:
     with pytest.raises(FrozenInstanceError):
         problem.outline_height = 6  # type: ignore[misc]
 
-    invalid_kwargs: tuple[dict[str, Any], ...] = (
-        {"sizes": ((0, 2),), "nets": (), "outline_height": 2, "area_lower_bound": 0},
-        {"sizes": ((1, 2),), "nets": ((0, 1),), "outline_height": 2, "area_lower_bound": 2},
-        {"sizes": ((1, 2),), "nets": (), "outline_height": 0, "area_lower_bound": 2},
-        {"sizes": ((1, 2),), "nets": (), "outline_height": 2, "area_lower_bound": -1},
+    invalid_calls: tuple[Callable[[], PlacementProblem], ...] = (
+        lambda: PlacementProblem(((0, 2),), (), 2, 0),
+        lambda: PlacementProblem(((1, 2),), ((0, 1),), 2, 2),
+        lambda: PlacementProblem(((1, 2),), (), 0, 2),
+        lambda: PlacementProblem(((1, 2),), (), 2, -1),
     )
-    for kwargs in invalid_kwargs:
+    for call in invalid_calls:
         with pytest.raises(ValueError):
-            PlacementProblem(**kwargs)
+            call()
 
 
 def _tiny_placement_problem() -> PlacementProblem:
@@ -1047,7 +1047,7 @@ def test_candidate_score_reports_independently_recomputed_components() -> None:
     assert breakdown.hard_outline_overflow == max(0, decoded.used_height - problem.outline_height)
     assert breakdown.energy == cheap_energy(problem, decoded, context)
     assert breakdown.energy.scalar == pytest.approx(
-        decoded.width * problem.outline_height / problem.area_lower_bound
+        decoded.width * decoded.used_height / problem.area_lower_bound
         + 0.35 * independent_hpwl / problem.area_lower_bound
         + 0.2 * independent_history / len(problem.nets)
         + 0.1 * breakdown.missed_direct_inserts / len(problem.nets)
@@ -1704,16 +1704,16 @@ def test_anneal_stage_advances_once_and_retains_ordered_distinct_elites() -> Non
 
 
 def test_anneal_config_rejects_invalid_schedule_values() -> None:
-    invalid_kwargs: tuple[dict[str, Any], ...] = (
-        {"moves_per_stage": 0},
-        {"initial_temperature": 0.0},
-        {"final_temperature": 0.0},
-        {"initial_temperature": 0.5, "final_temperature": 1.0},
-        {"elite_count": 0},
+    invalid_calls: tuple[Callable[[], AnnealConfig], ...] = (
+        lambda: AnnealConfig(moves_per_stage=0),
+        lambda: AnnealConfig(initial_temperature=0.0),
+        lambda: AnnealConfig(final_temperature=0.0),
+        lambda: AnnealConfig(initial_temperature=0.5, final_temperature=1.0),
+        lambda: AnnealConfig(elite_count=0),
     )
-    for kwargs in invalid_kwargs:
+    for call in invalid_calls:
         with pytest.raises(ValueError):
-            AnnealConfig(**kwargs)
+            call()
 
 
 @pytest.mark.parametrize(
@@ -1721,11 +1721,13 @@ def test_anneal_config_rejects_invalid_schedule_values() -> None:
     (
         (),
         (MoveKind.SWAP_POSITIVE, MoveKind.SWAP_POSITIVE),
-        (cast(Any, "swap_positive"),),
-        cast(Any, [MoveKind.SWAP_POSITIVE]),
+        (cast(MoveKind, "swap_positive"),),
+        cast(tuple[MoveKind, ...], [MoveKind.SWAP_POSITIVE]),
     ),
 )
-def test_anneal_config_rejects_invalid_move_pools(move_kinds: Any) -> None:
+def test_anneal_config_rejects_invalid_move_pools(
+    move_kinds: tuple[MoveKind, ...],
+) -> None:
     with pytest.raises(ValueError):
         AnnealConfig(move_kinds=move_kinds)
 

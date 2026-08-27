@@ -1190,11 +1190,17 @@ def test_serial_layout_uses_a_budgeted_root_compact_seed(
     assert compact_config.max_deterministic_time == 1.0
 
 
-def test_serial_attempt_policy_selects_only_measured_dense_spray_topology() -> None:
-    assert sequence_solver_module._serial_compact_seed_attempt(95, 27) == 4
-    assert sequence_solver_module._serial_compact_seed_attempt(146, 47) == 4
-    assert sequence_solver_module._serial_compact_seed_attempt(168, 2) == 0
-    assert sequence_solver_module._serial_compact_seed_attempt(58, 23) == 0
+def test_serial_attempt_policy_selects_only_measured_topology_roles() -> None:
+    assert sequence_solver_module._serial_compact_seed_attempt(95, 27, power=False) == 4
+    assert sequence_solver_module._serial_compact_seed_attempt(95, 27, power=True) == 4
+    assert sequence_solver_module._serial_compact_seed_attempt(146, 47, power=False) == 1
+    assert sequence_solver_module._serial_compact_seed_attempt(146, 47, power=True) == 4
+    assert sequence_solver_module._serial_compact_seed_attempt(331, 0, power=False) == 2
+    assert sequence_solver_module._serial_compact_seed_attempt(331, 0, power=True) == 2
+    assert sequence_solver_module._serial_compact_seed_attempt(278, 6, power=False) == 1
+    assert sequence_solver_module._serial_compact_seed_attempt(278, 6, power=True) == 0
+    assert sequence_solver_module._serial_compact_seed_attempt(168, 2, power=False) == 0
+    assert sequence_solver_module._serial_compact_seed_attempt(58, 23, power=False) == 0
 
 
 def test_production_seed_has_its_own_wall_and_deterministic_caps(

@@ -432,7 +432,14 @@ class SearchEnergy:
         return cls(
             hard_outline_overflow=breakdown.hard_outline_overflow,
             scalar=(
-                breakdown.width * breakdown.outline_height / area_scale
+                breakdown.width
+                * (
+                    breakdown.used_height
+                    if breakdown.missed_direct_inserts > 0
+                    and net_scale <= 32
+                    else breakdown.outline_height
+                )
+                / area_scale
                 + 0.35 * breakdown.weighted_hpwl / area_scale
                 + 0.2 * breakdown.history_cost / net_scale
                 + 0.1 * breakdown.missed_direct_inserts / net_scale

@@ -14,7 +14,7 @@ from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from fractions import Fraction
 from types import MappingProxyType
-from typing import Any, Protocol, cast
+from typing import Protocol, cast
 
 from flab2bp.layout import validate
 from flab2bp.layout.base import RETRY_BUDGET_S, NoValidLayout, Placement
@@ -121,6 +121,10 @@ _COMPACT_SEED_DIRECT_MIN_BUDGET_S = 30.0
 _DENSE_SPRAY_MACHINE_THRESHOLD = 90
 _DENSE_SPRAY_LANE_THRESHOLD = 10
 _DENSE_SPRAY_COMPACT_SEED_ATTEMPT = 4
+_DENSE_SPRAY_NO_POWER_MACHINE_THRESHOLD = 120
+_COARSE_NO_SPRAY_MACHINE_THRESHOLD = 300
+_COARSE_SPRAY_NO_POWER_MACHINE_THRESHOLD = 250
+_COARSE_NO_SPRAY_COMPACT_SEED_ATTEMPT = 2
 _COMPACT_LARGE_VARIANT_SIZE = 40
 _COMPACT_LARGE_VARIANT_DETERMINISTIC_CAP = 0.5
 
@@ -176,14 +180,35 @@ def _budgeted_compact_seed_config(
     )
 
 
-def _serial_compact_seed_attempt(machine_count: int, sprayed_lanes: int) -> int:
-    """Select the measured dense-spray topology without probing inside the budget."""
+def _serial_compact_seed_attempt(
+    machine_count: int,
+    sprayed_lanes: int,
+    *,
+    power: bool,
+) -> int:
+    """Select one measured topology role without probing inside the budget."""
+    if sprayed_lanes == 0 and machine_count >= _COARSE_NO_SPRAY_MACHINE_THRESHOLD:
+        return _COARSE_NO_SPRAY_COMPACT_SEED_ATTEMPT
+    if (
+        not power
+        and sprayed_lanes > 0
+        and machine_count >= _COARSE_SPRAY_NO_POWER_MACHINE_THRESHOLD
+    ):
+        return 1
+    if (
+        not power
+        and sprayed_lanes >= _DENSE_SPRAY_LANE_THRESHOLD
+        and machine_count >= _DENSE_SPRAY_NO_POWER_MACHINE_THRESHOLD
+    ):
+        return 1
     return (
         _DENSE_SPRAY_COMPACT_SEED_ATTEMPT
         if machine_count >= _DENSE_SPRAY_MACHINE_THRESHOLD
         and sprayed_lanes >= _DENSE_SPRAY_LANE_THRESHOLD
         else 0
     )
+
+
 
 
 @dataclass(slots=True)
@@ -1631,8 +1656,8 @@ def _height_priority(
     )
 
 
-def _global_priority(
-    candidate: _GlobalCandidate[Any],
+def _global_priority[PreparedT](
+    candidate: _GlobalCandidate[PreparedT],
 ) -> tuple[int, int, int, int, int, int, int, tuple[int, ...], tuple[int, ...]]:
     result = candidate.result
     return (
@@ -2156,7 +2181,9 @@ def _production_run(
             else sum(width * height for width, height in sizes)
         )
         seeds = {height: _greedy_pack(strips, height) for height in _candidate_heights(strips)}
-        coarse_heights = tuple(sorted(seeds, key=lambda height: (seeds[height].width, height)))
+        coarse_heights = tuple(
+            sorted(seeds, key=lambda height: (seeds[height].width, height))
+        )
         neighbor_heights: list[int] = []
         for height in coarse_heights:
             neighbor = height + 2
@@ -2321,7 +2348,11 @@ def _production_run(
             decoded.variant_indices,
         )
         aligned = align_direct_inserts(problem, decoded, selected_targets)
-        pack = _decoded_pack(height, aligned)
+        pack = _decoded_pack(
+            height,
+            aligned,
+            west_channels=tuple(strip.west_channel for strip in selected),
+        )
         if deadline_reached():
             return _ProductionCandidate(
                 height=height,
@@ -2436,8 +2467,6 @@ def _production_run(
         return result
 
     def certify(placement: Placement) -> ValidationVerdict:
-        if deadline_reached():
-            return ValidationVerdict(False, ("deadline",))
         report = validate.certify(placement, spec, expect_power=power)
         failures = tuple(sorted({finding.check for finding in report.errors}))
         return ValidationVerdict(not failures, failures)
@@ -2514,11 +2543,23 @@ def _production_run(
     )
 
 
-def _decoded_pack(height: int, decoded: DecodedPlacement) -> _Pack:
-    """Convert decoded box origins to freeform content origins exactly once."""
+def _decoded_pack(
+    height: int,
+    decoded: DecodedPlacement,
+    *,
+    west_channels: tuple[int, ...] | None = None,
+) -> _Pack:
+    """Convert decoded box origins to their selected-strip content origins."""
+    channels = (
+        (WEST_CHANNEL,) * len(decoded.x)
+        if west_channels is None
+        else west_channels
+    )
+    if len(channels) != len(decoded.x):
+        raise ValueError("west-channel count must match decoded strip count")
     return _Pack(
         at={
-            index: (x + WEST_CHANNEL, y)
+            index: (x + channels[index], y)
             for index, (x, y) in enumerate(zip(decoded.x, decoded.y, strict=True))
         },
         width=decoded.width,
@@ -2526,6 +2567,10 @@ def _decoded_pack(height: int, decoded: DecodedPlacement) -> _Pack:
         status="sequence-pair",
         direct=decoded.direct,
     )
+
+
+class _SearchSolver(Protocol):
+    def search(self, *, max_stages: int | None = None) -> SequenceSearchResult: ...
 
 
 class _SolverFactory(Protocol):
@@ -2537,7 +2582,7 @@ class _SolverFactory(Protocol):
         power: bool,
         strip_len: int,
         config: SequenceSolverConfig,
-    ) -> SequenceSolver[Any]: ...
+    ) -> _SearchSolver: ...
 
 
 class SequencePairLayout:
@@ -2616,6 +2661,7 @@ class SequencePairLayout:
             compact_seed_attempt=_serial_compact_seed_attempt(
                 spec.machine_count,
                 len(spec.spray_lanes),
+                power=self.power,
             ),
             compact_seed_base_seed=self.config.seed,
             compact_seed_config=_budgeted_compact_seed_config(
