@@ -628,6 +628,9 @@ class SequenceSolver[PreparedT]:
             problem_by_height,
             initial_states,
         )
+        self._area_lower_bound = min(
+            problem.area_lower_bound for problem in problem_by_height.values()
+        )
         self.budget.configure(heights, self.config.final_reserve_fraction)
         self._protected_followup_heights = protected_followup_heights
         self._borrow_first_discovery = borrow_first_discovery
@@ -663,6 +666,12 @@ class SequenceSolver[PreparedT]:
             stage.global_skip_reason not in ("shared-pack", "topology-beam")
             for stage in self._stage_stats
         ) < stage_limit:
+            if (
+                self._incumbent is not None
+                and self._incumbent.exact_key[0] == self._area_lower_bound
+            ):
+                termination = "area-optimal"
+                break
             if self.deadline_reached():
                 termination = "deadline"
                 break

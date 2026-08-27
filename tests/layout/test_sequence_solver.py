@@ -394,6 +394,41 @@ def test_exact_decoded_closure_retains_coordinates_without_sequence_reencoding()
     assert budget.spent == 7
 
 
+
+def test_search_stops_when_exact_incumbent_meets_certified_area_floor() -> None:
+    optimal = _placement(area=1, belt_tiles=1)
+    unnecessary = _placement(area=2, belt_tiles=0)
+    fake = _FakeRouting(
+        detailed_results=(
+            DetailedStageResult(
+                _routing(DetailedRouteStatus.ROUTED, expansions=3),
+                optimal,
+            ),
+            DetailedStageResult(
+                _routing(DetailedRouteStatus.ROUTED, expansions=5),
+                unnecessary,
+            ),
+        )
+    )
+    solver = _solver(fake, heights=(40,))
+    decoded = DecodedPlacement(
+        x=(0,),
+        y=(0,),
+        width=1,
+        used_height=1,
+        x_windows=((0, 0),),
+        y_windows=((0, 0),),
+        gap_area=0,
+        variant_indices=(0,),
+    )
+
+    solver.close_exact_decoded(40, decoded, reason="topology-beam")
+    result = solver.search(max_stages=1)
+
+    assert result.placement is optimal
+    assert result.termination == "area-optimal"
+    assert len(fake.detailed_allowances) == 1
+
 def test_valid_topology_candidate_does_not_stop_better_exact_enumeration() -> None:
     first = _placement(area=30, belt_tiles=1)
     better = _placement(area=20, belt_tiles=4)
