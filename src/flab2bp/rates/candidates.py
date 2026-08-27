@@ -12,13 +12,21 @@ from __future__ import annotations
 
 import warnings
 from fractions import Fraction
+from math import gcd, lcm
 
+from flab2bp.dsp import rules
 from flab2bp.lab.flow import FlowError, FlowSelection
 from flab2bp.lab.schema import Dataset
 from flab2bp.lab.url import LabRequest
 from flab2bp.rates.adjust import ProliferatorTier
 from flab2bp.rates.solve import RateSolution, solve, target_producer_ids, target_rates
-from flab2bp.spec import BuildSpec, BuildSpecSet, MachineGroup, ProliferatorMode
+from flab2bp.spec import (
+    BuildSpec,
+    BuildSpecSet,
+    CoproductBufferProof,
+    MachineGroup,
+    ProliferatorMode,
+)
 
 #: The deterministic mode frontier: none, all legal products, and products only
 #: on recipes that directly produce a requested final output.
@@ -30,6 +38,78 @@ def _producer_of(solution: RateSolution, item_id: str) -> str | None:
         if item_id in group.adjusted.outputs_per_craft:
             return group.recipe_id
     return None
+
+_CHEMICAL_MACHINES = frozenset({"chemical-plant", "quantum-chemical-plant"})
+
+
+def _rational_gcd(one: Fraction, two: Fraction) -> Fraction:
+    denominator = lcm(one.denominator, two.denominator)
+    return Fraction(
+        gcd(
+            one.numerator * (denominator // one.denominator),
+            two.numerator * (denominator // two.denominator),
+        ),
+        denominator,
+    )
+
+
+def _coproduct_buffer_proofs(
+    data: Dataset, solution: RateSolution
+) -> tuple[CoproductBufferProof, ...]:
+    """Prove isolated startup batches against the selected machine's buffer."""
+    produced = {
+        item_id for group in solution.groups for item_id in group.adjusted.outputs_per_craft
+    }
+    consumed = {
+        item_id for group in solution.groups for item_id in group.adjusted.inputs_per_craft
+    }
+    proofs: list[CoproductBufferProof] = []
+    for item_id in sorted(produced & consumed):
+        producers = [
+            group
+            for group in solution.groups
+            if item_id in group.adjusted.outputs_per_craft
+            and len(data.recipe(group.recipe_id).outputs) > 1
+        ]
+        consumers = [
+            group
+            for group in solution.groups
+            if item_id in group.adjusted.inputs_per_craft
+        ]
+        if len(producers) != 1 or len(consumers) != 1:
+            continue
+        producer = producers[0]
+        consumer = consumers[0]
+        if (
+            producer.machines != 1
+            or consumer.machines != 1
+            or producer.machine_item_id not in _CHEMICAL_MACHINES
+            or set(data.recipe(consumer.recipe_id).inputs) != {item_id}
+            or not set(data.recipe(producer.recipe_id).inputs)
+            <= set(solution.external_inputs)
+        ):
+            continue
+        producer_batch = data.recipe(producer.recipe_id).outputs[item_id]
+        consumer_batch = data.recipe(consumer.recipe_id).inputs[item_id]
+        required = producer_batch + consumer_batch - _rational_gcd(
+            producer_batch, consumer_batch
+        )
+        intrinsic = producer_batch * rules.CHEMICAL_OUTPUT_BUFFER_CRAFTS
+        if intrinsic < required:
+            continue
+        proofs.append(
+            CoproductBufferProof(
+                item_id=item_id,
+                producer_recipe_id=producer.recipe_id,
+                consumer_recipe_id=consumer.recipe_id,
+                producer_batch=producer_batch,
+                consumer_batch=consumer_batch,
+                required_capacity=required,
+                intrinsic_capacity=intrinsic,
+            )
+        )
+    return tuple(proofs)
+
 
 
 def _to_build_spec(
@@ -67,17 +147,24 @@ def _to_build_spec(
             spray_lanes[item_id] = spray_lanes.get(item_id, True) and is_external
             if producer is not None:
                 belt_required.add((producer, group.recipe_id))
+    surplus_outputs = {
+        item_id: rate
+        for item_id, rate in solution.surplus.items()
+        if item_id not in solution.outputs
+    }
 
     belt_id = request.belt_id or "conveyor-belt-1"
     spec = BuildSpec(
         groups=tuple(groups),
         external_inputs=dict(solution.external_inputs),
         outputs=dict(solution.outputs),
+        surplus_outputs=surplus_outputs,
         belt_item_id=belt_id,
         belt_items_per_second=data.belt_speed(belt_id),
         label=label,
         belt_required_edges=frozenset(belt_required),
         spray_lanes=spray_lanes,
+        coproduct_buffer_proofs=_coproduct_buffer_proofs(data, solution),
     )
     # Needs the finished spec to compute, so fill it in on a copy.
     # BuildSpec is a pydantic model, so model_copy rather than dataclasses.replace.

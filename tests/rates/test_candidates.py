@@ -31,6 +31,45 @@ DIAGNOSED_URL = (
     "tHnfLqJod7jckTrbSB0xmwcgvv38e4EmfLlD8zsy4icXorVKIVhlRrDLoVA2lQc7ZJww4AatoS20h"
     "wbXFan1tELqPW2s1onZ5Uvv7c4YXwAUJfU_&v=11"
 )
+BROKE_URL = (
+    "https://factoriolab.github.io/dsp/list?z=eJxFyrEKwkAUBdG.2WKqbFCsXnMXtRMjJLitGkRiCE"
+    "QUbd63i2C0OwwzmM5hMB2ZzQuIH7.-XlAWXzaUvyMTpyxNvhxaUxjbp23JnOi4ow2q0R51riu"
+    "6kVae1qTK0y70.WjZ5UuvwsNifAOtdSVD&v=11"
+)
+
+
+def test_coproduct_hydrogen_is_internally_balanced_by_buffered_recipe(
+    data: Dataset,
+) -> None:
+    specs = build_candidates(data, parse_url(BROKE_URL)).candidates
+
+    for spec in specs:
+        advanced = next(group for group in spec.groups if group.recipe_id == "graphene-advanced")
+        consumed = sum(
+            group.inputs_per_machine.get("hydrogen", Fraction()) * group.count
+            for group in spec.groups
+        )
+        produced = advanced.outputs_per_machine["hydrogen"] * advanced.count
+        assert consumed > 0
+        assert produced == consumed
+        assert "hydrogen" not in spec.external_inputs
+        proof = next(p for p in spec.coproduct_buffer_proofs if p.item_id == "hydrogen")
+        assert proof.producer_recipe_id == "graphene-advanced"
+        assert proof.consumer_recipe_id == "deuterium"
+        assert proof.producer_batch == 1
+        assert proof.consumer_batch == 10
+        assert proof.required_capacity == 10
+        assert proof.intrinsic_capacity == 20
+        graphene_produced = (
+            advanced.outputs_per_machine["graphene"] * advanced.count
+        )
+        graphene_consumed = sum(
+            group.inputs_per_machine.get("graphene", Fraction()) * group.count
+            for group in spec.groups
+        )
+        assert graphene_produced > graphene_consumed
+        assert "graphene" not in spec.outputs
+        assert spec.surplus_outputs["graphene"] == graphene_produced - graphene_consumed
 
 
 @pytest.fixture(scope="module")
@@ -125,6 +164,11 @@ def test_diagnosed_url_has_exact_fixed_policy_counts_and_rates(data: Dataset) ->
         "output-products": 215,
     }
     assert all(dict(spec.outputs) == {"space-warper": Fraction(1, 60)} for spec in specs)
+    assert {spec.label: dict(spec.surplus_outputs) for spec in specs} == {
+        "no-proliferator": {"graphene": Fraction(3, 5)},
+        "all-products": {"graphene": Fraction(1375, 3888)},
+        "output-products": {"graphene": Fraction(1, 2)},
+    }
 
 
 def test_every_proliferated_recipe_declares_its_internal_edges(

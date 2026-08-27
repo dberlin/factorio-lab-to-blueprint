@@ -1062,7 +1062,9 @@ def _sink_demand(
     belt -- so its demand is whatever the spec promises to deliver.
     """
     if not dest_key:
-        return spec.outputs.get(item, Fraction(0))
+        return spec.outputs.get(item, Fraction(0)) + spec.surplus_outputs.get(
+            item, Fraction(0)
+        )
     dest = groups.get(dest_key)
     if dest is None:
         return Fraction(0)
@@ -1551,7 +1553,7 @@ def _logical_strip_plans(spec: BuildSpec) -> tuple[_LogicalStripPlan, ...]:
         for item in sorted(group.outputs):
             destinations = consumers.get((key, item), [])
             sinks.extend((item, destination) for destination in destinations)
-            if item in spec.outputs or not destinations:
+            if item in spec.outputs or item in spec.surplus_outputs or not destinations:
                 sinks.append((item, ""))
 
         columns = (
@@ -3316,6 +3318,7 @@ def _flank_lane(
                 yaw2=Facing.EAST.value,
                 input_obj=m_idx,
                 output_obj=column[0],
+                carries_item=item,
             )
         )
         placed += 1
@@ -3495,6 +3498,7 @@ def _link_lane(
                 input_obj=source,
                 output_obj=destination,
                 filter_id=filter_id,
+                carries_item=planned.item,
             )
         )
         placed += 1

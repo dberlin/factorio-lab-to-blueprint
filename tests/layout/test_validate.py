@@ -38,7 +38,12 @@ from flab2bp.layout.validate import (
     _kind,
     validate,
 )
-from flab2bp.spec import BuildSpec, MachineGroup, ProliferatorMode
+from flab2bp.spec import (
+    BuildSpec,
+    CoproductBufferProof,
+    MachineGroup,
+    ProliferatorMode,
+)
 from tests.dsp.test_local_offset import GEOMETRY_CORPUS
 
 ASSEMBLER = 2304  # Assembling Machine Mk.II, 4x4
@@ -124,6 +129,7 @@ def sorter(
     z: Fraction | int = 0,
     z2: Fraction | int = 0,
     filter_id: int = 0,
+    carries: str | None = None,
 ) -> PlacedBuilding:
     return PlacedBuilding(
         item_id=item_id,
@@ -137,6 +143,7 @@ def sorter(
         input_obj=inp,
         output_obj=out,
         filter_id=filter_id,
+        carries_item=carries,
     )
 
 
@@ -604,6 +611,140 @@ def test_sorter_endpoint_pair_fires_when_links_disagree_with_anchors() -> None:
     # output_obj names the machine, but the far anchor sits on the belt
     r = validate(place(machine(0, 0), belt(4, 0), sorter(3, 0, 4, 0, inp=0, out=0)))
     assert fired(r, "sorter.endpoint_pair")
+
+
+def _output_filter_report(filter_id: int, *, carries: str = "graphene") -> Report:
+    spec = BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id="graphene-advanced",
+                machine_item_id="chemical-plant",
+                count=1,
+                inputs_per_machine={"fire-ice": Fraction(2)},
+                outputs_per_machine={"graphene": Fraction(2), "hydrogen": Fraction(1)},
+            ),
+        ),
+        external_inputs={"fire-ice": Fraction(2)},
+        outputs={"graphene": Fraction(2), "hydrogen": Fraction(1)},
+    )
+    ids = IdMap(
+        recipes={"graphene-advanced": 32},
+        items={"chemical-plant": CHEM_PLANT, "graphene": 1123, "hydrogen": 1120},
+    )
+    placement = Placement(
+        buildings=(
+            machine(0, 0, item_id=CHEM_PLANT, recipe_id=32),
+            belt(2, -1, carries=carries),
+            sorter(
+                2,
+                1,
+                2,
+                -1,
+                inp=0,
+                out=1,
+                filter_id=filter_id,
+                carries=carries,
+            ),
+        )
+    )
+    return validate(placement, spec, ids=ids, only={"sorter.output_filter"})
+
+
+def test_multi_output_sorter_requires_a_filter() -> None:
+    findings = _output_filter_report(0).by_check("sorter.output_filter")
+
+    assert findings
+    assert all(finding.severity is Severity.ERROR for finding in findings)
+
+
+def test_multi_output_sorter_rejects_the_wrong_lane_filter() -> None:
+    findings = _output_filter_report(1120, carries="graphene").by_check(
+        "sorter.output_filter"
+    )
+
+    assert findings
+    assert all(finding.severity is Severity.ERROR for finding in findings)
+
+
+def test_multi_output_sorter_accepts_the_exact_lane_filter() -> None:
+    assert not _output_filter_report(1123, carries="graphene").by_check(
+        "sorter.output_filter"
+    )
+
+def _coproduct_buffer_report(*, connected: bool, malformed: bool = False) -> Report:
+    proof = CoproductBufferProof(
+        item_id="hydrogen",
+        producer_recipe_id="graphene-advanced",
+        consumer_recipe_id="deuterium",
+        producer_batch=Fraction(1),
+        consumer_batch=Fraction(10),
+        required_capacity=Fraction(10),
+        intrinsic_capacity=Fraction(20),
+    )
+    spec = BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id="graphene-advanced",
+                machine_item_id="chemical-plant",
+                count=1,
+                inputs_per_machine={"fire-ice": Fraction(2)},
+                outputs_per_machine={"graphene": Fraction(2), "hydrogen": Fraction(1)},
+            ),
+            MachineGroup(
+                recipe_id="deuterium",
+                machine_item_id="miniature-particle-collider",
+                count=1,
+                inputs_per_machine={"hydrogen": Fraction(10)},
+                outputs_per_machine={"deuterium": Fraction(5)},
+            ),
+        ),
+        external_inputs={"fire-ice": Fraction(2)},
+        outputs={"graphene": Fraction(2), "deuterium": Fraction(5)},
+        coproduct_buffer_proofs=(proof,),
+    )
+    ids = IdMap(
+        recipes={"graphene-advanced": 32, "deuterium": 40},
+        items={
+            "chemical-plant": CHEM_PLANT,
+            "miniature-particle-collider": 2310,
+            "hydrogen": 1120,
+        },
+    )
+    output_target = 99 if malformed else (1 if connected else None)
+    placement = Placement(
+        buildings=(
+            machine(0, 0, item_id=CHEM_PLANT, recipe_id=32),
+            belt(10, 0, carries="hydrogen"),
+            sorter(
+                8,
+                0,
+                10,
+                0,
+                inp=0,
+                out=output_target,
+                filter_id=1120,
+                carries="hydrogen",
+            ),
+            machine(14, 0, item_id=2310, recipe_id=40),
+            sorter(12, 0, 14, 0, inp=5, out=3, carries="hydrogen"),
+            belt(12, 0, carries="hydrogen"),
+            sorter(10, 0, 12, 0, inp=1, out=5, carries="hydrogen"),
+        )
+    )
+    return validate(placement, spec, ids=ids, only={"flow.coproduct_buffer"})
+
+
+def test_flow_coproduct_buffer_requires_one_aggregating_consumer_path() -> None:
+    assert _coproduct_buffer_report(connected=False).by_check("flow.coproduct_buffer")
+
+
+def test_flow_coproduct_buffer_accepts_the_certified_consumer_path() -> None:
+    assert not _coproduct_buffer_report(connected=True).by_check("flow.coproduct_buffer")
+
+def test_flow_coproduct_buffer_reports_a_malformed_output_link() -> None:
+    assert _coproduct_buffer_report(
+        connected=True, malformed=True
+    ).by_check("flow.coproduct_buffer")
 
 
 SPRAY_COATER = 2313  # a belt addon: no insert pose, fed by belt from its addon area

@@ -310,21 +310,20 @@ def proliferator_item(spec: BuildSpec) -> str | None:
 def _leaving_items(groups: dict[str, _Group], spec: BuildSpec) -> set[str]:
     """Items that must be belted out of the block: the targets AND the byproducts.
 
-    ``spec.outputs`` names only what the build is *for*.  A recipe with two
-    products emits the other one regardless -- ``plasma-refining`` yields refined
-    oil and hydrogen -- and if nothing consumes it, ``_lane_requirements`` gave
-    it no lane, so no sorter drained it and the machine backed up.  The
-    validator's ``machine.output_removed`` says so in as many words, on graphene,
-    plastic and energy-matrix.
+    ``spec.outputs`` names what the build is for; ``spec.surplus_outputs``
+    names excess production that must leave for the target recipe to keep
+    running. A recipe with two products emits both regardless --
+    ``plasma-refining`` yields refined oil and hydrogen -- and if an excess has
+    no lane, no sorter drains it and the machine backs up.
 
     A byproduct is treated exactly like a target: a lane from its maker to the
-    east edge, where the player belts it away or voids it.  That is the only
+    east edge, where the player belts it away or voids it. That is the only
     honest option -- the alternative, leaving it unbelted, stalls the machine
     that makes the thing the build is actually for.
     """
     consumed = {item for g in groups.values() for item in g.inputs}
     produced = {item for g in groups.values() for item in g.outputs}
-    return set(spec.outputs) | (produced - consumed)
+    return set(spec.outputs) | set(spec.surplus_outputs) | (produced - consumed)
 
 
 @dataclass(frozen=True, slots=True)
@@ -622,6 +621,8 @@ def _item_flow(
     for item, rate in spec.external_inputs.items():
         supply[item] += rate
     for item, rate in spec.outputs.items():
+        demand[item] += rate
+    for item, rate in spec.surplus_outputs.items():
         demand[item] += rate
     # A direct-inserted edge never touches a belt, so its rate is not on any lane.
     for e in edges:
@@ -3123,6 +3124,7 @@ def _emit(
                     yaw2=Facing.SOUTH.value,
                     input_obj=pi,
                     output_obj=ci,
+                    carries_item=item,
                 )
             )
             direct_sorters += 1
@@ -3192,6 +3194,7 @@ def _emit(
                     tier=tier,
                     per_machine=per_machine,
                     into_machine=into_machine,
+                    item=item,
                     filter_id=_lane_filter(item) if shared else 0,
                     column=_share_column(plan, *lane_key, item),
                     reserved=lane_columns[lane_key] if shared else None,
@@ -4101,6 +4104,7 @@ def _place_sorters(
     machine_y: int,
     tier: int,
     per_machine: int,
+    item: str,
     into_machine: bool,
     filter_id: int = 0,
     column: int = 0,
@@ -4200,6 +4204,7 @@ def _place_sorters(
                     input_obj=src,
                     output_obj=dst,
                     filter_id=filter_id,
+                    carries_item=item,
                 )
             )
             placed += 1

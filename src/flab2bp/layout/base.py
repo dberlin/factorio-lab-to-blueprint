@@ -143,14 +143,13 @@ class PlacedBuilding:
 
     parameters: tuple[int, ...] = ()
 
-    #: For a belt, the FactorioLab item id this lane carries; ``None`` elsewhere
-    #: or when the strategy does not know.
+    #: FactorioLab item id carried by a belt or moved by a sorter; ``None`` when
+    #: the strategy does not know.
     #:
     #: Not part of the DSP record -- it is layout knowledge that would otherwise
-    #: be thrown away at emission and cannot be recovered afterwards.  Two things
-    #: need it: the belt marker icons that label external inputs, and the
-    #: validator's exact per-item max-flow check, which is currently unimplemented
-    #: precisely because a ``Placement`` carried no lane labelling.
+    #: be thrown away at emission and cannot be recovered afterwards.  Belt
+    #: markers, exact flow validation, and multi-product output-sorter filters
+    #: all consume it before encoding.
     carries_item: str | None = None
 
     def tiles(self) -> list[tuple[int, int, Fraction]]:

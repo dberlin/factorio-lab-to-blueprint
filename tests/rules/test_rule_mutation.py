@@ -77,6 +77,10 @@ VERDICTS: dict[str, tuple[str, str]] = {
     "rules.WORLD_UNITS_PER_LEVEL": ("both", "altitude in world units"),
     "rules.SLOT_REACH": ("both", "the plan's own first example"),
     "rules.SPLITTER_MAX_PORTS": ("both", "junction port cap"),
+    "rules.CHEMICAL_OUTPUT_BUFFER_CRAFTS": (
+        "validator",
+        "flow.coproduct_buffer recomputes the exact game-backed capacity",
+    ),
     "rules.BELT_INPUT_SLOTS": (
         "strategy",
         "emission allocates the range; checks inspect resulting occupied cells",

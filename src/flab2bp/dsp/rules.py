@@ -117,6 +117,7 @@ __all__ = [
     "BELT_PORT_MAX_TILE_GAP",
     "BELT_SLOT",
     "BELT_SLOT_AUTO_RANGE",
+    "CHEMICAL_OUTPUT_BUFFER_CRAFTS",
     "COATER_RESHAPE_MAX",
     "GEOTHERMAL_TOO_CLOSE_SQR",
     "INPUT_TO_SLOT",
@@ -318,6 +319,15 @@ BELT_PORT_MAX_TILE_GAP = 1.0
 #: it, since each occupies a side.  Exceeding it pastes as a splitter quietly
 #: dropping connections rather than as an error, which is why it is checked.
 SPLITTER_MAX_PORTS = 4
+
+#: Completed recipe batches retained independently for every product of a
+#: Chemical recipe. ``AssemblerComponent.InternalUpdate`` refuses the next
+#: ordinary craft only when ``produced[j] > productCounts[j] * 19`` for any
+#: output, so an empty machine commits exactly twenty atomic output batches.
+#: This is the installed 0.10.34 implementation, lines 528-632 of the retained
+#: ``Assembly-CSharp`` decompile.
+CHEMICAL_OUTPUT_BUFFER_CRAFTS = 20
+
 
 
 # --- BuildTool_BlueprintCopy.CheckInserterDataLegal -------------------------

@@ -158,7 +158,7 @@ def _id_map(spec: BuildSpec) -> validate.IdMap:
             got = catalog.get_item_id(item)
             if got is not None:
                 items[item] = got
-    for item in (*spec.external_inputs, *spec.outputs):
+    for item in (*spec.external_inputs, *spec.outputs, *spec.surplus_outputs):
         got = catalog.get_item_id(item)
         if got is not None:
             items[item] = got

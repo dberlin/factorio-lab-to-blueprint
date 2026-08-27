@@ -566,6 +566,15 @@ _RULES: tuple[Entry, ...] = (
         ),
     ),
     _e("rules.SPLITTER_MAX_PORTS", Kind.RULE),
+    _e(
+        "rules.CHEMICAL_OUTPUT_BUFFER_CRAFTS",
+        Kind.RULE,
+        lint=True,
+        note=(
+            "AssemblerComponent.InternalUpdate admits exactly 20 ordinary Chemical "
+            "craft completions into each product buffer before blocking the next."
+        ),
+    ),
     _e("rules.SLOT_REACH", Kind.RULE, lint=True),
     _e("rules.PASTE_SNAP", Kind.RULE, lint=True),
     _e(
@@ -936,6 +945,12 @@ LINT_EXCEPTIONS: tuple[LintException, ...] = (
         "CompactTopologyBeamConfig",
         0.2,
         "per-candidate CP deterministic work; not BELT_PROBE_LIFT geometry",
+    ),
+    LintException(
+        "flab2bp.layout.finalize",
+        "uses_tall_saturated_role",
+        24.0,
+        "shared strip-count complexity cap; not skew degrees",
     ),
     LintException(
         "flab2bp.layout.sequence_solver",

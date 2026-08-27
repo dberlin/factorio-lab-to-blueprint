@@ -1203,19 +1203,39 @@ def _assign_sorter_slots_only(
     return tuple(out)
 
 
+def _output_filter_id(
+    sorter: PlacedBuilding, buildings: Sequence[PlacedBuilding]
+) -> int:
+    """Filter a multi-product machine's output sorter to its assigned item."""
+    source = sorter.input_obj
+    if source is None or not 0 <= source < len(buildings):
+        return sorter.filter_id
+    machine = buildings[source]
+    if machine.recipe_id == 0:
+        return sorter.filter_id
+    try:
+        outputs = cat.recipe_output_item_ids(machine.recipe_id)
+    except KeyError:
+        return sorter.filter_id
+    if len(outputs) <= 1 or sorter.carries_item is None:
+        return sorter.filter_id
+    item_id = cat.get_item_id(sorter.carries_item)
+    return sorter.filter_id if item_id is None else item_id
+
+
 def emitted_sorter(
     sorter: PlacedBuilding,
     buildings: Sequence[PlacedBuilding],
     *,
     strict: bool = False,
 ) -> PlacedBuilding:
-    """One sorter with the slot indices and yaw EMISSION will give it.
+    """One sorter with all fields that EMISSION derives from layout metadata.
 
-    A strategy builds a sorter out of two anchors and two links and leaves the
-    four slot fields at the dataclass default of zero; the yaw it sets is a
-    placeholder.  :func:`assign_sorter_slots` fills all of them in from geometry
-    as the last pass before emission, so what the game finally reads is derived
-    here and nowhere else.
+    Slot indices and yaw come from geometry.  A sorter drawing from a recipe
+    with multiple distinct products also receives the DSP item filter for the
+    exact lane/item its strategy assigned in ``carries_item``.  Keeping that
+    rule in this final shared pass covers every strategy and fallback that
+    already funnels through :func:`assign_sorter_slots`.
 
     WHICH MATTERS BEFORE THAT PASS, and that is why this is public.  A slot
     index is not decoration: it is WHERE the paste seats the sorter's machine
@@ -1266,5 +1286,6 @@ def emitted_sorter(
         output_from_slot=OUTPUT_FROM_SLOT,
         input_to_slot=INPUT_TO_SLOT,
         yaw=yaw,
+        filter_id=_output_filter_id(sorter, buildings),
         yaw2=yaw,
     )

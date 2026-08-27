@@ -863,6 +863,32 @@ def _recipe_ids() -> dict[str, int]:
     return table
 
 
+@cache
+def _recipe_output_items() -> dict[int, tuple[int, ...]]:
+    values = _array(_json(_RECIPES), str(_RECIPES))
+    table: dict[int, tuple[int, ...]] = {}
+    for index, value in enumerate(values):
+        path = f"{_RECIPES}[{index}]"
+        row = _mapping(value, path)
+        recipe = _integer(_required(row, "id", path), f"{path}.id")
+        results = _array(_required(row, "results", path), f"{path}.results")
+        table[recipe] = tuple(
+            dict.fromkeys(
+                _integer(result, f"{path}.results[{result_index}]")
+                for result_index, result in enumerate(results)
+            )
+        )
+    return table
+
+
+def recipe_output_item_ids(recipe: int) -> tuple[int, ...]:
+    """Distinct DSP item ids produced by one numeric DSP recipe id."""
+    try:
+        return _recipe_output_items()[recipe]
+    except KeyError:
+        raise KeyError(f"no DSP recipe outputs known for recipe id {recipe}") from None
+
+
 def recipe_id(factoriolab_id: str) -> int:
     """DSP numeric recipe id for a FactorioLab recipe id.
 

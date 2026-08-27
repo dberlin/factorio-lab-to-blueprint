@@ -92,6 +92,32 @@ def two_stage_spec() -> BuildSpec:
     )
 
 
+def multi_output_direct_spec() -> BuildSpec:
+    return BuildSpec(
+        groups=(
+            group(
+                "graphene-advanced",
+                "chemical-plant",
+                1,
+                {"fire-ice": F(2)},
+                {"graphene": F(2), "hydrogen": F(1)},
+            ),
+            group(
+                "particle-container",
+                "assembling-machine-2",
+                1,
+                {"graphene": F(2)},
+                {"particle-container": F(1)},
+            ),
+        ),
+        external_inputs={"fire-ice": F(2)},
+        outputs={"hydrogen": F(1), "particle-container": F(1)},
+        belt_item_id="conveyor-belt-2",
+        belt_items_per_second=F(12),
+        label="multi-output-direct",
+    )
+
+
 def magnetic_ring_spec() -> BuildSpec:
     """Shaped like the super-magnetic-ring chain, and RATE-BALANCED.
 
@@ -494,6 +520,47 @@ class TestPlacementProperties:
                         f"belt {index} climbs more than one level"
                     )
 
+
+
+def test_fallback_emission_filters_each_multi_output_lane() -> None:
+    spec = multi_output_direct_spec()
+    placement = _emit(spec, fallback_plan(spec), power=False)
+    buildings = placement.buildings
+    output_sorters = {
+        sorter.carries_item: sorter.filter_id
+        for sorter in buildings
+        if catalog.is_sorter(sorter.item_id)
+        and sorter.input_obj is not None
+        and buildings[sorter.input_obj].recipe_id == catalog.recipe_id("graphene-advanced")
+    }
+
+    assert output_sorters == {
+        "graphene": catalog.item_id("graphene"),
+        "hydrogen": catalog.item_id("hydrogen"),
+    }
+
+
+def test_direct_insert_from_multi_output_machine_filters_the_inserted_item() -> None:
+    spec = multi_output_direct_spec()
+    plan = replace(
+        fallback_plan(spec),
+        direct={("graphene-advanced#0", "particle-container#1", "graphene")},
+    )
+    placement = _emit(spec, plan, power=False)
+    buildings = placement.buildings
+    direct = [
+        sorter
+        for sorter in buildings
+        if catalog.is_sorter(sorter.item_id)
+        and sorter.input_obj is not None
+        and sorter.output_obj is not None
+        and not catalog.is_belt(buildings[sorter.input_obj].item_id)
+        and not catalog.is_belt(buildings[sorter.output_obj].item_id)
+    ]
+
+    assert [(sorter.carries_item, sorter.filter_id) for sorter in direct] == [
+        ("graphene", catalog.item_id("graphene"))
+    ]
 
 class TestLaneExtents:
     def test_lanes_are_trimmed_to_what_they_serve(self) -> None:

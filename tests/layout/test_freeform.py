@@ -350,6 +350,61 @@ def test_multi_lane_assembler_emission_uses_one_slot_per_sorter() -> None:
     assert len(set(machine_slots)) == len(machine_slots)
 
 
+def multi_output_chemical_spec() -> BuildSpec:
+    return BuildSpec(
+        groups=(
+            group(
+                "graphene-advanced",
+                "chemical-plant",
+                1,
+                {"fire-ice": F(2)},
+                {"graphene": F(2), "hydrogen": F(1)},
+            ),
+        ),
+        external_inputs={"fire-ice": F(2)},
+        outputs={"graphene": F(2), "hydrogen": F(1)},
+        belt_item_id="conveyor-belt-2",
+        belt_items_per_second=F(12),
+        label="multi-output-chemical",
+    )
+
+
+def test_shared_strip_emission_filters_each_multi_output_lane() -> None:
+    spec = multi_output_chemical_spec()
+    strip = plan_strips(spec)[0]
+    canvas = _Canvas()
+    belt_id = catalog.item_id(spec.belt_item_id)
+
+    _emit_strip(
+        canvas,
+        strip,
+        0,
+        0,
+        belt_id,
+        catalog.building(belt_id).model_index,
+        {},
+    )
+    wired = slots.assign_sorter_slots(canvas.buildings)
+    machine_index = next(
+        index for index, building in enumerate(wired) if building.item_id == strip.item_id
+    )
+    output_sorters = {
+        sorter.carries_item: sorter.filter_id
+        for sorter in wired
+        if catalog.is_sorter(sorter.item_id) and sorter.input_obj == machine_index
+    }
+
+    assert output_sorters == {
+        "graphene": catalog.item_id("graphene"),
+        "hydrogen": catalog.item_id("hydrogen"),
+    }
+    assert all(
+        sorter.filter_id == 0
+        for sorter in wired
+        if catalog.is_sorter(sorter.item_id) and sorter.output_obj == machine_index
+    )
+
+
 def test_an_unmatched_variant_has_a_structured_unique_slot_refusal() -> None:
     strip = replace(
         plan_strips(multi_lane_assembler_spec())[0],

@@ -12,6 +12,7 @@ than a rule hole -- see :func:`test_only_artificial_star_is_excluded`.
 from __future__ import annotations
 
 import collections
+import dataclasses
 import math
 from collections.abc import Callable, Sequence
 from fractions import Fraction
@@ -871,6 +872,50 @@ def test_a_sorter_still_carrying_its_default_slots_seats_on_the_real_one() -> No
     assert (seat.x2, seat.y2) == pytest.approx((5.0, 4.1246), abs=1e-3)
     on_slot_zero = S.slot_offset(2304, fresh.yaw, 0)
     assert abs(on_slot_zero[0]) == pytest.approx(0.7958, abs=1e-3)
+
+
+def _chemical_output_sorter(
+    recipe_id: int, item: str
+) -> tuple[list[PlacedBuilding], PlacedBuilding]:
+    machine = dataclasses.replace(_at(2309), recipe_id=recipe_id)
+    belt = PlacedBuilding(
+        item_id=2002,
+        model_index=cat.building(2002).model_index,
+        x=2,
+        y=-1,
+        carries_item=item,
+    )
+    sorter = PlacedBuilding(
+        item_id=2011,
+        model_index=cat.building(2011).model_index,
+        x=2,
+        y=1,
+        x2=2,
+        y2=-1,
+        z2=Fraction(0),
+        input_obj=0,
+        output_obj=1,
+        carries_item=item,
+    )
+    return [machine, belt], sorter
+
+
+@pytest.mark.parametrize(
+    ("item", "expected_filter"),
+    [("graphene", 1123), ("hydrogen", 1120)],
+)
+def test_multi_output_machine_sorters_filter_their_exact_output(
+    item: str, expected_filter: int
+) -> None:
+    buildings, sorter = _chemical_output_sorter(32, item)
+
+    assert S.emitted_sorter(sorter, buildings).filter_id == expected_filter
+
+
+def test_single_output_machine_sorters_remain_unfiltered() -> None:
+    buildings, sorter = _chemical_output_sorter(31, "graphene")
+
+    assert S.emitted_sorter(sorter, buildings).filter_id == 0
 
 
 def test_two_sorters_meeting_on_one_belt_tile_are_not_clear() -> None:

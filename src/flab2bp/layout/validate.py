@@ -2652,6 +2652,75 @@ def _filter(ctx: Context) -> Iterable[Finding]:
                 )
 
 
+def _assigned_output_item(ctx: Context, sorter: PlacedBuilding) -> str | None:
+    """Lane/direct-insert item without trusting the filter being validated."""
+    if sorter.carries_item is not None:
+        return sorter.carries_item
+    bs = ctx.placement.buildings
+    destination = sorter.output_obj
+    if destination is None or not 0 <= destination < len(bs):
+        return None
+    if ctx.kinds[destination] is Kind.BELT:
+        carried = bs[destination].carries_item
+        if carried is not None:
+            return carried
+        run = ctx.run_of.get(destination)
+        known = set() if run is None else _run_labels(ctx).get(run, set())
+        return next(iter(known)) if len(known) == 1 else None
+    if ctx.kinds[destination] is Kind.MACHINE:
+        source = sorter.input_obj
+        if source is None:
+            return None
+        producer = ctx.group_for(source)
+        consumer = ctx.group_for(destination)
+        if producer is None or consumer is None:
+            return None
+        shared = set(producer.outputs_per_machine) & set(consumer.inputs_per_machine)
+        return next(iter(shared)) if len(shared) == 1 else None
+    return None
+
+
+@check("sorter.output_filter", needs_spec=True, needs_groups=True)
+def _output_filter(ctx: Context) -> Iterable[Finding]:
+    """Every sorter drawing from a multi-product recipe selects its exact item."""
+    bs = ctx.placement.buildings
+    for i, sorter in ctx.of_kind(Kind.SORTER):
+        source = sorter.input_obj
+        if source is None or not 0 <= source < len(bs):
+            continue
+        if ctx.kinds[source] is not Kind.MACHINE:
+            continue
+        group = ctx.group_for(source)
+        if group is None or len(group.outputs_per_machine) <= 1:
+            continue
+        expected = _assigned_output_item(ctx, sorter)
+        if sorter.filter_id == 0:
+            yield Finding(
+                "sorter.output_filter",
+                Severity.ERROR,
+                f"sorter {i} draws from multi-output machine {source} without a filter",
+                (i, source),
+                {"expected_item": expected},
+            )
+            continue
+        filtered = ctx.item_name(sorter.filter_id)
+        if filtered not in group.outputs_per_machine or (
+            expected is not None and filtered != expected
+        ):
+            yield Finding(
+                "sorter.output_filter",
+                Severity.ERROR,
+                f"sorter {i} draws {expected or 'an assigned output'} from multi-output "
+                f"machine {source} but filters on {filtered or sorter.filter_id}",
+                (i, source),
+                {
+                    "expected_item": expected,
+                    "filter_id": sorter.filter_id,
+                    "filtered_item": filtered,
+                },
+            )
+
+
 # --- belts -----------------------------------------------------------------
 
 
@@ -3998,6 +4067,137 @@ def _output_removed(ctx: Context) -> Iterable[Finding]:
                 {"recipe": g.recipe_id, "products": need, "drains": drains[i]},
             )
 
+def _fraction_gcd(one: Fraction, two: Fraction) -> Fraction:
+    denominator = math.lcm(one.denominator, two.denominator)
+    return Fraction(
+        math.gcd(
+            one.numerator * (denominator // one.denominator),
+            two.numerator * (denominator // two.denominator),
+        ),
+        denominator,
+    )
+
+
+def _belt_reaches_any(
+    ctx: Context, start: int, targets: set[int], item: str
+) -> bool:
+    pending = [start]
+    seen: set[int] = set()
+    while pending:
+        index = pending.pop()
+        if index in seen:
+            continue
+        seen.add(index)
+        if index in targets:
+            return True
+        pending.extend(_belt_successors(ctx, index))
+        pending.extend(
+            sorter.output_obj
+            for sorter_index, sorter in ctx.of_kind(Kind.SORTER)
+            if sorter.input_obj == index
+            and sorter.output_obj is not None
+            and 0 <= sorter.output_obj < len(ctx.kinds)
+            and ctx.kinds[sorter.output_obj] in (Kind.BELT, Kind.SPLITTER)
+            and _sorter_item(ctx, sorter_index) == item
+        )
+    return False
+
+
+@check("flow.coproduct_buffer", needs_spec=True, needs_groups=True)
+def _coproduct_buffer(ctx: Context) -> Iterable[Finding]:
+    """A certified intrinsic buffer feeds one unsplit atomic consumer batch."""
+    assert ctx.spec is not None
+    for proof in ctx.spec.coproduct_buffer_proofs:
+        required = (
+            proof.producer_batch
+            + proof.consumer_batch
+            - _fraction_gcd(proof.producer_batch, proof.consumer_batch)
+        )
+        intrinsic = proof.producer_batch * rules.CHEMICAL_OUTPUT_BUFFER_CRAFTS
+        if (
+            proof.required_capacity != required
+            or proof.intrinsic_capacity != intrinsic
+            or intrinsic < required
+        ):
+            yield Finding(
+                "flow.coproduct_buffer",
+                Severity.ERROR,
+                f"{proof.item_id}: buffer certificate arithmetic does not match "
+                "the game rule and exact recipe batches",
+                detail={
+                    "item": proof.item_id,
+                    "required": required,
+                    "intrinsic": intrinsic,
+                },
+            )
+            continue
+
+        producers = [
+            index
+            for index, _building in ctx.of_kind(Kind.MACHINE)
+            if ctx.recipe_of(index) == proof.producer_recipe_id
+        ]
+        consumers = [
+            index
+            for index, _building in ctx.of_kind(Kind.MACHINE)
+            if ctx.recipe_of(index) == proof.consumer_recipe_id
+        ]
+        if len(producers) != 1 or len(consumers) != 1:
+            yield Finding(
+                "flow.coproduct_buffer",
+                Severity.ERROR,
+                f"{proof.item_id}: certificate requires one physical producer and "
+                f"one consumer, found {len(producers)} and {len(consumers)}",
+                tuple((*producers, *consumers)),
+                {
+                    "item": proof.item_id,
+                    "producers": len(producers),
+                    "consumers": len(consumers),
+                },
+            )
+            continue
+
+        producer = producers[0]
+        consumer = consumers[0]
+        consumer_belts = {
+            sorter.input_obj
+            for index, sorter in ctx.of_kind(Kind.SORTER)
+            if sorter.output_obj == consumer
+            and sorter.input_obj is not None
+            and _sorter_item(ctx, index) == proof.item_id
+        }
+        connected = False
+        for _index, sorter in ctx.of_kind(Kind.SORTER):
+            output = sorter.output_obj
+            if (
+                sorter.input_obj != producer
+                or _assigned_output_item(ctx, sorter) != proof.item_id
+                or output is None
+                or not 0 <= output < len(ctx.kinds)
+            ):
+                continue
+            if output == consumer or (
+                ctx.kinds[output] in (Kind.BELT, Kind.SPLITTER)
+                and _belt_reaches_any(ctx, output, consumer_belts, proof.item_id)
+            ):
+                connected = True
+                break
+        if not connected:
+            yield Finding(
+                "flow.coproduct_buffer",
+                Severity.ERROR,
+                f"{proof.item_id}: buffered output from {proof.producer_recipe_id} "
+                f"does not aggregate at the single {proof.consumer_recipe_id} consumer",
+                (producer, consumer),
+                {
+                    "item": proof.item_id,
+                    "producer": producer,
+                    "consumer": consumer,
+                    "required_capacity": proof.required_capacity,
+                },
+            )
+
+
 
 # --- spec conformance ------------------------------------------------------
 
@@ -4457,6 +4657,8 @@ def _conservation(ctx: Context) -> Iterable[Finding]:
     for item, rate in ctx.spec.external_inputs.items():
         net[item] += rate
     for item, rate in ctx.spec.outputs.items():
+        net[item] -= rate
+    for item, rate in ctx.spec.surplus_outputs.items():
         net[item] -= rate
     short = [item for item in sorted(net) if net[item] < 0]
     for item in short:
@@ -5208,7 +5410,7 @@ def id_map(spec: BuildSpec) -> IdMap:
             got = cat.get_item_id(item)
             if got is not None:
                 items[item] = got
-    for item in (*spec.external_inputs, *spec.outputs):
+    for item in (*spec.external_inputs, *spec.outputs, *spec.surplus_outputs):
         got = cat.get_item_id(item)
         if got is not None:
             items[item] = got
