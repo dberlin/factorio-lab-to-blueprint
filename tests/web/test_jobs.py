@@ -85,6 +85,24 @@ def test_a_bad_url_is_an_error() -> None:
         builder.shutdown()
 
 
+def test_an_unexpected_operational_failure_finishes_as_error() -> None:
+    def disconnect(_o: Options, _p: pipeline.ProgressSink) -> pipeline.Build:
+        raise RuntimeError("CDP connection dropped")
+
+    builder = Builder(solve=disconnect)
+    try:
+        job = builder.submit(Options(url=URL))
+        snap = _settled(builder, job.id, timeout_s=1.0)
+        assert snap["state"] == "error"
+        assert snap["error"] == "build failed unexpectedly"
+        assert snap["refusal"] is None and snap["result"] is None
+        current = builder.get(job.id)
+        assert current is not None
+        assert current.finished_at is not None
+    finally:
+        builder.shutdown()
+
+
 def test_a_second_job_queues_behind_the_first(small_build: pipeline.Build) -> None:
     """One worker, so the second job waits -- and says how far back it is."""
     release = threading.Event()

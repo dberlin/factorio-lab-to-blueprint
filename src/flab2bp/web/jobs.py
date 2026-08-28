@@ -346,6 +346,13 @@ class Builder:
                 job.state = "error"
                 job.error = str(exc)
                 job.finished_at = time.monotonic()
+        except Exception:
+            # Chromium/CDP failures are ordinary operational failures for a job.
+            # Exception deliberately excludes KeyboardInterrupt and SystemExit.
+            with job._lock:
+                job.state = "error"
+                job.error = "build failed unexpectedly"
+                job.finished_at = time.monotonic()
         else:
             with job._lock:
                 job.state = "done"

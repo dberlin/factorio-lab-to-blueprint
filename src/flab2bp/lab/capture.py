@@ -187,6 +187,7 @@ _ARGS: Final = (
 #: made to wait, large enough that polling is not itself a load on the page.
 _POLL_S: Final = 0.25
 _LOCATION_JS: Final = "location.href"
+_READY_STATE_JS: Final = "document.readyState"
 
 
 #: Reads DOM state the solve is downstream of.  Returned as a JSON string
@@ -291,7 +292,36 @@ async def _validate_page_location(page: _AsyncPage, validator: UrlValidator) -> 
         ) from exc
 
 
-async def _await_solve(page: _AsyncPage, url: str, deadline_s: float) -> None:
+async def _await_navigation(
+    page: _AsyncPage,
+    validator: UrlValidator | None,
+    deadline_s: float,
+) -> None:
+    """Wait for the main frame to finish loading, checking every observed URL."""
+    loop = asyncio.get_running_loop()
+    end = loop.time() + deadline_s
+    last_ready: object = None
+    while loop.time() < end:
+        if validator is not None:
+            await _validate_page_location(page, validator)
+        last_ready = await page.evaluate(_READY_STATE_JS, return_by_value=True)
+        if last_ready == "complete":
+            return
+        if last_ready not in ("loading", "interactive"):
+            raise CaptureError(f"browser returned invalid document.readyState: {last_ready!r}")
+        await asyncio.sleep(_POLL_S)
+    raise CaptureError(
+        "FactorioLab navigation did not settle before the capture deadline. "
+        f"Last document.readyState: {last_ready!r}"
+    )
+
+
+async def _await_solve(
+    page: _AsyncPage,
+    url: str,
+    deadline_s: float,
+    url_validator: UrlValidator | None = None,
+) -> None:
     """Wait until FactorioLab has actually finished solving.
 
     Never a sleep.  See the module docstring for why each condition is
@@ -305,6 +335,8 @@ async def _await_solve(page: _AsyncPage, url: str, deadline_s: float) -> None:
     last_csv = False
     completed_raw: object | None = None
     while loop.time() < end:
+        if url_validator is not None:
+            await _validate_page_location(page, url_validator)
         raw = await page.evaluate(_PROBE_JS, return_by_value=True)
         rows, csv = _solve_probe_values(raw)
         last_rows, last_csv = rows, csv
@@ -358,11 +390,12 @@ async def _capture(
         await _await_devtools(port, process, min(timeout_s, 30.0))
         browser = await nodriver.start(host="127.0.0.1", port=port)
         page = await browser.get(url)
-        if url_validator is not None:
-            await _validate_page_location(page, url_validator)
-        await _await_solve(page, url, timeout_s)
+        await _await_navigation(page, url_validator, timeout_s)
+        await _await_solve(page, url, timeout_s, url_validator=url_validator)
 
         await page.evaluate(_PATCH_JS, return_by_value=True)
+        if url_validator is not None:
+            await _validate_page_location(page, url_validator)
         clicked = await page.evaluate(_CLICK_JS, return_by_value=True)
         if not clicked:
             raise CaptureError(

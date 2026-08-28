@@ -40,6 +40,7 @@ from flab2bp.lab.capture import (
     BROWSER_ENV,
     CaptureError,
     SolveProbeState,
+    _await_navigation,
     _await_solve,
     _capture,
     _validate_page_location,
@@ -110,6 +111,38 @@ class _LocationPage:
         return self.location
 
 
+class _RedirectingSolvePage:
+    def __init__(self, locations: list[str]) -> None:
+        self.locations = locations
+        self.location_calls = 0
+        self.probe_calls = 0
+
+    async def evaluate(self, expression: str, **_kwargs: object) -> object:
+        if expression == "location.href":
+            location = self.locations[min(self.location_calls, len(self.locations) - 1)]
+            self.location_calls += 1
+            return location
+        assert "document.querySelectorAll" in expression
+        self.probe_calls += 1
+        return json.dumps({"rows": 0, "csv": False})
+
+
+
+class _NavigationPage:
+    def __init__(self, locations: list[str], ready_states: list[str]) -> None:
+        self.locations = locations
+        self.ready_states = ready_states
+        self.index = 0
+
+    async def evaluate(self, expression: str, **_kwargs: object) -> object:
+        index = min(self.index, len(self.locations) - 1)
+        if expression == "location.href":
+            return self.locations[index]
+        assert expression == "document.readyState"
+        ready = self.ready_states[min(self.index, len(self.ready_states) - 1)]
+        self.index += 1
+        return ready
+
 def test_final_navigation_is_checked_before_page_probes() -> None:
     seen: list[str] = []
 
@@ -132,6 +165,45 @@ def test_non_string_final_navigation_is_refused_before_validation() -> None:
         asyncio.run(_validate_page_location(_LocationPage(None), seen.append))
     assert seen == []
 
+
+def test_solve_poll_revalidates_location_before_each_page_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    unsafe = "http://127.0.0.1/private"
+    page = _RedirectingSolvePage([REAL_URL, unsafe])
+    seen: list[str] = []
+
+    def validate(url: str) -> None:
+        seen.append(url)
+        if url == unsafe:
+            raise ValueError("outside allowlist")
+
+    monkeypatch.setattr("flab2bp.lab.capture._POLL_S", 0.0)
+    with pytest.raises(CaptureError, match="outside allowlist"):
+        asyncio.run(
+            _await_solve(page, REAL_URL, deadline_s=1.0, url_validator=validate)
+        )
+    assert seen == [REAL_URL, unsafe]
+    assert page.probe_calls == 1
+
+
+
+def test_navigation_settle_rejects_a_later_redirect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    unsafe = "http://127.0.0.1/private"
+    page = _NavigationPage([REAL_URL, unsafe], ["loading", "complete"])
+    seen: list[str] = []
+
+    def validate(url: str) -> None:
+        seen.append(url)
+        if url == unsafe:
+            raise ValueError("outside allowlist")
+
+    monkeypatch.setattr("flab2bp.lab.capture._POLL_S", 0.0)
+    with pytest.raises(CaptureError, match="outside allowlist"):
+        asyncio.run(_await_navigation(page, validate, deadline_s=1.0))
+    assert seen == [REAL_URL, unsafe]
 def test_requested_url_validation_refuses_before_browser_launch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
