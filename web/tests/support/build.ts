@@ -67,10 +67,7 @@ export function serving(...responses: Scripted[]): Array<{ url: string; init?: R
   const calls: Array<{ url: string; init?: RequestInit }> = [];
   let index = 0;
   const scriptedFetch = Object.assign(
-    (
-      input: Parameters<typeof fetch>[0],
-      init?: Parameters<typeof fetch>[1],
-    ): Promise<Response> => {
+    (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]): Promise<Response> => {
       const url = input instanceof Request ? input.url : input.toString();
       calls.push({ url, init });
       const next = responses[Math.min(index++, responses.length - 1)];

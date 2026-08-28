@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "concurrently --kill-others --names api,web \"bun run dev:api\" \"bun run dev:frontend:local\"",
+    "dev": "concurrently --kill-others --names api,web --passthrough-arguments \"bun run dev:api\" \"bun run dev:frontend:local -- {@}\" --",
     "dev:api": "uv run --directory .. flab2bp-web --no-build",
     "dev:frontend:local": "wait-on http-get://127.0.0.1:8000/api/health && rsbuild dev",
     "dev:frontend": "rsbuild dev",

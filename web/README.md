@@ -51,6 +51,15 @@ Open <http://127.0.0.1:3001>. `concurrently` starts `flab2bp-web --no-build` on 
 8000 while `wait-on` holds Rsbuild until `/api/health` responds. Ctrl-C terminates both
 process trees.
 
+To expose the frontend on all interfaces while keeping the Python API bound to loopback, run:
+
+```sh
+bun run dev -- --host 0.0.0.0
+```
+
+Open `http://<development-machine>:3001`. Anyone who can reach that port can also reach the
+proxied solver and unauthenticated `/api/fetch` relay, so use this only on a trusted network.
+
 To use an API at a different origin, manage that API separately and run:
 
 ```sh
@@ -71,8 +80,8 @@ A proxy error for `/api/build` means the configured Python API is not reachable.
 | `bun run format` | Biome formatter, writing in place. |
 | `bun run extract-assets` | Regenerates `public/assets/` from the game install. |
 
-The default development servers bind to `127.0.0.1`. `/api/fetch` is an unauthenticated relay,
-so neither server should be exposed to the LAN.
+The development servers bind to `127.0.0.1` by default. Passing a different frontend host
+also exposes its proxied `/api` routes; `/api/fetch` is an unauthenticated HTTP(S) relay.
 
 ## Architecture
 

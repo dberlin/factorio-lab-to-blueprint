@@ -1,8 +1,8 @@
 import { afterEach, expect, test } from '@rstest/core';
 import {
+  BuildOptions,
   BuildRequestError,
   DEFAULT_OPTIONS,
-  BuildOptions,
   isSettled,
   pollBuild,
   runBuild,
@@ -61,7 +61,6 @@ test('a payload that has drifted from the schema is rejected rather than rendere
   await expect(pollBuild('x')).rejects.toThrow();
 });
 
-
 test('response strategies are limited to active explicit web choices', async () => {
   serving({
     status: 200,
@@ -69,7 +68,6 @@ test('response strategies are limited to active explicit web choices', async () 
   });
   await expect(pollBuild('x')).rejects.toThrow();
 });
-
 
 test('sequence-pair is accepted as an explicit response strategy', async () => {
   const result = aResult({

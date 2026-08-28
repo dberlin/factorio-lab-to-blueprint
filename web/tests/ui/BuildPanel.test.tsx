@@ -49,10 +49,7 @@ test('a refusal is shown as a result, with one line per pair', async () => {
       result: null,
       refusal: {
         message: 'no valid layout for no-proliferator after 2s',
-        reasons: [
-          'freeform/no-proliferator: too tall',
-          'freeform/max-proliferation: unroutable',
-        ],
+        reasons: ['freeform/no-proliferator: too tall', 'freeform/max-proliferation: unroutable'],
       },
     }),
   });
