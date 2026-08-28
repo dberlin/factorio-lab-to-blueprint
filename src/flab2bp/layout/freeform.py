@@ -1542,8 +1542,7 @@ def _logical_strip_plans(spec: BuildSpec) -> tuple[_LogicalStripPlan, ...]:
     for key, group in groups.items():
         for item in group.inputs:
             for source in producers.get(item, []):
-                if source != key:
-                    consumers[source, item].append(key)
+                consumers[source, item].append(key)
 
     plans: list[_LogicalStripPlan] = []
     for key, group in groups.items():
@@ -1992,11 +1991,12 @@ def _nets_between(strips: list[Strip]) -> list[tuple[int, int]]:
     for i, s in enumerate(strips):
         by_group[s.group_key].append(i)
     nets: set[tuple[int, int]] = set()
-    for i, s in enumerate(strips):
-        for _item, dest in s.out_lanes:
-            for d in _dests(dest):
-                for j in by_group.get(d, []):
-                    nets.add((i, j))
+    for i, strip in enumerate(strips):
+        for _item, destination in strip.out_lanes:
+            for group_key in _dests(destination):
+                for j in by_group.get(group_key, []):
+                    if i != j:
+                        nets.add((i, j))
     return sorted(nets)
 
 

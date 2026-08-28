@@ -75,6 +75,20 @@ def _family(spec: BuildSpec) -> StripFamily:
     return families[0]
 
 
+def test_sequence_families_keep_same_group_feedback_destination(
+    refined_oil_feedback_spec: BuildSpec,
+) -> None:
+    families = generate_strip_families(refined_oil_feedback_spec)
+    feedback = [
+        lane
+        for family in families
+        for lane in family.output_lanes
+        if lane.items == ("refined-oil",)
+        and family.group_key in lane.destination_group_keys
+    ]
+    assert feedback
+
+
 def _at_yaw(family: StripFamily, yaw: float) -> tuple[StripVariant, ...]:
     return tuple(variant for variant in family.variants if variant.yaw == yaw)
 

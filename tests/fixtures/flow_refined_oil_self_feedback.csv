@@ -1,0 +1,10 @@
+"https://factoriolab.github.io/dsp/list?z=eJxFxrEKgzAUBdC.yXCnxCpOb7mhuEkVW8hadSgqQqRil.ftYqn0TGcWBlysNbOwRZpZwB3..J8jsb8-kGTnSbjzzdHvX89eaGK.yQ0BHQa8wRK8g4NyBBf4Ar5SX5tpihKUetXKrOLcDk0nJEA_&v=11"
+Item,Items,Inputs,Outputs,Targets,Belts,Belt,Recipe,Machines,Machine,Modules,Power
+refined-oil,=900,"coal:0.3,hydrogen:1,refined-oil:2/3","refined-oil:1","reforming-refine:2/3",=1.25,conveyor-belt-2,reforming-refine,=20,oil-refinery,"1 ",=19200
+hydrogen,=300,,"hydrogen:1","reforming-refine:1",=5/12,conveyor-belt-2,ice-giant-hydrogen,=25/12,orbital-collector,,
+coal,=1000,,,"reforming-refine:0.3",=25/18,conveyor-belt-2,,,,
+high-purity-silicon,=450,,,,=0.625,conveyor-belt-2,,,,
+titanium-ingot,=450,,,,=0.625,conveyor-belt-2,,,,
+iron-ingot,=200,,,,=5/18,conveyor-belt-2,,,,
+copper-ingot,=2500,,,,=125/36,conveyor-belt-2,,,,
+magnet,=100,,,,=5/36,conveyor-belt-2,,,,

@@ -15,13 +15,33 @@ from __future__ import annotations
 
 import functools
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Protocol
 
 import pytest
 
+from flab2bp.lab.data import load_vendored
+from flab2bp.lab.flow import flow_from_text, pin_request
+from flab2bp.lab.url import parse_url
 from flab2bp.layout.base import NoValidLayout, Placement
 from flab2bp.layout.freeform import FreeformLayout
+from flab2bp.rates.candidates import build_candidates
 from flab2bp.spec import BuildSpec
+
+_REFINED_OIL_FLOW = Path(__file__).parent / "fixtures" / "flow_refined_oil_self_feedback.csv"
+_REFINED_OIL_URL = (
+    "https://factoriolab.github.io/dsp/list?z=eJxFxrEKgzAUBdC.yXCnxCpOb7mhuEkVW8hadSgqQqRil.ftYqn0TGcWBlysNbOwRZpZwB3..J8jsb8-kGTnSbjzzdHvX89eaGK.yQ0BHQa8wRK8g4NyBBf4Ar5SX5tpihKUetXKrOLcDk0nJEA_&v=11"
+)
+
+
+@pytest.fixture(scope="session")
+def refined_oil_feedback_spec() -> BuildSpec:
+    data = load_vendored()
+    selection = flow_from_text(_REFINED_OIL_FLOW.read_text(), url=_REFINED_OIL_URL)
+    request = pin_request(parse_url(_REFINED_OIL_URL), data, selection)
+    (spec,) = build_candidates(data, request, flow=selection).candidates
+    assert spec.label == "flow-pinned"
+    return spec
 
 
 class _Layout(Protocol):

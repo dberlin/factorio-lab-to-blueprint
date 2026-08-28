@@ -53,10 +53,12 @@ from flab2bp.layout.freeform import (
     _Grid,
     _height_seed,
     _join_shard_islands,
+    _logical_strip_plans,
     _machines_without_poses,
     _make_grid,
     _merge_lanes,
     _Net,
+    _nets_between,
     _pack,
     _pair_lanes,
     _PathSearchResult,
@@ -406,6 +408,24 @@ def test_surplus_reuses_a_consumer_lane_when_the_combined_rate_fits() -> None:
         )
         == 2
     )
+
+
+def test_self_consuming_product_keeps_internal_and_boundary_output_lanes(
+    refined_oil_feedback_spec: BuildSpec,
+) -> None:
+    (plan,) = _logical_strip_plans(refined_oil_feedback_spec)
+    assert ("refined-oil", plan.group_key) in plan.out_lanes
+    assert ("refined-oil", "") in plan.out_lanes
+
+
+def test_packer_proxy_does_not_separate_a_strip_from_itself(
+    refined_oil_feedback_spec: BuildSpec,
+) -> None:
+    strips = plan_strips(
+        refined_oil_feedback_spec,
+        strip_len=refined_oil_feedback_spec.machine_count,
+    )
+    assert all(left != right for left, right in _nets_between(strips))
 
 
 def test_shared_strip_emission_filters_each_multi_output_lane() -> None:
