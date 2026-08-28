@@ -318,42 +318,25 @@ _SEGMENT_TABLE = (
 
 
 def _longitude_segment_count(latitude_rad: float, segment: int) -> int:
-    """``PlanetGrid.DetermineLongitudeSegmentCount``, decompiled line 103293.
+    """``BlueprintUtils.GetLongitudeSegmentCount(float)``, exactly.
 
-    ``PlanetGrid.cs:1838``::
+    ``BlueprintUtils.cs:209-220`` first snaps latitude to a grid row with
+    ``_round2int(latitude / GetLatitudeRadPerGrid())``, takes the absolute row,
+    decrements every non-equatorial row, and only then divides by five and calls
+    ``PlanetGrid.DetermineLongitudeSegmentCount``.
 
-        public static int DetermineLongitudeSegmentCount(int latitudeIndex, int segment)
-        {
-            int num = Mathf.CeilToInt(Mathf.Abs(Mathf.Cos((float)latitudeIndex
-                        / ((float)segment / 4f) * MathF.PI * 0.5f)) * (float)segment);
-            if (num < 500)
-            {
-                return segmentTable[num];
-            }
-            return (num + 49) / 100 * 100;
-        }
-
-    The count is COSINE-based and then snapped through :data:`_SEGMENT_TABLE`,
-    so it is quantised, not continuous.  This is the function the paste-time
-    geometry actually goes through: ``BlueprintUtils.RefreshBuildPreview`` takes
-    the longitude step from ``GetLongitudeRadPerGrid``
-    (``BlueprintUtils.cs:270-273``)::
-
-        return MathF.PI * 2f / (float)(GetLongitudeSegmentCount(_latitudeRad, _segmentCnt) * 5);
-
-    which resolves to this.  So the quantisation is part of the rule and not an
-    artefact of grid construction.
-
-    :func:`collisions` still evaluates at the equator, where the raw count is
-    ``segment`` and ``segmentTable[200]`` is ``200``, so the flat model is
-    unaffected -- but :func:`preview_pose` takes an ``anchor_lat`` and was
-    silently wrong for it everywhere else.
+    The former local port divided first, omitted the decrement, used double
+    cosine arithmetic, and subtracted a ``1e-9`` fudge before ``ceil``.  It was
+    wrong in 300 ``(segment, latitude)`` cases including every pole.  Delegate
+    the band lookup to :mod:`flab2bp.dsp.planet`, which owns the exact float32
+    implementation and the decrement; this wrapper only performs the
+    float-latitude snapping that its integer API deliberately does not.
     """
-    lat_index = int(abs(latitude_rad) / _latitude_rad_per_grid(segment) / 5)
-    raw = math.ceil(abs(math.cos(lat_index / (segment / 4.0) * math.pi * 0.5)) * segment - 1e-9)
-    if raw >= 500:
-        return (raw + 49) // 100 * 100
-    return _SEGMENT_TABLE[raw]
+    from flab2bp.dsp import planet
+
+    scaled = latitude_rad / _latitude_rad_per_grid(segment)
+    grid_idx = int(scaled + 0.5) if scaled > 0.0 else int(scaled - 0.5)
+    return planet.longitude_segment_count(grid_idx, segment)
 
 
 def _latitude_rad_per_grid(segment: int) -> float:

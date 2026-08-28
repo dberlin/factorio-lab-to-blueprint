@@ -16,7 +16,9 @@ import json
 import os
 from fractions import Fraction
 from pathlib import Path
-from typing import Any, Final
+from typing import Final
+
+from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 from flab2bp.lab.schema import Dataset, HashIndex
 
@@ -29,6 +31,15 @@ VENDORED_DIR: Path = Path(__file__).parent / "vendored"
 OFFLINE_ENV_VAR: Final = "FLAB2BP_OFFLINE"
 
 _DEFAULT_TIMEOUT: Final = 30.0
+
+
+class _CacheMetadata(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
+
+    etag: str | None = None
+
+
+_CACHE_METADATA_ADAPTER: Final[TypeAdapter[_CacheMetadata]] = TypeAdapter(_CacheMetadata)
 
 
 class DatasetNotAvailable(RuntimeError):
@@ -65,11 +76,10 @@ def _meta_path(body_path: Path) -> Path:
 
 def _read_etag(body_path: Path) -> str | None:
     try:
-        meta = json.loads(_meta_path(body_path).read_text(encoding="utf-8"))
+        raw: object = json.loads(_meta_path(body_path).read_text(encoding="utf-8"))
+        return _CACHE_METADATA_ADAPTER.validate_python(raw).etag
     except (OSError, ValueError):
         return None
-    etag = meta.get("etag")
-    return etag if isinstance(etag, str) else None
 
 
 def _write_cache(body_path: Path, text: str, etag: str | None) -> None:
@@ -124,13 +134,14 @@ def _download(url: str, body_path: Path, *, force_refresh: bool) -> str | None:
 # ---------------------------------------------------------------------------
 
 
-def _parse_json(text: str) -> Any:
+def _parse_json(text: str) -> object:
     """Parse with exact rationals for every decimal literal.
 
     ``parse_float`` receives the raw token text, so ``0.32`` becomes exactly
     ``Fraction(8, 25)`` rather than the nearest binary double.
     """
-    return json.loads(text, parse_float=Fraction)
+    parsed: object = json.loads(text, parse_float=Fraction)
+    return parsed
 
 
 def _resolve_text(

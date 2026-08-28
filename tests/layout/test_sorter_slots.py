@@ -12,6 +12,7 @@ than a rule hole -- see :func:`test_only_artificial_star_is_excluded`.
 from __future__ import annotations
 
 import collections
+import dataclasses
 import math
 from collections.abc import Callable, Sequence
 from fractions import Fraction
@@ -405,6 +406,28 @@ def test_yaw_rotates_the_ring(yaw: float) -> None:
         assert S.machine_slot(2303, yaw, turn(*offset), turn(*approach)) == expected
 
 
+@pytest.mark.parametrize(
+    ("yaw", "expected"),
+    [
+        (0.0, (10, 19, 3)),
+        (90.0, (9, 20, 3)),
+        (180.0, (10, 21, 3)),
+        (270.0, (11, 20, 3)),
+    ],
+)
+def test_coater_supply_cell_rotates_behind_host_at_next_level(
+    yaw: float, expected: tuple[int, int, int]
+) -> None:
+    assert S.addon_supply_cell(
+        cat.SPRAY_COATER_ID,
+        x=10,
+        y=20,
+        z=Fraction(2),
+        yaw=yaw,
+        area=1,
+    ) == expected
+
+
 def test_wide_side_clamps_to_its_end_slot() -> None:
     """A side has three slots however long it is, so a far column takes the end one.
 
@@ -498,6 +521,29 @@ def test_attachment_refuses_a_lane_further_than_a_sorter_reaches() -> None:
     assert S.attachment(plant, (4, -3)) is None
 
 
+def test_chemical_lane_three_clear_is_past_real_slot_reach() -> None:
+    """The inner north-side pose makes the apparent third clear row too far."""
+    plant = _at(2309)
+    lane_y = plant.y - cat.SORTER_MAX_REACH
+
+    assert S.attachable_columns(plant, lane_y) == {}
+
+
+def test_chemical_lane_closer_uses_real_inner_anchor() -> None:
+    """One row closer reaches the pose without a machine-name spacing rule."""
+    plant = _at(2309)
+    lane_y = plant.y - cat.SORTER_MAX_REACH + 1
+    attachments = S.attachable_columns(plant, lane_y)
+
+    assert attachments
+    assert {attachment.cell[1] for attachment in attachments.values()} == {
+        plant.y + 1
+    }
+    assert max(attachment.span for attachment in attachments.values()) <= (
+        cat.SORTER_MAX_REACH
+    )
+
+
 def test_a_belt_addon_carries_the_pair_the_game_writes() -> None:
     """All eight corpus coaters: no connection, and ``(15, 14)`` on both ends."""
     seen: collections.Counter[tuple[int, int, int, int]] = collections.Counter()
@@ -575,17 +621,14 @@ def test_attachment_is_empty_for_a_building_that_takes_no_sorter() -> None:
     assert S.attachment(_at(2209), (4, -1)) is None  # Energy Exchanger
 
 
-def test_a_building_with_no_sorter_slots_is_refused() -> None:
-    """Storage Tank: four belt PORTS, and not one insert pose.
+def test_a_belt_ported_building_with_no_sorter_slots_is_refused() -> None:
+    """Energy Exchanger: four belt ports, and not one authoritative sorter pose."""
+    exchanger = cat.building(cat.ENERGY_EXCHANGER_ID)
 
-    This is the distinction ``buildings.json`` blurred -- its ``slots`` field is
-    the port table -- and naming a slot on a building that has none is the shape
-    of guess this module exists to stop.
-    """
-    assert cat.building(2106).slots, "Storage Tank does have belt ports"
-    assert not cat.building(2106).slot_poses
-    with pytest.raises(S.SlotUndetermined):
-        S.machine_slot(2106, 0.0, (0, 3), (0, 1))
+    assert len(exchanger.slots) == 4, "the Energy Exchanger does have belt ports"
+    assert exchanger.slot_poses == ()
+    with pytest.raises(S.SlotUndetermined, match="defines no sorter slots at all"):
+        S.machine_slot(cat.ENERGY_EXCHANGER_ID, 0.0, (0, 4), (0, 1))
 
 
 def test_the_chemical_plant_table_is_the_games_and_not_a_ring() -> None:
@@ -665,7 +708,7 @@ def _on_sphere(tile: tuple[float, float], off: tuple[float, float]) -> tuple[flo
     )
 
 
-def _placed(bs: Sequence[BlueprintBuilding]) -> list[PlacedBuilding]:
+def _placed_blueprint(bs: Sequence[BlueprintBuilding]) -> list[PlacedBuilding]:
     """A decoded blueprint as PlacedBuildings, index-aligned so links resolve."""
     out = []
     for b in bs:
@@ -697,7 +740,7 @@ def _answer_key() -> list[tuple[PlacedBuilding, BlueprintBuilding, list[PlacedBu
     """Our 38 sorters paired with the 33 the game built, matched by POSITION."""
     ours = decode(OURS.read_text(encoding="utf-8")).buildings
     built = decode(BUILT.read_text(encoding="utf-8")).buildings
-    placed = _placed(ours)
+    placed = _placed_blueprint(ours)
     mine = [b for b in ours if cat.is_sorter(b.item_id)]
     theirs = [b for b in built if cat.is_sorter(b.item_id)]
     scored = []
@@ -829,6 +872,50 @@ def test_a_sorter_still_carrying_its_default_slots_seats_on_the_real_one() -> No
     assert (seat.x2, seat.y2) == pytest.approx((5.0, 4.1246), abs=1e-3)
     on_slot_zero = S.slot_offset(2304, fresh.yaw, 0)
     assert abs(on_slot_zero[0]) == pytest.approx(0.7958, abs=1e-3)
+
+
+def _chemical_output_sorter(
+    recipe_id: int, item: str
+) -> tuple[list[PlacedBuilding], PlacedBuilding]:
+    machine = dataclasses.replace(_at(2309), recipe_id=recipe_id)
+    belt = PlacedBuilding(
+        item_id=2002,
+        model_index=cat.building(2002).model_index,
+        x=2,
+        y=-1,
+        carries_item=item,
+    )
+    sorter = PlacedBuilding(
+        item_id=2011,
+        model_index=cat.building(2011).model_index,
+        x=2,
+        y=1,
+        x2=2,
+        y2=-1,
+        z2=Fraction(0),
+        input_obj=0,
+        output_obj=1,
+        carries_item=item,
+    )
+    return [machine, belt], sorter
+
+
+@pytest.mark.parametrize(
+    ("item", "expected_filter"),
+    [("graphene", 1123), ("hydrogen", 1120)],
+)
+def test_multi_output_machine_sorters_filter_their_exact_output(
+    item: str, expected_filter: int
+) -> None:
+    buildings, sorter = _chemical_output_sorter(32, item)
+
+    assert S.emitted_sorter(sorter, buildings).filter_id == expected_filter
+
+
+def test_single_output_machine_sorters_remain_unfiltered() -> None:
+    buildings, sorter = _chemical_output_sorter(31, "graphene")
+
+    assert S.emitted_sorter(sorter, buildings).filter_id == 0
 
 
 def test_two_sorters_meeting_on_one_belt_tile_are_not_clear() -> None:

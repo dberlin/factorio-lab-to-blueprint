@@ -12,8 +12,10 @@ import json
 import math
 import pathlib
 from fractions import Fraction
+from typing import ClassVar
 
 import pytest
+from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 from flab2bp.dsp import catalog, colliders
 from flab2bp.dsp.codec import decode
@@ -21,12 +23,30 @@ from flab2bp.dsp.codec import decode
 FIXTURES = pathlib.Path(__file__).parent.parent / "fixtures"
 
 
+class _AssetRow(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="allow")
+
+
+class _BuildingBoxRow(_AssetRow):
+    itemId: int | None
+    blueprintBoxSize: tuple[float, float]
+
+
+class _NamedIdRow(_AssetRow):
+    id: int
+    name: str
+
+
+_BUILDING_BOX_ROWS_ADAPTER = TypeAdapter(tuple[_BuildingBoxRow, ...])
+_NAMED_ID_ROWS_ADAPTER = TypeAdapter(tuple[_NamedIdRow, ...])
+
+
 def _blueprint_box_size(item_id: int) -> tuple[float, float]:
     """The field the footprint deliberately no longer reads, for contrast."""
     data = pathlib.Path(catalog.__file__).parent / "data" / "buildings.json"
-    for row in json.loads(data.read_text()):
-        if row.get("itemId") == item_id:
-            return (float(row["blueprintBoxSize"][0]), float(row["blueprintBoxSize"][1]))
+    for row in _BUILDING_BOX_ROWS_ADAPTER.validate_json(data.read_bytes()):
+        if row.itemId == item_id:
+            return row.blueprintBoxSize
     raise AssertionError(f"no row for item {item_id}")
 
 
@@ -34,6 +54,67 @@ def test_table_loads() -> None:
     buildings = catalog.all_buildings()
     assert len(buildings) > 50
     assert all(b.width >= 1 and b.height >= 1 for b in buildings)
+
+
+def test_catalog_validates_bundled_building_json(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    malformed = tmp_path / "buildings.json"
+    _ = malformed.write_text(
+        json.dumps(
+            [
+                {
+                    "prefab": "bad",
+                    "itemId": 1,
+                    "name": "Bad",
+                    "modelIndex": "not-an-integer",
+                }
+            ]
+        )
+    )
+    monkeypatch.setattr(catalog, "_DATA", malformed)
+    catalog._load.cache_clear()
+
+    with pytest.raises(ValueError, match="modelIndex"):
+        _ = catalog.all_buildings()
+
+    catalog._load.cache_clear()
+
+
+def test_catalog_validates_bundled_slot_pose_json(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    malformed = tmp_path / "slot_poses.json"
+    _ = malformed.write_text(
+        json.dumps(
+            {
+                "bad": {
+                    "slotPoses": [{"pos": [0.0, 0.0], "fwd": [0.0, 0.0, 1.0]}]
+                }
+            }
+        )
+    )
+    monkeypatch.setattr(catalog, "_SLOT_POSES", malformed)
+    catalog._load.cache_clear()
+
+    with pytest.raises(ValueError, match="pos"):
+        _ = catalog.all_buildings()
+
+    catalog._load.cache_clear()
+
+
+def test_catalog_validates_bundled_name_id_json(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    malformed = tmp_path / "recipes.json"
+    _ = malformed.write_text(json.dumps([{"name": "Bad", "id": "not-an-integer"}]))
+    monkeypatch.setattr(catalog, "_RECIPES", malformed)
+    catalog._recipe_ids.cache_clear()
+
+    with pytest.raises(ValueError, match="id"):
+        _ = catalog.recipe_id("bad")
+
+    catalog._recipe_ids.cache_clear()
 
 
 @pytest.mark.parametrize(
@@ -243,6 +324,23 @@ def test_spray_coater_occupies_no_tile() -> None:
     assert not coater.occupies_tiles
 
 
+def test_spray_coater_addon_supply_pose_is_authoritative_and_exact() -> None:
+    coater = catalog.building(catalog.SPRAY_COATER_ID)
+
+    assert coater.slot_poses == ()
+    assert catalog.addon_supply_pose(catalog.SPRAY_COATER_ID, area=0) == (
+        catalog.AddonSupplyPose(Fraction(0), Fraction(0), Fraction(0), area=0)
+    )
+    assert catalog.addon_supply_pose(catalog.SPRAY_COATER_ID, area=1) == (
+        catalog.AddonSupplyPose(
+            Fraction(0),
+            Fraction(-5, 4),
+            Fraction(1),
+            area=1,
+        )
+    )
+
+
 def test_splitter_is_belt_integrated() -> None:
     """Splitters sit ON the belt line -- measured at dx=0.00, dy=0.00 from a belt."""
     assert catalog.is_belt_integrated(catalog.SPLITTER_ID)
@@ -251,24 +349,10 @@ def test_splitter_is_belt_integrated() -> None:
     assert not catalog.is_belt_integrated(2303)  # an assembler
 
 
-def test_tesla_cover_radius_is_a_radius() -> None:
-    """A diameter reading would leave machines in working blueprints unpowered."""
-    assert catalog.TESLA_COVER_RADIUS == 10.5
-
-
-def test_tesla_link_distance_tracks_the_extracted_game_table() -> None:
-    """The constant must be the game's ``connectDistance``, not a hand-typed guess.
-
-    See the note on :data:`catalog.TESLA_LINK_DISTANCE` for why 22.5 is a
-    centre-to-centre *distance* and not half of one: the game's own
-    ``PowerSystem.OnNodeAdded`` compares squared node separation against
-    ``max(a.connDistance2, b.connDistance2)``, where ``connDistance2`` is this
-    field squared.  The corpus cannot discriminate 22.5 from 11.25, so tying the
-    constant to the extracted table is the only check available here.
-    """
+def test_tesla_power_distances_track_the_extracted_game_table() -> None:
     tower = catalog.building(catalog.TESLA_TOWER_ID)
-    assert tower.connect_distance == catalog.TESLA_LINK_DISTANCE
-    assert tower.cover_radius == catalog.TESLA_COVER_RADIUS
+    assert tower.connect_distance == 22.5
+    assert tower.cover_radius == 10.5
     # The link rule takes the larger of the two nodes' reaches, so a longer-range
     # node really does exist and really does out-reach the tower.
     wireless = catalog.building(2202)
@@ -383,11 +467,9 @@ def test_item_aliases_resolve(factoriolab_id: str, dsp_item_id: int) -> None:
 
 def test_every_dsp_recipe_is_reachable_by_its_factoriolab_id() -> None:
     """No DSP recipe should be stranded behind a name the mapping cannot form."""
-    import json
-
-    raw = json.loads((catalog._RECIPES).read_text())
+    raw = _NAMED_ID_ROWS_ADAPTER.validate_json(catalog._RECIPES.read_bytes())
     known = catalog.known_recipe_ids()
-    stranded = [r["name"] for r in raw if catalog._kebab(r["name"]) not in known]
+    stranded = [row.name for row in raw if catalog._kebab(row.name) not in known]
     assert not stranded, f"DSP recipes no FactorioLab id reaches: {stranded}"
 
 
@@ -424,9 +506,10 @@ def test_table_covers_every_recipe_real_blueprints_use() -> None:
     means the extraction missed something -- which no amount of internal
     consistency would reveal.
     """
-    import json
-
-    known = {r["id"] for r in json.loads((catalog._RECIPES).read_text())}
+    known = {
+        row.id
+        for row in _NAMED_ID_ROWS_ADAPTER.validate_json(catalog._RECIPES.read_bytes())
+    }
     used: set[int] = set()
     for path in sorted(pathlib.Path("tests/fixtures").glob("*.txt")):
         try:
@@ -625,6 +708,16 @@ def test_clearance_exceeds_the_footprint_exactly_where_the_collider_does() -> No
     assert catalog.oriented_footprint(2303, 0.0) == (3, 3)
     assert catalog.clearance(2303, 0.0) == (4, 4)
     assert catalog.clearance(2101, 0.0) == (3, 3)  # Depot Mk.I, 3.00 units
+
+
+def test_clearance_uses_non_footprint_collider_extent() -> None:
+    """Collider clearance must not silently collapse to the footprint."""
+    item_id = 2303  # Assembling Machine Mk.II
+    assert catalog.oriented_footprint(item_id, 0.0) == (3, 3)
+    assert colliders.own_centre_extent(
+        catalog.building(item_id).model_index, 0.0
+    ) == pytest.approx((3.82, 3.82))
+    assert catalog.clearance(item_id, 0.0) == (4, 4)
     for b in catalog.all_buildings():
         cw, ch = catalog.clearance(b.item_id, 0.0)
         fw, fh = catalog.oriented_footprint(b.item_id, 0.0)
@@ -732,21 +825,22 @@ def test_the_belt_port_class_is_the_nine_zero_pose_buildings_plus_the_stations()
 
 
 def test_the_poseless_buildings_a_spec_group_can_reach() -> None:
-    """Eight, not nine, and one of them takes no belt either.
+    """Every recipe producer with no sorter pose remains an explicit refusal."""
+    from flab2bp.lab.data import load_vendored
 
-    ``spine._sorterless_groups``'s docstring named nine and listed two things
-    that are not in the catalog as described: there is no ``ray-receiver-pro``
-    prefab at all, and ``orbital-collector`` carries ZERO ports as well as zero
-    insert poses -- which is right for a building fed by logistics vessels in
-    orbit, and means belt-to-port docking will never reach it.  Pinned here
-    because both strategies' refusals quote this set.
-    """
-    from flab2bp.layout.spine import MACHINE_ITEM_IDS
-
+    machine_ids = {
+        item_id
+        for recipe in load_vendored().recipes
+        for producer in recipe.producers
+        if (item_id := catalog.get_item_id(producer)) is not None
+    }
+    machine_ids.update(
+        entry.machine_item_id for entry in catalog.MODE_DRIVEN_MACHINE.values()
+    )
     poseless = sorted(
-        catalog.building(i).prefab
-        for i in set(MACHINE_ITEM_IDS.values())
-        if not catalog.building(i).slot_poses
+        catalog.building(item_id).prefab
+        for item_id in machine_ids
+        if not catalog.building(item_id).slot_poses
     )
     assert poseless == [
         "energy-exchanger",
@@ -759,6 +853,6 @@ def test_the_poseless_buildings_a_spec_group_can_reach() -> None:
         "water-pump",
     ]
     assert not catalog.building(
-        MACHINE_ITEM_IDS["orbital-collector"]
+        catalog.item_id("orbital-collector")
     ).takes_belt_ports, "an Orbital Collector is fed in orbit, not by belt"
     assert all(b.prefab != "ray-receiver-pro" for b in catalog.all_buildings())

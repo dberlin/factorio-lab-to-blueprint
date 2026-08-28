@@ -10,11 +10,12 @@ import pytest
 from flab2bp import pipeline
 from flab2bp.layout.base import NoValidLayout
 from flab2bp.web.jobs import Builder, Options, run_build
+from flab2bp.web.payload import Json, JsonValue
 
 URL = "https://factoriolab.github.io/dsp/flow?o=graphene*60&v=11"
 
 
-def _settled(builder: Builder, job_id: str, *, timeout_s: float = 20.0) -> dict[str, object]:
+def _settled(builder: Builder, job_id: str, *, timeout_s: float = 20.0) -> Json:
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
         job = builder.get(job_id)
@@ -25,6 +26,12 @@ def _settled(builder: Builder, job_id: str, *, timeout_s: float = 20.0) -> dict[
     raise AssertionError(f"job {job_id} never finished")
 
 
+def _object(value: JsonValue) -> Json:
+    if not isinstance(value, dict):
+        raise AssertionError(f"expected JSON object, got {value!r}")
+    return value
+
+
 def test_a_successful_build_reports_done_with_a_result(small_build: pipeline.Build) -> None:
     builder = Builder(solve=lambda _o, _p: small_build)
     try:
@@ -32,8 +39,8 @@ def test_a_successful_build_reports_done_with_a_result(small_build: pipeline.Bui
         snap = _settled(builder, job.id)
         assert snap["state"] == "done"
         assert snap["refusal"] is None and snap["error"] is None
-        assert isinstance(snap["result"], dict)
-        assert snap["result"]["blueprint"] == small_build.blueprint
+        result = _object(snap["result"])
+        assert result["blueprint"] == small_build.blueprint
     finally:
         builder.shutdown()
 
@@ -43,7 +50,7 @@ def test_a_refusal_is_a_result_not_an_error() -> None:
 
     def refuse(_o: Options, _p: pipeline.ProgressSink) -> pipeline.Build:
         raise NoValidLayout(
-            "spine/no-proliferator: too tall; freeform/no-proliferator: unroutable",
+            "freeform/no-proliferator: too tall; freeform/max-proliferation: unroutable",
             spec_label="no-proliferator",
             budget_s=2.0,
         )
@@ -53,13 +60,13 @@ def test_a_refusal_is_a_result_not_an_error() -> None:
         snap = _settled(builder, builder.submit(Options(url=URL)).id)
         assert snap["state"] == "refused"
         assert snap["error"] is None
-        assert isinstance(snap["refusal"], dict)
+        refused = _object(snap["refusal"])
         # One line per strategy/candidate pair, not one long sentence.
-        assert snap["refusal"]["reasons"] == [
-            "spine/no-proliferator: too tall",
-            "freeform/no-proliferator: unroutable",
+        assert refused["reasons"] == [
+            "freeform/no-proliferator: too tall",
+            "freeform/max-proliferation: unroutable",
         ]
-        assert "no valid layout" in str(snap["refusal"]["message"])
+        assert "no valid layout" in str(refused["message"])
     finally:
         builder.shutdown()
 
@@ -93,8 +100,14 @@ def test_a_second_job_queues_behind_the_first(small_build: pipeline.Build) -> No
         # The first job has to actually reach the worker before the second can
         # be behind it; without this the assertion could pass vacuously.
         deadline = time.monotonic() + 5.0
-        while builder.get(first.id).state != "running" and time.monotonic() < deadline:  # type: ignore[union-attr]
+        current = builder.get(first.id)
+        while (
+            current is not None
+            and current.state != "running"
+            and time.monotonic() < deadline
+        ):
             time.sleep(0.01)
+            current = builder.get(first.id)
         assert builder.snapshot(second)["state"] == "queued"
         assert builder.snapshot(second)["queue_position"] == 0
         release.set()
@@ -131,7 +144,7 @@ def test_the_snapshot_carries_the_ceiling_and_the_elapsed_time(
     try:
         options = Options(url=URL, strategy="best", candidates=2, budget_s=4.0)
         snap = _settled(builder, builder.submit(options).id)
-        assert snap["solver_ceiling_s"] == 16.0
+        assert snap["solver_ceiling_s"] == 2 * pipeline.PRODUCTION_STRATEGY_COUNT * 4.0
         assert isinstance(snap["elapsed_s"], float)
         reported = snap["options"]
         assert isinstance(reported, dict)
@@ -151,20 +164,20 @@ def test_a_running_job_reports_which_pair_it_is_on(small_build: pipeline.Build) 
     release = threading.Event()
 
     def solve(_o: Options, note: pipeline.ProgressSink) -> pipeline.Build:
-        note(pipeline.AttemptProgress(1, 2, "no-proliferator", "spine", "started"))
+        note(pipeline.AttemptProgress(1, 2, "no-proliferator", "freeform", "started"))
         note(
             pipeline.AttemptProgress(
-                1, 2, "no-proliferator", "spine", "refused", reason="too tall"
+                1, 2, "no-proliferator", "freeform", "refused", reason="too tall"
             )
         )
-        note(pipeline.AttemptProgress(2, 2, "no-proliferator", "freeform", "started"))
+        note(pipeline.AttemptProgress(2, 2, "max-proliferation", "freeform", "started"))
         reached_second.set()
         release.wait(timeout=20.0)
         return small_build
 
     builder = Builder(solve=solve)
     try:
-        job = builder.submit(Options(url=URL))
+        job = builder.submit(Options(url=URL, candidates=2))
         assert reached_second.wait(timeout=20.0)
         snap = builder.snapshot(job)
         progress = snap["progress"]
@@ -176,9 +189,11 @@ def test_a_running_job_reports_which_pair_it_is_on(small_build: pipeline.Build) 
         # `started` events are not kept, or every pair would appear twice.
         settled = snap["settled"]
         assert isinstance(settled, list)
-        assert [(s["strategy"], s["phase"], s["reason"]) for s in settled] == [
-            ("spine", "refused", "too tall")
-        ]
+        settled_objects = [_object(item) for item in settled]
+        assert [
+            (item["strategy"], item["phase"], item["reason"])
+            for item in settled_objects
+        ] == [("freeform", "refused", "too tall")]
     finally:
         release.set()
         builder.shutdown()
@@ -235,6 +250,24 @@ class TestFlowReachesTheSolver:
         run_build(Options(url=URL), lambda _s: None)
         assert seen["flow_text"] is None
 
+    def test_explicit_proliferator_tier_reaches_pipeline(
+        self, monkeypatch: pytest.MonkeyPatch, small_build: pipeline.Build
+    ) -> None:
+        from flab2bp.rates.adjust import ProliferatorTier
+
+        seen: dict[str, object] = {}
+
+        def spy(url: str, **kwargs: object) -> pipeline.Build:
+            seen.update(kwargs)
+            return small_build
+
+        monkeypatch.setattr(pipeline, "build", spy)
+        run_build(
+            Options(url=URL, proliferator_tier=ProliferatorTier.MK1),
+            lambda _s: None,
+        )
+        assert seen["proliferator_tier"] is ProliferatorTier.MK1
+
     def test_the_snapshot_says_whether_one_was_supplied(self, small_build: pipeline.Build) -> None:
         # The CSV itself is not echoed back -- it can be hundreds of kB and the
         # page already has it -- but silence about whether one was used would
@@ -243,8 +276,7 @@ class TestFlowReachesTheSolver:
         try:
             job = builder.submit(Options(url=URL, flow="Recipes\nid,name\ngraphene,Graphene\n"))
             snap = _settled(builder, job.id)
-            options = snap["options"]
-            assert isinstance(options, dict)
+            options = _object(snap["options"])
             assert options["flow_supplied"] is True
             assert "flow" not in options
         finally:

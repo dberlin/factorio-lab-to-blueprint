@@ -33,7 +33,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 from fractions import Fraction
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Protocol, TypedDict
 
 if TYPE_CHECKING:
     from flab2bp.spec import BuildSpec
@@ -143,14 +143,13 @@ class PlacedBuilding:
 
     parameters: tuple[int, ...] = ()
 
-    #: For a belt, the FactorioLab item id this lane carries; ``None`` elsewhere
-    #: or when the strategy does not know.
+    #: FactorioLab item id carried by a belt or moved by a sorter; ``None`` when
+    #: the strategy does not know.
     #:
     #: Not part of the DSP record -- it is layout knowledge that would otherwise
-    #: be thrown away at emission and cannot be recovered afterwards.  Two things
-    #: need it: the belt marker icons that label external inputs, and the
-    #: validator's exact per-item max-flow check, which is currently unimplemented
-    #: precisely because a ``Placement`` carried no lane labelling.
+    #: be thrown away at emission and cannot be recovered afterwards.  Belt
+    #: markers, exact flow validation, and multi-product output-sorter filters
+    #: all consume it before encoding.
     carries_item: str | None = None
 
     def tiles(self) -> list[tuple[int, int, Fraction]]:
@@ -160,6 +159,140 @@ class PlacedBuilding:
             for dx in range(self.width)
             for dy in range(self.height)
         ]
+
+
+class PlacementStats(TypedDict, total=False):
+    """Complete cross-strategy schema for observational layout diagnostics."""
+
+    accelerator: str
+    accepted_moves: float
+    anneal_stages: float
+    archive_categories: list[str]
+    archive_category: str
+    area: float
+    area_segments: float
+    backend: str
+    band_rotated: float
+    belt_tiles: float
+    best_overflow: float
+    best_stranded: float
+    boundary_belts_removed: float
+    boundary_cleanup_time_s: float
+    box_area: float
+    cache_hits: float
+    compact_seed_attempt: float
+    compact_seed_base_seed: int
+    compact_seed_closure_backend: str
+    compact_seed_closure_exact: float
+    compact_seed_closure_status: str
+    compact_seed_closures: float
+    compact_seed_decoded_height: float
+    compact_seed_decoded_width: float
+    compact_seed_deterministic_time_s: float
+    compact_seed_height: float
+    compact_seed_solved_width: float
+    compact_seed_status: str
+    compact_seed_wall_time_s: float
+    compilation_time_s: float
+    corridor_tiles: float
+    decoded_candidates: float
+    detailed_expansions: float
+    detailed_route_time_s: float
+    detailed_routes: float
+    direct_candidates: float
+    direct_insert_candidates: float
+    direct_inserts: float
+    direct_sorters: float
+    elevated_coater_routes: float
+    expansion_allowance: float
+    expansions: float
+    fallback_reason: float
+    fallback_used: float
+    feedback_cells: float
+    feedback_decays: float
+    feedback_nets: float
+    final_reserved: float
+    gap_area: float
+    global_expansions: float
+    global_route_time_s: float
+    global_routes: float
+    global_skip_reason: str
+    global_skips: float
+    hard_outline_overflow: float
+    height_waste: float
+    heights: float
+    history_cost: float
+    hit_time_budget: float
+    input_markers: int
+    island_result_reserve_s: float
+    islands_completed: float
+    islands_refused: float
+    islands_requested: float
+    junctions: float
+    lns_invocations: float
+    lns_max_size: float
+    lns_total_size: float
+    machines: float
+    max_quality_stagnation: float
+    merge_count: float
+    missed_direct_inserts: float
+    moves: float
+    nets: float
+    objective_mode: str
+    pack_width: float
+    placement_time_s: float
+    planning_time_s: float
+    pose_count: float
+    pose_feasibility_rejects: float
+    pose_yaw_0: float
+    pose_yaw_180: float
+    pose_yaw_270: float
+    pose_yaw_90: float
+    power: float
+    power_uncovered: float
+    preparation_time_s: float
+    quality_entries: float
+    quality_exits: float
+    quality_stages: float
+    repair_iterations: float
+    restarts: float
+    riser_columns: float
+    risers: float
+    route_failures: float
+    routed: float
+    rows: float
+    search_energy: float
+    seed: int
+    seeds: float
+    shared_pack_candidates: float
+    shared_pack_closures: float
+    shared_pack_wall_time_s: float
+    solver_rejected: float
+    solver_status: float
+    sorters: float
+    split_count: float
+    spray_coaters: float
+    stages: float
+    starved_taps: float
+    strips: float
+    target_height: float
+    termination: str
+    termination_cause: str
+    topology_beam_candidates: float
+    topology_beam_closures: float
+    topology_beam_height: float
+    topology_beam_wall_time_s: float
+    total_time_s: float
+    towers: float
+    used_height: float
+    validation_clean: float
+    validation_status: str
+    validation_time_s: float
+    validator_clean: float
+    variant_moves: float
+    weighted_hpwl: float
+    winner_island_id: int
+    winner_island_seed: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -173,7 +306,7 @@ class Placement:
     #: Item ids shown as the blueprint's icons, at most five.
     icons: tuple[int, ...] = ()
     #: Diagnostics from the strategy that produced this, for the bake-off.
-    stats: dict[str, float] = field(default_factory=dict)
+    stats: PlacementStats = field(default_factory=PlacementStats)
 
     @property
     def bounds(self) -> tuple[int, int, int, int]:
@@ -191,15 +324,6 @@ class Placement:
         return (max_x - min_x + 1) * (max_y - min_y + 1)
 
 
-#: Seconds granted to a retry when the first attempt finds nothing feasible.
-#:
-#: The escalation is deliberately once, and generous.  If a spec is genuinely
-#: solvable, a solver that found nothing in the normal budget will usually find
-#: something here; if fifteen seconds still yields nothing, the working
-#: assumption is a defect in our model rather than a hard instance, and the
-#: error says so.  Treating it as "just a big problem" is how an unroutable
-#: model gets excused indefinitely.
-RETRY_BUDGET_S = 15.0
 
 
 class NoValidLayout(Exception):
@@ -224,9 +348,8 @@ class NoValidLayout(Exception):
     def __init__(self, reason: str, *, spec_label: str = "", budget_s: float = 0.0) -> None:
         super().__init__(
             f"no valid layout for {spec_label or 'this spec'} after "
-            f"{budget_s:g}s: {reason}. A spec that cannot be laid out in "
-            f"{RETRY_BUDGET_S:g}s is more likely a defect in the layout model "
-            f"than a hard instance -- treat it as our bug until shown otherwise."
+            f"{budget_s:g}s: {reason}. Treat a spec that cannot be laid out in "
+            "the requested budget as a layout-model defect until shown otherwise."
         )
         self.reason = reason
         self.spec_label = spec_label
@@ -240,13 +363,11 @@ class LayoutStrategy(Protocol):
     modulo the solver time budget.
 
     ``lay_out`` returns a placement that satisfies the constraints, or raises
-    :class:`NoValidLayout`.  It never returns a degraded one.  On finding nothing
-    feasible it retries ONCE at :data:`RETRY_BUDGET_S` before giving up.
+    :class:`NoValidLayout`. It never returns a degraded one.
     """
-
     name: str
 
-    def lay_out(self, spec: BuildSpec, *, time_budget_s: float = 60.0) -> Placement:
+    def lay_out(self, spec: BuildSpec, *, time_budget_s: float = 15.0) -> Placement:
         """Lay out ``spec``, returning the densest valid ``Placement`` found.
 
         Raises :class:`NoValidLayout` rather than returning a degraded result.

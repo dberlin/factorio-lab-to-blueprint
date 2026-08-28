@@ -8,8 +8,8 @@ back `PowerTooClose`, a rule we had never modelled because
 blind to it.
 
 **That row is now IMPLEMENTED** — ported, checked and complied with by both
-packers; see `docs/RULE_LEDGER.md` §1c. The rest of this file is as the audit
-left it.
+packers; see `docs/RULE_LEDGER.md` §1c. Paste-applicable missing rows now also
+name their centralized literal/lookups and the exact downstream migration left.
 
 This file closes that gap from the other end. `EBuildCondition` is the complete
 list of refusals the game has; nothing outside it can happen. Every value gets
@@ -56,7 +56,6 @@ is the index. `#` is the enum's own value, not a row number.
 | 10 | `BlockTooClose` | INAPPLICABLE | D |
 | 11 | `MK2MinerTooClose` | INAPPLICABLE | D |
 | 12 | `PlasmaTooClose` | INAPPLICABLE | D |
-| 5 | `PowerTooClose` | `:2527` `if (buildPreview2.desc.isPowerNode && !buildPreview2.desc.isAccumulator)` gates three loops; the blueprint-side one is `:2646-2683`, id-filtered `2199..2299` and thresholded `num37 = (geothermal ? 144f : (windForcedPower ? 110.25f : 12.25f))` at `:2547` | `rules.POWER_TOO_CLOSE_SQR / WIND_TOO_CLOSE_SQR / GEOTHERMAL_TOO_CLOSE_SQR / PASTE_POWER_NODE_IDS`, `rules.power_node_condition`, `rules.power_node_keepout_offsets`, `game.power_too_close`, and BOTH packers (`spine._tower_keep_out`, the `_emit` gate, `freeform._power_plan`). Fixed after this audit was written; see `RULE_LEDGER.md` §1c and MISSING #1 below, which is kept for its citations. |
 | 13 | `TooClose` | IMPLEMENTED | IMPLEMENTED |
 | 14 | `TooFar` | MISSING | MISSING #5 |
 | 15 | `TooSkew` | MISSING | MISSING #4 |
@@ -311,9 +310,11 @@ is legal, `round(2/2) = 1 < 2`. Second pass, a different candidate won for
 total across eleven builds — so the rule fires on a small absolute number and on
 100% of the builds that use altitude for a junction.
 
-**Kind.** Both: a validator rule (a splitter's `z` against `storageLevel`, which
-is tech and so belongs next to `catalog.belt_max_z`) and a layout constraint
-(the junction placer must not put a splitter above z = 2 without the unlock).
+**Kind.** Both. The literal assignment is centralized as
+`catalog.vertical_construction_allowed`, with `Building.stack_height` loaded
+from the game catalog and `BeltAltitudeRules.storage_level` selected from the
+researched Vertical Construction tier. The row remains MISSING until validation
+and junction placement consume that predicate.
 
 ### 3. `BlueprintNeedTech = 52` — **9 of 11 corpus builds exceed the first unlock**
 
@@ -327,9 +328,11 @@ if (base.actionBuild.history.blueprintLimit < blueprint.buildings.Length)
     AddErrorMessage(EBuildCondition.BlueprintNeedTech);
 }
 ```
-
 and the same comparison is `bMeetTech`'s own definition,
 `BuildTool_BlueprintPaste.cs:243`.
+`GameHistoryData.cs:1897-1899` is the literal technology assignment
+(`case 28: blueprintLimit = num`); FactorioLab names the five researched tiers
+`mass-construction-1` through `mass-construction-5`.
 
 **Threshold, with units.** A count of buildings, against `history.blueprintLimit`.
 `UITechTree.cs:1625` reads that number back: `< 150` means "not yet unlocked",
@@ -345,10 +348,12 @@ pass and 3703 in the second; `information-matrix` 2893 then 3280;
 as well, which is the last finite rung: those need blueprint research fully
 maxed, and nothing anywhere tells the user that.
 
-**Kind.** A validator rule, and a *reporting* one: we cannot make the player's
-research bigger, so the right shape is a warning that names the tech tier the
-blueprint needs — the same shape `geom.bounds` already uses for its soft-width
-warning. Nothing in the repo mentions `blueprintLimit` today.
+**Kind.** A validator and reporting rule. The exact Mass Construction lookup now
+lives in `catalog.BLUEPRINT_LIMIT_BY_LEVEL` and
+`catalog.blueprint_limit_for_technologies`; explicit technology sets select
+0/150/300/900/3600/unlimited without flattening the tier. The row remains
+MISSING because no downstream validator or CLI report compares the emitted
+building count with that lookup yet.
 
 ### 4. `TooSkew = 15`, spray-coater form — **inert at the bands we usually record; live at two of them**
 
@@ -414,8 +419,9 @@ paste refuses the coater. That is why the row is MISSING rather than
 INAPPLICABLE: both halves are produced by our own code, they have been observed
 within two rungs of each other, and nothing prevents them meeting.
 
-**Kind.** A validator rule, cheapest as a refusal in `codec._area_for` — a
-placement containing a Spray Coater may not record `area_segments` of 8 or 4.
+**Kind.** A validator rule. The literal threshold is centralized as
+`rules.COATER_RESHAPE_MAX` and `rules.coater_reshape_allowed`; the row remains
+MISSING until selected-band certification supplies the projected reshape.
 
 ### 5. `TooFar = 14`, belt-to-belt form — **inert today, and inert only by habit**
 
@@ -460,9 +466,9 @@ forbids any `dz != 0` at `dxy <= 1`, which is why this has never bitten.
 one level per tile. That is a property of the emitters, not a checked invariant,
 and the recent freeform work is precisely about how the router spends altitude.
 
-**Kind.** A validator rule, and the cheapest of the six: one `abs(dz) >= 2`
-clause next to `belt.link_adjacent`, which is where the x/y half of the same
-game test already lives.
+**Kind.** A validator rule. The literal squared-world threshold is centralized
+as `rules.PASTE_BELT_LINK_MAX_SQR` and `rules.belt_link_too_far`; the row remains
+MISSING until belt-link validation supplies the projected 3-D distance.
 
 ### 6. `NeedGround = 23` — **real, and provably not a property of a blueprint**
 
@@ -505,9 +511,9 @@ ground, not a check.
 | # | condition | where the game sets it (paste path only) | our model |
 |---|---|---|---|
 | 13 | `TooClose` | `BuildTool_BlueprintPaste.cs:3468-3470` `if (magnitude < num132)`, `num132` = 0.4 / 0.6 / 0.9 by belt-end count (`:3444`, `:3449`, `:3456`) | `rules.SORTER_LENGTH` (min), `sorter.reach`, `game.inserter_paste`, `planet.sorter_condition` |
-| 14 | `TooFar` | `:3462-3464` `if (magnitude > num131)`, `num131` = 5.0 / 5.5 / 7.5 (`:3443`, `:3450`, `:3457`); inserter endpoint `:2100-2125` `> 16f` then `> 28f`, with item 2307 exempt; belt-to-belt `:2087-2089` `sqrMagnitude > 5.3f` | `rules.SORTER_LENGTH` (max), `sorter.reach`, `planet.sorter_condition`. **The belt-to-belt clause is modelled in x/y only** — `belt.link_adjacent` ignores z. See MISSING #5. |
-| 15 | `TooSkew` | `:3488` `Quaternion.Angle(lrot, lrot2) > 30f`; `:3494-3501` `if (num135 > 24f \|\| num136 > 24f)` | `rules.SKEW_PAIR_DEG = 30`, `rules.SKEW_AXIS_DEG = 24`, `game.inserter_skew`, `slots.attachment`. **The spray-coater form at `:1866` is NOT modelled — see MISSING #4.** |
-| 16 | `TooSteep` | `:2093-2095` `if (!history.beltVerticalConstruction && Mathf.Abs(Vector3.Dot(lpos.normalized, (output.lpos - lpos).normalized)) > 0.6f)`, belt-to-belt only (`:2083`, `:2085`) | `geom.altitude_step`, `catalog.BeltAltitudeRules.vertical_construction`. Worth noting the paste and the path state this rule **differently**: the path is `num25 > 0.8f` on a rise-over-run ratio (`BuildTool_Path.cs:1954`, which is what `catalog.MAX_BELT_SLOPE` ports), the paste is `sin θ > 0.6` — i.e. `tan θ > 0.75`, marginally stricter. On our geometry they never disagree: `belt.link_adjacent` pins `dxy <= 1`, and at `dxy <= 1, dz = ±1` both refuse (0.728 against 0.6; 1.333 against 0.8). |
+| 14 | `TooFar` | `:3462-3464` `if (magnitude > num131)`, `num131` = 5.0 / 5.5 / 7.5 (`:3443`, `:3450`, `:3457`); inserter endpoint `:2100-2125` `> 16f` then `> 28f`, with item 2307 exempt; belt-to-belt `:2087-2089` `sqrMagnitude > 5.3f` | `rules.SORTER_LENGTH`, `sorter.reach`, `planet.sorter_condition`; the belt clause is centralized as `rules.PASTE_BELT_LINK_MAX_SQR` / `belt_link_too_far` but awaits validator migration (MISSING #5). |
+| 15 | `TooSkew` | `:3488` `Quaternion.Angle(lrot, lrot2) > 30f`; `:3494-3501` `if (num135 > 24f \|\| num136 > 24f)`; spray coater `:1863-1868` `Abs(reshape.x\|y) > 0.265f` | Inserters: `rules.SKEW_PAIR_DEG`, `rules.SKEW_AXIS_DEG`, `game.inserter_skew`, `slots.attachment`. Coater threshold: `rules.COATER_RESHAPE_MAX` / `coater_reshape_allowed`, awaiting band-certificate migration (MISSING #4). |
+| 16 | `TooSteep` | `:2093-2095` `if (!history.beltVerticalConstruction && Mathf.Abs(Vector3.Dot(lpos.normalized, (output.lpos - lpos).normalized)) > 0.6f)`, belt-to-belt only (`:2083`, `:2085`) | `catalog.MAX_BELT_SLOPE = 3/4` is the equivalent tangent, resolved by `BeltAltitudeRules.vertical_construction`; `catalog.belt_slope_allowed` is the exact centralized predicate. The old `4/5` came from interactive `BuildTool_Path` and is not authoritative for a paste. |
 | 28 | `NeedConn` | `:1738-1740` `if (flag \| flag2) { bp.condition = EBuildCondition.NeedConn; }` after `MatchInserter` fails to seat an end | `rules.MATCH_SNAP_MAX_SQR = 6.0`, `rules.MATCH_ALIGN_COS = 0.9702957`, `game.inserter_paste`, `sorter.anchors_present`, `sorter.endpoints`. **Note it never calls `AddErrorMessage`**: an unseated sorter is silently dropped, not refused, which is exactly the failure `game.inserter_paste` exists to catch. |
 | 34 | `Collide` | `:2511-2514` the belt probe sphere `OverlapSphereNonAlloc(..., 0.5f, ...)`; `:2484-2490` the addon-on-belt clause; `:2498-2500` `desc.veinMiner`; `:3044-3050` the birth-point capsule zone; `:3710-3715` and `:3786-3788` belt-cover conflicts against objects already on the planet | `geom.collide`, `geom.overlap`, `game.sorter_collide`, `game.belt_collide`, `game.belt_crossing`, `game.addon_facing`, `game.addon_corner`, `game.addon_crossings`, `colliders.build_colliders`. The `veinMiner` clause is inapplicable (no miners); the birth-point and belt-cover clauses are properties of the planet pasted onto, noted in `validate.py:1511-1514`. |
 | 37 | `OutOfReach` | `:2073-2078` `float num15 = history.buildMaxHeight + 0.5f + planet.realRadius * (flag4 ? 1.025f : 1f); if (lpos.sqrMagnitude > num15 * num15)` | `geom.altitude_range` via `catalog.belt_max_z()` / `DEFAULT_LAB_LEVEL = 3`; already a KEEP row in `RULE_LEDGER.md`. The second setter `:2688-2692` is `desc.isCollectStation` and inapplicable. |
@@ -517,10 +523,10 @@ ground, not a check.
 | 54 | `ErrorInserterData` | `BlueprintUtils.RefreshBuildPreview`, `BlueprintUtils.cs:2114-2141` (input end) and `:2165-2192` (output end): `num40 > 0.8f` then `num41 > 0.5f`, `num41 < 0.1f && num40 > 1.6f`, `num41 >= 0.1f && num40 > 0.8f`, and the reversal test `Vector3.Dot(transformedBy.forward, ...) < 0f` | `rules.PASTE_SNAP = 0.8`, `rules.PASTE_LATERAL = 0.5`, `rules.PASTE_RADIAL = 1.6`, `rules.PASTE_LATERAL_EPS = 0.1`, `game.inserter_data`, `game.slot_occupancy` |
 
 That is 12 rows in the table and 10 in the count. `TooFar` and `TooSkew` are
-counted under MISSING: each has one paste form nobody has ported, and a row where
-the game can still refuse us is not an implemented row however much of it is
-modelled. They are listed here as well so the part that *is* modelled is not
-lost, and their rows say which clause is which.
+counted under MISSING: their paste literals are centralized, but no downstream
+validator supplies the belt's 3-D link distance or the coater's selected-band
+reshape. A row where the game can still refuse us is not IMPLEMENTED merely
+because its threshold has an authoritative home.
 
 ---
 
@@ -552,7 +558,7 @@ only moves if the game adds a setter.
 | 2 | `NotEnoughItem` | `BuildTool_Click.cs:1552`, `BuildTool_Path.cs:1419`, `BuildTool_Inserter.cs:1303`, `BuildTool_Addon.cs:1020`. `BuildTool_BlueprintPaste` **reads** it 19 times and **never assigns** it, and `AddErrorMessage` (`BuildTool_BlueprintPaste.cs:4816`) returns early for it, so it can neither be set by a paste nor refuse one. |
 | 4 | `TooShort` | `BuildTool_Path.cs:1254`, `:1283` |
 | 17 | `TooBend` | `BuildTool_Path.cs:1895`, `:1922`, `:1990`, `:2117` |
-| 18 | `TooBendToLift` | `BuildTool_Path.cs:1982` — **only there**. `rules.BEND_MIN_ANGLE_WHEN_SLOPED_RAD` and `rules.SLOPE_DEADZONE` carry its constants with no readers, and `RULE_LEDGER.md` already records that. This is the item that was about to convict 21 of 24 spine cells. |
+| 18 | `TooBendToLift` | `BuildTool_Path.cs:1982` — **only there**. Its former constants and predicate were deleted from `dsp.rules`: retaining an interactive-only condition in the paste registry made dead code look applicable. |
 | 19 | `TooBendInBeltJunction` | `BuildTool_Path.cs:1942`, `:2183` |
 | 20 | `JointCannotLift` | `BuildTool_Path.cs:2004`, `:2038`, `:2046` |
 | 21 | `InputConflict` | `BuildTool_Path.cs:2112`, `:2129`, `:2145`, `:2161`, `:2202` |
@@ -664,8 +670,9 @@ emit. See MISSING #3.
 * The `TooSkew` spray-coater trigger is a conjunction the corpus does not
   exhibit. It is recorded as MISSING with both halves shown to be reachable and
   observed two band-rungs apart, not as a demonstrated failure.
-* **The MISSING rows were not implemented here, by instruction.** `PowerTooClose`
-  is in flight with another agent; the other four are handoffs, each with its
-  citation, its threshold and units, the buildings of ours that trigger it, and
-  whether it wants a validator check, a layout constraint, or both. Nothing under
-  `src/` was touched by this audit.
+* The five MISSING rows now have authoritative literals/lookups where the input
+  is blueprint-certifiable. `TooFar`, coater `TooSkew`,
+  `OutOfVerticalConstructionHeight`, and `BlueprintNeedTech` remain MISSING
+  until the downstream strategy/validate/reporting paths consume them.
+  `NeedGround` deliberately has no predicate: its terrain raycasts cannot be
+  certified from a blueprint.

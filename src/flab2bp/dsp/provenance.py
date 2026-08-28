@@ -86,8 +86,10 @@ PACKAGE = "flab2bp"
 #: Modules whose code is the *search*.  Everything R4 calls a "strategy test"
 #: exercises one of these.
 STRATEGY_MODULES: tuple[str, ...] = (
-    "flab2bp.layout.spine",
     "flab2bp.layout.freeform",
+    "flab2bp.layout.sequence_solver",
+    "flab2bp.layout.sequence_pair",
+    "flab2bp.layout.compact_seed",
     "flab2bp.layout.slots",
     "flab2bp.layout.junction",
     "flab2bp.layout.base",
@@ -148,8 +150,8 @@ class Graph:
     #:
     #: Only recorded for import-time nodes, and the distinction is the whole
     #: reason :func:`frozen_captures` gives a usable answer.
-    #: ``pipeline._STRATEGIES = (SpineLayout, FreeformLayout)`` NAMES two
-    #: classes at import; it does not RUN them, so it freezes nothing.
+    #: ``pipeline.PRODUCTION_STRATEGIES`` names backends at import; it does not
+    #: run them, so it freezes nothing.
     #: ``junction._KEEPOUT = tuple(sorted(_keepout()))`` calls, so everything
     #: ``_keepout`` reaches really is resolved once and kept.
     calls: Mapping[str, frozenset[str]] = types.MappingProxyType({})

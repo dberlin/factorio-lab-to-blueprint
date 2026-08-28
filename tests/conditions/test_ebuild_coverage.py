@@ -292,8 +292,9 @@ LOAD_BEARING: tuple[tuple[str, int, str], ...] = (
     ("BuildTool_BlueprintPaste.cs", 2036, "isSplitter"),
     ("BuildTool_BlueprintPaste.cs", 2063, "2.666667f"),
     ("BuildTool_BlueprintPaste.cs", 2065, "num13 >= num11"),
-    # BlueprintNeedTech: the building-count cap.
+    # BlueprintNeedTech: the building-count cap and its technology assignment.
     ("BuildTool_BlueprintPaste.cs", 1122, "blueprintLimit < blueprint.buildings.Length"),
+    ("GameHistoryData.cs", 1898, "blueprintLimit = num"),
     # TooSkew, spray-coater form.
     ("BuildTool_BlueprintPaste.cs", 1863, "isSpraycoster"),
     ("BuildTool_BlueprintPaste.cs", 1866, "0.265f"),
@@ -325,8 +326,8 @@ LOAD_BEARING: tuple[tuple[str, int, str], ...] = (
     ("BuildTool_Path.cs", 1982, "TooBendToLift"),
     # A condition that is text and nothing else.
     ("BuildPreview.cs", 93, "NeedTech"),
-    # TooSteep, where the paste and the path state the same rule differently.
-    ("BuildTool_Path.cs", 1954, "num25 > 0.8f"),
+    # TooSteep in the authoritative paste tool, not BuildTool_Path.
+    ("BuildTool_BlueprintPaste.cs", 2093, "0.6f"),
 )
 
 

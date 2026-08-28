@@ -1,4 +1,4 @@
-"""Pure geometry helpers for the spine layout.
+"""Pure geometry helpers shared by the layout strategies.
 
 Nothing here knows about CP-SAT or about ``BuildSpec``.  These are the small
 decidable pieces -- rounding, circle linearisation, lane ordering, band offsets --

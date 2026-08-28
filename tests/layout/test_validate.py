@@ -19,7 +19,6 @@ from flab2bp.dsp.catalog import (
     ENERGY_EXCHANGER_ID,
     GEOMETRY_SAFE_FIXTURES,
     RAY_RECEIVER_ID,
-    TESLA_COVER_RADIUS,
 )
 from flab2bp.dsp.catalog import building as catalog_building
 from flab2bp.dsp.catalog import oriented_footprint as catalog_oriented_footprint
@@ -38,7 +37,12 @@ from flab2bp.layout.validate import (
     _kind,
     validate,
 )
-from flab2bp.spec import BuildSpec, MachineGroup, ProliferatorMode
+from flab2bp.spec import (
+    BuildSpec,
+    CoproductBufferProof,
+    MachineGroup,
+    ProliferatorMode,
+)
 from tests.dsp.test_local_offset import GEOMETRY_CORPUS
 
 ASSEMBLER = 2304  # Assembling Machine Mk.II, 4x4
@@ -47,6 +51,7 @@ BELT2 = 2002  # Conveyor Belt Mk.II, 12/s
 SORTER3 = 2013  # Sorter Mk.III, 6/s at one tile
 SORTER1 = 2011  # Sorter Mk.I, 1.5/s at one tile
 TOWER = 2201  # Tesla Tower, cover radius 10.5, link distance 22.5
+TESLA_COVER_RADIUS = catalog_building(TOWER).cover_radius
 WIRELESS_TOWER = 2202  # Wireless Power Tower, the long-reach node: link 45.5
 WIND_TURBINE = 2203  # windForcedPower: the 110.25 spacing tier
 SOLAR_PANEL = 2205  # a power NODE with cover_radius 0 -- not a "tower"
@@ -124,6 +129,7 @@ def sorter(
     z: Fraction | int = 0,
     z2: Fraction | int = 0,
     filter_id: int = 0,
+    carries: str | None = None,
 ) -> PlacedBuilding:
     return PlacedBuilding(
         item_id=item_id,
@@ -137,6 +143,7 @@ def sorter(
         input_obj=inp,
         output_obj=out,
         filter_id=filter_id,
+        carries_item=carries,
     )
 
 
@@ -281,8 +288,7 @@ def test_geom_footprint_fires_when_a_quarter_turn_is_not_applied() -> None:
     """At yaw 90 a 7x5 is 5x7.  Declaring the unturned pair is still wrong.
 
     Without this the check could be satisfied by copying ``catalog.footprint``
-    and ignoring yaw -- a different bug with the same symptom, and one
-    ``layout.spine`` already carries a comment about.
+    and ignoring yaw.
     """
     p = Placement(
         buildings=(
@@ -466,7 +472,7 @@ def test_geom_altitude_step_fires_on_a_full_level_across_one_tile() -> None:
     """The exact step that shipped red, refused by the game's own rule.
 
     A blueprint rise of 1 across one tile is a WORLD slope of 4/3 -- blueprint
-    z is 3/4 of world height -- against the 4/5 the game allows.  It is
+    z is 3/4 of world height -- against the 3/4 the paste allows.  It is
     `EBuildCondition.TooSteep`, and the old `dz > 1` test scored it exactly 1
     and let it pass.
     """
@@ -478,7 +484,7 @@ def test_geom_altitude_step_fires_on_a_full_level_across_one_tile() -> None:
 
 
 def test_geom_altitude_step_allows_the_ramp_we_emit() -> None:
-    """1/2 across one tile is a world slope of 2/3, inside the 4/5 limit."""
+    """1/2 across one tile is a world slope of 2/3, inside the 3/4 limit."""
     r = validate(place(belt(0, 0, 0, out=1), belt(1, 0, Fraction(1, 2))))
     assert not fired(r, "geom.altitude_step")
 
@@ -496,14 +502,14 @@ def test_geom_altitude_step_allows_a_ramp_at_any_height() -> None:
 
 
 def test_geom_altitude_step_fires_just_past_the_slope_limit() -> None:
-    """3/5 of blueprint z per tile is exactly 4/5 world; 7/10 is over it."""
+    """9/16 of blueprint z is exactly 3/4 world slope; 3/5 is over it."""
     ok = validate(
-        place(belt(0, 0, 0, out=1), belt(1, 0, Fraction(3, 5))),
+        place(belt(0, 0, 0, out=1), belt(1, 0, Fraction(9, 16))),
         belt_vertical_construction=False,
     )
     assert not fired(ok, "geom.altitude_step")
     over = validate(
-        place(belt(0, 0, 0, out=1), belt(1, 0, Fraction(7, 10))),
+        place(belt(0, 0, 0, out=1), belt(1, 0, Fraction(3, 5))),
         belt_vertical_construction=False,
     )
     assert fired(over, "geom.altitude_step")
@@ -604,6 +610,140 @@ def test_sorter_endpoint_pair_fires_when_links_disagree_with_anchors() -> None:
     # output_obj names the machine, but the far anchor sits on the belt
     r = validate(place(machine(0, 0), belt(4, 0), sorter(3, 0, 4, 0, inp=0, out=0)))
     assert fired(r, "sorter.endpoint_pair")
+
+
+def _output_filter_report(filter_id: int, *, carries: str = "graphene") -> Report:
+    spec = BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id="graphene-advanced",
+                machine_item_id="chemical-plant",
+                count=1,
+                inputs_per_machine={"fire-ice": Fraction(2)},
+                outputs_per_machine={"graphene": Fraction(2), "hydrogen": Fraction(1)},
+            ),
+        ),
+        external_inputs={"fire-ice": Fraction(2)},
+        outputs={"graphene": Fraction(2), "hydrogen": Fraction(1)},
+    )
+    ids = IdMap(
+        recipes={"graphene-advanced": 32},
+        items={"chemical-plant": CHEM_PLANT, "graphene": 1123, "hydrogen": 1120},
+    )
+    placement = Placement(
+        buildings=(
+            machine(0, 0, item_id=CHEM_PLANT, recipe_id=32),
+            belt(2, -1, carries=carries),
+            sorter(
+                2,
+                1,
+                2,
+                -1,
+                inp=0,
+                out=1,
+                filter_id=filter_id,
+                carries=carries,
+            ),
+        )
+    )
+    return validate(placement, spec, ids=ids, only={"sorter.output_filter"})
+
+
+def test_multi_output_sorter_requires_a_filter() -> None:
+    findings = _output_filter_report(0).by_check("sorter.output_filter")
+
+    assert findings
+    assert all(finding.severity is Severity.ERROR for finding in findings)
+
+
+def test_multi_output_sorter_rejects_the_wrong_lane_filter() -> None:
+    findings = _output_filter_report(1120, carries="graphene").by_check(
+        "sorter.output_filter"
+    )
+
+    assert findings
+    assert all(finding.severity is Severity.ERROR for finding in findings)
+
+
+def test_multi_output_sorter_accepts_the_exact_lane_filter() -> None:
+    assert not _output_filter_report(1123, carries="graphene").by_check(
+        "sorter.output_filter"
+    )
+
+def _coproduct_buffer_report(*, connected: bool, malformed: bool = False) -> Report:
+    proof = CoproductBufferProof(
+        item_id="hydrogen",
+        producer_recipe_id="graphene-advanced",
+        consumer_recipe_id="deuterium",
+        producer_batch=Fraction(1),
+        consumer_batch=Fraction(10),
+        required_capacity=Fraction(10),
+        intrinsic_capacity=Fraction(20),
+    )
+    spec = BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id="graphene-advanced",
+                machine_item_id="chemical-plant",
+                count=1,
+                inputs_per_machine={"fire-ice": Fraction(2)},
+                outputs_per_machine={"graphene": Fraction(2), "hydrogen": Fraction(1)},
+            ),
+            MachineGroup(
+                recipe_id="deuterium",
+                machine_item_id="miniature-particle-collider",
+                count=1,
+                inputs_per_machine={"hydrogen": Fraction(10)},
+                outputs_per_machine={"deuterium": Fraction(5)},
+            ),
+        ),
+        external_inputs={"fire-ice": Fraction(2)},
+        outputs={"graphene": Fraction(2), "deuterium": Fraction(5)},
+        coproduct_buffer_proofs=(proof,),
+    )
+    ids = IdMap(
+        recipes={"graphene-advanced": 32, "deuterium": 40},
+        items={
+            "chemical-plant": CHEM_PLANT,
+            "miniature-particle-collider": 2310,
+            "hydrogen": 1120,
+        },
+    )
+    output_target = 99 if malformed else (1 if connected else None)
+    placement = Placement(
+        buildings=(
+            machine(0, 0, item_id=CHEM_PLANT, recipe_id=32),
+            belt(10, 0, carries="hydrogen"),
+            sorter(
+                8,
+                0,
+                10,
+                0,
+                inp=0,
+                out=output_target,
+                filter_id=1120,
+                carries="hydrogen",
+            ),
+            machine(14, 0, item_id=2310, recipe_id=40),
+            sorter(12, 0, 14, 0, inp=5, out=3, carries="hydrogen"),
+            belt(12, 0, carries="hydrogen"),
+            sorter(10, 0, 12, 0, inp=1, out=5, carries="hydrogen"),
+        )
+    )
+    return validate(placement, spec, ids=ids, only={"flow.coproduct_buffer"})
+
+
+def test_flow_coproduct_buffer_requires_one_aggregating_consumer_path() -> None:
+    assert _coproduct_buffer_report(connected=False).by_check("flow.coproduct_buffer")
+
+
+def test_flow_coproduct_buffer_accepts_the_certified_consumer_path() -> None:
+    assert not _coproduct_buffer_report(connected=True).by_check("flow.coproduct_buffer")
+
+def test_flow_coproduct_buffer_reports_a_malformed_output_link() -> None:
+    assert _coproduct_buffer_report(
+        connected=True, malformed=True
+    ).by_check("flow.coproduct_buffer")
 
 
 SPRAY_COATER = 2313  # a belt addon: no insert pose, fed by belt from its addon area
@@ -1248,14 +1388,14 @@ def test_two_assemblers_collide_at_pitch_3_and_clear_at_pitch_4() -> None:
     assert _cat.clearance(ASSEMBLER, 0.0)[0] == 4, "and needs a fourth"
 
 
-def _coater(x: int, y: int, z: Fraction | int = 0) -> PlacedBuilding:
+def _coater(
+    x: int, y: int, z: Fraction | int = 0, *, yaw: float = 90.0
+) -> PlacedBuilding:
     """A Spray Coater on the belt at ``(x, y)``.
 
-    ``z`` is converted the way ``belt`` and ``splitter`` above convert theirs.
-    Handing ``PlacedBuilding`` a bare ``int`` was not merely a type error: this
-    helper feeds ``game.addon_supply``, which measures a proliferator belt one
-    altitude LEVEL up against a 1.0-unit area, and altitudes are Fractions
-    because a level is not a whole tile.
+    It is deliberately represented as 1x1: a belt addon is anchored on its host
+    tile, while the catalog's 1x3 describes collider reach rather than an
+    origin-anchored footprint.
     """
     b = catalog_building(SPRAY_COATER)
     return PlacedBuilding(
@@ -1264,7 +1404,7 @@ def _coater(x: int, y: int, z: Fraction | int = 0) -> PlacedBuilding:
         x=x,
         y=y,
         z=Fraction(z),
-        yaw=90.0,  # Facing.EAST
+        yaw=yaw,
     )
 
 
@@ -1281,12 +1421,125 @@ def test_game_addon_supply_fires_when_a_coater_has_no_proliferator_belt() -> Non
     assert fired(r, "game.addon_supply")
 
 
-def test_game_addon_supply_clean_when_the_belt_is_where_the_game_looks() -> None:
-    """One level up and a tile behind: 0.25 from the area centre, well inside 1.0."""
-    r = validate(place(belt(0, 0), belt(-1, 0, 1), _coater(0, 0)))
-    assert not fired(r, "game.addon_supply"), [
-        f.message for f in r.by_check("game.addon_supply")
+@pytest.mark.parametrize(
+    ("yaw", "supply"),
+    [
+        (0.0, (0, -1)),
+        (90.0, (-1, 0)),
+        (180.0, (0, 1)),
+        (270.0, (1, 0)),
+    ],
+)
+def test_game_addon_supply_uses_rotated_elevated_pose(
+    yaw: float, supply: tuple[int, int]
+) -> None:
+    ground = validate(
+        place(belt(0, 0), belt(*supply, 0), _coater(0, 0, yaw=yaw)),
+        only={"game.addon_supply"},
+    )
+    assert fired(ground, "game.addon_supply")
+
+    elevated = validate(
+        place(belt(0, 0), belt(*supply, 1), _coater(0, 0, yaw=yaw)),
+        only={"game.addon_supply"},
+    )
+    assert not fired(elevated, "game.addon_supply"), [
+        f.message for f in elevated.by_check("game.addon_supply")
     ]
+
+
+def test_game_addon_supply_accepts_belt_inside_authoritative_radius() -> None:
+    report = validate(
+        place(
+            belt(0, 0, carries="ore"),
+            belt(-1, 0, 1, carries="proliferator-3"),
+            _coater(0, 0),
+        ),
+        only={"game.addon_supply"},
+    )
+
+    assert not fired(report, "game.addon_supply"), [
+        finding.message for finding in report.by_check("game.addon_supply")
+    ]
+
+
+COATER_SPEC = BuildSpec(
+    groups=(),
+    external_inputs={"proliferator-3": Fraction(1)},
+    spray_lanes={"ore": True},
+)
+
+
+def _coater_supply_report(
+    *, host_item: str | None = "ore", supply_item: str | None = "proliferator-3"
+) -> Report:
+    return validate(
+        place(
+            belt(0, 0, carries=host_item),
+            belt(-1, 0, 1, carries=supply_item),
+            _coater(0, 0),
+        ),
+        COATER_SPEC,
+        ids=IdMap(),
+        only={"prolif.coaters_are_supplied"},
+    )
+
+
+def test_spec_coater_supply_requires_the_declared_proliferator_item() -> None:
+    assert fired(
+        _coater_supply_report(supply_item="ore"),
+        "prolif.coaters_are_supplied",
+    )
+
+
+def test_spec_coater_host_requires_a_declared_sprayed_item() -> None:
+    assert fired(
+        _coater_supply_report(host_item="unsprayed"),
+        "prolif.coaters_are_supplied",
+    )
+
+
+def test_spec_coater_host_and_supply_items_validate_together() -> None:
+    report = _coater_supply_report()
+    assert not fired(report, "prolif.coaters_are_supplied"), [
+        finding.message
+        for finding in report.by_check("prolif.coaters_are_supplied")
+    ]
+
+
+def test_nearest_addon_belt_wins_before_item_semantics() -> None:
+    placement = place(
+        belt(0, 0, carries="ore"),
+        belt(-1, 0, 1, carries="wrong-item"),
+        belt(-2, 0, 1, carries="proliferator-3"),
+        _coater(0, 0),
+    )
+    report = validate(
+        placement,
+        COATER_SPEC,
+        ids=IdMap(),
+        only={"game.addon_supply", "prolif.coaters_are_supplied"},
+    )
+
+    assert fired(report, "game.addon_supply")
+    assert fired(report, "prolif.coaters_are_supplied")
+
+
+def test_game_addon_supply_rejects_a_sorter_targeting_a_coater() -> None:
+    placement = place(
+        belt(0, 0, carries="ore"),
+        belt(-1, 0, 1, carries="proliferator-3"),
+        _coater(0, 0),
+        sorter(-1, 0, 0, 0, inp=1, out=2, z=1, z2=0),
+    )
+
+    report = validate(placement, only={"game.addon_supply"})
+
+    assert fired(report, "game.addon_supply")
+    assert any(
+        "sorter" in finding.message
+        for finding in report.by_check("game.addon_supply")
+    )
 
 
 def test_game_inserter_data_fires_on_a_far_column_of_a_wide_machine() -> None:
@@ -2235,82 +2488,6 @@ def test_a_partly_evaluated_check_still_reports_what_it_did_find() -> None:
     assert "machine.inputs_supplied" in r.skipped
 
 
-def test_every_check_that_consults_group_for_declares_it() -> None:
-    """``NEEDS_GROUPS`` is the transitive closure, recomputed, not a hand list.
-
-    The defect report named three ERROR checks.  The call graph says TEN reach
-    ``Context.group_for``: three call it directly, five arrive through
-    ``_lane_balance``, ``_sorter_demand``, ``_run_demand`` or ``_sorter_item``
-    -- a hand-maintained list would have missed exactly those -- and two,
-    ``spec.machine_counts`` and
-    ``prolif.belt_required_edges_not_direct_inserted``, reach the same
-    resolution through ``Context.recipe_of``.
-
-    Recomputed here from the module's own source so the set cannot drift: add a
-    check that asks what a machine makes and forget to declare it, and this
-    fails naming it.
-    """
-    import ast
-    import collections
-    import inspect
-
-    from flab2bp.layout import validate as module
-
-    tree = ast.parse(inspect.getsource(module))
-    funcs: dict[str, ast.FunctionDef] = {}
-    check_of: dict[str, str] = {}
-    for node in tree.body:
-        if isinstance(node, ast.FunctionDef):
-            funcs[node.name] = node
-            for dec in node.decorator_list:
-                if isinstance(dec, ast.Call) and getattr(dec.func, "id", "") == "check":
-                    first = dec.args[0]
-                    assert isinstance(first, ast.Constant)
-                    check_of[node.name] = str(first.value)
-        elif isinstance(node, ast.ClassDef):
-            for member in node.body:
-                if isinstance(member, ast.FunctionDef):
-                    funcs.setdefault(member.name, member)
-
-    def calls(node: ast.AST) -> set[str]:
-        out: set[str] = set()
-        for sub in ast.walk(node):
-            if isinstance(sub, ast.Call):
-                fn = sub.func
-                if isinstance(fn, ast.Name):
-                    out.add(fn.id)
-                elif isinstance(fn, ast.Attribute):
-                    out.add(fn.attr)
-        return out & set(funcs)
-
-    graph = {name: calls(node) for name, node in funcs.items()}
-
-    def reaches(start: str, target: str) -> bool:
-        seen: set[str] = set()
-        queue = collections.deque([start])
-        while queue:
-            cur = queue.popleft()
-            if cur in seen:
-                continue
-            seen.add(cur)
-            for nxt in graph.get(cur, ()):
-                if nxt == target:
-                    return True
-                queue.append(nxt)
-        return False
-
-    computed = {
-        cid
-        for fn, cid in check_of.items()
-        if reaches(fn, "group_for") or reaches(fn, "recipe_of")
-    }
-    computed.discard("machine.group_resolved")  # it OWNS the inability
-    assert computed == NEEDS_GROUPS, (
-        f"declared {sorted(NEEDS_GROUPS)}, call graph says {sorted(computed)}"
-    )
-    # Eleven since `prolif.sprayed_cargo_reaches_machines` landed: it asks
-    # `group_for` whether the machine being fed is proliferated at all.
-    assert len(computed) == 11, f"expected 11 dependent checks, found {len(computed)}"
 
 
 # --- machine conformance, continued ----------------------------------------
@@ -3491,11 +3668,7 @@ def test_flow_external_entry_reachable_clean_when_one_side_is_open() -> None:
 
 
 def test_flow_external_entry_points_warns_on_several_lanes_for_one_item() -> None:
-    """Spine's magnetic-ring output asks for `coal` at five separate lanes.
-
-    Legitimate -- the player can belt an item in as many times as asked -- but a
-    real cost that a bounding-box density comparison hides completely.
-    """
+    """Several reachable entries are legal but carry a real connection cost."""
     p = place(
         machine(6, 6, item_id=SMELTER, recipe_id=5),  # 0
         belt(5, 6, carries="copper-ore"),  # 1

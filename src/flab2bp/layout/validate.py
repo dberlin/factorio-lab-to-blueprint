@@ -804,9 +804,8 @@ def _footprint(ctx: Context) -> Iterable[Finding]:
     A building that OCCUPIES TILES anchors on the minimum corner of its
     footprint, so its declared size must be
     ``catalog.oriented_footprint(item_id, yaw)`` -- the prefab's, with the
-    quarter turn applied.  Copying ``catalog.footprint`` and forgetting the turn
-    is a live hazard rather than a hypothetical: ``layout.spine`` carries a
-    comment about exactly that case.
+    quarter turn applied. Copying ``catalog.footprint`` and forgetting the turn
+    is a live hazard rather than a hypothetical.
 
     A BELT ADDON anchors on the belt tile it RIDES, and must declare ``1x1`` so
     that ``tile_to_local_offset`` leaves its centre on that tile.  This is
@@ -1116,15 +1115,16 @@ def _altitude_range(ctx: Context) -> Iterable[Finding]:
 def _altitude_step(ctx: Context) -> Iterable[Finding]:
     """A belt's slope may not exceed what the game allows.
 
-    This is the game's own rule, from ``BuildTool_Path``::
+    This is the game's own blueprint-paste rule::
 
-        num25 = Mathf.Abs(Maths.SphericalSlopeRatio(a, b));
-        if (!history.beltVerticalConstruction && num25 > 0.8f)
-            buildPreview2.condition = EBuildCondition.TooSteep;
+        if (!history.beltVerticalConstruction
+            && Abs(Dot(lpos.normalized, (output.lpos - lpos).normalized)) > 0.6f)
+            condition = EBuildCondition.TooSteep;
 
-    ``SphericalSlopeRatio`` is ``(|b| - |a|) / horizontal distance`` -- WORLD
-    rise over run -- and blueprint z is ``3/4`` of world height, so a link's
-    slope is ``(dz / BELT_Z_PER_WORLD_UNIT) / dxy``.
+    The dot is the radial component of the unit link vector: ``sin(theta)``.
+    The accepted ``sin(theta) <= 3/5`` is exactly ``tan(theta) <= 3/4``.
+    Blueprint z is ``3/4`` of world height, so callers convert the link's rise
+    before asking :func:`catalog.belt_slope_allowed`.
 
     Three earlier versions of this check were all wrong, in instructive ways:
 
@@ -1141,7 +1141,6 @@ def _altitude_step(ctx: Context) -> Iterable[Finding]:
     is declared per run alongside the height ceiling, never assumed.
     """
     bs = ctx.placement.buildings
-    limit = cat.MAX_BELT_SLOPE
     for i, b in ctx.of_kind(Kind.BELT):
         o = b.output_obj
         if o is None or not (0 <= o < len(bs)) or ctx.kinds[o] is not Kind.BELT:
@@ -1152,33 +1151,35 @@ def _altitude_step(ctx: Context) -> Iterable[Finding]:
             continue
         dxy = abs(nxt.x - b.x) + abs(nxt.y - b.y)
         world_rise = abs(dz) / cat.BELT_Z_PER_WORLD_UNIT
+        if cat.belt_slope_allowed(
+            world_rise,
+            dxy,
+            unlocked=ctx.belt_vertical_construction,
+        ):
+            continue
         if dxy == 0:
-            if not ctx.belt_vertical_construction:
-                yield Finding(
-                    "geom.altitude_step",
-                    Severity.ERROR,
-                    f"belt {i} rises {dz} to belt {o} without moving, which is "
-                    f"an infinite slope; only the beltVerticalConstruction "
-                    f"unlock permits that (pass --belt-vertical-construction "
-                    f"if this save has it)",
-                    (i, o),
-                    {"dz": dz, "dxy": dxy},
-                )
-            continue
-        if ctx.belt_vertical_construction:
-            continue
-        slope = world_rise / dxy
-        if slope > limit:
             yield Finding(
                 "geom.altitude_step",
                 Severity.ERROR,
-                f"belt {i} climbs {dz} to belt {o} across {dxy} tile(s): a "
-                f"world slope of {float(slope):.3f}, over the {float(limit)} "
-                f"the game allows without the beltVerticalConstruction unlock "
-                f"(TooSteep)",
+                f"belt {i} rises {dz} to belt {o} without moving, which is "
+                f"an infinite slope; only the beltVerticalConstruction "
+                f"unlock permits that (pass --belt-vertical-construction "
+                f"if this save has it)",
                 (i, o),
-                {"dz": dz, "dxy": dxy, "slope": float(slope)},
+                {"dz": dz, "dxy": dxy},
             )
+            continue
+        slope = world_rise / dxy
+        yield Finding(
+            "geom.altitude_step",
+            Severity.ERROR,
+            f"belt {i} climbs {dz} to belt {o} across {dxy} tile(s): a "
+            f"world slope of {float(slope):.3f}, over the "
+            f"{float(cat.MAX_BELT_SLOPE)} the game allows without the "
+            f"beltVerticalConstruction unlock (TooSteep)",
+            (i, o),
+            {"dz": dz, "dxy": dxy, "slope": float(slope)},
+        )
 
 
 @check("geom.bounds")
@@ -1940,6 +1941,55 @@ def _inserter_skew(ctx: Context) -> Iterable[Finding]:
 
 
 
+def _belt_in_addon_area(
+    ctx: Context,
+    addon: PlacedBuilding,
+    *,
+    area: int,
+) -> int | None:
+    """Nearest belt the game selects, breaking exact distance ties by index."""
+    want = slots.addon_supply_position(
+        addon.item_id,
+        x=addon.x,
+        y=addon.y,
+        z=addon.z,
+        yaw=addon.yaw,
+        area=area,
+    )
+    candidates = []
+    for i, belt in enumerate(ctx.placement.buildings):
+        if ctx.kinds[i] is not Kind.BELT:
+            continue
+        distance = slots.world_gap(
+            float(want[0] - belt.x),
+            float(want[1] - belt.y),
+            float(want[2] - belt.z),
+        )
+        if distance < rules.ADDON_AREA_RADIUS:
+            candidates.append((distance, i))
+    return min(candidates)[1] if candidates else None
+
+
+def _expected_addon_items(
+    ctx: Context,
+    addon: PlacedBuilding,
+    *,
+    area: int,
+) -> frozenset[str] | None:
+    """Spec item semantics for a Spray Coater addon area, when available."""
+    if ctx.spec is None or addon.item_id != cat.SPRAY_COATER_ID:
+        return None
+    if area == 0:
+        return frozenset(ctx.spec.spray_lanes)
+    if area == 1:
+        return frozenset(
+            item
+            for item in ctx.spec.external_inputs
+            if item.startswith("proliferator")
+        )
+    return None
+
+
 @check("game.addon_supply")
 def _addon_supply(ctx: Context) -> Iterable[Finding]:
     """A belt addon is fed by BELT, and the game finds that belt by position.
@@ -1964,31 +2014,74 @@ def _addon_supply(ctx: Context) -> Iterable[Finding]:
     on, and that co-location is already what places them.
     """
     bs = ctx.placement.buildings
-    belts = [(b.x, b.y, float(b.z)) for b in bs if cat.is_belt(b.item_id)]
+    addon_indices = {
+        i
+        for i, building in enumerate(bs)
+        if cat.building(building.item_id).is_belt_addon
+    }
+    for sorter_index, sorter in ctx.of_kind(Kind.SORTER):
+        targeted = tuple(
+            link
+            for link in (sorter.input_obj, sorter.output_obj)
+            if link in addon_indices
+        )
+        if targeted:
+            yield Finding(
+                "game.addon_supply",
+                Severity.ERROR,
+                f"sorter {sorter_index} targets belt addon(s) {list(targeted)}, "
+                "but addons have no sorter slots and connect to belts by position",
+                (sorter_index, *targeted),
+                {"targets": list(targeted)},
+            )
     for i, b in enumerate(bs):
         areas = cat.building(b.item_id).addon_areas
         if len(areas) < 2:
             continue
-        for n, (adx, ady, adz) in enumerate(areas):
-            if n == 0:
+        for pose in areas:
+            selected = _belt_in_addon_area(ctx, b, area=pose.area)
+            if selected is None:
+                want = slots.addon_supply_position(
+                    b.item_id,
+                    x=b.x,
+                    y=b.y,
+                    z=b.z,
+                    yaw=b.yaw,
+                    area=pose.area,
+                )
+                yield Finding(
+                    "game.addon_supply",
+                    Severity.ERROR,
+                    f"{cat.building(b.item_id).name} {i} has no belt in its addon "
+                    f"area {pose.area}, at ({float(want[0]):.2f}, "
+                    f"{float(want[1]):.2f}, z={float(want[2]):.2f}); the game "
+                    f"supplies an addon from there and from nowhere else",
+                    (i,),
+                    {
+                        "area": pose.area,
+                        "x": round(float(want[0]), 2),
+                        "y": round(float(want[1]), 2),
+                        "z": round(float(want[2]), 2),
+                    },
+                )
                 continue
-            wx, wy = slots.to_world((adx, ady), b.yaw)
-            want = (b.x + wx, b.y + wy, float(b.z) + adz)
-            if any(
-                rules.world_gap(want[0] - p[0], want[1] - p[1], want[2] - p[2])
-                < rules.ADDON_AREA_RADIUS
-                for p in belts
-            ):
-                continue
-            yield Finding(
-                "game.addon_supply",
-                Severity.ERROR,
-                f"{cat.building(b.item_id).name} {i} has no belt in its addon "
-                f"area {n}, at ({want[0]:.2f}, {want[1]:.2f}) one level up; the "
-                f"game supplies an addon from there and from nowhere else",
-                (i,),
-                {"area": n, "x": round(want[0], 2), "y": round(want[1], 2)},
-            )
+            expected = _expected_addon_items(ctx, b, area=pose.area)
+            selected_item = bs[selected].carries_item
+            if expected is not None and selected_item not in expected:
+                yield Finding(
+                    "game.addon_supply",
+                    Severity.ERROR,
+                    f"{cat.building(b.item_id).name} {i}'s nearest belt in addon "
+                    f"area {pose.area} carries {selected_item!r}, not one of "
+                    f"{sorted(expected)}",
+                    (i, selected),
+                    {
+                        "area": pose.area,
+                        "belt": selected,
+                        "carries_item": selected_item,
+                        "expected_items": sorted(expected),
+                    },
+                )
 
 
 def _addon_rides(
@@ -2374,12 +2467,18 @@ def _addon_crossings(ctx: Context) -> Iterable[Finding]:
         # the belt the game flagged.  The attached belt is the one at the
         # area's own altitude.
         areas = {
-            (
-                ab.x + round(slots.to_world((adx, ady), ab.yaw)[0]),
-                ab.y + round(slots.to_world((adx, ady), ab.yaw)[1]),
-                float(ab.z) + adz,
+            (round(want[0]), round(want[1]), float(want[2]))
+            for area in info.addon_areas
+            for want in (
+                slots.addon_supply_position(
+                    ab.item_id,
+                    x=ab.x,
+                    y=ab.y,
+                    z=ab.z,
+                    yaw=ab.yaw,
+                    area=area.area,
+                ),
             )
-            for adx, ady, adz in info.addon_areas
         }
         need = dsp_colliders.belt_crossing_height(ab.model_index) + float(ab.z)
         pose = dsp_colliders.Placed(
@@ -2550,6 +2649,75 @@ def _filter(ctx: Context) -> Iterable[Finding]:
                     (i,),
                     {"filter_id": b.filter_id},
                 )
+
+
+def _assigned_output_item(ctx: Context, sorter: PlacedBuilding) -> str | None:
+    """Lane/direct-insert item without trusting the filter being validated."""
+    if sorter.carries_item is not None:
+        return sorter.carries_item
+    bs = ctx.placement.buildings
+    destination = sorter.output_obj
+    if destination is None or not 0 <= destination < len(bs):
+        return None
+    if ctx.kinds[destination] is Kind.BELT:
+        carried = bs[destination].carries_item
+        if carried is not None:
+            return carried
+        run = ctx.run_of.get(destination)
+        known = set() if run is None else _run_labels(ctx).get(run, set())
+        return next(iter(known)) if len(known) == 1 else None
+    if ctx.kinds[destination] is Kind.MACHINE:
+        source = sorter.input_obj
+        if source is None:
+            return None
+        producer = ctx.group_for(source)
+        consumer = ctx.group_for(destination)
+        if producer is None or consumer is None:
+            return None
+        shared = set(producer.outputs_per_machine) & set(consumer.inputs_per_machine)
+        return next(iter(shared)) if len(shared) == 1 else None
+    return None
+
+
+@check("sorter.output_filter", needs_spec=True, needs_groups=True)
+def _output_filter(ctx: Context) -> Iterable[Finding]:
+    """Every sorter drawing from a multi-product recipe selects its exact item."""
+    bs = ctx.placement.buildings
+    for i, sorter in ctx.of_kind(Kind.SORTER):
+        source = sorter.input_obj
+        if source is None or not 0 <= source < len(bs):
+            continue
+        if ctx.kinds[source] is not Kind.MACHINE:
+            continue
+        group = ctx.group_for(source)
+        if group is None or len(group.outputs_per_machine) <= 1:
+            continue
+        expected = _assigned_output_item(ctx, sorter)
+        if sorter.filter_id == 0:
+            yield Finding(
+                "sorter.output_filter",
+                Severity.ERROR,
+                f"sorter {i} draws from multi-output machine {source} without a filter",
+                (i, source),
+                {"expected_item": expected},
+            )
+            continue
+        filtered = ctx.item_name(sorter.filter_id)
+        if filtered not in group.outputs_per_machine or (
+            expected is not None and filtered != expected
+        ):
+            yield Finding(
+                "sorter.output_filter",
+                Severity.ERROR,
+                f"sorter {i} draws {expected or 'an assigned output'} from multi-output "
+                f"machine {source} but filters on {filtered or sorter.filter_id}",
+                (i, source),
+                {
+                    "expected_item": expected,
+                    "filter_id": sorter.filter_id,
+                    "filtered_item": filtered,
+                },
+            )
 
 
 # --- belts -----------------------------------------------------------------
@@ -3898,6 +4066,137 @@ def _output_removed(ctx: Context) -> Iterable[Finding]:
                 {"recipe": g.recipe_id, "products": need, "drains": drains[i]},
             )
 
+def _fraction_gcd(one: Fraction, two: Fraction) -> Fraction:
+    denominator = math.lcm(one.denominator, two.denominator)
+    return Fraction(
+        math.gcd(
+            one.numerator * (denominator // one.denominator),
+            two.numerator * (denominator // two.denominator),
+        ),
+        denominator,
+    )
+
+
+def _belt_reaches_any(
+    ctx: Context, start: int, targets: set[int], item: str
+) -> bool:
+    pending = [start]
+    seen: set[int] = set()
+    while pending:
+        index = pending.pop()
+        if index in seen:
+            continue
+        seen.add(index)
+        if index in targets:
+            return True
+        pending.extend(_belt_successors(ctx, index))
+        pending.extend(
+            sorter.output_obj
+            for sorter_index, sorter in ctx.of_kind(Kind.SORTER)
+            if sorter.input_obj == index
+            and sorter.output_obj is not None
+            and 0 <= sorter.output_obj < len(ctx.kinds)
+            and ctx.kinds[sorter.output_obj] in (Kind.BELT, Kind.SPLITTER)
+            and _sorter_item(ctx, sorter_index) == item
+        )
+    return False
+
+
+@check("flow.coproduct_buffer", needs_spec=True, needs_groups=True)
+def _coproduct_buffer(ctx: Context) -> Iterable[Finding]:
+    """A certified intrinsic buffer feeds one unsplit atomic consumer batch."""
+    assert ctx.spec is not None
+    for proof in ctx.spec.coproduct_buffer_proofs:
+        required = (
+            proof.producer_batch
+            + proof.consumer_batch
+            - _fraction_gcd(proof.producer_batch, proof.consumer_batch)
+        )
+        intrinsic = proof.producer_batch * rules.CHEMICAL_OUTPUT_BUFFER_CRAFTS
+        if (
+            proof.required_capacity != required
+            or proof.intrinsic_capacity != intrinsic
+            or intrinsic < required
+        ):
+            yield Finding(
+                "flow.coproduct_buffer",
+                Severity.ERROR,
+                f"{proof.item_id}: buffer certificate arithmetic does not match "
+                "the game rule and exact recipe batches",
+                detail={
+                    "item": proof.item_id,
+                    "required": required,
+                    "intrinsic": intrinsic,
+                },
+            )
+            continue
+
+        producers = [
+            index
+            for index, _building in ctx.of_kind(Kind.MACHINE)
+            if ctx.recipe_of(index) == proof.producer_recipe_id
+        ]
+        consumers = [
+            index
+            for index, _building in ctx.of_kind(Kind.MACHINE)
+            if ctx.recipe_of(index) == proof.consumer_recipe_id
+        ]
+        if len(producers) != 1 or len(consumers) != 1:
+            yield Finding(
+                "flow.coproduct_buffer",
+                Severity.ERROR,
+                f"{proof.item_id}: certificate requires one physical producer and "
+                f"one consumer, found {len(producers)} and {len(consumers)}",
+                tuple((*producers, *consumers)),
+                {
+                    "item": proof.item_id,
+                    "producers": len(producers),
+                    "consumers": len(consumers),
+                },
+            )
+            continue
+
+        producer = producers[0]
+        consumer = consumers[0]
+        consumer_belts = {
+            sorter.input_obj
+            for index, sorter in ctx.of_kind(Kind.SORTER)
+            if sorter.output_obj == consumer
+            and sorter.input_obj is not None
+            and _sorter_item(ctx, index) == proof.item_id
+        }
+        connected = False
+        for _index, sorter in ctx.of_kind(Kind.SORTER):
+            output = sorter.output_obj
+            if (
+                sorter.input_obj != producer
+                or _assigned_output_item(ctx, sorter) != proof.item_id
+                or output is None
+                or not 0 <= output < len(ctx.kinds)
+            ):
+                continue
+            if output == consumer or (
+                ctx.kinds[output] in (Kind.BELT, Kind.SPLITTER)
+                and _belt_reaches_any(ctx, output, consumer_belts, proof.item_id)
+            ):
+                connected = True
+                break
+        if not connected:
+            yield Finding(
+                "flow.coproduct_buffer",
+                Severity.ERROR,
+                f"{proof.item_id}: buffered output from {proof.producer_recipe_id} "
+                f"does not aggregate at the single {proof.consumer_recipe_id} consumer",
+                (producer, consumer),
+                {
+                    "item": proof.item_id,
+                    "producer": producer,
+                    "consumer": consumer,
+                    "required_capacity": proof.required_capacity,
+                },
+            )
+
+
 
 # --- spec conformance ------------------------------------------------------
 
@@ -4046,56 +4345,38 @@ def _coaters_supplied(ctx: Context) -> Iterable[Finding]:
     prolif_items = {
         item for item in ctx.spec.external_inputs if item.startswith("proliferator")
     }
-    supplying_belts = {
+
+    def selected_item(coater: PlacedBuilding, area: int) -> str | None:
+        selected = _belt_in_addon_area(ctx, coater, area=area)
+        if selected is None:
+            return None
+        return ctx.placement.buildings[selected].carries_item
+
+    starved = [
         i
-        for i, b in enumerate(ctx.placement.buildings)
-        if ctx.kinds[i] is Kind.BELT and b.carries_item in prolif_items
-    }
-
-    if prolif_items and not supplying_belts:
-        yield Finding(
-            "prolif.coaters_are_supplied",
-            Severity.ERROR,
-            f"{len(coaters)} spray coater(s) placed but no belt carries "
-            f"{sorted(prolif_items)}; they would spray nothing and every "
-            f"proliferated recipe would silently run unproliferated",
-            tuple(i for i, _ in coaters),
-            {"coaters": len(coaters), "proliferator_items": sorted(prolif_items)},
-        )
-        return
-
-    supply_at = [
-        (
-            ctx.placement.buildings[i].x,
-            ctx.placement.buildings[i].y,
-            float(ctx.placement.buildings[i].z),
-        )
-        for i in supplying_belts
+        for i, coater in coaters
+        if selected_item(coater, 1) not in prolif_items
     ]
-    starved = []
-    for i, b in coaters:
-        areas = cat.building(b.item_id).addon_areas
-        ok = False
-        for n, (adx, ady, adz) in enumerate(areas):
-            if n == 0:
-                continue
-            wx, wy = slots.to_world((adx, ady), b.yaw)
-            want = (b.x + wx, b.y + wy, float(b.z) + adz)
-            ok = ok or any(
-                rules.world_gap(want[0] - p[0], want[1] - p[1], want[2] - p[2])
-                < rules.ADDON_AREA_RADIUS
-                for p in supply_at
-            )
-        if not ok:
-            starved.append(i)
-    if starved:
+    wrong_hosts = [
+        i
+        for i, coater in coaters
+        if selected_item(coater, 0) not in ctx.spec.spray_lanes
+    ]
+    if starved or wrong_hosts:
+        affected = tuple(sorted(set(starved) | set(wrong_hosts)))
         yield Finding(
             "prolif.coaters_are_supplied",
             Severity.ERROR,
-            f"{len(starved)} of {len(coaters)} spray coaters have no proliferator "
-            f"belt in their addon area, a tile behind and one level up",
-            tuple(starved),
-            {"starved": len(starved), "total": len(coaters)},
+            f"{len(starved)} of {len(coaters)} spray coaters have no "
+            f"positionally attached belt carrying {sorted(prolif_items)}, and "
+            f"{len(wrong_hosts)} are not hosted on a belt carrying one of "
+            f"{sorted(ctx.spec.spray_lanes)}",
+            affected,
+            {
+                "starved": len(starved),
+                "wrong_hosts": len(wrong_hosts),
+                "total": len(coaters),
+            },
         )
 
 
@@ -4225,10 +4506,11 @@ def _sprayed_cargo_reaches_machines(ctx: Context) -> Iterable[Finding]:
     simply misses its rate: the same silent class as a coater at the tail of its
     own lane and as two sorters on one machine slot, both of which shipped.
 
-    So the question is asked from the MACHINE's end, which is where the
-    correctness lives.  For each proliferated group and each of its ingredients
-    that ``spray_lanes`` names, every belt a sorter feeds that machine from must
-    be downstream of a coater -- :func:`_unsprayed_belts` decides which are not.
+    So the question is asked from the MACHINE's end, which is where correctness
+    lives.  A proliferated group must draw each sprayed ingredient downstream
+    of a coater.  For an item in ``lanes_requiring_split``, an unproliferated
+    group must draw upstream of every coater; sharing the sprayed branch would
+    silently over-produce it.
 
     ``prolif.coaters_are_supplied`` cannot answer this and never could.  It asks
     whether proliferator reaches the coater; it says nothing about whether the
@@ -4262,10 +4544,14 @@ def _sprayed_cargo_reaches_machines(ctx: Context) -> Iterable[Finding]:
     unsprayed: dict[str, set[int]] = {}
     for m, _b in ctx.of_kind(Kind.MACHINE):
         g = ctx.group_for(m)
-        if g is None or not g.is_proliferated:
+        if g is None:
             continue
         for item in g.inputs_per_machine:
-            if item not in spec.spray_lanes:
+            requires_spray = g.is_proliferated and item in spec.spray_lanes
+            forbids_spray = (
+                not g.is_proliferated and item in spec.lanes_requiring_split
+            )
+            if not requires_spray and not forbids_spray:
                 continue
             # An unresolvable sorter is INCLUDED, not skipped.  "I could not
             # tell what this one carries" is the answer a validator may never
@@ -4277,20 +4563,33 @@ def _sprayed_cargo_reaches_machines(ctx: Context) -> Iterable[Finding]:
             ]
             if not candidates:
                 continue  # `machine.inputs_supplied` owns the missing-feed case
-            bad = unsprayed.get(item)
-            if bad is None:
-                bad = unsprayed[item] = _unsprayed_belts(ctx, item)
+            dirty = unsprayed.get(item)
+            if dirty is None:
+                dirty = unsprayed[item] = _unsprayed_belts(ctx, item)
             for i, src in candidates:
-                if src not in bad:
+                wrong_side = src in dirty if requires_spray else src not in dirty
+                if not wrong_side:
                     continue
+                if requires_spray:
+                    message = (
+                        f"sorter {i} feeds machine {m} with {item}, which "
+                        f"{ctx.recipe_of(m)} is proliferated on, from belt {src} at "
+                        f"({bs[src].x}, {bs[src].y}) -- and that belt is reachable "
+                        f"by {item} that has not passed a Spray Coater. The build "
+                        "would paste, run, and quietly miss its rate"
+                    )
+                else:
+                    message = (
+                        f"sorter {i} feeds unproliferated machine {m} with {item} "
+                        f"from belt {src} at ({bs[src].x}, {bs[src].y}) after it "
+                        "passed a Spray Coater. This item requires physically split "
+                        "sprayed and unsprayed lanes; sharing this branch would "
+                        "silently over-produce"
+                    )
                 yield Finding(
                     "prolif.sprayed_cargo_reaches_machines",
                     Severity.ERROR,
-                    f"sorter {i} feeds machine {m} with {item}, which "
-                    f"{ctx.recipe_of(m)} is proliferated on, from belt {src} at "
-                    f"({bs[src].x}, {bs[src].y}) -- and that belt is reachable by "
-                    f"{item} that has not passed a Spray Coater. The build would "
-                    f"paste, run, and quietly miss its rate",
+                    message,
                     (i, m, src),
                     {"item": item, "machine": m, "belt": src},
                 )
@@ -4357,6 +4656,8 @@ def _conservation(ctx: Context) -> Iterable[Finding]:
     for item, rate in ctx.spec.external_inputs.items():
         net[item] += rate
     for item, rate in ctx.spec.outputs.items():
+        net[item] -= rate
+    for item, rate in ctx.spec.surplus_outputs.items():
         net[item] -= rate
     short = [item for item in sorted(net) if net[item] < 0]
     for item in short:
@@ -5108,7 +5409,7 @@ def id_map(spec: BuildSpec) -> IdMap:
             got = cat.get_item_id(item)
             if got is not None:
                 items[item] = got
-    for item in (*spec.external_inputs, *spec.outputs):
+    for item in (*spec.external_inputs, *spec.outputs, *spec.surplus_outputs):
         got = cat.get_item_id(item)
         if got is not None:
             items[item] = got

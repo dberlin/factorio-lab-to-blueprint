@@ -49,7 +49,10 @@ test('a refusal is shown as a result, with one line per pair', async () => {
       result: null,
       refusal: {
         message: 'no valid layout for no-proliferator after 2s',
-        reasons: ['spine/no-proliferator: too tall', 'freeform/no-proliferator: unroutable'],
+        reasons: [
+          'freeform/no-proliferator: too tall',
+          'freeform/max-proliferation: unroutable',
+        ],
       },
     }),
   });
@@ -57,8 +60,8 @@ test('a refusal is shown as a result, with one line per pair', async () => {
   build();
 
   const refusal = await screen.findByTestId('refusal');
-  expect(refusal).toHaveTextContent('spine/no-proliferator: too tall');
-  expect(refusal).toHaveTextContent('freeform/no-proliferator: unroutable');
+  expect(refusal).toHaveTextContent('freeform/no-proliferator: too tall');
+  expect(refusal).toHaveTextContent('freeform/max-proliferation: unroutable');
   // Not an alert: a refusal is an answer, and nothing should announce a failure.
   expect(screen.queryByRole('alert')).toBeNull();
 });
@@ -112,7 +115,7 @@ test('an invalid build withholds the string and offers it explicitly', async () 
 test('progress says where the job is while it is still running', async () => {
   serving(
     { status: 202, body: aJob({ state: 'queued', result: null, queue_position: 2 }) },
-    { body: aJob({ state: 'running', result: null, elapsed_s: 3.5, solver_ceiling_s: 12 }) },
+    { body: aJob({ state: 'running', result: null, elapsed_s: 3.5, solver_ceiling_s: 6 }) },
     { body: aJob() },
   );
   mount();
@@ -122,13 +125,32 @@ test('progress says where the job is while it is still running', async () => {
   await waitFor(() => expect(screen.getByTestId('progress')).toHaveTextContent('3.5s elapsed'));
 });
 
-test('the time it warns about is the product, not the per-layout budget', () => {
+test('the strategy choices are exactly the production strategy set', () => {
   mount();
-  // Defaults: 3 candidates x best (2 strategies) x 2s.
-  expect(screen.getByText(/up to 12s of solving/)).toBeInTheDocument();
+  const strategy = screen.getByLabelText('Strategy');
+  expect(strategy).toHaveTextContent('best');
+  expect(strategy).toHaveTextContent('freeform');
+  expect(strategy).toHaveTextContent('sequence-pair');
+});
 
-  fireEvent.change(screen.getByLabelText('Strategy'), { target: { value: 'spine' } });
-  expect(screen.getByText(/up to 6s of solving/)).toBeInTheDocument();
+test('proliferator tier exposes auto and every spray tier', () => {
+  mount();
+  const tier = screen.getByLabelText('Proliferator tier');
+  expect(tier).toHaveTextContent('URL selection');
+  expect(tier).toHaveTextContent('Mk.I');
+  expect(tier).toHaveTextContent('Mk.II');
+  expect(tier).toHaveTextContent('Mk.III');
+});
+
+test('the budget copy matches the two active best strategies', () => {
+  mount();
+  // Defaults: 3 candidates x 2 active production strategies x 15s.
+  expect(screen.getByText(/up to 90s of solving/)).toBeInTheDocument();
+
+  fireEvent.change(screen.getByLabelText('Strategy'), {
+    target: { value: 'sequence-pair' },
+  });
+  expect(screen.getByText(/up to 45s of solving/)).toBeInTheDocument();
 });
 
 test('the blueprint title is what the game will show, and it names the product', async () => {
@@ -156,8 +178,8 @@ test('the copy button says what it copies', async () => {
 });
 
 test('a build that has reached the layout loop counts pairs, not seconds', async () => {
-  // Two settled, a third in flight: the bar is 2/6 because two pairs are DONE,
-  // not because a third of some clock has passed.
+  // Two settled, a third in flight: the bar is 2/3 because two pairs are DONE,
+  // not because two thirds of some clock has passed.
   serving(
     {
       status: 202,
@@ -165,12 +187,12 @@ test('a build that has reached the layout loop counts pairs, not seconds', async
         state: 'running',
         result: null,
         elapsed_s: 9,
-        solver_ceiling_s: 60,
+        solver_ceiling_s: 6,
         progress: {
           index: 3,
-          total: 6,
+          total: 3,
           candidate: 'max-proliferation',
-          strategy: 'spine',
+          strategy: 'freeform',
           phase: 'started',
           area: null,
           ok: null,
@@ -179,9 +201,9 @@ test('a build that has reached the layout loop counts pairs, not seconds', async
         settled: [
           {
             index: 1,
-            total: 6,
+            total: 3,
             candidate: 'no-proliferator',
-            strategy: 'spine',
+            strategy: 'freeform',
             phase: 'refused',
             area: null,
             ok: null,
@@ -189,8 +211,8 @@ test('a build that has reached the layout loop counts pairs, not seconds', async
           },
           {
             index: 2,
-            total: 6,
-            candidate: 'no-proliferator',
+            total: 3,
+            candidate: 'max-proliferation',
             strategy: 'freeform',
             phase: 'laid-out',
             area: 2006,
@@ -206,13 +228,13 @@ test('a build that has reached the layout loop counts pairs, not seconds', async
   build();
 
   const progress = await screen.findByTestId('progress');
-  expect(progress).toHaveTextContent('Laying out 3 of 6: max-proliferation / spine');
+  expect(progress).toHaveTextContent('Laying out 3 of 3: max-proliferation / freeform');
   // The pair that gave up stays on screen while the next one runs.
   expect(screen.getByTestId('settled')).toHaveTextContent(
     'no layout — nothing fits under the belt ceiling',
   );
   expect(screen.getByTestId('settled')).toHaveTextContent('2006 tiles, valid');
-  expect(progress.querySelector('.fill')).toHaveStyle({ width: '33.3%' });
+  expect(progress.querySelector('.fill')).toHaveStyle({ width: '66.7%' });
 });
 
 test('before the layout loop starts there is nothing to count, and it says so', async () => {

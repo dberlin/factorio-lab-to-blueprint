@@ -13,6 +13,7 @@ Usage: uv run scripts/extract_assets.py [GAME_DIR]
 from __future__ import annotations
 
 import colorsys
+import contextlib
 import glob
 import json
 import os
@@ -103,10 +104,8 @@ def main() -> None:
 
     for o in env.objects:
         if o.type.name == "GameObject":
-            try:
+            with contextlib.suppress(Exception):
                 gonames[o.path_id] = o.read(check_read=False).m_Name
-            except Exception:
-                pass
             continue
         if o.type.name != "MonoBehaviour":
             continue
@@ -140,7 +139,8 @@ def main() -> None:
     if locale_found:
         for p in glob.glob(os.path.join(locale_dir, "*.txt")):
             try:
-                lines = open(p, encoding="utf-16").read().splitlines()
+                with open(p, encoding="utf-16") as locale_file:
+                    lines = locale_file.read().splitlines()
             except Exception:
                 continue
             for line in lines:
@@ -149,7 +149,10 @@ def main() -> None:
                     tr.setdefault(c[0], c[3])
         print(f"localization: {len(tr)} entries from {locale_dir}")
     else:
-        print("WARNING: Locale/1033 not found; names will stay in the source language", file=sys.stderr)
+        print(
+            "WARNING: Locale/1033 not found; names will stay in the source language",
+            file=sys.stderr,
+        )
 
     def en(name: str) -> str:
         return tr.get(name, name)
@@ -274,10 +277,8 @@ def main() -> None:
                 continue
             nm = getattr(d, "m_Name", "")
             if nm in wanted_icons and nm not in images:
-                try:
+                with contextlib.suppress(Exception):
                     images[nm] = d.image.convert("RGBA").resize((ICON_CELL, ICON_CELL))
-                except Exception:
-                    pass
     print(f"icons: {len(images)}/{len(wanted_icons)}")
 
     names = sorted(images)
@@ -534,9 +535,11 @@ def dominant_color(img: Image.Image) -> int:
     for r, g, b, a in img.getdata():
         if a <= 128:
             continue
-        _h, l, s = colorsys.rgb_to_hls(r / 255, g / 255, b / 255)
-        midtone = 1 - abs(2 * l - 1)  # 0 at l=0 or l=1, 1 at l=0.5
-        weight = s * midtone
+        _hue, lightness, saturation = colorsys.rgb_to_hls(
+            r / 255, g / 255, b / 255
+        )
+        midtone = 1 - abs(2 * lightness - 1)
+        weight = saturation * midtone
         if weight <= 0:
             continue
         weighted_r += r * weight

@@ -798,8 +798,8 @@ SORTER_COMBINED_MIN = {2: 0.8, 1: 0.88, 0: 1.451}
 
 #: ``num129 -= 0.3f`` -- the machine-to-machine case biases the value that
 #: becomes the sorter's length parameter before it is clamped to 1..3
-#: (``BuildTool_BlueprintPaste.cs:3460`` and ``:3486``).  It does not affect any
-#: legality test; it is here because the parameter is emitted.
+#: (``BuildTool_BlueprintPaste.cs:3460`` and ``:3486``).  The
+#: :func:`sorter_parameter` projection is the single reader.
 SORTER_PARAM_BIAS = {2: 0.0, 1: 0.0, 0: -0.3}
 
 #: ``0.2f`` -- ``num130 = Abs(lpos.magnitude - lpos2.magnitude) / 0.2f``.  The
@@ -909,6 +909,27 @@ def sorter_condition(sorter: Sorter, projection: Projection) -> str | None:
         if math.degrees(math.acos(cos)) > rules.SKEW_AXIS_DEG:
             return "TooSkew"
     return None
+
+
+def sorter_parameter(
+    sorter: Sorter,
+    projection: Projection,
+    *,
+    bias: dict[int, float] | None = None,
+) -> int:
+    """The one-parameter sorter span the paste writes after legality checks.
+
+    ``BuildTool_BlueprintPaste.cs:3438-3487`` computes ``num128`` with
+    :func:`calc_segments_across`, subtracts 0.3 for a machine-to-machine sorter,
+    clamps to ``1..3`` and applies ``Mathf.RoundToInt``.
+    """
+    reference = projection.position(sorter.ref_x, sorter.ref_y, sorter.ref_z)
+    lpos = projection.position(sorter.x, sorter.y, sorter.z)
+    lpos2 = projection.position(sorter.x2, sorter.y2, sorter.z2)
+    across = calc_segments_across(reference, lpos, lpos2, projection.segment)
+    table = SORTER_PARAM_BIAS if bias is None else bias
+    adjusted = max(1.0, min(3.0, across + table[sorter.belt_ends]))
+    return round(adjusted)
 
 
 def _magnitude(v: Vec3) -> float:

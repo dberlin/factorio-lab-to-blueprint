@@ -6,14 +6,11 @@ The plan's two worked examples are both of this shape: *"bump ``SLOT_REACH`` to
 "a test file goes red" -- a named piece of SEARCH code must compute a different
 answer.  That is what a probe is here.
 
-Direct calls rather than ``lay_out``, for two reasons.  Every test in
-``test_spine.py`` and ``test_freeform.py`` takes a fixture, so none is callable
-without a pytest session; and a full solve costs a CP-SAT budget per constant,
-which fifty-four constants cannot afford inside a 300-second limit.  A probe
-costs microseconds, so R4 can run the WHOLE set against every constant instead
-of guessing which one matters -- which is the property that keeps the mechanism
-honest.  A probe suite that is too narrow reports "the search ignores this
-rule" when the truth is "I did not ask the right question".
+Direct calls rather than ``lay_out`` keep rule mutation probes independent of
+solver fixtures and CP-SAT budgets. A probe costs microseconds, so R4 can run
+the whole set against every constant instead of guessing which one matters. A
+suite that is too narrow reports "the search ignores this rule" when the truth
+is "the probe did not ask the right question".
 
 A probe returns anything comparable.  It may raise: a rule perturbed hard
 enough to make search code throw has demonstrably been consulted, so
@@ -25,10 +22,9 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import replace
 from fractions import Fraction
-from typing import Any
 
 from flab2bp.dsp import catalog, rules
-from flab2bp.layout import freeform, geometry, junction, slots, spine
+from flab2bp.layout import freeform, geometry, junction, slots
 from flab2bp.layout.base import PlacedBuilding
 
 #: Item ids with real colliders, slot poses and footprints, picked once so the
@@ -38,6 +34,11 @@ SMELTER = 2302
 CHEMICAL_PLANT = 2309
 BELT = 2001
 SORTER = 2012
+_SplitterProbeRow = (
+    tuple[int, int, int, str, int, int]
+    | tuple[int | None, int, int]
+    | str
+)
 
 
 def _b(item_id: int, x: int, y: int, *, z: int = 0, yaw: float = 0.0) -> PlacedBuilding:
@@ -88,18 +89,18 @@ def scene() -> tuple[PlacedBuilding, ...]:
     return (machine, _b(SMELTER, 6, 0), *belts, sorter)
 
 
-def _attachment() -> Any:
+def _attachment() -> list[tuple[int, str]]:
     machine = slots.probe_building(ASSEMBLER, 0.0)
     return [(d, str(slots.attachment(machine, (0, d)))) for d in range(2, 7)]
 
 
-def _attachable_columns() -> Any:
+def _attachable_columns() -> dict[int, list[int]]:
     machine = slots.probe_building(ASSEMBLER, 0.0)
     return {y: sorted(slots.attachable_columns(machine, y)) for y in (3, 4, 5, 6)}
 
 
-def _machine_slots() -> Any:
-    out: list[Any] = []
+def _machine_slots() -> list[int | str]:
+    out: list[int | str] = []
     for item_id in (ASSEMBLER, SMELTER, CHEMICAL_PLANT):
         for yaw in (0.0, 90.0):
             for offset in ((0.0, -1.5), (1.5, 0.0), (0.0, 1.5)):
@@ -110,7 +111,7 @@ def _machine_slots() -> Any:
     return out
 
 
-def _slot_poses() -> Any:
+def _slot_poses() -> list[tuple[float, float, float]]:
     return [
         slots.slot_offset(item_id, yaw, slot)
         for item_id in (ASSEMBLER, SMELTER)
@@ -119,24 +120,21 @@ def _slot_poses() -> Any:
     ]
 
 
-def _slot_forwards() -> Any:
+def _slot_forwards() -> list[tuple[float, float, float]]:
     return [slots.slot_forward(ASSEMBLER, yaw, slot) for yaw in (0.0, 90.0) for slot in (0, 1)]
 
 
-def _lane_facing() -> Any:
+def _lane_facing() -> list[tuple[bool, bool]]:
     return [slots.lane_facing(i, yaw) for i in (ASSEMBLER, SMELTER) for yaw in (0.0, 90.0, 180.0)]
 
 
-def _junction_keepout() -> Any:
+def _junction_keepout() -> list[tuple[tuple[int, int, int], ...]]:
     return [junction.keepout_cells(0, 0, lvl) for lvl in (0, 1, 2)]
 
 
-def _belt_floor_over() -> Any:
-    return [str(spine._belt_floor_over(b)) for b in scene()]
 
-
-def _tower_reach() -> Any:
-    radius = Fraction(catalog.TESLA_COVER_RADIUS)
+def _tower_reach() -> tuple[list[int], list[int], bool]:
+    radius = Fraction(catalog.building(catalog.TESLA_TOWER_ID).cover_radius)
     return (
         geometry.reach_table(radius),
         geometry.greedy_tower_xs(x0=0, width=40, hr=3, tower_w=1),
@@ -144,36 +142,16 @@ def _tower_reach() -> Any:
     )
 
 
-def _tower_spacing() -> Any:
-    """Where spine will not stand a second power node, and freeform's stamp.
-
-    Both packers consult ``rules.power_node_keepout_offsets`` -- spine through
-    ``_tower_keep_out`` and the emission gate, freeform through the stamp its
-    greedy clears from ``free`` -- so a perturbation of the rule must move this.
-    The freeform half is asked of the rule at the same reach the planner reads
-    it at, because the planner's own copy lives inside a closure.
-    """
+def _tower_spacing() -> list[tuple[int, int, int]]:
+    """The exact power-node keepout consumed by the surviving strategies."""
     tower = catalog.building(catalog.TESLA_TOWER_ID)
-    stand = PlacedBuilding(
-        item_id=catalog.TESLA_TOWER_ID,
-        model_index=tower.model_index,
-        x=10,
-        y=10,
-        width=tower.width,
-        height=tower.height,
-    )
-    return (
-        sorted(spine._tower_spacing()),
-        sorted(spine._tower_keep_out([stand])),
-        sorted(rules.power_node_keepout_offsets(tower.power_node, tower.power_node)),
+    return sorted(
+        rules.power_node_keepout_offsets(tower.power_node, tower.power_node)
     )
 
 
-def _addon_area_step() -> Any:
-    return [spine._addon_area_step(yaw) for yaw in (0.0, 90.0, 180.0, 270.0)]
 
-
-def _legal_links() -> Any:
+def _legal_links() -> list[tuple[str, int, bool, bool]]:
     """Freeform's own step-legality table, which is what routes belts.
 
     The only probe that reaches the router.  Plan step 2.2 wants
@@ -190,13 +168,13 @@ def _legal_links() -> Any:
     ]
 
 
-def _altitude_profiles() -> Any:
-    paths = [
+def _altitude_profiles() -> list[list[str] | None]:
+    paths: list[list[tuple[int, int, int]]] = [
         [(0, 0, 0), (1, 0, 0), (2, 0, 1), (3, 0, 1), (4, 0, 0)],
         [(0, 0, 0), (1, 0, 1), (2, 0, 2)],
         [(0, 0, 2), (1, 0, 2), (2, 0, 1), (3, 0, 0)],
     ]
-    out: list[Any] = []
+    out: list[list[str] | None] = []
     for path in paths:
         for ramped in (True, False):
             got = freeform._altitude_profile(path, ramped=ramped)
@@ -204,28 +182,58 @@ def _altitude_profiles() -> Any:
     return out
 
 
-def _sorter_seats() -> Any:
+def _sorter_seats() -> list[str]:
     buildings = scene()
     return [str(b) for b in slots.sorter_seat_boxes(buildings)]
 
 
-def _assigned_sorter_slots() -> Any:
+def _assigned_sorter_slots() -> list[tuple[int | None, int, int | None, int]]:
     return [
         (b.output_obj, b.output_to_slot, b.input_obj, b.input_from_slot)
         for b in slots.assign_sorter_slots(scene())
     ]
 
 
-def _assigned_belt_slots() -> Any:
+def _assigned_belt_slots() -> list[tuple[int | None, int, int | None, int]]:
     return [
         (b.output_obj, b.output_to_slot, b.input_obj, b.input_from_slot)
         for b in slots.assign_belt_slots(scene())
     ]
 
 
-def _splitter_ports() -> Any:
+def _assigned_port_slots() -> list[tuple[int, int]]:
+    host = _b(catalog.RAY_RECEIVER_ID, 0, 0)
+    feeder = replace(
+        _b(BELT, 0, 0),
+        output_obj=0,
+        output_to_slot=0,
+    )
+    drawer = replace(
+        _b(BELT, 1, 0),
+        input_obj=0,
+        input_from_slot=1,
+    )
+    wired = slots.assign_belt_slots((host, feeder, drawer))
+    return [
+        (b.output_from_slot, b.input_to_slot)
+        for b in wired[1:]
+    ]
+
+
+def _assigned_addon_slots() -> tuple[int, int, int, int]:
+    coater = _b(catalog.SPRAY_COATER_ID, 0, 0)
+    (wired,) = slots.assign_sorter_slots((coater,))
+    return (
+        wired.output_to_slot,
+        wired.input_from_slot,
+        wired.output_from_slot,
+        wired.input_to_slot,
+    )
+
+
+def _splitter_ports() -> list[_SplitterProbeRow]:
     j = junction.make_splitter(2, 9, Fraction(0))
-    out: list[Any] = [
+    out: list[_SplitterProbeRow] = [
         (j.item_id, j.x, j.y, str(j.z), j.input_to_slot, j.output_from_slot),
     ]
     belts = [_b(BELT, x, 8) for x in range(int(rules.SPLITTER_MAX_PORTS) + 2)]
@@ -243,7 +251,9 @@ def _splitter_ports() -> Any:
     return out
 
 
-def _footprints_and_clearance() -> Any:
+def _footprints_and_clearance() -> list[
+    tuple[tuple[int, int], tuple[int, int]]
+]:
     return [
         (catalog.footprint(i), catalog.clearance(i, yaw))
         for i in (ASSEMBLER, SMELTER, CHEMICAL_PLANT, BELT)
@@ -251,7 +261,7 @@ def _footprints_and_clearance() -> Any:
     ]
 
 
-def _belt_rates() -> Any:
+def _belt_rates() -> list[tuple[int, str, str]]:
     return [
         (i, str(catalog.BELT_RATE[i]), str(catalog.sorter_rate(SORTER, span)))
         for i in catalog.BELT_RATE
@@ -259,13 +269,13 @@ def _belt_rates() -> Any:
     ]
 
 
-def _belt_ceiling() -> Any:
+def _belt_ceiling() -> list[str]:
     return [str(catalog.belt_max_z(level)) for level in (3, 9, 13, 15)]
 
 
 #: Every probe, run against every perturbation.  Adding one can only make R4
 #: stricter, so it is always the right move when a rule reports as ignored.
-PROBES: dict[str, Callable[[], Any]] = {
+PROBES: dict[str, Callable[[], object]] = {
     "slots.attachment": _attachment,
     "slots.attachable_columns": _attachable_columns,
     "slots.machine_slot": _machine_slots,
@@ -275,12 +285,12 @@ PROBES: dict[str, Callable[[], Any]] = {
     "slots.sorter_seat_boxes": _sorter_seats,
     "slots.assign_sorter_slots": _assigned_sorter_slots,
     "slots.assign_belt_slots": _assigned_belt_slots,
+    "slots.assign_port_slots": _assigned_port_slots,
+    "slots.assign_addon_slots": _assigned_addon_slots,
     "junction.keepout_cells": _junction_keepout,
     "junction.attach_input": _splitter_ports,
-    "spine._belt_floor_over": _belt_floor_over,
     "geometry.tower_reach": _tower_reach,
-    "spine._tower_keep_out": _tower_spacing,
-    "spine._addon_area_step": _addon_area_step,
+    "rules.power_node_keepout_offsets": _tower_spacing,
     "freeform._legal_link": _legal_links,
     "freeform._altitude_profile": _altitude_profiles,
     "catalog.footprint/clearance": _footprints_and_clearance,

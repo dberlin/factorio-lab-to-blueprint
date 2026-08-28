@@ -1,4 +1,4 @@
-"""Which layout strategy is denser -- A (spine) or B (freeform) -- and by how much?
+"""Compare Freeform and SequencePair density with a validated paired corpus.
 
 A real A-to-B test, not a table of numbers nobody can defend.  The measurement
 logic lives in :mod:`flab2bp.bench.ab`; this file is the driver that feeds it
@@ -50,6 +50,7 @@ import json
 import sys
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
@@ -67,35 +68,36 @@ from flab2bp.bench.ab import (  # noqa: E402
     budget_flip,
     compare,
     crossvalidate_samples,
+    isolated_attempt,
     render_markdown,
     render_text,
-    sample_once,
+    sample_measured,
     to_json,
     trials_from,
 )
 from flab2bp.bench.corpus import URL_CORPUS, CorpusEntry, Tier  # noqa: E402
 from flab2bp.dsp import codec  # noqa: E402
 from flab2bp.lab.techs import belt_rules_for_url  # noqa: E402
-from flab2bp.layout import markers, validate  # noqa: E402
+from flab2bp.layout import finalize, markers, validate  # noqa: E402
 from flab2bp.layout.base import LayoutStrategy, Placement  # noqa: E402
 from flab2bp.layout.freeform import FreeformLayout  # noqa: E402
-from flab2bp.layout.spine import SpineLayout  # noqa: E402
+from flab2bp.layout.sequence_solver import SequencePairLayout  # noqa: E402
 from flab2bp.pipeline import _id_map  # noqa: E402
 from flab2bp.spec import BuildSpec  # noqa: E402
 
 _TIER_ORDER = (Tier.TRIVIAL, Tier.SMALL, Tier.MID, Tier.LARGE, Tier.STRESS)
 
-A_NAME = "spine"
+A_NAME = "sequence-pair"
 B_NAME = "freeform"
 
 #: Factories rather than classes so the driver never depends on the two
 #: constructors happening to share a signature.
 #:
 #: The second argument is the save's slope rule, taken from the entry's URL.
-#: Both arms must get the SAME one or the comparison is measuring the
+#: Both arms must get the same one or the comparison is measuring the
 #: technology set rather than the strategies.
 STRATEGIES: dict[str, Callable[[bool, bool], LayoutStrategy]] = {
-    A_NAME: lambda power, vertical: SpineLayout(
+    A_NAME: lambda power, vertical: SequencePairLayout(
         power=power, belt_vertical_construction=vertical
     ),
     B_NAME: lambda power, vertical: FreeformLayout(
@@ -104,6 +106,27 @@ STRATEGIES: dict[str, Callable[[bool, bool], LayoutStrategy]] = {
 }
 
 Judge = Callable[[Placement], tuple[bool, tuple[str, ...]]]
+
+@dataclass(frozen=True, slots=True)
+class _LayoutCall:
+    """Picklable solve request executed inside one fresh measurement process."""
+
+    strategy: str
+    power: bool
+    vertical: bool
+    spec: BuildSpec
+    budget_s: float
+
+    def __call__(self) -> Placement:
+        placement = STRATEGIES[self.strategy](self.power, self.vertical).lay_out(
+            self.spec, time_budget_s=self.budget_s
+        )
+        return finalize.compact_open_boundary_belts(
+            placement,
+            self.spec,
+            expect_power=self.power,
+        )
+
 
 
 def specs_for(entry: CorpusEntry, candidates: int) -> tuple[BuildSpec, ...]:
@@ -166,6 +189,8 @@ def collect(
     repeat: int,
     candidates: int,
     power: bool,
+    a_name: str = A_NAME,
+    b_name: str = B_NAME,
 ) -> list[Sample]:
     """Run the whole matrix.
 
@@ -174,6 +199,7 @@ def collect(
     throttling, other load, and any drift over a long sweep move both of them
     together instead of landing on whichever ran second.
     """
+    strategy_names = (a_name, b_name)
     specs: dict[str, tuple[BuildSpec, ...]] = {}
     spec_errors: dict[str, str] = {}
     for entry in entries:
@@ -195,28 +221,29 @@ def collect(
                         Sample(
                             entry.url_id, "-", name, budget, trial,
                             Outcome.ERROR, 0.0, detail=spec_errors[entry.url_id],
+                            power=power,
                         )
-                        for name in STRATEGIES
+                        for name in strategy_names
                     )
                     continue
                 for spec in specs[entry.url_id]:
                     judge: Judge = partial(judge_with, spec, _id_map(spec), power)
                     encode = partial(encode_with, spec)
                     vertical = belt_rules_for_url(entry.url).vertical_construction
-                    for name, make in STRATEGIES.items():
-                        strategy = make(power, vertical)
+                    for name in strategy_names:
                         samples.append(
-                            sample_once(
+                            sample_measured(
                                 url_id=entry.url_id,
                                 candidate=spec.label or "default",
                                 strategy=name,
                                 budget_s=budget,
                                 trial=trial,
-                                lay_out=partial(
-                                    strategy.lay_out, spec, time_budget_s=budget
+                                attempt=isolated_attempt(
+                                    _LayoutCall(name, power, vertical, spec, budget)
                                 ),
                                 judge=judge,
                                 encode=encode,
+                                power=power,
                             )
                         )
                 print(
@@ -230,6 +257,8 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
+    ap.add_argument("--a", default=A_NAME, choices=tuple(STRATEGIES))
+    ap.add_argument("--b", default=B_NAME, choices=tuple(STRATEGIES))
     ap.add_argument("--tier", default="small", choices=[t.value for t in _TIER_ORDER])
     ap.add_argument(
         "--budget",
@@ -259,6 +288,9 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
+    if args.a == args.b:
+        print("--a and --b must select different strategies", file=sys.stderr)
+        return 2
 
     budgets = [float(b) for b in str(args.budget).split(",") if b.strip()]
     cutoff = _TIER_ORDER.index(Tier(args.tier))
@@ -279,6 +311,8 @@ def main(argv: list[str] | None = None) -> int:
         repeat=args.repeat,
         candidates=args.candidates,
         power=bool(args.power),
+        a_name=args.a,
+        b_name=args.b,
     )
 
     if args.no_crossvalidate:
@@ -295,6 +329,8 @@ def main(argv: list[str] | None = None) -> int:
         urls=len(entries),
         started=started,
         seconds=round(time.perf_counter() - t0, 1),
+        a_name=args.a,
+        b_name=args.b,
     )
 
     trials = trials_from(samples)
@@ -302,8 +338,8 @@ def main(argv: list[str] | None = None) -> int:
     comparisons: list[Comparison] = [
         compare(
             trials,
-            a_name=A_NAME,
-            b_name=B_NAME,
+            a_name=args.a,
+            b_name=args.b,
             budget_s=b,
             url_ids=url_ids,
             cross=cross,

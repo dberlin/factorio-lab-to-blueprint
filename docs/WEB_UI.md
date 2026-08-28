@@ -12,9 +12,9 @@ uv run flab2bp-web          # http://127.0.0.1:8000
 
 That is the whole command. On first run it builds the front end itself (`bun install
 --frozen-lockfile && bun run build` in `web/`), so the prerequisites are `uv` and `bun` on
-`PATH` and nothing else — `flab2bp.web` is standard library plus `httpx`, which the core
-package already required. There is deliberately no `[web]` extra, because there is nothing to
-put in it.
+`PATH` and nothing else — `flab2bp.web` uses the standard-library HTTP server plus `httpx`
+and Pydantic, which the core package already requires. There is deliberately no `[web]` extra,
+because there is nothing to put in it.
 
 | flag | what it does |
 | --- | --- |
@@ -26,6 +26,16 @@ put in it.
 
 If the front end is not built and `bun` is missing, the API still serves and the page says so
 in plain text rather than 404ing.
+
+## Strategy choices
+
+The web request contract is `best`, `freeform`, or the exact wire spelling
+`sequence-pair`. `best` runs both Freeform and SequencePair and returns the
+smallest validator-clean result.
+
+The solver ceiling is `candidates × active production strategies × budget` for `best`, using
+the pipeline's canonical active-strategy tuple. The promoted portfolio has two strategies.
+An explicit Freeform or SequencePair request always runs one layout per candidate.
 
 ## Proving it works
 
@@ -106,8 +116,8 @@ longer-lived wants the job state somewhere it can be re-read, and that is a diff
 **A running solve cannot be cancelled.** "Stop watching" stops the polling, not the solve:
 CP-SAT holds its worker until its budget expires. The button is named for what it actually does,
 which is the honest half. The fix is not in this package at all — it needs a `SolutionCallback`
-or a solve interrupter threaded through `src/flab2bp/layout/`, where both strategies build and
-run their `CpSolver`. It is the one item on this list that is unfinished rather than decided.
+or a solve interrupter threaded through the layout backends that build and run a `CpSolver`.
+It is the one item on this list that is unfinished rather than decided.
 
 **Concurrency is a queue, not parallelism, and that is deliberate.** One CP-SAT solve already
 runs at ~700% CPU (see the note in `pyproject.toml` about why the test suite is not `-n auto`).
@@ -153,15 +163,16 @@ GET  /api/fetch?url=...  the viewer's own blueprint-page proxy
 GET  /*                  the built front end, with an SPA fallback
 ```
 
-The submit body takes `url`, `strategy` (`best`/`spine`/`freeform`), `candidates` (1–8),
-`budget_s`, `power`, `name`, `allow_invalid`, and `flow` — a FactorioLab CSV export as text,
-which pins which recipe makes what. A poll echoes `flow_supplied` rather than the CSV itself
-(it can be hundreds of kB and the page already has it); `result.flow_pinned` is the proof it was
-honoured. Every bound is a refusal rather than a clamp:
-a job asking for more than 300s of solving comes back 400 with the arithmetic spelled out,
-never silently rounded down to something servable, because running a different build from the
-one that was asked for and reporting it as the one that was asked for is the failure mode this
-whole project exists to avoid.
+The submit body takes `url`, `strategy` (`best`/`freeform`/`sequence-pair`), `candidates`
+(1–8), positive finite `budget_s`, `power`, `name`, `allow_invalid`, and `flow` — a
+FactorioLab CSV export as text, which pins which recipe makes what. A poll echoes
+`flow_supplied` rather than the CSV itself (it can be hundreds of kB and the page already has
+it); `result.flow_pinned` is the proof it was honoured. Every bound is a refusal rather than a
+clamp: a job asking for more
+than 300s of solving comes back 400 with the arithmetic spelled out, never silently rounded
+down to something servable, because running a different build from the one that was asked for
+and reporting it as the one that was asked for is the failure mode this whole project exists
+to avoid.
 
 `blueprint` is `null` when validation failed and `allow_invalid` was not set — the same refusal
 the CLI makes without `--allow-invalid`, moved to the place the string would be copied from.

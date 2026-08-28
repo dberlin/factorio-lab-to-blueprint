@@ -76,6 +76,18 @@ class MachineGroup(_Frozen):
         return self.proliferator_mode is not ProliferatorMode.NONE
 
 
+class CoproductBufferProof(_Frozen):
+    """A game-backed finite buffer that enables one atomic consumer batch."""
+
+    item_id: str
+    producer_recipe_id: str
+    consumer_recipe_id: str
+    producer_batch: Fraction = Field(gt=0)
+    consumer_batch: Fraction = Field(gt=0)
+    required_capacity: Fraction = Field(gt=0)
+    intrinsic_capacity: Fraction = Field(gt=0)
+
+
 class BuildSpec(_Frozen):
     """One complete, self-consistent thing to build.
 
@@ -97,6 +109,8 @@ class BuildSpec(_Frozen):
     external_inputs: dict[str, Fraction] = Field(default_factory=dict)
     #: The target item(s) belted out, at the achieved rate.
     outputs: dict[str, Fraction] = Field(default_factory=dict)
+    #: Unavoidable non-target production that must also leave the block.
+    surplus_outputs: dict[str, Fraction] = Field(default_factory=dict)
     belt_item_id: str = "conveyor-belt-1"
     belt_items_per_second: Fraction = Field(default=Fraction(6), gt=0)
     #: What this candidate optimises, for the bake-off report.
@@ -115,10 +129,14 @@ class BuildSpec(_Frozen):
     spray_lanes: dict[str, bool] = Field(default_factory=dict)
 
     #: Items whose lane must be physically SPLIT in two, because the same item
-    #: feeds both a proliferated and an unproliferated consumer.  Spraying a
+    #: feeds both a proliferated and an unproliferated consumer. Spraying a
     #: shared lane would proliferate the unproliferated consumer's input too,
     #: silently over-producing it and desyncing the build from these rates.
     lanes_requiring_split: frozenset[str] = Field(default_factory=frozenset)
+
+    #: Startup-liveness certificates derived from exact recipe batches and the
+    #: selected machine's game-defined internal output capacity.
+    coproduct_buffer_proofs: tuple[CoproductBufferProof, ...] = ()
 
     @model_validator(mode="after")
     def _no_dangling_demand(self) -> BuildSpec:

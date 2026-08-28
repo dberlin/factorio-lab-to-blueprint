@@ -13,6 +13,8 @@ stay at ~21s and a bake-off belongs behind a script entry point.
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from flab2bp.bench.ab import (
@@ -28,9 +30,11 @@ from flab2bp.bench.ab import (
     compare,
     cross_verdict,
     crossvalidate_samples,
+    isolated_attempt,
     render_markdown,
     render_text,
     sample_once,
+    samples_from_json,
     ship,
     to_json,
     trials_from,
@@ -59,7 +63,7 @@ def _sample(
     outcome: Outcome,
     *,
     url: str = "u",
-    strategy: str = "spine",
+    strategy: str = "sequence-pair",
     area: int | None = None,
     candidate: str = "c",
     trial: int = 0,
@@ -87,7 +91,7 @@ def _trial(
     outcome: Outcome,
     *,
     url: str = "u",
-    strategy: str = "spine",
+    strategy: str = "sequence-pair",
     area: int | None = None,
     trial: int = 0,
     budget: float = 1.0,
@@ -126,17 +130,17 @@ def test_a_rejected_sample_cannot_carry_an_area(outcome: Outcome) -> None:
     can accidentally consume one.
     """
     with pytest.raises(ValueError, match="systematically smaller"):
-        Sample("u", "c", "spine", 1.0, 0, outcome, 0.5, metrics=_metrics(1))
+        Sample("u", "c", "sequence-pair", 1.0, 0, outcome, 0.5, metrics=_metrics(1))
 
 
 def test_a_valid_sample_must_carry_measured_geometry() -> None:
     with pytest.raises(ValueError, match="must carry measured geometry"):
-        Sample("u", "c", "spine", 1.0, 0, Outcome.VALID, 0.5)
+        Sample("u", "c", "sequence-pair", 1.0, 0, Outcome.VALID, 0.5)
 
 
 def test_only_a_valid_sample_may_carry_a_blueprint() -> None:
     with pytest.raises(ValueError, match="blueprint"):
-        Sample("u", "c", "spine", 1.0, 0, Outcome.INVALID, 0.5, blueprint="H4sI")
+        Sample("u", "c", "sequence-pair", 1.0, 0, Outcome.INVALID, 0.5, blueprint="H4sI")
 
 
 def test_demotion_drops_the_area_with_the_verdict() -> None:
@@ -228,14 +232,14 @@ def test_a_tiny_invalid_candidate_never_beats_a_larger_valid_one() -> None:
 
 
 def _comparison(trials: list[Trial], urls: list[str]) -> Comparison:
-    return compare(trials, a_name="spine", b_name="freeform", budget_s=1.0, url_ids=urls)
+    return compare(trials, a_name="sequence-pair", b_name="freeform", budget_s=1.0, url_ids=urls)
 
 
 def test_coverage_is_reported_before_density_with_both_denominators() -> None:
     trials = [
-        _trial(Outcome.VALID, url="a", strategy="spine", area=1000),
-        _trial(Outcome.VALID, url="b", strategy="spine", area=1000),
-        _trial(Outcome.VALID, url="c", strategy="spine", area=1000),
+        _trial(Outcome.VALID, url="a", strategy="sequence-pair", area=1000),
+        _trial(Outcome.VALID, url="b", strategy="sequence-pair", area=1000),
+        _trial(Outcome.VALID, url="c", strategy="sequence-pair", area=1000),
         _trial(Outcome.VALID, url="a", strategy="freeform", area=800),
         _trial(Outcome.INVALID, url="b", strategy="freeform", detail="flow.lane_sourced"),
         _trial(Outcome.REFUSED, url="c", strategy="freeform", detail="no routable pack"),
@@ -259,7 +263,7 @@ def test_coverage_is_reported_before_density_with_both_denominators() -> None:
 def test_no_shared_success_means_no_ratio_at_all() -> None:
     """Not 1.0. "They tied" and "nothing could be compared" are different claims."""
     trials = [
-        _trial(Outcome.VALID, url="a", strategy="spine", area=1000),
+        _trial(Outcome.VALID, url="a", strategy="sequence-pair", area=1000),
         _trial(Outcome.REFUSED, url="a", strategy="freeform"),
     ]
     c = _comparison(trials, ["a"])
@@ -284,9 +288,9 @@ def test_a_url_that_never_ran_still_counts_in_the_denominator() -> None:
 def test_reliability_is_distinct_from_coverage() -> None:
     """Shipping 1 run in 3 is not the same as shipping every run."""
     trials = [
-        _trial(Outcome.VALID, url="a", strategy="spine", area=100, trial=0),
-        _trial(Outcome.INVALID, url="a", strategy="spine", trial=1),
-        _trial(Outcome.INVALID, url="a", strategy="spine", trial=2),
+        _trial(Outcome.VALID, url="a", strategy="sequence-pair", area=100, trial=0),
+        _trial(Outcome.INVALID, url="a", strategy="sequence-pair", trial=1),
+        _trial(Outcome.INVALID, url="a", strategy="sequence-pair", trial=2),
         _trial(Outcome.VALID, url="a", strategy="freeform", area=100, trial=0),
         _trial(Outcome.VALID, url="a", strategy="freeform", area=100, trial=1),
         _trial(Outcome.VALID, url="a", strategy="freeform", area=100, trial=2),
@@ -315,7 +319,7 @@ def _cell(name: str, areas: list[int]) -> Cell:
 
 
 def _spread_pair(a: list[int], b: list[int]) -> Pair:
-    return Pair("u", 1.0, _cell("spine", a), _cell("freeform", b))
+    return Pair("u", 1.0, _cell("sequence-pair", a), _cell("freeform", b))
 
 
 def test_one_sample_per_cell_can_never_be_declared_separated() -> None:
@@ -342,7 +346,7 @@ def test_a_gap_wider_than_the_spread_is_separated() -> None:
 def test_a_ratio_nothing_supports_says_so_as_loudly_as_the_ratio() -> None:
     """One repeat still prints a number, so it must also print its own warning."""
     trials = [
-        _trial(Outcome.VALID, url="a", strategy="spine", area=1000),
+        _trial(Outcome.VALID, url="a", strategy="sequence-pair", area=1000),
         _trial(Outcome.VALID, url="a", strategy="freeform", area=600),
     ]
     head = _comparison(trials, ["a"]).headline()
@@ -357,7 +361,7 @@ def test_a_repeatable_exact_tie_is_a_tie_not_a_missing_verdict() -> None:
     assert pair.separated
     trials = [
         _trial(Outcome.VALID, url="a", strategy=name, area=100, trial=i)
-        for name in ("spine", "freeform")
+        for name in ("sequence-pair", "freeform")
         for i in (0, 1)
     ]
     assert _comparison(trials, ["a"]).wins == (0, 0, 1)
@@ -365,8 +369,8 @@ def test_a_repeatable_exact_tie_is_a_tie_not_a_missing_verdict() -> None:
 
 def test_an_effect_inside_the_noise_floor_is_called_out() -> None:
     trials = [
-        _trial(Outcome.VALID, url="a", strategy="spine", area=1000, trial=0),
-        _trial(Outcome.VALID, url="a", strategy="spine", area=1300, trial=1),
+        _trial(Outcome.VALID, url="a", strategy="sequence-pair", area=1000, trial=0),
+        _trial(Outcome.VALID, url="a", strategy="sequence-pair", area=1300, trial=1),
         _trial(Outcome.VALID, url="a", strategy="freeform", area=980, trial=0),
         _trial(Outcome.VALID, url="a", strategy="freeform", area=1280, trial=1),
     ]
@@ -378,13 +382,13 @@ def test_an_effect_inside_the_noise_floor_is_called_out() -> None:
 def test_wins_are_counted_only_over_separated_pairs() -> None:
     trials = [
         # a: B clearly smaller, tight spreads -> separated, a B win
-        _trial(Outcome.VALID, url="a", strategy="spine", area=1000, trial=0),
-        _trial(Outcome.VALID, url="a", strategy="spine", area=1005, trial=1),
+        _trial(Outcome.VALID, url="a", strategy="sequence-pair", area=1000, trial=0),
+        _trial(Outcome.VALID, url="a", strategy="sequence-pair", area=1005, trial=1),
         _trial(Outcome.VALID, url="a", strategy="freeform", area=600, trial=0),
         _trial(Outcome.VALID, url="a", strategy="freeform", area=605, trial=1),
         # b: medians differ but spreads overlap -> no verdict
-        _trial(Outcome.VALID, url="b", strategy="spine", area=1000, trial=0),
-        _trial(Outcome.VALID, url="b", strategy="spine", area=1400, trial=1),
+        _trial(Outcome.VALID, url="b", strategy="sequence-pair", area=1000, trial=0),
+        _trial(Outcome.VALID, url="b", strategy="sequence-pair", area=1400, trial=1),
         _trial(Outcome.VALID, url="b", strategy="freeform", area=900, trial=0),
         _trial(Outcome.VALID, url="b", strategy="freeform", area=1500, trial=1),
     ]
@@ -401,32 +405,44 @@ def test_wins_are_counted_only_over_separated_pairs() -> None:
 
 def test_a_winner_that_flips_with_the_budget_is_reported_as_such() -> None:
     fast = [
-        _trial(Outcome.VALID, url="a", strategy="spine", area=1000, budget=1.0),
+        _trial(Outcome.VALID, url="a", strategy="sequence-pair", area=1000, budget=1.0),
         _trial(Outcome.VALID, url="a", strategy="freeform", area=600, budget=1.0),
     ]
     slow = [
-        _trial(Outcome.VALID, url="a", strategy="spine", area=500, budget=10.0),
+        _trial(Outcome.VALID, url="a", strategy="sequence-pair", area=500, budget=10.0),
         _trial(Outcome.VALID, url="a", strategy="freeform", area=900, budget=10.0),
     ]
     comparisons = [
-        compare(fast + slow, a_name="spine", b_name="freeform", budget_s=1.0, url_ids=["a"]),
-        compare(fast + slow, a_name="spine", b_name="freeform", budget_s=10.0, url_ids=["a"]),
+        compare(
+            fast + slow,
+            a_name="sequence-pair",
+            b_name="freeform",
+            budget_s=1.0,
+            url_ids=["a"],
+        ),
+        compare(
+            fast + slow,
+            a_name="sequence-pair",
+            b_name="freeform",
+            budget_s=10.0,
+            url_ids=["a"],
+        ),
     ]
     message = budget_flip(comparisons)
     assert "FLIPS" in message
-    assert "1s -> freeform" in message and "10s -> spine" in message
+    assert "1s -> freeform" in message and "10s -> sequence-pair" in message
 
 
 def test_a_stable_winner_says_so() -> None:
     trials = [
-        _trial(Outcome.VALID, url="a", strategy="spine", area=1000, budget=b)
+        _trial(Outcome.VALID, url="a", strategy="sequence-pair", area=1000, budget=b)
         for b in (1.0, 10.0)
     ] + [
         _trial(Outcome.VALID, url="a", strategy="freeform", area=600, budget=b)
         for b in (1.0, 10.0)
     ]
     comparisons = [
-        compare(trials, a_name="spine", b_name="freeform", budget_s=b, url_ids=["a"])
+        compare(trials, a_name="sequence-pair", b_name="freeform", budget_s=b, url_ids=["a"])
         for b in (1.0, 10.0)
     ]
     assert "stable across budgets" in budget_flip(comparisons)
@@ -496,7 +512,11 @@ def test_a_blueprint_the_decoder_rejects_stops_contributing_an_area(
 
     # And the demotion has to reach the aggregate, not just the sample.
     c = compare(
-        trials_from(out), a_name="spine", b_name="freeform", budget_s=1.0, url_ids=["a", "b"]
+        trials_from(out),
+        a_name="sequence-pair",
+        b_name="freeform",
+        budget_s=1.0,
+        url_ids=["a", "b"],
     )
     assert c.a_covered == 1
 
@@ -510,13 +530,26 @@ def _placement() -> Placement:
     return Placement(buildings=(PlacedBuilding(item_id=2304, model_index=66, x=0, y=0),))
 
 
+def _process_identity_placement() -> Placement:
+    return Placement(
+        buildings=(PlacedBuilding(item_id=2304, model_index=66, x=os.getpid(), y=0),)
+    )
+
+
+def test_isolated_attempt_runs_in_a_fresh_process() -> None:
+    attempt = isolated_attempt(_process_identity_placement)
+
+    assert attempt.placement is not None
+    assert attempt.placement.buildings[0].x != os.getpid()
+
+
 def _grade(
     lay_out: object, judge: object = None, encode: object = None
 ) -> Sample:
     return sample_once(
         url_id="u",
         candidate="c",
-        strategy="spine",
+        strategy="sequence-pair",
         budget_s=1.0,
         trial=0,
         lay_out=lay_out,  # type: ignore[arg-type]
@@ -575,6 +608,8 @@ def test_an_accepted_placement_is_measured_not_asked() -> None:
     assert s.area == 16
     assert s.buildings == 1
     assert s.blueprint == "H4sI"
+    assert s.cpu_seconds is not None and s.cpu_seconds >= 0
+    assert s.peak_rss_mb is not None and s.peak_rss_mb > 0
 
 
 # --------------------------------------------------------------------------
@@ -596,7 +631,7 @@ def test_a_covered_url_still_reports_a_mostly_broken_candidate_frontier() -> Non
         ]
     )
     assert (trial.candidates_valid, trial.candidates_total) == (1, 3)
-    cell = Cell("u", "spine", 1.0, (trial,))
+    cell = Cell("u", "sequence-pair", 1.0, (trial,))
     assert cell.always
     assert cell.candidate_health == "only 1/3 candidates laid out"
     assert "only 1/3 candidates laid out" in "\n".join(
@@ -606,7 +641,7 @@ def test_a_covered_url_still_reports_a_mostly_broken_candidate_frontier() -> Non
 
 def test_the_table_names_the_failure_kind_per_strategy() -> None:
     trials = [
-        _trial(Outcome.VALID, url="a", strategy="spine", area=1000),
+        _trial(Outcome.VALID, url="a", strategy="sequence-pair", area=1000),
         _trial(Outcome.INVALID, url="a", strategy="freeform", detail="flow.lane_sourced"),
     ]
     text = "\n".join(render_text(_comparison(trials, ["a"])))
@@ -617,7 +652,7 @@ def test_the_table_names_the_failure_kind_per_strategy() -> None:
 def test_composition_is_reported_so_the_reason_for_a_win_is_visible() -> None:
     trials = [
         _trial(
-            Outcome.VALID, url="a", strategy="spine", area=1000,
+            Outcome.VALID, url="a", strategy="sequence-pair", area=1000,
             belts=800, direct=0, buildings=900,
         ),
         _trial(
@@ -652,3 +687,64 @@ def test_the_json_dump_never_carries_an_area_for_a_failure() -> None:
     assert rows[0]["area"] == 1000
     assert rows[1]["area"] is None
     assert rows[1]["outcome"] == "invalid"
+
+
+def test_cpu_and_peak_rss_survive_json_and_shipping() -> None:
+    sample = Sample(
+        url_id="u",
+        candidate="c",
+        strategy="freeform",
+        budget_s=1.0,
+        trial=0,
+        outcome=Outcome.VALID,
+        seconds=0.5,
+        metrics=_metrics(100),
+        buildings=1,
+        cpu_seconds=0.25,
+        peak_rss_mb=123.5,
+    )
+    meta = RunMeta(
+        ("small",),
+        (1.0,),
+        repeat=1,
+        candidates=1,
+        power=False,
+        urls=1,
+        a_name="freeform",
+        b_name="sequence-pair",
+    )
+
+    dumped = to_json([sample], meta, CrossSummary(available=False, reason="test"))
+    loaded = samples_from_json(dumped)
+    trial = trials_from(loaded)[0]
+
+    dumped_meta = dumped["meta"]
+    dumped_rows = dumped["samples"]
+    assert isinstance(dumped_meta, dict)
+    assert isinstance(dumped_rows, list)
+    assert dumped_meta["a"] == "freeform"
+    assert dumped_meta["b"] == "sequence-pair"
+    assert dumped_rows[0]["cpu_seconds"] == 0.25
+    assert dumped_rows[0]["peak_rss_mb"] == 123.5
+    assert trial.cpu_seconds == pytest.approx(0.25)
+    assert trial.peak_rss_mb == pytest.approx(123.5)
+
+
+def test_old_json_without_resource_metrics_still_parses() -> None:
+    dumped = to_json(
+        [_sample(Outcome.VALID, area=100, buildings=1)],
+        RunMeta(("small",), (1.0,), repeat=1, candidates=1, power=False, urls=1),
+        CrossSummary(available=False, reason="test"),
+    )
+    rows = dumped["samples"]
+    assert isinstance(rows, list)
+    row = rows[0]
+    del row["cpu_seconds"]
+    del row["peak_rss_mb"]
+
+    loaded = samples_from_json(dumped)
+
+    assert loaded[0].cpu_seconds is None
+    assert loaded[0].peak_rss_mb is None
+
+

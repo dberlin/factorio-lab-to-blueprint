@@ -38,9 +38,14 @@ the aggregation logic is unit-testable without running CP-SAT.
 
 from __future__ import annotations
 
+import math
+import multiprocessing
+import resource
 import statistics
+import sys
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field, replace
 from enum import Enum
 
@@ -121,6 +126,12 @@ class Sample:
     blueprint: str = ""
     #: Refusal reason, failing checks, or exception text.  Empty when VALID.
     detail: str = ""
+    #: Process CPU consumed by this attempt. ``None`` only for legacy JSON.
+    cpu_seconds: float | None = None
+    #: Process peak resident set after this attempt, in MiB. ``None`` for legacy JSON.
+    peak_rss_mb: float | None = None
+    #: Power mode is part of the persisted sample identity.
+    power: bool = False
 
     def __post_init__(self) -> None:
         valid = self.outcome is Outcome.VALID
@@ -153,6 +164,143 @@ class Sample:
         )
 
 
+def _peak_rss_mb() -> float:
+    """Return process peak RSS in MiB on the platforms supported by the harness."""
+    raw = float(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+    return raw / (1024 * 1024) if sys.platform == "darwin" else raw / 1024
+
+
+@dataclass(frozen=True, slots=True)
+class MeasuredAttempt:
+    """A layout result measured inside the process that performed the solve."""
+
+    placement: Placement | None
+    failure: Outcome | None
+    detail: str
+    seconds: float
+    cpu_seconds: float
+    peak_rss_mb: float
+
+
+def measure_attempt(lay_out: Callable[[], Placement]) -> MeasuredAttempt:
+    """Measure one solve in the current process, excluding caller overhead."""
+    started = time.perf_counter()
+    cpu_started = time.process_time()
+    try:
+        placement = lay_out()
+    except NoValidLayout as exc:
+        return MeasuredAttempt(
+            None,
+            Outcome.REFUSED,
+            exc.reason,
+            time.perf_counter() - started,
+            time.process_time() - cpu_started,
+            _peak_rss_mb(),
+        )
+    except Exception as exc:  # noqa: BLE001 - one bad cell must not kill the sweep
+        return MeasuredAttempt(
+            None,
+            Outcome.ERROR,
+            f"{type(exc).__name__}: {exc}",
+            time.perf_counter() - started,
+            time.process_time() - cpu_started,
+            _peak_rss_mb(),
+        )
+    return MeasuredAttempt(
+        placement,
+        None,
+        "",
+        time.perf_counter() - started,
+        time.process_time() - cpu_started,
+        _peak_rss_mb(),
+    )
+
+
+def isolated_attempt(lay_out: Callable[[], Placement]) -> MeasuredAttempt:
+    """Measure one attempt in a newly spawned process with an uncontaminated RSS."""
+    context = multiprocessing.get_context("spawn")
+    with ProcessPoolExecutor(max_workers=1, mp_context=context) as pool:
+        return pool.submit(measure_attempt, lay_out).result()
+
+
+def sample_measured(
+    *,
+    url_id: str,
+    candidate: str,
+    strategy: str,
+    budget_s: float,
+    trial: int,
+    attempt: MeasuredAttempt,
+    judge: Callable[[Placement], tuple[bool, tuple[str, ...]]],
+    encode: Callable[[Placement], str],
+    power: bool = False,
+) -> Sample:
+    """Grade a measured attempt without changing its child-process resource data."""
+    if attempt.failure is not None:
+        return Sample(
+            url_id,
+            candidate,
+            strategy,
+            budget_s,
+            trial,
+            attempt.failure,
+            attempt.seconds,
+            detail=attempt.detail,
+            cpu_seconds=attempt.cpu_seconds,
+            peak_rss_mb=attempt.peak_rss_mb,
+            power=power,
+        )
+    placement = attempt.placement
+    if placement is None:
+        raise AssertionError("a successful measured attempt must carry a placement")
+    ok, checks = judge(placement)
+    if not ok:
+        return Sample(
+            url_id,
+            candidate,
+            strategy,
+            budget_s,
+            trial,
+            Outcome.INVALID,
+            attempt.seconds,
+            detail=",".join(checks) or "unknown check",
+            cpu_seconds=attempt.cpu_seconds,
+            peak_rss_mb=attempt.peak_rss_mb,
+            power=power,
+        )
+    try:
+        blueprint = encode(placement)
+    except Exception as exc:  # noqa: BLE001
+        return Sample(
+            url_id,
+            candidate,
+            strategy,
+            budget_s,
+            trial,
+            Outcome.CROSSFAIL,
+            attempt.seconds,
+            detail=f"encode: {type(exc).__name__}: {exc}",
+            cpu_seconds=attempt.cpu_seconds,
+            peak_rss_mb=attempt.peak_rss_mb,
+            power=power,
+        )
+    return Sample(
+        url_id,
+        candidate,
+        strategy,
+        budget_s,
+        trial,
+        Outcome.VALID,
+        attempt.seconds,
+        metrics=measure(placement),
+        buildings=len(placement.buildings),
+        blueprint=blueprint,
+        cpu_seconds=attempt.cpu_seconds,
+        peak_rss_mb=attempt.peak_rss_mb,
+        power=power,
+    )
+
+
 def sample_once(
     *,
     url_id: str,
@@ -163,55 +311,19 @@ def sample_once(
     lay_out: Callable[[], Placement],
     judge: Callable[[Placement], tuple[bool, tuple[str, ...]]],
     encode: Callable[[Placement], str],
+    power: bool = False,
 ) -> Sample:
-    """Run one attempt and grade it.
-
-    The three callables are injected rather than imported so the grading logic
-    can be tested without CP-SAT, and so the driver decides what "valid" means
-    (in particular whether the ``BuildSpec`` and id map are passed to the
-    validator -- without them nine spec-conformance checks silently skip, and a
-    build that never ran its throughput checks reads as clean).
-    """
-    started = time.perf_counter()
-    try:
-        placement = lay_out()
-    except NoValidLayout as exc:
-        return Sample(
-            url_id, candidate, strategy, budget_s, trial,
-            Outcome.REFUSED, time.perf_counter() - started, detail=exc.reason,
-        )
-    except Exception as exc:  # noqa: BLE001 - one bad cell must not kill the sweep
-        return Sample(
-            url_id, candidate, strategy, budget_s, trial,
-            Outcome.ERROR, time.perf_counter() - started,
-            detail=f"{type(exc).__name__}: {exc}",
-        )
-    elapsed = time.perf_counter() - started
-
-    ok, checks = judge(placement)
-    if not ok:
-        return Sample(
-            url_id, candidate, strategy, budget_s, trial,
-            Outcome.INVALID, elapsed, detail=",".join(checks) or "unknown check",
-        )
-
-    # An encode failure on a placement the validator accepted is the same class
-    # of news as a decoder rejection -- we believed it was shippable and it is
-    # not -- so it is graded the same way rather than as a crash.
-    try:
-        blueprint = encode(placement)
-    except Exception as exc:  # noqa: BLE001
-        return Sample(
-            url_id, candidate, strategy, budget_s, trial,
-            Outcome.CROSSFAIL, elapsed, detail=f"encode: {type(exc).__name__}: {exc}",
-        )
-
-    return Sample(
-        url_id, candidate, strategy, budget_s, trial,
-        Outcome.VALID, elapsed,
-        metrics=measure(placement),
-        buildings=len(placement.buildings),
-        blueprint=blueprint,
+    """Measure and grade one attempt in the current process."""
+    return sample_measured(
+        url_id=url_id,
+        candidate=candidate,
+        strategy=strategy,
+        budget_s=budget_s,
+        trial=trial,
+        attempt=measure_attempt(lay_out),
+        judge=judge,
+        encode=encode,
+        power=power,
     )
 
 
@@ -228,6 +340,23 @@ class CrossSummary:
     passed: int = 0
     demoted: tuple[str, ...] = ()
     reason: str = ""
+    complete: bool = True
+
+    def __post_init__(self) -> None:
+        if type(self.available) is not bool:
+            raise ValueError("cross-validation availability must be a bool")
+        if type(self.complete) is not bool:
+            raise ValueError("cross-validation completeness must be a bool")
+        if any(type(value) is not int or value < 0 for value in (self.checked, self.passed)):
+            raise ValueError("cross-validation counts must be non-negative integers")
+        if self.passed > self.checked:
+            raise ValueError("cross-validation passes cannot exceed checked blueprints")
+        if not isinstance(self.demoted, tuple) or any(
+            not isinstance(item, str) or not item for item in self.demoted
+        ):
+            raise ValueError("cross-validation demotions must be non-empty strings in a tuple")
+        if not isinstance(self.reason, str):
+            raise ValueError("cross-validation reason must be a string")
 
     def summary(self) -> str:
         if not self.available:
@@ -328,6 +457,11 @@ class Trial:
     #: frontier is to have alternatives when one of them will not lay out.
     candidates_valid: int = 0
     candidates_total: int = 0
+    #: Sum of candidate CPU times. ``None`` when loaded legacy samples lack it.
+    cpu_seconds: float | None = None
+    #: Largest candidate process peak RSS. ``None`` for legacy samples.
+    peak_rss_mb: float | None = None
+    power: bool = False
 
     @property
     def area(self) -> int | None:
@@ -340,14 +474,34 @@ def ship(samples: Sequence[Sample]) -> Trial:
         raise ValueError("ship() needs at least one sample")
     first = samples[0]
     total = sum(s.seconds for s in samples)
+    cpu_seconds = (
+        sum(s.cpu_seconds for s in samples if s.cpu_seconds is not None)
+        if all(s.cpu_seconds is not None for s in samples)
+        else None
+    )
+    peak_rss_mb = (
+        max(s.peak_rss_mb for s in samples if s.peak_rss_mb is not None)
+        if all(s.peak_rss_mb is not None for s in samples)
+        else None
+    )
     winners = [s for s in samples if s.outcome is Outcome.VALID and s.metrics is not None]
     if winners:
         best = min(winners, key=lambda s: s.metrics.area if s.metrics else 0)
         return Trial(
-            first.url_id, first.strategy, first.budget_s, first.trial,
-            Outcome.VALID, best.candidate, total,
-            metrics=best.metrics, buildings=best.buildings,
-            candidates_valid=len(winners), candidates_total=len(samples),
+            first.url_id,
+            first.strategy,
+            first.budget_s,
+            first.trial,
+            Outcome.VALID,
+            best.candidate,
+            total,
+            metrics=best.metrics,
+            buildings=best.buildings,
+            candidates_valid=len(winners),
+            candidates_total=len(samples),
+            cpu_seconds=cpu_seconds,
+            peak_rss_mb=peak_rss_mb,
+            power=first.power,
         )
 
     by_outcome = {s.outcome: s for s in reversed(samples)}
@@ -356,9 +510,19 @@ def ship(samples: Sequence[Sample]) -> Trial:
             worst = by_outcome[outcome]
             details = sorted({s.detail for s in samples if s.outcome is outcome and s.detail})
             return Trial(
-                first.url_id, first.strategy, first.budget_s, first.trial,
-                outcome, worst.candidate, total, detail="; ".join(details),
-                candidates_valid=0, candidates_total=len(samples),
+                first.url_id,
+                first.strategy,
+                first.budget_s,
+                first.trial,
+                outcome,
+                worst.candidate,
+                total,
+                detail="; ".join(details),
+                candidates_valid=0,
+                candidates_total=len(samples),
+                cpu_seconds=cpu_seconds,
+                peak_rss_mb=peak_rss_mb,
+                power=first.power,
             )
     raise AssertionError(f"unreachable: no outcome among {[s.outcome for s in samples]}")
 
@@ -726,11 +890,18 @@ def compare(
 
 
 def trials_from(samples: Sequence[Sample]) -> list[Trial]:
-    """Group samples by ``(url, strategy, budget, trial)`` and ship each group."""
-    groups: dict[tuple[str, str, float, int], list[Sample]] = {}
-    for s in samples:
-        groups.setdefault((s.url_id, s.strategy, s.budget_s, s.trial), []).append(s)
-    return [ship(g) for g in groups.values()]
+    """Group samples by ``(url, strategy, budget, trial, power)`` and ship."""
+    groups: dict[tuple[str, str, float, int, bool], list[Sample]] = {}
+    for sample in samples:
+        key = (
+            sample.url_id,
+            sample.strategy,
+            sample.budget_s,
+            sample.trial,
+            sample.power,
+        )
+        groups.setdefault(key, []).append(sample)
+    return [ship(group) for group in groups.values()]
 
 
 def _belts(t: Trial) -> int:
@@ -850,6 +1021,8 @@ class RunMeta:
     urls: int
     started: str = ""
     seconds: float = 0.0
+    a_name: str = "sequence-pair"
+    b_name: str = "freeform"
 
     def lines(self) -> list[str]:
         return [
@@ -861,9 +1034,7 @@ class RunMeta:
         ]
 
 
-def render_markdown(
-    comparisons: Sequence[Comparison], meta: RunMeta, cross: CrossSummary
-) -> str:
+def render_markdown(comparisons: Sequence[Comparison], meta: RunMeta, cross: CrossSummary) -> str:
     """The generated results section, for pasting into a docs report."""
     out = ["# A/B density comparison (generated)", ""]
     out += [f"- {line}" for line in meta.lines()]
@@ -895,9 +1066,7 @@ def render_markdown(
     return "\n".join(out)
 
 
-def to_json(
-    samples: Sequence[Sample], meta: RunMeta, cross: CrossSummary
-) -> dict[str, object]:
+def to_json(samples: Sequence[Sample], meta: RunMeta, cross: CrossSummary) -> dict[str, object]:
     """Machine-readable dump.  Blueprints are omitted -- they are large and the
     verdict must not depend on re-reading them."""
     return {
@@ -910,9 +1079,12 @@ def to_json(
             "urls": meta.urls,
             "started": meta.started,
             "seconds": meta.seconds,
+            "a": meta.a_name,
+            "b": meta.b_name,
         },
         "crossvalidation": {
             "available": cross.available,
+            "complete": cross.complete,
             "checked": cross.checked,
             "passed": cross.passed,
             "demoted": list(cross.demoted),
@@ -926,7 +1098,10 @@ def to_json(
                 "budget_s": s.budget_s,
                 "trial": s.trial,
                 "outcome": s.outcome.value,
+                "power": s.power,
                 "seconds": round(s.seconds, 3),
+                "cpu_seconds": round(s.cpu_seconds, 6) if s.cpu_seconds is not None else None,
+                "peak_rss_mb": round(s.peak_rss_mb, 3) if s.peak_rss_mb is not None else None,
                 "area": s.area,
                 "used_tiles": s.metrics.used_tiles if s.metrics else None,
                 "buildings": s.buildings or None,
@@ -938,3 +1113,162 @@ def to_json(
             for s in samples
         ],
     }
+
+
+def _number(row: Mapping[str, object], key: str, *, required: bool = True) -> float | None:
+    value = row.get(key)
+    if value is None and not required:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"sample {key!r} must be numeric")
+    return float(value)
+
+
+def _required_string(row: Mapping[str, object], key: str) -> str:
+    value = row.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"sample {key!r} must be a nonempty string")
+    return value
+
+
+def _required_number(row: Mapping[str, object], key: str) -> float:
+    value = _number(row, key)
+    if value is None:  # ``required=True`` makes this defensive, and narrows the type.
+        raise ValueError(f"sample {key!r} must be numeric")
+    return value
+
+
+def _nonnegative_integer(value: object, label: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{label} must be a non-negative integer")
+    if isinstance(value, float):
+        if not math.isfinite(value) or not value.is_integer():
+            raise ValueError(f"{label} must be a non-negative integer")
+        number = int(value)
+    else:
+        number = value
+    if number < 0:
+        raise ValueError(f"{label} must be a non-negative integer")
+    return number
+
+
+_MISSING = object()
+
+
+def _integer(
+    row: Mapping[str, object],
+    key: str,
+    default: object = _MISSING,
+) -> int:
+    value = row.get(key, default)
+    if value is _MISSING:
+        raise ValueError(f"sample {key!r} must be a non-negative integer")
+    return _nonnegative_integer(value, f"sample {key!r}")
+
+
+def cross_summary_from_json(document: Mapping[str, object]) -> CrossSummary:
+    """Parse independent decoder evidence without treating absence as success."""
+    raw = document.get("crossvalidation")
+    if raw is None:
+        return CrossSummary(available=False, reason="cross-validation evidence missing")
+    if not isinstance(raw, dict):
+        raise ValueError("result JSON crossvalidation must be an object")
+    available = raw.get("available")
+    if type(available) is not bool:
+        raise ValueError("cross-validation 'available' must be a boolean")
+    complete = raw.get("complete", True)
+    if type(complete) is not bool:
+        raise ValueError("cross-validation 'complete' must be a boolean")
+    demoted = raw.get("demoted", [])
+    if not isinstance(demoted, list) or any(
+        not isinstance(item, str) or not item for item in demoted
+    ):
+        raise ValueError("cross-validation 'demoted' must be a list of non-empty strings")
+    reason = raw.get("reason", "")
+    if not isinstance(reason, str):
+        raise ValueError("cross-validation 'reason' must be a string")
+    return CrossSummary(
+        available=available,
+        complete=complete,
+        checked=_nonnegative_integer(
+            raw.get("checked", 0),
+            "cross-validation 'checked'",
+        ),
+        passed=_nonnegative_integer(
+            raw.get("passed", 0),
+            "cross-validation 'passed'",
+        ),
+        demoted=tuple(demoted),
+        reason=reason,
+    )
+
+
+def _parsed_buildings(row: Mapping[str, object], outcome: Outcome) -> int:
+    if row.get("buildings") is None:
+        if outcome is Outcome.VALID:
+            raise ValueError("sample 'buildings' must be numeric")
+        return 0
+    return _integer(row, "buildings")
+
+
+def _boolean(row: Mapping[str, object], key: str, default: bool) -> bool:
+    value = row.get(key, default)
+    if not isinstance(value, bool):
+        raise ValueError(f"sample {key!r} must be a boolean")
+    return value
+
+
+def samples_from_json(document: Mapping[str, object]) -> list[Sample]:
+    """Parse persisted samples, accepting documents written before CPU/RSS metrics."""
+    raw_samples = document.get("samples")
+    if not isinstance(raw_samples, list):
+        raise ValueError("result JSON must contain a samples list")
+    raw_meta = document.get("meta", {})
+    if not isinstance(raw_meta, dict):
+        raise ValueError("result JSON meta must be an object")
+    meta_power = _boolean(raw_meta, "power", False)
+    samples: list[Sample] = []
+    for raw in raw_samples:
+        if not isinstance(raw, dict):
+            raise ValueError("every persisted sample must be an object")
+        row: Mapping[str, object] = raw
+        try:
+            outcome = Outcome(str(row["outcome"]))
+            raw_area = row.get("area")
+            area = None if raw_area is None else _nonnegative_integer(raw_area, "sample 'area'")
+            metrics = None
+            if outcome is Outcome.VALID:
+                if area is None:
+                    raise ValueError("a persisted VALID sample must carry area")
+                metrics = Metrics(
+                    area=area,
+                    used_tiles=_integer(row, "used_tiles"),
+                    width=_integer(row, "width", area),
+                    height=_integer(row, "height", 1),
+                    machines=_integer(row, "machines"),
+                    belt_tiles=_integer(row, "belt_tiles"),
+                    sorters=_integer(row, "sorters", 0),
+                    direct_inserts=_integer(row, "direct_inserts"),
+                    towers=_integer(row, "towers", 0),
+                    altitude_levels=_integer(row, "altitude_levels", 1),
+                )
+            samples.append(
+                Sample(
+                    url_id=_required_string(row, "url_id"),
+                    candidate=_required_string(row, "candidate"),
+                    strategy=_required_string(row, "strategy"),
+                    budget_s=_required_number(row, "budget_s"),
+                    trial=_integer(row, "trial"),
+                    outcome=outcome,
+                    seconds=_required_number(row, "seconds"),
+                    metrics=metrics,
+                    buildings=_parsed_buildings(row, outcome),
+                    detail=str(row.get("detail", "")),
+                    cpu_seconds=_number(row, "cpu_seconds", required=False),
+                    peak_rss_mb=_number(row, "peak_rss_mb", required=False),
+                    power=_boolean(row, "power", meta_power),
+                )
+            )
+        except KeyError as exc:
+            raise ValueError(f"persisted sample lacks {exc.args[0]!r}") from exc
+    return samples

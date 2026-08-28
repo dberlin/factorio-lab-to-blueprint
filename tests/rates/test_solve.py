@@ -6,6 +6,7 @@ import importlib
 import warnings
 from collections.abc import Mapping, Sequence
 from fractions import Fraction
+from typing import Protocol, TypeGuard
 
 import pytest
 from ortools.linear_solver import pywraplp  # type: ignore[import-untyped]
@@ -26,8 +27,50 @@ from flab2bp.rates.solve import (
 )
 from flab2bp.spec import ProliferatorMode
 
-solve_module = importlib.import_module("flab2bp.rates.solve")
 
+class _ContinuousLp(Protocol):
+    def __call__(
+        self,
+        columns: Sequence[AdjustedRecipe],
+        internal_items: Sequence[str],
+        demand: Mapping[str, Fraction],
+        *,
+        objective: object | None = None,
+        time_limit_s: float,
+    ) -> list[float]: ...
+
+
+class _Milp(Protocol):
+    def __call__(
+        self,
+        columns: Sequence[AdjustedRecipe],
+        internal_items: Sequence[str],
+        demand: Mapping[str, Fraction],
+        *,
+        objective: object | None = None,
+        time_limit_s: float,
+    ) -> tuple[list[float], list[float]]: ...
+
+
+class _SolveModule(Protocol):
+    _run_continuous_lp: _ContinuousLp
+    _run_milp: _Milp
+
+
+def _is_solve_module(module: object) -> TypeGuard[_SolveModule]:
+    return callable(getattr(module, "_run_continuous_lp", None)) and callable(
+        getattr(module, "_run_milp", None)
+    )
+
+
+def _load_solve_module() -> _SolveModule:
+    module: object = importlib.import_module("flab2bp.rates.solve")
+    if not _is_solve_module(module):
+        raise RuntimeError("flab2bp.rates.solve lacks its solver seams")
+    return module
+
+
+solve_module = _load_solve_module()
 
 EXAMPLE_URL = (
     "https://factoriolab.github.io/dsp/flow"
@@ -374,6 +417,110 @@ def test_products_policy_rates_are_exact_balanced_and_within_capacity(
         assert available >= rate
 
 
+COST_URL = (
+    "https://factoriolab.github.io/dsp/flow?o=super-magnetic-ring*60"
+    "&ibe=conveyor-belt-2"
+    "&mmr=arc-smelter~assembling-machine-2~chemical-plant~matrix-lab"
+    "&mps=proliferator-2-products&cfa=100&cma=100&cfp=100&csu=100&v=11"
+)
+
+
+def test_omitted_costs_match_factoriolab_defaults(
+    data: Dataset,
+    plain: RateSolution,
+) -> None:
+    explicit_defaults = EXAMPLE_URL.replace(
+        "&v=11",
+        "&cfa=1&cma=1&cfp=1&csu=0&v=11",
+    )
+
+    assert solve(data, parse_url(explicit_defaults)) == plain
+
+
+
+def test_surplus_cost_reaches_downstream_coproduct_consumers(
+    data: Dataset,
+) -> None:
+    request = parse_url(
+        "https://factoriolab.github.io/dsp/flow"
+        "?o=antimatter*60&cma=0&cfp=0&csu=1&v=11"
+    )
+
+    result = solve(data, request, prove_minimal=False)
+
+    assert sum(result.surplus.values(), Fraction()) < 1
+
+def test_factoriolab_costs_weight_machine_footprint_and_surplus(
+    data: Dataset,
+) -> None:
+    from flab2bp.rates.solve import (
+        _columns,
+        _objective_coefficients,
+        _resolve_chain,
+    )
+
+    request = parse_url(COST_URL)
+    targets = target_rates(data, request)
+    excluded = _excluded_recipes(data, request)
+    producers, _external = _resolve_chain(data, targets, excluded)
+    columns = _columns(
+        data,
+        producers,
+        request,
+        ProliferatorTier.NONE,
+        None,
+        None,
+    )
+    coefficients = _objective_coefficients(data, request, columns)
+    index = next(
+        i for i, column in enumerate(columns)
+        if column.recipe_id == "super-magnetic-ring"
+    )
+    column = columns[index]
+
+    assert coefficients.machine[index] == 100 * column.footprint_area
+    net_items = sum(
+        (
+            column.outputs_per_craft.get(item_id, Fraction())
+            - column.inputs_per_craft.get(item_id, Fraction())
+            for item_id in coefficients.items
+        ),
+        Fraction(),
+    )
+    assert coefficients.surplus[index] == 100 * net_items
+    assert coefficients.continuous[index] == (
+        coefficients.machine[index] / column.crafts_per_second
+        + coefficients.surplus[index]
+    )
+
+
+def test_factoriolab_recipe_factor_scales_declared_recipe_cost(
+    data: Dataset,
+) -> None:
+    from flab2bp.rates.adjust import adjust, select_machine
+    from flab2bp.rates.solve import _objective_coefficients
+
+    request = parse_url(
+        "https://factoriolab.github.io/dsp/flow?o=antimatter*1&cfa=100&v=11"
+    )
+    recipe = data.recipe("mass-energy-storage")
+    column = adjust(
+        data,
+        recipe,
+        select_machine(data, recipe, request.machine_rank_ids),
+    )
+    coefficients = _objective_coefficients(data, request, [column])
+
+    assert recipe.cost is not None
+    assert coefficients.machine == (
+        sum(column.outputs_per_craft.values(), Fraction())
+        * column.crafts_per_second
+        * recipe.cost
+        * 100,
+    )
+
+
+
 def test_derivation_ignores_solver_float_noise(data: Dataset) -> None:
     """The derivation must depend on the solver's structure, never its floats.
 
@@ -704,6 +851,7 @@ def test_default_solve_uses_the_fixed_charge_oracle(
         internal_items: Sequence[str],
         demand: Mapping[str, Fraction],
         *,
+        objective: object | None = None,
         time_limit_s: float,
     ) -> tuple[list[float], list[float]]:
         nonlocal calls
@@ -712,6 +860,7 @@ def test_default_solve_uses_the_fixed_charge_oracle(
             columns,
             internal_items,
             demand,
+            objective=objective,
             time_limit_s=time_limit_s,
         )
 

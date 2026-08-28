@@ -5,15 +5,20 @@ from __future__ import annotations
 import dataclasses
 import json
 from fractions import Fraction
+from typing import Final
+
+from pydantic import TypeAdapter
 
 from flab2bp import pipeline
 from flab2bp.layout.validate import Finding, Severity
-from flab2bp.web.payload import describe, refusal
+from flab2bp.web.payload import Json, describe, refusal
+
+_JSON_ADAPTER: Final[TypeAdapter[Json]] = TypeAdapter(Json)
 
 
 def test_it_is_actually_serialisable(small_build: pipeline.Build) -> None:
     """A ``Fraction`` anywhere in here would raise, which is the point of the test."""
-    assert json.loads(json.dumps(describe(small_build)))["valid"] is True
+    assert _JSON_ADAPTER.validate_json(json.dumps(describe(small_build)))["valid"] is True
 
 
 def test_the_blueprint_and_the_shape_of_the_build(small_build: pipeline.Build) -> None:
@@ -44,9 +49,11 @@ def test_rates_keep_the_exact_fraction(small_build: pipeline.Build) -> None:
     outputs = describe(small_build)["outputs"]
     assert isinstance(outputs, dict)
     for item, rate in small_build.spec.outputs.items():
-        assert outputs[item]["exact"] == str(rate)
-        assert Fraction(outputs[item]["exact"]) == rate
-        assert outputs[item]["per_minute"] == float(rate * 60)
+        described_rate = outputs[item]
+        assert isinstance(described_rate, dict)
+        assert described_rate["exact"] == str(rate)
+        assert Fraction(str(described_rate["exact"])) == rate
+        assert described_rate["per_minute"] == float(rate * 60)
 
 
 def test_an_invalid_build_withholds_the_string(small_build: pipeline.Build) -> None:
@@ -66,13 +73,21 @@ def test_an_invalid_build_withholds_the_string(small_build: pipeline.Build) -> N
     body = describe(broken)
     assert body["blueprint"] is None
     assert body["valid"] is False
-    assert body["report"]["errors"] == [{"check": "invented", "message": "for the test"}]
+    report = body["report"]
+    assert isinstance(report, dict)
+    assert report["errors"] == [{"check": "invented", "message": "for the test"}]
 
     # ...and it IS offered when the caller says so, mirroring --allow-invalid.
     assert describe(broken, allow_invalid=True)["blueprint"] == small_build.blueprint
 
 
 def test_a_refusal_keeps_one_line_per_pair() -> None:
-    body = refusal(["spine/a: too tall", "freeform/a: unroutable"], message="no valid layout")
-    assert body["reasons"] == ["spine/a: too tall", "freeform/a: unroutable"]
+    body = refusal(
+        ["sequence-pair/a: too tall", "sequence-pair/b: unroutable"],
+        message="no valid layout",
+    )
+    assert body["reasons"] == [
+        "sequence-pair/a: too tall",
+        "sequence-pair/b: unroutable",
+    ]
     assert body["message"] == "no valid layout"

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
+from typing import TypedDict
+
+from pydantic import TypeAdapter
 
 from flab2bp.bench.regression import (
     AREA_TOLERANCE,
@@ -14,9 +16,20 @@ from flab2bp.bench.regression import (
 from flab2bp.bench.types import CellResult
 
 
+class _BaselineEntry(TypedDict):
+    area: int
+
+
+class _BaselinePayload(TypedDict):
+    entries: dict[str, _BaselineEntry]
+
+
+_BASELINE_ADAPTER = TypeAdapter(_BaselinePayload)
+
+
 def _cell(url_id: str, *, area: int, valid: bool = True) -> CellResult:
     return CellResult(
-        strategy="spine",
+        strategy="sequence-pair",
         url_id=url_id,
         candidate="free-proliferation",
         power=True,
@@ -87,7 +100,7 @@ def test_improvement_notices_but_does_not_fail(tmp_path: Path) -> None:
 def test_baseline_roundtrips_as_json(tmp_path: Path) -> None:
     baseline = tmp_path / "baseline.json"
     write_baseline([_cell("u1", area=100), _cell("u2", area=200)], baseline)
-    payload = json.loads(baseline.read_text())
+    payload = _BASELINE_ADAPTER.validate_json(baseline.read_bytes())
     assert payload["entries"]["u1"]["area"] == 100
     assert payload["entries"]["u2"]["area"] == 200
 

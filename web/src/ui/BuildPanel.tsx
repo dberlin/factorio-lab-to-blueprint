@@ -2,10 +2,9 @@
  * Paste a FactorioLab URL, get a blueprint, see it rendered.
  *
  * The whole panel is shaped by one fact: a build takes seconds to minutes, and
- * the wall clock is a multiple of the per-layout budget because `best` lays out
- * every candidate with both strategies. So nothing here waits on a request —
- * the job is submitted, and then polled, and the panel says where it is the
- * whole time rather than showing a spinner and hoping.
+ * the wall clock is a multiple of the per-layout budget. So nothing here waits
+ * on a request — the job is submitted, and then polled, and the panel says
+ * where it is the whole time rather than showing a spinner and hoping.
  */
 import { useEffect, useId, useRef, useState } from 'react';
 import {
@@ -13,6 +12,8 @@ import {
   BuildRequestError,
   DEFAULT_OPTIONS,
   type Job,
+  ProliferatorTier,
+  RequestStrategy,
   runBuild,
 } from '../api/build';
 import { useBlueprint } from '../state/BlueprintProvider';
@@ -32,6 +33,7 @@ export function BuildPanel() {
   const strategyId = useId();
   const candidatesId = useId();
   const budgetId = useId();
+  const proliferatorTierId = useId();
   const flowId = useId();
 
   // A build outlives the panel if the page changes under it; aborting on
@@ -136,11 +138,29 @@ export function BuildPanel() {
         <select
           id={strategyId}
           value={options.strategy}
-          onChange={(e) => set('strategy', e.target.value as BuildOptions['strategy'])}
+          onChange={(event) => {
+            const strategy = RequestStrategy.safeParse(event.target.value);
+            if (strategy.success) set('strategy', strategy.data);
+          }}
         >
-          <option value="best">best (both, smallest valid wins)</option>
-          <option value="spine">spine</option>
+          <option value="best">best (freeform + sequence-pair, smallest valid wins)</option>
           <option value="freeform">freeform</option>
+          <option value="sequence-pair">sequence-pair</option>
+        </select>
+
+        <label htmlFor={proliferatorTierId}>Proliferator tier</label>
+        <select
+          id={proliferatorTierId}
+          value={options.proliferator_tier}
+          onChange={(event) => {
+            const tier = ProliferatorTier.safeParse(event.target.value);
+            if (tier.success) set('proliferator_tier', tier.data);
+          }}
+        >
+          <option value="auto">URL selection (Mk.III if unspecified)</option>
+          <option value="1">Mk.I</option>
+          <option value="2">Mk.II</option>
+          <option value="3">Mk.III</option>
         </select>
 
         <label htmlFor={candidatesId}>Candidates</label>
@@ -226,9 +246,10 @@ export function BuildPanel() {
       </div>
 
       <p className="note">
-        Budget is per layout, and <code>best</code> lays out every candidate with both strategies —
-        so {options.candidates} × {options.strategy === 'best' ? 2 : 1} × {options.budget_s}s is up
-        to {options.candidates * (options.strategy === 'best' ? 2 : 1) * options.budget_s}s of
+        Budget is per layout. <code>best</code> runs two layouts per candidate, so{' '}
+        {options.candidates} candidates × {options.strategy === 'best' ? 2 : 1} strategies ×{' '}
+        {options.budget_s}s is up to{' '}
+        {options.candidates * (options.strategy === 'best' ? 2 : 1) * options.budget_s}s of
         solving, plus rates, validation and encoding on top.
       </p>
 

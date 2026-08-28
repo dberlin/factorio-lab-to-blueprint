@@ -1,5 +1,5 @@
 # /// script
-# requires-python = ">=3.11"
+# requires-python = ">=3.14"
 # dependencies = ["UnityPy==1.25.3", "TypeTreeGeneratorAPI"]
 # ///
 """Extract the current DSP recipe and item tables from a game install.
@@ -98,7 +98,7 @@ def load_existing_colors(path: str) -> dict[int, int]:
     try:
         with open(path, encoding="utf-8") as fh:
             return {int(i["id"]): int(i["color"]) for i in json.load(fh) if "color" in i}
-    except (OSError, ValueError, KeyError):
+    except OSError, ValueError, KeyError:
         return {}
 
 

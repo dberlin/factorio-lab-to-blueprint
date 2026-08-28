@@ -66,6 +66,7 @@ from __future__ import annotations
 import math
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
+from fractions import Fraction
 
 from flab2bp.dsp import catalog as cat
 from flab2bp.dsp import colliders
@@ -98,6 +99,8 @@ __all__ = [
     "Attachment",
     "PortDock",
     "SlotUndetermined",
+    "addon_supply_cell",
+    "addon_supply_position",
     "assign_belt_slots",
     "assign_sorter_slots",
     "attachable_columns",
@@ -139,7 +142,9 @@ class SlotUndetermined(ValueError):
     """
 
 
-def _unrotate(dx: float, dy: float, yaw: float) -> tuple[float, float]:
+def _unrotate[Offset: (float, Fraction)](
+    dx: Offset, dy: Offset, yaw: float
+) -> tuple[Offset, Offset]:
     """``(dx, dy)`` expressed in the frame of a building turned by ``yaw``.
 
     World is ``R(yaw)`` applied to local, where ``R(90)`` maps local ``(x, y)``
@@ -163,9 +168,47 @@ def to_local(offset: tuple[float, float], yaw: float) -> tuple[float, float]:
     return _unrotate(offset[0], offset[1], yaw)
 
 
-def to_world(local: tuple[float, float], yaw: float) -> tuple[float, float]:
+def to_world[Offset: (float, Fraction)](
+    local: tuple[Offset, Offset], yaw: float
+) -> tuple[Offset, Offset]:
     """The inverse of :func:`to_local`: a building-local offset, turned into world."""
     return _unrotate(local[0], local[1], -yaw)
+
+
+def addon_supply_position(
+    item_id: int,
+    *,
+    x: int,
+    y: int,
+    z: Fraction | int,
+    yaw: float,
+    area: int = 1,
+) -> tuple[Fraction, Fraction, Fraction]:
+    """Resolve an addon's area centre in the project's exact grid frame."""
+    pose = cat.addon_supply_pose(item_id, area=area)
+    wx, wy = to_world((pose.dx, pose.dy), yaw)
+    return (Fraction(x) + wx, Fraction(y) + wy, Fraction(z) + pose.dz)
+
+
+def addon_supply_cell(
+    item_id: int,
+    *,
+    x: int,
+    y: int,
+    z: Fraction | int,
+    yaw: float,
+    area: int = 1,
+) -> tuple[int, int, int]:
+    """Resolve the canonical nearest integer belt cell for an addon area."""
+    position = addon_supply_position(
+        item_id,
+        x=x,
+        y=y,
+        z=z,
+        yaw=yaw,
+        area=area,
+    )
+    return (round(position[0]), round(position[1]), round(position[2]))
 
 
 def slot_offset(item_id: int, yaw: float, slot: int) -> tuple[float, float, float]:
@@ -1160,19 +1203,39 @@ def _assign_sorter_slots_only(
     return tuple(out)
 
 
+def _output_filter_id(
+    sorter: PlacedBuilding, buildings: Sequence[PlacedBuilding]
+) -> int:
+    """Filter a multi-product machine's output sorter to its assigned item."""
+    source = sorter.input_obj
+    if source is None or not 0 <= source < len(buildings):
+        return sorter.filter_id
+    machine = buildings[source]
+    if machine.recipe_id == 0:
+        return sorter.filter_id
+    try:
+        outputs = cat.recipe_output_item_ids(machine.recipe_id)
+    except KeyError:
+        return sorter.filter_id
+    if len(outputs) <= 1 or sorter.carries_item is None:
+        return sorter.filter_id
+    item_id = cat.get_item_id(sorter.carries_item)
+    return sorter.filter_id if item_id is None else item_id
+
+
 def emitted_sorter(
     sorter: PlacedBuilding,
     buildings: Sequence[PlacedBuilding],
     *,
     strict: bool = False,
 ) -> PlacedBuilding:
-    """One sorter with the slot indices and yaw EMISSION will give it.
+    """One sorter with all fields that EMISSION derives from layout metadata.
 
-    A strategy builds a sorter out of two anchors and two links and leaves the
-    four slot fields at the dataclass default of zero; the yaw it sets is a
-    placeholder.  :func:`assign_sorter_slots` fills all of them in from geometry
-    as the last pass before emission, so what the game finally reads is derived
-    here and nowhere else.
+    Slot indices and yaw come from geometry.  A sorter drawing from a recipe
+    with multiple distinct products also receives the DSP item filter for the
+    exact lane/item its strategy assigned in ``carries_item``.  Keeping that
+    rule in this final shared pass covers every strategy and fallback that
+    already funnels through :func:`assign_sorter_slots`.
 
     WHICH MATTERS BEFORE THAT PASS, and that is why this is public.  A slot
     index is not decoration: it is WHERE the paste seats the sorter's machine
@@ -1223,5 +1286,6 @@ def emitted_sorter(
         output_from_slot=OUTPUT_FROM_SLOT,
         input_to_slot=INPUT_TO_SLOT,
         yaw=yaw,
+        filter_id=_output_filter_id(sorter, buildings),
         yaw2=yaw,
     )

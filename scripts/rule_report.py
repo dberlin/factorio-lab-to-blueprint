@@ -49,6 +49,20 @@ def main() -> int:
         for reader in readers:
             print(f"      read by {reader}")
 
+    print("\n=== applicable paste gaps awaiting downstream migration ===")
+    gaps = [
+        entry
+        for entry in registry.rules()
+        if (entry.unconsulted_because or "").startswith("PASTE GAP")
+    ]
+    for entry in sorted(gaps, key=lambda item: item.symbol):
+        print(f"  {entry.symbol}")
+        print(f"      {entry.unconsulted_because}")
+
+    print("\n=== paste-time ambiguity outside blueprint-certifiable state ===")
+    for condition, reason in registry.PASTE_AMBIGUITIES:
+        print(f"  {condition}: {reason}")
+
     print("\n=== R1: bare game constants outside dsp/ ===")
     unexplained = provenance.unexplained_literals()
     for violation in unexplained:

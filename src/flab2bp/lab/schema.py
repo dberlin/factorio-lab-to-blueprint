@@ -20,12 +20,134 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from fractions import Fraction
 from types import MappingProxyType
-from typing import Any
+from typing import Final, TypedDict
+
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+
+type RawNumber = Fraction | int | float | str
+
+
+class _RawModel(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
+
+
+class _RawMachine(_RawModel):
+    speed: RawNumber | None = None
+    usage: RawNumber | None = None
+    drain: RawNumber | None = None
+    consumption: dict[str, RawNumber] | None = None
+    type: str | None = None
+    modules: int | None = None
+    total_recipe: bool = Field(False, alias="totalRecipe")
+    fuel_categories: list[str] | None = Field(None, alias="fuelCategories")
+
+
+class _RawModule(_RawModel):
+    productivity: RawNumber | None = None
+    speed: RawNumber | None = None
+    consumption: RawNumber | None = None
+    sprays: int | None = None
+    proliferator: str | None = None
+    limitation: str | None = None
+
+
+class _RawBelt(_RawModel):
+    speed: RawNumber | None = None
+
+
+class _RawFuel(_RawModel):
+    category: str | None = None
+    value: RawNumber | None = None
+
+
+class _RawTechnology(_RawModel):
+    prerequisites: list[str] | None = None
+    recipe_unlock: list[str] | None = Field(None, alias="recipeUnlock")
+
+
+class _RawItem(_RawModel):
+    id: str
+    name: str | None = None
+    category: str | None = None
+    row: int | None = None
+    stack: int | None = None
+    icon: str | None = None
+    machine: _RawMachine | None = None
+    module: _RawModule | None = None
+    belt: _RawBelt | None = None
+    fuel: _RawFuel | None = None
+    technology: _RawTechnology | None = None
+
+
+class _RawRecipe(_RawModel):
+    id: str
+    name: str | None = None
+    time: RawNumber | None = None
+    inputs: dict[str, RawNumber] | None = Field(None, alias="in")
+    outputs: dict[str, RawNumber] | None = Field(None, alias="out")
+    producers: list[str] | None = None
+    category: str | None = None
+    row: int | None = None
+    flags: list[str] | None = None
+    icon: str | None = None
+    usage: RawNumber | None = None
+    cost: RawNumber | None = None
+
+
+class _RawCategory(_RawModel):
+    id: str
+    name: str | None = None
+    icon: str | None = None
+
+
+class _RawDefaults(_RawModel):
+    excluded_recipes: list[str] | None = Field(None, alias="excludedRecipes")
+    min_belt: str | None = Field(None, alias="minBelt")
+    max_belt: str | None = Field(None, alias="maxBelt")
+    min_machine_rank: list[str] | None = Field(None, alias="minMachineRank")
+    max_machine_rank: list[str] | None = Field(None, alias="maxMachineRank")
+    module_rank: list[str] | None = Field(None, alias="moduleRank")
+    fuel_rank: list[str] | None = Field(None, alias="fuelRank")
+    mod_ids: list[str] | None = Field(None, alias="modIds")
+
+
+class _RawHashIndex(_RawModel):
+    items: list[str | None] | None = None
+    beacons: list[str | None] | None = None
+    belts: list[str | None] | None = None
+    fuels: list[str | None] | None = None
+    wagons: list[str | None] | None = None
+    machines: list[str | None] | None = None
+    modules: list[str | None] | None = None
+    recipes: list[str | None] | None = None
+    technologies: list[str | None] | None = None
+
+
+class _RawIcon(_RawModel):
+    id: str
+    x: int
+    y: int
+    color: str
+
+
+class _RawDataset(_RawModel):
+    version: dict[str, str] | None = None
+    categories: list[_RawCategory] | None = None
+    items: list[_RawItem] | None = None
+    recipes: list[_RawRecipe] | None = None
+    limitations: dict[str, list[str] | None] | None = None
+    defaults: _RawDefaults | None = None
+    flags: list[str] | None = None
+    icons: list[_RawIcon] | None = None
+
+
+_DATASET_ADAPTER: Final[TypeAdapter[_RawDataset]] = TypeAdapter(_RawDataset)
+_HASH_INDEX_ADAPTER: Final[TypeAdapter[_RawHashIndex]] = TypeAdapter(_RawHashIndex)
 
 Number = Fraction
 
 
-def _frac(value: Any) -> Fraction | None:
+def _frac(value: RawNumber | None) -> Fraction | None:
     """Coerce a parsed JSON number to an exact ``Fraction``."""
     if value is None:
         return None
@@ -39,19 +161,30 @@ def _frac(value: Any) -> Fraction | None:
     raise TypeError(f"expected a number, got {type(value).__name__}: {value!r}")
 
 
-def _frac_map(value: Any) -> Mapping[str, Fraction]:
+def _frac_map(value: Mapping[str, RawNumber] | None) -> Mapping[str, Fraction]:
     if not value:
         return MappingProxyType({})
     out: dict[str, Fraction] = {}
-    for k, v in value.items():
-        parsed = _frac(v)
+    for key, raw_number in value.items():
+        parsed = _frac(raw_number)
         if parsed is not None:
-            out[k] = parsed
+            out[key] = parsed
     return MappingProxyType(out)
 
 
-def _tuple(value: Any) -> tuple[str, ...]:
+def _tuple(value: Sequence[str] | None) -> tuple[str, ...]:
     return tuple(value) if value else ()
+
+
+class IconData(TypedDict):
+    id: str
+    x: int
+    y: int
+    color: str
+
+
+def _icon(raw: _RawIcon) -> IconData:
+    return {"id": raw.id, "x": raw.x, "y": raw.y, "color": raw.color}
 
 
 # ---------------------------------------------------------------------------
@@ -81,16 +214,16 @@ class Machine:
     fuel_categories: tuple[str, ...] = ()
 
     @classmethod
-    def parse(cls, raw: Mapping[str, Any]) -> Machine:
+    def parse(cls, raw: _RawMachine) -> Machine:
         return cls(
-            speed=_frac(raw.get("speed")),
-            usage=_frac(raw.get("usage")),
-            drain=_frac(raw.get("drain")),
-            consumption=_frac_map(raw.get("consumption")),
-            type=raw.get("type"),
-            modules=raw.get("modules"),
-            total_recipe=bool(raw.get("totalRecipe", False)),
-            fuel_categories=_tuple(raw.get("fuelCategories")),
+            speed=_frac(raw.speed),
+            usage=_frac(raw.usage),
+            drain=_frac(raw.drain),
+            consumption=_frac_map(raw.consumption),
+            type=raw.type,
+            modules=raw.modules,
+            total_recipe=raw.total_recipe,
+            fuel_categories=_tuple(raw.fuel_categories),
         )
 
 
@@ -117,15 +250,15 @@ class Module:
     limitation: str | None = None
 
     @classmethod
-    def parse(cls, item_id: str, raw: Mapping[str, Any]) -> Module:
+    def parse(cls, item_id: str, raw: _RawModule) -> Module:
         return cls(
             id=item_id,
-            productivity=_frac(raw.get("productivity")),
-            speed=_frac(raw.get("speed")),
-            consumption=_frac(raw.get("consumption")),
-            sprays=raw.get("sprays"),
-            proliferator=raw.get("proliferator"),
-            limitation=raw.get("limitation"),
+            productivity=_frac(raw.productivity),
+            speed=_frac(raw.speed),
+            consumption=_frac(raw.consumption),
+            sprays=raw.sprays,
+            proliferator=raw.proliferator,
+            limitation=raw.limitation,
         )
 
     @property
@@ -142,8 +275,8 @@ class Belt:
     speed: Fraction
 
     @classmethod
-    def parse(cls, raw: Mapping[str, Any]) -> Belt:
-        speed = _frac(raw.get("speed"))
+    def parse(cls, raw: _RawBelt) -> Belt:
+        speed = _frac(raw.speed)
         return cls(speed=speed if speed is not None else Fraction(0))
 
 
@@ -153,8 +286,8 @@ class Fuel:
     value: Fraction | None = None
 
     @classmethod
-    def parse(cls, raw: Mapping[str, Any]) -> Fuel:
-        return cls(category=raw.get("category"), value=_frac(raw.get("value")))
+    def parse(cls, raw: _RawFuel) -> Fuel:
+        return cls(category=raw.category, value=_frac(raw.value))
 
 
 @dataclass(frozen=True, slots=True)
@@ -163,10 +296,10 @@ class Technology:
     recipe_unlock: tuple[str, ...] = ()
 
     @classmethod
-    def parse(cls, raw: Mapping[str, Any]) -> Technology:
+    def parse(cls, raw: _RawTechnology) -> Technology:
         return cls(
-            prerequisites=_tuple(raw.get("prerequisites")),
-            recipe_unlock=_tuple(raw.get("recipeUnlock")),
+            prerequisites=_tuple(raw.prerequisites),
+            recipe_unlock=_tuple(raw.recipe_unlock),
         )
 
 
@@ -190,20 +323,21 @@ class Item:
     technology: Technology | None = None
 
     @classmethod
-    def parse(cls, raw: Mapping[str, Any]) -> Item:
-        item_id = raw["id"]
+    def parse(cls, raw: _RawItem) -> Item:
         return cls(
-            id=item_id,
-            name=raw.get("name", item_id),
-            category=raw.get("category"),
-            row=raw.get("row"),
-            stack=raw.get("stack"),
-            icon=raw.get("icon"),
-            machine=Machine.parse(raw["machine"]) if raw.get("machine") else None,
-            module=Module.parse(item_id, raw["module"]) if raw.get("module") else None,
-            belt=Belt.parse(raw["belt"]) if raw.get("belt") else None,
-            fuel=Fuel.parse(raw["fuel"]) if raw.get("fuel") else None,
-            technology=Technology.parse(raw["technology"]) if raw.get("technology") else None,
+            id=raw.id,
+            name=raw.name if raw.name is not None else raw.id,
+            category=raw.category,
+            row=raw.row,
+            stack=raw.stack,
+            icon=raw.icon,
+            machine=Machine.parse(raw.machine) if raw.machine is not None else None,
+            module=Module.parse(raw.id, raw.module) if raw.module is not None else None,
+            belt=Belt.parse(raw.belt) if raw.belt is not None else None,
+            fuel=Fuel.parse(raw.fuel) if raw.fuel is not None else None,
+            technology=(
+                Technology.parse(raw.technology) if raw.technology is not None else None
+            ),
         )
 
 
@@ -223,22 +357,21 @@ class Recipe:
     cost: Fraction | None = None
 
     @classmethod
-    def parse(cls, raw: Mapping[str, Any]) -> Recipe:
-        recipe_id = raw["id"]
-        time = _frac(raw.get("time"))
+    def parse(cls, raw: _RawRecipe) -> Recipe:
+        time = _frac(raw.time)
         return cls(
-            id=recipe_id,
-            name=raw.get("name", recipe_id),
+            id=raw.id,
+            name=raw.name if raw.name is not None else raw.id,
             time=time if time is not None else Fraction(0),
-            inputs=_frac_map(raw.get("in")),
-            outputs=_frac_map(raw.get("out")),
-            producers=_tuple(raw.get("producers")),
-            category=raw.get("category"),
-            row=raw.get("row"),
-            flags=frozenset(raw.get("flags") or ()),
-            icon=raw.get("icon"),
-            usage=_frac(raw.get("usage")),
-            cost=_frac(raw.get("cost")),
+            inputs=_frac_map(raw.inputs),
+            outputs=_frac_map(raw.outputs),
+            producers=_tuple(raw.producers),
+            category=raw.category,
+            row=raw.row,
+            flags=frozenset(raw.flags or ()),
+            icon=raw.icon,
+            usage=_frac(raw.usage),
+            cost=_frac(raw.cost),
         )
 
     @property
@@ -266,8 +399,12 @@ class Category:
     icon: str | None = None
 
     @classmethod
-    def parse(cls, raw: Mapping[str, Any]) -> Category:
-        return cls(id=raw["id"], name=raw.get("name", raw["id"]), icon=raw.get("icon"))
+    def parse(cls, raw: _RawCategory) -> Category:
+        return cls(
+            id=raw.id,
+            name=raw.name if raw.name is not None else raw.id,
+            icon=raw.icon,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -284,16 +421,18 @@ class Defaults:
     mod_ids: tuple[str, ...] = ()
 
     @classmethod
-    def parse(cls, raw: Mapping[str, Any]) -> Defaults:
+    def parse(cls, raw: _RawDefaults | None) -> Defaults:
+        if raw is None:
+            return cls()
         return cls(
-            excluded_recipes=frozenset(raw.get("excludedRecipes") or ()),
-            min_belt=raw.get("minBelt"),
-            max_belt=raw.get("maxBelt"),
-            min_machine_rank=_tuple(raw.get("minMachineRank")),
-            max_machine_rank=_tuple(raw.get("maxMachineRank")),
-            module_rank=_tuple(raw.get("moduleRank")),
-            fuel_rank=_tuple(raw.get("fuelRank")),
-            mod_ids=_tuple(raw.get("modIds")),
+            excluded_recipes=frozenset(raw.excluded_recipes or ()),
+            min_belt=raw.min_belt,
+            max_belt=raw.max_belt,
+            min_machine_rank=_tuple(raw.min_machine_rank),
+            max_machine_rank=_tuple(raw.max_machine_rank),
+            module_rank=_tuple(raw.module_rank),
+            fuel_rank=_tuple(raw.fuel_rank),
+            mod_ids=_tuple(raw.mod_ids),
         )
 
 
@@ -316,20 +455,18 @@ class HashIndex:
     technologies: tuple[str | None, ...] = ()
 
     @classmethod
-    def parse(cls, raw: Mapping[str, Any]) -> HashIndex:
-        def col(key: str) -> tuple[str | None, ...]:
-            return tuple(raw.get(key) or ())
-
+    def parse(cls, raw: object) -> HashIndex:
+        parsed = _HASH_INDEX_ADAPTER.validate_python(raw)
         return cls(
-            items=col("items"),
-            beacons=col("beacons"),
-            belts=col("belts"),
-            fuels=col("fuels"),
-            wagons=col("wagons"),
-            machines=col("machines"),
-            modules=col("modules"),
-            recipes=col("recipes"),
-            technologies=col("technologies"),
+            items=tuple(parsed.items or ()),
+            beacons=tuple(parsed.beacons or ()),
+            belts=tuple(parsed.belts or ()),
+            fuels=tuple(parsed.fuels or ()),
+            wagons=tuple(parsed.wagons or ()),
+            machines=tuple(parsed.machines or ()),
+            modules=tuple(parsed.modules or ()),
+            recipes=tuple(parsed.recipes or ()),
+            technologies=tuple(parsed.technologies or ()),
         )
 
 
@@ -349,7 +486,7 @@ class Dataset:
     limitations: Mapping[str, frozenset[str]]
     defaults: Defaults
     flags: frozenset[str]
-    icons: tuple[Mapping[str, Any], ...] = ()
+    icons: tuple[IconData, ...] = ()
 
     _items_by_id: Mapping[str, Item] = field(init=False, repr=False, compare=False)
     _recipes_by_id: Mapping[str, Recipe] = field(init=False, repr=False, compare=False)
@@ -374,19 +511,22 @@ class Dataset:
     # -- construction -------------------------------------------------------
 
     @classmethod
-    def parse(cls, raw: Mapping[str, Any]) -> Dataset:
+    def parse(cls, raw: object) -> Dataset:
+        parsed = _DATASET_ADAPTER.validate_python(raw)
         limitations = {
-            name: frozenset(ids or ()) for name, ids in (raw.get("limitations") or {}).items()
+            name: frozenset(ids or ()) for name, ids in (parsed.limitations or {}).items()
         }
         return cls(
-            version=MappingProxyType(dict(raw.get("version") or {})),
-            categories=tuple(Category.parse(c) for c in raw.get("categories") or ()),
-            items=tuple(Item.parse(i) for i in raw.get("items") or ()),
-            recipes=tuple(Recipe.parse(r) for r in raw.get("recipes") or ()),
+            version=MappingProxyType(dict(parsed.version or {})),
+            categories=tuple(
+                Category.parse(category) for category in parsed.categories or ()
+            ),
+            items=tuple(Item.parse(item) for item in parsed.items or ()),
+            recipes=tuple(Recipe.parse(recipe) for recipe in parsed.recipes or ()),
             limitations=MappingProxyType(limitations),
-            defaults=Defaults.parse(raw.get("defaults") or {}),
-            flags=frozenset(raw.get("flags") or ()),
-            icons=tuple(raw.get("icons") or ()),
+            defaults=Defaults.parse(parsed.defaults),
+            flags=frozenset(parsed.flags or ()),
+            icons=tuple(_icon(icon) for icon in parsed.icons or ()),
         )
 
     # -- lookups ------------------------------------------------------------
@@ -505,6 +645,7 @@ __all__: Sequence[str] = (
     "Defaults",
     "Fuel",
     "HashIndex",
+    "IconData",
     "Item",
     "Machine",
     "Module",

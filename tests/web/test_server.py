@@ -12,20 +12,39 @@ import urllib.request
 from collections.abc import Callable, Iterator
 from http.server import ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Final
 
 import httpx
 import pytest
+from pydantic import TypeAdapter
 
 from flab2bp import pipeline
 from flab2bp.web.jobs import Builder, Options, Solve, run_build
+from flab2bp.web.payload import Json
 from flab2bp.web.server import serve
 
 URL = "https://factoriolab.github.io/dsp/flow?o=graphene*60&v=11"
 
 
-def _decode(content_type: str, body: bytes) -> Any:
-    return json.loads(body) if "json" in content_type else body.decode()
+_JSON_ADAPTER: Final[TypeAdapter[Json]] = TypeAdapter(Json)
+
+
+def _decode_json(body: bytes) -> Json:
+    return _JSON_ADAPTER.validate_json(body)
+
+
+def _string(body: Json, key: str) -> str:
+    value = body[key]
+    if not isinstance(value, str):
+        raise AssertionError(f"{key} is not a string: {value!r}")
+    return value
+
+
+def _object(body: Json, key: str) -> Json:
+    value = body[key]
+    if not isinstance(value, dict):
+        raise AssertionError(f"{key} is not an object: {value!r}")
+    return value
 
 
 class Client:
@@ -34,31 +53,48 @@ class Client:
     def __init__(self, base: str) -> None:
         self.base = base
 
-    def get(self, path: str) -> tuple[int, Any]:
-        with urllib.request.urlopen(self.base + path, timeout=10) as r:
-            return r.status, _decode(r.headers.get("Content-Type", ""), r.read())
+    def get_json(self, path: str) -> tuple[int, Json]:
+        with urllib.request.urlopen(self.base + path, timeout=10) as response:
+            return response.status, _decode_json(response.read())
 
-    def post(self, path: str, body: object) -> tuple[int, Any]:
+    def post(self, path: str, body: object) -> tuple[int, Json]:
         request = urllib.request.Request(
             self.base + path,
             data=json.dumps(body).encode(),
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        with urllib.request.urlopen(request, timeout=10) as r:
-            return r.status, _decode(r.headers.get("Content-Type", ""), r.read())
+        with urllib.request.urlopen(request, timeout=10) as response:
+            return response.status, _decode_json(response.read())
 
-    def failing(self, path: str, body: object = None, *, method: str = "GET") -> tuple[int, Any]:
-        """A 4xx/5xx, decoded. ``urlopen`` raises on those rather than returning."""
+    def get_text(self, path: str) -> tuple[int, str]:
+        with urllib.request.urlopen(self.base + path, timeout=10) as response:
+            return response.status, response.read().decode()
+
+    def failing_json(
+        self, path: str, body: object = None, *, method: str = "GET"
+    ) -> tuple[int, Json]:
+        """A JSON 4xx/5xx. ``urlopen`` raises rather than returning it."""
         with pytest.raises(urllib.error.HTTPError) as caught:
-            self.post(path, body) if method == "POST" else self.get(path)
+            self.post(path, body) if method == "POST" else self.get_json(path)
         error = caught.value
-        return error.code, _decode(error.headers.get("Content-Type", ""), error.read())
+        return error.code, _decode_json(error.read())
 
-    def settled(self, job_id: str, *, timeout_s: float = 20.0) -> Any:
+    def failing_text(self, path: str, *, method: str = "GET") -> tuple[int, str]:
+        """A text 4xx/5xx. ``urlopen`` raises rather than returning it."""
+        with pytest.raises(urllib.error.HTTPError) as caught:
+            if method == "POST":
+                request = urllib.request.Request(self.base + path, data=b"", method="POST")
+                urllib.request.urlopen(request, timeout=10)
+            else:
+                self.get_text(path)
+        error = caught.value
+        return error.code, error.read().decode()
+
+    def settled(self, job_id: str, *, timeout_s: float = 20.0) -> Json:
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
-            _, snap = self.get(f"/api/build/{job_id}")
+            _, snap = self.get_json(f"/api/build/{job_id}")
             if snap["state"] in ("done", "refused", "error"):
                 return snap
             time.sleep(0.02)
@@ -88,7 +124,7 @@ def start(tmp_path: Path) -> Iterator[Callable[..., Client]]:
 
 
 def test_health_says_whether_the_front_end_is_built(start: Callable[..., Client]) -> None:
-    status, body = start().get("/api/health")
+    status, body = start().get_json("/api/health")
     assert status == 200
     assert body == {"ok": True, "front_end_built": False}
 
@@ -118,13 +154,13 @@ def test_the_post_does_not_wait_for_the_solve(
     assert job["state"] in ("queued", "running")
 
     # ...and the poll works while that solve is still held open.
-    _, mid = client.get(f"/api/build/{job['id']}")
+    _, mid = client.get_json(f"/api/build/{_string(job, 'id')}")
     assert mid["state"] in ("queued", "running")
 
     release.set()
-    snap = client.settled(job["id"])
+    snap = client.settled(_string(job, "id"))
     assert snap["state"] == "done"
-    assert snap["result"]["blueprint"] == small_build.blueprint
+    assert _object(snap, "result")["blueprint"] == small_build.blueprint
 
 
 def test_a_refusal_comes_back_200_not_500(start: Callable[..., Client]) -> None:
@@ -132,19 +168,43 @@ def test_a_refusal_comes_back_200_not_500(start: Callable[..., Client]) -> None:
     from flab2bp.layout.base import NoValidLayout
 
     def refuse(_o: Options, _p: pipeline.ProgressSink) -> pipeline.Build:
-        raise NoValidLayout("spine/a: too tall", spec_label="a", budget_s=1.0)
+        raise NoValidLayout("freeform/a: too tall", spec_label="a", budget_s=1.0)
 
     client = start(refuse)
     _, job = client.post("/api/build", {"url": URL})
-    snap = client.settled(job["id"])
+    snap = client.settled(_string(job, "id"))
     assert snap["state"] == "refused"
-    assert snap["refusal"]["reasons"] == ["spine/a: too tall"]
+    assert _object(snap, "refusal")["reasons"] == ["freeform/a: too tall"]
 
 
 def test_a_bad_body_is_400_with_a_reason(start: Callable[..., Client]) -> None:
-    status, body = start().failing("/api/build", {"strategy": "best"}, method="POST")
+    status, body = start().failing_json(
+        "/api/build", {"strategy": "best"}, method="POST"
+    )
     assert status == 400
-    assert "url" in body["error"]
+    assert "url" in _string(body, "error")
+
+
+def test_sequence_pair_is_accepted_with_exact_wire_spelling(
+    start: Callable[..., Client],
+) -> None:
+    def not_layout(_options: Options, _progress: pipeline.ProgressSink) -> pipeline.Build:
+        raise ValueError("layout is not part of this submission-boundary test")
+
+    client = start(not_layout)
+    status, body = client.post(
+        "/api/build", {"url": URL, "strategy": "sequence-pair"}
+    )
+    assert status == 202
+    assert _object(body, "options")["strategy"] == "sequence-pair"
+
+
+def test_unknown_strategy_is_rejected_before_submission(start: Callable[..., Client]) -> None:
+    status, body = start().failing_json(
+        "/api/build", {"url": URL, "strategy": "unknown"}, method="POST"
+    )
+    assert status == 400
+    assert _string(body, "error") == "'strategy' must be one of best, freeform, sequence-pair"
 
 
 def test_a_body_that_is_not_json_is_400(start: Callable[..., Client]) -> None:
@@ -158,13 +218,13 @@ def test_a_body_that_is_not_json_is_400(start: Callable[..., Client]) -> None:
 
 
 def test_polling_an_unknown_job_is_404(start: Callable[..., Client]) -> None:
-    status, body = start().failing("/api/build/deadbeef")
+    status, body = start().failing_json("/api/build/deadbeef")
     assert status == 404
-    assert body["error"] == "no such job"
+    assert _string(body, "error") == "no such job"
 
 
 def test_an_unbuilt_front_end_says_so_rather_than_404ing(start: Callable[..., Client]) -> None:
-    status, body = start().failing("/")
+    status, body = start().failing_text("/")
     assert status == 503
     assert "bun run build" in body
 
@@ -176,10 +236,10 @@ def test_static_files_are_served_and_unknown_paths_fall_back_to_index(
     (tmp_path / "index.html").write_text("<title>flab2bp</title>")
     (tmp_path / "main.js").write_text("console.log(1)")
 
-    assert client.get("/")[1] == "<title>flab2bp</title>"
-    assert client.get("/main.js")[1] == "console.log(1)"
+    assert client.get_text("/")[1] == "<title>flab2bp</title>"
+    assert client.get_text("/main.js")[1] == "console.log(1)"
     # A single-page app answers an unknown route with the app.
-    assert client.get("/some/route")[1] == "<title>flab2bp</title>"
+    assert client.get_text("/some/route")[1] == "<title>flab2bp</title>"
 
 
 def test_a_path_escaping_dist_gets_the_app_not_the_file(
@@ -190,18 +250,18 @@ def test_a_path_escaping_dist_gets_the_app_not_the_file(
     (tmp_path.parent / "secret.txt").write_text("not yours")
 
     for path in ("/../secret.txt", "/%2e%2e/secret.txt", "/a/../../secret.txt"):
-        assert "not yours" not in client.get(path)[1]
+        assert "not yours" not in client.get_text(path)[1]
 
 
 def test_an_unknown_api_endpoint_is_404(start: Callable[..., Client]) -> None:
-    assert start().failing("/api/nope")[0] == 404
+    assert start().failing_text("/api/nope")[0] == 404
 
 
 def test_the_inherited_proxy_still_validates_its_input(start: Callable[..., Client]) -> None:
     """Same contract as the viewer's proxy.ts, which this replaced."""
     client = start()
-    assert client.failing("/api/fetch") == (400, "Missing url")
-    assert client.failing("/api/fetch?url=file:///etc/passwd") == (
+    assert client.failing_text("/api/fetch") == (400, "Missing url")
+    assert client.failing_text("/api/fetch?url=file:///etc/passwd") == (
         400,
         "Only http/https are allowed",
     )
@@ -226,7 +286,7 @@ def test_a_large_text_response_is_gzipped_when_the_client_asks(
         assert gzip.decompress(raw).decode() == "console.log('x');\n" * 5000
 
     # A client that did not ask still gets it uncompressed and intact.
-    plain = client.get("/big.js")[1]
+    plain = client.get_text("/big.js")[1]
     assert plain == "console.log('x');\n" * 5000
 
 
@@ -251,7 +311,7 @@ def test_a_small_json_poll_is_not_gzipped(start: Callable[..., Client]) -> None:
     )
     with urllib.request.urlopen(request, timeout=10) as response:
         assert response.headers.get("Content-Encoding") is None
-        assert json.loads(response.read())["ok"] is True
+        assert _decode_json(response.read())["ok"] is True
 
 
 class TestTheProxyWillNotRelayIntoThisMachine:
@@ -280,7 +340,9 @@ class TestTheProxyWillNotRelayIntoThisMachine:
         self, start: Callable[..., Client], url: str
     ) -> None:
         client = start()
-        status, body = client.failing(f"/api/fetch?url={urllib.parse.quote(url, safe='')}")
+        status, body = client.failing_text(
+            f"/api/fetch?url={urllib.parse.quote(url, safe='')}"
+        )
         assert status == 400
         assert "not a public address" in body
 
@@ -294,7 +356,9 @@ class TestTheProxyWillNotRelayIntoThisMachine:
 
         monkeypatch.setattr(httpx, "get", fake_get)
         client = start()
-        status, body = client.get("/api/fetch?url=http%3A%2F%2F93.184.216.34%2Fpage")
+        status, body = client.get_text(
+            "/api/fetch?url=http%3A%2F%2F93.184.216.34%2Fpage"
+        )
         assert (status, body) == (200, "a blueprint page")
 
     def test_a_redirect_into_loopback_is_refused_at_the_second_hop(
@@ -312,7 +376,9 @@ class TestTheProxyWillNotRelayIntoThisMachine:
 
         monkeypatch.setattr(httpx, "get", fake_get)
         client = start()
-        status, body = client.failing("/api/fetch?url=http%3A%2F%2F93.184.216.34%2Fpage")
+        status, body = client.failing_text(
+            "/api/fetch?url=http%3A%2F%2F93.184.216.34%2Fpage"
+        )
         assert status == 400
         assert "127.0.0.1" in body and "not a public address" in body
 
@@ -328,7 +394,9 @@ class TestTheProxyWillNotRelayIntoThisMachine:
 
         monkeypatch.setattr(httpx, "get", fake_get)
         client = start()
-        status, body = client.failing("/api/fetch?url=http%3A%2F%2F93.184.216.34%2Fpage")
+        status, body = client.failing_text(
+            "/api/fetch?url=http%3A%2F%2F93.184.216.34%2Fpage"
+        )
         assert status == 502
         assert "Too many redirects" in body
 
@@ -360,7 +428,7 @@ class TestTheProxyWillNotRelayIntoThisMachine:
                 return None if url.startswith(upstream) else real(url)
 
             monkeypatch.setattr(server_module, "private_address", allow_the_first_hop)
-            status, body = client.failing(
+            status, body = client.failing_text(
                 f"/api/fetch?url={urllib.parse.quote(upstream + '/go', safe='')}"
             )
             assert status == 400

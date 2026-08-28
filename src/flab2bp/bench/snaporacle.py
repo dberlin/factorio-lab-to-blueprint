@@ -28,7 +28,9 @@ import shutil
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import ClassVar
+
+from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 from flab2bp.dsp import catalog as cat
 from flab2bp.dsp import colliders
@@ -85,7 +87,7 @@ def game_managed_dir() -> Path | None:
 
 def unavailable_reason() -> str | None:
     """Why the oracle cannot run here, phrased for a skip message."""
-    missing = []
+    missing: list[str] = []
     if not dotnet_available():
         missing.append("the `dotnet` SDK")
     if game_managed_dir() is None:
@@ -188,7 +190,7 @@ class Step:
     preview: int
     flag4: bool
     flag3: bool
-    scores: tuple[dict[str, Any], ...] = ()
+    scores: tuple[dict[str, _JsonValue], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -218,6 +220,54 @@ class Verdict:
     def connected(self) -> bool:
         return self.condition == "Ok"
 
+
+type _JsonValue = (
+    str | int | float | bool | None | list[_JsonValue] | dict[str, _JsonValue]
+)
+
+
+class _WireModel(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="allow")
+
+
+class _StepWire(_WireModel):
+    side: str
+    num4: float
+    num5: int
+    num6: int
+    preview: int
+    flag4: bool
+    flag3: bool
+    scores: tuple[dict[str, _JsonValue], ...] = ()
+
+
+class _VerdictWire(_WireModel):
+    name: str
+    condition: str = ""
+    lpos: tuple[float, float, float] | None = None
+    lpos2: tuple[float, float, float] | None = None
+    lrot: tuple[float, float, float, float] | None = None
+    lrot2: tuple[float, float, float, float] | None = None
+    inputObjId: int = 0
+    outputObjId: int = 0
+    inputPreview: int = -1
+    outputPreview: int = -1
+    inputFromSlot: int = 0
+    inputToSlot: int = 0
+    inputOffset: int = 0
+    outputFromSlot: int = 0
+    outputToSlot: int = 0
+    outputOffset: int = 0
+    trace: tuple[_StepWire, ...] = ()
+    error: str | None = None
+
+
+class _SelftestWire(_WireModel):
+    failures: tuple[str, ...] = ()
+
+
+_SELFTEST_ADAPTER = TypeAdapter(_SelftestWire)
+_VERDICTS_ADAPTER = TypeAdapter(tuple[_VerdictWire, ...])
 
 # --- our grid, in the game's units -----------------------------------------
 
@@ -274,17 +324,17 @@ def machine_candidate(
 # --- running it ------------------------------------------------------------
 
 
-def _payload(case: Case) -> dict[str, Any]:
-    def slot(p: SlotPose) -> dict[str, Any]:
-        out: dict[str, Any] = {"pos": list(p.pos)}
+def _payload(case: Case) -> dict[str, object]:
+    def slot(p: SlotPose) -> dict[str, object]:
+        out: dict[str, object] = {"pos": list(p.pos)}
         if p.rot is not None:
             out["rot"] = list(p.rot)
         if p.fwd is not None:
             out["fwd"] = list(p.fwd)
         return out
 
-    def cand(c: Candidate) -> dict[str, Any]:
-        out: dict[str, Any] = {
+    def cand(c: Candidate) -> dict[str, object]:
+        out: dict[str, object] = {
             "kind": c.kind,
             "objId": c.obj_id,
             "isBelt": c.is_belt,
@@ -326,47 +376,39 @@ def _payload(case: Case) -> dict[str, Any]:
     }
 
 
-def _step(raw: dict[str, Any]) -> Step:
+def _step(raw: _StepWire) -> Step:
     return Step(
-        side=raw["side"],
-        num4=raw["num4"],
-        num5=raw["num5"],
-        num6=raw["num6"],
-        preview=raw["preview"],
-        flag4=raw["flag4"],
-        flag3=raw["flag3"],
-        scores=tuple(raw.get("scores") or ()),
+        side=raw.side,
+        num4=raw.num4,
+        num5=raw.num5,
+        num6=raw.num6,
+        preview=raw.preview,
+        flag4=raw.flag4,
+        flag3=raw.flag3,
+        scores=raw.scores,
     )
 
 
-def _verdict(raw: dict[str, Any]) -> Verdict:
-    def vec(key: str) -> tuple[float, float, float]:
-        v = raw.get(key) or [0.0, 0.0, 0.0]
-        return (v[0], v[1], v[2])
-
-    def quat(key: str) -> tuple[float, float, float, float]:
-        v = raw.get(key) or [0.0, 0.0, 0.0, 1.0]
-        return (v[0], v[1], v[2], v[3])
-
+def _verdict(raw: _VerdictWire) -> Verdict:
     return Verdict(
-        name=raw["name"],
-        condition=raw.get("condition", ""),
-        lpos=vec("lpos"),
-        lpos2=vec("lpos2"),
-        lrot=quat("lrot"),
-        lrot2=quat("lrot2"),
-        input_obj_id=raw.get("inputObjId", 0),
-        output_obj_id=raw.get("outputObjId", 0),
-        input_preview=raw.get("inputPreview", -1),
-        output_preview=raw.get("outputPreview", -1),
-        input_from_slot=raw.get("inputFromSlot", 0),
-        input_to_slot=raw.get("inputToSlot", 0),
-        input_offset=raw.get("inputOffset", 0),
-        output_from_slot=raw.get("outputFromSlot", 0),
-        output_to_slot=raw.get("outputToSlot", 0),
-        output_offset=raw.get("outputOffset", 0),
-        trace=tuple(_step(s) for s in (raw.get("trace") or ())),
-        error=raw.get("error"),
+        name=raw.name,
+        condition=raw.condition,
+        lpos=raw.lpos or (0.0, 0.0, 0.0),
+        lpos2=raw.lpos2 or (0.0, 0.0, 0.0),
+        lrot=raw.lrot or (0.0, 0.0, 0.0, 1.0),
+        lrot2=raw.lrot2 or (0.0, 0.0, 0.0, 1.0),
+        input_obj_id=raw.inputObjId,
+        output_obj_id=raw.outputObjId,
+        input_preview=raw.inputPreview,
+        output_preview=raw.outputPreview,
+        input_from_slot=raw.inputFromSlot,
+        input_to_slot=raw.inputToSlot,
+        input_offset=raw.inputOffset,
+        output_from_slot=raw.outputFromSlot,
+        output_to_slot=raw.outputToSlot,
+        output_offset=raw.outputOffset,
+        trace=tuple(_step(step) for step in raw.trace),
+        error=raw.error,
     )
 
 
@@ -421,9 +463,8 @@ def selftest(*, timeout_s: float = 200.0) -> list[str]:
     proc = _run(["--selftest"], "", timeout_s)
     if not proc.stdout.strip():
         raise OracleUnavailable(f"selftest produced nothing: {proc.stderr[-2000:]}")
-    parsed: dict[str, Any] = json.loads(proc.stdout)
-    failures: list[str] = list(parsed.get("failures") or ())
-    return failures
+    parsed = _SELFTEST_ADAPTER.validate_json(proc.stdout)
+    return list(parsed.failures)
 
 
 def slot_table(item_id: int) -> tuple[SlotPose, ...]:
@@ -471,7 +512,7 @@ def ask(
         raise OracleUnavailable(
             f"the oracle exited {proc.returncode}: {proc.stderr[-2000:]}"
         )
-    raw: list[dict[str, Any]] = json.loads(proc.stdout)
+    raw = _VERDICTS_ADAPTER.validate_json(proc.stdout)
     if len(raw) != len(cases):
         raise OracleUnavailable(
             f"asked for {len(cases)} verdicts and got {len(raw)}"
@@ -504,7 +545,7 @@ class Disagreement:
     what: str
     ours: str
     game: str
-    detail: dict[str, Any] = field(default_factory=dict)
+    detail: dict[str, object] = field(default_factory=dict)
 
     def __str__(self) -> str:
         return f"{self.case}: {self.what} -- ours {self.ours}, game {self.game}"

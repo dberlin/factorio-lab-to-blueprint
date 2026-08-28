@@ -36,14 +36,14 @@ URL ──1──> LabRequest ──2──> RateSolution ──3──> BuildSp
 | `rates/solve.py` | Objectives → per-recipe machine counts, in exact rational arithmetic |
 | `spec.py` | `RateSolution` → `BuildSpec`, the frozen rates/geometry boundary |
 | `layout/base.py` | `LayoutStrategy` protocol, `Placement`, geometry primitives |
-| `layout/spine.py` | **Strategy A** — structured spine, CP-SAT arrangement |
-| `layout/freeform.py` | **Strategy B** — CP-SAT rectangle packing + belt router |
+| `layout/freeform.py` | Freeform — CP-SAT rectangle packing + detailed belt router |
+| `layout/sequence_solver.py` | SequencePair — staged sequence-pair search using the shared router |
 | `layout/validate.py` | Strategy-independent judge: overlap, reach, continuity, throughput |
 | `dsp/codec.py` | `Placement` → binary → gzip → base64 → header → MD5F, and back |
-| `bench/` | Runs both strategies over a URL corpus and reports density |
+| `bench/` | Compares Freeform and SequencePair over the URL corpus |
 
-Stage 4 has two competing implementations behind one interface. Which one ships is decided
-empirically by `bench/`, not by argument.
+Stage 4 has two production implementations behind one interface. `best` runs both and
+returns the smallest validator-clean placement.
 
 Everything upstream of `BuildSpec` is arithmetic on rationals with no geometry. Everything
 downstream is geometry with no rate reasoning.

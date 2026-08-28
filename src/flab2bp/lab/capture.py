@@ -59,6 +59,7 @@ the browser was slow would reintroduce the exact defect this feature removes.
 from __future__ import annotations
 
 import asyncio
+import importlib
 import json
 import os
 import shutil
@@ -66,16 +67,79 @@ import socket
 import subprocess
 import tempfile
 from collections.abc import Sequence
+from importlib.util import find_spec
 from pathlib import Path
-from typing import Any, Final
+from typing import Final, Protocol, TypedDict, TypeGuard
+
+from pydantic import TypeAdapter, ValidationError
 
 from flab2bp.lab.flow import FlowError
 
-__all__ = ["CaptureError", "capture_flow_csv", "find_browser"]
+__all__ = ["CaptureError", "SolveProbeState", "capture_flow_csv", "find_browser"]
 
 
 class CaptureError(FlowError):
     """The export could not be fetched.  Never falls back to deriving one."""
+
+
+class SolveProbeState(TypedDict):
+    """The complete JSON state returned by the in-page solve probe."""
+
+    rows: int
+    csv: bool
+
+
+class _AsyncPage(Protocol):
+    async def evaluate(
+        self,
+        expression: str,
+        *,
+        await_promise: bool = False,
+        return_by_value: bool = False,
+    ) -> object: ...
+
+
+class _Browser(Protocol):
+    async def get(self, url: str) -> _AsyncPage: ...
+
+    def stop(self) -> None: ...
+
+
+class _NoDriver(Protocol):
+    async def start(self, *, host: str, port: int) -> _Browser: ...
+
+
+def _is_nodriver(module: object) -> TypeGuard[_NoDriver]:
+    return callable(getattr(module, "start", None))
+
+
+_SOLVE_PROBE_STATE_ADAPTER = TypeAdapter(SolveProbeState)
+
+
+def _parse_solve_probe(raw: object) -> SolveProbeState:
+    if not isinstance(raw, str):
+        raise CaptureError(f"invalid solve probe payload: expected JSON, got {raw!r}")
+    try:
+        return _SOLVE_PROBE_STATE_ADAPTER.validate_json(raw)
+    except ValidationError as exc:
+        raise CaptureError(f"invalid solve probe payload: {raw!r}") from exc
+
+
+def _solve_probe_values(raw: object) -> tuple[int, bool]:
+    """Narrow the two poll fields without running schema validation in the loop."""
+    if not isinstance(raw, str):
+        raise CaptureError(f"invalid solve probe payload: expected JSON, got {raw!r}")
+    try:
+        decoded: object = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise CaptureError(f"invalid solve probe payload: {raw!r}") from exc
+    if not isinstance(decoded, dict):
+        raise CaptureError(f"invalid solve probe payload: {raw!r}")
+    rows: object = decoded.get("rows")
+    csv: object = decoded.get("csv")
+    if isinstance(rows, bool) or not isinstance(rows, int) or not isinstance(csv, bool):
+        raise CaptureError(f"invalid solve probe payload: {raw!r}")
+    return rows, csv
 
 
 #: Env var to point at a specific browser, for a machine where the search below
@@ -206,7 +270,7 @@ async def _await_devtools(port: int, process: subprocess.Popen[bytes], deadline_
     )
 
 
-async def _await_solve(page: Any, url: str, deadline_s: float) -> None:
+async def _await_solve(page: _AsyncPage, url: str, deadline_s: float) -> None:
     """Wait until FactorioLab has actually finished solving.
 
     Never a sleep.  See the module docstring for why each condition is
@@ -216,19 +280,25 @@ async def _await_solve(page: Any, url: str, deadline_s: float) -> None:
     loop = asyncio.get_running_loop()
     end = loop.time() + deadline_s
     settled: int | None = None
-    state: dict[str, Any] = {}
+    last_rows = 0
+    last_csv = False
+    completed_raw: object | None = None
     while loop.time() < end:
         raw = await page.evaluate(_PROBE_JS, return_by_value=True)
-        state = json.loads(raw) if isinstance(raw, str) else {}
-        rows = int(state.get("rows") or 0)
-        if state.get("csv") and rows > 0 and settled == rows:
-            return
-        settled = rows if state.get("csv") and rows > 0 else None
+        rows, csv = _solve_probe_values(raw)
+        last_rows, last_csv = rows, csv
+        if csv and rows > 0 and settled == rows:
+            completed_raw = raw
+            break
+        settled = rows if csv and rows > 0 else None
         await asyncio.sleep(_POLL_S)
+    if completed_raw is not None:
+        _ = _parse_solve_probe(completed_raw)
+        return
     raise CaptureError(
         f"FactorioLab did not finish solving {url} within {deadline_s:.0f}s. "
-        f"Last seen: {state.get('rows', 0)} step row(s), CSV button "
-        f"{'present' if state.get('csv') else 'absent'}. The download button is "
+        f"Last seen: {last_rows} step row(s), CSV button "
+        f"{'present' if last_csv else 'absent'}. The download button is "
         "rendered only once the in-page solver has produced steps, so an absent "
         "button means the solve had not completed -- not that the page failed to "
         "load. Raise --fetch-timeout, or check the URL opens in a browser."
@@ -236,9 +306,9 @@ async def _await_solve(page: Any, url: str, deadline_s: float) -> None:
 
 
 async def _capture(url: str, executable: str, timeout_s: float, headless: bool) -> str:
-    # nodriver ships no py.typed, and adding a mypy override to pyproject for
-    # it would touch a file another agent is editing. Scoped here instead.
-    import nodriver  # type: ignore[import-untyped]
+    nodriver: object = importlib.import_module("nodriver")
+    if not _is_nodriver(nodriver):
+        raise CaptureError("nodriver has no callable start()")
 
     port = _free_port()
     profile = tempfile.mkdtemp(prefix="flab2bp-browser-")
@@ -251,7 +321,7 @@ async def _capture(url: str, executable: str, timeout_s: float, headless: bool) 
     process = subprocess.Popen(  # noqa: S603 - executable resolved by find_browser
         [executable, *args], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
     )
-    browser = None
+    browser: _Browser | None = None
     try:
         await _await_devtools(port, process, min(timeout_s, 30.0))
         browser = await nodriver.start(host="127.0.0.1", port=port)
@@ -278,7 +348,7 @@ async def _capture(url: str, executable: str, timeout_s: float, headless: bool) 
     return text
 
 
-async def _await_blob(page: Any, timeout_s: float) -> str:
+async def _await_blob(page: _AsyncPage, timeout_s: float) -> str:
     """Read the Blob the click produced, refusing an empty or absent one."""
     loop = asyncio.get_running_loop()
     end = loop.time() + timeout_s
@@ -309,11 +379,9 @@ def capture_flow_csv(
     to a real export is refusing, not deriving one.
     """
     executable = find_browser(browser)
-    try:
-        import nodriver  # noqa: F401
-    except ImportError as exc:  # pragma: no cover - declared dependency
+    if find_spec("nodriver") is None:  # pragma: no cover - declared dependency
         raise CaptureError(
             "nodriver is not installed, so a flow export cannot be fetched; "
             "pass --flow with a CSV downloaded from FactorioLab instead"
-        ) from exc
+        )
     return asyncio.run(_capture(url, executable, timeout_s, headless))

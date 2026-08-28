@@ -183,8 +183,8 @@ distinctive values — `0.9702957` yes, `0.5` and `6.0` no.
   column** — wider than the equator. The narrowest column in the system is band
   32's poleward edge at 0.783.
 * Therefore **"smallest band that fits" is not "narrowest tiles"** and is not a
-  conservative proxy. `spine._band_rejected` uses the satisfiable reading:
-  smallest band the layout is actually *legal* in, searched upward.
+  conservative proxy. A verified placement must use the smallest band where its
+  actual geometry is legal.
 * `colliders.collisions()` evaluates on a flat equatorial grid, which is the
   **supremum** of real spacing. A layout it passes can still collide poleward.
 
@@ -227,7 +227,7 @@ distinctive values — `0.9702957` yes, `0.5` and `6.0` no.
 
 ## Measurement
 
-* Same-arm noise floors: **spine 0.06–0.56%**, **freeform 1.0–1.8%**.
+* Measured same-arm noise floors span **0.06–1.8%** across the tested layouts.
 * A null arm — provably identical geometry — measured **0.63% "denser"**. Any
   area claim smaller than the noise floor is noise. Establish the null.
 * The full suite is ~**270s** against a 300s command cap. It exceeds the cap
@@ -245,7 +245,7 @@ distinctive values — `0.9702957` yes, `0.5` and `6.0` no.
 | `BlueprintNeedTech` | 9 of 11 builds exceed 150 buildings; `quantum-chip` is 8225. Rungs 150 → 3600 → unlimited. Nothing in the repo mentions `blueprintLimit`. |
 | `catalog.MAX_BELT_SLOPE = 4/5` cited from the wrong tool | That is `BuildTool_Path.cs:1954`, the drag. The paste rule is `:2093`, a **sine** test → tan θ ≤ 3/4, **stricter**. Doesn't bite today (ramps are 0.53) but would permit a ramp the game refuses without the vertical-construction unlock. |
 | `_Canvas.ramped = False` | assumes `beltVerticalConstruction`; `belt_rules_for_technologies` is never consulted, and there is no `belt_max_z` check in freeform. |
-| `DEFAULT_MAX_BELT_Z` | freeform, spine and validate all consult the ceiling at a **hardcoded lab level** rather than the spec-derived `BeltAltitudeRules.max_z`. |
+| `DEFAULT_MAX_BELT_Z` | Layout and validation must use the spec-derived `BeltAltitudeRules.max_z`, never a hardcoded lab level. |
 
 ## 4.2 Latent
 
@@ -263,8 +263,8 @@ distinctive values — `0.9702957` yes, `0.5` and `6.0` no.
   measured against the broken lookup and must be re-measured.
 * `catalog.UNPOWERED_ITEM_IDS` has no production reader — `power.coverage`
   restates the rule in `validate._POWERED`.
-* `rules.CONN_SLOTS_PER_OBJECT` is read by no code; four **prose** copies exist
-  in `slots.py:827`, `spine.py:2543`, `freeform.py:795` and `:2726`.
+* `rules.CONN_SLOTS_PER_OBJECT` is read by no code; prose copies remain in the
+  connection-slot implementation.
 * Coverage holes where a wrong value would ship: `DRAG_MAX_ALIGNMENT`,
   `planet.SORTER_SEGMENTS_MAX`, `SORTER_COMBINED_MIN`, `SORTER_PARAM_BIAS`,
   `SORTER_ALTITUDE_UNIT`, `PASTE_LATERAL`, `PASTE_LATERAL_EPS`, `SKEW_PAIR_DEG`.

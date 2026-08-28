@@ -9,7 +9,7 @@ export default [
     ignores: ['dist/**', 'payload/**', 'public/**', 'node_modules/**', 'coverage/**', 'vendor/**'],
   },
   {
-    files: ['src/**/*.{ts,tsx}'],
+    files: ['src/**/*.{ts,tsx}', 'scripts/**/*.{ts,tsx}'],
     languageOptions: {
       parser: tsParser,
       ecmaVersion: 'latest',

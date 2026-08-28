@@ -230,11 +230,14 @@ class TestScalarSettings:
 
     def test_cost_settings(self) -> None:
         req = parse_url(
-            "https://factoriolab.github.io/dsp/list?o=iron-ingot*1&cma=2&cun=1000000&v=11"
+            "https://factoriolab.github.io/dsp/list?o=iron-ingot*1"
+            "&cfa=3&cma=2&cfp=5&csu=7&cun=1000000&v=11"
         )
+        assert req.costs.factor == Fraction(3)
         assert req.costs.machine == Fraction(2)
+        assert req.costs.footprint == Fraction(5)
+        assert req.costs.surplus == Fraction(7)
         assert req.costs.unproduceable == Fraction(1000000)
-        assert req.costs.factor is None
 
 
 class TestSubsetSettings:

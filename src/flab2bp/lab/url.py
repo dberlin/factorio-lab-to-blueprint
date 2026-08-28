@@ -23,10 +23,10 @@ job of :mod:`flab2bp.lab.data`.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import IntEnum
 from fractions import Fraction
-from typing import Any
 from urllib.parse import unquote, urlparse
 
 from flab2bp.lab import params as P
@@ -240,7 +240,7 @@ class LabRequest:
 # --- query-string handling ---------------------------------------------------
 
 
-def _split_query(query: str) -> dict[str, str | list[str]]:
+def _split_query(query: str) -> dict[str, P.ParamValue]:
     """Decode a URL query the way a browser router does.
 
     Deliberately not :func:`urllib.parse.parse_qsl`: that applies
@@ -248,7 +248,7 @@ def _split_query(query: str) -> dict[str, str | list[str]]:
     legacy ``z`` payloads that still contain raw ``+``.  Browsers use
     ``decodeURIComponent``, which leaves ``+`` alone.
     """
-    result: dict[str, str | list[str]] = {}
+    result: dict[str, P.ParamValue] = {}
     for section in query.split("&"):
         if not section:
             continue
@@ -265,13 +265,13 @@ def _split_query(query: str) -> dict[str, str | list[str]]:
     return result
 
 
-def _as_list(value: str | list[str] | None) -> list[str]:
+def _as_list(value: P.ParamValue | None) -> list[str]:
     if value is None:
         return []
     return list(value) if isinstance(value, list) else [value]
 
 
-def _scalar(params: dict[str, Any], key: str) -> str | None:
+def _scalar(params: Mapping[str, P.ParamValue], key: str) -> str | None:
     """A scalar param, taking the last value if the key was repeated."""
     value = params.get(key)
     if isinstance(value, list):
@@ -282,7 +282,9 @@ def _scalar(params: dict[str, Any], key: str) -> str | None:
 # --- record parsers ----------------------------------------------------------
 
 
-def _parse_modules(params: dict[str, Any], mh: ModHash | None) -> tuple[ModuleSetting, ...]:
+def _parse_modules(
+    params: Mapping[str, P.ParamValue], mh: ModHash | None
+) -> tuple[ModuleSetting, ...]:
     out: list[ModuleSetting] = []
     for entry in _as_list(params.get("e")):
         f = P.split_fields(entry)
@@ -296,7 +298,7 @@ def _parse_modules(params: dict[str, Any], mh: ModHash | None) -> tuple[ModuleSe
 
 
 def _parse_beacons(
-    params: dict[str, Any],
+    params: Mapping[str, P.ParamValue],
     modules: tuple[ModuleSetting, ...],
     mh: ModHash | None,
 ) -> tuple[BeaconSetting, ...]:
@@ -315,7 +317,7 @@ def _parse_beacons(
 
 
 def _parse_objectives(
-    params: dict[str, Any],
+    params: Mapping[str, P.ParamValue],
     modules: tuple[ModuleSetting, ...],
     beacons: tuple[BeaconSetting, ...],
     mh: ModHash | None,
@@ -350,7 +352,9 @@ def _parse_objectives(
     return tuple(out)
 
 
-def _parse_items(params: dict[str, Any], mh: ModHash | None) -> dict[str, ItemSetting]:
+def _parse_items(
+    params: Mapping[str, P.ParamValue], mh: ModHash | None
+) -> dict[str, ItemSetting]:
     out: dict[str, ItemSetting] = {}
     for entry in _as_list(params.get("i")):
         f = P.split_fields(entry)
@@ -365,7 +369,7 @@ def _parse_items(params: dict[str, Any], mh: ModHash | None) -> dict[str, ItemSe
 
 
 def _parse_recipes(
-    params: dict[str, Any],
+    params: Mapping[str, P.ParamValue],
     modules: tuple[ModuleSetting, ...],
     beacons: tuple[BeaconSetting, ...],
     mh: ModHash | None,
@@ -387,7 +391,7 @@ def _parse_recipes(
 
 
 def _parse_machines(
-    params: dict[str, Any],
+    params: Mapping[str, P.ParamValue],
     modules: tuple[ModuleSetting, ...],
     beacons: tuple[BeaconSetting, ...],
     mh: ModHash | None,
@@ -410,7 +414,11 @@ def _get(fields: list[str], index: int) -> str | None:
     return fields[index] if index < len(fields) else None
 
 
-def _indices(value: str | None, arr: tuple[Any, ...], empty: type) -> tuple[Any, ...] | None:
+def _indices[T](
+    value: str | None,
+    arr: Sequence[T],
+    empty: Callable[[], T],
+) -> tuple[T, ...] | None:
     parsed = P.parse_indices(value, arr, empty=empty)
     return None if parsed is None else tuple(parsed)
 
@@ -447,7 +455,9 @@ def parse_url(url: str, *, mod_hash: ModHash | None = None) -> LabRequest:
     is_bare = zipped is None
 
     if zipped is not None:
-        params: dict[str, Any] = dict(P.to_params(P.inflate_query_value(zipped)))
+        params: dict[str, P.ParamValue] = dict(
+            P.to_params(P.inflate_query_value(zipped))
+        )
         params["z"] = zipped
     else:
         params = dict(raw)

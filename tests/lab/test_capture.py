@@ -31,19 +31,27 @@ import json
 import os
 from fractions import Fraction
 from pathlib import Path
-from typing import Any
+from typing import TypedDict
 
 import pytest
 
 from flab2bp.lab.capture import (
     BROWSER_ENV,
     CaptureError,
+    SolveProbeState,
     _await_solve,
     capture_flow_csv,
     find_browser,
 )
 from flab2bp.lab.data import load_vendored
-from flab2bp.lab.flow import FlowError, cross_check, flow_from_text, pin_request, unsupplied_inputs
+from flab2bp.lab.flow import (
+    FlowError,
+    FlowSelection,
+    cross_check,
+    flow_from_text,
+    pin_request,
+    unsupplied_inputs,
+)
 from flab2bp.lab.schema import Dataset
 from flab2bp.lab.url import parse_url
 from flab2bp.rates.solve import solve
@@ -62,14 +70,25 @@ def data() -> Dataset:
     return load_vendored()
 
 
-class _FakePage:
+class _InvalidSolveProbeState(TypedDict):
+    rows: str
+    csv: bool
+
+
+class _FakePage[StateT]:
     """A page whose probe answers from a canned script, one entry per poll."""
 
-    def __init__(self, script: list[dict[str, Any]]) -> None:
-        self.script = script
-        self.calls = 0
+    def __init__(self, script: list[StateT]) -> None:
+        self.script: list[StateT] = script
+        self.calls: int = 0
 
-    async def evaluate(self, expression: str, **kwargs: Any) -> str:
+    async def evaluate(
+        self,
+        expression: str,
+        *,
+        await_promise: bool = False,
+        return_by_value: bool = False,
+    ) -> str:
         state = self.script[min(self.calls, len(self.script) - 1)]
         self.calls += 1
         return json.dumps(state)
@@ -122,7 +141,7 @@ class TestWaitConditions:
         The button is inside `@if (objectivesStore.steps().length)`, so its
         presence *is* the statement that the in-page solver produced steps.
         """
-        page = _FakePage([{"rows": 4, "csv": False}] * 3)
+        page = _FakePage[SolveProbeState]([{"rows": 4, "csv": False}] * 3)
         with pytest.raises(CaptureError, match="did not finish solving"):
             asyncio.run(_await_solve(page, REAL_URL, deadline_s=0.9))
         assert page.calls >= 2, "should have polled repeatedly, not slept once"
@@ -134,15 +153,19 @@ class TestWaitConditions:
         with the next one, or we could read a half-built flow and silently drop
         steps from the blueprint.
         """
-        page = _FakePage(
-            [{"rows": 1, "csv": True}, {"rows": 3, "csv": True}, {"rows": 4, "csv": True},
-             {"rows": 4, "csv": True}]
+        page = _FakePage[SolveProbeState](
+            [
+                {"rows": 1, "csv": True},
+                {"rows": 3, "csv": True},
+                {"rows": 4, "csv": True},
+                {"rows": 4, "csv": True},
+            ]
         )
         asyncio.run(_await_solve(page, REAL_URL, deadline_s=5.0))
         assert page.calls >= 4, "returned before the count repeated"
 
     def test_an_empty_page_times_out_naming_what_it_awaited(self) -> None:
-        page = _FakePage([{"rows": 0, "csv": False}])
+        page = _FakePage[SolveProbeState]([{"rows": 0, "csv": False}])
         with pytest.raises(CaptureError) as exc:
             asyncio.run(_await_solve(page, REAL_URL, deadline_s=0.6))
         message = str(exc.value)
@@ -150,9 +173,16 @@ class TestWaitConditions:
         assert "0 step row(s)" in message
         assert REAL_URL in message
 
+    def test_invalid_probe_payload_refuses_at_the_browser_boundary(self) -> None:
+        page = _FakePage[_InvalidSolveProbeState](
+            [_InvalidSolveProbeState(rows="four", csv=True)]
+        )
+        with pytest.raises(CaptureError, match="invalid solve probe"):
+            asyncio.run(_await_solve(page, REAL_URL, deadline_s=0.6))
+
 
 @pytest.fixture(scope="module")
-def flow() -> Any:
+def flow() -> FlowSelection:
     """The checked-in real export, through the same door a user's file uses."""
     return flow_from_text(REAL.read_text(), url=REAL_URL)
 
@@ -160,11 +190,11 @@ def flow() -> Any:
 class TestRealCapture:
     """A genuine download, checked in. The round trip the parser never had."""
 
-    def test_it_parses_and_provenance_holds(self, flow: Any) -> None:
+    def test_it_parses_and_provenance_holds(self, flow: FlowSelection) -> None:
         """`flow_from_text` verifies line 1 against the URL we drove to."""
         assert flow.source_url == REAL_URL
 
-    def test_a_real_export_is_exact(self, flow: Any) -> None:
+    def test_a_real_export_is_exact(self, flow: FlowSelection) -> None:
         """The finding that chose CSV over JSON, confirmed on a real file.
 
         `=1/12` is in the bytes on disk. The nine-place decimals in the sample
@@ -176,7 +206,7 @@ class TestRealCapture:
         assert flow.by_item["graphene"].machines == Fraction(3, 2)
         assert flow.by_item["coal"].items == Fraction(180)
 
-    def test_the_header_is_dynamic(self, flow: Any) -> None:
+    def test_the_header_is_dynamic(self, flow: FlowSelection) -> None:
         """Only columns some row fills are emitted -- no `Surplus` here.
 
         Pinned because it is why columns must be read by name, never position.
@@ -184,7 +214,7 @@ class TestRealCapture:
         assert "Surplus" not in flow.columns
         assert "Machines" in flow.columns and "Recipe" in flow.columns
 
-    def test_modules_can_be_a_count_with_no_module(self, flow: Any) -> None:
+    def test_modules_can_be_a_count_with_no_module(self, flow: FlowSelection) -> None:
         """The real file writes `"1 "` -- a count and an EMPTY module id.
 
         Two consequences, both found here rather than reasoned about. Parsing
@@ -195,7 +225,9 @@ class TestRealCapture:
         assert flow.by_item["graphene"].modules == "1"
         assert not flow.uses_proliferator
 
-    def test_it_reproduces_the_stone_bug_and_the_fix(self, data: Dataset, flow: Any) -> None:
+    def test_it_reproduces_the_stone_bug_and_the_fix(
+        self, data: Dataset, flow: FlowSelection
+    ) -> None:
         """The motivating defect, on a real export of a real corpus URL.
 
         FactorioLab belts sulfuric acid in (`sulphuric-acid-vein`, a mining
@@ -213,7 +245,9 @@ class TestRealCapture:
         }
         assert unsupplied_inputs(flow, data, pinned.external_inputs) == ()
 
-    def test_the_exact_cross_check_agrees(self, data: Dataset, flow: Any) -> None:
+    def test_the_exact_cross_check_agrees(
+        self, data: Dataset, flow: FlowSelection
+    ) -> None:
         """Both sides exact rationals, and they match -- machines and rates.
 
         This is the check the JSON export could not support at all.

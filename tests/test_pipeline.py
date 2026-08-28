@@ -27,7 +27,7 @@ def test_every_pair_reports_started_and_then_how_it_ended() -> None:
     steps: list[pipeline.AttemptProgress] = []
     build = pipeline.build(
         SMALL_URL,
-        strategy="spine",
+        strategy="freeform",
         candidates=2,
         time_budget_s=3.0,
         on_progress=steps.append,
@@ -51,10 +51,10 @@ def test_every_pair_reports_started_and_then_how_it_ended() -> None:
 
 
 @pytest.mark.slow
-def test_the_index_counts_only_pairs_that_will_actually_run() -> None:
-    """``total`` is a promise about how many reports are coming."""
+def test_best_reports_freeform_and_sequence_pairs() -> None:
+    """``best`` resolves to both implemented strategies."""
     steps: list[pipeline.AttemptProgress] = []
-    pipeline.build(
+    build = pipeline.build(
         SMALL_URL,
         strategy="best",
         candidates=1,
@@ -62,11 +62,14 @@ def test_the_index_counts_only_pairs_that_will_actually_run() -> None:
         on_progress=steps.append,
     )
     started = [s for s in steps if s.phase == "started"]
-    # One candidate x both strategies.
+    # One candidate x the two production strategies.
     assert len(started) == 2
     assert [s.index for s in started] == [1, 2]
     assert {s.total for s in started} == {2}
-    assert {s.strategy for s in started} == {"spine", "freeform"}
+    assert [s.strategy for s in started] == ["freeform", "sequence-pair"]
+    valid = [attempt for attempt in build.attempts if attempt.ok]
+    winner = min(valid, key=lambda attempt: attempt.area)
+    assert (build.strategy, build.placement.area) == (winner.strategy, winner.area)
 
 
 def test_a_sink_that_raises_is_not_swallowed() -> None:
@@ -84,7 +87,7 @@ def test_a_sink_that_raises_is_not_swallowed() -> None:
 
     with pytest.raises(Boom):
         pipeline.build(
-            SMALL_URL, strategy="spine", candidates=1, time_budget_s=0.5, on_progress=explode
+            SMALL_URL, strategy="freeform", candidates=1, time_budget_s=0.5, on_progress=explode
         )
 
 
@@ -99,7 +102,7 @@ def test_no_proliferator_keeps_only_unsprayed_candidates() -> None:
     """
     build = pipeline.build(
         SMALL_URL,
-        strategy="spine",
+        strategy="freeform",
         candidates=3,
         time_budget_s=3.0,
         no_proliferator=True,
@@ -136,7 +139,7 @@ def test_no_proliferator_refuses_rather_than_quietly_spraying() -> None:
         with pytest.raises(ValueError, match="every candidate"):
             pipeline.build(
                 SMALL_URL,
-                strategy="spine",
+                strategy="freeform",
                 candidates=3,
                 time_budget_s=3.0,
                 no_proliferator=True,

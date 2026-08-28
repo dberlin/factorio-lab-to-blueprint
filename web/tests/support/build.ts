@@ -21,13 +21,13 @@ export function aResult(overrides: Partial<BuildResult> = {}): BuildResult {
   return {
     blueprint: A_BLUEPRINT,
     valid: true,
-    strategy: 'spine',
+    strategy: 'freeform',
     candidate: 'no-proliferator',
     machines: 9,
     area: 575,
     buildings: 42,
     title: 'electromagnetic-matrix 60/min',
-    description: 'flab2bp spine layout',
+    description: 'flab2bp freeform layout',
     outputs: { 'electromagnetic-matrix': { exact: '1', per_minute: 60 } },
     external_inputs: { 'magnetic-coil': { exact: '5/6', per_minute: 50 } },
     input_markers: 1,
@@ -40,7 +40,7 @@ export function aResult(overrides: Partial<BuildResult> = {}): BuildResult {
     attempts: [
       {
         candidate: 'no-proliferator',
-        strategy: 'spine',
+        strategy: 'freeform',
         area: 575,
         ok: true,
         errors: 0,
@@ -66,17 +66,25 @@ const realFetch = globalThis.fetch;
 export function serving(...responses: Scripted[]): Array<{ url: string; init?: RequestInit }> {
   const calls: Array<{ url: string; init?: RequestInit }> = [];
   let index = 0;
-  globalThis.fetch = ((url: string, init?: RequestInit) => {
-    calls.push({ url, init });
-    const next = responses[Math.min(index++, responses.length - 1)];
-    if (!next) throw new Error('serving() was given no responses');
-    return Promise.resolve(
-      new Response(typeof next.body === 'string' ? next.body : JSON.stringify(next.body), {
-        status: next.status ?? 200,
-        headers: { 'content-type': 'application/json' },
-      }),
-    );
-  }) as unknown as typeof fetch;
+  const scriptedFetch = Object.assign(
+    (
+      input: Parameters<typeof fetch>[0],
+      init?: Parameters<typeof fetch>[1],
+    ): Promise<Response> => {
+      const url = input instanceof Request ? input.url : input.toString();
+      calls.push({ url, init });
+      const next = responses[Math.min(index++, responses.length - 1)];
+      if (!next) throw new Error('serving() was given no responses');
+      return Promise.resolve(
+        new Response(typeof next.body === 'string' ? next.body : JSON.stringify(next.body), {
+          status: next.status ?? 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      );
+    },
+    { preconnect: realFetch.preconnect },
+  ) satisfies typeof fetch;
+  globalThis.fetch = scriptedFetch;
   return calls;
 }
 
@@ -89,7 +97,7 @@ export function aJob(overrides: Partial<Job> = {}): Job {
     id: 'abc123',
     state: 'done',
     elapsed_s: 1.2,
-    solver_ceiling_s: 12,
+    solver_ceiling_s: 6,
     progress: null,
     settled: [],
     result: aResult(),

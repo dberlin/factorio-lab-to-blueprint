@@ -19,15 +19,21 @@ Two rules the CLI already follows and this must not break:
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from fractions import Fraction
-from typing import Any
 
 from flab2bp import pipeline
 from flab2bp.layout import markers
 
-#: A JSON object.  ``Any`` rather than ``object`` because ``json.dumps`` is
-#: typed loosely and every consumer here is the encoder itself.
-Json = dict[str, Any]
+#: Recursive JSON values, with no escape hatch for non-serialisable objects.
+type JsonScalar = None | bool | int | float | str
+type JsonValue = JsonScalar | list[JsonValue] | Json
+type Json = dict[str, JsonValue]
+
+
+def _array(values: Iterable[JsonValue]) -> list[JsonValue]:
+    """Materialise a JSON array without invariant container escape hatches."""
+    return list(values)
 
 
 def _rate(value: Fraction) -> Json:
@@ -42,7 +48,10 @@ def _rate(value: Fraction) -> Json:
 
 
 def _rates(values: dict[str, Fraction]) -> Json:
-    return {item: _rate(rate) for item, rate in sorted(values.items())}
+    result: Json = {}
+    for item, rate in sorted(values.items()):
+        result[item] = _rate(rate)
+    return result
 
 
 def describe(build: pipeline.Build, *, allow_invalid: bool = False) -> Json:
@@ -69,6 +78,29 @@ def describe(build: pipeline.Build, *, allow_invalid: bool = False) -> Json:
             "from_url": rules.from_url,
         }
 
+    errors: list[JsonValue] = [
+        {"check": finding.check, "message": finding.message}
+        for finding in build.report.errors
+    ]
+    warnings: list[JsonValue] = [
+        {"check": finding.check, "message": finding.message}
+        for finding in build.report.warnings
+    ]
+    attempts: list[JsonValue] = [
+        {
+            "candidate": attempt.candidate,
+            "strategy": attempt.strategy,
+            "area": attempt.area,
+            "ok": attempt.ok,
+            "errors": len(attempt.report.errors),
+            "chosen": (
+                attempt.candidate == build.spec.label
+                and attempt.strategy == build.strategy
+            ),
+        }
+        for attempt in sorted(build.attempts, key=lambda item: (not item.ok, item.area))
+    ]
+
     return {
         "blueprint": build.blueprint if (valid or allow_invalid) else None,
         "valid": valid,
@@ -82,37 +114,23 @@ def describe(build: pipeline.Build, *, allow_invalid: bool = False) -> Json:
         "outputs": _rates(dict(build.spec.outputs)),
         "external_inputs": _rates(dict(build.spec.external_inputs)),
         "input_markers": int(build.placement.stats.get("input_markers", 0)),
-        "unmarked_inputs": sorted(unmarked),
+        "unmarked_inputs": _array(sorted(unmarked)),
         "flow_pinned": build.flow_pinned,
-        "flow_findings": list(build.flow_findings),
+        "flow_findings": _array(build.flow_findings),
         "belt_rules": belt,
-        # Refusals travel with a successful build too: "spine refused this
-        # candidate" is invisible in `attempts`, and silence there reads as
-        # "it simply was not the best", which is a much more reassuring claim
-        # than the truth.
-        "refused": list(build.refused),
+        # Refusals travel with a successful build too: "sequence-pair refused
+        # this candidate" is invisible in `attempts`, and silence there reads
+        # as "it simply was not the best", which is a much more reassuring
+        # claim than the truth.
+        "refused": _array(build.refused),
         "report": {
             "ok": build.report.ok,
-            "checks_run": list(build.report.checks_run),
-            "skipped": list(build.report.skipped),
-            "errors": [
-                {"check": f.check, "message": f.message} for f in build.report.errors
-            ],
-            "warnings": [
-                {"check": f.check, "message": f.message} for f in build.report.warnings
-            ],
+            "checks_run": _array(build.report.checks_run),
+            "skipped": _array(build.report.skipped),
+            "errors": errors,
+            "warnings": warnings,
         },
-        "attempts": [
-            {
-                "candidate": a.candidate,
-                "strategy": a.strategy,
-                "area": a.area,
-                "ok": a.ok,
-                "errors": len(a.report.errors),
-                "chosen": a.candidate == build.spec.label and a.strategy == build.strategy,
-            }
-            for a in sorted(build.attempts, key=lambda a: (not a.ok, a.area))
-        ],
+        "attempts": attempts,
     }
 
 
@@ -124,4 +142,4 @@ def refusal(reasons: list[str], *, message: str) -> Json:
     is a defect in the layout model rather than a hard instance.  Both are kept:
     the list says what was tried, the message says how to read it.
     """
-    return {"message": message, "reasons": reasons}
+    return {"message": message, "reasons": _array(reasons)}

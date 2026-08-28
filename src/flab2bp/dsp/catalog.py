@@ -54,12 +54,173 @@ from dataclasses import dataclass
 from fractions import Fraction
 from functools import cache
 from pathlib import Path
-from typing import Any
+from typing import Protocol, TypedDict, TypeGuard
 
 from flab2bp.dsp.rules import WORLD_UNITS_PER_LEVEL, PowerNode
 
 _DATA = Path(__file__).parent / "data" / "buildings.json"
 _SLOT_POSES = Path(__file__).parent / "data" / "slot_poses.json"
+
+
+class _JsonLoads(Protocol):
+    def __call__(self, value: str | bytes | bytearray, /) -> object: ...
+
+
+_JSON_LOADS: _JsonLoads = json.loads
+
+
+class _CatalogDataError(ValueError):
+    """A bundled asset has the wrong JSON shape."""
+
+
+class _PoseData(TypedDict):
+    pos: tuple[float, float, float]
+    fwd: tuple[float, float, float]
+
+
+class _PoseEntry(TypedDict):
+    slotPoses: tuple[_PoseData, ...]
+    portPoses: tuple[_PoseData, ...]
+    addonAreas: tuple[tuple[float, float, float], ...]
+
+
+type _PoseTable = dict[str, _PoseEntry]
+
+
+def _json(path: Path) -> object:
+    return _JSON_LOADS(path.read_bytes())
+
+
+def _is_object_mapping(value: object) -> TypeGuard[Mapping[object, object]]:
+    return isinstance(value, Mapping)
+
+
+def _is_object_list(value: object) -> TypeGuard[list[object]]:
+    return isinstance(value, list)
+
+
+def _mapping(value: object, path: str) -> Mapping[object, object]:
+    if not _is_object_mapping(value):
+        raise _CatalogDataError(f"{path} must be an object, got {type(value).__name__}")
+    return value
+
+
+def _array(value: object, path: str) -> list[object]:
+    if not _is_object_list(value):
+        raise _CatalogDataError(f"{path} must be an array, got {type(value).__name__}")
+    return value
+
+
+def _required(row: Mapping[object, object], key: str, path: str) -> object:
+    if key not in row:
+        raise _CatalogDataError(f"{path}.{key} is required")
+    return row[key]
+
+
+def _string(value: object, path: str) -> str:
+    if not isinstance(value, str):
+        raise _CatalogDataError(f"{path} must be a string, got {type(value).__name__}")
+    return value
+
+
+def _integer(value: object, path: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise _CatalogDataError(f"{path} must be an integer, got {type(value).__name__}")
+    return value
+
+
+def _number(value: object, path: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise _CatalogDataError(f"{path} must be a number, got {type(value).__name__}")
+    return float(value)
+
+
+def _boolean(value: object, path: str) -> bool:
+    if not isinstance(value, bool):
+        raise _CatalogDataError(f"{path} must be a boolean, got {type(value).__name__}")
+    return value
+
+
+def _tuple3(value: object, path: str) -> tuple[float, float, float]:
+    parts = _array(value, path)
+    if len(parts) != 3:
+        raise _CatalogDataError(f"{path} must contain exactly three numbers")
+    return (
+        _number(parts[0], f"{path}[0]"),
+        _number(parts[1], f"{path}[1]"),
+        _number(parts[2], f"{path}[2]"),
+    )
+
+
+def _optional_integer(
+    row: Mapping[object, object], key: str, path: str, default: int
+) -> int:
+    if key not in row:
+        return default
+    return _integer(row[key], f"{path}.{key}")
+
+
+def _pose_data(value: object, path: str) -> _PoseData:
+    row = _mapping(value, path)
+    return {
+        "pos": _tuple3(_required(row, "pos", path), f"{path}.pos"),
+        "fwd": _tuple3(_required(row, "fwd", path), f"{path}.fwd"),
+    }
+
+
+def _parse_pose_table(value: object) -> _PoseTable:
+    raw = _mapping(value, str(_SLOT_POSES))
+    table: _PoseTable = {}
+    for key, entry_value in raw.items():
+        prefab = _string(key, f"{_SLOT_POSES} key")
+        path = f"{_SLOT_POSES}.{prefab}"
+        entry = _mapping(entry_value, path)
+        slot_values = (
+            _array(entry["slotPoses"], f"{path}.slotPoses")
+            if "slotPoses" in entry
+            else []
+        )
+        port_values = (
+            _array(entry["portPoses"], f"{path}.portPoses")
+            if "portPoses" in entry
+            else []
+        )
+        addon_values = (
+            _array(entry["addonAreas"], f"{path}.addonAreas")
+            if "addonAreas" in entry
+            else []
+        )
+        table[prefab] = {
+            "slotPoses": tuple(
+                _pose_data(item, f"{path}.slotPoses[{index}]")
+                for index, item in enumerate(slot_values)
+            ),
+            "portPoses": tuple(
+                _pose_data(item, f"{path}.portPoses[{index}]")
+                for index, item in enumerate(port_values)
+            ),
+            "addonAreas": tuple(
+                _tuple3(item, f"{path}.addonAreas[{index}]")
+                for index, item in enumerate(addon_values)
+            ),
+        }
+    return table
+
+
+def _optional_number(
+    row: Mapping[object, object], key: str, path: str
+) -> float | None:
+    if key not in row or row[key] is None:
+        return None
+    return _number(row[key], f"{path}.{key}")
+
+
+def _optional_boolean(
+    row: Mapping[object, object], key: str, path: str
+) -> bool:
+    if key not in row:
+        return False
+    return _boolean(row[key], f"{path}.{key}")
 
 
 # --- id ranges -------------------------------------------------------------
@@ -71,6 +232,8 @@ SPLITTER_ID = 2020
 SPRAY_COATER_ID = 2313
 FRACTIONATOR_ID = 2314
 TESLA_TOWER_ID = 2201
+MATRIX_LAB_IDS = (2901, 2902)
+STORAGE_STACK_IDS = (2020, 2101, 2102, 2106)
 
 
 def is_belt(item_id: int) -> bool:
@@ -142,6 +305,11 @@ SORTER_RATE_AT_1 = {
     2014: Fraction(20),     # Pile Sorter
 }
 
+#: Sorter item ids ordered from cheapest/slowest to fastest.
+SORTER_TIERS = tuple(
+    sorted(SORTER_RATE_AT_1, key=SORTER_RATE_AT_1.__getitem__)
+)
+
 def sorter_rate(item_id: int, span: int) -> Fraction:
     """Items/second a sorter of this tier sustains across ``span`` tiles."""
     if span < 1 or span > SORTER_MAX_REACH:
@@ -168,26 +336,37 @@ BELT_RATE = {
 #: rise of 1/2 over one tile is a world slope of 2/3, not 1/2.
 BELT_Z_PER_WORLD_UNIT = Fraction(3, 4)
 
-#: The steepest a belt may be built without the vertical-construction unlock,
-#: as ``world rise / horizontal run``.  Straight from ``BuildTool_Path``::
+#: The steepest a BELT-TO-BELT LINK may be pasted without the
+#: vertical-construction unlock, as ``world rise / horizontal run``.
 #:
-#:     if (!history.beltVerticalConstruction && num25 > 0.8f)
-#:         buildPreview2.condition = EBuildCondition.TooSteep;
+#: This must come from ``BuildTool_BlueprintPaste``, not ``BuildTool_Path``:
+#: the path tool compares its rise/run ratio with ``0.8f``, while the paste at
+#: ``BuildTool_BlueprintPaste.cs:2093-2095`` compares the sine directly::
 #:
-#: where ``num25`` is ``|Maths.SphericalSlopeRatio(a, b)|``, which is
-#: ``(|b| - |a|) / horizontal distance``.  With the unlock the test is skipped
-#: entirely -- there is then NO slope limit, which is what lets a belt climb
-#: straight up.
+#:     if (!history.beltVerticalConstruction
+#:         && Abs(Dot(lpos.normalized, (output.lpos - lpos).normalized)) > 0.6f)
+#:         condition = EBuildCondition.TooSteep;
 #:
-#: This one number settles what the fixtures could not.  A blueprint rise of
-#: 1/2 across one tile is a world slope of ``(1/2)/(3/4) / 1 = 2/3``, inside
-#: the limit; the ``dz = 1`` across one tile we shipped is ``4/3``, outside it,
-#: and the game rejects it as ``TooSteep``.  The fix and the bug are both
-#: confirmed by the same line of the game's own code.
-MAX_BELT_SLOPE = Fraction(4, 5)
+#: The dot is the radial component of the unit link vector, so it is
+#: ``sin(theta)``.  ``sin(theta) <= 3/5`` is exactly
+#: ``tan(theta) <= 3/4``.  With the unlock the test is skipped entirely.
+MAX_BELT_SLOPE = Fraction(3, 4)
+
+def belt_slope_allowed(
+    world_rise: Fraction | int,
+    horizontal_run: Fraction | int,
+    *,
+    unlocked: bool,
+) -> bool:
+    """Whether the paste's ``TooSteep`` clause accepts one belt link."""
+    if unlocked:
+        return True
+    rise = abs(Fraction(world_rise))
+    run = abs(Fraction(horizontal_run))
+    return run > 0 and rise <= MAX_BELT_SLOPE * run
 
 #: A belt climbs this much per tile of run at the steepest slope the corpus
-#: uses.  NOT a cap: ``MAX_BELT_SLOPE`` allows up to ``3/5`` of blueprint z per
+#: uses.  NOT a cap: ``MAX_BELT_SLOPE`` allows up to ``9/16`` of blueprint z per
 #: tile, and with the unlock, any amount.  This is the value we EMIT, chosen
 #: because it lands altitudes on :data:`BELT_Z_QUANTUM` and because all 118
 #: clean ramp steps in the corpus use it.
@@ -211,21 +390,32 @@ VERTICAL_STEP = Fraction(1)
 # 2.80-4.97 world units where this said a flat 1 -- it is not even the right
 # number for a Spray Coater, whose box is 1.8975 high.
 #
-# Its only readers were `spine._TRUNK_Z` and two comments.  No validator ever
-# consulted it, so it enforced nothing; a constant in `dsp/` with no check
-# behind it is an unported rule wearing a ported rule's clothes, which is
-# exactly what the consolidation plan's clause 4 exists to catch.  The trunk
-# altitude it really set now lives in `layout.spine`, next to the other
-# structural choices, where it is legible as the knob it is.
+# The scalar was deleted because no validator consulted it; crossing height is
+# derived per collider by ``dsp.colliders.belt_crossing_height``.
 
-# `BEND_MIN_ANGLE_WHEN_SLOPED_RAD` and `SLOPE_DEADZONE` moved to
-# `flab2bp.dsp.rules`, where `rules.too_bend_to_lift` applies them.  They are
-# bare `EBuildCondition` thresholds -- not read against the building table and
-# not parameterised by technology -- so this module was never their home, and
-# they sat here for a year with no reader anywhere in the repository.
+# Path-only ``TooBendToLift`` constants used to live here.  The applicability
+# audit proved BlueprintPaste never assigns that condition, so the dead
+# definitions were deleted rather than promoted into the paste registry.
 
 #: Lab level on a NEW save, from ``GameHistoryData.Init``: ``labLevel = 3``.
 DEFAULT_LAB_LEVEL = 3
+
+#: Storage level on a new save, ``GameHistoryData.cs:576``.
+DEFAULT_STORAGE_LEVEL = 2
+
+#: FactorioLab prefix for Mass Construction, whose five levels set
+#: ``GameHistoryData.blueprintLimit`` through ``UnlockTechFunction`` case 28.
+MASS_CONSTRUCTION_PREFIX = "mass-construction-"
+
+#: Facility-count cap by Mass Construction level.  Index 0 is an explicitly
+#: unresearched save; level 5 is unlimited and therefore represented by
+#: ``None`` rather than by an invented finite sentinel.
+#:
+#: The paste compares this value literally at
+#: ``BuildTool_BlueprintPaste.cs:1122``.  ``GameHistoryData.cs:1898`` is the
+#: assignment, and ``UITechTree.cs:1625`` distinguishes finite values through
+#: 3600 from the unlimited tier.
+BLUEPRINT_LIMIT_BY_LEVEL: tuple[int | None, ...] = (0, 150, 300, 900, 3600, None)
 
 
 def belt_max_z(lab_level: int = DEFAULT_LAB_LEVEL) -> Fraction:
@@ -289,13 +479,35 @@ class BeltAltitudeRules:
     #: Whether the slope limit is lifted -- i.e. whether a belt may climb with
     #: no horizontal run at all.
     vertical_construction: bool
-    #: Lab level the ceiling was derived from, for error messages.
+    #: Storage/splitter stack level derived from Vertical Construction.
+    storage_level: int
+    #: Lab level the ceiling and lab stack threshold were derived from.
     lab_level: int
     #: False when the URL carried no technology set at all.  The values above
     #: are then FactorioLab's own default -- every technology researched -- not
-    #: a guess of ours and not a new save.  Kept separate from an explicitly
-    #: empty set, which is a real save with nothing researched.
+    #: a guess of ours and not a new save.
     from_url: bool
+
+
+def _technology_level(technology_ids: Set[str], prefix: str) -> int:
+    """Highest numeric suffix researched for one levelled technology."""
+    levels = (
+        int(suffix)
+        for technology_id in technology_ids
+        if technology_id.startswith(prefix)
+        and (suffix := technology_id.removeprefix(prefix)).isdigit()
+    )
+    return max(levels, default=0)
+
+
+def blueprint_limit_for_technologies(
+    technology_ids: Set[str] | None,
+    all_technology_ids: Set[str],
+) -> int | None:
+    """Paste facility-count cap for the FactorioLab technology selection."""
+    effective = all_technology_ids if technology_ids is None else technology_ids
+    level = min(_technology_level(effective, MASS_CONSTRUCTION_PREFIX), 5)
+    return BLUEPRINT_LIMIT_BY_LEVEL[level]
 
 
 def belt_rules_for_technologies(
@@ -345,21 +557,22 @@ def belt_rules_for_technologies(
     An explicit empty set still means a save with nothing researched, and is
     honoured as such.
 
-    The lab level is the starting 3 plus one per researched Vertical
-    Construction level.  ``UnlockValues`` lives in the game's binary asset
-    protos and could not be read, so "one per level" is an ASSUMPTION -- its
-    checkable consequence is that FactorioLab models 6 levels, giving at most
-    lab 9 and a ceiling of 26.55, while the user's own save reaches 38.55 at
-    lab 13.  So it UNDER-estimates a developed save, which is the safe
-    direction: it refuses altitudes the save would allow and never emits one it
-    would not.
+    The lab and storage levels are their starting values plus the highest
+    researched Vertical Construction level.  ``UnlockValues`` lives in the
+    game's binary asset protos and could not be read, so "one per level" remains
+    an explicit assumption.  FactorioLab models six levels, giving at most lab
+    9 and a ceiling of 26.55, while the user's own save reaches 38.55 at lab 13.
+    This under-estimates a developed save, the safe direction: it refuses
+    altitudes the save would allow and never emits one it would not.
     """
     effective = all_technology_ids if technology_ids is None else technology_ids
-    levels = sum(1 for t in effective if t.startswith(VERTICAL_CONSTRUCTION_PREFIX))
+    levels = _technology_level(effective, VERTICAL_CONSTRUCTION_PREFIX)
     lab_level = DEFAULT_LAB_LEVEL + levels
+    storage_level = DEFAULT_STORAGE_LEVEL + levels
     return BeltAltitudeRules(
         max_z=belt_max_z(lab_level),
         vertical_construction=BELT_SLOPE_UNLOCK_TECH in effective,
+        storage_level=storage_level,
         lab_level=lab_level,
         from_url=technology_ids is not None,
     )
@@ -408,53 +621,6 @@ BELT_Z_QUANTUM = BELT_CLIMB_PER_TILE
 #: bound would have rejected that, so no constant replaces it.
 
 
-
-# --- power -----------------------------------------------------------------
-
-#: Tesla Tower supply **radius** in tiles -- not a diameter.  Settled two ways.
-#: Game data: ``PrefabDesc.powerCoverRadius`` <- ``PowerDesc.coverRadius`` =
-#: 10.5, with no ``coverArea``/``Diameter`` field existing in either struct.
-#: Empirically: across working published blueprints, 94 machines sit farther
-#: than 5.25 from their nearest tower (which the diameter reading would leave
-#: unpowered) and *zero* machines anywhere exceed 10.5.  Bracketed both sides.
-TESLA_COVER_RADIUS = Fraction(21, 2)
-
-#: Tower-to-tower link distance: the maximum centre-to-centre separation at
-#: which two power nodes connect.  A *distance*, not a diameter.
-#:
-#: Settled from the game's own IL (``DSPGAME_Data/Managed/Assembly-CSharp.dll``,
-#: disassembled with ``ikdasm``), because the corpus provably cannot settle it:
-#: the largest tower nearest-neighbour distance there is 11.00, which fits both
-#: 22.5-as-distance and 11.25-as-half-a-diameter, only 2.2% apart.  The chain
-#: carries the value through with no scaling anywhere:
-#:
-#:   ``PowerDesc.connectDistance`` (Unity component, under a "Power Node"
-#:   header) -> ``PrefabDesc.powerConnectDistance`` -> ``PowerSystem
-#:   .NewNodeComponent(entityId, conn, cover)`` -> ``PowerNodeComponent
-#:   .connectDistance`` -> ``Node.connDistance2 = connectDistance *
-#:   connectDistance``
-#:
-#: and ``PowerSystem.OnNodeAdded`` then links two nodes when
-#:
-#:   ``dx*dx + dy*dy + dz*dz <= max(a.connDistance2, b.connDistance2)``
-#:
-#: i.e. squared centre-to-centre distance against the squared field value.  The
-#: identical shape one branch later tests ``d2 <= coverRadius2`` for consumer
-#: coverage, and ``coverRadius`` is independently proven to be a radius -- so
-#: the two fields have the same units and the diameter reading is refuted.
-#: There is no ``coverArea`` or diameter field in ``PowerDesc`` at all; the sole
-#: "diameter" string in the whole assembly belongs to Unity's TAA settings.
-#:
-#: Two consequences worth knowing.  The test is ``max`` of the pair, not ``min``
-#: or a sum, so a long-reach node pulls a short-reach one into its network: a
-#: Wireless Power Tower (45.5) links to a Tesla Tower at up to 45.5, not 22.5.
-#: And node positions are first projected onto a common sphere of radius
-#: ``realRadius + 0.2``, so the comparison is against a 3D chord -- which is why
-#: this constant is only usable on flat, non-polar layouts.
-TESLA_LINK_DISTANCE = Fraction(45, 2)
-
-#: Belts are unpowered in DSP.  Sorters and spray coaters are not.
-UNPOWERED_ITEM_IDS = frozenset(BELT_IDS)
 
 
 # --- fixtures safe for geometric validation --------------------------------
@@ -637,13 +803,46 @@ def _kebab(name: str) -> str:
 
 @cache
 def _recipe_ids() -> dict[str, int]:
-    raw = json.loads(_RECIPES.read_text())
-    table = {_kebab(r["name"]): int(r["id"]) for r in raw}
-    by_name = {r["name"]: int(r["id"]) for r in raw}
+    values = _array(_json(_RECIPES), str(_RECIPES))
+    table: dict[str, int] = {}
+    by_name: dict[str, int] = {}
+    for index, value in enumerate(values):
+        path = f"{_RECIPES}[{index}]"
+        row = _mapping(value, path)
+        name = _string(_required(row, "name", path), f"{path}.name")
+        dsp_id = _integer(_required(row, "id", path), f"{path}.id")
+        table[_kebab(name)] = dsp_id
+        by_name[name] = dsp_id
     for factoriolab_id, dsp_name in _RECIPE_ALIASES.items():
         if dsp_name in by_name:
             table[factoriolab_id] = by_name[dsp_name]
     return table
+
+
+@cache
+def _recipe_output_items() -> dict[int, tuple[int, ...]]:
+    values = _array(_json(_RECIPES), str(_RECIPES))
+    table: dict[int, tuple[int, ...]] = {}
+    for index, value in enumerate(values):
+        path = f"{_RECIPES}[{index}]"
+        row = _mapping(value, path)
+        recipe = _integer(_required(row, "id", path), f"{path}.id")
+        results = _array(_required(row, "results", path), f"{path}.results")
+        table[recipe] = tuple(
+            dict.fromkeys(
+                _integer(result, f"{path}.results[{result_index}]")
+                for result_index, result in enumerate(results)
+            )
+        )
+    return table
+
+
+def recipe_output_item_ids(recipe: int) -> tuple[int, ...]:
+    """Distinct DSP item ids produced by one numeric DSP recipe id."""
+    try:
+        return _recipe_output_items()[recipe]
+    except KeyError:
+        raise KeyError(f"no DSP recipe outputs known for recipe id {recipe}") from None
 
 
 def recipe_id(factoriolab_id: str) -> int:
@@ -701,9 +900,16 @@ _ITEMS = Path(__file__).parent / "data" / "items.json"
 
 @cache
 def _item_ids() -> dict[str, int]:
-    raw = json.loads(_ITEMS.read_text())
-    table = {_kebab(i["name"]): int(i["id"]) for i in raw}
-    by_name = {i["name"]: int(i["id"]) for i in raw}
+    values = _array(_json(_ITEMS), str(_ITEMS))
+    table: dict[str, int] = {}
+    by_name: dict[str, int] = {}
+    for index, value in enumerate(values):
+        path = f"{_ITEMS}[{index}]"
+        row = _mapping(value, path)
+        name = _string(_required(row, "name", path), f"{path}.name")
+        dsp_id = _integer(_required(row, "id", path), f"{path}.id")
+        table[_kebab(name)] = dsp_id
+        by_name[name] = dsp_id
     for factoriolab_id, dsp_name in _ITEM_ALIASES.items():
         if dsp_name in by_name:
             table[factoriolab_id] = by_name[dsp_name]
@@ -773,6 +979,21 @@ class SlotPose:
     fz: float
 
 
+
+@dataclass(frozen=True, slots=True)
+class AddonSupplyPose:
+    """One game-extracted positional belt connection for an addon.
+
+    Horizontal offsets are in grid tiles and ``dz`` is in project altitude
+    levels.  Fractions keep routing decisions exact after the asset loader has
+    normalized Unity's rounded world-height value.
+    """
+
+    dx: Fraction
+    dy: Fraction
+    dz: Fraction
+    area: int
+
 @dataclass(frozen=True, slots=True)
 class Building:
     """One buildable thing, with the geometry the layout stage needs."""
@@ -792,6 +1013,9 @@ class Building:
     #: belt sitting a level above one of these is a CONNECTION rather than a
     #: crossing.  ``game.belt_crossing`` needs to know the difference.
     multi_level: int
+    #: ``PrefabDesc.stackHeight`` in world units.  ``None`` for buildings the
+    #: paste does not subject to the vertical-construction stack ladder.
+    stack_height: Fraction | None
     #: Belt and fluid PORT poses -- ``PrefabDesc.portPoses``, which is
     #: ``SlotConfig.slotPoses`` in the prefab.  The name is the game's and it is
     #: a trap: these are where a belt or a pipe meets the building, and they are
@@ -815,9 +1039,7 @@ class Building:
     #: also how the game's own checks read it: they skip a peer whose
     #: ``slotPoses.Length`` does not cover the index.
     slot_poses: tuple[SlotPose, ...]
-    #: Where a belt ADDON looks for the belts it attaches to, as ``(dx, dy, dz)``
-    #: offsets from the addon's own tile -- ``dx``/``dy`` in tiles, ``dz`` in
-    #: altitude levels.  ``PrefabDesc.addonAreaPoses``.
+    #: Where a belt ADDON looks for the belts it attaches to.
     #:
     #: This is how a Spray Coater is supplied, and it is not by sorter.  On
     #: build the game takes the nearest belt within 1.0 of each area and writes
@@ -826,7 +1048,7 @@ class Building:
     #: at ``(0, 0, 0)`` -- the coater rides it.  Area 1 is the PROLIFERATOR
     #: supply, at ``(0, -1.25, 1)``: one tile and a quarter behind the coater
     #: and exactly one altitude level up.
-    addon_areas: tuple[tuple[float, float, float], ...]
+    addon_areas: tuple[AddonSupplyPose, ...]
     cover_radius: Fraction
     connect_distance: Fraction
     #: ``PrefabDesc.isPowerNode`` -- ``PowerDesc.node`` on the prefab, read by
@@ -970,22 +1192,26 @@ _BELT_ENTRIES = {
 }
 
 
-def _slot_poses_for(prefab: str, table: Mapping[str, Any]) -> tuple[SlotPose, ...]:
-    """``prefab``'s sorter slots, with Unity's model axes mapped onto the grid."""
-    return tuple(
-        SlotPose(
-            dx=float(p["pos"][0]),
-            dy=float(p["pos"][2]),
-            dz=float(p["pos"][1]),
-            fx=float(p["fwd"][0]),
-            fy=float(p["fwd"][2]),
-            fz=float(p["fwd"][1]),
-        )
-        for p in (table.get(prefab) or {}).get("slotPoses", ())
+def _pose(data: _PoseData) -> SlotPose:
+    pos = data["pos"]
+    fwd = data["fwd"]
+    return SlotPose(
+        dx=pos[0],
+        dy=pos[2],
+        dz=pos[1],
+        fx=fwd[0],
+        fy=fwd[2],
+        fz=fwd[1],
     )
 
 
-def _port_poses_for(prefab: str, table: Mapping[str, Any]) -> tuple[SlotPose, ...]:
+def _slot_poses_for(prefab: str, table: _PoseTable) -> tuple[SlotPose, ...]:
+    """``prefab``'s sorter slots, with Unity's model axes mapped onto the grid."""
+    entry = table.get(prefab)
+    return () if entry is None else tuple(_pose(data) for data in entry["slotPoses"])
+
+
+def _port_poses_for(prefab: str, table: _PoseTable) -> tuple[SlotPose, ...]:
     """``prefab``'s BELT ports, in the same grid frame as :func:`_slot_poses_for`.
 
     ``SlotConfig.slotPoses``, which ``PrefabDesc`` calls ``portPoses`` -- the
@@ -997,70 +1223,205 @@ def _port_poses_for(prefab: str, table: Mapping[str, Any]) -> tuple[SlotPose, ..
     the building it is on, and the ``yaw`` field in ``slots`` is a rounded
     degree where the forward is the vector the game itself dots against.
     """
-    return tuple(
-        SlotPose(
-            dx=float(p["pos"][0]),
-            dy=float(p["pos"][2]),
-            dz=float(p["pos"][1]),
-            fx=float(p["fwd"][0]),
-            fy=float(p["fwd"][2]),
-            fz=float(p["fwd"][1]),
-        )
-        for p in (table.get(prefab) or {}).get("portPoses", ())
+    entry = table.get(prefab)
+    return () if entry is None else tuple(_pose(data) for data in entry["portPoses"])
+
+
+#: World units per altitude level, from the blueprint paste path::
+#:
+#:     lpos = dir * (localOffset_z * 1.3333333f + 0.2f + realRadius)
+#:
+#: Only :func:`_addon_areas_for` uses it, to turn the prefab's world-space addon
+#: offsets into the levels the rest of this project counts in.
+
+
+def _asset_altitude_level(value: object) -> Fraction:
+    """Normalize the asset's rounded Unity height into project levels."""
+    level = Fraction(str(value)) / Fraction(WORLD_UNITS_PER_LEVEL).limit_denominator()
+    nearest = round(level)
+    if abs(level - nearest) <= Fraction(1, 10_000):
+        return Fraction(nearest)
+    return level.limit_denominator(10_000)
+
+
+def _asset_stack_height(value: object) -> Fraction:
+    """Recover the game's stack pitch from the two-decimal asset dump.
+
+    ``buildings.json`` records the Splitter's ``2.666667f`` as ``2.67``.  In
+    blueprint z that is 2.0025 rather than the exact two-level pitch used by
+    ``BuildTool_BlueprintPaste.cs:2063``.  Snap only when the converted pitch is
+    within the dump's half-cent precision of an integer, then convert back to
+    world units.
+    """
+    height = Fraction(str(value))
+    pitch = height * BELT_Z_PER_WORLD_UNIT
+    nearest = round(pitch)
+    if abs(pitch - nearest) <= Fraction(1, 200):
+        return Fraction(nearest) / BELT_Z_PER_WORLD_UNIT
+    return height
+
+
+def stack_pitch_z(item_id: int) -> Fraction | None:
+    """One vertical stack step in blueprint ``z``, from prefab data."""
+    height = building(item_id).stack_height
+    if height is None:
+        return None
+    return (height * BELT_Z_PER_WORLD_UNIT).limit_denominator(10_000)
+
+
+def vertical_construction_allowed(
+    item_id: int,
+    z: Fraction | int,
+    altitude_rules: BeltAltitudeRules,
+) -> bool:
+    """Whether the paste's ``OutOfVerticalConstructionHeight`` ladder accepts it.
+
+    ``BuildTool_BlueprintPaste.cs:2036-2068`` converts world altitude to a
+    rounded stack index and refuses when that index is at least the save's lab
+    or storage level.  Python's :func:`round` and ``Mathf.RoundToInt`` both use
+    midpoint-to-even.
+    """
+    pitch = stack_pitch_z(item_id)
+    if pitch is None:
+        return True
+    if item_id not in STORAGE_STACK_IDS and item_id not in MATRIX_LAB_IDS:
+        return True
+    level = (
+        altitude_rules.lab_level
+        if item_id in MATRIX_LAB_IDS
+        else altitude_rules.storage_level
     )
+    return round(Fraction(z) / pitch) < level
 
 
 def _addon_areas_for(
-    prefab: str, table: Mapping[str, Any]
-) -> tuple[tuple[float, float, float], ...]:
-    """``prefab``'s addon areas, in tiles across and altitude LEVELS up."""
+    prefab: str, table: _PoseTable
+) -> tuple[AddonSupplyPose, ...]:
+    """``prefab``'s addon areas, in tiles across and altitude levels up."""
+    entry = table.get(prefab)
+    if entry is None:
+        return ()
     return tuple(
-        (float(a[0]), float(a[2]), float(a[1]) / WORLD_UNITS_PER_LEVEL)
-        for a in (table.get(prefab) or {}).get("addonAreas", ())
+        AddonSupplyPose(
+            dx=Fraction(str(pose[0])),
+            dy=Fraction(str(pose[2])),
+            dz=_asset_altitude_level(pose[1]),
+            area=area,
+        )
+        for area, pose in enumerate(entry["addonAreas"])
     )
+
+
+def _number_or_default(
+    row: Mapping[object, object], key: str, path: str, default: float = 0.0
+) -> float:
+    if key not in row:
+        return default
+    return _number(row[key], f"{path}.{key}")
+
+
+def _building_slot(value: object, path: str) -> dict[str, float]:
+    row = _mapping(value, path)
+    return {
+        key: _number(_required(row, key, path), f"{path}.{key}")
+        for key in ("x", "y", "z", "yaw")
+    }
 
 
 @cache
 def _load() -> dict[int, Building]:
     from flab2bp.dsp import colliders
 
-    raw = json.loads(_DATA.read_text())
-    poses = json.loads(_SLOT_POSES.read_text())
+    values = _array(_json(_DATA), str(_DATA))
+    poses = _parse_pose_table(_json(_SLOT_POSES))
     out: dict[int, Building] = {}
-    for row in raw:
-        item_id = row.get("itemId")
-        if item_id is None:
+    for index, value in enumerate(values):
+        path = f"{_DATA}[{index}]"
+        row = _mapping(value, path)
+        item_id_value = _required(row, "itemId", path)
+        if item_id_value is None:
             continue  # prefab variant with no item of its own
+        item_id = _integer(item_id_value, f"{path}.itemId")
         if item_id in out:
             # Several prefab variants can share one item id (splitter-a/b/c).
             # The first is authoritative; later ones are alternate models.
             continue
+        prefab = _string(_required(row, "prefab", path), f"{path}.prefab")
+        name = _string(_required(row, "name", path), f"{path}.name")
+        model_index_value = _required(row, "modelIndex", path)
+        if model_index_value is None:
+            raise _CatalogDataError(f"buildable prefab {prefab!r} has no modelIndex")
+        model_index = _integer(model_index_value, f"{path}.modelIndex")
+
         # NOT `row["blueprintBoxSize"]`: the game computes that field from a
         # single collider (`ReadPrefab` 217456) and keeps the LAST Build box,
         # which for a prefab with three or more boxes is precisely the box
         # `buildColliders` leaves out.  Read the colliders instead.
-        ex, ez = colliders.own_centre_extent(row["modelIndex"], 0.0)
+        ex, ez = colliders.own_centre_extent(model_index, 0.0)
         w, h = derive_footprint(ex), derive_footprint(ez)
-        power = row.get("power") or {}
+
+        slot_values = (
+            _array(row["slots"], f"{path}.slots") if "slots" in row else []
+        )
+        stack_height = _optional_number(row, "stackHeight", path)
+        power_value = row.get("power")
+        power = (
+            None
+            if power_value is None
+            else _mapping(power_value, f"{path}.power")
+        )
+        power_path = f"{path}.power"
         building = Building(
-            prefab=row["prefab"],
+            prefab=prefab,
             item_id=item_id,
-            name=row["name"],
-            model_index=row["modelIndex"],
+            name=name,
+            model_index=model_index,
             width=int(w),
             height=int(h),
-            addon_type=row.get("addonType", 0),
-            multi_level=row.get("multiLevel") or 0,
-            slots=tuple(row.get("slots") or ()),
-            port_poses=_port_poses_for(row["prefab"], poses),
-            slot_poses=_slot_poses_for(row["prefab"], poses),
-            addon_areas=_addon_areas_for(row["prefab"], poses),
-            cover_radius=Fraction(power.get("coverRadius") or 0).limit_denominator(100),
-            connect_distance=Fraction(power.get("connectDistance") or 0).limit_denominator(100),
-            is_power_node=bool(power.get("node")),
-            is_accumulator=bool(power.get("accumulator")),
-            wind_forced_power=bool(power.get("wind")),
-            geothermal=bool(power.get("geothermal")),
+            addon_type=_optional_integer(row, "addonType", path, 0),
+            multi_level=_optional_integer(row, "multiLevel", path, 0),
+            stack_height=(
+                _asset_stack_height(stack_height)
+                if stack_height is not None
+                else None
+            ),
+            slots=tuple(
+                _building_slot(slot, f"{path}.slots[{slot_index}]")
+                for slot_index, slot in enumerate(slot_values)
+            ),
+            port_poses=_port_poses_for(prefab, poses),
+            slot_poses=_slot_poses_for(prefab, poses),
+            addon_areas=_addon_areas_for(prefab, poses),
+            cover_radius=Fraction(
+                _number_or_default(power, "coverRadius", power_path)
+                if power is not None
+                else 0
+            ).limit_denominator(100),
+            connect_distance=Fraction(
+                _number_or_default(power, "connectDistance", power_path)
+                if power is not None
+                else 0
+            ).limit_denominator(100),
+            is_power_node=(
+                _optional_boolean(power, "node", power_path)
+                if power is not None
+                else False
+            ),
+            is_accumulator=(
+                _optional_boolean(power, "accumulator", power_path)
+                if power is not None
+                else False
+            ),
+            wind_forced_power=(
+                _optional_boolean(power, "wind", power_path)
+                if power is not None
+                else False
+            ),
+            geothermal=(
+                _optional_boolean(power, "geothermal", power_path)
+                if power is not None
+                else False
+            ),
         )
         out[item_id] = building
 
@@ -1074,6 +1435,7 @@ def _load() -> dict[int, Building]:
             height=1,
             addon_type=0,
             multi_level=0,
+            stack_height=None,
             slots=(),
             port_poses=(),
             slot_poses=(),
@@ -1082,6 +1444,14 @@ def _load() -> dict[int, Building]:
             connect_distance=Fraction(0),
         )
     return out
+
+
+def addon_supply_pose(item_id: int, *, area: int = 1) -> AddonSupplyPose:
+    """Return one addon's authoritative positional belt connection."""
+    for pose in building(item_id).addon_areas:
+        if pose.area == area:
+            return pose
+    raise ValueError(f"building item {item_id} has no addon supply area {area}")
 
 
 def building(item_id: int) -> Building:
@@ -1094,6 +1464,43 @@ def building(item_id: int) -> Building:
 def footprint(item_id: int) -> tuple[int, int]:
     b = building(item_id)
     return (b.width, b.height)
+
+
+@cache
+def collider_span(item_id: int, yaw: float) -> tuple[float, float]:
+    """Oriented collider span in grid tiles, measured about the building centre.
+
+    Falls back to the oriented footprint when collider data is unavailable.
+    Unlike :func:`clearance`, this is not rounded up; pairwise center-distance
+    checks need the actual half-span sum rather than two independently rounded
+    reservation pitches.
+    """
+    from flab2bp.dsp import colliders
+
+    fw, fh = oriented_footprint(item_id, yaw)
+    try:
+        boxes = colliders.build_colliders(building(item_id).model_index)
+    except Exception:  # noqa: BLE001 - preserve footprint fallback
+        return (float(fw), float(fh))
+    if not boxes:
+        return (float(fw), float(fh))
+    half_turn = math.radians(yaw) * 0.5
+    spin = (0.0, math.sin(half_turn), 0.0, math.cos(half_turn))
+    ex = ez = 0.0
+    for centre, half, rot in boxes:
+        turned = colliders._qmul(spin, rot)
+        rotated_centre = colliders._qrot(spin, centre)
+        for sx in (-1.0, 1.0):
+            for sy in (-1.0, 1.0):
+                for sz in (-1.0, 1.0):
+                    local = (sx * half[0], sy * half[1], sz * half[2])
+                    spun = colliders._qrot(turned, local)
+                    ex = max(ex, abs(rotated_centre[0] + spun[0]))
+                    ez = max(ez, abs(rotated_centre[2] + spun[2]))
+    return (
+        ex * 2 / colliders.GRID_ARC,
+        ez * 2 / colliders.GRID_ARC,
+    )
 
 
 @cache
@@ -1126,10 +1533,7 @@ def clearance(item_id: int, yaw: float) -> tuple[int, int]:
     from flab2bp.dsp import colliders
 
     fw, fh = oriented_footprint(item_id, yaw)
-    try:
-        ex, ez = colliders.own_centre_extent(building(item_id).model_index, yaw)
-    except Exception:  # noqa: BLE001 - an unreadable model must not stop a layout
-        return (fw, fh)
+    ex, ez = colliders.own_centre_extent(building(item_id).model_index, yaw)
     if not (ex or ez):
         return (fw, fh)
     return (

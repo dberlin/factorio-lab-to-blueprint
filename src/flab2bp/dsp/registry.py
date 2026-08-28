@@ -75,12 +75,13 @@ import importlib
 from collections.abc import Iterator
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any
+from typing import TypedDict, Unpack, cast
 
 __all__ = [
     "ENTRIES",
     "Entry",
     "Kind",
+    "PASTE_AMBIGUITIES",
     "by_symbol",
     "of_kind",
     "resolve",
@@ -125,6 +126,11 @@ class Entry:
     #: Set for a ``RULE`` that is knowingly consulted by nothing, with the
     #: reason.  R2 counts these separately; it does not excuse them.
     unconsulted_because: str | None = None
+    #: Why R4 deliberately does not perturb this RULE.  Reserved for a rule
+    #: outside emitted-blueprint paste, or a dead protocol bound with no reader;
+    #: applicable paste rules stay in R4 even while their downstream reader is
+    #: a declared gap.
+    mutation_exempt_because: str | None = None
 
     @property
     def module(self) -> str:
@@ -139,7 +145,19 @@ class Entry:
         return f"flab2bp.dsp.{self.symbol}"
 
 
-def _e(symbol: str, kind: Kind, **kw: Any) -> Entry:
+class _EntryOptions(TypedDict, total=False):
+    depends_on: tuple[str, ...]
+    resolved_by: str | None
+    projection_of: str | None
+    hardcodes: tuple[str, ...]
+    lint: bool
+    lint_enumerate: str | None
+    note: str
+    unconsulted_because: str | None
+    mutation_exempt_because: str | None
+
+
+def _e(symbol: str, kind: Kind, **kw: Unpack[_EntryOptions]) -> Entry:
     return Entry(symbol=symbol, kind=kind, **kw)
 
 
@@ -166,6 +184,8 @@ _CATALOG: tuple[Entry, ...] = (
     _e("catalog.SPRAY_COATER_ID", Kind.DATA),
     _e("catalog.FRACTIONATOR_ID", Kind.DATA),
     _e("catalog.TESLA_TOWER_ID", Kind.DATA),
+    _e("catalog.STORAGE_STACK_IDS", Kind.DATA),
+    _e("catalog.MATRIX_LAB_IDS", Kind.DATA),
     _e("catalog.ENERGY_EXCHANGER_ID", Kind.DATA),
     _e("catalog.RAY_RECEIVER_ID", Kind.DATA),
     _e(
@@ -173,19 +193,6 @@ _CATALOG: tuple[Entry, ...] = (
         Kind.DERIVED,
         projection_of="catalog.BELT_IDS",
         note="Union of the belt, sorter and splitter ids; no content of its own.",
-    ),
-    _e(
-        "catalog.UNPOWERED_ITEM_IDS",
-        Kind.RULE,
-        note="Which buildings the game does not require power for.  Belts only.",
-        unconsulted_because=(
-            "LEDGER ROW, found by R2.  No production code reads it -- only "
-            "tests/layout/test_spine.py does.  `power.coverage` decides who "
-            "needs power from `validate._POWERED`, a hand-written set of Kinds "
-            "with the comment 'Belts are unpowered in DSP'.  That is the same "
-            "rule stated twice, in the module the plan calls the "
-            "best-consolidated rule in the codebase.  Companion to step 1.4."
-        ),
     ),
     _e(
         "catalog.SORTER_MAX_REACH",
@@ -205,6 +212,12 @@ _CATALOG: tuple[Entry, ...] = (
         resolved_by="catalog.sorter_rate",
         note="Keyed by item id; sorter_rate divides by span.",
     ),
+    _e(
+        "catalog.SORTER_TIERS",
+        Kind.DERIVED,
+        projection_of="catalog.SORTER_RATE_AT_1",
+        note="Sorter ids ordered by their one-tile throughput.",
+    ),
     # `catalog.SORTER_SPANS_ALTITUDE` was declared here.  Phase V deleted it:
     # the game MEASURES a sorter's altitude span (`BuildTool_Inserter.cs:1311`)
     # and applies a MINIMUM to it (`:1347`).  Nothing caps it, so the rule we
@@ -223,9 +236,9 @@ _CATALOG: tuple[Entry, ...] = (
         resolved_by="catalog.belt_rules_for_technologies",
         lint=True,
         note=(
-            "With the unlock there is no slope limit at all, so the rule is a "
-            "function of researched tech; BeltAltitudeRules.vertical_construction "
-            "is where the variation lives."
+            "The blueprint-paste sine gate at BuildTool_BlueprintPaste.cs:2093 "
+            "is tan(theta) <= 3/4.  With the unlock there is no slope limit, so "
+            "BeltAltitudeRules.vertical_construction resolves the tech branch."
         ),
     ),
     _e(
@@ -247,35 +260,81 @@ _CATALOG: tuple[Entry, ...] = (
         depends_on=(_TECH_SLOPE,),
         resolved_by="catalog.belt_rules_for_technologies",
     ),
-    # `catalog.BELT_CROSSING_CLEARANCE` was declared here as a RULE whose fix
-    # was "the ledger's".  Phase V's answer was that there is no rule: no
-    # citation exists and no validator ever read it.  It survives only as a
-    # spine-local trunk-altitude knob, which is not this registry's business.
-    _e(
-        "rules.BEND_MIN_ANGLE_WHEN_SLOPED_RAD",
-        Kind.RULE,
-        lint=True,
-        unconsulted_because=(
-            "The audit's headline finding, and plan step 0.1 is IN FLIGHT to "
-            "settle it by pasting.  Ported with a citation, read by nothing.  "
-            "This row is the reason R2 exists; it is not excused by being here."
-        ),
-    ),
-    _e(
-        "rules.SLOPE_DEADZONE",
-        Kind.RULE,
-        lint=True,
-        unconsulted_because="Companion to BEND_MIN_ANGLE_WHEN_SLOPED_RAD; same row.",
-    ),
+    # `BELT_CROSSING_CLEARANCE` had no game predicate.  The Path-only
+    # `TooBendToLift` thresholds also used to live here despite never running
+    # during BlueprintPaste; both dead definitions are deliberately absent.
     _e(
         "catalog.DEFAULT_LAB_LEVEL",
         Kind.RULE,
         depends_on=(_TECH_LAB,),
         resolved_by="catalog.belt_rules_for_technologies",
+        unconsulted_because=(
+            "Save-rule normalization consumes this outside layout/validator roots."
+        ),
+        mutation_exempt_because=(
+            "R4 measures emitted-layout seams, not request normalization."
+        ),
         note="GameHistoryData.Init: labLevel = 3 on a new save.",
+    ),
+    _e(
+        "catalog.DEFAULT_STORAGE_LEVEL",
+        Kind.RULE,
+        depends_on=(_TECH_LAB,),
+        resolved_by="catalog.belt_rules_for_technologies",
+        unconsulted_because=(
+            "BeltAltitudeRules carries the derived storage level, but no emitted-"
+            "paste strategy or validator consumes that field yet."
+        ),
+        mutation_exempt_because=(
+            "R4 perturbs observable emitted-paste seams; carrying this value in an "
+            "otherwise-read dataclass is not an observable seam."
+        ),
+        note="GameHistoryData.Init: storageLevel = 2 on a new save.",
+    ),
+    _e("catalog.MASS_CONSTRUCTION_PREFIX", Kind.DATA),
+    _e(
+        "catalog.BLUEPRINT_LIMIT_BY_LEVEL",
+        Kind.DATA,
+        note="Mass Construction prototype lookup; None is the unlimited tier.",
     ),
     _e("catalog.BELT_SLOPE_UNLOCK_TECH", Kind.DATA),
     _e("catalog.VERTICAL_CONSTRUCTION_PREFIX", Kind.DATA),
+    _e(
+        "catalog.belt_slope_allowed",
+        Kind.RULE,
+        depends_on=(_TECH_SLOPE, "world rise", "horizontal run"),
+        note=(
+            "The exact TooSteep predicate is read by validation and routing; no "
+            "downstream literal or fixed move table owns the rule."
+        ),
+    ),
+    _e(
+        "catalog.blueprint_limit_for_technologies",
+        Kind.RULE,
+        depends_on=("Mass Construction technology level",),
+        unconsulted_because=(
+            "PASTE GAP BlueprintNeedTech: migrate reporting/validation to compare "
+            "the emitted building count with this lookup."
+        ),
+    ),
+    _e(
+        "catalog.stack_pitch_z",
+        Kind.RULE,
+        depends_on=("building item id", "PrefabDesc.stackHeight"),
+        unconsulted_because=(
+            "PASTE GAP OutOfVerticalConstructionHeight: downstream validation "
+            "does not yet read the prefab-derived stack pitch."
+        ),
+    ),
+    _e(
+        "catalog.vertical_construction_allowed",
+        Kind.RULE,
+        depends_on=("building item id", "blueprint z", _TECH_LAB),
+        unconsulted_because=(
+            "PASTE GAP OutOfVerticalConstructionHeight: migrate splitter/lab "
+            "placement and validation to this tech-aware predicate."
+        ),
+    ),
     _e(
         "catalog.DEFAULT_MAX_BELT_Z",
         Kind.DERIVED,
@@ -295,8 +354,6 @@ _CATALOG: tuple[Entry, ...] = (
         projection_of="catalog.BELT_CLIMB_PER_TILE",
         note="Plan step 4.2: the game quantises nothing.  This is our emitter's step.",
     ),
-    _e("catalog.TESLA_COVER_RADIUS", Kind.RULE, lint=True),
-    _e("catalog.TESLA_LINK_DISTANCE", Kind.RULE, lint=True),
     _e("catalog.GEOMETRY_SAFE_FIXTURES", Kind.DATA),
     _e("catalog.LOW_CONFIDENCE_FOOTPRINTS", Kind.DATA),
     _e("catalog.NO_DSP_ITEM_PREFIXES", Kind.DATA),
@@ -308,13 +365,22 @@ _CATALOG: tuple[Entry, ...] = (
         Kind.RULE,
         depends_on=("lab level, i.e. researched vertical construction",),
         resolved_by="catalog.belt_rules_for_technologies",
+        unconsulted_because=(
+            "Save-rule normalization resolves this before layout strategies run."
+        ),
+        mutation_exempt_because=(
+            "R4 measures emitted-layout seams, not request normalization."
+        ),
         note="GameHistoryData.buildMaxHeight, quoted in the function's docstring.",
     ),
     _e(
         "catalog.clearance",
         Kind.RULE,
         depends_on=("building item id", "yaw"),
-        note="The compiled projection the plan's Phase 2 holds up as the good case.",
+        note=(
+            "Compiled reservation projection read by packers.  Validation asks "
+            "the underlying collider predicate directly, so R4's seam is strategy-only."
+        ),
     ),
     _e(
         "catalog.sorter_rate",
@@ -340,7 +406,15 @@ _COLLIDERS: tuple[Entry, ...] = (
     ),
     _e("colliders.PLANET_RADIUS", Kind.RULE, lint=True),
     _e("colliders.PLANET_SEGMENT", Kind.RULE, lint=True),
-    _e("colliders.SORTER_END_EXTENSION", Kind.RULE, lint=True),
+    _e(
+        "colliders.SORTER_END_EXTENSION",
+        Kind.RULE,
+        lint=True,
+        note=(
+            "Read by sorter collider construction on both production paths; R4's "
+            "current boundary corpus moves strategy seating only, not a validator verdict."
+        ),
+    ),
     _e("colliders.SORTER_HALF_LENGTH_MIN", Kind.RULE, lint=True),
     _e("colliders.BELT_PROBE_RADIUS", Kind.RULE, lint=True),
     _e("colliders.BELT_PROBE_LIFT", Kind.RULE, lint=True),
@@ -357,17 +431,27 @@ _COLLIDERS: tuple[Entry, ...] = (
         "planet.SORTER_SEGMENTS_MAX",
         Kind.RULE,
         depends_on=("how many ends are machines",),
+        unconsulted_because=(
+            "The band-specific sorter oracle is not used by current flat layouts."
+        ),
+        mutation_exempt_because=(
+            "No emitted layout currently consumes the band-specific oracle."
+        ),
         note="`num133`, BuildTool_BlueprintPaste.cs:3446-3459.",
     ),
     _e(
         "planet.SORTER_COMBINED_MIN",
         Kind.RULE,
         depends_on=("how many ends are machines",),
+        unconsulted_because=(
+            "The band-specific sorter oracle is not used by current flat layouts."
+        ),
+        mutation_exempt_because=(
+            "No emitted layout currently consumes the band-specific oracle."
+        ),
         note=(
-            "`num134`, same passage: a floor on "
-            "sqrt(segmentsAcross^2 + altitudeSteps^2) in GRID CELLS, not world "
-            "units.  This is what convicts a one-tile machine-to-machine direct "
-            "insert at 1.329 against a floor of 1.451."
+            "`num134`: a floor on sqrt(segmentsAcross^2 + altitudeSteps^2) "
+            "in grid cells."
         ),
     ),
     _e(
@@ -375,21 +459,41 @@ _COLLIDERS: tuple[Entry, ...] = (
         Kind.RULE,
         depends_on=("how many ends are machines",),
         unconsulted_because=(
-            "LEDGER ROW.  Nothing reads it: `planet.sorter_condition` ports the "
-            "`num129` bias inline rather than through this mapping, so the "
-            "constant and the code that implements it have already drifted "
-            "apart on the day they landed."
+            "PASTE GAP sorter parameter emission: sorter_parameter owns the "
+            "projection, but no downstream emitter consumes it yet."
+        ),
+        mutation_exempt_because=(
+            "The centralized projection has a direct boundary control, but emitted "
+            "blueprints do not consume the parameter yet."
         ),
         note="`num129 -= 0.3f` in the machine-to-machine case.",
     ),
     _e(
+        "planet.sorter_parameter",
+        Kind.RULE,
+        depends_on=("projected sorter pose", "how many ends are machines"),
+        unconsulted_because=(
+            "PASTE GAP sorter parameter emission: migrate the blueprint emitter "
+            "from its span approximation to this paste projection."
+        ),
+        mutation_exempt_because=(
+            "The centralized projection has a direct boundary control, but emitted "
+            "blueprints do not call it yet."
+        ),
+    ),
+    _e(
         "planet.SORTER_ALTITUDE_UNIT",
         Kind.RULE,
-        # 0.2 is far too common a literal to lint on; see MATCH_SNAP_MAX_SQR.
         lint=False,
+        unconsulted_because=(
+            "The band-specific sorter oracle is not used by current flat layouts."
+        ),
+        mutation_exempt_because=(
+            "No emitted layout currently consumes the band-specific oracle."
+        ),
         note=(
-            "`num130 = Abs(lpos.magnitude - lpos2.magnitude) / 0.2f`.  The "
-            "game's own unit for a radial step -- not a tile, not a level."
+            "`num130 = Abs(lpos.magnitude - lpos2.magnitude) / 0.2f`, the "
+            "game's radial-step unit."
         ),
     ),
     _e(
@@ -447,19 +551,36 @@ _RULES: tuple[Entry, ...] = (
     _e("rules.ADDON_TO_SLOT", Kind.RULE, note=_SLOT_INDEX_NOTE),
     _e("rules.SPLITTER_INPUT_TO_SLOT", Kind.RULE, note=_SLOT_INDEX_NOTE),
     _e("rules.SPLITTER_OUTPUT_FROM_SLOT", Kind.RULE, note=_SLOT_INDEX_NOTE),
-    _e("rules.BELT_INPUT_SLOTS", Kind.RULE, note=_SLOT_INDEX_NOTE),
     _e(
-        "rules.CONN_SLOTS_PER_OBJECT",
+        "rules.BELT_INPUT_SLOTS",
         Kind.RULE,
-        unconsulted_because=(
-            "LEDGER ROW, found by R2.  Plan step 1.7 calls for removing three "
-            "hand-rolled `* 16 + slot` copies; what R2 actually finds is that "
-            "`entityConnPool[objId * 16 + slot]` survives only in PROSE -- "
-            "slots.py:827, spine.py:2543, freeform.py:795 and :2726 quote it in "
-            "docstrings -- while the constant itself is read by no code at all, "
-            "in dsp or out of it.  R1 cannot see those either, because 16 is far "
-            "too ordinary a literal to hunt for.  A rule quoted four times and "
-            "enforced nowhere."
+        note=(
+            f"{_SLOT_INDEX_NOTE} Emission allocates this range; validation checks "
+            "the resulting occupied cells rather than consulting the range."
+        ),
+    ),
+    _e(
+        "rules.BELT_PORT_FEED_FROM_SLOT",
+        Kind.RULE,
+        note=(
+            "The belt's own output pool cell when it feeds a building port; all "
+            "70 game-authored records use slot 0."
+        ),
+    ),
+    _e(
+        "rules.BELT_PORT_DRAW_TO_SLOT",
+        Kind.RULE,
+        note=(
+            "The belt's own input pool cell when it draws from a building port; "
+            "all 108 game-authored records use slot 1."
+        ),
+    ),
+    _e(
+        "rules.BELT_PORT_MAX_TILE_GAP",
+        Kind.KNOB,
+        note=(
+            "A corpus-derived validator bound, not a paste threshold: the game "
+            "replays the recorded port link without re-deriving its pose."
         ),
     ),
     _e(
@@ -470,13 +591,66 @@ _RULES: tuple[Entry, ...] = (
             "the 9th auto-slot connection -- is enforced by nothing.  Corpus "
             "worst is 6, so it has never bound."
         ),
+        mutation_exempt_because=(
+            "No emitted-paste reader consults the silent auto-slot pool bound; R2 "
+            "keeps the dead protocol rule explicit."
+        ),
     ),
     _e("rules.SPLITTER_MAX_PORTS", Kind.RULE),
+    _e(
+        "rules.CHEMICAL_OUTPUT_BUFFER_CRAFTS",
+        Kind.RULE,
+        lint=True,
+        note=(
+            "AssemblerComponent.InternalUpdate admits exactly 20 ordinary Chemical "
+            "craft completions into each product buffer before blocking the next."
+        ),
+    ),
     _e("rules.SLOT_REACH", Kind.RULE, lint=True),
     _e("rules.PASTE_SNAP", Kind.RULE, lint=True),
-    _e("rules.PASTE_LATERAL", Kind.RULE),
+    _e(
+        "rules.PASTE_LATERAL",
+        Kind.RULE,
+        mutation_exempt_because=(
+            "The branch is reachable only for a silo, and this project emits no "
+            "silo; the applicable snap/epsilon/radial branches remain in R4."
+        ),
+    ),
     _e("rules.PASTE_RADIAL", Kind.RULE, lint=True),
     _e("rules.PASTE_LATERAL_EPS", Kind.RULE, lint=True),
+    _e(
+        "rules.PASTE_BELT_LINK_MAX_SQR",
+        Kind.RULE,
+        lint=True,
+        unconsulted_because=(
+            "PASTE GAP TooFar: migrate belt-link validation to the 5.3 squared-"
+            "world-distance cap; vertical construction does not disable it."
+        ),
+    ),
+    _e(
+        "rules.belt_link_too_far",
+        Kind.RULE,
+        depends_on=("squared world distance between linked belts",),
+        unconsulted_because=(
+            "PASTE GAP TooFar: no validator currently checks a two-level belt link."
+        ),
+    ),
+    _e(
+        "rules.COATER_RESHAPE_MAX",
+        Kind.RULE,
+        lint=True,
+        unconsulted_because=(
+            "PASTE GAP TooSkew: selected-band coater reshape is not yet validated."
+        ),
+    ),
+    _e(
+        "rules.coater_reshape_allowed",
+        Kind.RULE,
+        depends_on=("SpraycoaterComponent reshape x", "reshape y"),
+        unconsulted_because=(
+            "PASTE GAP TooSkew: migrate band certification to this predicate."
+        ),
+    ),
     _e(
         "rules.SORTER_LENGTH",
         Kind.RULE,
@@ -504,10 +678,10 @@ _RULES: tuple[Entry, ...] = (
         lint=True,
         unconsulted_because=(
             "The same limit for a turret.  We never place a turret, so nothing "
-            "can consult it and no perturbation can turn anything red.  This is "
-            "the one row where zero readers is the correct state -- but it is "
-            "declared, so R2 counts it as unconsulted rather than hiding it."
+            "can consult it.  This is declared for R2/R1 rather than mutated as "
+            "though a blueprint emitted by this project could reach it."
         ),
+        mutation_exempt_because="Turret addon placement is outside emitted blueprints.",
     ),
     _e("rules.ADDON_NEIGHBOUR_RADIAL_GAP", Kind.RULE, lint=True),
     # The three Phase V added after this registry was written.  MATCH_* are the
@@ -534,6 +708,10 @@ _RULES: tuple[Entry, ...] = (
             "because the compiled oracle checks us against it (15488/15488); "
             "unread by the pipeline BY THE RULE'S OWN TERMS, not by neglect."
         ),
+        mutation_exempt_because=(
+            "MatchInserter is an interactive missing-peer recovery path; every "
+            "sorter this project emits carries both peers."
+        ),
         note=(
             "BuildTool_BlueprintPaste.cs:1588 `if (num4 < 6f && ...)` -- a "
             "SQUARED world distance, so 2.449 world units, NOT a sibling of "
@@ -545,6 +723,10 @@ _RULES: tuple[Entry, ...] = (
         Kind.RULE,
         lint=True,  # 0.9702957 is distinctive; a bare copy of it IS a defect.
         unconsulted_because="Same ladder, same reachability condition, same reason.",
+        mutation_exempt_because=(
+            "MatchInserter is an interactive missing-peer recovery path; every "
+            "sorter this project emits carries both peers."
+        ),
         note="BuildTool_BlueprintPaste.cs:1536, cos 14 on BOTH dots.",
     ),
     _e(
@@ -643,6 +825,40 @@ _ENCODING: tuple[Entry, ...] = (
 )
 
 
+#: Paste-time facts that cannot honestly be certified from the blueprint alone,
+#: or whose binary prototype data has not yet been extracted.  The reporting
+#: script prints these separately from code migrations.
+PASTE_AMBIGUITIES: tuple[tuple[str, str], ...] = (
+    (
+        "NeedGround",
+        "terrain and water raycasts depend on the exact planet location chosen by the player",
+    ),
+    (
+        "PowerTooClose/live state",
+        "live-network and prebuild loops depend on objects already present on the planet",
+    ),
+    (
+        "Collide/live state",
+        "birth-point and existing-object collision branches depend on the target planet",
+    ),
+    (
+        "Vertical Construction unlock values",
+        "GameHistoryData assignments are decompiled, but TechProto.UnlockValues remain "
+        "unextracted; one level per FactorioLab tier is the explicit safe assumption",
+    ),
+    (
+        "Mass Construction intermediate limits",
+        "the paste comparison and assignment are decompiled and UI pins 150/3600/unlimited; "
+        "the 300/900 intermediate prototype values still need an asset dump",
+    ),
+    (
+        "INAPPLICABLE desc flags",
+        "group D guards are traced to named buildings but not yet cross-checked against a "
+        "complete PrefabDesc flag dump",
+    ),
+)
+
+
 ENTRIES: tuple[Entry, ...] = _CATALOG + _COLLIDERS + _RULES + _ENCODING
 
 _BY_SYMBOL: dict[str, Entry] = {e.symbol: e for e in ENTRIES}
@@ -667,7 +883,8 @@ def rules() -> tuple[Entry, ...]:
 def resolve(entry: Entry) -> object:
     """The live object an entry names.  Raises if the declaration has rotted."""
     module = importlib.import_module(f"flab2bp.dsp.{entry.module}")
-    return getattr(module, entry.name)
+    # Erase reflection's dynamic type only to top-type object; callers must narrow.
+    return cast(object, getattr(module, entry.name))
 
 
 def declared_symbols() -> Iterator[str]:
@@ -701,13 +918,13 @@ class LintException:
     why: str
 
 
-#: Measured, not assumed.  Running R1 with no exceptions at all produced exactly
-#: thirteen hits across the twelve sites below and nothing else, and every one
-#: of them is a quality knob
-#: whose number happens to coincide with a game constant.  That is the finding
-#: R1 actually produced: the plan expected it to "start green", and it does --
-#: but only once the coincidences are written down, because the game's constants
-#: are ordinary numbers.  0.8 is both ``SLOT_REACH`` and four fifths.
+#: Measured, not assumed.  Running R1 with no exceptions produced the sites
+#: below and nothing else.  Each is a quality knob, timeout, or integer infinity
+#: sentinel whose number happens to coincide with a game constant.  That is the
+#: finding R1 actually produced: the game's constants are ordinary numbers.
+#: The plan expected R1 to start green; it does once these coincidences are
+#: written down.  ``0.8`` remains ``SLOT_REACH`` even though the
+#: paste-authoritative belt slope is now ``3/4``.
 #:
 #: The teeth are still there.  These suppress a value AT A SITE, not the value.
 #: A new ``0.8`` anywhere else in ``layout/`` still fails.
@@ -732,9 +949,75 @@ LINT_EXCEPTIONS: tuple[LintException, ...] = (
     ),
     LintException(
         "flab2bp.layout.freeform",
+        "<module>",
+        24.0,
+        "_DETERMINISTIC_PACK_STRIPS: empirical packing-worker threshold; not skew degrees",
+    ),
+    LintException(
+        "flab2bp.layout.sequence_pair",
+        "SearchEnergy",
+        0.35,
+        "weighted-HPWL objective coefficient; not SORTER_END_EXTENSION geometry",
+    ),
+    LintException(
+        "flab2bp.layout.sequence_pair",
+        "SearchEnergy",
+        0.2,
+        "history-cost objective coefficient; not BELT_PROBE_LIFT geometry",
+    ),
+    LintException(
+        "flab2bp.layout.sequence_pair",
+        "SearchEnergy",
+        0.1,
+        "direct-insert miss objective coefficient; not sorter geometry or paste epsilon",
+    ),
+    LintException(
+        "flab2bp.layout.compact_seed",
+        "CompactTopologyBeamConfig",
+        0.2,
+        "per-candidate CP deterministic work; not BELT_PROBE_LIFT geometry",
+    ),
+    LintException(
+        "flab2bp.layout.finalize",
+        "uses_tall_saturated_role",
+        24.0,
+        "shared strip-count complexity cap; not skew degrees",
+    ),
+    LintException(
+        "flab2bp.layout.sequence_solver",
+        "<module>",
+        24.0,
+        "_TOPOLOGY_BEAM_MAX_STRIPS: quadratic model-size cap; not skew degrees",
+    ),
+    LintException(
+        "flab2bp.layout.sequence_solver",
+        "<module>",
+        0.2,
+        "_TOPOLOGY_BEAM_DETERMINISTIC_SECONDS: CP work; not BELT_PROBE_LIFT geometry",
+    ),
+    LintException(
+        "flab2bp.layout.sequence_solver",
+        "<module>",
+        200.0,
+        "_SHARED_PACK_MACHINE_MAX: measured seed-role size cap; not planet geometry",
+    ),
+    LintException(
+        "flab2bp.layout.sequence_solver",
+        "<module>",
+        30.0,
+        "_COMPACT_SEED_DIRECT_MIN_BUDGET_S: wall seconds; not skew degrees",
+    ),
+    LintException(
+        "flab2bp.layout.freeform",
         "_astar",
         30.0,
         "`1 << 30` as an infinity sentinel for the heuristic; not degrees",
+    ),
+    LintException(
+        "flab2bp.layout.sequence_pair",
+        "derive_stage_seed",
+        30.0,
+        "`value >> 30` bit-mixing shift; not the sorter skew angle",
     ),
     LintException(
         "flab2bp.layout.freeform",
@@ -765,13 +1048,6 @@ LINT_EXCEPTIONS: tuple[LintException, ...] = (
         "_candidate_heights",
         1.6,
         "height sweep factor; PASTE_RADIAL is world units",
-    ),
-    LintException(
-        "flab2bp.layout.spine",
-        "_link_towers",
-        0.6,
-        "aim a relay 60% of a link out; a fraction of TESLA_LINK_DISTANCE, "
-        "not the addon radial gap",
     ),
     LintException(
         "flab2bp.rates.candidates",

@@ -3,7 +3,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "rsbuild dev",
+    "dev": "concurrently --kill-others --names api,web \"bun run dev:api\" \"bun run dev:frontend:local\"",
+    "dev:api": "uv run --directory .. flab2bp-web --no-build",
+    "dev:frontend:local": "wait-on http-get://127.0.0.1:8000/api/health && rsbuild dev",
+    "dev:frontend": "rsbuild dev",
     "build": "rsbuild build",
     "test": "rstest run",
     "test:watch": "rstest watch",
@@ -34,9 +37,11 @@
     "@types/react-dom": "^19.2.4",
     "@types/three": "^0.185.4",
     "@typescript-eslint/parser": "8.67.0",
+    "concurrently": "^10.0.5",
     "eslint": "^10.8.1",
     "eslint-plugin-react-hooks": "^7.1.1",
     "happy-dom": "^20.11.2",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "wait-on": "^9.1.0"
   }
 }

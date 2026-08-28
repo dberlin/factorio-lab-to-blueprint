@@ -76,8 +76,8 @@ def mark_external_inputs(placement: Placement, spec: BuildSpec) -> Placement:
     if not marked:
         return placement
 
-    stats = dict(placement.stats)
-    stats["input_markers"] = float(marked)
+    stats = placement.stats.copy()
+    stats["input_markers"] = marked
     return replace(placement, buildings=tuple(buildings), stats=stats)
 
 

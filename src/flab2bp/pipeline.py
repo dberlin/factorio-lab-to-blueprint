@@ -30,16 +30,55 @@ from flab2bp.lab.flow import (
 from flab2bp.lab.schema import Dataset
 from flab2bp.lab.techs import belt_rules_for_url
 from flab2bp.lab.url import parse_url
-from flab2bp.layout import markers, validate
+from flab2bp.layout import finalize, markers, validate
 from flab2bp.layout.base import NoValidLayout, Placement
 from flab2bp.layout.freeform import FreeformLayout
-from flab2bp.layout.spine import SpineLayout
+from flab2bp.layout.sequence_solver import SequencePairLayout
+from flab2bp.rates.adjust import ProliferatorTier
 from flab2bp.rates.candidates import build_candidates
 from flab2bp.spec import BuildSpec, BuildSpecSet
 
-StrategyName = Literal["spine", "freeform", "best"]
+ExplicitStrategyName = Literal["freeform", "sequence-pair"]
+StrategyName = Literal["best", "freeform", "sequence-pair"]
 
-_STRATEGIES = {"spine": SpineLayout, "freeform": FreeformLayout}
+STRATEGY_CHOICES: tuple[StrategyName, ...] = (
+    "best",
+    "freeform",
+    "sequence-pair",
+)
+#: Explicit strategies included when callers request ``best``.
+PRODUCTION_STRATEGIES: tuple[ExplicitStrategyName, ...] = (
+    "freeform",
+    "sequence-pair",
+)
+PRODUCTION_STRATEGY_COUNT = len(PRODUCTION_STRATEGIES)
+
+
+def _strategy_names(strategy: StrategyName) -> tuple[ExplicitStrategyName, ...]:
+    """Resolve a request to the implemented production strategies."""
+    if strategy == "best":
+        return PRODUCTION_STRATEGIES
+    return (strategy,)
+
+
+def _new_layout(
+    strategy: ExplicitStrategyName,
+    *,
+    power: bool,
+    belt_vertical_construction: bool,
+    sequence_islands: int = 1,
+) -> FreeformLayout | SequencePairLayout:
+    """Construct one explicitly selected layout backend."""
+    if strategy == "freeform":
+        return FreeformLayout(
+            power=power,
+            belt_vertical_construction=belt_vertical_construction,
+        )
+    return SequencePairLayout(
+        power=power,
+        belt_vertical_construction=belt_vertical_construction,
+        islands=sequence_islands,
+    )
 
 
 #: Outputs named in a title before it gives up and counts the rest.
@@ -113,7 +152,7 @@ def _id_map(spec: BuildSpec) -> validate.IdMap:
             got = catalog.get_item_id(item)
             if got is not None:
                 items[item] = got
-    for item in (*spec.external_inputs, *spec.outputs):
+    for item in (*spec.external_inputs, *spec.outputs, *spec.surplus_outputs):
         got = catalog.get_item_id(item)
         if got is not None:
             items[item] = got
@@ -205,7 +244,9 @@ def build(
     strategy: StrategyName = "best",
     power: bool = True,
     candidates: int = 3,
-    time_budget_s: float = 2.0,
+    time_budget_s: float = 15.0,
+    proliferator_tier: ProliferatorTier | None = None,
+    sequence_islands: int = 1,
     dataset: Dataset | None = None,
     name: str = "",
     flow: Path | None = None,
@@ -235,6 +276,8 @@ def build(
     worst outcome available here, since nothing surfaces the failure until you
     are standing in front of it in game.
     """
+    if sequence_islands != 1 and strategy != "sequence-pair":
+        raise ValueError("sequence islands require --strategy sequence-pair")
     data = dataset if dataset is not None else load_vendored()
     request = parse_url(url)
     # How high a belt may go, and whether it may climb with no run at all, are
@@ -275,7 +318,13 @@ def build(
     if selection is not None:
         request = pin_request(request, data, selection)
 
-    spec_set = build_candidates(data, request, count=candidates, flow=selection)
+    spec_set = build_candidates(
+        data,
+        request,
+        tier=proliferator_tier,
+        count=candidates,
+        flow=selection,
+    )
 
     # With a flow pinned, a candidate that belts in something FactorioLab's own
     # flow does not is not a legal candidate for this build -- the boundary rule
@@ -341,7 +390,7 @@ def build(
             )
         spec_set = BuildSpecSet(candidates=unsprayed)
 
-    wanted = list(_STRATEGIES) if strategy == "best" else [strategy]
+    wanted = _strategy_names(strategy)
 
     # Counted here, after the flow filter, so a progress report never promises a
     # pair that was already dropped.
@@ -363,21 +412,12 @@ def build(
                         phase="started",
                     )
                 )
-            # BOTH strategies need the save's slope rule now.
-            #
-            # `freeform` chooses between the ramped and the dense form with it.
-            # `spine` used to be exempt, and the reasoning was sound while it
-            # held: its bridges reserve a ramp column, so a bridge is legal
-            # either way. The Spray Coater spur broke the exemption -- it runs
-            # inside a corridor, where there is no column to spare, so whether
-            # it may leave the lane's tail already elevated or must spend
-            # `RAMP_TILES_PER_LEVEL` tiles climbing is the difference between
-            # supplying the coater and refusing.
-            kw: dict[str, object] = {
-                "power": power,
-                "belt_vertical_construction": belt_rules.vertical_construction,
-            }
-            layout = _STRATEGIES[sname](**kw)
+            layout = _new_layout(
+                sname,
+                power=power,
+                belt_vertical_construction=belt_rules.vertical_construction,
+                sequence_islands=sequence_islands,
+            )
             try:
                 placement = layout.lay_out(spec, time_budget_s=time_budget_s)
             except NoValidLayout as exc:
@@ -397,6 +437,11 @@ def build(
                         )
                     )
                 continue
+            placement = finalize.compact_open_boundary_belts(
+                placement,
+                spec,
+                expect_power=power,
+            )
             # Pass the spec AND the id map. Without them the nine
             # spec-dependent checks are skipped, and a build that never ran its
             # throughput or proliferator checks reads as clean.
@@ -471,9 +516,7 @@ def build(
             data,
             chosen_spec.external_inputs,
             exempt=(
-                frozenset(
-                    i for i in chosen_spec.external_inputs if i.startswith("proliferator")
-                )
+                frozenset(i for i in chosen_spec.external_inputs if i.startswith("proliferator"))
                 if selection.uses_proliferator
                 else frozenset()
             ),
