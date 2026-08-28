@@ -157,6 +157,11 @@ class Result:
     #: an arm can go green on more cells and ship a worse blueprint on every one
     #: of them, which is exactly the trade a fallback makes.
     area: float = 0.0
+    projection_frame_candidates: int = 0
+    projection_count: int = 0
+    projection_collider_pairs: int = 0
+    projection_power_pairs: int = 0
+    projection_sorters: int = 0
 
     @property
     def label(self) -> str:
@@ -252,6 +257,11 @@ def run_cell(job: Job) -> Result:
             exc.checks,
             time.monotonic() - t0,
         )
+    projection_frame_candidates = int(placement.stats.get("projection_frame_candidates", 0))
+    projection_count = int(placement.stats.get("projection_count", 0))
+    projection_collider_pairs = int(placement.stats.get("projection_collider_pairs", 0))
+    projection_power_pairs = int(placement.stats.get("projection_power_pairs", 0))
+    projection_sorters = int(placement.stats.get("projection_sorters", 0))
 
     report = validate.validate(
         placement,
@@ -263,7 +273,20 @@ def run_cell(job: Job) -> Result:
     )
     elapsed = time.monotonic() - t0
     if report.ok:
-        return Result(job, "CLEAN", label, "", (), elapsed, float(placement.area))
+        return Result(
+            job,
+            "CLEAN",
+            label,
+            "",
+            (),
+            elapsed,
+            float(placement.area),
+            projection_frame_candidates,
+            projection_count,
+            projection_collider_pairs,
+            projection_power_pairs,
+            projection_sorters,
+        )
     checks = tuple(sorted({f.check for f in report.errors}))
     return Result(
         job,
@@ -273,6 +296,11 @@ def run_cell(job: Job) -> Result:
         checks,
         elapsed,
         float(placement.area),
+        projection_frame_candidates,
+        projection_count,
+        projection_collider_pairs,
+        projection_power_pairs,
+        projection_sorters,
     )
 
 
@@ -397,6 +425,12 @@ def record(tallies: dict[str, Tally], r: Result) -> None:
             "status": r.status,
             "area": r.area,
             "seconds": r.seconds,
+            "build_wall_time_s": r.seconds,
+            "projection_frame_candidates": r.projection_frame_candidates,
+            "projection_count": r.projection_count,
+            "projection_collider_pairs": r.projection_collider_pairs,
+            "projection_power_pairs": r.projection_power_pairs,
+            "projection_sorters": r.projection_sorters,
             "detail": r.detail,
         }
     )
