@@ -25,6 +25,11 @@ test('submit posts sequence-pair with its exact wire spelling', async () => {
   const body = BuildOptions.parse(JSON.parse(String(calls[0]?.init?.body)));
   expect(body.url).toBe('https://example.invalid/x');
   expect(body.strategy).toBe('sequence-pair');
+  expect(body.proliferator_tier).toBe('auto');
+
+  await submitBuild({ ...DEFAULT_OPTIONS, proliferator_tier: '1' });
+  const explicit = BuildOptions.parse(JSON.parse(String(calls[1]?.init?.body)));
+  expect(explicit.proliferator_tier).toBe('1');
 });
 
 test('submit rejects an unknown strategy before making a request', async () => {

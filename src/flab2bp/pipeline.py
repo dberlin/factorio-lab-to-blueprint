@@ -34,6 +34,7 @@ from flab2bp.layout import finalize, markers, validate
 from flab2bp.layout.base import NoValidLayout, Placement
 from flab2bp.layout.freeform import FreeformLayout
 from flab2bp.layout.sequence_solver import SequencePairLayout
+from flab2bp.rates.adjust import ProliferatorTier
 from flab2bp.rates.candidates import build_candidates
 from flab2bp.spec import BuildSpec, BuildSpecSet
 
@@ -244,6 +245,7 @@ def build(
     power: bool = True,
     candidates: int = 3,
     time_budget_s: float = 15.0,
+    proliferator_tier: ProliferatorTier | None = None,
     sequence_islands: int = 1,
     dataset: Dataset | None = None,
     name: str = "",
@@ -316,7 +318,13 @@ def build(
     if selection is not None:
         request = pin_request(request, data, selection)
 
-    spec_set = build_candidates(data, request, count=candidates, flow=selection)
+    spec_set = build_candidates(
+        data,
+        request,
+        tier=proliferator_tier,
+        count=candidates,
+        flow=selection,
+    )
 
     # With a flow pinned, a candidate that belts in something FactorioLab's own
     # flow does not is not a legal candidate for this build -- the boundary rule

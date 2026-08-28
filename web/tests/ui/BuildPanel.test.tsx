@@ -133,6 +133,15 @@ test('the strategy choices are exactly the production strategy set', () => {
   expect(strategy).toHaveTextContent('sequence-pair');
 });
 
+test('proliferator tier exposes auto and every spray tier', () => {
+  mount();
+  const tier = screen.getByLabelText('Proliferator tier');
+  expect(tier).toHaveTextContent('URL selection');
+  expect(tier).toHaveTextContent('Mk.I');
+  expect(tier).toHaveTextContent('Mk.II');
+  expect(tier).toHaveTextContent('Mk.III');
+});
+
 test('the budget copy matches the two active best strategies', () => {
   mount();
   // Defaults: 3 candidates x 2 active production strategies x 15s.

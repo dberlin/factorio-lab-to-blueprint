@@ -20,6 +20,8 @@ export const RequestStrategy = z.enum(['best', 'freeform', 'sequence-pair']);
 /** Strategies the server may report for an actual layout attempt or result. */
 export const ExplicitStrategy = z.enum(['freeform', 'sequence-pair']);
 
+export const ProliferatorTier = z.enum(['auto', '1', '2', '3']);
+
 /** Both forms of a rate: the exact one, and the one a player reads. */
 const Rate = z.object({ exact: z.string(), per_minute: z.number() });
 
@@ -119,6 +121,7 @@ export const BuildOptions = z.object({
   strategy: RequestStrategy,
   candidates: z.number(),
   budget_s: z.number(),
+  proliferator_tier: ProliferatorTier,
   power: z.boolean(),
   name: z.string(),
   allow_invalid: z.boolean(),
@@ -130,12 +133,14 @@ export const BuildOptions = z.object({
 export type BuildOptions = z.infer<typeof BuildOptions>;
 export type RequestStrategy = z.infer<typeof RequestStrategy>;
 export type ExplicitStrategy = z.infer<typeof ExplicitStrategy>;
+export type ProliferatorTier = z.infer<typeof ProliferatorTier>;
 
 export const DEFAULT_OPTIONS: BuildOptions = {
   url: '',
   strategy: 'best',
   candidates: 3,
   budget_s: 15,
+  proliferator_tier: 'auto',
   power: true,
   name: '',
   // Off by default, exactly as the CLI has it: a blueprint that pastes cleanly

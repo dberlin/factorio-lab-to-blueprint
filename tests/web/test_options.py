@@ -14,6 +14,7 @@ URL = "https://factoriolab.github.io/dsp/flow?o=graphene*60&v=11"
 def test_defaults_match_the_cli() -> None:
     options = parse_options({"url": URL})
     assert (options.strategy, options.candidates, options.budget_s) == ("best", 3, 15.0)
+    assert options.proliferator_tier is None
     assert options.power is True
     # The CLI refuses to emit an invalid blueprint unless asked; so does this.
     assert options.allow_invalid is False
@@ -42,6 +43,24 @@ def test_defaults_match_the_cli() -> None:
 def test_bad_requests_are_refused(body: JsonValue) -> None:
     with pytest.raises(InvalidOptions):
         parse_options(body)
+
+def test_proliferator_tier_is_optional_and_explicit() -> None:
+    from flab2bp.rates.adjust import ProliferatorTier
+
+    assert parse_options(
+        {"url": URL, "proliferator_tier": "1"}
+    ).proliferator_tier is ProliferatorTier.MK1
+    assert parse_options(
+        {"url": URL, "proliferator_tier": "2"}
+    ).proliferator_tier is ProliferatorTier.MK2
+    assert parse_options(
+        {"url": URL, "proliferator_tier": "3"}
+    ).proliferator_tier is ProliferatorTier.MK3
+    assert parse_options(
+        {"url": URL, "proliferator_tier": "auto"}
+    ).proliferator_tier is None
+    with pytest.raises(InvalidOptions, match="proliferator_tier"):
+        parse_options({"url": URL, "proliferator_tier": "4"})
 
 
 def test_booleans_are_not_integers() -> None:

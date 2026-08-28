@@ -28,6 +28,7 @@ from typing import Literal
 
 from flab2bp import pipeline
 from flab2bp.layout.base import NoValidLayout
+from flab2bp.rates.adjust import ProliferatorTier
 from flab2bp.web.payload import Json, JsonValue, describe, refusal
 
 State = Literal["queued", "running", "done", "refused", "error"]
@@ -53,6 +54,7 @@ class Options:
     power: bool = True
     candidates: int = 3
     budget_s: float = 15.0
+    proliferator_tier: ProliferatorTier | None = None
     name: str = ""
     #: Mirrors ``--allow-invalid``.  Off by default: a blueprint that pastes
     #: cleanly and then does not run is the worst outcome available here.
@@ -121,6 +123,21 @@ def parse_options(raw: JsonValue) -> Options:
         raise InvalidOptions("'budget_s' must be a positive finite number") from exc
     if not math.isfinite(budget) or budget <= 0:
         raise InvalidOptions("'budget_s' must be a positive finite number")
+    raw_tier = raw.get("proliferator_tier", "auto")
+    match raw_tier:
+        case "auto" | None:
+            proliferator_tier = None
+        case "1":
+            proliferator_tier = ProliferatorTier.MK1
+        case "2":
+            proliferator_tier = ProliferatorTier.MK2
+        case "3":
+            proliferator_tier = ProliferatorTier.MK3
+        case _:
+            raise InvalidOptions(
+                "'proliferator_tier' must be one of auto, 1, 2, 3"
+            )
+
 
     power = raw.get("power", True)
     if not isinstance(power, bool):
@@ -144,6 +161,7 @@ def parse_options(raw: JsonValue) -> Options:
         power=power,
         candidates=candidates,
         budget_s=budget,
+        proliferator_tier=proliferator_tier,
         name=name,
         allow_invalid=allow_invalid,
         flow=flow.strip(),
@@ -213,6 +231,7 @@ def run_build(options: Options, on_progress: pipeline.ProgressSink) -> pipeline.
         power=options.power,
         candidates=options.candidates,
         time_budget_s=options.budget_s,
+        proliferator_tier=options.proliferator_tier,
         name=options.name,
         flow_text=options.flow or None,
         on_progress=on_progress,
@@ -317,6 +336,11 @@ class Builder:
                     "strategy": job.options.strategy,
                     "candidates": job.options.candidates,
                     "budget_s": job.options.budget_s,
+                    "proliferator_tier": (
+                        job.options.proliferator_tier.value
+                        if job.options.proliferator_tier is not None
+                        else "auto"
+                    ),
                     "power": job.options.power,
                     "allow_invalid": job.options.allow_invalid,
                     "name": job.options.name,

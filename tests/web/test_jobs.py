@@ -250,6 +250,24 @@ class TestFlowReachesTheSolver:
         run_build(Options(url=URL), lambda _s: None)
         assert seen["flow_text"] is None
 
+    def test_explicit_proliferator_tier_reaches_pipeline(
+        self, monkeypatch: pytest.MonkeyPatch, small_build: pipeline.Build
+    ) -> None:
+        from flab2bp.rates.adjust import ProliferatorTier
+
+        seen: dict[str, object] = {}
+
+        def spy(url: str, **kwargs: object) -> pipeline.Build:
+            seen.update(kwargs)
+            return small_build
+
+        monkeypatch.setattr(pipeline, "build", spy)
+        run_build(
+            Options(url=URL, proliferator_tier=ProliferatorTier.MK1),
+            lambda _s: None,
+        )
+        assert seen["proliferator_tier"] is ProliferatorTier.MK1
+
     def test_the_snapshot_says_whether_one_was_supplied(self, small_build: pipeline.Build) -> None:
         # The CSV itself is not echoed back -- it can be hundreds of kB and the
         # page already has it -- but silence about whether one was used would

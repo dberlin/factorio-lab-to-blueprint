@@ -1,18 +1,17 @@
-"""The production solve: exact minimum rounded footprint and exact flows out.
+"""The production solve: FactorioLab's objective and exact flows out.
 
 Each candidate fixes one proliferator mode per recipe before solving. That
 removes mode-activation binaries and leaves a small fixed-charge MILP over craft
-rates and integer physical machine counts. The production default proves the
-minimum rounded footprint; with the deterministic policies this takes tens of
-milliseconds rather than spending the old 30-second cap on mode combinations.
+rates and integer physical machine counts. The URL's recipe, machine, footprint,
+and surplus costs are applied with FactorioLab's exact coefficient semantics.
 
 Every rate leaving the solver is recovered by an exact Rational LP inside the
 bought capacities. Machines may idle, so upstream demand follows exact craft
 rates rather than spare capacity, and no float reaches ``BuildSpec``.
 
-``prove_minimal=False`` is the explicit FactorioLab-style alternative:
-continuous footprint optimum, tolerance-based support, exact Rational recovery,
-then exact machine ceiling. It preserves every material support column and
+``prove_minimal=False`` is the explicit continuous alternative: optimise the
+same FactorioLab costs, recover exact rates over the selected support, then take
+the exact machine ceiling. It preserves every material support column and
 expands exact recovery if a discarded tiny flow is required for balance.
 
 Both solvers come from ortools. Do not reintroduce ``highspy``: it and ortools
@@ -138,6 +137,98 @@ class RateSolution:
     def proliferator_item_id(self) -> str | None:
         return self.tier.sprayed_item_id if self.proliferator_rate else None
 
+
+@dataclass(frozen=True, slots=True)
+class _ObjectiveCoefficients:
+    """FactorioLab's per-column machine and surplus objective coefficients."""
+
+    machine: tuple[Fraction, ...]
+    surplus: tuple[Fraction, ...]
+    continuous: tuple[Fraction, ...]
+    items: tuple[str, ...]
+
+
+def _cost(value: Fraction | None, default: int) -> Fraction:
+    return Fraction(default) if value is None else value
+
+
+def _objective_coefficients(
+    data: Dataset,
+    request: LabRequest,
+    columns: Sequence[AdjustedRecipe],
+) -> _ObjectiveCoefficients:
+    """Mirror FactorioLab ``adjustCosts`` plus its surplus-variable objective."""
+    factor_cost = _cost(request.costs.factor, 1)
+    machine_cost = _cost(request.costs.machine, 1)
+    footprint_cost = _cost(request.costs.footprint, 1)
+    surplus_cost = _cost(request.costs.surplus, 0)
+    items = tuple(
+        sorted(
+            {
+                item_id
+                for column in columns
+                for item_id in column.outputs_per_craft
+            }
+        )
+    )
+
+    machine: list[Fraction] = []
+    surplus: list[Fraction] = []
+    continuous: list[Fraction] = []
+    for column in columns:
+        recipe = data.recipe(column.recipe_id)
+        override = request.recipes.get(recipe.id)
+        if override is not None and override.cost is not None:
+            per_machine = override.cost
+        elif recipe.cost is not None:
+            output_rate = sum(
+                column.outputs_per_craft.values(),
+                Fraction(),
+            ) * column.crafts_per_second
+            per_machine = output_rate * recipe.cost * factor_cost
+        else:
+            per_machine = machine_cost
+            # FactorioLab treats footprint cost as an on/off multiplier: any
+            # nonzero value multiplies machine cost by tile area.
+            if footprint_cost:
+                per_machine *= column.footprint_area
+
+        surplus_per_craft = surplus_cost * sum(
+            (
+                column.outputs_per_craft.get(item_id, Fraction())
+                - column.inputs_per_craft.get(item_id, Fraction())
+                for item_id in items
+            ),
+            Fraction(),
+        )
+        machine.append(per_machine)
+        surplus.append(surplus_per_craft)
+        continuous.append(
+            per_machine / column.crafts_per_second + surplus_per_craft
+        )
+
+    return _ObjectiveCoefficients(
+        machine=tuple(machine),
+        surplus=tuple(surplus),
+        continuous=tuple(continuous),
+        items=items,
+    )
+
+
+def _default_objective(
+    columns: Sequence[AdjustedRecipe],
+) -> _ObjectiveCoefficients:
+    machine = tuple(Fraction(column.footprint_area) for column in columns)
+    surplus = (Fraction(),) * len(columns)
+    return _ObjectiveCoefficients(
+        machine=machine,
+        surplus=surplus,
+        continuous=tuple(
+            cost / column.crafts_per_second
+            for cost, column in zip(machine, columns, strict=True)
+        ),
+        items=(),
+    )
 
 def target_rates(data: Dataset, request: LabRequest) -> dict[str, Fraction]:
     """Normalise objectives to items/second, keyed by item id."""
@@ -283,12 +374,32 @@ def _resolve_chain(
     targets: Iterable[str],
     excluded: frozenset[str],
     supplied: frozenset[str] = frozenset(),
+    *,
+    include_consumers: bool = False,
 ) -> tuple[dict[str, tuple[Recipe, ...]], set[str]]:
     """Walk the recipe graph from the targets.
 
     Returns the producing recipes for each internal item, plus the set of items
-    that must be belted in because nothing here can make them.
+    that must be belted in because nothing here can make them. With a positive
+    surplus cost, FactorioLab traverses recipes that either produce or consume
+    each visited item and follows both their inputs and outputs. That wider
+    closure lets downstream recipes consume coproduct surplus.
     """
+    io_recipes: dict[str, list[Recipe]] = {}
+    if include_consumers:
+        for recipe in data.recipes:
+            if (
+                "mining" in recipe.flags
+                or recipe.is_technology
+                or recipe.id in excluded
+            ):
+                continue
+            for item_id in recipe.inputs:
+                io_recipes.setdefault(item_id, []).append(recipe)
+            for item_id in recipe.outputs:
+                if item_id not in recipe.inputs:
+                    io_recipes.setdefault(item_id, []).append(recipe)
+
     producers: dict[str, tuple[Recipe, ...]] = {}
     external: set[str] = set()
     queue: deque[str] = deque(targets)
@@ -303,15 +414,24 @@ def _resolve_chain(
             # recipe exists -- that is the point of an Input objective.
             external.add(item_id)
             continue
+
         options = _buildable_producers(data, item_id, excluded)
-        if not options:
+        if options:
+            producers[item_id] = options
+        else:
             external.add(item_id)
-            continue
-        producers[item_id] = options
-        for recipe in options:
+
+        matches: Iterable[Recipe] = (
+            io_recipes.get(item_id, ()) if include_consumers else options
+        )
+        for recipe in matches:
             for ingredient in recipe.inputs:
                 if ingredient not in seen:
                     queue.append(ingredient)
+            if include_consumers:
+                for product in recipe.outputs:
+                    if product not in seen:
+                        queue.append(product)
     return producers, external
 
 
@@ -354,13 +474,15 @@ def _run_continuous_lp(
     internal_items: Sequence[str],
     demand: Mapping[str, Fraction],
     *,
+    objective: _ObjectiveCoefficients | None = None,
     time_limit_s: float,
 ) -> list[float]:
-    """Find the FactorioLab-style continuous footprint optimum."""
+    """Find the FactorioLab-style continuous cost optimum."""
     model = pywraplp.Solver.CreateSolver("GLOP")
     if model is None:  # pragma: no cover - GLOP ships with ortools
         raise InfeasibleError("no continuous LP solver is available")
     model.SetTimeLimit(int(time_limit_s * 1000))
+    objective = objective or _default_objective(columns)
     crafts = [model.NumVar(0.0, model.infinity(), f"x{i}") for i in range(len(columns))]
 
     for item_id in internal_items:
@@ -378,8 +500,8 @@ def _run_continuous_lp(
         raise InfeasibleError("no recipes available to build the objective")
     model.Minimize(
         model.Sum(
-            float(Fraction(column.footprint_area) / column.crafts_per_second) * craft
-            for craft, column in zip(crafts, columns, strict=True)
+            float(cost) * craft
+            for cost, craft in zip(objective.continuous, crafts, strict=True)
         )
     )
     status = model.Solve()
@@ -395,6 +517,7 @@ def _run_milp(
     internal_items: Sequence[str],
     demand: Mapping[str, Fraction],
     *,
+    objective: _ObjectiveCoefficients | None = None,
     time_limit_s: float,
 ) -> tuple[list[float], list[float]]:
     """Solve the fixed-charge oracle for craft rates and integer machine counts."""
@@ -402,6 +525,7 @@ def _run_milp(
     if model is None:  # pragma: no cover - SCIP ships with ortools
         raise InfeasibleError("no MILP solver is available")
     model.SetTimeLimit(int(time_limit_s * 1000))
+    objective = objective or _default_objective(columns)
 
     crafts = [model.NumVar(0.0, model.infinity(), f"x{i}") for i in range(len(columns))]
     machines = [model.IntVar(0, _MAX_MACHINES, f"n{i}") for i in range(len(columns))]
@@ -428,8 +552,20 @@ def _run_milp(
         raise InfeasibleError("no recipes available to build the objective")
     model.Minimize(
         model.Sum(
-            float(column.footprint_area) * machine
-            for machine, column in zip(machines, columns, strict=True)
+            [
+                *(
+                    float(cost) * machine
+                    for cost, machine in zip(
+                        objective.machine, machines, strict=True
+                    )
+                ),
+                *(
+                    float(cost) * craft
+                    for cost, craft in zip(
+                        objective.surplus, crafts, strict=True
+                    )
+                ),
+            ]
         )
     )
 
@@ -492,6 +628,7 @@ def _solve_exact_lp(
     demand: Mapping[str, Fraction],
     machine_caps: Sequence[int] | None = None,
     minimum_rates: Mapping[int, Fraction] | None = None,
+    objective: _ObjectiveCoefficients | None = None,
 ) -> list[Fraction]:
     """Recover exact rates over selected support and optional exact bounds."""
     if not active:
@@ -532,10 +669,8 @@ def _solve_exact_lp(
             matrix.append(row)
             limits.append(_rational(Fraction(machines) * columns[index].crafts_per_second))
 
-    cost = [
-        _rational(Fraction(columns[index].footprint_area) / columns[index].crafts_per_second)
-        for index in active
-    ]
+    objective = objective or _default_objective(columns)
+    cost = [_rational(objective.continuous[index]) for index in active]
     try:
         _optimum, solution = linprog(cost, matrix, limits)
     except (InfeasibleLPError, UnboundedLPError) as exc:
@@ -562,13 +697,21 @@ def _exact_rates(
     raw_machines: Sequence[float],
     internal_items: Sequence[str],
     demand: Mapping[str, Fraction],
+    objective: _ObjectiveCoefficients | None = None,
 ) -> list[Fraction]:
     """Recover exact rates inside the fixed-charge MILP's bought capacities."""
     active = [index for index, machines in enumerate(raw_machines) if round(machines) > 0]
     caps = [round(raw_machines[index]) for index in active]
     if not active:
         return [Fraction()] * len(columns)
-    return _solve_exact_lp(columns, active, internal_items, demand, caps)
+    return _solve_exact_lp(
+        columns,
+        active,
+        internal_items,
+        demand,
+        caps,
+        objective=objective,
+    )
 
 
 def _exact_continuous_rates(
@@ -576,6 +719,7 @@ def _exact_continuous_rates(
     raw_crafts: Sequence[float],
     internal_items: Sequence[str],
     demand: Mapping[str, Fraction],
+    objective: _ObjectiveCoefficients | None = None,
 ) -> list[Fraction]:
     """Turn approximate LP support into exact rates without epsilon groups.
 
@@ -597,6 +741,7 @@ def _exact_continuous_rates(
             tuple(range(len(columns))),
             internal_items,
             demand,
+            objective=objective,
         )
 
     # Preserve every materially positive GLOP column as a physical group. The
@@ -611,6 +756,7 @@ def _exact_continuous_rates(
             internal_items,
             demand,
             minimum_rates=minimum_rates,
+            objective=objective,
         )
     except InfeasibleError:
         # A sub-tolerance column may still be genuinely required for balance.
@@ -621,6 +767,7 @@ def _exact_continuous_rates(
             internal_items,
             demand,
             minimum_rates=minimum_rates,
+            objective=objective,
         )
 
 
@@ -637,14 +784,15 @@ def solve(
 ) -> RateSolution:
     """Solve ``request`` into exact flows and exact-ceiling machine counts.
 
-    Production defaults to the fixed-charge MILP and proves the minimum rounded
-    footprint under the already-fixed mode policy. Every selected structure's
-    rates are recovered exactly inside its bought capacities.
+    Production defaults to the fixed-charge MILP and minimises FactorioLab's
+    recipe, machine, footprint, and surplus objective under the already-fixed
+    mode policy. Every selected structure's rates are recovered exactly inside
+    its bought capacities.
 
-    ``prove_minimal=False`` selects the FactorioLab-style continuous footprint
-    optimum followed by exact support recovery and exact machine ceiling. If
-    continuous support cannot be recovered, the fixed-charge model is the
-    fallback. ``time_limit_s`` applies to either path.
+    ``prove_minimal=False`` selects the continuous form of that same objective,
+    followed by exact support recovery and exact machine ceiling. If continuous
+    support cannot be recovered, the fixed-charge model is the fallback.
+    ``time_limit_s`` applies to either path.
 
     ``mode_policy`` deterministically applies one mode to every legal recipe in
     ``proliferable`` (or every recipe when it is ``None``), falling back to
@@ -654,7 +802,14 @@ def solve(
     targets = target_rates(data, request)
     supplied = supplied_rates(data, request)
     excluded = _excluded_recipes(data, request)
-    producers, external = _resolve_chain(data, targets, excluded, frozenset(supplied))
+    has_surplus_cost = _cost(request.costs.surplus, 0) > 0
+    producers, external = _resolve_chain(
+        data,
+        targets,
+        excluded,
+        frozenset(supplied),
+        include_consumers=has_surplus_cost,
+    )
     internal_items = sorted(producers)
     columns = _columns(
         data,
@@ -667,6 +822,12 @@ def solve(
     )
     if not columns:
         raise InfeasibleError("no buildable recipes reach the requested item")
+    objective = _objective_coefficients(data, request, columns)
+    balance_items = (
+        sorted(set(internal_items) | set(objective.items))
+        if has_surplus_cost
+        else internal_items
+    )
 
     crafts: list[Fraction] = []
     used_milp = prove_minimal
@@ -674,15 +835,17 @@ def solve(
         try:
             raw_crafts = _run_continuous_lp(
                 columns,
-                internal_items,
+                balance_items,
                 targets,
+                objective=objective,
                 time_limit_s=time_limit_s,
             )
             crafts = _exact_continuous_rates(
                 columns,
                 raw_crafts,
-                internal_items,
+                balance_items,
                 targets,
+                objective,
             )
         except InfeasibleError:
             used_milp = True
@@ -690,18 +853,27 @@ def solve(
     if used_milp:
         _, raw_machines = _run_milp(
             columns,
-            internal_items,
+            balance_items,
             targets,
+            objective=objective,
             time_limit_s=time_limit_s,
         )
-        crafts = _exact_rates(columns, raw_machines, internal_items, targets)
+        crafts = _exact_rates(
+            columns,
+            raw_machines,
+            balance_items,
+            targets,
+            objective,
+        )
 
-    if used_milp:
+    geometric_objective = _default_objective(columns)
+    if used_milp or objective != geometric_objective:
         try:
             lower_raw = _run_continuous_lp(
                 columns,
-                internal_items,
+                balance_items,
                 targets,
+                objective=geometric_objective,
                 time_limit_s=time_limit_s,
             )
             lower_bound = sum(
@@ -714,7 +886,7 @@ def solve(
                 ),
                 Fraction(),
             )
-        except InfeasibleError:  # pragma: no cover - the MILP already succeeded
+        except InfeasibleError:  # pragma: no cover - the production solve succeeded
             lower_bound = Fraction()
     else:
         lower_bound = sum(
@@ -770,7 +942,7 @@ def solve(
                 f"{group.recipe_id} requires {group.crafts_per_second} crafts/s "
                 f"but {group.machines} machine(s) provide only {capacity}"
             )
-    for item_id in internal_items:
+    for item_id in balance_items:
         required = consumed.get(item_id, Fraction()) + targets.get(item_id, Fraction())
         available = produced.get(item_id, Fraction())
         if available < required:
