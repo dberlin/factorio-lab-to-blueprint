@@ -964,11 +964,12 @@ real browser and decodes what the Copy button put on the clipboard.
 `docs/WEB_UI.md` is the reference; these are the gaps, named here rather than
 left to be discovered.
 
-**Not wired, and the page says so.** `--flow` and `--fetch-flow`. The first
-needs a file upload; the second drives a headless browser through `nodriver` and
-is a much bigger surface than a build. Until then every web build reports
-`flow_pinned: false` -- the recipe selection is DERIVED, not FactorioLab's own.
-That is the weaker of the two guarantees, and it is stated on the page.
+**RESOLVED -- flow input and safe automatic capture are wired.** Pasted/uploaded CSV pins the
+flow directly. The opt-in automatic-fetch checkbox drives installed Chromium only for the
+supported FactorioLab HTTPS pages, and it is mutually exclusive with pasted flow. Capture
+failure refuses instead of falling back to a derived recipe selection. `nodriver` is
+intentionally pinned to 0.47.0, the newest verified importable release, pending a verified
+importable upgrade.
 
 **A job does not survive a restart.** The registry is a dict in the server
 process and the queue is a `ThreadPoolExecutor`. Restarting `flab2bp-web`

@@ -104,8 +104,16 @@ failure. So is an invalid build: if validation fails, the string is withheld and
 listed, exactly as the CLI refuses to emit without `--allow-invalid` — the page has a button
 that says what you are asking for.
 
-Not wired yet: `--flow` and `--fetch-flow`. The page says so rather than leaving "recipe
-selection derived, not pinned" to be inferred from silence.
+Flow provenance is explicit. `--flow FILE` pins a FactorioLab CSV export; `--fetch-flow` is
+opt-in (off by default) and drives the installed Chromium to export FactorioLab's own solved
+flow. A capture failure refuses the build instead of silently deriving a different recipe
+selection. The web checkbox offers the same capture only for
+`https://factoriolab.github.io/dsp/list` and `/dsp/flow` pages with no nonstandard port.
+Automatic fetch and pasted/uploaded CSV are mutually exclusive in web requests.
+
+`nodriver` is intentionally pinned to 0.47.0, the newest verified release with importable
+UTF-8 Python source; newer published wheels remain unsuitable until an importable upgrade is
+verified.
 
 For working on the TypeScript, `cd web && bun run dev` starts rsbuild on port 3001 with `/api`
 proxied to `flab2bp-web` on 8000 — the solver is Python, so that process has to be running

@@ -58,6 +58,9 @@ export and checks the report comes back **pinned** rather than derived. Two scre
 ships its own browser builds and none work on Fedora, so a proof driven through it is a proof
 this machine cannot re-run.
 
+`nodriver` is intentionally pinned to 0.47.0, the newest verified release whose Python source
+is importable. The pin remains until a newer importable release is verified.
+
 ## What the page shows
 
 The blueprint's own **title** — which names the *product*, `space-warper 10/min (max prolif)`,
@@ -90,23 +93,25 @@ falls back to elapsed time against `solver_ceiling_s` — `candidates x strategi
 which bounds CP-SAT only. Validation and encoding are on top of it and a strategy that refuses
 spends its retry budget as well, so it is a scale for the wait, never a finish time.
 
+## Flow provenance
+
+Paste FactorioLab's CSV export into the flow box, or choose the file, to pin recipe selection.
+The API takes it as text and sends it through `flow_from_text` and its provenance check exactly
+as a file named on the command line does. An export generated from a *different* URL is refused
+with the difference spelled out parameter by parameter; it is never quietly ignored.
+
+The **Fetch FactorioLab flow automatically** checkbox is initially unchecked. Selecting it
+launches the server's installed Chromium, waits for FactorioLab to solve, and exports the flow.
+Automatic capture is allowed only for HTTPS pages on `factoriolab.github.io` at `/dsp/list` or
+`/dsp/flow`, with no nonstandard port; the final page after navigation must remain on that
+allowlist too. Pasted/uploaded flow and automatic fetch are mutually exclusive in web requests,
+and the controls disable reciprocally. If capture fails, the build is refused rather than
+silently falling back to re-derived recipes.
+
+Without pasted or captured flow, a build reports `flow_pinned: false` — the recipe selection is
+DERIVED, not FactorioLab's own. That is the weaker guarantee, and the page says so.
+
 ## What it does NOT do
-
-**`--fetch-flow` is not wired.** It drives a headless browser to make FactorioLab run its own
-solve. `/api/build` has no authentication; wiring `--fetch-flow` would turn it into *render any
-URL you like in a headless Chromium on this machine*, since the browser goes to whatever URL the
-request supplied. That is strictly more power than solving, and it is not power this endpoint
-should have before it has an answer to who is calling it.
-
-`--flow` **is** wired. Paste FactorioLab's CSV export into the flow box, or choose
-the file; the API takes it as text and it reaches `flow_from_text` and its provenance check
-exactly as a file named on the command line does. An export generated from a *different* URL is
-refused with the difference spelled out parameter by parameter — it is never quietly ignored,
-because a pin the user believes in and the build did not honour is worse than no pin.
-
-Without one, a build reports `flow_pinned: false` — the recipe selection is DERIVED, not
-FactorioLab's own. That is the weaker of the two guarantees, and it is stated on the page rather
-than left to be inferred.
 
 **A job does not survive a restart.** The registry is a dict in the server process and the
 queue is a `ThreadPoolExecutor`. Restarting `flab2bp-web` abandons every in-flight solve and
@@ -164,8 +169,9 @@ GET  /*                  the built front end, with an SPA fallback
 ```
 
 The submit body takes `url`, `strategy` (`best`/`freeform`/`sequence-pair`), `candidates`
-(1–8), positive finite `budget_s`, `power`, `name`, `allow_invalid`, and `flow` — a
-FactorioLab CSV export as text, which pins which recipe makes what. A poll echoes
+(1–8), positive finite `budget_s`, `power`, `name`, `allow_invalid`, `flow`, and `fetch_flow`.
+`flow` is a FactorioLab CSV export as text, while `fetch_flow: true` asks the server to capture
+one from an allowlisted FactorioLab page; the two are mutually exclusive. A poll echoes
 `flow_supplied` rather than the CSV itself (it can be hundreds of kB and the page already has
 it); `result.flow_pinned` is the proof it was honoured. Every bound is a refusal rather than a
 clamp: a job asking for more
