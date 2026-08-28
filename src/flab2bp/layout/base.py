@@ -161,6 +161,25 @@ class PlacedBuilding:
         ]
 
 
+@dataclass(frozen=True, slots=True)
+class AreaFrame:
+    """Finalized single-area dimensions and their certified latitude bands."""
+
+    width: int
+    height: int
+    primary_band: int
+    certified_bands: tuple[int, ...]
+    rotated: bool
+
+    def __post_init__(self) -> None:
+        if self.width <= 0 or self.height <= 0:
+            raise ValueError("area frame dimensions must be positive")
+        if not self.certified_bands:
+            raise ValueError("area frame requires at least one certified band")
+        if self.certified_bands[0] != self.primary_band:
+            raise ValueError("area frame primary band must be the first certified band")
+
+
 class PlacementStats(TypedDict, total=False):
     """Complete cross-strategy schema for observational layout diagnostics."""
 
@@ -170,9 +189,7 @@ class PlacementStats(TypedDict, total=False):
     archive_categories: list[str]
     archive_category: str
     area: float
-    area_segments: float
     backend: str
-    band_rotated: float
     belt_tiles: float
     best_overflow: float
     best_stranded: float
@@ -307,6 +324,8 @@ class Placement:
     icons: tuple[int, ...] = ()
     #: Diagnostics from the strategy that produced this, for the bake-off.
     stats: PlacementStats = field(default_factory=PlacementStats)
+    #: Finalized area authority. ``None`` while geometry is still being laid out.
+    frame: AreaFrame | None = None
 
     @property
     def bounds(self) -> tuple[int, int, int, int]:
@@ -319,7 +338,9 @@ class Placement:
 
     @property
     def area(self) -> int:
-        """Bounding-box area in tiles -- the bake-off's primary density metric."""
+        """Finalized frame area, or the search-time building-bounds area."""
+        if self.frame is not None:
+            return self.frame.width * self.frame.height
         min_x, min_y, max_x, max_y = self.bounds
         return (max_x - min_x + 1) * (max_y - min_y + 1)
 

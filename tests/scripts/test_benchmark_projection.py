@@ -38,7 +38,7 @@ def test_fixture_loader_returns_unfinalized_geometry() -> None:
         placement = benchmark_projection._load_case(name)
         assert "area_segments" not in placement.stats
         assert "band_rotated" not in placement.stats
-        assert not hasattr(placement, "frame")
+        assert placement.frame is None
 
 
 def test_time_case_uses_inclusive_p95(monkeypatch: pytest.MonkeyPatch) -> None:

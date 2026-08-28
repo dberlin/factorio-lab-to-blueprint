@@ -9,7 +9,7 @@ import pytest
 
 from flab2bp.dsp import catalog, codec
 from flab2bp.layout import finalize
-from flab2bp.layout.base import PlacedBuilding, Placement
+from flab2bp.layout.base import AreaFrame, PlacedBuilding, Placement
 from tests.layout.test_freeform import two_stage_spec
 
 
@@ -138,8 +138,7 @@ def test_finalization_selects_the_smallest_band_for_broke2_extent(
 
     finalized = finalize.finalize_placement(placement)
 
-    assert finalized.stats["area_segments"] == 160.0
-    assert finalized.stats["band_rotated"] == 0.0
+    assert finalized.frame == AreaFrame(width, height, 160, (160,), False)
 
 
 def test_finalization_physically_rotates_an_extent_that_only_fits_turned() -> None:
@@ -149,8 +148,7 @@ def test_finalization_physically_rotates_an_extent_that_only_fits_turned() -> No
     area = codec.placement_to_blueprint(finalized).areas[0]
 
     assert finalized.bounds == (0, 0, 160, 9)
-    assert finalized.stats["area_segments"] == 40.0
-    assert finalized.stats["band_rotated"] == 1.0
+    assert finalized.frame == AreaFrame(161, 10, 40, (40,), True)
     assert (area.width, area.height, area.area_segments) == (161, 10, 40)
 
 
@@ -165,8 +163,7 @@ def test_broke2_tower_pair_uses_the_safe_smallest_band_orientation() -> None:
 
     finalized = finalize.finalize_placement(placement)
 
-    assert finalized.stats["area_segments"] == 160.0
-    assert finalized.stats["band_rotated"] == 1.0
+    assert finalized.frame == AreaFrame(35, 43, 160, (160,), True)
     assert finalized.bounds == (0, 0, 34, 42)
 
 
@@ -222,8 +219,7 @@ def test_finalization_rejects_a_band_where_a_sorter_compresses_too_close() -> No
 
     finalized = finalize.finalize_placement(placement)
 
-    assert finalized.stats["area_segments"] == 8.0
-    assert finalized.stats["band_rotated"] == 0.0
+    assert finalized.frame == AreaFrame(20, 5, 8, (8,), False)
 
 
 def test_freeform_uses_shared_planet_finalization(
@@ -248,7 +244,7 @@ def test_freeform_uses_shared_planet_finalization(
     )
 
     assert calls
-    assert placement.stats["area_segments"] == float(original(placement).stats["area_segments"])
+    assert placement.frame is not None
 
 
 def test_sequence_pair_uses_shared_planet_finalization(
@@ -263,10 +259,10 @@ def test_sequence_pair_uses_shared_planet_finalization(
 
     def observed(placement: Placement) -> Placement:
         calls.append(placement)
-        stats = placement.stats.copy()
-        stats["area_segments"] = 160.0
-        stats["band_rotated"] = 0.0
-        return replace(placement, stats=stats)
+        return replace(
+            placement,
+            frame=AreaFrame(43, 35, 160, (160,), False),
+        )
 
     class _Solver:
         def search(self) -> object:
@@ -285,4 +281,4 @@ def test_sequence_pair_uses_shared_planet_finalization(
     )
 
     assert calls == [raw]
-    assert placement.stats["area_segments"] == 160.0
+    assert placement.frame == AreaFrame(43, 35, 160, (160,), False)

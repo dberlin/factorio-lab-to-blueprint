@@ -10,7 +10,7 @@ from typing import Literal
 
 from flab2bp.dsp import catalog, codec, colliders, planet, rules
 from flab2bp.layout import slots
-from flab2bp.layout.base import PlacedBuilding, Placement
+from flab2bp.layout.base import AreaFrame, PlacedBuilding, Placement
 from flab2bp.layout.validate import certify as _certify
 from flab2bp.spec import BuildSpec
 
@@ -484,11 +484,15 @@ def finalize_placement(placement: Placement) -> Placement:
             failures.append(failure)
             continue
         oriented = _oriented(placement, rotated=fit.rotated)
-        stats = oriented.stats.copy()
-        prior_rotated = bool(round(float(stats.get("band_rotated", 0.0))))
-        stats["area_segments"] = float(fit.band.area_segments)
-        stats["band_rotated"] = float(prior_rotated ^ fit.rotated)
-        return replace(oriented, stats=stats)
+        prior_rotated = placement.frame.rotated if placement.frame is not None else False
+        frame = AreaFrame(
+            width=fit.columns,
+            height=fit.rows,
+            primary_band=fit.band.area_segments,
+            certified_bands=(fit.band.area_segments,),
+            rotated=prior_rotated ^ fit.rotated,
+        )
+        return replace(oriented, frame=frame)
     raise ProjectionRefusal(failures)
 
 

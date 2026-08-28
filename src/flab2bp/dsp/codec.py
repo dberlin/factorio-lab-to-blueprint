@@ -195,44 +195,67 @@ def tile_to_local_offset(
 
 
 def _area_for(placement: Placement) -> BlueprintArea:
-    """The verified single-area band selected by layout finalization.
-
-    ``area_segments`` is not an encoder default.  It names the latitude band
-    whose spherical geometry accepted the final placement, so encoding an
-    unfinalized placement would turn missing proof into a plausible-looking
-    blueprint.  The finalizer also physically applies a selected quarter turn;
-    the emitted width and height therefore have to fit this band unrotated.
-    """
-    min_x, min_y, max_x, max_y = placement.bounds
-    width = max(1, max_x - min_x + 1)
-    height = max(1, max_y - min_y + 1)
-    verified = placement.stats.get("area_segments")
-    if verified is None:
+    """Emit the finalized frame after validating it against DSP geometry."""
+    frame = placement.frame
+    if frame is None:
         raise ValueError(
-            "placement has no verified area_segments; call "
-            "layout.finalize.finalize_placement before encoding"
+            "placement has no area frame; call layout.finalize.finalize_placement "
+            "before encoding"
         )
-    segment_count = int(verified)
+
+    for index, building in enumerate(placement.buildings):
+        if (
+            building.width <= 0
+            or building.height <= 0
+            or building.x < 0
+            or building.y < 0
+            or building.x + building.width > frame.width
+            or building.y + building.height > frame.height
+        ):
+            raise ValueError(
+                f"building {index} footprint is outside area frame "
+                f"{frame.width}x{frame.height}"
+            )
+        if building.x2 is not None:
+            second_y = building.y2 if building.y2 is not None else 0
+            if (
+                building.x2 < 0
+                or building.x2 >= frame.width
+                or second_y < 0
+                or second_y >= frame.height
+            ):
+                raise ValueError(
+                    f"building {index} second anchor is outside area frame "
+                    f"{frame.width}x{frame.height}"
+                )
+
     band = next(
-        (candidate for candidate in planet.bands() if candidate.area_segments == segment_count),
+        (
+            candidate
+            for candidate in planet.bands()
+            if candidate.area_segments == frame.primary_band
+        ),
         None,
     )
     if band is None:
-        raise ValueError(f"verified area_segments {segment_count} names no DSP latitude band")
-    if width > band.columns or height > band.rows:
         raise ValueError(
-            f"finalized {width}x{height} placement does not fit emitted band "
-            f"{segment_count} without another rotation"
+            f"area frame primary band {frame.primary_band} names no DSP latitude band"
         )
+    if frame.width > band.columns or frame.height > band.rows:
+        raise ValueError(
+            f"area frame {frame.width}x{frame.height} does not fit primary band "
+            f"{frame.primary_band}"
+        )
+
     return BlueprintArea(
         index=0,
         parent_index=-1,
         tropic_anchor=0,
-        area_segments=segment_count,
+        area_segments=frame.primary_band,
         anchor_local_offset_x=0,
         anchor_local_offset_y=0,
-        width=width,
-        height=height,
+        width=frame.width,
+        height=frame.height,
     )
 
 
