@@ -27,6 +27,7 @@ The current finalizer also certifies one selected band. Users need a stronger de
 7. Retain structured projection evidence through user-facing refusal reports.
 8. Correct the false-positive termination warning for positional addon-supply belts.
 9. Measure and report material finalization overhead before shipping it.
+10. Route same-group product feedback required by a pinned steady-state flow.
 
 ## Non-goals
 
@@ -36,6 +37,7 @@ The current finalizer also certifies one selected band. Users need a stronger de
 - Do not allow the unauthenticated web API to navigate Chromium to arbitrary origins.
 - Do not silently downgrade Portable mode to one band.
 - Do not suppress projection checks or globally inflate unexplained flat clearances.
+- Do not reinterpret FactorioLab CSV `Items` rows or capped Input objectives in this change. Gross/net cross-check ambiguity is diagnostic-only and separate from the layout refusal.
 
 ## Evidence and Root Causes
 
@@ -47,6 +49,19 @@ The exact reported URL fails at `importlib.import_module("nodriver")`. Wheel ins
 - 0.48.0, 0.48.1, 0.50.1, 0.50.2, and 0.50.3: invalid byte `0xb1` in `nodriver/cdp/network.py`.
 
 Using `nodriver==0.47.0`, the exact URL captured successfully as 10 CSV lines and 877 bytes. Pinning the last valid release is smaller and less risky than replacing the existing browser driver with a new CDP implementation in the same change.
+
+### Self-consuming pinned flow
+
+After successful capture, the exact refined-oil CSV still refused both layout strategies. The CSV provenance, recipe selection, and steady-state rates are valid: twenty `reforming-refine` Oil Refineries produce 15 refined oil/s, recycle 10/s as their own input, and deliver the requested net 5/s.
+
+The shared strip planner deletes that physical feedback requirement. `_logical_strip_plans` records producer-to-consumer destinations only when `source != key`, so a group consuming its own product keeps an input lane but receives no output route back to it. Both strategies then emit four dry refined-oil input lanes and correctly fail `flow.lane_sourced`.
+
+Removing only that guard is insufficient because `_nets_between` would emit `(i, i)` and CP-SAT would require a strip to be spatially separate from itself. The bounded fix is:
+
+1. retain same-group destinations in `_logical_strip_plans`, so detailed routing sees the real feedback net;
+2. omit only `i == j` from `_nets_between`, which is the packer's distance/separation proxy and not the detailed router's net list.
+
+Runtime instrumentation with exactly those two changes produced clean 1,368-tile Freeform and SequencePair layouts at the existing 15-second budget, each with four internal feedback nets routed. Rate solving, flow pinning, validator semantics, and external input classification remain unchanged.
 
 ### Projection-related refusals
 
@@ -204,6 +219,8 @@ Pin `nodriver==0.47.0` in `pyproject.toml` and `uv.lock`. Add a regression that 
 
 The web checkbox label is `Fetch FactorioLab flow automatically`. Supporting text states that this launches a server-side browser, waits for FactorioLab's solve, and pins recipe selection. The unpinned result copy offers either automatic fetch or paste/upload instead of claiming fetch is unavailable.
 
+The exact captured refined-oil flow must proceed through layout, not merely through CSV parsing. Same-group product destinations remain in logical strip plans. The packer excludes self edges from its spatial separation proxy, while `_prepare_routing_problem` retains them as detailed routing nets. A self-consuming product is not reclassified as an external input and its gross physical lane is not netted away.
+
 ## Performance Gate
 
 Measure current and new finalization on the same frozen small, medium, and large placements. Report separately:
@@ -239,6 +256,9 @@ Every behavior change follows red-green TDD.
 - `run_build` passes the option through to `pipeline.build`.
 - Frontend tests assert the checkbox default, submitted JSON, mutual exclusion, and disabled controls.
 - The network-gated capture test uses the exact reported URL and asserts a non-empty provenance-valid flow.
+- The exact captured refined-oil fixture produces one 20-refinery self-consuming pinned candidate with a real internal refined-oil feedback net.
+- `_nets_between` excludes `(i, i)` without removing the corresponding detailed routing net.
+- Fixed prepared geometry routes every feedback net and passes `flow.lane_sourced` without relying on a wall-clock CP-SAT outcome.
 
 ### Band policy and frame
 
@@ -266,6 +286,7 @@ Every behavior change follows red-green TDD.
 - Actual CLI smoke for Freeform and SequencePair in Portable mode and one explicit band.
 - Browser-driven web verification of the fetch checkbox, band selector, mutual exclusion, progress, and reported certified bands.
 - Network-gated exact-URL capture smoke.
+- The exact refined-oil URL with its captured CSV completes a valid build; both strategies have focused self-feedback coverage.
 - Performance comparison against the approved thresholds.
 
 An unseeded repeated URL solve is diagnostic, not a regression test. Once an alternate failing placement/seed is captured, preserve it as a deterministic fixture.
@@ -301,11 +322,12 @@ This is a clean cutover:
 The change is complete only when:
 
 1. The exact URL reaches browser capture without the current nodriver syntax error.
-2. The web UI can request automatic flow capture safely and truthfully.
-3. Portable is the CLI, pipeline, and web default.
-4. Every emitted Portable blueprint carries a real area frame certified at every anchor in its primary and up to two wider bands.
-5. A non-portable placement refuses or succeeds under an explicitly selected band; it never silently downgrades.
-6. The known power and coater/Splitter projection defects are constrained before routing, and static collision evidence feeds a targeted retry.
-7. Structured projection details survive to reports.
-8. Coater supply belts no longer trigger the false all-lane-wasted warning.
-9. The performance gate passes, or the measured regression is returned for an explicit product decision before completion.
+2. Its valid pinned self-consuming refined-oil flow routes its internal feedback and produces a valid layout rather than `flow.lane_sourced`.
+3. The web UI can request automatic flow capture safely and truthfully.
+4. Portable is the CLI, pipeline, and web default.
+5. Every emitted Portable blueprint carries a real area frame certified at every anchor in its primary and up to two wider bands.
+6. A non-portable placement refuses or succeeds under an explicitly selected band; it never silently downgrades.
+7. The known power and coater/Splitter projection defects are constrained before routing, and static collision evidence feeds a targeted retry.
+8. Structured projection details survive to reports.
+9. Coater supply belts no longer trigger the false all-lane-wasted warning.
+10. The performance gate passes, or the measured regression is returned for an explicit product decision before completion.

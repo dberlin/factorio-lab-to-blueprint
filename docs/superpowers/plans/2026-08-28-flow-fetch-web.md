@@ -21,6 +21,7 @@
 - `fetch_flow` defaults to false and the UI checkbox defaults unchecked.
 - Do not add a web timeout control; use the existing 90-second capture default.
 - Every production change follows red-green TDD.
+- Execute `docs/superpowers/plans/2026-08-28-self-consuming-flow-feedback.md` first; the exact captured flow must produce a layout, not stop at the previously diagnosed self-feedback refusal.
 
 ---
 
@@ -485,10 +486,10 @@ Mark the corresponding BACKLOG item resolved; do not leave both “not wired” 
 Use the exact URL from the issue:
 
 ```bash
-uv run flab2bp 'https://factoriolab.github.io/dsp/list?z=eJxFxrEKgzAUBdC.yXCnxCpOb7mhuEkVW8hadSgqQqRil.ftYqn0TGcWBlysNbOwRZpZwB3..J8jsb8-kGTnSbjzzdHvX89eaGK.yQ0BHQa8wRK8g4NyBBf4Ar5SX5tpihKUetXKrOLcDk0nJEA_&v=11' --fetch-flow --fetch-timeout 90 --budget 0.5 -o /tmp/flab2bp-fetch-smoke.txt
+uv run flab2bp 'https://factoriolab.github.io/dsp/list?z=eJxFxrEKgzAUBdC.yXCnxCpOb7mhuEkVW8hadSgqQqRil.ftYqn0TGcWBlysNbOwRZpZwB3..J8jsb8-kGTnSbjzzdHvX89eaGK.yQ0BHQa8wRK8g4NyBBf4Ar5SX5tpihKUetXKrOLcDk0nJEA_&v=11' --fetch-flow --fetch-timeout 90 --budget 15 -o /tmp/flab2bp-fetch-smoke.txt
 ```
 
-Expected capture evidence: no nodriver `SyntaxError`; FactorioLab CSV capture completes and reaches flow provenance/layout. A later honest `NoValidLayout` is a separate solver result and must not be reported as a capture failure.
+Expected: exit 0, no nodriver `SyntaxError`, non-empty blueprint output, and no `flow.lane_sourced` refusal. Gross/net flow cross-check findings may remain visible; they are diagnostic and outside this change.
 
 - [ ] **Step 3: Run the network-gated capture regression**
 
@@ -505,7 +506,7 @@ Start the managed dev surface with `bun run dev`, wait for ports 8000 and 3001, 
 1. enter the exact URL;
 2. verify the automatic-fetch checkbox is initially unchecked;
 3. select it and verify paste/upload controls disable;
-4. submit and observe queued/running/settled state;
+4. submit, observe queued/running/done state, and verify a valid result with a non-empty blueprint;
 5. verify an unsafe URL with automatic fetch receives the server's allowlist error;
 6. toggle fetch off, paste CSV, and verify the checkbox disables.
 
