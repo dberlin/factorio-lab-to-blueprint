@@ -3079,3 +3079,18 @@ def test_ray_receiver_sequence_closed_loop_routes_and_validates_exactly() -> Non
 
     assert len(docks) == 2
     assert not validate.certify(placement, spec, expect_power=False).errors
+
+
+@pytest.mark.slow
+def test_sequence_pair_routes_self_consuming_pinned_flow(
+    refined_oil_feedback_spec: BuildSpec,
+) -> None:
+    placement = SequencePairLayout(power=False, islands=1).lay_out(
+        refined_oil_feedback_spec,
+        time_budget_s=15.0,
+    )
+    assert validate.certify(
+        placement,
+        refined_oil_feedback_spec,
+        expect_power=False,
+    ).ok

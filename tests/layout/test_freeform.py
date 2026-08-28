@@ -39,6 +39,7 @@ from flab2bp.layout.freeform import (
     FreeformLayout,
     Strip,
     _astar,
+    _box,
     _bridge,
     _build,
     _build_prepared,
@@ -426,6 +427,64 @@ def test_packer_proxy_does_not_separate_a_strip_from_itself(
         strip_len=refined_oil_feedback_spec.machine_count,
     )
     assert all(left != right for left, right in _nets_between(strips))
+
+
+def test_self_consuming_refined_oil_feedback_routes_and_validates(
+    refined_oil_feedback_spec: BuildSpec,
+) -> None:
+    strips = plan_strips(
+        refined_oil_feedback_spec,
+        strip_len=refined_oil_feedback_spec.machine_count,
+    )
+    height = max(_box(strip)[1] for strip in strips)
+    pack = _greedy_pack(strips, height)
+    prepared = _prepare_routing_problem(
+        refined_oil_feedback_spec,
+        strips,
+        pack,
+        power=False,
+    )
+
+    feedback = [
+        net
+        for net in prepared.nets
+        if net.item == "refined-oil"
+        and net.src is not None
+        and net.net_id.role is not NetRole.EXTERNAL
+    ]
+    assert feedback
+
+    result = _build_prepared(
+        refined_oil_feedback_spec,
+        strips,
+        prepared,
+        power=False,
+        route=True,
+        budget={"left": 5_000_000},
+    )
+    assert result.routing.failed_count == 0
+    report = validate.certify(
+        result.placement,
+        refined_oil_feedback_spec,
+        expect_power=False,
+    )
+    assert not [finding for finding in report.errors if finding.check == "flow.lane_sourced"]
+    assert report.ok
+
+
+@pytest.mark.slow
+def test_freeform_routes_self_consuming_pinned_flow(
+    refined_oil_feedback_spec: BuildSpec,
+) -> None:
+    placement = FreeformLayout(power=False, workers=1).lay_out(
+        refined_oil_feedback_spec,
+        time_budget_s=15.0,
+    )
+    assert validate.certify(
+        placement,
+        refined_oil_feedback_spec,
+        expect_power=False,
+    ).ok
 
 
 def test_shared_strip_emission_filters_each_multi_output_lane() -> None:
