@@ -30,6 +30,30 @@ def test_web_fetch_and_supplied_flow_are_mutually_exclusive() -> None:
 @pytest.mark.parametrize(
     "url",
     [
+        r"https://127.0.0.1\@factoriolab.github.io/dsp/flow?v=11&o=x",
+        "https://user@factoriolab.github.io/dsp/flow?v=11&o=x",
+    ],
+)
+def test_web_fetch_rejects_ambiguous_or_authenticated_authorities(url: str) -> None:
+    with pytest.raises(InvalidOptions, match="FactorioLab HTTPS"):
+        parse_options({"url": url, "fetch_flow": True})
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://[factoriolab.github.io/dsp/flow?v=11&o=x",
+        "https://factoriolab.github.io／example.com/dsp/flow?v=11&o=x",
+    ],
+)
+def test_web_fetch_translates_malformed_authorities_to_invalid_options(url: str) -> None:
+    with pytest.raises(InvalidOptions, match="FactorioLab HTTPS"):
+        parse_options({"url": url, "fetch_flow": True})
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
         "http://factoriolab.github.io/dsp/flow?o=x&v=11",
         "https://example.com/dsp/flow?o=x&v=11",
         "https://factoriolab.github.io:444/dsp/flow?o=x&v=11",

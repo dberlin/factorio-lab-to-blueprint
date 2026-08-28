@@ -88,8 +88,13 @@ class InvalidOptions(ValueError):
 
 
 def _validate_web_fetch_url(url: str) -> None:
-    parsed = urlsplit(url)
+    if "\\" in url:
+        raise InvalidOptions(
+            "automatic flow fetch requires a FactorioLab HTTPS /dsp/list or /dsp/flow URL"
+        )
     try:
+        parsed = urlsplit(url)
+        hostname = parsed.hostname
         port = parsed.port
     except ValueError as exc:
         raise InvalidOptions(
@@ -97,8 +102,10 @@ def _validate_web_fetch_url(url: str) -> None:
         ) from exc
     if (
         parsed.scheme != "https"
-        or parsed.hostname != "factoriolab.github.io"
+        or hostname != "factoriolab.github.io"
         or port not in (None, 443)
+        or parsed.username is not None
+        or parsed.password is not None
         or parsed.path not in ("/dsp/list", "/dsp/flow")
     ):
         raise InvalidOptions(

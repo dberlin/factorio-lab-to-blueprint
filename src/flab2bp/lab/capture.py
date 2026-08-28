@@ -334,7 +334,10 @@ async def _capture(
     url_validator: UrlValidator | None,
 ) -> str:
     if url_validator is not None:
-        url_validator(url)
+        try:
+            url_validator(url)
+        except ValueError as exc:
+            raise CaptureError(f"requested flow URL is not permitted: {exc}") from exc
     nodriver: object = importlib.import_module("nodriver")
     if not _is_nodriver(nodriver):
         raise CaptureError("nodriver has no callable start()")

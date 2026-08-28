@@ -41,6 +41,7 @@ from flab2bp.lab.capture import (
     CaptureError,
     SolveProbeState,
     _await_solve,
+    _capture,
     _validate_page_location,
     capture_flow_csv,
     find_browser,
@@ -100,7 +101,6 @@ class _FakePage[StateT]:
         return json.dumps(state)
 
 
-
 class _LocationPage:
     def __init__(self, location: object) -> None:
         self.location = location
@@ -131,6 +131,26 @@ def test_non_string_final_navigation_is_refused_before_validation() -> None:
     with pytest.raises(CaptureError, match="invalid location.href"):
         asyncio.run(_validate_page_location(_LocationPage(None), seen.append))
     assert seen == []
+
+def test_requested_url_validation_refuses_before_browser_launch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    launched = False
+
+    def launch(*_args: object, **_kwargs: object) -> object:
+        nonlocal launched
+        launched = True
+        raise AssertionError("browser launch must not be reached")
+
+    def validate(url: str) -> None:
+        assert url == REAL_URL
+        raise ValueError("outside allowlist")
+
+    monkeypatch.setattr("flab2bp.lab.capture.subprocess.Popen", launch)
+    with pytest.raises(CaptureError, match="requested.*outside allowlist"):
+        asyncio.run(_capture(REAL_URL, "/browser", 1.0, True, validate))
+    assert launched is False
+
 
 class TestFindBrowser:
     def test_an_explicit_missing_browser_names_itself(self) -> None:
