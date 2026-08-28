@@ -44,21 +44,27 @@ def test_bad_requests_are_refused(body: JsonValue) -> None:
     with pytest.raises(InvalidOptions):
         parse_options(body)
 
+
 def test_proliferator_tier_is_optional_and_explicit() -> None:
     from flab2bp.rates.adjust import ProliferatorTier
 
-    assert parse_options(
-        {"url": URL, "proliferator_tier": "1"}
-    ).proliferator_tier is ProliferatorTier.MK1
-    assert parse_options(
-        {"url": URL, "proliferator_tier": "2"}
-    ).proliferator_tier is ProliferatorTier.MK2
-    assert parse_options(
-        {"url": URL, "proliferator_tier": "3"}
-    ).proliferator_tier is ProliferatorTier.MK3
-    assert parse_options(
-        {"url": URL, "proliferator_tier": "auto"}
-    ).proliferator_tier is None
+    assert (
+        parse_options({"url": URL, "proliferator_tier": "1"}).proliferator_tier
+        is ProliferatorTier.MK1
+    )
+    assert (
+        parse_options({"url": URL, "proliferator_tier": "2"}).proliferator_tier
+        is ProliferatorTier.MK2
+    )
+    assert (
+        parse_options({"url": URL, "proliferator_tier": "3"}).proliferator_tier
+        is ProliferatorTier.MK3
+    )
+    assert (
+        parse_options({"url": URL, "proliferator_tier": "none"}).proliferator_tier
+        is ProliferatorTier.NONE
+    )
+    assert parse_options({"url": URL, "proliferator_tier": "auto"}).proliferator_tier is None
     with pytest.raises(InvalidOptions, match="proliferator_tier"):
         parse_options({"url": URL, "proliferator_tier": "4"})
 
@@ -71,26 +77,17 @@ def test_booleans_are_not_integers() -> None:
 
 def test_web_strategies_are_the_public_subset() -> None:
     assert parse_options({"url": URL, "strategy": "freeform"}).strategy == "freeform"
-    assert (
-        parse_options({"url": URL, "strategy": "sequence-pair"}).strategy
-        == "sequence-pair"
-    )
+    assert parse_options({"url": URL, "strategy": "sequence-pair"}).strategy == "sequence-pair"
 
 
 def test_the_ceiling_is_on_the_product_not_the_budget() -> None:
     """The ceiling follows the strategies that ``best`` actually runs."""
-    best_budget = MAX_SOLVER_SECONDS / (
-        3 * pipeline.PRODUCTION_STRATEGY_COUNT
-    )
-    at_the_edge = parse_options(
-        {"url": URL, "candidates": 3, "budget_s": best_budget}
-    )
+    best_budget = MAX_SOLVER_SECONDS / (3 * pipeline.PRODUCTION_STRATEGY_COUNT)
+    at_the_edge = parse_options({"url": URL, "candidates": 3, "budget_s": best_budget})
     assert at_the_edge.solver_ceiling_s == pytest.approx(MAX_SOLVER_SECONDS)
 
     with pytest.raises(InvalidOptions, match="ceiling"):
-        parse_options(
-            {"url": URL, "candidates": 3, "budget_s": best_budget + 1.0}
-        )
+        parse_options({"url": URL, "candidates": 3, "budget_s": best_budget + 1.0})
 
 
 def test_best_ceiling_follows_the_canonical_production_portfolio() -> None:
@@ -100,9 +97,7 @@ def test_best_ceiling_follows_the_canonical_production_portfolio() -> None:
 
 
 def test_explicit_strategy_ceiling_is_one_layout_per_candidate() -> None:
-    sequence_pair = Options(
-        url=URL, strategy="sequence-pair", candidates=2, budget_s=5.0
-    )
+    sequence_pair = Options(url=URL, strategy="sequence-pair", candidates=2, budget_s=5.0)
     assert sequence_pair.solver_ceiling_s == 10.0
 
 

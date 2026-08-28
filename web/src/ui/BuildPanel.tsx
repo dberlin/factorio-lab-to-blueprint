@@ -158,6 +158,7 @@ export function BuildPanel() {
           }}
         >
           <option value="auto">URL selection (Mk.III if unspecified)</option>
+          <option value="none">None</option>
           <option value="1">Mk.I</option>
           <option value="2">Mk.II</option>
           <option value="3">Mk.III</option>

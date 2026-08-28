@@ -134,9 +134,27 @@ test('proliferator tier exposes auto and every spray tier', () => {
   mount();
   const tier = screen.getByLabelText('Proliferator tier');
   expect(tier).toHaveTextContent('URL selection');
+  expect(tier).toHaveTextContent('None');
   expect(tier).toHaveTextContent('Mk.I');
   expect(tier).toHaveTextContent('Mk.II');
   expect(tier).toHaveTextContent('Mk.III');
+});
+
+test.each([
+  ['None', 'none'],
+  ['Mk.II', '2'],
+  ['Mk.III', '3'],
+])('submits an explicit %s proliferation tier', async (_label, tier) => {
+  const calls = serving({ status: 202, body: aJob() });
+  mount();
+  fireEvent.change(screen.getByLabelText('Proliferator tier'), {
+    target: { value: tier },
+  });
+  build();
+
+  await waitFor(() => expect(calls).toHaveLength(1));
+  const body = JSON.parse(String(calls[0]?.init?.body)) as Record<string, unknown>;
+  expect(body.proliferator_tier).toBe(tier);
 });
 
 test('the budget copy matches the two active best strategies', () => {

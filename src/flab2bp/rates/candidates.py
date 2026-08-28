@@ -39,6 +39,7 @@ def _producer_of(solution: RateSolution, item_id: str) -> str | None:
             return group.recipe_id
     return None
 
+
 _CHEMICAL_MACHINES = frozenset({"chemical-plant", "quantum-chemical-plant"})
 
 
@@ -60,9 +61,7 @@ def _coproduct_buffer_proofs(
     produced = {
         item_id for group in solution.groups for item_id in group.adjusted.outputs_per_craft
     }
-    consumed = {
-        item_id for group in solution.groups for item_id in group.adjusted.inputs_per_craft
-    }
+    consumed = {item_id for group in solution.groups for item_id in group.adjusted.inputs_per_craft}
     proofs: list[CoproductBufferProof] = []
     for item_id in sorted(produced & consumed):
         producers = [
@@ -72,9 +71,7 @@ def _coproduct_buffer_proofs(
             and len(data.recipe(group.recipe_id).outputs) > 1
         ]
         consumers = [
-            group
-            for group in solution.groups
-            if item_id in group.adjusted.inputs_per_craft
+            group for group in solution.groups if item_id in group.adjusted.inputs_per_craft
         ]
         if len(producers) != 1 or len(consumers) != 1:
             continue
@@ -85,15 +82,12 @@ def _coproduct_buffer_proofs(
             or consumer.machines != 1
             or producer.machine_item_id not in _CHEMICAL_MACHINES
             or set(data.recipe(consumer.recipe_id).inputs) != {item_id}
-            or not set(data.recipe(producer.recipe_id).inputs)
-            <= set(solution.external_inputs)
+            or not set(data.recipe(producer.recipe_id).inputs) <= set(solution.external_inputs)
         ):
             continue
         producer_batch = data.recipe(producer.recipe_id).outputs[item_id]
         consumer_batch = data.recipe(consumer.recipe_id).inputs[item_id]
-        required = producer_batch + consumer_batch - _rational_gcd(
-            producer_batch, consumer_batch
-        )
+        required = producer_batch + consumer_batch - _rational_gcd(producer_batch, consumer_batch)
         intrinsic = producer_batch * rules.CHEMICAL_OUTPUT_BUFFER_CRAFTS
         if intrinsic < required:
             continue
@@ -109,7 +103,6 @@ def _coproduct_buffer_proofs(
             )
         )
     return tuple(proofs)
-
 
 
 def _to_build_spec(
@@ -190,9 +183,7 @@ def lanes_requiring_split(data: Dataset, spec: BuildSpec) -> frozenset[str]:
     split: set[str] = set()
     for item_id in spec.spray_lanes:
         eaters = consumers.get(item_id, [])
-        if any(g.is_proliferated for g in eaters) and any(
-            not g.is_proliferated for g in eaters
-        ):
+        if any(g.is_proliferated for g in eaters) and any(not g.is_proliferated for g in eaters):
             split.add(item_id)
     return frozenset(split)
 
@@ -242,8 +233,12 @@ def proliferator_from_request(request: LabRequest) -> ProliferatorTier | None:
 
 def _proliferation_modes_from_flow(
     flow: FlowSelection,
+    tier_override: ProliferatorTier | None = None,
 ) -> tuple[ProliferatorTier, dict[str, ProliferatorMode]]:
     """Read the exact proliferator mode authored for each flow recipe."""
+    if tier_override is ProliferatorTier.NONE:
+        return ProliferatorTier.NONE, {}
+
     by_id = {
         tier.module_id(mode): (tier, mode)
         for tier in ProliferatorTier
@@ -263,14 +258,15 @@ def _proliferation_modes_from_flow(
     if not sprayed:
         return ProliferatorTier.NONE, {}
     tiers = {tier for tier, _ in sprayed.values()}
-    if len(tiers) > 1:
+    if len(tiers) > 1 and tier_override is None:
         raise FlowError(
             "the flow sprays more than one proliferator tier "
             f"({sorted(t.value for t in tiers)}). This build takes a single tier, "
             "so honouring the flow exactly is not possible; choosing one would "
             "change what the block consumes."
         )
-    return tiers.pop(), {recipe_id: mode for recipe_id, (_, mode) in sprayed.items()}
+    selected_tier = tier_override if tier_override is not None else tiers.pop()
+    return selected_tier, {recipe_id: mode for recipe_id, (_, mode) in sprayed.items()}
 
 
 def proliferation_from_flow(
@@ -286,23 +282,22 @@ def _pinned_candidates(
     request: LabRequest,
     flow: FlowSelection,
     time_limit_s: float,
+    tier: ProliferatorTier | None = None,
 ) -> BuildSpecSet:
-    """The single build FactorioLab's flow describes.
+    """Build the single recipe/mode selection FactorioLab's flow describes.
 
-    One candidate, not a frontier.  The frontier exists to explore a choice the
-    rate stage cannot price; when the player has already made that choice there
-    is nothing to explore, and exploring anyway is how a proliferator input the
-    player never asked for gets added. Against an unsprayed captured flow, an
-    unpinned products policy would ask the player to belt in a proliferator.
+    One candidate, not a frontier.  The frontier exists to explore choices the
+    rate stage cannot price; when the player supplies a flow, its recipe and
+    per-recipe mode choices stay pinned.
 
-    A proliferator tier is an IMPLIED INPUT -- the sprayed item is belted in from
-    outside, so choosing a tier changes what the block consumes -- and the rule
-    is that the inputs FactorioLab chose may never be changed, implied ones
-    included.  ``proliferator_from_request`` reasons that an absent proliferator
-    in a URL "is not a constraint", which is right for a URL: it states what is
-    available, not what is used. A solved flow states what is used.
+    With no explicit ``tier``, the flow also pins its proliferator tier because
+    that tier is an implied input: the sprayed item is belted in from outside.
+    An explicit caller selection deliberately replaces only that tier while
+    retaining the flow's recipe and mode choices.  This changes the implied
+    proliferator input, so it is permitted only through the explicit override;
+    ``auto`` continues to preserve the flow exactly.
     """
-    tier, fixed_modes = _proliferation_modes_from_flow(flow)
+    tier, fixed_modes = _proliferation_modes_from_flow(flow, tier)
     plan = solve(
         data,
         request,
@@ -347,9 +342,9 @@ def build_candidates(
         raise ValueError(f"count must be between 1 and {DEFAULT_CANDIDATES}")
 
     if flow is not None:
-        # Everything below this line is the UNPINNED frontier and is reached
-        # only when no flow was supplied, so a build without one is unchanged.
-        return _pinned_candidates(data, request, flow, time_limit_s)
+        # A supplied flow fixes recipe and per-recipe mode choices. An explicit
+        # tier still wins; None means preserve the flow's own tier exactly.
+        return _pinned_candidates(data, request, flow, time_limit_s, tier)
 
     # A URL that names a proliferator pins the tier; one that does not leaves
     # the frontier free at Mk.III. The sprayed item is belted in from outside,
@@ -445,9 +440,7 @@ def _is_runaway(spec: BuildSpec, baseline_machines: int) -> bool:
     return spec.machine_count > baseline_machines * _RUNAWAY_FACTOR
 
 
-def _assert_same_objective(
-    data: Dataset, request: LabRequest, specs: list[BuildSpec]
-) -> None:
+def _assert_same_objective(data: Dataset, request: LabRequest, specs: list[BuildSpec]) -> None:
     """Every candidate must build the same thing, or the set is meaningless."""
     wanted = target_rates(data, request)
     for spec in specs:

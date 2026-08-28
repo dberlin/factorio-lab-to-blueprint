@@ -107,8 +107,7 @@ class TestReadingWhatTheFlowSprays:
         rows = list(_UNSPRAYED)
         rows[0] = 'graphene,=60,graphene,=3/2,chemical-plant,"1 proliferator-1-speed"'
         rows[1] = (
-            'energetic-graphite,=90,energetic-graphite,=3,arc-smelter,'
-            '"1 proliferator-3-speed"'
+            'energetic-graphite,=90,energetic-graphite,=3,arc-smelter,"1 proliferator-3-speed"'
         )
         with pytest.raises(FlowError, match="more than one proliferator tier"):
             proliferation_from_flow(_flow(*rows))
@@ -146,9 +145,7 @@ class TestPinnedFrontier:
         }
         assert unsupplied_inputs(flow, data, spec.external_inputs) == ()
 
-    def test_the_pin_follows_the_flow_rather_than_forbidding_spray(
-        self, data: Dataset
-    ) -> None:
+    def test_the_pin_follows_the_flow_rather_than_forbidding_spray(self, data: Dataset) -> None:
         """A flow that DOES spray gets built sprayed, at its own tier.
 
         The rule is "do not change what FactorioLab chose", not "never
@@ -165,22 +162,100 @@ class TestPinnedFrontier:
         # Spraying a recipe FactorioLab left alone changes its input rates, so
         # the per-recipe fixed-mode map is part of the observable pin.
         assert {g.recipe_id for g in spec.groups if g.is_proliferated} == {"graphene"}
-        assert {
-            group.proliferator_mode for group in spec.groups if group.is_proliferated
-        } == {ProliferatorMode.SPEED}
+        assert {group.proliferator_mode for group in spec.groups if group.is_proliferated} == {
+            ProliferatorMode.SPEED
+        }
         # And the belted proliferator is legal precisely because the flow sprays.
         assert flow.uses_proliferator
-        assert unsupplied_inputs(
-            flow,
-            data,
-            spec.external_inputs,
-            exempt=frozenset(
-                i for i in spec.external_inputs if i.startswith("proliferator")
+        assert (
+            unsupplied_inputs(
+                flow,
+                data,
+                spec.external_inputs,
+                exempt=frozenset(i for i in spec.external_inputs if i.startswith("proliferator")),
+            )
+            == ()
+        )
+
+    @pytest.mark.parametrize(
+        ("flow_module", "selected_tier", "expected_item", "expected_label"),
+        [
+            (
+                "proliferator-2-speed",
+                ProliferatorTier.MK3,
+                "proliferator-3",
+                "flow-pinned-mk3",
             ),
-        ) == ()
+            (
+                "proliferator-3-speed",
+                ProliferatorTier.MK2,
+                "proliferator-2",
+                "flow-pinned-mk2",
+            ),
+        ],
+    )
+    def test_an_explicit_tier_overrides_the_flow_tier(
+        self,
+        data: Dataset,
+        flow_module: str,
+        selected_tier: ProliferatorTier,
+        expected_item: str,
+        expected_label: str,
+    ) -> None:
+        flow = _sprayed(flow_module)
+        pinned = build_candidates(
+            data,
+            pin_request(parse_url(URL), data, flow),
+            tier=selected_tier,
+            flow=flow,
+        )
+        (spec,) = pinned.candidates
+
+        assert spec.label == expected_label
+        sprayed_inputs = {
+            item_id: rate
+            for item_id, rate in spec.external_inputs.items()
+            if item_id.startswith("proliferator-")
+        }
+        assert set(sprayed_inputs) == {expected_item}
+
+        (sprayed_group,) = (group for group in spec.groups if group.is_proliferated)
+        sprays = data.module(f"{expected_item}-speed").sprays
+        assert sprays is not None
+        sprayed_item_rate = (
+            sum(sprayed_group.inputs_per_machine.values(), Fraction()) * sprayed_group.count
+        )
+        assert sprayed_inputs[expected_item] == sprayed_item_rate / sprays
+
+    def test_explicit_none_clears_the_flow_spray_modes(self, data: Dataset) -> None:
+        flow = _sprayed("proliferator-3-speed")
+        pinned = build_candidates(
+            data,
+            pin_request(parse_url(URL), data, flow),
+            tier=ProliferatorTier.NONE,
+            flow=flow,
+        )
+        (spec,) = pinned.candidates
+
+        assert spec.label == "flow-pinned"
+        assert not spec.is_proliferated
+        assert all(not item_id.startswith("proliferator-") for item_id in spec.external_inputs)
+        assert all(group.proliferator_mode is ProliferatorMode.NONE for group in spec.groups)
+
+    def test_explicit_none_ignores_an_unknown_flow_proliferator(self, data: Dataset) -> None:
+        flow = _sprayed("proliferator-9-warp")
+        pinned = build_candidates(
+            data,
+            pin_request(parse_url(URL), data, flow),
+            tier=ProliferatorTier.NONE,
+            flow=flow,
+        )
+        (spec,) = pinned.candidates
+
+        assert spec.label == "flow-pinned"
+        assert not spec.is_proliferated
+        assert all(not item_id.startswith("proliferator-") for item_id in spec.external_inputs)
 
     def test_no_flow_keeps_all_frontier_choices(self, data: Dataset) -> None:
-        labels = {
-            spec.label for spec in build_candidates(data, parse_url(URL), count=3).candidates
-        }
+        labels = {spec.label for spec in build_candidates(data, parse_url(URL), count=3).candidates}
         assert labels == {"no-proliferator", "all-products", "output-products"}

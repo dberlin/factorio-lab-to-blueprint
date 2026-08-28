@@ -20,7 +20,7 @@ export const RequestStrategy = z.enum(['best', 'freeform', 'sequence-pair']);
 /** Strategies the server may report for an actual layout attempt or result. */
 export const ExplicitStrategy = z.enum(['freeform', 'sequence-pair']);
 
-export const ProliferatorTier = z.enum(['auto', '1', '2', '3']);
+export const ProliferatorTier = z.enum(['auto', 'none', '1', '2', '3']);
 
 /** Both forms of a rate: the exact one, and the one a player reads. */
 const Rate = z.object({ exact: z.string(), per_minute: z.number() });

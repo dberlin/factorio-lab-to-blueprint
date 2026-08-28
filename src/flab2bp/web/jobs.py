@@ -75,11 +75,7 @@ class Options:
         time against this so "still working" has a scale, not so it can promise
         an exact finish time.
         """
-        per_spec = (
-            pipeline.PRODUCTION_STRATEGY_COUNT
-            if self.strategy == "best"
-            else 1
-        )
+        per_spec = pipeline.PRODUCTION_STRATEGY_COUNT if self.strategy == "best" else 1
         return self.candidates * per_spec * self.budget_s
 
 
@@ -106,9 +102,7 @@ def parse_options(raw: JsonValue) -> Options:
         case "best" | "freeform" | "sequence-pair":
             web_strategy: WebStrategyName = strategy
         case _:
-            raise InvalidOptions(
-                "'strategy' must be one of best, freeform, sequence-pair"
-            )
+            raise InvalidOptions("'strategy' must be one of best, freeform, sequence-pair")
 
     candidates = raw.get("candidates", 3)
     if not isinstance(candidates, int) or isinstance(candidates, bool) or not 1 <= candidates <= 8:
@@ -127,6 +121,8 @@ def parse_options(raw: JsonValue) -> Options:
     match raw_tier:
         case "auto" | None:
             proliferator_tier = None
+        case "none":
+            proliferator_tier = ProliferatorTier.NONE
         case "1":
             proliferator_tier = ProliferatorTier.MK1
         case "2":
@@ -134,10 +130,7 @@ def parse_options(raw: JsonValue) -> Options:
         case "3":
             proliferator_tier = ProliferatorTier.MK3
         case _:
-            raise InvalidOptions(
-                "'proliferator_tier' must be one of auto, 1, 2, 3"
-            )
-
+            raise InvalidOptions("'proliferator_tier' must be one of auto, none, 1, 2, 3")
 
     power = raw.get("power", True)
     if not isinstance(power, bool):
