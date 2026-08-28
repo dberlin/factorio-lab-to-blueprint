@@ -20,7 +20,7 @@ dependencies = [
     "httpx>=0.27",
     "pydantic>=2.13.4",
     "sympy>=1.14.0",
-    "nodriver>=0.50.3",
+    "nodriver==0.47.0",
 ]
 
 [project.scripts]

@@ -27,6 +27,7 @@ Three layers, and only the last needs a browser:
 from __future__ import annotations
 
 import asyncio
+import importlib
 import json
 import os
 from fractions import Fraction
@@ -63,6 +64,10 @@ REAL_URL = (
     "https://factoriolab.github.io/dsp/list?o=graphene*60&ibe=conveyor-belt-2"
     "&mmr=arc-smelter~assembling-machine-2~chemical-plant~matrix-lab&v=11"
 )
+
+def test_declared_nodriver_imports_on_the_supported_runtime() -> None:
+    module = importlib.import_module("nodriver")
+    assert callable(getattr(module, "start", None))
 
 
 @pytest.fixture(scope="module")
