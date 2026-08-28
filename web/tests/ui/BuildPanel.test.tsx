@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from '@rstest/core';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { BlueprintProvider, useBlueprint } from '../../src/state/BlueprintProvider';
 import { BuildPanel } from '../../src/ui/BuildPanel';
 import { A_BLUEPRINT, aJob, aResult, restoreFetch, serving } from '../support/build';
@@ -31,6 +31,65 @@ test('build is disabled until there is a URL', () => {
   expect(screen.getByRole('button', { name: 'Build' })).toBeDisabled();
 });
 
+test('automatic flow fetch is off by default and is submitted when selected', async () => {
+  const calls = serving({ status: 202, body: aJob() });
+  mount();
+  const fetchFlow = screen.getByRole('checkbox', {
+    name: 'Fetch FactorioLab flow automatically',
+  });
+  expect(fetchFlow).not.toBeChecked();
+
+  fireEvent.click(fetchFlow);
+  build();
+  await waitFor(() => expect(calls).toHaveLength(1));
+  const body = JSON.parse(String(calls[0]?.init?.body)) as Record<string, unknown>;
+  expect(body.fetch_flow).toBe(true);
+  expect(body.flow).toBe('');
+});
+
+test('automatic fetch and supplied CSV cannot both be selected', () => {
+  mount();
+  const fetchFlow = screen.getByRole('checkbox', {
+    name: 'Fetch FactorioLab flow automatically',
+  });
+  const text = screen.getByTestId('flow-text');
+  const file = screen.getByTestId('flow-file');
+
+  fireEvent.change(text, { target: { value: 'Recipes\nid,name\n' } });
+  expect(fetchFlow).toBeDisabled();
+  expect(text).toHaveValue('Recipes\nid,name\n');
+
+  fireEvent.change(text, { target: { value: '' } });
+  fireEvent.click(fetchFlow);
+  expect(text).toBeDisabled();
+  expect(file).toBeDisabled();
+});
+
+test('a file read that finishes after automatic fetch was selected remains mutually exclusive', async () => {
+  mount();
+  const fetchFlow = screen.getByRole('checkbox', {
+    name: 'Fetch FactorioLab flow automatically',
+  });
+  const text = screen.getByTestId('flow-text');
+  const fileInput = screen.getByTestId('flow-file');
+  const file = new File([''], 'flow.csv', { type: 'text/csv' });
+  let finishRead = (_value: string) => {};
+  Object.defineProperty(file, 'text', {
+    value: () =>
+      new Promise<string>((resolve) => {
+        finishRead = resolve;
+      }),
+  });
+
+  fireEvent.change(fileInput, { target: { files: [file] } });
+  fireEvent.click(fetchFlow);
+  expect(fetchFlow).toBeChecked();
+
+  await act(async () => finishRead('Recipes\nid,name\n'));
+  expect(fetchFlow).not.toBeChecked();
+  expect(text).toHaveValue('Recipes\nid,name\n');
+});
+
 test('a finished build shows the string and renders it without a second click', async () => {
   serving({ status: 202, body: aJob({ result: aResult({ blueprint: A_BLUEPRINT }) }) });
   mount();
@@ -39,6 +98,17 @@ test('a finished build shows the string and renders it without a second click', 
   await waitFor(() => expect(screen.getByTestId('blueprint-string')).toHaveValue(A_BLUEPRINT));
   // The point of having the viewer in the same page: no copy-paste step.
   await waitFor(() => expect(screen.getByTestId('loaded')).not.toHaveTextContent('none'));
+});
+
+test('an unpinned report offers both automatic fetch and a supplied flow', async () => {
+  serving({ status: 202, body: aJob({ result: aResult({ flow_pinned: false }) }) });
+  mount();
+  build();
+
+  const report = await screen.findByTestId('build-report');
+  expect(report).toHaveTextContent('Select automatic flow fetch above');
+  expect(report).toHaveTextContent('paste or upload a flow export');
+  expect(report).not.toHaveTextContent('is not offered here');
 });
 
 test('a refusal is shown as a result, with one line per pair', async () => {

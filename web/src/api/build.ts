@@ -125,6 +125,7 @@ export const BuildOptions = z.object({
   power: z.boolean(),
   name: z.string(),
   allow_invalid: z.boolean(),
+  fetch_flow: z.boolean(),
   /** A FactorioLab flow export's CSV text. Empty means the recipe selection is
       derived rather than pinned, which the report says out loud. */
   flow: z.string(),
@@ -146,6 +147,7 @@ export const DEFAULT_OPTIONS: BuildOptions = {
   // Off by default, exactly as the CLI has it: a blueprint that pastes cleanly
   // and then does not run is the worst outcome available here.
   allow_invalid: false,
+  fetch_flow: false,
   flow: '',
 };
 

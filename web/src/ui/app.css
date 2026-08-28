@@ -311,3 +311,7 @@ body {
   padding: 0.4rem;
   resize: vertical;
 }
+.build-panel .row.flow :disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}

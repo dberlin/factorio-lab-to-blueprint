@@ -26,6 +26,7 @@ test('submit posts sequence-pair with its exact wire spelling', async () => {
   expect(body.url).toBe('https://example.invalid/x');
   expect(body.strategy).toBe('sequence-pair');
   expect(body.proliferator_tier).toBe('auto');
+  expect(body.fetch_flow).toBe(false);
 
   await submitBuild({ ...DEFAULT_OPTIONS, proliferator_tier: '1' });
   const explicit = BuildOptions.parse(JSON.parse(String(calls[1]?.init?.body)));

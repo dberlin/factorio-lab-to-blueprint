@@ -43,6 +43,15 @@ export function BuildPanel() {
   const set = <K extends keyof BuildOptions>(key: K, value: BuildOptions[K]) =>
     setOptions((previous) => ({ ...previous, [key]: value }));
 
+  const setFlow = (flow: string) =>
+    setOptions((previous) => ({
+      ...previous,
+      flow,
+      // A local file read may finish after automatic fetch was selected.
+      // The supplied flow wins without discarding what the user uploaded.
+      fetch_flow: flow.trim() ? false : previous.fetch_flow,
+    }));
+
   const start = async (overrides: Partial<BuildOptions> = {}) => {
     abort.current?.abort();
     const controller = new AbortController();
@@ -210,13 +219,26 @@ export function BuildPanel() {
           quiet mis-pin. */}
       <div className="row flow">
         <label htmlFor={flowId}>Flow export (optional)</label>
+        <label className="checkbox">
+          <input
+            type="checkbox"
+            checked={options.fetch_flow}
+            disabled={Boolean(options.flow.trim()) || busy}
+            onChange={(event) => set('fetch_flow', event.target.checked)}
+          />
+          Fetch FactorioLab flow automatically
+        </label>
+        <span className="note">
+          Runs FactorioLab in a server-side browser and pins its solved recipe selection.
+        </span>
         <textarea
           id={flowId}
           value={options.flow}
           spellCheck={false}
           rows={3}
+          disabled={options.fetch_flow || busy}
           placeholder="Paste FactorioLab's CSV export, or choose the file — pins WHICH recipe makes what"
-          onChange={(e) => set('flow', e.target.value)}
+          onChange={(e) => setFlow(e.target.value)}
           data-testid="flow-text"
         />
         <input
@@ -224,23 +246,24 @@ export function BuildPanel() {
           accept=".csv,.tsv,.txt,text/csv,text/plain"
           aria-label="flow export file"
           data-testid="flow-file"
+          disabled={options.fetch_flow || busy}
           onChange={(e) => {
             const file = e.target.files?.[0];
             if (!file) return;
             // Read here rather than uploading the File: the API takes the CSV
             // text, and a browser that cannot read a local file it was handed
             // should say so rather than submit an empty pin.
-            file.text().then(
-              (text) => set('flow', text),
-              (cause: unknown) =>
+            file
+              .text()
+              .then(setFlow, (cause: unknown) =>
                 setRequestError(
                   `Could not read ${file.name}: ${cause instanceof Error ? cause.message : String(cause)}`,
                 ),
-            );
+              );
           }}
         />
         {options.flow.trim() && (
-          <button type="button" onClick={() => set('flow', '')}>
+          <button type="button" onClick={() => setFlow('')}>
             Clear flow
           </button>
         )}
