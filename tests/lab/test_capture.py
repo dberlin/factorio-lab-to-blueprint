@@ -41,6 +41,7 @@ from flab2bp.lab.capture import (
     CaptureError,
     SolveProbeState,
     _await_solve,
+    _validate_page_location,
     capture_flow_csv,
     find_browser,
 )
@@ -98,6 +99,38 @@ class _FakePage[StateT]:
         self.calls += 1
         return json.dumps(state)
 
+
+
+class _LocationPage:
+    def __init__(self, location: object) -> None:
+        self.location = location
+
+    async def evaluate(self, expression: str, **_kwargs: object) -> object:
+        assert expression == "location.href"
+        return self.location
+
+
+def test_final_navigation_is_checked_before_page_probes() -> None:
+    seen: list[str] = []
+
+    def validate(url: str) -> None:
+        seen.append(url)
+        if url.startswith("http://127.0.0.1"):
+            raise CaptureError("outside allowlist")
+
+    with pytest.raises(CaptureError, match="outside allowlist"):
+        asyncio.run(
+            _validate_page_location(_LocationPage("http://127.0.0.1/private"), validate)
+        )
+    assert seen == ["http://127.0.0.1/private"]
+
+
+def test_non_string_final_navigation_is_refused_before_validation() -> None:
+    seen: list[str] = []
+
+    with pytest.raises(CaptureError, match="invalid location.href"):
+        asyncio.run(_validate_page_location(_LocationPage(None), seen.append))
+    assert seen == []
 
 class TestFindBrowser:
     def test_an_explicit_missing_browser_names_itself(self) -> None:

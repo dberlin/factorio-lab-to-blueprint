@@ -11,6 +11,37 @@ from flab2bp.web.payload import JsonValue
 URL = "https://factoriolab.github.io/dsp/flow?o=graphene*60&v=11"
 
 
+def test_fetch_flow_defaults_off_and_accepts_the_factorio_lab_origin() -> None:
+    assert parse_options({"url": URL}).fetch_flow is False
+    assert parse_options({"url": URL, "fetch_flow": True}).fetch_flow is True
+
+
+@pytest.mark.parametrize("value", [1, "yes", None, []])
+def test_fetch_flow_requires_a_boolean(value: JsonValue) -> None:
+    with pytest.raises(InvalidOptions, match="'fetch_flow' must be a boolean"):
+        parse_options({"url": URL, "fetch_flow": value})
+
+
+def test_web_fetch_and_supplied_flow_are_mutually_exclusive() -> None:
+    with pytest.raises(InvalidOptions, match="flow.*fetch_flow"):
+        parse_options({"url": URL, "flow": "Recipes\n", "fetch_flow": True})
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://factoriolab.github.io/dsp/flow?o=x&v=11",
+        "https://example.com/dsp/flow?o=x&v=11",
+        "https://factoriolab.github.io:444/dsp/flow?o=x&v=11",
+        "https://factoriolab.github.io/dsp/other?o=x&v=11",
+        "https://factoriolab.github.io:bad/dsp/flow?o=x&v=11",
+    ],
+)
+def test_web_fetch_rejects_navigation_outside_supported_pages(url: str) -> None:
+    with pytest.raises(InvalidOptions, match="FactorioLab HTTPS"):
+        parse_options({"url": url, "fetch_flow": True})
+
+
 def test_defaults_match_the_cli() -> None:
     options = parse_options({"url": URL})
     assert (options.strategy, options.candidates, options.budget_s) == ("best", 3, 15.0)

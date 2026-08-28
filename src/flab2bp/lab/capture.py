@@ -66,7 +66,7 @@ import shutil
 import socket
 import subprocess
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from importlib.util import find_spec
 from pathlib import Path
 from typing import Final, Protocol, TypedDict, TypeGuard
@@ -75,7 +75,14 @@ from pydantic import TypeAdapter, ValidationError
 
 from flab2bp.lab.flow import FlowError
 
-__all__ = ["CaptureError", "SolveProbeState", "capture_flow_csv", "find_browser"]
+__all__ = [
+    "CaptureError",
+    "SolveProbeState",
+    "UrlValidator",
+    "capture_flow_csv",
+    "find_browser",
+]
+type UrlValidator = Callable[[str], None]
 
 
 class CaptureError(FlowError):
@@ -179,6 +186,8 @@ _ARGS: Final = (
 #: How often to re-test a wait condition.  Small enough that a fast solve is not
 #: made to wait, large enough that polling is not itself a load on the page.
 _POLL_S: Final = 0.25
+_LOCATION_JS: Final = "location.href"
+
 
 #: Reads DOM state the solve is downstream of.  Returned as a JSON string
 #: because nodriver hands back a CDP ``RemoteObject`` for anything structured,
@@ -270,6 +279,18 @@ async def _await_devtools(port: int, process: subprocess.Popen[bytes], deadline_
     )
 
 
+async def _validate_page_location(page: _AsyncPage, validator: UrlValidator) -> None:
+    location = await page.evaluate(_LOCATION_JS, return_by_value=True)
+    if not isinstance(location, str):
+        raise CaptureError(f"browser returned invalid location.href: {location!r}")
+    try:
+        validator(location)
+    except ValueError as exc:
+        raise CaptureError(
+            f"browser navigated outside the permitted flow page: {exc}"
+        ) from exc
+
+
 async def _await_solve(page: _AsyncPage, url: str, deadline_s: float) -> None:
     """Wait until FactorioLab has actually finished solving.
 
@@ -305,7 +326,15 @@ async def _await_solve(page: _AsyncPage, url: str, deadline_s: float) -> None:
     )
 
 
-async def _capture(url: str, executable: str, timeout_s: float, headless: bool) -> str:
+async def _capture(
+    url: str,
+    executable: str,
+    timeout_s: float,
+    headless: bool,
+    url_validator: UrlValidator | None,
+) -> str:
+    if url_validator is not None:
+        url_validator(url)
     nodriver: object = importlib.import_module("nodriver")
     if not _is_nodriver(nodriver):
         raise CaptureError("nodriver has no callable start()")
@@ -326,6 +355,8 @@ async def _capture(url: str, executable: str, timeout_s: float, headless: bool) 
         await _await_devtools(port, process, min(timeout_s, 30.0))
         browser = await nodriver.start(host="127.0.0.1", port=port)
         page = await browser.get(url)
+        if url_validator is not None:
+            await _validate_page_location(page, url_validator)
         await _await_solve(page, url, timeout_s)
 
         await page.evaluate(_PATCH_JS, return_by_value=True)
@@ -370,6 +401,7 @@ def capture_flow_csv(
     timeout_s: float = 90.0,
     browser: str | None = None,
     headless: bool = True,
+    url_validator: UrlValidator | None = None,
 ) -> str:
     """Drive a headless browser to ``url`` and return its CSV export.
 
@@ -384,4 +416,4 @@ def capture_flow_csv(
             "nodriver is not installed, so a flow export cannot be fetched; "
             "pass --flow with a CSV downloaded from FactorioLab instead"
         )
-    return asyncio.run(_capture(url, executable, timeout_s, headless))
+    return asyncio.run(_capture(url, executable, timeout_s, headless, url_validator))

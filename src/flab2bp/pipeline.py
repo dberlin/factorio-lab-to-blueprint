@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Literal
 
 from flab2bp.dsp import catalog, codec
-from flab2bp.lab.capture import capture_flow_csv
+from flab2bp.lab.capture import UrlValidator, capture_flow_csv
 from flab2bp.lab.data import load_vendored
 from flab2bp.lab.flow import (
     FlowError,
@@ -260,6 +260,7 @@ def build(
     fetch_flow: bool = False,
     fetch_timeout_s: float = 90.0,
     browser: str | None = None,
+    fetch_url_validator: UrlValidator | None = None,
     no_proliferator: bool = False,
     on_progress: ProgressSink | None = None,
 ) -> Build:
@@ -313,7 +314,13 @@ def build(
         selection = flow_from_text(flow_text, url=url)
     elif fetch_flow:
         selection = flow_from_text(
-            capture_flow_csv(url, timeout_s=fetch_timeout_s, browser=browser), url=url
+            capture_flow_csv(
+                url,
+                timeout_s=fetch_timeout_s,
+                browser=browser,
+                url_validator=fetch_url_validator,
+            ),
+            url=url,
         )
     if selection is not None:
         request = pin_request(request, data, selection)

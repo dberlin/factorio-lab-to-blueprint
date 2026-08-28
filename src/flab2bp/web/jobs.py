@@ -25,6 +25,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Literal
+from urllib.parse import urlsplit
 
 from flab2bp import pipeline
 from flab2bp.layout.base import NoValidLayout
@@ -65,6 +66,9 @@ class Options:
     #: URL.  Empty means the recipe selection is DERIVED, which the report says
     #: rather than leaving it to be inferred.
     flow: str = ""
+    #: Ask the server to drive FactorioLab and capture its CSV export.  This is
+    #: allowed only for the validated FactorioLab HTTPS pages.
+    fetch_flow: bool = False
 
     @property
     def solver_ceiling_s(self) -> float:
@@ -81,6 +85,25 @@ class Options:
 
 class InvalidOptions(ValueError):
     """The request could not be turned into a build."""
+
+
+def _validate_web_fetch_url(url: str) -> None:
+    parsed = urlsplit(url)
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise InvalidOptions(
+            "automatic flow fetch requires a FactorioLab HTTPS /dsp/list or /dsp/flow URL"
+        ) from exc
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname != "factoriolab.github.io"
+        or port not in (None, 443)
+        or parsed.path not in ("/dsp/list", "/dsp/flow")
+    ):
+        raise InvalidOptions(
+            "automatic flow fetch requires a FactorioLab HTTPS /dsp/list or /dsp/flow URL"
+        )
 
 
 def parse_options(raw: JsonValue) -> Options:
@@ -148,6 +171,14 @@ def parse_options(raw: JsonValue) -> Options:
     if not isinstance(flow, str):
         raise InvalidOptions("'flow' must be a string: a FactorioLab flow export's CSV text")
 
+    fetch_flow = raw.get("fetch_flow", False)
+    if not isinstance(fetch_flow, bool):
+        raise InvalidOptions("'fetch_flow' must be a boolean")
+    if fetch_flow and flow.strip():
+        raise InvalidOptions("'flow' and 'fetch_flow' are mutually exclusive")
+    if fetch_flow:
+        _validate_web_fetch_url(url.strip())
+
     options = Options(
         url=url.strip(),
         strategy=web_strategy,
@@ -158,6 +189,7 @@ def parse_options(raw: JsonValue) -> Options:
         name=name,
         allow_invalid=allow_invalid,
         flow=flow.strip(),
+        fetch_flow=fetch_flow,
     )
     if options.solver_ceiling_s > MAX_SOLVER_SECONDS:
         raise InvalidOptions(
@@ -210,13 +242,11 @@ class Job:
 def run_build(options: Options, on_progress: pipeline.ProgressSink) -> pipeline.Build:
     """The one call into the solver.
 
-    ``--flow`` is wired: the export arrives as CSV text, pasted or uploaded,
-    and goes through ``flow_from_text``'s provenance check exactly as a file
-    named on the command line does.  ``--fetch-flow`` is not: it drives a
-    headless browser to make FactorioLab do its own solve, and exposing that
-    through the unauthenticated build API would let callers navigate Chromium
-    to arbitrary URLs.  A build with no flow reports ``flow_pinned: false`` and
-    the UI says what that means, rather than the omission reading as silence.
+    ``--flow`` arrives as CSV text and goes through ``flow_from_text``'s
+    provenance check exactly as a file named on the command line does.
+    ``--fetch-flow`` is admitted only for the strict FactorioLab HTTPS
+    allowlist, and the same validator checks the browser's final main-frame
+    location before any page probes run.
     """
     return pipeline.build(
         options.url,
@@ -227,6 +257,8 @@ def run_build(options: Options, on_progress: pipeline.ProgressSink) -> pipeline.
         proliferator_tier=options.proliferator_tier,
         name=options.name,
         flow_text=options.flow or None,
+        fetch_flow=options.fetch_flow,
+        fetch_url_validator=_validate_web_fetch_url if options.fetch_flow else None,
         on_progress=on_progress,
     )
 

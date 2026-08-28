@@ -212,6 +212,24 @@ def test_a_job_that_has_not_started_laying_out_claims_no_progress(
         builder.shutdown()
 
 
+def test_run_build_passes_fetch_flow_and_web_url_validator(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: dict[str, object] = {}
+
+    def spy(*_args: object, **kwargs: object) -> object:
+        seen.update(kwargs)
+        raise ValueError("stop after observing options")
+
+    monkeypatch.setattr(pipeline, "build", spy)
+    with pytest.raises(ValueError, match="stop after observing"):
+        run_build(Options(url=URL, fetch_flow=True), lambda _step: None)
+
+    assert seen["fetch_flow"] is True
+    validator = seen["fetch_url_validator"]
+    assert callable(validator)
+
+
 class TestFlowReachesTheSolver:
     """``run_build`` is the one call into ``pipeline.build``.
 
