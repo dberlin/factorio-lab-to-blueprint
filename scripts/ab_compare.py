@@ -107,6 +107,7 @@ STRATEGIES: dict[str, Callable[[bool, bool], LayoutStrategy]] = {
 
 Judge = Callable[[Placement], tuple[bool, tuple[str, ...]]]
 
+
 @dataclass(frozen=True, slots=True)
 class _LayoutCall:
     """Picklable solve request executed inside one fresh measurement process."""
@@ -121,12 +122,12 @@ class _LayoutCall:
         placement = STRATEGIES[self.strategy](self.power, self.vertical).lay_out(
             self.spec, time_budget_s=self.budget_s
         )
-        return finalize.compact_open_boundary_belts(
+        compacted = finalize.compact_open_boundary_belts(
             placement,
             self.spec,
             expect_power=self.power,
         )
-
+        return finalize.finalize_placement(compacted)
 
 
 def specs_for(entry: CorpusEntry, candidates: int) -> tuple[BuildSpec, ...]:
@@ -165,9 +166,7 @@ def judge_with(
     """
     report = validate.validate(placement, spec, ids=ids, expect_power=power)
     checks = tuple(sorted({f.check for f in report.errors}))
-    unexpected = tuple(
-        c for c in report.skipped if power or not c.startswith("power.")
-    )
+    unexpected = tuple(c for c in report.skipped if power or not c.startswith("power."))
     if unexpected:
         return False, checks + tuple(f"unchecked:{c}" for c in unexpected)
     return report.ok, checks
@@ -219,8 +218,14 @@ def collect(
                     # URL nobody ran and shrink the denominator silently.
                     samples.extend(
                         Sample(
-                            entry.url_id, "-", name, budget, trial,
-                            Outcome.ERROR, 0.0, detail=spec_errors[entry.url_id],
+                            entry.url_id,
+                            "-",
+                            name,
+                            budget,
+                            trial,
+                            Outcome.ERROR,
+                            0.0,
+                            detail=spec_errors[entry.url_id],
                             power=power,
                         )
                         for name in strategy_names
@@ -280,8 +285,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     ap.add_argument(
         "--no-crossvalidate",
         action="store_true",
-        help="skip the independent TypeScript decoder (reported as SKIPPED, "
-        "never as a pass)",
+        help="skip the independent TypeScript decoder (reported as SKIPPED, never as a pass)",
     )
     return ap.parse_args(argv)
 

@@ -111,6 +111,7 @@ def strategy_names(requested: str) -> tuple[str, ...]:
         raise ValueError(f"unknown strategy: {requested}")
     return (requested,)
 
+
 #: A cell slower than this is worth NAMING in the summary even when it passes.
 #: This is a reporting threshold, not a defect threshold: see :func:`_slow_note`
 #: for why a cell above it is usually behaving exactly as designed.
@@ -136,10 +137,7 @@ class Job:
 
     @property
     def label(self) -> str:
-        return (
-            f"{self.url_id}/#{self.spec_index} power={int(self.power)} "
-            f"budget={self.budget:g}s"
-        )
+        return f"{self.url_id}/#{self.spec_index} power={int(self.power)} budget={self.budget:g}s"
 
 
 @dataclass(frozen=True)
@@ -177,9 +175,7 @@ _SPECS: dict[tuple[str, int], tuple[BuildSpec, ...]] = {}
 def _specs_for(url: str, count: int) -> tuple[BuildSpec, ...]:
     key = (url, count)
     if key not in _SPECS:
-        _SPECS[key] = build_candidates(
-            load_vendored(), parse_url(url), count=count
-        ).candidates
+        _SPECS[key] = build_candidates(load_vendored(), parse_url(url), count=count).candidates
     return _SPECS[key]
 
 
@@ -205,9 +201,7 @@ def run_cell(job: Job) -> Result:
     try:
         specs = _specs_for(job.url, job.candidates)
     except Exception as exc:  # noqa: BLE001
-        return Result(
-            job, "SPEC", "?", f"{type(exc).__name__}: {exc}", (), time.monotonic() - t0
-        )
+        return Result(job, "SPEC", "?", f"{type(exc).__name__}: {exc}", (), time.monotonic() - t0)
     if job.spec_index >= len(specs):
         return Result(job, "SPEC", "?", "no such candidate", (), time.monotonic() - t0)
     spec = specs[job.spec_index]
@@ -225,17 +219,13 @@ def run_cell(job: Job) -> Result:
                 belt_vertical_construction=belt_rules.vertical_construction,
             )
         else:
-            strategy = make_strategy(
-                job.power, job.workers, belt_rules.vertical_construction
-            )
+            strategy = make_strategy(job.power, job.workers, belt_rules.vertical_construction)
         placement = strategy.lay_out(
             spec,
             time_budget_s=job.budget,
         )
     except NoValidLayout as exc:
-        return Result(
-            job, "REFUSED", label, exc.reason[:70], ("<refused>",), time.monotonic() - t0
-        )
+        return Result(job, "REFUSED", label, exc.reason[:70], ("<refused>",), time.monotonic() - t0)
     except Exception as exc:  # noqa: BLE001
         return Result(
             job,
@@ -250,6 +240,18 @@ def run_cell(job: Job) -> Result:
         spec,
         expect_power=job.power,
     )
+    try:
+        placement = finalize.finalize_placement(placement)
+    except finalize.ProjectionRefusal as exc:
+        reason = "final spherical projection rejected " + ", ".join(exc.checks)
+        return Result(
+            job,
+            "REFUSED",
+            label,
+            reason[:70],
+            exc.checks,
+            time.monotonic() - t0,
+        )
 
     report = validate.validate(
         placement,
@@ -321,8 +323,7 @@ def _slugs(raw: str, flag: str) -> set[str]:
     unknown = sorted(want - known)
     if unknown:
         raise SystemExit(
-            f"{flag}: no such url_id: {', '.join(unknown)}\n"
-            f"corpus has: {', '.join(sorted(known))}"
+            f"{flag}: no such url_id: {', '.join(unknown)}\ncorpus has: {', '.join(sorted(known))}"
         )
     return want
 
@@ -465,9 +466,7 @@ def main() -> int:
         "measured default; 1 is the search as it stood before arrangements "
         "existed, which is what an A/B compares against",
     )
-    ap.add_argument(
-        "--quiet", action="store_true", help="totals only, no per-cell miss list"
-    )
+    ap.add_argument("--quiet", action="store_true", help="totals only, no per-cell miss list")
     ap.add_argument(
         "--json",
         default="",

@@ -195,46 +195,40 @@ def tile_to_local_offset(
 
 
 def _area_for(placement: Placement) -> BlueprintArea:
-    """The single area record, with the band this extent actually belongs to.
+    """The verified single-area band selected by layout finalization.
 
-    ``area_segments`` was the literal 200 for every blueprint we have ever
-    written, which says "this was copied from the equatorial band" whatever the
-    extent is.  The game writes the band it copied FROM
-    (``BlueprintUtils.cs:1426``), and :func:`flab2bp.dsp.planet.band_for_extent`
-    is the same quantisation run forwards: the smallest band the extent fits, in
-    either orientation.
-
-    A strategy that has VERIFIED which band its layout pastes in records the
-    answer in ``stats["area_segments"]`` and that wins, because it is a stronger
-    claim: the extent-only answer says the area fits, the verified one says the
-    game accepts it.
-
-    Without a verdict the WIDEST fitting band is declared, not the smallest.
-    The smallest is only meaningful once something has checked the layout is
-    legal there, and for a small blueprint it is the 4-segment polar band, which
-    is 20 tiles around the entire planet and where nothing can be built.  The
-    widest is the claim the extent alone supports, and for anything up to 161
-    rows it is 200 -- the number that used to be a literal.
-
-    An extent that fits NO band raises :class:`~flab2bp.dsp.planet.BandRefusal`
-    rather than falling back to 200.  Such a blueprint crosses a tropic at every
-    anchor on the planet and the game refuses it with
-    ``EBuildCondition.BlueprintAreaCrossTropic``; writing 200 would encode a
-    blueprint that cannot be pasted anywhere and say nothing about it.
+    ``area_segments`` is not an encoder default.  It names the latitude band
+    whose spherical geometry accepted the final placement, so encoding an
+    unfinalized placement would turn missing proof into a plausible-looking
+    blueprint.  The finalizer also physically applies a selected quarter turn;
+    the emitted width and height therefore have to fit this band unrotated.
     """
     min_x, min_y, max_x, max_y = placement.bounds
     width = max(1, max_x - min_x + 1)
     height = max(1, max_y - min_y + 1)
     verified = placement.stats.get("area_segments")
+    if verified is None:
+        raise ValueError(
+            "placement has no verified area_segments; call "
+            "layout.finalize.finalize_placement before encoding"
+        )
+    segment_count = int(verified)
+    band = next(
+        (candidate for candidate in planet.bands() if candidate.area_segments == segment_count),
+        None,
+    )
+    if band is None:
+        raise ValueError(f"verified area_segments {segment_count} names no DSP latitude band")
+    if width > band.columns or height > band.rows:
+        raise ValueError(
+            f"finalized {width}x{height} placement does not fit emitted band "
+            f"{segment_count} without another rotation"
+        )
     return BlueprintArea(
         index=0,
         parent_index=-1,
         tropic_anchor=0,
-        area_segments=(
-            int(verified)
-            if verified is not None
-            else planet.widest_band_for_extent(width, height).band.area_segments
-        ),
+        area_segments=segment_count,
         anchor_local_offset_x=0,
         anchor_local_offset_y=0,
         width=width,
@@ -306,6 +300,7 @@ def placement_to_blueprint(
         attributes=(),
         description=placement.description,
     )
+    area = _area_for(placement)
 
     return Blueprint(
         header=header,
@@ -314,10 +309,10 @@ def placement_to_blueprint(
         cursor_offset_x=0,
         cursor_offset_y=0,
         cursor_target_area=0,
-        drag_box_size_x=_area_for(placement).width,
-        drag_box_size_y=_area_for(placement).height,
+        drag_box_size_x=area.width,
+        drag_box_size_y=area.height,
         primary_area_idx=0,
-        areas=(_area_for(placement),),
+        areas=(area,),
         buildings=tuple(buildings),
         gzip_os=0x0A,
     )

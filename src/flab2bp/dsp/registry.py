@@ -271,9 +271,7 @@ _CATALOG: tuple[Entry, ...] = (
         unconsulted_because=(
             "Save-rule normalization consumes this outside layout/validator roots."
         ),
-        mutation_exempt_because=(
-            "R4 measures emitted-layout seams, not request normalization."
-        ),
+        mutation_exempt_because=("R4 measures emitted-layout seams, not request normalization."),
         note="GameHistoryData.Init: labLevel = 3 on a new save.",
     ),
     _e(
@@ -365,12 +363,8 @@ _CATALOG: tuple[Entry, ...] = (
         Kind.RULE,
         depends_on=("lab level, i.e. researched vertical construction",),
         resolved_by="catalog.belt_rules_for_technologies",
-        unconsulted_because=(
-            "Save-rule normalization resolves this before layout strategies run."
-        ),
-        mutation_exempt_because=(
-            "R4 measures emitted-layout seams, not request normalization."
-        ),
+        unconsulted_because=("Save-rule normalization resolves this before layout strategies run."),
+        mutation_exempt_because=("R4 measures emitted-layout seams, not request normalization."),
         note="GameHistoryData.buildMaxHeight, quoted in the function's docstring.",
     ),
     _e(
@@ -431,11 +425,10 @@ _COLLIDERS: tuple[Entry, ...] = (
         "planet.SORTER_SEGMENTS_MAX",
         Kind.RULE,
         depends_on=("how many ends are machines",),
-        unconsulted_because=(
-            "The band-specific sorter oracle is not used by current flat layouts."
-        ),
         mutation_exempt_because=(
-            "No emitted layout currently consumes the band-specific oracle."
+            "Final band selection consumes this threshold and has direct boundary "
+            "and fit-selection controls; R4 has no integer-anchor strategy probe "
+            "that isolates it from the rest of the sorter ladder."
         ),
         note="`num133`, BuildTool_BlueprintPaste.cs:3446-3459.",
     ),
@@ -443,16 +436,12 @@ _COLLIDERS: tuple[Entry, ...] = (
         "planet.SORTER_COMBINED_MIN",
         Kind.RULE,
         depends_on=("how many ends are machines",),
-        unconsulted_because=(
-            "The band-specific sorter oracle is not used by current flat layouts."
-        ),
         mutation_exempt_because=(
-            "No emitted layout currently consumes the band-specific oracle."
+            "Final band selection consumes this threshold and has direct boundary "
+            "and fit-selection controls; R4 has no integer-anchor strategy probe "
+            "that isolates it from the rest of the sorter ladder."
         ),
-        note=(
-            "`num134`: a floor on sqrt(segmentsAcross^2 + altitudeSteps^2) "
-            "in grid cells."
-        ),
+        note=("`num134`: a floor on sqrt(segmentsAcross^2 + altitudeSteps^2) in grid cells."),
     ),
     _e(
         "planet.SORTER_PARAM_BIAS",
@@ -485,15 +474,13 @@ _COLLIDERS: tuple[Entry, ...] = (
         "planet.SORTER_ALTITUDE_UNIT",
         Kind.RULE,
         lint=False,
-        unconsulted_because=(
-            "The band-specific sorter oracle is not used by current flat layouts."
-        ),
         mutation_exempt_because=(
-            "No emitted layout currently consumes the band-specific oracle."
+            "Final band selection consumes this altitude scale and has direct "
+            "boundary controls; R4 has no integer-anchor strategy probe that "
+            "isolates it from the combined sorter floor."
         ),
         note=(
-            "`num130 = Abs(lpos.magnitude - lpos2.magnitude) / 0.2f`, the "
-            "game's radial-step unit."
+            "`num130 = Abs(lpos.magnitude - lpos2.magnitude) / 0.2f`, the game's radial-step unit."
         ),
     ),
     _e(
@@ -647,9 +634,7 @@ _RULES: tuple[Entry, ...] = (
         "rules.coater_reshape_allowed",
         Kind.RULE,
         depends_on=("SpraycoaterComponent reshape x", "reshape y"),
-        unconsulted_because=(
-            "PASTE GAP TooSkew: migrate band certification to this predicate."
-        ),
+        unconsulted_because=("PASTE GAP TooSkew: migrate band certification to this predicate."),
     ),
     _e(
         "rules.SORTER_LENGTH",

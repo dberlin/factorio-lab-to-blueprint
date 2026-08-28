@@ -442,6 +442,23 @@ def build(
                 spec,
                 expect_power=power,
             )
+            try:
+                placement = finalize.finalize_placement(placement)
+            except finalize.ProjectionRefusal as exc:
+                reason = "final spherical projection rejected " + ", ".join(exc.checks)
+                refused.append(f"{sname}/{spec.label}: {reason}")
+                if on_progress is not None:
+                    on_progress(
+                        AttemptProgress(
+                            index=pair_index,
+                            total=total_pairs,
+                            candidate=spec.label,
+                            strategy=sname,
+                            phase="refused",
+                            reason=reason,
+                        )
+                    )
+                continue
             # Pass the spec AND the id map. Without them the nine
             # spec-dependent checks are skipped, and a build that never ran its
             # throughput or proliferator checks reads as clean.

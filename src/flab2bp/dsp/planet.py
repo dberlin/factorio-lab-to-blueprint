@@ -177,7 +177,7 @@ def latitude_rad_per_grid(segment: int) -> float:
 def longitude_rad_per_grid(longitude_seg_cnt: int) -> float:
     """``BlueprintUtils.GetLongitudeRadPerGrid(int)``, ``BlueprintUtils.cs:275``::
 
-        return MathF.PI * 2f / (float)(_longitudeSegCnt * 5);
+    return MathF.PI * 2f / (float)(_longitudeSegCnt * 5);
     """
     return 2.0 * math.pi / (longitude_seg_cnt * 5)
 
@@ -354,35 +354,6 @@ class Fit:
     rows: int
     #: Longitude grid columns it occupies.
     columns: int
-
-
-def widest_band_for_extent(
-    width: int, height: int, segment: int = colliders.PLANET_SEGMENT
-) -> Fit:
-    """The LARGEST band the extent fits -- the answer for a caller that has not
-    checked legality.
-
-    :func:`band_for_extent` gives the smallest band the extent fits, which is
-    only a useful answer once something has verified the layout is legal there;
-    on its own it is the most compressed geometry on the planet and, for a small
-    blueprint, a band nothing at all can be built in.  A caller with no verdict
-    to declare should declare the band it can honestly claim the area fits, which
-    is the widest one, and that is what the encoder wrote as the literal 200 for
-    every blueprint before any of this existed.
-
-    Still refuses when nothing fits: an extent that crosses a tropic at every
-    anchor on the planet has no honest band either.
-    """
-    best: Fit | None = None
-    for band in bands(segment):
-        for rotated, (cols, rows) in ((False, (width, height)), (True, (height, width))):
-            if rows > band.rows or cols > band.columns:
-                continue
-            if best is None or band.area_segments > best.band.area_segments:
-                best = Fit(band=band, rotated=rotated, rows=rows, columns=cols)
-    if best is None:
-        return band_for_extent(width, height, segment)  # raises, with the message
-    return best
 
 
 def band_for_extent(width: int, height: int, segment: int = colliders.PLANET_SEGMENT) -> Fit:
@@ -1051,9 +1022,7 @@ def collisions_at(
         return []
     wanted = {i for pair in pairs for i in pair}
     boxes = {
-        i: colliders.target_boxes(
-            buildings[i], *projection.pose(*_placed_at(buildings[i]))
-        )
+        i: colliders.target_boxes(buildings[i], *projection.pose(*_placed_at(buildings[i])))
         for i in wanted
     }
     hits = [

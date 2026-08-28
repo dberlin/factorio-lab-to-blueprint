@@ -84,6 +84,16 @@ def _run_cell(
         spec,
         expect_power=power,
     )
+    try:
+        placement = finalize.finalize_placement(placement)
+    except finalize.ProjectionRefusal as exc:
+        return _refused_cell(
+            handle,
+            entry,
+            spec,
+            power=power,
+            reason="final spherical projection rejected " + ", ".join(exc.checks),
+        )
     elapsed = time.perf_counter() - started
 
     m = measure(placement)
@@ -134,9 +144,7 @@ def _run_cell(
         # a hole: we told the validator there would be no towers. Every other
         # skip stays, because a check that could not run is not a check that
         # passed.
-        skipped_checks=tuple(
-            c for c in report.skipped if power or not c.startswith("power.")
-        ),
+        skipped_checks=tuple(c for c in report.skipped if power or not c.startswith("power.")),
         error_checks=tuple(sorted({f.check for f in report.errors})),
         checks_run=len(report.checks_run),
     )

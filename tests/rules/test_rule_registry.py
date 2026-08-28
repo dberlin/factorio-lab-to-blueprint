@@ -41,9 +41,6 @@ EXPECTED_UNCONSULTED = {
     "catalog.DEFAULT_STORAGE_LEVEL",
     "catalog.DEFAULT_LAB_LEVEL",
     "catalog.belt_max_z",
-    "planet.SORTER_ALTITUDE_UNIT",
-    "planet.SORTER_COMBINED_MIN",
-    "planet.SORTER_SEGMENTS_MAX",
     # Paste-applicable rules centralized here but not yet migrated into
     # strategy/validation.  The report prints each registry reason.
     "catalog.blueprint_limit_for_technologies",

@@ -150,7 +150,6 @@ _MID_NO_SPRAY_COMPACT_MIN_STRIPS = 10
 _MID_NO_SPRAY_COMPACT_MAX_STRIPS = 15
 
 
-
 @dataclass(frozen=True, slots=True)
 class SequenceSolverConfig:
     """Fixed deterministic orchestration constants."""
@@ -2300,8 +2299,6 @@ def _uses_shared_pack_candidate(
     )
 
 
-
-
 def _exact_pack_decoded(
     pack: _Pack,
     strips: Sequence[Strip],
@@ -2684,9 +2681,7 @@ def _production_run(
             and _MID_NO_SPRAY_COMPACT_MIN_MACHINES
             <= spec.machine_count
             <= _MID_NO_SPRAY_COMPACT_MAX_MACHINES
-            and _MID_NO_SPRAY_COMPACT_MIN_STRIPS
-            <= len(strips)
-            <= _MID_NO_SPRAY_COMPACT_MAX_STRIPS
+            and _MID_NO_SPRAY_COMPACT_MIN_STRIPS <= len(strips) <= _MID_NO_SPRAY_COMPACT_MAX_STRIPS
         ):
             planned_strip_len = 4
             strips = plan_strips(spec, strip_len=planned_strip_len)
@@ -3060,7 +3055,13 @@ def _production_run(
     def certify(placement: Placement) -> ValidationVerdict:
         report = validate.certify(placement, spec, expect_power=power)
         failures = tuple(sorted({finding.check for finding in report.errors}))
-        return ValidationVerdict(not failures, failures)
+        if failures:
+            return ValidationVerdict(False, failures)
+        try:
+            finalize.finalize_placement(placement)
+        except finalize.ProjectionRefusal as exc:
+            return ValidationVerdict(False, exc.checks)
+        return ValidationVerdict(True, ())
 
     family_by_id = {family.family_id: family for family in generate_strip_families(spec)}
     telemetry.pose_feasibility_rejects = sum(
@@ -3473,12 +3474,11 @@ class SequencePairLayout:
                 strip_len=self.strip_len,
                 config=self.config,
             )
-            return solver.search().placement
-
-        if self.islands > 1:
+            placement = solver.search().placement
+        elif self.islands > 1:
             from flab2bp.layout.sequence_islands import run_sequence_islands
 
-            return run_sequence_islands(
+            placement = run_sequence_islands(
                 spec,
                 time_budget_s=time_budget_s,
                 power=self.power,
@@ -3488,34 +3488,42 @@ class SequencePairLayout:
                 compact_seed_config=self.compact_seed_config,
                 islands=self.islands,
             )
-
-        run = _production_run(
-            spec,
-            time_budget_s=time_budget_s,
-            power=self.power,
-            belt_vertical_construction=not self.ramped,
-            strip_len=self.strip_len,
-            config=self.config,
-            compact_seed_attempt=_serial_compact_seed_attempt(
-                spec.machine_count,
-                len(spec.spray_lanes),
+        else:
+            run = _production_run(
+                spec,
+                time_budget_s=time_budget_s,
                 power=self.power,
-            ),
-            compact_seed_base_seed=self.config.seed,
-            compact_seed_config=_budgeted_compact_seed_config(
-                time_budget_s,
-                self.compact_seed_config,
-            ),
-        )
+                belt_vertical_construction=not self.ramped,
+                strip_len=self.strip_len,
+                config=self.config,
+                compact_seed_attempt=_serial_compact_seed_attempt(
+                    spec.machine_count,
+                    len(spec.spray_lanes),
+                    power=self.power,
+                ),
+                compact_seed_base_seed=self.config.seed,
+                compact_seed_config=_budgeted_compact_seed_config(
+                    time_budget_s,
+                    self.compact_seed_config,
+                ),
+            )
+            try:
+                result = run.solver.search(max_stages=run.max_search_stages)
+            except NoValidLayout as exc:
+                raise NoValidLayout(
+                    exc.reason,
+                    spec_label=spec.label,
+                    budget_s=run.ceiling,
+                ) from exc
+            placement = _with_observational_stats(result, run, self.power, self.config)
         try:
-            result = run.solver.search(max_stages=run.max_search_stages)
-        except NoValidLayout as exc:
+            return finalize.finalize_placement(placement)
+        except finalize.ProjectionRefusal as exc:
             raise NoValidLayout(
-                exc.reason,
+                "final spherical projection rejected " + ", ".join(exc.checks),
                 spec_label=spec.label,
-                budget_s=run.ceiling,
+                budget_s=time_budget_s,
             ) from exc
-        return _with_observational_stats(result, run, self.power, self.config)
 
 
 def _with_observational_stats(
