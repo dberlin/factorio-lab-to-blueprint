@@ -211,8 +211,12 @@ def _planet_sorters(placement: Placement) -> tuple[tuple[int, planet.Sorter], ..
 def _projected_sorter_failure(
     sorters: Sequence[tuple[int, planet.Sorter]],
     projection: planet.Projection,
+    *,
+    counters: _ProjectionCounters | None = None,
 ) -> ProjectionFailure | None:
     for index, sorter in sorters:
+        if counters is not None:
+            counters.sorters += 1
         condition = planet.sorter_condition(sorter, projection)
         if condition is not None:
             return ProjectionFailure(
@@ -227,6 +231,8 @@ def _projected_sorter_failure(
 def _projected_power_failure(
     nodes: Sequence[tuple[int, PlacedBuilding, rules.PowerNode]],
     projection: planet.Projection,
+    *,
+    counters: _ProjectionCounters | None = None,
 ) -> ProjectionFailure | None:
     if len(nodes) < 2:
         return None
@@ -246,6 +252,8 @@ def _projected_power_failure(
     for left in range(len(nodes)):
         ia, ba, na = nodes[left]
         for right in range(left + 1, len(nodes)):
+            if counters is not None:
+                counters.power_pairs += 1
             ib, bb, nb = nodes[right]
             distance2 = sum(
                 (a - b) ** 2
@@ -273,8 +281,12 @@ def _projected_static_failure(
     tested: Sequence[tuple[int, colliders.Placed]],
     pairs: Sequence[tuple[int, int]],
     projection: planet.Projection,
+    *,
+    counters: _ProjectionCounters | None = None,
 ) -> ProjectionFailure | None:
     placed = [building for _index, building in tested]
+    if counters is not None:
+        counters.collider_pairs += len(pairs)
     hits = planet.collisions_at(placed, projection, pairs)
     if not hits:
         return None
@@ -443,29 +455,40 @@ def _failure_at_projection(
     pairs: Sequence[tuple[int, int]],
     projection: planet.Projection,
     counters: _ProjectionCounters,
-) -> ProjectionFailure | None:
+) -> tuple[ProjectionFailure, ...]:
     counters.projections += 1
-    counters.collider_pairs += len(pairs)
-    counters.power_pairs += len(invariants.nodes) * (len(invariants.nodes) - 1) // 2
-    counters.sorters += len(invariants.sorters)
-    failure = _projected_power_failure(invariants.nodes, projection)
-    if failure is None:
-        failure = _projected_sorter_failure(invariants.sorters, projection)
-    if failure is None:
-        failure = _projected_static_failure(invariants.tested, pairs, projection)
-    if failure is None:
-        failure = _projected_addon_failure(
+    failures: list[ProjectionFailure] = []
+    for failure in (
+        _projected_power_failure(
+            invariants.nodes,
+            projection,
+            counters=counters,
+        ),
+        _projected_sorter_failure(
+            invariants.sorters,
+            projection,
+            counters=counters,
+        ),
+        _projected_static_failure(
+            invariants.tested,
+            pairs,
+            projection,
+            counters=counters,
+        ),
+        _projected_addon_failure(
             invariants.belts,
             invariants.addons,
             projection,
-        )
-    if failure is None:
-        failure = _projected_addon_splitter_failure(
+        ),
+        _projected_addon_splitter_failure(
             invariants.coaters,
             invariants.splitters,
             projection,
-        )
-    return failure
+        ),
+    ):
+        if failure is not None:
+            failures.append(failure)
+    return tuple(failures)
 
 
 def _certify_frame(
@@ -509,16 +532,16 @@ def _certify_frame(
                 radius=colliders.PLANET_RADIUS,
                 quadrant=quadrant,
             )
-            failure = _failure_at_projection(
+            projection_failures = _failure_at_projection(
                 invariants,
                 pairs,
                 projection,
                 counters,
             )
-            if failure is not None:
-                failures.append(failure)
+            if projection_failures:
+                failures.extend(projection_failures)
                 if stop_after_failure:
-                    return (failure,)
+                    return projection_failures
     return tuple(dict.fromkeys(failures))
 
 
@@ -877,10 +900,11 @@ def finalize_placement(
     policy: BandPolicy | None = None,
 ) -> Placement:
     """Certify the requested frame, retaining staged legacy behavior for ``None``."""
+    if policy is None:
+        legacy = _finalize_legacy(placement)
+        return placement if legacy == placement else legacy
     if placement.frame is not None and _frame_satisfies_policy(placement, policy):
         return placement
-    if policy is None:
-        return _finalize_legacy(placement)
 
     candidates = frame_candidates(placement, policy)
     if not candidates:

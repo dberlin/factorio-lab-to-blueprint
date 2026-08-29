@@ -8,7 +8,7 @@ from typing import cast
 
 import pytest
 
-from flab2bp.dsp import catalog, codec, colliders, planet
+from flab2bp.dsp import catalog, codec, colliders, planet, rules
 from flab2bp.layout import finalize
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import AreaFrame, PlacedBuilding, Placement
@@ -348,9 +348,13 @@ def test_certification_can_select_the_other_physical_orientation(
 
     def fail_wide_orientation(
         tested: tuple[tuple[int, colliders.Placed], ...],
-        _pairs: tuple[tuple[int, int], ...],
+        pairs: tuple[tuple[int, int], ...],
         projection: planet.Projection,
+        *,
+        counters: finalize._ProjectionCounters | None = None,
     ) -> finalize.ProjectionFailure | None:
+        if counters is not None:
+            counters.collider_pairs += len(pairs)
         if any(building.x > 1.0 for _index, building in tested):
             return finalize.ProjectionFailure(
                 "geom.collide",
@@ -374,9 +378,13 @@ def test_padding_search_uses_the_first_legal_south_north_split(
 
     def require_south_padding(
         tested: tuple[tuple[int, colliders.Placed], ...],
-        _pairs: tuple[tuple[int, int], ...],
+        pairs: tuple[tuple[int, int], ...],
         projection: planet.Projection,
+        *,
+        counters: finalize._ProjectionCounters | None = None,
     ) -> finalize.ProjectionFailure | None:
+        if counters is not None:
+            counters.collider_pairs += len(pairs)
         if tested[0][1].y < 2.0:
             return finalize.ProjectionFailure(
                 "geom.collide",
@@ -418,9 +426,13 @@ def test_portable_certifies_same_coordinates_at_every_required_anchor(
 
     def accept_static(
         tested: tuple[tuple[int, colliders.Placed], ...],
-        _pairs: tuple[tuple[int, int], ...],
+        pairs: tuple[tuple[int, int], ...],
         projection: planet.Projection,
+        *,
+        counters: finalize._ProjectionCounters | None = None,
     ) -> None:
+        if counters is not None:
+            counters.collider_pairs += len(pairs)
         seen.append(
             (
                 projection.band.area_segments,
@@ -459,9 +471,13 @@ def test_portable_never_promotes_primary_after_projection_failure(
 
     def reject(
         _tested: tuple[tuple[int, colliders.Placed], ...],
-        _pairs: tuple[tuple[int, int], ...],
+        pairs: tuple[tuple[int, int], ...],
         projection: planet.Projection,
+        *,
+        counters: finalize._ProjectionCounters | None = None,
     ) -> finalize.ProjectionFailure | None:
+        if counters is not None:
+            counters.collider_pairs += len(pairs)
         seen_bands.append(projection.band.area_segments)
         if projection.band.area_segments != 4:
             return None
@@ -510,9 +526,13 @@ def test_five_row_polar_band_passes_only_unpadded_or_refuses(
 
     def reject(
         _tested: tuple[tuple[int, colliders.Placed], ...],
-        _pairs: tuple[tuple[int, int], ...],
+        pairs: tuple[tuple[int, int], ...],
         projection: planet.Projection,
+        *,
+        counters: finalize._ProjectionCounters | None = None,
     ) -> finalize.ProjectionFailure:
+        if counters is not None:
+            counters.collider_pairs += len(pairs)
         return finalize.ProjectionFailure(
             "geom.collide",
             (0, 1),
@@ -536,6 +556,175 @@ def test_projection_refusal_preserves_order_deduplicates_and_formats_evidence() 
     assert "band 60" in str(refusal)
     assert "(9,)" in str(refusal)
     assert "too close" in str(refusal)
+
+
+def test_projection_collects_simultaneous_rule_category_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ordered_checks = (
+        "game.power_too_close",
+        "game.inserter_paste",
+        "geom.collide",
+        "game.addon_supply",
+        "game.addon_splitter_clearance",
+    )
+
+    def refusing(check: str) -> object:
+        def predicate(
+            *args: object,
+            counters: finalize._ProjectionCounters | None = None,
+        ) -> finalize.ProjectionFailure:
+            del counters
+            projection = cast(planet.Projection, args[-1])
+            return finalize.ProjectionFailure(
+                check=check,
+                buildings=(0,),
+                detail=f"simultaneous {check}",
+                band=projection.band.area_segments,
+            )
+
+        return predicate
+
+    for name, check in zip(
+        (
+            "_projected_power_failure",
+            "_projected_sorter_failure",
+            "_projected_static_failure",
+            "_projected_addon_failure",
+            "_projected_addon_splitter_failure",
+        ),
+        ordered_checks,
+        strict=True,
+    ):
+        monkeypatch.setattr(finalize, name, refusing(check))
+
+    with pytest.raises(finalize.ProjectionRefusal) as caught:
+        finalize.finalize_placement(
+            Placement(buildings=_extent(20, 5)),
+            BandPolicy("4"),
+        )
+
+    assert tuple(failure.check for failure in caught.value.failures) == ordered_checks
+    assert caught.value.checks == tuple(sorted(ordered_checks))
+
+
+def test_projection_counters_count_only_observed_rule_loop_work(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    building = _building(catalog.TESLA_TOWER_ID, 0, 0)
+    node = rules.PowerNode(
+        is_power_node=True,
+        is_accumulator=False,
+        wind_forced_power=False,
+        geothermal=False,
+    )
+    sorter = planet.Sorter(
+        x=0.0,
+        y=0.0,
+        z=0.0,
+        x2=1.0,
+        y2=0.0,
+        z2=0.0,
+        yaw=90.0,
+        yaw2=90.0,
+        input_belt=True,
+        output_belt=True,
+        ref_x=0.5,
+        ref_y=0.0,
+        ref_z=0.0,
+    )
+    placed = colliders.Placed(building.model_index, 0.0, 0.0, 0.0, 0.0)
+    invariants = finalize._ProjectionInvariants(
+        tested=((0, placed), (1, placed), (2, placed)),
+        nodes=((0, building, node), (1, building, node), (2, building, node)),
+        sorters=((3, sorter), (4, sorter)),
+        belts=(),
+        addons=(),
+        coaters=(),
+        splitters=(),
+    )
+    pairs = ((0, 1), (0, 2), (1, 2))
+    power_work: list[int] = []
+    sorter_work: list[int] = []
+    collider_work: list[int] = []
+
+    monkeypatch.setattr(finalize, "_projection_invariants", lambda _placement: invariants)
+    monkeypatch.setattr(
+        planet,
+        "candidate_pairs",
+        lambda *_args: list(pairs),
+    )
+
+    def observed_power(
+        _nodes: object,
+        projection: planet.Projection,
+        *,
+        counters: finalize._ProjectionCounters | None = None,
+    ) -> finalize.ProjectionFailure | None:
+        work = 1 if not power_work else len(pairs)
+        power_work.append(work)
+        if counters is not None:
+            counters.power_pairs += work
+        if len(power_work) == 1:
+            return finalize.ProjectionFailure(
+                "game.power_too_close",
+                (0, 1),
+                "first pair refused",
+                projection.band.area_segments,
+            )
+        return None
+
+    def observed_sorters(
+        _sorters: object,
+        projection: planet.Projection,
+        *,
+        counters: finalize._ProjectionCounters | None = None,
+    ) -> finalize.ProjectionFailure | None:
+        work = 1 if not sorter_work else len(invariants.sorters)
+        sorter_work.append(work)
+        if counters is not None:
+            counters.sorters += work
+        if len(sorter_work) == 1:
+            return finalize.ProjectionFailure(
+                "game.inserter_paste",
+                (3,),
+                "first sorter refused",
+                projection.band.area_segments,
+            )
+        return None
+
+    def observed_static(
+        _tested: object,
+        tested_pairs: tuple[tuple[int, int], ...],
+        _projection: planet.Projection,
+        *,
+        counters: finalize._ProjectionCounters | None = None,
+    ) -> None:
+        collider_work.append(len(tested_pairs))
+        if counters is not None:
+            counters.collider_pairs += len(tested_pairs)
+
+    monkeypatch.setattr(finalize, "_projected_power_failure", observed_power)
+    monkeypatch.setattr(finalize, "_projected_sorter_failure", observed_sorters)
+    monkeypatch.setattr(finalize, "_projected_static_failure", observed_static)
+
+    finalized = finalize.finalize_placement(
+        Placement(buildings=_extent(1, 1)),
+        BandPolicy("4"),
+    )
+
+    assert finalized.stats["projection_power_pairs"] == sum(power_work)
+    assert finalized.stats["projection_sorters"] == sum(sorter_work)
+    assert finalized.stats["projection_collider_pairs"] == sum(collider_work)
+
+
+def test_omitted_policy_recomputes_exact_legacy_selection_from_explicit_frame() -> None:
+    raw = Placement(buildings=_extent(3, 3))
+    legacy = finalize.finalize_placement(raw)
+    explicit = finalize.finalize_placement(raw, BandPolicy("40"))
+
+    assert finalize.finalize_placement(legacy, None) is legacy
+    assert finalize.finalize_placement(explicit, None) == legacy
 
 
 def test_framed_finalization_is_idempotent_only_for_coherent_policy() -> None:
