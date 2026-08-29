@@ -150,7 +150,7 @@ def main(argv: list[str] | None = None) -> int:
         choices=BAND_SELECTIONS,
         default="portable",
         help="latitude-band policy (default: portable, the smallest fitting "
-        "band plus two wider bands)",
+        "band plus up to two wider bands)",
     )
     ap.add_argument(
         "--sequence-islands",

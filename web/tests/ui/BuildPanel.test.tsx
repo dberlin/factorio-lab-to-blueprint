@@ -197,7 +197,7 @@ test('latitude band defaults to portable and submits a changed selection', async
   mount();
   const band = screen.getByLabelText('Latitude band');
   expect(band).toHaveValue('portable');
-  expect(band).toHaveTextContent('Portable (smallest + two wider)');
+  expect(band).toHaveTextContent('Portable (smallest + up to two wider)');
 
   fireEvent.change(band, { target: { value: '160' } });
   build();

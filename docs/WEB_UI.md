@@ -39,7 +39,7 @@ An explicit Freeform or SequencePair request always runs one layout per candidat
 
 ## Latitude bands
 
-The selector defaults to **Portable (smallest + two wider)**. The request field is the string
+The selector defaults to **Portable (smallest + up to two wider)**. The request field is the string
 `band`, and its complete shared Python/TypeScript enum is:
 
 ```text

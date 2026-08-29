@@ -156,6 +156,7 @@ def test_strategy_help_separates_best_from_explicit_backends(
     assert exc_info.value.code == 0
     help_text = " ".join(capsys.readouterr().out.split())
     assert "best runs freeform and sequence-pair" in help_text
+    assert "smallest fitting band plus up to two wider bands" in help_text
 
 
 def test_cli_band_choices_are_exact_and_reach_pipeline(

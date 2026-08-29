@@ -168,7 +168,7 @@ export function BuildPanel() {
             if (band.success) set('band', band.data);
           }}
         >
-          <option value="portable">Portable (smallest + two wider)</option>
+          <option value="portable">Portable (smallest + up to two wider)</option>
           {BandSelection.options
             .filter((band) => band !== 'portable')
             .map((band) => (
