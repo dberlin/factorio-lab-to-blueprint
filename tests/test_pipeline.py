@@ -21,7 +21,7 @@ from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import NoValidLayout, Placement
 from flab2bp.layout.freeform import FreeformLayout
 from flab2bp.layout.sequence_solver import SequencePairLayout
-from flab2bp.rates.candidates import build_candidates
+from flab2bp.rates.candidates import _build_candidates_canonical
 from flab2bp.spec import BuildSpecSet
 
 #: Small, and known to lay out.  One candidate and one strategy so the test
@@ -323,7 +323,7 @@ def test_no_proliferator_refuses_rather_than_quietly_spraying() -> None:
     """
     def only_sprayed(*args: object, **kwargs: object) -> BuildSpecSet:
         """Hand back only the candidates that DO spray, so none survives."""
-        spec_set = build_candidates(*args, **kwargs)  # type: ignore[arg-type]
+        spec_set = _build_candidates_canonical(*args, **kwargs)  # type: ignore[arg-type]
         sprayed = tuple(
             s for s in spec_set.candidates if any(g.is_proliferated for g in s.groups)
         )
@@ -331,7 +331,7 @@ def test_no_proliferator_refuses_rather_than_quietly_spraying() -> None:
         return BuildSpecSet(candidates=sprayed)
 
     with pytest.MonkeyPatch.context() as mp:
-        mp.setattr(pipeline, "build_candidates", only_sprayed)
+        mp.setattr(pipeline, "_build_candidates_canonical", only_sprayed)
         with pytest.raises(ValueError, match="every candidate"):
             pipeline.build(
                 SMALL_URL,
