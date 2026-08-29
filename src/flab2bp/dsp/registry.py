@@ -1012,12 +1012,6 @@ LINT_EXCEPTIONS: tuple[LintException, ...] = (
     ),
     LintException(
         "flab2bp.layout.freeform",
-        "FreeformLayout",
-        0.1,
-        "floor on a time budget in seconds, twice; not a slope deadzone",
-    ),
-    LintException(
-        "flab2bp.layout.freeform",
         "_candidate_heights",
         0.6,
         "height sweep factors (0.6, 0.8, 1.0, 1.25, 1.6) -- dimensionless ratios",
@@ -1037,6 +1031,12 @@ LINT_EXCEPTIONS: tuple[LintException, ...] = (
     LintException(
         "flab2bp.rates.candidates",
         "build_candidates",
+        30.0,
+        "CP-SAT time limit in seconds; not degrees",
+    ),
+    LintException(
+        "flab2bp.rates.candidates",
+        "_build_candidates_canonical",
         30.0,
         "CP-SAT time limit in seconds; not degrees",
     ),
