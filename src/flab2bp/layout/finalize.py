@@ -509,7 +509,7 @@ def _projected_addon_failure(
     ],
     projection: planet.Projection,
 ) -> ProjectionFailure | None:
-    if not belts:
+    if not belts or not addons:
         return None
     belt_positions = tuple(
         projection.position(belt.x, belt.y, float(belt.z))

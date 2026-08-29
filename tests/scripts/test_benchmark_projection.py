@@ -252,15 +252,20 @@ def _build_record(
     strategy: str,
     wall_time_s: float,
     area: float,
+    url_id: str = "graphene",
+    spec_index: int = 0,
+    spec_label: str = "all-products",
+    power: bool = False,
+    budget: float = 4.0,
     status: str = "CLEAN",
 ) -> dict[str, object]:
     return {
         "strategy": strategy,
-        "url_id": "graphene",
-        "spec_index": 0,
-        "spec_label": "all-products",
-        "power": False,
-        "budget": 4.0,
+        "url_id": url_id,
+        "spec_index": spec_index,
+        "spec_label": spec_label,
+        "power": power,
+        "budget": budget,
         "status": status,
         "area": area,
         "build_wall_time_s": wall_time_s,
@@ -333,6 +338,89 @@ def test_build_comparison_uses_deadline_grace_for_changed_semantics() -> None:
     assert excess["semantic_change_reasons"] == ["area: 200.0 -> 201.0"]
     assert excess["historical_regression"] is True
     assert excess["gate_passed"] is False
+
+
+@pytest.mark.parametrize(
+    ("field", "changed"),
+    (
+        ("strategy", "sequence-pair"),
+        ("url_id", "plastic"),
+        ("spec_index", 1),
+        ("spec_label", "no-proliferator"),
+        ("power", True),
+        ("budget", 5.0),
+    ),
+)
+def test_build_comparison_rejects_every_identity_mismatch(
+    field: str,
+    changed: object,
+) -> None:
+    baseline = _build_record(strategy="freeform", wall_time_s=1.0, area=100.0)
+    after = baseline.copy()
+    after[field] = changed
+
+    with pytest.raises(ValueError, match="build cases differ"):
+        benchmark_projection.compare_build_results([baseline], [after])
+
+
+def test_build_comparison_rejects_missing_extra_and_duplicate_cases() -> None:
+    first = _build_record(strategy="freeform", wall_time_s=1.0, area=100.0)
+    second = _build_record(
+        strategy="sequence-pair",
+        wall_time_s=1.0,
+        area=100.0,
+    )
+
+    with pytest.raises(ValueError, match="build cases differ"):
+        benchmark_projection.compare_build_results([first, second], [first])
+    with pytest.raises(ValueError, match="build cases differ"):
+        benchmark_projection.compare_build_results([first], [first, second])
+    with pytest.raises(ValueError, match="duplicates build case"):
+        benchmark_projection.compare_build_results([first], [first, first.copy()])
+    with pytest.raises(ValueError, match="duplicates build case"):
+        benchmark_projection.compare_build_results([first, first.copy()], [first])
+
+
+def test_build_comparison_keeps_exact_historical_boundary_diagnostic() -> None:
+    baseline = [
+        _build_record(
+            strategy="freeform",
+            wall_time_s=10.0,
+            area=100.0,
+            budget=20.0,
+        ),
+        _build_record(
+            strategy="sequence-pair",
+            wall_time_s=10.0,
+            area=100.0,
+            budget=20.0,
+        ),
+    ]
+    after = [
+        _build_record(
+            strategy="freeform",
+            wall_time_s=11.0,
+            area=100.0,
+            budget=20.0,
+        ),
+        _build_record(
+            strategy="sequence-pair",
+            wall_time_s=11.000_001,
+            area=100.0,
+            budget=20.0,
+        ),
+    ]
+
+    comparison = benchmark_projection.compare_build_results(baseline, after)
+
+    equality, excess = comparison["cases"]
+    assert equality["wall_time_delta_ratio"] == pytest.approx(0.1)
+    assert equality["historical_regression"] is False
+    assert excess["wall_time_delta_ratio"] == pytest.approx(0.100_000_1)
+    assert excess["historical_regression"] is True
+    assert equality["gate_kind"] == excess["gate_kind"] == "audit_deadline_grace"
+    assert equality["governing_limit_s"] == excess["governing_limit_s"] == 25.0
+    assert equality["gate_passed"] is excess["gate_passed"] is True
 
 
 def test_cli_combines_projection_and_build_per_case_comparisons(

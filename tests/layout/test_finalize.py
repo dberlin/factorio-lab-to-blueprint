@@ -868,6 +868,35 @@ def test_projected_addon_supply_preserves_strict_radius_boundary(
     assert (None if failure is None else failure.check) == expected_check
 
 
+def test_projected_addon_supply_skips_projection_without_both_sides() -> None:
+    class CountingProjection:
+        band = next(
+            candidate for candidate in planet.bands() if candidate.area_segments == 4
+        )
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def position(self, x: float, y: float, z: float) -> tuple[float, float, float]:
+            self.calls += 1
+            return (x, y, z)
+
+    coater = _building(catalog.SPRAY_COATER_ID, 0, 0)
+    addons = ((1, coater, catalog.building(coater.item_id).addon_areas),)
+    belts = ((0, _belt(0, 0, output=None)),)
+    for control_belts, control_addons in ((belts, ()), ((), addons)):
+        projection = CountingProjection()
+        assert (
+            finalize._projected_addon_failure(
+                control_belts,
+                control_addons,
+                cast(planet.Projection, projection),
+            )
+            is None
+        )
+        assert projection.calls == 0
+
+
 def test_projected_addon_supply_projects_each_belt_once_per_projection() -> None:
     class CountingFlatProjection:
         band = next(
@@ -1040,6 +1069,186 @@ def test_projection_result_cache_reuses_only_complete_exact_check_keys(
         "addon": 2,
         "addon_splitter": 2,
     }
+    node = rules.PowerNode(
+        is_power_node=True,
+        is_accumulator=False,
+        wind_forced_power=False,
+        geothermal=False,
+    )
+    changed_inputs = (
+        (replace(invariants, sorters=((3, sorter),)), pairs),
+        (replace(invariants, tested=((0, placed),)), pairs),
+        (invariants, ((1, 0),)),
+        (replace(invariants, nodes=((0, building, node),)), pairs),
+        (
+            replace(
+                invariants,
+                belts=((0, _belt(0, 0, output=None)),),
+            ),
+            pairs,
+        ),
+        (
+            replace(
+                invariants,
+                addons=((0, building, ()),),
+            ),
+            pairs,
+        ),
+        (replace(invariants, coaters=((0, placed),)), pairs),
+        (replace(invariants, splitters=((1, placed),)), pairs),
+    )
+    for changed, changed_pairs in changed_inputs:
+        assert (
+            finalize._failure_at_projection(
+                changed,
+                changed_pairs,
+                first,
+                counters,
+                cache=cache,
+            )
+            == ()
+        )
+    assert calls == {
+        "power": 3,
+        "sorter": 3,
+        "static": 4,
+        "addon": 4,
+        "addon_splitter": 4,
+    }
+
+
+def test_projection_result_cache_reuses_none_and_first_failure_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    checks = (
+        "game.power_too_close",
+        "game.inserter_paste",
+        "geom.collide",
+        "game.addon_supply",
+        "game.addon_splitter_clearance",
+    )
+    names = (
+        "power",
+        "sorter",
+        "static",
+        "addon",
+        "addon_splitter",
+    )
+    failures = {
+        name: finalize.ProjectionFailure(check, (0,), name, 4)
+        for name, check in zip(names, checks, strict=True)
+    }
+    calls = dict.fromkeys(names, 0)
+
+    def refusing(name: str) -> object:
+        def predicate(
+            *args: object,
+            counters: finalize._ProjectionCounters | None = None,
+        ) -> finalize.ProjectionFailure:
+            calls[name] += 1
+            if counters is not None and name == "sorter":
+                counters.sorters += 3
+            if counters is not None and name == "static":
+                counters.collider_pairs += 2
+            return failures[name]
+
+        return predicate
+
+    for function, name in zip(
+        (
+            "projected_power_failure",
+            "_projected_sorter_failure",
+            "_projected_static_failure",
+            "_projected_addon_failure",
+            "_projected_addon_splitter_failure",
+        ),
+        names,
+        strict=True,
+    ):
+        monkeypatch.setattr(finalize, function, refusing(name))
+    band = next(candidate for candidate in planet.bands() if candidate.area_segments == 4)
+    projection = planet.Projection(
+        band,
+        0,
+        colliders.PLANET_SEGMENT,
+        colliders.PLANET_RADIUS,
+    )
+    invariants = finalize._ProjectionInvariants((), (), (), (), (), (), ())
+    counters = finalize._ProjectionCounters()
+    cache = finalize._ProjectionCache(counters)
+
+    first = finalize._failure_at_projection(
+        invariants,
+        (),
+        projection,
+        counters,
+        cache=cache,
+    )
+    second = finalize._failure_at_projection(
+        invariants,
+        (),
+        projection,
+        counters,
+        cache=cache,
+    )
+
+    assert tuple(failure.check for failure in first) == checks
+    assert all(left is right for left, right in zip(first, second, strict=True))
+    assert calls == dict.fromkeys(names, 1)
+    assert counters.sorters == 3
+    assert counters.collider_pairs == 2
+    assert (
+        counters.power_result_cache_hits,
+        counters.sorter_result_cache_hits,
+        counters.static_result_cache_hits,
+        counters.addon_result_cache_hits,
+        counters.addon_splitter_result_cache_hits,
+    ) == (1, 1, 1, 1, 1)
+
+
+def test_projection_result_cache_lifetime_is_one_finalization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    names = ("power", "sorter", "static", "addon", "addon_splitter")
+    calls = dict.fromkeys(names, 0)
+
+    def observed(name: str) -> object:
+        def predicate(*args: object, **kwargs: object) -> None:
+            calls[name] += 1
+
+        return predicate
+
+    for function, name in zip(
+        (
+            "projected_power_failure",
+            "_projected_sorter_failure",
+            "_projected_static_failure",
+            "_projected_addon_failure",
+            "_projected_addon_splitter_failure",
+        ),
+        names,
+        strict=True,
+    ):
+        monkeypatch.setattr(finalize, function, observed(name))
+    placement = Placement(buildings=_extent(1, 1))
+    policy = BandPolicy("4")
+
+    first = finalize.finalize_placement(placement, policy)
+    second = finalize.finalize_placement(placement, policy)
+
+    expected_calls = int(first.stats["projection_count"]) + int(
+        second.stats["projection_count"]
+    )
+    assert calls == dict.fromkeys(names, expected_calls)
+    for finalized in (first, second):
+        stats = cast(dict[str, object], finalized.stats)
+        assert stats["projection_power_result_cache_hits"] == 0
+        assert stats["projection_sorter_result_cache_hits"] == 0
+        assert stats["projection_static_result_cache_hits"] == 0
+        assert stats["projection_addon_result_cache_hits"] == 0
+        assert stats["projection_addon_splitter_result_cache_hits"] == 0
+
+
 
 
 
