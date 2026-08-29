@@ -21,6 +21,8 @@ from flab2bp.lab.data import load_vendored
 from flab2bp.lab.flow import (
     FlowError,
     FlowSelection,
+    canonicalize_dataset,
+    canonicalize_request,
     cross_check,
     flow_from_text,
     load_flow,
@@ -285,8 +287,8 @@ def build(
     policy = BandPolicy.parse(band)
     if sequence_islands != 1 and strategy != "sequence-pair":
         raise ValueError("sequence islands require --strategy sequence-pair")
-    data = dataset if dataset is not None else load_vendored()
-    request = parse_url(url)
+    data = canonicalize_dataset(dataset if dataset is not None else load_vendored())
+    request = canonicalize_request(parse_url(url))
     # How high a belt may go, and whether it may climb with no run at all, are
     # properties of the player's SAVE -- so they come from the technologies
     # FactorioLab already recorded in the URL, not from a flag whose default we

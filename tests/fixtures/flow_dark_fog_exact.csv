@@ -1,0 +1,43 @@
+"https://factoriolab.github.io/dsp/list?z=eJxNyr0KwkAQBOC3uWJAuIuJqbbZYLQQMaKRa9UUMR7BBEWbe3bJ712z-80wNaUhIlETlwhETdtL.3g3lPGQbggjCajOP-cYkRyZI5jNDCWncPLMC6xma-em24x17tw6Lr3Fw7Py.JpcEFJhSEMKQ9zfNaQorwWxaIovHaBxR4U3eA8-gyvLT3CLZIMks8lRGNOQtmzXNhMfUuoPq0xHzg__&v=11"
+Item,Items,Inputs,Outputs,Targets,Belts,Belt,Recipe,Machines,Machine,Modules,Power
+df-supersonic-missile-set,=5,"df-explosive-unit:1,df-missile-set:1,processor:1/12,thruster:1,proliferator-2:1/576","df-supersonic-missile-set:1","",=1/144,conveyor-belt-2,df-supersonic-missile-set,=5/36,assembling-machine-2,"1 proliferator-2-products",=143
+df-explosive-unit,=25/3,"df-combustible-unit:0.5,plastic:1,sulfuric-acid:5/144,proliferator-2:25/20736","df-explosive-unit:1","df-supersonic-missile-set:1",=5/432,conveyor-belt-2,df-explosive-unit,=25/72,chemical-plant,"1 proliferator-2-products",=1322/3
+plastic,=125/18,"energetic-graphite:125/1091,refined-oil:25/1296,proliferator-2:25/20736","plastic:1","df-explosive-unit:1",=25/2592,conveyor-belt-2,plastic,=125/432,chemical-plant,"1 proliferator-2-products",=3341/9
+refined-oil,=600,,,"plastic:25/1296",=5/6,conveyor-belt-2,,,,,
+df-missile-set,=25/6,"circuit-board:25/33,copper-ingot:1/120,df-combustible-unit:0.5,df-engine:1,proliferator-2:5/1728","df-missile-set:1","df-supersonic-missile-set:1",=5/864,conveyor-belt-2,df-missile-set,=25/216,assembling-machine-2,"1 proliferator-2-products",=733/6
+df-engine,=125/36,"copper-ingot:1/432,magnetic-coil:75/8851,proliferator-2:25/41472","df-engine:1","df-missile-set:1",=25/5184,conveyor-belt-2,df-engine,=125/864,assembling-machine-2,"1 proliferator-2-products",=3557/24
+thruster,=25/6,"copper-ingot:1/240,steel:5/72,proliferator-2:25/20736","thruster:1","df-supersonic-missile-set:1",=5/864,conveyor-belt-2,thruster,=25/108,assembling-machine-2,"1 proliferator-2-products",=679/3
+spray-coater,=2,"circuit-board:8/33,microcrystalline-component:1,plasma-exciter:2/11,steel:1/15,proliferator-2:1/864","spray-coater:1","",=1/360,conveyor-belt-2,spray-coater,=1/12,assembling-machine-2,"1 proliferator-2-products",=93
+microcrystalline-component,=10/3,"copper-ingot:1/900,high-purity-silicon:1/81,proliferator-2:1/1728","microcrystalline-component:1","spray-coater:1",=1/216,conveyor-belt-2,microcrystalline-component,=5/54,assembling-machine-2,"1 proliferator-2-products",=304/3
+sorter-4,=2,"processor:0.02,sorter-3:0.04,super-magnetic-ring:6/161","sorter-4:1","",=1/360,conveyor-belt-2,sorter-4,=1/30,assembling-machine-2,"1 ",=35.4
+sorter-3,=100,,,"sorter-4:0.04",=5/36,conveyor-belt-2,,,,,
+satellite-substation,=5,"frame-material:1,super-magnetic-ring:150/161,wireless-power-tower:1","satellite-substation:1","",=1/144,conveyor-belt-2,satellite-substation,=5/12,assembling-machine-2,"1 ",=235.5
+wireless-power-tower,=5,"plasma-exciter:9/11,tesla-tower:1","wireless-power-tower:1","satellite-substation:1",=1/144,conveyor-belt-2,wireless-power-tower,=0.25,assembling-machine-2,"1 ",=148.5
+tesla-tower,=5,"iron-ingot:1/60,magnetic-coil:108/8851,proliferator-2:1/1152","tesla-tower:1","wireless-power-tower:1",=1/144,conveyor-belt-2,tesla-tower,=5/72,assembling-machine-2,"1 proliferator-2-products",=80.5
+frame-material,=10,"carbon-nanotube:1,high-purity-silicon:1/54,titanium-alloy:1,proliferator-2:1/288","frame-material:1","satellite-substation:1",=1/72,conveyor-belt-2,frame-material,=5/6,assembling-machine-2,"1 proliferator-2-products",=768
+carbon-nanotube,=100/3,"graphene:5/12,titanium-ingot:5/162,proliferator-2:5/1296","carbon-nanotube:1","frame-material:1",=5/108,conveyor-belt-2,carbon-nanotube,=25/27,chemical-plant,"1 proliferator-2-products",=10216/9
+graphene,=100,,,"carbon-nanotube:5/12",=5/36,conveyor-belt-2,,,,,
+titanium-alloy,=25/3,"steel:5/72,sulfuric-acid:5/36,titanium-ingot:5/324,proliferator-2:5/2592","titanium-alloy:1","frame-material:1",=5/432,conveyor-belt-2,titanium-alloy,=25/72,arc-smelter,"1 proliferator-2-products",=661/3
+automatic-piler,=2,"gear:216/4241,processor:1/30,steel:0.05,super-magnetic-ring:5/161,proliferator-2:1/864","automatic-piler:1","",=1/360,conveyor-belt-2,automatic-piler,=1/9,assembling-machine-2,"1 proliferator-2-products",=118
+super-magnetic-ring,=161/3,"electromagnetic-turbine:1,energetic-graphite:966/1091,magnet:161/1200,proliferator-2:161/8640","super-magnetic-ring:1","sorter-4:6/161,satellite-substation:150/161,automatic-piler:5/161",=161/2160,conveyor-belt-2,super-magnetic-ring,=161/72,assembling-machine-2,"1 proliferator-2-products",=2066.5
+electromagnetic-turbine,=805/9,"electric-motor:1,magnetic-coil:3864/8851,proliferator-2:161/7776","electromagnetic-turbine:1","super-magnetic-ring:1",=161/1296,conveyor-belt-2,electromagnetic-turbine,=805/324,assembling-machine-2,"1 proliferator-2-products",=20611/9
+electric-motor,=4025/27,"gear:4025/4241,iron-ingot:161/324,magnetic-coil:3220/8851,proliferator-2:805/23328","electric-motor:1","electromagnetic-turbine:1",=805/3888,conveyor-belt-2,electric-motor,=4025/972,assembling-machine-2,"1 proliferator-2-products",=103055/27
+plasma-exciter,=55/3,"magnetic-coil:1584/8851,prism:1,proliferator-2:11/1728","plasma-exciter:1","spray-coater:2/11,wireless-power-tower:9/11",=11/432,conveyor-belt-2,plasma-exciter,=55/108,assembling-machine-2,"1 proliferator-2-products",=1429/3
+prism,=275/9,"glass:55/144,proliferator-2:55/20736","prism:1","plasma-exciter:1",=55/1296,conveyor-belt-2,prism,=275/648,assembling-machine-2,"1 proliferator-2-products",=7199/18
+glass,=100,,,"prism:55/144",=5/36,conveyor-belt-2,,,,,
+df-combustible-unit,=125/9,"coal:5/144,proliferator-2:25/10368","df-combustible-unit:1","df-explosive-unit:0.5,df-missile-set:0.5",=25/1296,conveyor-belt-2,df-combustible-unit,=125/216,assembling-machine-2,"1 proliferator-2-products",=3233/6
+energetic-graphite,=5455/108,"coal:1091/12960,proliferator-2:1091/186624","energetic-graphite:1","plastic:125/1091,super-magnetic-ring:966/1091",=1091/15552,conveyor-belt-2,energetic-graphite,=5455/3888,arc-smelter,"1 proliferator-2-products",=140263/162
+circuit-board,=13.75,"copper-ingot:11/4800,iron-ingot:11/480,proliferator-2:11/9216","circuit-board:1","df-missile-set:25/33,spray-coater:8/33",=11/576,conveyor-belt-2,circuit-board,=55/576,assembling-machine-2,"1 proliferator-2-products",=1663/16
+magnetic-coil,=221275/648,"copper-ingot:8851/155520,magnet:8851/31104,proliferator-2:44255/1492992","magnetic-coil:1","df-engine:75/8851,plasma-exciter:1584/8851,electromagnetic-turbine:3864/8851,electric-motor:3220/8851,tesla-tower:108/8851",=44255/93312,conveyor-belt-2,magnetic-coil,=221275/93312,assembling-machine-2,"1 proliferator-2-products",=5671843/2592
+gear,=21205/162,"iron-ingot:4241/19440,proliferator-2:4241/559872","gear:1","electric-motor:4025/4241,automatic-piler:216/4241",=4241/23328,conveyor-belt-2,gear,=21205/11664,assembling-machine-2,"1 proliferator-2-products",=541789/324
+processor,=100,,,"df-supersonic-missile-set:1/12,sorter-4:0.02,automatic-piler:1/30",=5/36,conveyor-belt-2,,,,,
+proliferator-2,=600,,,"df-supersonic-missile-set:1/576,df-explosive-unit:25/20736,df-missile-set:5/1728,thruster:25/20736,df-combustible-unit:25/10368,plastic:25/20736,energetic-graphite:1091/186624,circuit-board:11/9216,df-engine:25/41472,magnetic-coil:44255/1492992,microcrystalline-component:1/1728,spray-coater:1/864,plasma-exciter:11/1728,prism:55/20736,super-magnetic-ring:161/8640,electromagnetic-turbine:161/7776,electric-motor:805/23328,gear:4241/559872,frame-material:1/288,carbon-nanotube:5/1296,titanium-alloy:5/2592,tesla-tower:1/1152,automatic-piler:1/864",=5/6,conveyor-belt-2,,,,,
+sulfuric-acid,=100,,,"df-explosive-unit:5/144,titanium-alloy:5/36",=5/36,conveyor-belt-2,,,,,
+coal,=1000,,,"df-combustible-unit:5/144,energetic-graphite:1091/12960",=25/18,conveyor-belt-2,,,,,
+water,=100,,,,=5/36,conveyor-belt-2,,,,,
+copper-ingot,=2500,,,"df-missile-set:1/120,thruster:1/240,circuit-board:11/4800,df-engine:1/432,magnetic-coil:8851/155520,microcrystalline-component:1/900",=125/36,conveyor-belt-2,,,,,
+iron-ingot,=500,,,"circuit-board:11/480,electric-motor:161/324,gear:4241/19440,tesla-tower:1/60",=25/36,conveyor-belt-2,,,,,
+magnet,=1000,,,"magnetic-coil:8851/31104,super-magnetic-ring:161/1200",=25/18,conveyor-belt-2,,,,,
+high-purity-silicon,=450,,,"microcrystalline-component:1/81,frame-material:1/54",=0.625,conveyor-belt-2,,,,,
+steel,=100,,,"thruster:5/72,spray-coater:1/15,titanium-alloy:5/72,automatic-piler:0.05",=5/36,conveyor-belt-2,,,,,
+titanium-ingot,=450,,,"carbon-nanotube:5/162,titanium-alloy:5/324",=0.625,conveyor-belt-2,,,,,

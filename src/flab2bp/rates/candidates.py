@@ -15,7 +15,12 @@ from fractions import Fraction
 from math import gcd, lcm
 
 from flab2bp.dsp import rules
-from flab2bp.lab.flow import FlowError, FlowSelection
+from flab2bp.lab.flow import (
+    FlowError,
+    FlowSelection,
+    canonicalize_dataset,
+    canonicalize_request,
+)
 from flab2bp.lab.schema import Dataset
 from flab2bp.lab.url import LabRequest
 from flab2bp.rates.adjust import ProliferatorTier
@@ -277,6 +282,33 @@ def proliferation_from_flow(
     return tier, tuple(sorted(set(by_recipe.values()))), frozenset(by_recipe)
 
 
+def _dark_fog_items(spec: BuildSpec) -> frozenset[str]:
+    """Every synthetic Dark Fog id that would cross the blueprint boundary."""
+    items = {
+        item_id
+        for item_id in (*spec.external_inputs, *spec.outputs, *spec.surplus_outputs)
+        if item_id.startswith("df-")
+    }
+    for group in spec.groups:
+        if group.recipe_id.startswith("df-"):
+            items.add(group.recipe_id)
+        items.update(item_id for item_id in group.inputs_per_machine if item_id.startswith("df-"))
+        items.update(item_id for item_id in group.outputs_per_machine if item_id.startswith("df-"))
+    return frozenset(items)
+
+
+def _refuse_derived_dark_fog(spec: BuildSpec) -> None:
+    """A URL alone cannot authorize a distinct DF-only source item."""
+    items = sorted(_dark_fog_items(spec))
+    if items:
+        item_id = items[0]
+        raise KeyError(
+            f"{item_id!r} is a Dark Fog-only item with no normal DSP catalog "
+            "identity, so derived solving cannot put it in a blueprint. Supply "
+            "this URL's explicit flow to prove it is an external source."
+        )
+
+
 def _pinned_candidates(
     data: Dataset,
     request: LabRequest,
@@ -306,7 +338,20 @@ def _pinned_candidates(
         time_limit_s=time_limit_s,
     )
     label = "flow-pinned" if tier is ProliferatorTier.NONE else f"flow-pinned-mk{tier.value}"
-    specs = [_to_build_spec(data, request, plan, label)]
+    spec = _to_build_spec(data, request, plan, label)
+    synthetic_groups = sorted(g.recipe_id for g in spec.groups if g.recipe_id.startswith("df-"))
+    if synthetic_groups:
+        raise FlowError(
+            f"the pinned candidate selected synthetic Dark Fog recipe(s) "
+            f"{synthetic_groups!r}; those rows are source provenance, never machines"
+        )
+    unlisted = sorted(_dark_fog_items(spec) - set(flow.by_item))
+    if unlisted:
+        raise FlowError(
+            f"{unlisted[0]!r} is a Dark Fog source needed by the pinned candidate, "
+            "but the supplied flow does not explicitly list that item"
+        )
+    specs = [spec]
     _assert_same_objective(data, request, specs)
     return BuildSpecSet(candidates=tuple(specs))
 
@@ -338,9 +383,24 @@ def build_candidates(
     real URL produced 515,396,248 machines this way, and the layout stage then
     sat trying to place them.
     """
+    data = canonicalize_dataset(data)
+    request = canonicalize_request(request)
     if count < 1 or count > DEFAULT_CANDIDATES:
         raise ValueError(f"count must be between 1 and {DEFAULT_CANDIDATES}")
 
+    if flow is None:
+        df_only_objectives = sorted(
+            objective.target_id
+            for objective in request.objectives
+            if objective.target_id.startswith("df-")
+        )
+        if df_only_objectives:
+            item_id = df_only_objectives[0]
+            raise KeyError(
+                f"{item_id!r} is a Dark Fog-only item with no normal DSP catalog "
+                "identity, so derived solving cannot put it in a blueprint. Supply "
+                "this URL's explicit flow to prove it is an external source."
+            )
     if flow is not None:
         # A supplied flow fixes recipe and per-recipe mode choices. An explicit
         # tier still wins; None means preserve the flow's own tier exactly.
@@ -358,9 +418,11 @@ def build_candidates(
         mode_policy=ProliferatorMode.NONE,
         time_limit_s=time_limit_s,
     )
-    specs = [_to_build_spec(data, request, baseline, "no-proliferator")]
+    baseline_spec = _to_build_spec(data, request, baseline, "no-proliferator")
+    _refuse_derived_dark_fog(baseline_spec)
+    specs = [baseline_spec]
     rounded_areas = {"no-proliferator": baseline.total_area}
-    baseline_machines = specs[0].machine_count
+    baseline_machines = baseline_spec.machine_count
     dropped: list[str] = []
 
     if chosen is not ProliferatorTier.NONE and count > 1:
