@@ -220,6 +220,16 @@ def test_anchors_are_every_window_in_the_band_and_no_others() -> None:
         assert planet.area_count(anchor, anchor + 49, SEGMENT) == 1
 
 
+def test_full_height_polar_fit_has_only_the_two_unpadded_hemisphere_anchors() -> None:
+    band = next(band for band in planet.bands(SEGMENT) if band.area_segments == 4)
+    fit = planet.Fit(band=band, rotated=False, rows=5, columns=20)
+
+    projections = planet.projections_for(fit)
+
+    assert tuple(projection.anchor_row for projection in projections) == (-250, 246)
+    assert all(projection.quadrant == 0 for projection in projections)
+
+
 # --- the projection ---------------------------------------------------------
 
 

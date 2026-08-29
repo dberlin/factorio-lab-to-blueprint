@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from fractions import Fraction
+from typing import cast
 
 import pytest
 
-from flab2bp.dsp import catalog, codec
+from flab2bp.dsp import catalog, codec, colliders, planet
 from flab2bp.layout import finalize
+from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import AreaFrame, PlacedBuilding, Placement
 from tests.layout.test_freeform import two_stage_spec
 
@@ -257,6 +259,303 @@ def test_finalization_rejects_a_band_where_a_sorter_compresses_too_close() -> No
     assert finalized.frame == AreaFrame(20, 5, 8, (8,), False)
 
 
+def test_portable_targets_stop_at_the_equator() -> None:
+    by_segments = {band.area_segments: band for band in planet.bands()}
+
+    assert tuple(
+        band.area_segments
+        for band in finalize.target_bands(by_segments[160], BandPolicy("portable"))
+    ) == (160, 200)
+    assert tuple(
+        band.area_segments
+        for band in finalize.target_bands(by_segments[200], BandPolicy("portable"))
+    ) == (200,)
+
+
+def test_frame_candidates_cover_both_orientations_and_every_padding_split() -> None:
+    placement = Placement(buildings=_extent(2, 2))
+
+    candidates = finalize.frame_candidates(placement, BandPolicy("40"))
+
+    assert {
+        (candidate.frame.rotated, candidate.added_rows, candidate.south_padding)
+        for candidate in candidates
+    } == {
+        (rotated, added_rows, south_padding)
+        for rotated in (False, True)
+        for added_rows in range(5)
+        for south_padding in range(added_rows + 1)
+    }
+    assert all(candidate.frame.width == 2 for candidate in candidates)
+    keys = [
+        (
+            candidate.frame.width * candidate.frame.height,
+            candidate.added_rows,
+            candidate.frame.rotated,
+            candidate.south_padding,
+        )
+        for candidate in candidates
+    ]
+    assert keys == sorted(keys)
+
+
+def test_portable_primary_is_global_and_padding_never_promotes_it() -> None:
+    candidates = finalize.frame_candidates(
+        Placement(buildings=_extent(21, 5)),
+        BandPolicy("portable"),
+    )
+
+    assert candidates
+    assert {candidate.frame.primary_band for candidate in candidates} == {8}
+    assert {candidate.frame.certified_bands for candidate in candidates} == {(8, 16, 20)}
+
+
+def test_explicit_policy_certifies_only_requested_band() -> None:
+    finalized = finalize.finalize_placement(
+        Placement(buildings=_extent(3, 3)),
+        BandPolicy("40"),
+    )
+
+    assert finalized.frame == AreaFrame(3, 3, 40, (40,), False)
+
+
+def test_explicit_policy_refuses_instead_of_promoting_requested_band() -> None:
+    with pytest.raises(finalize.ProjectionRefusal) as caught:
+        finalize.finalize_placement(
+            Placement(buildings=_extent(21, 5)),
+            BandPolicy("4"),
+        )
+
+    assert caught.value.failures == (
+        finalize.ProjectionFailure(
+            check="game.blueprint_area",
+            buildings=(),
+            detail="frame 21x5 exceeds the requested band's 20x5 capacity",
+            band=4,
+        ),
+    )
+
+
+def test_certification_can_select_the_other_physical_orientation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    placement = Placement(
+        buildings=(
+            _building(2302, 0, 0),
+            _building(2302, 5, 0),
+        )
+    )
+
+    def fail_wide_orientation(
+        tested: tuple[tuple[int, colliders.Placed], ...],
+        _pairs: tuple[tuple[int, int], ...],
+        projection: planet.Projection,
+    ) -> finalize.ProjectionFailure | None:
+        if any(building.x > 1.0 for _index, building in tested):
+            return finalize.ProjectionFailure(
+                "geom.collide",
+                (0, 1),
+                "synthetic orientation refusal",
+                projection.band.area_segments,
+            )
+        return None
+
+    monkeypatch.setattr(finalize, "_projected_static_failure", fail_wide_orientation)
+
+    finalized = finalize.finalize_placement(placement, BandPolicy("40"))
+
+    assert finalized.frame == AreaFrame(3, 8, 40, (40,), True)
+    assert finalized.bounds == (0, 0, 2, 7)
+
+def test_padding_search_uses_the_first_legal_south_north_split(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    placement = Placement(buildings=(_building(2302, 0, 0),))
+
+    def require_south_padding(
+        tested: tuple[tuple[int, colliders.Placed], ...],
+        _pairs: tuple[tuple[int, int], ...],
+        projection: planet.Projection,
+    ) -> finalize.ProjectionFailure | None:
+        if tested[0][1].y < 2.0:
+            return finalize.ProjectionFailure(
+                "geom.collide",
+                (0,),
+                "synthetic south-edge refusal",
+                projection.band.area_segments,
+            )
+        return None
+
+    monkeypatch.setattr(finalize, "_projected_static_failure", require_south_padding)
+
+    finalized = finalize.finalize_placement(placement, BandPolicy("40"))
+
+    assert finalized.frame == AreaFrame(3, 4, 40, (40,), False)
+    assert finalized.buildings[0].y == 1
+
+
+def test_portable_certifies_same_coordinates_at_every_required_anchor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    placement = Placement(
+        buildings=(
+            _building(2302, 0, 0),
+            _building(2302, 0, 0),
+        )
+    )
+    pair_bands: list[int] = []
+    seen: list[tuple[int, int, tuple[colliders.Placed, ...]]] = []
+    original_pairs = planet.candidate_pairs
+
+    def observed_pairs(
+        buildings: tuple[colliders.Placed, ...],
+        band: planet.Band,
+        segment: int,
+        radius: float,
+    ) -> list[tuple[int, int]]:
+        pair_bands.append(band.area_segments)
+        return original_pairs(buildings, band, segment, radius)
+
+    def accept_static(
+        tested: tuple[tuple[int, colliders.Placed], ...],
+        _pairs: tuple[tuple[int, int], ...],
+        projection: planet.Projection,
+    ) -> None:
+        seen.append(
+            (
+                projection.band.area_segments,
+                projection.anchor_row,
+                tuple(building for _index, building in tested),
+            )
+        )
+        return None
+
+    monkeypatch.setattr(planet, "candidate_pairs", observed_pairs)
+    monkeypatch.setattr(finalize, "_projected_static_failure", accept_static)
+
+    finalized = finalize.finalize_placement(placement, BandPolicy("portable"))
+
+    by_segments = {band.area_segments: band for band in planet.bands()}
+    expected = [
+        (segments, anchor)
+        for segments in (4, 8, 16)
+        for anchor in by_segments[segments].anchors(3)
+    ]
+    assert [(segments, anchor) for segments, anchor, _buildings in seen] == expected
+    assert len({buildings for _segments, _anchor, buildings in seen}) == 1
+    assert pair_bands == [4, 8, 16]
+    assert finalized.frame == AreaFrame(3, 3, 4, (4, 8, 16), False)
+    assert finalized.stats["projection_frame_candidates"] == 1
+    assert finalized.stats["projection_count"] == len(expected)
+    assert finalized.stats["projection_collider_pairs"] == len(expected)
+    assert finalized.stats["projection_power_pairs"] == 0
+    assert finalized.stats["projection_sorters"] == 0
+
+
+def test_portable_never_promotes_primary_after_projection_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen_bands: list[int] = []
+
+    def reject(
+        _tested: tuple[tuple[int, colliders.Placed], ...],
+        _pairs: tuple[tuple[int, int], ...],
+        projection: planet.Projection,
+    ) -> finalize.ProjectionFailure | None:
+        seen_bands.append(projection.band.area_segments)
+        if projection.band.area_segments != 4:
+            return None
+        return finalize.ProjectionFailure(
+            "geom.collide",
+            (0, 1),
+            "synthetic primary-band refusal",
+            projection.band.area_segments,
+        )
+
+    monkeypatch.setattr(finalize, "_projected_static_failure", reject)
+
+    with pytest.raises(finalize.ProjectionRefusal) as caught:
+        finalize.finalize_placement(
+            Placement(buildings=_extent(3, 3)),
+            BandPolicy("portable"),
+        )
+
+    assert set(seen_bands) == {4, 8, 16}
+    assert {failure.band for failure in caught.value.failures} == {4}
+
+
+def test_five_row_polar_band_passes_only_unpadded_or_refuses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    placement = Placement(buildings=_extent(20, 5))
+    policy = BandPolicy("portable")
+
+    candidates = finalize.frame_candidates(placement, policy)
+    assert [
+        (
+            candidate.frame.width,
+            candidate.frame.height,
+            candidate.added_rows,
+            candidate.south_padding,
+        )
+        for candidate in candidates
+    ] == [(20, 5, 0, 0)]
+    assert finalize.finalize_placement(placement, policy).frame == AreaFrame(
+        20,
+        5,
+        4,
+        (4, 8, 16),
+        False,
+    )
+
+    def reject(
+        _tested: tuple[tuple[int, colliders.Placed], ...],
+        _pairs: tuple[tuple[int, int], ...],
+        projection: planet.Projection,
+    ) -> finalize.ProjectionFailure:
+        return finalize.ProjectionFailure(
+            "geom.collide",
+            (0, 1),
+            "synthetic polar refusal",
+            projection.band.area_segments,
+        )
+
+    monkeypatch.setattr(finalize, "_projected_static_failure", reject)
+    with pytest.raises(finalize.ProjectionRefusal):
+        finalize.finalize_placement(placement, policy)
+
+
+def test_projection_refusal_preserves_order_deduplicates_and_formats_evidence() -> None:
+    first = finalize.ProjectionFailure("geom.collide", (4, 5), "overlap", 40)
+    second = finalize.ProjectionFailure("game.inserter_paste", (9,), "too close", 60)
+
+    refusal = finalize.ProjectionRefusal((second, first, second))
+
+    assert refusal.failures == (second, first)
+    assert refusal.checks == ("game.inserter_paste", "geom.collide")
+    assert "band 60" in str(refusal)
+    assert "(9,)" in str(refusal)
+    assert "too close" in str(refusal)
+
+
+def test_framed_finalization_is_idempotent_only_for_coherent_policy() -> None:
+    placement = Placement(buildings=_extent(2, 2))
+    policy = BandPolicy("portable")
+    finalized = finalize.finalize_placement(placement, policy)
+
+    assert finalize.finalize_placement(finalized, policy) is finalized
+
+    invalid = replace(finalized, frame=AreaFrame(1, 1, 4, (4, 8, 16), False))
+    repaired = finalize.finalize_placement(invalid, policy)
+    assert repaired is not invalid
+    assert repaired.frame == AreaFrame(2, 2, 4, (4, 8, 16), False)
+
+    legacy = finalize.finalize_placement(placement)
+    portable = finalize.finalize_placement(legacy, policy)
+    assert portable is not legacy
+    assert portable.frame == AreaFrame(2, 2, 4, (4, 8, 16), False)
+
+
 def test_freeform_uses_shared_planet_finalization(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -287,7 +586,7 @@ def test_sequence_pair_uses_shared_planet_finalization(
 ) -> None:
     from types import SimpleNamespace
 
-    from flab2bp.layout.sequence_solver import SequencePairLayout
+    from flab2bp.layout.sequence_solver import SequencePairLayout, SequenceSearchResult
 
     raw = Placement(buildings=_extent(43, 35))
     calls: list[Placement] = []
@@ -300,8 +599,13 @@ def test_sequence_pair_uses_shared_planet_finalization(
         )
 
     class _Solver:
-        def search(self) -> object:
-            return SimpleNamespace(placement=raw)
+        def search(
+            self,
+            *,
+            max_stages: int | None = None,
+        ) -> SequenceSearchResult:
+            del max_stages
+            return cast(SequenceSearchResult, SimpleNamespace(placement=raw))
 
     def factory(*_args: object, **_kwargs: object) -> _Solver:
         return _Solver()

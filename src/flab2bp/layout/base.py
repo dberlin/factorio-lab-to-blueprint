@@ -278,6 +278,11 @@ class PlacementStats(TypedDict, total=False):
     route_failures: float
     routed: float
     rows: float
+    projection_collider_pairs: int
+    projection_count: int
+    projection_frame_candidates: int
+    projection_power_pairs: int
+    projection_sorters: int
     search_energy: float
     seed: int
     seeds: float

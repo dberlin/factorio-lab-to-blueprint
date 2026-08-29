@@ -5,11 +5,12 @@ from __future__ import annotations
 import math
 import time
 from collections.abc import Sequence
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import Literal
 
 from flab2bp.dsp import catalog, codec, colliders, planet, rules
 from flab2bp.layout import slots
+from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import AreaFrame, PlacedBuilding, Placement
 from flab2bp.layout.validate import certify as _certify
 from flab2bp.spec import BuildSpec
@@ -17,25 +18,65 @@ from flab2bp.spec import BuildSpec
 type _Direction = Literal["input", "output"]
 type _Side = Literal["left", "bottom", "right", "top"]
 
-type _ProjectionFailure = tuple[str, tuple[int, ...], str]
+@dataclass(frozen=True, slots=True)
+class ProjectionFailure:
+    """One authoritative projected paste refusal."""
+
+    check: str
+    buildings: tuple[int, ...]
+    detail: str
+    band: int
 
 
 class ProjectionRefusal(ValueError):
-    """No extent-fitting latitude band accepts the placement's real geometry."""
+    """No requested latitude frame accepts the placement's real geometry."""
 
-    def __init__(self, failures: Sequence[_ProjectionFailure]) -> None:
+    def __init__(self, failures: Sequence[ProjectionFailure]) -> None:
         distinct = tuple(dict.fromkeys(failures))
-        self.failures: tuple[_ProjectionFailure, ...] = distinct
+        self.failures: tuple[ProjectionFailure, ...] = distinct
         self.checks: tuple[str, ...] = tuple(
-            sorted({check for check, _buildings, _detail in distinct})
+            sorted({failure.check for failure in distinct})
         )
         detail = "; ".join(
-            f"{check} {buildings}: {message}" for check, buildings, message in distinct
+            f"band {failure.band} {failure.check} {failure.buildings}: {failure.detail}"
+            for failure in distinct
         )
         super().__init__(
             "no legal DSP latitude band/orientation accepts the final placement"
             + (f": {detail}" if detail else "")
         )
+
+
+@dataclass(frozen=True, slots=True)
+class FrameCandidate:
+    """One deterministic latitude-only frame choice awaiting certification."""
+
+    frame: AreaFrame
+    south_padding: int
+    added_rows: int
+
+
+@dataclass(frozen=True, slots=True)
+class _ProjectionInvariants:
+    tested: tuple[tuple[int, colliders.Placed], ...]
+    nodes: tuple[tuple[int, PlacedBuilding, rules.PowerNode], ...]
+    sorters: tuple[tuple[int, planet.Sorter], ...]
+    belts: tuple[tuple[int, PlacedBuilding], ...]
+    addons: tuple[
+        tuple[int, PlacedBuilding, tuple[catalog.AddonSupplyPose, ...]],
+        ...,
+    ]
+    coaters: tuple[tuple[int, colliders.Placed], ...]
+    splitters: tuple[tuple[int, colliders.Placed], ...]
+
+
+@dataclass(slots=True)
+class _ProjectionCounters:
+    frame_candidates: int = 0
+    projections: int = 0
+    collider_pairs: int = 0
+    power_pairs: int = 0
+    sorters: int = 0
 
 
 def _extent_fits(width: int, height: int) -> tuple[planet.Fit, ...]:
@@ -50,22 +91,6 @@ def _extent_fits(width: int, height: int) -> tuple[planet.Fit, ...]:
     return tuple(fits)
 
 
-def _projections(
-    placement: Placement,
-    fit: planet.Fit,
-) -> tuple[planet.Projection, ...]:
-    min_x, min_y, _max_x, _max_y = placement.bounds
-    row_origin = min_x if fit.rotated else min_y
-    return tuple(
-        planet.Projection(
-            band=fit.band,
-            anchor_row=southmost - row_origin,
-            segment=colliders.PLANET_SEGMENT,
-            radius=colliders.PLANET_RADIUS,
-            quadrant=1 if fit.rotated else 0,
-        )
-        for southmost in fit.band.anchors(fit.rows)
-    )
 
 
 def _collision_placed(building: PlacedBuilding) -> colliders.Placed:
@@ -186,14 +211,15 @@ def _planet_sorters(placement: Placement) -> tuple[tuple[int, planet.Sorter], ..
 def _projected_sorter_failure(
     sorters: Sequence[tuple[int, planet.Sorter]],
     projection: planet.Projection,
-) -> _ProjectionFailure | None:
+) -> ProjectionFailure | None:
     for index, sorter in sorters:
         condition = planet.sorter_condition(sorter, projection)
         if condition is not None:
-            return (
-                "game.inserter_paste",
-                (index,),
-                f"sorter is {condition} at band {projection.band.area_segments}",
+            return ProjectionFailure(
+                check="game.inserter_paste",
+                buildings=(index,),
+                detail=f"sorter is {condition}",
+                band=projection.band.area_segments,
             )
     return None
 
@@ -201,7 +227,7 @@ def _projected_sorter_failure(
 def _projected_power_failure(
     nodes: Sequence[tuple[int, PlacedBuilding, rules.PowerNode]],
     projection: planet.Projection,
-) -> _ProjectionFailure | None:
+) -> ProjectionFailure | None:
     if len(nodes) < 2:
         return None
     lo, hi = rules.PASTE_POWER_NODE_IDS
@@ -221,19 +247,24 @@ def _projected_power_failure(
         ia, ba, na = nodes[left]
         for right in range(left + 1, len(nodes)):
             ib, bb, nb = nodes[right]
-            distance2 = sum((a - b) ** 2 for a, b in zip(poses[left], poses[right], strict=True))
+            distance2 = sum(
+                (a - b) ** 2
+                for a, b in zip(poses[left], poses[right], strict=True)
+            )
             condition = None
             if lo <= bb.item_id < hi:
                 condition = rules.power_node_condition(na, nb, distance2)
             if condition is None and lo <= ba.item_id < hi:
                 condition = rules.power_node_condition(nb, na, distance2)
             if condition is not None:
-                return (
-                    "game.power_too_close",
-                    (ia, ib),
-                    f"{distance2**0.5:.4f} world units apart at band "
-                    f"{projection.band.area_segments}, below the 3.5-unit "
-                    f"PowerTooClose gate ({condition})",
+                return ProjectionFailure(
+                    check="game.power_too_close",
+                    buildings=(ia, ib),
+                    detail=(
+                        f"{distance2**0.5:.4f} world units apart, below the "
+                        f"3.5-unit PowerTooClose gate ({condition})"
+                    ),
+                    band=projection.band.area_segments,
                 )
     return None
 
@@ -242,37 +273,30 @@ def _projected_static_failure(
     tested: Sequence[tuple[int, colliders.Placed]],
     pairs: Sequence[tuple[int, int]],
     projection: planet.Projection,
-) -> _ProjectionFailure | None:
+) -> ProjectionFailure | None:
     placed = [building for _index, building in tested]
     hits = planet.collisions_at(placed, projection, pairs)
     if not hits:
         return None
     left, right = hits[0]
-    return (
-        "geom.collide",
-        (tested[left][0], tested[right][0]),
-        f"build colliders intersect at band {projection.band.area_segments}",
+    return ProjectionFailure(
+        check="geom.collide",
+        buildings=(tested[left][0], tested[right][0]),
+        detail="build colliders intersect",
+        band=projection.band.area_segments,
     )
 
 
 def _projected_addon_failure(
-    placement: Placement,
+    belts: Sequence[tuple[int, PlacedBuilding]],
+    addons: Sequence[
+        tuple[int, PlacedBuilding, tuple[catalog.AddonSupplyPose, ...]]
+    ],
     projection: planet.Projection,
-) -> _ProjectionFailure | None:
-    belts = [
-        (index, building)
-        for index, building in enumerate(placement.buildings)
-        if catalog.is_belt(building.item_id)
-    ]
+) -> ProjectionFailure | None:
     if not belts:
         return None
-    for addon_index, addon in enumerate(placement.buildings):
-        try:
-            areas = catalog.building(addon.item_id).addon_areas
-        except KeyError:
-            continue
-        if len(areas) < 2:
-            continue
+    for addon_index, addon, areas in addons:
         for area in areas:
             wanted = slots.addon_supply_position(
                 addon.item_id,
@@ -309,38 +333,24 @@ def _projected_addon_failure(
                 default=None,
             )
             if nearest is None or nearest[0] >= rules.ADDON_AREA_RADIUS**2:
-                return (
-                    "game.addon_supply",
-                    (addon_index,),
-                    f"addon area {area.area} has no belt within "
-                    f"{rules.ADDON_AREA_RADIUS} world unit in band "
-                    f"{projection.band.area_segments}",
+                return ProjectionFailure(
+                    check="game.addon_supply",
+                    buildings=(addon_index,),
+                    detail=(
+                        f"addon area {area.area} has no belt within "
+                        f"{rules.ADDON_AREA_RADIUS} world unit"
+                    ),
+                    band=projection.band.area_segments,
                 )
     return None
 
 
 def _projected_addon_splitter_failure(
-    placement: Placement,
+    coaters: Sequence[tuple[int, colliders.Placed]],
+    splitters: Sequence[tuple[int, colliders.Placed]],
     projection: planet.Projection,
-) -> _ProjectionFailure | None:
-    """Authoritative coater/splitter keepout from the broke2 in-game refusal.
-
-    The ordinary OBBs leave the reported pair clear.  A Splitter's cross-shaped
-    connection body nevertheless makes the paste red one cell beyond the
-    coater's existing lateral keepout.  Reserve one projected grid arc on the
-    coater collider's short horizontal axis; unlike a tile-only ban, this keeps
-    the promise in the selected spherical projection.
-    """
-    coaters = [
-        (index, _collision_placed(building))
-        for index, building in enumerate(placement.buildings)
-        if building.item_id == catalog.SPRAY_COATER_ID
-    ]
-    splitters = [
-        (index, _collision_placed(building))
-        for index, building in enumerate(placement.buildings)
-        if building.item_id == catalog.SPLITTER_ID
-    ]
+) -> ProjectionFailure | None:
+    """Authoritative coater/splitter keepout from the broke2 in-game refusal."""
     for coater_index, coater in coaters:
         coater_boxes = colliders.target_boxes(
             coater,
@@ -379,49 +389,137 @@ def _projected_addon_splitter_failure(
                 for coater_box in expanded
                 for splitter_box in splitter_boxes
             ):
-                return (
-                    "game.addon_splitter_clearance",
-                    (coater_index, splitter_index),
-                    "Splitter connection body enters the Spray Coater's "
-                    f"projected lateral keepout in band {projection.band.area_segments}",
+                return ProjectionFailure(
+                    check="game.addon_splitter_clearance",
+                    buildings=(coater_index, splitter_index),
+                    detail=(
+                        "Splitter connection body enters the Spray Coater's "
+                        "projected lateral keepout"
+                    ),
+                    band=projection.band.area_segments,
                 )
     return None
 
 
-def _projection_failure(
+def _projection_invariants(placement: Placement) -> _ProjectionInvariants:
+    tested: list[tuple[int, colliders.Placed]] = []
+    belts: list[tuple[int, PlacedBuilding]] = []
+    addons: list[
+        tuple[int, PlacedBuilding, tuple[catalog.AddonSupplyPose, ...]]
+    ] = []
+    coaters: list[tuple[int, colliders.Placed]] = []
+    splitters: list[tuple[int, colliders.Placed]] = []
+    for index, building in enumerate(placement.buildings):
+        is_belt = catalog.is_belt(building.item_id)
+        is_sorter = catalog.is_sorter(building.item_id)
+        if is_belt:
+            belts.append((index, building))
+        if not is_belt and not is_sorter:
+            placed = _collision_placed(building)
+            tested.append((index, placed))
+            if building.item_id == catalog.SPRAY_COATER_ID:
+                coaters.append((index, placed))
+            elif building.item_id == catalog.SPLITTER_ID:
+                splitters.append((index, placed))
+        try:
+            areas = catalog.building(building.item_id).addon_areas
+        except KeyError:
+            continue
+        if len(areas) >= 2:
+            addons.append((index, building, areas))
+    return _ProjectionInvariants(
+        tested=tuple(tested),
+        nodes=_power_nodes(placement),
+        sorters=_planet_sorters(placement),
+        belts=tuple(belts),
+        addons=tuple(addons),
+        coaters=tuple(coaters),
+        splitters=tuple(splitters),
+    )
+
+
+def _failure_at_projection(
+    invariants: _ProjectionInvariants,
+    pairs: Sequence[tuple[int, int]],
+    projection: planet.Projection,
+    counters: _ProjectionCounters,
+) -> ProjectionFailure | None:
+    counters.projections += 1
+    counters.collider_pairs += len(pairs)
+    counters.power_pairs += len(invariants.nodes) * (len(invariants.nodes) - 1) // 2
+    counters.sorters += len(invariants.sorters)
+    failure = _projected_power_failure(invariants.nodes, projection)
+    if failure is None:
+        failure = _projected_sorter_failure(invariants.sorters, projection)
+    if failure is None:
+        failure = _projected_static_failure(invariants.tested, pairs, projection)
+    if failure is None:
+        failure = _projected_addon_failure(
+            invariants.belts,
+            invariants.addons,
+            projection,
+        )
+    if failure is None:
+        failure = _projected_addon_splitter_failure(
+            invariants.coaters,
+            invariants.splitters,
+            projection,
+        )
+    return failure
+
+
+def _certify_frame(
     placement: Placement,
-    fit: planet.Fit,
-) -> _ProjectionFailure | None:
-    tested = tuple(
-        (index, _collision_placed(building))
-        for index, building in enumerate(placement.buildings)
-        if not catalog.is_belt(building.item_id) and not catalog.is_sorter(building.item_id)
+    frame: AreaFrame,
+    counters: _ProjectionCounters,
+    *,
+    quadrant: int = 0,
+    row_origin: int = 0,
+    pair_rotated: bool = False,
+    stop_after_failure: bool = False,
+) -> tuple[ProjectionFailure, ...]:
+    invariants = _projection_invariants(placement)
+    pair_buildings = tuple(
+        replace(building, x=building.y, y=building.x)
+        if pair_rotated
+        else building
+        for _index, building in invariants.tested
     )
-    candidates = [
-        (replace(building, x=building.y, y=building.x) if fit.rotated else building)
-        for _index, building in tested
-    ]
-    pairs = planet.candidate_pairs(
-        candidates,
-        fit.band,
-        colliders.PLANET_SEGMENT,
-        colliders.PLANET_RADIUS,
-    )
-    nodes = _power_nodes(placement)
-    sorters = _planet_sorters(placement)
-    for projection in _projections(placement, fit):
-        failure = _projected_power_failure(nodes, projection)
-        if failure is None:
-            failure = _projected_sorter_failure(sorters, projection)
-        if failure is None:
-            failure = _projected_static_failure(tested, pairs, projection)
-        if failure is None:
-            failure = _projected_addon_failure(placement, projection)
-        if failure is None:
-            failure = _projected_addon_splitter_failure(placement, projection)
-        if failure is not None:
-            return failure
-    return None
+    by_segments = {band.area_segments: band for band in planet.bands()}
+    pairs_by_band: dict[int, tuple[tuple[int, int], ...]] = {}
+    failures: list[ProjectionFailure] = []
+    for segments in frame.certified_bands:
+        band = by_segments[segments]
+        pairs = pairs_by_band.get(segments)
+        if pairs is None:
+            pairs = tuple(
+                planet.candidate_pairs(
+                    pair_buildings,
+                    band,
+                    colliders.PLANET_SEGMENT,
+                    colliders.PLANET_RADIUS,
+                )
+            )
+            pairs_by_band[segments] = pairs
+        for anchor in band.anchors(frame.height):
+            projection = planet.Projection(
+                band=band,
+                anchor_row=anchor - row_origin,
+                segment=colliders.PLANET_SEGMENT,
+                radius=colliders.PLANET_RADIUS,
+                quadrant=quadrant,
+            )
+            failure = _failure_at_projection(
+                invariants,
+                pairs,
+                projection,
+                counters,
+            )
+            if failure is not None:
+                failures.append(failure)
+                if stop_after_failure:
+                    return (failure,)
+    return tuple(dict.fromkeys(failures))
 
 
 def _oriented(placement: Placement, *, rotated: bool) -> Placement:
@@ -461,30 +559,292 @@ def _oriented(placement: Placement, *, rotated: bool) -> Placement:
                     y2=None if building.y2 is None else building.y2 - min_y,
                 )
             )
-    return replace(placement, buildings=tuple(buildings))
+    return replace(placement, buildings=tuple(buildings), frame=None)
 
 
-def finalize_placement(placement: Placement) -> Placement:
-    """Choose and apply the smallest orientation/band legal at every anchor."""
+def target_bands(
+    primary: planet.Band,
+    policy: BandPolicy,
+) -> tuple[planet.Band, ...]:
+    """Bands required by ``policy``, starting at the fixed primary band."""
+    if policy.explicit_segments is not None:
+        return (primary,)
+    ordered = tuple(sorted(planet.bands(), key=lambda band: band.area_segments))
+    start = ordered.index(primary)
+    return ordered[start : start + 3]
+
+
+def _primary_band(
+    placement: Placement,
+    policy: BandPolicy,
+) -> planet.Band | None:
+    explicit = policy.explicit_segments
+    if explicit is not None:
+        return next(
+            band for band in planet.bands() if band.area_segments == explicit
+        )
+    min_x, min_y, max_x, max_y = placement.bounds
+    try:
+        return planet.band_for_extent(
+            max_x - min_x + 1,
+            max_y - min_y + 1,
+        ).band
+    except planet.BandRefusal:
+        return None
+
+
+def _frame_candidate_for_primary(
+    placement: Placement,
+    policy: BandPolicy,
+    primary: planet.Band,
+    *,
+    rotated: bool,
+    south_padding: int,
+    north_padding: int,
+) -> FrameCandidate | None:
+    if south_padding < 0 or north_padding < 0:
+        raise ValueError("latitude padding must be non-negative")
+    min_x, min_y, max_x, max_y = placement.bounds
+    width = max_x - min_x + 1
+    height = max_y - min_y + 1
+    columns, content_rows = (height, width) if rotated else (width, height)
+    added_rows = south_padding + north_padding
+    rows = content_rows + added_rows
+    if columns > primary.columns or rows > primary.rows:
+        return None
+    prior_rotated = placement.frame.rotated if placement.frame is not None else False
+    required = target_bands(primary, policy)
+    return FrameCandidate(
+        frame=AreaFrame(
+            width=columns,
+            height=rows,
+            primary_band=primary.area_segments,
+            certified_bands=tuple(band.area_segments for band in required),
+            rotated=prior_rotated ^ rotated,
+        ),
+        south_padding=south_padding,
+        added_rows=added_rows,
+    )
+
+
+def _frame_candidate(
+    placement: Placement,
+    policy: BandPolicy,
+    *,
+    rotated: bool,
+    south_padding: int,
+    north_padding: int,
+) -> FrameCandidate | None:
+    """Build one latitude-padded frame without changing its fixed primary."""
+    primary = _primary_band(placement, policy)
+    if primary is None:
+        return None
+    return _frame_candidate_for_primary(
+        placement,
+        policy,
+        primary,
+        rotated=rotated,
+        south_padding=south_padding,
+        north_padding=north_padding,
+    )
+
+
+def frame_candidates(
+    placement: Placement,
+    policy: BandPolicy,
+) -> tuple[FrameCandidate, ...]:
+    """Enumerate every approved frame in deterministic minimum-area order."""
+    primary = _primary_band(placement, policy)
+    if primary is None:
+        return ()
+    candidates: list[FrameCandidate] = []
+    for rotated in (False, True):
+        for added_rows in range(5):
+            for south_padding in range(added_rows + 1):
+                candidate = _frame_candidate_for_primary(
+                    placement,
+                    policy,
+                    primary,
+                    rotated=rotated,
+                    south_padding=south_padding,
+                    north_padding=added_rows - south_padding,
+                )
+                if candidate is not None:
+                    candidates.append(candidate)
+    return tuple(
+        sorted(
+            candidates,
+            key=lambda candidate: (
+                candidate.frame.width * candidate.frame.height,
+                candidate.added_rows,
+                candidate.frame.rotated,
+                candidate.south_padding,
+            ),
+        )
+    )
+
+
+def _materialize_frame(
+    placement: Placement,
+    candidate: FrameCandidate,
+) -> Placement:
+    prior_rotated = placement.frame.rotated if placement.frame is not None else False
+    relative_rotation = prior_rotated ^ candidate.frame.rotated
+    oriented = _oriented(placement, rotated=relative_rotation)
+    if candidate.south_padding:
+        buildings = tuple(
+            replace(
+                building,
+                y=building.y + candidate.south_padding,
+                y2=(
+                    None
+                    if building.y2 is None
+                    else building.y2 + candidate.south_padding
+                ),
+            )
+            for building in oriented.buildings
+        )
+        oriented = replace(oriented, buildings=buildings, frame=None)
+    return replace(oriented, frame=candidate.frame)
+
+
+def _frame_content_valid(placement: Placement) -> bool:
+    frame = placement.frame
+    if frame is None:
+        return False
+    if tuple(dict.fromkeys(frame.certified_bands)) != frame.certified_bands:
+        return False
+    by_segments = {band.area_segments: band for band in planet.bands()}
+    if any(segments not in by_segments for segments in frame.certified_bands):
+        return False
+    if any(
+        frame.width > by_segments[segments].columns
+        or frame.height > by_segments[segments].rows
+        for segments in frame.certified_bands
+    ):
+        return False
+    for building in placement.buildings:
+        if (
+            building.width <= 0
+            or building.height <= 0
+            or building.x < 0
+            or building.y < 0
+            or building.x + building.width > frame.width
+            or building.y + building.height > frame.height
+        ):
+            return False
+        if building.x2 is not None:
+            second_y = building.y2 if building.y2 is not None else 0
+            if (
+                building.x2 < 0
+                or building.x2 >= frame.width
+                or second_y < 0
+                or second_y >= frame.height
+            ):
+                return False
+    left, bottom, right, top = placement.bounds
+    return (
+        left == 0
+        and right == frame.width - 1
+        and bottom >= 0
+        and top < frame.height
+        and bottom + (frame.height - top - 1) <= 4
+    )
+
+
+def _frame_satisfies_policy(
+    placement: Placement,
+    policy: BandPolicy | None,
+) -> bool:
+    if not _frame_content_valid(placement):
+        return False
+    frame = placement.frame
+    assert frame is not None
+    if policy is None:
+        return True
+    explicit = policy.explicit_segments
+    if explicit is not None:
+        return (
+            frame.primary_band == explicit
+            and frame.certified_bands == (explicit,)
+        )
+    min_x, min_y, max_x, max_y = placement.bounds
+    try:
+        primary = planet.band_for_extent(
+            max_x - min_x + 1,
+            max_y - min_y + 1,
+        ).band
+    except planet.BandRefusal:
+        return False
+    required = tuple(
+        band.area_segments for band in target_bands(primary, policy)
+    )
+    return (
+        frame.primary_band == primary.area_segments
+        and frame.certified_bands == required
+    )
+
+
+def _with_projection_stats(
+    placement: Placement,
+    counters: _ProjectionCounters,
+) -> Placement:
+    stats = placement.stats.copy()
+    stats["projection_frame_candidates"] = counters.frame_candidates
+    stats["projection_count"] = counters.projections
+    stats["projection_collider_pairs"] = counters.collider_pairs
+    stats["projection_power_pairs"] = counters.power_pairs
+    stats["projection_sorters"] = counters.sorters
+    return replace(placement, stats=stats)
+
+
+def _extent_failure(
+    placement: Placement,
+    policy: BandPolicy | None,
+) -> ProjectionFailure:
+    min_x, min_y, max_x, max_y = placement.bounds
+    width = max_x - min_x + 1
+    height = max_y - min_y + 1
+    explicit = policy.explicit_segments if policy is not None else None
+    if explicit is not None:
+        band = next(
+            candidate
+            for candidate in planet.bands()
+            if candidate.area_segments == explicit
+        )
+        return ProjectionFailure(
+            check="game.blueprint_area",
+            buildings=(),
+            detail=(
+                f"frame {width}x{height} exceeds the requested band's "
+                f"{band.columns}x{band.rows} capacity"
+            ),
+            band=explicit,
+        )
+    try:
+        _ = planet.band_for_extent(width, height)
+    except planet.BandRefusal as exc:
+        return ProjectionFailure(
+            check="game.blueprint_area",
+            buildings=(),
+            detail=str(exc),
+            band=0,
+        )
+    raise AssertionError("extent failure requested for geometry with a fitting band")
+
+
+def _finalize_legacy(placement: Placement) -> Placement:
     min_x, min_y, max_x, max_y = placement.bounds
     width = max_x - min_x + 1
     height = max_y - min_y + 1
     fits = _extent_fits(width, height)
     if not fits:
-        try:
-            _ = planet.band_for_extent(width, height)
-        except planet.BandRefusal as exc:
-            raise ProjectionRefusal((("game.blueprint_area", (), str(exc)),)) from exc
-        raise AssertionError("band_for_extent did not refuse an extent with no fit")
-
-    failures: list[_ProjectionFailure] = []
+        raise ProjectionRefusal((_extent_failure(placement, None),))
+    counters = _ProjectionCounters()
+    failures: list[ProjectionFailure] = []
+    prior_rotated = placement.frame.rotated if placement.frame is not None else False
     for fit in fits:
-        failure = _projection_failure(placement, fit)
-        if failure is not None:
-            failures.append(failure)
-            continue
-        oriented = _oriented(placement, rotated=fit.rotated)
-        prior_rotated = placement.frame.rotated if placement.frame is not None else False
+        counters.frame_candidates += 1
         frame = AreaFrame(
             width=fit.columns,
             height=fit.rows,
@@ -492,7 +852,53 @@ def finalize_placement(placement: Placement) -> Placement:
             certified_bands=(fit.band.area_segments,),
             rotated=prior_rotated ^ fit.rotated,
         )
-        return replace(oriented, frame=frame)
+        fit_failures = _certify_frame(
+            placement,
+            frame,
+            counters,
+            quadrant=1 if fit.rotated else 0,
+            row_origin=min_x if fit.rotated else min_y,
+            pair_rotated=fit.rotated,
+            stop_after_failure=True,
+        )
+        if fit_failures:
+            failures.extend(fit_failures)
+            continue
+        oriented = _oriented(placement, rotated=fit.rotated)
+        return _with_projection_stats(
+            replace(oriented, frame=frame),
+            counters,
+        )
+    raise ProjectionRefusal(failures)
+
+
+def finalize_placement(
+    placement: Placement,
+    policy: BandPolicy | None = None,
+) -> Placement:
+    """Certify the requested frame, retaining staged legacy behavior for ``None``."""
+    if placement.frame is not None and _frame_satisfies_policy(placement, policy):
+        return placement
+    if policy is None:
+        return _finalize_legacy(placement)
+
+    candidates = frame_candidates(placement, policy)
+    if not candidates:
+        raise ProjectionRefusal((_extent_failure(placement, policy),))
+    counters = _ProjectionCounters()
+    failures: list[ProjectionFailure] = []
+    for candidate in candidates:
+        counters.frame_candidates += 1
+        framed = _materialize_frame(placement, candidate)
+        candidate_failures = _certify_frame(
+            framed,
+            candidate.frame,
+            counters,
+        )
+        if candidate_failures:
+            failures.extend(candidate_failures)
+            continue
+        return _with_projection_stats(framed, counters)
     raise ProjectionRefusal(failures)
 
 

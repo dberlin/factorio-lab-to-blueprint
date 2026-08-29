@@ -14,7 +14,9 @@ import pytest
 
 from flab2bp.dsp.codec import decode, encode, encode_blueprint, placement_to_blueprint
 from flab2bp.dsp.envelope import BlueprintFormatError, dotnet_ticks
+from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import AreaFrame, PlacedBuilding, Placement, PlacementStats
+from flab2bp.layout.finalize import finalize_placement
 
 from .conftest import fixture_texts
 
@@ -88,6 +90,29 @@ def test_encoding_is_deterministic() -> None:
     a = encode(_tiny_placement(), timestamp=dotnet_ticks(0))
     b = encode(_tiny_placement(), timestamp=dotnet_ticks(0))
     assert a == b
+
+
+def test_reencoding_portably_finalized_geometry_is_idempotent() -> None:
+    unfinalized = Placement(
+        buildings=(
+            PlacedBuilding(
+                item_id=BELT_MK2,
+                model_index=BELT_MK2_MODEL,
+                x=0,
+                y=0,
+            ),
+        )
+    )
+    policy = BandPolicy("portable")
+    finalized = finalize_placement(unfinalized, policy)
+
+    finalized_again = finalize_placement(finalized, policy)
+
+    assert finalized_again is finalized
+    assert encode(finalized_again, timestamp=dotnet_ticks(0)) == encode(
+        finalized,
+        timestamp=dotnet_ticks(0),
+    )
 
 
 def test_connections_survive_encoding() -> None:
