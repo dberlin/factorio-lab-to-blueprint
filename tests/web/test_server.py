@@ -171,10 +171,28 @@ def test_a_refusal_comes_back_200_not_500(start: Callable[..., Client]) -> None:
         raise NoValidLayout("freeform/a: too tall", spec_label="a", budget_s=1.0)
 
     client = start(refuse)
-    _, job = client.post("/api/build", {"url": URL})
-    snap = client.settled(_string(job, "id"))
+    submit_status, job = client.post("/api/build", {"url": URL})
+    assert submit_status == 202
+
+    client.settled(_string(job, "id"))
+    status, snap = client.get_json(f"/api/build/{_string(job, 'id')}")
+    assert status == 200
     assert snap["state"] == "refused"
-    assert _object(snap, "refusal")["reasons"] == ["freeform/a: too tall"]
+    assert _object(snap, "refusal") == {
+        "message": (
+            "no valid layout for a after 1s: freeform/a: too tall. Treat a spec that "
+            "cannot be laid out in the requested budget as a layout-model defect until "
+            "shown otherwise."
+        ),
+        "attempts": [
+            {
+                "candidate": "a",
+                "strategy": None,
+                "reason": "freeform/a: too tall",
+                "projection_failures": [],
+            }
+        ],
+    }
 
 
 def test_a_bad_body_is_400_with_a_reason(start: Callable[..., Client]) -> None:
