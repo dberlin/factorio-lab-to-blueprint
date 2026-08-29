@@ -10,7 +10,13 @@ from types import MappingProxyType
 import pytest
 
 from flab2bp.lab.data import load_vendored
-from flab2bp.lab.flow import FlowError, flow_from_text, load_flow, pin_request
+from flab2bp.lab.flow import (
+    FlowError,
+    FlowFormatError,
+    flow_from_text,
+    load_flow,
+    pin_request,
+)
 from flab2bp.lab.schema import Dataset
 from flab2bp.lab.url import parse_url
 from flab2bp.rates.candidates import build_candidates
@@ -153,6 +159,60 @@ def test_alias_and_canonical_flow_rows_merge_rates() -> None:
     assert flow.rows[0].recipe_id == "combustible-unit"
     assert flow.rows[0].items == 2
     assert flow.rows[0].machines == 2
+
+
+@pytest.mark.parametrize(
+    ("field", "alias_values", "canonical_values"),
+    [
+        ("Recipe", ("", "", "", ""), ("combustible-unit", "", "", "")),
+        (
+            "Machine",
+            ("combustible-unit", "", "", ""),
+            ("combustible-unit", "assembling-machine-2", "", ""),
+        ),
+        (
+            "Belt",
+            ("combustible-unit", "assembling-machine-2", "", ""),
+            (
+                "combustible-unit",
+                "assembling-machine-2",
+                "conveyor-belt-2",
+                "",
+            ),
+        ),
+        (
+            "Modules",
+            ("combustible-unit", "assembling-machine-2", "conveyor-belt-2", ""),
+            (
+                "combustible-unit",
+                "assembling-machine-2",
+                "conveyor-belt-2",
+                "1 proliferator-2-products",
+            ),
+        ),
+    ],
+)
+def test_alias_merge_rejects_blank_nonblank_semantic_conflicts(
+    field: str,
+    alias_values: tuple[str, str, str, str],
+    canonical_values: tuple[str, str, str, str],
+) -> None:
+    url = "https://factoriolab.github.io/dsp/list?o=combustible-unit*2&v=11"
+
+    def row(item_id: str, values: tuple[str, str, str, str]) -> str:
+        recipe, machine, belt, modules = values
+        return f'{item_id},=1,{belt},{recipe},=1,{machine},"{modules}"'
+
+    text = "\r\n".join(
+        [
+            f'"{url}"',
+            "Item,Items,Belt,Recipe,Machines,Machine,Modules",
+            row("df-combustible-unit", alias_values),
+            row("combustible-unit", canonical_values),
+        ]
+    )
+    with pytest.raises(FlowFormatError, match=f"conflicting {field}"):
+        _ = flow_from_text(text + "\r\n", url=url)
 
 
 def test_df_only_output_is_refused_even_when_the_flow_lists_it(data: Dataset) -> None:

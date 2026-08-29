@@ -417,14 +417,13 @@ def _merge_flow_rows(one: FlowRow, two: FlowRow) -> FlowRow:
     """Merge two source spellings that canonicalized to one item identity."""
 
     def one_text(field: str, left: str, right: str) -> str:
-        values = {value for value in (left, right) if value}
-        if len(values) > 1:
+        if left != right:
             raise FlowFormatError(
                 f"canonical item {one.item_id!r} has conflicting {field} values "
-                f"{sorted(values)!r}; aliases may merge only when they describe "
-                "the same flow step"
+                f"{[left, right]!r}; aliases may merge only when they describe "
+                "the same flow step, including whether the field is blank"
             )
-        return next(iter(values), "")
+        return left
 
     return FlowRow(
         item_id=one.item_id,
