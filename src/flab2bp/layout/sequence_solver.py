@@ -119,6 +119,7 @@ class ObjectiveMode(StrEnum):
 
 type QualityArchiveKey = tuple[int, int, int, int, float, PlacementKey]
 type RefinementHint = tuple[int, tuple[int, int], DecodedPlacement]
+type _ValidationFailure = str | finalize.ProjectionFailure
 
 _QUALITY_REVISIT_AFTER = 2
 _MAX_SEQUENCE_ISLANDS = 16
@@ -396,15 +397,22 @@ class ValidationVerdict:
     """Stable exact-validator outcome returned by an injected adapter."""
 
     ok: bool
-    failed_checks: tuple[str, ...]
+    failed_checks: tuple[_ValidationFailure, ...]
 
     def __post_init__(self) -> None:
         if type(self.ok) is not bool:
             raise ValueError("validation verdict ok flag must be a bool")
         if not isinstance(self.failed_checks, tuple) or any(
-            not isinstance(check, str) or not check for check in self.failed_checks
+            not (
+                (isinstance(failure, str) and bool(failure))
+                or isinstance(failure, finalize.ProjectionFailure)
+            )
+            for failure in self.failed_checks
         ):
-            raise ValueError("validation failure checks must be non-empty strings in a tuple")
+            raise ValueError(
+                "validation failures must be non-empty check strings or "
+                "ProjectionFailure records in a tuple"
+            )
         if self.ok and self.failed_checks:
             raise ValueError("a clean validation verdict cannot contain failed checks")
 
@@ -441,7 +449,7 @@ class StageObservation:
     expansions: int
     lns_size: int
     exact_key: tuple[int, int] | None
-    validation_failures: tuple[str, ...]
+    validation_failures: tuple[_ValidationFailure, ...]
     variant_moves: int
     selected_instance_ids: tuple[StripInstanceId, ...]
     selected_variant_ids: tuple[StripVariantId, ...]
@@ -810,15 +818,30 @@ class SequenceSolver[PreparedT]:
             }[termination]
             validation_failures = tuple(
                 dict.fromkeys(
-                    check
+                    failure
                     for stage in self._stage_stats
-                    for check in stage.validation_failures
+                    for failure in stage.validation_failures
                 )
             )
-            if validation_failures:
-                reason += "; exact validation failures: " + ", ".join(
-                    validation_failures
+            validation_checks = tuple(
+                dict.fromkeys(
+                    failure
+                    if isinstance(failure, str)
+                    else failure.check
+                    for failure in validation_failures
                 )
+            )
+            if validation_checks:
+                reason += "; exact validation failures: " + ", ".join(
+                    validation_checks
+                )
+            projection_failures = tuple(
+                failure
+                for failure in validation_failures
+                if isinstance(failure, finalize.ProjectionFailure)
+            )
+            if projection_failures:
+                reason += "; " + str(finalize.ProjectionRefusal(projection_failures))
             raise NoValidLayout(reason)
         incumbent = self._incumbent
         return SequenceSearchResult(
@@ -1400,7 +1423,7 @@ class SequenceSolver[PreparedT]:
         )
         if observation.continue_search:
             height_state.pending_quality_exit = False
-        validation_failures: tuple[str, ...] = ()
+        validation_failures: tuple[_ValidationFailure, ...] = ()
         validation_time_s = 0.0
         if detailed.routing.status is DetailedRouteStatus.ROUTED and detailed.placement is not None:
             validation_started = time.perf_counter()
@@ -1665,7 +1688,7 @@ class SequenceSolver[PreparedT]:
         global_overflow: int | None,
         global_skip_reason: str | None,
         exact_key: tuple[int, int] | None,
-        validation_failures: tuple[str, ...],
+        validation_failures: tuple[_ValidationFailure, ...],
         preparation_time_s: float,
         global_route_time_s: float,
         detailed_route_time_s: float,
@@ -3074,7 +3097,7 @@ def _production_run(
         try:
             finalize.finalize_placement(placement, band_policy)
         except finalize.ProjectionRefusal as exc:
-            return ValidationVerdict(False, exc.checks)
+            return ValidationVerdict(False, exc.failures)
         return ValidationVerdict(True, ())
 
     family_by_id = {family.family_id: family for family in generate_strip_families(spec)}

@@ -12,7 +12,7 @@ import pytest
 import flab2bp.layout.freeform as freeform_module
 import flab2bp.layout.sequence_solver as sequence_solver_module
 from flab2bp.dsp import catalog, rules
-from flab2bp.layout import slots, validate
+from flab2bp.layout import finalize, slots, validate
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import NoValidLayout, PlacedBuilding, Placement
 from flab2bp.layout.compact_seed import (
@@ -1027,6 +1027,72 @@ def test_refusal_accumulates_distinct_validation_failures() -> None:
     assert "validator.second" in caught.value.reason
     assert caught.value.reason.count("validator.shared") == 1
 
+
+
+def test_production_projection_refusals_reach_terminal_sequence_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = _production_run(
+        two_stage_spec(),
+        band_policy=BandPolicy("portable"),
+        time_budget_s=2.0,
+        power=False,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+    )
+    first = finalize.ProjectionFailure(
+        check="geom.collide",
+        buildings=(4, 9),
+        detail="first projected collision",
+        band=160,
+    )
+    shared = finalize.ProjectionFailure(
+        check="game.power_too_close",
+        buildings=(2, 7),
+        detail="shared projected power refusal",
+        band=200,
+    )
+    last = finalize.ProjectionFailure(
+        check="geom.collide",
+        buildings=(1, 8),
+        detail="last projected collision",
+        band=240,
+    )
+    batches = iter(((first, shared), (shared, last)))
+    monkeypatch.setattr(
+        validate,
+        "certify",
+        lambda *_args, **_kwargs: validate.Report(findings=()),
+    )
+
+    def refuse_projection(
+        _placement: Placement,
+        _policy: BandPolicy,
+    ) -> Never:
+        raise finalize.ProjectionRefusal(next(batches))
+
+    monkeypatch.setattr(finalize, "finalize_placement", refuse_projection)
+    routed = _placement(area=10, belt_tiles=2)
+    fake = _FakeRouting(
+        detailed_results=(DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), routed),)
+    )
+    solver = _solver(fake, heights=(40, 60))
+    solver.adapters = replace(
+        solver.adapters,
+        validate=run.solver.adapters.validate,
+    )
+
+    with pytest.raises(NoValidLayout) as caught:
+        solver.search(max_stages=2)
+
+    assert "no scheduled stage produced an exact layout" in caught.value.reason
+    for failure in (first, shared, last):
+        record = (
+            f"band {failure.band} {failure.check} "
+            f"{failure.buildings}: {failure.detail}"
+        )
+        assert caught.value.reason.count(record) == 1
+        assert record in str(caught.value)
 
 def test_stage_routes_preserve_the_final_twenty_five_percent() -> None:
     budget = ExpansionBudget(total=100)
