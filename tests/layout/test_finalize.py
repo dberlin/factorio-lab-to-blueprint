@@ -260,6 +260,68 @@ def test_projected_power_failure_rejects_flat_legal_pair_in_required_projection(
         for projection in _required_power_projections(40)
     )
 
+
+def _broke2_coater() -> tuple[int, colliders.Placed]:
+    coater = catalog.building(catalog.SPRAY_COATER_ID)
+    return (
+        4,
+        finalize._collision_placed(
+            PlacedBuilding(
+                item_id=catalog.SPRAY_COATER_ID,
+                model_index=coater.model_index,
+                x=26,
+                y=15,
+                yaw=90.0,
+            )
+        ),
+    )
+
+
+def _broke2_splitter(y: int = 17) -> tuple[int, colliders.Placed]:
+    return (
+        5,
+        finalize._collision_placed(
+            _building(catalog.SPLITTER_ID, 25, y, z=Fraction(1))
+        ),
+    )
+
+
+def _broke2_projection() -> planet.Projection:
+    band = next(band for band in planet.bands() if band.area_segments == 160)
+    return planet.Projection(
+        band=band,
+        anchor_row=-130,
+        segment=colliders.PLANET_SEGMENT,
+        radius=colliders.PLANET_RADIUS,
+    )
+
+
+def test_projected_coater_splitter_failure_uses_exact_broke2_geometry() -> None:
+    failure = finalize.projected_coater_splitter_failure(
+        coater=_broke2_coater(),
+        splitter=_broke2_splitter(),
+        projection=_broke2_projection(),
+    )
+
+    assert failure == finalize.ProjectionFailure(
+        check="game.addon_splitter_clearance",
+        buildings=(4, 5),
+        detail=(
+            "Splitter connection body enters the Spray Coater projected lateral "
+            "keepout"
+        ),
+        band=160,
+    )
+    assert (
+        finalize.projected_coater_splitter_failure(
+            coater=_broke2_coater(),
+            splitter=_broke2_splitter(y=18),
+            projection=_broke2_projection(),
+        )
+        is None
+    )
+
+
 def test_broke2_splitter_region_is_rejected_by_projected_addon_keepout() -> None:
     # Original blueprint records: host belt #100, supply belt #478,
     # Spray Coater #479, and Splitter #794.

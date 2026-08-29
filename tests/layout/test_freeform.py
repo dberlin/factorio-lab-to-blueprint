@@ -5706,6 +5706,170 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
             indices[0], 0, 0, 0, tiles - 1, tuple(indices), strips[0].machines, 0
         )
         return canvas, spec, strips[:1], [{self.ITEM: port}]
+
+    def _broke2_fixture(
+        self,
+        splitter_y: int,
+    ) -> tuple[
+        _Canvas,
+        BuildSpec,
+        list[Strip],
+        list[dict[str, _Port]],
+        int,
+    ]:
+        _unused, spec, strips, _unused_ports = self._fixture(3)
+        canvas = _Canvas()
+        for x, y in ((0, 0), (42, 34)):
+            index = canvas.add(_belt(x, y))
+            canvas.buildings[index] = replace(
+                canvas.buildings[index],
+                input_obj=index,
+                output_obj=index,
+            )
+        indices = [canvas.add(_belt(x, 15, item=self.ITEM)) for x in (25, 26, 27)]
+        for index in indices:
+            canvas.buildings[index] = replace(
+                canvas.buildings[index],
+                input_obj=index,
+                output_obj=index,
+            )
+        splitter = catalog.building(catalog.SPLITTER_ID)
+        splitter_index = canvas.add(
+            PlacedBuilding(
+                item_id=catalog.SPLITTER_ID,
+                model_index=splitter.model_index,
+                x=25,
+                y=splitter_y,
+                z=F(1),
+                width=splitter.width,
+                height=splitter.height,
+            )
+        )
+        port = _Port(
+            indices[0],
+            25,
+            15,
+            0,
+            27,
+            tuple(indices),
+            strips[0].machines,
+            0,
+        )
+        return canvas, spec, strips, [{self.ITEM: port}], splitter_index
+
+    def test_coater_seat_rejects_projected_splitter_keepout_before_emission(
+        self,
+    ) -> None:
+        canvas, spec, strips, ports, splitter_index = self._broke2_fixture(17)
+        before = tuple(canvas.buildings)
+
+        with pytest.raises(freeform._Unseatable) as caught:
+            freeform._place_coaters(
+                canvas,
+                spec,
+                strips,
+                ports,
+                2001,
+                35,
+                policy=BandPolicy("portable"),
+            )
+
+        failure = caught.value.failure
+        assert tuple(canvas.buildings) == before
+        assert failure == freeform.finalize.ProjectionFailure(
+            check="game.addon_splitter_clearance",
+            buildings=(len(before) + 1, splitter_index),
+            detail=(
+                "Splitter connection body enters the Spray Coater projected "
+                "lateral keepout"
+            ),
+            band=160,
+        )
+        assert caught.value.failures == (failure,)
+        assert (
+            f"band 160 game.addon_splitter_clearance "
+            f"({len(before) + 1}, {splitter_index})"
+        ) in str(caught.value)
+
+    def test_coater_splitter_projection_is_staged_off_without_policy(self) -> None:
+        canvas, spec, strips, ports, _splitter_index = self._broke2_fixture(17)
+
+        got = freeform._place_coaters(canvas, spec, strips, ports, 2001, 35)
+
+        assert len(got) == 1
+
+    def test_coater_seat_allows_splitter_at_known_projected_separation(self) -> None:
+        canvas, spec, strips, ports, _splitter_index = self._broke2_fixture(18)
+
+        got = freeform._place_coaters(
+            canvas,
+            spec,
+            strips,
+            ports,
+            2001,
+            35,
+            policy=BandPolicy("portable"),
+        )
+
+        assert len(got) == 1
+
+    def test_build_passes_policy_to_coater_splitter_check_before_routing(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        policy = BandPolicy("portable")
+        failure = freeform.finalize.ProjectionFailure(
+            check="game.addon_splitter_clearance",
+            buildings=(12, 7),
+            detail=(
+                "Splitter connection body enters the Spray Coater projected "
+                "lateral keepout"
+            ),
+            band=160,
+        )
+        seen: list[BandPolicy | None] = []
+
+        def refuse(
+            _canvas: _Canvas,
+            _spec: BuildSpec,
+            _strips: list[Strip],
+            _ports: list[dict[str, _Port]],
+            _belt_id: int,
+            _belt_model: int,
+            *,
+            policy: BandPolicy | None = None,
+        ) -> list[CoaterSupplyPort]:
+            seen.append(policy)
+            raise freeform._Unseatable(
+                "projected coater/Splitter refusal",
+                failure=failure,
+            )
+
+        monkeypatch.setattr(freeform, "_place_coaters", refuse)
+        monkeypatch.setattr(
+            freeform,
+            "_route_all",
+            lambda *_args, **_kwargs: pytest.fail(
+                "detailed routing started after projected coater refusal"
+            ),
+        )
+        spec = proliferated_spec()
+        strips = plan_strips(spec)
+        pack = _greedy_pack(strips, _height_seed(strips))
+
+        with pytest.raises(freeform._Unseatable) as caught:
+            _build(
+                spec,
+                strips,
+                pack,
+                power=False,
+                route=True,
+                policy=policy,
+            )
+
+        assert seen == [policy]
+        assert caught.value.failure is failure
+
     def test_sprayed_lane_reserves_the_full_coater_body_west(self) -> None:
         _canvas, _spec, strips, _ports = self._fixture(4)
         assert strips[0].west_channel == freeform._COATER_WEST_CHANNEL == 3

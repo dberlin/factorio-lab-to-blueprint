@@ -364,59 +364,84 @@ def _projected_addon_failure(
     return None
 
 
+def _projected_coater_keepout_overlaps(
+    coater: colliders.Placed,
+    splitter: colliders.Placed,
+    projection: planet.Projection,
+) -> bool:
+    """Whether one Splitter enters one Coater's exact projected keepout."""
+    coater_boxes = colliders.target_boxes(
+        coater,
+        *projection.pose(coater.x, coater.y, coater.z, coater.yaw),
+    )
+    lateral_step = (1, 0) if round(coater.yaw) % 180 == 0 else (0, 1)
+    lateral_arc = math.dist(
+        projection.position(coater.x, coater.y, coater.z),
+        projection.position(
+            coater.x + lateral_step[0],
+            coater.y + lateral_step[1],
+            coater.z,
+        ),
+    )
+    expanded: list[colliders.Box] = []
+    for box in coater_boxes:
+        half_x, half_y, half_z = box.half
+        expanded_half = (
+            (half_x + lateral_arc, half_y, half_z)
+            if half_x <= half_z
+            else (half_x, half_y, half_z + lateral_arc)
+        )
+        expanded.append(replace(box, half=expanded_half))
+    splitter_boxes = colliders.target_boxes(
+        splitter,
+        *projection.pose(
+            splitter.x,
+            splitter.y,
+            splitter.z,
+            splitter.yaw,
+        ),
+    )
+    return any(
+        colliders.obb_overlap(coater_box, splitter_box)
+        for coater_box in expanded
+        for splitter_box in splitter_boxes
+    )
+
+
+def projected_coater_splitter_failure(
+    coater: tuple[int, colliders.Placed],
+    splitter: tuple[int, colliders.Placed],
+    projection: planet.Projection,
+) -> ProjectionFailure | None:
+    """Return exact structured evidence for one projected Coater/Splitter pair."""
+    if not _projected_coater_keepout_overlaps(coater[1], splitter[1], projection):
+        return None
+    return ProjectionFailure(
+        check="game.addon_splitter_clearance",
+        buildings=(coater[0], splitter[0]),
+        detail=(
+            "Splitter connection body enters the Spray Coater projected lateral "
+            "keepout"
+        ),
+        band=projection.band.area_segments,
+    )
+
+
 def _projected_addon_splitter_failure(
     coaters: Sequence[tuple[int, colliders.Placed]],
     splitters: Sequence[tuple[int, colliders.Placed]],
     projection: planet.Projection,
 ) -> ProjectionFailure | None:
     """Authoritative coater/splitter keepout from the broke2 in-game refusal."""
-    for coater_index, coater in coaters:
-        coater_boxes = colliders.target_boxes(
-            coater,
-            *projection.pose(coater.x, coater.y, coater.z, coater.yaw),
-        )
-        lateral_step = (1, 0) if round(coater.yaw) % 180 == 0 else (0, 1)
-        lateral_arc = math.dist(
-            projection.position(coater.x, coater.y, coater.z),
-            projection.position(
-                coater.x + lateral_step[0],
-                coater.y + lateral_step[1],
-                coater.z,
-            ),
-        )
-        expanded: list[colliders.Box] = []
-        for box in coater_boxes:
-            half_x, half_y, half_z = box.half
-            expanded_half = (
-                (half_x + lateral_arc, half_y, half_z)
-                if half_x <= half_z
-                else (half_x, half_y, half_z + lateral_arc)
-            )
-            expanded.append(replace(box, half=expanded_half))
-        for splitter_index, splitter in splitters:
-            splitter_boxes = colliders.target_boxes(
+    for coater in coaters:
+        for splitter in splitters:
+            failure = projected_coater_splitter_failure(
+                coater,
                 splitter,
-                *projection.pose(
-                    splitter.x,
-                    splitter.y,
-                    splitter.z,
-                    splitter.yaw,
-                ),
+                projection,
             )
-            if any(
-                colliders.obb_overlap(coater_box, splitter_box)
-                for coater_box in expanded
-                for splitter_box in splitter_boxes
-            ):
-                return ProjectionFailure(
-                    check="game.addon_splitter_clearance",
-                    buildings=(coater_index, splitter_index),
-                    detail=(
-                        "Splitter connection body enters the Spray Coater's "
-                        "projected lateral keepout"
-                    ),
-                    band=projection.band.area_segments,
-                )
+            if failure is not None:
+                return failure
     return None
 
 

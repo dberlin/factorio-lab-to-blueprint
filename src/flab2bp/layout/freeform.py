@@ -6953,6 +6953,21 @@ class _Unseatable(NoValidLayout):
     and not the quiet one.
     """
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        failure: finalize.ProjectionFailure | None = None,
+    ) -> None:
+        self.failure = failure
+        self.failures = () if failure is None else (failure,)
+        if failure is not None:
+            message = (
+                f"{message}: band {failure.band} {failure.check} "
+                f"{failure.buildings}: {failure.detail}"
+            )
+        super().__init__(message)
+
 
 class _Unpowerable(Exception):
     """This pack cannot be powered, so it is not a feasible pack.
@@ -7973,7 +7988,15 @@ def _prepare_routing_problem(
     coater_list: list[CoaterSupplyPort] = []
     prolif_item = _proliferator_item(spec)
     if spec.spray_lanes:
-        coater_list = _place_coaters(canvas, spec, strips, strip_in_ports, belt_id, belt_model)
+        coater_list = _place_coaters(
+            canvas,
+            spec,
+            strips,
+            strip_in_ports,
+            belt_id,
+            belt_model,
+            policy=policy,
+        )
     coaters = len(coater_list)
     for coater in coater_list:
         strip_of_belt[coater.supply_belt] = strip_of_belt[coater.host_belt]
@@ -8462,6 +8485,8 @@ def _place_coaters(
     ports: list[dict[str, _Port]],
     belt_id: int,
     belt_model: int,
+    *,
+    policy: BandPolicy | None = None,
 ) -> list[CoaterSupplyPort]:
     """Place one Spray Coater per sprayed input lane and its supply belt.
 
@@ -8505,6 +8530,18 @@ def _place_coaters(
     seen: set[str] = set()
     out: list[CoaterSupplyPort] = []
     coater_by_host: dict[int, CoaterSupplyPort] = {}
+    projections: tuple[planet.Projection, ...] = ()
+    splitters: tuple[tuple[int, colliders.Placed], ...] = ()
+    if policy is not None:
+        splitters = tuple(
+            (index, _collision_pose(building))
+            for index, building in enumerate(canvas.buildings)
+            if building.item_id == catalog.SPLITTER_ID
+        )
+        if splitters:
+            if canvas.limit is None:
+                canvas.limit = _grow(_core_bounds(canvas), _ENTRY_RING)
+            projections = _power_projection_envelope(canvas, policy)
 
     belt_at: dict[tuple[int, int, int], int] = {
         (b.x, b.y, int(b.z)): i
@@ -8561,6 +8598,31 @@ def _place_coaters(
                 height=1,
                 yaw=yaw,
             )
+            projected_failure: finalize.ProjectionFailure | None = None
+            if projections and splitters:
+                proposed_pair = (
+                    len(canvas.buildings) + 1,
+                    _collision_pose(proposed_coater),
+                )
+                for projection in projections:
+                    for splitter in splitters:
+                        projected_failure = (
+                            finalize.projected_coater_splitter_failure(
+                                proposed_pair,
+                                splitter,
+                                projection,
+                            )
+                        )
+                        if projected_failure is not None:
+                            break
+                    if projected_failure is not None:
+                        break
+            if projected_failure is not None:
+                raise _Unseatable(
+                    f"the {item} coater at ({cx}, {cy}, z={host_z}) enters a "
+                    "Splitter projected lateral keepout",
+                    failure=projected_failure,
+                )
             collider_hits = _coater_keepout_hits(
                 canvas.buildings,
                 proposed_coater,
