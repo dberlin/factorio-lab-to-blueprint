@@ -344,6 +344,7 @@ class Builder:
 
         try:
             build = self._solve(job.options, note)
+            result = describe(build, allow_invalid=job.options.allow_invalid)
         except NoValidLayout as exc:
             # Not an error. A spec nobody can lay out reports which pairs were
             # tried and why each gave up, and that is the most useful thing on
@@ -367,7 +368,7 @@ class Builder:
         else:
             with job._lock:
                 job.state = "done"
-                job.result = describe(build, allow_invalid=job.options.allow_invalid)
+                job.result = result
                 job.finished_at = time.monotonic()
 
     def snapshot(self, job: Job) -> Json:

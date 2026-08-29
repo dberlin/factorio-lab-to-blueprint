@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import threading
 import time
 
@@ -44,6 +45,27 @@ def test_a_successful_build_reports_done_with_a_result(small_build: pipeline.Bui
         assert result["blueprint"] == small_build.blueprint
     finally:
         builder.shutdown()
+
+def test_unframed_success_finishes_as_controlled_error(
+    small_build: pipeline.Build,
+) -> None:
+    unframed = dataclasses.replace(
+        small_build,
+        placement=dataclasses.replace(small_build.placement, frame=None),
+    )
+    builder = Builder(solve=lambda _o, _p: unframed)
+    try:
+        job = builder.submit(Options(url=URL))
+        snap = _settled(builder, job.id, timeout_s=1.0)
+        assert snap["state"] == "error"
+        assert snap["error"] == "successful build placement has no area frame"
+        assert snap["result"] is None and snap["refusal"] is None
+        current = builder.get(job.id)
+        assert current is not None
+        assert current.finished_at is not None
+    finally:
+        builder.shutdown()
+
 
 
 def test_a_refusal_is_a_result_not_an_error() -> None:

@@ -240,6 +240,7 @@ def main(argv: list[str] | None = None) -> int:
             browser=args.browser,
             no_proliferator=args.no_proliferator,
         )
+        _report(build, verbose=args.verbose)
     except NoValidLayout as exc:
         # Distinct exit code: "no layout exists" is a different outcome from
         # "the URL was bad", and per the user a spec that cannot be laid out in
@@ -250,7 +251,6 @@ def main(argv: list[str] | None = None) -> int:
         print(f"flab2bp: {exc}", file=sys.stderr)
         return 2
 
-    _report(build, verbose=args.verbose)
 
     if build.report.errors and not args.allow_invalid:
         print(

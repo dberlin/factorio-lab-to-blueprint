@@ -218,11 +218,16 @@ def test_cli_reports_literal_band_evidence(
 
 def test_cli_refuses_success_without_band_evidence(
     band_build: pipeline.Build,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     unframed = dataclasses.replace(
         band_build,
         placement=dataclasses.replace(band_build.placement, frame=None),
     )
+    monkeypatch.setattr(pipeline, "build", lambda *args, **kwargs: unframed)
 
-    with pytest.raises(ValueError, match="area frame"):
-        cli._report(unframed, verbose=False)
+    assert cli.main(["iron-ingot"]) == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "flab2bp: successful build placement has no area frame\n"

@@ -4194,13 +4194,13 @@ class TestPowerClaimsItsGroundBeforeRouting:
             "authoritative projected pair detail",
             40,
         )
-        seen: list[BandPolicy | None] = []
+        seen: list[BandPolicy] = []
 
         def refuse(
             _canvas: _Canvas,
             _core: tuple[int, int, int, int],
             *,
-            policy: BandPolicy | None = None,
+            policy: BandPolicy,
         ) -> list[tuple[int, int]]:
             seen.append(policy)
             raise _Unpowerable("projected power refusal", failure=failure)
@@ -5828,8 +5828,17 @@ class TestTheSlopeLimitIsConditional:
 
     def test_the_default_save_has_the_tech_so_is_not_ramped(self) -> None:
         """An absent technology set means every technology researched."""
-        assert freeform.FreeformLayout().ramped is False
-        assert freeform.FreeformLayout(belt_vertical_construction=False).ramped is True
+        assert (
+            freeform.FreeformLayout(band_policy=BandPolicy("portable")).ramped
+            is False
+        )
+        assert (
+            freeform.FreeformLayout(
+                band_policy=BandPolicy("portable"),
+                belt_vertical_construction=False,
+            ).ramped
+            is True
+        )
 
 
 class TestAPortKnowsItsOwnAltitude:
@@ -6244,12 +6253,6 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
             splitter_index,
         )
 
-    def test_coater_splitter_projection_is_staged_off_without_policy(self) -> None:
-        canvas, spec, strips, ports, _splitter_index = self._broke2_fixture(17)
-
-        got = freeform._place_coaters(canvas, spec, strips, ports, 2001, 35)
-
-        assert len(got) == 1
 
     def test_coater_seat_allows_splitter_at_known_projected_separation(self) -> None:
         canvas, spec, strips, ports, _splitter_index = self._broke2_fixture(18)
@@ -6280,7 +6283,7 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
             ),
             band=160,
         )
-        seen: list[BandPolicy | None] = []
+        seen: list[BandPolicy] = []
 
         def refuse(
             _canvas: _Canvas,
@@ -6290,7 +6293,7 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
             _belt_id: int,
             _belt_model: int,
             *,
-            policy: BandPolicy | None = None,
+            policy: BandPolicy,
         ) -> list[CoaterSupplyPort]:
             seen.append(policy)
             raise freeform._Unseatable(
@@ -6332,7 +6335,15 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
         """One tile: ``_coater_seat`` has no tile with a lane tile either side."""
         canvas, spec, strips, ports = self._fixture(1)
         with pytest.raises(freeform._Unseatable, match="tile"):
-            freeform._place_coaters(canvas, spec, strips, ports, 2001, 35)
+            freeform._place_coaters(
+                canvas,
+                spec,
+                strips,
+                ports,
+                2001,
+                35,
+                policy=BandPolicy("portable"),
+            )
 
     def test_a_taken_drop_cell_is_refused(self) -> None:
         """The coater's addon area is the ONLY place its proliferator may sit.
@@ -6354,7 +6365,15 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
         canvas.blocked[drop] = 999
         assert not canvas.free(drop), "the fixture failed to block the drop cell"
         with pytest.raises(freeform._Unseatable, match="proliferator drop"):
-            freeform._place_coaters(canvas, spec, strips, ports, 2001, 35)
+            freeform._place_coaters(
+                canvas,
+                spec,
+                strips,
+                ports,
+                2001,
+                35,
+                policy=BandPolicy("portable"),
+            )
 
     def test_reported_coater_assembler_pair_is_refused_before_emission(
         self,
@@ -6426,12 +6445,21 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
                 [{self.ITEM: port}],
                 2001,
                 35,
+                policy=BandPolicy("portable"),
             )
 
     def test_the_same_fixture_unblocked_seats_one(self) -> None:
         """Without this the two above pass for a fixture that seats nothing."""
         canvas, spec, strips, ports = self._fixture(4)
-        got = freeform._place_coaters(canvas, spec, strips, ports, 2001, 35)
+        got = freeform._place_coaters(
+            canvas,
+            spec,
+            strips,
+            ports,
+            2001,
+            35,
+            policy=BandPolicy("portable"),
+        )
         assert len(got) == 1, f"expected one coater on the sprayed lane, got {got}"
 
     def test_items_sharing_one_lane_share_one_positional_coater(self) -> None:
@@ -6447,7 +6475,15 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
         )
         ports[0][other] = ports[0][self.ITEM]
 
-        got = freeform._place_coaters(canvas, spec, strips, ports, 2001, 35)
+        got = freeform._place_coaters(
+            canvas,
+            spec,
+            strips,
+            ports,
+            2001,
+            35,
+            policy=BandPolicy("portable"),
+        )
 
         assert len(got) == 1
         assert len(
@@ -6465,7 +6501,15 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
             update={"spray_lanes": {**spec.spray_lanes, "gear": False}}
         )
         with pytest.raises(freeform._Unseatable, match="gear"):
-            freeform._place_coaters(canvas, spec, strips, ports, 2001, 35)
+            freeform._place_coaters(
+                canvas,
+                spec,
+                strips,
+                ports,
+                2001,
+                35,
+                policy=BandPolicy("portable"),
+            )
 
 # --- belt docked into a building PORT ---------------------------------------
 
