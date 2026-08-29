@@ -27,6 +27,25 @@ _FUNCTION_NAMES = (
     "planet.collider_radius",
 )
 
+_ROLLBACK_REASONS = {
+    "catalog.clearance": (
+        "Repeatable same-machine 21-sample median regression exceeded 5% "
+        "in comparison pairs 1 and 2."
+    ),
+    "colliders.own_centre_extent": (
+        "Repeatable same-machine 21-sample median regression exceeded 5% "
+        "in comparison pairs 2 and 3."
+    ),
+    "colliders.belt_keepout_offsets": (
+        "Repeatable same-machine 21-sample median regression exceeded 5% "
+        "in comparison pairs 1, 2, and 3."
+    ),
+    "planet.collider_radius": (
+        "Repeatable same-machine 21-sample median regression exceeded 5% "
+        "in comparison pairs 2 and 3."
+    ),
+}
+
 type CacheKey = tuple[object, ...]
 type FunctionTraces = dict[str, list[CacheKey]]
 type CaseTraces = dict[str, FunctionTraces]
@@ -65,6 +84,8 @@ class _FunctionReport(TypedDict):
     unbounded_hits: int
     candidates: list[_CandidateReport]
     recommended_maxsize: int
+    applied_maxsize: int | None
+    rollback_reason: str | None
     samples: NotRequired[int]
     median_seconds: NotRequired[float]
     cache_info: NotRequired[_CacheInfoReport]
@@ -201,7 +222,7 @@ def _collect_case_traces(root: Path) -> tuple[CaseTraces, list[str]]:
             contains_splitter = contains_splitter or building.item_id == catalog.SPLITTER_ID
         if contains_splitter:
             traces["colliders.belt_keepout_offsets"].append(
-                (splitter_model, 0.0, 3, 4)
+                (splitter_model,)
             )
         cases[case_name] = traces
 
@@ -236,7 +257,7 @@ def _collect_case_traces(root: Path) -> tuple[CaseTraces, list[str]]:
                 traces["planet.collider_radius"].append((model_index,))
         if contains_splitter:
             traces["colliders.belt_keepout_offsets"].append(
-                (splitter_model, 0.0, 3, 4)
+                (splitter_model,)
             )
         cases[case_name] = traces
 
@@ -249,7 +270,7 @@ def collect_case_traces(root: Path) -> CaseTraces:
     return cases
 
 
-def _function_report(case_traces: list[list[CacheKey]]) -> _FunctionReport:
+def _function_report(name: str, case_traces: list[list[CacheKey]]) -> _FunctionReport:
     combined = [key for trace in case_traces for key in trace]
     distinct_keys = len(set(combined))
     unbounded_hits = len(combined) - distinct_keys
@@ -261,13 +282,17 @@ def _function_report(case_traces: list[list[CacheKey]]) -> _FunctionReport:
         )
         for size in _powers_of_two_through(max(distinct_keys, 1))
     ]
+    recommendation = recommended_maxsize(case_traces)
+    rollback_reason = _ROLLBACK_REASONS.get(name)
     return _FunctionReport(
         calls=len(combined),
         distinct_keys=distinct_keys,
         peak_case_distinct=max((len(set(trace)) for trace in case_traces), default=0),
         unbounded_hits=unbounded_hits,
         candidates=candidates,
-        recommended_maxsize=recommended_maxsize(case_traces),
+        recommended_maxsize=recommendation,
+        applied_maxsize=None if rollback_reason is not None else recommendation,
+        rollback_reason=rollback_reason,
     )
 
 
@@ -275,7 +300,9 @@ def _build_report_and_traces(root: Path) -> tuple[_Report, CaseTraces]:
     cases, skipped = _collect_case_traces(root)
     functions: dict[str, _FunctionReport] = {}
     for name in _FUNCTION_NAMES:
-        functions[name] = _function_report([case[name] for case in cases.values()])
+        functions[name] = _function_report(
+            name, [case[name] for case in cases.values()]
+        )
     return _Report(skipped_blueprints=skipped, functions=functions), cases
 
 
@@ -356,9 +383,10 @@ def _compare(report: _Report, prior_path: Path) -> list[str]:
         if cache_info is None:
             raise ValueError(f"current functions.{name}.cache_info is required")
         actual = cache_info["maxsize"]
-        if actual != recommendation:
+        applied = current["applied_maxsize"]
+        if actual != applied:
             failures.append(
-                f"{name}: actual maxsize {actual!r} differs from recommendation {recommendation}"
+                f"{name}: actual maxsize {actual!r} differs from applied policy {applied!r}"
             )
     return failures
 

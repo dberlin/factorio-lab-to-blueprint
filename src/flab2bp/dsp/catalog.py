@@ -1503,7 +1503,7 @@ def collider_span(item_id: int, yaw: float) -> tuple[float, float]:
     )
 
 
-@lru_cache(maxsize=1024)
+@cache
 def clearance(item_id: int, yaw: float) -> tuple[int, int]:
     """Tiles to RESERVE for ``item_id`` at ``yaw`` so nothing collides with it.
 

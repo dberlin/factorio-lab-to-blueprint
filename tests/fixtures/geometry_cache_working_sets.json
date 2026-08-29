@@ -75,7 +75,9 @@
           "retained_hit_ratio": 1.0
         }
       ],
-      "recommended_maxsize": 1024
+      "recommended_maxsize": 1024,
+      "applied_maxsize": 1024,
+      "rollback_reason": null
     },
     "catalog.clearance": {
       "calls": 17539,
@@ -149,7 +151,9 @@
           "retained_hit_ratio": 1.0
         }
       ],
-      "recommended_maxsize": 1024
+      "recommended_maxsize": 1024,
+      "applied_maxsize": null,
+      "rollback_reason": "Repeatable same-machine 21-sample median regression exceeded 5% in comparison pairs 1 and 2."
     },
     "colliders.own_centre_extent": {
       "calls": 35078,
@@ -223,7 +227,9 @@
           "retained_hit_ratio": 1.0
         }
       ],
-      "recommended_maxsize": 1024
+      "recommended_maxsize": 1024,
+      "applied_maxsize": null,
+      "rollback_reason": "Repeatable same-machine 21-sample median regression exceeded 5% in comparison pairs 2 and 3."
     },
     "colliders.belt_keepout_offsets": {
       "calls": 3,
@@ -237,7 +243,9 @@
           "retained_hit_ratio": 1.0
         }
       ],
-      "recommended_maxsize": 1
+      "recommended_maxsize": 1,
+      "applied_maxsize": null,
+      "rollback_reason": "Repeatable same-machine 21-sample median regression exceeded 5% in comparison pairs 1, 2, and 3."
     },
     "planet.collider_radius": {
       "calls": 162,
@@ -266,7 +274,9 @@
           "retained_hit_ratio": 1.0
         }
       ],
-      "recommended_maxsize": 8
+      "recommended_maxsize": 8,
+      "applied_maxsize": null,
+      "rollback_reason": "Repeatable same-machine 21-sample median regression exceeded 5% in comparison pairs 2 and 3."
     }
   }
 }
