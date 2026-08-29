@@ -96,6 +96,13 @@ from flab2bp.spec import BuildSpec, MachineGroup, ProliferatorMode
 
 type SpecFactory = Callable[[], BuildSpec]
 
+_LEGACY_BAND_BY_SPEC_LABEL: Mapping[str, BandSelection] = {
+    "single": "32",
+    "two-stage": "32",
+    "magnetic-ring": "160",
+    "proliferated": "32",
+}
+
 
 def group(
     recipe: str,
@@ -1530,14 +1537,8 @@ class TestPlacementProperties:
         power: bool,
     ) -> None:
         spec = spec_fn()
-        legacy_bands: dict[str, BandSelection] = {
-            "single": "32",
-            "two-stage": "32",
-            "magnetic-ring": "160",
-            "proliferated": "32",
-        }
         placement = FreeformLayout(
-            band_policy=BandPolicy(legacy_bands[spec.label]),
+            band_policy=BandPolicy(_LEGACY_BAND_BY_SPEC_LABEL[spec.label]),
             power=power
         ).lay_out(spec, time_budget_s=1.0)
         tiles = blocking_tiles(placement)
@@ -1871,7 +1872,7 @@ class TestDirectInsertion:
         """
         spec = two_stage_spec()
         swept = FreeformLayout(
-            band_policy=BandPolicy("200"),
+            band_policy=BandPolicy("32"),
             direct_insert=True,
             power=False,
             workers=DETERMINISTIC_WORKERS,
@@ -2727,10 +2728,9 @@ class TestProducerWithManyConsumers:
         """
         spec = fan_out_spec(4)
         p = FreeformLayout(
-            band_policy=BandPolicy("100"),
+            band_policy=BandPolicy("160"),
             power=power,
             workers=DETERMINISTIC_WORKERS,
-            strip_len=8,
         ).lay_out(
             spec, time_budget_s=0.5
         )
@@ -3065,7 +3065,7 @@ class TestModeDrivenMachines:
         above green.
         """
         p = FreeformLayout(
-            band_policy=BandPolicy("200"),
+            band_policy=BandPolicy("32"),
             power=False
         ).lay_out(single_recipe_spec(), time_budget_s=0.5)
         smelters = [b for b in p.buildings if b.recipe_id]
@@ -3617,7 +3617,7 @@ class TestTheExtentIsDecidedBeforeAnythingRoutes:
     ) -> None:
         spec = factory()
         p = FreeformLayout(
-            band_policy=BandPolicy("200"),
+            band_policy=BandPolicy(_LEGACY_BAND_BY_SPEC_LABEL[spec.label]),
             power=False, workers=DETERMINISTIC_WORKERS
         ).lay_out(
             spec, time_budget_s=1.0
@@ -3896,7 +3896,7 @@ class TestPowerClaimsItsGroundBeforeRouting:
         canvas = _Canvas(limit=(0, 0, 40, 40))
         canvas.add(self._machine(10, 10), solid=True)
         self._pin_projection_extent(canvas, (0, 0, 40, 40))
-        sites = _power_plan(canvas, (0, 0, 40, 40), policy=BandPolicy("200"))
+        sites = _power_plan(canvas, (0, 0, 40, 40), policy=BandPolicy("160"))
         assert sites, "a powered building must be given at least one tower"
         for x, y in sites:
             assert not canvas.free((x, y, 0)), f"{(x, y)} was planned but reads free"
@@ -3944,7 +3944,7 @@ class TestPowerClaimsItsGroundBeforeRouting:
         canvas.add(self._machine(20, 20), solid=True)
         self._pin_projection_extent(canvas, (0, 0, 40, 40))
         with pytest.raises(_Unpowerable):
-            _power_plan(canvas, (0, 0, 40, 40), policy=BandPolicy("200"))
+            _power_plan(canvas, (0, 0, 40, 40), policy=BandPolicy("160"))
 
     def test_covering_by_need_beats_covering_by_grid(self) -> None:
         """Fewer towers is the density win, and it is the point.
@@ -3962,7 +3962,7 @@ class TestPowerClaimsItsGroundBeforeRouting:
             for y in range(15, 24, 3):
                 canvas.add(self._machine(x, y), solid=True)
         self._pin_projection_extent(canvas, (0, 0, 40, 40))
-        sites = _power_plan(canvas, (0, 0, 40, 40), policy=BandPolicy("200"))
+        sites = _power_plan(canvas, (0, 0, 40, 40), policy=BandPolicy("160"))
         lattice = len(range(4, 41, 9)) ** 2
         assert 0 < len(sites) < lattice, (
             f"covering by need took {len(sites)}, the 9-spaced grid took {lattice}"
@@ -4320,7 +4320,7 @@ class TestPowerClaimsItsGroundBeforeRouting:
             solid=True,
         )
         self._pin_projection_extent(canvas, (0, 0, 20, 20))
-        sites = _power_plan(canvas, (0, 0, 20, 20), policy=BandPolicy("200"))
+        sites = _power_plan(canvas, (0, 0, 20, 20), policy=BandPolicy("100"))
         assert sites
         cx, cy = 9 + panel.width // 2, 9 + panel.height // 2
         keepout = {
@@ -4665,6 +4665,7 @@ class TestAShardThatCannotFeedItself:
         supply, demand = {10: F(1), 20: F(1)}, {30: F(1), 31: F(3)}
         cut = [(10, 30), (20, 31)]
         assert _join_shard_islands(cut, supply, demand, F(0)) == [(10, 31)]
+        assert _join_shard_islands(cut, supply, demand, F(2)) == []
 
     def test_the_plan_really_does_starve_a_shard(self) -> None:
         """Verify the instrument: the fixture must contain the defect.

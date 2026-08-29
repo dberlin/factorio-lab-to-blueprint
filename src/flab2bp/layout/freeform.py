@@ -7090,44 +7090,81 @@ def _projection_envelope(
     ):
         raise ValueError("occupied power-planning bounds must lie inside canvas.limit")
 
+    # A projection depends on the rectangle's EXTENT and on only one origin:
+    # ``min_y`` normally, or ``min_x`` when the frame is rotated.  Enumerating
+    # all four rectangle edges repeated each projection once for every
+    # irrelevant opposite edge.  A modest 26x30 fan-out pack consequently
+    # hashed more than 600,000 duplicate projections and spent several seconds
+    # preparing power -- beyond its entire 0.5s layout budget.
+    #
+    # Enumerate each feasible extent once, then only the origins that affect its
+    # candidate projection.  The bounds below are the exact rearrangement of
+    # ``max = min + extent - 1`` under the old four edge ranges, so this produces
+    # the same projection set without the Cartesian duplication.
+    def feasible_origins(
+        limit_start: int,
+        occupied_start: int,
+        occupied_end: int,
+        limit_end: int,
+        extent: int,
+    ) -> range:
+        lower = max(limit_start, occupied_end - extent + 1)
+        upper = min(occupied_start, limit_end - extent + 1)
+        return range(lower, upper + 1)
+
     by_segments = {band.area_segments: band for band in planet.bands()}
-    candidates_by_extent: dict[
-        tuple[int, int],
-        tuple[finalize.FrameCandidate, ...],
-    ] = {}
-    projections: dict[planet.Projection, None] = {}
-    for min_x in range(limit_min_x, occupied_min_x + 1):
-        for min_y in range(limit_min_y, occupied_min_y + 1):
-            for max_x in range(occupied_max_x, limit_max_x + 1):
-                for max_y in range(occupied_max_y, limit_max_y + 1):
-                    width = max_x - min_x + 1
-                    height = max_y - min_y + 1
-                    extent = (width, height)
-                    candidates = candidates_by_extent.get(extent)
-                    if candidates is None:
-                        candidates = finalize._frame_candidates_for_extent(
-                            width,
-                            height,
-                            policy,
-                        )
-                        candidates_by_extent[extent] = candidates
-                    for candidate in candidates:
-                        rotated = candidate.frame.rotated
-                        row_origin = (
-                            min_x if rotated else min_y
-                        ) - candidate.south_padding
-                        for segments in candidate.frame.certified_bands:
-                            band = by_segments[segments]
-                            for anchor in band.anchors(candidate.frame.height):
-                                projection = planet.Projection(
-                                    band=band,
-                                    anchor_row=anchor - row_origin,
-                                    segment=colliders.PLANET_SEGMENT,
-                                    radius=colliders.PLANET_RADIUS,
-                                    quadrant=int(rotated),
-                                )
-                                projections.setdefault(projection, None)
-    return tuple(projections)
+    projection_keys: dict[tuple[int, int, int], None] = {}
+    occupied_width = occupied_max_x - occupied_min_x + 1
+    occupied_height = occupied_max_y - occupied_min_y + 1
+    limit_width = limit_max_x - limit_min_x + 1
+    limit_height = limit_max_y - limit_min_y + 1
+    for width in range(occupied_width, limit_width + 1):
+        x_origins = feasible_origins(
+            limit_min_x,
+            occupied_min_x,
+            occupied_max_x,
+            limit_max_x,
+            width,
+        )
+        if not x_origins:
+            continue
+        for height in range(occupied_height, limit_height + 1):
+            y_origins = feasible_origins(
+                limit_min_y,
+                occupied_min_y,
+                occupied_max_y,
+                limit_max_y,
+                height,
+            )
+            if not y_origins:
+                continue
+            for candidate in finalize._frame_candidates_for_extent(
+                width,
+                height,
+                policy,
+            ):
+                rotated = candidate.frame.rotated
+                origins = x_origins if rotated else y_origins
+                quadrant = int(rotated)
+                for segments in candidate.frame.certified_bands:
+                    band = by_segments[segments]
+                    for origin in origins:
+                        row_origin = origin - candidate.south_padding
+                        for anchor in band.anchors(candidate.frame.height):
+                            projection_keys.setdefault(
+                                (segments, anchor - row_origin, quadrant),
+                                None,
+                            )
+    return tuple(
+        planet.Projection(
+            band=by_segments[segments],
+            anchor_row=anchor_row,
+            segment=colliders.PLANET_SEGMENT,
+            radius=colliders.PLANET_RADIUS,
+            quadrant=quadrant,
+        )
+        for segments, anchor_row, quadrant in projection_keys
+    )
 
 
 def _power_projection_envelope(
