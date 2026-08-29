@@ -20,6 +20,36 @@ Density is the objective. The layout may use direct insertion between adjacent m
 choosing per recipe between *extra products* mode, which compounds savings up the chain, and
 *production speedup* mode, which halves machine count at that step.
 
+## Latitude portability
+
+`--band portable` is the default for both layout strategies and for the web UI. The complete
+selection is:
+
+```text
+--band portable|4|8|16|20|32|40|60|80|100|120|160|200
+```
+
+Portable mode starts with the globally smallest band in which the unpadded layout fits (`B0`)
+and certifies `B0` plus up to two bands with greater `area_segments`. It checks the same
+orientation and frame at every legal latitude anchor in every named band. Near the equator
+there may be fewer than three bands left, so the report lists the exact bands actually
+certified; Portable does not claim every latitude band on the planet.
+
+The finalizer may add zero through four empty **latitude** rows, split between the north and
+south margins, while keeping `B0` fixed. It never adds longitude padding. It picks the smallest
+passing frame, or refuses the layout rather than emitting a blueprint with a weaker guarantee.
+A refusal retains structured evidence for each failed projection: band, check, building
+indices, and the authoritative detail.
+
+An explicit numeric selection certifies only that requested band, using the same search of up
+to four latitude rows. If the layout does not fit the band or fails at any legal anchor, the
+build refuses. Successful CLI reports and web results expose both `primary_band` and the
+literal `certified_bands` tuple.
+
+Latitude certification does not change the validator's `flow.external_entry_points` warning:
+multiple reachable external lanes for one item remain valid, but the player must connect a
+supply to every lane.
+
 ## Pipeline
 
 ```

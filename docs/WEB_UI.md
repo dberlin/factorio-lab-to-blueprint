@@ -37,6 +37,31 @@ The solver ceiling is `candidates × active production strategies × budget` for
 the pipeline's canonical active-strategy tuple. The promoted portfolio has two strategies.
 An explicit Freeform or SequencePair request always runs one layout per candidate.
 
+## Latitude bands
+
+The selector defaults to **Portable (smallest + two wider)**. The request field is the string
+`band`, and its complete shared Python/TypeScript enum is:
+
+```text
+portable | 4 | 8 | 16 | 20 | 32 | 40 | 60 | 80 | 100 | 120 | 160 | 200
+```
+
+Portable finds the globally smallest band in which the unpadded content fits (`B0`) and
+certifies `B0` plus up to two bands with greater `area_segments`. The same frame must pass at
+every legal latitude anchor in each required band. Near the equator only one or two bands may
+remain, so `certified_bands` reports the literal set checked; Portable is not a promise about
+every planetary band.
+
+The frame search may add zero through four empty latitude rows, distributed between its north
+and south margins, without changing `B0`. It never pads longitude. If none of those frames
+passes, the build is refused instead of silently falling back to a single band.
+
+Selecting a number is explicit-only: `200`, for example, certifies only band 200 with the same
+up-to-four-row latitude-padding search. A frame that does not fit the requested band or fails at
+any legal anchor refuses. Successful results display `primary_band` and exact
+`certified_bands`; projection refusals retain the band, check, building indices, and detail for
+each distinct failure.
+
 ## Proving it works
 
 ```bash
@@ -75,8 +100,9 @@ Then the parts that read as silence if nobody prints them:
 * **Whether the recipe selection was pinned or re-derived.** Re-derived unless a flow export
   was supplied, and the page says which.
 * **Validator warnings.** A warning means a check *ran* and found something to look at — a belt
-  run nothing taps, an input arriving on two separate lanes. The build is valid and the string
-  is emitted, so nothing else would ever mention them.
+  run nothing taps, or one item arriving through multiple external-entry lanes. The latter
+  remains valid and does not block emission, but the player must connect every lane; latitude
+  certification does not change `flow.external_entry_points`.
 * **Every strategy/candidate pair that produced no layout**, with its reason — invisible in the
   attempts table, and silence there reads as "it simply was not the best".
 
@@ -169,16 +195,18 @@ GET  /*                  the built front end, with an SPA fallback
 ```
 
 The submit body takes `url`, `strategy` (`best`/`freeform`/`sequence-pair`), `candidates`
-(1–8), positive finite `budget_s`, `power`, `name`, `allow_invalid`, `flow`, and `fetch_flow`.
+(1–8), positive finite `budget_s`, `band`
+(`portable`/`4`/`8`/`16`/`20`/`32`/`40`/`60`/`80`/`100`/`120`/`160`/`200`), `power`,
+`name`, `allow_invalid`, `flow`, and `fetch_flow`. `band` defaults to `portable`.
 `flow` is a FactorioLab CSV export as text, while `fetch_flow: true` asks the server to capture
 one from an allowlisted FactorioLab page; the two are mutually exclusive. A poll echoes
 `flow_supplied` rather than the CSV itself (it can be hundreds of kB and the page already has
-it); `result.flow_pinned` is the proof it was honoured. Every bound is a refusal rather than a
-clamp: a job asking for more
-than 300s of solving comes back 400 with the arithmetic spelled out, never silently rounded
-down to something servable, because running a different build from the one that was asked for
-and reporting it as the one that was asked for is the failure mode this whole project exists
-to avoid.
+it); `result.flow_pinned` is the proof it was honoured. A successful `result` also carries
+`primary_band` and literal `certified_bands`. Every bound is a refusal rather than a clamp: a
+job asking for more than 300s of solving comes back 400 with the arithmetic spelled out, never
+silently rounded down to something servable, because running a different build from the one
+that was asked for and reporting it as the one that was asked for is the failure mode this
+whole project exists to avoid.
 
 `blueprint` is `null` when validation failed and `allow_invalid` was not set — the same refusal
 the CLI makes without `--allow-invalid`, moved to the place the string would be copied from.
