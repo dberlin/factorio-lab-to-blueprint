@@ -1018,6 +1018,21 @@ def _boundary_open_belts(placement: Placement, side: _Side) -> frozenset[int]:
     )
 
 
+def _cleanup_survivor_bounds(
+    placement: Placement,
+) -> tuple[int, int, int, int]:
+    """Innermost bounds reachable through existing cleanup eligibility."""
+    candidate = placement
+    for _wave in range(len(placement.buildings)):
+        removable = set(_prunable_open_belts(candidate))
+        for side in ("left", "bottom", "right", "top"):
+            removable.update(_boundary_open_belts(candidate, side))
+        if not removable:
+            break
+        candidate = _remove_buildings(candidate, frozenset(removable))
+    return candidate.bounds
+
+
 def uses_tall_saturated_role(
     *,
     machine_count: float,

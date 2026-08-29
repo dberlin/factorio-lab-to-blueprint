@@ -7034,6 +7034,22 @@ def _projection_envelope(
     return tuple(projections)
 
 
+def _power_projection_envelope(
+    canvas: _Canvas,
+    policy: BandPolicy,
+) -> tuple[planet.Projection, ...]:
+    """Projection union down to geometry no cleanup eligibility can remove."""
+    occupied = _core_bounds(canvas)
+    cleanup_inner = finalize._cleanup_survivor_bounds(
+        Placement(buildings=tuple(canvas.buildings))
+    )
+    return _projection_envelope(
+        cleanup_inner,
+        canvas.limit or occupied,
+        policy,
+    )
+
+
 def _power_plan(
     canvas: _Canvas,
     core: tuple[int, int, int, int],
@@ -7235,13 +7251,7 @@ def _power_plan(
                 free[gx, gy] = False
 
     projections = (
-        _projection_envelope(
-            _core_bounds(canvas),
-            canvas.limit or (min_x, min_y, max_x, max_y),
-            policy,
-        )
-        if policy is not None
-        else ()
+        () if policy is None else _power_projection_envelope(canvas, policy)
     )
     for projection in projections:
         existing_failure = finalize.projected_power_failure(power_nodes, projection)

@@ -3574,6 +3574,13 @@ class TestPowerClaimsItsGroundBeforeRouting:
             for y in range(limit[1], limit[3] + 1):
                 if (x, y) not in {(0, 0), candidate}:
                     canvas.add(_belt(x, y))
+        for index, building in enumerate(canvas.buildings):
+            if catalog.is_belt(building.item_id):
+                canvas.buildings[index] = replace(
+                    building,
+                    input_obj=index,
+                    output_obj=index,
+                )
         return canvas
 
     def test_power_plan_rejects_flat_legal_pair_in_required_projection(self) -> None:
@@ -3717,6 +3724,65 @@ class TestPowerClaimsItsGroundBeforeRouting:
         )
         assert failure is not None
         assert failure.check == "game.power_too_close"
+
+    def test_power_projection_envelope_covers_compacted_open_boundary_belts(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        class _Accepted:
+            errors: tuple[object, ...] = ()
+
+        monkeypatch.setattr(
+            freeform.finalize,
+            "_certify",
+            lambda *_args, **_kwargs: _Accepted(),
+        )
+        policy = BandPolicy("portable")
+        limit = (0, 0, 164, 16)
+        canvas = _Canvas(limit=limit)
+        canvas.add(self._machine(6, 6), solid=True)
+        canvas.add(self._machine(158, 8), solid=True)
+        canvas.add(_belt(3, 3))
+        canvas.add(_belt(161, 13))
+        planning_envelope = set(
+            freeform._power_projection_envelope(
+                canvas,
+                policy,
+            )
+        )
+        assert len(planning_envelope) == 204
+
+        compacted = freeform.finalize.compact_open_boundary_belts(
+            Placement(buildings=tuple(canvas.buildings)),
+            two_stage_spec(),
+            expect_power=False,
+        )
+        assert compacted.bounds == (6, 6, 160, 10)
+        candidates = freeform.finalize.frame_candidates(compacted, policy)
+        assert {candidate.frame.primary_band for candidate in candidates} == {32}
+
+        by_segments = {band.area_segments: band for band in planet.bands()}
+        expected: set[planet.Projection] = set()
+        min_x, min_y, _max_x, _max_y = compacted.bounds
+        for candidate in candidates:
+            rotated = candidate.frame.rotated
+            row_origin = (
+                min_x if rotated else min_y
+            ) - candidate.south_padding
+            for segments in candidate.frame.certified_bands:
+                band = by_segments[segments]
+                expected.update(
+                    planet.Projection(
+                        band=band,
+                        anchor_row=anchor - row_origin,
+                        segment=colliders.PLANET_SEGMENT,
+                        radius=colliders.PLANET_RADIUS,
+                        quadrant=int(rotated),
+                    )
+                    for anchor in band.anchors(candidate.frame.height)
+                )
+
+        assert expected <= planning_envelope
 
     def test_build_passes_projection_policy_to_power_plan_before_routing(
         self,
