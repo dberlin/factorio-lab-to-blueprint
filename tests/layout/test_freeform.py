@@ -17,6 +17,7 @@ from fractions import Fraction as F
 from pathlib import Path
 
 import pytest
+from ortools.sat.python import cp_model
 
 from flab2bp.dsp import catalog, codec, colliders, planet, rules
 from flab2bp.layout import finalize, freeform, junction, slots, validate
@@ -2144,6 +2145,7 @@ def test_projection_no_good_forbids_only_the_exact_failed_pair_context() -> None
         pack_height=initial.height,
         left_origin=initial.at[0],
         right_origin=initial.at[2],
+        pack_origins=tuple(initial.at[index] for index in range(len(strips))),
         failure=failure,
     )
 
@@ -2173,6 +2175,63 @@ def test_projection_no_good_forbids_only_the_exact_failed_pair_context() -> None
         retry.at[0][0] - retry.at[1][0],
         retry.at[0][1] - retry.at[1][1],
     ) == unrelated_delta
+
+def test_projection_no_good_is_scoped_to_every_strip_origin_in_the_failed_pack() -> None:
+    strip = plan_strips(single_recipe_spec())[0]
+    strips = [
+        replace(strip, group_key=f"strip-{index}", west_channel=1)
+        for index in range(3)
+    ]
+    height = 3 * max(_box(candidate)[1] for candidate in strips)
+    width_bound = 3 * max(_box(candidate)[0] for candidate in strips)
+    baseline = _pack(
+        strips,
+        height=height,
+        width_bound=width_bound,
+        time_budget_s=0.5,
+        direct_candidates={},
+        workers=DETERMINISTIC_WORKERS,
+    )
+    assert baseline is not None
+    placement = Placement(
+        buildings=(
+            PlacedBuilding(1, 1, 0, 0, owner_strip=0),
+            PlacedBuilding(1, 1, 1, 0, owner_strip=1),
+        ),
+        short_desc="three-strip no-good",
+    )
+    failure = finalize.ProjectionFailure("geom.collide", (0, 1), "collision", 160)
+    no_good = freeform._projection_no_good(placement, baseline, failure)
+    assert no_good is not None
+    complete_origins = tuple(baseline.at[index] for index in range(3))
+    assert no_good.pack_origins == complete_origins
+
+    def solve_with(origins: tuple[tuple[int, int], ...]) -> cp_model.CpSolverStatus:
+        model = cp_model.CpModel()
+        width = model.new_int_var(0, width_bound, "width")
+        xs = [
+            model.new_int_var(0, width_bound, f"x{index}")
+            for index in range(len(strips))
+        ]
+        ys = [
+            model.new_int_var(0, height, f"y{index}")
+            for index in range(len(strips))
+        ]
+        freeform._add_projection_no_good(model, width, xs, ys, strips, no_good)
+        model.add(width == baseline.width)
+        for index, origin in enumerate(origins):
+            model.add(xs[index] == origin[0] - strips[index].west_channel)
+            model.add(ys[index] == origin[1])
+        return cp_model.CpSolver().solve(model)
+
+    assert solve_with(complete_origins) == cp_model.INFEASIBLE
+    moved_third = (
+        complete_origins[0],
+        complete_origins[1],
+        (complete_origins[2][0] + 1, complete_origins[2][1]),
+    )
+    assert moved_third[:2] == complete_origins[:2]
+    assert solve_with(moved_third) in (cp_model.FEASIBLE, cp_model.OPTIMAL)
 
 
 @pytest.mark.parametrize("context_change", ["height", "width", "absolute-origin"])
@@ -2205,6 +2264,7 @@ def test_projection_no_good_leaves_same_displacement_free_in_another_context(
         baseline.height,
         baseline.at[0],
         baseline.at[1],
+        tuple(baseline.at[index] for index in range(len(strips))),
         failure,
     )
     if context_change == "height":
@@ -2212,7 +2272,12 @@ def test_projection_no_good_leaves_same_displacement_free_in_another_context(
     elif context_change == "width":
         other_context = replace(no_good, pack_width=999)
     else:
-        other_context = replace(no_good, left_origin=(999, 999))
+        moved_left = (999, 999)
+        other_context = replace(
+            no_good,
+            left_origin=moved_left,
+            pack_origins=(moved_left, *no_good.pack_origins[1:]),
+        )
 
     retry = _pack(
         strips,

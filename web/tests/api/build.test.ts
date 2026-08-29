@@ -149,6 +149,12 @@ test('a refusal settles the job like any other answer', async () => {
               },
             ],
           },
+          {
+            candidate: 'direct-spec',
+            strategy: null,
+            reason: 'request has no legal layout',
+            projection_failures: [],
+          },
         ],
       },
     }),
@@ -158,6 +164,7 @@ test('a refusal settles the job like any other answer', async () => {
   expect(settled.refusal?.attempts[0]?.projection_failures[0]?.detail).toBe(
     'first collision; left machine; right machine',
   );
+  expect(settled.refusal?.attempts[1]?.strategy).toBeNull();
 });
 
 test('aborting stops the poll loop', async () => {

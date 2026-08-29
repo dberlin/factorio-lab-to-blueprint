@@ -67,7 +67,7 @@ import socket
 import subprocess
 import tempfile
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from importlib.util import find_spec
 from pathlib import Path
 from typing import Final, Protocol, TypedDict, TypeGuard, cast
@@ -198,6 +198,7 @@ class _MainFrameRequestGuard:
     cdp: _Cdp
     validator: UrlValidator
     main_frame_id: object
+    first_main_document_decided: asyncio.Event = field(default_factory=asyncio.Event)
     failure: CaptureError | None = None
 
     async def handle(self, raw_event: object) -> None:
@@ -211,18 +212,29 @@ class _MainFrameRequestGuard:
         try:
             self.validator(event.request.url)
         except ValueError as exc:
-            _ = await self.page.send(
-                self.cdp.fetch.fail_request(
-                    event.request_id,
-                    self.cdp.network.ErrorReason.BLOCKED_BY_CLIENT,
-                )
-            )
             if self.failure is None:
                 self.failure = CaptureError(
                     f"redirect target is not permitted: {event.request.url}: {exc}"
                 )
+            try:
+                _ = await self.page.send(
+                    self.cdp.fetch.fail_request(
+                        event.request_id,
+                        self.cdp.network.ErrorReason.BLOCKED_BY_CLIENT,
+                    )
+                )
+            finally:
+                self.first_main_document_decided.set()
             return
-        _ = await self.page.send(self.cdp.fetch.continue_request(event.request_id))
+        try:
+            _ = await self.page.send(self.cdp.fetch.continue_request(event.request_id))
+        except Exception as exc:
+            if self.failure is None:
+                self.failure = CaptureError(
+                    f"could not continue permitted navigation to {event.request.url}: {exc}"
+                )
+        finally:
+            self.first_main_document_decided.set()
 
     def raise_if_failed(self) -> None:
         if self.failure is not None:
@@ -234,6 +246,8 @@ async def _navigate_with_request_guard(
     url: str,
     cdp: _Cdp,
     validator: UrlValidator,
+    *,
+    deadline_s: float = 30.0,
 ) -> _MainFrameRequestGuard:
     """Enable request-stage Fetch interception on ``about:blank``, then navigate."""
 
@@ -250,12 +264,31 @@ async def _navigate_with_request_guard(
             ]
         )
     )
+    loop = asyncio.get_running_loop()
+    end = loop.time() + deadline_s
     _ = await page.send(cdp.page.navigate(url))
-    # nodriver schedules async event callbacks as tasks. Let a request-stage
-    # refusal settle before inspecting the guard or any DOM state.
-    await asyncio.sleep(0)
+    try:
+        await asyncio.wait_for(
+            guard.first_main_document_decided.wait(),
+            timeout=max(0.0, end - loop.time()),
+        )
+    except TimeoutError as exc:
+        raise CaptureError(
+            "Chromium did not expose the first main-document request before "
+            f"the {deadline_s:g}s capture navigation deadline"
+        ) from exc
     guard.raise_if_failed()
-    return guard
+
+    while loop.time() < end:
+        location = await page.evaluate(_LOCATION_JS, return_by_value=True)
+        guard.raise_if_failed()
+        if location != "about:blank":
+            return guard
+        await asyncio.sleep(_POLL_S)
+    raise CaptureError(
+        "Chromium admitted the first main-document request but navigation "
+        f"remained on about:blank for {deadline_s:g}s"
+    )
 
 _SOLVE_PROBE_STATE_ADAPTER = TypeAdapter(SolveProbeState)
 
@@ -547,6 +580,7 @@ async def _capture(
                 url,
                 cdp,
                 url_validator,
+                deadline_s=timeout_s,
             )
         await _await_navigation(page, url_validator, timeout_s, request_guard)
         await _await_solve(

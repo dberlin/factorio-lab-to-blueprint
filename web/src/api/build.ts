@@ -52,7 +52,7 @@ export const ProjectionFailure = z.object({
 
 export const AttemptFailure = z.object({
   candidate: z.string(),
-  strategy: ExplicitStrategy,
+  strategy: ExplicitStrategy.nullable(),
   reason: z.string(),
   projection_failures: z.array(ProjectionFailure),
 });

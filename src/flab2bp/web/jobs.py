@@ -445,7 +445,7 @@ def _attempt_failures(exc: NoValidLayout) -> tuple[LayoutAttemptFailure, ...]:
     return tuple(
         LayoutAttemptFailure(
             exc.spec_label,
-            "",
+            None,
             reason,
             exc.projection_failures if len(reasons) == 1 else (),
         )

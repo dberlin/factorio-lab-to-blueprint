@@ -145,6 +145,12 @@ test('a refusal is shown as a result, with one line per pair', async () => {
             reason: 'unroutable',
             projection_failures: [],
           },
+          {
+            candidate: 'direct-spec',
+            strategy: null,
+            reason: 'request has no legal layout',
+            projection_failures: [],
+          },
         ],
       },
     }),
@@ -163,6 +169,7 @@ test('a refusal is shown as a result, with one line per pair', async () => {
     'band 200 — game.power_too_close — buildings 2, 7 — power envelopes; north; south',
   );
   expect(refusal).toHaveTextContent('freeform / max-proliferation: unroutable');
+  expect(refusal).toHaveTextContent('direct-spec: request has no legal layout');
   // Not an alert: a refusal is an answer, and nothing should announce a failure.
   expect(screen.queryByRole('alert')).toBeNull();
 });

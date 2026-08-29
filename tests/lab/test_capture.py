@@ -199,6 +199,7 @@ class _InterceptPage:
         self.handler: object = None
         self.commands: list[tuple[object, ...]] = []
         self.loaded: list[str] = []
+        self.location = "about:blank"
 
     def add_handler(self, event_type: type, callback: object) -> None:
         assert event_type is _FakeFetch.RequestPaused
@@ -212,6 +213,10 @@ class _InterceptPage:
             return SimpleNamespace(frame=SimpleNamespace(id_="main"))
         if typed[0] != "navigate":
             return None
+        await self._dispatch()
+        return ("main", "loader", None)
+
+    async def _dispatch(self) -> None:
         assert callable(self.handler)
         for index, url in enumerate(self.urls):
             event = SimpleNamespace(
@@ -225,7 +230,7 @@ class _InterceptPage:
             action = self.commands[before]
             if action[0] == "continue":
                 self.loaded.append(url)
-        return ("main", "loader", None)
+                self.location = url
 
     async def evaluate(
         self,
@@ -234,8 +239,26 @@ class _InterceptPage:
         await_promise: bool = False,
         return_by_value: bool = False,
     ) -> object:
-        del expression, await_promise, return_by_value
+        del await_promise, return_by_value
+        if "location.href" in expression:
+            return self.location
+        if "document.readyState" in expression:
+            return "complete"
         return None
+
+class _DetachedInterceptPage(_InterceptPage):
+    async def send(self, command: object) -> object:
+        typed = cast(tuple[object, ...], command)
+        if typed[0] != "navigate":
+            return await super().send(command)
+        self.commands.append(typed)
+
+        async def later() -> None:
+            await asyncio.sleep(0.01)
+            await self._dispatch()
+
+        _ = asyncio.create_task(later())
+        return ("main", "loader", None)
 
 
 def test_forbidden_main_frame_redirect_is_aborted_before_load() -> None:
@@ -280,6 +303,51 @@ def test_allowed_main_frame_redirects_are_continued() -> None:
     assert page.loaded == [REAL_URL, redirected]
     assert seen == [REAL_URL, redirected]
     assert [command[0] for command in page.commands].count("continue") == 2
+
+def test_detached_allowed_handler_advances_navigation_before_location_validation() -> None:
+    redirected = REAL_URL.replace("/list?", "/flow?")
+    page = _DetachedInterceptPage([REAL_URL, redirected])
+
+    def validate(url: str) -> None:
+        if url not in (REAL_URL, redirected):
+            raise ValueError(f"outside allowlist: {url}")
+
+    async def exercise() -> None:
+        guard = await _navigate_with_request_guard(
+            page,
+            REAL_URL,
+            cast(_Cdp, _FakeCdp),
+            validate,
+            deadline_s=0.2,
+        )
+        await _await_navigation(page, validate, 0.2, guard)
+
+    asyncio.run(exercise())
+    assert page.loaded == [REAL_URL, redirected]
+
+
+def test_detached_forbidden_handler_aborts_before_load_side_effect() -> None:
+    unsafe = "http://127.0.0.1/private"
+    page = _DetachedInterceptPage([REAL_URL, unsafe])
+
+    def validate(url: str) -> None:
+        if url not in (REAL_URL,):
+            raise ValueError(f"outside allowlist: {url}")
+
+    with pytest.raises(CaptureError, match="redirect target is not permitted"):
+        asyncio.run(
+            _navigate_with_request_guard(
+                page,
+                REAL_URL,
+                cast(_Cdp, _FakeCdp),
+                validate,
+                deadline_s=0.2,
+            )
+        )
+
+    assert page.loaded == [REAL_URL]
+    assert unsafe not in page.loaded
+    assert ("fail", "request-1", "BlockedByClient") in page.commands
 
 def test_final_navigation_is_checked_before_page_probes() -> None:
     seen: list[str] = []

@@ -2024,6 +2024,7 @@ def _projection_no_good(
         pack_height=pack.height,
         left_origin=(left_x, left_y),
         right_origin=(right_x, right_y),
+        pack_origins=tuple(pack.at[index] for index in range(len(pack.at))),
         failure=failure,
     )
 
@@ -2064,6 +2065,31 @@ def _greedy_pack(strips: list[Strip], height: int) -> _Pack:
         shelf_h = max(shelf_h, w)
         width = max(width, shelf_x + w)
     return _Pack(at=at, width=width, height=height, status="greedy")
+
+def _add_projection_no_good(
+    model: cp_model.CpModel,
+    width: cp_model.IntVar,
+    xs: Sequence[cp_model.IntVar],
+    ys: Sequence[cp_model.IntVar],
+    strips: Sequence[Strip],
+    no_good: ProjectionNoGood,
+) -> None:
+    """Forbid only the complete packed assignment that projection rejected."""
+    if len(no_good.pack_origins) != len(strips):
+        raise ValueError("projection no-good must retain every packed strip origin")
+    variables = [width]
+    values = [no_good.pack_width]
+    for strip_index, origin in enumerate(no_good.pack_origins):
+        variables.extend((xs[strip_index], ys[strip_index]))
+        values.extend(
+            (
+                origin[0] - strips[strip_index].west_channel,
+                origin[1],
+            )
+        )
+    model.add_forbidden_assignments(variables, [tuple(values)])
+
+
 
 
 def _pack(
@@ -2143,26 +2169,7 @@ def _pack(
             raise ValueError("projection no-good must name two distinct packed strips")
         if no_good.pack_height != height:
             continue
-        left_x = no_good.left_origin[0] - strips[no_good.left_strip].west_channel
-        right_x = no_good.right_origin[0] - strips[no_good.right_strip].west_channel
-        model.add_forbidden_assignments(
-            [
-                w_var,
-                xs[no_good.left_strip],
-                ys[no_good.left_strip],
-                xs[no_good.right_strip],
-                ys[no_good.right_strip],
-            ],
-            [
-                (
-                    no_good.pack_width,
-                    left_x,
-                    no_good.left_origin[1],
-                    right_x,
-                    no_good.right_origin[1],
-                )
-            ],
-        )
+        _add_projection_no_good(model, w_var, xs, ys, strips, no_good)
 
     # CUT 3 -- ROUTING CAPACITY was built here, measured, and taken out.
     #
@@ -9980,8 +9987,11 @@ class FreeformLayout:
                         no_good.delta_y,
                         no_good.pack_width,
                         no_good.pack_height,
-                        *no_good.left_origin,
-                        *no_good.right_origin,
+                        *(
+                            coordinate
+                            for origin in no_good.pack_origins
+                            for coordinate in origin
+                        ),
                     )
                     if no_good_key in projection_no_good_keys:
                         continue

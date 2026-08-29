@@ -30,8 +30,9 @@ function AttemptFailures({ attempts }: { attempts: AttemptFailure[] }) {
   return (
     <ul className="reasons">
       {attempts.map((attempt) => (
-        <li key={`${attempt.candidate}/${attempt.strategy}`}>
-          {attempt.strategy} / {attempt.candidate}: {attempt.reason}
+        <li key={`${attempt.candidate}/${attempt.strategy ?? 'direct'}`}>
+          {attempt.strategy ? `${attempt.strategy} / ` : ''}
+          {attempt.candidate}: {attempt.reason}
           <ProjectionFailures failures={attempt.projection_failures} />
         </li>
       ))}

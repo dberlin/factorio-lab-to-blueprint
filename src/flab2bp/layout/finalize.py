@@ -42,6 +42,7 @@ class ProjectionNoGood:
     pack_height: int
     left_origin: tuple[int, int]
     right_origin: tuple[int, int]
+    pack_origins: tuple[tuple[int, int], ...]
     failure: ProjectionFailure
 
 

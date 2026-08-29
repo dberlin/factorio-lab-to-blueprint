@@ -372,7 +372,7 @@ class LayoutAttemptFailure:
     """One candidate/strategy refusal with its projection evidence boundary."""
 
     candidate: str
-    strategy: str
+    strategy: str | None
     reason: str
     projection_failures: tuple[ProjectionFailureRecord, ...] = ()
 

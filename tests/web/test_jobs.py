@@ -109,6 +109,30 @@ def test_a_refusal_is_a_result_not_an_error() -> None:
     finally:
         builder.shutdown()
 
+def test_direct_refusal_without_attempt_strategy_serializes_null_not_an_invalid_name() -> None:
+    def refuse(_o: Options, _p: pipeline.ProgressSink) -> pipeline.Build:
+        raise NoValidLayout(
+            "request has no legal layout",
+            spec_label="direct-spec",
+            budget_s=1.0,
+        )
+
+    builder = Builder(solve=refuse)
+    try:
+        snap = _settled(builder, builder.submit(Options(url=URL)).id)
+        refused = _object(snap["refusal"])
+        attempts = refused["attempts"]
+        assert isinstance(attempts, list) and len(attempts) == 1
+        direct = _object(attempts[0])
+        assert direct == {
+            "candidate": "direct-spec",
+            "strategy": None,
+            "reason": "request has no legal layout",
+            "projection_failures": [],
+        }
+    finally:
+        builder.shutdown()
+
 
 def test_projection_evidence_semicolons_stay_structured_inside_attempt_payload() -> None:
     first = ProjectionFailureRecord(
