@@ -4012,6 +4012,66 @@ class TestPowerClaimsItsGroundBeforeRouting:
             )
 
     @staticmethod
+    def _reference_projection_envelope(
+        occupied: tuple[int, int, int, int],
+        limit: tuple[int, int, int, int],
+        policy: BandPolicy,
+    ) -> tuple[planet.Projection, ...]:
+        """Literal four-edge enumeration defining first-seen evidence order."""
+        occupied_min_x, occupied_min_y, occupied_max_x, occupied_max_y = occupied
+        limit_min_x, limit_min_y, limit_max_x, limit_max_y = limit
+        by_segments = {band.area_segments: band for band in planet.bands()}
+        projections: dict[planet.Projection, None] = {}
+        for min_x in range(limit_min_x, occupied_min_x + 1):
+            for min_y in range(limit_min_y, occupied_min_y + 1):
+                for max_x in range(occupied_max_x, limit_max_x + 1):
+                    for max_y in range(occupied_max_y, limit_max_y + 1):
+                        candidates = finalize._frame_candidates_for_extent(
+                            max_x - min_x + 1,
+                            max_y - min_y + 1,
+                            policy,
+                        )
+                        for candidate in candidates:
+                            rotated = candidate.frame.rotated
+                            row_origin = (
+                                min_x if rotated else min_y
+                            ) - candidate.south_padding
+                            for segments in candidate.frame.certified_bands:
+                                band = by_segments[segments]
+                                for anchor in band.anchors(candidate.frame.height):
+                                    projection = planet.Projection(
+                                        band=band,
+                                        anchor_row=anchor - row_origin,
+                                        segment=colliders.PLANET_SEGMENT,
+                                        radius=colliders.PLANET_RADIUS,
+                                        quadrant=int(rotated),
+                                    )
+                                    projections.setdefault(projection, None)
+        return tuple(projections)
+
+    @pytest.mark.parametrize(
+        ("occupied", "limit", "selection"),
+        (
+            ((3, 3, 161, 7), (0, 0, 164, 10), "portable"),
+            ((0, 0, 4, 4), (0, 0, 7, 7), "32"),
+            ((0, 0, 199, 4), (0, 0, 199, 4), "portable"),
+            ((-2, 4, 5, 8), (-5, 1, 8, 11), "160"),
+        ),
+    )
+    def test_projection_envelope_retains_reference_first_seen_order(
+        self,
+        occupied: tuple[int, int, int, int],
+        limit: tuple[int, int, int, int],
+        selection: BandSelection,
+    ) -> None:
+        policy = BandPolicy(selection)
+        assert freeform._projection_envelope(
+            occupied,
+            limit,
+            policy,
+        ) == self._reference_projection_envelope(occupied, limit, policy)
+
+    @staticmethod
     def _canvas_with_one_tower_site(
         candidate: tuple[int, int],
     ) -> _Canvas:
@@ -4123,15 +4183,13 @@ class TestPowerClaimsItsGroundBeforeRouting:
                     for anchor in band.anchors(candidate.frame.height)
                 )
 
-        envelope = set(
-            freeform._projection_envelope(
-                occupied,
-                limit,
-                policy,
-            )
+        envelope = freeform._projection_envelope(
+            occupied,
+            limit,
+            policy,
         )
-        assert len(envelope) == 98
-        assert expected <= envelope
+        assert len(envelope) == len(set(envelope)) == 98
+        assert expected <= set(envelope)
         tower = catalog.building(catalog.TESLA_TOWER_ID)
         assert rules.power_node_condition(
             tower.power_node,
@@ -4180,7 +4238,18 @@ class TestPowerClaimsItsGroundBeforeRouting:
             None,
         )
         assert failure is not None
-        assert failure.check == "game.power_too_close"
+        assert (
+            failure.band,
+            failure.check,
+            failure.buildings,
+            failure.detail,
+        ) == (
+            60,
+            "game.power_too_close",
+            (0, 1),
+            "3.4776 world units apart, below the 3.5-unit PowerTooClose gate "
+            "(PowerTooClose)",
+        )
 
     def test_power_projection_envelope_covers_compacted_open_boundary_belts(
         self,
