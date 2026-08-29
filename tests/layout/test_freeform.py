@@ -2001,11 +2001,14 @@ class TestSolverActuallyRuns:
 
 
 def test_projection_no_good_forbids_only_rejected_relative_displacement() -> None:
-    assert hasattr(freeform, "ProjectionNoGood")
     strip = plan_strips(single_recipe_spec())[0]
-    strips = [strip, strip]
-    height = 2 * _box(strip)[1]
-    width_bound = 2 * _box(strip)[0]
+    strips = [
+        replace(strip, west_channel=3),
+        replace(strip, west_channel=1),
+        replace(strip, west_channel=1),
+    ]
+    height = 2 * max(_box(candidate)[1] for candidate in strips)
+    width_bound = 3 * max(_box(candidate)[0] for candidate in strips)
     initial = _pack(
         strips,
         height=height,
@@ -2017,15 +2020,21 @@ def test_projection_no_good_forbids_only_rejected_relative_displacement() -> Non
     assert initial is not None
     failure = freeform.finalize.ProjectionFailure(
         check="geom.collide",
-        buildings=(0, 1),
+        buildings=(0, 2),
         detail="build colliders intersect",
         band=160,
     )
-    bad_delta = (
+    rejected_delta = (
+        initial.at[0][0] - initial.at[2][0],
+        initial.at[0][1] - initial.at[2][1],
+    )
+    unrelated_delta = (
         initial.at[0][0] - initial.at[1][0],
         initial.at[0][1] - initial.at[1][1],
     )
-    bad = freeform.ProjectionNoGood(0, 1, *bad_delta, failure)
+    assert rejected_delta == (-12, -6)
+    assert unrelated_delta == (2, -6)
+    bad = freeform.ProjectionNoGood(0, 2, *rejected_delta, failure)
 
     retry = _pack(
         strips,
@@ -2039,9 +2048,13 @@ def test_projection_no_good_forbids_only_rejected_relative_displacement() -> Non
 
     assert retry is not None
     assert (
+        retry.at[0][0] - retry.at[2][0],
+        retry.at[0][1] - retry.at[2][1],
+    ) != rejected_delta
+    assert (
         retry.at[0][0] - retry.at[1][0],
         retry.at[0][1] - retry.at[1][1],
-    ) != bad_delta
+    ) == unrelated_delta
 
 
 def test_projection_owned_strip_collision_learns_and_repacks(
