@@ -3187,6 +3187,17 @@ def _termination(ctx: Context) -> Iterable[Finding]:
         for link in (s.input_obj, s.output_obj):
             if link is not None:
                 touched.add(link)
+    for addon in ctx.placement.buildings:
+        try:
+            areas = cat.building(addon.item_id).addon_areas
+        except KeyError:
+            continue
+        if len(areas) < 2:
+            continue
+        for area in areas:
+            belt_index = _belt_in_addon_area(ctx, addon, area=area.area)
+            if belt_index is not None:
+                touched.add(belt_index)
     for r, run in enumerate(ctx.runs):
         tail = run.tail
         o = bs[tail].output_obj

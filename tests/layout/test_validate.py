@@ -3752,6 +3752,40 @@ def test_flow_lane_attribution_sees_items_arriving_through_a_junction() -> None:
 # warned on 95 of 130 runs, and on the twelve-URL bake-off corpus on 380 of 517.
 # It now measures the SIZE of the overshoot, and those rates fall to 7% and 14%.
 
+def _supplied_coater_lane() -> Placement:
+    return place(
+        belt(-2, 0, 1, out=1, carries="proliferator-3"),
+        belt(-1, 0, 1, carries="proliferator-3"),
+        belt(0, 0, carries="ore"),
+        _coater(0, 0),
+    )
+
+
+def _unconsumed_control_lane() -> Placement:
+    return place(
+        belt(-2, 0, 1, out=1, carries="proliferator-3"),
+        belt(-1, 0, 1, carries="proliferator-3"),
+    )
+
+
+def _termination_report(placement: Placement) -> Report:
+    return validate(placement, only={"belt.termination"})
+
+
+def test_addon_supply_belt_is_a_termination_tap() -> None:
+    report = _termination_report(_supplied_coater_lane())
+    assert not any(
+        finding.check == "belt.termination"
+        and finding.severity is Severity.WARNING
+        and finding.detail["taps"] == 0
+        for finding in report.warnings
+    )
+
+
+def test_unconsumed_lane_still_warns() -> None:
+    report = _termination_report(_unconsumed_control_lane())
+    assert any(finding.check == "belt.termination" for finding in report.warnings)
+
 
 def tapped_lane(length: int) -> Placement:
     """A lane of ``length`` tiles whose FIRST tile feeds a machine."""
