@@ -244,8 +244,8 @@
         }
       ],
       "recommended_maxsize": 1,
-      "applied_maxsize": null,
-      "rollback_reason": "Repeatable same-machine 21-sample median regression exceeded 5% in comparison pairs 1, 2, and 3."
+      "applied_maxsize": 1,
+      "rollback_reason": null
     },
     "planet.collider_radius": {
       "calls": 162,

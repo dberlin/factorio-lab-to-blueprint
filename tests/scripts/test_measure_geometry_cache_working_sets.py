@@ -39,14 +39,17 @@ def test_splitter_trace_uses_the_real_one_argument_cache_key() -> None:
 
 def test_report_separates_recommendation_from_applied_rollback_policy() -> None:
     functions = build_report(Path(__file__).parents[2])["functions"]
-    finite = functions["catalog.collider_span"]
-    assert finite["applied_maxsize"] == finite["recommended_maxsize"]
-    assert finite["rollback_reason"] is None
+    for name in (
+        "catalog.collider_span",
+        "colliders.belt_keepout_offsets",
+    ):
+        finite = functions[name]
+        assert finite["applied_maxsize"] == finite["recommended_maxsize"]
+        assert finite["rollback_reason"] is None
 
     for name in (
         "catalog.clearance",
         "colliders.own_centre_extent",
-        "colliders.belt_keepout_offsets",
         "planet.collider_radius",
     ):
         assert functions[name]["recommended_maxsize"] > 0

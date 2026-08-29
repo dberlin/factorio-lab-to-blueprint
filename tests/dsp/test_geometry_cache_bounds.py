@@ -90,6 +90,16 @@ def _yaw_eviction_args(name: str, identifier: int) -> tuple[_CallArgs, ...]:
     return tuple((identifier, float(yaw)) for yaw in range(1, maxsize + 2))
 
 
+def _model_eviction_args(name: str, canonical_model: int) -> tuple[_CallArgs, ...]:
+    maxsize = _REPORT["functions"][name]["recommended_maxsize"]
+    models = tuple(
+        building.model_index
+        for building in catalog.all_buildings()
+        if building.model_index != canonical_model
+    )
+    return tuple((model_index,) for model_index in models[: maxsize + 1])
+
+
 
 
 _EVICTION_CALLS: tuple[
@@ -100,6 +110,12 @@ _EVICTION_CALLS: tuple[
         cast(_CacheFunction, cast(object, catalog.collider_span)),
         (2303, 0.0),
         _yaw_eviction_args("catalog.collider_span", 2303),
+    ),
+    (
+        "colliders.belt_keepout_offsets",
+        cast(_CacheFunction, cast(object, colliders.belt_keepout_offsets)),
+        (_SPLITTER_MODEL,),
+        _model_eviction_args("colliders.belt_keepout_offsets", _SPLITTER_MODEL),
     ),
 )
 
@@ -113,11 +129,6 @@ _ROLLED_BACK_CALLS: tuple[tuple[str, _CacheFunction, _CallArgs], ...] = (
         "colliders.own_centre_extent",
         cast(_CacheFunction, cast(object, colliders.own_centre_extent)),
         (_ASSEMBLER_MODEL, 0.0),
-    ),
-    (
-        "colliders.belt_keepout_offsets",
-        cast(_CacheFunction, cast(object, colliders.belt_keepout_offsets)),
-        (_SPLITTER_MODEL,),
     ),
     (
         "planet.collider_radius",

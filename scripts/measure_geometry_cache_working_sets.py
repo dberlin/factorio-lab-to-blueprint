@@ -36,10 +36,6 @@ _ROLLBACK_REASONS = {
         "Repeatable same-machine 21-sample median regression exceeded 5% "
         "in comparison pairs 2 and 3."
     ),
-    "colliders.belt_keepout_offsets": (
-        "Repeatable same-machine 21-sample median regression exceeded 5% "
-        "in comparison pairs 1, 2, and 3."
-    ),
     "planet.collider_radius": (
         "Repeatable same-machine 21-sample median regression exceeded 5% "
         "in comparison pairs 2 and 3."
