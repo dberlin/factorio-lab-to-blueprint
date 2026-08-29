@@ -504,6 +504,7 @@ def build(
             "; ".join(refused) or "every strategy refused every candidate",
             spec_label=", ".join(s.label for s in spec_set.candidates),
             budget_s=time_budget_s,
+            attempt_reasons=tuple(refused),
         )
     # Prefer a valid layout. Falling back to the best invalid one is deliberate
     # and visible: the CLI refuses to emit it, and the report names the errors.

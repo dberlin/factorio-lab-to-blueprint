@@ -162,7 +162,13 @@ def test_projection_refusal_preserves_structured_exception_text(
         detail="build colliders intersect",
         band=160,
     )
-    refusal = finalize.ProjectionRefusal((failure,))
+    second_failure = finalize.ProjectionFailure(
+        check="game.power_too_close",
+        buildings=(2, 7),
+        detail="projected power envelopes intersect",
+        band=200,
+    )
+    refusal = finalize.ProjectionRefusal((failure, second_failure))
 
     class RefusedLayout:
         def lay_out(self, _spec: object, *, time_budget_s: float) -> Placement:
@@ -190,6 +196,11 @@ def test_projection_refusal_preserves_structured_exception_text(
         )
 
     assert "band 160 geom.collide (4, 9): build colliders intersect" in caught.value.reason
+    assert (
+        "band 200 game.power_too_close (2, 7): projected power envelopes intersect"
+        in caught.value.reason
+    )
+    assert caught.value.attempt_reasons == (caught.value.reason,)
 
 
 @pytest.mark.slow

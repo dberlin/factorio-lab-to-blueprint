@@ -76,6 +76,10 @@ def test_a_refusal_is_a_result_not_an_error() -> None:
             "freeform/no-proliferator: too tall; freeform/max-proliferation: unroutable",
             spec_label="no-proliferator",
             budget_s=2.0,
+            attempt_reasons=(
+                "freeform/no-proliferator: too tall",
+                "freeform/max-proliferation: unroutable",
+            ),
         )
 
     builder = Builder(solve=refuse)
@@ -90,6 +94,39 @@ def test_a_refusal_is_a_result_not_an_error() -> None:
             "freeform/max-proliferation: unroutable",
         ]
         assert "no valid layout" in str(refused["message"])
+    finally:
+        builder.shutdown()
+
+
+def test_projection_evidence_semicolons_stay_in_one_attempt_payload() -> None:
+    attempt = (
+        "sequence-pair/no-proliferator: no scheduled stage produced an exact layout; "
+        "exact validation failures: game.power_too_close, geom.collide; "
+        "no legal DSP latitude band/orientation accepts the final placement: "
+        "band 160 geom.collide (4, 9): first projected collision; "
+        "band 200 game.power_too_close (2, 7): projected power envelopes intersect"
+    )
+
+    def refuse(_o: Options, _p: pipeline.ProgressSink) -> pipeline.Build:
+        raise NoValidLayout(
+            attempt,
+            spec_label="no-proliferator",
+            budget_s=2.0,
+            attempt_reasons=(attempt,),
+        )
+
+    builder = Builder(solve=refuse)
+    try:
+        snap = _settled(builder, builder.submit(Options(url=URL)).id)
+        refused = _object(snap["refusal"])
+        assert refused["reasons"] == [attempt]
+        assert "band 160 geom.collide (4, 9): first projected collision" in str(
+            refused["message"]
+        )
+        assert (
+            "band 200 game.power_too_close (2, 7): projected power envelopes intersect"
+            in str(refused["message"])
+        )
     finally:
         builder.shutdown()
 

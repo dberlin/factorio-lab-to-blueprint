@@ -376,7 +376,14 @@ class NoValidLayout(Exception):
     same code, opposite role, bounding the search instead of replacing it.
     """
 
-    def __init__(self, reason: str, *, spec_label: str = "", budget_s: float = 0.0) -> None:
+    def __init__(
+        self,
+        reason: str,
+        *,
+        spec_label: str = "",
+        budget_s: float = 0.0,
+        attempt_reasons: tuple[str, ...] = (),
+    ) -> None:
         super().__init__(
             f"no valid layout for {spec_label or 'this spec'} after "
             f"{budget_s:g}s: {reason}. Treat a spec that cannot be laid out in "
@@ -385,6 +392,7 @@ class NoValidLayout(Exception):
         self.reason = reason
         self.spec_label = spec_label
         self.budget_s = budget_s
+        self.attempt_reasons = attempt_reasons
 
 
 class LayoutStrategy(Protocol):

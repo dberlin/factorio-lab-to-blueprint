@@ -1086,6 +1086,10 @@ def test_production_projection_refusals_reach_terminal_sequence_evidence(
         solver.search(max_stages=2)
 
     assert "no scheduled stage produced an exact layout" in caught.value.reason
+    assert (
+        "exact validation failures: game.power_too_close, geom.collide"
+        in caught.value.reason
+    )
     for failure in (first, shared, last):
         record = (
             f"band {failure.band} {failure.check} "

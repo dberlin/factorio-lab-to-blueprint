@@ -434,10 +434,5 @@ def _step(step: pipeline.AttemptProgress | None) -> Json | None:
 
 
 def _reasons(exc: NoValidLayout) -> tuple[str, ...]:
-    """The per-pair reasons the pipeline joined into one string.
-
-    ``pipeline.build`` builds ``NoValidLayout``'s reason by ``"; ".join``-ing
-    the refusals it collected, so splitting it back apart is how the UI gets one
-    line per strategy/candidate pair rather than one long sentence.
-    """
-    return tuple(part.strip() for part in exc.reason.split(";") if part.strip())
+    """Return pipeline-provided strategy/candidate refusal boundaries."""
+    return exc.attempt_reasons or (exc.reason,)

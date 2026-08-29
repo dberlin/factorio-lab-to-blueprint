@@ -315,6 +315,66 @@ def test_parent_deadline_terminates_active_workers_and_refuses_without_an_exact(
     assert not executor.killed
 
 
+def test_parent_deadline_preserves_settled_refusals_in_island_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _PendingExecutor.instances.clear()
+    monkeypatch.setattr(islands_module, "ProcessPoolExecutor", _PendingExecutor)
+    refusal_zero = (
+        "no scheduled stage produced an exact layout; "
+        "no legal DSP latitude band/orientation accepts the final placement: "
+        "band 160 geom.collide (4, 9): first projected collision"
+    )
+    refusal_two = (
+        "no scheduled stage produced an exact layout; "
+        "no legal DSP latitude band/orientation accepts the final placement: "
+        "band 240 game.power_too_close (2, 7): later projected power refusal"
+    )
+
+    def settle_two_islands(
+        futures: list[Future[_SequenceIslandOutcome]],
+        *,
+        timeout: float | None,
+    ) -> tuple[set[Future[_SequenceIslandOutcome]], set[Future[_SequenceIslandOutcome]]]:
+        assert timeout is not None
+        executor = _PendingExecutor.instances[-1]
+        futures[2].set_result(
+            _SequenceIslandOutcome.refused(
+                2,
+                executor.requests[2].seed,
+                refusal_two,
+                "mixed",
+                2.0,
+            )
+        )
+        futures[0].set_result(
+            _SequenceIslandOutcome.refused(
+                0,
+                executor.requests[0].seed,
+                refusal_zero,
+                "mixed",
+                2.0,
+            )
+        )
+        return {futures[2], futures[0]}, {futures[1]}
+
+    monkeypatch.setattr(islands_module, "wait", settle_two_islands)
+
+    with pytest.raises(NoValidLayout) as caught:
+        SequencePairLayout(
+            band_policy=BandPolicy("portable"),
+            islands=3,
+        ).lay_out(two_stage_spec(), time_budget_s=2.0)
+
+    assert caught.value.reason == (
+        "deadline exhausted before any sequence island produced an exact layout; "
+        f"settled island refusals: island 0: {refusal_zero}; island 2: {refusal_two}"
+    )
+    executor = _PendingExecutor.instances[-1]
+    assert executor.terminated
+    assert not executor.killed
+
+
 def test_child_soft_deadline_leaves_parent_time_to_collect_result(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

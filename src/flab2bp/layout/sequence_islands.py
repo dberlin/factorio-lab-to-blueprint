@@ -322,8 +322,18 @@ def run_sequence_islands(
                 spec_label=spec.label,
                 budget_s=ceiling,
             )
+        reason = "deadline exhausted before any sequence island produced an exact layout"
+        settled_refusals = sorted(
+            (outcome for outcome in outcomes if outcome.status == "refused"),
+            key=_island_id,
+        )
+        if settled_refusals:
+            reason += "; settled island refusals: " + "; ".join(
+                f"island {outcome.island_id}: {outcome.refusal_reason}"
+                for outcome in settled_refusals
+            )
         raise NoValidLayout(
-            "deadline exhausted before any sequence island produced an exact layout",
+            reason,
             spec_label=spec.label,
             budget_s=ceiling,
         )
