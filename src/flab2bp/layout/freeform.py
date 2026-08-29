@@ -6981,37 +6981,57 @@ class _Unpowerable(Exception):
 
 
 def _projection_envelope(
-    bounds: tuple[int, int, int, int],
+    occupied: tuple[int, int, int, int],
+    limit: tuple[int, int, int, int],
     policy: BandPolicy,
 ) -> tuple[planet.Projection, ...]:
-    """Every required projection of every finalizer frame for fixed bounds."""
-    min_x, min_y, max_x, max_y = bounds
-    if max_x < min_x or max_y < min_y:
-        return ()
-    extent = Placement(
-        buildings=(
-            PlacedBuilding(item_id=0, model_index=0, x=min_x, y=min_y),
-            PlacedBuilding(item_id=0, model_index=0, x=max_x, y=max_y),
-        )
-    )
+    """Every finalizer projection reachable inside one fixed capacity box."""
+    occupied_min_x, occupied_min_y, occupied_max_x, occupied_max_y = occupied
+    limit_min_x, limit_min_y, limit_max_x, limit_max_y = limit
+    if not (
+        limit_min_x <= occupied_min_x <= occupied_max_x <= limit_max_x
+        and limit_min_y <= occupied_min_y <= occupied_max_y <= limit_max_y
+    ):
+        raise ValueError("occupied power-planning bounds must lie inside canvas.limit")
+
     by_segments = {band.area_segments: band for band in planet.bands()}
-    projections: list[planet.Projection] = []
-    for candidate in finalize.frame_candidates(extent, policy):
-        rotated = candidate.frame.rotated
-        row_origin = (min_x if rotated else min_y) - candidate.south_padding
-        for segments in candidate.frame.certified_bands:
-            band = by_segments[segments]
-            projections.extend(
-                planet.Projection(
-                    band=band,
-                    anchor_row=anchor - row_origin,
-                    segment=colliders.PLANET_SEGMENT,
-                    radius=colliders.PLANET_RADIUS,
-                    quadrant=int(rotated),
-                )
-                for anchor in band.anchors(candidate.frame.height)
-            )
-    return tuple(dict.fromkeys(projections))
+    candidates_by_extent: dict[
+        tuple[int, int],
+        tuple[finalize.FrameCandidate, ...],
+    ] = {}
+    projections: dict[planet.Projection, None] = {}
+    for min_x in range(limit_min_x, occupied_min_x + 1):
+        for min_y in range(limit_min_y, occupied_min_y + 1):
+            for max_x in range(occupied_max_x, limit_max_x + 1):
+                for max_y in range(occupied_max_y, limit_max_y + 1):
+                    width = max_x - min_x + 1
+                    height = max_y - min_y + 1
+                    extent = (width, height)
+                    candidates = candidates_by_extent.get(extent)
+                    if candidates is None:
+                        candidates = finalize._frame_candidates_for_extent(
+                            width,
+                            height,
+                            policy,
+                        )
+                        candidates_by_extent[extent] = candidates
+                    for candidate in candidates:
+                        rotated = candidate.frame.rotated
+                        row_origin = (
+                            min_x if rotated else min_y
+                        ) - candidate.south_padding
+                        for segments in candidate.frame.certified_bands:
+                            band = by_segments[segments]
+                            for anchor in band.anchors(candidate.frame.height):
+                                projection = planet.Projection(
+                                    band=band,
+                                    anchor_row=anchor - row_origin,
+                                    segment=colliders.PLANET_SEGMENT,
+                                    radius=colliders.PLANET_RADIUS,
+                                    quadrant=int(rotated),
+                                )
+                                projections.setdefault(projection, None)
+    return tuple(projections)
 
 
 def _power_plan(
@@ -7215,7 +7235,11 @@ def _power_plan(
                 free[gx, gy] = False
 
     projections = (
-        _projection_envelope(canvas.limit or (min_x, min_y, max_x, max_y), policy)
+        _projection_envelope(
+            _core_bounds(canvas),
+            canvas.limit or (min_x, min_y, max_x, max_y),
+            policy,
+        )
         if policy is not None
         else ()
     )

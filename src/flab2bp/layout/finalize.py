@@ -602,8 +602,9 @@ def target_bands(
     return ordered[start : start + 3]
 
 
-def _primary_band(
-    placement: Placement,
+def _primary_band_for_extent(
+    width: int,
+    height: int,
     policy: BandPolicy,
 ) -> planet.Band | None:
     explicit = policy.explicit_segments
@@ -611,36 +612,30 @@ def _primary_band(
         return next(
             band for band in planet.bands() if band.area_segments == explicit
         )
-    min_x, min_y, max_x, max_y = placement.bounds
     try:
-        return planet.band_for_extent(
-            max_x - min_x + 1,
-            max_y - min_y + 1,
-        ).band
+        return planet.band_for_extent(width, height).band
     except planet.BandRefusal:
         return None
 
 
 def _frame_candidate_for_primary(
-    placement: Placement,
+    width: int,
+    height: int,
     policy: BandPolicy,
     primary: planet.Band,
     *,
+    prior_rotated: bool,
     rotated: bool,
     south_padding: int,
     north_padding: int,
 ) -> FrameCandidate | None:
     if south_padding < 0 or north_padding < 0:
         raise ValueError("latitude padding must be non-negative")
-    min_x, min_y, max_x, max_y = placement.bounds
-    width = max_x - min_x + 1
-    height = max_y - min_y + 1
     columns, content_rows = (height, width) if rotated else (width, height)
     added_rows = south_padding + north_padding
     rows = content_rows + added_rows
     if columns > primary.columns or rows > primary.rows:
         return None
-    prior_rotated = placement.frame.rotated if placement.frame is not None else False
     required = target_bands(primary, policy)
     return FrameCandidate(
         frame=AreaFrame(
@@ -655,34 +650,15 @@ def _frame_candidate_for_primary(
     )
 
 
-def _frame_candidate(
-    placement: Placement,
+def _frame_candidates_for_extent(
+    width: int,
+    height: int,
     policy: BandPolicy,
     *,
-    rotated: bool,
-    south_padding: int,
-    north_padding: int,
-) -> FrameCandidate | None:
-    """Build one latitude-padded frame without changing its fixed primary."""
-    primary = _primary_band(placement, policy)
-    if primary is None:
-        return None
-    return _frame_candidate_for_primary(
-        placement,
-        policy,
-        primary,
-        rotated=rotated,
-        south_padding=south_padding,
-        north_padding=north_padding,
-    )
-
-
-def frame_candidates(
-    placement: Placement,
-    policy: BandPolicy,
+    prior_rotated: bool = False,
 ) -> tuple[FrameCandidate, ...]:
-    """Enumerate every approved frame in deterministic minimum-area order."""
-    primary = _primary_band(placement, policy)
+    """Apply the finalizer's one frame convention to an exact content extent."""
+    primary = _primary_band_for_extent(width, height, policy)
     if primary is None:
         return ()
     candidates: list[FrameCandidate] = []
@@ -690,9 +666,11 @@ def frame_candidates(
         for added_rows in range(5):
             for south_padding in range(added_rows + 1):
                 candidate = _frame_candidate_for_primary(
-                    placement,
+                    width,
+                    height,
                     policy,
                     primary,
+                    prior_rotated=prior_rotated,
                     rotated=rotated,
                     south_padding=south_padding,
                     north_padding=added_rows - south_padding,
@@ -709,6 +687,22 @@ def frame_candidates(
                 candidate.south_padding,
             ),
         )
+    )
+
+
+def frame_candidates(
+    placement: Placement,
+    policy: BandPolicy,
+) -> tuple[FrameCandidate, ...]:
+    """Enumerate every approved frame in deterministic minimum-area order."""
+    min_x, min_y, max_x, max_y = placement.bounds
+    return _frame_candidates_for_extent(
+        max_x - min_x + 1,
+        max_y - min_y + 1,
+        policy,
+        prior_rotated=(
+            placement.frame.rotated if placement.frame is not None else False
+        ),
     )
 
 

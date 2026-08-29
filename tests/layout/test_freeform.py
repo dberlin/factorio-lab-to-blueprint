@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from flab2bp.dsp import catalog, codec, colliders, rules
+from flab2bp.dsp import catalog, codec, colliders, planet, rules
 from flab2bp.layout import freeform, junction, slots, validate
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import (
@@ -3577,8 +3577,10 @@ class TestPowerClaimsItsGroundBeforeRouting:
         return canvas
 
     def test_power_plan_rejects_flat_legal_pair_in_required_projection(self) -> None:
+        bounds = (0, 0, 199, 4)
         envelope = freeform._projection_envelope(
-            (0, 0, 199, 4),
+            bounds,
+            bounds,
             BandPolicy("portable"),
         )
         anchors = {
@@ -3623,6 +3625,98 @@ class TestPowerClaimsItsGroundBeforeRouting:
             (*legal_site, *legal_site),
             policy=BandPolicy("portable"),
         ) == [legal_site]
+
+    def test_power_projection_envelope_covers_empty_limit_edges(self) -> None:
+        occupied = (3, 3, 161, 7)
+        limit = (0, 0, 164, 10)
+        policy = BandPolicy("portable")
+        representative = Placement(
+            buildings=(
+                _belt(occupied[0], occupied[1]),
+                _belt(occupied[2], occupied[3]),
+            )
+        )
+        candidates = freeform.finalize.frame_candidates(representative, policy)
+        assert {candidate.frame.primary_band for candidate in candidates} == {32}
+
+        by_segments = {band.area_segments: band for band in planet.bands()}
+        expected: set[planet.Projection] = set()
+        for candidate in candidates:
+            rotated = candidate.frame.rotated
+            row_origin = (
+                occupied[0] if rotated else occupied[1]
+            ) - candidate.south_padding
+            for segments in candidate.frame.certified_bands:
+                band = by_segments[segments]
+                expected.update(
+                    planet.Projection(
+                        band=band,
+                        anchor_row=anchor - row_origin,
+                        segment=colliders.PLANET_SEGMENT,
+                        radius=colliders.PLANET_RADIUS,
+                        quadrant=int(rotated),
+                    )
+                    for anchor in band.anchors(candidate.frame.height)
+                )
+
+        envelope = set(
+            freeform._projection_envelope(
+                occupied,
+                limit,
+                policy,
+            )
+        )
+        assert len(envelope) == 98
+        assert expected <= envelope
+        tower = catalog.building(catalog.TESLA_TOWER_ID)
+        assert rules.power_node_condition(
+            tower.power_node,
+            tower.power_node,
+            10 * colliders.GRID_ARC**2,
+        ) is None
+        pair = (
+            (
+                0,
+                PlacedBuilding(
+                    item_id=catalog.TESLA_TOWER_ID,
+                    model_index=tower.model_index,
+                    x=10,
+                    y=3,
+                ),
+                tower.power_node,
+            ),
+            (
+                1,
+                PlacedBuilding(
+                    item_id=catalog.TESLA_TOWER_ID,
+                    model_index=tower.model_index,
+                    x=13,
+                    y=4,
+                ),
+                tower.power_node,
+            ),
+        )
+        limit_only = freeform._projection_envelope(limit, limit, policy)
+        assert all(
+            freeform.finalize.projected_power_failure(pair, projection) is None
+            for projection in limit_only
+        )
+        failure = next(
+            (
+                failure
+                for projection in envelope
+                if (
+                    failure := freeform.finalize.projected_power_failure(
+                        pair,
+                        projection,
+                    )
+                )
+                is not None
+            ),
+            None,
+        )
+        assert failure is not None
+        assert failure.check == "game.power_too_close"
 
     def test_build_passes_projection_policy_to_power_plan_before_routing(
         self,
