@@ -25,6 +25,7 @@ import zlib
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from fractions import Fraction
+from functools import cache
 from pathlib import Path
 from typing import Final
 
@@ -422,7 +423,6 @@ class ModHash:
 
 
 _VENDORED = Path(__file__).parent / "vendored"
-_HASH_CACHE: dict[str, ModHash] = {}
 
 
 def _candidate_paths(mod_id: str) -> Iterable[Path]:
@@ -432,6 +432,23 @@ def _candidate_paths(mod_id: str) -> Iterable[Path]:
         # The single-dataset layout currently vendored in this package.
         yield _VENDORED / "hash.json"
 
+def _load_mod_hash_path(path: Path) -> ModHash:
+    raw: object = json.loads(path.read_text(encoding="utf-8"))
+    return ModHash.from_json(raw)
+
+
+@cache
+def _load_vendored_mod_hash(mod_id: str) -> ModHash:
+    source = next(
+        (candidate for candidate in _candidate_paths(mod_id) if candidate.is_file()), None
+    )
+    if source is None:
+        raise LabUrlError(
+            f"no vendored hash.json for dataset {mod_id!r}; looked under {_VENDORED}"
+        )
+    return _load_mod_hash_path(source)
+
+
 
 def load_mod_hash(mod_id: str = "dsp", *, path: Path | None = None) -> ModHash:
     """Load a dataset's ``hash.json`` from the vendored copy.
@@ -440,17 +457,10 @@ def load_mod_hash(mod_id: str = "dsp", *, path: Path | None = None) -> ModHash:
     and any excluded/checked set, so a network round trip here would make
     offline use impossible.
     """
-    if path is None and mod_id in _HASH_CACHE:
-        return _HASH_CACHE[mod_id]
-
-    source = path
-    if source is None:
-        source = next((p for p in _candidate_paths(mod_id) if p.is_file()), None)
-    if source is None or not source.is_file():
-        raise LabUrlError(f"no vendored hash.json for dataset {mod_id!r}; looked under {_VENDORED}")
-
-    raw: object = json.loads(source.read_text(encoding="utf-8"))
-    mod_hash = ModHash.from_json(raw)
     if path is None:
-        _HASH_CACHE[mod_id] = mod_hash
-    return mod_hash
+        return _load_vendored_mod_hash(mod_id)
+    if not path.is_file():
+        raise LabUrlError(
+            f"no vendored hash.json for dataset {mod_id!r}; looked under {_VENDORED}"
+        )
+    return _load_mod_hash_path(path)

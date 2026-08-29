@@ -6,6 +6,7 @@ Every expectation here is traceable to FactorioLab `main`:
 
 from __future__ import annotations
 
+import json
 import zlib
 from fractions import Fraction
 from pathlib import Path
@@ -284,3 +285,40 @@ class TestModHash:
     def test_unknown_mod_raises(self) -> None:
         with pytest.raises(P.LabUrlError):
             P.load_mod_hash("no-such-mod")
+
+    def test_explicit_path_is_reread_after_replacement(self, tmp_path: Path) -> None:
+        source = tmp_path / "hash.json"
+        source.write_text(json.dumps({"items": ["first"]}), encoding="utf-8")
+        first = P.load_mod_hash(path=source)
+
+        source.write_text(json.dumps({"items": ["second"]}), encoding="utf-8")
+        second = P.load_mod_hash(path=source)
+
+        assert first.items == ["first"]
+        assert second.items == ["second"]
+        assert second is not first
+
+    def test_failed_vendored_load_is_retryable_and_success_is_cached(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        vendored = tmp_path / "vendored"
+        source = vendored / "retryable" / "hash.json"
+        source.parent.mkdir(parents=True)
+        monkeypatch.setattr(P, "_VENDORED", vendored)
+
+        helper = P._load_vendored_mod_hash
+        helper.cache_clear()
+        try:
+            source.write_text('{"items": [7]}', encoding="utf-8")
+            with pytest.raises(ValidationError):
+                P.load_mod_hash("retryable")
+
+            source.write_text(json.dumps({"items": ["repaired"]}), encoding="utf-8")
+            repaired = P.load_mod_hash("retryable")
+            assert repaired.items == ["repaired"]
+            assert P.load_mod_hash("retryable") is repaired
+            assert helper.cache_info().currsize == 1
+        finally:
+            helper.cache_clear()
