@@ -19,6 +19,8 @@ nothing in ``lab``, so the direction is the one that was already there.
 
 from __future__ import annotations
 
+from functools import lru_cache
+
 from flab2bp.dsp import catalog
 from flab2bp.lab.data import load_vendored
 from flab2bp.lab.schema import Dataset
@@ -26,9 +28,16 @@ from flab2bp.lab.url import parse_url
 
 __all__ = ["belt_rules_for_url"]
 
-#: Keyed by URL.  Parsing and scanning the dataset is pure, and the audit asks
-#: the same question once per cell across hundreds of cells.
-_CACHE: dict[str, catalog.BeltAltitudeRules] = {}
+def _belt_rules(url: str, dataset: Dataset) -> catalog.BeltAltitudeRules:
+    return catalog.belt_rules_for_technologies(
+        parse_url(url).researched_technology_ids,
+        {item.id for item in dataset.items if item.technology is not None},
+    )
+
+
+@lru_cache(maxsize=512)
+def _vendored_belt_rules_for_url(url: str) -> catalog.BeltAltitudeRules:
+    return _belt_rules(url, load_vendored())
 
 
 def belt_rules_for_url(
@@ -48,10 +57,6 @@ def belt_rules_for_url(
     ``settings-store.ts::computeSettings``.  Passing ``None`` straight through
     is what preserves that.
     """
-    if url not in _CACHE:
-        data = dataset if dataset is not None else load_vendored()
-        _CACHE[url] = catalog.belt_rules_for_technologies(
-            parse_url(url).researched_technology_ids,
-            {i.id for i in data.items if i.technology is not None},
-        )
-    return _CACHE[url]
+    if dataset is None:
+        return _vendored_belt_rules_for_url(url)
+    return _belt_rules(url, dataset)
