@@ -339,17 +339,38 @@ def _pinned_candidates(
     )
     label = "flow-pinned" if tier is ProliferatorTier.NONE else f"flow-pinned-mk{tier.value}"
     spec = _to_build_spec(data, request, plan, label)
-    synthetic_groups = sorted(g.recipe_id for g in spec.groups if g.recipe_id.startswith("df-"))
-    if synthetic_groups:
+    forbidden = sorted(
+        {
+            item_id
+            for item_id in (*spec.outputs, *spec.surplus_outputs)
+            if item_id.startswith("df-")
+        }
+        | {
+            group.recipe_id
+            for group in spec.groups
+            if group.recipe_id.startswith("df-")
+        }
+        | {
+            item_id
+            for group in spec.groups
+            for item_id in group.outputs_per_machine
+            if item_id.startswith("df-")
+        }
+    )
+    if forbidden:
         raise FlowError(
-            f"the pinned candidate selected synthetic Dark Fog recipe(s) "
-            f"{synthetic_groups!r}; those rows are source provenance, never machines"
+            f"{forbidden[0]!r} is DF-only and cannot be a candidate output, "
+            "internal product, or synthetic machine recipe"
         )
-    unlisted = sorted(_dark_fog_items(spec) - set(flow.by_item))
+    df_external = {
+        item_id for item_id in spec.external_inputs if item_id.startswith("df-")
+    }
+    authorized_external = set(flow.external_items(data))
+    unlisted = sorted(df_external - authorized_external)
     if unlisted:
         raise FlowError(
-            f"{unlisted[0]!r} is a Dark Fog source needed by the pinned candidate, "
-            "but the supplied flow does not explicitly list that item"
+            f"{unlisted[0]!r} is required as a DF-only external input, but the "
+            "supplied flow does not list a positive demand for that exact item"
         )
     specs = [spec]
     _assert_same_objective(data, request, specs)

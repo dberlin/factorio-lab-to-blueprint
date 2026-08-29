@@ -132,6 +132,113 @@ def test_captured_alias_and_canonical_rows_produce_the_same_selection() -> None:
     assert alias.source_url == url
 
 
+
+def test_alias_and_canonical_flow_rows_merge_rates() -> None:
+    url = "https://factoriolab.github.io/dsp/list?o=combustible-unit*2&v=11"
+    flow = flow_from_text(
+        "\r\n".join(
+            [
+                f'"{url}"',
+                "Item,Items,Recipe,Machines,Machine,Modules",
+                'df-combustible-unit,=1,df-combustible-unit,=1,assembling-machine-2,"1 "',
+                'combustible-unit,=1,combustible-unit,=1,assembling-machine-2,"1 "',
+            ]
+        )
+        + "\r\n",
+        url=url,
+    )
+
+    assert len(flow.rows) == 1
+    assert flow.rows[0].item_id == "combustible-unit"
+    assert flow.rows[0].recipe_id == "combustible-unit"
+    assert flow.rows[0].items == 2
+    assert flow.rows[0].machines == 2
+
+
+def test_df_only_output_is_refused_even_when_the_flow_lists_it(data: Dataset) -> None:
+    url = "https://factoriolab.github.io/dsp/list?o=df-only-resource*1&v=11"
+    source = data.recipe("logistics-bot")
+    synthetic = replace(
+        source,
+        id="df-only-resource",
+        inputs=MappingProxyType({"iron-ingot": Fraction(1)}),
+        outputs=MappingProxyType({"df-only-resource": Fraction(1)}),
+    )
+    custom = replace(data, recipes=(*data.recipes, synthetic))
+    flow = flow_from_text(
+        "\r\n".join(
+            [
+                f'"{url}"',
+                "Item,Items,Recipe,Machines,Machine,Modules",
+                'df-only-resource,=1,df-only-resource,=1,assembling-machine-2,"1 "',
+                "iron-ingot,=1,,,,",
+            ]
+        )
+        + "\r\n",
+        url=url,
+    )
+
+    with pytest.raises(FlowError, match="df-only-resource.*cannot be a blueprint output"):
+        _ = pin_request(parse_url(url), custom, flow)
+
+
+def test_df_only_non_demand_row_does_not_authorize_an_input(data: Dataset) -> None:
+    custom = _with_df_only_logistics_input(data)
+    text = _df_only_flow(include_source=True).replace(
+        "df-only-resource,=60", "df-only-resource,=0"
+    )
+    flow = flow_from_text(text, url=LOGISTICS_URL)
+    request = pin_request(parse_url(LOGISTICS_URL), custom, flow)
+
+    with pytest.raises(FlowError, match="df-only-resource.*external input"):
+        _ = build_candidates(custom, request, count=1, flow=flow)
+
+def test_df_only_internal_product_is_refused(data: Dataset) -> None:
+    logistics = replace(
+        data.recipe("logistics-bot"),
+        inputs=MappingProxyType(
+            {
+                "df-only-resource": Fraction(1),
+                "iron-ingot": Fraction(2),
+                "processor": Fraction(1),
+            }
+        ),
+    )
+    producer = replace(
+        data.recipe("gear"),
+        outputs=MappingProxyType({"df-only-resource": Fraction(1)}),
+    )
+    custom = replace(
+        data,
+        recipes=tuple(
+            logistics
+            if recipe.id == logistics.id
+            else producer
+            if recipe.id == producer.id
+            else recipe
+            for recipe in data.recipes
+        ),
+    )
+    flow = flow_from_text(
+        "\r\n".join(
+            [
+                f'"{LOGISTICS_URL}"',
+                "Item,Items,Recipe,Machines,Machine,Modules",
+                'logistics-bot,=60,logistics-bot,=2,assembling-machine-2,"1 "',
+                'df-only-resource,=60,gear,=1,assembling-machine-2,"1 "',
+                "iron-ingot,=180,,,,",
+                "processor,=60,,,,",
+            ]
+        )
+        + "\r\n",
+        url=LOGISTICS_URL,
+    )
+    request = pin_request(parse_url(LOGISTICS_URL), custom, flow)
+
+    with pytest.raises(FlowError, match="df-only-resource.*internal product"):
+        _ = build_candidates(custom, request, count=1, flow=flow)
+
+
 def test_df_only_explicit_input_is_an_external_source(data: Dataset) -> None:
     custom = _with_df_only_logistics_input(data)
     flow = flow_from_text(_df_only_flow(include_source=True), url=LOGISTICS_URL)
@@ -154,7 +261,7 @@ def test_df_only_implicit_input_is_refused(data: Dataset) -> None:
     flow = flow_from_text(_df_only_flow(include_source=False), url=LOGISTICS_URL)
     request = pin_request(parse_url(LOGISTICS_URL), custom, flow)
 
-    with pytest.raises(FlowError, match="df-only-resource.*explicitly list"):
+    with pytest.raises(FlowError, match="df-only-resource.*positive demand"):
         _ = build_candidates(custom, request, count=1, flow=flow)
 
 

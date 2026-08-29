@@ -405,6 +405,40 @@ class FlowRow:
         return self.items is not None and self.items > 0
 
 
+def _sum_optional(one: Fraction | None, two: Fraction | None) -> Fraction | None:
+    if one is None:
+        return two
+    if two is None:
+        return one
+    return one + two
+
+
+def _merge_flow_rows(one: FlowRow, two: FlowRow) -> FlowRow:
+    """Merge two source spellings that canonicalized to one item identity."""
+
+    def one_text(field: str, left: str, right: str) -> str:
+        values = {value for value in (left, right) if value}
+        if len(values) > 1:
+            raise FlowFormatError(
+                f"canonical item {one.item_id!r} has conflicting {field} values "
+                f"{sorted(values)!r}; aliases may merge only when they describe "
+                "the same flow step"
+            )
+        return next(iter(values), "")
+
+    return FlowRow(
+        item_id=one.item_id,
+        recipe_id=one_text("Recipe", one.recipe_id, two.recipe_id),
+        machine_item_id=one_text("Machine", one.machine_item_id, two.machine_item_id),
+        belt_item_id=one_text("Belt", one.belt_item_id, two.belt_item_id),
+        items=_sum_optional(one.items, two.items),
+        surplus=_sum_optional(one.surplus, two.surplus),
+        machines=_sum_optional(one.machines, two.machines),
+        modules=one_text("Modules", one.modules, two.modules),
+        exact=one.exact and two.exact,
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class FlowSelection:
     """A parsed FactorioLab CSV: the flow FactorioLab solved."""
@@ -625,6 +659,7 @@ def parse_flow_csv(text: str) -> FlowSelection:
         )
 
     rows: list[FlowRow] = []
+    row_origins: list[str] = []
     for lineno, record in enumerate(reader, start=3):
         if not any(field.strip() for field in record):
             continue
@@ -639,9 +674,10 @@ def parse_flow_csv(text: str) -> FlowSelection:
             name: _number(cell.get(name, ""), f"line {lineno}, column {name}")
             for name in _NUMERIC
         }
+        original_item_id = cell.get("Item", "").strip()
         rows.append(
             FlowRow(
-                item_id=canonical_item_id(cell.get("Item", "").strip()),
+                item_id=canonical_item_id(original_item_id),
                 recipe_id=canonical_recipe_id(cell.get("Recipe", "").strip()),
                 machine_item_id=canonical_item_id(cell.get("Machine", "").strip()),
                 belt_item_id=canonical_item_id(cell.get("Belt", "").strip()),
@@ -652,22 +688,32 @@ def parse_flow_csv(text: str) -> FlowSelection:
                 exact=all(got[1] for got in parsed.values() if got is not None),
             )
         )
+        row_origins.append(original_item_id)
 
     if not rows:
         raise FlowFormatError("the export has a header but no steps")
 
-    seen: dict[str, int] = {}
-    for index, row in enumerate(rows):
+    merged: list[FlowRow] = []
+    seen: dict[str, tuple[int, int, set[str]]] = {}
+    for index, (row, origin) in enumerate(zip(rows, row_origins, strict=True)):
         if not row.item_id:
+            merged.append(row)
             continue
-        if row.item_id in seen:
+        previous = seen.get(row.item_id)
+        if previous is None:
+            seen[row.item_id] = (len(merged), index, {origin})
+            merged.append(row)
+            continue
+        merged_index, first_index, origins = previous
+        if origin in origins:
             raise FlowFormatError(
-                f"item {row.item_id!r} appears on two rows ({seen[row.item_id] + 3} "
+                f"item {row.item_id!r} appears on two rows ({first_index + 3} "
                 f"and {index + 3}). FactorioLab emits one step per item, so the "
                 "selection this file states is ambiguous."
             )
-        seen[row.item_id] = index
-    return FlowSelection(source_url=url, rows=tuple(rows), columns=columns)
+        merged[merged_index] = _merge_flow_rows(merged[merged_index], row)
+        origins.add(origin)
+    return FlowSelection(source_url=url, rows=tuple(merged), columns=columns)
 
 
 def _url_state(url: str) -> tuple[str, str, tuple[tuple[str, str], ...]]:
@@ -852,41 +898,30 @@ def verify_against_request(flow: FlowSelection, data: Dataset, request: LabReque
 def pin_request(request: LabRequest, data: Dataset, flow: FlowSelection) -> LabRequest:
     """Return a canonical request with buildable recipes pinned to ``flow``.
 
-    Verifies first: a flow that cannot be this URL's is refused rather than
-    pinned, because pinning it would produce a blueprint that is internally
-    consistent and answers the wrong question.
+    Catalog-backed ``df-*`` aliases have already become ordinary DSP identities.
+    Any remaining ``df-*`` identity is source-only: an explicit flow may
+    authorize it as an external input, but it can never satisfy an Output
+    objective or become a synthetic machine recipe.
 
-    Catalog-backed ``df-*`` aliases have already become their ordinary DSP
-    identities in both the request and flow. A remaining ``df-*`` objective is
-    a distinct DF-only source: it must be explicitly named by this flow and is
-    removed as a machine output because no catalog recipe can build it.
+    Verification still runs before the recipe complement is pinned. A flow that
+    cannot be this URL's is refused rather than producing an internally
+    consistent blueprint for the wrong request.
     """
     data = canonicalize_dataset(data)
     request = canonicalize_request(request)
-    verify_against_request(flow, data, request)
-    requested_dark_fog = {
+    requested_dark_fog = sorted(
         objective.target_id
         for objective in request.objectives
         if objective.type is ObjectiveType.Output and objective.target_id.startswith("df-")
-    }
-    missing = sorted(requested_dark_fog - set(flow.by_item))
-    if missing:
-        raise FlowProvenanceError(
-            f"this URL requests {missing!r}, but the supplied flow does not explicitly "
-            "list those Dark Fog items. A synthetic recipe name is not provenance for "
-            "a drop; re-download the flow from this exact URL."
-        )
-    objectives = tuple(
-        objective
-        for objective in request.objectives
-        if not (
-            objective.type is ObjectiveType.Output
-            and objective.target_id.startswith("df-")
-        )
     )
+    if requested_dark_fog:
+        raise FlowProvenanceError(
+            f"{requested_dark_fog[0]!r} is a DF-only source and cannot be a blueprint "
+            "output, even when the flow lists it. No DSP machine recipe produces it."
+        )
+    verify_against_request(flow, data, request)
     return replace(
         request,
-        objectives=objectives,
         excluded_recipe_ids=set(pinned_exclusions(data, flow)),
     )
 
