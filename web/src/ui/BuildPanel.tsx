@@ -8,6 +8,7 @@
  */
 import { useEffect, useId, useRef, useState } from 'react';
 import {
+  BandSelection,
   type BuildOptions,
   BuildRequestError,
   DEFAULT_OPTIONS,
@@ -31,6 +32,7 @@ export function BuildPanel() {
   const urlId = useId();
   const nameId = useId();
   const strategyId = useId();
+  const bandId = useId();
   const candidatesId = useId();
   const budgetId = useId();
   const proliferatorTierId = useId();
@@ -155,6 +157,23 @@ export function BuildPanel() {
           <option value="best">best (freeform + sequence-pair, smallest valid wins)</option>
           <option value="freeform">freeform</option>
           <option value="sequence-pair">sequence-pair</option>
+        </select>
+
+        <label htmlFor={bandId}>Latitude band</label>
+        <select
+          id={bandId}
+          value={options.band}
+          onChange={(event) => {
+            const band = BandSelection.safeParse(event.target.value);
+            if (band.success) set('band', band.data);
+          }}
+        >
+          <option value="portable">Portable (smallest + two wider)</option>
+          {BandSelection.options.filter((band) => band !== 'portable').map((band) => (
+            <option key={band} value={band}>
+              {band}
+            </option>
+          ))}
         </select>
 
         <label htmlFor={proliferatorTierId}>Proliferator tier</label>

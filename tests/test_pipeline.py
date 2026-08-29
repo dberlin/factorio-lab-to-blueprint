@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from flab2bp import pipeline
+from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.rates.candidates import build_candidates
 from flab2bp.spec import BuildSpecSet
 
@@ -23,31 +24,77 @@ SMALL_URL = "https://factoriolab.github.io/dsp/flow?o=electromagnetic-matrix*60&
 
 
 @pytest.mark.slow
+def test_build_defaults_to_one_portable_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Changing the default or reparsing at either finalizer breaks this."""
+    seen: list[BandPolicy] = []
+    original_new_layout = pipeline._new_layout
+    original_finalize = pipeline.finalize.finalize_placement
+
+    def new_layout_spy(*args: object, **kwargs: object) -> object:
+        policy = kwargs["band_policy"]
+        assert isinstance(policy, BandPolicy)
+        seen.append(policy)
+        return original_new_layout(*args, **kwargs)  # type: ignore[arg-type]
+
+    def finalize_spy(
+        placement: pipeline.Placement,
+        policy: BandPolicy,
+    ) -> pipeline.Placement:
+        seen.append(policy)
+        return original_finalize(placement, policy)
+
+    monkeypatch.setattr(pipeline, "_new_layout", new_layout_spy)
+    monkeypatch.setattr(pipeline.finalize, "finalize_placement", finalize_spy)
+
+    pipeline.build(
+        SMALL_URL,
+        strategy="freeform",
+        candidates=1,
+        time_budget_s=3.0,
+    )
+
+    assert len(seen) >= 3  # construction, internal finalization, pipeline defense
+    assert seen[0] == BandPolicy("portable")
+    assert all(policy is seen[0] for policy in seen)
+
+
+@pytest.mark.slow
 def test_every_pair_reports_started_and_then_how_it_ended() -> None:
     steps: list[pipeline.AttemptProgress] = []
     build = pipeline.build(
         SMALL_URL,
         strategy="freeform",
+        band="160",
         candidates=2,
         time_budget_s=3.0,
         on_progress=steps.append,
     )
 
-    # Two candidates, one strategy: two pairs, each reported twice.
-    assert [s.phase for s in steps] == ["started", "laid-out", "started", "laid-out"]
+    # Two candidates, one strategy: two pairs, each reported when it starts and
+    # when it either lays out or strictly refuses the requested band.
+    assert [s.phase for s in steps[::2]] == ["started", "started"]
+    assert all(s.phase in {"laid-out", "refused"} for s in steps[1::2])
     assert [s.index for s in steps] == [1, 1, 2, 2]
     assert {s.total for s in steps} == {2}
 
-    # The pairs reported are the pairs that ran, not a guess at them.
+    # The settled pairs correspond exactly to the returned attempts/refusals.
     reported = {(s.candidate, s.strategy) for s in steps}
-    assert reported == {(a.candidate, a.strategy) for a in build.attempts}
+    assert len(reported) == 2
+    assert {(s.candidate, s.strategy) for s in steps[1::2] if s.phase == "laid-out"} == {
+        (a.candidate, a.strategy) for a in build.attempts
+    }
+    assert sum(s.phase == "refused" for s in steps[1::2]) == len(build.refused)
 
-    # A settled pair carries its verdict; a starting one has not got one yet.
+    # A settled pair carries either its layout verdict or its refusal reason.
     for step in steps:
         if step.phase == "started":
-            assert step.area is None and step.ok is None
+            assert step.area is None and step.ok is None and step.reason is None
+        elif step.phase == "laid-out":
+            assert step.area is not None and step.ok is not None and step.reason is None
         else:
-            assert step.area is not None and step.ok is not None
+            assert step.area is None and step.ok is None and step.reason is not None
 
 
 @pytest.mark.slow
@@ -116,7 +163,7 @@ def test_projection_refusal_preserves_structured_exception_text(
     monkeypatch.setattr(
         pipeline.finalize,
         "finalize_placement",
-        lambda _placement: (_ for _ in ()).throw(refusal),
+        lambda _placement, _policy: (_ for _ in ()).throw(refusal),
     )
 
     with pytest.raises(pipeline.NoValidLayout) as caught:
@@ -208,6 +255,7 @@ class TestFlowText:
         from_text = pipeline.build(
             GRAPHENE_URL,
             strategy="freeform",
+            band="160",
             candidates=1,
             time_budget_s=2.0,
             flow_text=GRAPHENE_FLOW.read_text(encoding="utf-8-sig"),

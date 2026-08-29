@@ -17,6 +17,7 @@ from types import MappingProxyType
 from typing import Protocol
 
 from flab2bp.layout import finalize, validate
+from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import DETERMINISTIC_WORKERS, NoValidLayout, Placement
 from flab2bp.layout.compact_seed import (
     CompactSeedConfig,
@@ -2630,6 +2631,7 @@ def _production_run(
     *,
     time_budget_s: float,
     power: bool,
+    band_policy: BandPolicy,
     strip_len: int,
     config: SequenceSolverConfig,
     belt_vertical_construction: bool = True,
@@ -2960,6 +2962,7 @@ def _production_run(
                 list(selected),
                 pack,
                 power=power,
+                policy=band_policy,
                 ramped=not belt_vertical_construction,
             )
         except (_Unpowerable, _Unseatable) as exc:
@@ -3069,7 +3072,7 @@ def _production_run(
         if failures:
             return ValidationVerdict(False, failures)
         try:
-            finalize.finalize_placement(placement)
+            finalize.finalize_placement(placement, band_policy)
         except finalize.ProjectionRefusal as exc:
             return ValidationVerdict(False, exc.checks)
         return ValidationVerdict(True, ())
@@ -3443,6 +3446,7 @@ class SequencePairLayout:
     def __init__(
         self,
         *,
+        band_policy: BandPolicy,
         power: bool = False,
         belt_vertical_construction: bool = True,
         strip_len: int = 6,
@@ -3462,6 +3466,7 @@ class SequencePairLayout:
         if compact_seed_config is not None and type(compact_seed_config) is not CompactSeedConfig:
             raise ValueError("compact seed config must be exactly CompactSeedConfig")
         self._solver_factory = solver_factory
+        self.band_policy = band_policy
         self.power = power
         self.ramped = not belt_vertical_construction
         self.strip_len = strip_len
@@ -3493,6 +3498,7 @@ class SequencePairLayout:
                 spec,
                 time_budget_s=time_budget_s,
                 power=self.power,
+                band_policy=self.band_policy,
                 belt_vertical_construction=not self.ramped,
                 strip_len=self.strip_len,
                 config=self.config,
@@ -3504,6 +3510,7 @@ class SequencePairLayout:
                 spec,
                 time_budget_s=time_budget_s,
                 power=self.power,
+                band_policy=self.band_policy,
                 belt_vertical_construction=not self.ramped,
                 strip_len=self.strip_len,
                 config=self.config,
@@ -3528,7 +3535,7 @@ class SequencePairLayout:
                 ) from exc
             placement = _with_observational_stats(result, run, self.power, self.config)
         try:
-            return finalize.finalize_placement(placement)
+            return finalize.finalize_placement(placement, self.band_policy)
         except finalize.ProjectionRefusal as exc:
             raise NoValidLayout(
                 "final spherical projection rejected: " + str(exc),

@@ -65,6 +65,9 @@ def describe(build: pipeline.Build, *, allow_invalid: bool = False) -> Json:
     unmarked = markers.unmarked_external_inputs(build.placement, build.spec)
     rules = build.belt_rules
     valid = build.report.ok
+    frame = build.placement.frame
+    if frame is None:
+        raise ValueError("successful build placement has no area frame")
 
     belt: Json | None = None
     if rules is not None:
@@ -108,6 +111,8 @@ def describe(build: pipeline.Build, *, allow_invalid: bool = False) -> Json:
         "candidate": build.spec.label,
         "machines": build.spec.machine_count,
         "area": build.placement.area,
+        "primary_band": frame.primary_band,
+        "certified_bands": _array(frame.certified_bands),
         "buildings": len(build.placement.buildings),
         "title": build.placement.short_desc,
         "description": build.placement.description,

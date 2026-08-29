@@ -18,6 +18,7 @@ sys.path.insert(0, str(_ROOT))
 sys.path.insert(0, str(_ROOT / "src"))
 
 from flab2bp.layout import finalize  # noqa: E402
+from flab2bp.layout.band_policy import BandPolicy  # noqa: E402
 from flab2bp.layout.base import PlacedBuilding, Placement, PlacementStats  # noqa: E402
 
 _FIXTURES = _ROOT / "tests" / "fixtures" / "projection"
@@ -174,7 +175,7 @@ def _time_case(placement: Placement, samples: int) -> CaseResult:
     finalized: Placement | None = None
     for _ in range(samples):
         started = time.perf_counter_ns()
-        finalized = finalize.finalize_placement(placement)
+        finalized = finalize.finalize_placement(placement, BandPolicy("portable"))
         elapsed.append((time.perf_counter_ns() - started) / 1_000_000_000)
     assert finalized is not None
     ordered = sorted(elapsed)

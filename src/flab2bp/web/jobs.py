@@ -28,6 +28,7 @@ from typing import Literal
 from urllib.parse import urlsplit
 
 from flab2bp import pipeline
+from flab2bp.layout.band_policy import BAND_SELECTIONS, BandSelection
 from flab2bp.layout.base import NoValidLayout
 from flab2bp.rates.adjust import ProliferatorTier
 from flab2bp.web.payload import Json, JsonValue, describe, refusal
@@ -52,6 +53,7 @@ class Options:
     url: str
     #: Public and CLI callers share the same production strategy set.
     strategy: WebStrategyName = "best"
+    band: BandSelection = "portable"
     power: bool = True
     candidates: int = 3
     budget_s: float = 15.0
@@ -134,6 +136,13 @@ def parse_options(raw: JsonValue) -> Options:
         case _:
             raise InvalidOptions("'strategy' must be one of best, freeform, sequence-pair")
 
+    raw_band = raw.get("band", "portable")
+    if not isinstance(raw_band, str) or raw_band not in BAND_SELECTIONS:
+        raise InvalidOptions(
+            "'band' must be one of " + ", ".join(BAND_SELECTIONS)
+        )
+    band: BandSelection = raw_band
+
     candidates = raw.get("candidates", 3)
     if not isinstance(candidates, int) or isinstance(candidates, bool) or not 1 <= candidates <= 8:
         raise InvalidOptions("'candidates' must be an integer from 1 to 8")
@@ -189,6 +198,7 @@ def parse_options(raw: JsonValue) -> Options:
     options = Options(
         url=url.strip(),
         strategy=web_strategy,
+        band=band,
         power=power,
         candidates=candidates,
         budget_s=budget,
@@ -258,6 +268,7 @@ def run_build(options: Options, on_progress: pipeline.ProgressSink) -> pipeline.
     return pipeline.build(
         options.url,
         strategy=options.strategy,
+        band=options.band,
         power=options.power,
         candidates=options.candidates,
         time_budget_s=options.budget_s,
@@ -373,6 +384,7 @@ class Builder:
                 "options": {
                     "url": job.options.url,
                     "strategy": job.options.strategy,
+                    "band": job.options.band,
                     "candidates": job.options.candidates,
                     "budget_s": job.options.budget_s,
                     "proliferator_tier": (

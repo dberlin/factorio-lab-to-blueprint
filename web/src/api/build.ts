@@ -14,6 +14,23 @@
  */
 import { z } from 'zod';
 
+/** Latitude-band policy accepted consistently by Python, CLI, and web. */
+export const BandSelection = z.enum([
+  'portable',
+  '4',
+  '8',
+  '16',
+  '20',
+  '32',
+  '40',
+  '60',
+  '80',
+  '100',
+  '120',
+  '160',
+  '200',
+]);
+
 /** Strategies accepted on every build request. */
 export const RequestStrategy = z.enum(['best', 'freeform', 'sequence-pair']);
 
@@ -47,6 +64,8 @@ const BeltRules = z.object({
 const BuildResult = z.object({
   /** Null when validation failed and the caller did not pass allow_invalid. */
   blueprint: z.string().nullable(),
+  primary_band: z.number(),
+  certified_bands: z.array(z.number()),
   valid: z.boolean(),
   strategy: ExplicitStrategy,
   candidate: z.string(),
@@ -122,6 +141,7 @@ export const BuildOptions = z.object({
   candidates: z.number(),
   budget_s: z.number(),
   proliferator_tier: ProliferatorTier,
+  band: BandSelection,
   power: z.boolean(),
   name: z.string(),
   allow_invalid: z.boolean(),
@@ -131,6 +151,7 @@ export const BuildOptions = z.object({
   flow: z.string(),
 });
 
+export type BandSelection = z.infer<typeof BandSelection>;
 export type BuildOptions = z.infer<typeof BuildOptions>;
 export type RequestStrategy = z.infer<typeof RequestStrategy>;
 export type ExplicitStrategy = z.infer<typeof ExplicitStrategy>;
@@ -144,6 +165,7 @@ export const DEFAULT_OPTIONS: BuildOptions = {
   proliferator_tier: 'auto',
   power: true,
   name: '',
+  band: 'portable',
   // Off by default, exactly as the CLI has it: a blueprint that pastes cleanly
   // and then does not run is the worst outcome available here.
   allow_invalid: false,

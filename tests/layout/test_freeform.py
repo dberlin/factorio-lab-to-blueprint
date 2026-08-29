@@ -173,7 +173,13 @@ def test_prepared_problem_creates_fresh_workspaces() -> None:
     spec = two_stage_spec()
     strips = plan_strips(spec, strip_len=6)
     pack = _greedy_pack(strips, _height_seed(strips))
-    prepared = _prepare_routing_problem(spec, strips, pack, power=False)
+    prepared = _prepare_routing_problem(
+        spec,
+        strips,
+        pack,
+        policy=BandPolicy("portable"),
+        power=False
+    )
 
     first = prepared.new_workspace()
     second = prepared.new_workspace()
@@ -194,8 +200,20 @@ def test_prepared_net_ids_are_stable() -> None:
     spec = two_stage_spec()
     strips = plan_strips(spec, strip_len=6)
     pack = _greedy_pack(strips, _height_seed(strips))
-    a = _prepare_routing_problem(spec, strips, pack, power=False)
-    b = _prepare_routing_problem(spec, strips, pack, power=False)
+    a = _prepare_routing_problem(
+        spec,
+        strips,
+        pack,
+        policy=BandPolicy("portable"),
+        power=False
+    )
+    b = _prepare_routing_problem(
+        spec,
+        strips,
+        pack,
+        policy=BandPolicy("portable"),
+        power=False
+    )
 
     assert tuple(net.net_id for net in a.nets) == tuple(net.net_id for net in b.nets)
 
@@ -206,7 +224,13 @@ def test_prepared_static_access_failure_spends_no_route_budget(
     spec = two_stage_spec()
     strips = plan_strips(spec, strip_len=6)
     pack = _greedy_pack(strips, _height_seed(strips))
-    prepared = _prepare_routing_problem(spec, strips, pack, power=False)
+    prepared = _prepare_routing_problem(
+        spec,
+        strips,
+        pack,
+        policy=BandPolicy("portable"),
+        power=False
+    )
     net_id = prepared.nets[0].net_id
     failed = replace(
         prepared,
@@ -444,6 +468,7 @@ def test_self_consuming_refined_oil_feedback_routes_and_validates(
         refined_oil_feedback_spec,
         strips,
         pack,
+        policy=BandPolicy("portable"),
         power=False,
     )
 
@@ -478,7 +503,10 @@ def test_self_consuming_refined_oil_feedback_routes_and_validates(
 def test_freeform_routes_self_consuming_pinned_flow(
     refined_oil_feedback_spec: BuildSpec,
 ) -> None:
-    placement = FreeformLayout(power=False, workers=1).lay_out(
+    placement = FreeformLayout(
+        band_policy=BandPolicy("portable"),
+        power=False, workers=1
+    ).lay_out(
         refined_oil_feedback_spec,
         time_budget_s=15.0,
     )
@@ -605,7 +633,13 @@ def test_prepared_net_ids_preserve_routing_roles() -> None:
     spec = proliferated_spec()
     strips = plan_strips(spec, strip_len=6)
     pack = _greedy_pack(strips, _height_seed(strips))
-    prepared = _prepare_routing_problem(spec, strips, pack, power=False)
+    prepared = _prepare_routing_problem(
+        spec,
+        strips,
+        pack,
+        policy=BandPolicy("portable"),
+        power=False
+    )
 
     roles = {net.net_id.role for net in prepared.nets}
     assert NetRole.EXTERNAL in roles
@@ -616,7 +650,13 @@ def test_prepared_proliferator_ports_round_trip_elevated_level() -> None:
     spec = proliferated_spec()
     strips = plan_strips(spec, strip_len=6)
     pack = _greedy_pack(strips, _height_seed(strips))
-    prepared = _prepare_routing_problem(spec, strips, pack, power=False)
+    prepared = _prepare_routing_problem(
+        spec,
+        strips,
+        pack,
+        policy=BandPolicy("portable"),
+        power=False
+    )
 
     proliferator_nets = [
         net for net in prepared.nets if net.net_id.role is NetRole.PROLIFERATOR
@@ -653,6 +693,7 @@ def test_slope_limited_prepared_coater_routing_is_structured() -> None:
         spec,
         strips,
         pack,
+        policy=BandPolicy("portable"),
         power=False,
         ramped=True,
     )
@@ -1263,7 +1304,10 @@ class TestPlanStrips:
         )
         strips = plan_strips(spec, strip_len=6)
         assert len(strips[0].in_below) == 1, "the fourth ingredient must go below"
-        p = FreeformLayout(power=False).lay_out(spec, time_budget_s=0.5)
+        p = FreeformLayout(
+            band_policy=BandPolicy("portable"),
+            power=False
+        ).lay_out(spec, time_budget_s=0.5)
         report = validate.validate(p, expect_power=False)
         assert report.ok, "\n".join(f"{f.check}: {f.message}" for f in report.errors[:6])
 
@@ -1462,7 +1506,7 @@ class TestFallback:
     @pytest.mark.parametrize("spec_fn", ALL_SPECS, ids=lambda f: f.__name__)
     def test_fallback_is_complete_and_non_overlapping(self, spec_fn: object) -> None:
         spec = spec_fn()  # type: ignore[operator]
-        placement = fallback_placement(spec, power=True)
+        placement = fallback_placement(spec, band_policy=BandPolicy("portable"), power=True)
         tiles = blocking_tiles(placement)
         assert len(tiles) == len(set(tiles)), "fallback overlaps"
         assert placement.buildings
@@ -1479,7 +1523,10 @@ class TestPlacementProperties:
         self, spec_fn: object, power: bool
     ) -> None:
         spec = spec_fn()  # type: ignore[operator]
-        placement = FreeformLayout(power=power).lay_out(spec, time_budget_s=1.0)
+        placement = FreeformLayout(
+            band_policy=BandPolicy("portable"),
+            power=power
+        ).lay_out(spec, time_budget_s=1.0)
         tiles = blocking_tiles(placement)
         assert len(tiles) == len(set(tiles)), "overlapping footprints"
         assert len(machines_of(placement)) == spec.machine_count
@@ -1512,7 +1559,10 @@ class TestPlacementProperties:
 class TestProliferationForbidsDirectInsertion:
     def test_belt_required_edges_are_never_direct_inserted(self) -> None:
         spec = proliferated_spec()
-        layout = FreeformLayout(power=False)
+        layout = FreeformLayout(
+            band_policy=BandPolicy("portable"),
+            power=False
+        )
         p = layout.lay_out(spec, time_budget_s=0.5)
         assert p.stats["direct_inserts"] == 0.0
 
@@ -1522,13 +1572,19 @@ class TestProliferationForbidsDirectInsertion:
         If the same spec without proliferation also reported zero candidates,
         the previous test would prove nothing about the constraint.
         """
-        layout = FreeformLayout(power=False)
+        layout = FreeformLayout(
+            band_policy=BandPolicy("portable"),
+            power=False
+        )
         p = layout.lay_out(two_stage_spec(), time_budget_s=0.5)
         assert p.stats["direct_insert_candidates"] > 0.0
 
     def test_the_proliferated_spec_still_validates(self) -> None:
         """A silently under-producing build pastes cleanly, so the judge matters."""
-        p = FreeformLayout(power=False).lay_out(proliferated_spec(), time_budget_s=0.5)
+        p = FreeformLayout(
+            band_policy=BandPolicy("portable"),
+            power=False
+        ).lay_out(proliferated_spec(), time_budget_s=0.5)
         report = validate.validate(p, expect_power=False)
         assert report.ok, "\n".join(f"{f.check}: {f.message}" for f in report.errors[:5])
 
@@ -1579,7 +1635,7 @@ class TestLanesStopAtTheirLastTap:
         )
         assert expected < untrimmed, "the fixture no longer exercises trimming"
 
-        p = fallback_placement(spec, power=False)
+        p = fallback_placement(spec, band_policy=BandPolicy("portable"), power=False)
         belts = sum(1 for b in p.buildings if catalog.is_belt(b.item_id))
         assert belts == expected
 
@@ -1618,7 +1674,14 @@ class TestDirectInsertion:
             workers=DETERMINISTIC_WORKERS,
         )
         assert pack is not None
-        result = _build(spec, strips, pack, power=False, route=True)
+        result = _build(
+            spec,
+            strips,
+            pack,
+            power=False,
+            route=True,
+            policy=BandPolicy("portable"),
+        )
         return result.placement, pack
 
     def test_the_bridge_is_a_lane_to_lane_transfer_not_a_machine_pair(self) -> None:
@@ -1795,7 +1858,10 @@ class TestDirectInsertion:
         """
         spec = two_stage_spec()
         kw = {"power": False, "workers": DETERMINISTIC_WORKERS}
-        swept = FreeformLayout(direct_insert=True, **kw).lay_out(spec, time_budget_s=0.5)  # type: ignore[arg-type]
+        swept = FreeformLayout(
+            band_policy=BandPolicy("portable"),
+            direct_insert=True, **kw
+        ).lay_out(spec, time_budget_s=0.5)  # type: ignore[arg-type]
         stacked, _ = self._stacked(spec, direct=True)
 
         assert stacked.stats["direct_inserts"] >= 1.0
@@ -1872,8 +1938,11 @@ class TestSolverActuallyRuns:
         to beat, so it stays here as the yardstick.
         """
         spec = two_stage_spec()
-        solved = FreeformLayout(power=True).lay_out(spec, time_budget_s=2.0)
-        greedy = fallback_placement(spec, power=True)
+        solved = FreeformLayout(
+            band_policy=BandPolicy("portable"),
+            power=True
+        ).lay_out(spec, time_budget_s=2.0)
+        greedy = fallback_placement(spec, band_policy=BandPolicy("portable"), power=True)
         assert solved.stats["fallback_used"] == 0.0, "solver silently fell back"
         assert solved.stats["solver_status"] > 0.0, "no CP-SAT status: the pack was not solved"
 
@@ -1904,7 +1973,10 @@ class TestSolverActuallyRuns:
         deliberately written to fail the moment the gap closed. It did.
         """
         spec = fan_out_spec(consumers=4)
-        p = FreeformLayout(power=True).lay_out(spec, time_budget_s=2.0)
+        p = FreeformLayout(
+            band_policy=BandPolicy("portable"),
+            power=True
+        ).lay_out(spec, time_budget_s=2.0)
         report = _full_report(p, spec, power=True)
         assert report.ok, "\n".join(f.message for f in report.errors[:5])
         assert p.stats["route_failures"] == 0.0
@@ -1917,7 +1989,10 @@ class TestSolverActuallyRuns:
         does not exist -- smaller than a correct one.
         """
         with pytest.raises(NoValidLayout) as exc:
-            FreeformLayout(power=True).lay_out(two_stage_spec(), time_budget_s=0.0)
+            FreeformLayout(
+                band_policy=BandPolicy("portable"),
+                power=True
+            ).lay_out(two_stage_spec(), time_budget_s=0.0)
         assert "packer was never asked" in exc.value.reason
 
     def test_a_placement_our_own_validator_rejects_is_refused(
@@ -1948,7 +2023,10 @@ class TestSolverActuallyRuns:
             lambda *a, **k: rejection,
         )
         with pytest.raises(NoValidLayout) as exc:
-            FreeformLayout(power=True).lay_out(two_stage_spec(), time_budget_s=1.0)
+            FreeformLayout(
+                band_policy=BandPolicy("portable"),
+                power=True
+            ).lay_out(two_stage_spec(), time_budget_s=1.0)
         assert "rejected by our own validator" in exc.value.reason
         assert "flow.conservation" in exc.value.reason, (
             "the refusal must name the check, or the next reader goes to the "
@@ -1992,7 +2070,10 @@ class TestSolverActuallyRuns:
         )
 
         with pytest.raises(NoValidLayout) as caught:
-            FreeformLayout(power=False).lay_out(two_stage_spec(), time_budget_s=1.0)
+            FreeformLayout(
+                band_policy=BandPolicy("portable"),
+                power=False
+            ).lay_out(two_stage_spec(), time_budget_s=1.0)
 
         assert "geom.collide" in caught.value.reason
         assert "band 160" in caught.value.reason
@@ -2128,7 +2209,10 @@ def test_projection_owned_strip_collision_learns_and_repacks(
     )
     monkeypatch.setattr(freeform.finalize, "finalize_placement", finalize_projection)
 
-    result = FreeformLayout(power=False, arrangements=1)._sweep(spec, strips, 1.0)
+    result = FreeformLayout(
+        band_policy=BandPolicy("portable"),
+        power=False, arrangements=1
+    )._sweep(spec, strips, 1.0)
 
     assert result is not None
     assert len(seen_no_goods) == 2
@@ -2186,6 +2270,7 @@ def test_projection_strip_static_objects_retain_non_encoded_owner() -> None:
         spec,
         strips,
         pack,
+        policy=BandPolicy("portable"),
         power=False,
         _reserve_ports=False,
     )
@@ -2236,13 +2321,22 @@ class TestPower:
 
     def test_towers_appear_only_when_power_is_on(self) -> None:
         spec = two_stage_spec()
-        on = FreeformLayout(power=True).lay_out(spec, time_budget_s=0.5)
-        off = FreeformLayout(power=False).lay_out(spec, time_budget_s=0.5)
+        on = FreeformLayout(
+            band_policy=BandPolicy("portable"),
+            power=True
+        ).lay_out(spec, time_budget_s=0.5)
+        off = FreeformLayout(
+            band_policy=BandPolicy("portable"),
+            power=False
+        ).lay_out(spec, time_budget_s=0.5)
         assert on.stats["towers"] > 0
         assert off.stats["towers"] == 0
 
     def test_every_powered_building_is_covered(self) -> None:
-        p = FreeformLayout(power=True).lay_out(magnetic_ring_spec(), time_budget_s=1.0)
+        p = FreeformLayout(
+            band_policy=BandPolicy("portable"),
+            power=True
+        ).lay_out(magnetic_ring_spec(), time_budget_s=1.0)
         report = validate.validate(p, only=["power.coverage", "power.connectivity"])
         assert report.ok, "\n".join(f.message for f in report.errors[:5])
 
@@ -2283,7 +2377,10 @@ class TestPower:
 
     def test_coverage_is_skipped_rather_than_failed_when_power_is_off(self) -> None:
         """``--no-power`` is a legitimate mode, not a factory-wide error."""
-        p = FreeformLayout(power=False).lay_out(magnetic_ring_spec(), time_budget_s=0.5)
+        p = FreeformLayout(
+            band_policy=BandPolicy("portable"),
+            power=False
+        ).lay_out(magnetic_ring_spec(), time_budget_s=0.5)
         assert p.stats["towers"] == 0
         report = validate.validate(p, only=["power.coverage"], expect_power=False)
         assert not report.findings
@@ -2338,7 +2435,10 @@ class TestProliferatorIsActuallySupplied:
 
     def test_some_belt_carries_the_proliferator(self) -> None:
         spec = proliferated_spec()
-        p = FreeformLayout(power=False).lay_out(spec, time_budget_s=0.5)
+        p = FreeformLayout(
+            band_policy=BandPolicy("portable"),
+            power=False
+        ).lay_out(spec, time_budget_s=0.5)
         prolif = {i for i in spec.external_inputs if i.startswith("proliferator")}
         assert prolif, "fixture must declare a proliferator input"
         carried = {
@@ -2350,7 +2450,10 @@ class TestProliferatorIsActuallySupplied:
 
     def test_every_coater_has_a_sorter_drawing_from_a_supply_belt(self) -> None:
         spec = proliferated_spec()
-        p = FreeformLayout(power=False).lay_out(spec, time_budget_s=0.5)
+        p = FreeformLayout(
+            band_policy=BandPolicy("portable"),
+            power=False
+        ).lay_out(spec, time_budget_s=0.5)
         report = _full_report(p, spec)
         starved = report.by_check("prolif.coaters_are_supplied")
         assert not starved, "\n".join(f.message for f in starved)
@@ -2358,7 +2461,10 @@ class TestProliferatorIsActuallySupplied:
     def test_coaters_sit_on_the_lane_carrying_the_item_they_spray(self) -> None:
         """A coater on some unrelated belt sprays the wrong items."""
         spec = proliferated_spec()
-        p = FreeformLayout(power=False).lay_out(spec, time_budget_s=0.5)
+        p = FreeformLayout(
+            band_policy=BandPolicy("portable"),
+            power=False
+        ).lay_out(spec, time_budget_s=0.5)
         belt_at = {
             (b.x, b.y, b.z): b for b in p.buildings if catalog.is_belt(b.item_id)
         }
@@ -2375,7 +2481,10 @@ class TestProliferatorIsActuallySupplied:
     def test_no_proliferator_spec_places_no_supply_lane(self) -> None:
         """The machinery must cost nothing when proliferation is off."""
         spec = two_stage_spec()
-        p = FreeformLayout(power=False).lay_out(spec, time_budget_s=0.5)
+        p = FreeformLayout(
+            band_policy=BandPolicy("portable"),
+            power=False
+        ).lay_out(spec, time_budget_s=0.5)
         assert p.stats["spray_coaters"] == 0
         assert not [b for b in p.buildings if b.item_id == catalog.SPRAY_COATER_ID]
 
@@ -2390,7 +2499,10 @@ class TestSortersCanCarryTheirDemand:
         was being handed 0.546/s.
         """
         spec = proliferated_spec()
-        p = FreeformLayout(power=False).lay_out(spec, time_budget_s=0.5)
+        p = FreeformLayout(
+            band_policy=BandPolicy("portable"),
+            power=False
+        ).lay_out(spec, time_budget_s=0.5)
         over = _full_report(p, spec).by_check("flow.sorter_capacity")
         assert not over, "\n".join(f.message for f in over)
 
@@ -2419,7 +2531,10 @@ class TestRealUrlCandidate:
         spec = next(
             candidate for candidate in candidates if candidate.label == "no-proliferator"
         )
-        placement = FreeformLayout(power=True).lay_out(spec, time_budget_s=2.0)
+        placement = FreeformLayout(
+            band_policy=BandPolicy("portable"),
+            power=True
+        ).lay_out(spec, time_budget_s=2.0)
         sorters = [
             building
             for building in placement.buildings
@@ -2573,7 +2688,10 @@ class TestProducerWithManyConsumers:
         dropped a connection.
         """
         spec = fan_out_spec(4)
-        p = FreeformLayout(power=power, workers=DETERMINISTIC_WORKERS).lay_out(
+        p = FreeformLayout(
+            band_policy=BandPolicy("portable"),
+            power=power, workers=DETERMINISTIC_WORKERS
+        ).lay_out(
             spec, time_budget_s=0.5
         )
         assert p.stats.get("route_failures", 0) == 0, "a net went unrouted"
@@ -2721,7 +2839,10 @@ class TestMixedItemLanes:
         spec = six_input_spec()
         strips = plan_strips(spec, strip_len=6)
         assert strips and all(s.flank_outputs for s in strips)
-        p = FreeformLayout(power=False).lay_out(spec, time_budget_s=0.5)
+        p = FreeformLayout(
+            band_policy=BandPolicy("portable"),
+            power=False
+        ).lay_out(spec, time_budget_s=0.5)
         report = _full_report(p, spec, power=False)
         assert report.ok, "\n".join(f"{f.check}: {f.message}" for f in report.errors[:8])
 
@@ -2739,7 +2860,10 @@ class TestMixedItemLanes:
         the east face and there is nowhere else it could have come from.
         """
         spec = six_input_spec()
-        p = FreeformLayout(power=False).lay_out(spec, time_budget_s=0.5)
+        p = FreeformLayout(
+            band_policy=BandPolicy("portable"),
+            power=False
+        ).lay_out(spec, time_budget_s=0.5)
         labs = {
             i
             for i, b in enumerate(p.buildings)
@@ -2787,7 +2911,10 @@ class TestMixedItemLanes:
         spec = five_input_spec()
         strips = plan_strips(spec, strip_len=6)
         assert max(len(lane) for lane in strips[0].in_above + strips[0].in_below) > 1
-        p = FreeformLayout(power=False).lay_out(spec, time_budget_s=0.5)
+        p = FreeformLayout(
+            band_policy=BandPolicy("portable"),
+            power=False
+        ).lay_out(spec, time_budget_s=0.5)
         report = _full_report(p, spec, power=False)
         assert report.ok, "\n".join(f"{f.check}: {f.message}" for f in report.errors[:8])
 
@@ -2798,7 +2925,10 @@ class TestMixedItemLanes:
         the paste looks wrong -- so this is correctness, not tidiness.
         """
         spec = five_input_spec()
-        p = FreeformLayout(power=False).lay_out(spec, time_budget_s=0.5)
+        p = FreeformLayout(
+            band_policy=BandPolicy("portable"),
+            power=False
+        ).lay_out(spec, time_budget_s=0.5)
         shared = _lane_runs(p)
         assert shared, "a five-input strip must produce at least one mixed lane"
         assert any(len(f) > 1 for f in shared.values()), (
@@ -2813,7 +2943,10 @@ class TestMixedItemLanes:
         decomposition to a lane it had not actually checked.
         """
         spec = magnetic_ring_spec()
-        p = FreeformLayout(power=False).lay_out(spec, time_budget_s=0.5)
+        p = FreeformLayout(
+            band_policy=BandPolicy("portable"),
+            power=False
+        ).lay_out(spec, time_budget_s=0.5)
         assert not _lane_runs(p), "no lane in this spec is shared, so none may filter"
 
 
@@ -2859,7 +2992,10 @@ class TestModeDrivenMachines:
         assert len(info.port_poses) == 4
 
         with pytest.raises(NoValidLayout) as exc:
-            FreeformLayout(power=False).lay_out(mode_driven_spec(), time_budget_s=0.5)
+            FreeformLayout(
+                band_policy=BandPolicy("portable"),
+                power=False
+            ).lay_out(mode_driven_spec(), time_budget_s=0.5)
         reason = exc.value.reason
         assert "no insert pose on any face" in reason
         assert "Energy Exchanger" in reason
@@ -2888,7 +3024,10 @@ class TestModeDrivenMachines:
         without it, deleting the branch entirely would leave every assertion
         above green.
         """
-        p = FreeformLayout(power=False).lay_out(single_recipe_spec(), time_budget_s=0.5)
+        p = FreeformLayout(
+            band_policy=BandPolicy("portable"),
+            power=False
+        ).lay_out(single_recipe_spec(), time_budget_s=0.5)
         smelters = [b for b in p.buildings if b.recipe_id]
         assert smelters, "the fixture must emit machines with a recipe id"
         assert all(b.parameters == () for b in smelters)
@@ -2949,7 +3088,10 @@ class TestShardedGroupsAreFedOnEveryShard:
     @pytest.mark.parametrize("power", [False, True])
     def test_no_shard_is_left_starving(self, power: bool) -> None:
         spec = sharded_consumer_spec()
-        p = FreeformLayout(power=power, workers=DETERMINISTIC_WORKERS).lay_out(
+        p = FreeformLayout(
+            band_policy=BandPolicy("portable"),
+            power=power, workers=DETERMINISTIC_WORKERS
+        ).lay_out(
             spec, time_budget_s=0.5
         )
         report = _full_report(p, spec, power=power)
@@ -2977,7 +3119,10 @@ class TestShardedGroupsAreFedOnEveryShard:
             s for s in plan_strips(spec, strip_len=6) if s.group_key.startswith("iron-ingot")
         ]
         assert len(producers) >= 2, "fixture must shard the producer"
-        p = FreeformLayout(power=False, workers=DETERMINISTIC_WORKERS).lay_out(
+        p = FreeformLayout(
+            band_policy=BandPolicy("portable"),
+            power=False, workers=DETERMINISTIC_WORKERS
+        ).lay_out(
             spec, time_budget_s=0.5
         )
         report = _full_report(p, spec, power=False)
@@ -3366,7 +3511,10 @@ class TestTheProliferatorChainIsOneLinearRun:
 
     def test_no_splitter_carries_the_proliferator(self) -> None:
         spec = proliferated_spec()
-        p = FreeformLayout(power=False, workers=DETERMINISTIC_WORKERS).lay_out(
+        p = FreeformLayout(
+            band_policy=BandPolicy("portable"),
+            power=False, workers=DETERMINISTIC_WORKERS
+        ).lay_out(
             spec, time_budget_s=1.0
         )
         prolif = {i for i in spec.external_inputs if i.startswith("proliferator")}
@@ -3428,7 +3576,10 @@ class TestTheExtentIsDecidedBeforeAnythingRoutes:
         self, factory: SpecFactory
     ) -> None:
         spec = factory()  # type: ignore[operator]
-        p = FreeformLayout(power=False, workers=DETERMINISTIC_WORKERS).lay_out(
+        p = FreeformLayout(
+            band_policy=BandPolicy("portable"),
+            power=False, workers=DETERMINISTIC_WORKERS
+        ).lay_out(
             spec, time_budget_s=1.0
         )
         report = _full_report(p, spec)
@@ -3443,7 +3594,10 @@ class TestTheExtentIsDecidedBeforeAnythingRoutes:
         directions at once.
         """
         spec = proliferated_spec()
-        p = FreeformLayout(power=False, workers=DETERMINISTIC_WORKERS).lay_out(
+        p = FreeformLayout(
+            band_policy=BandPolicy("portable"),
+            power=False, workers=DETERMINISTIC_WORKERS
+        ).lay_out(
             spec, time_budget_s=1.0
         )
         min_x, min_y, _, _ = p.bounds
@@ -3542,7 +3696,10 @@ class TestEveryShardDrainsEveryProduct:
             assert {item for item, _ in s.out_lanes} == {"refined-oil", "hydrogen"}, (
                 f"shard {s.out_lanes} cannot drain both products"
             )
-        p = FreeformLayout(power=False, workers=DETERMINISTIC_WORKERS).lay_out(
+        p = FreeformLayout(
+            band_policy=BandPolicy("portable"),
+            power=False, workers=DETERMINISTIC_WORKERS
+        ).lay_out(
             spec, time_budget_s=1.0
         )
         backed_up = _full_report(p, spec).by_check("machine.output_removed")
@@ -3654,7 +3811,10 @@ class TestOneLaneCanServeSeveralDestinations:
 
     def test_the_merged_plan_lays_out_and_validates(self) -> None:
         spec = one_machine_fan_out_spec(4)
-        p = FreeformLayout(power=True, workers=DETERMINISTIC_WORKERS).lay_out(
+        p = FreeformLayout(
+            band_policy=BandPolicy("portable"),
+            power=True, workers=DETERMINISTIC_WORKERS
+        ).lay_out(
             spec, time_budget_s=4.0
         )
         report = _full_report(p, spec, power=True)
@@ -3680,7 +3840,7 @@ class TestPowerClaimsItsGroundBeforeRouting:
     def test_planned_sites_are_closed_to_everything_else(self) -> None:
         canvas = _Canvas(limit=(0, 0, 40, 40))
         canvas.add(self._machine(10, 10), solid=True)
-        sites = _power_plan(canvas, (0, 0, 40, 40))
+        sites = _power_plan(canvas, (0, 0, 40, 40), policy=BandPolicy("portable"))
         assert sites, "a powered building must be given at least one tower"
         for x, y in sites:
             assert not canvas.free((x, y, 0)), f"{(x, y)} was planned but reads free"
@@ -3700,7 +3860,7 @@ class TestPowerClaimsItsGroundBeforeRouting:
         for x in range(2, 50, 6):
             for y in range(2, 50, 6):
                 canvas.add(self._machine(x, y), solid=True)
-        sites = _power_plan(canvas, (0, 0, 60, 60))
+        sites = _power_plan(canvas, (0, 0, 60, 60), policy=BandPolicy("portable"))
         tower = catalog.building(catalog.TESLA_TOWER_ID)
         reach2 = math.floor((2 * tower.cover_radius) ** 2)
         centres = [(2 * x + 1, 2 * y + 1) for x, y in sites]
@@ -3727,7 +3887,7 @@ class TestPowerClaimsItsGroundBeforeRouting:
                 canvas.add(_belt(x, y))
         canvas.add(self._machine(20, 20), solid=True)
         with pytest.raises(_Unpowerable):
-            _power_plan(canvas, (0, 0, 40, 40))
+            _power_plan(canvas, (0, 0, 40, 40), policy=BandPolicy("portable"))
 
     def test_covering_by_need_beats_covering_by_grid(self) -> None:
         """Fewer towers is the density win, and it is the point.
@@ -3744,7 +3904,7 @@ class TestPowerClaimsItsGroundBeforeRouting:
         for x in range(15, 24, 3):
             for y in range(15, 24, 3):
                 canvas.add(self._machine(x, y), solid=True)
-        sites = _power_plan(canvas, (0, 0, 40, 40))
+        sites = _power_plan(canvas, (0, 0, 40, 40), policy=BandPolicy("portable"))
         lattice = len(range(4, 41, 9)) ** 2
         assert 0 < len(sites) < lattice, (
             f"covering by need took {len(sites)}, the 9-spaced grid took {lattice}"
@@ -3777,7 +3937,7 @@ class TestPowerClaimsItsGroundBeforeRouting:
                     PlacedBuilding(item_id=2303, model_index=65, x=x, y=y, width=1, height=1),
                     solid=True,
                 )
-        sites = _power_plan(canvas, core)
+        sites = _power_plan(canvas, core, policy=BandPolicy("portable"))
         assert len(sites) >= 3, "the sample must contain several towers to be a test"
         keepout = {
             (dx, dy)
@@ -3849,8 +4009,6 @@ class TestPowerClaimsItsGroundBeforeRouting:
         }
 
         illegal_site = (2, 2)
-        legacy = self._canvas_with_one_tower_site(illegal_site)
-        assert _power_plan(legacy, (*illegal_site, *illegal_site)) == [illegal_site]
 
         projected = self._canvas_with_one_tower_site(illegal_site)
         with pytest.raises(_Unpowerable) as caught:
@@ -4103,7 +4261,7 @@ class TestPowerClaimsItsGroundBeforeRouting:
             ),
             solid=True,
         )
-        sites = _power_plan(canvas, (0, 0, 20, 20))
+        sites = _power_plan(canvas, (0, 0, 20, 20), policy=BandPolicy("portable"))
         assert sites
         cx, cy = 9 + panel.width // 2, 9 + panel.height // 2
         keepout = {
@@ -4147,7 +4305,7 @@ class TestPowerClaimsItsGroundBeforeRouting:
         for x in range(11):
             for y in (4, 6):
                 canvas.add(_belt(x, y))
-        sites = _power_plan(canvas, (0, 0, 10, 10))
+        sites = _power_plan(canvas, (0, 0, 10, 10), policy=BandPolicy("portable"))
         assert len(sites) == 1, f"one tower covers this core, not {len(sites)}"
         x, y = sites[0]
         neighbours = sum(
@@ -4161,7 +4319,10 @@ class TestPowerClaimsItsGroundBeforeRouting:
         )
 
     def test_towers_still_cover_when_the_plan_claims_its_cells(self) -> None:
-        p = FreeformLayout(power=True, workers=DETERMINISTIC_WORKERS).lay_out(
+        p = FreeformLayout(
+            band_policy=BandPolicy("portable"),
+            power=True, workers=DETERMINISTIC_WORKERS
+        ).lay_out(
             proliferated_spec(), time_budget_s=1.0
         )
         report = validate.validate(p, only=["power.coverage", "power.connectivity"])
@@ -4463,7 +4624,10 @@ class TestAShardThatCannotFeedItself:
     @pytest.mark.parametrize("power", [False, True])
     def test_it_lays_out_and_conserves_flow(self, power: bool) -> None:
         spec = starved_shard_spec()
-        p = FreeformLayout(power=power, workers=DETERMINISTIC_WORKERS).lay_out(
+        p = FreeformLayout(
+            band_policy=BandPolicy("portable"),
+            power=power, workers=DETERMINISTIC_WORKERS
+        ).lay_out(
             spec, time_budget_s=0.5
         )
         assert p.stats.get("route_failures", 0) == 0, "a net went unrouted"
@@ -4495,7 +4659,10 @@ class TestTheTimeBudgetIsAWall:
 
         monkeypatch.setattr(FreeformLayout, "_sweep", refuse)
         with pytest.raises(NoValidLayout):
-            FreeformLayout(power=True).lay_out(
+            FreeformLayout(
+                band_policy=BandPolicy("portable"),
+                power=True
+            ).lay_out(
                 magnetic_ring_spec(), time_budget_s=0.5
             )
 
@@ -4511,7 +4678,10 @@ class TestTheTimeBudgetIsAWall:
         strips = plan_strips(spec, strip_len=6)
         # A deadline already in the past: every phase must decline to start.
         assert (
-            FreeformLayout(power=True)._sweep(spec, strips, 4.0, time.monotonic() - 1.0)
+            FreeformLayout(
+                band_policy=BandPolicy("portable"),
+                power=True
+            )._sweep(spec, strips, 4.0, time.monotonic() - 1.0)
             is None
         )
 
@@ -4531,6 +4701,7 @@ class TestTheTimeBudgetIsAWall:
             pack,
             power=True,
             route=True,
+            policy=BandPolicy("portable"),
             deadline=time.monotonic() - 1.0,
         )
         assert result.routing.failed_count > 0, (
@@ -6342,7 +6513,13 @@ class TestPreparedBeltPortDocking:
         assert _machines_without_poses(strips) == []
         pack = _greedy_pack(strips, _height_seed(strips))
 
-        prepared = _prepare_routing_problem(spec, strips, pack, power=False)
+        prepared = _prepare_routing_problem(
+            spec,
+            strips,
+            pack,
+            policy=BandPolicy("portable"),
+            power=False
+        )
         buildings = prepared.building_templates
         receivers = [
             building

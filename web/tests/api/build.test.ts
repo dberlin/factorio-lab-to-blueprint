@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from '@rstest/core';
 import {
+  BandSelection,
   BuildOptions,
   BuildRequestError,
   DEFAULT_OPTIONS,
@@ -27,10 +28,33 @@ test('submit posts sequence-pair with its exact wire spelling', async () => {
   expect(body.strategy).toBe('sequence-pair');
   expect(body.proliferator_tier).toBe('auto');
   expect(body.fetch_flow).toBe(false);
+  expect(body.band).toBe('portable');
 
   await submitBuild({ ...DEFAULT_OPTIONS, proliferator_tier: '1' });
   const explicit = BuildOptions.parse(JSON.parse(String(calls[1]?.init?.body)));
   expect(explicit.proliferator_tier).toBe('1');
+});
+
+test('band selection uses the exact public strings and defaults to portable', () => {
+  const expected = [
+    'portable',
+    '4',
+    '8',
+    '16',
+    '20',
+    '32',
+    '40',
+    '60',
+    '80',
+    '100',
+    '120',
+    '160',
+    '200',
+  ];
+  expect([...BandSelection.options].sort()).toEqual([...expected].sort());
+  expect(DEFAULT_OPTIONS.band).toBe('portable');
+  expect(BandSelection.safeParse(160).success).toBe(false);
+  expect(BandSelection.safeParse('240').success).toBe(false);
 });
 
 test('submit rejects an unknown strategy before making a request', async () => {

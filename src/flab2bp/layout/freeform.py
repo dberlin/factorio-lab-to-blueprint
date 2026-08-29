@@ -7152,7 +7152,7 @@ def _power_plan(
     canvas: _Canvas,
     core: tuple[int, int, int, int],
     *,
-    policy: BandPolicy | None = None,
+    policy: BandPolicy,
 ) -> list[tuple[int, int]]:
     """Where every tower goes, decided BEFORE anything routes.
 
@@ -7337,8 +7337,7 @@ def _power_plan(
             continue
         if not peer.is_power_node:
             continue
-        if policy is not None:
-            power_nodes.append((index, b, peer))
+        power_nodes.append((index, b, peer))
         cx = b.x + b.width // 2 - min_x + pad
         cy = b.y + b.height // 2 - min_y + pad
         for dx, dy, dz in rules.power_node_keepout_offsets(peer, tower.power_node):
@@ -7348,9 +7347,7 @@ def _power_plan(
             if 0 <= gx < shape[0] and 0 <= gy < shape[1]:
                 free[gx, gy] = False
 
-    projections = (
-        () if policy is None else _power_projection_envelope(canvas, policy)
-    )
+    projections = _power_projection_envelope(canvas, policy)
     for projection in projections:
         existing_failure = finalize.projected_power_failure(power_nodes, projection)
         if existing_failure is not None:
@@ -7878,7 +7875,7 @@ def _prepare_routing_problem(
     pack: _Pack,
     *,
     power: bool,
-    policy: BandPolicy | None = None,
+    policy: BandPolicy,
     ramped: bool = False,
     _reserve_ports: bool = True,
 ) -> _PreparedRoutingProblem:
@@ -8276,7 +8273,7 @@ def _build(
     *,
     power: bool,
     route: bool,
-    policy: BandPolicy | None = None,
+    policy: BandPolicy,
     ramped: bool = False,
     deadline: float | None = None,
     budget: dict[str, int] | None = None,
@@ -8611,7 +8608,7 @@ def _place_coaters(
     belt_id: int,
     belt_model: int,
     *,
-    policy: BandPolicy | None = None,
+    policy: BandPolicy,
 ) -> list[CoaterSupplyPort]:
     """Place one Spray Coater per sprayed input lane and its supply belt.
 
@@ -8658,19 +8655,16 @@ def _place_coaters(
     staged_hosts: set[int] = set()
     staged_drop_cells: set[Cell] = set()
     prospective = list(canvas.buildings)
-    splitters: tuple[tuple[int, colliders.Placed], ...] = ()
-    projected_capacity: tuple[int, int, int, int] | None = None
-    if policy is not None:
-        splitters = tuple(
-            (index, _collision_pose(building))
-            for index, building in enumerate(canvas.buildings)
-            if building.item_id == catalog.SPLITTER_ID
-        )
-        if splitters:
-            projected_capacity = canvas.limit or _grow(
-                _core_bounds(canvas),
-                _ENTRY_RING,
-            )
+    splitters = tuple(
+        (index, _collision_pose(building))
+        for index, building in enumerate(canvas.buildings)
+        if building.item_id == catalog.SPLITTER_ID
+    )
+    projected_capacity = (
+        canvas.limit or _grow(_core_bounds(canvas), _ENTRY_RING)
+        if splitters
+        else None
+    )
 
     belt_at: dict[tuple[int, int, int], int] = {
         (building.x, building.y, int(building.z)): index
@@ -8817,7 +8811,7 @@ def _place_coaters(
             f"Spray Coater was placed for {'any' if len(missing) > 1 else 'it'}"
         )
 
-    if policy is not None and projected_capacity is not None:
+    if projected_capacity is not None:
         projections = _power_projection_envelope(
             canvas,
             policy,
@@ -9172,7 +9166,13 @@ def _machines_without_poses(strips: list[Strip]) -> list[str]:
     return out
 
 
-def fallback_placement(spec: BuildSpec, *, power: bool = True, ramped: bool = False) -> Placement:
+def fallback_placement(
+    spec: BuildSpec,
+    *,
+    band_policy: BandPolicy,
+    power: bool = True,
+    ramped: bool = False,
+) -> Placement:
     """One strip per group, stacked vertically.  NOT a usable layout.
 
     It cannot fail to *construct*, which is a different and much weaker property
@@ -9196,7 +9196,15 @@ def fallback_placement(spec: BuildSpec, *, power: bool = True, ramped: bool = Fa
         y += s.height + MARGIN
     width = max((s.width for s in strips), default=1) + MARGIN
     pack = _Pack(at=at, width=width, height=y, status="fallback")
-    result = _build(spec, strips, pack, power=power, route=False, ramped=ramped)
+    result = _build(
+        spec,
+        strips,
+        pack,
+        power=power,
+        route=False,
+        policy=band_policy,
+        ramped=ramped,
+    )
     placement = result.placement
     placement.stats["fallback_used"] = 1.0
     placement.stats["solver_status"] = 0.0
@@ -9253,6 +9261,7 @@ class FreeformLayout:
     def __init__(
         self,
         *,
+        band_policy: BandPolicy,
         power: bool = True,
         strip_len: int = 6,
         workers: int | None = None,
@@ -9260,6 +9269,7 @@ class FreeformLayout:
         arrangements: int | None = None,
         belt_vertical_construction: bool = True,
     ) -> None:
+        self.band_policy = band_policy
         self.power = power
         #: Whether ramps are REQUIRED.  The game's slope limit is conditional --
         #: ``!history.beltVerticalConstruction && num25 > 0.8f`` -- so a save
@@ -9847,6 +9857,7 @@ class FreeformLayout:
                     pack,
                     power=self.power,
                     route=True,
+                    policy=self.band_policy,
                     ramped=self.ramped,
                     deadline=deadline,
                     budget=budget,
@@ -9903,7 +9914,10 @@ class FreeformLayout:
                         _retain_refusal(rejected, finding)
                 continue
             try:
-                placement = finalize.finalize_placement(placement)
+                placement = finalize.finalize_placement(
+                    placement,
+                    self.band_policy,
+                )
             except finalize.ProjectionRefusal as exc:
                 learned = False
                 for failure in exc.failures:

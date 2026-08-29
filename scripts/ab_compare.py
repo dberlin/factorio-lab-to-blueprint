@@ -79,6 +79,7 @@ from flab2bp.bench.corpus import URL_CORPUS, CorpusEntry, Tier  # noqa: E402
 from flab2bp.dsp import codec  # noqa: E402
 from flab2bp.lab.techs import belt_rules_for_url  # noqa: E402
 from flab2bp.layout import finalize, markers, validate  # noqa: E402
+from flab2bp.layout.band_policy import BandPolicy  # noqa: E402
 from flab2bp.layout.base import LayoutStrategy, Placement  # noqa: E402
 from flab2bp.layout.freeform import FreeformLayout  # noqa: E402
 from flab2bp.layout.sequence_solver import SequencePairLayout  # noqa: E402
@@ -98,9 +99,11 @@ B_NAME = "freeform"
 #: technology set rather than the strategies.
 STRATEGIES: dict[str, Callable[[bool, bool], LayoutStrategy]] = {
     A_NAME: lambda power, vertical: SequencePairLayout(
+        band_policy=BandPolicy("portable"),
         power=power, belt_vertical_construction=vertical
     ),
     B_NAME: lambda power, vertical: FreeformLayout(
+        band_policy=BandPolicy("portable"),
         power=power, belt_vertical_construction=vertical
     ),
 }
@@ -127,7 +130,7 @@ class _LayoutCall:
             self.spec,
             expect_power=self.power,
         )
-        return finalize.finalize_placement(compacted)
+        return finalize.finalize_placement(compacted, BandPolicy("portable"))
 
 
 def specs_for(entry: CorpusEntry, candidates: int) -> tuple[BuildSpec, ...]:

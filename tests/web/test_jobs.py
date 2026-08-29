@@ -8,8 +8,9 @@ import time
 import pytest
 
 from flab2bp import pipeline
+from flab2bp.layout.band_policy import BAND_SELECTIONS
 from flab2bp.layout.base import NoValidLayout
-from flab2bp.web.jobs import Builder, Options, run_build
+from flab2bp.web.jobs import Builder, InvalidOptions, Options, parse_options, run_build
 from flab2bp.web.payload import Json, JsonValue
 
 URL = "https://factoriolab.github.io/dsp/flow?o=graphene*60&v=11"
@@ -228,6 +229,34 @@ def test_a_job_that_has_not_started_laying_out_claims_no_progress(
         assert snap["settled"] == []
     finally:
         builder.shutdown()
+
+
+def test_band_defaults_to_portable_and_accepts_only_exact_strings() -> None:
+    assert parse_options({"url": URL}).band == "portable"
+    assert tuple(
+        parse_options({"url": URL, "band": selection}).band
+        for selection in BAND_SELECTIONS
+    ) == BAND_SELECTIONS
+
+    for value in (160, None, "240", "Portable"):
+        with pytest.raises(InvalidOptions, match="'band'"):
+            parse_options({"url": URL, "band": value})
+
+
+def test_run_build_passes_band_to_pipeline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: dict[str, object] = {}
+
+    def spy(*_args: object, **kwargs: object) -> object:
+        seen.update(kwargs)
+        raise ValueError("stop after observing options")
+
+    monkeypatch.setattr(pipeline, "build", spy)
+    with pytest.raises(ValueError, match="stop after observing"):
+        run_build(Options(url=URL, band="160"), lambda _step: None)
+
+    assert seen["band"] == "160"
 
 
 def test_run_build_passes_fetch_flow_and_web_url_validator(

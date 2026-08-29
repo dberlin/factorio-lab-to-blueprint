@@ -24,6 +24,7 @@ from flab2bp.bench.crossvalidate import (
 )
 from flab2bp.dsp import catalog, codec
 from flab2bp.layout import finalize
+from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import PlacedBuilding, Placement
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
@@ -81,36 +82,34 @@ def test_our_encoder_output_matches_the_independent_decoder() -> None:
     # test a geometry the game does not have.
     asm_w, asm_h = catalog.footprint(2304)
     smelt_w, smelt_h = catalog.footprint(2302)
-    placement = finalize.finalize_placement(
-        Placement(
-            buildings=(
-                PlacedBuilding(
-                    item_id=2304,
-                    model_index=66,
-                    x=0,
-                    y=0,
-                    width=asm_w,
-                    height=asm_h,
-                ),
-                PlacedBuilding(
-                    item_id=2302,
-                    model_index=62,
-                    x=10,
-                    y=0,
-                    width=smelt_w,
-                    height=smelt_h,
-                ),
-                PlacedBuilding(
-                    item_id=2002,
-                    model_index=36,
-                    x=0,
-                    y=8,
-                    output_obj=3,
-                ),
-                PlacedBuilding(item_id=2002, model_index=36, x=1, y=8),
-            )
+    placement = finalize.finalize_placement(Placement(
+        buildings=(
+            PlacedBuilding(
+                item_id=2304,
+                model_index=66,
+                x=0,
+                y=0,
+                width=asm_w,
+                height=asm_h,
+            ),
+            PlacedBuilding(
+                item_id=2302,
+                model_index=62,
+                x=10,
+                y=0,
+                width=smelt_w,
+                height=smelt_h,
+            ),
+            PlacedBuilding(
+                item_id=2002,
+                model_index=36,
+                x=0,
+                y=8,
+                output_obj=3,
+            ),
+            PlacedBuilding(item_id=2002, model_index=36, x=1, y=8),
         )
-    )
+    ), BandPolicy("portable"))
     text = codec.encode(placement)
     (result,) = crossvalidate([text])
     assert result.ok, result.error

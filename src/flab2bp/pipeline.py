@@ -31,6 +31,7 @@ from flab2bp.lab.schema import Dataset
 from flab2bp.lab.techs import belt_rules_for_url
 from flab2bp.lab.url import parse_url
 from flab2bp.layout import finalize, markers, validate
+from flab2bp.layout.band_policy import BandPolicy, BandSelection
 from flab2bp.layout.base import NoValidLayout, Placement
 from flab2bp.layout.freeform import FreeformLayout
 from flab2bp.layout.sequence_solver import SequencePairLayout
@@ -67,17 +68,20 @@ def _new_layout(
     power: bool,
     belt_vertical_construction: bool,
     sequence_islands: int = 1,
+    band_policy: BandPolicy,
 ) -> FreeformLayout | SequencePairLayout:
     """Construct one explicitly selected layout backend."""
     if strategy == "freeform":
         return FreeformLayout(
             power=power,
             belt_vertical_construction=belt_vertical_construction,
+            band_policy=band_policy,
         )
     return SequencePairLayout(
         power=power,
         belt_vertical_construction=belt_vertical_construction,
         islands=sequence_islands,
+        band_policy=band_policy,
     )
 
 
@@ -242,6 +246,7 @@ def build(
     url: str,
     *,
     strategy: StrategyName = "best",
+    band: BandSelection = "portable",
     power: bool = True,
     candidates: int = 3,
     time_budget_s: float = 15.0,
@@ -277,6 +282,7 @@ def build(
     worst outcome available here, since nothing surfaces the failure until you
     are standing in front of it in game.
     """
+    policy = BandPolicy.parse(band)
     if sequence_islands != 1 and strategy != "sequence-pair":
         raise ValueError("sequence islands require --strategy sequence-pair")
     data = dataset if dataset is not None else load_vendored()
@@ -424,6 +430,7 @@ def build(
                 power=power,
                 belt_vertical_construction=belt_rules.vertical_construction,
                 sequence_islands=sequence_islands,
+                band_policy=policy,
             )
             try:
                 placement = layout.lay_out(spec, time_budget_s=time_budget_s)
@@ -450,7 +457,7 @@ def build(
                 expect_power=power,
             )
             try:
-                placement = finalize.finalize_placement(placement)
+                placement = finalize.finalize_placement(placement, policy)
             except finalize.ProjectionRefusal as exc:
                 reason = str(exc)
                 refused.append(f"{sname}/{spec.label}: {reason}")

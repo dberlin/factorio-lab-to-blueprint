@@ -59,6 +59,10 @@ export function BuildReportPanel({
         <dd>{result.machines}</dd>
         <dt>Area</dt>
         <dd>{result.area} tiles</dd>
+        <dt>primary_band</dt>
+        <dd>{result.primary_band}</dd>
+        <dt>certified_bands</dt>
+        <dd>{result.certified_bands.join(', ')}</dd>
         <dt>Buildings</dt>
         <dd>{result.buildings}</dd>
         <dt>Makes</dt>

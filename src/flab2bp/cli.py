@@ -16,15 +16,24 @@ from pathlib import Path
 
 from flab2bp import pipeline
 from flab2bp.layout import markers
+from flab2bp.layout.band_policy import BAND_SELECTIONS
 from flab2bp.layout.base import NoValidLayout
 
 
 def _report(build: pipeline.Build, *, verbose: bool) -> None:
     """Everything except the blueprint itself goes to stderr."""
     out = sys.stderr
+    frame = build.placement.frame
+    if frame is None:
+        raise ValueError("successful build placement has no area frame")
     print(
         f"{build.strategy} / {build.spec.label}: {build.spec.machine_count} machines, "
         f"{build.placement.area} tiles, {len(build.placement.buildings)} buildings",
+        file=out,
+    )
+    print(f"primary_band: {frame.primary_band}", file=out)
+    print(
+        f"certified_bands: {', '.join(map(str, frame.certified_bands))}",
         file=out,
     )
 
@@ -137,6 +146,13 @@ def main(argv: list[str] | None = None) -> int:
         "smallest valid result (default)",
     )
     ap.add_argument(
+        "--band",
+        choices=BAND_SELECTIONS,
+        default="portable",
+        help="latitude-band policy (default: portable, the smallest fitting "
+        "band plus two wider bands)",
+    )
+    ap.add_argument(
         "--sequence-islands",
         type=int,
         metavar="N",
@@ -212,6 +228,7 @@ def main(argv: list[str] | None = None) -> int:
         build = pipeline.build(
             args.url,
             strategy=args.strategy,
+            band=args.band,
             power=args.power,
             candidates=args.candidates,
             time_budget_s=args.budget,

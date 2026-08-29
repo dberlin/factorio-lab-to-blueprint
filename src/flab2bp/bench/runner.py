@@ -19,6 +19,7 @@ from flab2bp.lab.techs import belt_rules_for_url
 from flab2bp.lab.url import parse_url
 from flab2bp.layout import finalize
 from flab2bp.layout import validate as validator
+from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import LayoutStrategy, NoValidLayout, Placement
 from flab2bp.layout.freeform import FreeformLayout
 from flab2bp.layout.sequence_solver import SequencePairLayout
@@ -43,6 +44,7 @@ def available_strategies(
         StrategyHandle(
             "freeform",
             FreeformLayout(
+                band_policy=BandPolicy("portable"),
                 power=power,
                 belt_vertical_construction=belt_vertical_construction,
             ),
@@ -50,6 +52,7 @@ def available_strategies(
         StrategyHandle(
             "sequence-pair",
             SequencePairLayout(
+                band_policy=BandPolicy("portable"),
                 power=power,
                 belt_vertical_construction=belt_vertical_construction,
             ),
@@ -85,7 +88,7 @@ def _run_cell(
         expect_power=power,
     )
     try:
-        placement = finalize.finalize_placement(placement)
+        placement = finalize.finalize_placement(placement, BandPolicy("portable"))
     except finalize.ProjectionRefusal as exc:
         return _refused_cell(
             handle,

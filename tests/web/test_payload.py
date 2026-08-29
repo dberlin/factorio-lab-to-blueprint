@@ -7,9 +7,11 @@ import json
 from fractions import Fraction
 from typing import Final
 
+import pytest
 from pydantic import TypeAdapter
 
 from flab2bp import pipeline
+from flab2bp.layout.base import AreaFrame
 from flab2bp.layout.validate import Finding, Severity
 from flab2bp.web.payload import Json, describe, refusal
 
@@ -29,6 +31,43 @@ def test_the_blueprint_and_the_shape_of_the_build(small_build: pipeline.Build) -
     assert body["candidate"] == small_build.spec.label
     assert body["machines"] == small_build.spec.machine_count
     assert body["area"] == small_build.placement.area
+
+
+def test_payload_reports_literal_certified_bands(
+    small_build: pipeline.Build,
+) -> None:
+    original_frame = small_build.placement.frame
+    assert original_frame is not None
+    framed = dataclasses.replace(
+        small_build,
+        placement=dataclasses.replace(
+            small_build.placement,
+            frame=AreaFrame(
+                width=original_frame.width,
+                height=original_frame.height,
+                primary_band=160,
+                certified_bands=(160, 200),
+                rotated=original_frame.rotated,
+            ),
+        ),
+    )
+
+    result = describe(framed)
+
+    assert result["primary_band"] == 160
+    assert result["certified_bands"] == [160, 200]
+
+
+def test_payload_refuses_success_without_band_evidence(
+    small_build: pipeline.Build,
+) -> None:
+    unframed = dataclasses.replace(
+        small_build,
+        placement=dataclasses.replace(small_build.placement, frame=None),
+    )
+
+    with pytest.raises(ValueError, match="area frame"):
+        describe(unframed)
 
 
 def test_provenance_survives(small_build: pipeline.Build) -> None:

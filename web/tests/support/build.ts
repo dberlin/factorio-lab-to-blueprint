@@ -25,6 +25,8 @@ export function aResult(overrides: Partial<BuildResult> = {}): BuildResult {
     candidate: 'no-proliferator',
     machines: 9,
     area: 575,
+    primary_band: 160,
+    certified_bands: [160, 200],
     buildings: 42,
     title: 'electromagnetic-matrix 60/min',
     description: 'flab2bp freeform layout',

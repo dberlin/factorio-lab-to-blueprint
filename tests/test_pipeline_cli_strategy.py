@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 from pathlib import Path
 from types import SimpleNamespace
 from typing import TypedDict, Unpack
@@ -8,10 +9,13 @@ import pytest
 
 from flab2bp import cli, pipeline
 from flab2bp.lab.schema import Dataset
+from flab2bp.layout.band_policy import BAND_SELECTIONS, BandSelection
+from flab2bp.layout.base import AreaFrame
 
 
 class _BuildKwargs(TypedDict, total=False):
     strategy: pipeline.StrategyName
+    band: BandSelection
     power: bool
     candidates: int
     time_budget_s: float
@@ -25,6 +29,16 @@ class _BuildKwargs(TypedDict, total=False):
     browser: str | None
     no_proliferator: bool
     on_progress: pipeline.ProgressSink | None
+
+
+@pytest.fixture(scope="module")
+def band_build() -> pipeline.Build:
+    return pipeline.build(
+        "https://factoriolab.github.io/dsp/flow?o=electromagnetic-matrix*60&v=11",
+        strategy="freeform",
+        candidates=1,
+        time_budget_s=3.0,
+    )
 
 
 @pytest.mark.parametrize("strategy", ("freeform", "sequence-pair"))
@@ -51,6 +65,7 @@ def test_cli_passes_exact_explicit_strategy_name(
     assert received["power"] is False
     assert received["time_budget_s"] == 15.0
     assert capsys.readouterr().out == "BLUEPRINT\n"
+    assert received["band"] == "portable"
 
 
 @pytest.mark.parametrize(("affinity", "expected"), ((3, 3), (64, 8)))
@@ -141,3 +156,73 @@ def test_strategy_help_separates_best_from_explicit_backends(
     assert exc_info.value.code == 0
     help_text = " ".join(capsys.readouterr().out.split())
     assert "best runs freeform and sequence-pair" in help_text
+
+
+def test_cli_band_choices_are_exact_and_reach_pipeline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    received: list[object] = []
+
+    def fake_build(url: str, **kwargs: Unpack[_BuildKwargs]) -> SimpleNamespace:
+        del url
+        received.append(kwargs["band"])
+        return SimpleNamespace(
+            blueprint="BLUEPRINT",
+            report=SimpleNamespace(errors=()),
+        )
+
+    monkeypatch.setattr(pipeline, "build", fake_build)
+    monkeypatch.setattr(cli, "_report", lambda build, *, verbose: None)
+
+    for selection in BAND_SELECTIONS:
+        assert cli.main(["iron-ingot", "--band", selection]) == 0
+    assert tuple(received) == BAND_SELECTIONS
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(["iron-ingot", "--band", "240"])
+    assert exc_info.value.code == 2
+
+
+@pytest.mark.parametrize(
+    "certified",
+    (
+        (160,),
+        (160, 200),
+        (120, 160, 200),
+    ),
+)
+def test_cli_reports_literal_band_evidence(
+    certified: tuple[int, ...],
+    band_build: pipeline.Build,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    original_frame = band_build.placement.frame
+    assert original_frame is not None
+    placement = dataclasses.replace(
+        band_build.placement,
+        frame=AreaFrame(
+            width=original_frame.width,
+            height=original_frame.height,
+            primary_band=certified[0],
+            certified_bands=certified,
+            rotated=original_frame.rotated,
+        ),
+    )
+
+    cli._report(dataclasses.replace(band_build, placement=placement), verbose=False)
+
+    report = capsys.readouterr().err
+    assert f"primary_band: {certified[0]}" in report
+    assert f"certified_bands: {', '.join(map(str, certified))}" in report
+
+
+def test_cli_refuses_success_without_band_evidence(
+    band_build: pipeline.Build,
+) -> None:
+    unframed = dataclasses.replace(
+        band_build,
+        placement=dataclasses.replace(band_build.placement, frame=None),
+    )
+
+    with pytest.raises(ValueError, match="area frame"):
+        cli._report(unframed, verbose=False)

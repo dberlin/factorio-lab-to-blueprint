@@ -10,6 +10,7 @@ from dataclasses import dataclass, replace
 from typing import Literal
 
 from flab2bp.layout import validate
+from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import NoValidLayout, Placement
 from flab2bp.layout.compact_seed import CompactSeedConfig
 from flab2bp.layout.sequence_pair import derive_stage_seed
@@ -34,6 +35,7 @@ class _SequenceIslandRequest:
     time_budget_s: float
     soft_deadline: float
     power: bool
+    band_policy: BandPolicy
     belt_vertical_construction: bool
     strip_len: int
     config: SequenceSolverConfig
@@ -122,6 +124,7 @@ def _run_sequence_island(request: _SequenceIslandRequest) -> _SequenceIslandOutc
             request.spec,
             time_budget_s=request.time_budget_s,
             power=request.power,
+            band_policy=request.band_policy,
             belt_vertical_construction=request.belt_vertical_construction,
             strip_len=request.strip_len,
             config=config,
@@ -243,6 +246,7 @@ def run_sequence_islands(
     *,
     time_budget_s: float,
     power: bool,
+    band_policy: BandPolicy,
     belt_vertical_construction: bool,
     strip_len: int,
     config: SequenceSolverConfig,
@@ -269,6 +273,7 @@ def run_sequence_islands(
             time_budget_s=time_budget_s,
             soft_deadline=soft_deadline,
             power=power,
+            band_policy=band_policy,
             belt_vertical_construction=belt_vertical_construction,
             strip_len=strip_len,
             config=config,

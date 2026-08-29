@@ -13,6 +13,7 @@ import flab2bp.layout.freeform as freeform_module
 import flab2bp.layout.sequence_solver as sequence_solver_module
 from flab2bp.dsp import catalog, rules
 from flab2bp.layout import slots, validate
+from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import NoValidLayout, PlacedBuilding, Placement
 from flab2bp.layout.compact_seed import (
     CompactSeedConfig,
@@ -1223,6 +1224,7 @@ def test_unseatable_prepared_candidate_remains_searchable_refusal(
     )
     run = _production_run(
         two_stage_spec(),
+        band_policy=BandPolicy("portable"),
         time_budget_s=2.0,
         power=False,
         strip_len=6,
@@ -1341,6 +1343,7 @@ def test_deadline_empty_global_is_cancelled_without_budget_exhaustion() -> None:
     )
     run = _production_run(
         two_stage_spec(),
+        band_policy=BandPolicy("portable"),
         time_budget_s=2.0,
         power=False,
         strip_len=6,
@@ -1391,6 +1394,7 @@ def test_deadline_returns_an_existing_exact_incumbent() -> None:
 def test_production_run_uses_requested_budget_with_supplied_absolute_deadline() -> None:
     run = _production_run(
         two_stage_spec(),
+        band_policy=BandPolicy("portable"),
         time_budget_s=2.0,
         power=False,
         strip_len=6,
@@ -1441,7 +1445,9 @@ def test_serial_layout_uses_a_budgeted_root_compact_seed(
     )
 
     with pytest.raises(RuntimeError, match="captured production arguments"):
-        SequencePairLayout().lay_out(two_stage_spec(), time_budget_s=2.0)
+        SequencePairLayout(
+            band_policy=BandPolicy("portable"),
+        ).lay_out(two_stage_spec(), time_budget_s=2.0)
 
     assert captured["compact_seed_attempt"] == 0
     compact_config = captured["compact_seed_config"]
@@ -1869,6 +1875,7 @@ def test_production_seed_has_its_own_wall_and_deterministic_caps(
     monkeypatch.setattr(sequence_solver_module, "solve_compact_seed", capture_seed)
     run = _production_run(
         two_stage_spec(),
+        band_policy=BandPolicy("portable"),
         time_budget_s=2.0,
         power=False,
         strip_len=6,
@@ -1906,6 +1913,7 @@ def test_validator_started_before_deadline_may_finish_exact_certification(
     monkeypatch.setattr(validate, "certify", slow_certify)
     run = _production_run(
         two_stage_spec(),
+        band_policy=BandPolicy("portable"),
         time_budget_s=2.0,
         power=False,
         strip_len=6,
@@ -2087,6 +2095,7 @@ def test_prepared_physical_nets_keep_stable_logical_family_edges() -> None:
         spec,
         strips,
         _greedy_pack(strips, height),
+        policy=BandPolicy("portable"),
         power=False,
     )
 
@@ -2110,6 +2119,7 @@ def test_production_stage_boundary_rebuilds_preparation_for_children() -> None:
     spec = two_stage_spec()
     run = _production_run(
         spec,
+        band_policy=BandPolicy("portable"),
         time_budget_s=2.0,
         power=False,
         strip_len=6,
@@ -2583,6 +2593,7 @@ def test_sequence_backend_returns_only_certified_placements(
 ) -> None:
     spec = two_stage_spec()
     placement = SequencePairLayout(
+        band_policy=BandPolicy("portable"),
         power=power,
         belt_vertical_construction=belt_vertical_construction,
         config=SequenceSolverConfig.test(),
@@ -2690,6 +2701,7 @@ def test_production_observability_preserves_categories_and_all_grouped_work() ->
     )
     run = _production_run(
         two_stage_spec(),
+        band_policy=BandPolicy("portable"),
         time_budget_s=2.0,
         power=False,
         strip_len=6,
@@ -2839,6 +2851,7 @@ def test_sequence_reuses_adaptive_coarse_strip_partition_before_problem_identity
 
     run = _production_run(
         spec,
+        band_policy=BandPolicy("portable"),
         time_budget_s=2.0,
         power=False,
         strip_len=6,
@@ -2887,7 +2900,10 @@ def test_refinery_closed_loop_routes_the_selected_rotated_pose() -> None:
         outputs=("refined-oil", "hydrogen"),
     )
 
-    placement = SequencePairLayout(config=SequenceSolverConfig.test()).lay_out(
+    placement = SequencePairLayout(
+        band_policy=BandPolicy("portable"),
+        config=SequenceSolverConfig.test()
+    ).lay_out(
         spec,
         time_budget_s=2.0,
     )
@@ -2909,7 +2925,10 @@ def test_chemical_closed_loop_emits_exact_inner_anchor_sorters() -> None:
         outputs=("graphene", "hydrogen"),
     )
 
-    placement = SequencePairLayout(config=SequenceSolverConfig.test()).lay_out(
+    placement = SequencePairLayout(
+        band_policy=BandPolicy("portable"),
+        config=SequenceSolverConfig.test()
+    ).lay_out(
         spec,
         time_budget_s=2.0,
     )
@@ -2958,7 +2977,10 @@ def test_chemical_closed_loop_emits_exact_inner_anchor_sorters() -> None:
 def test_proliferated_closed_loop_routes_elevated_supply_without_coater_sorter() -> None:
     spec = proliferated_spec()
 
-    placement = SequencePairLayout(config=SequenceSolverConfig.test()).lay_out(
+    placement = SequencePairLayout(
+        band_policy=BandPolicy("portable"),
+        config=SequenceSolverConfig.test()
+    ).lay_out(
         spec,
         time_budget_s=2.0,
     )
@@ -3037,7 +3059,13 @@ def test_selected_port_variant_reaches_shared_prepared_docking_geometry() -> Non
     )
     pack = _greedy_pack(selected, problem.outline_height)
 
-    prepared = _prepare_routing_problem(spec, selected, pack, power=False)
+    prepared = _prepare_routing_problem(
+        spec,
+        selected,
+        pack,
+        policy=BandPolicy("portable"),
+        power=False
+    )
     docks = [
         building
         for building in prepared.building_templates
@@ -3064,6 +3092,7 @@ def test_selected_port_variant_reaches_shared_prepared_docking_geometry() -> Non
 def test_sequence_preparation_consumes_elevated_machine_and_tesla_junction_bans() -> None:
     run = _production_run(
         two_stage_spec(),
+        band_policy=BandPolicy("portable"),
         time_budget_s=2.0,
         power=True,
         strip_len=6,
@@ -3095,7 +3124,10 @@ def test_sequence_preparation_consumes_elevated_machine_and_tesla_junction_bans(
 def test_ray_receiver_sequence_closed_loop_routes_and_validates_exactly() -> None:
     spec = ray_receiver_spec()
 
-    placement = SequencePairLayout(config=SequenceSolverConfig.test()).lay_out(
+    placement = SequencePairLayout(
+        band_policy=BandPolicy("portable"),
+        config=SequenceSolverConfig.test()
+    ).lay_out(
         spec,
         time_budget_s=2.0,
     )
@@ -3115,7 +3147,10 @@ def test_ray_receiver_sequence_closed_loop_routes_and_validates_exactly() -> Non
 def test_sequence_pair_routes_self_consuming_pinned_flow(
     refined_oil_feedback_spec: BuildSpec,
 ) -> None:
-    placement = SequencePairLayout(power=False, islands=1).lay_out(
+    placement = SequencePairLayout(
+        band_policy=BandPolicy("portable"),
+        power=False, islands=1
+    ).lay_out(
         refined_oil_feedback_spec,
         time_budget_s=15.0,
     )

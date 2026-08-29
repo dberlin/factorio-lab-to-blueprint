@@ -81,6 +81,7 @@ from flab2bp.lab.data import load_vendored  # noqa: E402
 from flab2bp.lab.techs import belt_rules_for_url  # noqa: E402
 from flab2bp.lab.url import parse_url  # noqa: E402
 from flab2bp.layout import finalize, validate  # noqa: E402
+from flab2bp.layout.band_policy import BandPolicy  # noqa: E402
 from flab2bp.layout.base import LayoutStrategy, NoValidLayout  # noqa: E402
 from flab2bp.layout.freeform import FreeformLayout  # noqa: E402
 from flab2bp.layout.sequence_solver import SequencePairLayout  # noqa: E402
@@ -91,11 +92,13 @@ _TIER_ORDER = (Tier.TRIVIAL, Tier.SMALL, Tier.MID, Tier.LARGE, Tier.STRESS)
 _StrategyFactory = Callable[[bool, int, bool], LayoutStrategy]
 _STRATEGIES: dict[str, _StrategyFactory] = {
     "freeform": lambda power, workers, vertical: FreeformLayout(
+        band_policy=BandPolicy("portable"),
         power=power,
         workers=workers,
         belt_vertical_construction=vertical,
     ),
     "sequence-pair": lambda power, _workers, vertical: SequencePairLayout(
+        band_policy=BandPolicy("portable"),
         power=power,
         belt_vertical_construction=vertical,
     ),
@@ -218,6 +221,7 @@ def run_cell(job: Job) -> Result:
     try:
         if job.arrangements is not None and job.strategy == "freeform":
             strategy = FreeformLayout(
+                band_policy=BandPolicy("portable"),
                 power=job.power,
                 workers=job.workers,
                 arrangements=job.arrangements,
@@ -246,7 +250,7 @@ def run_cell(job: Job) -> Result:
         expect_power=job.power,
     )
     try:
-        placement = finalize.finalize_placement(placement)
+        placement = finalize.finalize_placement(placement, BandPolicy("portable"))
     except finalize.ProjectionRefusal as exc:
         reason = "final spherical projection rejected " + ", ".join(exc.checks)
         return Result(

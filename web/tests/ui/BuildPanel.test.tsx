@@ -192,6 +192,21 @@ test('progress says where the job is while it is still running', async () => {
   await waitFor(() => expect(screen.getByTestId('progress')).toHaveTextContent('3.5s elapsed'));
 });
 
+test('latitude band defaults to portable and submits a changed selection', async () => {
+  const calls = serving({ status: 202, body: aJob() });
+  mount();
+  const band = screen.getByLabelText('Latitude band');
+  expect(band).toHaveValue('portable');
+  expect(band).toHaveTextContent('Portable (smallest + two wider)');
+
+  fireEvent.change(band, { target: { value: '160' } });
+  build();
+
+  await waitFor(() => expect(calls).toHaveLength(1));
+  const body = JSON.parse(String(calls[0]?.init?.body)) as Record<string, unknown>;
+  expect(body.band).toBe('160');
+});
+
 test('the strategy choices are exactly the production strategy set', () => {
   mount();
   const strategy = screen.getByLabelText('Strategy');

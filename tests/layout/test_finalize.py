@@ -138,7 +138,7 @@ def test_framed_boundary_fallback_returns_unfinalized_smaller_geometry(
     assert compacted.bounds == (1, 0, 3, 2)
     assert compacted.area == 9
     assert compacted.stats["area"] == 9.0
-    assert finalize.finalize_placement(compacted).frame is not None
+    assert finalize.finalize_placement(compacted, BandPolicy("portable")).frame is not None
 
 
 def test_compaction_preserves_original_when_certification_fails(
@@ -173,19 +173,19 @@ def test_finalization_selects_the_smallest_band_for_broke2_extent(
 ) -> None:
     placement = Placement(buildings=_extent(width, height))
 
-    finalized = finalize.finalize_placement(placement)
+    finalized = finalize.finalize_placement(placement, BandPolicy("portable"))
 
-    assert finalized.frame == AreaFrame(width, height, 160, (160,), False)
+    assert finalized.frame == AreaFrame(width, height, 160, (160, 200), False)
 
 
 def test_finalization_physically_rotates_an_extent_that_only_fits_turned() -> None:
     placement = Placement(buildings=_extent(10, 161))
 
-    finalized = finalize.finalize_placement(placement)
+    finalized = finalize.finalize_placement(placement, BandPolicy("portable"))
     area = codec.placement_to_blueprint(finalized).areas[0]
 
     assert finalized.bounds == (0, 0, 160, 9)
-    assert finalized.frame == AreaFrame(161, 10, 40, (40,), True)
+    assert finalized.frame == AreaFrame(161, 10, 40, (40, 60, 80), True)
     assert (area.width, area.height, area.area_segments) == (161, 10, 40)
 
 
@@ -198,7 +198,7 @@ def test_broke2_tower_pair_uses_the_safe_smallest_band_orientation() -> None:
         )
     )
 
-    finalized = finalize.finalize_placement(placement)
+    finalized = finalize.finalize_placement(placement, BandPolicy("160"))
 
     assert finalized.frame == AreaFrame(35, 43, 160, (160,), True)
     assert finalized.bounds == (0, 0, 34, 42)
@@ -342,13 +342,13 @@ def test_broke2_splitter_region_is_rejected_by_projected_addon_keepout() -> None
     )
 
     with pytest.raises(finalize.ProjectionRefusal) as exc:
-        finalize.finalize_placement(placement)
+        finalize.finalize_placement(placement, BandPolicy("portable"))
 
     assert exc.value.checks == ("game.addon_splitter_clearance",)
     assert "(4, 5)" in str(exc.value)
 
 
-def test_finalization_rejects_a_band_where_a_sorter_compresses_too_close() -> None:
+def test_portable_refuses_when_required_primary_band_compresses_sorter() -> None:
     belt_id = min(catalog.BELT_IDS)
     sorter_id = catalog.item_id("sorter-1")
     placement = Placement(
@@ -372,9 +372,10 @@ def test_finalization_rejects_a_band_where_a_sorter_compresses_too_close() -> No
         )
     )
 
-    finalized = finalize.finalize_placement(placement)
+    with pytest.raises(finalize.ProjectionRefusal) as exc:
+        finalize.finalize_placement(placement, BandPolicy("portable"))
 
-    assert finalized.frame == AreaFrame(20, 5, 8, (8,), False)
+    assert exc.value.checks == ("game.inserter_paste",)
 
 
 def test_portable_targets_stop_at_the_equator() -> None:
@@ -836,13 +837,6 @@ def test_projection_counters_count_only_observed_rule_loop_work(
     assert finalized.stats["projection_collider_pairs"] == sum(collider_work)
 
 
-def test_omitted_policy_recomputes_exact_legacy_selection_from_explicit_frame() -> None:
-    raw = Placement(buildings=_extent(3, 3))
-    legacy = finalize.finalize_placement(raw)
-    explicit = finalize.finalize_placement(raw, BandPolicy("40"))
-
-    assert finalize.finalize_placement(legacy, None) is legacy
-    assert finalize.finalize_placement(explicit, None) == legacy
 
 
 def test_framed_finalization_is_idempotent_only_for_coherent_policy() -> None:
@@ -857,10 +851,6 @@ def test_framed_finalization_is_idempotent_only_for_coherent_policy() -> None:
     assert repaired is not invalid
     assert repaired.frame == AreaFrame(2, 2, 4, (4, 8, 16), False)
 
-    legacy = finalize.finalize_placement(placement)
-    portable = finalize.finalize_placement(legacy, policy)
-    assert portable is not legacy
-    assert portable.frame == AreaFrame(2, 2, 4, (4, 8, 16), False)
 
 
 def test_freeform_uses_shared_planet_finalization(
@@ -868,23 +858,27 @@ def test_freeform_uses_shared_planet_finalization(
 ) -> None:
     from flab2bp.layout.freeform import FreeformLayout
 
-    calls: list[Placement] = []
+    calls: list[tuple[Placement, BandPolicy]] = []
     original = finalize.finalize_placement
+    policy = BandPolicy("portable")
 
-    def observed(placement: Placement) -> Placement:
-        calls.append(placement)
-        return original(placement)
+    def observed(
+        placement: Placement,
+        band_policy: BandPolicy,
+    ) -> Placement:
+        calls.append((placement, band_policy))
+        return original(placement, band_policy)
 
     monkeypatch.setattr(
         "flab2bp.layout.freeform.finalize.finalize_placement",
         observed,
     )
-    placement = FreeformLayout(power=False).lay_out(
+    placement = FreeformLayout(band_policy=policy, power=False).lay_out(
         two_stage_spec(),
         time_budget_s=0.5,
     )
 
-    assert calls
+    assert calls and all(band_policy is policy for _, band_policy in calls)
     assert placement.frame is not None
 
 
@@ -896,13 +890,17 @@ def test_sequence_pair_uses_shared_planet_finalization(
     from flab2bp.layout.sequence_solver import SequencePairLayout, SequenceSearchResult
 
     raw = Placement(buildings=_extent(43, 35))
-    calls: list[Placement] = []
+    calls: list[tuple[Placement, BandPolicy]] = []
+    policy = BandPolicy("portable")
 
-    def observed(placement: Placement) -> Placement:
-        calls.append(placement)
+    def observed(
+        placement: Placement,
+        band_policy: BandPolicy,
+    ) -> Placement:
+        calls.append((placement, band_policy))
         return replace(
             placement,
-            frame=AreaFrame(43, 35, 160, (160,), False),
+            frame=AreaFrame(43, 35, 160, (160, 200), False),
         )
 
     class _Solver:
@@ -921,10 +919,13 @@ def test_sequence_pair_uses_shared_planet_finalization(
         "flab2bp.layout.sequence_solver.finalize.finalize_placement",
         observed,
     )
-    placement = SequencePairLayout(solver_factory=factory).lay_out(
+    placement = SequencePairLayout(
+        band_policy=policy,
+        solver_factory=factory,
+    ).lay_out(
         two_stage_spec(),
         time_budget_s=0.5,
     )
 
-    assert calls == [raw]
-    assert placement.frame == AreaFrame(43, 35, 160, (160,), False)
+    assert calls == [(raw, policy)]
+    assert placement.frame == AreaFrame(43, 35, 160, (160, 200), False)

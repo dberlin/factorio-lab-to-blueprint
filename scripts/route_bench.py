@@ -45,6 +45,7 @@ from flab2bp.bench.corpus import URL_CORPUS  # noqa: E402
 from flab2bp.lab.data import load_vendored  # noqa: E402
 from flab2bp.lab.url import parse_url  # noqa: E402
 from flab2bp.layout import freeform  # noqa: E402
+from flab2bp.layout.band_policy import BandPolicy  # noqa: E402
 from flab2bp.layout.base import NoValidLayout  # noqa: E402
 from flab2bp.rates.candidates import build_candidates  # noqa: E402
 
@@ -105,7 +106,10 @@ def capture(url_id: str, power: int, budget: float, every: int, cap: int, out: P
 
     freeform._astar = spy
     try:
-        freeform.FreeformLayout(power=power, workers=1).lay_out(
+        freeform.FreeformLayout(
+            band_policy=BandPolicy("portable"),
+            power=power, workers=1
+        ).lay_out(
             spec, time_budget_s=budget
         )
     except NoValidLayout:

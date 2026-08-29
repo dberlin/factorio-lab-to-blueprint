@@ -812,14 +812,12 @@ def _frame_content_valid(placement: Placement) -> bool:
 
 def _frame_satisfies_policy(
     placement: Placement,
-    policy: BandPolicy | None,
+    policy: BandPolicy,
 ) -> bool:
     if not _frame_content_valid(placement):
         return False
     frame = placement.frame
     assert frame is not None
-    if policy is None:
-        return True
     explicit = policy.explicit_segments
     if explicit is not None:
         return (
@@ -858,12 +856,12 @@ def _with_projection_stats(
 
 def _extent_failure(
     placement: Placement,
-    policy: BandPolicy | None,
+    policy: BandPolicy,
 ) -> ProjectionFailure:
     min_x, min_y, max_x, max_y = placement.bounds
     width = max_x - min_x + 1
     height = max_y - min_y + 1
-    explicit = policy.explicit_segments if policy is not None else None
+    explicit = policy.explicit_segments
     if explicit is not None:
         band = next(
             candidate
@@ -891,53 +889,13 @@ def _extent_failure(
     raise AssertionError("extent failure requested for geometry with a fitting band")
 
 
-def _finalize_legacy(placement: Placement) -> Placement:
-    min_x, min_y, max_x, max_y = placement.bounds
-    width = max_x - min_x + 1
-    height = max_y - min_y + 1
-    fits = _extent_fits(width, height)
-    if not fits:
-        raise ProjectionRefusal((_extent_failure(placement, None),))
-    counters = _ProjectionCounters()
-    failures: list[ProjectionFailure] = []
-    prior_rotated = placement.frame.rotated if placement.frame is not None else False
-    for fit in fits:
-        counters.frame_candidates += 1
-        frame = AreaFrame(
-            width=fit.columns,
-            height=fit.rows,
-            primary_band=fit.band.area_segments,
-            certified_bands=(fit.band.area_segments,),
-            rotated=prior_rotated ^ fit.rotated,
-        )
-        fit_failures = _certify_frame(
-            placement,
-            frame,
-            counters,
-            quadrant=1 if fit.rotated else 0,
-            row_origin=min_x if fit.rotated else min_y,
-            pair_rotated=fit.rotated,
-            stop_after_failure=True,
-        )
-        if fit_failures:
-            failures.extend(fit_failures)
-            continue
-        oriented = _oriented(placement, rotated=fit.rotated)
-        return _with_projection_stats(
-            replace(oriented, frame=frame),
-            counters,
-        )
-    raise ProjectionRefusal(failures)
 
 
 def finalize_placement(
     placement: Placement,
-    policy: BandPolicy | None = None,
+    policy: BandPolicy,
 ) -> Placement:
-    """Certify the requested frame, retaining staged legacy behavior for ``None``."""
-    if policy is None:
-        legacy = _finalize_legacy(placement)
-        return placement if legacy == placement else legacy
+    """Certify one placement against its required latitude-band policy."""
     if placement.frame is not None and _frame_satisfies_policy(placement, policy):
         return placement
 
