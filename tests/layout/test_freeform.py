@@ -5762,6 +5762,7 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
     ) -> None:
         canvas, spec, strips, ports, splitter_index = self._broke2_fixture(17)
         before = tuple(canvas.buildings)
+        assert canvas.limit is None
 
         with pytest.raises(freeform._Unseatable) as caught:
             freeform._place_coaters(
@@ -5790,6 +5791,46 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
             f"band 160 game.addon_splitter_clearance "
             f"({len(before) + 1}, {splitter_index})"
         ) in str(caught.value)
+        assert canvas.limit is None
+
+    def test_later_projected_coater_splitter_refusal_commits_no_earlier_coater(
+        self,
+    ) -> None:
+        canvas, spec, strips, ports, splitter_index = self._broke2_fixture(17)
+        first_indices = [
+            canvas.add(_belt(x, 5, item=self.ITEM))
+            for x in (10, 11, 12)
+        ]
+        first_port = _Port(
+            first_indices[0],
+            10,
+            5,
+            0,
+            12,
+            tuple(first_indices),
+            strips[0].machines,
+            0,
+        )
+        before = tuple(canvas.buildings)
+
+        with pytest.raises(freeform._Unseatable) as caught:
+            freeform._place_coaters(
+                canvas,
+                spec,
+                [strips[0], strips[0]],
+                [{self.ITEM: first_port}, ports[0]],
+                2001,
+                35,
+                policy=BandPolicy("portable"),
+            )
+
+        assert tuple(canvas.buildings) == before
+        assert canvas.limit is None
+        assert caught.value.failure is not None
+        assert caught.value.failure.buildings == (
+            len(before) + 3,
+            splitter_index,
+        )
 
     def test_coater_splitter_projection_is_staged_off_without_policy(self) -> None:
         canvas, spec, strips, ports, _splitter_index = self._broke2_fixture(17)

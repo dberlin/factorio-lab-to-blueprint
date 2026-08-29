@@ -2890,6 +2890,16 @@ class CoaterSupplyPort:
     z: int
 
 
+@dataclass(frozen=True, slots=True)
+class _StagedCoater:
+    """One fully checked Coater/drop pair awaiting an atomic commit."""
+
+    supply: PlacedBuilding
+    coater: PlacedBuilding
+    projected_pair: tuple[int, colliders.Placed]
+    port: CoaterSupplyPort
+
+
 def _prepare_port(port: _Port) -> _PreparedPort:
     return _PreparedPort(
         belt_index=port.belt,
@@ -7052,6 +7062,8 @@ def _projection_envelope(
 def _power_projection_envelope(
     canvas: _Canvas,
     policy: BandPolicy,
+    *,
+    capacity: tuple[int, int, int, int] | None = None,
 ) -> tuple[planet.Projection, ...]:
     """Projection union down to geometry no cleanup eligibility can remove."""
     occupied = _core_bounds(canvas)
@@ -7060,7 +7072,7 @@ def _power_projection_envelope(
     )
     return _projection_envelope(
         cleanup_inner,
-        canvas.limit or occupied,
+        capacity if capacity is not None else canvas.limit or occupied,
         policy,
     )
 
@@ -8478,6 +8490,47 @@ def _coater_seat(canvas: _Canvas, port: _Port) -> tuple[int, int] | None:
     return b.x, b.y
 
 
+def _reserve_staged_coater_belt_ban(
+    canvas: _Canvas,
+    staged: _StagedCoater,
+    belt_model: int,
+) -> None:
+    """Price the committed Coater's exact collider for later belt routes."""
+    cx, cy = staged.port.host_x, staged.port.host_y
+    drop = (staged.port.x, staged.port.y)
+    need = colliders.belt_crossing_height(staged.coater.model_index)
+    span = (
+        catalog.oriented_footprint(
+            catalog.SPRAY_COATER_ID,
+            staged.port.yaw,
+        )[0]
+        - 1
+    ) // 2 + 1
+    for dx in range(-span, span + 1):
+        for dy in range(-span, span + 1):
+            tile = (cx + dx, cy + dy)
+            if tile == drop:
+                continue
+            for level in range(1, math.floor(need) + 1):
+                probe = colliders.Placed(
+                    belt_model,
+                    *codec.tile_to_local_offset(
+                        tile[0],
+                        tile[1],
+                        Fraction(level),
+                        1,
+                        1,
+                    ),
+                    0.0,
+                )
+                if colliders.belt_crossings(
+                    [probe],
+                    [staged.projected_pair[1]],
+                    directly_over_only=True,
+                ):
+                    canvas.belt_ban.setdefault(tile, set()).add(level)
+
+
 def _place_coaters(
     canvas: _Canvas,
     spec: BuildSpec,
@@ -8527,11 +8580,14 @@ def _place_coaters(
     coater = catalog.building(catalog.SPRAY_COATER_ID)
     wanted = set(spec.spray_lanes)
     groups = _adapt(spec)
+    proliferator_item = _proliferator_item(spec)
     seen: set[str] = set()
-    out: list[CoaterSupplyPort] = []
-    coater_by_host: dict[int, CoaterSupplyPort] = {}
-    projections: tuple[planet.Projection, ...] = ()
+    staged: list[_StagedCoater] = []
+    staged_hosts: set[int] = set()
+    staged_drop_cells: set[Cell] = set()
+    prospective = list(canvas.buildings)
     splitters: tuple[tuple[int, colliders.Placed], ...] = ()
+    projected_capacity: tuple[int, int, int, int] | None = None
     if policy is not None:
         splitters = tuple(
             (index, _collision_pose(building))
@@ -8539,21 +8595,25 @@ def _place_coaters(
             if building.item_id == catalog.SPLITTER_ID
         )
         if splitters:
-            if canvas.limit is None:
-                canvas.limit = _grow(_core_bounds(canvas), _ENTRY_RING)
-            projections = _power_projection_envelope(canvas, policy)
+            projected_capacity = canvas.limit or _grow(
+                _core_bounds(canvas),
+                _ENTRY_RING,
+            )
 
     belt_at: dict[tuple[int, int, int], int] = {
-        (b.x, b.y, int(b.z)): i
-        for i, b in enumerate(canvas.buildings)
-        if catalog.is_belt(b.item_id) and b.z.denominator == 1
+        (building.x, building.y, int(building.z)): index
+        for index, building in enumerate(canvas.buildings)
+        if catalog.is_belt(building.item_id) and building.z.denominator == 1
     }
 
-    for s, in_ports in zip(strips, ports, strict=True):
-        for item in s.in_lanes:
+    for strip, in_ports in zip(strips, ports, strict=True):
+        for item in strip.in_lanes:
             if item not in wanted:
                 continue
-            if item in spec.lanes_requiring_split and not groups[s.group_key].proliferated:
+            if (
+                item in spec.lanes_requiring_split
+                and not groups[strip.group_key].proliferated
+            ):
                 continue
             port = in_ports.get(item)
             if port is None:
@@ -8585,9 +8645,10 @@ def _place_coaters(
                     f"the {item} lane's seat ({cx}, {cy}) carries no belt at "
                     f"level {host_z}, so there is nothing for a coater to ride"
                 )
-            if host in coater_by_host:
+            if host in staged_hosts:
                 seen.add(item)
                 continue
+
             proposed_coater = PlacedBuilding(
                 item_id=catalog.SPRAY_COATER_ID,
                 model_index=coater.model_index,
@@ -8598,125 +8659,57 @@ def _place_coaters(
                 height=1,
                 yaw=yaw,
             )
-            projected_failure: finalize.ProjectionFailure | None = None
-            if projections and splitters:
-                proposed_pair = (
-                    len(canvas.buildings) + 1,
-                    _collision_pose(proposed_coater),
-                )
-                for projection in projections:
-                    for splitter in splitters:
-                        projected_failure = (
-                            finalize.projected_coater_splitter_failure(
-                                proposed_pair,
-                                splitter,
-                                projection,
-                            )
-                        )
-                        if projected_failure is not None:
-                            break
-                    if projected_failure is not None:
-                        break
-            if projected_failure is not None:
-                raise _Unseatable(
-                    f"the {item} coater at ({cx}, {cy}, z={host_z}) enters a "
-                    "Splitter projected lateral keepout",
-                    failure=projected_failure,
-                )
             collider_hits = _coater_keepout_hits(
-                canvas.buildings,
+                prospective,
                 proposed_coater,
             )
             if collider_hits:
                 obstacles = ", ".join(
-                    f"{catalog.building(canvas.buildings[index].item_id).name} "
-                    f"at ({canvas.buildings[index].x}, "
-                    f"{canvas.buildings[index].y}, z={canvas.buildings[index].z})"
+                    f"{catalog.building(prospective[index].item_id).name} "
+                    f"at ({prospective[index].x}, "
+                    f"{prospective[index].y}, z={prospective[index].z})"
                     for index in collider_hits
                 )
                 raise _Unseatable(
                     f"the {item} coater at ({cx}, {cy}, z={host_z}) has a "
                     f"full-body keepout intersecting {obstacles}"
                 )
-            if not canvas.free(drop_cell):
+            within_capacity = (
+                projected_capacity is None
+                or (
+                    projected_capacity[0] <= drop_cell[0] <= projected_capacity[2]
+                    and projected_capacity[1]
+                    <= drop_cell[1]
+                    <= projected_capacity[3]
+                )
+            )
+            if (
+                not within_capacity
+                or drop_cell in staged_drop_cells
+                or not canvas.free(drop_cell)
+            ):
                 raise _Unseatable(
                     f"the {item} coater at ({cx}, {cy}) cannot have its "
                     f"proliferator drop at {drop_cell}: that cell is taken, and "
                     f"the game supplies an addon from its area and nowhere else"
                 )
 
-            supply_belt = canvas.add(
-                PlacedBuilding(
-                    item_id=belt_id,
-                    model_index=belt_model,
-                    x=drop_cell[0],
-                    y=drop_cell[1],
-                    z=Fraction(drop_cell[2]),
-                    width=1,
-                    height=1,
-                    carries_item=_proliferator_item(spec),
-                ),
-                level=drop_cell[2],
+            supply = PlacedBuilding(
+                item_id=belt_id,
+                model_index=belt_model,
+                x=drop_cell[0],
+                y=drop_cell[1],
+                z=Fraction(drop_cell[2]),
+                width=1,
+                height=1,
+                carries_item=proliferator_item,
             )
-            coater_index = len(canvas.buildings)
-            canvas.buildings.append(proposed_coater)
-            # NO sorter drop -> coater. That connection does not exist in the
-            # game: a coater ships zero insert poses, `BuildTool_Inserter` will
-            # not target a building with none, and all eight coaters in the
-            # fixture corpus carry no connection at all. The game attaches the
-            # belts positionally instead, from `PrefabDesc.addonAreaPoses` --
-            # area 1, the proliferator supply, sits at `(0, -1.25, 1)`: a tile
-            # and a quarter behind the coater and one altitude level UP. The
-            # drop belt above is at the right x and the wrong LEVEL, so
-            # `game.addon_supply` reports the coater unsupplied and the
-            # candidate is refused rather than shipped looking fed.
-            # PRICE THE COATER FOR EVERY ROUTE THAT COMES AFTER IT.  A coater
-            # reserves no tile -- it rides its belt -- so nothing in `solid` or
-            # `blocked` keeps a later route off it, and its collider is 1.8975
-            # high and three tiles long.  The proliferator chain used to cross
-            # at level 1 and paste as `EBuildCondition.Collide` on the crossing
-            # BELT; confirmed in game on a cut-down blueprint carrying one
-            # coater, its tower and no machines at all.  `game.belt_crossing`
-            # is the check; this is where it is honoured.
-            #
-            # The drop cell is left out on purpose: that is the addon's raised
-            # area, a belt is REQUIRED there one level up, and it is already
-            # placed above.
-            # EXACT, from the collider, not from the footprint.  The oriented
-            # footprint is three tiles and the two boxes do not fill it: box A
-            # is 0.9 high and stops at +1.51 tiles along the coater's axis, box
-            # B reaches 2.7 high and stops at +0.32.  Banning the whole
-            # footprint at level 1 walled off the MARGIN tile the proliferator
-            # chain enters through, and the chain then had no way in at all --
-            # 22 corpus cells refused for a cell the game does not object to.
-            # So each candidate cell is asked of the real boxes, which is the
-            # same question `validate.game.belt_crossing` asks of the result.
-            pose = colliders.Placed(
-                coater.model_index,
-                *codec.tile_to_local_offset(cx, cy, Fraction(host_z), 1, 1),
-                Facing.EAST.value,
-            )
-            need = colliders.belt_crossing_height(coater.model_index)
-            span = (
-                catalog.oriented_footprint(catalog.SPRAY_COATER_ID, Facing.EAST.value)[0] - 1
-            ) // 2 + 1
-            for dx in range(-span, span + 1):
-                for dy in range(-span, span + 1):
-                    tile = (cx + dx, cy + dy)
-                    if tile == (drop_cell[0], drop_cell[1]):
-                        continue
-                    for level in range(1, math.floor(need) + 1):
-                        probe = colliders.Placed(
-                            belt_model,
-                            *codec.tile_to_local_offset(tile[0], tile[1], Fraction(level), 1, 1),
-                            0.0,
-                        )
-                        if colliders.belt_crossings([probe], [pose], directly_over_only=True):
-                            canvas.belt_ban.setdefault(tile, set()).add(level)
+            supply_index = len(prospective)
+            coater_index = supply_index + 1
             prepared_port = CoaterSupplyPort(
                 coater=coater_index,
                 host_belt=host,
-                supply_belt=supply_belt,
+                supply_belt=supply_index,
                 item=item,
                 yaw=yaw,
                 host_x=cx,
@@ -8726,25 +8719,24 @@ def _place_coaters(
                 y=drop_cell[1],
                 z=drop_cell[2],
             )
-            out.append(prepared_port)
-            coater_by_host[host] = prepared_port
+            staged.append(
+                _StagedCoater(
+                    supply=supply,
+                    coater=proposed_coater,
+                    projected_pair=(
+                        coater_index,
+                        _collision_pose(proposed_coater),
+                    ),
+                    port=prepared_port,
+                )
+            )
+            prospective.extend((supply, proposed_coater))
+            staged_hosts.add(host)
+            staged_drop_cells.add(drop_cell)
             seen.add(item)
 
-    # EVERY drop is exempt from EVERY ban, not just its own coater's.  Coaters
-    # two tiles apart on one row overlap footprints, so coater A's band covered
-    # coater B's drop cell -- the belt was already standing there, but the
-    # router could no longer reach it and the net came back unrouted with no
-    # explanation.  A drop cell carries a required connection whichever coater
-    # is standing over it.
-    for c in out:
-        canvas.belt_ban.pop((c.x, c.y), None)
-
-    # AND EVERY SPRAYED ITEM GOT ONE SOMEWHERE.  The loop above walks the lanes
-    # the strips carry, so an item the spec wants sprayed that no strip carries
-    # on a lane is not refused by any of the clauses inside it -- it is simply
-    # never visited.  That is the same silent miss with the loop skipped
-    # entirely, and it is what a direct-inserted sprayed ingredient looks like
-    # from here.
+    # The loop walks only lanes that exist. Refuse a requested sprayed item that
+    # no strip carries before committing any of the successfully staged lanes.
     missing = wanted - seen
     if missing:
         raise _Unseatable(
@@ -8752,6 +8744,58 @@ def _place_coaters(
             f"{'them' if len(missing) > 1 else 'it'} on an input lane, so no "
             f"Spray Coater was placed for {'any' if len(missing) > 1 else 'it'}"
         )
+
+    if policy is not None and projected_capacity is not None:
+        projections = _power_projection_envelope(
+            canvas,
+            policy,
+            capacity=projected_capacity,
+        )
+        for candidate in staged:
+            projected_failure: finalize.ProjectionFailure | None = None
+            for projection in projections:
+                for splitter in splitters:
+                    projected_failure = finalize.projected_coater_splitter_failure(
+                        candidate.projected_pair,
+                        splitter,
+                        projection,
+                    )
+                    if projected_failure is not None:
+                        break
+                if projected_failure is not None:
+                    break
+            if projected_failure is not None:
+                raise _Unseatable(
+                    f"the {candidate.port.item} coater at "
+                    f"({candidate.port.host_x}, {candidate.port.host_y}, "
+                    f"z={candidate.port.host_z}) enters a Splitter projected "
+                    "lateral keepout",
+                    failure=projected_failure,
+                )
+
+        # This is the same fixed capacity `_prepare_routing_problem` establishes
+        # after Coater placement. Keep it local until every staged pair passes so
+        # a refusal leaves an initially unbounded canvas unchanged.
+        if canvas.limit is None:
+            canvas.limit = projected_capacity
+
+    out: list[CoaterSupplyPort] = []
+    for candidate in staged:
+        supply_index = canvas.add(
+            candidate.supply,
+            level=candidate.port.z,
+        )
+        assert supply_index == candidate.port.supply_belt
+        coater_index = len(canvas.buildings)
+        assert coater_index == candidate.port.coater
+        canvas.buildings.append(candidate.coater)
+        _reserve_staged_coater_belt_ban(canvas, candidate, belt_model)
+        out.append(candidate.port)
+
+    # Every drop is exempt from every overlapping Coater ban: it is a required
+    # positional addon connection whichever Coater owns the ban.
+    for committed in out:
+        canvas.belt_ban.pop((committed.x, committed.y), None)
     return out
 
 
