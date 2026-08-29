@@ -119,7 +119,33 @@ test('a refusal is shown as a result, with one line per pair', async () => {
       result: null,
       refusal: {
         message: 'no valid layout for no-proliferator after 2s',
-        reasons: ['freeform/no-proliferator: too tall', 'freeform/max-proliferation: unroutable'],
+        attempts: [
+          {
+            candidate: 'no-proliferator',
+            strategy: 'sequence-pair',
+            reason: 'too tall; exact projection failed',
+            projection_failures: [
+              {
+                band: 160,
+                check: 'geom.collide',
+                buildings: [4, 9],
+                detail: 'first collision; left machine; right machine',
+              },
+              {
+                band: 200,
+                check: 'game.power_too_close',
+                buildings: [2, 7],
+                detail: 'power envelopes; north; south',
+              },
+            ],
+          },
+          {
+            candidate: 'max-proliferation',
+            strategy: 'freeform',
+            reason: 'unroutable',
+            projection_failures: [],
+          },
+        ],
       },
     }),
   });
@@ -127,8 +153,16 @@ test('a refusal is shown as a result, with one line per pair', async () => {
   build();
 
   const refusal = await screen.findByTestId('refusal');
-  expect(refusal).toHaveTextContent('freeform/no-proliferator: too tall');
-  expect(refusal).toHaveTextContent('freeform/max-proliferation: unroutable');
+  expect(refusal).toHaveTextContent(
+    'sequence-pair / no-proliferator: too tall; exact projection failed',
+  );
+  expect(refusal).toHaveTextContent(
+    'band 160 — geom.collide — buildings 4, 9 — first collision; left machine; right machine',
+  );
+  expect(refusal).toHaveTextContent(
+    'band 200 — game.power_too_close — buildings 2, 7 — power envelopes; north; south',
+  );
+  expect(refusal).toHaveTextContent('freeform / max-proliferation: unroutable');
   // Not an alert: a refusal is an answer, and nothing should announce a failure.
   expect(screen.queryByRole('alert')).toBeNull();
 });
@@ -297,6 +331,7 @@ test('a build that has reached the layout loop counts pairs, not seconds', async
           area: null,
           ok: null,
           reason: null,
+          projection_failures: [],
         },
         settled: [
           {
@@ -308,6 +343,14 @@ test('a build that has reached the layout loop counts pairs, not seconds', async
             area: null,
             ok: null,
             reason: 'nothing fits under the belt ceiling',
+            projection_failures: [
+              {
+                band: 160,
+                check: 'geom.collide',
+                buildings: [4, 9],
+                detail: 'blocked; west; east',
+              },
+            ],
           },
           {
             index: 2,
@@ -318,6 +361,7 @@ test('a build that has reached the layout loop counts pairs, not seconds', async
             area: 2006,
             ok: true,
             reason: null,
+            projection_failures: [],
           },
         ],
       }),
@@ -332,6 +376,9 @@ test('a build that has reached the layout loop counts pairs, not seconds', async
   // The pair that gave up stays on screen while the next one runs.
   expect(screen.getByTestId('settled')).toHaveTextContent(
     'no layout — nothing fits under the belt ceiling',
+  );
+  expect(screen.getByTestId('settled')).toHaveTextContent(
+    'band 160 — geom.collide — buildings 4, 9 — blocked; west; east',
   );
   expect(screen.getByTestId('settled')).toHaveTextContent('2006 tiles, valid');
   expect(progress.querySelector('.fill')).toHaveStyle({ width: '66.7%' });
@@ -415,7 +462,17 @@ test('a refusal marks the blueprint on screen as the previous build', async () =
     body: aJob({
       state: 'refused',
       result: null,
-      refusal: { message: 'no valid layout', reasons: ['freeform/x: unroutable'] },
+      refusal: {
+        message: 'no valid layout',
+        attempts: [
+          {
+            candidate: 'x',
+            strategy: 'freeform',
+            reason: 'unroutable',
+            projection_failures: [],
+          },
+        ],
+      },
     }),
   });
   build();

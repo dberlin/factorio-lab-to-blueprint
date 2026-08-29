@@ -704,8 +704,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if compare_builds is not None:
         if baseline is not None:
             parser.error("--baseline cannot be combined with --compare-builds")
-        _emit(_comparison_result(compare_builds[0], compare_builds[1]), output)
-        return 0
+        comparison = _comparison_result(compare_builds[0], compare_builds[1])
+        _emit(comparison, output)
+        return 0 if comparison["passed"] else 1
 
     result = run_benchmark(samples)
     if baseline is None:
@@ -715,14 +716,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         _benchmark_result(_read_json(baseline, label="baseline"), label="baseline"),
         result,
     )
-    _emit(
-        BenchmarkAfterResult(
-            cases=result["cases"],
-            projection_comparison=projection_comparison,
-        ),
-        output,
+    after = BenchmarkAfterResult(
+        cases=result["cases"],
+        projection_comparison=projection_comparison,
     )
-    return 0
+    _emit(after, output)
+    return 0 if projection_comparison["passed"] else 1
 
 
 if __name__ == "__main__":

@@ -13,6 +13,9 @@ from pathlib import Path
 import pytest
 
 from flab2bp import pipeline
+from flab2bp.lab.data import load_vendored
+from flab2bp.lab.flow import canonicalize_dataset, canonicalize_request
+from flab2bp.lab.url import parse_url
 from flab2bp.layout import finalize
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import NoValidLayout, Placement
@@ -25,6 +28,68 @@ from flab2bp.spec import BuildSpecSet
 #: costs a second of CP-SAT rather than a minute -- the sequence is the subject,
 #: not the packing.
 SMALL_URL = "https://factoriolab.github.io/dsp/flow?o=electromagnetic-matrix*60&v=11"
+
+@pytest.mark.parametrize("pinned", [False, True])
+def test_pipeline_canonicalizes_once_before_internal_consumers(
+    monkeypatch: pytest.MonkeyPatch,
+    pinned: bool,
+) -> None:
+    source_data = load_vendored()
+    canonical_data = canonicalize_dataset(source_data)
+    canonical_request = canonicalize_request(parse_url(SMALL_URL))
+    assert hasattr(pipeline, "_pin_request_canonical")
+    assert hasattr(pipeline, "_build_candidates_canonical")
+    pinned_request = canonical_request
+    dataset_calls = 0
+    request_calls = 0
+    seen: list[tuple[str, object, object]] = []
+
+    def canonical_data_spy(data: object) -> object:
+        nonlocal dataset_calls
+        assert data is source_data
+        dataset_calls += 1
+        return canonical_data
+
+    def canonical_request_spy(request: object) -> object:
+        nonlocal request_calls
+        request_calls += 1
+        return canonical_request
+
+    def pin_spy(request: object, data: object, selection: object) -> object:
+        del selection
+        assert request is canonical_request
+        assert data is canonical_data
+        seen.append(("pin", data, request))
+        return pinned_request
+
+    class ReachedCandidates(RuntimeError):
+        pass
+
+    def candidates_spy(data: object, request: object, **_kwargs: object) -> BuildSpecSet:
+        assert data is canonical_data
+        assert request is pinned_request
+        seen.append(("candidates", data, request))
+        raise ReachedCandidates
+
+    monkeypatch.setattr(pipeline, "canonicalize_dataset", canonical_data_spy)
+    monkeypatch.setattr(pipeline, "canonicalize_request", canonical_request_spy)
+    monkeypatch.setattr(pipeline, "_pin_request_canonical", pin_spy)
+    monkeypatch.setattr(pipeline, "_build_candidates_canonical", candidates_spy)
+    if pinned:
+        monkeypatch.setattr(pipeline, "flow_from_text", lambda *_args, **_kwargs: object())
+
+    with pytest.raises(ReachedCandidates):
+        pipeline.build(
+            SMALL_URL,
+            dataset=source_data,
+            flow_text="flow" if pinned else None,
+        )
+
+    assert dataset_calls == 1
+    assert request_calls == 1
+    assert [entry[0] for entry in seen] == (
+        ["pin", "candidates"] if pinned else ["candidates"]
+    )
 
 
 @pytest.mark.slow
@@ -186,6 +251,7 @@ def test_projection_refusal_preserves_structured_exception_text(
         "finalize_placement",
         lambda _placement, _policy: (_ for _ in ()).throw(refusal),
     )
+    steps: list[pipeline.AttemptProgress] = []
 
     with pytest.raises(NoValidLayout) as caught:
         pipeline.build(
@@ -193,6 +259,7 @@ def test_projection_refusal_preserves_structured_exception_text(
             strategy="freeform",
             candidates=1,
             time_budget_s=0.5,
+            on_progress=steps.append,
         )
 
     assert "band 160 geom.collide (4, 9): build colliders intersect" in caught.value.reason
@@ -201,6 +268,23 @@ def test_projection_refusal_preserves_structured_exception_text(
         in caught.value.reason
     )
     assert caught.value.attempt_reasons == (caught.value.reason,)
+    assert [
+        (item.band, item.check, item.buildings, item.detail)
+        for item in caught.value.projection_failures
+    ] == [
+        (item.band, item.check, item.buildings, item.detail)
+        for item in (failure, second_failure)
+    ]
+    refused = steps[-1]
+    assert refused.phase == "refused"
+    assert refused.reason is not None
+    assert [
+        (item.band, item.check, item.buildings, item.detail)
+        for item in refused.projection_failures
+    ] == [
+        (item.band, item.check, item.buildings, item.detail)
+        for item in (failure, second_failure)
+    ]
 
 
 @pytest.mark.slow

@@ -9,7 +9,7 @@ touch it.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from fractions import Fraction
 from pathlib import Path
@@ -21,12 +21,12 @@ from flab2bp.lab.data import load_vendored
 from flab2bp.lab.flow import (
     FlowError,
     FlowSelection,
+    _pin_request_canonical,
     canonicalize_dataset,
     canonicalize_request,
     cross_check,
     flow_from_text,
     load_flow,
-    pin_request,
     unsupplied_inputs,
 )
 from flab2bp.lab.schema import Dataset
@@ -34,11 +34,16 @@ from flab2bp.lab.techs import belt_rules_for_url
 from flab2bp.lab.url import parse_url
 from flab2bp.layout import finalize, markers, validate
 from flab2bp.layout.band_policy import BandPolicy, BandSelection
-from flab2bp.layout.base import NoValidLayout, Placement
+from flab2bp.layout.base import (
+    LayoutAttemptFailure,
+    NoValidLayout,
+    Placement,
+    ProjectionFailureRecord,
+)
 from flab2bp.layout.freeform import FreeformLayout
 from flab2bp.layout.sequence_solver import SequencePairLayout
 from flab2bp.rates.adjust import ProliferatorTier
-from flab2bp.rates.candidates import build_candidates
+from flab2bp.rates.candidates import _build_candidates_canonical
 from flab2bp.spec import BuildSpec, BuildSpecSet
 
 ExplicitStrategyName = Literal["freeform", "sequence-pair"]
@@ -165,6 +170,20 @@ def _id_map(spec: BuildSpec) -> validate.IdMap:
     return validate.IdMap(recipes=recipes, items=items)
 
 
+def _projection_records(
+    failures: Sequence[finalize.ProjectionFailure],
+) -> tuple[ProjectionFailureRecord, ...]:
+    return tuple(
+        ProjectionFailureRecord(
+            failure.band,
+            failure.check,
+            failure.buildings,
+            failure.detail,
+        )
+        for failure in failures
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class Attempt:
     """One (candidate, strategy) pair laid out."""
@@ -209,6 +228,8 @@ class AttemptProgress:
     ok: bool | None = None
     #: Why the strategy gave up, on ``refused``.
     reason: str | None = None
+    #: Ordered, distinct projection evidence for this refused attempt.
+    projection_failures: tuple[ProjectionFailureRecord, ...] = ()
 
 
 #: Told what a build is doing, as it does it.  Deliberately not wrapped in a
@@ -229,7 +250,7 @@ class Build:
     attempts: tuple[Attempt, ...] = field(default_factory=tuple)
     #: Strategy/candidate pairs that produced no layout at all, with the reason.
     #: Kept so a refusal is reported rather than silently absent from `attempts`.
-    refused: tuple[str, ...] = field(default_factory=tuple)
+    refused: tuple[LayoutAttemptFailure, ...] = field(default_factory=tuple)
     #: Ways the chosen build's recipe set differs from the pinned flow's, if one
     #: was supplied.  Empty when no flow was given OR when we reproduced it: the
     #: CLI says which, because "no findings" and "nothing was checked" are very
@@ -331,9 +352,9 @@ def build(
             url=url,
         )
     if selection is not None:
-        request = pin_request(request, data, selection)
+        request = _pin_request_canonical(request, data, selection)
 
-    spec_set = build_candidates(
+    spec_set = _build_candidates_canonical(
         data,
         request,
         tier=proliferator_tier,
@@ -413,7 +434,7 @@ def build(
     pair_index = 0
 
     attempts: list[Attempt] = []
-    refused: list[str] = []
+    refused: list[LayoutAttemptFailure] = []
     for spec in spec_set.candidates:
         for sname in wanted:
             pair_index += 1
@@ -440,7 +461,13 @@ def build(
                 # One strategy failing a candidate is not a failed build -- the
                 # others may well succeed. Record it so the reason survives to
                 # the report rather than vanishing into an empty result.
-                refused.append(f"{sname}/{spec.label}: {exc.reason}")
+                failure = LayoutAttemptFailure(
+                    candidate=spec.label,
+                    strategy=sname,
+                    reason=exc.reason,
+                    projection_failures=exc.projection_failures,
+                )
+                refused.append(failure)
                 if on_progress is not None:
                     on_progress(
                         AttemptProgress(
@@ -450,6 +477,7 @@ def build(
                             strategy=sname,
                             phase="refused",
                             reason=exc.reason,
+                            projection_failures=failure.projection_failures,
                         )
                     )
                 continue
@@ -462,7 +490,13 @@ def build(
                 placement = finalize.finalize_placement(placement, policy)
             except finalize.ProjectionRefusal as exc:
                 reason = str(exc)
-                refused.append(f"{sname}/{spec.label}: {reason}")
+                failure = LayoutAttemptFailure(
+                    candidate=spec.label,
+                    strategy=sname,
+                    reason=reason,
+                    projection_failures=_projection_records(exc.failures),
+                )
+                refused.append(failure)
                 if on_progress is not None:
                     on_progress(
                         AttemptProgress(
@@ -472,6 +506,7 @@ def build(
                             strategy=sname,
                             phase="refused",
                             reason=reason,
+                            projection_failures=failure.projection_failures,
                         )
                     )
                 continue
@@ -503,10 +538,18 @@ def build(
     valid = [a for a in attempts if a.ok]
     if not attempts:
         raise NoValidLayout(
-            "; ".join(refused) or "every strategy refused every candidate",
+            "; ".join(map(str, refused)) or "every strategy refused every candidate",
             spec_label=", ".join(s.label for s in spec_set.candidates),
             budget_s=time_budget_s,
-            attempt_reasons=tuple(refused),
+            attempt_reasons=tuple(map(str, refused)),
+            attempt_failures=tuple(refused),
+            projection_failures=tuple(
+                dict.fromkeys(
+                    projection
+                    for failure in refused
+                    for projection in failure.projection_failures
+                )
+            ),
         )
     # Prefer a valid layout. Falling back to the best invalid one is deliberate
     # and visible: the CLI refuses to emit it, and the report names the errors.

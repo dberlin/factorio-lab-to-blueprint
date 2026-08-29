@@ -97,6 +97,12 @@ def _report(build: pipeline.Build, *, verbose: bool) -> None:
         print(f"  {len(build.refused)} strategy/candidate pair(s) produced no layout:", file=out)
         for r in build.refused[:5]:
             print(f"    {r}", file=out)
+            for failure in r.projection_failures[:5]:
+                print(
+                    f"      band {failure.band} {failure.check} buildings "
+                    f"{failure.buildings}: {failure.detail}",
+                    file=out,
+                )
 
     if build.report.skipped:
         print(
@@ -246,6 +252,12 @@ def main(argv: list[str] | None = None) -> int:
         # "the URL was bad", and per the user a spec that cannot be laid out in
         # the retry budget is our bug until shown otherwise.
         print(f"flab2bp: {exc}", file=sys.stderr)
+        for failure in exc.projection_failures[:5]:
+            print(
+                f"  band {failure.band} {failure.check} buildings "
+                f"{failure.buildings}: {failure.detail}",
+                file=sys.stderr,
+            )
         return 3
     except (ValueError, KeyError) as exc:
         print(f"flab2bp: {exc}", file=sys.stderr)

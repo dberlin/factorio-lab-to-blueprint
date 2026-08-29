@@ -18,7 +18,12 @@ from typing import Protocol
 
 from flab2bp.layout import finalize, validate
 from flab2bp.layout.band_policy import BandPolicy
-from flab2bp.layout.base import DETERMINISTIC_WORKERS, NoValidLayout, Placement
+from flab2bp.layout.base import (
+    DETERMINISTIC_WORKERS,
+    NoValidLayout,
+    Placement,
+    ProjectionFailureRecord,
+)
 from flab2bp.layout.compact_seed import (
     CompactSeedConfig,
     CompactSeedDiagnostics,
@@ -835,7 +840,16 @@ class SequenceSolver[PreparedT]:
             )
             if projection_failures:
                 reason += "; " + str(finalize.ProjectionRefusal(projection_failures))
-            raise NoValidLayout(reason)
+            records = tuple(
+                ProjectionFailureRecord(
+                    failure.band,
+                    failure.check,
+                    failure.buildings,
+                    failure.detail,
+                )
+                for failure in projection_failures
+            )
+            raise NoValidLayout(reason, projection_failures=records)
         incumbent = self._incumbent
         return SequenceSearchResult(
             placement=incumbent.placement,
@@ -3555,6 +3569,7 @@ class SequencePairLayout:
                     spec_label=spec.label,
                     budget_s=run.ceiling,
                     attempt_reasons=exc.attempt_reasons,
+                    projection_failures=exc.projection_failures,
                 ) from exc
             placement = _with_observational_stats(result, run, self.power, self.config)
         try:
@@ -3564,6 +3579,15 @@ class SequencePairLayout:
                 "final spherical projection rejected: " + str(exc),
                 spec_label=spec.label,
                 budget_s=time_budget_s,
+                projection_failures=tuple(
+                    ProjectionFailureRecord(
+                        failure.band,
+                        failure.check,
+                        failure.buildings,
+                        failure.detail,
+                    )
+                    for failure in exc.failures
+                ),
             ) from exc
 
 

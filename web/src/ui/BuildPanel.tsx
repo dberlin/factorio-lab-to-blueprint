@@ -18,7 +18,7 @@ import {
   runBuild,
 } from '../api/build';
 import { useBlueprint } from '../state/BlueprintProvider';
-import { BuildReportPanel, RefusalReport } from './BuildReport';
+import { BuildReportPanel, ProjectionFailures, RefusalReport } from './BuildReport';
 
 export function BuildPanel() {
   const { load, markStale } = useBlueprint();
@@ -415,6 +415,7 @@ function Progress({ job }: { job: Job }) {
               {done.phase === 'refused'
                 ? `no layout — ${done.reason ?? 'no reason given'}`
                 : `${done.area} tiles, ${done.ok ? 'valid' : 'INVALID'}`}
+              <ProjectionFailures failures={done.projection_failures} />
             </li>
           ))}
         </ul>

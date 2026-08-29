@@ -11,7 +11,7 @@ from typing import Literal
 
 from flab2bp.layout import validate
 from flab2bp.layout.band_policy import BandPolicy
-from flab2bp.layout.base import NoValidLayout, Placement
+from flab2bp.layout.base import NoValidLayout, Placement, ProjectionFailureRecord
 from flab2bp.layout.compact_seed import CompactSeedConfig
 from flab2bp.layout.sequence_pair import derive_stage_seed
 from flab2bp.layout.sequence_solver import (
@@ -57,6 +57,7 @@ class _SequenceIslandOutcome:
     refusal_reason: str | None = None
     refusal_spec_label: str = ""
     refusal_budget_s: float = 0.0
+    refusal_projection_failures: tuple[ProjectionFailureRecord, ...] = ()
 
     @classmethod
     def completed(
@@ -75,6 +76,8 @@ class _SequenceIslandOutcome:
         reason: str,
         spec_label: str,
         budget_s: float,
+        *,
+        projection_failures: tuple[ProjectionFailureRecord, ...] = (),
     ) -> _SequenceIslandOutcome:
         return cls(
             island_id,
@@ -83,6 +86,7 @@ class _SequenceIslandOutcome:
             refusal_reason=reason,
             refusal_spec_label=spec_label,
             refusal_budget_s=budget_s,
+            refusal_projection_failures=projection_failures,
         )
 
     @classmethod
@@ -142,6 +146,7 @@ def _run_sequence_island(request: _SequenceIslandRequest) -> _SequenceIslandOutc
             exc.reason,
             exc.spec_label,
             exc.budget_s,
+            projection_failures=exc.projection_failures,
         )
 
     if validate.certify(placement, request.spec, expect_power=request.power).errors:
@@ -192,10 +197,18 @@ def _merge_sequence_island_outcomes(
     details = "; ".join(
         f"island {outcome.island_id}: {outcome.refusal_reason}" for outcome in refused
     )
+    projection_failures = tuple(
+        dict.fromkeys(
+            failure
+            for outcome in refused
+            for failure in outcome.refusal_projection_failures
+        )
+    )
     raise NoValidLayout(
         f"all {requested} sequence islands refused" + (f": {details}" if details else ""),
         spec_label=spec_label,
         budget_s=budget_s,
+        projection_failures=projection_failures,
     )
 
 
@@ -332,10 +345,18 @@ def run_sequence_islands(
                 f"island {outcome.island_id}: {outcome.refusal_reason}"
                 for outcome in settled_refusals
             )
+        projection_failures = tuple(
+            dict.fromkeys(
+                failure
+                for outcome in settled_refusals
+                for failure in outcome.refusal_projection_failures
+            )
+        )
         raise NoValidLayout(
             reason,
             spec_label=spec.label,
             budget_s=ceiling,
+            projection_failures=projection_failures,
         )
     winner = _merge_sequence_island_outcomes(
         outcomes,

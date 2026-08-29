@@ -833,6 +833,17 @@ def pinned_exclusions(data: Dataset, flow: FlowSelection) -> frozenset[str]:
 
 
 def verify_against_request(flow: FlowSelection, data: Dataset, request: LabRequest) -> None:
+    """Canonicalize the public inputs once, then verify their structural agreement."""
+    canonical_data = canonicalize_dataset(data)
+    canonical_request = canonicalize_request(request)
+    _verify_against_request_canonical(flow, canonical_data, canonical_request)
+
+
+def _verify_against_request_canonical(
+    flow: FlowSelection,
+    data: Dataset,
+    request: LabRequest,
+) -> None:
     """Structural agreement between the flow and the URL's settings.
 
     Complements :func:`verify_provenance` rather than replacing it: the URL
@@ -850,8 +861,7 @@ def verify_against_request(flow: FlowSelection, data: Dataset, request: LabReque
     against the defaults here re-created ``60d5f0f`` exactly: our defaults
     overruling a selection the player had made.
     """
-    data = canonicalize_dataset(data)
-    request = canonicalize_request(request)
+    # ``data`` and ``request`` are canonical objects owned by the caller.
     chosen = flow.chosen_recipe_ids
     if request.excluded_recipe_ids is not None:
         forbidden = sorted(chosen & frozenset(request.excluded_recipe_ids))
@@ -895,6 +905,17 @@ def verify_against_request(flow: FlowSelection, data: Dataset, request: LabReque
 
 
 def pin_request(request: LabRequest, data: Dataset, flow: FlowSelection) -> LabRequest:
+    """Canonicalize the public inputs once, then pin the request to ``flow``."""
+    canonical_data = canonicalize_dataset(data)
+    canonical_request = canonicalize_request(request)
+    return _pin_request_canonical(canonical_request, canonical_data, flow)
+
+
+def _pin_request_canonical(
+    request: LabRequest,
+    data: Dataset,
+    flow: FlowSelection,
+) -> LabRequest:
     """Return a canonical request with buildable recipes pinned to ``flow``.
 
     Catalog-backed ``df-*`` aliases have already become ordinary DSP identities.
@@ -906,8 +927,7 @@ def pin_request(request: LabRequest, data: Dataset, flow: FlowSelection) -> LabR
     cannot be this URL's is refused rather than producing an internally
     consistent blueprint for the wrong request.
     """
-    data = canonicalize_dataset(data)
-    request = canonicalize_request(request)
+    # ``data`` and ``request`` are canonical objects owned by the caller.
     requested_dark_fog = sorted(
         objective.target_id
         for objective in request.objectives
@@ -918,7 +938,7 @@ def pin_request(request: LabRequest, data: Dataset, flow: FlowSelection) -> LabR
             f"{requested_dark_fog[0]!r} is a DF-only source and cannot be a blueprint "
             "output, even when the flow lists it. No DSP machine recipe produces it."
         )
-    verify_against_request(flow, data, request)
+    _verify_against_request_canonical(flow, data, request)
     return replace(
         request,
         excluded_recipe_ids=set(pinned_exclusions(data, flow)),

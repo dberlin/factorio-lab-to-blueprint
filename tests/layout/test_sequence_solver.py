@@ -1097,6 +1097,13 @@ def test_production_projection_refusals_reach_terminal_sequence_evidence(
         )
         assert caught.value.reason.count(record) == 1
         assert record in str(caught.value)
+    assert [
+        (failure.band, failure.check, failure.buildings, failure.detail)
+        for failure in caught.value.projection_failures
+    ] == [
+        (failure.band, failure.check, failure.buildings, failure.detail)
+        for failure in (first, shared, last)
+    ]
 
 def test_stage_routes_preserve_the_final_twenty_five_percent() -> None:
     budget = ExpansionBudget(total=100)

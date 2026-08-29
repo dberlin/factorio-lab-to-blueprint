@@ -357,6 +357,37 @@ class Placement:
 
 
 
+@dataclass(frozen=True, slots=True)
+class ProjectionFailureRecord:
+    """Immutable, JSON-ready evidence for one authoritative projection refusal."""
+
+    band: int
+    check: str
+    buildings: tuple[int, ...]
+    detail: str
+
+
+@dataclass(frozen=True, slots=True)
+class LayoutAttemptFailure:
+    """One candidate/strategy refusal with its projection evidence boundary."""
+
+    candidate: str
+    strategy: str
+    reason: str
+    projection_failures: tuple[ProjectionFailureRecord, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "projection_failures",
+            tuple(dict.fromkeys(self.projection_failures)),
+        )
+
+    def __str__(self) -> str:
+        pair = "/".join(part for part in (self.strategy, self.candidate) if part)
+        return f"{pair}: {self.reason}" if pair else self.reason
+
+
 class NoValidLayout(Exception):
     """No layout satisfying the constraints was found.
 
@@ -383,6 +414,8 @@ class NoValidLayout(Exception):
         spec_label: str = "",
         budget_s: float = 0.0,
         attempt_reasons: tuple[str, ...] = (),
+        attempt_failures: tuple[LayoutAttemptFailure, ...] = (),
+        projection_failures: tuple[ProjectionFailureRecord, ...] = (),
     ) -> None:
         super().__init__(
             f"no valid layout for {spec_label or 'this spec'} after "
@@ -393,6 +426,8 @@ class NoValidLayout(Exception):
         self.spec_label = spec_label
         self.budget_s = budget_s
         self.attempt_reasons = attempt_reasons
+        self.attempt_failures = tuple(attempt_failures)
+        self.projection_failures = tuple(dict.fromkeys(projection_failures))
 
 
 class LayoutStrategy(Protocol):

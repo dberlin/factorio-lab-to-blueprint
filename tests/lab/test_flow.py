@@ -30,6 +30,7 @@ from pathlib import Path
 
 import pytest
 
+from flab2bp.lab import flow as flow_module
 from flab2bp.lab.data import load_vendored
 from flab2bp.lab.flow import (
     FlowFormatError,
@@ -304,6 +305,41 @@ class TestPin:
         # 2-second craft, so one chemical plant delivers the 60/min objective.
         assert plan.groups[0].exact_machines == Fraction(1)
         assert dict(plan.surplus) == {"hydrogen": Fraction(1, 2)}
+
+    def test_direct_pin_adapter_canonicalizes_exactly_once(
+        self,
+        pristine: FlowSelection,
+        data: Dataset,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        request = parse_url(GRAPHENE_URL)
+        canonical_data = flow_module.canonicalize_dataset(data)
+        canonical_request = flow_module.canonicalize_request(request)
+        assert hasattr(flow_module, "_pin_request_canonical")
+        calls = {"dataset": 0, "request": 0}
+
+        def canonical_data_spy(source: Dataset) -> Dataset:
+            assert source is data
+            calls["dataset"] += 1
+            return canonical_data
+
+        def canonical_request_spy(source: object) -> object:
+            assert source is request
+            calls["request"] += 1
+            return canonical_request
+
+        def internal(request_arg: object, data_arg: object, selection: object) -> object:
+            assert request_arg is canonical_request
+            assert data_arg is canonical_data
+            assert selection is pristine
+            return canonical_request
+
+        monkeypatch.setattr(flow_module, "canonicalize_dataset", canonical_data_spy)
+        monkeypatch.setattr(flow_module, "canonicalize_request", canonical_request_spy)
+        monkeypatch.setattr(flow_module, "_pin_request_canonical", internal)
+
+        assert flow_module.pin_request(request, data, pristine) is canonical_request
+        assert calls == {"dataset": 1, "request": 1}
 
     def test_the_pin_excludes_everything_not_chosen(
         self, pristine: FlowSelection, data: Dataset

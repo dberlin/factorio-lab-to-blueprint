@@ -133,12 +133,31 @@ test('a refusal settles the job like any other answer', async () => {
     body: aJob({
       state: 'refused',
       result: null,
-      refusal: { message: 'no valid layout', reasons: ['freeform/a: too tall'] },
+      refusal: {
+        message: 'no valid layout',
+        attempts: [
+          {
+            candidate: 'a',
+            strategy: 'freeform',
+            reason: 'too tall; after exact projection',
+            projection_failures: [
+              {
+                band: 160,
+                check: 'geom.collide',
+                buildings: [4, 9],
+                detail: 'first collision; left machine; right machine',
+              },
+            ],
+          },
+        ],
+      },
     }),
   });
   const settled = await runBuild({ ...DEFAULT_OPTIONS, url: 'x' }, () => {});
   expect(settled.state).toBe('refused');
-  expect(settled.refusal?.reasons).toEqual(['freeform/a: too tall']);
+  expect(settled.refusal?.attempts[0]?.projection_failures[0]?.detail).toBe(
+    'first collision; left machine; right machine',
+  );
 });
 
 test('aborting stops the poll loop', async () => {

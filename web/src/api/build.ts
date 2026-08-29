@@ -43,6 +43,19 @@ export const ProliferatorTier = z.enum(['auto', 'none', '1', '2', '3']);
 const Rate = z.object({ exact: z.string(), per_minute: z.number() });
 
 const Finding = z.object({ check: z.string(), message: z.string() });
+export const ProjectionFailure = z.object({
+  band: z.number(),
+  check: z.string(),
+  buildings: z.array(z.number()),
+  detail: z.string(),
+});
+
+export const AttemptFailure = z.object({
+  candidate: z.string(),
+  strategy: ExplicitStrategy,
+  reason: z.string(),
+  projection_failures: z.array(ProjectionFailure),
+});
 
 const Attempt = z.object({
   candidate: z.string(),
@@ -81,7 +94,7 @@ const BuildResult = z.object({
   flow_pinned: z.boolean(),
   flow_findings: z.array(z.string()),
   belt_rules: BeltRules.nullable(),
-  refused: z.array(z.string()),
+  refused: z.array(AttemptFailure),
   report: z.object({
     ok: z.boolean(),
     checks_run: z.array(z.string()),
@@ -92,8 +105,8 @@ const BuildResult = z.object({
   attempts: z.array(Attempt),
 });
 
-/** A refusal: which pairs were tried, and why each gave up. */
-const Refusal = z.object({ message: z.string(), reasons: z.array(z.string()) });
+/** A refusal: which pairs were tried and each exact projection failure. */
+const Refusal = z.object({ message: z.string(), attempts: z.array(AttemptFailure) });
 
 /**
  * One (candidate, strategy) pair, as `pipeline.build` starts it and as it
@@ -110,6 +123,7 @@ const Step = z.object({
   area: z.number().nullable(),
   ok: z.boolean().nullable(),
   reason: z.string().nullable(),
+  projection_failures: z.array(ProjectionFailure),
 });
 
 const Job = z.object({
@@ -134,6 +148,8 @@ export type Step = z.infer<typeof Step>;
 export type BuildResult = z.infer<typeof BuildResult>;
 export type Refusal = z.infer<typeof Refusal>;
 export type Attempt = z.infer<typeof Attempt>;
+export type ProjectionFailure = z.infer<typeof ProjectionFailure>;
+export type AttemptFailure = z.infer<typeof AttemptFailure>;
 
 export const BuildOptions = z.object({
   url: z.string(),

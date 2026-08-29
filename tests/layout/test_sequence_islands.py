@@ -14,7 +14,12 @@ import pytest
 import flab2bp.layout.sequence_islands as islands_module
 from flab2bp.layout import validate
 from flab2bp.layout.band_policy import BandPolicy
-from flab2bp.layout.base import NoValidLayout, PlacedBuilding, Placement
+from flab2bp.layout.base import (
+    NoValidLayout,
+    PlacedBuilding,
+    Placement,
+    ProjectionFailureRecord,
+)
 from flab2bp.layout.compact_seed import CompactSeedConfig, solve_compact_seed
 from flab2bp.layout.sequence_islands import (
     _merge_sequence_island_outcomes,
@@ -330,6 +335,18 @@ def test_parent_deadline_preserves_settled_refusals_in_island_order(
         "no legal DSP latitude band/orientation accepts the final placement: "
         "band 240 game.power_too_close (2, 7): later projected power refusal"
     )
+    first = ProjectionFailureRecord(
+        band=160,
+        check="geom.collide",
+        buildings=(4, 9),
+        detail="first projected collision; collider A; collider B",
+    )
+    second = ProjectionFailureRecord(
+        band=240,
+        check="game.power_too_close",
+        buildings=(2, 7),
+        detail="later projected power refusal; north; south",
+    )
 
     def settle_two_islands(
         futures: list[Future[_SequenceIslandOutcome]],
@@ -345,6 +362,7 @@ def test_parent_deadline_preserves_settled_refusals_in_island_order(
                 refusal_two,
                 "mixed",
                 2.0,
+                projection_failures=(second,),
             )
         )
         futures[0].set_result(
@@ -354,6 +372,7 @@ def test_parent_deadline_preserves_settled_refusals_in_island_order(
                 refusal_zero,
                 "mixed",
                 2.0,
+                projection_failures=(first,),
             )
         )
         return {futures[2], futures[0]}, {futures[1]}
@@ -370,6 +389,13 @@ def test_parent_deadline_preserves_settled_refusals_in_island_order(
         "deadline exhausted before any sequence island produced an exact layout; "
         f"settled island refusals: island 0: {refusal_zero}; island 2: {refusal_two}"
     )
+    assert [
+        (failure.band, failure.check, failure.buildings, failure.detail)
+        for failure in caught.value.projection_failures
+    ] == [
+        (failure.band, failure.check, failure.buildings, failure.detail)
+        for failure in (first, second)
+    ]
     executor = _PendingExecutor.instances[-1]
     assert executor.terminated
     assert not executor.killed

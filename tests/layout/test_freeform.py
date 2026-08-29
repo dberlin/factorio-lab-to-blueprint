@@ -2103,7 +2103,7 @@ class TestSolverActuallyRuns:
         assert "build colliders intersect" in caught.value.reason
 
 
-def test_projection_no_good_forbids_only_rejected_relative_displacement() -> None:
+def test_projection_no_good_forbids_only_the_exact_failed_pair_context() -> None:
     strip = plan_strips(single_recipe_spec())[0]
     strips = [
         replace(strip, west_channel=3),
@@ -2135,9 +2135,17 @@ def test_projection_no_good_forbids_only_rejected_relative_displacement() -> Non
         initial.at[0][0] - initial.at[1][0],
         initial.at[0][1] - initial.at[1][1],
     )
-    assert rejected_delta == (-12, -6)
-    assert unrelated_delta == (2, -6)
-    bad = ProjectionNoGood(0, 2, *rejected_delta, failure)
+    bad = ProjectionNoGood(
+        left_strip=0,
+        right_strip=2,
+        delta_x=rejected_delta[0],
+        delta_y=rejected_delta[1],
+        pack_width=initial.width,
+        pack_height=initial.height,
+        left_origin=initial.at[0],
+        right_origin=initial.at[2],
+        failure=failure,
+    )
 
     retry = _pack(
         strips,
@@ -2151,13 +2159,74 @@ def test_projection_no_good_forbids_only_rejected_relative_displacement() -> Non
 
     assert retry is not None
     assert (
-        retry.at[0][0] - retry.at[2][0],
-        retry.at[0][1] - retry.at[2][1],
-    ) != rejected_delta
+        retry.width,
+        retry.height,
+        retry.at[0],
+        retry.at[2],
+    ) != (
+        bad.pack_width,
+        bad.pack_height,
+        bad.left_origin,
+        bad.right_origin,
+    )
     assert (
         retry.at[0][0] - retry.at[1][0],
         retry.at[0][1] - retry.at[1][1],
     ) == unrelated_delta
+
+
+@pytest.mark.parametrize("context_change", ["height", "width", "absolute-origin"])
+def test_projection_no_good_leaves_same_displacement_free_in_another_context(
+    context_change: str,
+) -> None:
+    strip = plan_strips(single_recipe_spec())[0]
+    strips = [replace(strip, west_channel=3), replace(strip, west_channel=1)]
+    height = 2 * max(_box(candidate)[1] for candidate in strips)
+    width_bound = 2 * max(_box(candidate)[0] for candidate in strips)
+    baseline = _pack(
+        strips,
+        height=height,
+        width_bound=width_bound,
+        time_budget_s=0.5,
+        direct_candidates={},
+        workers=DETERMINISTIC_WORKERS,
+    )
+    assert baseline is not None
+    failure = finalize.ProjectionFailure("geom.collide", (0, 1), "collision", 160)
+    delta = (
+        baseline.at[0][0] - baseline.at[1][0],
+        baseline.at[0][1] - baseline.at[1][1],
+    )
+    no_good = ProjectionNoGood(
+        0,
+        1,
+        *delta,
+        baseline.width,
+        baseline.height,
+        baseline.at[0],
+        baseline.at[1],
+        failure,
+    )
+    if context_change == "height":
+        other_context = replace(no_good, pack_height=999)
+    elif context_change == "width":
+        other_context = replace(no_good, pack_width=999)
+    else:
+        other_context = replace(no_good, left_origin=(999, 999))
+
+    retry = _pack(
+        strips,
+        height=height,
+        width_bound=width_bound,
+        time_budget_s=0.5,
+        direct_candidates={},
+        workers=DETERMINISTIC_WORKERS,
+        projection_no_goods=(other_context,),
+    )
+
+    assert retry is not None
+    assert retry.at == baseline.at
+    assert retry.width == baseline.width
 
 
 def test_projection_owned_strip_collision_learns_and_repacks(

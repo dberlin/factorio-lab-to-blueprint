@@ -8,7 +8,36 @@
  * produced no layout at all are the parts you need before trusting the result.
  * Every one of them reads as silence if the UI does not say it.
  */
-import type { BuildResult, Refusal } from '../api/build';
+import type { AttemptFailure, BuildResult, ProjectionFailure, Refusal } from '../api/build';
+export function ProjectionFailures({ failures }: { failures: ProjectionFailure[] }) {
+  if (failures.length === 0) return null;
+  return (
+    <ul className="projection-failures">
+      {failures.map((failure) => (
+        <li
+          key={`${failure.band}/${failure.check}/${failure.buildings.join(',')}/${failure.detail}`}
+        >
+          band {failure.band} — {failure.check} — buildings {failure.buildings.join(', ')} —{' '}
+          {failure.detail}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function AttemptFailures({ attempts }: { attempts: AttemptFailure[] }) {
+  if (attempts.length === 0) return null;
+  return (
+    <ul className="reasons">
+      {attempts.map((attempt) => (
+        <li key={`${attempt.candidate}/${attempt.strategy}`}>
+          {attempt.strategy} / {attempt.candidate}: {attempt.reason}
+          <ProjectionFailures failures={attempt.projection_failures} />
+        </li>
+      ))}
+    </ul>
+  );
+}
 
 /** One refused strategy/candidate pair per line, as a result rather than an error. */
 export function RefusalReport({ refusal }: { refusal: Refusal }) {
@@ -16,13 +45,7 @@ export function RefusalReport({ refusal }: { refusal: Refusal }) {
     <section className="build-report refused" data-testid="refusal">
       <h2>No layout for this spec</h2>
       <p>{refusal.message}</p>
-      {refusal.reasons.length > 0 && (
-        <ul className="reasons">
-          {refusal.reasons.map((reason) => (
-            <li key={reason}>{reason}</li>
-          ))}
-        </ul>
-      )}
+      <AttemptFailures attempts={refusal.attempts} />
       <p className="note">
         A refusal is a result, not a crash: each line above is one strategy trying one candidate and
         saying why it gave up. Raising the budget or the candidate count sometimes helps; a spec
@@ -138,11 +161,7 @@ export function BuildReportPanel({
           {/* Invisible in `attempts`, and silence would read as "that pair simply
               was not the best" — a much more reassuring claim than the truth. */}
           <p>{result.refused.length} strategy/candidate pair(s) produced no layout:</p>
-          <ul className="reasons">
-            {result.refused.map((line) => (
-              <li key={line}>{line}</li>
-            ))}
-          </ul>
+          <AttemptFailures attempts={result.refused} />
         </>
       )}
 

@@ -19,11 +19,12 @@ Two rules the CLI already follows and this must not break:
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from fractions import Fraction
 
 from flab2bp import pipeline
 from flab2bp.layout import markers
+from flab2bp.layout.base import LayoutAttemptFailure, ProjectionFailureRecord
 
 #: Recursive JSON values, with no escape hatch for non-serialisable objects.
 type JsonScalar = None | bool | int | float | str
@@ -52,6 +53,29 @@ def _rates(values: dict[str, Fraction]) -> Json:
     for item, rate in sorted(values.items()):
         result[item] = _rate(rate)
     return result
+
+def projection_failure(failure: ProjectionFailureRecord) -> Json:
+    """One exact projection refusal without flattening its evidence."""
+    return {
+        "band": failure.band,
+        "check": failure.check,
+        "buildings": _array(failure.buildings),
+        "detail": failure.detail,
+    }
+
+
+def attempt_failure(attempt: LayoutAttemptFailure) -> Json:
+    """One strategy/candidate refusal and its ordered projection evidence."""
+    return {
+        "candidate": attempt.candidate,
+        "strategy": attempt.strategy,
+        "reason": attempt.reason,
+        "projection_failures": _array(
+            projection_failure(failure)
+            for failure in attempt.projection_failures
+        ),
+    }
+
 
 
 def describe(build: pipeline.Build, *, allow_invalid: bool = False) -> Json:
@@ -127,7 +151,7 @@ def describe(build: pipeline.Build, *, allow_invalid: bool = False) -> Json:
         # this candidate" is invisible in `attempts`, and silence there reads
         # as "it simply was not the best", which is a much more reassuring
         # claim than the truth.
-        "refused": _array(build.refused),
+        "refused": _array(attempt_failure(attempt) for attempt in build.refused),
         "report": {
             "ok": build.report.ok,
             "checks_run": _array(build.report.checks_run),
@@ -139,12 +163,14 @@ def describe(build: pipeline.Build, *, allow_invalid: bool = False) -> Json:
     }
 
 
-def refusal(reasons: list[str], *, message: str) -> Json:
-    """A ``NoValidLayout`` as a result rather than an error.
+def refusal(attempts: Sequence[LayoutAttemptFailure], *, message: str) -> Json:
+    """A ``NoValidLayout`` as a structured result rather than an error.
 
-    ``reasons`` is the per-pair list the pipeline collected; ``message`` is the
-    exception's own text, which already explains that a spec nobody can lay out
-    is a defect in the layout model rather than a hard instance.  Both are kept:
-    the list says what was tried, the message says how to read it.
+    Attempt boundaries and projection fields remain data all the way to the
+    browser.  In particular, semicolons in a validator's human-readable detail
+    cannot be mistaken for separators between attempts or failures.
     """
-    return {"message": message, "reasons": _array(reasons)}
+    return {
+        "message": message,
+        "attempts": _array(attempt_failure(attempt) for attempt in attempts),
+    }

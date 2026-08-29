@@ -84,6 +84,7 @@ from flab2bp.layout.base import (
     NoValidLayout,
     PlacedBuilding,
     Placement,
+    ProjectionFailureRecord,
 )
 from flab2bp.layout.finalize import ProjectionNoGood
 from flab2bp.layout.route_feedback import (
@@ -2019,6 +2020,10 @@ def _projection_no_good(
         right_strip=right_strip,
         delta_x=left_x - right_x,
         delta_y=left_y - right_y,
+        pack_width=pack.width,
+        pack_height=pack.height,
+        left_origin=(left_x, left_y),
+        right_origin=(right_x, right_y),
         failure=failure,
     )
 
@@ -2129,30 +2134,34 @@ def _pack(
 
     model.add_no_overlap_2d(x_iv, y_iv)
 
-    for index, no_good in enumerate(projection_no_goods):
+    for no_good in projection_no_goods:
         if (
             no_good.left_strip == no_good.right_strip
             or not 0 <= no_good.left_strip < n
             or not 0 <= no_good.right_strip < n
         ):
             raise ValueError("projection no-good must name two distinct packed strips")
-        dx = model.new_int_var(-width_bound, width_bound, f"projection_dx_{index}")
-        dy = model.new_int_var(-height, height, f"projection_dy_{index}")
-        # `_Pack.at` names CONTENT origins, while `xs` name boxes including the
-        # reserved west channel.  Keep the learned displacement in `_Pack.at`'s
-        # coordinate system so sprayed and unsprayed strips forbid exactly the
-        # arrangement that failed rather than an off-by-channel neighbour.
-        model.add(
-            dx
-            == xs[no_good.left_strip]
-            - xs[no_good.right_strip]
-            + strips[no_good.left_strip].west_channel
-            - strips[no_good.right_strip].west_channel
-        )
-        model.add(dy == ys[no_good.left_strip] - ys[no_good.right_strip])
+        if no_good.pack_height != height:
+            continue
+        left_x = no_good.left_origin[0] - strips[no_good.left_strip].west_channel
+        right_x = no_good.right_origin[0] - strips[no_good.right_strip].west_channel
         model.add_forbidden_assignments(
-            [dx, dy],
-            [(no_good.delta_x, no_good.delta_y)],
+            [
+                w_var,
+                xs[no_good.left_strip],
+                ys[no_good.left_strip],
+                xs[no_good.right_strip],
+                ys[no_good.right_strip],
+            ],
+            [
+                (
+                    no_good.pack_width,
+                    left_x,
+                    no_good.left_origin[1],
+                    right_x,
+                    no_good.right_origin[1],
+                )
+            ],
         )
 
     # CUT 3 -- ROUTING CAPACITY was built here, measured, and taken out.
@@ -9459,6 +9468,16 @@ class FreeformLayout:
         # value of checking: "the packer produced packs its own router cannot
         # wire" would be false here and would send the next reader to the packer.
         if rejected:
+            projection_failures = tuple(
+                ProjectionFailureRecord(
+                    finding.band,
+                    finding.check,
+                    finding.buildings,
+                    finding.detail,
+                )
+                for finding in rejected
+                if isinstance(finding, finalize.ProjectionFailure)
+            )
             raise NoValidLayout(
                 "every packing that wired was rejected by our own validator ("
                 + _refusal_summary(rejected)
@@ -9467,6 +9486,7 @@ class FreeformLayout:
                 "run",
                 spec_label=spec.label,
                 budget_s=budgets[-1],
+                projection_failures=projection_failures,
             )
         if _expired(deadline):
             # AND IT HAS TO SAY HOW CLOSE THE PACKS CAME, because the clock
@@ -9659,7 +9679,7 @@ class FreeformLayout:
             for height in heights
         ]
         projection_no_goods: list[ProjectionNoGood] = []
-        projection_no_good_keys: set[tuple[int, int, int, int]] = set()
+        projection_no_good_keys: set[tuple[int, ...]] = set()
         # This sweep's own share, never more than the CALL has left. A sweep
         # asked for 15s when 3 remain must not spend 15.
         left = time_budget_s if deadline is None else deadline - time.monotonic()
@@ -9958,6 +9978,10 @@ class FreeformLayout:
                         no_good.right_strip,
                         no_good.delta_x,
                         no_good.delta_y,
+                        no_good.pack_width,
+                        no_good.pack_height,
+                        *no_good.left_origin,
+                        *no_good.right_origin,
                     )
                     if no_good_key in projection_no_good_keys:
                         continue

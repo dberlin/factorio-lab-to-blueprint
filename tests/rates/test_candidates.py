@@ -7,8 +7,10 @@ from fractions import Fraction
 import pytest
 
 from flab2bp.lab.data import load_dataset
+from flab2bp.lab.flow import canonicalize_dataset, canonicalize_request
 from flab2bp.lab.schema import Dataset
 from flab2bp.lab.url import parse_url
+from flab2bp.rates import candidates as candidates_module
 from flab2bp.rates.adjust import ProliferatorTier, available_modes, machine_footprint
 from flab2bp.rates.candidates import (
     build_candidates,
@@ -80,6 +82,40 @@ def data() -> Dataset:
 @pytest.fixture(scope="module")
 def candidates(data: Dataset) -> BuildSpecSet:
     return build_candidates(data, parse_url(EXAMPLE_URL), tier=ProliferatorTier.MK3)
+
+def test_direct_candidate_adapter_canonicalizes_exactly_once(
+    data: Dataset,
+    candidates: BuildSpecSet,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = parse_url(EXAMPLE_URL)
+    canonical_data = canonicalize_dataset(data)
+    canonical_request = canonicalize_request(request)
+    assert hasattr(candidates_module, "_build_candidates_canonical")
+    calls = {"dataset": 0, "request": 0}
+    expected = candidates
+
+    def canonical_data_spy(source: Dataset) -> Dataset:
+        assert source is data
+        calls["dataset"] += 1
+        return canonical_data
+
+    def canonical_request_spy(source: object) -> object:
+        assert source is request
+        calls["request"] += 1
+        return canonical_request
+
+    def internal(data_arg: object, request_arg: object, **_kwargs: object) -> BuildSpecSet:
+        assert data_arg is canonical_data
+        assert request_arg is canonical_request
+        return expected
+
+    monkeypatch.setattr(candidates_module, "canonicalize_dataset", canonical_data_spy)
+    monkeypatch.setattr(candidates_module, "canonicalize_request", canonical_request_spy)
+    monkeypatch.setattr(candidates_module, "_build_candidates_canonical", internal)
+
+    assert candidates_module.build_candidates(data, request) is expected
+    assert calls == {"dataset": 1, "request": 1}
 
 
 # --- the frontier ----------------------------------------------------------

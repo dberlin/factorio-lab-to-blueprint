@@ -10,7 +10,12 @@ import pytest
 from flab2bp import cli, pipeline
 from flab2bp.lab.schema import Dataset
 from flab2bp.layout.band_policy import BAND_SELECTIONS, BandSelection
-from flab2bp.layout.base import AreaFrame
+from flab2bp.layout.base import (
+    AreaFrame,
+    LayoutAttemptFailure,
+    NoValidLayout,
+    ProjectionFailureRecord,
+)
 
 
 class _BuildKwargs(TypedDict, total=False):
@@ -216,6 +221,66 @@ def test_cli_reports_literal_band_evidence(
     assert f"primary_band: {certified[0]}" in report
     assert f"certified_bands: {', '.join(map(str, certified))}" in report
 
+def test_cli_reports_structured_projection_evidence_without_parsing_prose(
+    band_build: pipeline.Build,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    projection = ProjectionFailureRecord(
+        160,
+        "geom.collide",
+        (4, 9),
+        "first collision; left machine; right machine",
+    )
+    refused = LayoutAttemptFailure(
+        "no-proliferator",
+        "sequence-pair",
+        "exact projection refused; after routing",
+        (projection,),
+    )
+
+    cli._report(dataclasses.replace(band_build, refused=(refused,)), verbose=False)
+
+    report = capsys.readouterr().err
+    assert (
+        "sequence-pair/no-proliferator: exact projection refused; after routing"
+        in report
+    )
+    assert (
+        "band 160 geom.collide buildings (4, 9): "
+        "first collision; left machine; right machine"
+    ) in report
+
+
+def test_terminal_cli_refusal_prints_structured_projection_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    projection = ProjectionFailureRecord(
+        200,
+        "game.power_too_close",
+        (2, 7),
+        "power envelopes; north; south",
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "build",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            NoValidLayout(
+                "exact projection refused",
+                spec_label="no-proliferator",
+                budget_s=2.0,
+                projection_failures=(projection,),
+            )
+        ),
+    )
+
+    assert cli.main(["iron-ingot"]) == 3
+
+    report = capsys.readouterr().err
+    assert (
+        "band 200 game.power_too_close buildings (2, 7): "
+        "power envelopes; north; south"
+    ) in report
 
 def test_cli_refuses_success_without_band_evidence(
     band_build: pipeline.Build,

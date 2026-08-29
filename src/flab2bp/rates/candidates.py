@@ -386,6 +386,26 @@ def build_candidates(
     time_limit_s: float = 30.0,
     flow: FlowSelection | None = None,
 ) -> BuildSpecSet:
+    """Canonicalize direct public inputs once, then build the candidate frontier."""
+    return _build_candidates_canonical(
+        canonicalize_dataset(data),
+        canonicalize_request(request),
+        tier=tier,
+        count=count,
+        time_limit_s=time_limit_s,
+        flow=flow,
+    )
+
+
+def _build_candidates_canonical(
+    data: Dataset,
+    request: LabRequest,
+    *,
+    tier: ProliferatorTier | None = None,
+    count: int = DEFAULT_CANDIDATES,
+    time_limit_s: float = 30.0,
+    flow: FlowSelection | None = None,
+) -> BuildSpecSet:
     """Emit an ordered frontier of complete, valid builds.
 
     The deterministic frontier contains ``no-proliferator``, ``all-products``,
@@ -404,8 +424,7 @@ def build_candidates(
     real URL produced 515,396,248 machines this way, and the layout stage then
     sat trying to place them.
     """
-    data = canonicalize_dataset(data)
-    request = canonicalize_request(request)
+    # ``data`` and ``request`` are canonical objects owned by the caller.
     if count < 1 or count > DEFAULT_CANDIDATES:
         raise ValueError(f"count must be between 1 and {DEFAULT_CANDIDATES}")
 

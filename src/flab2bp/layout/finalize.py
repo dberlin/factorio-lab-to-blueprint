@@ -32,12 +32,16 @@ class ProjectionFailure:
 
 @dataclass(frozen=True, slots=True)
 class ProjectionNoGood:
-    """One exact strip-origin displacement rejected by projected geometry."""
+    """One pair-specific packed origin assignment rejected by projection."""
 
     left_strip: int
     right_strip: int
     delta_x: int
     delta_y: int
+    pack_width: int
+    pack_height: int
+    left_origin: tuple[int, int]
+    right_origin: tuple[int, int]
     failure: ProjectionFailure
 
 

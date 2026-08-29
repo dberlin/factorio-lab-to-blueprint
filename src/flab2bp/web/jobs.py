@@ -29,9 +29,9 @@ from urllib.parse import urlsplit
 
 from flab2bp import pipeline
 from flab2bp.layout.band_policy import BAND_SELECTIONS, BandSelection
-from flab2bp.layout.base import NoValidLayout
+from flab2bp.layout.base import LayoutAttemptFailure, NoValidLayout
 from flab2bp.rates.adjust import ProliferatorTier
-from flab2bp.web.payload import Json, JsonValue, describe, refusal
+from flab2bp.web.payload import Json, JsonValue, describe, projection_failure, refusal
 
 State = Literal["queued", "running", "done", "refused", "error"]
 WebStrategyName = Literal["best", "freeform", "sequence-pair"]
@@ -262,8 +262,8 @@ def run_build(options: Options, on_progress: pipeline.ProgressSink) -> pipeline.
     ``--flow`` arrives as CSV text and goes through ``flow_from_text``'s
     provenance check exactly as a file named on the command line does.
     ``--fetch-flow`` is admitted only for the strict FactorioLab HTTPS
-    allowlist, and the same validator checks the browser's final main-frame
-    location before any page probes run.
+    allowlist, and request-stage CDP interception aborts a forbidden main-frame
+    document redirect before Chromium accesses it.
     """
     return pipeline.build(
         options.url,
@@ -351,7 +351,7 @@ class Builder:
             # the screen when it happens.
             with job._lock:
                 job.state = "refused"
-                job.refusal = refusal(list(_reasons(exc)), message=str(exc))
+                job.refusal = refusal(_attempt_failures(exc), message=str(exc))
                 job.finished_at = time.monotonic()
         except (ValueError, KeyError) as exc:
             with job._lock:
@@ -430,9 +430,24 @@ def _step(step: pipeline.AttemptProgress | None) -> Json | None:
         "area": step.area,
         "ok": step.ok,
         "reason": step.reason,
+        "projection_failures": [
+            projection_failure(failure)
+            for failure in step.projection_failures
+        ],
     }
 
 
-def _reasons(exc: NoValidLayout) -> tuple[str, ...]:
-    """Return pipeline-provided strategy/candidate refusal boundaries."""
-    return exc.attempt_reasons or (exc.reason,)
+def _attempt_failures(exc: NoValidLayout) -> tuple[LayoutAttemptFailure, ...]:
+    """Return pipeline-provided attempt boundaries without parsing prose."""
+    if exc.attempt_failures:
+        return exc.attempt_failures
+    reasons = exc.attempt_reasons or (exc.reason,)
+    return tuple(
+        LayoutAttemptFailure(
+            exc.spec_label,
+            "",
+            reason,
+            exc.projection_failures if len(reasons) == 1 else (),
+        )
+        for reason in reasons
+    )

@@ -1017,10 +1017,14 @@ root `.gitignore`'s UNANCHORED `dist/` pattern stripped every package's own
 unanchored ignore pattern is a trap once a vendored dependency tree is inside the
 repo; `bun.lock` is the declaration and the tree is no longer tracked.
 
-**`/api/fetch` is an open relay**, inherited from the viewer and reimplemented
-in Python for parity. It follows redirects, so an allowed http(s) URL can still
-reach a loopback address. Mitigated only by binding to 127.0.0.1. Anything
-public needs this closed first, along with rate limiting on `/api/build`.
+**PARTLY FIXED -- `/api/fetch` is no longer a blind redirect relay.** Every
+requested URL and redirect hop is resolved and rejected when any answer is
+loopback, private, link-local, or otherwise reserved. The remaining relay gap
+is DNS rebinding between that check and httpx's separate connection; closing it
+requires pinning the checked address to the socket. `/api/build` also still
+needs rate limiting before this server belongs on a public interface. The
+default `127.0.0.1` binding remains part of the security boundary until both are
+closed.
 
 **Considered and dropped: running the solver client-side.** `ortools` is not in
 Pyodide's package set, and while a WASM port of OR-Tools exists, the whole point

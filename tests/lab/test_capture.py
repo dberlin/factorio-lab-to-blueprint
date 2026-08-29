@@ -32,7 +32,8 @@ import json
 import os
 from fractions import Fraction
 from pathlib import Path
-from typing import TypedDict
+from types import SimpleNamespace
+from typing import TypedDict, cast
 
 import pytest
 
@@ -43,6 +44,8 @@ from flab2bp.lab.capture import (
     _await_navigation,
     _await_solve,
     _capture,
+    _Cdp,
+    _navigate_with_request_guard,
     _validate_page_location,
     capture_flow_csv,
     find_browser,
@@ -142,6 +145,141 @@ class _NavigationPage:
         ready = self.ready_states[min(self.index, len(self.ready_states) - 1)]
         self.index += 1
         return ready
+
+class _FakeFetch:
+    class RequestPaused:
+        pass
+
+    class RequestStage:
+        REQUEST = "Request"
+
+    class RequestPattern:
+        def __init__(self, *, resource_type: str, request_stage: str) -> None:
+            self.resource_type = resource_type
+            self.request_stage = request_stage
+
+    @staticmethod
+    def enable(*, patterns: list[object]) -> tuple[str, list[object]]:
+        return ("enable", patterns)
+
+    @staticmethod
+    def continue_request(request_id: str) -> tuple[str, str]:
+        return ("continue", request_id)
+
+    @staticmethod
+    def fail_request(request_id: str, reason: str) -> tuple[str, str, str]:
+        return ("fail", request_id, reason)
+
+
+class _FakeNetwork:
+    class ResourceType:
+        DOCUMENT = "Document"
+
+    class ErrorReason:
+        BLOCKED_BY_CLIENT = "BlockedByClient"
+
+
+class _FakeCdp:
+    fetch = _FakeFetch
+    network = _FakeNetwork
+
+    class page:
+        @staticmethod
+        def get_frame_tree() -> tuple[str]:
+            return ("frame-tree",)
+
+        @staticmethod
+        def navigate(url: str) -> tuple[str, str]:
+            return ("navigate", url)
+
+
+class _InterceptPage:
+    def __init__(self, urls: list[str]) -> None:
+        self.urls = urls
+        self.handler: object = None
+        self.commands: list[tuple[object, ...]] = []
+        self.loaded: list[str] = []
+
+    def add_handler(self, event_type: type, callback: object) -> None:
+        assert event_type is _FakeFetch.RequestPaused
+        self.handler = callback
+        self.commands.append(("handler",))
+
+    async def send(self, command: object) -> object:
+        typed = cast(tuple[object, ...], command)
+        self.commands.append(typed)
+        if typed[0] == "frame-tree":
+            return SimpleNamespace(frame=SimpleNamespace(id_="main"))
+        if typed[0] != "navigate":
+            return None
+        assert callable(self.handler)
+        for index, url in enumerate(self.urls):
+            event = SimpleNamespace(
+                request_id=f"request-{index}",
+                request=SimpleNamespace(url=url),
+                frame_id="main",
+                resource_type=_FakeNetwork.ResourceType.DOCUMENT,
+            )
+            before = len(self.commands)
+            await self.handler(event)
+            action = self.commands[before]
+            if action[0] == "continue":
+                self.loaded.append(url)
+        return ("main", "loader", None)
+
+    async def evaluate(
+        self,
+        expression: str,
+        *,
+        await_promise: bool = False,
+        return_by_value: bool = False,
+    ) -> object:
+        del expression, await_promise, return_by_value
+        return None
+
+
+def test_forbidden_main_frame_redirect_is_aborted_before_load() -> None:
+    unsafe = "http://127.0.0.1/private"
+    page = _InterceptPage([REAL_URL, unsafe])
+
+    def validate(url: str) -> None:
+        if url == unsafe:
+            raise ValueError("outside allowlist")
+
+    with pytest.raises(CaptureError, match="outside allowlist"):
+        asyncio.run(
+            _navigate_with_request_guard(
+                page,
+                REAL_URL,
+                cast(_Cdp, _FakeCdp),
+                validate,
+            )
+        )
+
+    assert page.loaded == [REAL_URL]
+    assert ("fail", "request-1", "BlockedByClient") in page.commands
+    assert page.commands.index(("handler",)) < next(
+        index for index, command in enumerate(page.commands) if command[0] == "navigate"
+    )
+
+
+def test_allowed_main_frame_redirects_are_continued() -> None:
+    redirected = REAL_URL.replace("/list?", "/flow?")
+    page = _InterceptPage([REAL_URL, redirected])
+    seen: list[str] = []
+
+    asyncio.run(
+        _navigate_with_request_guard(
+            page,
+            REAL_URL,
+            cast(_Cdp, _FakeCdp),
+            seen.append,
+        )
+    )
+
+    assert page.loaded == [REAL_URL, redirected]
+    assert seen == [REAL_URL, redirected]
+    assert [command[0] for command in page.commands].count("continue") == 2
 
 def test_final_navigation_is_checked_before_page_probes() -> None:
     seen: list[str] = []

@@ -480,7 +480,7 @@ def test_cli_combines_projection_and_build_per_case_comparisons(
                 str(comparison_path),
             ]
         )
-        == 0
+        == 1
     )
 
     after_payload = json.loads(after_path.read_text(encoding="utf-8"))
@@ -490,3 +490,28 @@ def test_cli_combines_projection_and_build_per_case_comparisons(
     assert comparison_payload["passed"] is False
     assert comparison_payload["projection"]["cases"]["small"]["after"]["area"] == 101
     assert comparison_payload["builds"]["cases"][0]["gate_passed"] is False
+
+
+def test_projection_only_cli_writes_failed_gate_before_nonzero_exit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    baseline = BenchmarkResult(
+        cases={"small": _case(median_s=1.0, p95_s=2.0, area=100)}
+    )
+    regressed = BenchmarkResult(
+        cases={"small": _case(median_s=1.0, p95_s=3.1, area=100)}
+    )
+    monkeypatch.setattr(benchmark_projection, "run_benchmark", lambda samples: regressed)
+    baseline_path = tmp_path / "baseline.json"
+    output_path = tmp_path / "after.json"
+    baseline_path.write_text(json.dumps(baseline), encoding="utf-8")
+
+    exit_code = benchmark_projection.main(
+        ["--baseline", str(baseline_path), "--output", str(output_path)]
+    )
+
+    assert exit_code == 1
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["projection_comparison"]["passed"] is False
+    assert payload["cases"] == regressed["cases"]

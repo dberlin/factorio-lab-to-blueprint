@@ -67,9 +67,10 @@ import socket
 import subprocess
 import tempfile
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from importlib.util import find_spec
 from pathlib import Path
-from typing import Final, Protocol, TypedDict, TypeGuard
+from typing import Final, Protocol, TypedDict, TypeGuard, cast
 
 from pydantic import TypeAdapter, ValidationError
 
@@ -106,19 +107,155 @@ class _AsyncPage(Protocol):
     ) -> object: ...
 
 
+class _InterceptPage(_AsyncPage, Protocol):
+    async def send(self, command: object) -> object: ...
+
+    def add_handler(self, event_type: type[object], callback: object) -> None: ...
+
+
+class _Request(Protocol):
+    url: str
+
+
+class _PausedRequest(Protocol):
+    request_id: object
+    request: _Request
+    frame_id: object
+    resource_type: object
+
+
+class _Frame(Protocol):
+    id_: object
+
+
+class _FrameTree(Protocol):
+    frame: _Frame
+
+
+class _RequestStage(Protocol):
+    REQUEST: object
+
+
+class _ResourceType(Protocol):
+    DOCUMENT: object
+
+
+class _ErrorReason(Protocol):
+    BLOCKED_BY_CLIENT: object
+
+
+class _FetchDomain(Protocol):
+    RequestPaused: type[object]
+    RequestStage: _RequestStage
+
+    def RequestPattern(self, *, resource_type: object, request_stage: object) -> object: ...
+
+    def enable(self, *, patterns: list[object]) -> object: ...
+
+    def continue_request(self, request_id: object) -> object: ...
+
+    def fail_request(self, request_id: object, error_reason: object) -> object: ...
+
+
+class _NetworkDomain(Protocol):
+    ResourceType: _ResourceType
+    ErrorReason: _ErrorReason
+
+
+class _PageDomain(Protocol):
+    def get_frame_tree(self) -> object: ...
+
+    def navigate(self, url: str) -> object: ...
+
+
+class _Cdp(Protocol):
+    fetch: _FetchDomain
+    network: _NetworkDomain
+    page: _PageDomain
+
+
 class _Browser(Protocol):
-    async def get(self, url: str) -> _AsyncPage: ...
+    async def get(self, url: str) -> _InterceptPage: ...
 
     def stop(self) -> None: ...
 
 
 class _NoDriver(Protocol):
+    cdp: _Cdp
     async def start(self, *, host: str, port: int) -> _Browser: ...
 
 
 def _is_nodriver(module: object) -> TypeGuard[_NoDriver]:
     return callable(getattr(module, "start", None))
 
+
+
+@dataclass(slots=True)
+class _MainFrameRequestGuard:
+    """Pause every main-frame document request until its URL is admitted."""
+
+    page: _InterceptPage
+    cdp: _Cdp
+    validator: UrlValidator
+    main_frame_id: object
+    failure: CaptureError | None = None
+
+    async def handle(self, raw_event: object) -> None:
+        event = cast(_PausedRequest, raw_event)
+        if (
+            event.frame_id != self.main_frame_id
+            or event.resource_type != self.cdp.network.ResourceType.DOCUMENT
+        ):
+            _ = await self.page.send(self.cdp.fetch.continue_request(event.request_id))
+            return
+        try:
+            self.validator(event.request.url)
+        except ValueError as exc:
+            _ = await self.page.send(
+                self.cdp.fetch.fail_request(
+                    event.request_id,
+                    self.cdp.network.ErrorReason.BLOCKED_BY_CLIENT,
+                )
+            )
+            if self.failure is None:
+                self.failure = CaptureError(
+                    f"redirect target is not permitted: {event.request.url}: {exc}"
+                )
+            return
+        _ = await self.page.send(self.cdp.fetch.continue_request(event.request_id))
+
+    def raise_if_failed(self) -> None:
+        if self.failure is not None:
+            raise self.failure
+
+
+async def _navigate_with_request_guard(
+    page: _InterceptPage,
+    url: str,
+    cdp: _Cdp,
+    validator: UrlValidator,
+) -> _MainFrameRequestGuard:
+    """Enable request-stage Fetch interception on ``about:blank``, then navigate."""
+
+    frame_tree = cast(_FrameTree, await page.send(cdp.page.get_frame_tree()))
+    guard = _MainFrameRequestGuard(page, cdp, validator, frame_tree.frame.id_)
+    page.add_handler(cdp.fetch.RequestPaused, guard.handle)
+    _ = await page.send(
+        cdp.fetch.enable(
+            patterns=[
+                cdp.fetch.RequestPattern(
+                    resource_type=cdp.network.ResourceType.DOCUMENT,
+                    request_stage=cdp.fetch.RequestStage.REQUEST,
+                )
+            ]
+        )
+    )
+    _ = await page.send(cdp.page.navigate(url))
+    # nodriver schedules async event callbacks as tasks. Let a request-stage
+    # refusal settle before inspecting the guard or any DOM state.
+    await asyncio.sleep(0)
+    guard.raise_if_failed()
+    return guard
 
 _SOLVE_PROBE_STATE_ADAPTER = TypeAdapter(SolveProbeState)
 
@@ -296,16 +433,21 @@ async def _await_navigation(
     page: _AsyncPage,
     validator: UrlValidator | None,
     deadline_s: float,
+    request_guard: _MainFrameRequestGuard | None = None,
 ) -> None:
     """Wait for the main frame to finish loading, checking every observed URL."""
     loop = asyncio.get_running_loop()
     end = loop.time() + deadline_s
     last_ready: object = None
     while loop.time() < end:
+        if request_guard is not None:
+            request_guard.raise_if_failed()
         if validator is not None:
             await _validate_page_location(page, validator)
         last_ready = await page.evaluate(_READY_STATE_JS, return_by_value=True)
         if last_ready == "complete":
+            if request_guard is not None:
+                request_guard.raise_if_failed()
             return
         if last_ready not in ("loading", "interactive"):
             raise CaptureError(f"browser returned invalid document.readyState: {last_ready!r}")
@@ -321,6 +463,7 @@ async def _await_solve(
     url: str,
     deadline_s: float,
     url_validator: UrlValidator | None = None,
+    request_guard: _MainFrameRequestGuard | None = None,
 ) -> None:
     """Wait until FactorioLab has actually finished solving.
 
@@ -335,6 +478,8 @@ async def _await_solve(
     last_csv = False
     completed_raw: object | None = None
     while loop.time() < end:
+        if request_guard is not None:
+            request_guard.raise_if_failed()
         if url_validator is not None:
             await _validate_page_location(page, url_validator)
         raw = await page.evaluate(_PROBE_JS, return_by_value=True)
@@ -346,6 +491,8 @@ async def _await_solve(
         settled = rows if csv and rows > 0 else None
         await asyncio.sleep(_POLL_S)
     if completed_raw is not None:
+        if request_guard is not None:
+            request_guard.raise_if_failed()
         _ = _parse_solve_probe(completed_raw)
         return
     raise CaptureError(
@@ -386,14 +533,33 @@ async def _capture(
         [executable, *args], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
     )
     browser: _Browser | None = None
+    request_guard: _MainFrameRequestGuard | None = None
     try:
         await _await_devtools(port, process, min(timeout_s, 30.0))
         browser = await nodriver.start(host="127.0.0.1", port=port)
-        page = await browser.get(url)
-        await _await_navigation(page, url_validator, timeout_s)
-        await _await_solve(page, url, timeout_s, url_validator=url_validator)
+        if url_validator is None:
+            page = await browser.get(url)
+        else:
+            page = await browser.get("about:blank")
+            cdp = nodriver.cdp
+            request_guard = await _navigate_with_request_guard(
+                page,
+                url,
+                cdp,
+                url_validator,
+            )
+        await _await_navigation(page, url_validator, timeout_s, request_guard)
+        await _await_solve(
+            page,
+            url,
+            timeout_s,
+            url_validator=url_validator,
+            request_guard=request_guard,
+        )
 
         await page.evaluate(_PATCH_JS, return_by_value=True)
+        if request_guard is not None:
+            request_guard.raise_if_failed()
         if url_validator is not None:
             await _validate_page_location(page, url_validator)
         clicked = await page.evaluate(_CLICK_JS, return_by_value=True)
@@ -403,6 +569,8 @@ async def _capture(
                 "clicked; the page changed underneath us"
             )
         text = await _await_blob(page, timeout_s=min(timeout_s, 30.0))
+        if request_guard is not None:
+            request_guard.raise_if_failed()
     finally:
         if browser is not None:
             browser.stop()

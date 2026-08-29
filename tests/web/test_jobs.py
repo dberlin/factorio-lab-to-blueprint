@@ -10,7 +10,11 @@ import pytest
 
 from flab2bp import pipeline
 from flab2bp.layout.band_policy import BAND_SELECTIONS
-from flab2bp.layout.base import NoValidLayout
+from flab2bp.layout.base import (
+    LayoutAttemptFailure,
+    NoValidLayout,
+    ProjectionFailureRecord,
+)
 from flab2bp.web.jobs import Builder, InvalidOptions, Options, parse_options, run_build
 from flab2bp.web.payload import Json, JsonValue
 
@@ -80,6 +84,10 @@ def test_a_refusal_is_a_result_not_an_error() -> None:
                 "freeform/no-proliferator: too tall",
                 "freeform/max-proliferation: unroutable",
             ),
+            attempt_failures=(
+                LayoutAttemptFailure("no-proliferator", "freeform", "too tall"),
+                LayoutAttemptFailure("max-proliferation", "freeform", "unroutable"),
+            ),
         )
 
     builder = Builder(solve=refuse)
@@ -88,45 +96,72 @@ def test_a_refusal_is_a_result_not_an_error() -> None:
         assert snap["state"] == "refused"
         assert snap["error"] is None
         refused = _object(snap["refusal"])
-        # One line per strategy/candidate pair, not one long sentence.
-        assert refused["reasons"] == [
-            "freeform/no-proliferator: too tall",
-            "freeform/max-proliferation: unroutable",
+        attempts = refused["attempts"]
+        assert isinstance(attempts, list)
+        assert [
+            (_object(attempt)["candidate"], _object(attempt)["reason"])
+            for attempt in attempts
+        ] == [
+            ("no-proliferator", "too tall"),
+            ("max-proliferation", "unroutable"),
         ]
         assert "no valid layout" in str(refused["message"])
     finally:
         builder.shutdown()
 
 
-def test_projection_evidence_semicolons_stay_in_one_attempt_payload() -> None:
-    attempt = (
-        "sequence-pair/no-proliferator: no scheduled stage produced an exact layout; "
-        "exact validation failures: game.power_too_close, geom.collide; "
-        "no legal DSP latitude band/orientation accepts the final placement: "
-        "band 160 geom.collide (4, 9): first projected collision; "
-        "band 200 game.power_too_close (2, 7): projected power envelopes intersect"
+def test_projection_evidence_semicolons_stay_structured_inside_attempt_payload() -> None:
+    first = ProjectionFailureRecord(
+        160,
+        "geom.collide",
+        (4, 9),
+        "first projected collision; left collider; right collider",
+    )
+    second = ProjectionFailureRecord(
+        200,
+        "game.power_too_close",
+        (2, 7),
+        "projected power envelopes intersect; north; south",
+    )
+    attempt = LayoutAttemptFailure(
+        "no-proliferator",
+        "sequence-pair",
+        "no scheduled stage produced an exact layout; exact validation failed",
+        (first, second),
     )
 
     def refuse(_o: Options, _p: pipeline.ProgressSink) -> pipeline.Build:
         raise NoValidLayout(
-            attempt,
-            spec_label="no-proliferator",
+            attempt.reason,
+            spec_label=attempt.candidate,
             budget_s=2.0,
-            attempt_reasons=(attempt,),
+            attempt_reasons=(str(attempt),),
+            attempt_failures=(attempt,),
+            projection_failures=(first, second),
         )
 
     builder = Builder(solve=refuse)
     try:
         snap = _settled(builder, builder.submit(Options(url=URL)).id)
         refused = _object(snap["refusal"])
-        assert refused["reasons"] == [attempt]
-        assert "band 160 geom.collide (4, 9): first projected collision" in str(
-            refused["message"]
-        )
-        assert (
-            "band 200 game.power_too_close (2, 7): projected power envelopes intersect"
-            in str(refused["message"])
-        )
+        attempts = refused["attempts"]
+        assert isinstance(attempts, list) and len(attempts) == 1
+        serialized = _object(attempts[0])
+        assert serialized["reason"] == attempt.reason
+        assert serialized["projection_failures"] == [
+            {
+                "band": 160,
+                "check": "geom.collide",
+                "buildings": [4, 9],
+                "detail": "first projected collision; left collider; right collider",
+            },
+            {
+                "band": 200,
+                "check": "game.power_too_close",
+                "buildings": [2, 7],
+                "detail": "projected power envelopes intersect; north; south",
+            },
+        ]
     finally:
         builder.shutdown()
 
@@ -239,13 +274,25 @@ def test_a_running_job_reports_which_pair_it_is_on(small_build: pipeline.Build) 
     from one on its last.
     """
     reached_second = threading.Event()
+    projection = ProjectionFailureRecord(
+        band=7,
+        check="routing; blocked",
+        buildings=(4, 5),
+        detail="north; south",
+    )
     release = threading.Event()
 
     def solve(_o: Options, note: pipeline.ProgressSink) -> pipeline.Build:
         note(pipeline.AttemptProgress(1, 2, "no-proliferator", "freeform", "started"))
         note(
             pipeline.AttemptProgress(
-                1, 2, "no-proliferator", "freeform", "refused", reason="too tall"
+                1,
+                2,
+                "no-proliferator",
+                "freeform",
+                "refused",
+                reason="too tall",
+                projection_failures=(projection,),
             )
         )
         note(pipeline.AttemptProgress(2, 2, "max-proliferation", "freeform", "started"))
@@ -272,6 +319,14 @@ def test_a_running_job_reports_which_pair_it_is_on(small_build: pipeline.Build) 
             (item["strategy"], item["phase"], item["reason"])
             for item in settled_objects
         ] == [("freeform", "refused", "too tall")]
+        assert settled_objects[0]["projection_failures"] == [
+            {
+                "band": 7,
+                "check": "routing; blocked",
+                "buildings": [4, 5],
+                "detail": "north; south",
+            }
+        ]
     finally:
         release.set()
         builder.shutdown()

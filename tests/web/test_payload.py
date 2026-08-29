@@ -11,7 +11,11 @@ import pytest
 from pydantic import TypeAdapter
 
 from flab2bp import pipeline
-from flab2bp.layout.base import AreaFrame
+from flab2bp.layout.base import (
+    AreaFrame,
+    LayoutAttemptFailure,
+    ProjectionFailureRecord,
+)
 from flab2bp.layout.validate import Finding, Severity
 from flab2bp.web.payload import Json, describe, refusal
 
@@ -120,13 +124,58 @@ def test_an_invalid_build_withholds_the_string(small_build: pipeline.Build) -> N
     assert describe(broken, allow_invalid=True)["blueprint"] == small_build.blueprint
 
 
-def test_a_refusal_keeps_one_line_per_pair() -> None:
-    body = refusal(
-        ["sequence-pair/a: too tall", "sequence-pair/b: unroutable"],
-        message="no valid layout",
+def test_a_refusal_keeps_structured_projection_records_inside_attempt_boundaries() -> None:
+    first = ProjectionFailureRecord(
+        band=160,
+        check="geom.collide",
+        buildings=(4, 9),
+        detail="first collision; left machine; right machine",
     )
-    assert body["reasons"] == [
-        "sequence-pair/a: too tall",
-        "sequence-pair/b: unroutable",
-    ]
-    assert body["message"] == "no valid layout"
+    second = ProjectionFailureRecord(
+        band=200,
+        check="game.power_too_close",
+        buildings=(2, 7),
+        detail="power envelopes; north; south",
+    )
+    attempts = (
+        LayoutAttemptFailure(
+            "a",
+            "sequence-pair",
+            "no scheduled stage; exact projection refused",
+            (first, second),
+        ),
+        LayoutAttemptFailure("b", "freeform", "unroutable"),
+    )
+
+    body = refusal(attempts, message="no valid layout")
+
+    assert body == {
+        "message": "no valid layout",
+        "attempts": [
+            {
+                "candidate": "a",
+                "strategy": "sequence-pair",
+                "reason": "no scheduled stage; exact projection refused",
+                "projection_failures": [
+                    {
+                        "band": 160,
+                        "check": "geom.collide",
+                        "buildings": [4, 9],
+                        "detail": "first collision; left machine; right machine",
+                    },
+                    {
+                        "band": 200,
+                        "check": "game.power_too_close",
+                        "buildings": [2, 7],
+                        "detail": "power envelopes; north; south",
+                    },
+                ],
+            },
+            {
+                "candidate": "b",
+                "strategy": "freeform",
+                "reason": "unroutable",
+                "projection_failures": [],
+            },
+        ],
+    }
