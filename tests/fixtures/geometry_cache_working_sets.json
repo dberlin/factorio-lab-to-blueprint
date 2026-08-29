@@ -1,0 +1,272 @@
+{
+  "skipped_blueprints": [
+    "tests/fixtures/dyson-sphere-iridescent.txt"
+  ],
+  "functions": {
+    "catalog.collider_span": {
+      "calls": 17539,
+      "distinct_keys": 3254,
+      "peak_case_distinct": 890,
+      "unbounded_hits": 14285,
+      "candidates": [
+        {
+          "maxsize": 1,
+          "hits": 6691,
+          "retained_hit_ratio": 0.4683934196709835
+        },
+        {
+          "maxsize": 2,
+          "hits": 7605,
+          "retained_hit_ratio": 0.5323766188309416
+        },
+        {
+          "maxsize": 4,
+          "hits": 8391,
+          "retained_hit_ratio": 0.5873993699684984
+        },
+        {
+          "maxsize": 8,
+          "hits": 9189,
+          "retained_hit_ratio": 0.6432621631081554
+        },
+        {
+          "maxsize": 16,
+          "hits": 10218,
+          "retained_hit_ratio": 0.7152957647882394
+        },
+        {
+          "maxsize": 32,
+          "hits": 11382,
+          "retained_hit_ratio": 0.7967798389919496
+        },
+        {
+          "maxsize": 64,
+          "hits": 12493,
+          "retained_hit_ratio": 0.8745537276863843
+        },
+        {
+          "maxsize": 128,
+          "hits": 13272,
+          "retained_hit_ratio": 0.9290864543227161
+        },
+        {
+          "maxsize": 256,
+          "hits": 13728,
+          "retained_hit_ratio": 0.9610080504025201
+        },
+        {
+          "maxsize": 512,
+          "hits": 14011,
+          "retained_hit_ratio": 0.9808190409520476
+        },
+        {
+          "maxsize": 1024,
+          "hits": 14150,
+          "retained_hit_ratio": 0.9905495274763738
+        },
+        {
+          "maxsize": 2048,
+          "hits": 14237,
+          "retained_hit_ratio": 0.9966398319915996
+        },
+        {
+          "maxsize": 4096,
+          "hits": 14285,
+          "retained_hit_ratio": 1.0
+        }
+      ],
+      "recommended_maxsize": 1024
+    },
+    "catalog.clearance": {
+      "calls": 17539,
+      "distinct_keys": 3254,
+      "peak_case_distinct": 890,
+      "unbounded_hits": 14285,
+      "candidates": [
+        {
+          "maxsize": 1,
+          "hits": 6691,
+          "retained_hit_ratio": 0.4683934196709835
+        },
+        {
+          "maxsize": 2,
+          "hits": 7605,
+          "retained_hit_ratio": 0.5323766188309416
+        },
+        {
+          "maxsize": 4,
+          "hits": 8391,
+          "retained_hit_ratio": 0.5873993699684984
+        },
+        {
+          "maxsize": 8,
+          "hits": 9189,
+          "retained_hit_ratio": 0.6432621631081554
+        },
+        {
+          "maxsize": 16,
+          "hits": 10218,
+          "retained_hit_ratio": 0.7152957647882394
+        },
+        {
+          "maxsize": 32,
+          "hits": 11382,
+          "retained_hit_ratio": 0.7967798389919496
+        },
+        {
+          "maxsize": 64,
+          "hits": 12493,
+          "retained_hit_ratio": 0.8745537276863843
+        },
+        {
+          "maxsize": 128,
+          "hits": 13272,
+          "retained_hit_ratio": 0.9290864543227161
+        },
+        {
+          "maxsize": 256,
+          "hits": 13728,
+          "retained_hit_ratio": 0.9610080504025201
+        },
+        {
+          "maxsize": 512,
+          "hits": 14011,
+          "retained_hit_ratio": 0.9808190409520476
+        },
+        {
+          "maxsize": 1024,
+          "hits": 14150,
+          "retained_hit_ratio": 0.9905495274763738
+        },
+        {
+          "maxsize": 2048,
+          "hits": 14237,
+          "retained_hit_ratio": 0.9966398319915996
+        },
+        {
+          "maxsize": 4096,
+          "hits": 14285,
+          "retained_hit_ratio": 1.0
+        }
+      ],
+      "recommended_maxsize": 1024
+    },
+    "colliders.own_centre_extent": {
+      "calls": 35078,
+      "distinct_keys": 3260,
+      "peak_case_distinct": 896,
+      "unbounded_hits": 31818,
+      "candidates": [
+        {
+          "maxsize": 1,
+          "hits": 7416,
+          "retained_hit_ratio": 0.23307561757495757
+        },
+        {
+          "maxsize": 2,
+          "hits": 22145,
+          "retained_hit_ratio": 0.6959896913696649
+        },
+        {
+          "maxsize": 4,
+          "hits": 24269,
+          "retained_hit_ratio": 0.7627443585391916
+        },
+        {
+          "maxsize": 8,
+          "hits": 25827,
+          "retained_hit_ratio": 0.8117103526305864
+        },
+        {
+          "maxsize": 16,
+          "hits": 27263,
+          "retained_hit_ratio": 0.8568420390973662
+        },
+        {
+          "maxsize": 32,
+          "hits": 28664,
+          "retained_hit_ratio": 0.9008737192783959
+        },
+        {
+          "maxsize": 64,
+          "hits": 29940,
+          "retained_hit_ratio": 0.9409768055817462
+        },
+        {
+          "maxsize": 128,
+          "hits": 30773,
+          "retained_hit_ratio": 0.967156955182601
+        },
+        {
+          "maxsize": 256,
+          "hits": 31247,
+          "retained_hit_ratio": 0.982054183166761
+        },
+        {
+          "maxsize": 512,
+          "hits": 31531,
+          "retained_hit_ratio": 0.9909799484568483
+        },
+        {
+          "maxsize": 1024,
+          "hits": 31677,
+          "retained_hit_ratio": 0.9955685461059778
+        },
+        {
+          "maxsize": 2048,
+          "hits": 31768,
+          "retained_hit_ratio": 0.9984285624489283
+        },
+        {
+          "maxsize": 4096,
+          "hits": 31818,
+          "retained_hit_ratio": 1.0
+        }
+      ],
+      "recommended_maxsize": 1024
+    },
+    "colliders.belt_keepout_offsets": {
+      "calls": 3,
+      "distinct_keys": 1,
+      "peak_case_distinct": 1,
+      "unbounded_hits": 2,
+      "candidates": [
+        {
+          "maxsize": 1,
+          "hits": 2,
+          "retained_hit_ratio": 1.0
+        }
+      ],
+      "recommended_maxsize": 1
+    },
+    "planet.collider_radius": {
+      "calls": 162,
+      "distinct_keys": 5,
+      "peak_case_distinct": 5,
+      "unbounded_hits": 157,
+      "candidates": [
+        {
+          "maxsize": 1,
+          "hits": 145,
+          "retained_hit_ratio": 0.9235668789808917
+        },
+        {
+          "maxsize": 2,
+          "hits": 148,
+          "retained_hit_ratio": 0.9426751592356688
+        },
+        {
+          "maxsize": 4,
+          "hits": 156,
+          "retained_hit_ratio": 0.9936305732484076
+        },
+        {
+          "maxsize": 8,
+          "hits": 157,
+          "retained_hit_ratio": 1.0
+        }
+      ],
+      "recommended_maxsize": 8
+    }
+  }
+}
