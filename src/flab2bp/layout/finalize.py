@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import math
 import time
-from collections.abc import Sequence
-from dataclasses import dataclass, replace
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, field, replace
+from functools import cache
 from itertools import combinations
-from typing import Literal
+from typing import Literal, cast
 
 from flab2bp.dsp import catalog, codec, colliders, planet, rules
 from flab2bp.layout import slots
@@ -89,7 +90,191 @@ class _ProjectionCounters:
     collider_pairs: int = 0
     power_pairs: int = 0
     sorters: int = 0
+    invariant_cache_hits: int = 0
+    pair_cache_hits: int = 0
+    projection_cache_hits: int = 0
+    sorter_result_cache_hits: int = 0
+    static_result_cache_hits: int = 0
+    power_result_cache_hits: int = 0
+    addon_result_cache_hits: int = 0
+    addon_splitter_result_cache_hits: int = 0
 
+
+type _SorterFailureCache = Callable[
+    [tuple[tuple[int, planet.Sorter], ...], planet.Projection],
+    ProjectionFailure | None,
+]
+type _StaticFailureCache = Callable[
+    [
+        tuple[tuple[int, colliders.Placed], ...],
+        tuple[tuple[int, int], ...],
+        planet.Projection,
+    ],
+    ProjectionFailure | None,
+]
+
+type _FailureCache = Callable[..., ProjectionFailure | None]
+
+@dataclass(slots=True)
+class _ProjectionCache:
+    counters: _ProjectionCounters
+    invariants: dict[tuple[PlacedBuilding, ...], _ProjectionInvariants] = field(
+        default_factory=dict
+    )
+    pairs: dict[
+        tuple[tuple[PlacedBuilding, ...], int, bool],
+        tuple[tuple[int, int], ...],
+    ] = field(default_factory=dict)
+    projections: dict[tuple[int, int, int, int], planet.Projection] = field(
+        default_factory=dict
+    )
+    _sorter_misses: int = field(init=False, default=0)
+    _static_misses: int = field(init=False, default=0)
+    _power_misses: int = field(init=False, default=0)
+    _addon_misses: int = field(init=False, default=0)
+    _addon_splitter_misses: int = field(init=False, default=0)
+    _sorter_failure: _SorterFailureCache = field(init=False, repr=False)
+    _static_failure: _StaticFailureCache = field(init=False, repr=False)
+    _power_failure: _FailureCache = field(init=False, repr=False)
+    _addon_failure: _FailureCache = field(init=False, repr=False)
+    _addon_splitter_failure: _FailureCache = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        @cache
+        def sorter_failure(
+            sorters: tuple[tuple[int, planet.Sorter], ...],
+            projection: planet.Projection,
+        ) -> ProjectionFailure | None:
+            self._sorter_misses += 1
+            return _projected_sorter_failure(
+                sorters,
+                projection,
+                counters=self.counters,
+            )
+
+        @cache
+        def static_failure(
+            tested: tuple[tuple[int, colliders.Placed], ...],
+            pairs: tuple[tuple[int, int], ...],
+            projection: planet.Projection,
+        ) -> ProjectionFailure | None:
+            self._static_misses += 1
+            return _projected_static_failure(
+                tested,
+                pairs,
+                projection,
+                counters=self.counters,
+            )
+
+        @cache
+        def power_failure(
+            nodes: tuple[tuple[int, PlacedBuilding, rules.PowerNode], ...],
+            projection: planet.Projection,
+        ) -> ProjectionFailure | None:
+            self._power_misses += 1
+            failure = projected_power_failure(nodes, projection)
+            self.counters.power_pairs += _power_pairs_examined(nodes, failure)
+            return failure
+
+        @cache
+        def addon_failure(
+            belts: tuple[tuple[int, PlacedBuilding], ...],
+            addons: tuple[
+                tuple[
+                    int,
+                    PlacedBuilding,
+                    tuple[catalog.AddonSupplyPose, ...],
+                ],
+                ...,
+            ],
+            projection: planet.Projection,
+        ) -> ProjectionFailure | None:
+            self._addon_misses += 1
+            return _projected_addon_failure(belts, addons, projection)
+
+        @cache
+        def addon_splitter_failure(
+            coaters: tuple[tuple[int, colliders.Placed], ...],
+            splitters: tuple[tuple[int, colliders.Placed], ...],
+            projection: planet.Projection,
+        ) -> ProjectionFailure | None:
+            self._addon_splitter_misses += 1
+            return _projected_addon_splitter_failure(
+                coaters,
+                splitters,
+                projection,
+            )
+
+        self._sorter_failure = sorter_failure
+        self._static_failure = static_failure
+        self._power_failure = power_failure
+        self._addon_failure = addon_failure
+        self._addon_splitter_failure = addon_splitter_failure
+
+    def sorter_failure(
+        self,
+        sorters: tuple[tuple[int, planet.Sorter], ...],
+        projection: planet.Projection,
+    ) -> ProjectionFailure | None:
+        misses = self._sorter_misses
+        failure = self._sorter_failure(sorters, projection)
+        if self._sorter_misses == misses:
+            self.counters.sorter_result_cache_hits += 1
+        return failure
+
+    def static_failure(
+        self,
+        tested: tuple[tuple[int, colliders.Placed], ...],
+        pairs: tuple[tuple[int, int], ...],
+        projection: planet.Projection,
+    ) -> ProjectionFailure | None:
+        misses = self._static_misses
+        failure = self._static_failure(tested, pairs, projection)
+        if self._static_misses == misses:
+            self.counters.static_result_cache_hits += 1
+        return failure
+
+    def power_failure(
+        self,
+        nodes: tuple[tuple[int, PlacedBuilding, rules.PowerNode], ...],
+        projection: planet.Projection,
+    ) -> ProjectionFailure | None:
+        misses = self._power_misses
+        failure = self._power_failure(nodes, projection)
+        if self._power_misses == misses:
+            self.counters.power_result_cache_hits += 1
+        return failure
+
+    def addon_failure(
+        self,
+        belts: tuple[tuple[int, PlacedBuilding], ...],
+        addons: tuple[
+            tuple[
+                int,
+                PlacedBuilding,
+                tuple[catalog.AddonSupplyPose, ...],
+            ],
+            ...,
+        ],
+        projection: planet.Projection,
+    ) -> ProjectionFailure | None:
+        misses = self._addon_misses
+        failure = self._addon_failure(belts, addons, projection)
+        if self._addon_misses == misses:
+            self.counters.addon_result_cache_hits += 1
+        return failure
+
+    def addon_splitter_failure(
+        self,
+        coaters: tuple[tuple[int, colliders.Placed], ...],
+        splitters: tuple[tuple[int, colliders.Placed], ...],
+        projection: planet.Projection,
+    ) -> ProjectionFailure | None:
+        misses = self._addon_splitter_misses
+        failure = self._addon_splitter_failure(coaters, splitters, projection)
+        if self._addon_splitter_misses == misses:
+            self.counters.addon_splitter_result_cache_hits += 1
+        return failure
 
 def _extent_fits(width: int, height: int) -> tuple[planet.Fit, ...]:
     fits: list[planet.Fit] = []
@@ -326,6 +511,11 @@ def _projected_addon_failure(
 ) -> ProjectionFailure | None:
     if not belts:
         return None
+    belt_positions = tuple(
+        projection.position(belt.x, belt.y, float(belt.z))
+        for _belt_index, belt in belts
+    )
+    radius2 = rules.ADDON_AREA_RADIUS**2
     for addon_index, addon, areas in addons:
         for area in areas:
             wanted = slots.addon_supply_position(
@@ -341,28 +531,13 @@ def _projected_addon_failure(
                 float(wanted[1]),
                 float(wanted[2]),
             )
-            nearest = min(
-                (
-                    (
-                        sum(
-                            (a - b) ** 2
-                            for a, b in zip(
-                                target,
-                                projection.position(
-                                    belt.x,
-                                    belt.y,
-                                    float(belt.z),
-                                ),
-                                strict=True,
-                            )
-                        ),
-                        belt_index,
-                    )
-                    for belt_index, belt in belts
-                ),
-                default=None,
-            )
-            if nearest is None or nearest[0] >= rules.ADDON_AREA_RADIUS**2:
+            if not any(
+                (target[0] - belt[0]) ** 2
+                + (target[1] - belt[1]) ** 2
+                + (target[2] - belt[2]) ** 2
+                < radius2
+                for belt in belt_positions
+            ):
                 return ProjectionFailure(
                     check="game.addon_supply",
                     buildings=(addon_index,),
@@ -498,34 +673,71 @@ def _failure_at_projection(
     pairs: Sequence[tuple[int, int]],
     projection: planet.Projection,
     counters: _ProjectionCounters,
+    *,
+    cache: _ProjectionCache | None = None,
 ) -> tuple[ProjectionFailure, ...]:
     counters.projections += 1
     failures: list[ProjectionFailure] = []
-    power_failure = projected_power_failure(invariants.nodes, projection)
-    counters.power_pairs += _power_pairs_examined(invariants.nodes, power_failure)
-    for failure in (
-        power_failure,
+    if cache is None:
+        power_failure = projected_power_failure(invariants.nodes, projection)
+        counters.power_pairs += _power_pairs_examined(
+            invariants.nodes,
+            power_failure,
+        )
+    else:
+        power_failure = cache.power_failure(invariants.nodes, projection)
+    pair_key = tuple(pairs)
+    sorter_failure = (
         _projected_sorter_failure(
             invariants.sorters,
             projection,
             counters=counters,
-        ),
+        )
+        if cache is None
+        else cache.sorter_failure(invariants.sorters, projection)
+    )
+    static_failure = (
         _projected_static_failure(
             invariants.tested,
-            pairs,
+            pair_key,
             projection,
             counters=counters,
-        ),
+        )
+        if cache is None
+        else cache.static_failure(invariants.tested, pair_key, projection)
+    )
+    addon_failure = (
         _projected_addon_failure(
             invariants.belts,
             invariants.addons,
             projection,
-        ),
+        )
+        if cache is None
+        else cache.addon_failure(
+            invariants.belts,
+            invariants.addons,
+            projection,
+        )
+    )
+    addon_splitter_failure = (
         _projected_addon_splitter_failure(
             invariants.coaters,
             invariants.splitters,
             projection,
-        ),
+        )
+        if cache is None
+        else cache.addon_splitter_failure(
+            invariants.coaters,
+            invariants.splitters,
+            projection,
+        )
+    )
+    for failure in (
+        power_failure,
+        sorter_failure,
+        static_failure,
+        addon_failure,
+        addon_splitter_failure,
     ):
         if failure is not None:
             failures.append(failure)
@@ -541,8 +753,16 @@ def _certify_frame(
     row_origin: int = 0,
     pair_rotated: bool = False,
     stop_after_failure: bool = False,
+    cache: _ProjectionCache | None = None,
 ) -> tuple[ProjectionFailure, ...]:
-    invariants = _projection_invariants(placement)
+    building_key = placement.buildings
+    invariants = None if cache is None else cache.invariants.get(building_key)
+    if invariants is None:
+        invariants = _projection_invariants(placement)
+        if cache is not None:
+            cache.invariants[building_key] = invariants
+    else:
+        counters.invariant_cache_hits += 1
     pair_buildings = tuple(
         replace(building, x=building.y, y=building.x)
         if pair_rotated
@@ -556,28 +776,50 @@ def _certify_frame(
         band = by_segments[segments]
         pairs = pairs_by_band.get(segments)
         if pairs is None:
-            pairs = tuple(
-                planet.candidate_pairs(
-                    pair_buildings,
-                    band,
-                    colliders.PLANET_SEGMENT,
-                    colliders.PLANET_RADIUS,
+            pair_key = (building_key, segments, pair_rotated)
+            pairs = None if cache is None else cache.pairs.get(pair_key)
+            if pairs is None:
+                pairs = tuple(
+                    planet.candidate_pairs(
+                        pair_buildings,
+                        band,
+                        colliders.PLANET_SEGMENT,
+                        colliders.PLANET_RADIUS,
+                    )
                 )
-            )
+                if cache is not None:
+                    cache.pairs[pair_key] = pairs
+            else:
+                counters.pair_cache_hits += 1
             pairs_by_band[segments] = pairs
         for anchor in band.anchors(frame.height):
-            projection = planet.Projection(
-                band=band,
-                anchor_row=anchor - row_origin,
-                segment=colliders.PLANET_SEGMENT,
-                radius=colliders.PLANET_RADIUS,
-                quadrant=quadrant,
+            projection_key = (
+                segments,
+                frame.height,
+                anchor - row_origin,
+                quadrant,
             )
+            projection = (
+                None if cache is None else cache.projections.get(projection_key)
+            )
+            if projection is None:
+                projection = planet.Projection(
+                    band=band,
+                    anchor_row=anchor - row_origin,
+                    segment=colliders.PLANET_SEGMENT,
+                    radius=colliders.PLANET_RADIUS,
+                    quadrant=quadrant,
+                )
+                if cache is not None:
+                    cache.projections[projection_key] = projection
+            else:
+                counters.projection_cache_hits += 1
             projection_failures = _failure_at_projection(
                 invariants,
                 pairs,
                 projection,
                 counters,
+                cache=cache,
             )
             if projection_failures:
                 failures.extend(projection_failures)
@@ -851,6 +1093,25 @@ def _with_projection_stats(
     stats["projection_collider_pairs"] = counters.collider_pairs
     stats["projection_power_pairs"] = counters.power_pairs
     stats["projection_sorters"] = counters.sorters
+    cache_stats = cast(dict[str, float], cast(object, stats))
+    cache_stats["projection_invariant_cache_hits"] = counters.invariant_cache_hits
+    cache_stats["projection_pair_cache_hits"] = counters.pair_cache_hits
+    cache_stats["projection_object_cache_hits"] = counters.projection_cache_hits
+    cache_stats["projection_sorter_result_cache_hits"] = (
+        counters.sorter_result_cache_hits
+    )
+    cache_stats["projection_static_result_cache_hits"] = (
+        counters.static_result_cache_hits
+    )
+    cache_stats["projection_power_result_cache_hits"] = (
+        counters.power_result_cache_hits
+    )
+    cache_stats["projection_addon_result_cache_hits"] = (
+        counters.addon_result_cache_hits
+    )
+    cache_stats["projection_addon_splitter_result_cache_hits"] = (
+        counters.addon_splitter_result_cache_hits
+    )
     return replace(placement, stats=stats)
 
 
@@ -903,6 +1164,7 @@ def finalize_placement(
     if not candidates:
         raise ProjectionRefusal((_extent_failure(placement, policy),))
     counters = _ProjectionCounters()
+    cache = _ProjectionCache(counters)
     failures: list[ProjectionFailure] = []
     for candidate in candidates:
         counters.frame_candidates += 1
@@ -911,6 +1173,7 @@ def finalize_placement(
             framed,
             candidate.frame,
             counters,
+            cache=cache,
         )
         if candidate_failures:
             failures.extend(candidate_failures)

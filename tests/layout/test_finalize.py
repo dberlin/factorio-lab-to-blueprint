@@ -827,15 +827,219 @@ def test_projection_counters_count_only_observed_rule_loop_work(
     monkeypatch.setattr(finalize, "_projected_sorter_failure", observed_sorters)
     monkeypatch.setattr(finalize, "_projected_static_failure", observed_static)
 
-    finalized = finalize.finalize_placement(
-        Placement(buildings=_extent(1, 1)),
-        BandPolicy("4"),
+    frame = AreaFrame(1, 1, 4, (4,), False)
+    counters = finalize._ProjectionCounters()
+    failures = finalize._certify_frame(
+        Placement(buildings=_extent(1, 1), frame=frame),
+        frame,
+        counters,
     )
 
-    assert finalized.stats["projection_power_pairs"] == sum(power_work)
-    assert finalized.stats["projection_sorters"] == sum(sorter_work)
-    assert finalized.stats["projection_collider_pairs"] == sum(collider_work)
+    assert failures
+    assert counters.power_pairs == sum(power_work)
+    assert counters.sorters == sum(sorter_work)
+    assert counters.collider_pairs == sum(collider_work)
 
+
+@pytest.mark.parametrize(
+    ("belt_x", "expected_check"),
+    ((0, None), (1, "game.addon_supply")),
+)
+def test_projected_addon_supply_preserves_strict_radius_boundary(
+    belt_x: int,
+    expected_check: str | None,
+) -> None:
+    class FlatProjection:
+        band = next(
+            candidate for candidate in planet.bands() if candidate.area_segments == 4
+        )
+
+        def position(self, x: float, y: float, z: float) -> tuple[float, float, float]:
+            return (x, y, z)
+
+    coater = _building(catalog.SPRAY_COATER_ID, 0, 0)
+    area = catalog.AddonSupplyPose(Fraction(), Fraction(), Fraction(), area=0)
+    failure = finalize._projected_addon_failure(
+        ((0, _belt(belt_x, 0, output=None)),),
+        ((1, coater, (area,)),),
+        cast(planet.Projection, FlatProjection()),
+    )
+
+    assert (None if failure is None else failure.check) == expected_check
+
+
+def test_projected_addon_supply_projects_each_belt_once_per_projection() -> None:
+    class CountingFlatProjection:
+        band = next(
+            candidate for candidate in planet.bands() if candidate.area_segments == 4
+        )
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def position(self, x: float, y: float, z: float) -> tuple[float, float, float]:
+            self.calls += 1
+            return (x, y, z)
+
+    projection = CountingFlatProjection()
+    coater = _building(catalog.SPRAY_COATER_ID, 0, 0)
+    areas = catalog.building(catalog.SPRAY_COATER_ID).addon_areas
+    belts = (
+        (0, _belt(0, 0, output=None)),
+        (1, replace(_belt(0, -1, output=None), z=Fraction(1))),
+        (2, _belt(20, 20, output=None)),
+    )
+
+    assert (
+        finalize._projected_addon_failure(
+            belts,
+            ((3, coater, areas),),
+            cast(planet.Projection, projection),
+        )
+        is None
+    )
+    assert projection.calls == len(belts) + len(areas)
+
+
+def test_projection_cache_reuses_only_invariant_frame_work() -> None:
+    placement = Placement(
+        buildings=_extent(1, 1),
+        frame=AreaFrame(1, 1, 4, (4,), False),
+    )
+    counters = finalize._ProjectionCounters()
+    cache = finalize._ProjectionCache(counters)
+    frame = placement.frame
+    assert frame is not None
+
+    assert finalize._certify_frame(
+        placement,
+        frame,
+        counters,
+        cache=cache,
+    ) == ()
+    first_projection_count = counters.projections
+    assert finalize._certify_frame(
+        placement,
+        frame,
+        counters,
+        cache=cache,
+    ) == ()
+
+    assert counters.invariant_cache_hits == 1
+    assert counters.pair_cache_hits == 1
+    assert counters.projection_cache_hits == first_projection_count
+
+
+def test_projection_result_cache_reuses_only_complete_exact_check_keys(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    building = _building(2302, 0, 0)
+    placed = colliders.Placed(building.model_index, 0.0, 0.0, 0.0, 0.0)
+    sorter = planet.Sorter(
+        x=0.0,
+        y=0.0,
+        z=0.0,
+        x2=1.0,
+        y2=0.0,
+        z2=0.0,
+        yaw=90.0,
+        yaw2=90.0,
+        input_belt=True,
+        output_belt=True,
+        ref_x=0.5,
+        ref_y=0.0,
+        ref_z=0.0,
+    )
+    invariants = finalize._ProjectionInvariants(
+        tested=((0, placed), (1, placed)),
+        nodes=(),
+        sorters=((2, sorter),),
+        belts=(),
+        addons=(),
+        coaters=(),
+        splitters=(),
+    )
+    calls = {
+        "power": 0,
+        "sorter": 0,
+        "static": 0,
+        "addon": 0,
+        "addon_splitter": 0,
+    }
+
+    def observed(name: str) -> object:
+        def predicate(*args: object, **kwargs: object) -> None:
+            calls[name] += 1
+
+        return predicate
+
+    monkeypatch.setattr(finalize, "projected_power_failure", observed("power"))
+    monkeypatch.setattr(finalize, "_projected_sorter_failure", observed("sorter"))
+    monkeypatch.setattr(finalize, "_projected_static_failure", observed("static"))
+    monkeypatch.setattr(finalize, "_projected_addon_failure", observed("addon"))
+    monkeypatch.setattr(
+        finalize,
+        "_projected_addon_splitter_failure",
+        observed("addon_splitter"),
+    )
+    band = next(candidate for candidate in planet.bands() if candidate.area_segments == 4)
+    first = planet.Projection(
+        band,
+        0,
+        colliders.PLANET_SEGMENT,
+        colliders.PLANET_RADIUS,
+    )
+    second = planet.Projection(
+        band,
+        1,
+        colliders.PLANET_SEGMENT,
+        colliders.PLANET_RADIUS,
+    )
+    counters = finalize._ProjectionCounters()
+    cache = finalize._ProjectionCache(counters)
+    pairs = ((0, 1),)
+
+    assert finalize._failure_at_projection(
+        invariants,
+        pairs,
+        first,
+        counters,
+        cache=cache,
+    ) == ()
+    assert finalize._failure_at_projection(
+        invariants,
+        pairs,
+        first,
+        counters,
+        cache=cache,
+    ) == ()
+    assert calls == {
+        "power": 1,
+        "sorter": 1,
+        "static": 1,
+        "addon": 1,
+        "addon_splitter": 1,
+    }
+    assert counters.power_result_cache_hits == 1
+    assert counters.sorter_result_cache_hits == 1
+    assert counters.static_result_cache_hits == 1
+    assert counters.addon_result_cache_hits == 1
+    assert counters.addon_splitter_result_cache_hits == 1
+
+    assert finalize._failure_at_projection(
+        invariants,
+        pairs,
+        second,
+        counters,
+        cache=cache,
+    ) == ()
+    assert calls == {
+        "power": 2,
+        "sorter": 2,
+        "static": 2,
+        "addon": 2,
+        "addon_splitter": 2,
+    }
 
 
 
