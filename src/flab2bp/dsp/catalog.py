@@ -52,7 +52,7 @@ import re
 from collections.abc import Mapping, Set
 from dataclasses import dataclass
 from fractions import Fraction
-from functools import cache
+from functools import cache, lru_cache
 from pathlib import Path
 from typing import Protocol, TypedDict, TypeGuard
 
@@ -1466,7 +1466,7 @@ def footprint(item_id: int) -> tuple[int, int]:
     return (b.width, b.height)
 
 
-@cache
+@lru_cache(maxsize=1024)
 def collider_span(item_id: int, yaw: float) -> tuple[float, float]:
     """Oriented collider span in grid tiles, measured about the building centre.
 
@@ -1503,7 +1503,7 @@ def collider_span(item_id: int, yaw: float) -> tuple[float, float]:
     )
 
 
-@cache
+@lru_cache(maxsize=1024)
 def clearance(item_id: int, yaw: float) -> tuple[int, int]:
     """Tiles to RESERVE for ``item_id`` at ``yaw`` so nothing collides with it.
 

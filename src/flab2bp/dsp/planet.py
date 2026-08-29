@@ -57,7 +57,7 @@ import math
 import struct
 from collections.abc import Sequence
 from dataclasses import dataclass
-from functools import cache, lru_cache
+from functools import lru_cache
 
 from flab2bp.dsp import colliders, rules
 
@@ -910,7 +910,7 @@ def _magnitude(v: Vec3) -> float:
 # --- collisions at a band ---------------------------------------------------
 
 
-@cache
+@lru_cache(maxsize=8)
 def collider_radius(model_index: int) -> float:
     """Cached sphere containing every collider for one immutable model.
 

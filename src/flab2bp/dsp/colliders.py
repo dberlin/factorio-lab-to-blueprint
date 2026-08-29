@@ -117,7 +117,7 @@ import json
 import math
 from collections.abc import Sequence
 from dataclasses import dataclass
-from functools import cache
+from functools import cache, lru_cache
 from pathlib import Path
 from typing import Protocol
 
@@ -397,7 +397,7 @@ def build_colliders(model_index: int) -> tuple[tuple[Vec3, Vec3, Quat], ...]:
     return _table().get(model_index, ())
 
 
-@cache
+@lru_cache(maxsize=1024)
 def own_centre_extent(model_index: int, yaw: float) -> tuple[float, float]:
     """Full width and depth, in world units, of the smallest box about the
     building's OWN centre that contains every build collider at ``yaw``.
@@ -917,7 +917,7 @@ def belt_crossing_height(model_index: int) -> float:
     return (top + BELT_PROBE_RADIUS - BELT_PROBE_LIFT) * 3.0 / 4.0
 
 
-@cache
+@lru_cache(maxsize=1)
 def belt_keepout_offsets(
     model_index: int, yaw: float = 0.0, reach: int = 3, levels: int = 4
 ) -> frozenset[tuple[int, int, int]]:
