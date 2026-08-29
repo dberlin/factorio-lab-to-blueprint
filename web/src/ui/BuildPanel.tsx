@@ -169,11 +169,13 @@ export function BuildPanel() {
           }}
         >
           <option value="portable">Portable (smallest + two wider)</option>
-          {BandSelection.options.filter((band) => band !== 'portable').map((band) => (
-            <option key={band} value={band}>
-              {band}
-            </option>
-          ))}
+          {BandSelection.options
+            .filter((band) => band !== 'portable')
+            .map((band) => (
+              <option key={band} value={band}>
+                {band}
+              </option>
+            ))}
         </select>
 
         <label htmlFor={proliferatorTierId}>Proliferator tier</label>

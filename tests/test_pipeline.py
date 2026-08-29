@@ -13,7 +13,11 @@ from pathlib import Path
 import pytest
 
 from flab2bp import pipeline
+from flab2bp.layout import finalize
 from flab2bp.layout.band_policy import BandPolicy
+from flab2bp.layout.base import NoValidLayout, Placement
+from flab2bp.layout.freeform import FreeformLayout
+from flab2bp.layout.sequence_solver import SequencePairLayout
 from flab2bp.rates.candidates import build_candidates
 from flab2bp.spec import BuildSpecSet
 
@@ -30,23 +34,34 @@ def test_build_defaults_to_one_portable_policy(
     """Changing the default or reparsing at either finalizer breaks this."""
     seen: list[BandPolicy] = []
     original_new_layout = pipeline._new_layout
-    original_finalize = pipeline.finalize.finalize_placement
+    original_finalize = finalize.finalize_placement
 
-    def new_layout_spy(*args: object, **kwargs: object) -> object:
-        policy = kwargs["band_policy"]
-        assert isinstance(policy, BandPolicy)
-        seen.append(policy)
-        return original_new_layout(*args, **kwargs)  # type: ignore[arg-type]
+    def new_layout_spy(
+        strategy: pipeline.ExplicitStrategyName,
+        *,
+        power: bool,
+        belt_vertical_construction: bool,
+        sequence_islands: int = 1,
+        band_policy: BandPolicy,
+    ) -> FreeformLayout | SequencePairLayout:
+        seen.append(band_policy)
+        return original_new_layout(
+            strategy,
+            power=power,
+            belt_vertical_construction=belt_vertical_construction,
+            sequence_islands=sequence_islands,
+            band_policy=band_policy,
+        )
 
     def finalize_spy(
-        placement: pipeline.Placement,
+        placement: Placement,
         policy: BandPolicy,
-    ) -> pipeline.Placement:
+    ) -> Placement:
         seen.append(policy)
         return original_finalize(placement, policy)
 
     monkeypatch.setattr(pipeline, "_new_layout", new_layout_spy)
-    monkeypatch.setattr(pipeline.finalize, "finalize_placement", finalize_spy)
+    monkeypatch.setattr(finalize, "finalize_placement", finalize_spy)
 
     pipeline.build(
         SMALL_URL,
@@ -141,32 +156,32 @@ def test_a_sink_that_raises_is_not_swallowed() -> None:
 def test_projection_refusal_preserves_structured_exception_text(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    failure = pipeline.finalize.ProjectionFailure(
+    failure = finalize.ProjectionFailure(
         check="geom.collide",
         buildings=(4, 9),
         detail="build colliders intersect",
         band=160,
     )
-    refusal = pipeline.finalize.ProjectionRefusal((failure,))
+    refusal = finalize.ProjectionRefusal((failure,))
 
     class RefusedLayout:
-        def lay_out(self, _spec: object, *, time_budget_s: float) -> pipeline.Placement:
+        def lay_out(self, _spec: object, *, time_budget_s: float) -> Placement:
             del time_budget_s
-            return pipeline.Placement(buildings=())
+            return Placement(buildings=())
 
     monkeypatch.setattr(pipeline, "_new_layout", lambda *_args, **_kwargs: RefusedLayout())
     monkeypatch.setattr(
-        pipeline.finalize,
+        finalize,
         "compact_open_boundary_belts",
         lambda placement, *_args, **_kwargs: placement,
     )
     monkeypatch.setattr(
-        pipeline.finalize,
+        finalize,
         "finalize_placement",
         lambda _placement, _policy: (_ for _ in ()).throw(refusal),
     )
 
-    with pytest.raises(pipeline.NoValidLayout) as caught:
+    with pytest.raises(NoValidLayout) as caught:
         pipeline.build(
             SMALL_URL,
             strategy="freeform",

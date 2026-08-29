@@ -1210,11 +1210,12 @@ def test_unseatable_prepared_candidate_remains_searchable_refusal(
         _strips: list[freeform_module.Strip],
         _pack: freeform_module._Pack,
         *,
+        policy: BandPolicy,
         power: bool,
         ramped: bool = False,
         _reserve_ports: bool = True,
     ) -> Never:
-        del power, ramped, _reserve_ports
+        del power, policy, ramped, _reserve_ports
         raise freeform_module._Unseatable("positional coater collision")
 
     monkeypatch.setattr(
@@ -1416,6 +1417,7 @@ def test_serial_layout_uses_a_budgeted_root_compact_seed(
         _spec: BuildSpec,
         *,
         time_budget_s: float,
+        band_policy: BandPolicy,
         power: bool,
         strip_len: int,
         config: SequenceSolverConfig,
@@ -1426,6 +1428,7 @@ def test_serial_layout_uses_a_budgeted_root_compact_seed(
         compact_seed_config: CompactSeedConfig | None = None,
     ) -> Never:
         del (
+            band_policy,
             time_budget_s,
             power,
             strip_len,

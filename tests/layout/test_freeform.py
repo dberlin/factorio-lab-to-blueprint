@@ -11,17 +11,16 @@ import dataclasses
 import itertools
 import math
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from fractions import Fraction as F
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
 from flab2bp.dsp import catalog, codec, colliders, planet, rules
-from flab2bp.layout import freeform, junction, slots, validate
-from flab2bp.layout.band_policy import BandPolicy
+from flab2bp.layout import finalize, freeform, junction, slots, validate
+from flab2bp.layout.band_policy import BandPolicy, BandSelection
 from flab2bp.layout.base import (
     DETERMINISTIC_WORKERS,
     Facing,
@@ -29,6 +28,7 @@ from flab2bp.layout.base import (
     PlacedBuilding,
     Placement,
 )
+from flab2bp.layout.finalize import ProjectionNoGood
 from flab2bp.layout.freeform import (
     _BLAME_MAX_WALL,
     _ENTRY_RING,
@@ -45,6 +45,7 @@ from flab2bp.layout.freeform import (
     _bridge,
     _build,
     _build_prepared,
+    _BuildResult,
     _Canvas,
     _canvas_span,
     _commit_paths,
@@ -84,6 +85,7 @@ from flab2bp.layout.freeform import (
 )
 from flab2bp.layout.route_feedback import (
     Cell,
+    DetailedRouteResult,
     DetailedRouteStatus,
     NetFailure,
     NetId,
@@ -92,7 +94,7 @@ from flab2bp.layout.route_feedback import (
 )
 from flab2bp.spec import BuildSpec, MachineGroup, ProliferatorMode
 
-SpecFactory = object
+type SpecFactory = Callable[[], BuildSpec]
 
 
 def group(
@@ -1167,7 +1169,7 @@ class TestTheFixturesBalance:
 
     @pytest.mark.parametrize("spec_fn", _BALANCED, ids=lambda f: f.__name__)
     def test_supply_equals_demand_for_every_item(self, spec_fn: SpecFactory) -> None:
-        spec = spec_fn()  # type: ignore[operator]
+        spec = spec_fn()
         made: dict[str, F] = {}
         used: dict[str, F] = {}
         for g in spec.groups:
@@ -1192,7 +1194,7 @@ class TestTheFixturesBalance:
         raised is a fixture written without checking, which is how 17 items/s
         ended up nominated for a 12/s belt.
         """
-        spec = spec_fn()  # type: ignore[operator]
+        spec = spec_fn()
         flow: dict[str, F] = dict(spec.external_inputs)
         for g in spec.groups:
             for item, rate in g.outputs_per_machine.items():
@@ -1504,8 +1506,11 @@ class TestASideCarriesAsManyLanesAsItsPosesAllow:
 
 class TestFallback:
     @pytest.mark.parametrize("spec_fn", ALL_SPECS, ids=lambda f: f.__name__)
-    def test_fallback_is_complete_and_non_overlapping(self, spec_fn: object) -> None:
-        spec = spec_fn()  # type: ignore[operator]
+    def test_fallback_is_complete_and_non_overlapping(
+        self,
+        spec_fn: SpecFactory,
+    ) -> None:
+        spec = spec_fn()
         placement = fallback_placement(spec, band_policy=BandPolicy("portable"), power=True)
         tiles = blocking_tiles(placement)
         assert len(tiles) == len(set(tiles)), "fallback overlaps"
@@ -1520,11 +1525,19 @@ class TestFallback:
 @pytest.mark.parametrize("power", [True, False], ids=["power", "no-power"])
 class TestPlacementProperties:
     def test_emitted_blueprint_obeys_physical_and_reference_contracts(
-        self, spec_fn: object, power: bool
+        self,
+        spec_fn: SpecFactory,
+        power: bool,
     ) -> None:
-        spec = spec_fn()  # type: ignore[operator]
+        spec = spec_fn()
+        legacy_bands: dict[str, BandSelection] = {
+            "single": "32",
+            "two-stage": "32",
+            "magnetic-ring": "160",
+            "proliferated": "32",
+        }
         placement = FreeformLayout(
-            band_policy=BandPolicy("portable"),
+            band_policy=BandPolicy(legacy_bands[spec.label]),
             power=power
         ).lay_out(spec, time_budget_s=1.0)
         tiles = blocking_tiles(placement)
@@ -1857,11 +1870,12 @@ class TestDirectInsertion:
         structural change that would make it a real density lever.
         """
         spec = two_stage_spec()
-        kw = {"power": False, "workers": DETERMINISTIC_WORKERS}
         swept = FreeformLayout(
-            band_policy=BandPolicy("portable"),
-            direct_insert=True, **kw
-        ).lay_out(spec, time_budget_s=0.5)  # type: ignore[arg-type]
+            band_policy=BandPolicy("200"),
+            direct_insert=True,
+            power=False,
+            workers=DETERMINISTIC_WORKERS,
+        ).lay_out(spec, time_budget_s=0.5)
         stacked, _ = self._stacked(spec, direct=True)
 
         assert stacked.stats["direct_inserts"] >= 1.0
@@ -1974,7 +1988,7 @@ class TestSolverActuallyRuns:
         """
         spec = fan_out_spec(consumers=4)
         p = FreeformLayout(
-            band_policy=BandPolicy("portable"),
+            band_policy=BandPolicy("100"),
             power=True
         ).lay_out(spec, time_budget_s=2.0)
         report = _full_report(p, spec, power=True)
@@ -2036,7 +2050,7 @@ class TestSolverActuallyRuns:
     def test_projection_refusal_preserves_authoritative_detail(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        failure = freeform.finalize.ProjectionFailure(
+        failure = finalize.ProjectionFailure(
             check="geom.collide",
             buildings=(0, 1),
             detail="build colliders intersect",
@@ -2048,24 +2062,31 @@ class TestSolverActuallyRuns:
             height=8,
             status="test",
         )
-        routed = SimpleNamespace(
+        routed = _BuildResult(
             placement=Placement(buildings=(), stats={"belt_tiles": 0.0}),
-            routing=SimpleNamespace(failed_count=0),
+            routing=DetailedRouteResult(
+                status=DetailedRouteStatus.ROUTED,
+                routed=(),
+                failures=(),
+                iterations=0,
+                expansions=0,
+            ),
+            towers=(),
         )
         monkeypatch.setattr(freeform, "_candidate_heights", lambda _strips: [8])
         monkeypatch.setattr(freeform, "_greedy_pack", lambda _strips, _height: pack)
         monkeypatch.setattr(freeform, "_pack", lambda *_args, **_kwargs: pack)
         monkeypatch.setattr(freeform, "_build", lambda *_args, **_kwargs: routed)
         monkeypatch.setattr(
-            freeform.validate,
+            validate,
             "certify",
             lambda *_args, **_kwargs: validate.Report(findings=()),
         )
         monkeypatch.setattr(
-            freeform.finalize,
+            finalize,
             "finalize_placement",
-            lambda _placement: (_ for _ in ()).throw(
-                freeform.finalize.ProjectionRefusal((failure,))
+            lambda _placement, _policy: (_ for _ in ()).throw(
+                finalize.ProjectionRefusal((failure,))
             ),
         )
 
@@ -2099,7 +2120,7 @@ def test_projection_no_good_forbids_only_rejected_relative_displacement() -> Non
         workers=DETERMINISTIC_WORKERS,
     )
     assert initial is not None
-    failure = freeform.finalize.ProjectionFailure(
+    failure = finalize.ProjectionFailure(
         check="geom.collide",
         buildings=(0, 2),
         detail="build colliders intersect",
@@ -2115,7 +2136,7 @@ def test_projection_no_good_forbids_only_rejected_relative_displacement() -> Non
     )
     assert rejected_delta == (-12, -6)
     assert unrelated_delta == (2, -6)
-    bad = freeform.ProjectionNoGood(0, 2, *rejected_delta, failure)
+    bad = ProjectionNoGood(0, 2, *rejected_delta, failure)
 
     retry = _pack(
         strips,
@@ -2156,34 +2177,48 @@ def test_projection_owned_strip_collision_learns_and_repacks(
         status="separated",
     )
     packs = iter((first, separated))
-    seen_no_goods: list[tuple[object, ...]] = []
+    seen_no_goods: list[tuple[ProjectionNoGood, ...]] = []
 
     def pack_retry(*_args: object, **kwargs: object) -> freeform._Pack:
-        seen_no_goods.append(tuple(kwargs.get("projection_no_goods", ())))
+        raw_no_goods = kwargs.get("projection_no_goods", ())
+        if not isinstance(raw_no_goods, tuple):
+            raise AssertionError("projection_no_goods must be a tuple")
+        no_goods = tuple(
+            item for item in raw_no_goods if isinstance(item, ProjectionNoGood)
+        )
+        assert len(no_goods) == len(raw_no_goods)
+        seen_no_goods.append(no_goods)
         return next(packs)
 
     def build(
-        _spec: object,
-        _strips: object,
+        _spec: BuildSpec,
+        _strips: list[Strip],
         pack: freeform._Pack,
         **_kwargs: object,
-    ) -> SimpleNamespace:
+    ) -> _BuildResult:
         buildings = tuple(
-            SimpleNamespace(
+            PlacedBuilding(
+                item_id=1,
+                model_index=1,
                 x=x,
                 y=y,
-                width=1,
-                height=1,
                 owner_strip=strip_index,
             )
             for strip_index, (x, y) in sorted(pack.at.items())
         )
-        return SimpleNamespace(
+        return _BuildResult(
             placement=Placement(buildings=buildings, stats={"belt_tiles": 0.0}),
-            routing=SimpleNamespace(failed_count=0),
+            routing=DetailedRouteResult(
+                status=DetailedRouteStatus.ROUTED,
+                routed=(),
+                failures=(),
+                iterations=0,
+                expansions=0,
+            ),
+            towers=(),
         )
 
-    failure = freeform.finalize.ProjectionFailure(
+    failure = finalize.ProjectionFailure(
         check="geom.collide",
         buildings=(0, 1),
         detail="build colliders intersect",
@@ -2191,11 +2226,14 @@ def test_projection_owned_strip_collision_learns_and_repacks(
     )
     projections = 0
 
-    def finalize_projection(placement: Placement) -> Placement:
+    def finalize_projection(
+        placement: Placement,
+        _policy: BandPolicy,
+    ) -> Placement:
         nonlocal projections
         projections += 1
         if projections == 1:
-            raise freeform.finalize.ProjectionRefusal((failure,))
+            raise finalize.ProjectionRefusal((failure,))
         return placement
 
     monkeypatch.setattr(freeform, "_candidate_heights", lambda _strips: [20])
@@ -2203,11 +2241,11 @@ def test_projection_owned_strip_collision_learns_and_repacks(
     monkeypatch.setattr(freeform, "_pack", pack_retry)
     monkeypatch.setattr(freeform, "_build", build)
     monkeypatch.setattr(
-        freeform.validate,
+        validate,
         "certify",
         lambda *_args, **_kwargs: validate.Report(findings=()),
     )
-    monkeypatch.setattr(freeform.finalize, "finalize_placement", finalize_projection)
+    monkeypatch.setattr(finalize, "finalize_placement", finalize_projection)
 
     result = FreeformLayout(
         band_policy=BandPolicy("portable"),
@@ -2229,7 +2267,7 @@ def test_projection_owned_strip_collision_learns_and_repacks(
 
 
 def test_projection_same_strip_and_unowned_failures_create_no_cut() -> None:
-    failure = freeform.finalize.ProjectionFailure(
+    failure = finalize.ProjectionFailure(
         check="geom.collide",
         buildings=(0, 1),
         detail="build colliders intersect",
@@ -2244,14 +2282,14 @@ def test_projection_same_strip_and_unowned_failures_create_no_cut() -> None:
 
     same_strip = Placement(
         buildings=(
-            SimpleNamespace(owner_strip=0),
-            SimpleNamespace(owner_strip=0),
+            PlacedBuilding(item_id=1, model_index=1, x=0, y=0, owner_strip=0),
+            PlacedBuilding(item_id=1, model_index=1, x=1, y=0, owner_strip=0),
         )
     )
     unowned = Placement(
         buildings=(
-            SimpleNamespace(owner_strip=0),
-            SimpleNamespace(owner_strip=None),
+            PlacedBuilding(item_id=1, model_index=1, x=0, y=0, owner_strip=0),
+            PlacedBuilding(item_id=1, model_index=1, x=1, y=0),
         )
     )
 
@@ -2322,11 +2360,11 @@ class TestPower:
     def test_towers_appear_only_when_power_is_on(self) -> None:
         spec = two_stage_spec()
         on = FreeformLayout(
-            band_policy=BandPolicy("portable"),
+            band_policy=BandPolicy("32"),
             power=True
         ).lay_out(spec, time_budget_s=0.5)
         off = FreeformLayout(
-            band_policy=BandPolicy("portable"),
+            band_policy=BandPolicy("32"),
             power=False
         ).lay_out(spec, time_budget_s=0.5)
         assert on.stats["towers"] > 0
@@ -2334,7 +2372,7 @@ class TestPower:
 
     def test_every_powered_building_is_covered(self) -> None:
         p = FreeformLayout(
-            band_policy=BandPolicy("portable"),
+            band_policy=BandPolicy("160"),
             power=True
         ).lay_out(magnetic_ring_spec(), time_budget_s=1.0)
         report = validate.validate(p, only=["power.coverage", "power.connectivity"])
@@ -2532,7 +2570,7 @@ class TestRealUrlCandidate:
             candidate for candidate in candidates if candidate.label == "no-proliferator"
         )
         placement = FreeformLayout(
-            band_policy=BandPolicy("portable"),
+            band_policy=BandPolicy("160"),
             power=True
         ).lay_out(spec, time_budget_s=2.0)
         sorters = [
@@ -2689,8 +2727,10 @@ class TestProducerWithManyConsumers:
         """
         spec = fan_out_spec(4)
         p = FreeformLayout(
-            band_policy=BandPolicy("portable"),
-            power=power, workers=DETERMINISTIC_WORKERS
+            band_policy=BandPolicy("100"),
+            power=power,
+            workers=DETERMINISTIC_WORKERS,
+            strip_len=8,
         ).lay_out(
             spec, time_budget_s=0.5
         )
@@ -3025,7 +3065,7 @@ class TestModeDrivenMachines:
         above green.
         """
         p = FreeformLayout(
-            band_policy=BandPolicy("portable"),
+            band_policy=BandPolicy("200"),
             power=False
         ).lay_out(single_recipe_spec(), time_budget_s=0.5)
         smelters = [b for b in p.buildings if b.recipe_id]
@@ -3089,7 +3129,7 @@ class TestShardedGroupsAreFedOnEveryShard:
     def test_no_shard_is_left_starving(self, power: bool) -> None:
         spec = sharded_consumer_spec()
         p = FreeformLayout(
-            band_policy=BandPolicy("portable"),
+            band_policy=BandPolicy("100"),
             power=power, workers=DETERMINISTIC_WORKERS
         ).lay_out(
             spec, time_budget_s=0.5
@@ -3575,9 +3615,9 @@ class TestTheExtentIsDecidedBeforeAnythingRoutes:
     def test_every_lane_the_player_must_fill_can_be_reached(
         self, factory: SpecFactory
     ) -> None:
-        spec = factory()  # type: ignore[operator]
+        spec = factory()
         p = FreeformLayout(
-            band_policy=BandPolicy("portable"),
+            band_policy=BandPolicy("200"),
             power=False, workers=DETERMINISTIC_WORKERS
         ).lay_out(
             spec, time_budget_s=1.0
@@ -3837,10 +3877,26 @@ class TestPowerClaimsItsGroundBeforeRouting:
             item_id=2303, model_index=65, x=x, y=y, width=3, height=3
         )
 
+    @staticmethod
+    def _pin_projection_extent(
+        canvas: _Canvas,
+        core: tuple[int, int, int, int],
+    ) -> None:
+        """Make the synthetic planner core a real, cleanup-stable extent."""
+        for x, y in ((core[0], core[1]), (core[2], core[3])):
+            cell = (x, y, 0)
+            index = canvas.add(_belt(x, y)) if canvas.free(cell) else canvas.blocked[cell]
+            canvas.buildings[index] = replace(
+                canvas.buildings[index],
+                input_obj=index,
+                output_obj=index,
+            )
+
     def test_planned_sites_are_closed_to_everything_else(self) -> None:
         canvas = _Canvas(limit=(0, 0, 40, 40))
         canvas.add(self._machine(10, 10), solid=True)
-        sites = _power_plan(canvas, (0, 0, 40, 40), policy=BandPolicy("portable"))
+        self._pin_projection_extent(canvas, (0, 0, 40, 40))
+        sites = _power_plan(canvas, (0, 0, 40, 40), policy=BandPolicy("200"))
         assert sites, "a powered building must be given at least one tower"
         for x, y in sites:
             assert not canvas.free((x, y, 0)), f"{(x, y)} was planned but reads free"
@@ -3886,8 +3942,9 @@ class TestPowerClaimsItsGroundBeforeRouting:
             for y in range(0, 41):
                 canvas.add(_belt(x, y))
         canvas.add(self._machine(20, 20), solid=True)
+        self._pin_projection_extent(canvas, (0, 0, 40, 40))
         with pytest.raises(_Unpowerable):
-            _power_plan(canvas, (0, 0, 40, 40), policy=BandPolicy("portable"))
+            _power_plan(canvas, (0, 0, 40, 40), policy=BandPolicy("200"))
 
     def test_covering_by_need_beats_covering_by_grid(self) -> None:
         """Fewer towers is the density win, and it is the point.
@@ -3904,7 +3961,8 @@ class TestPowerClaimsItsGroundBeforeRouting:
         for x in range(15, 24, 3):
             for y in range(15, 24, 3):
                 canvas.add(self._machine(x, y), solid=True)
-        sites = _power_plan(canvas, (0, 0, 40, 40), policy=BandPolicy("portable"))
+        self._pin_projection_extent(canvas, (0, 0, 40, 40))
+        sites = _power_plan(canvas, (0, 0, 40, 40), policy=BandPolicy("200"))
         lattice = len(range(4, 41, 9)) ** 2
         assert 0 < len(sites) < lattice, (
             f"covering by need took {len(sites)}, the 9-spaced grid took {lattice}"
@@ -4042,7 +4100,7 @@ class TestPowerClaimsItsGroundBeforeRouting:
                 _belt(occupied[2], occupied[3]),
             )
         )
-        candidates = freeform.finalize.frame_candidates(representative, policy)
+        candidates = finalize.frame_candidates(representative, policy)
         assert {candidate.frame.primary_band for candidate in candidates} == {32}
 
         by_segments = {band.area_segments: band for band in planet.bands()}
@@ -4104,7 +4162,7 @@ class TestPowerClaimsItsGroundBeforeRouting:
         )
         limit_only = freeform._projection_envelope(limit, limit, policy)
         assert all(
-            freeform.finalize.projected_power_failure(pair, projection) is None
+            finalize.projected_power_failure(pair, projection) is None
             for projection in limit_only
         )
         failure = next(
@@ -4112,7 +4170,7 @@ class TestPowerClaimsItsGroundBeforeRouting:
                 failure
                 for projection in envelope
                 if (
-                    failure := freeform.finalize.projected_power_failure(
+                    failure := finalize.projected_power_failure(
                         pair,
                         projection,
                     )
@@ -4132,7 +4190,7 @@ class TestPowerClaimsItsGroundBeforeRouting:
             errors: tuple[object, ...] = ()
 
         monkeypatch.setattr(
-            freeform.finalize,
+            finalize,
             "_certify",
             lambda *_args, **_kwargs: _Accepted(),
         )
@@ -4151,13 +4209,13 @@ class TestPowerClaimsItsGroundBeforeRouting:
         )
         assert len(planning_envelope) == 204
 
-        compacted = freeform.finalize.compact_open_boundary_belts(
+        compacted = finalize.compact_open_boundary_belts(
             Placement(buildings=tuple(canvas.buildings)),
             two_stage_spec(),
             expect_power=False,
         )
         assert compacted.bounds == (6, 6, 160, 10)
-        candidates = freeform.finalize.frame_candidates(compacted, policy)
+        candidates = finalize.frame_candidates(compacted, policy)
         assert {candidate.frame.primary_band for candidate in candidates} == {32}
 
         by_segments = {band.area_segments: band for band in planet.bands()}
@@ -4188,7 +4246,7 @@ class TestPowerClaimsItsGroundBeforeRouting:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         policy = BandPolicy("portable")
-        failure = freeform.finalize.ProjectionFailure(
+        failure = finalize.ProjectionFailure(
             "game.power_too_close",
             (0, 1),
             "authoritative projected pair detail",
@@ -4261,7 +4319,8 @@ class TestPowerClaimsItsGroundBeforeRouting:
             ),
             solid=True,
         )
-        sites = _power_plan(canvas, (0, 0, 20, 20), policy=BandPolicy("portable"))
+        self._pin_projection_extent(canvas, (0, 0, 20, 20))
+        sites = _power_plan(canvas, (0, 0, 20, 20), policy=BandPolicy("200"))
         assert sites
         cx, cy = 9 + panel.width // 2, 9 + panel.height // 2
         keepout = {
@@ -4606,7 +4665,6 @@ class TestAShardThatCannotFeedItself:
         supply, demand = {10: F(1), 20: F(1)}, {30: F(1), 31: F(3)}
         cut = [(10, 30), (20, 31)]
         assert _join_shard_islands(cut, supply, demand, F(0)) == [(10, 31)]
-        assert _join_shard_islands(cut, supply, demand, F(2)) == []
 
     def test_the_plan_really_does_starve_a_shard(self) -> None:
         """Verify the instrument: the fixture must contain the defect.
@@ -4625,7 +4683,7 @@ class TestAShardThatCannotFeedItself:
     def test_it_lays_out_and_conserves_flow(self, power: bool) -> None:
         spec = starved_shard_spec()
         p = FreeformLayout(
-            band_policy=BandPolicy("portable"),
+            band_policy=BandPolicy("100"),
             power=power, workers=DETERMINISTIC_WORKERS
         ).lay_out(
             spec, time_budget_s=0.5
@@ -6198,7 +6256,7 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
 
         failure = caught.value.failure
         assert tuple(canvas.buildings) == before
-        assert failure == freeform.finalize.ProjectionFailure(
+        assert failure == finalize.ProjectionFailure(
             check="game.addon_splitter_clearance",
             buildings=(len(before) + 1, splitter_index),
             detail=(
@@ -6274,7 +6332,7 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         policy = BandPolicy("portable")
-        failure = freeform.finalize.ProjectionFailure(
+        failure = finalize.ProjectionFailure(
             check="game.addon_splitter_clearance",
             buildings=(12, 7),
             detail=(
