@@ -452,7 +452,7 @@ def build(
             try:
                 placement = finalize.finalize_placement(placement)
             except finalize.ProjectionRefusal as exc:
-                reason = "final spherical projection rejected " + ", ".join(exc.checks)
+                reason = str(exc)
                 refused.append(f"{sname}/{spec.label}: {reason}")
                 if on_progress is not None:
                     on_progress(

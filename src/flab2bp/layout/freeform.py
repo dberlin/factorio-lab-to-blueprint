@@ -85,6 +85,7 @@ from flab2bp.layout.base import (
     PlacedBuilding,
     Placement,
 )
+from flab2bp.layout.finalize import ProjectionNoGood
 from flab2bp.layout.route_feedback import (
     Cell,
     DetailedRouteResult,
@@ -1985,6 +1986,42 @@ class _Pack:
     #: Nets the packer arranged to bridge with a sorter instead of a belt route.
     direct: frozenset[tuple[int, int]] = frozenset()
 
+def _projection_no_good(
+    placement: Placement,
+    pack: _Pack,
+    failure: finalize.ProjectionFailure,
+) -> ProjectionNoGood | None:
+    """Map one exact projected static collision back to two packed strips."""
+    if failure.check != "geom.collide" or len(failure.buildings) != 2:
+        return None
+    left_building, right_building = failure.buildings
+    if (
+        not 0 <= left_building < len(placement.buildings)
+        or not 0 <= right_building < len(placement.buildings)
+    ):
+        return None
+    left_strip = placement.buildings[left_building].owner_strip
+    right_strip = placement.buildings[right_building].owner_strip
+    if (
+        type(left_strip) is not int
+        or type(right_strip) is not int
+        or left_strip == right_strip
+        or left_strip not in pack.at
+        or right_strip not in pack.at
+    ):
+        return None
+    if left_strip > right_strip:
+        left_strip, right_strip = right_strip, left_strip
+    left_x, left_y = pack.at[left_strip]
+    right_x, right_y = pack.at[right_strip]
+    return ProjectionNoGood(
+        left_strip=left_strip,
+        right_strip=right_strip,
+        delta_x=left_x - right_x,
+        delta_y=left_y - right_y,
+        failure=failure,
+    )
+
 
 def _nets_between(strips: list[Strip]) -> list[tuple[int, int]]:
     """Strip index pairs that will need a belt route."""
@@ -2034,6 +2071,7 @@ def _pack(
     workers: int,
     seed: _Pack | None = None,
     arrangement: int = 0,
+    projection_no_goods: tuple[ProjectionNoGood, ...] = (),
 ) -> _Pack | None:
     """Minimise width at a fixed height with CP-SAT.
 
@@ -2090,6 +2128,32 @@ def _pack(
         model.add(x + w <= w_var)
 
     model.add_no_overlap_2d(x_iv, y_iv)
+
+    for index, no_good in enumerate(projection_no_goods):
+        if (
+            no_good.left_strip == no_good.right_strip
+            or not 0 <= no_good.left_strip < n
+            or not 0 <= no_good.right_strip < n
+        ):
+            raise ValueError("projection no-good must name two distinct packed strips")
+        dx = model.new_int_var(-width_bound, width_bound, f"projection_dx_{index}")
+        dy = model.new_int_var(-height, height, f"projection_dy_{index}")
+        # `_Pack.at` names CONTENT origins, while `xs` name boxes including the
+        # reserved west channel.  Keep the learned displacement in `_Pack.at`'s
+        # coordinate system so sprayed and unsprayed strips forbid exactly the
+        # arrangement that failed rather than an off-by-channel neighbour.
+        model.add(
+            dx
+            == xs[no_good.left_strip]
+            - xs[no_good.right_strip]
+            + strips[no_good.left_strip].west_channel
+            - strips[no_good.right_strip].west_channel
+        )
+        model.add(dy == ys[no_good.left_strip] - ys[no_good.right_strip])
+        model.add_forbidden_assignments(
+            [dx, dy],
+            [(no_good.delta_x, no_good.delta_y)],
+        )
 
     # CUT 3 -- ROUTING CAPACITY was built here, measured, and taken out.
     #
@@ -2958,6 +3022,7 @@ def _emit_strip(
     in_rates: Mapping[str, Fraction] | None = None,
     out_rates: Mapping[str, Fraction] | None = None,
     sprayed: Set[str] = frozenset(),
+    owner_strip: int | None = None,
 ) -> tuple[dict[str, _Port], dict[tuple[str, str], _Port], int]:
     """Place one strip's lanes, machines and sorters.
 
@@ -3072,6 +3137,7 @@ def _emit_strip(
                         height=1,
                         yaw=Facing.EAST.value,
                         carries_item=lane_item_of.get(row),
+                        owner_strip=owner_strip,
                     )
                 )
             )
@@ -3099,6 +3165,7 @@ def _emit_strip(
                     # randomises string hashing.
                     recipe_id=0 if s.is_mode_driven else catalog.recipe_id(s.recipe_id),
                     parameters=s.mode_params,
+                    owner_strip=owner_strip,
                 ),
                 solid=True,
             )
@@ -3292,6 +3359,7 @@ def _flank_lane(
                         height=1,
                         yaw=Facing.SOUTH.value,
                         carries_item=item,
+                        owner_strip=m.owner_strip,
                     )
                 )
             )
@@ -3315,6 +3383,7 @@ def _flank_lane(
                 input_obj=m_idx,
                 output_obj=column[0],
                 carries_item=item,
+                owner_strip=m.owner_strip,
             )
         )
         placed += 1
@@ -3389,6 +3458,7 @@ def _dock_lane(
                     height=1,
                     yaw=dock.facing.value,
                     carries_item=item,
+                    owner_strip=machine.owner_strip,
                 )
             )
             for y in range(dock.cell[1], lane_y)
@@ -3477,6 +3547,7 @@ def _link_lane(
                 output_obj=destination,
                 filter_id=filter_id,
                 carries_item=planned.item,
+                owner_strip=machine.owner_strip,
             )
         )
         placed += 1
@@ -7880,6 +7951,7 @@ def _prepare_routing_problem(
             rates,
             *per_item.get(s.group_key, ({}, {})),
             sprayed=frozenset(spec.spray_lanes),
+            owner_strip=i,
         )
         sorters += placed
         strip_in_ports.append(ins)
@@ -9139,6 +9211,40 @@ def fallback_placement(spec: BuildSpec, *, power: bool = True, ramped: bool = Fa
     return placement
 
 
+type _RefusalFinding = str | validate.Finding | finalize.ProjectionFailure
+
+
+def _retain_refusal(
+    rejected: list[_RefusalFinding],
+    finding: _RefusalFinding,
+) -> None:
+    """Keep authoritative findings in first-seen order without duplicates."""
+    if finding not in rejected:
+        rejected.append(finding)
+
+
+def _refusal_summary(rejected: Sequence[_RefusalFinding]) -> str:
+    """List concise checks first, then the structured records that explain them."""
+    checks: list[str] = []
+    records: list[str] = []
+    for finding in rejected:
+        check = finding if isinstance(finding, str) else finding.check
+        if check not in checks:
+            checks.append(check)
+        if isinstance(finding, finalize.ProjectionFailure):
+            records.append(
+                f"band {finding.band} {finding.check} "
+                f"{finding.buildings}: {finding.detail}"
+            )
+        elif isinstance(finding, validate.Finding):
+            record = f"{finding.check} {finding.buildings}: {finding.message}"
+            if finding.detail:
+                record += f" ({dict(finding.detail)})"
+            records.append(record)
+    summary = ", ".join(checks)
+    return summary + (f"; findings: {'; '.join(records)}" if records else "")
+
+
 class FreeformLayout:
     """Free-form packing plus belt routing."""
 
@@ -9297,8 +9403,8 @@ class FreeformLayout:
 
         budgets = (time_budget_s,)
 
-        #: Checks that threw a placement out AFTER it wired -- see `_sweep`.
-        rejected: set[str] = set()
+        #: Ordered authoritative findings from candidates rejected after packing.
+        rejected: list[_RefusalFinding] = []
         #: The unrouted-net count of every pack the sweep actually ROUTED.
         #: Empty means no pack got that far.  It is what turns "the deadline
         #: passed" from an assertion into a measurement -- see the refusal
@@ -9318,7 +9424,7 @@ class FreeformLayout:
         if rejected:
             raise NoValidLayout(
                 "every packing that wired was rejected by our own validator ("
-                + ", ".join(sorted(rejected))
+                + _refusal_summary(rejected)
                 + "); a placement that fails validation is refused rather than "
                 "returned, because an invalid blueprint pastes and then does not "
                 "run",
@@ -9387,7 +9493,7 @@ class FreeformLayout:
         time_budget_s: float,
         deadline: float | None = None,
         budget: dict[str, int] | None = None,
-        rejected: set[str] | None = None,
+        rejected: list[_RefusalFinding] | None = None,
         attempts: list[int] | None = None,
     ) -> Placement | None:
         """Try every candidate height, returning the best FULLY ROUTED placement.
@@ -9402,9 +9508,9 @@ class FreeformLayout:
         ranked below routed ones, so an unwireable pack can never be what this
         returns, and neither can one our own validator rejects.
 
-        ``rejected`` collects the check names of placements thrown out by that
-        self-check, so the refusal can say WHICH promise the build broke instead
-        of blaming the packer for a pack that wired perfectly well.
+        ``rejected`` collects ordered structured findings from placements thrown
+        out by self-checks or projected geometry, so a terminal refusal can name
+        the broken promise and retain the authoritative record that proved it.
 
         ``time_budget_s`` bounds the WHOLE sweep, not just CP-SAT.  It used to
         bound only the packing: routing is limited by an expansion count, not a
@@ -9511,10 +9617,12 @@ class FreeformLayout:
         # alternatives begin.  A stress refusal must not spend the whole clock
         # redrawing one height while a later height is known to route cleanly.
         candidate_packs = [
-            (height, arrangement)
+            (height, arrangement, False)
             for arrangement in range(max(1, self.arrangements))
             for height in heights
         ]
+        projection_no_goods: list[ProjectionNoGood] = []
+        projection_no_good_keys: set[tuple[int, int, int, int]] = set()
         # This sweep's own share, never more than the CALL has left. A sweep
         # asked for 15s when 3 remain must not spend 15.
         left = time_budget_s if deadline is None else deadline - time.monotonic()
@@ -9549,7 +9657,10 @@ class FreeformLayout:
         #: What `_room_for_another` charges the next improvement arrangement.
         dearest_candidate_s = 0.0
         started_at: float | None = None
-        for height, arrangement in candidate_packs:
+        candidate_index = 0
+        while candidate_index < len(candidate_packs):
+            height, arrangement, projection_retry = candidate_packs[candidate_index]
+            candidate_index += 1
             # Charge the PREVIOUS candidate here, at the one place every path
             # through the body reaches. The body leaves by five different
             # routes -- no pack, unpowerable, unrouted, rejected, kept -- and a
@@ -9640,9 +9751,13 @@ class FreeformLayout:
             # So the default is the one both ends support, which is the thing the
             # unconditional version got wrong: it was measured at budget 60 and
             # shipped to budget 4.
-            if arrangement and best is None:
+            if not projection_retry and arrangement and best is None:
                 break
-            if arrangement and not _room_for_another(deadline, soft, dearest_candidate_s):
+            if (
+                not projection_retry
+                and arrangement
+                and not _room_for_another(deadline, soft, dearest_candidate_s)
+            ):
                 break
             # The SOFT deadline stops us IMPROVING, never FINDING. A refusal
             # means the model could not lay the spec out; a sweep's own clock
@@ -9651,7 +9766,7 @@ class FreeformLayout:
             # free-proliferation chain only wires at the tallest, so a 2s budget
             # refused a spec that routes every net cleanly given the chance to
             # reach it.
-            if best is not None and time.monotonic() >= soft:
+            if not projection_retry and best is not None and time.monotonic() >= soft:
                 break
             # The HARD deadline is the call's, and it does stop us finding --
             # that is what makes `time_budget_s` a wall rather than a suggestion.
@@ -9678,6 +9793,7 @@ class FreeformLayout:
                 workers=(1 if len(strips) >= _DETERMINISTIC_PACK_STRIPS else self.workers),
                 seed=seeds[height],
                 arrangement=arrangement,
+                projection_no_goods=tuple(projection_no_goods),
             )
             if pack is None:
                 continue
@@ -9735,11 +9851,11 @@ class FreeformLayout:
                     deadline=deadline,
                     budget=budget,
                 )
-            except _Unpowerable:
+            except _Unpowerable as exc:
                 if rejected is not None:
-                    rejected.add("power.coverage")
+                    _retain_refusal(rejected, exc.failure or "power.coverage")
                 continue
-            except _Unseatable:
+            except _Unseatable as exc:
                 # A pack that cannot seat one of its Spray Coaters is not a
                 # pack, for the same reason one that cannot be powered is not:
                 # the spec asked for proliferation and this height cannot
@@ -9747,7 +9863,10 @@ class FreeformLayout:
                 # what is NOT allowed is emitting the pack with the coater left
                 # out, which is what this replaced.
                 if rejected is not None:
-                    rejected.add("prolif.sprayed_cargo_reaches_machines")
+                    _retain_refusal(
+                        rejected,
+                        exc.failure or "prolif.sprayed_cargo_reaches_machines",
+                    )
                 continue
             failed = result.routing.failed_count
             if attempts is not None:
@@ -9780,13 +9899,35 @@ class FreeformLayout:
             report = validate.certify(placement, spec, expect_power=self.power)
             if report.errors:
                 if rejected is not None:
-                    rejected.update(f.check for f in report.errors)
+                    for finding in report.errors:
+                        _retain_refusal(rejected, finding)
                 continue
             try:
                 placement = finalize.finalize_placement(placement)
             except finalize.ProjectionRefusal as exc:
-                if rejected is not None:
-                    rejected.update(exc.checks)
+                learned = False
+                for failure in exc.failures:
+                    if rejected is not None:
+                        _retain_refusal(rejected, failure)
+                    no_good = _projection_no_good(placement, pack, failure)
+                    if no_good is None:
+                        continue
+                    no_good_key = (
+                        no_good.left_strip,
+                        no_good.right_strip,
+                        no_good.delta_x,
+                        no_good.delta_y,
+                    )
+                    if no_good_key in projection_no_good_keys:
+                        continue
+                    projection_no_good_keys.add(no_good_key)
+                    projection_no_goods.append(no_good)
+                    learned = True
+                if learned:
+                    candidate_packs.insert(
+                        candidate_index,
+                        (height, arrangement, True),
+                    )
                 continue
             # Area, then belt count. Two packs of equal area are not equally
             # good: the one with fewer belt tiles is fewer buildings to paste,

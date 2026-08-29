@@ -29,6 +29,17 @@ class ProjectionFailure:
     band: int
 
 
+@dataclass(frozen=True, slots=True)
+class ProjectionNoGood:
+    """One exact strip-origin displacement rejected by projected geometry."""
+
+    left_strip: int
+    right_strip: int
+    delta_x: int
+    delta_y: int
+    failure: ProjectionFailure
+
+
 class ProjectionRefusal(ValueError):
     """No requested latitude frame accepts the placement's real geometry."""
 

@@ -997,6 +997,36 @@ def test_validator_rejection_never_establishes_an_exact_incumbent() -> None:
         _solver(fake, heights=(40,)).search(max_stages=1)
 
 
+def test_refusal_accumulates_distinct_validation_failures() -> None:
+    invalid = _placement(area=10, belt_tiles=2, valid=False)
+    fake = _FakeRouting(
+        detailed_results=(DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), invalid),)
+    )
+    solver = _solver(fake, heights=(40, 60))
+    failed_checks = iter(
+        (
+            ("validator.first", "validator.shared"),
+            ("validator.second", "validator.shared"),
+        )
+    )
+    solver.adapters = replace(
+        solver.adapters,
+        validate=lambda _placement: ValidationVerdict(
+            ok=False,
+            failed_checks=next(failed_checks),
+        ),
+    )
+
+    with pytest.raises(NoValidLayout) as caught:
+        solver.search(max_stages=2)
+
+    assert "no scheduled stage produced an exact layout" in caught.value.reason
+    assert "validator.first" in caught.value.reason
+    assert "validator.shared" in caught.value.reason
+    assert "validator.second" in caught.value.reason
+    assert caught.value.reason.count("validator.shared") == 1
+
+
 def test_stage_routes_preserve_the_final_twenty_five_percent() -> None:
     budget = ExpansionBudget(total=100)
     fake = _FakeRouting(spend_allowance=True)

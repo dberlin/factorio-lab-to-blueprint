@@ -15,6 +15,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from fractions import Fraction as F
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -1954,7 +1955,234 @@ class TestSolverActuallyRuns:
             f"packer for a pack that wired perfectly well: {exc.value.reason}"
         )
 
+    def test_projection_refusal_preserves_authoritative_detail(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        failure = freeform.finalize.ProjectionFailure(
+            check="geom.collide",
+            buildings=(0, 1),
+            detail="build colliders intersect",
+            band=160,
+        )
+        pack = freeform._Pack(
+            at={0: (0, 0), 1: (8, 0)},
+            width=16,
+            height=8,
+            status="test",
+        )
+        routed = SimpleNamespace(
+            placement=Placement(buildings=(), stats={"belt_tiles": 0.0}),
+            routing=SimpleNamespace(failed_count=0),
+        )
+        monkeypatch.setattr(freeform, "_candidate_heights", lambda _strips: [8])
+        monkeypatch.setattr(freeform, "_greedy_pack", lambda _strips, _height: pack)
+        monkeypatch.setattr(freeform, "_pack", lambda *_args, **_kwargs: pack)
+        monkeypatch.setattr(freeform, "_build", lambda *_args, **_kwargs: routed)
+        monkeypatch.setattr(
+            freeform.validate,
+            "certify",
+            lambda *_args, **_kwargs: validate.Report(findings=()),
+        )
+        monkeypatch.setattr(
+            freeform.finalize,
+            "finalize_placement",
+            lambda _placement: (_ for _ in ()).throw(
+                freeform.finalize.ProjectionRefusal((failure,))
+            ),
+        )
 
+        with pytest.raises(NoValidLayout) as caught:
+            FreeformLayout(power=False).lay_out(two_stage_spec(), time_budget_s=1.0)
+
+        assert "geom.collide" in caught.value.reason
+        assert "band 160" in caught.value.reason
+        assert "(0, 1)" in caught.value.reason
+        assert "build colliders intersect" in caught.value.reason
+
+
+def test_projection_no_good_forbids_only_rejected_relative_displacement() -> None:
+    assert hasattr(freeform, "ProjectionNoGood")
+    strip = plan_strips(single_recipe_spec())[0]
+    strips = [strip, strip]
+    height = 2 * _box(strip)[1]
+    width_bound = 2 * _box(strip)[0]
+    initial = _pack(
+        strips,
+        height=height,
+        width_bound=width_bound,
+        time_budget_s=0.5,
+        direct_candidates={},
+        workers=DETERMINISTIC_WORKERS,
+    )
+    assert initial is not None
+    failure = freeform.finalize.ProjectionFailure(
+        check="geom.collide",
+        buildings=(0, 1),
+        detail="build colliders intersect",
+        band=160,
+    )
+    bad_delta = (
+        initial.at[0][0] - initial.at[1][0],
+        initial.at[0][1] - initial.at[1][1],
+    )
+    bad = freeform.ProjectionNoGood(0, 1, *bad_delta, failure)
+
+    retry = _pack(
+        strips,
+        height=height,
+        width_bound=width_bound,
+        time_budget_s=0.5,
+        direct_candidates={},
+        workers=DETERMINISTIC_WORKERS,
+        projection_no_goods=(bad,),
+    )
+
+    assert retry is not None
+    assert (
+        retry.at[0][0] - retry.at[1][0],
+        retry.at[0][1] - retry.at[1][1],
+    ) != bad_delta
+
+
+def test_projection_owned_strip_collision_learns_and_repacks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = two_stage_spec()
+    strips = plan_strips(spec)
+    first = freeform._Pack(
+        at={0: (3, 4), 1: (11, 9)},
+        width=20,
+        height=20,
+        status="first",
+    )
+    separated = freeform._Pack(
+        at={0: (3, 4), 1: (12, 9)},
+        width=21,
+        height=20,
+        status="separated",
+    )
+    packs = iter((first, separated))
+    seen_no_goods: list[tuple[object, ...]] = []
+
+    def pack_retry(*_args: object, **kwargs: object) -> freeform._Pack:
+        seen_no_goods.append(tuple(kwargs.get("projection_no_goods", ())))
+        return next(packs)
+
+    def build(
+        _spec: object,
+        _strips: object,
+        pack: freeform._Pack,
+        **_kwargs: object,
+    ) -> SimpleNamespace:
+        buildings = tuple(
+            SimpleNamespace(
+                x=x,
+                y=y,
+                width=1,
+                height=1,
+                owner_strip=strip_index,
+            )
+            for strip_index, (x, y) in sorted(pack.at.items())
+        )
+        return SimpleNamespace(
+            placement=Placement(buildings=buildings, stats={"belt_tiles": 0.0}),
+            routing=SimpleNamespace(failed_count=0),
+        )
+
+    failure = freeform.finalize.ProjectionFailure(
+        check="geom.collide",
+        buildings=(0, 1),
+        detail="build colliders intersect",
+        band=160,
+    )
+    projections = 0
+
+    def finalize_projection(placement: Placement) -> Placement:
+        nonlocal projections
+        projections += 1
+        if projections == 1:
+            raise freeform.finalize.ProjectionRefusal((failure,))
+        return placement
+
+    monkeypatch.setattr(freeform, "_candidate_heights", lambda _strips: [20])
+    monkeypatch.setattr(freeform, "_greedy_pack", lambda _strips, _height: first)
+    monkeypatch.setattr(freeform, "_pack", pack_retry)
+    monkeypatch.setattr(freeform, "_build", build)
+    monkeypatch.setattr(
+        freeform.validate,
+        "certify",
+        lambda *_args, **_kwargs: validate.Report(findings=()),
+    )
+    monkeypatch.setattr(freeform.finalize, "finalize_placement", finalize_projection)
+
+    result = FreeformLayout(power=False, arrangements=1)._sweep(spec, strips, 1.0)
+
+    assert result is not None
+    assert len(seen_no_goods) == 2
+    assert seen_no_goods[0] == ()
+    learned = seen_no_goods[1]
+    assert len(learned) == 1
+    assert (
+        learned[0].left_strip,
+        learned[0].right_strip,
+        learned[0].delta_x,
+        learned[0].delta_y,
+        learned[0].failure,
+    ) == (0, 1, -8, -5, failure)
+
+
+def test_projection_same_strip_and_unowned_failures_create_no_cut() -> None:
+    failure = freeform.finalize.ProjectionFailure(
+        check="geom.collide",
+        buildings=(0, 1),
+        detail="build colliders intersect",
+        band=160,
+    )
+    pack = freeform._Pack(
+        at={0: (3, 4), 1: (11, 9)},
+        width=20,
+        height=20,
+        status="test",
+    )
+
+    same_strip = Placement(
+        buildings=(
+            SimpleNamespace(owner_strip=0),
+            SimpleNamespace(owner_strip=0),
+        )
+    )
+    unowned = Placement(
+        buildings=(
+            SimpleNamespace(owner_strip=0),
+            SimpleNamespace(owner_strip=None),
+        )
+    )
+
+    assert freeform._projection_no_good(same_strip, pack, failure) is None
+    assert freeform._projection_no_good(unowned, pack, failure) is None
+
+
+
+
+def test_projection_strip_static_objects_retain_non_encoded_owner() -> None:
+    spec = two_stage_spec()
+    strips = plan_strips(spec)
+    pack = _greedy_pack(strips, _height_seed(strips))
+
+    prepared = _prepare_routing_problem(
+        spec,
+        strips,
+        pack,
+        power=False,
+        _reserve_ports=False,
+    )
+
+    assert prepared.building_templates
+    assert all(building.owner_strip is not None for building in prepared.building_templates)
+    assert {building.owner_strip for building in prepared.building_templates} == set(
+        range(len(strips))
+    )
+    assert PlacedBuilding(item_id=1, model_index=1, x=0, y=0).owner_strip is None
 
 # --- power -----------------------------------------------------------------
 

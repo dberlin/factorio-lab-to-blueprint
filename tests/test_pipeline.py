@@ -91,6 +91,45 @@ def test_a_sink_that_raises_is_not_swallowed() -> None:
         )
 
 
+def test_projection_refusal_preserves_structured_exception_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    failure = pipeline.finalize.ProjectionFailure(
+        check="geom.collide",
+        buildings=(4, 9),
+        detail="build colliders intersect",
+        band=160,
+    )
+    refusal = pipeline.finalize.ProjectionRefusal((failure,))
+
+    class RefusedLayout:
+        def lay_out(self, _spec: object, *, time_budget_s: float) -> pipeline.Placement:
+            del time_budget_s
+            return pipeline.Placement(buildings=())
+
+    monkeypatch.setattr(pipeline, "_new_layout", lambda *_args, **_kwargs: RefusedLayout())
+    monkeypatch.setattr(
+        pipeline.finalize,
+        "compact_open_boundary_belts",
+        lambda placement, *_args, **_kwargs: placement,
+    )
+    monkeypatch.setattr(
+        pipeline.finalize,
+        "finalize_placement",
+        lambda _placement: (_ for _ in ()).throw(refusal),
+    )
+
+    with pytest.raises(pipeline.NoValidLayout) as caught:
+        pipeline.build(
+            SMALL_URL,
+            strategy="freeform",
+            candidates=1,
+            time_budget_s=0.5,
+        )
+
+    assert "band 160 geom.collide (4, 9): build colliders intersect" in caught.value.reason
+
+
 @pytest.mark.slow
 def test_no_proliferator_keeps_only_unsprayed_candidates() -> None:
     """`--no-proliferator` is read off the MODE, not off the label.

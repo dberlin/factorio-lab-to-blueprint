@@ -152,6 +152,11 @@ class PlacedBuilding:
     #: all consume it before encoding.
     carries_item: str | None = None
 
+    #: Packing provenance for exact projected-collision feedback.  This is not a
+    #: DSP record field: the encoder ignores it, while layout may use it to map a
+    #: rejected static object back to the strip origin that placed it.
+    owner_strip: int | None = None
+
     def tiles(self) -> list[tuple[int, int, Fraction]]:
         """Every grid cell this building's footprint occupies."""
         return [

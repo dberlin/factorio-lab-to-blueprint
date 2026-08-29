@@ -807,6 +807,17 @@ class SequenceSolver[PreparedT]:
                 "cancelled": "routing was cancelled before detailed emission",
                 "stage-limit": "no scheduled stage produced an exact layout",
             }[termination]
+            validation_failures = tuple(
+                dict.fromkeys(
+                    check
+                    for stage in self._stage_stats
+                    for check in stage.validation_failures
+                )
+            )
+            if validation_failures:
+                reason += "; exact validation failures: " + ", ".join(
+                    validation_failures
+                )
             raise NoValidLayout(reason)
         incumbent = self._incumbent
         return SequenceSearchResult(
@@ -3520,7 +3531,7 @@ class SequencePairLayout:
             return finalize.finalize_placement(placement)
         except finalize.ProjectionRefusal as exc:
             raise NoValidLayout(
-                "final spherical projection rejected " + ", ".join(exc.checks),
+                "final spherical projection rejected: " + str(exc),
                 spec_label=spec.label,
                 budget_s=time_budget_s,
             ) from exc
