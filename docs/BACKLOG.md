@@ -3044,9 +3044,10 @@ at any legal anchor refuses; there is no fallback to Portable or a different num
 Successful CLI and web reports expose the literal `primary_band` and `certified_bands`.
 
 Projection refusals are structured rather than reduced to a generic solver failure. Freeform,
-SequencePair, pipeline, CLI, and web retain the failed band, check, building indices, and
-authoritative detail. Shared projected power and Spray Coater/Splitter predicates run before
-routing, static projected collisions feed exact relative strip no-goods back to Freeform, and
+SequencePair, pipeline, CLI, and web retain each distinct projection failure's band, check,
+building indices, and authoritative detail. Shared projected power and Spray Coater/Splitter
+predicates run before routing, static projected collisions feed exact relative strip no-goods
+back to Freeform, and
 finalization repeats every predicate as the encoding boundary.
 
 The validator correction was deliberately narrower than latitude certification. A belt in a

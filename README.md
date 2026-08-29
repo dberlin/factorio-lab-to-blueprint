@@ -38,8 +38,8 @@ certified; Portable does not claim every latitude band on the planet.
 The finalizer may add zero through four empty **latitude** rows, split between the north and
 south margins, while keeping `B0` fixed. It never adds longitude padding. It picks the smallest
 passing frame, or refuses the layout rather than emitting a blueprint with a weaker guarantee.
-A refusal retains structured evidence for each failed projection: band, check, building
-indices, and the authoritative detail.
+A refusal retains structured evidence for each distinct projection failure: band, check,
+building indices, and the authoritative detail.
 
 An explicit numeric selection certifies only that requested band, using the same search of up
 to four latitude rows. If the layout does not fit the band or fails at any legal anchor, the

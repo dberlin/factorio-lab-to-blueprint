@@ -60,7 +60,7 @@ Selecting a number is explicit-only: `200`, for example, certifies only band 200
 up-to-four-row latitude-padding search. A frame that does not fit the requested band or fails at
 any legal anchor refuses. Successful results display `primary_band` and exact
 `certified_bands`; projection refusals retain the band, check, building indices, and detail for
-each distinct failure.
+each distinct projection failure.
 
 ## Proving it works
 
