@@ -527,7 +527,7 @@ def _remove_buildings(placement: Placement, removed: frozenset[int]) -> Placemen
         for index, building in enumerate(placement.buildings)
         if index not in removed
     )
-    candidate = replace(placement, buildings=buildings)
+    candidate = replace(placement, buildings=buildings, frame=None)
     stats = placement.stats.copy()
     if "area" in stats:
         stats["area"] = float(candidate.area)

@@ -104,6 +104,41 @@ def test_compaction_prunes_open_belt_leaves_to_a_structural_fixed_point(
     assert [(belt.x, belt.y) for belt in compacted.buildings] == [(1, 1)]
 
 
+def test_framed_boundary_fallback_returns_unfinalized_smaller_geometry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    smelter = _building(2302, 1, 0)
+    placement = Placement(
+        buildings=(
+            _belt(0, 1, output=1),
+            smelter,
+        ),
+        stats={"area": 12.0},
+        frame=AreaFrame(4, 3, 4, (4,), False),
+    )
+    calls: list[Placement] = []
+
+    def certify(candidate: Placement, *_args: object, **_kwargs: object) -> _Report:
+        calls.append(candidate)
+        return _Report(errors=(object(),)) if len(calls) == 1 else _Report()
+
+    monkeypatch.setattr(finalize, "_certify", certify)
+
+    compacted = finalize.compact_open_boundary_belts(
+        placement,
+        two_stage_spec(),
+        expect_power=False,
+    )
+
+    assert len(calls) == 2
+    assert compacted.buildings == (smelter,)
+    assert compacted.frame is None
+    assert compacted.bounds == (1, 0, 3, 2)
+    assert compacted.area == 9
+    assert compacted.stats["area"] == 9.0
+    assert finalize.finalize_placement(compacted).frame is not None
+
+
 def test_compaction_preserves_original_when_certification_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
