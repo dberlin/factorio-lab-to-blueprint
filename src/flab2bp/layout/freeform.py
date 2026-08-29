@@ -75,8 +75,9 @@ from typing import TYPE_CHECKING, Literal
 import numpy as np
 from ortools.sat.python import cp_model
 
-from flab2bp.dsp import catalog, codec, colliders, params, rules
+from flab2bp.dsp import catalog, codec, colliders, params, planet, rules
 from flab2bp.layout import finalize, junction, slots, validate
+from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import (
     DEFAULT_SEARCH_WORKERS,
     Facing,
@@ -6957,14 +6958,68 @@ class _Unpowerable(Exception):
     """This pack cannot be powered, so it is not a feasible pack.
 
     Raised by :func:`_power_plan` before anything routes, and by
-    :func:`_place_power` if a held site was taken anyway.  The sweep discards
-    the height and moves on, exactly as it does for a pack that cannot be
-    wired: coverage is not a nice-to-have that a build can ship without, so a
-    placement that cannot have it is not a placement.
+    :func:`_place_power` if a held site was taken anyway.  Projected refusals
+    retain their structured finalizer evidence so a caller can report the
+    authoritative band, check, and detail instead of calling every failure
+    ``power.coverage``.
     """
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        failure: finalize.ProjectionFailure | None = None,
+    ) -> None:
+        self.failure = failure
+        self.failures = () if failure is None else (failure,)
+        if failure is not None:
+            message = (
+                f"{message}: band {failure.band} {failure.check} "
+                f"{failure.buildings}: {failure.detail}"
+            )
+        super().__init__(message)
 
-def _power_plan(canvas: _Canvas, core: tuple[int, int, int, int]) -> list[tuple[int, int]]:
+
+def _projection_envelope(
+    bounds: tuple[int, int, int, int],
+    policy: BandPolicy,
+) -> tuple[planet.Projection, ...]:
+    """Every required projection of every finalizer frame for fixed bounds."""
+    min_x, min_y, max_x, max_y = bounds
+    if max_x < min_x or max_y < min_y:
+        return ()
+    extent = Placement(
+        buildings=(
+            PlacedBuilding(item_id=0, model_index=0, x=min_x, y=min_y),
+            PlacedBuilding(item_id=0, model_index=0, x=max_x, y=max_y),
+        )
+    )
+    by_segments = {band.area_segments: band for band in planet.bands()}
+    projections: list[planet.Projection] = []
+    for candidate in finalize.frame_candidates(extent, policy):
+        rotated = candidate.frame.rotated
+        row_origin = (min_x if rotated else min_y) - candidate.south_padding
+        for segments in candidate.frame.certified_bands:
+            band = by_segments[segments]
+            projections.extend(
+                planet.Projection(
+                    band=band,
+                    anchor_row=anchor - row_origin,
+                    segment=colliders.PLANET_SEGMENT,
+                    radius=colliders.PLANET_RADIUS,
+                    quadrant=int(rotated),
+                )
+                for anchor in band.anchors(candidate.frame.height)
+            )
+    return tuple(dict.fromkeys(projections))
+
+
+def _power_plan(
+    canvas: _Canvas,
+    core: tuple[int, int, int, int],
+    *,
+    policy: BandPolicy | None = None,
+) -> list[tuple[int, int]]:
     """Where every tower goes, decided BEFORE anything routes.
 
     Raises :class:`_Unpowerable` when this pack cannot be powered at all, which
@@ -7140,13 +7195,16 @@ def _power_plan(canvas: _Canvas, core: tuple[int, int, int, int]) -> list[tuple[
     # network and are subject to the same rule; the pack has already placed them
     # and `free` knows only that their own tiles are taken.  Their spacing is
     # keyed on their own flags, so a node on a wider tier keeps its own distance.
-    for b in canvas.buildings:
+    power_nodes: list[tuple[int, PlacedBuilding, rules.PowerNode]] = []
+    for index, b in enumerate(canvas.buildings):
         try:
             peer = catalog.building(b.item_id).power_node
         except KeyError:
             continue
         if not peer.is_power_node:
             continue
+        if policy is not None:
+            power_nodes.append((index, b, peer))
         cx = b.x + b.width // 2 - min_x + pad
         cy = b.y + b.height // 2 - min_y + pad
         for dx, dy, dz in rules.power_node_keepout_offsets(peer, tower.power_node):
@@ -7155,6 +7213,19 @@ def _power_plan(canvas: _Canvas, core: tuple[int, int, int, int]) -> list[tuple[
             gx, gy = cx + dx, cy + dy
             if 0 <= gx < shape[0] and 0 <= gy < shape[1]:
                 free[gx, gy] = False
+
+    projections = (
+        _projection_envelope(canvas.limit or (min_x, min_y, max_x, max_y), policy)
+        if policy is not None
+        else ()
+    )
+    for projection in projections:
+        existing_failure = finalize.projected_power_failure(power_nodes, projection)
+        if existing_failure is not None:
+            raise _Unpowerable(
+                "existing power nodes are illegal in a required projection",
+                failure=existing_failure,
+            )
 
     def spread(mask: np.ndarray) -> np.ndarray:
         """Cells within tower reach of anything in ``mask``."""
@@ -7192,8 +7263,9 @@ def _power_plan(canvas: _Canvas, core: tuple[int, int, int, int]) -> list[tuple[
 
     linked = np.zeros(shape, dtype=bool)
     sites: list[tuple[int, int]] = []
-    # A cap, not a schedule: every round consumes one free cell, so a placement
-    # that has not finished by then is not converging and says so.
+    projected_refusal: finalize.ProjectionFailure | None = None
+    # A cap, not a schedule: every round either consumes or rejects one free
+    # cell, so a placement that has not finished by then is not converging.
     for _ in range(int(np.count_nonzero(free)) + 1):
         if not remaining.any():
             break
@@ -7281,10 +7353,50 @@ def _power_plan(canvas: _Canvas, core: tuple[int, int, int, int]) -> list[tuple[
             # cell closest to a tile still dark.
             cand = np.argwhere(reachable_now)
             if not len(cand):
-                raise _Unpowerable("the tower network cannot reach the rest of the block")
+                raise _Unpowerable(
+                    "the tower network cannot reach the rest of the block",
+                    failure=projected_refusal,
+                )
             target = np.argwhere(remaining)[0]
             gx, gy = cand[np.argmin(((cand - target) ** 2).sum(axis=1))].tolist()
-        sites.append((gx - pad + min_x, gy - pad + min_y))
+        site = (gx - pad + min_x, gy - pad + min_y)
+        candidate: tuple[int, PlacedBuilding, rules.PowerNode] | None = None
+        candidate_failure: finalize.ProjectionFailure | None = None
+        if projections:
+            candidate = (
+                len(canvas.buildings) + len(sites),
+                PlacedBuilding(
+                    item_id=catalog.TESLA_TOWER_ID,
+                    model_index=tower.model_index,
+                    x=site[0],
+                    y=site[1],
+                    width=tower.width,
+                    height=tower.height,
+                ),
+                tower.power_node,
+            )
+            candidate_failure = next(
+                (
+                    candidate_failure
+                    for projection in projections
+                    for peer in power_nodes
+                    if (
+                        candidate_failure := finalize.projected_power_failure(
+                            (peer, candidate),
+                            projection,
+                        )
+                    )
+                    is not None
+                ),
+                None,
+            )
+        if candidate_failure is not None:
+            projected_refusal = projected_refusal or candidate_failure
+            free[gx, gy] = False
+            continue
+        sites.append(site)
+        if candidate is not None:
+            power_nodes.append(candidate)
         # The cell itself AND every cell inside the paste's power-node spacing
         # rule.  Marking only the cell is what shipped a blueprint the game
         # refused; the halo is what makes this greedy incapable of producing one.
@@ -7304,7 +7416,10 @@ def _power_plan(canvas: _Canvas, core: tuple[int, int, int, int]) -> list[tuple[
             for dx, dy in disc:
                 score[lo_x:hi_x, lo_y:hi_y] -= covered[lo_x + dx : hi_x + dx, lo_y + dy : hi_y + dy]
     else:
-        raise _Unpowerable("tower placement did not converge")
+        raise _Unpowerable(
+            "tower placement did not converge",
+            failure=projected_refusal,
+        )
 
     for site in sites:
         canvas.keep_out.add(site)
@@ -7631,6 +7746,7 @@ def _prepare_routing_problem(
     pack: _Pack,
     *,
     power: bool,
+    policy: BandPolicy | None = None,
     ramped: bool = False,
     _reserve_ports: bool = True,
 ) -> _PreparedRoutingProblem:
@@ -7888,7 +8004,7 @@ def _prepare_routing_problem(
     # of the change: an unpowerable pack is infeasible, so it is refused here --
     # before a single belt is routed -- rather than emerging as a coverage
     # failure once the pack and the routing have both spent the ground.
-    power_sites = _power_plan(canvas, core) if power else []
+    power_sites = _power_plan(canvas, core, policy=policy) if power else []
 
     # External-input nets retain the existing lane-deduplication and item
     # precedence, while exposing their shared boundary cells immutably.
@@ -8019,6 +8135,7 @@ def _build(
     *,
     power: bool,
     route: bool,
+    policy: BandPolicy | None = None,
     ramped: bool = False,
     deadline: float | None = None,
     budget: dict[str, int] | None = None,
@@ -8029,6 +8146,7 @@ def _build(
         strips,
         pack,
         power=power,
+        policy=policy,
         _reserve_ports=route,
         ramped=ramped,
     )

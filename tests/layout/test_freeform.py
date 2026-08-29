@@ -20,6 +20,7 @@ import pytest
 
 from flab2bp.dsp import catalog, codec, colliders, rules
 from flab2bp.layout import freeform, junction, slots, validate
+from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import (
     DETERMINISTIC_WORKERS,
     Facing,
@@ -3550,6 +3551,124 @@ class TestPowerClaimsItsGroundBeforeRouting:
                 f"towers planned at {(ax, ay)} and {(bx, by)}; the game refuses "
                 "that paste with EBuildCondition.PowerTooClose"
             )
+
+    @staticmethod
+    def _canvas_with_one_tower_site(
+        candidate: tuple[int, int],
+    ) -> _Canvas:
+        limit = (0, 0, 199, 4)
+        canvas = _Canvas(limit=limit)
+        tower = catalog.building(catalog.TESLA_TOWER_ID)
+        canvas.add(
+            PlacedBuilding(
+                item_id=catalog.TESLA_TOWER_ID,
+                model_index=tower.model_index,
+                x=0,
+                y=0,
+                width=tower.width,
+                height=tower.height,
+            ),
+            solid=True,
+        )
+        for x in range(limit[0], limit[2] + 1):
+            for y in range(limit[1], limit[3] + 1):
+                if (x, y) not in {(0, 0), candidate}:
+                    canvas.add(_belt(x, y))
+        return canvas
+
+    def test_power_plan_rejects_flat_legal_pair_in_required_projection(self) -> None:
+        envelope = freeform._projection_envelope(
+            (0, 0, 199, 4),
+            BandPolicy("portable"),
+        )
+        anchors = {
+            segments: sorted(
+                {
+                    projection.anchor_row
+                    for projection in envelope
+                    if projection.band.area_segments == segments
+                }
+            )
+            for segments in (40, 60, 80)
+        }
+        assert {projection.quadrant for projection in envelope} == {0}
+        assert anchors == {
+            40: [*range(-220, -214), *range(211, 217)],
+            60: [*range(-210, -199), *range(196, 207)],
+            80: [*range(-195, -184), *range(181, 192)],
+        }
+
+        illegal_site = (2, 2)
+        legacy = self._canvas_with_one_tower_site(illegal_site)
+        assert _power_plan(legacy, (*illegal_site, *illegal_site)) == [illegal_site]
+
+        projected = self._canvas_with_one_tower_site(illegal_site)
+        with pytest.raises(_Unpowerable) as caught:
+            _power_plan(
+                projected,
+                (*illegal_site, *illegal_site),
+                policy=BandPolicy("portable"),
+            )
+
+        assert projected.keep_out == set()
+        assert caught.value.failure is not None
+        assert caught.value.failure.check == "game.power_too_close"
+        assert caught.value.failure.band in (40, 60, 80)
+        assert "below the 3.5-unit PowerTooClose gate" in caught.value.failure.detail
+
+        legal_site = (3, 2)
+        control = self._canvas_with_one_tower_site(legal_site)
+        assert _power_plan(
+            control,
+            (*legal_site, *legal_site),
+            policy=BandPolicy("portable"),
+        ) == [legal_site]
+
+    def test_build_passes_projection_policy_to_power_plan_before_routing(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        policy = BandPolicy("portable")
+        failure = freeform.finalize.ProjectionFailure(
+            "game.power_too_close",
+            (0, 1),
+            "authoritative projected pair detail",
+            40,
+        )
+        seen: list[BandPolicy | None] = []
+
+        def refuse(
+            _canvas: _Canvas,
+            _core: tuple[int, int, int, int],
+            *,
+            policy: BandPolicy | None = None,
+        ) -> list[tuple[int, int]]:
+            seen.append(policy)
+            raise _Unpowerable("projected power refusal", failure=failure)
+
+        monkeypatch.setattr(freeform, "_power_plan", refuse)
+        monkeypatch.setattr(
+            freeform,
+            "_route_all",
+            lambda *_args, **_kwargs: pytest.fail("routing started after a power refusal"),
+        )
+        spec = single_recipe_spec()
+        strips = plan_strips(spec)
+        pack = _greedy_pack(strips, _height_seed(strips))
+
+        with pytest.raises(_Unpowerable) as caught:
+            _build(
+                spec,
+                strips,
+                pack,
+                power=True,
+                route=True,
+                policy=policy,
+            )
+
+        assert seen == [policy]
+        assert caught.value.failure is failure
+        assert "band 40 game.power_too_close" in str(caught.value)
 
     def test_no_planned_tower_stands_too_close_to_a_power_NODE_MACHINE(self) -> None:
         """A power node is not only a tower, and the greedy did not know that.

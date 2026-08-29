@@ -204,6 +204,62 @@ def test_broke2_tower_pair_uses_the_safe_smallest_band_orientation() -> None:
     assert finalized.bounds == (0, 0, 34, 42)
 
 
+
+def _required_power_projections(primary_band: int) -> tuple[planet.Projection, ...]:
+    by_segments = {band.area_segments: band for band in planet.bands()}
+    primary = by_segments[primary_band]
+    return tuple(
+        planet.Projection(
+            band=band,
+            anchor_row=anchor,
+            segment=colliders.PLANET_SEGMENT,
+            radius=colliders.PLANET_RADIUS,
+        )
+        for band in finalize.target_bands(primary, BandPolicy("portable"))
+        for anchor in band.anchors(5)
+    )
+
+
+def _diagonal_tesla_pair(dx: int = 2, dy: int = 2) -> tuple[
+    tuple[int, PlacedBuilding, rules.PowerNode],
+    ...,
+]:
+    tower = catalog.building(catalog.TESLA_TOWER_ID)
+    return (
+        (0, _building(catalog.TESLA_TOWER_ID, 0, 0), tower.power_node),
+        (1, _building(catalog.TESLA_TOWER_ID, dx, dy), tower.power_node),
+    )
+
+
+def test_projected_power_failure_rejects_flat_legal_pair_in_required_projection() -> None:
+    tower = catalog.building(catalog.TESLA_TOWER_ID)
+    assert rules.power_node_condition(
+        tower.power_node,
+        tower.power_node,
+        8 * colliders.GRID_ARC**2,
+    ) is None
+
+    failures = tuple(
+        failure
+        for projection in _required_power_projections(40)
+        if (
+            failure := finalize.projected_power_failure(
+                _diagonal_tesla_pair(),
+                projection,
+            )
+        )
+        is not None
+    )
+
+    assert failures
+    assert {failure.check for failure in failures} == {"game.power_too_close"}
+    assert {failure.band for failure in failures} <= {40, 60, 80}
+    assert all("below the 3.5-unit PowerTooClose gate" in failure.detail for failure in failures)
+    assert all(
+        finalize.projected_power_failure(_diagonal_tesla_pair(3, 2), projection) is None
+        for projection in _required_power_projections(40)
+    )
+
 def test_broke2_splitter_region_is_rejected_by_projected_addon_keepout() -> None:
     # Original blueprint records: host belt #100, supply belt #478,
     # Spray Coater #479, and Splitter #794.
@@ -587,7 +643,7 @@ def test_projection_collects_simultaneous_rule_category_failures(
 
     for name, check in zip(
         (
-            "_projected_power_failure",
+            "projected_power_failure",
             "_projected_sorter_failure",
             "_projected_static_failure",
             "_projected_addon_failure",
@@ -704,7 +760,7 @@ def test_projection_counters_count_only_observed_rule_loop_work(
         if counters is not None:
             counters.collider_pairs += len(tested_pairs)
 
-    monkeypatch.setattr(finalize, "_projected_power_failure", observed_power)
+    monkeypatch.setattr(finalize, "projected_power_failure", observed_power)
     monkeypatch.setattr(finalize, "_projected_sorter_failure", observed_sorters)
     monkeypatch.setattr(finalize, "_projected_static_failure", observed_static)
 

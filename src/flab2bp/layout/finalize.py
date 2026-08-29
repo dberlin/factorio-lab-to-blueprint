@@ -6,6 +6,7 @@ import math
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
+from itertools import combinations
 from typing import Literal
 
 from flab2bp.dsp import catalog, codec, colliders, planet, rules
@@ -228,53 +229,59 @@ def _projected_sorter_failure(
     return None
 
 
-def _projected_power_failure(
+def _power_pair_condition(
+    left: tuple[int, PlacedBuilding, rules.PowerNode],
+    right: tuple[int, PlacedBuilding, rules.PowerNode],
+    distance2: float,
+) -> str | None:
+    _left_index, left_building, left_node = left
+    _right_index, right_building, right_node = right
+    lo, hi = rules.PASTE_POWER_NODE_IDS
+    condition = None
+    if lo <= right_building.item_id < hi:
+        condition = rules.power_node_condition(left_node, right_node, distance2)
+    if condition is None and lo <= left_building.item_id < hi:
+        condition = rules.power_node_condition(right_node, left_node, distance2)
+    return condition
+
+
+def projected_power_failure(
     nodes: Sequence[tuple[int, PlacedBuilding, rules.PowerNode]],
     projection: planet.Projection,
-    *,
-    counters: _ProjectionCounters | None = None,
 ) -> ProjectionFailure | None:
-    if len(nodes) < 2:
-        return None
-    lo, hi = rules.PASTE_POWER_NODE_IDS
-    poses = [
-        projection.position(
-            *codec.tile_to_local_offset(
-                building.x,
-                building.y,
-                building.z,
-                building.width,
-                building.height,
-            )
-        )
+    """Return the first authoritative power-pair refusal in one projection."""
+    poses = tuple(
+        projection.position(*_building_centre(building))
         for _index, building, _node in nodes
-    ]
-    for left in range(len(nodes)):
-        ia, ba, na = nodes[left]
-        for right in range(left + 1, len(nodes)):
-            if counters is not None:
-                counters.power_pairs += 1
-            ib, bb, nb = nodes[right]
-            distance2 = sum(
-                (a - b) ** 2
-                for a, b in zip(poses[left], poses[right], strict=True)
+    )
+    for left, right in combinations(range(len(nodes)), 2):
+        distance2 = math.dist(poses[left], poses[right]) ** 2
+        condition = _power_pair_condition(nodes[left], nodes[right], distance2)
+        if condition is not None:
+            return ProjectionFailure(
+                check="game.power_too_close",
+                buildings=(nodes[left][0], nodes[right][0]),
+                detail=(
+                    f"{distance2**0.5:.4f} world units apart, below the "
+                    f"3.5-unit PowerTooClose gate ({condition})"
+                ),
+                band=projection.band.area_segments,
             )
-            condition = None
-            if lo <= bb.item_id < hi:
-                condition = rules.power_node_condition(na, nb, distance2)
-            if condition is None and lo <= ba.item_id < hi:
-                condition = rules.power_node_condition(nb, na, distance2)
-            if condition is not None:
-                return ProjectionFailure(
-                    check="game.power_too_close",
-                    buildings=(ia, ib),
-                    detail=(
-                        f"{distance2**0.5:.4f} world units apart, below the "
-                        f"3.5-unit PowerTooClose gate ({condition})"
-                    ),
-                    band=projection.band.area_segments,
-                )
     return None
+
+
+def _power_pairs_examined(
+    nodes: Sequence[tuple[int, PlacedBuilding, rules.PowerNode]],
+    failure: ProjectionFailure | None,
+) -> int:
+    """Count pairs the shared first-failure predicate necessarily evaluated."""
+    for examined, (left, right) in enumerate(combinations(range(len(nodes)), 2), 1):
+        if failure is not None and failure.buildings == (
+            nodes[left][0],
+            nodes[right][0],
+        ):
+            return examined
+    return len(nodes) * (len(nodes) - 1) // 2
 
 
 def _projected_static_failure(
@@ -458,12 +465,10 @@ def _failure_at_projection(
 ) -> tuple[ProjectionFailure, ...]:
     counters.projections += 1
     failures: list[ProjectionFailure] = []
+    power_failure = projected_power_failure(invariants.nodes, projection)
+    counters.power_pairs += _power_pairs_examined(invariants.nodes, power_failure)
     for failure in (
-        _projected_power_failure(
-            invariants.nodes,
-            projection,
-            counters=counters,
-        ),
+        power_failure,
         _projected_sorter_failure(
             invariants.sorters,
             projection,
