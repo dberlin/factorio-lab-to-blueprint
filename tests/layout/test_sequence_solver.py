@@ -2709,6 +2709,16 @@ def test_sequence_backend_returns_authoritative_finalized_placement_once(
         solver.adapters,
         validate=production.solver.adapters.validate,
     )
+    serial_run = replace(
+        production,
+        solver=solver,
+        max_search_stages=1,
+    )
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "_production_run",
+        lambda *_args, **_kwargs: serial_run,
+    )
     finalized: list[Placement] = []
     finalize_placement = finalize.finalize_placement
 
@@ -2721,7 +2731,7 @@ def test_sequence_backend_returns_authoritative_finalized_placement_once(
 
     placement = SequencePairLayout(
         band_policy=policy,
-        solver_factory=lambda *_args, **_kwargs: solver,
+        config=SequenceSolverConfig.test(),
     ).lay_out(spec, time_budget_s=2.0)
 
     assert len(finalized) == 1
@@ -2966,8 +2976,8 @@ def test_production_observability_preserves_categories_and_all_grouped_work() ->
         + placement.stats["compilation_time_s"]
     )
 
-    assert result.placement.stats == original_stats
-    assert result.placement is not placement
+    assert all(result.placement.stats[key] == value for key, value in original_stats.items())
+    assert result.placement is placement is python_placement is mixed_placement
     assert result.exact_candidate_key == exact_stage.candidate_key
 
 

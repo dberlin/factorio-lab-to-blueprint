@@ -3775,4 +3775,5 @@ def _with_observational_stats(
                 ),
             }
         )
-    return replace(placement, stats=stats)
+    placement.stats.update(stats)
+    return placement
