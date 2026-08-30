@@ -2855,6 +2855,26 @@ def test_unaffordable_feedback_retry_preserves_later_base_height(
     assert seen[:2] == [(20, 0), (21, 0)]
 
 
+def test_admitted_feedback_retry_is_not_rechecked_at_deadline_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    affordability = iter((True, False))
+    monkeypatch.setattr(
+        freeform,
+        "_room_for_another",
+        lambda *_args: next(affordability),
+    )
+
+    result, seen, _attempts = _sweep_after_first_routing(
+        monkeypatch,
+        _feedback_bearing_routing(),
+        heights=(20, 21),
+    )
+
+    assert result is not None
+    assert seen[:2] == [(20, 0), (20, 1)]
+
+
 
 def test_width_slack_uses_exact_integer_ceiling_at_decimal_boundaries() -> None:
     assert freeform._width_slack_cap(50) == 55

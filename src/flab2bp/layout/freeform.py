@@ -12187,9 +12187,10 @@ class FreeformLayout:
                             retry_cost,
                         ):
                             rescuable_heights.add(height)
+                            candidate_packs.pop(next_index)
                             candidate_packs.insert(
                                 candidate_index,
-                                candidate_packs.pop(next_index),
+                                (height, arrangement + 1, True),
                             )
                 continue
             if result.routing.status is not DetailedRouteStatus.ROUTED:
