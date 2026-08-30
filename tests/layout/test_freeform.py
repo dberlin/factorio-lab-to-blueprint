@@ -113,10 +113,10 @@ from flab2bp.spec import BuildSpec, MachineGroup, ProliferatorMode
 type SpecFactory = Callable[[], BuildSpec]
 
 _LEGACY_BAND_BY_SPEC_LABEL: Mapping[str, BandSelection] = {
-    "single": "32",
-    "two-stage": "32",
+    "single": "portable",
+    "two-stage": "portable",
     "magnetic-ring": "160",
-    "proliferated": "32",
+    "proliferated": "portable",
 }
 
 
@@ -2187,7 +2187,7 @@ class TestDirectInsertion:
         """
         spec = two_stage_spec()
         swept = FreeformLayout(
-            band_policy=BandPolicy("32"),
+            band_policy=BandPolicy("portable"),
             direct_insert=True,
             workers=DETERMINISTIC_WORKERS,
         ).lay_out(spec, time_budget_s=0.5)
@@ -3499,7 +3499,7 @@ class TestPower:
 
     def test_towers_appear_in_production_layout(self) -> None:
         placement = FreeformLayout(
-            band_policy=BandPolicy("32"),
+            band_policy=BandPolicy("portable"),
         ).lay_out(two_stage_spec(), time_budget_s=0.5)
 
         assert placement.stats["towers"] > 0
@@ -4179,7 +4179,7 @@ class TestModeDrivenMachines:
         above green.
         """
         p = FreeformLayout(
-            band_policy=BandPolicy("32"),
+            band_policy=BandPolicy("portable"),
         ).lay_out(single_recipe_spec(), time_budget_s=0.5)
         smelters = [b for b in p.buildings if b.recipe_id]
         assert smelters, "the fixture must emit machines with a recipe id"
