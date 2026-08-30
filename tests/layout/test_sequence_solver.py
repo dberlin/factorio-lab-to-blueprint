@@ -87,6 +87,7 @@ from flab2bp.layout.strip_variants import (
 )
 from flab2bp.spec import BuildSpec, MachineGroup
 from tests.layout.test_freeform import (
+    band_120_control_spec,
     plastic_spec,
     projected_chemical_plant_spec,
     proliferated_spec,
@@ -3994,3 +3995,151 @@ def test_sequence_pair_routes_self_consuming_pinned_flow(
         refined_oil_feedback_spec,
         expect_power=True,
     ).ok
+
+
+def test_sequence_band_policy_height_reserves_one_band_120_boundary_slot() -> None:
+    portable = _production_run(
+        band_120_control_spec(),
+        band_policy=BandPolicy("portable"),
+        time_budget_s=2.0,
+        power=False,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+    ).heights
+    fixed = _production_run(
+        band_120_control_spec(),
+        band_policy=BandPolicy("120"),
+        time_budget_s=2.0,
+        power=False,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+    ).heights
+
+    assert portable == (26, 33, 12, 16, 21, 28, 35, 14, 18, 23)
+    assert fixed == (19, 33, 12, 16, 21, 28, 35, 14, 18, 23)
+    assert len(fixed) == len(portable)
+
+
+@pytest.mark.parametrize(
+    ("selection", "height"),
+    (("portable", 26), ("120", 19)),
+)
+def test_sequence_band_120_dropped_height_has_actual_clean_layout_control(
+    selection: str,
+    height: int,
+) -> None:
+    spec = band_120_control_spec()
+    strips = plan_strips(spec, strip_len=6)
+    seed = _greedy_pack(strips, height)
+    pack = freeform_module._pack(
+        strips,
+        height=height,
+        width_bound=max(8, 2 * seed.width),
+        time_budget_s=1.0,
+        direct_candidates=freeform_module._direct_net_candidates(strips, spec),
+        workers=1,
+        seed=seed,
+    )
+    assert pack is not None
+    run = _production_run(
+        spec,
+        band_policy=BandPolicy(selection),
+        time_budget_s=5.0,
+        power=False,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+    )
+    state = next(candidate for candidate in run.solver._heights if candidate.height == height)
+    decoded = sequence_solver_module._exact_pack_decoded(
+        pack,
+        strips,
+        state.problem,
+    )
+
+    detailed = run.solver.close_exact_decoded(
+        height,
+        decoded,
+        reason="band-policy-height-control",
+    )
+
+    assert detailed.routing.status is DetailedRouteStatus.ROUTED
+    assert detailed.placement is not None
+    assert validate.certify(detailed.placement, spec, expect_power=False).ok
+    assert finalize.finalize_placement(
+        detailed.placement,
+        BandPolicy(selection),
+    ).frame is not None
+
+
+def test_sequence_portable_schedule_is_unchanged() -> None:
+    strips = plan_strips(two_stage_spec(), strip_len=6)
+    seeds = {
+        height: _greedy_pack(strips, height)
+        for height in freeform_module._candidate_heights(strips)
+    }
+    coarse = tuple(sorted(seeds, key=lambda height: (seeds[height].width, height)))
+    neighbors = tuple(height + 2 for height in coarse if height + 2 not in seeds)
+
+    run = _production_run(
+        two_stage_spec(),
+        band_policy=BandPolicy("portable"),
+        time_budget_s=2.0,
+        power=False,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+    )
+
+    assert run.heights == coarse + neighbors
+
+
+@pytest.mark.parametrize(
+    ("core_width", "core_height"),
+    ((595, 19), (19, 595)),
+)
+def test_sequence_extent_gate_stops_before_preparation_and_detailed_routing(
+    core_width: int,
+    core_height: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "_candidate_heights",
+        lambda _strips: [19, 595],
+    )
+    monkeypatch.setattr(
+        freeform_module,
+        "_power_plan",
+        lambda *_args, **_kwargs: pytest.fail("infeasible extent reached power planning"),
+    )
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "_route_detailed_candidate",
+        lambda *_args, **_kwargs: pytest.fail("infeasible extent reached detailed routing"),
+    )
+    run = _production_run(
+        two_stage_spec(),
+        band_policy=BandPolicy("120"),
+        time_budget_s=2.0,
+        power=True,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+    )
+    state = next(height for height in run.solver._heights if height.height == core_height)
+    decoded = replace(
+        decode_state(
+            state.problem,
+            AnnealState.initial(state.problem.size, 7),
+        ),
+        width=core_width,
+    )
+
+    candidate = run.solver.adapters.prepare(state.height, decoded)
+    detailed = run.solver.adapters.detailed_route(candidate, 1_000)
+
+    assert candidate.prepared is None
+    assert candidate.preparation_error == "band-extent"
+    assert candidate.projection_failures
+    assert detailed.routing.status is DetailedRouteStatus.INVALID
+    assert detailed.placement is None
+
+    assert detailed.projection_failures == candidate.projection_failures

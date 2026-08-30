@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from functools import cache
 from itertools import combinations
@@ -73,6 +73,91 @@ class FrameCandidate:
     south_padding: int
     added_rows: int
 
+
+
+@dataclass(frozen=True, slots=True)
+class BandPolicySearchEnvelope:
+    """Pure fixed-perimeter capacity shared by layout search strategies."""
+
+    policy: BandPolicy
+    perimeter: int
+    band: planet.Band | None
+
+    @property
+    def boundary_core_height(self) -> int | None:
+        """The fixed band's unrotated latitude boundary, excluding perimeter."""
+        if self.band is None:
+            return None
+        boundary = self.band.rows - 2 * self.perimeter
+        return boundary if boundary > 0 else None
+
+    def frame_candidates(
+        self,
+        core_width: int,
+        core_height: int,
+    ) -> tuple[FrameCandidate, ...]:
+        """Return exact finalizer frames for one reserved core envelope."""
+        if core_width <= 0 or core_height <= 0:
+            return ()
+        margin = 2 * self.perimeter
+        return _frame_candidates_for_extent(
+            core_width + margin,
+            core_height + margin,
+            self.policy,
+        )
+
+    def extent_failure(
+        self,
+        core_width: int,
+        core_height: int,
+    ) -> ProjectionFailure:
+        """Return structured evidence for an empty exact frame-candidate set."""
+        if self.frame_candidates(core_width, core_height):
+            raise ValueError("extent failure requested for a fitting search envelope")
+        margin = 2 * self.perimeter
+        return _extent_failure_for_dimensions(
+            core_width + margin,
+            core_height + margin,
+            self.policy,
+        )
+
+    def reserve_boundary_height(
+        self,
+        ordered: tuple[int, ...],
+        *,
+        minimum_width_for_height: Mapping[int, int],
+    ) -> tuple[int, ...]:
+        """Replace the first proved-infeasible fixed height without adding work."""
+        boundary = self.boundary_core_height
+        if boundary is None or boundary in ordered:
+            return ordered
+        for index, height in enumerate(ordered):
+            minimum_width = minimum_width_for_height[height]
+            if self.frame_candidates(minimum_width, height):
+                continue
+            return ordered[:index] + (boundary,) + ordered[index + 1 :]
+        return ordered
+
+
+def band_policy_search_envelope(
+    policy: BandPolicy,
+    *,
+    perimeter: int,
+) -> BandPolicySearchEnvelope:
+    """Build the one exact band-policy capacity used before costly preparation."""
+    if type(perimeter) is not int or perimeter < 0:
+        raise ValueError("search-envelope perimeter must be a non-negative integer")
+    explicit = policy.explicit_segments
+    band = (
+        next(
+            candidate
+            for candidate in planet.bands()
+            if candidate.area_segments == explicit
+        )
+        if explicit is not None
+        else None
+    )
+    return BandPolicySearchEnvelope(policy, perimeter, band)
 
 @dataclass(frozen=True, slots=True)
 class _ProjectionInvariants:
@@ -1120,13 +1205,12 @@ def _with_projection_stats(
     return replace(placement, stats=stats)
 
 
-def _extent_failure(
-    placement: Placement,
+def _extent_failure_for_dimensions(
+    width: int,
+    height: int,
     policy: BandPolicy,
 ) -> ProjectionFailure:
-    min_x, min_y, max_x, max_y = placement.bounds
-    width = max_x - min_x + 1
-    height = max_y - min_y + 1
+    """Build the finalizer's structured extent refusal from exact dimensions."""
     explicit = policy.explicit_segments
     if explicit is not None:
         band = next(
@@ -1153,6 +1237,18 @@ def _extent_failure(
             band=0,
         )
     raise AssertionError("extent failure requested for geometry with a fitting band")
+
+
+def _extent_failure(
+    placement: Placement,
+    policy: BandPolicy,
+) -> ProjectionFailure:
+    min_x, min_y, max_x, max_y = placement.bounds
+    return _extent_failure_for_dimensions(
+        max_x - min_x + 1,
+        max_y - min_y + 1,
+        policy,
+    )
 
 
 

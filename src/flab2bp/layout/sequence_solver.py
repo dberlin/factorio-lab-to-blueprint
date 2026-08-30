@@ -36,6 +36,7 @@ from flab2bp.layout.compact_seed import (
     solve_compact_seed,
 )
 from flab2bp.layout.freeform import (
+    _ENTRY_RING,
     _ROUTING_BUDGET,
     _ROUTING_EXPANSIONS_PER_SECOND,
     WEST_CHANNEL,
@@ -49,6 +50,7 @@ from flab2bp.layout.freeform import (
     _direct_net_candidates,
     _fanout_shortfall,
     _greedy_pack,
+    _minimum_pack_width,
     _Pack,
     _pack,
     _prepare_routing_problem,
@@ -399,6 +401,7 @@ class DetailedStageResult:
 
     routing: DetailedRouteResult
     placement: Placement | None
+    projection_failures: tuple[finalize.ProjectionFailure, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -1544,7 +1547,7 @@ class SequenceSolver[PreparedT]:
         if observation.continue_search:
             height_state.pending_quality_exit = False
         validation_failures: tuple[str, ...] = ()
-        projection_failures: tuple[finalize.ProjectionFailure, ...] = ()
+        projection_failures = detailed.projection_failures
         validation_time_s = 0.0
         if detailed.routing.status is DetailedRouteStatus.ROUTED and detailed.placement is not None:
             validation_started = time.perf_counter()
@@ -2781,6 +2784,7 @@ class _ProductionCandidate:
     prepared: _PreparedRoutingProblem | None
     preparation_error: str | None = None
     selected_strips: tuple[Strip, ...] = ()
+    projection_failures: tuple[finalize.ProjectionFailure, ...] = ()
 
 
 @dataclass(slots=True)
@@ -2834,10 +2838,11 @@ def _empty_global_result(*, exhausted: bool, cancelled: bool = False) -> GlobalR
         hot_regions=(),
         cancelled=cancelled,
     )
-
-
 def _closed_detailed_result(
-    status: DetailedRouteStatus, *, expansions: int = 0
+    status: DetailedRouteStatus,
+    *,
+    expansions: int = 0,
+    projection_failures: tuple[finalize.ProjectionFailure, ...] = (),
 ) -> DetailedStageResult:
     return DetailedStageResult(
         routing=DetailedRouteResult(
@@ -2848,6 +2853,7 @@ def _closed_detailed_result(
             expansions=expansions,
         ),
         placement=None,
+        projection_failures=projection_failures,
     )
 
 
@@ -3039,7 +3045,24 @@ def _production_run(
             seeds[neighbor] = _greedy_pack(strips, neighbor)
             neighbor_heights.append(neighbor)
         protected_followup_heights = tuple(neighbor_heights)
-        heights = coarse_heights + protected_followup_heights
+        legacy_heights = coarse_heights + protected_followup_heights
+        envelope = finalize.band_policy_search_envelope(
+            band_policy,
+            perimeter=_ENTRY_RING,
+        )
+        heights = envelope.reserve_boundary_height(
+            legacy_heights,
+            minimum_width_for_height={
+                height: _minimum_pack_width(strips, height)
+                for height in legacy_heights
+            },
+        )
+        boundary_height = envelope.boundary_core_height
+        if boundary_height is not None and boundary_height in heights:
+            seeds.setdefault(
+                boundary_height,
+                _greedy_pack(strips, boundary_height),
+            )
         problems = {
             height: PlacementProblem(
                 sizes=sizes,
@@ -3228,6 +3251,17 @@ def _production_run(
                 policy=band_policy,
                 ramped=not belt_vertical_construction,
             )
+        except finalize.ProjectionRefusal as exc:
+            return _ProductionCandidate(
+                height=height,
+                problem=problem,
+                decoded=routed,
+                pack=pack,
+                prepared=None,
+                preparation_error="band-extent",
+                selected_strips=selected,
+                projection_failures=exc.failures,
+            )
         except (_Unpowerable, _Unseatable) as exc:
             return _ProductionCandidate(
                 height=height,
@@ -3307,7 +3341,14 @@ def _production_run(
         if candidate.preparation_error == "deadline" or deadline_reached():
             return _closed_detailed_result(DetailedRouteStatus.BUDGET)
         if candidate.prepared is None:
-            return _closed_detailed_result(DetailedRouteStatus.UNPOWERABLE)
+            return _closed_detailed_result(
+                (
+                    DetailedRouteStatus.INVALID
+                    if candidate.preparation_error == "band-extent"
+                    else DetailedRouteStatus.UNPOWERABLE
+                ),
+                projection_failures=candidate.projection_failures,
+            )
         result = _route_detailed_candidate(
             spec,
             list(candidate.selected_strips) if candidate.selected_strips else strips,

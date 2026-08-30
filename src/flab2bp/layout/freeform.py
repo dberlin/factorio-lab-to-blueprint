@@ -8117,6 +8117,15 @@ def _prepare_routing_problem(
     _reserve_ports: bool = True,
 ) -> _PreparedRoutingProblem:
     """Build immutable exact geometry shared by both routing engines."""
+    envelope = finalize.band_policy_search_envelope(
+        policy,
+        perimeter=_ENTRY_RING,
+    )
+    if not envelope.frame_candidates(pack.width, pack.height):
+        raise finalize.ProjectionRefusal(
+            (envelope.extent_failure(pack.width, pack.height),)
+        )
+
     belt_id = catalog.get_item_id(spec.belt_item_id) or 2001
     belt_model = catalog.building(belt_id).model_index
     canvas = _Canvas(ramped=ramped)
@@ -9964,8 +9973,8 @@ class FreeformLayout:
         #
         # The greedy pack is already built per height as `_pack`'s seed, so
         # building them all up front costs nothing and only moves the work.
-        seeds = {height: _greedy_pack(strips, height) for height in _candidate_heights(strips)}
-        heights = sorted(seeds, key=lambda height: (seeds[height].width, height))
+        heights = list(_band_policy_candidate_heights(strips, self.band_policy))
+        seeds = {height: _greedy_pack(strips, height) for height in heights}
         # AND A CANDIDATE IS A (HEIGHT, ARRANGEMENT) PAIR, NOT A HEIGHT.
         #
         # The note above ends "the lever is the packer's arrangement, not the
@@ -10235,6 +10244,11 @@ class FreeformLayout:
                     deadline=deadline,
                     budget=budget,
                 )
+            except finalize.ProjectionRefusal as exc:
+                if rejected is not None:
+                    for failure in exc.failures:
+                        _retain_refusal(rejected, failure)
+                continue
             except _Unpowerable as exc:
                 if rejected is not None:
                     _retain_refusal(rejected, exc.failure or "power.coverage")
@@ -10444,3 +10458,34 @@ def _candidate_heights(strips: list[Strip]) -> list[int]:
     tall = max((h for _w, h in map(_box, strips)), default=1)
     out = {max(tall, int(h0 * f)) for f in (0.6, 0.8, 1.0, 1.25, 1.6)}
     return sorted(out)
+
+
+def _minimum_pack_width(strips: list[Strip], height: int) -> int:
+    """Return a proof-valid width floor for any packing at one height."""
+    boxes = tuple(map(_box, strips))
+    area = sum(width * box_height for width, box_height in boxes)
+    widest = max((width for width, _box_height in boxes), default=1)
+    return max(widest, (area + height - 1) // height)
+
+
+def _band_policy_candidate_heights(
+    strips: list[Strip],
+    policy: BandPolicy,
+) -> tuple[int, ...]:
+    """Keep the measured order while reserving one proved fixed-band boundary."""
+    seeds = {
+        height: _greedy_pack(strips, height)
+        for height in _candidate_heights(strips)
+    }
+    ordered = tuple(sorted(seeds, key=lambda height: (seeds[height].width, height)))
+    envelope = finalize.band_policy_search_envelope(
+        policy,
+        perimeter=_ENTRY_RING,
+    )
+    return envelope.reserve_boundary_height(
+        ordered,
+        minimum_width_for_height={
+            height: _minimum_pack_width(strips, height)
+            for height in ordered
+        },
+    )

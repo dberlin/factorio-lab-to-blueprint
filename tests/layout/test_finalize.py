@@ -684,6 +684,70 @@ def test_five_row_polar_band_passes_only_unpadded_or_refuses(
         finalize.finalize_placement(placement, policy)
 
 
+def test_band_120_search_envelope_has_core_height_19_boundary() -> None:
+    envelope = finalize.band_policy_search_envelope(
+        BandPolicy("120"),
+        perimeter=3,
+    )
+
+    assert envelope.boundary_core_height == 19
+    assert envelope.frame_candidates(594, 19)
+    assert {candidate.frame.rotated for candidate in envelope.frame_candidates(594, 19)} == {
+        False
+    }
+
+
+@pytest.mark.parametrize(
+    ("core_width", "core_height"),
+    ((595, 19), (19, 595)),
+)
+def test_band_120_extent_gate_rejects_empty_exact_frame_orientations(
+    core_width: int,
+    core_height: int,
+) -> None:
+    envelope = finalize.band_policy_search_envelope(
+        BandPolicy("120"),
+        perimeter=3,
+    )
+
+    assert envelope.frame_candidates(core_width, core_height) == ()
+    failure = envelope.extent_failure(core_width, core_height)
+    assert failure.check == "game.blueprint_area"
+    assert failure.band == 120
+
+
+def test_fixed_band_schedule_cardinality_replaces_only_first_proved_infeasible_height() -> None:
+    envelope = finalize.band_policy_search_envelope(
+        BandPolicy("120"),
+        perimeter=3,
+    )
+    ordered = (17, 23, 31, 47, 61)
+
+    scheduled = envelope.reserve_boundary_height(
+        ordered,
+        minimum_width_for_height={height: 20 for height in ordered},
+    )
+
+    assert scheduled == (17, 19, 31, 47, 61)
+    assert len(scheduled) == len(ordered)
+
+
+def test_portable_schedule_preservation_is_exact() -> None:
+    envelope = finalize.band_policy_search_envelope(
+        BandPolicy("portable"),
+        perimeter=3,
+    )
+    ordered = (61, 47, 31, 23, 17)
+
+    assert (
+        envelope.reserve_boundary_height(
+            ordered,
+            minimum_width_for_height={height: 10_000 for height in ordered},
+        )
+        is ordered
+    )
+
+
 def test_projection_refusal_preserves_order_deduplicates_and_formats_evidence() -> None:
     first = finalize.ProjectionFailure("geom.collide", (4, 5), "overlap", 40)
     second = finalize.ProjectionFailure("game.inserter_paste", (9,), "too close", 60)

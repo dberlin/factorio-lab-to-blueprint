@@ -8049,3 +8049,131 @@ class TestPreparedBeltPortDocking:
         assert [dock.input_from_slot for dock in docks] == [port]
 
 
+
+def band_120_control_spec() -> BuildSpec:
+    """A routing-light fixed-band control whose old schedule drops height 26."""
+    count = 24
+    return BuildSpec(
+        groups=(
+            group(
+                "iron-ingot",
+                "arc-smelter",
+                count,
+                {"iron-ore": F(1)},
+                {"iron-ingot": F(1)},
+            ),
+        ),
+        external_inputs={"iron-ore": F(count)},
+        outputs={"iron-ingot": F(count)},
+        belt_item_id="conveyor-belt-2",
+        belt_items_per_second=F(12),
+        label="band-120-control",
+    )
+
+
+def test_freeform_band_policy_height_reserves_one_band_120_boundary_slot() -> None:
+    strips = plan_strips(band_120_control_spec(), strip_len=6)
+    portable = freeform._band_policy_candidate_heights(
+        strips,
+        BandPolicy("portable"),
+    )
+    fixed = freeform._band_policy_candidate_heights(
+        strips,
+        BandPolicy("120"),
+    )
+
+    assert portable == (26, 33, 12, 16, 21)
+    assert fixed == (19, 33, 12, 16, 21)
+    assert len(fixed) == len(portable)
+
+
+@pytest.mark.parametrize(
+    ("selection", "height"),
+    (("portable", 26), ("120", 19)),
+)
+def test_freeform_band_120_dropped_height_has_actual_clean_layout_control(
+    selection: str,
+    height: int,
+) -> None:
+    spec = band_120_control_spec()
+    strips = plan_strips(spec, strip_len=6)
+    seed = _greedy_pack(strips, height)
+    pack = _pack(
+        strips,
+        height=height,
+        width_bound=max(8, 2 * seed.width),
+        time_budget_s=1.0,
+        direct_candidates=_direct_net_candidates(strips, spec),
+        workers=1,
+        seed=seed,
+    )
+
+    assert pack is not None
+    result = _build(
+        spec,
+        strips,
+        pack,
+        power=False,
+        route=True,
+        policy=BandPolicy(selection),
+        budget={"left": 5_000_000},
+    )
+    assert result.routing.status is DetailedRouteStatus.ROUTED
+    assert result.placement is not None
+    assert validate.certify(result.placement, spec, expect_power=False).ok
+    assert finalize.finalize_placement(
+        result.placement,
+        BandPolicy(selection),
+    ).frame is not None
+
+
+def test_freeform_portable_schedule_preserves_legacy_order() -> None:
+    strips = plan_strips(two_stage_spec(), strip_len=6)
+    seeds = {
+        height: _greedy_pack(strips, height)
+        for height in freeform._candidate_heights(strips)
+    }
+    legacy = tuple(sorted(seeds, key=lambda height: (seeds[height].width, height)))
+
+    assert (
+        freeform._band_policy_candidate_heights(
+            strips,
+            BandPolicy("portable"),
+        )
+        == legacy
+    )
+
+
+@pytest.mark.parametrize(
+    ("core_width", "core_height"),
+    ((595, 19), (19, 595)),
+)
+def test_freeform_extent_gate_stops_before_power_planning_in_both_orientations(
+    core_width: int,
+    core_height: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = two_stage_spec()
+    strips = plan_strips(spec, strip_len=6)
+    pack = replace(
+        _greedy_pack(strips, core_height),
+        width=core_width,
+        height=core_height,
+    )
+    monkeypatch.setattr(
+        freeform,
+        "_power_plan",
+        lambda *_args, **_kwargs: pytest.fail("infeasible extent reached power planning"),
+    )
+
+    with pytest.raises(finalize.ProjectionRefusal) as caught:
+        _prepare_routing_problem(
+            spec,
+            strips,
+            pack,
+            policy=BandPolicy("120"),
+            power=True,
+        )
+
+    assert caught.value.checks == ("game.blueprint_area",)
+
