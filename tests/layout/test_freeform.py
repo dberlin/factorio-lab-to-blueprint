@@ -5863,6 +5863,69 @@ class TestDetailedRoutingDiagnostics:
         assert tuple(failure.expansions for failure in result.failures) == (3, 5)
         assert result.expansions == 8
 
+    def test_successful_round_deadline_expires_before_commit_preflight(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        canvas = _Canvas()
+        bounds = (-8, -8, 8, 8)
+        canvas.limit = bounds
+        first_id = NetId(0, 1, "first", NetRole.INTERNAL, 0)
+        second_id = NetId(2, 3, "second", NetRole.INTERNAL, 0)
+        nets = [
+            self._net(canvas, (-6, -2), (-4, -2), first_id),
+            self._net(canvas, (-6, 2), (-4, 2), second_id),
+        ]
+        searches = iter(
+            (
+                _PathSearchResult(((-5, -2, 0),), None, (), 3),
+                _PathSearchResult(((-5, 2, 0),), None, (), 5),
+            )
+        )
+        ticks = iter((0.0, 0.0, 2.0))
+
+        monkeypatch.setattr(
+            freeform,
+            "_astar",
+            lambda *_args, **_kwargs: next(searches),
+        )
+        monkeypatch.setattr(
+            "flab2bp.layout.freeform.time.monotonic",
+            lambda: next(ticks),
+        )
+        monkeypatch.setattr(
+            freeform,
+            "_commit_paths",
+            lambda *_args, **_kwargs: pytest.fail(
+                "an expired successful round reached commit preflight"
+            ),
+        )
+
+        result = _route_all(
+            canvas,
+            nets,
+            2001,
+            35,
+            bounds,
+            deadline=1.0,
+            budget={"left": 100},
+        )
+
+        assert result.status is DetailedRouteStatus.BUDGET
+        assert result.routed == ()
+        assert tuple(failure.net_id for failure in result.failures) == (
+            first_id,
+            second_id,
+        )
+        assert tuple(failure.kind for failure in result.failures) == (
+            RouteFailureKind.BUDGET,
+            RouteFailureKind.BUDGET,
+        )
+        assert tuple(failure.wall for failure in result.failures) == ((), ())
+        assert tuple(failure.blocking_nets for failure in result.failures) == ((), ())
+        assert tuple(failure.expansions for failure in result.failures) == (3, 5)
+        assert result.iterations == 1
+        assert result.expansions == 8
+
     def test_empty_live_starts_take_precedence_over_budget(self) -> None:
         canvas = _Canvas()
         bounds = (-2, -2, 2, 2)

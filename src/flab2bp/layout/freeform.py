@@ -4997,6 +4997,7 @@ def _route_all(
     best_failures: dict[int, NetFailure] = {}
     best_source_hints: dict[int, Cell] = {}
     best_sink_hints: dict[int, Cell] = {}
+    round_expansions: dict[int, int] = {}
 
     def _net_id(index: int) -> NetId:
         net_id = nets[index].net_id
@@ -5038,11 +5039,14 @@ def _route_all(
                     RouteFailureKind.BUDGET,
                     (),
                     (),
-                    (
-                        previous.expansions
-                        if (previous := best_failures.get(i)) is not None
-                        else 0
-                    ),
+                    round_expansions.get(
+                        i,
+                        (
+                            previous.expansions
+                            if (previous := best_failures.get(i)) is not None
+                            else 0
+                        ),
+                    )
                 )
                 for i in range(len(nets))
             ),
@@ -5612,6 +5616,9 @@ def _route_all(
             )
             canvas.routing_ports = frozenset()
             expansions += through.expansions
+            round_expansions[index] = (
+                round_expansions.get(index, 0) + through.expansions
+            )
             if through.path is None:
                 if through.kind is RouteFailureKind.BUDGET:
                     # A per-search cap is unknown even while the shared pass
@@ -5704,6 +5711,9 @@ def _route_all(
                 )
                 canvas.routing_ports = frozenset()
                 expansions += again.expansions
+                round_expansions[hurt] = (
+                    round_expansions.get(hurt, 0) + again.expansions
+                )
                 if again.path is None:
                     if again.kind is RouteFailureKind.BUDGET:
                         # The transaction rolls back, so `index` remains the
@@ -5737,6 +5747,7 @@ def _route_all(
     round_limit = 1 if len(nets) >= _SINGLE_ROUND_NETS else RRR_MAX
     for it in range(round_limit):
         iterations = it + 1
+        round_expansions.clear()
         for index in list(paths):
             _unstake(index)
         # `history` gained a round's worth of use and blame at the end of the
@@ -5781,6 +5792,7 @@ def _route_all(
             )
             canvas.routing_ports = frozenset()
             expansions += searched.expansions
+            round_expansions[i] = round_expansions.get(i, 0) + searched.expansions
             if searched.path is None:
                 search_failures[i] = searched
                 search_blockers[i] = _blocking_nets(searched.wall)
@@ -5816,6 +5828,8 @@ def _route_all(
             )
             for index in stranded
         }
+        if _expired(deadline):
+            return _budget_result()
         if failed == 0:
             # Linking is part of routing feasibility, not terminal emission.
             # Prove the selected topology on a disposable workspace while the
@@ -5941,8 +5955,6 @@ def _route_all(
             or budget["left"] <= 0
         ):
             break
-    if _expired(deadline):
-        return _budget_result()
     return _finish(
         best_paths,
         best_failures,
