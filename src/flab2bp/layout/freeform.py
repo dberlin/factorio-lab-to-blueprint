@@ -1753,6 +1753,7 @@ def plan_strips(
             for lane in inputs_above + inputs_below
             for item in lane
         )
+        realized: tuple[tuple[int, int, StripVariant | None], ...]
         if family.variants:
             template = default_strip_variant(family)
             required_pitch = minimum_pitch_x.get(strip_pose_id(template))
@@ -1797,6 +1798,9 @@ def plan_strips(
                 machine_count,
                 spec,
             )
+            lane_plan: LanePlan | None
+            attachment_plan: tuple[LaneAttachmentPlan, ...]
+            port_dock_plan: tuple[LanePortDockPlan, ...]
             if physical_variant is None:
                 footprint_width = group.width
                 footprint_height = group.height

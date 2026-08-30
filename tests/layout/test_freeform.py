@@ -98,6 +98,7 @@ from flab2bp.layout.route_feedback import (
 from flab2bp.layout.strip_variants import (
     ProjectionPitchRequirement,
     StripInstance,
+    StripPoseId,
     StripVariant,
     default_strip_variant,
     generate_strip_families,
@@ -2514,9 +2515,13 @@ def test_freeform_retries_same_strip_projection_failure_with_padded_pitch(
         spec: BuildSpec,
         *,
         strip_len: int = 6,
-        **kwargs: object,
+        minimum_pitch_x: Mapping[StripPoseId, int] = freeform._NO_PITCH_REQUIREMENTS,
     ) -> list[Strip]:
-        planned = ordinary_plan_strips(spec, strip_len=strip_len, **kwargs)
+        planned = ordinary_plan_strips(
+            spec,
+            strip_len=strip_len,
+            minimum_pitch_x=minimum_pitch_x,
+        )
         chemical_pitches = tuple(strip.pw for strip in planned if strip.item_id == 2309)
         if chemical_pitches:
             planned_pitches.append(chemical_pitches)
