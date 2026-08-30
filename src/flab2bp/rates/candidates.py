@@ -34,6 +34,7 @@ from flab2bp.spec import (
     ProliferatorMode,
 )
 
+
 class CandidatePolicy(StrEnum):
     """One deterministic proliferation policy exposed to callers."""
 

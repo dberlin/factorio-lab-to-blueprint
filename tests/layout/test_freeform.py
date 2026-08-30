@@ -197,7 +197,7 @@ def plastic_spec() -> BuildSpec:
     from flab2bp.bench.corpus import URL_CORPUS
     from flab2bp.lab.data import load_vendored
     from flab2bp.lab.url import parse_url
-    from flab2bp.rates.candidates import build_candidates
+    from flab2bp.rates.candidates import DEFAULT_CANDIDATE_POLICIES, build_candidates
 
     entry = next(candidate for candidate in URL_CORPUS if candidate.url_id == "plastic")
     return next(
@@ -205,7 +205,7 @@ def plastic_spec() -> BuildSpec:
         for candidate in build_candidates(
             load_vendored(),
             parse_url(entry.url),
-            count=3,
+            candidate_policies=DEFAULT_CANDIDATE_POLICIES,
         ).candidates
         if candidate.label == "all-products"
     )
@@ -3360,10 +3360,15 @@ class TestRealUrlCandidate:
     def test_unproliferated_candidate_is_complete_valid_and_acyclic(self) -> None:
         from flab2bp.lab.data import load_vendored
         from flab2bp.lab.url import parse_url
-        from flab2bp.rates.candidates import build_candidates
+        from flab2bp.rates.candidates import (
+            DEFAULT_CANDIDATE_POLICIES,
+            build_candidates,
+        )
 
         candidates = build_candidates(
-            load_vendored(), parse_url(self.URL), count=3
+            load_vendored(),
+            parse_url(self.URL),
+            candidate_policies=DEFAULT_CANDIDATE_POLICIES,
         ).candidates
         spec = next(
             candidate for candidate in candidates if candidate.label == "no-proliferator"

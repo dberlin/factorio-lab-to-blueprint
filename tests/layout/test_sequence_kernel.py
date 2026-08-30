@@ -49,7 +49,11 @@ from flab2bp.layout.sequence_solver import (
     _placement_nets,
     _variant_search_inputs,
 )
-from flab2bp.rates.candidates import build_candidates
+from flab2bp.rates.candidates import (
+    DEFAULT_CANDIDATE_POLICIES,
+    CandidatePolicy,
+    build_candidates,
+)
 
 _REFINERY_URL = (
     "https://factoriolab.github.io/dsp/list?z="
@@ -80,10 +84,18 @@ def _stage_digest(stage: object) -> bytes:
 
 def _real_case(name: str) -> tuple[PlacementProblem, AnnealState, PlacementCostContext]:
     if name == "refinery14":
-        spec = build_candidates(load_vendored(), parse_url(_REFINERY_URL), count=3).candidates[2]
+        spec = build_candidates(
+            load_vendored(),
+            parse_url(_REFINERY_URL),
+            candidate_policies=DEFAULT_CANDIDATE_POLICIES,
+        ).candidates[2]
     elif name == "quantum40":
         quantum = entry("quantum-chip")
-        spec = build_candidates(load_vendored(), parse_url(quantum.url), count=1).candidates[0]
+        spec = build_candidates(
+            load_vendored(),
+            parse_url(quantum.url),
+            candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+        ).candidates[0]
     else:
         raise AssertionError(name)
 

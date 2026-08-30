@@ -16,12 +16,13 @@ from flab2bp.layout.base import (
     NoValidLayout,
     ProjectionFailureRecord,
 )
+from flab2bp.rates.candidates import CandidatePolicy
 
 
 class _BuildKwargs(TypedDict, total=False):
     strategy: pipeline.StrategyName
     band: BandSelection
-    candidates: int
+    candidate_policies: tuple[CandidatePolicy, ...]
     time_budget_s: float
     sequence_islands: int
     dataset: Dataset | None
@@ -40,7 +41,7 @@ def band_build() -> pipeline.Build:
     return pipeline.build(
         "https://factoriolab.github.io/dsp/flow?o=electromagnetic-matrix*60&v=11",
         strategy="freeform",
-        candidates=1,
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
         time_budget_s=3.0,
     )
 

@@ -35,7 +35,7 @@ from flab2bp.layout.sequence_pair import (
 )
 from flab2bp.layout.sequence_solver import _placement_nets, _variant_search_inputs
 from flab2bp.layout.strip_variants import StripVariant
-from flab2bp.rates.candidates import build_candidates
+from flab2bp.rates.candidates import DEFAULT_CANDIDATE_POLICIES, build_candidates
 from tests.layout.test_freeform import two_stage_spec
 
 
@@ -609,7 +609,11 @@ _REFINERY_URL = "https://factoriolab.github.io/dsp/list?z=eJxFyrEKwkAQRdG.meJVM0
 
 @pytest.mark.slow
 def test_real_refinery_fixed_outline_seed_is_cython_decodable_without_witness_hint() -> None:
-    spec = build_candidates(load_vendored(), parse_url(_REFINERY_URL), count=3).candidates[2]
+    spec = build_candidates(
+        load_vendored(),
+        parse_url(_REFINERY_URL),
+        candidate_policies=DEFAULT_CANDIDATE_POLICIES,
+    ).candidates[2]
     strips = plan_strips(spec, strip_len=4)
     instance_ids, variant_tables = _variant_search_inputs(spec, strips, strip_len=4)
     sizes = tuple(_box(strip) for strip in strips)
