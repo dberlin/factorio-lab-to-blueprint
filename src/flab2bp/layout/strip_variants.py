@@ -1132,6 +1132,17 @@ def variants_for_count(
     return tuple(_variant_for_count(template, machine_count) for template in family.variants)
 
 
+def _family_pose_minimum_pitches(family: StripFamily) -> dict[StripPoseId, int]:
+    minimum_pitches: dict[StripPoseId, int] = {}
+    for candidate in family.variants:
+        pose_id = strip_pose_id(candidate)
+        minimum_pitches[pose_id] = min(
+            candidate.pitch_x,
+            minimum_pitches.get(pose_id, candidate.pitch_x),
+        )
+    return minimum_pitches
+
+
 def partition_strip_variant(
     family: StripFamily,
     variant: StripVariant,
@@ -1141,12 +1152,12 @@ def partition_strip_variant(
     """Partition a family through one explicit ordinary or padded variant."""
     if max_machine_count <= 0:
         raise ValueError("maximum strip machine count must be positive")
-    if (
-        variant.variant_id.family_id != family.family_id
-        or strip_pose_id(variant)
-        not in {strip_pose_id(candidate) for candidate in family.variants}
-    ):
+    minimum_pitches = _family_pose_minimum_pitches(family)
+    pose_id = strip_pose_id(variant)
+    if variant.variant_id.family_id != family.family_id or pose_id not in minimum_pitches:
         raise ValueError("strip instance variant does not belong to the family")
+    if variant.pitch_x < minimum_pitches[pose_id]:
+        raise ValueError("strip instance variant pitch is below the ordinary family pose")
     instance_count = max(
         1,
         (family.total_machine_count + max_machine_count - 1) // max_machine_count,
@@ -1289,12 +1300,16 @@ def validate_instance_partition(
 ) -> None:
     """Require active physical ranges to cover ``0..total`` exactly once."""
     expected_start = 0
-    valid_poses = {strip_pose_id(variant) for variant in family.variants}
+    minimum_pitches = _family_pose_minimum_pitches(family)
     for instance in sorted(instances, key=lambda candidate: candidate.machine_start):
         if instance.family_id != family.family_id:
             raise ValueError("strip instances do not partition one logical family")
-        if strip_pose_id(instance.variant) not in valid_poses:
+        pose_id = strip_pose_id(instance.variant)
+        minimum_pitch = minimum_pitches.get(pose_id)
+        if minimum_pitch is None:
             raise ValueError("strip instance uses a variant outside its family")
+        if instance.variant.pitch_x < minimum_pitch:
+            raise ValueError("strip instance variant pitch is below the ordinary family pose")
         if instance.machine_start != expected_start:
             raise ValueError("strip instance ranges do not partition the logical family")
         expected_start = instance.machine_stop

@@ -564,6 +564,31 @@ def test_explicit_padded_variant_instance_partition_conserves_family_ranges() ->
         )
 
 
+def test_contracted_same_pose_variant_is_rejected_by_partition_and_validation() -> None:
+    generated_family = _family(_single_machine_spec("chemical-plant", count=2))
+    contracted = default_strip_variant(generated_family)
+    ordinary = variant_with_minimum_pitch(contracted, contracted.pitch_x + 1)
+    family = replace(generated_family, variants=(ordinary,))
+
+    assert contracted.pitch_x == 7
+    assert ordinary.pitch_x == 8
+    assert strip_pose_id(contracted) == strip_pose_id(ordinary)
+    with pytest.raises(ValueError, match="below the ordinary family pose"):
+        partition_strip_variant(
+            family,
+            contracted,
+            max_machine_count=2,
+        )
+
+    (ordinary_instance,) = partition_strip_family(family, max_machine_count=2)
+    with pytest.raises(ValueError, match="below the ordinary family pose"):
+        validate_instance_partition(
+            family,
+            (replace(ordinary_instance, variant=contracted),),
+        )
+
+
+
 def test_realized_variant_order_and_geometry_are_stable_for_every_count() -> None:
     family = _family(_single_machine_spec("assembling-machine-1", count=7))
     template_keys = tuple(variant.template_key for variant in family.variants)
