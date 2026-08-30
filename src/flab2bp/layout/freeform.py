@@ -2001,6 +2001,8 @@ def _direct_net_candidates(
     out: dict[tuple[int, int], _DirectCandidate] = {}
     for i, j in _nets_between(strips):
         src, dst = strips[i], strips[j]
+        if src.takes_belt_ports or (src.recipe_id, dst.recipe_id) not in eligible:
+            continue
         lane = next(
             (
                 (k, item)
@@ -8196,14 +8198,17 @@ def _prepare_routing_problem(
         by_item: dict[str, list[CargoKey]] = defaultdict(list)
         for cargo in by_cargo:
             by_item[cargo[0]].append(cargo)
-        for item, cargo_keys in by_item.items():
-            total_weight = sum((cargo_weight[cargo] for cargo in cargo_keys), Fraction(0))
-            for cargo in cargo_keys:
+        for item, item_cargo_keys in by_item.items():
+            total_weight = sum(
+                (cargo_weight[cargo] for cargo in item_cargo_keys),
+                Fraction(0),
+            )
+            for cargo in item_cargo_keys:
                 belts = sorted(by_cargo[cargo])
                 share = (
                     cargo_weight[cargo] / total_weight
                     if total_weight > 0
-                    else Fraction(1, len(cargo_keys))
+                    else Fraction(1, len(item_cargo_keys))
                 )
                 lane_supply[cargo][belts[0]] = (
                     s.machines * made.get(item, Fraction(0)) * share
@@ -8259,19 +8264,19 @@ def _prepare_routing_problem(
                     )
                 )
 
-    cargo_keys = set(joined) | set(sibling_lanes)
+    active_cargo = set(joined) | set(sibling_lanes)
     demand_by_item = {
         item: sum(
             (
                 sum(lane_demand[cargo].values(), Fraction(0))
-                for cargo in cargo_keys
+                for cargo in active_cargo
                 if cargo[0] == item
             ),
             Fraction(0),
         )
-        for item, _cargo_domain in cargo_keys
+        for item, _cargo_domain in active_cargo
     }
-    for cargo in sorted(cargo_keys, key=lambda key: (key[0], key[1].value)):
+    for cargo in sorted(active_cargo, key=lambda key: (key[0], key[1].value)):
         item, cargo_domain = cargo
         total_demand = demand_by_item[item]
         domain_demand = sum(lane_demand[cargo].values(), Fraction(0))

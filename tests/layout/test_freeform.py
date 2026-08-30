@@ -1858,6 +1858,26 @@ class TestPlacementProperties:
 
 
 class TestProliferationForbidsDirectInsertion:
+    def test_candidate_filter_rejects_belt_required_and_prefab_port_edges(
+        self,
+    ) -> None:
+        belt_required = magnetic_ring_spec().model_copy(
+            update={"belt_required_edges": frozenset({("iron-ingot", "gear")})}
+        )
+        strips = plan_strips(belt_required, strip_len=6)
+        candidates = _direct_net_candidates(strips, belt_required)
+        assert candidates, "the other eligible recipe edges keep the filter non-vacuous"
+        assert all(
+            (strips[source].recipe_id, strips[destination].recipe_id)
+            != ("iron-ingot", "gear")
+            for source, destination in candidates
+        )
+
+        prefab = ray_receiver_spec()
+        prefab_strips = plan_strips(prefab, strip_len=6)
+        assert any(strip.takes_belt_ports for strip in prefab_strips)
+        assert _direct_net_candidates(prefab_strips, prefab) == {}
+
     def test_belt_required_edges_are_never_direct_inserted(self) -> None:
         spec = proliferated_spec()
         layout = FreeformLayout(
@@ -5635,7 +5655,10 @@ def _shard_balance(spec: BuildSpec, item: str) -> list[tuple[F, F]]:
     machines: dict[str, int] = {}
     for s in strips:
         machines[s.group_key] = machines.get(s.group_key, 0) + s.machines
-    shards: dict[tuple[str, tuple[tuple[str, str], ...]], int] = {}
+    shards: dict[
+        tuple[str, tuple[tuple[str, str, CargoDomain], ...]],
+        int,
+    ] = {}
     for s in strips:
         key = (s.group_key, s.out_lanes)
         shards[key] = shards.get(key, 0) + s.machines
@@ -5644,7 +5667,12 @@ def _shard_balance(spec: BuildSpec, item: str) -> list[tuple[F, F]]:
         g = groups[gk]
         if item not in g.outputs_per_machine:
             continue
-        dests = {d for it, dest in lanes if it == item for d in _dests(dest)}
+        dests = {
+            destination
+            for lane_item, destination, _cargo_domain in lanes
+            if lane_item == item
+            for destination in _dests(destination)
+        }
         if not dests:
             continue
         demand = F(0)
@@ -7410,7 +7438,15 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
         canvas = _Canvas()
         indices = [canvas.add(_belt(x, 0, item=self.ITEM)) for x in range(tiles)]
         port = _Port(
-            indices[0], 0, 0, 0, tiles - 1, tuple(indices), strips[0].machines, 0
+            indices[0],
+            0,
+            0,
+            0,
+            tiles - 1,
+            tuple(indices),
+            strips[0].machines,
+            0,
+            cargo_domain=strips[0].cargo_domain,
         )
         return canvas, spec, strips[:1], [{self.ITEM: port}]
 
@@ -7461,6 +7497,7 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
             tuple(indices),
             strips[0].machines,
             0,
+            cargo_domain=strips[0].cargo_domain,
         )
         return canvas, spec, strips, [{self.ITEM: port}], splitter_index
 
@@ -7517,6 +7554,7 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
             tuple(first_indices),
             strips[0].machines,
             0,
+            cargo_domain=strips[0].cargo_domain,
         )
         before = tuple(canvas.buildings)
 
@@ -7710,6 +7748,7 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
             tuple(indices),
             strips[0].machines,
             0,
+            cargo_domain=strips[0].cargo_domain,
         )
         proposed = PlacedBuilding(
             item_id=catalog.SPRAY_COATER_ID,
