@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import cProfile
 import io
+import json
 import pstats
 import sys
 import time
@@ -46,9 +47,16 @@ def _strategy(name: str):
             band_policy=BandPolicy("portable"),
             **kwargs,
         )
-    from flab2bp.layout.seqpair import SeqPairLayout
+    from flab2bp.layout.sequence_solver import SequencePairLayout
 
-    return SeqPairLayout
+    def sequence_pair(*, power: int, workers: int):
+        del workers
+        return SequencePairLayout(
+            band_policy=BandPolicy("portable"),
+            power=bool(power),
+        )
+
+    return sequence_pair
 
 
 def _spec(url_id: str, index: int):
@@ -113,7 +121,7 @@ def install(tally: Tally):
                              deadline, budget)
         tally.add("route_all", time.perf_counter() - t0)
         tally.passes += 1
-        tally.rounds += out[2]
+        tally.rounds += out.iterations
         return out
 
     def commit(*a, **k):
@@ -239,6 +247,7 @@ def main() -> int:
     ap.add_argument("--repeat", type=int, default=1)
     ap.add_argument("--heights", action="store_true")
     ap.add_argument("--strategy", default="freeform")
+    ap.add_argument("--json", action="store_true")
     args = ap.parse_args()
 
     if args.heights:
@@ -255,8 +264,7 @@ def main() -> int:
         try:
             if prof is not None:
                 prof.enable()
-            freeform.FreeformLayout(
-                band_policy=BandPolicy("portable"),
+            _strategy(args.strategy)(
                 power=args.power, workers=args.workers
             ).lay_out(
                 spec, time_budget_s=args.budget
@@ -268,13 +276,33 @@ def main() -> int:
                 prof.disable()
             restore()
         wall = time.perf_counter() - t0
+        routing = tally.t.get("route_all", 0.0)
+        inner = tally.t.get("astar", 0.0)
+        if args.json:
+            print(json.dumps({
+                "url_id": args.url_id,
+                "strategy": args.strategy,
+                "power": args.power,
+                "budget_s": args.budget,
+                "run": run + 1,
+                "repeat": args.repeat,
+                "verdict": verdict,
+                "wall_s": wall,
+                "route_all_s": routing,
+                "astar_s": inner,
+                "astar_routing_share": inner / max(routing, 1e-9),
+                "astar_wall_share": inner / max(wall, 1e-9),
+                "expansions": tally.expansions,
+                "hits": tally.astar_hit,
+                "misses": tally.astar_none,
+            }, separators=(",", ":"), sort_keys=True))
+            continue
 
         print(f"=== {args.url_id} power={args.power} budget={args.budget} "
               f"run {run + 1}/{args.repeat}")
         print(f"    {verdict}")
         print(f"    wall {wall:.2f}s   routing passes {tally.passes}   "
               f"rip-up rounds {tally.rounds}")
-        routing = tally.t.get("route_all", 0.0)
         print(f"    _route_all total {routing:.2f}s ({100 * routing / wall:.0f}% of wall)")
         for key in ("astar", "commit_paths", "make_grid", "refresh_history",
                     "build_landmarks", "reserve_port_access", "merge_frontier"):
@@ -282,7 +310,6 @@ def main() -> int:
                 print(f"      {key:<22} {tally.t[key]:7.2f}s  "
                       f"n={tally.n[key]:<7} "
                       f"{100 * tally.t[key] / max(routing, 1e-9):5.1f}% of routing")
-        inner = tally.t.get("astar", 0.0)
         other = routing - sum(
             tally.t.get(k, 0.0)
             for k in ("astar", "commit_paths", "make_grid", "refresh_history",
