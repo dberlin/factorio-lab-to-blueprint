@@ -3150,6 +3150,8 @@ def test_projection_no_good_forbids_only_the_exact_failed_pair_context() -> None
         pack_height=initial.height,
         left_origin=initial.at[0],
         right_origin=initial.at[2],
+        left_geometry=freeform._strip_geometry_signature(strips[0]),
+        right_geometry=freeform._strip_geometry_signature(strips[2]),
         failure=failure,
     )
 
@@ -3208,6 +3210,8 @@ def test_projection_no_good_unrelated_strip_movement_cannot_erase_pair_evidence(
         pack_height=baseline.height,
         left_origin=complete_origins[0],
         right_origin=complete_origins[1],
+        left_geometry=freeform._strip_geometry_signature(strips[0]),
+        right_geometry=freeform._strip_geometry_signature(strips[1]),
         failure=failure,
     )
 
@@ -3244,6 +3248,59 @@ def test_projection_no_good_unrelated_strip_movement_cannot_erase_pair_evidence(
     assert solve_with(moved_implicated) in (cp_model.FEASIBLE, cp_model.OPTIMAL)
 
 
+def test_projection_no_good_changed_implicated_variant_remains_searchable() -> None:
+    strip = replace(plan_strips(single_recipe_spec())[0], west_channel=1)
+    strips = [replace(strip, group_key=f"strip-{index}") for index in range(2)]
+    height = 2 * max(_box(candidate)[1] for candidate in strips)
+    width_bound = 2 * max(_box(candidate)[0] for candidate in strips)
+    baseline = _pack(
+        strips,
+        height=height,
+        width_bound=width_bound,
+        time_budget_s=0.5,
+        direct_candidates={},
+        workers=DETERMINISTIC_WORKERS,
+    )
+    assert baseline is not None
+    failure = finalize.ProjectionFailure("geom.collide", (0, 1), "collision", 160)
+    no_good = ProjectionNoGood(
+        left_strip=0,
+        right_strip=1,
+        delta_x=baseline.at[0][0] - baseline.at[1][0],
+        delta_y=baseline.at[0][1] - baseline.at[1][1],
+        pack_width=baseline.width,
+        pack_height=baseline.height,
+        left_origin=baseline.at[0],
+        right_origin=baseline.at[1],
+        left_geometry=freeform._strip_geometry_signature(strips[0]),
+        right_geometry=freeform._strip_geometry_signature(strips[1]),
+        failure=failure,
+    )
+    changed = [replace(strips[0], yaw=(strips[0].yaw + 90.0) % 360.0), strips[1]]
+    control = _pack(
+        changed,
+        height=height,
+        width_bound=width_bound,
+        time_budget_s=0.5,
+        direct_candidates={},
+        workers=DETERMINISTIC_WORKERS,
+    )
+    retry = _pack(
+        changed,
+        height=height,
+        width_bound=width_bound,
+        time_budget_s=0.5,
+        direct_candidates={},
+        workers=DETERMINISTIC_WORKERS,
+        projection_no_goods=(no_good,),
+    )
+
+    assert control is not None
+    assert retry is not None
+    assert retry.at == control.at
+    assert retry.width == control.width
+
+
 @pytest.mark.parametrize("context_change", ["height", "width", "absolute-origin"])
 def test_projection_no_good_leaves_same_displacement_free_in_another_context(
     context_change: str,
@@ -3267,14 +3324,17 @@ def test_projection_no_good_leaves_same_displacement_free_in_another_context(
         baseline.at[0][1] - baseline.at[1][1],
     )
     no_good = ProjectionNoGood(
-        0,
-        1,
-        *delta,
-        baseline.width,
-        baseline.height,
-        baseline.at[0],
-        baseline.at[1],
-        failure,
+        left_strip=0,
+        right_strip=1,
+        delta_x=delta[0],
+        delta_y=delta[1],
+        pack_width=baseline.width,
+        pack_height=baseline.height,
+        left_origin=baseline.at[0],
+        right_origin=baseline.at[1],
+        left_geometry=freeform._strip_geometry_signature(strips[0]),
+        right_geometry=freeform._strip_geometry_signature(strips[1]),
+        failure=failure,
     )
     if context_change == "height":
         other_context = replace(no_good, pack_height=999)
@@ -3400,9 +3460,7 @@ def test_projection_no_good_owned_strip_collision_learns_and_repacks(
     monkeypatch.setattr(
         finalize,
         "independent_projection_pair",
-        lambda _placement, _policy, exact_failure: (
-            exact_failure.buildings if independent else None
-        ),
+        lambda _pair, _policy, **_kwargs: (0, 1) if independent else None,
     )
 
     result = FreeformLayout(
@@ -3450,6 +3508,13 @@ def test_projection_same_strip_and_unowned_failures_create_no_cut() -> None:
         detail="build colliders intersect",
         band=160,
     )
+    strips = [
+        replace(
+            plan_strips(single_recipe_spec())[0],
+            group_key=f"strip-{index}",
+        )
+        for index in range(2)
+    ]
     pack = freeform._Pack(
         at={0: (3, 4), 1: (11, 9)},
         width=20,
@@ -3471,8 +3536,10 @@ def test_projection_same_strip_and_unowned_failures_create_no_cut() -> None:
     )
 
     policy = BandPolicy("portable")
-    assert freeform._projection_no_good(same_strip, pack, failure, policy) is None
-    assert freeform._projection_no_good(unowned, pack, failure, policy) is None
+    assert (
+        freeform._projection_no_good(same_strip, pack, strips, failure, policy) is None
+    )
+    assert freeform._projection_no_good(unowned, pack, strips, failure, policy) is None
 
 
 

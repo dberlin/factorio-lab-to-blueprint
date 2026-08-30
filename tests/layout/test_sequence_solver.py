@@ -2778,6 +2778,7 @@ def test_different_strip_feedback_changes_only_unchanged_exact_relation() -> Non
         decode_state(problem, state),
         west_channels=channels,
     )
+    geometries = (("variant-a",), ("variant-b",), ("variant-c",))
     failure = finalize.ProjectionFailure(
         "geom.collide",
         (0, 1),
@@ -2793,6 +2794,8 @@ def test_different_strip_feedback_changes_only_unchanged_exact_relation() -> Non
         pack_height=baseline.height,
         left_origin=baseline.at[0],
         right_origin=baseline.at[1],
+        left_geometry=geometries[0],
+        right_geometry=geometries[1],
         failure=failure,
     )
 
@@ -2801,6 +2804,7 @@ def test_different_strip_feedback_changes_only_unchanged_exact_relation() -> Non
         state,
         no_good,
         west_channels=channels,
+        geometry_signatures=geometries,
     )
     assert repaired is not None
     changed_pack = _decoded_pack(
@@ -2829,8 +2833,18 @@ def test_different_strip_feedback_changes_only_unchanged_exact_relation() -> Non
         already_changed,
         no_good,
         west_channels=channels,
+        geometry_signatures=geometries,
     )
     assert unchanged == StageBoundaryUpdate(problem, already_changed)
+    changed_geometry = sequence_solver_module._projection_feedback_stage_update(
+        problem,
+        state,
+        no_good,
+        west_channels=channels,
+        geometry_signatures=(("variant-a-changed",), *geometries[1:]),
+    )
+    assert changed_geometry == StageBoundaryUpdate(problem, state)
+
 
     exact = freeform_module.ExactPackNoGood(
         height=baseline.height,
@@ -2844,6 +2858,7 @@ def test_different_strip_feedback_changes_only_unchanged_exact_relation() -> Non
         state,
         exact,
         west_channels=channels,
+        geometry_signatures=geometries,
     )
     assert exact_repair is not None
     exact_pack = _decoded_pack(
@@ -3183,8 +3198,8 @@ def test_different_strip_feedback_rebuilds_production_stage(
     monkeypatch.setattr(
         finalize,
         "independent_projection_pair",
-        lambda _placement, _policy, exact_failure: (
-            exact_failure.buildings if independent else None
+        lambda pair, _policy, **_kwargs: (
+            tuple(index for index, _building in pair) if independent else None
         ),
     )
 

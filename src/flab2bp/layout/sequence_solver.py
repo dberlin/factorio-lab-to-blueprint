@@ -60,6 +60,7 @@ from flab2bp.layout.freeform import (
     _PreparedRoutingProblem,
     _projection_no_good,
     _projection_strip_pair,
+    _strip_geometry_signature,
     _Unpowerable,
     _Unseatable,
     plan_strips,
@@ -1990,6 +1991,7 @@ def _projection_feedback_matches(
     state: AnnealState,
     pack: _Pack,
     no_good: _ProjectionPackNoGood,
+    geometry_signatures: tuple[finalize.ProjectionGeometrySignature, ...],
 ) -> bool:
     """Return whether one decoded state repeats the retained exact evidence."""
     if isinstance(no_good, finalize.ProjectionNoGood):
@@ -1997,6 +1999,8 @@ def _projection_feedback_matches(
             pack.width == no_good.pack_width
             and pack.height == no_good.pack_height
             and pack.at[no_good.left_strip] == no_good.left_origin
+            and geometry_signatures[no_good.left_strip] == no_good.left_geometry
+            and geometry_signatures[no_good.right_strip] == no_good.right_geometry
             and pack.at[no_good.right_strip] == no_good.right_origin
         )
     return (
@@ -2014,15 +2018,24 @@ def _projection_feedback_stage_update(
     no_good: _ProjectionPackNoGood,
     *,
     west_channels: tuple[int, ...],
+    geometry_signatures: tuple[finalize.ProjectionGeometrySignature, ...],
 ) -> StageBoundaryUpdate | None:
     """Move an unchanged exact refusal to the nearest changed pair relation."""
     decoded = decode_state(problem, state)
+    if len(geometry_signatures) != problem.size:
+        raise ValueError("projection feedback requires one geometry signature per strip")
     pack = _decoded_pack(
         problem.outline_height,
         decoded,
         west_channels=west_channels,
     )
-    if not _projection_feedback_matches(problem, state, pack, no_good):
+    if not _projection_feedback_matches(
+        problem,
+        state,
+        pack,
+        no_good,
+        geometry_signatures,
+    ):
         return StageBoundaryUpdate(problem, state)
 
     if isinstance(no_good, finalize.ProjectionNoGood):
@@ -2072,6 +2085,7 @@ def _projection_feedback_stage_update(
                 candidate,
                 candidate_pack,
                 no_good,
+                geometry_signatures,
             ):
                 return StageBoundaryUpdate(problem, candidate)
     return None
@@ -3640,6 +3654,7 @@ def _production_run(
                     no_good = _projection_no_good(
                         detailed.placement,
                         pack,
+                        selected,
                         failure,
                         band_policy,
                     )
@@ -3685,6 +3700,9 @@ def _production_run(
                     state,
                     no_good,
                     west_channels=tuple(strip.west_channel for strip in selected),
+                    geometry_signatures=tuple(
+                        _strip_geometry_signature(strip) for strip in selected
+                    ),
                 )
 
         transformed = _pose_stage_boundary_update(

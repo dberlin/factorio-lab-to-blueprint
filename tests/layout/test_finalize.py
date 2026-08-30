@@ -348,21 +348,25 @@ def test_projection_no_good_independence_ignores_unrelated_route_geometry() -> N
             _belt(12, 12, output=None),
         )
     )
-    failure = finalize.ProjectionFailure(
-        check="geom.collide",
-        buildings=(0, 1),
-        detail="build colliders intersect",
-        band=160,
-    )
     policy = BandPolicy("portable")
 
-    assert finalize.independent_projection_pair(placement, policy, failure) == (0, 1)
+    def prove(candidate: Placement) -> tuple[int, int] | None:
+        return finalize.independent_projection_pair(
+            (
+                (0, candidate.buildings[0]),
+                (1, candidate.buildings[1]),
+            ),
+            policy,
+        )
+
+    assert prove(placement) == (0, 1)
     moved_route = replace(
         placement,
         buildings=placement.buildings[:2]
-        + (replace(placement.buildings[2], x=10, y=14),),
+        + (replace(placement.buildings[2], x=-20, y=40),),
     )
-    assert finalize.independent_projection_pair(moved_route, policy, failure) == (0, 1)
+    assert moved_route.bounds != placement.bounds
+    assert prove(moved_route) == (0, 1)
 
     changed_pair = replace(
         placement,
@@ -372,7 +376,7 @@ def test_projection_no_good_independence_ignores_unrelated_route_geometry() -> N
             placement.buildings[2],
         ),
     )
-    assert finalize.independent_projection_pair(changed_pair, policy, failure) is None
+    assert prove(changed_pair) is None
 
 
 

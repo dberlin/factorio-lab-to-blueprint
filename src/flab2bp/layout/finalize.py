@@ -29,6 +29,9 @@ class ProjectionFailure:
     detail: str
     band: int
 
+type ProjectionGeometrySignature = tuple[object, ...]
+
+
 
 @dataclass(frozen=True, slots=True)
 class ProjectionNoGood:
@@ -42,7 +45,20 @@ class ProjectionNoGood:
     pack_height: int
     left_origin: tuple[int, int]
     right_origin: tuple[int, int]
+    left_geometry: ProjectionGeometrySignature
+    right_geometry: ProjectionGeometrySignature
     failure: ProjectionFailure
+
+
+
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.left_geometry, tuple)
+            or not self.left_geometry
+            or not isinstance(self.right_geometry, tuple)
+            or not self.right_geometry
+        ):
+            raise ValueError("projection no-good requires two physical geometry signatures")
 
 
 class ProjectionRefusal(ValueError):
@@ -1163,61 +1179,150 @@ def _materialize_frame(
     )
 
 
-def independent_projection_pair(
-    placement: Placement,
-    policy: BandPolicy,
-    failure: ProjectionFailure,
-) -> tuple[int, int] | None:
-    """Return a static pair only when that pair rejects every exact projection.
+_PAIR_PROOF_MAX_CASES = 250_000
 
-    The proof deliberately re-runs the authoritative pair predicate with every
-    other building removed.  Requiring the same pair to collide in every frame,
-    certified band, and latitude anchor proves that neither unrelated obstacles
-    nor routed belts can make this packed pair acceptable.
+
+def independent_projection_pair(
+    pair: tuple[tuple[int, PlacedBuilding], tuple[int, PlacedBuilding]],
+    policy: BandPolicy,
+) -> tuple[int, int] | None:
+    """Prove a pair collision without consulting unrelated placement bounds.
+
+    The cut conditions only the compact pack and two physical strip records,
+    while routing may expand the outer content bounds.  This proof therefore
+    over-approximates every translation, orientation, containing frame size,
+    certified band, latitude anchor, and padding row reachable anywhere in an
+    authoritative band.  If the finite proof would be too large, no smaller cut
+    is emitted and the caller retains the full exact assignment.
     """
-    if failure.check != "geom.collide" or len(failure.buildings) != 2:
-        return None
-    left, right = failure.buildings
     if (
-        left == right
-        or not 0 <= left < len(placement.buildings)
-        or not 0 <= right < len(placement.buildings)
-    ):
-        return None
-    if any(
-        catalog.is_belt(placement.buildings[index].item_id)
-        or catalog.is_sorter(placement.buildings[index].item_id)
-        for index in (left, right)
-    ):
-        return None
-    candidates = frame_candidates(placement, policy)
-    if not candidates:
-        return None
-    bands = {band.area_segments: band for band in planet.bands()}
-    projections = 0
-    for candidate in candidates:
-        framed = _materialize_frame(placement, candidate)
-        pair = (
-            (left, _collision_placed(framed.buildings[left])),
-            (right, _collision_placed(framed.buildings[right])),
+        len(pair) != 2
+        or pair[0][0] == pair[1][0]
+        or any(
+            catalog.is_belt(building.item_id)
+            or catalog.is_sorter(building.item_id)
+            for _index, building in pair
         )
-        for segments in candidate.frame.certified_bands:
-            band = bands[segments]
-            for anchor in band.anchors(candidate.frame.height):
-                projections += 1
-                exact = _projected_static_failure(
-                    pair,
-                    ((0, 1),),
-                    planet.Projection(
-                        band=band,
-                        anchor_row=anchor,
-                        segment=colliders.PLANET_SEGMENT,
-                        radius=colliders.PLANET_RADIUS,
-                    ),
+    ):
+        return None
+    indices = (pair[0][0], pair[1][0])
+    bands = (
+        tuple(
+            band
+            for band in planet.bands()
+            if band.area_segments == policy.explicit_segments
+        )
+        if policy.explicit_segments is not None
+        else planet.bands()
+    )
+    if not bands:
+        return None
+
+    cases: list[
+        tuple[
+            tuple[tuple[int, colliders.Placed], tuple[int, colliders.Placed]],
+            int,
+            int,
+            planet.Band,
+            tuple[int, ...],
+        ]
+    ] = []
+    case_count = 0
+    for rotated in (False, True):
+        oriented = tuple(
+            (
+                index,
+                (
+                    replace(
+                        building,
+                        x=-(building.y + building.height),
+                        y=building.x,
+                        width=building.height,
+                        height=building.width,
+                        yaw=(building.yaw - 90.0) % 360.0,
+                    )
+                    if rotated
+                    else building
+                ),
+            )
+            for index, building in pair
+        )
+        min_x = min(building.x for _index, building in oriented)
+        min_y = min(building.y for _index, building in oriented)
+        normalized = tuple(
+            (
+                index,
+                _collision_placed(
+                    replace(
+                        building,
+                        x=building.x - min_x,
+                        y=building.y - min_y,
+                    )
+                ),
+            )
+            for index, building in oriented
+        )
+        pair_width = max(
+            building.x + building.width for _index, building in oriented
+        ) - min(building.x for _index, building in oriented)
+        pair_height = max(
+            building.y + building.height for _index, building in oriented
+        ) - min(building.y for _index, building in oriented)
+        # The outer content bounds are not part of the cut.  Using the full
+        # authoritative band capacity covers the union of every containing
+        # frame size and every row translation that unrelated routed tiles can
+        # induce.  A shared column translation is exactly a rigid rotation
+        # around the planet's polar axis, so x=0 represents every column.
+        # Anchors likewise cover every feasible frame height.
+        for band in bands:
+            x_count = 1 if pair_width <= band.columns else 0
+            y_count = band.rows - pair_height + 1
+            if x_count <= 0 or y_count <= 0:
+                continue
+            anchors = tuple(
+                sorted(
+                    {
+                        anchor
+                        for frame_height in range(1, band.rows + 1)
+                        for anchor in band.anchors(frame_height)
+                    }
                 )
-                if exact is None or exact.buildings != (left, right):
-                    return None
-    return (left, right) if projections else None
+            )
+            case_count += x_count * y_count * len(anchors)
+            if case_count > _PAIR_PROOF_MAX_CASES:
+                return None
+            cases.append((normalized, x_count, y_count, band, anchors))
+
+    if not cases:
+        return None
+    for normalized, x_count, y_count, band, anchors in cases:
+        for x in range(x_count):
+            for y in range(y_count):
+                tested = tuple(
+                    (
+                        index,
+                        replace(
+                            placed,
+                            x=placed.x + x,
+                            y=placed.y + y,
+                        ),
+                    )
+                    for index, placed in normalized
+                )
+                for anchor in anchors:
+                    exact = _projected_static_failure(
+                        tested,
+                        ((0, 1),),
+                        planet.Projection(
+                            band=band,
+                            anchor_row=anchor,
+                            segment=colliders.PLANET_SEGMENT,
+                            radius=colliders.PLANET_RADIUS,
+                        ),
+                    )
+                    if exact is None or exact.buildings != indices:
+                        return None
+    return indices
 
 
 def _frame_content_valid(placement: Placement) -> bool:

@@ -2242,6 +2242,40 @@ class _Pack:
     #: Exact nets the packer rewarded for replacing with one sorter.
     direct: frozenset[DirectInsertId] = frozenset()
 
+def _strip_geometry_signature(
+    strip: Strip,
+) -> finalize.ProjectionGeometrySignature:
+    """Return every immutable strip field that determines physical emission."""
+    return (
+        strip.item_id,
+        strip.model_index,
+        strip.cargo_domain,
+        strip.machines,
+        strip.mw,
+        strip.mh,
+        strip.yaw,
+        strip.pw,
+        strip.ph,
+        strip.in_above,
+        strip.out_lanes,
+        strip.in_below,
+        strip.lane_plan,
+        strip.attachment_plan,
+        strip.box_height,
+        (
+            strip.physical_variant.variant_id
+            if strip.physical_variant is not None
+            else None
+        ),
+        strip.port_dock_plan,
+        strip.mode_params,
+        strip.flank_outputs,
+        strip.family_id,
+        strip.machine_start,
+        strip.west_channel,
+    )
+
+
 def _projection_strip_pair(
     placement: Placement,
     failure: finalize.ProjectionFailure,
@@ -2273,17 +2307,31 @@ def _projection_strip_pair(
 def _projection_no_good(
     placement: Placement,
     pack: _Pack,
+    strips: Sequence[Strip],
     failure: finalize.ProjectionFailure,
     policy: BandPolicy,
 ) -> ProjectionNoGood | None:
-    """Map a universally proved static collision to two packed strips."""
+    """Map a pair-local universal static collision to two packed strips."""
     strip_pair = _projection_strip_pair(placement, failure)
     if strip_pair is None:
         return None
-    if finalize.independent_projection_pair(placement, policy, failure) is None:
-        return None
     left_strip, right_strip = strip_pair
-    if left_strip not in pack.at or right_strip not in pack.at:
+    if (
+        left_strip not in pack.at
+        or right_strip not in pack.at
+        or not 0 <= left_strip < len(strips)
+        or not 0 <= right_strip < len(strips)
+    ):
+        return None
+    left_building, right_building = failure.buildings
+    proved = finalize.independent_projection_pair(
+        (
+            (left_building, placement.buildings[left_building]),
+            (right_building, placement.buildings[right_building]),
+        ),
+        policy,
+    )
+    if proved is None:
         return None
     left_x, left_y = pack.at[left_strip]
     right_x, right_y = pack.at[right_strip]
@@ -2296,6 +2344,8 @@ def _projection_no_good(
         pack_height=pack.height,
         left_origin=(left_x, left_y),
         right_origin=(right_x, right_y),
+        left_geometry=_strip_geometry_signature(strips[left_strip]),
+        right_geometry=_strip_geometry_signature(strips[right_strip]),
         failure=failure,
     )
 
@@ -2434,6 +2484,11 @@ def _add_projection_no_good(
     """Forbid one proved pair while preserving unrelated-strip freedom."""
     left = no_good.left_strip
     right = no_good.right_strip
+    if (
+        _strip_geometry_signature(strips[left]) != no_good.left_geometry
+        or _strip_geometry_signature(strips[right]) != no_good.right_geometry
+    ):
+        return
     variables = [width, xs[left], ys[left], xs[right], ys[right]]
     values = [
         no_good.pack_width,
@@ -10857,7 +10912,7 @@ class FreeformLayout:
             for height in heights
         ]
         projection_no_goods: list[ProjectionNoGood] = []
-        projection_no_good_keys: set[tuple[int, ...]] = set()
+        projection_no_good_keys: set[ProjectionNoGood] = set()
         minimum_pitch_x: dict[StripPoseId, int] = {}
         minimum_staged_static_clearance: dict[StripPoseId, int] = {}
         exact_pack_no_goods: list[ExactPackNoGood] = []
@@ -11303,22 +11358,14 @@ class FreeformLayout:
                     no_good = _projection_no_good(
                         placement,
                         pack,
+                        strips,
                         failure,
                         self.band_policy,
                     )
                     if strip_pair is not None and no_good is None:
                         requires_exact_pack_no_good = True
                     if no_good is not None:
-                        no_good_key = (
-                            no_good.left_strip,
-                            no_good.right_strip,
-                            no_good.delta_x,
-                            no_good.delta_y,
-                            no_good.pack_width,
-                            no_good.pack_height,
-                            *no_good.left_origin,
-                            *no_good.right_origin,
-                        )
+                        no_good_key = no_good
                         if no_good_key not in projection_no_good_keys:
                             projection_no_good_keys.add(no_good_key)
                             projection_no_goods.append(no_good)
