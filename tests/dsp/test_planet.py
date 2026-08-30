@@ -607,3 +607,69 @@ def test_candidate_focused_pairs_preserve_near_edge_exact_verdict(
         for pair in planet.collisions_at(buildings, projection, all_pairs)
         if candidate_position in pair
     ]
+
+
+def test_candidate_pairs_cancels_inside_focused_peer_scan() -> None:
+    model = cat.building(2303).model_index
+    buildings = tuple(
+        colliders.Placed(model, float(index), 0.0, 0.0, 0.0)
+        for index in range(32)
+    )
+    checks = 0
+
+    def cancelled() -> bool:
+        nonlocal checks
+        checks += 1
+        return checks >= 6
+
+    with pytest.raises(planet.ProjectionCancelled):
+        planet.candidate_pairs(
+            buildings,
+            planet.bands(SEGMENT)[0],
+            SEGMENT,
+            colliders.PLANET_RADIUS,
+            candidate_position=11,
+            cancelled=cancelled,
+        )
+
+    assert checks == 6
+
+
+def test_collisions_at_cancels_inside_obb_products_without_box_cache_artifact(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model = cat.building(2303).model_index
+    buildings = tuple(
+        colliders.Placed(model, 0.0, 0.0, 0.0, 0.0)
+        for _ in range(3)
+    )
+    projection = planet.Projection(
+        planet.bands(SEGMENT)[0],
+        0,
+        SEGMENT,
+        colliders.PLANET_RADIUS,
+    )
+    overlaps = 0
+    box_cache: dict[
+        tuple[colliders.Placed, planet.Projection],
+        tuple[colliders.Box, ...],
+    ] = {}
+
+    def overlap_once(_left: colliders.Box, _right: colliders.Box) -> bool:
+        nonlocal overlaps
+        overlaps += 1
+        return False
+
+    monkeypatch.setattr(colliders, "obb_overlap", overlap_once)
+
+    with pytest.raises(planet.ProjectionCancelled):
+        planet.collisions_at(
+            buildings,
+            projection,
+            ((0, 1), (0, 2)),
+            _box_cache=box_cache,
+            cancelled=lambda: overlaps >= 1,
+        )
+
+    assert overlaps == 1
+    assert box_cache == {}

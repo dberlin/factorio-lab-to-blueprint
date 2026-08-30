@@ -422,10 +422,19 @@ class ValidationVerdict:
     failed_checks: tuple[str, ...]
     placement: Placement | None
     projection_failures: tuple[finalize.ProjectionFailure, ...] = ()
+    status: DetailedRouteStatus | None = None
 
     def __post_init__(self) -> None:
         if type(self.ok) is not bool:
             raise ValueError("validation verdict ok flag must be a bool")
+        if self.status is None:
+            object.__setattr__(
+                self,
+                "status",
+                DetailedRouteStatus.ROUTED if self.ok else DetailedRouteStatus.INVALID,
+            )
+        elif not isinstance(self.status, DetailedRouteStatus):
+            raise ValueError("validation verdict status must be a detailed route status")
         if self.placement is not None and not isinstance(self.placement, Placement):
             raise ValueError("validation placement must be a Placement or None")
         if self.ok and self.placement is None:
@@ -443,6 +452,12 @@ class ValidationVerdict:
             raise ValueError("projection failures must be ProjectionFailure records in a tuple")
         if self.ok and (self.failed_checks or self.projection_failures):
             raise ValueError("a clean validation verdict cannot contain failures")
+        if self.ok and self.status is not DetailedRouteStatus.ROUTED:
+            raise ValueError("a clean validation verdict must have ROUTED status")
+        if self.status is DetailedRouteStatus.BUDGET and (
+            self.ok or self.failed_checks or self.projection_failures
+        ):
+            raise ValueError("an incomplete validation verdict cannot contain acceptance or failures")
 
 
 @dataclass(frozen=True, slots=True)
@@ -1559,12 +1574,29 @@ class SequenceSolver[PreparedT]:
         validation_failures: tuple[str, ...] = ()
         projection_failures = detailed.projection_failures
         validation_time_s = 0.0
+        validation_budget = False
         if detailed.routing.status is DetailedRouteStatus.ROUTED and detailed.placement is not None:
             validation_started = time.perf_counter()
             verdict = self.adapters.validate(detailed.placement)
             validation_time_s = time.perf_counter() - validation_started
             validation_failures = verdict.failed_checks
             projection_failures = verdict.projection_failures
+            if verdict.status is DetailedRouteStatus.BUDGET:
+                detailed = replace(
+                    detailed,
+                    routing=replace(
+                        detailed.routing,
+                        status=DetailedRouteStatus.BUDGET,
+                        routed=(),
+                        failures=(),
+                        exhaustive=False,
+                    ),
+                    placement=None,
+                    projection_failures=(),
+                )
+                validation_failures = ()
+                projection_failures = ()
+                validation_budget = True
             if verdict.ok:
                 finalized = verdict.placement
                 assert finalized is not None
@@ -1579,6 +1611,33 @@ class SequenceSolver[PreparedT]:
                     )
                 if height_state.exact_key is None or exact_key < height_state.exact_key:
                     height_state.exact_key = exact_key
+        if validation_budget:
+            self._record_routing_observation(
+                height_state,
+                selected,
+                detailed,
+                spent,
+                problem=problem,
+                observation=observation,
+                global_routes=global_routes,
+                global_overflow=global_overflow,
+                global_skip_reason=global_skip_reason,
+                exact_key=None,
+                validation_failures=(),
+                projection_failures=(),
+                pitch_requirement=None,
+                preparation_time_s=preparation_time_s,
+                global_route_time_s=global_route_time_s,
+                detailed_route_time_s=detailed_route_time_s,
+                validation_time_s=validation_time_s,
+                lns_size=0,
+                variant_moves=0,
+                split_count=0,
+                merge_count=0,
+                quality_entered=False,
+                quality_exited=False,
+            )
+            return spent, True
         pitch_requirement = _stage_projection_pitch_requirement(
             problem,
             selected.state,
@@ -3601,14 +3660,39 @@ def _production_run(
         return result
 
     def certify(placement: Placement) -> ValidationVerdict:
+        if deadline_reached():
+            return ValidationVerdict(
+                False,
+                (),
+                None,
+                status=DetailedRouteStatus.BUDGET,
+            )
         report = validate.certify(placement, spec, expect_power=power)
+        if deadline_reached():
+            return ValidationVerdict(
+                False,
+                (),
+                None,
+                status=DetailedRouteStatus.BUDGET,
+            )
         failures = tuple(sorted({finding.check for finding in report.errors}))
         if failures:
             return ValidationVerdict(False, failures, None)
         try:
-            finalized = finalize.finalize_placement(placement, band_policy)
+            finalized = finalize.finalize_placement(
+                placement,
+                band_policy,
+                cancelled=deadline_reached,
+            )
         except finalize.ProjectionRefusal as exc:
             return ValidationVerdict(False, exc.checks, None, exc.failures)
+        except finalize.ProjectionCancelled:
+            return ValidationVerdict(
+                False,
+                (),
+                None,
+                status=DetailedRouteStatus.BUDGET,
+            )
         return ValidationVerdict(True, (), finalized)
 
     family_by_id = {family.family_id: family for family in generate_strip_families(spec)}

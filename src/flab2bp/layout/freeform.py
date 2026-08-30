@@ -3342,37 +3342,97 @@ def _junction_ban_offsets(
     )
 
 
+def _cancellable_junction_ban_offsets(
+    item_id: int,
+    model_index: int,
+    width: int,
+    height: int,
+    yaw: float,
+    z: Fraction,
+    cancelled: Callable[[], bool],
+) -> frozenset[Cell]:
+    """Compute one uncached complete offset set while polling its caller."""
+    obstacle = PlacedBuilding(
+        item_id=item_id,
+        model_index=model_index,
+        x=0,
+        y=0,
+        z=z,
+        width=width,
+        height=height,
+        yaw=yaw,
+    )
+    splitter_span = max(catalog.collider_span(catalog.SPLITTER_ID, 0.0))
+    try:
+        obstacle_span = max(catalog.collider_span(item_id, yaw))
+    except KeyError, ValueError:
+        obstacle_span = max(width, height) * colliders.GRID_ARC
+    radius = math.ceil(
+        (splitter_span + obstacle_span) / (2.0 * colliders.GRID_ARC)
+    ) + 2
+    centre_x = (width - 1) / 2.0
+    centre_y = (height - 1) / 2.0
+    banned: set[Cell] = set()
+    for x in range(
+        math.floor(centre_x - radius),
+        math.ceil(centre_x + radius) + 1,
+    ):
+        if cancelled():
+            raise _PreparationDeadline
+        for y in range(
+            math.floor(centre_y - radius),
+            math.ceil(centre_y + radius) + 1,
+        ):
+            if cancelled():
+                raise _PreparationDeadline
+            for level in range(LEVELS):
+                if cancelled():
+                    raise _PreparationDeadline
+                if not _junction_site_is_clear((obstacle,), x, y, level):
+                    banned.add((x, y, level))
+    if cancelled():
+        raise _PreparationDeadline
+    return frozenset(banned)
+
+
 def _prepared_junction_ban(
     buildings: Sequence[PlacedBuilding],
     power_sites: Sequence[tuple[int, int]],
     *,
     projection_frames: Sequence[_JunctionProjectionFrame] = (),
     junction_bounds: tuple[int, int, int, int] | None = None,
+    cancelled: Callable[[], bool] | None = None,
 ) -> frozenset[Cell]:
     """Precompute exact flat and projected Splitter refusals."""
-    obstacles = [
-        building
-        for building in buildings
-        if not catalog.is_belt(building.item_id) and not catalog.is_sorter(building.item_id)
-    ]
+    obstacles: list[PlacedBuilding] = []
+    for building in buildings:
+        if cancelled is not None and cancelled():
+            raise _PreparationDeadline
+        if not catalog.is_belt(building.item_id) and not catalog.is_sorter(
+            building.item_id
+        ):
+            obstacles.append(building)
     tower = catalog.building(catalog.TESLA_TOWER_ID)
-    obstacles.extend(
-        PlacedBuilding(
-            item_id=catalog.TESLA_TOWER_ID,
-            model_index=tower.model_index,
-            x=x,
-            y=y,
-            width=tower.width,
-            height=tower.height,
+    for x, y in power_sites:
+        if cancelled is not None and cancelled():
+            raise _PreparationDeadline
+        obstacles.append(
+            PlacedBuilding(
+                item_id=catalog.TESLA_TOWER_ID,
+                model_index=tower.model_index,
+                x=x,
+                y=y,
+                width=tower.width,
+                height=tower.height,
+            )
         )
-        for x, y in power_sites
-    )
 
     banned: set[Cell] = set()
     for obstacle in obstacles:
-        banned.update(
-            (obstacle.x + dx, obstacle.y + dy, level)
-            for dx, dy, level in _junction_ban_offsets(
+        if cancelled is not None and cancelled():
+            raise _PreparationDeadline
+        offsets = (
+            _junction_ban_offsets(
                 obstacle.item_id,
                 obstacle.model_index,
                 obstacle.width,
@@ -3380,13 +3440,28 @@ def _prepared_junction_ban(
                 obstacle.yaw,
                 obstacle.z,
             )
+            if cancelled is None
+            else _cancellable_junction_ban_offsets(
+                obstacle.item_id,
+                obstacle.model_index,
+                obstacle.width,
+                obstacle.height,
+                obstacle.yaw,
+                obstacle.z,
+                cancelled,
+            )
         )
+        for dx, dy, level in offsets:
+            if cancelled is not None and cancelled():
+                raise _PreparationDeadline
+            banned.add((obstacle.x + dx, obstacle.y + dy, level))
 
-    coaters = tuple(
-        (index, building)
-        for index, building in enumerate(buildings)
-        if building.item_id == catalog.SPRAY_COATER_ID
-    )
+    coaters: list[tuple[int, PlacedBuilding]] = []
+    for index, building in enumerate(buildings):
+        if cancelled is not None and cancelled():
+            raise _PreparationDeadline
+        if building.item_id == catalog.SPRAY_COATER_ID:
+            coaters.append((index, building))
     if coaters and projection_frames:
         if junction_bounds is None:
             raise ValueError("projected junction bans require fixed junction bounds")
@@ -3397,8 +3472,11 @@ def _prepared_junction_ban(
                 junction_bounds,
                 already_banned=banned,
                 splitter_index=len(buildings),
+                cancelled=cancelled,
             )
         )
+    if cancelled is not None and cancelled():
+        raise _PreparationDeadline
     return frozenset(banned)
 
 
@@ -8202,12 +8280,23 @@ def _cached_junction_projection_frames(
     occupied: tuple[int, int, int, int],
     limit: tuple[int, int, int, int],
     policy: BandPolicy,
+    *,
+    cancelled: Callable[[], bool] | None = None,
 ) -> tuple[_JunctionProjectionFrame, ...]:
     """Return exact reachable frames once per attempt-local geometry signature."""
+    if cancelled is not None and cancelled():
+        raise _PreparationDeadline
     key = (occupied, limit, policy)
     frames = cache.frames.get(key)
     if frames is None:
-        frames = _junction_projection_frames(occupied, limit, policy)
+        frames = _junction_projection_frames(
+            occupied,
+            limit,
+            policy,
+            cancelled=cancelled,
+        )
+        if cancelled is not None and cancelled():
+            raise _PreparationDeadline
         cache.frames[key] = frames
     return frames
 
@@ -8216,8 +8305,12 @@ def _junction_projection_frames(
     occupied: tuple[int, int, int, int],
     limit: tuple[int, int, int, int],
     policy: BandPolicy,
+    *,
+    cancelled: Callable[[], bool] | None = None,
 ) -> tuple[_JunctionProjectionFrame, ...]:
     """Every distinct finalizer-materialized frame reachable in capacity."""
+    if cancelled is not None and cancelled():
+        raise _PreparationDeadline
     occupied_min_x, occupied_min_y, occupied_max_x, occupied_max_y = occupied
     limit_min_x, limit_min_y, limit_max_x, limit_max_y = limit
     if not (
@@ -8244,9 +8337,17 @@ def _junction_projection_frames(
         set[tuple[int, tuple[int, ...]]],
     ] = {}
     for min_x in range(limit_min_x, occupied_min_x + 1):
+        if cancelled is not None and cancelled():
+            raise _PreparationDeadline
         for min_y in range(limit_min_y, occupied_min_y + 1):
+            if cancelled is not None and cancelled():
+                raise _PreparationDeadline
             for max_x in range(occupied_max_x, limit_max_x + 1):
+                if cancelled is not None and cancelled():
+                    raise _PreparationDeadline
                 for max_y in range(occupied_max_y, limit_max_y + 1):
+                    if cancelled is not None and cancelled():
+                        raise _PreparationDeadline
                     width = max_x - min_x + 1
                     height = max_y - min_y + 1
                     extent = (width, height)
@@ -8259,6 +8360,8 @@ def _junction_projection_frames(
                         )
                         candidates_by_extent[extent] = candidates
                     for candidate in candidates:
+                        if cancelled is not None and cancelled():
+                            raise _PreparationDeadline
                         rotated = candidate.frame.rotated
                         transform_key = (
                             rotated,
@@ -8291,30 +8394,44 @@ def _junction_projection_frames(
                             continue
                         projection_signatures.add(projection_signature)
                         for segments in candidate.frame.certified_bands:
+                            if cancelled is not None and cancelled():
+                                raise _PreparationDeadline
                             band = by_segments[segments]
                             for anchor in band.anchors(
                                 candidate.frame.height
                             ):
+                                if cancelled is not None and cancelled():
+                                    raise _PreparationDeadline
                                 frame_projections.setdefault(
                                     (segments, anchor),
                                     None,
                                 )
-    return tuple(
-        _JunctionProjectionFrame(
-            bounds=bounds,
-            candidate=candidate,
-            projections=tuple(
+    frames: list[_JunctionProjectionFrame] = []
+    for key, (bounds, candidate) in frame_specs.items():
+        if cancelled is not None and cancelled():
+            raise _PreparationDeadline
+        projections: list[planet.Projection] = []
+        for segments, anchor in projections_by_frame[key]:
+            if cancelled is not None and cancelled():
+                raise _PreparationDeadline
+            projections.append(
                 planet.Projection(
                     band=by_segments[segments],
                     anchor_row=anchor,
                     segment=colliders.PLANET_SEGMENT,
                     radius=colliders.PLANET_RADIUS,
                 )
-                for segments, anchor in projections_by_frame[key]
-            ),
+            )
+        frames.append(
+            _JunctionProjectionFrame(
+                bounds=bounds,
+                candidate=candidate,
+                projections=tuple(projections),
+            )
         )
-        for key, (bounds, candidate) in frame_specs.items()
-    )
+    if cancelled is not None and cancelled():
+        raise _PreparationDeadline
+    return tuple(frames)
 
 
 def _prospective_static_failure(
@@ -8383,13 +8500,18 @@ def _projected_coater_junction_ban(
     *,
     already_banned: Set[Cell],
     splitter_index: int,
+    cancelled: Callable[[], bool] | None = None,
 ) -> frozenset[Cell]:
     """Exact Splitter bans after applying each finalizer frame transform."""
+    if cancelled is not None and cancelled():
+        raise _PreparationDeadline
     min_x, min_y, max_x, max_y = junction_bounds
     splitter_span = catalog.collider_span(catalog.SPLITTER_ID, 0.0)
     banned: set[Cell] = set()
 
     for coater_index, coater_building in coaters:
+        if cancelled is not None and cancelled():
+            raise _PreparationDeadline
         prepared_frames: list[
             tuple[
                 _JunctionProjectionFrame,
@@ -8405,6 +8527,8 @@ def _projected_coater_junction_ban(
         scan_reach_x = 0
         scan_reach_y = 0
         for frame in frames:
+            if cancelled is not None and cancelled():
+                raise _PreparationDeadline
             materialized_building = finalize.materialize_frame_building(
                 coater_building,
                 bounds=frame.bounds,
@@ -8438,6 +8562,8 @@ def _projected_coater_junction_ban(
             materialized_reach_x = 0
             materialized_reach_y = 0
             for projection in frame.projections:
+                if cancelled is not None and cancelled():
+                    raise _PreparationDeadline
                 latitude_step = (
                     projection.radius
                     * planet.latitude_rad_per_grid(projection.segment)
@@ -8504,11 +8630,17 @@ def _projected_coater_junction_ban(
             max(min_x, coater_building.x - scan_reach_x),
             min(max_x, coater_building.x + scan_reach_x) + 1,
         ):
+            if cancelled is not None and cancelled():
+                raise _PreparationDeadline
             for y in range(
                 max(min_y, coater_building.y - scan_reach_y),
                 min(max_y, coater_building.y + scan_reach_y) + 1,
             ):
+                if cancelled is not None and cancelled():
+                    raise _PreparationDeadline
                 for level in range(LEVELS):
+                    if cancelled is not None and cancelled():
+                        raise _PreparationDeadline
                     cell = (x, y, level)
                     if cell in already_banned or cell in banned:
                         continue
@@ -8525,6 +8657,8 @@ def _projected_coater_junction_ban(
                         tangent_reach_y,
                         frame_projection_states,
                     ) in prepared_frames:
+                        if cancelled is not None and cancelled():
+                            raise _PreparationDeadline
                         materialized_splitter = _collision_pose(
                             finalize.materialize_frame_building(
                                 splitter_building,
@@ -8546,6 +8680,8 @@ def _projected_coater_junction_ban(
                             y_step,
                             coater_boxes,
                         ) in frame_projection_states:
+                            if cancelled is not None and cancelled():
+                                raise _PreparationDeadline
                             if (
                                 cell_dx * x_step > tangent_reach_x
                                 or cell_dy * y_step > tangent_reach_y
@@ -8560,17 +8696,29 @@ def _projected_coater_junction_ban(
                                     materialized_splitter.yaw,
                                 ),
                             )
-                            if not any(
-                                colliders.obb_overlap(coater_box, splitter_box)
-                                for coater_box in coater_boxes
-                                for splitter_box in splitter_boxes
-                            ):
+                            overlap = False
+                            for coater_box in coater_boxes:
+                                if cancelled is not None and cancelled():
+                                    raise _PreparationDeadline
+                                for splitter_box in splitter_boxes:
+                                    if cancelled is not None and cancelled():
+                                        raise _PreparationDeadline
+                                    if colliders.obb_overlap(
+                                        coater_box,
+                                        splitter_box,
+                                    ):
+                                        overlap = True
+                                        break
+                                if overlap:
+                                    break
+                            if not overlap:
                                 continue
                             if (
                                 finalize.projected_coater_splitter_failure(
                                     materialized_coater,
                                     (splitter_index, materialized_splitter),
                                     projection,
+                                    cancelled=cancelled,
                                 )
                                 is not None
                             ):
@@ -8579,6 +8727,8 @@ def _projected_coater_junction_ban(
                                 break
                         if rejected:
                             break
+    if cancelled is not None and cancelled():
+        raise _PreparationDeadline
     return frozenset(banned)
 
 
@@ -8586,8 +8736,12 @@ def _projection_envelope(
     occupied: tuple[int, int, int, int],
     limit: tuple[int, int, int, int],
     policy: BandPolicy,
+    *,
+    cancelled: Callable[[], bool] | None = None,
 ) -> tuple[planet.Projection, ...]:
     """Every finalizer projection reachable inside one fixed capacity box."""
+    if cancelled is not None and cancelled():
+        raise _PreparationDeadline
     occupied_min_x, occupied_min_y, occupied_max_x, occupied_max_y = occupied
     limit_min_x, limit_min_y, limit_max_x, limit_max_y = limit
     if not (
@@ -8617,9 +8771,17 @@ def _projection_envelope(
     projection_keys: dict[tuple[int, int, int], None] = {}
     expanded: set[tuple[int, int, int, bool]] = set()
     for min_x in range(limit_min_x, occupied_min_x + 1):
+        if cancelled is not None and cancelled():
+            raise _PreparationDeadline
         for min_y in range(limit_min_y, occupied_min_y + 1):
+            if cancelled is not None and cancelled():
+                raise _PreparationDeadline
             for max_x in range(occupied_max_x, limit_max_x + 1):
+                if cancelled is not None and cancelled():
+                    raise _PreparationDeadline
                 for max_y in range(occupied_max_y, limit_max_y + 1):
+                    if cancelled is not None and cancelled():
+                        raise _PreparationDeadline
                     width = max_x - min_x + 1
                     height = max_y - min_y + 1
                     extent = (width, height)
@@ -8632,6 +8794,8 @@ def _projection_envelope(
                         )
                         candidates_by_extent[extent] = candidates
                     for candidate in candidates:
+                        if cancelled is not None and cancelled():
+                            raise _PreparationDeadline
                         rotated = candidate.frame.rotated
                         origin = min_x if rotated else min_y
                         expansion = (width, height, origin, rotated)
@@ -8639,8 +8803,12 @@ def _projection_envelope(
                             continue
                         row_origin = origin - candidate.south_padding
                         for segments in candidate.frame.certified_bands:
+                            if cancelled is not None and cancelled():
+                                raise _PreparationDeadline
                             band = by_segments[segments]
                             for anchor in band.anchors(candidate.frame.height):
+                                if cancelled is not None and cancelled():
+                                    raise _PreparationDeadline
                                 projection_keys.setdefault(
                                     (
                                         segments,
@@ -8651,16 +8819,22 @@ def _projection_envelope(
                                 )
                     expanded.add((width, height, min_y, False))
                     expanded.add((width, height, min_x, True))
-    return tuple(
-        planet.Projection(
-            band=by_segments[segments],
-            anchor_row=anchor_row,
-            segment=colliders.PLANET_SEGMENT,
-            radius=colliders.PLANET_RADIUS,
-            quadrant=quadrant,
+    projections: list[planet.Projection] = []
+    for segments, anchor_row, quadrant in projection_keys:
+        if cancelled is not None and cancelled():
+            raise _PreparationDeadline
+        projections.append(
+            planet.Projection(
+                band=by_segments[segments],
+                anchor_row=anchor_row,
+                segment=colliders.PLANET_SEGMENT,
+                radius=colliders.PLANET_RADIUS,
+                quadrant=quadrant,
+            )
         )
-        for segments, anchor_row, quadrant in projection_keys
-    )
+    if cancelled is not None and cancelled():
+        raise _PreparationDeadline
+    return tuple(projections)
 
 
 def _power_projection_envelope(
@@ -8668,8 +8842,11 @@ def _power_projection_envelope(
     policy: BandPolicy,
     *,
     capacity: tuple[int, int, int, int] | None = None,
+    cancelled: Callable[[], bool] | None = None,
 ) -> tuple[planet.Projection, ...]:
     """Projection union down to geometry no cleanup eligibility can remove."""
+    if cancelled is not None and cancelled():
+        raise _PreparationDeadline
     occupied = _core_bounds(canvas)
     cleanup_inner = finalize._cleanup_survivor_bounds(
         Placement(buildings=tuple(canvas.buildings))
@@ -8678,6 +8855,7 @@ def _power_projection_envelope(
         cleanup_inner,
         capacity if capacity is not None else canvas.limit or occupied,
         policy,
+        cancelled=cancelled,
     )
 
 
@@ -8880,6 +9058,8 @@ def _power_plan(
     # keyed on their own flags, so a node on a wider tier keeps its own distance.
     power_nodes: list[tuple[int, PlacedBuilding, rules.PowerNode]] = []
     for index, b in enumerate(canvas.buildings):
+        if cancelled is not None and cancelled():
+            raise _PreparationDeadline
         try:
             peer = catalog.building(b.item_id).power_node
         except KeyError:
@@ -8890,13 +9070,19 @@ def _power_plan(
         cx = b.x + b.width // 2 - min_x + pad
         cy = b.y + b.height // 2 - min_y + pad
         for dx, dy, dz in rules.power_node_keepout_offsets(peer, tower.power_node):
+            if cancelled is not None and cancelled():
+                raise _PreparationDeadline
             if dz:
                 continue
             gx, gy = cx + dx, cy + dy
             if 0 <= gx < shape[0] and 0 <= gy < shape[1]:
                 free[gx, gy] = False
 
-    projections = _power_projection_envelope(canvas, policy)
+    projections = _power_projection_envelope(
+        canvas,
+        policy,
+        cancelled=cancelled,
+    )
     static_buildings = list(enumerate(canvas.buildings))
     static_frames_by_bounds: dict[
         tuple[int, int, int, int],
@@ -8905,7 +9091,11 @@ def _power_plan(
     for projection in projections:
         if cancelled is not None and cancelled():
             raise _PreparationDeadline
-        existing_failure = finalize.projected_power_failure(power_nodes, projection)
+        existing_failure = finalize.projected_power_failure(
+            power_nodes,
+            projection,
+            cancelled=cancelled,
+        )
         if existing_failure is not None:
             raise _Unpowerable(
                 "existing power nodes are illegal in a required projection",
@@ -9064,21 +9254,22 @@ def _power_plan(
             ),
             tower.power_node,
         )
-        candidate_failure = next(
-            (
-                candidate_failure
-                for projection in projections
-                for peer in power_nodes
-                if (
-                    candidate_failure := finalize.projected_power_failure(
-                        (peer, candidate),
-                        projection,
-                    )
+        candidate_failure: finalize.ProjectionFailure | None = None
+        for projection in projections:
+            if cancelled is not None and cancelled():
+                raise _PreparationDeadline
+            for peer in power_nodes:
+                if cancelled is not None and cancelled():
+                    raise _PreparationDeadline
+                candidate_failure = finalize.projected_power_failure(
+                    (peer, candidate),
+                    projection,
+                    cancelled=cancelled,
                 )
-                is not None
-            ),
-            None,
-        )
+                if candidate_failure is not None:
+                    break
+            if candidate_failure is not None:
+                break
         if candidate_failure is None:
             candidate_buildings = (
                 *(building for _, building in static_buildings),
@@ -9094,6 +9285,7 @@ def _power_plan(
                     candidate_bounds,
                     canvas.limit or candidate_bounds,
                     policy,
+                    cancelled=cancelled,
                 )
                 static_frames_by_bounds[candidate_bounds] = static_frames
             candidate_failure = _prospective_static_failure(
@@ -9993,6 +10185,7 @@ def _prepare_routing_problem(
             ),
             capacity,
             policy,
+            cancelled=cancelled,
         )
         if coater_list and junction_possible
         else ()
@@ -10003,10 +10196,13 @@ def _prepare_routing_problem(
             power_sites,
             projection_frames=junction_frames,
             junction_bounds=capacity,
+            cancelled=cancelled,
         )
         if junction_possible
         else frozenset()
     )
+    if cancelled is not None and cancelled():
+        raise _PreparationDeadline
 
     return _PreparedRoutingProblem(
         building_templates=tuple(deepcopy(canvas.buildings)),
@@ -10205,16 +10401,31 @@ def _build(
     staged_static_cache: _StagedStaticCache | None = None,
 ) -> _BuildResult:
     """Prepare one pack, then emit it through the reusable detailed entry point."""
-    prepared = _prepare_routing_problem(
-        spec,
-        strips,
-        pack,
-        power=power,
-        policy=policy,
-        _reserve_ports=route,
-        ramped=ramped,
-        staged_static_cache=staged_static_cache,
-    )
+    cancelled = None if deadline is None else lambda: _expired(deadline)
+    try:
+        prepared = _prepare_routing_problem(
+            spec,
+            strips,
+            pack,
+            power=power,
+            policy=policy,
+            _reserve_ports=route,
+            ramped=ramped,
+            staged_static_cache=staged_static_cache,
+            cancelled=cancelled,
+        )
+    except (_PreparationDeadline, finalize.ProjectionCancelled):
+        return _BuildResult(
+            None,
+            DetailedRouteResult(
+                DetailedRouteStatus.BUDGET,
+                (),
+                (),
+                0,
+                0,
+            ),
+            (),
+        )
     return _build_prepared(
         spec,
         strips,
@@ -10793,6 +11004,7 @@ def _place_coaters(
                     candidate_bounds,
                     static_capacity,
                     policy,
+                    cancelled=cancelled,
                 )
                 projected_failure = _prospective_static_failure(
                     (
@@ -10915,15 +11127,23 @@ def _place_coaters(
             canvas,
             policy,
             capacity=projected_capacity,
+            cancelled=cancelled,
         )
         for candidate in staged:
+            if cancelled is not None and cancelled():
+                raise _PreparationDeadline
             projected_failure: finalize.ProjectionFailure | None = None
             for projection in projections:
+                if cancelled is not None and cancelled():
+                    raise _PreparationDeadline
                 for splitter in splitters:
+                    if cancelled is not None and cancelled():
+                        raise _PreparationDeadline
                     projected_failure = finalize.projected_coater_splitter_failure(
                         candidate.projected_pair,
                         splitter,
                         projection,
+                        cancelled=cancelled,
                     )
                     if projected_failure is not None:
                         break
@@ -10937,6 +11157,8 @@ def _place_coaters(
                     "lateral keepout",
                     failure=projected_failure,
                 )
+        if cancelled is not None and cancelled():
+            raise _PreparationDeadline
 
         # This is the same fixed capacity `_prepare_routing_problem` establishes
         # after Coater placement. Keep it local until every staged pair passes so

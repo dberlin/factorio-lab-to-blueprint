@@ -1600,3 +1600,57 @@ def test_sequence_pair_uses_shared_planet_finalization(
 
     assert calls == [(raw, policy)]
     assert placement.frame == AreaFrame(43, 35, 160, (160, 200), False)
+
+
+def test_projected_power_failure_cancels_inside_pair_scan() -> None:
+    tower = catalog.building(catalog.TESLA_TOWER_ID)
+    placement = Placement(
+        buildings=tuple(
+            _building(catalog.TESLA_TOWER_ID, index * 10, 0)
+            for index in range(12)
+        )
+    )
+    nodes = finalize._power_nodes(placement)
+    band = planet.bands()[0]
+    projection = planet.Projection(
+        band,
+        next(iter(band.anchors(1))),
+        colliders.PLANET_SEGMENT,
+        colliders.PLANET_RADIUS,
+    )
+    checks = 0
+
+    def cancelled() -> bool:
+        nonlocal checks
+        checks += 1
+        return checks >= 5
+
+    assert tower.power_node.is_power_node
+    with pytest.raises(finalize.ProjectionCancelled):
+        finalize.projected_power_failure(
+            nodes,
+            projection,
+            cancelled=cancelled,
+        )
+
+    assert checks == 5
+
+
+def test_finalize_placement_cancels_inside_frame_certification() -> None:
+    placement = Placement(buildings=_extent(12, 12))
+    checks = 0
+
+    def cancelled() -> bool:
+        nonlocal checks
+        checks += 1
+        return checks >= 12
+
+    with pytest.raises(finalize.ProjectionCancelled):
+        finalize.finalize_placement(
+            placement,
+            BandPolicy("portable"),
+            cancelled=cancelled,
+        )
+
+    assert checks == 12
+    assert placement.frame is None

@@ -30,8 +30,7 @@ class ProjectionFailure:
     band: int
 
 
-class ProjectionCancelled(Exception):
-    """Exact projected validation stopped before producing a verdict."""
+ProjectionCancelled = planet.ProjectionCancelled
 
 type ProjectionGeometrySignature = tuple[object, ...]
 
@@ -415,9 +414,13 @@ def _collision_placed(building: PlacedBuilding) -> colliders.Placed:
 
 def _power_nodes(
     placement: Placement,
+    *,
+    cancelled: Callable[[], bool] | None = None,
 ) -> tuple[tuple[int, PlacedBuilding, rules.PowerNode], ...]:
     nodes: list[tuple[int, PlacedBuilding, rules.PowerNode]] = []
     for index, building in enumerate(placement.buildings):
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
         try:
             info = catalog.building(building.item_id)
         except KeyError:
@@ -449,10 +452,16 @@ def _building_centre(building: PlacedBuilding) -> tuple[float, float, float]:
     )
 
 
-def _planet_sorters(placement: Placement) -> tuple[tuple[int, planet.Sorter], ...]:
+def _planet_sorters(
+    placement: Placement,
+    *,
+    cancelled: Callable[[], bool] | None = None,
+) -> tuple[tuple[int, planet.Sorter], ...]:
     buildings = placement.buildings
     sorters: list[tuple[int, planet.Sorter]] = []
     for index, building in enumerate(buildings):
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
         if not catalog.is_sorter(building.item_id):
             continue
         if building.x2 is None or building.y2 is None:
@@ -519,8 +528,11 @@ def _projected_sorter_failure(
     projection: planet.Projection,
     *,
     counters: _ProjectionCounters | None = None,
+    cancelled: Callable[[], bool] | None = None,
 ) -> ProjectionFailure | None:
     for index, sorter in sorters:
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
         if counters is not None:
             counters.sorters += 1
         condition = planet.sorter_condition(sorter, projection)
@@ -553,13 +565,19 @@ def _power_pair_condition(
 def projected_power_failure(
     nodes: Sequence[tuple[int, PlacedBuilding, rules.PowerNode]],
     projection: planet.Projection,
+    *,
+    cancelled: Callable[[], bool] | None = None,
 ) -> ProjectionFailure | None:
     """Return the first authoritative power-pair refusal in one projection."""
-    poses = tuple(
-        projection.position(*_building_centre(building))
-        for _index, building, _node in nodes
-    )
+    poses_list: list[tuple[float, float, float]] = []
+    for _index, building, _node in nodes:
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
+        poses_list.append(projection.position(*_building_centre(building)))
+    poses = tuple(poses_list)
     for left, right in combinations(range(len(nodes)), 2):
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
         distance2 = math.dist(poses[left], poses[right]) ** 2
         condition = _power_pair_condition(nodes[left], nodes[right], distance2)
         if condition is not None:
@@ -600,6 +618,7 @@ def _projected_static_failure(
         tuple[colliders.Box, ...],
     ]
     | None = None,
+    cancelled: Callable[[], bool] | None = None,
 ) -> ProjectionFailure | None:
     placed = [building for _index, building in tested]
     if counters is not None:
@@ -609,6 +628,7 @@ def _projected_static_failure(
         projection,
         pairs,
         _box_cache=_box_cache,
+        cancelled=cancelled,
     )
     if not hits:
         return None
@@ -692,15 +712,27 @@ def first_projected_static_failure(
                 if projection.rotated
                 else pair_buildings
             )
-            pairs = tuple(
-                planet.candidate_pairs(
-                    broad_phase_buildings,
-                    projection.band,
-                    projection.segment,
-                    projection.radius,
-                    candidate_position=candidate_position,
+            if cancelled is None:
+                pairs = tuple(
+                    planet.candidate_pairs(
+                        broad_phase_buildings,
+                        projection.band,
+                        projection.segment,
+                        projection.radius,
+                        candidate_position=candidate_position,
+                    )
                 )
-            )
+            else:
+                pairs = tuple(
+                    planet.candidate_pairs(
+                        broad_phase_buildings,
+                        projection.band,
+                        projection.segment,
+                        projection.radius,
+                        candidate_position=candidate_position,
+                        cancelled=cancelled,
+                    )
+                )
             pairs_by_context[context] = pairs
         clean_context: tuple[object, ...] | None = None
         if _clean_contexts is not None:
@@ -746,11 +778,21 @@ def first_projected_static_failure(
                 continue
         if cancelled is not None and cancelled():
             raise ProjectionCancelled
-        failure = _projected_static_failure(
-            tested,
-            pairs,
-            projection,
-            _box_cache=_box_cache,
+        failure = (
+            _projected_static_failure(
+                tested,
+                pairs,
+                projection,
+                _box_cache=_box_cache,
+            )
+            if cancelled is None
+            else _projected_static_failure(
+                tested,
+                pairs,
+                projection,
+                _box_cache=_box_cache,
+                cancelled=cancelled,
+            )
         )
         if failure is not None:
             return failure
@@ -764,6 +806,7 @@ def projected_static_failure(
     projection: planet.Projection,
     *,
     candidate_index: int | None = None,
+    cancelled: Callable[[], bool] | None = None,
 ) -> ProjectionFailure | None:
     """Return the finalizer's exact static-collider verdict for one projection.
 
@@ -778,6 +821,7 @@ def projected_static_failure(
         buildings,
         (projection,),
         candidate_index=candidate_index,
+        cancelled=cancelled,
     )
 
 
@@ -787,16 +831,26 @@ def _projected_addon_failure(
         tuple[int, PlacedBuilding, tuple[catalog.AddonSupplyPose, ...]]
     ],
     projection: planet.Projection,
+    *,
+    cancelled: Callable[[], bool] | None = None,
 ) -> ProjectionFailure | None:
     if not belts or not addons:
         return None
-    belt_positions = tuple(
-        projection.position(belt.x, belt.y, float(belt.z))
-        for _belt_index, belt in belts
-    )
+    belt_positions_list: list[tuple[float, float, float]] = []
+    for _belt_index, belt in belts:
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
+        belt_positions_list.append(
+            projection.position(belt.x, belt.y, float(belt.z))
+        )
+    belt_positions = tuple(belt_positions_list)
     radius2 = rules.ADDON_AREA_RADIUS**2
     for addon_index, addon, areas in addons:
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
         for area in areas:
+            if cancelled is not None and cancelled():
+                raise ProjectionCancelled
             wanted = slots.addon_supply_position(
                 addon.item_id,
                 x=addon.x,
@@ -810,13 +864,19 @@ def _projected_addon_failure(
                 float(wanted[1]),
                 float(wanted[2]),
             )
-            if not any(
-                (target[0] - belt[0]) ** 2
-                + (target[1] - belt[1]) ** 2
-                + (target[2] - belt[2]) ** 2
-                < radius2
-                for belt in belt_positions
-            ):
+            supplied = False
+            for belt in belt_positions:
+                if cancelled is not None and cancelled():
+                    raise ProjectionCancelled
+                if (
+                    (target[0] - belt[0]) ** 2
+                    + (target[1] - belt[1]) ** 2
+                    + (target[2] - belt[2]) ** 2
+                    < radius2
+                ):
+                    supplied = True
+                    break
+            if not supplied:
                 return ProjectionFailure(
                     check="game.addon_supply",
                     buildings=(addon_index,),
@@ -863,6 +923,8 @@ def _projected_coater_keepout_overlaps(
     coater: colliders.Placed,
     splitter: colliders.Placed,
     projection: planet.Projection,
+    *,
+    cancelled: Callable[[], bool] | None = None,
 ) -> bool:
     """Whether one Splitter enters one Coater's exact projected keepout."""
     coater_boxes = projected_coater_keepout_boxes(coater, projection)
@@ -875,20 +937,30 @@ def _projected_coater_keepout_overlaps(
             splitter.yaw,
         ),
     )
-    return any(
-        colliders.obb_overlap(coater_box, splitter_box)
-        for coater_box in coater_boxes
-        for splitter_box in splitter_boxes
-    )
+    for coater_box in coater_boxes:
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
+        for splitter_box in splitter_boxes:
+            if cancelled is not None and cancelled():
+                raise ProjectionCancelled
+            if colliders.obb_overlap(coater_box, splitter_box):
+                return True
+    return False
 
 
 def projected_coater_splitter_failure(
     coater: tuple[int, colliders.Placed],
     splitter: tuple[int, colliders.Placed],
     projection: planet.Projection,
+    *,
+    cancelled: Callable[[], bool] | None = None,
 ) -> ProjectionFailure | None:
-    """Return exact structured evidence for one projected Coater/Splitter pair."""
-    if not _projected_coater_keepout_overlaps(coater[1], splitter[1], projection):
+    if not _projected_coater_keepout_overlaps(
+        coater[1],
+        splitter[1],
+        projection,
+        cancelled=cancelled,
+    ):
         return None
     return ProjectionFailure(
         check="game.addon_splitter_clearance",
@@ -905,21 +977,32 @@ def _projected_addon_splitter_failure(
     coaters: Sequence[tuple[int, colliders.Placed]],
     splitters: Sequence[tuple[int, colliders.Placed]],
     projection: planet.Projection,
+    *,
+    cancelled: Callable[[], bool] | None = None,
 ) -> ProjectionFailure | None:
     """Authoritative coater/splitter keepout from the broke2 in-game refusal."""
     for coater in coaters:
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
         for splitter in splitters:
+            if cancelled is not None and cancelled():
+                raise ProjectionCancelled
             failure = projected_coater_splitter_failure(
                 coater,
                 splitter,
                 projection,
+                cancelled=cancelled,
             )
             if failure is not None:
                 return failure
     return None
 
 
-def _projection_invariants(placement: Placement) -> _ProjectionInvariants:
+def _projection_invariants(
+    placement: Placement,
+    *,
+    cancelled: Callable[[], bool] | None = None,
+) -> _ProjectionInvariants:
     tested: list[tuple[int, colliders.Placed]] = []
     belts: list[tuple[int, PlacedBuilding]] = []
     addons: list[
@@ -928,6 +1011,8 @@ def _projection_invariants(placement: Placement) -> _ProjectionInvariants:
     coaters: list[tuple[int, colliders.Placed]] = []
     splitters: list[tuple[int, colliders.Placed]] = []
     for index, building in enumerate(placement.buildings):
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
         is_belt = catalog.is_belt(building.item_id)
         is_sorter = catalog.is_sorter(building.item_id)
         if is_belt:
@@ -945,10 +1030,16 @@ def _projection_invariants(placement: Placement) -> _ProjectionInvariants:
             continue
         if len(areas) >= 2:
             addons.append((index, building, areas))
+    if cancelled is None:
+        nodes = _power_nodes(placement)
+        sorters = _planet_sorters(placement)
+    else:
+        nodes = _power_nodes(placement, cancelled=cancelled)
+        sorters = _planet_sorters(placement, cancelled=cancelled)
     return _ProjectionInvariants(
         tested=tuple(tested),
-        nodes=_power_nodes(placement),
-        sorters=_planet_sorters(placement),
+        nodes=nodes,
+        sorters=sorters,
         belts=tuple(belts),
         addons=tuple(addons),
         coaters=tuple(coaters),
@@ -963,63 +1054,98 @@ def _failure_at_projection(
     counters: _ProjectionCounters,
     *,
     cache: _ProjectionCache | None = None,
+    cancelled: Callable[[], bool] | None = None,
 ) -> tuple[ProjectionFailure, ...]:
+    if cancelled is not None and cancelled():
+        raise ProjectionCancelled
     counters.projections += 1
     failures: list[ProjectionFailure] = []
-    if cache is None:
-        power_failure = projected_power_failure(invariants.nodes, projection)
+    use_cache = cache is not None and cancelled is None
+    if not use_cache:
+        power_failure = (
+            projected_power_failure(invariants.nodes, projection)
+            if cancelled is None
+            else projected_power_failure(
+                invariants.nodes,
+                projection,
+                cancelled=cancelled,
+            )
+        )
         counters.power_pairs += _power_pairs_examined(
             invariants.nodes,
             power_failure,
         )
     else:
+        assert cache is not None
         power_failure = cache.power_failure(invariants.nodes, projection)
+    if cancelled is not None and cancelled():
+        raise ProjectionCancelled
     pair_key = tuple(pairs)
-    sorter_failure = (
-        _projected_sorter_failure(
-            invariants.sorters,
-            projection,
-            counters=counters,
-        )
-        if cache is None
-        else cache.sorter_failure(invariants.sorters, projection)
-    )
-    static_failure = (
-        _projected_static_failure(
-            invariants.tested,
-            pair_key,
-            projection,
-            counters=counters,
-        )
-        if cache is None
-        else cache.static_failure(invariants.tested, pair_key, projection)
-    )
-    addon_failure = (
-        _projected_addon_failure(
+    if not use_cache:
+        if cancelled is None:
+            sorter_failure = _projected_sorter_failure(
+                invariants.sorters,
+                projection,
+                counters=counters,
+            )
+            static_failure = _projected_static_failure(
+                invariants.tested,
+                pair_key,
+                projection,
+                counters=counters,
+            )
+            addon_failure = _projected_addon_failure(
+                invariants.belts,
+                invariants.addons,
+                projection,
+            )
+            addon_splitter_failure = _projected_addon_splitter_failure(
+                invariants.coaters,
+                invariants.splitters,
+                projection,
+            )
+        else:
+            sorter_failure = _projected_sorter_failure(
+                invariants.sorters,
+                projection,
+                counters=counters,
+                cancelled=cancelled,
+            )
+            static_failure = _projected_static_failure(
+                invariants.tested,
+                pair_key,
+                projection,
+                counters=counters,
+                cancelled=cancelled,
+            )
+            addon_failure = _projected_addon_failure(
+                invariants.belts,
+                invariants.addons,
+                projection,
+                cancelled=cancelled,
+            )
+            addon_splitter_failure = _projected_addon_splitter_failure(
+                invariants.coaters,
+                invariants.splitters,
+                projection,
+                cancelled=cancelled,
+            )
+    else:
+        assert cache is not None
+        sorter_failure = cache.sorter_failure(invariants.sorters, projection)
+        static_failure = cache.static_failure(invariants.tested, pair_key, projection)
+        addon_failure = cache.addon_failure(
             invariants.belts,
             invariants.addons,
             projection,
         )
-        if cache is None
-        else cache.addon_failure(
-            invariants.belts,
-            invariants.addons,
-            projection,
-        )
-    )
-    addon_splitter_failure = (
-        _projected_addon_splitter_failure(
+        addon_splitter_failure = cache.addon_splitter_failure(
             invariants.coaters,
             invariants.splitters,
             projection,
         )
-        if cache is None
-        else cache.addon_splitter_failure(
-            invariants.coaters,
-            invariants.splitters,
-            projection,
-        )
-    )
+    if cancelled is not None and cancelled():
+        raise ProjectionCancelled
     for failure in (
         power_failure,
         sorter_failure,
@@ -1042,45 +1168,80 @@ def _certify_frame(
     pair_rotated: bool = False,
     stop_after_failure: bool = False,
     cache: _ProjectionCache | None = None,
+    cancelled: Callable[[], bool] | None = None,
 ) -> tuple[ProjectionFailure, ...]:
+    if cancelled is not None and cancelled():
+        raise ProjectionCancelled
+    active_cache = cache if cancelled is None else None
     building_key = placement.buildings
-    invariants = None if cache is None else cache.invariants.get(building_key)
+    invariants = (
+        None
+        if active_cache is None
+        else active_cache.invariants.get(building_key)
+    )
     if invariants is None:
-        invariants = _projection_invariants(placement)
-        if cache is not None:
-            cache.invariants[building_key] = invariants
+        invariants = (
+            _projection_invariants(placement)
+            if cancelled is None
+            else _projection_invariants(placement, cancelled=cancelled)
+        )
+        if active_cache is not None:
+            active_cache.invariants[building_key] = invariants
     else:
         counters.invariant_cache_hits += 1
-    pair_buildings = tuple(
-        replace(building, x=building.y, y=building.x)
-        if pair_rotated
-        else building
-        for _index, building in invariants.tested
-    )
+    pair_buildings_list: list[colliders.Placed] = []
+    for _index, building in invariants.tested:
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
+        pair_buildings_list.append(
+            replace(building, x=building.y, y=building.x)
+            if pair_rotated
+            else building
+        )
+    pair_buildings = tuple(pair_buildings_list)
     by_segments = {band.area_segments: band for band in planet.bands()}
     pairs_by_band: dict[int, tuple[tuple[int, int], ...]] = {}
     failures: list[ProjectionFailure] = []
     for segments in frame.certified_bands:
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
         band = by_segments[segments]
         pairs = pairs_by_band.get(segments)
         if pairs is None:
             pair_key = (building_key, segments, pair_rotated)
-            pairs = None if cache is None else cache.pairs.get(pair_key)
+            pairs = (
+                None
+                if active_cache is None
+                else active_cache.pairs.get(pair_key)
+            )
             if pairs is None:
-                pairs = tuple(
-                    planet.candidate_pairs(
-                        pair_buildings,
-                        band,
-                        colliders.PLANET_SEGMENT,
-                        colliders.PLANET_RADIUS,
+                if cancelled is None:
+                    pairs = tuple(
+                        planet.candidate_pairs(
+                            pair_buildings,
+                            band,
+                            colliders.PLANET_SEGMENT,
+                            colliders.PLANET_RADIUS,
+                        )
                     )
-                )
-                if cache is not None:
-                    cache.pairs[pair_key] = pairs
+                else:
+                    pairs = tuple(
+                        planet.candidate_pairs(
+                            pair_buildings,
+                            band,
+                            colliders.PLANET_SEGMENT,
+                            colliders.PLANET_RADIUS,
+                            cancelled=cancelled,
+                        )
+                    )
+                if active_cache is not None:
+                    active_cache.pairs[pair_key] = pairs
             else:
                 counters.pair_cache_hits += 1
             pairs_by_band[segments] = pairs
         for anchor in band.anchors(frame.height):
+            if cancelled is not None and cancelled():
+                raise ProjectionCancelled
             projection_key = (
                 segments,
                 frame.height,
@@ -1088,7 +1249,9 @@ def _certify_frame(
                 quadrant,
             )
             projection = (
-                None if cache is None else cache.projections.get(projection_key)
+                None
+                if active_cache is None
+                else active_cache.projections.get(projection_key)
             )
             if projection is None:
                 projection = planet.Projection(
@@ -1098,21 +1261,34 @@ def _certify_frame(
                     radius=colliders.PLANET_RADIUS,
                     quadrant=quadrant,
                 )
-                if cache is not None:
-                    cache.projections[projection_key] = projection
+                if active_cache is not None:
+                    active_cache.projections[projection_key] = projection
             else:
                 counters.projection_cache_hits += 1
-            projection_failures = _failure_at_projection(
-                invariants,
-                pairs,
-                projection,
-                counters,
-                cache=cache,
+            projection_failures = (
+                _failure_at_projection(
+                    invariants,
+                    pairs,
+                    projection,
+                    counters,
+                    cache=active_cache,
+                )
+                if cancelled is None
+                else _failure_at_projection(
+                    invariants,
+                    pairs,
+                    projection,
+                    counters,
+                    cache=active_cache,
+                    cancelled=cancelled,
+                )
             )
             if projection_failures:
                 failures.extend(projection_failures)
                 if stop_after_failure:
                     return projection_failures
+    if cancelled is not None and cancelled():
+        raise ProjectionCancelled
     return tuple(dict.fromkeys(failures))
 
 
@@ -1609,8 +1785,12 @@ def _extent_failure(
 def finalize_placement(
     placement: Placement,
     policy: BandPolicy,
+    *,
+    cancelled: Callable[[], bool] | None = None,
 ) -> Placement:
     """Certify one placement against its required latitude-band policy."""
+    if cancelled is not None and cancelled():
+        raise ProjectionCancelled
     if placement.frame is not None and _frame_satisfies_policy(placement, policy):
         return placement
 
@@ -1621,6 +1801,8 @@ def finalize_placement(
     cache = _ProjectionCache(counters)
     failures: list[ProjectionFailure] = []
     for candidate in candidates:
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
         counters.frame_candidates += 1
         framed = _materialize_frame(placement, candidate)
         candidate_failures = _certify_frame(
@@ -1628,10 +1810,13 @@ def finalize_placement(
             candidate.frame,
             counters,
             cache=cache,
+            cancelled=cancelled,
         )
         if candidate_failures:
             failures.extend(candidate_failures)
             continue
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
         return _with_projection_stats(framed, counters)
     raise ProjectionRefusal(failures)
 

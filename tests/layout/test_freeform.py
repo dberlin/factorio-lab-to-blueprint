@@ -10202,3 +10202,241 @@ def test_all_products_band_160_learns_every_projected_coater_clearance() -> None
     assert placement.frame.primary_band == 160
     assert validate.certify(placement, spec, expect_power=True).ok
 
+
+def test_power_projection_envelope_cancels_inside_rectangle_generation() -> None:
+    machine = catalog.building(2303)
+    canvas = _Canvas()
+    canvas.add(
+        PlacedBuilding(
+            2303,
+            machine.model_index,
+            0,
+            0,
+            width=machine.width,
+            height=machine.height,
+        ),
+        solid=True,
+    )
+    canvas.limit = (-3, -3, 6, 6)
+    checks = 0
+
+    def cancelled() -> bool:
+        nonlocal checks
+        checks += 1
+        return checks >= 8
+
+    with pytest.raises(freeform._PreparationDeadline):
+        freeform._power_projection_envelope(
+            canvas,
+            BandPolicy("portable"),
+            cancelled=cancelled,
+        )
+
+    assert checks == 8
+
+
+def test_cancelled_junction_frame_cache_miss_never_installs_partial_frames() -> None:
+    cache = freeform._StagedStaticCache()
+    checks = 0
+
+    def cancelled() -> bool:
+        nonlocal checks
+        checks += 1
+        return checks >= 10
+
+    with pytest.raises(freeform._PreparationDeadline):
+        freeform._cached_junction_projection_frames(
+            cache,
+            (0, 0, 1, 1),
+            (-3, -3, 4, 4),
+            BandPolicy("portable"),
+            cancelled=cancelled,
+        )
+
+    assert checks == 10
+    assert cache.frames == {}
+
+
+def test_prepared_junction_ban_cancels_inside_cell_level_scan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    machine = catalog.building(2303)
+    obstacle = PlacedBuilding(
+        2303,
+        machine.model_index,
+        0,
+        0,
+        width=machine.width,
+        height=machine.height,
+    )
+    sites = 0
+
+    def site_is_clear(
+        _buildings: Sequence[PlacedBuilding],
+        _x: int,
+        _y: int,
+        _level: int,
+    ) -> bool:
+        nonlocal sites
+        sites += 1
+        return True
+
+    monkeypatch.setattr(freeform, "_junction_site_is_clear", site_is_clear)
+
+    with pytest.raises(freeform._PreparationDeadline):
+        freeform._prepared_junction_ban(
+            (obstacle,),
+            (),
+            cancelled=lambda: sites >= 1,
+        )
+
+    assert sites == 1
+
+
+def test_projected_coater_junction_ban_cancels_inside_obb_product(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    coater_info = catalog.building(catalog.SPRAY_COATER_ID)
+    coater = PlacedBuilding(
+        catalog.SPRAY_COATER_ID,
+        coater_info.model_index,
+        0,
+        0,
+        width=coater_info.width,
+        height=coater_info.height,
+    )
+    placement = Placement(buildings=(coater,))
+    candidate = finalize.frame_candidates(placement, BandPolicy("portable"))[0]
+    band = next(
+        band
+        for band in planet.bands()
+        if band.area_segments == candidate.frame.certified_bands[0]
+    )
+    projection = planet.Projection(
+        band,
+        next(iter(band.anchors(candidate.frame.height))),
+        colliders.PLANET_SEGMENT,
+        colliders.PLANET_RADIUS,
+    )
+    frame = freeform._JunctionProjectionFrame(
+        placement.bounds,
+        candidate,
+        (projection,),
+    )
+    overlaps = 0
+    boxes = (object(), object())
+
+    def overlap_once(_left: object, _right: object) -> bool:
+        nonlocal overlaps
+        overlaps += 1
+        return False
+
+    monkeypatch.setattr(finalize, "projected_coater_keepout_boxes", lambda *_args: boxes)
+    monkeypatch.setattr(colliders, "target_boxes", lambda *_args: boxes)
+    monkeypatch.setattr(colliders, "obb_overlap", overlap_once)
+
+    with pytest.raises(freeform._PreparationDeadline):
+        freeform._projected_coater_junction_ban(
+            ((0, coater),),
+            (frame,),
+            placement.bounds,
+            already_banned=set(),
+            splitter_index=1,
+            cancelled=lambda: overlaps >= 1,
+        )
+
+    assert overlaps == 1
+
+
+def test_power_plan_cancels_inside_proposal_projection_node_scan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tower = catalog.building(catalog.TESLA_TOWER_ID)
+    canvas = _Canvas()
+    canvas.add(
+        PlacedBuilding(
+            catalog.TESLA_TOWER_ID,
+            tower.model_index,
+            0,
+            0,
+            width=tower.width,
+            height=tower.height,
+        ),
+        solid=True,
+    )
+    canvas.limit = (-5, -5, 8, 8)
+    band = planet.bands()[0]
+    projections = (
+        planet.Projection(
+            band,
+            anchor,
+            colliders.PLANET_SEGMENT,
+            colliders.PLANET_RADIUS,
+        )
+        for anchor in tuple(band.anchors(1))[:2]
+    )
+    proposal_pairs = 0
+
+    def power_failure(
+        nodes: Sequence[tuple[int, PlacedBuilding, rules.PowerNode]],
+        _projection: planet.Projection,
+        *,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> finalize.ProjectionFailure | None:
+        nonlocal proposal_pairs
+        assert cancelled is not None
+        if len(nodes) == 2:
+            proposal_pairs += 1
+        return None
+
+    monkeypatch.setattr(
+        freeform,
+        "_power_projection_envelope",
+        lambda *_args, **_kwargs: tuple(projections),
+    )
+    monkeypatch.setattr(finalize, "projected_power_failure", power_failure)
+    cache = freeform._StagedStaticCache()
+
+    with pytest.raises(freeform._PreparationDeadline):
+        _power_plan(
+            canvas,
+            (-2, -2, 4, 4),
+            policy=BandPolicy("portable"),
+            staged_static_cache=cache,
+            cancelled=lambda: proposal_pairs >= 1,
+        )
+
+    assert proposal_pairs == 1
+    assert cache.frames == {}
+
+
+def test_regular_build_maps_cancelled_preparation_to_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = two_stage_spec()
+    strips = plan_strips(spec, strip_len=6)
+    pack = _greedy_pack(strips, max(_box(strip)[1] for strip in strips))
+
+    def cancel_preparation(
+        *_args: object,
+        cancelled: Callable[[], bool] | None = None,
+        **_kwargs: object,
+    ) -> freeform._PreparedRoutingProblem:
+        assert cancelled is not None
+        assert cancelled()
+        raise freeform._PreparationDeadline
+
+    monkeypatch.setattr(freeform, "_prepare_routing_problem", cancel_preparation)
+
+    result = _build(
+        spec,
+        strips,
+        pack,
+        power=False,
+        route=True,
+        policy=BandPolicy("portable"),
+        deadline=time.monotonic() - 1.0,
+    )
+
+    assert result.placement is None
+    assert result.routing.status is DetailedRouteStatus.BUDGET

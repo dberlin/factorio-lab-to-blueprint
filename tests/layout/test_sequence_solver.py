@@ -2274,7 +2274,7 @@ def test_production_seed_has_its_own_wall_and_deterministic_caps(
     assert 0.0 < compact_deadline - called_at <= 2.0 / 3.0
 
 
-def test_validator_started_before_deadline_may_finish_exact_certification(
+def test_validator_crossing_deadline_returns_incomplete_budget(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class Report:
@@ -2304,9 +2304,10 @@ def test_validator_started_before_deadline_may_finish_exact_certification(
     candidate = _placement(area=1, belt_tiles=1)
     verdict = run.solver.adapters.validate(candidate)
 
-    assert verdict.ok
+    assert not verdict.ok
+    assert verdict.status is DetailedRouteStatus.BUDGET
     assert verdict.failed_checks == ()
-    assert verdict.placement is not None
+    assert verdict.placement is None
 
 
 def test_deadline_without_an_exact_incumbent_raises() -> None:
@@ -4728,3 +4729,75 @@ def test_sequence_extent_gate_uses_realized_core_not_nominal_outline(
     assert candidate.prepared is not None
     assert candidate.preparation_error is None
     assert candidate.projection_failures == ()
+
+
+def test_validation_budget_status_cannot_install_exact_incumbent() -> None:
+    exact = _placement(area=20, belt_tiles=4)
+    fake = _FakeRouting(
+        detailed_results=(
+            DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), exact),
+        )
+    )
+    solver = _solver(
+        fake,
+        heights=(40,),
+        config=SequenceSolverConfig.test(),
+    )
+    solver.adapters = replace(
+        solver.adapters,
+        validate=lambda _placement: ValidationVerdict(
+            ok=False,
+            failed_checks=(),
+            placement=None,
+            status=DetailedRouteStatus.BUDGET,
+        ),
+    )
+
+    with pytest.raises(NoValidLayout, match="cancelled"):
+        solver.search(max_stages=1)
+
+    assert solver._incumbent is None
+    assert solver._stage_stats
+    assert solver._stage_stats[-1].detailed_status is DetailedRouteStatus.BUDGET
+
+
+def test_production_certify_maps_projection_cancellation_to_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    run = _production_run(
+        two_stage_spec(),
+        band_policy=BandPolicy("portable"),
+        time_budget_s=2.0,
+        power=False,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+    )
+    observed_cancelled: list[Callable[[], bool]] = []
+    monkeypatch.setattr(
+        validate,
+        "certify",
+        lambda *_args, **_kwargs: SimpleNamespace(errors=()),
+    )
+
+    def cancel_finalization(
+        _placement: Placement,
+        _policy: BandPolicy,
+        *,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> Never:
+        assert cancelled is not None
+        observed_cancelled.append(cancelled)
+        raise finalize.ProjectionCancelled
+
+    monkeypatch.setattr(finalize, "finalize_placement", cancel_finalization)
+
+    verdict = run.solver.adapters.validate(_placement(area=20, belt_tiles=4))
+
+    assert observed_cancelled
+    assert not verdict.ok
+    assert verdict.status is DetailedRouteStatus.BUDGET
+    assert verdict.placement is None
+    assert verdict.failed_checks == ()
+    assert verdict.projection_failures == ()

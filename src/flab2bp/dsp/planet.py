@@ -55,7 +55,7 @@ from __future__ import annotations
 
 import math
 import struct
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from functools import cache, lru_cache
 
@@ -63,6 +63,10 @@ from flab2bp.dsp import colliders, rules
 
 Vec3 = tuple[float, float, float]
 Quat = tuple[float, float, float, float]
+
+
+class ProjectionCancelled(Exception):
+    """Projected geometry stopped before producing a complete verdict."""
 
 
 def _f32(x: float) -> float:
@@ -930,6 +934,7 @@ def candidate_pairs(
     radius: float,
     *,
     candidate_position: int | None = None,
+    cancelled: Callable[[], bool] | None = None,
 ) -> list[tuple[int, int]]:
     """Pairs that could possibly collide SOMEWHERE in this band.
 
@@ -947,6 +952,8 @@ def candidate_pairs(
     not a tolerance on the verdict -- make it 0.5 and the answers do not change,
     only the running time.
     """
+    if cancelled is not None and cancelled():
+        raise ProjectionCancelled
     if not buildings:
         return []
     step = longitude_rad_per_grid(band.area_segments)
@@ -959,7 +966,11 @@ def candidate_pairs(
     # case even in the 4-segment band and far less anywhere a collision lives.
     col = radius * poleward * step * 0.9
     row = radius * lat_step * 0.9
-    radii = [collider_radius(b.model_index) for b in buildings]
+    radii: list[float] = []
+    for building in buildings:
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
+        radii.append(collider_radius(building.model_index))
     if candidate_position is not None:
         if type(candidate_position) is not int or not (
             0 <= candidate_position < len(buildings)
@@ -969,6 +980,8 @@ def candidate_pairs(
         candidate_radius = radii[candidate_position]
         focused: list[tuple[int, int]] = []
         for peer_position, peer in enumerate(buildings):
+            if cancelled is not None and cancelled():
+                raise ProjectionCancelled
             if peer_position == candidate_position:
                 continue
             gap = math.sqrt(
@@ -990,12 +1003,20 @@ def candidate_pairs(
     span = max(1.0, reach / max(col, 1e-9))
     grid: dict[int, list[int]] = {}
     for i, b in enumerate(buildings):
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
         grid.setdefault(int(math.floor(b.x / span)), []).append(i)
     out: set[tuple[int, int]] = set()
     for key, members in grid.items():
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
         others = members + [j for k in (key + 1,) for j in grid.get(k, ())]
         for a_pos, i in enumerate(members):
+            if cancelled is not None and cancelled():
+                raise ProjectionCancelled
             for j in others[a_pos + 1 :]:
+                if cancelled is not None and cancelled():
+                    raise ProjectionCancelled
                 if i == j:
                     continue
                 bi, bj = buildings[i], buildings[j]
@@ -1019,6 +1040,7 @@ def collisions_at(
         tuple[colliders.Box, ...],
     ]
     | None = None,
+    cancelled: Callable[[], bool] | None = None,
 ) -> list[tuple[int, int]]:
     """``EBuildCondition.Collide`` pairs among machines projected into a band.
 
@@ -1051,13 +1073,33 @@ def collisions_at(
     the sum of its two collider radii.  Passing ``None`` tests everything, at the
     cost of projecting every building whether or not it has a neighbour.
     """
+    if cancelled is not None and cancelled():
+        raise ProjectionCancelled
     if pairs is None:
-        pairs = [(i, j) for i in range(len(buildings)) for j in range(i + 1, len(buildings))]
+        all_pairs: list[tuple[int, int]] = []
+        for left in range(len(buildings)):
+            if cancelled is not None and cancelled():
+                raise ProjectionCancelled
+            for right in range(left + 1, len(buildings)):
+                if cancelled is not None and cancelled():
+                    raise ProjectionCancelled
+                all_pairs.append((left, right))
+        pairs = all_pairs
     if not pairs:
         return []
-    wanted = {i for pair in pairs for i in pair}
+    wanted: set[int] = set()
+    for pair in pairs:
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
+        wanted.update(pair)
     boxes: dict[int, tuple[colliders.Box, ...]] = {}
+    pending_boxes: dict[
+        tuple[colliders.Placed, Projection],
+        tuple[colliders.Box, ...],
+    ] = {}
     for i in wanted:
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
         cache_key = (buildings[i], projection)
         built = None if _box_cache is None else _box_cache.get(cache_key)
         if built is None:
@@ -1067,18 +1109,33 @@ def collisions_at(
                     *projection.pose(*_placed_at(buildings[i])),
                 )
             )
+            if cancelled is not None and cancelled():
+                raise ProjectionCancelled
             if _box_cache is not None:
-                _box_cache[cache_key] = built
+                pending_boxes[cache_key] = built
         boxes[i] = built
-    hits = [
-        pair
-        for pair in pairs
-        if any(
-            colliders.obb_overlap(query, target)
-            for query in boxes[pair[0]]
-            for target in boxes[pair[1]]
-        )
-    ]
+    hits: list[tuple[int, int]] = []
+    for pair in pairs:
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
+        collided = False
+        for query in boxes[pair[0]]:
+            if cancelled is not None and cancelled():
+                raise ProjectionCancelled
+            for target in boxes[pair[1]]:
+                if cancelled is not None and cancelled():
+                    raise ProjectionCancelled
+                if colliders.obb_overlap(query, target):
+                    collided = True
+                    break
+            if collided:
+                break
+        if collided:
+            hits.append(pair)
+    if cancelled is not None and cancelled():
+        raise ProjectionCancelled
+    if _box_cache is not None:
+        _box_cache.update(pending_boxes)
     return sorted(hits)
 
 
