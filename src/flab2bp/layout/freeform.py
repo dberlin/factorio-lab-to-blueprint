@@ -5454,7 +5454,12 @@ def _route_all(
         # A grid whose belts are passable but dear.  `base` is the occupancy
         # before any path settled, so restoring it opens exactly the cells this
         # pass has taken -- machines, keep-outs and the routing box stay shut.
-        open_grid = replace(grid, occ=bytearray(grid.base), hist=None)
+        open_grid = replace(
+            grid,
+            occ=bytearray(grid.base),
+            routing_flags=bytearray(grid.size),
+            hist=None,
+        )
         for guarded in guard_claims:
             if _inside_grid(guarded):
                 open_grid.block(guarded)

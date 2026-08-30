@@ -5413,12 +5413,16 @@ class TestDetailedRoutingDiagnostics:
         wall = (0, -1, 0)
         original_astar = _astar
         calls = 0
+        search_grids: list[_Grid] = []
 
         def capped_repair_astar(
             *args: object, **kwargs: object
         ) -> _PathSearchResult:
             nonlocal calls
             calls += 1
+            search_grid = args[9]
+            assert isinstance(search_grid, _Grid)
+            search_grids.append(search_grid)
             if calls == 1:
                 return _PathSearchResult((wall,), None, (), 1)
             if calls == 2:
@@ -5450,6 +5454,9 @@ class TestDetailedRoutingDiagnostics:
 
         failure = next(f for f in result.failures if f.net_id == failed_id)
         assert calls == 3
+        assert search_grids[0] is search_grids[1]
+        assert search_grids[2] is not search_grids[0]
+        assert search_grids[2].routing_flags is not search_grids[0].routing_flags
         assert shared_budget["left"] > 0
         assert result.status is DetailedRouteStatus.BUDGET
         assert failure.kind is RouteFailureKind.BUDGET
