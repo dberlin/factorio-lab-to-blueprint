@@ -3011,32 +3011,7 @@ def _production_run(
         )
         seeds = {height: _greedy_pack(strips, height) for height in _candidate_heights(strips)}
         coarse_heights = tuple(sorted(seeds, key=lambda height: (seeds[height].width, height)))
-        topology_beam_height = _topology_beam_height(
-            seeds,
-            coarse_heights,
-            machine_count=spec.machine_count,
-            strip_count=len(strips),
-            sprayed_lanes=len(spec.spray_lanes),
-            power=power,
-        )
-        use_topology_beam = _uses_topology_beam(
-            strip_count=len(strips),
-            height=topology_beam_height,
-            machine_count=spec.machine_count,
-            sprayed_lanes=len(spec.spray_lanes),
-            power=power,
-        )
-        use_shared_pack = _uses_shared_pack_candidate(
-            machine_count=spec.machine_count,
-            power=power,
-            sprayed_lanes=len(spec.spray_lanes),
-            strip_count=len(strips),
-            direct_candidates=len(direct_candidates),
-            strip_len=strip_len,
-        )
-        if (use_topology_beam or use_shared_pack) and topology_beam_height is not None:
-            median_height = sorted(coarse_heights)[len(coarse_heights) // 2]
-            topology_beam_width_bound = max(8, 2 * seeds[median_height].width)
+        coarse_height_count = len(coarse_heights)
         neighbor_heights: list[int] = []
         for height in coarse_heights:
             neighbor = height + 2
@@ -3063,6 +3038,34 @@ def _production_run(
                 boundary_height,
                 _greedy_pack(strips, boundary_height),
             )
+        coarse_heights = heights[:coarse_height_count]
+        protected_followup_heights = heights[coarse_height_count:]
+        topology_beam_height = _topology_beam_height(
+            seeds,
+            coarse_heights,
+            machine_count=spec.machine_count,
+            strip_count=len(strips),
+            sprayed_lanes=len(spec.spray_lanes),
+            power=power,
+        )
+        use_topology_beam = _uses_topology_beam(
+            strip_count=len(strips),
+            height=topology_beam_height,
+            machine_count=spec.machine_count,
+            sprayed_lanes=len(spec.spray_lanes),
+            power=power,
+        )
+        use_shared_pack = _uses_shared_pack_candidate(
+            machine_count=spec.machine_count,
+            power=power,
+            sprayed_lanes=len(spec.spray_lanes),
+            strip_count=len(strips),
+            direct_candidates=len(direct_candidates),
+            strip_len=strip_len,
+        )
+        if (use_topology_beam or use_shared_pack) and topology_beam_height is not None:
+            median_height = sorted(coarse_heights)[len(coarse_heights) // 2]
+            topology_beam_width_bound = max(8, 2 * seeds[median_height].width)
         problems = {
             height: PlacementProblem(
                 sizes=sizes,

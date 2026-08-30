@@ -8369,15 +8369,6 @@ def _prepare_routing_problem(
     _reserve_ports: bool = True,
 ) -> _PreparedRoutingProblem:
     """Build immutable exact geometry shared by both routing engines."""
-    envelope = finalize.band_policy_search_envelope(
-        policy,
-        perimeter=_ENTRY_RING,
-    )
-    if not envelope.frame_candidates(pack.width, pack.height):
-        raise finalize.ProjectionRefusal(
-            (envelope.extent_failure(pack.width, pack.height),)
-        )
-
     belt_id = catalog.get_item_id(spec.belt_item_id) or 2001
     belt_model = catalog.building(belt_id).model_index
     canvas = _Canvas(ramped=ramped)
@@ -8660,6 +8651,16 @@ def _prepare_routing_problem(
     # empty by construction, which is what makes an entry belt reachable from
     # outside no matter what else the router does.
     core = _core_bounds(canvas)
+    core_width = core[2] - core[0] + 1
+    core_height = core[3] - core[1] + 1
+    envelope = finalize.band_policy_search_envelope(
+        policy,
+        perimeter=_ENTRY_RING,
+    )
+    if not envelope.frame_candidates(core_width, core_height):
+        raise finalize.ProjectionRefusal(
+            (envelope.extent_failure(core_width, core_height),)
+        )
     capacity = _grow(core, _ENTRY_RING)
     canvas.limit = capacity
     route_bounds = _grow(core, _ROUTE_RING)

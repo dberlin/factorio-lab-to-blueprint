@@ -4071,6 +4071,118 @@ def test_sequence_band_120_dropped_height_has_actual_clean_layout_control(
     ).frame is not None
 
 
+def test_sequence_band_policy_height_remaps_protected_followup_slot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "_candidate_heights",
+        lambda _strips: [18],
+    )
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "_minimum_pack_width",
+        lambda _strips, _height: 20,
+    )
+
+    run = _production_run(
+        two_stage_spec(),
+        band_policy=BandPolicy("120"),
+        time_budget_s=2.0,
+        power=False,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+    )
+
+    assert run.heights == (18, 19)
+    assert run.solver._protected_followup_heights == (19,)
+
+
+def test_sequence_band_policy_height_derives_topology_role_after_substitution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    selected: list[int | None] = []
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "_topology_beam_height",
+        lambda _seeds, coarse, **_kwargs: coarse[0],
+    )
+
+    def capture_topology_role(
+        *,
+        strip_count: int,
+        height: int | None,
+        machine_count: int,
+        sprayed_lanes: int,
+        power: bool,
+    ) -> bool:
+        del strip_count, machine_count, sprayed_lanes, power
+        selected.append(height)
+        return False
+
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "_uses_topology_beam",
+        capture_topology_role,
+    )
+
+    run = _production_run(
+        band_120_control_spec(),
+        band_policy=BandPolicy("120"),
+        time_budget_s=2.0,
+        power=False,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+    )
+
+    assert selected == [19]
+    assert selected[0] in run.heights
+
+
+def test_sequence_band_policy_height_derives_shared_pack_role_after_substitution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    selected: list[int] = []
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "_uses_shared_pack_candidate",
+        lambda **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "_shared_pack_height_rank",
+        lambda **_kwargs: 0,
+    )
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "_needs_topology_beam",
+        lambda **_kwargs: False,
+    )
+
+    def capture_shared_pack(
+        _strips: list[freeform_module.Strip],
+        *,
+        height: int,
+        **_kwargs: object,
+    ) -> None:
+        selected.append(height)
+        return None
+
+    monkeypatch.setattr(sequence_solver_module, "_pack", capture_shared_pack)
+
+    run = _production_run(
+        band_120_control_spec(),
+        band_policy=BandPolicy("120"),
+        time_budget_s=2.0,
+        power=False,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+    )
+
+    assert selected == [19]
+    assert selected[0] in run.heights
+
+
 def test_sequence_portable_schedule_is_unchanged() -> None:
     strips = plan_strips(two_stage_spec(), strip_len=6)
     seeds = {
@@ -4112,6 +4224,11 @@ def test_sequence_extent_gate_stops_before_preparation_and_detailed_routing(
         lambda *_args, **_kwargs: pytest.fail("infeasible extent reached power planning"),
     )
     monkeypatch.setattr(
+        freeform_module,
+        "_core_bounds",
+        lambda _canvas: (0, 0, core_width - 1, core_height - 1),
+    )
+    monkeypatch.setattr(
         sequence_solver_module,
         "_route_detailed_candidate",
         lambda *_args, **_kwargs: pytest.fail("infeasible extent reached detailed routing"),
@@ -4143,3 +4260,35 @@ def test_sequence_extent_gate_stops_before_preparation_and_detailed_routing(
     assert detailed.placement is None
 
     assert detailed.projection_failures == candidate.projection_failures
+
+
+def test_sequence_extent_gate_uses_realized_core_not_nominal_outline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "_candidate_heights",
+        lambda _strips: [19, 595],
+    )
+    run = _production_run(
+        two_stage_spec(),
+        band_policy=BandPolicy("120"),
+        time_budget_s=2.0,
+        power=False,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+    )
+    state = next(height for height in run.solver._heights if height.height == 595)
+    decoded = replace(
+        decode_state(
+            state.problem,
+            AnnealState.initial(state.problem.size, 7),
+        ),
+        width=19,
+    )
+
+    candidate = run.solver.adapters.prepare(state.height, decoded)
+
+    assert candidate.prepared is not None
+    assert candidate.preparation_error is None
+    assert candidate.projection_failures == ()

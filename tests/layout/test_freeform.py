@@ -8411,6 +8411,11 @@ def test_freeform_extent_gate_stops_before_power_planning_in_both_orientations(
         "_power_plan",
         lambda *_args, **_kwargs: pytest.fail("infeasible extent reached power planning"),
     )
+    monkeypatch.setattr(
+        freeform,
+        "_core_bounds",
+        lambda _canvas: (0, 0, core_width - 1, core_height - 1),
+    )
 
     with pytest.raises(finalize.ProjectionRefusal) as caught:
         _prepare_routing_problem(
@@ -8422,4 +8427,29 @@ def test_freeform_extent_gate_stops_before_power_planning_in_both_orientations(
         )
 
     assert caught.value.checks == ("game.blueprint_area",)
+
+
+def test_freeform_extent_gate_uses_realized_core_not_nominal_pack_ceiling() -> None:
+    spec = two_stage_spec()
+    strips = plan_strips(spec, strip_len=6)
+    nominally_oversized = replace(
+        _greedy_pack(strips, 595),
+        width=19,
+        height=595,
+    )
+
+    prepared = _prepare_routing_problem(
+        spec,
+        strips,
+        nominally_oversized,
+        policy=BandPolicy("120"),
+        power=False,
+    )
+
+    core_width = prepared.core[2] - prepared.core[0] + 1
+    core_height = prepared.core[3] - prepared.core[1] + 1
+    assert finalize.band_policy_search_envelope(
+        BandPolicy("120"),
+        perimeter=_ENTRY_RING,
+    ).frame_candidates(core_width, core_height)
 
