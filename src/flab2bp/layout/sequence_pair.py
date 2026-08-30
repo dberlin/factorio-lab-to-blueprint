@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 import random
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import TYPE_CHECKING
 
@@ -527,6 +527,118 @@ class StageBoundaryUpdate:
         if self.problem.size != len(self.state.pair.positive):
             raise ValueError("stage-boundary problem and state cardinality disagree")
         self.problem._validate_variant_indices(self.state.variant_indices)
+
+
+def enable_variant_stage_boundary(
+    problem: PlacementProblem,
+    state: AnnealState,
+    *,
+    strip: int,
+    variant: StripVariant,
+    select_variant: bool,
+) -> StageBoundaryUpdate:
+    """Enable one padded pose variant without mutating sibling restart selections."""
+    from flab2bp.layout.strip_variants import strip_pose_id
+
+    problem._validate_variant_indices(state.variant_indices)
+    if not problem.variant_tables:
+        raise ValueError("stage-boundary variant update requires a variant-aware problem")
+    if type(strip) is not int or not 0 <= strip < problem.size:
+        raise ValueError("variant target must identify a placement strip")
+    if type(select_variant) is not bool:
+        raise ValueError("variant selection flag must be a bool")
+
+    instance_id = problem.instance_ids[strip]
+    table = problem.variant_tables[strip]
+    pose_id = strip_pose_id(variant)
+    if (
+        variant.variant_id.family_id != instance_id.family_id
+        or len(variant.machine_origins_x) != instance_id.machine_count
+    ):
+        raise ValueError("enabled variant must realize the exact owning instance")
+    matching_indices = tuple(
+        index for index, candidate in enumerate(table) if strip_pose_id(candidate) == pose_id
+    )
+    if not matching_indices:
+        raise ValueError("enabled variant pose is outside the target variant table")
+
+    minimum_pitch = min(table[index].pitch_x for index in matching_indices)
+    maximum_pitch = max(table[index].pitch_x for index in matching_indices)
+    if variant.pitch_x <= minimum_pitch:
+        raise ValueError("enabled variant must increase the ordinary pose pitch")
+    exact_index = next(
+        (
+            index
+            for index in matching_indices
+            if table[index].variant_id == variant.variant_id
+        ),
+        None,
+    )
+    selected_index = state.variant_indices[strip]
+    if exact_index is not None:
+        if not select_variant or selected_index == exact_index:
+            return StageBoundaryUpdate(problem=problem, state=state)
+        return StageBoundaryUpdate(
+            problem=problem,
+            state=replace(
+                state,
+                variant_indices=state.variant_indices[:strip]
+                + (exact_index,)
+                + state.variant_indices[strip + 1 :],
+            ),
+        )
+    if variant.pitch_x <= maximum_pitch:
+        raise ValueError("enabled variant cannot contract a previously padded pose")
+
+    superseded = frozenset(
+        index for index in matching_indices if table[index].pitch_x > minimum_pitch
+    )
+    rebuilt_table = tuple(
+        candidate for index, candidate in enumerate(table) if index not in superseded
+    ) + (variant,)
+    rebuilt_tables = (
+        problem.variant_tables[:strip]
+        + (rebuilt_table,)
+        + problem.variant_tables[strip + 1 :]
+    )
+    width_padding = problem.sizes[strip][0] - table[0].box_width
+    height_padding = problem.sizes[strip][1] - table[0].box_height
+    rebuilt_sizes = (
+        problem.sizes[:strip]
+        + (
+            (
+                rebuilt_table[0].box_width + width_padding,
+                rebuilt_table[0].box_height + height_padding,
+            ),
+        )
+        + problem.sizes[strip + 1 :]
+    )
+    rebuilt_problem = PlacementProblem(
+        sizes=rebuilt_sizes,
+        nets=problem.nets,
+        outline_height=problem.outline_height,
+        area_lower_bound=problem.area_lower_bound,
+        instance_ids=problem.instance_ids,
+        logical_net_ids=problem.logical_net_ids,
+        variant_tables=rebuilt_tables,
+    )
+    replacement_index = len(rebuilt_table) - 1
+    if select_variant or selected_index in superseded:
+        rebuilt_selected_index = replacement_index
+    else:
+        selected_id = table[selected_index].variant_id
+        rebuilt_selected_index = next(
+            index
+            for index, candidate in enumerate(rebuilt_table)
+            if candidate.variant_id == selected_id
+        )
+    rebuilt_state = replace(
+        state,
+        variant_indices=state.variant_indices[:strip]
+        + (rebuilt_selected_index,)
+        + state.variant_indices[strip + 1 :],
+    )
+    return StageBoundaryUpdate(problem=rebuilt_problem, state=rebuilt_state)
 
 
 @dataclass(frozen=True, order=True, slots=True)

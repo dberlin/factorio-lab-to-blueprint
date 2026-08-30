@@ -95,6 +95,7 @@ from flab2bp.layout.sequence_pair import (
     anneal_stage,
     build_elite_archive,
     decode_state,
+    enable_variant_stage_boundary,
     derive_stage_seed,
     merge_stage_boundary,
     quality_archive_key,
@@ -103,15 +104,19 @@ from flab2bp.layout.sequence_pair import (
     split_stage_boundary,
 )
 from flab2bp.layout.strip_variants import (
+    ProjectionPitchRequirement,
     StripFamily,
     StripFamilyId,
     StripInstanceId,
     StripVariant,
     StripVariantId,
     default_strip_variant,
+    projection_pitch_requirement,
+    strip_pose_id,
     generate_strip_families,
     partition_strip_family,
     variants_for_count,
+    variant_with_minimum_pitch,
 )
 from flab2bp.spec import BuildSpec
 
@@ -461,6 +466,7 @@ class StageObservation:
     exact_key: tuple[int, int] | None
     validation_failures: tuple[str, ...]
     projection_failures: tuple[finalize.ProjectionFailure, ...]
+    pitch_requirement: ProjectionPitchRequirement | None
     variant_moves: int
     selected_instance_ids: tuple[StripInstanceId, ...]
     selected_variant_ids: tuple[StripVariantId, ...]
@@ -536,6 +542,7 @@ class _HeightState:
     quality_stagnation: int = 0
     quality_restart: int | None = None
     pending_quality_exit: bool = False
+    feedback_restart: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -588,8 +595,10 @@ StageBoundaryTransform = Callable[
         PlacementProblem,
         AnnealState,
         FeedbackState,
-        DetailedRouteResult,
+        DetailedStageResult,
         int,
+        tuple[finalize.ProjectionFailure, ...],
+        bool,
     ],
     StageBoundaryUpdate | None,
 ]
@@ -878,6 +887,18 @@ class SequenceSolver[PreparedT]:
         return best
 
     def _select_restart(self, height_state: _HeightState) -> _RestartState:
+        if height_state.feedback_restart is not None:
+            feedback_restart = next(
+                (
+                    restart
+                    for restart in height_state.restarts
+                    if restart.restart == height_state.feedback_restart
+                    and restart.stages < self.config.stages
+                ),
+                None,
+            )
+            if feedback_restart is not None:
+                return feedback_restart
         if height_state.objective_mode is ObjectiveMode.QUALITY:
             quality_restart = self._select_quality_restart(height_state)
             if quality_restart is not None:
@@ -1145,7 +1166,7 @@ class SequenceSolver[PreparedT]:
             topology_lane = self.config.restarts_per_height >= 2 and restart.restart == 0
             restart_config = topology_stage_config if topology_lane else stage_config
             stage_start = restart.anneal
-            if topology_lane:
+            if topology_lane and restart.restart != height_state.feedback_restart:
                 stage_start = replace(
                     stage_start,
                     gaps=GapProfile.zero(problem.size),
@@ -1191,13 +1212,30 @@ class SequenceSolver[PreparedT]:
         *,
         closure_allowance: int | None = None,
     ) -> tuple[int, bool]:
+        candidate_sources = tuple(annealed)
+        if height_state.feedback_restart is not None:
+            feedback_source = next(
+                (
+                    source
+                    for source in candidate_sources
+                    if source.restart.restart == height_state.feedback_restart
+                ),
+                None,
+            )
+            if feedback_source is not None:
+                candidate_sources = (feedback_source,)
+                height_state.feedback_restart = None
         source_by_incumbent: dict[int, _AnnealedRestart] = {}
-        for source in annealed:
+        for source in candidate_sources:
             for tagged in source.result.archive:
                 # Archive union retains an input object, so identity carries its restart.
                 source_by_incumbent.setdefault(id(tagged.incumbent), source)
         merged = build_elite_archive(
-            (tagged.incumbent for source in annealed for tagged in source.result.archive),
+            (
+                tagged.incumbent
+                for source in candidate_sources
+                for tagged in source.result.archive
+            ),
             self.config.global_elites,
         )
         narrowest = next(
@@ -1460,6 +1498,75 @@ class SequenceSolver[PreparedT]:
                     )
                 if height_state.exact_key is None or exact_key < height_state.exact_key:
                     height_state.exact_key = exact_key
+        pitch_requirement = _stage_projection_pitch_requirement(
+            problem,
+            selected.state,
+            detailed.placement,
+            projection_failures,
+        )
+        if (
+            not observation.continue_search
+            and projection_failures
+            and self.stage_boundary_transform is not None
+        ):
+            primary_restart = observation.restart
+            primary_state = replace(
+                selected.state,
+                base_seed=primary_restart.seed,
+                stage_index=primary_restart.anneal.stage_index,
+            )
+            transformed = self.stage_boundary_transform(
+                height_state.height,
+                problem,
+                primary_state,
+                height_state.feedback,
+                detailed,
+                primary_restart.feedback_stagnation,
+                projection_failures,
+                True,
+            )
+            if transformed is not None:
+                sibling_updates: list[tuple[_RestartState, StageBoundaryUpdate]] = []
+                for other in height_state.restarts:
+                    if other is primary_restart:
+                        continue
+                    sibling = self.stage_boundary_transform(
+                        height_state.height,
+                        problem,
+                        other.anneal,
+                        height_state.feedback,
+                        detailed,
+                        primary_restart.feedback_stagnation,
+                        projection_failures,
+                        False,
+                    )
+                    if sibling is None or sibling.problem != transformed.problem:
+                        raise ValueError(
+                            "stage-boundary transform must rebuild every restart identically"
+                        )
+                    sibling_updates.append((other, sibling))
+                if self.stage_boundary_commit is not None:
+                    self.stage_boundary_commit(
+                        height_state.height,
+                        transformed.problem,
+                    )
+                for other, sibling in sibling_updates:
+                    other.anneal = sibling.state
+                    other.failure_signature = ()
+                    other.feedback_stagnation = 0
+                primary_restart.anneal = transformed.state
+                primary_restart.failure_signature = ()
+                primary_restart.feedback_stagnation = 0
+                height_state.problem = transformed.problem
+                height_state.feedback_restart = primary_restart.restart
+                if transformed.problem != problem:
+                    for candidate_restart in height_state.restarts:
+                        candidate_restart.archive = ()
+                    height_state.objective_mode = ObjectiveMode.EXPLORATION
+                    height_state.quality_restart = None
+                    height_state.pending_quality_exit = False
+                    height_state.quality_stagnation = 0
+                    height_state.narrowest_key = None
         if not observation.continue_search:
             self._record_routing_observation(
                 height_state,
@@ -1474,6 +1581,7 @@ class SequenceSolver[PreparedT]:
                 exact_key=exact_key,
                 validation_failures=validation_failures,
                 projection_failures=projection_failures,
+                pitch_requirement=pitch_requirement,
                 preparation_time_s=preparation_time_s,
                 global_route_time_s=global_route_time_s,
                 detailed_route_time_s=detailed_route_time_s,
@@ -1578,18 +1686,19 @@ class SequenceSolver[PreparedT]:
         split_count = 0
         merge_count = 0
         topology_changed = False
-        if (
-            starting_mode is ObjectiveMode.EXPLORATION
-            and self.stage_boundary_transform is not None
-            and signature
+        if self.stage_boundary_transform is not None and (
+            projection_failures
+            or (starting_mode is ObjectiveMode.EXPLORATION and signature)
         ):
             transformed = self.stage_boundary_transform(
                 height_state.height,
                 problem,
                 next_anneal,
                 height_state.feedback,
-                detailed.routing,
+                detailed,
                 restart.feedback_stagnation,
+                projection_failures,
+                True,
             )
             if transformed is not None:
                 sibling_updates: list[tuple[_RestartState, StageBoundaryUpdate]] = []
@@ -1601,8 +1710,10 @@ class SequenceSolver[PreparedT]:
                         problem,
                         other.anneal,
                         height_state.feedback,
-                        detailed.routing,
+                        detailed,
                         restart.feedback_stagnation,
+                        projection_failures,
+                        False,
                     )
                     if sibling is None or sibling.problem != transformed.problem:
                         if transformed.problem.size < problem.size:
@@ -1628,12 +1739,18 @@ class SequenceSolver[PreparedT]:
                     cardinality_delta = transformed.problem.size - problem.size
                     split_count = max(0, cardinality_delta)
                     merge_count = max(0, -cardinality_delta)
-                    height_state.feedback = remap_feedback_nets(
-                        height_state.feedback,
-                        (),
-                    )
+                    if (
+                        transformed.problem.instance_ids != problem.instance_ids
+                        or transformed.problem.nets != problem.nets
+                    ):
+                        height_state.feedback = remap_feedback_nets(
+                            height_state.feedback,
+                            (),
+                        )
                     restart.failure_signature = ()
                     restart.feedback_stagnation = 0
+                    if pitch_requirement is not None:
+                        height_state.feedback_restart = restart.restart
                     if topology_changed:
                         for candidate_restart in height_state.restarts:
                             candidate_restart.archive = ()
@@ -1678,6 +1795,7 @@ class SequenceSolver[PreparedT]:
             exact_key=exact_key,
             validation_failures=validation_failures,
             projection_failures=projection_failures,
+            pitch_requirement=pitch_requirement,
             preparation_time_s=preparation_time_s,
             global_route_time_s=global_route_time_s,
             detailed_route_time_s=detailed_route_time_s,
@@ -1706,6 +1824,7 @@ class SequenceSolver[PreparedT]:
         exact_key: tuple[int, int] | None,
         validation_failures: tuple[str, ...],
         projection_failures: tuple[finalize.ProjectionFailure, ...],
+        pitch_requirement: ProjectionPitchRequirement | None,
         preparation_time_s: float,
         global_route_time_s: float,
         detailed_route_time_s: float,
@@ -1747,6 +1866,7 @@ class SequenceSolver[PreparedT]:
                 exact_key=exact_key,
                 validation_failures=validation_failures,
                 projection_failures=projection_failures,
+                pitch_requirement=pitch_requirement,
                 variant_moves=variant_moves,
                 selected_instance_ids=problem.instance_ids,
                 selected_variant_ids=selected_variant_ids,
@@ -1782,6 +1902,31 @@ def _lns_neighbourhood(
         problem,
         decoded,
     )
+
+
+def _stage_projection_pitch_requirement(
+    problem: PlacementProblem,
+    state: AnnealState,
+    placement: Placement | None,
+    projection_failures: tuple[finalize.ProjectionFailure, ...],
+) -> ProjectionPitchRequirement | None:
+    """Return the first ordered exact pitch requirement mapped by this state."""
+    if placement is None or not problem.variant_tables:
+        return None
+    selected_variants = tuple(
+        problem.variant(strip, variant)
+        for strip, variant in enumerate(state.variant_indices)
+    )
+    for failure in projection_failures:
+        requirement = projection_pitch_requirement(
+            placement,
+            instance_ids=problem.instance_ids,
+            variants=selected_variants,
+            failure=failure,
+        )
+        if requirement is not None:
+            return requirement
+    return None
 
 
 def _default_feedback(problem: PlacementProblem) -> FeedbackState:
@@ -3127,18 +3272,74 @@ def _production_run(
         4 - len({variant.yaw for variant in family.variants}) for family in family_by_id.values()
     )
 
+    projection_feedback: (
+        tuple[
+            PlacementProblem,
+            tuple[finalize.ProjectionFailure, ...],
+            int,
+            StripVariant,
+        ]
+        | None
+    ) = None
+
     def transform_stage(
         height: int,
         problem: PlacementProblem,
         state: AnnealState,
         _feedback: FeedbackState,
-        result: DetailedRouteResult,
+        detailed: DetailedStageResult,
         stagnation: int,
+        projection_failures: tuple[finalize.ProjectionFailure, ...],
+        select_feedback_variant: bool,
     ) -> StageBoundaryUpdate | None:
+        nonlocal projection_feedback
+        if select_feedback_variant:
+            projection_feedback = None
+            requirement = _stage_projection_pitch_requirement(
+                problem,
+                state,
+                detailed.placement,
+                projection_failures,
+            )
+            if requirement is not None:
+                strip = problem.instance_ids.index(requirement.instance_id)
+                selected_variant = problem.variant(strip, state.variant_indices[strip])
+                pose_id = strip_pose_id(selected_variant)
+                enabled = tuple(
+                    variant
+                    for variant in problem.variant_tables[strip]
+                    if strip_pose_id(variant) == pose_id
+                    and variant.pitch_x >= requirement.required_pitch
+                )
+                padded = (
+                    max(enabled, key=lambda variant: variant.pitch_x)
+                    if enabled
+                    else variant_with_minimum_pitch(
+                        selected_variant,
+                        requirement.required_pitch,
+                    )
+                )
+                projection_feedback = (
+                    problem,
+                    projection_failures,
+                    strip,
+                    padded,
+                )
+        if projection_feedback is not None:
+            feedback_problem, feedback_failures, strip, padded = projection_feedback
+            if feedback_problem == problem and feedback_failures == projection_failures:
+                return enable_variant_stage_boundary(
+                    problem,
+                    state,
+                    strip=strip,
+                    variant=padded,
+                    select_variant=select_feedback_variant,
+                )
+
         transformed = _pose_stage_boundary_update(
             problem,
             state,
-            result,
+            detailed.routing,
             stagnation=stagnation,
             family_by_id=family_by_id,
         )

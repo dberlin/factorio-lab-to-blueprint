@@ -53,6 +53,7 @@ from flab2bp.layout.sequence_pair import (
     decode_sequence_pair,
     decode_state,
     derive_stage_seed,
+    enable_variant_stage_boundary,
     merge_stage_boundary,
     repair_neighbourhood,
     split_stage_boundary,
@@ -63,6 +64,7 @@ from flab2bp.layout.strip_variants import (
     StripVariant,
     _variant_id,
     partition_strip_family,
+    variant_with_minimum_pitch,
     variants_for_count,
 )
 from tests.layout.test_freeform import two_stage_spec
@@ -766,6 +768,133 @@ def test_alignment_accepts_smaller_selected_variant_without_default_overlap() ->
     assert target.key in aligned.direct
     assert aligned.x == decoded.x
     assert aligned.width == 13
+
+
+def _stage_boundary_variant_problem() -> tuple[PlacementProblem, AnnealState, StripVariant]:
+    family = _family(_single_machine_spec("chemical-plant", count=4))
+    variants = variants_for_count(family, 2)
+    problem = PlacementProblem(
+        sizes=tuple(
+            (variants[0].box_width + padding, variants[0].box_height + 1)
+            for padding in (2, 3)
+        ),
+        nets=((0, 1),),
+        outline_height=40,
+        area_lower_bound=1,
+        instance_ids=(
+            StripInstanceId(family.family_id, 0, 2),
+            StripInstanceId(family.family_id, 2, 2),
+        ),
+        variant_tables=(variants, variants),
+    )
+    state = AnnealState(
+        pair=SequencePair((1, 0), (0, 1)),
+        gaps=GapProfile((2, 3), (4, 1)),
+        base_seed=71,
+        stage_index=5,
+        variant_indices=(0, 1),
+    )
+    padded = variant_with_minimum_pitch(variants[0], variants[0].pitch_x + 1)
+    return problem, state, padded
+
+
+def test_enable_variant_stage_boundary_rebuilds_only_target_table_and_selection() -> None:
+    problem, state, padded = _stage_boundary_variant_problem()
+
+    update = enable_variant_stage_boundary(
+        problem,
+        state,
+        strip=0,
+        variant=padded,
+        select_variant=True,
+    )
+
+    assert update.problem.variant_tables[0] == problem.variant_tables[0] + (padded,)
+    assert update.problem.variant_tables[1] == problem.variant_tables[1]
+    assert update.problem.sizes == problem.sizes
+    assert update.problem.instance_ids == problem.instance_ids
+    assert update.problem.nets == problem.nets
+    assert update.problem.logical_net_ids == problem.logical_net_ids
+    assert update.state.variant_indices[0] == len(problem.variant_tables[0])
+    assert update.state.variant_indices[1] == state.variant_indices[1]
+    assert update.state.pair == state.pair
+    assert update.state.gaps == state.gaps
+    assert update.state.base_seed == state.base_seed
+    assert update.state.stage_index == state.stage_index
+
+
+def test_enable_variant_stage_boundary_is_idempotent_for_selected_variant() -> None:
+    problem, state, padded = _stage_boundary_variant_problem()
+    enabled = enable_variant_stage_boundary(
+        problem,
+        state,
+        strip=0,
+        variant=padded,
+        select_variant=True,
+    )
+
+    repeated = enable_variant_stage_boundary(
+        enabled.problem,
+        enabled.state,
+        strip=0,
+        variant=padded,
+        select_variant=True,
+    )
+
+    assert repeated.problem is enabled.problem
+    assert repeated.state is enabled.state
+
+
+def test_enable_variant_stage_boundary_supersedes_padded_variant_and_rebases_siblings() -> (
+    None
+):
+    problem, state, padded = _stage_boundary_variant_problem()
+    enabled = enable_variant_stage_boundary(
+        problem,
+        state,
+        strip=0,
+        variant=padded,
+        select_variant=True,
+    )
+    replacement = variant_with_minimum_pitch(padded, padded.pitch_x + 1)
+    ordinary_sibling = replace(enabled.state, variant_indices=(1, 1))
+    padded_sibling = replace(
+        enabled.state,
+        variant_indices=(len(enabled.problem.variant_tables[0]) - 1, 1),
+    )
+
+    selected = enable_variant_stage_boundary(
+        enabled.problem,
+        enabled.state,
+        strip=0,
+        variant=replacement,
+        select_variant=True,
+    )
+    retained = enable_variant_stage_boundary(
+        enabled.problem,
+        ordinary_sibling,
+        strip=0,
+        variant=replacement,
+        select_variant=False,
+    )
+    migrated = enable_variant_stage_boundary(
+        enabled.problem,
+        padded_sibling,
+        strip=0,
+        variant=replacement,
+        select_variant=False,
+    )
+
+    replacement_index = len(problem.variant_tables[0])
+    expected_table = problem.variant_tables[0] + (replacement,)
+    assert selected.problem.variant_tables[0] == expected_table
+    assert padded not in selected.problem.variant_tables[0]
+    assert retained.problem == selected.problem == migrated.problem
+    assert selected.state.variant_indices[0] == replacement_index
+    assert retained.state.variant_indices[0] == ordinary_sibling.variant_indices[0]
+    assert migrated.state.variant_indices[0] == replacement_index
+    assert retained.state.pair == ordinary_sibling.pair
+    assert migrated.state.pair == padded_sibling.pair
 
 
 def test_stage_boundary_split_rebuilds_every_cardinality_owned_array() -> None:

@@ -52,6 +52,7 @@ from flab2bp.layout.sequence_pair import (
     SequencePair,
     StageBoundaryUpdate,
     TaggedAnnealIncumbent,
+    enable_variant_stage_boundary,
     apply_variant_move,
     build_elite_archive,
     decode_sequence_pair,
@@ -75,14 +76,20 @@ from flab2bp.layout.sequence_solver import (
     _variant_search_inputs,
 )
 from flab2bp.layout.strip_variants import (
+    ProjectionPitchRequirement,
+    StripVariant,
     generate_strip_families,
     partition_strip_family,
+    projection_pitch_requirement,
     variants_for_count,
+    variant_with_minimum_pitch,
 )
 from flab2bp.spec import BuildSpec, MachineGroup
 from tests.layout.test_freeform import (
     proliferated_spec,
+    plastic_spec,
     ray_receiver_spec,
+    projected_chemical_plant_spec,
     two_stage_spec,
 )
 
@@ -2385,16 +2392,20 @@ def test_production_stage_boundary_rebuilds_preparation_for_children() -> None:
         problem,
         state,
         height_state.feedback,
-        result,
+        DetailedStageResult(result, None),
         2,
+        (),
+        True,
     )
     alternate = transform(
         height_state.height,
         problem,
         alternate_state,
         height_state.feedback,
-        result,
+        DetailedStageResult(result, None),
         2,
+        (),
+        False,
     )
 
     assert transformed is not None
@@ -2433,6 +2444,295 @@ def test_production_stage_boundary_rebuilds_preparation_for_children() -> None:
     )
 
 
+def _projection_pitch_stage_fixture() -> tuple[
+    PlacementProblem,
+    AnnealState,
+    Placement,
+    finalize.ProjectionFailure,
+]:
+    (family,) = generate_strip_families(projected_chemical_plant_spec())
+    (instance,) = partition_strip_family(family, max_machine_count=2)
+    variants = variants_for_count(family, 2)
+    ordinary = variants[0]
+    problem = PlacementProblem(
+        sizes=((ordinary.box_width, ordinary.box_height),),
+        nets=(),
+        outline_height=40,
+        area_lower_bound=1,
+        instance_ids=(instance.instance_id,),
+        variant_tables=(variants,),
+    )
+    state = AnnealState(
+        pair=SequencePair((0,), (0,)),
+        gaps=GapProfile.zero(1),
+        base_seed=17,
+        variant_indices=(0,),
+    )
+    placement = Placement(
+        buildings=tuple(
+            PlacedBuilding(
+                item_id=2309,
+                model_index=64,
+                x=3 + origin,
+                y=11 + ordinary.lane_plan.machine_row,
+                width=ordinary.footprint_width,
+                height=ordinary.footprint_height,
+                yaw=ordinary.yaw,
+                owner_strip=0,
+            )
+            for origin in ordinary.machine_origins_x
+        )
+    )
+    failure = finalize.ProjectionFailure(
+        "geom.collide",
+        (0, 1),
+        "build colliders intersect",
+        160,
+    )
+    return problem, state, placement, failure
+
+
+def test_projection_pitch_feedback_rebuilds_failed_restart_and_rebases_siblings() -> None:
+    problem, state, placement, failure = _projection_pitch_stage_fixture()
+    config = SequenceSolverConfig(
+        stages=1,
+        moves_per_stage=1,
+        restarts_per_height=2,
+        global_elites=1,
+    )
+    budget = ExpansionBudget(17)
+    transform_calls: list[
+        tuple[
+            tuple[finalize.ProjectionFailure, ...],
+            bool,
+            tuple[int, ...],
+            int,
+        ]
+    ] = []
+    transform_updates: list[tuple[bool, StageBoundaryUpdate]] = []
+    feedback_variant: tuple[int, StripVariant] | None = None
+
+    def transform(
+        _height: int,
+        stage_problem: PlacementProblem,
+        stage_state: AnnealState,
+        _feedback: FeedbackState,
+        detailed: DetailedStageResult,
+        stagnation: int,
+        projection_failures: tuple[finalize.ProjectionFailure, ...],
+        select_feedback_variant: bool,
+    ) -> StageBoundaryUpdate | None:
+        nonlocal feedback_variant
+        transform_calls.append(
+            (
+                projection_failures,
+                select_feedback_variant,
+                stage_state.variant_indices,
+                stagnation,
+            )
+        )
+        if select_feedback_variant:
+            assert detailed.placement is placement
+            selected_variants = tuple(
+                stage_problem.variant(strip, variant)
+                for strip, variant in enumerate(stage_state.variant_indices)
+            )
+            requirement = projection_pitch_requirement(
+                placement,
+                instance_ids=stage_problem.instance_ids,
+                variants=selected_variants,
+                failure=projection_failures[0],
+            )
+            assert requirement is not None
+            target = stage_problem.instance_ids.index(requirement.instance_id)
+            feedback_variant = (
+                target,
+                variant_with_minimum_pitch(
+                    selected_variants[target],
+                    requirement.required_pitch,
+                ),
+            )
+        if feedback_variant is None:
+            return None
+        target, padded = feedback_variant
+        update = enable_variant_stage_boundary(
+            stage_problem,
+            stage_state,
+            strip=target,
+            variant=padded,
+            select_variant=select_feedback_variant,
+        )
+        transform_updates.append((select_feedback_variant, update))
+        return update
+
+    detailed_results = iter(
+        (
+            DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), placement),
+            DetailedStageResult(_routing(DetailedRouteStatus.BUDGET), None),
+        )
+    )
+
+    solver = SequenceSolver(
+        heights=(40,),
+        problem_for_height=lambda _height: problem,
+        adapters=StageAdapters(
+            prepare=lambda _height, decoded: decoded,
+            global_route=lambda _prepared, _feedback, _allowance: _global(),
+            detailed_route=lambda _prepared, _allowance: next(detailed_results),
+            validate=lambda _placement: ValidationVerdict(
+                False,
+                ("geom.collide",),
+                None,
+                (failure,),
+            ),
+        ),
+        expansion_budget=budget,
+        initial_states={40: state},
+        config=config,
+        stage_boundary_transform=transform,
+    )
+    sibling = solver._heights[0].restarts[1]
+    sibling.anneal = replace(sibling.anneal, variant_indices=(1,))
+    ordinary_sibling_id = problem.variant(0, 1).variant_id
+
+    with pytest.raises(NoValidLayout):
+        solver.search(max_stages=2)
+
+    height_state = solver._heights[0]
+    selected_update = next(update for select, update in transform_updates if select)
+    sibling_update = next(update for select, update in transform_updates if not select)
+    padded = selected_update.problem.variant(
+        0,
+        selected_update.state.variant_indices[0],
+    )
+    assert solver._incumbent is None
+    assert padded.pitch_x == problem.variant(0, 0).pitch_x + 1
+    assert selected_update.problem == sibling_update.problem == height_state.problem
+    assert (
+        sibling_update.problem.variant(0, sibling_update.state.variant_indices[0]).variant_id
+        == ordinary_sibling_id
+    )
+    assert [select for _failures, select, _indices, _stagnation in transform_calls] == [
+        True,
+        False,
+    ]
+    assert height_state.stages == config.stages
+    assert len(solver._stage_stats) == 2
+    assert [stage.anneal_moves for stage in solver._stage_stats] == [
+        0,
+        config.moves_per_stage * config.restarts_per_height,
+    ]
+    assert all(stage.expansions == 0 for stage in solver._stage_stats)
+    assert budget.spent == 0
+    assert all(len(restart.archive) <= 3 for restart in height_state.restarts)
+    observation = solver._stage_stats[0]
+    assert observation.projection_failures == (failure,)
+    assert isinstance(observation.pitch_requirement, ProjectionPitchRequirement)
+    assert observation.pitch_requirement.required_pitch == padded.pitch_x
+    assert solver._stage_stats[1].selected_variant_ids[0].placement_geometry[2] == padded.pitch_x
+
+
+def test_production_padded_variant_transform_maps_same_strip_projection() -> None:
+    problem, state, placement, failure = _projection_pitch_stage_fixture()
+    run = _production_run(
+        projected_chemical_plant_spec(),
+        band_policy=BandPolicy("portable"),
+        time_budget_s=2.0,
+        power=False,
+        strip_len=2,
+        config=SequenceSolverConfig.test(),
+    )
+    transform = run.solver.stage_boundary_transform
+    assert transform is not None
+    alternate_state = replace(state, variant_indices=(1,))
+    detailed = DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), placement)
+
+    selected = transform(
+        40,
+        problem,
+        state,
+        FeedbackState.empty((40, 40)),
+        detailed,
+        0,
+        (failure,),
+        True,
+    )
+    sibling = transform(
+        40,
+        problem,
+        alternate_state,
+        FeedbackState.empty((40, 40)),
+        detailed,
+        0,
+        (failure,),
+        False,
+    )
+
+    assert selected is not None
+    assert sibling is not None
+    assert selected.problem == sibling.problem
+    assert selected.problem.variant(0, selected.state.variant_indices[0]).pitch_x == 8
+    assert (
+        sibling.problem.variant(0, sibling.state.variant_indices[0]).variant_id
+        == problem.variant(0, alternate_state.variant_indices[0]).variant_id
+    )
+
+
+@pytest.mark.parametrize("control", ["unmapped", "different-strip"])
+def test_projection_pitch_controls_do_not_enable_padded_variant(control: str) -> None:
+    problem, state, placement, failure = _projection_pitch_stage_fixture()
+    run = _production_run(
+        projected_chemical_plant_spec(),
+        band_policy=BandPolicy("portable"),
+        time_budget_s=2.0,
+        power=False,
+        strip_len=2,
+        config=SequenceSolverConfig.test(),
+    )
+    transform = run.solver.stage_boundary_transform
+    assert transform is not None
+    buildings = list(placement.buildings)
+    if control == "unmapped":
+        buildings[1] = replace(buildings[1], owner_strip=None)
+    else:
+        second_instance = replace(problem.instance_ids[0], machine_start=2)
+        problem = replace(
+            problem,
+            sizes=problem.sizes + problem.sizes,
+            instance_ids=problem.instance_ids + (second_instance,),
+            variant_tables=problem.variant_tables + problem.variant_tables,
+        )
+        state = AnnealState.initial(2, seed=17)
+        buildings.extend(
+            replace(building, x=building.x + 20, owner_strip=1)
+            for building in placement.buildings
+        )
+        failure = replace(failure, buildings=(0, 2))
+    detailed = DetailedStageResult(
+        _routing(DetailedRouteStatus.ROUTED),
+        replace(placement, buildings=tuple(buildings)),
+    )
+
+    assert (
+        transform(
+            40,
+            problem,
+            state,
+            FeedbackState.empty((40, 40)),
+            detailed,
+            0,
+            (failure,),
+            True,
+        )
+        is None
+    )
+    selected_pitches = {
+        problem.variant(strip, variant).pitch_x
+        for strip, variant in enumerate(state.variant_indices)
+    }
+    assert selected_pitches == {7}
+
+
 def test_feedback_stagnation_rebuilds_the_next_fixed_cardinality_stage() -> None:
     family = next(
         family
@@ -2469,12 +2769,14 @@ def test_feedback_stagnation_rebuilds_the_next_fixed_cardinality_stage() -> None
         stage_problem: PlacementProblem,
         stage_state: AnnealState,
         _feedback: FeedbackState,
-        result: DetailedRouteResult,
+        detailed: DetailedStageResult,
         stagnation: int,
+        _projection_failures: tuple[finalize.ProjectionFailure, ...],
+        _select_feedback_variant: bool,
     ) -> StageBoundaryUpdate | None:
         transformed_stagnation.append(stagnation)
         target = select_split_candidate(
-            result,
+            detailed.routing,
             stage_problem.instance_ids,
             stagnation=stagnation,
             split_after=2,
@@ -2615,8 +2917,10 @@ def test_topology_change_clears_stale_quality_archives_before_restart_fallback()
         _problem: PlacementProblem,
         state: AnnealState,
         _feedback: FeedbackState,
-        _result: DetailedRouteResult,
+        _detailed: DetailedStageResult,
         _stagnation: int,
+        _projection_failures: tuple[finalize.ProjectionFailure, ...],
+        _select_feedback_variant: bool,
     ) -> StageBoundaryUpdate:
         return StageBoundaryUpdate(
             rebuilt,
@@ -2699,8 +3003,10 @@ def test_exact_problem_identity_transform_retains_restart_archive() -> None:
         stage_problem: PlacementProblem,
         state: AnnealState,
         _feedback: FeedbackState,
-        _result: DetailedRouteResult,
+        _detailed: DetailedStageResult,
         _stagnation: int,
+        _projection_failures: tuple[finalize.ProjectionFailure, ...],
+        _select_feedback_variant: bool,
     ) -> StageBoundaryUpdate:
         return StageBoundaryUpdate(stage_problem, state)
 
@@ -2756,13 +3062,15 @@ def test_fixed_size_problem_skips_pose_boundary_transforms_without_metadata() ->
         stage_problem: PlacementProblem,
         stage_state: AnnealState,
         _feedback: FeedbackState,
-        result: DetailedRouteResult,
+        detailed: DetailedStageResult,
         stagnation: int,
+        _projection_failures: tuple[finalize.ProjectionFailure, ...],
+        _select_feedback_variant: bool,
     ) -> StageBoundaryUpdate | None:
         update = _pose_stage_boundary_update(
             stage_problem,
             stage_state,
-            result,
+            detailed.routing,
             stagnation=stagnation,
             family_by_id={},
         )
@@ -3413,6 +3721,37 @@ def test_ray_receiver_sequence_closed_loop_routes_and_validates_exactly() -> Non
 
     assert len(docks) == 2
     assert not validate.certify(placement, spec, expect_power=True).errors
+
+
+@pytest.mark.slow
+def test_sequence_pair_plastic_projection_pitch_feedback_finalizes_cleanly() -> None:
+    spec = plastic_spec()
+    policy = BandPolicy("portable")
+
+    placement = SequencePairLayout(
+        band_policy=policy,
+        islands=1,
+    ).lay_out(
+        spec,
+        time_budget_s=4.0,
+    )
+
+    assert validate.certify(placement, spec, expect_power=True).ok
+    finalize.finalize_placement(placement, policy)
+    chemical_by_owner: dict[int, list[PlacedBuilding]] = {}
+    for building in placement.buildings:
+        if building.item_id == 2309 and type(building.owner_strip) is int:
+            chemical_by_owner.setdefault(building.owner_strip, []).append(building)
+    selected_pitches = {
+        right.x - left.x
+        for buildings in chemical_by_owner.values()
+        for left, right in zip(
+            sorted(buildings, key=lambda building: building.x),
+            sorted(buildings, key=lambda building: building.x)[1:],
+        )
+    }
+
+    assert selected_pitches == {8}
 
 
 @pytest.mark.slow
