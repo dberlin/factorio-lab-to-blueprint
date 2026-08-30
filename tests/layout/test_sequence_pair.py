@@ -1362,22 +1362,45 @@ def _archive_incumbent(
     )
 
 
-def test_quality_archive_key_prefers_projected_area_over_width_and_direct_inserts() -> None:
-    narrower = _archive_incumbent(
-        width=4,
-        used_height=4,
-        hpwl=0.0,
-        history=0.0,
-        missed_direct=0,
+def test_quality_archive_key_prefers_scored_projected_area_over_width() -> None:
+    problem = PlacementProblem(
+        sizes=((4, 4), (1, 4)),
+        nets=(),
+        outline_height=8,
+        area_lower_bound=20,
     )
-    area_aligned = _archive_incumbent(
-        width=5,
-        used_height=2,
-        hpwl=100.0,
-        history=100.0,
-        missed_direct=10,
+    context = PlacementCostContext(
+        net_weights=(),
+        net_pairs=(),
+        history_outline=(0, problem.outline_height),
+        history_summed_area=(0.0,) * (problem.outline_height + 1),
     )
+    horizontal = AnnealState(
+        pair=SequencePair((0, 1), (0, 1)),
+        gaps=GapProfile.zero(2),
+        base_seed=0,
+        variant_indices=(0, 0),
+    )
+    vertical = replace(
+        horizontal,
+        pair=SequencePair((0, 1), (1, 0)),
+    )
+    area_aligned = sequence_pair_module._score_state(problem, horizontal, context)
+    narrower = sequence_pair_module._score_state(problem, vertical, context)
 
+    assert (
+        area_aligned.breakdown.box_area
+        == narrower.breakdown.box_area
+        == problem.area_lower_bound
+    )
+    assert (
+        area_aligned.breakdown.width,
+        area_aligned.breakdown.used_height,
+    ) == (5, 4)
+    assert (
+        narrower.breakdown.width,
+        narrower.breakdown.used_height,
+    ) == (4, 8)
     assert sequence_pair_module.quality_archive_key(
         area_aligned
     ) < sequence_pair_module.quality_archive_key(narrower)

@@ -1831,7 +1831,7 @@ def quality_archive_key(
     breakdown = candidate.breakdown
     return (
         breakdown.hard_outline_overflow,
-        breakdown.box_area,
+        breakdown.width * breakdown.used_height,
         breakdown.missed_direct_inserts,
         breakdown.weighted_hpwl,
         breakdown.history_cost,
