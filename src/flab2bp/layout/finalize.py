@@ -42,7 +42,6 @@ class ProjectionNoGood:
     pack_height: int
     left_origin: tuple[int, int]
     right_origin: tuple[int, int]
-    pack_origins: tuple[tuple[int, int], ...]
     failure: ProjectionFailure
 
 
@@ -1162,6 +1161,63 @@ def _materialize_frame(
         ),
         frame=candidate.frame,
     )
+
+
+def independent_projection_pair(
+    placement: Placement,
+    policy: BandPolicy,
+    failure: ProjectionFailure,
+) -> tuple[int, int] | None:
+    """Return a static pair only when that pair rejects every exact projection.
+
+    The proof deliberately re-runs the authoritative pair predicate with every
+    other building removed.  Requiring the same pair to collide in every frame,
+    certified band, and latitude anchor proves that neither unrelated obstacles
+    nor routed belts can make this packed pair acceptable.
+    """
+    if failure.check != "geom.collide" or len(failure.buildings) != 2:
+        return None
+    left, right = failure.buildings
+    if (
+        left == right
+        or not 0 <= left < len(placement.buildings)
+        or not 0 <= right < len(placement.buildings)
+    ):
+        return None
+    if any(
+        catalog.is_belt(placement.buildings[index].item_id)
+        or catalog.is_sorter(placement.buildings[index].item_id)
+        for index in (left, right)
+    ):
+        return None
+    candidates = frame_candidates(placement, policy)
+    if not candidates:
+        return None
+    bands = {band.area_segments: band for band in planet.bands()}
+    projections = 0
+    for candidate in candidates:
+        framed = _materialize_frame(placement, candidate)
+        pair = (
+            (left, _collision_placed(framed.buildings[left])),
+            (right, _collision_placed(framed.buildings[right])),
+        )
+        for segments in candidate.frame.certified_bands:
+            band = bands[segments]
+            for anchor in band.anchors(candidate.frame.height):
+                projections += 1
+                exact = _projected_static_failure(
+                    pair,
+                    ((0, 1),),
+                    planet.Projection(
+                        band=band,
+                        anchor_row=anchor,
+                        segment=colliders.PLANET_SEGMENT,
+                        radius=colliders.PLANET_RADIUS,
+                    ),
+                )
+                if exact is None or exact.buildings != (left, right):
+                    return None
+    return (left, right) if projections else None
 
 
 def _frame_content_valid(placement: Placement) -> bool:

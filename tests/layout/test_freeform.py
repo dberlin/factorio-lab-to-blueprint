@@ -3150,7 +3150,6 @@ def test_projection_no_good_forbids_only_the_exact_failed_pair_context() -> None
         pack_height=initial.height,
         left_origin=initial.at[0],
         right_origin=initial.at[2],
-        pack_origins=tuple(initial.at[index] for index in range(len(strips))),
         failure=failure,
     )
 
@@ -3181,7 +3180,7 @@ def test_projection_no_good_forbids_only_the_exact_failed_pair_context() -> None
         retry.at[0][1] - retry.at[1][1],
     ) == unrelated_delta
 
-def test_projection_no_good_is_scoped_to_every_strip_origin_in_the_failed_pack() -> None:
+def test_projection_no_good_unrelated_strip_movement_cannot_erase_pair_evidence() -> None:
     strip = plan_strips(single_recipe_spec())[0]
     strips = [
         replace(strip, group_key=f"strip-{index}", west_channel=1)
@@ -3198,18 +3197,19 @@ def test_projection_no_good_is_scoped_to_every_strip_origin_in_the_failed_pack()
         workers=DETERMINISTIC_WORKERS,
     )
     assert baseline is not None
-    placement = Placement(
-        buildings=(
-            PlacedBuilding(1, 1, 0, 0, owner_strip=0),
-            PlacedBuilding(1, 1, 1, 0, owner_strip=1),
-        ),
-        short_desc="three-strip no-good",
-    )
-    failure = finalize.ProjectionFailure("geom.collide", (0, 1), "collision", 160)
-    no_good = freeform._projection_no_good(placement, baseline, failure)
-    assert no_good is not None
     complete_origins = tuple(baseline.at[index] for index in range(3))
-    assert no_good.pack_origins == complete_origins
+    failure = finalize.ProjectionFailure("geom.collide", (0, 1), "collision", 160)
+    no_good = ProjectionNoGood(
+        left_strip=0,
+        right_strip=1,
+        delta_x=complete_origins[0][0] - complete_origins[1][0],
+        delta_y=complete_origins[0][1] - complete_origins[1][1],
+        pack_width=baseline.width,
+        pack_height=baseline.height,
+        left_origin=complete_origins[0],
+        right_origin=complete_origins[1],
+        failure=failure,
+    )
 
     def solve_with(origins: tuple[tuple[int, int], ...]) -> cp_model.CpSolverStatus:
         model = cp_model.CpModel()
@@ -3235,8 +3235,13 @@ def test_projection_no_good_is_scoped_to_every_strip_origin_in_the_failed_pack()
         complete_origins[1],
         (complete_origins[2][0] + 1, complete_origins[2][1]),
     )
-    assert moved_third[:2] == complete_origins[:2]
-    assert solve_with(moved_third) in (cp_model.FEASIBLE, cp_model.OPTIMAL)
+    assert solve_with(moved_third) == cp_model.INFEASIBLE
+    moved_implicated = (
+        complete_origins[0],
+        (complete_origins[1][0] + 1, complete_origins[1][1]),
+        complete_origins[2],
+    )
+    assert solve_with(moved_implicated) in (cp_model.FEASIBLE, cp_model.OPTIMAL)
 
 
 @pytest.mark.parametrize("context_change", ["height", "width", "absolute-origin"])
@@ -3269,7 +3274,6 @@ def test_projection_no_good_leaves_same_displacement_free_in_another_context(
         baseline.height,
         baseline.at[0],
         baseline.at[1],
-        tuple(baseline.at[index] for index in range(len(strips))),
         failure,
     )
     if context_change == "height":
@@ -3281,7 +3285,6 @@ def test_projection_no_good_leaves_same_displacement_free_in_another_context(
         other_context = replace(
             no_good,
             left_origin=moved_left,
-            pack_origins=(moved_left, *no_good.pack_origins[1:]),
         )
 
     retry = _pack(
@@ -3299,8 +3302,10 @@ def test_projection_no_good_leaves_same_displacement_free_in_another_context(
     assert retry.width == baseline.width
 
 
-def test_projection_owned_strip_collision_learns_and_repacks(
+@pytest.mark.parametrize("independent", [True, False])
+def test_projection_no_good_owned_strip_collision_learns_and_repacks(
     monkeypatch: pytest.MonkeyPatch,
+    independent: bool,
 ) -> None:
     spec = two_stage_spec()
     strips = plan_strips(spec)
@@ -3318,6 +3323,7 @@ def test_projection_owned_strip_collision_learns_and_repacks(
     )
     packs = iter((first, separated))
     seen_no_goods: list[tuple[ProjectionNoGood, ...]] = []
+    seen_exact_no_goods: list[tuple[freeform.ExactPackNoGood, ...]] = []
 
     def pack_retry(*_args: object, **kwargs: object) -> freeform._Pack:
         raw_no_goods = kwargs.get("projection_no_goods", ())
@@ -3328,6 +3334,11 @@ def test_projection_owned_strip_collision_learns_and_repacks(
         )
         assert len(no_goods) == len(raw_no_goods)
         seen_no_goods.append(no_goods)
+        raw_exact = kwargs.get("exact_pack_no_goods", ())
+        if not isinstance(raw_exact, tuple):
+            raise AssertionError("exact_pack_no_goods must be a tuple")
+        assert all(isinstance(item, freeform.ExactPackNoGood) for item in raw_exact)
+        seen_exact_no_goods.append(raw_exact)
         return next(packs)
 
     def build(
@@ -3386,6 +3397,13 @@ def test_projection_owned_strip_collision_learns_and_repacks(
         lambda *_args, **_kwargs: validate.Report(findings=()),
     )
     monkeypatch.setattr(finalize, "finalize_placement", finalize_projection)
+    monkeypatch.setattr(
+        finalize,
+        "independent_projection_pair",
+        lambda _placement, _policy, exact_failure: (
+            exact_failure.buildings if independent else None
+        ),
+    )
 
     result = FreeformLayout(
         band_policy=BandPolicy("portable"),
@@ -3393,17 +3411,36 @@ def test_projection_owned_strip_collision_learns_and_repacks(
     )._sweep(spec, strips, 1.0)
 
     assert result is not None
-    assert len(seen_no_goods) == 2
-    assert seen_no_goods[0] == ()
-    learned = seen_no_goods[1]
-    assert len(learned) == 1
-    assert (
-        learned[0].left_strip,
-        learned[0].right_strip,
-        learned[0].delta_x,
-        learned[0].delta_y,
-        learned[0].failure,
-    ) == (0, 1, -8, -5, failure)
+    assert len(seen_no_goods) == len(seen_exact_no_goods) == 2
+    assert seen_no_goods[0] == seen_exact_no_goods[0] == ()
+    if independent:
+        learned = seen_no_goods[1]
+        assert seen_exact_no_goods[1] == ()
+        assert len(learned) == 1
+        assert (
+            learned[0].left_strip,
+            learned[0].right_strip,
+            learned[0].delta_x,
+            learned[0].delta_y,
+            learned[0].failure,
+        ) == (0, 1, -8, -5, failure)
+    else:
+        assert seen_no_goods[1] == ()
+        assert len(seen_exact_no_goods[1]) == 1
+        exact = seen_exact_no_goods[1][0]
+        assert (
+            exact.height,
+            exact.outline,
+            exact.width,
+            exact.origins,
+            exact.evidence,
+        ) == (
+            first.height,
+            tuple(_box(strip) for strip in strips),
+            first.width,
+            tuple(first.at[index] for index in range(len(strips))),
+            (failure,),
+        )
 
 
 def test_projection_same_strip_and_unowned_failures_create_no_cut() -> None:
@@ -3433,8 +3470,9 @@ def test_projection_same_strip_and_unowned_failures_create_no_cut() -> None:
         )
     )
 
-    assert freeform._projection_no_good(same_strip, pack, failure) is None
-    assert freeform._projection_no_good(unowned, pack, failure) is None
+    policy = BandPolicy("portable")
+    assert freeform._projection_no_good(same_strip, pack, failure, policy) is None
+    assert freeform._projection_no_good(unowned, pack, failure, policy) is None
 
 
 

@@ -41,6 +41,7 @@ from flab2bp.layout.freeform import (
     _ROUTING_EXPANSIONS_PER_SECOND,
     WEST_CHANNEL,
     DirectInsertId,
+    ExactPackNoGood,
     Strip,
     _box,
     _build_prepared,
@@ -57,6 +58,8 @@ from flab2bp.layout.freeform import (
     _pack,
     _prepare_routing_problem,
     _PreparedRoutingProblem,
+    _projection_no_good,
+    _projection_strip_pair,
     _Unpowerable,
     _Unseatable,
     plan_strips,
@@ -1979,6 +1982,101 @@ def _lns_neighbourhood(
     )
 
 
+type _ProjectionPackNoGood = finalize.ProjectionNoGood | ExactPackNoGood
+
+
+def _projection_feedback_matches(
+    problem: PlacementProblem,
+    state: AnnealState,
+    pack: _Pack,
+    no_good: _ProjectionPackNoGood,
+) -> bool:
+    """Return whether one decoded state repeats the retained exact evidence."""
+    if isinstance(no_good, finalize.ProjectionNoGood):
+        return (
+            pack.width == no_good.pack_width
+            and pack.height == no_good.pack_height
+            and pack.at[no_good.left_strip] == no_good.left_origin
+            and pack.at[no_good.right_strip] == no_good.right_origin
+        )
+    return (
+        pack.height == no_good.height
+        and problem.selected_sizes(state.variant_indices) == no_good.outline
+        and pack.width == no_good.width
+        and tuple(pack.at[index] for index in range(problem.size))
+        == no_good.origins
+    )
+
+
+def _projection_feedback_stage_update(
+    problem: PlacementProblem,
+    state: AnnealState,
+    no_good: _ProjectionPackNoGood,
+    *,
+    west_channels: tuple[int, ...],
+) -> StageBoundaryUpdate | None:
+    """Move an unchanged exact refusal to the nearest changed pair relation."""
+    decoded = decode_state(problem, state)
+    pack = _decoded_pack(
+        problem.outline_height,
+        decoded,
+        west_channels=west_channels,
+    )
+    if not _projection_feedback_matches(problem, state, pack, no_good):
+        return StageBoundaryUpdate(problem, state)
+
+    if isinstance(no_good, finalize.ProjectionNoGood):
+        pairs = ((no_good.left_strip, no_good.right_strip),)
+    else:
+        pairs = tuple(
+            (left, right)
+            for left in range(problem.size)
+            for right in range(left + 1, problem.size)
+        )
+
+    def swapped(
+        permutation: tuple[int, ...],
+        left: int,
+        right: int,
+    ) -> tuple[int, ...]:
+        values = list(permutation)
+        left_position = values.index(left)
+        right_position = values.index(right)
+        values[left_position], values[right_position] = (
+            values[right_position],
+            values[left_position],
+        )
+        return tuple(values)
+
+    for left, right in pairs:
+        for axis in ("negative", "positive"):
+            pair = (
+                replace(
+                    state.pair,
+                    negative=swapped(state.pair.negative, left, right),
+                )
+                if axis == "negative"
+                else replace(
+                    state.pair,
+                    positive=swapped(state.pair.positive, left, right),
+                )
+            )
+            candidate = replace(state, pair=pair)
+            candidate_pack = _decoded_pack(
+                problem.outline_height,
+                decode_state(problem, candidate),
+                west_channels=west_channels,
+            )
+            if not _projection_feedback_matches(
+                problem,
+                candidate,
+                candidate_pack,
+                no_good,
+            ):
+                return StageBoundaryUpdate(problem, candidate)
+    return None
+
+
 def _stage_projection_pitch_requirement(
     problem: PlacementProblem,
     state: AnnealState,
@@ -3471,6 +3569,14 @@ def _production_run(
         ]
         | None
     ) = None
+    projection_relation_feedback: (
+        tuple[
+            PlacementProblem,
+            tuple[finalize.ProjectionFailure, ...],
+            _ProjectionPackNoGood,
+        ]
+        | None
+    ) = None
 
     def transform_stage(
         height: int,
@@ -3482,9 +3588,10 @@ def _production_run(
         projection_failures: tuple[finalize.ProjectionFailure, ...],
         select_feedback_variant: bool,
     ) -> StageBoundaryUpdate | None:
-        nonlocal projection_feedback
+        nonlocal projection_feedback, projection_relation_feedback
         if select_feedback_variant:
             projection_feedback = None
+            projection_relation_feedback = None
             requirement = _stage_projection_pitch_requirement(
                 problem,
                 state,
@@ -3515,6 +3622,43 @@ def _production_run(
                     strip,
                     padded,
                 )
+            elif detailed.placement is not None:
+                selected = _selected_strips(
+                    strips,
+                    problem,
+                    state.variant_indices,
+                )
+                decoded = decode_state(problem, state)
+                pack = _decoded_pack(
+                    height,
+                    decoded,
+                    west_channels=tuple(strip.west_channel for strip in selected),
+                )
+                for failure in projection_failures:
+                    if _projection_strip_pair(detailed.placement, failure) is None:
+                        continue
+                    no_good = _projection_no_good(
+                        detailed.placement,
+                        pack,
+                        failure,
+                        band_policy,
+                    )
+                    if no_good is None:
+                        no_good = ExactPackNoGood(
+                            height=pack.height,
+                            outline=problem.selected_sizes(state.variant_indices),
+                            width=pack.width,
+                            origins=tuple(
+                                pack.at[index] for index in range(len(selected))
+                            ),
+                            evidence=projection_failures,
+                        )
+                    projection_relation_feedback = (
+                        problem,
+                        projection_failures,
+                        no_good,
+                    )
+                    break
         if projection_feedback is not None:
             feedback_problem, feedback_failures, strip, padded = projection_feedback
             if feedback_problem == problem and feedback_failures == projection_failures:
@@ -3524,6 +3668,23 @@ def _production_run(
                     strip=strip,
                     variant=padded,
                     select_variant=select_feedback_variant,
+                )
+
+        if projection_relation_feedback is not None:
+            feedback_problem, feedback_failures, no_good = (
+                projection_relation_feedback
+            )
+            if feedback_problem == problem and feedback_failures == projection_failures:
+                selected = _selected_strips(
+                    strips,
+                    problem,
+                    state.variant_indices,
+                )
+                return _projection_feedback_stage_update(
+                    problem,
+                    state,
+                    no_good,
+                    west_channels=tuple(strip.west_channel for strip in selected),
                 )
 
         transformed = _pose_stage_boundary_update(

@@ -339,6 +339,42 @@ def test_prospective_projection_static_predicate_matches_finalizer_path(
     assert candidate_pair_inputs == [pair_buildings]
 
 
+def test_projection_no_good_independence_ignores_unrelated_route_geometry() -> None:
+    chemical = _building(2309, 0, 0)
+    placement = Placement(
+        buildings=(
+            replace(chemical, owner_strip=0),
+            replace(chemical, owner_strip=1),
+            _belt(12, 12, output=None),
+        )
+    )
+    failure = finalize.ProjectionFailure(
+        check="geom.collide",
+        buildings=(0, 1),
+        detail="build colliders intersect",
+        band=160,
+    )
+    policy = BandPolicy("portable")
+
+    assert finalize.independent_projection_pair(placement, policy, failure) == (0, 1)
+    moved_route = replace(
+        placement,
+        buildings=placement.buildings[:2]
+        + (replace(placement.buildings[2], x=10, y=14),),
+    )
+    assert finalize.independent_projection_pair(moved_route, policy, failure) == (0, 1)
+
+    changed_pair = replace(
+        placement,
+        buildings=(
+            placement.buildings[0],
+            replace(placement.buildings[1], x=8),
+            placement.buildings[2],
+        ),
+    )
+    assert finalize.independent_projection_pair(changed_pair, policy, failure) is None
+
+
 
 def _broke2_coater() -> tuple[int, colliders.Placed]:
     coater = catalog.building(catalog.SPRAY_COATER_ID)

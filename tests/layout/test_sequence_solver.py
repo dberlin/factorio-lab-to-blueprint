@@ -2759,6 +2759,105 @@ def test_projection_pitch_feedback_rebuilds_failed_restart_and_rebases_siblings(
     assert solver._stage_stats[1].selected_variant_ids[0].placement_geometry[2] == padded.pitch_x
 
 
+def test_different_strip_feedback_changes_only_unchanged_exact_relation() -> None:
+    problem = PlacementProblem(
+        sizes=((2, 2), (2, 2), (2, 2)),
+        nets=(),
+        outline_height=8,
+        area_lower_bound=12,
+    )
+    state = AnnealState(
+        pair=SequencePair((0, 1, 2), (0, 1, 2)),
+        gaps=GapProfile.zero(3),
+        base_seed=11,
+        variant_indices=(0, 0, 0),
+    )
+    channels = (1, 1, 1)
+    baseline = _decoded_pack(
+        problem.outline_height,
+        decode_state(problem, state),
+        west_channels=channels,
+    )
+    failure = finalize.ProjectionFailure(
+        "geom.collide",
+        (0, 1),
+        "build colliders intersect",
+        160,
+    )
+    no_good = finalize.ProjectionNoGood(
+        left_strip=0,
+        right_strip=1,
+        delta_x=baseline.at[0][0] - baseline.at[1][0],
+        delta_y=baseline.at[0][1] - baseline.at[1][1],
+        pack_width=baseline.width,
+        pack_height=baseline.height,
+        left_origin=baseline.at[0],
+        right_origin=baseline.at[1],
+        failure=failure,
+    )
+
+    repaired = sequence_solver_module._projection_feedback_stage_update(
+        problem,
+        state,
+        no_good,
+        west_channels=channels,
+    )
+    assert repaired is not None
+    changed_pack = _decoded_pack(
+        problem.outline_height,
+        decode_state(problem, repaired.state),
+        west_channels=channels,
+    )
+    assert (
+        changed_pack.width,
+        changed_pack.height,
+        changed_pack.at[0],
+        changed_pack.at[1],
+    ) != (
+        no_good.pack_width,
+        no_good.pack_height,
+        no_good.left_origin,
+        no_good.right_origin,
+    )
+
+    already_changed = replace(
+        state,
+        gaps=GapProfile(east=(1, 0, 0), north=(0, 0, 0)),
+    )
+    unchanged = sequence_solver_module._projection_feedback_stage_update(
+        problem,
+        already_changed,
+        no_good,
+        west_channels=channels,
+    )
+    assert unchanged == StageBoundaryUpdate(problem, already_changed)
+
+    exact = freeform_module.ExactPackNoGood(
+        height=baseline.height,
+        outline=problem.sizes,
+        width=baseline.width,
+        origins=tuple(baseline.at[index] for index in range(problem.size)),
+        evidence=(failure,),
+    )
+    exact_repair = sequence_solver_module._projection_feedback_stage_update(
+        problem,
+        state,
+        exact,
+        west_channels=channels,
+    )
+    assert exact_repair is not None
+    exact_pack = _decoded_pack(
+        problem.outline_height,
+        decode_state(problem, exact_repair.state),
+        west_channels=channels,
+    )
+    assert (
+        exact_pack.height,
+        exact_pack.width,
+        tuple(exact_pack.at[index] for index in range(problem.size)),
+    ) != (exact.height, exact.width, exact.origins)
+
+
 def test_projection_pitch_feedback_single_restart_routes_padded_variant() -> None:
     problem, state, placement, failure = _projection_pitch_stage_fixture()
     padded = variant_with_minimum_pitch(
@@ -3008,8 +3107,7 @@ def test_production_padded_variant_transform_maps_same_strip_projection() -> Non
     )
 
 
-@pytest.mark.parametrize("control", ["unmapped", "different-strip"])
-def test_projection_pitch_controls_do_not_enable_padded_variant(control: str) -> None:
+def test_projection_pitch_unmapped_control_does_not_enable_padded_variant() -> None:
     problem, state, placement, failure = _projection_pitch_stage_fixture()
     run = _production_run(
         projected_chemical_plant_spec(),
@@ -3022,22 +3120,7 @@ def test_projection_pitch_controls_do_not_enable_padded_variant(control: str) ->
     transform = run.solver.stage_boundary_transform
     assert transform is not None
     buildings = list(placement.buildings)
-    if control == "unmapped":
-        buildings[1] = replace(buildings[1], owner_strip=None)
-    else:
-        second_instance = replace(problem.instance_ids[0], machine_start=2)
-        problem = replace(
-            problem,
-            sizes=problem.sizes + problem.sizes,
-            instance_ids=problem.instance_ids + (second_instance,),
-            variant_tables=problem.variant_tables + problem.variant_tables,
-        )
-        state = AnnealState.initial(2, seed=17)
-        buildings.extend(
-            replace(building, x=building.x + 20, owner_strip=1)
-            for building in placement.buildings
-        )
-        failure = replace(failure, buildings=(0, 2))
+    buildings[1] = replace(buildings[1], owner_strip=None)
     detailed = DetailedStageResult(
         _routing(DetailedRouteStatus.ROUTED),
         replace(placement, buildings=tuple(buildings)),
@@ -3061,6 +3144,75 @@ def test_projection_pitch_controls_do_not_enable_padded_variant(control: str) ->
         for strip, variant in enumerate(state.variant_indices)
     }
     assert selected_pitches == {7}
+
+
+@pytest.mark.parametrize("independent", [True, False])
+def test_different_strip_feedback_rebuilds_production_stage(
+    monkeypatch: pytest.MonkeyPatch,
+    independent: bool,
+) -> None:
+    problem, state, placement, failure = _projection_pitch_stage_fixture()
+    run = _production_run(
+        projected_chemical_plant_spec(),
+        band_policy=BandPolicy("portable"),
+        time_budget_s=2.0,
+        power=False,
+        strip_len=2,
+        config=SequenceSolverConfig.test(),
+    )
+    transform = run.solver.stage_boundary_transform
+    assert transform is not None
+    second_instance = replace(problem.instance_ids[0], machine_start=2)
+    problem = replace(
+        problem,
+        sizes=problem.sizes + problem.sizes,
+        instance_ids=problem.instance_ids + (second_instance,),
+        variant_tables=problem.variant_tables + problem.variant_tables,
+    )
+    state = AnnealState.initial(2, seed=17)
+    buildings = list(placement.buildings)
+    buildings.extend(
+        replace(building, x=building.x + 20, owner_strip=1)
+        for building in placement.buildings
+    )
+    failure = replace(failure, buildings=(0, 2))
+    detailed = DetailedStageResult(
+        _routing(DetailedRouteStatus.ROUTED),
+        replace(placement, buildings=tuple(buildings)),
+    )
+    monkeypatch.setattr(
+        finalize,
+        "independent_projection_pair",
+        lambda _placement, _policy, exact_failure: (
+            exact_failure.buildings if independent else None
+        ),
+    )
+
+    selected = transform(
+        40,
+        problem,
+        state,
+        FeedbackState.empty((40, 40)),
+        detailed,
+        0,
+        (failure,),
+        True,
+    )
+
+    assert selected is not None
+    assert selected.problem == problem
+    assert selected.state != state
+    sibling = transform(
+        40,
+        problem,
+        selected.state,
+        FeedbackState.empty((40, 40)),
+        detailed,
+        0,
+        (failure,),
+        False,
+    )
+    assert sibling == StageBoundaryUpdate(problem, selected.state)
 
 
 def test_feedback_stagnation_rebuilds_the_next_fixed_cardinality_stage() -> None:

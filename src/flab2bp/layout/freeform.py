@@ -2242,12 +2242,11 @@ class _Pack:
     #: Exact nets the packer rewarded for replacing with one sorter.
     direct: frozenset[DirectInsertId] = frozenset()
 
-def _projection_no_good(
+def _projection_strip_pair(
     placement: Placement,
-    pack: _Pack,
     failure: finalize.ProjectionFailure,
-) -> ProjectionNoGood | None:
-    """Map one exact projected static collision back to two packed strips."""
+) -> tuple[int, int] | None:
+    """Map exact static evidence to two distinct physical strip owners."""
     if failure.check != "geom.collide" or len(failure.buildings) != 2:
         return None
     left_building, right_building = failure.buildings
@@ -2262,12 +2261,30 @@ def _projection_no_good(
         type(left_strip) is not int
         or type(right_strip) is not int
         or left_strip == right_strip
-        or left_strip not in pack.at
-        or right_strip not in pack.at
     ):
         return None
-    if left_strip > right_strip:
-        left_strip, right_strip = right_strip, left_strip
+    return (
+        (left_strip, right_strip)
+        if left_strip < right_strip
+        else (right_strip, left_strip)
+    )
+
+
+def _projection_no_good(
+    placement: Placement,
+    pack: _Pack,
+    failure: finalize.ProjectionFailure,
+    policy: BandPolicy,
+) -> ProjectionNoGood | None:
+    """Map a universally proved static collision to two packed strips."""
+    strip_pair = _projection_strip_pair(placement, failure)
+    if strip_pair is None:
+        return None
+    if finalize.independent_projection_pair(placement, policy, failure) is None:
+        return None
+    left_strip, right_strip = strip_pair
+    if left_strip not in pack.at or right_strip not in pack.at:
+        return None
     left_x, left_y = pack.at[left_strip]
     right_x, right_y = pack.at[right_strip]
     return ProjectionNoGood(
@@ -2279,7 +2296,6 @@ def _projection_no_good(
         pack_height=pack.height,
         left_origin=(left_x, left_y),
         right_origin=(right_x, right_y),
-        pack_origins=tuple(pack.at[index] for index in range(len(pack.at))),
         failure=failure,
     )
 
@@ -2415,20 +2431,18 @@ def _add_projection_no_good(
     strips: Sequence[Strip],
     no_good: ProjectionNoGood,
 ) -> None:
-    """Forbid only the complete packed assignment that projection rejected."""
-    if len(no_good.pack_origins) != len(strips):
-        raise ValueError("projection no-good must retain every packed strip origin")
-    variables = [width]
-    values = [no_good.pack_width]
-    for strip_index, origin in enumerate(no_good.pack_origins):
-        variables.extend((xs[strip_index], ys[strip_index]))
-        values.extend(
-            (
-                origin[0] - strips[strip_index].west_channel,
-                origin[1],
-            )
-        )
-    model.add_forbidden_assignments(variables, [tuple(values)])
+    """Forbid one proved pair while preserving unrelated-strip freedom."""
+    left = no_good.left_strip
+    right = no_good.right_strip
+    variables = [width, xs[left], ys[left], xs[right], ys[right]]
+    values = [
+        no_good.pack_width,
+        no_good.left_origin[0] - strips[left].west_channel,
+        no_good.left_origin[1],
+        no_good.right_origin[0] - strips[right].west_channel,
+        no_good.right_origin[1],
+    ]
+    model.add_forbidden_assignments(variables, [values])
 
 
 
@@ -11280,11 +11294,20 @@ class FreeformLayout:
                 )
             except finalize.ProjectionRefusal as exc:
                 learned = False
+                requires_exact_pack_no_good = False
                 for failure in exc.failures:
                     if rejected is not None:
                         _retain_refusal(rejected, failure)
 
-                    no_good = _projection_no_good(placement, pack, failure)
+                    strip_pair = _projection_strip_pair(placement, failure)
+                    no_good = _projection_no_good(
+                        placement,
+                        pack,
+                        failure,
+                        self.band_policy,
+                    )
+                    if strip_pair is not None and no_good is None:
+                        requires_exact_pack_no_good = True
                     if no_good is not None:
                         no_good_key = (
                             no_good.left_strip,
@@ -11293,11 +11316,8 @@ class FreeformLayout:
                             no_good.delta_y,
                             no_good.pack_width,
                             no_good.pack_height,
-                            *(
-                                coordinate
-                                for origin in no_good.pack_origins
-                                for coordinate in origin
-                            ),
+                            *no_good.left_origin,
+                            *no_good.right_origin,
                         )
                         if no_good_key not in projection_no_good_keys:
                             projection_no_good_keys.add(no_good_key)
@@ -11341,6 +11361,20 @@ class FreeformLayout:
                         continue
                     minimum_pitch_x[pose_id] = requirement.required_pitch
                     learned = True
+                if requires_exact_pack_no_good:
+                    exact_no_good = ExactPackNoGood(
+                        height=pack.height,
+                        outline=tuple(_box(strip) for strip in strips),
+                        width=pack.width,
+                        origins=tuple(
+                            pack.at[index] for index in range(len(strips))
+                        ),
+                        evidence=exc.failures,
+                    )
+                    if exact_no_good not in exact_pack_no_good_keys:
+                        exact_pack_no_good_keys.add(exact_no_good)
+                        exact_pack_no_goods.append(exact_no_good)
+                        learned = True
                 if learned:
                     replan_strip_len = max(strip.machines for strip in strips)
                     strips = plan_strips(
