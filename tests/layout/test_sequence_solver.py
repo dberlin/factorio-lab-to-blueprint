@@ -2786,6 +2786,55 @@ def test_projection_pitch_feedback_runs_before_the_next_height_discovery(
     assert bool(global_allowances) is not borrow_first_discovery
 
 
+@pytest.mark.parametrize("closure_allowance", [None, 0])
+def test_zero_budget_projection_feedback_preserves_stage_and_marker(
+    closure_allowance: int | None,
+) -> None:
+    problem, state, _placement, _failure = _projection_pitch_stage_fixture()
+    detailed_allowances: list[int] = []
+
+    def detailed_route(
+        _decoded: DecodedPlacement,
+        allowance: int,
+    ) -> DetailedStageResult:
+        detailed_allowances.append(allowance)
+        return DetailedStageResult(_routing(DetailedRouteStatus.BUDGET), None)
+
+    solver = SequenceSolver(
+        heights=(40,),
+        problem_for_height=lambda _height: problem,
+        adapters=StageAdapters(
+            prepare=lambda _height, decoded: decoded,
+            global_route=lambda _prepared, _feedback, _allowance: _global(),
+            detailed_route=detailed_route,
+            validate=lambda _placement: pytest.fail("zero-budget feedback validated"),
+        ),
+        expansion_budget=ExpansionBudget(17),
+        config=SequenceSolverConfig(
+            stages=2,
+            moves_per_stage=1,
+            restarts_per_height=1,
+            global_elites=1,
+        ),
+    )
+    height_state = solver._heights[0]
+    restart = height_state.restarts[0]
+    restart.anneal = state
+    restart.stages = 1
+    height_state.feedback_restart = restart.restart
+
+    assert solver._run_pending_projection_feedback(
+        height_state,
+        0,
+        1,
+        prior_cancelled=False,
+        closure_allowance=closure_allowance,
+    ) == (0, False)
+    assert detailed_allowances == []
+    assert restart.stages == 1
+    assert height_state.feedback_restart == restart.restart
+
+
 def test_production_padded_variant_transform_maps_same_strip_projection() -> None:
     problem, state, placement, failure = _projection_pitch_stage_fixture()
     run = _production_run(

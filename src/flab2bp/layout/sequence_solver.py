@@ -1161,6 +1161,9 @@ class SequenceSolver[PreparedT]:
         prior_cancelled: bool,
         closure_allowance: int | None = None,
     ) -> tuple[int, bool]:
+        effective_detailed_allowance = (
+            allowance if closure_allowance is None else closure_allowance
+        )
         feedback_restart = next(
             (
                 restart
@@ -1176,6 +1179,7 @@ class SequenceSolver[PreparedT]:
         )
         if (
             prior_cancelled
+            or effective_detailed_allowance == 0
             or feedback_restart is None
             or scheduled_stages >= stage_limit
             or self.deadline_reached()
