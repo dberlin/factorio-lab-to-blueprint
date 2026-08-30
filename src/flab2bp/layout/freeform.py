@@ -6669,12 +6669,19 @@ def _route_all(
                 history[detail.cell] += _BLAME_WEIGHT
                 for blocking_cell in detail.blocking_cells:
                     history[blocking_cell] += _BLAME_WEIGHT
+                source, destination = _endpoint_cells(nets[index])
+                blockers = tuple(
+                    _net_id(blocker) for blocker in detail.blocking_indices
+                )
                 round_failures[index] = NetFailure(
                     _net_id(index),
                     RouteFailureKind.COMMIT_LINK,
                     (detail.cell, *detail.blocking_cells),
-                    tuple(_net_id(blocker) for blocker in detail.blocking_indices),
+                    blockers,
                     0,
+                    source=source,
+                    destination=destination,
+                    blocking_endpoints=_blocking_endpoint_cells(blockers),
                 )
         for path in paths.values():
             for cell in path:

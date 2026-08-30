@@ -988,6 +988,73 @@ def test_commit_link_rejection_reroutes_the_same_net_before_emission(
     )
 
 
+def test_route_feedback_preflight_commit_link_retains_exact_endpoint_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    canvas = _Canvas(limit=(0, -2, 6, 2))
+    source_index = canvas.add(
+        PlacedBuilding(2001, 35, 0, 0, carries_item="ore")
+    )
+    destination_index = canvas.add(
+        PlacedBuilding(2001, 35, 6, 0, carries_item="ore")
+    )
+    net_id = NetId(0, 1, "ore", NetRole.INTERNAL, 0)
+    net = _Net(
+        src=_Port(source_index, 0, 0, 0, 0),
+        dst=_Port(destination_index, 6, 0, 6, 6),
+        item="ore",
+        net_id=net_id,
+    )
+    original = freeform._commit_paths
+
+    def reject_preflight(
+        attempt_canvas: _Canvas,
+        attempt_nets: list[_Net],
+        paths: Mapping[int, Sequence[Cell]],
+        belt_id: int,
+        belt_model: int,
+        src_group: Mapping[int, tuple[int, ...]] | None = None,
+        dst_group: Mapping[int, tuple[int, ...]] | None = None,
+        *,
+        source_hints: Mapping[int, Cell] | None = None,
+        sink_hints: Mapping[int, Cell] | None = None,
+        failure_details: dict[int, freeform._CommitFailure] | None = None,
+    ) -> tuple[int, ...]:
+        if attempt_canvas is not canvas:
+            if failure_details is not None:
+                failure_details[0] = freeform._CommitFailure(
+                    cell=paths[0][0],
+                    side="source",
+                )
+            return (0,)
+        return original(
+            attempt_canvas,
+            attempt_nets,
+            paths,
+            belt_id,
+            belt_model,
+            src_group,
+            dst_group,
+            source_hints=source_hints,
+            sink_hints=sink_hints,
+            failure_details=failure_details,
+        )
+
+    monkeypatch.setattr(freeform, "_commit_paths", reject_preflight)
+    result = _route_all(
+        canvas,
+        [net],
+        2001,
+        35,
+        (0, -2, 6, 2),
+        budget={"left": 50_000},
+    )
+
+    assert result.status is DetailedRouteStatus.STRANDED
+    assert result.failures[0].source == (0, 0, 0)
+    assert result.failures[0].destination == (6, 0, 0)
+
+
 def test_unreachable_elevated_port_returns_structured_failure_without_route() -> None:
     canvas = _Canvas(limit=(0, -2, 6, 2))
     source_index = canvas.add(
