@@ -3098,6 +3098,7 @@ def _production_run(
             strip_count=len(strips),
             height=topology_beam_height,
             machine_count=spec.machine_count,
+            sprayed_lanes=len(spec.spray_lanes),
             power=power,
         )
         use_shared_pack = _uses_shared_pack_candidate(

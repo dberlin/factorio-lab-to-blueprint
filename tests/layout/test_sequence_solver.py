@@ -4136,13 +4136,14 @@ def test_sequence_band_120_dropped_height_has_actual_clean_layout_control(
 ) -> None:
     spec = band_120_control_spec()
     strips = plan_strips(spec, strip_len=6)
+    direct_candidates = freeform_module._direct_net_candidates(strips, spec)
     seed = _greedy_pack(strips, height)
     pack = freeform_module._pack(
         strips,
         height=height,
         width_bound=max(8, 2 * seed.width),
         time_budget_s=1.0,
-        direct_candidates=freeform_module._direct_net_candidates(strips, spec),
+        direct_candidates=direct_candidates,
         workers=1,
         seed=seed,
     )
@@ -4160,6 +4161,7 @@ def test_sequence_band_120_dropped_height_has_actual_clean_layout_control(
         pack,
         strips,
         state.problem,
+        direct_candidates=direct_candidates,
     )
 
     detailed = run.solver.close_exact_decoded(
