@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 from collections.abc import Callable, Iterator
 from typing import cast
 
 import pytest
 
-from flab2bp.layout import sequence_solver
+from flab2bp.layout import freeform, sequence_solver
 from flab2bp.layout.route_feedback import DetailedRouteResult, DetailedRouteStatus
 from scripts import route_profile
 
@@ -44,8 +45,8 @@ def test_json_profile_emits_one_bounded_machine_readable_record(
     monkeypatch.setattr(route_profile, "Tally", lambda: tally)
     monkeypatch.setattr(route_profile, "install", lambda _tally: lambda: None)
     monkeypatch.setattr(route_profile, "_spec", lambda _url_id, _index: _SPEC)
-    monkeypatch.setattr(route_profile.time, "perf_counter", lambda: next(times))
-    monkeypatch.setattr(route_profile.freeform, "FreeformLayout", _Layout)
+    monkeypatch.setattr(time, "perf_counter", lambda: next(times))
+    monkeypatch.setattr(freeform, "FreeformLayout", _Layout)
     monkeypatch.setattr(
         sys,
         "argv",
@@ -79,10 +80,10 @@ def test_tally_reads_iterations_from_detailed_route_result(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     result = DetailedRouteResult(DetailedRouteStatus.ROUTED, (), (), 7, 123)
-    monkeypatch.setattr(route_profile.freeform, "_route_all", lambda *args, **kwargs: result)
+    monkeypatch.setattr(freeform, "_route_all", lambda *args, **kwargs: result)
     tally = route_profile.Tally()
     restore = route_profile.install(tally)
-    wrapped = cast(Callable[..., DetailedRouteResult], route_profile.freeform._route_all)
+    wrapped = cast(Callable[..., DetailedRouteResult], freeform._route_all)
     try:
         assert wrapped(None, [], 1, 1, (0, 0, 0, 0)) is result
     finally:
@@ -106,7 +107,7 @@ def test_normal_profile_honors_sequence_pair_strategy(
     monkeypatch.setattr(route_profile, "install", lambda _tally: lambda: None)
     monkeypatch.setattr(sequence_solver, "SequencePairLayout", SequencePairLayout)
     monkeypatch.setattr(
-        route_profile.freeform,
+        freeform,
         "FreeformLayout",
         lambda **_kwargs: pytest.fail("freeform strategy was selected"),
     )

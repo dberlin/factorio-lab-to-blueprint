@@ -14,8 +14,9 @@ def _run_profiled_astar(
     monkeypatch.setattr(freeform, "_astar", lambda *args, **kwargs: result)
     tally = route_profile.Tally()
     restore = route_profile.install(tally)
+    canvas = object.__new__(freeform._Canvas)
     try:
-        returned = freeform._astar(None, [], set(), {}, 0.0, (0, 0, 0, 0))
+        returned = freeform._astar(canvas, [], set(), {}, 0.0, (0, 0, 0, 0))
     finally:
         restore()
     return returned, tally
