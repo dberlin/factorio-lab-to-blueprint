@@ -1316,6 +1316,7 @@ def _archive_incumbent(
     history: float,
     missed_direct: int = 0,
     overflow: int = 0,
+    used_height: int = 1,
     seed: int = 0,
 ) -> AnnealIncumbent:
     state = AnnealState(
@@ -1328,20 +1329,20 @@ def _archive_incumbent(
         x=(0,),
         y=(0,),
         width=width,
-        used_height=1,
+        used_height=used_height,
         x_windows=((0, 0),),
         y_windows=((0, 0),),
         gap_area=0,
         variant_indices=(0,),
     )
-    dimensions = ((width, 1),)
+    dimensions = ((width, used_height),)
     return AnnealIncumbent(
         state=state,
         decoded=decoded,
         breakdown=EnergyBreakdown(
             width=width,
-            used_height=1,
-            box_area=width,
+            used_height=used_height,
+            box_area=width * used_height,
             gap_area=0,
             weighted_hpwl=hpwl,
             history_cost=history,
@@ -1358,6 +1359,140 @@ def _archive_incumbent(
             east_gaps=(0,),
             north_gaps=(0,),
         ),
+    )
+
+
+def test_quality_archive_key_prefers_projected_area_over_width_and_direct_inserts() -> None:
+    narrower = _archive_incumbent(
+        width=4,
+        used_height=4,
+        hpwl=0.0,
+        history=0.0,
+        missed_direct=0,
+    )
+    area_aligned = _archive_incumbent(
+        width=5,
+        used_height=2,
+        hpwl=100.0,
+        history=100.0,
+        missed_direct=10,
+    )
+
+    assert sequence_pair_module.quality_archive_key(
+        area_aligned
+    ) < sequence_pair_module.quality_archive_key(narrower)
+
+
+def test_quality_archive_key_preserves_overflow_proxy_and_placement_tie_order() -> None:
+    best = _archive_incumbent(width=5, hpwl=1.0, history=2.0)
+    missed = replace(best, breakdown=replace(best.breakdown, missed_direct_inserts=1))
+    overflowing = replace(
+        best,
+        breakdown=replace(
+            best.breakdown,
+            hard_outline_overflow=1,
+            missed_direct_inserts=0,
+            weighted_hpwl=0.0,
+            history_cost=0.0,
+        ),
+    )
+    later_key = replace(best, key=replace(best.key, x=(1,)))
+
+    assert sequence_pair_module.quality_archive_key(
+        best
+    ) < sequence_pair_module.quality_archive_key(missed)
+    assert sequence_pair_module.quality_archive_key(
+        missed
+    ) < sequence_pair_module.quality_archive_key(overflowing)
+    assert sorted(
+        (later_key, best),
+        key=sequence_pair_module.quality_archive_key,
+    ) == [best, later_key]
+
+
+def _archive_relation_incumbent(
+    *,
+    pair: SequencePair,
+    width: int,
+    key_offset: int,
+) -> AnnealIncumbent:
+    candidate = _archive_incumbent(
+        width=width,
+        hpwl=10.0,
+        history=10.0,
+    )
+    size = len(pair.positive)
+    x = tuple(range(key_offset, key_offset + size))
+    y = (0,) * size
+    gaps = GapProfile.zero(size)
+    return replace(
+        candidate,
+        state=AnnealState(
+            pair=pair,
+            gaps=gaps,
+            base_seed=0,
+            variant_indices=(0,) * size,
+        ),
+        decoded=replace(
+            candidate.decoded,
+            x=x,
+            y=y,
+            x_windows=tuple((coordinate, coordinate) for coordinate in x),
+            y_windows=((0, 0),) * size,
+            variant_indices=(0,) * size,
+        ),
+        key=PlacementKey(
+            x=x,
+            y=y,
+            dimensions=((1, 1),) * size,
+            east_gaps=gaps.east,
+            north_gaps=gaps.north,
+        ),
+    )
+
+
+def test_elite_archive_substitutes_one_redundant_relation_under_fixed_cap() -> None:
+    mandatory = _archive_incumbent(width=1, hpwl=0.0, history=0.0)
+    shared_relation = SequencePair((0, 1), (0, 1))
+    first_shared = _archive_relation_incumbent(
+        pair=shared_relation,
+        width=10,
+        key_offset=10,
+    )
+    second_shared = _archive_relation_incumbent(
+        pair=shared_relation,
+        width=11,
+        key_offset=20,
+    )
+    distinct_relation = _archive_relation_incumbent(
+        pair=SequencePair((0, 1), (1, 0)),
+        width=12,
+        key_offset=30,
+    )
+    candidates = (
+        second_shared,
+        distinct_relation,
+        mandatory,
+        first_shared,
+    )
+
+    forward = sequence_pair_module.build_elite_archive(candidates, elite_count=3)
+    reverse = sequence_pair_module.build_elite_archive(
+        reversed(candidates),
+        elite_count=3,
+    )
+
+    assert forward == reverse
+    assert len(forward) == 3
+    assert tuple(entry.incumbent for entry in forward) == (
+        mandatory,
+        first_shared,
+        distinct_relation,
+    )
+    assert forward[0].categories == tuple(sequence_pair_module.EliteCategory)
+    assert tuple(entry.categories for entry in forward[1:]) == (
+        (sequence_pair_module.EliteCategory.BLENDED,),
+        (sequence_pair_module.EliteCategory.BLENDED,),
     )
 
 

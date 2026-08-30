@@ -1537,20 +1537,16 @@ class SequenceSolver[PreparedT]:
                 RouteFailureKind.BUDGET,
             }
         )
-        if starting_mode is ObjectiveMode.EXPLORATION:
-            height_state.feedback = update_feedback(
-                decay_feedback(height_state.feedback), detailed.routing
+        height_state.feedback = update_feedback(
+            decay_feedback(height_state.feedback), detailed.routing
+        )
+        if signature:
+            restart.feedback_stagnation = (
+                restart.feedback_stagnation + 1 if signature == restart.failure_signature else 1
             )
-            if signature:
-                restart.feedback_stagnation = (
-                    restart.feedback_stagnation + 1 if signature == restart.failure_signature else 1
-                )
-            else:
-                restart.feedback_stagnation = 0
-            restart.failure_signature = signature
         else:
-            restart.failure_signature = ()
             restart.feedback_stagnation = 0
+        restart.failure_signature = signature
 
         neighbourhood = frozenset[int]()
         next_anneal = AnnealState(

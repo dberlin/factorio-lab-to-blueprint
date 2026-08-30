@@ -1769,6 +1769,35 @@ def build_elite_archive(
         order.append(candidate.key)
         categories_by_key[candidate.key] = [EliteCategory.BLENDED]
 
+    selected_signatures: set[tuple[tuple[int, ...], tuple[int, ...]]] = set()
+    redundant_index: int | None = None
+    for index, key in enumerate(order):
+        signature = _archive_relation_signature(distinct[key])
+        if (
+            signature in selected_signatures
+            and categories_by_key[key] == [EliteCategory.BLENDED]
+        ):
+            redundant_index = index
+        else:
+            selected_signatures.add(signature)
+
+    if redundant_index is not None:
+        replacement = min(
+            (
+                candidate
+                for candidate in values
+                if candidate.key not in categories_by_key
+                and _archive_relation_signature(candidate) not in selected_signatures
+            ),
+            key=_blended_archive_key,
+            default=None,
+        )
+        if replacement is not None:
+            redundant_key = order[redundant_index]
+            del categories_by_key[redundant_key]
+            order[redundant_index] = replacement.key
+            categories_by_key[replacement.key] = [EliteCategory.BLENDED]
+
     return tuple(
         TaggedAnnealIncumbent(
             incumbent=distinct[key],
@@ -1798,14 +1827,14 @@ def _blended_archive_key(candidate: AnnealIncumbent) -> tuple[SearchEnergy, Plac
 
 def quality_archive_key(
     candidate: AnnealIncumbent,
-) -> tuple[int, int, int, int, float, PlacementKey]:
+) -> tuple[int, int, int, float, float, PlacementKey]:
     breakdown = candidate.breakdown
     return (
         breakdown.hard_outline_overflow,
-        breakdown.width,
-        breakdown.used_height,
-        breakdown.gap_area,
+        breakdown.box_area,
+        breakdown.missed_direct_inserts,
         breakdown.weighted_hpwl,
+        breakdown.history_cost,
         candidate.key,
     )
 
@@ -1834,6 +1863,13 @@ def _lowest_history_archive_key(
         breakdown.weighted_hpwl,
         candidate.key,
     )
+
+
+def _archive_relation_signature(
+    candidate: AnnealIncumbent,
+) -> tuple[tuple[int, ...], tuple[int, ...]]:
+    dedupe_key = _archive_dedupe_key(candidate)
+    return dedupe_key[0], dedupe_key[1]
 
 
 def _archive_dedupe_key(

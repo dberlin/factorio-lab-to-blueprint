@@ -125,19 +125,29 @@ def _routing(
     *,
     expansions: int = 0,
     geometric_failure: bool = False,
+    failure_kind: RouteFailureKind | None = None,
 ) -> DetailedRouteResult:
     failures: tuple[NetFailure, ...] = ()
     if status is not DetailedRouteStatus.ROUTED:
         net = NetId(0, 0, "item", NetRole.INTERNAL, 0)
+        kind = failure_kind or (
+            RouteFailureKind.CONGESTION_WALL
+            if geometric_failure
+            else RouteFailureKind.BUDGET
+        )
         failures = (
             NetFailure(
                 net_id=net,
-                kind=(
-                    RouteFailureKind.CONGESTION_WALL
-                    if geometric_failure
-                    else RouteFailureKind.BUDGET
+                kind=kind,
+                wall=(
+                    ((0, 0, 0),)
+                    if kind
+                    not in {
+                        RouteFailureKind.BUDGET,
+                        RouteFailureKind.STATIC_ACCESS,
+                    }
+                    else ()
                 ),
-                wall=((0, 0, 0),) if geometric_failure else (),
                 blocking_nets=(),
                 expansions=expansions,
             ),
@@ -717,25 +727,17 @@ def test_quality_mode_requires_zero_overflow_and_validator_clean_exact(
     assert global_calls == 2
 
 
-@pytest.mark.parametrize(
-    "quality_failure",
-    (DetailedRouteStatus.STRANDED, DetailedRouteStatus.BUDGET),
-)
-def test_quality_failure_exits_and_following_stage_restores_global_feedback(
-    quality_failure: DetailedRouteStatus,
-) -> None:
+def test_quality_geometric_failure_updates_feedback_and_repeated_signature() -> None:
     exact = _placement(area=20, belt_tiles=4)
+    quality_failure = _routing(
+        DetailedRouteStatus.STRANDED,
+        failure_kind=RouteFailureKind.CONGESTION_WALL,
+    )
     fake = _FakeRouting(
         detailed_results=(
             DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), exact),
-            DetailedStageResult(
-                _routing(quality_failure, geometric_failure=True),
-                None,
-            ),
-            DetailedStageResult(
-                _routing(DetailedRouteStatus.STRANDED, geometric_failure=True),
-                None,
-            ),
+            DetailedStageResult(quality_failure, None),
+            DetailedStageResult(quality_failure, None),
         )
     )
     solver = _solver(
@@ -752,11 +754,23 @@ def test_quality_failure_exits_and_following_stage_restores_global_feedback(
     first_result = solver.search(max_stages=2)
 
     failure = first_result.stages[1]
+    restart = solver._heights[0].restarts[0]
+    failed_net = quality_failure.failures[0].net_id
+    expected_signature = (
+        (
+            failed_net.logical,
+            RouteFailureKind.CONGESTION_WALL,
+            (),
+        ),
+    )
     assert failure.global_routes == 0
     assert failure.global_skip_reason == "quality-mode"
     assert failure.objective_mode is sequence_solver_module.ObjectiveMode.EXPLORATION
     assert failure.quality_exited
-    assert not solver._heights[0].feedback.cell_history
+    assert solver._heights[0].feedback.net_weight == {failed_net: 1.0}
+    assert solver._heights[0].feedback.cell_history == {(0, 0, 0): 1.0}
+    assert restart.failure_signature == expected_signature
+    assert restart.feedback_stagnation == 1
     assert len(fake.global_allowances) == 1
 
     final_result = solver.search(max_stages=3)
@@ -765,8 +779,50 @@ def test_quality_failure_exits_and_following_stage_restores_global_feedback(
     assert restored.global_routes == 1
     assert restored.global_skip_reason is None
     assert restored.objective_mode is sequence_solver_module.ObjectiveMode.EXPLORATION
-    assert solver._heights[0].feedback.cell_history == {(0, 0, 0): 1.0}
+    assert solver._heights[0].feedback.net_weight == {failed_net: 1.85}
+    assert solver._heights[0].feedback.cell_history == {(0, 0, 0): 1.85}
+    assert restart.failure_signature == expected_signature
+    assert restart.feedback_stagnation == 2
     assert len(fake.global_allowances) == 2
+
+
+@pytest.mark.parametrize(
+    ("status", "kind"),
+    (
+        (DetailedRouteStatus.STRANDED, RouteFailureKind.STATIC_ACCESS),
+        (DetailedRouteStatus.BUDGET, RouteFailureKind.BUDGET),
+    ),
+)
+def test_quality_static_and_budget_failures_add_no_feedback_or_signature(
+    status: DetailedRouteStatus,
+    kind: RouteFailureKind,
+) -> None:
+    exact = _placement(area=20, belt_tiles=4)
+    fake = _FakeRouting(
+        detailed_results=(
+            DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), exact),
+            DetailedStageResult(_routing(status, failure_kind=kind), None),
+        )
+    )
+    solver = _solver(
+        fake,
+        heights=(40,),
+        config=SequenceSolverConfig(
+            stages=2,
+            moves_per_stage=1,
+            restarts_per_height=1,
+            global_elites=1,
+        ),
+    )
+
+    result = solver.search(max_stages=2)
+
+    restart = solver._heights[0].restarts[0]
+    assert result.stages[1].quality_exited
+    assert not solver._heights[0].feedback.net_weight
+    assert not solver._heights[0].feedback.cell_history
+    assert restart.failure_signature == ()
+    assert restart.feedback_stagnation == 0
 
 
 def test_best_height_scheduling_uses_complete_exact_key_before_stable_order() -> None:
