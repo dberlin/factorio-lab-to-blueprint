@@ -2710,6 +2710,7 @@ def _sweep_after_first_routing(
     arrangements: int = 2,
     forbid_finalization: bool = False,
     heights: tuple[int, ...] = (20,),
+    subsequent_routing: DetailedRouteResult | None = None,
 ) -> tuple[Placement | None, list[tuple[int, int]], list[freeform.PackAttempt]]:
     spec = two_stage_spec()
     strips = plan_strips(spec)
@@ -2723,7 +2724,7 @@ def _sweep_after_first_routing(
         for height in heights
         for arrangement in range(arrangements)
     }
-    routed = _routing_failures()
+    routed = subsequent_routing or _routing_failures()
     seen: list[tuple[int, int]] = []
 
     def pack(
@@ -2873,6 +2874,22 @@ def test_admitted_feedback_retry_is_not_rechecked_at_deadline_boundary(
 
     assert result is not None
     assert seen[:2] == [(20, 0), (20, 1)]
+
+def test_admitted_feedback_retry_cannot_cascade_to_a_third_arrangement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    failure = _feedback_bearing_routing()
+
+    result, seen, attempts = _sweep_after_first_routing(
+        monkeypatch,
+        failure,
+        arrangements=3,
+        subsequent_routing=failure,
+    )
+
+    assert result is None
+    assert seen == [(20, 0), (20, 1)]
+    assert [attempt.routing.failed_count for attempt in attempts] == [1, 1]
 
 
 

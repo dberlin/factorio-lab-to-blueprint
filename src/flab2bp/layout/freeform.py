@@ -11718,11 +11718,6 @@ class FreeformLayout:
 
         best: Placement | None = None
         best_key: tuple[int, float] | None = None
-        #: Heights whose first arrangement left only one to three authoritative
-        #: non-budget route failures. Each may spend one already-configured next
-        #: arrangement before an incumbent exists; admitting it removes the
-        #: height, so a second miss cannot cascade into more work.
-        rescuable_heights: set[int] = set()
         #: The dearest candidate this sweep has COMPLETED, pack through validate.
         #: What `_room_for_another` charges the next improvement arrangement.
         dearest_candidate_s = 0.0
@@ -11824,16 +11819,12 @@ class FreeformLayout:
             # shipped to budget 4.
             # One bounded exception lets a strong near miss look at the next
             # arrangement for that exact height. The candidate already exists in
-            # `candidate_packs`; this only admits it through the incumbent gate.
-            # It still pays the ordinary affordability and deadline checks below.
-            # Skipping non-matching heights preserves arrangement-outer ordering
-            # until the tracked height is reached.
+            # `candidate_packs`; promotion marks it only after the ordinary
+            # affordability check passes. The marker preserves that admission
+            # through this gate and the hard deadline still applies. A failed
+            # admitted retry cannot unlock the height's later arrangements.
             if not projection_retry and arrangement and best is None:
-                if height not in rescuable_heights:
-                    if not rescuable_heights:
-                        break
-                    continue
-                rescuable_heights.remove(height)
+                break
             if (
                 not projection_retry
                 and arrangement
@@ -12186,7 +12177,6 @@ class FreeformLayout:
                             soft,
                             retry_cost,
                         ):
-                            rescuable_heights.add(height)
                             candidate_packs.pop(next_index)
                             candidate_packs.insert(
                                 candidate_index,
