@@ -4,6 +4,7 @@ import json
 from types import SimpleNamespace
 
 import pytest
+from flab2bp.layout import finalize
 
 from flab2bp.layout.base import (
     LayoutAttemptFailure,
@@ -98,3 +99,105 @@ def test_run_cell_preserves_typed_refusal_evidence(
         }
     ]
     assert persisted["projection_failures"] == [expected_projection]
+
+
+def test_run_cell_persists_post_compaction_projection_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    failures = (
+        finalize.ProjectionFailure(
+            check="geom.collide",
+            buildings=(2, 7),
+            detail="projected colliders overlap",
+            band=4,
+        ),
+        finalize.ProjectionFailure(
+            check="power.coverage",
+            buildings=(11,),
+            detail="projected receiver is outside every power field",
+            band=5,
+        ),
+    )
+    refusal = finalize.ProjectionRefusal(failures)
+    placement = object()
+
+    class SuccessfulStrategy:
+        def lay_out(self, spec: object, *, time_budget_s: float) -> object:
+            return placement
+
+    monkeypatch.setattr(
+        audit,
+        "_specs_for",
+        lambda url, count: (SimpleNamespace(label="projection fixture"),),
+    )
+    monkeypatch.setattr(
+        audit,
+        "_belt_rules_for",
+        lambda url: SimpleNamespace(vertical_construction=False),
+    )
+    monkeypatch.setitem(
+        audit._STRATEGIES,
+        "post-projection",
+        lambda power, workers, vertical: SuccessfulStrategy(),
+    )
+    monkeypatch.setattr(
+        audit.finalize,
+        "compact_open_boundary_belts",
+        lambda result, spec, *, expect_power: result,
+    )
+
+    def reject_projection(
+        result: object,
+        policy: object,
+    ) -> object:
+        raise refusal
+
+    monkeypatch.setattr(audit.finalize, "finalize_placement", reject_projection)
+    monkeypatch.setattr(audit, "_JSONL", [])
+    job = audit.Job(
+        strategy="post-projection",
+        url_id="projection",
+        url="test://projection",
+        tier="trivial",
+        spec_index=0,
+        candidates=1,
+        budget=1.0,
+        power=False,
+        workers=1,
+    )
+
+    result = audit.run_cell(job)
+    audit.record({"post-projection": audit.Tally()}, result)
+    persisted = json.loads(json.dumps(audit._JSONL[-1]))
+
+    expected = [
+        {
+            "band": 4,
+            "check": "geom.collide",
+            "buildings": [2, 7],
+            "detail": "projected colliders overlap",
+        },
+        {
+            "band": 5,
+            "check": "power.coverage",
+            "buildings": [11],
+            "detail": "projected receiver is outside every power field",
+        },
+    ]
+    assert result.status == "REFUSED"
+    assert result.checks == ("geom.collide", "power.coverage")
+    assert result.projection_failures == (
+        ProjectionFailureRecord(
+            band=4,
+            check="geom.collide",
+            buildings=(2, 7),
+            detail="projected colliders overlap",
+        ),
+        ProjectionFailureRecord(
+            band=5,
+            check="power.coverage",
+            buildings=(11,),
+            detail="projected receiver is outside every power field",
+        ),
+    )
+    assert persisted["projection_failures"] == expected

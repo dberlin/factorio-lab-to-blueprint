@@ -269,6 +269,15 @@ def run_cell(job: Job) -> Result:
         placement = finalize.finalize_placement(placement, BandPolicy("portable"))
     except finalize.ProjectionRefusal as exc:
         reason = "final spherical projection rejected " + ", ".join(exc.checks)
+        projection_failures = tuple(
+            ProjectionFailureRecord(
+                band=failure.band,
+                check=failure.check,
+                buildings=failure.buildings,
+                detail=failure.detail,
+            )
+            for failure in exc.failures
+        )
         return Result(
             job,
             "REFUSED",
@@ -276,6 +285,7 @@ def run_cell(job: Job) -> Result:
             reason[:70],
             exc.checks,
             time.monotonic() - t0,
+            projection_failures=projection_failures,
         )
     projection_frame_candidates = int(placement.stats.get("projection_frame_candidates", 0))
     projection_count = int(placement.stats.get("projection_count", 0))
