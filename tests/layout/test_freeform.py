@@ -4303,12 +4303,13 @@ def test_static_clearance_requirement_regenerates_a_distinct_lane_variant() -> N
     selected = next(strip for strip in ordinary if "iron-ingot" in strip.in_lanes)
     assert selected.physical_variant is not None
     pose_id = strip_pose_id(selected.physical_variant)
+    relation = next(iter(freeform._staged_static_clearance_keys(selected)))
     before_identity = selected.staged_static_variant_id
 
     extended = plan_strips(
         spec,
         minimum_staged_static_clearance={
-            pose_id: selected.west_channel + 1,
+            relation: selected.west_channel + 1,
         },
     )
     replacement = next(
@@ -4382,10 +4383,12 @@ def test_staged_static_terminal_exhaustion_is_bounded_across_distinct_assignment
             if "iron-ingot" in strip.in_lanes
         )
         seen_clearance.append(selected.west_channel)
+        relation = next(iter(freeform._staged_static_clearance_keys(selected)))
         requirement = freeform._staged_static_clearance_requirement(
             selected,
             selected_index,
             failure,
+            relation,
         )
         assert requirement is not None
         raise freeform._Unseatable(
@@ -9627,6 +9630,8 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
             policy=BandPolicy("portable"),
         )
         assert len(got) == 1, f"expected one coater on the sprayed lane, got {got}"
+        assert canvas.buildings[got[0].coater].owner_strip == 0
+        assert canvas.buildings[got[0].supply_belt].owner_strip == 0
 
     def test_items_sharing_one_lane_share_one_positional_coater(self) -> None:
         canvas, spec, strips, ports = self._fixture(4)
@@ -9988,4 +9993,118 @@ def test_freeform_extent_gate_uses_realized_core_not_nominal_pack_ceiling() -> N
         BandPolicy("120"),
         perimeter=_ENTRY_RING,
     ).frame_candidates(core_width, core_height)
+
+
+def band_160_all_products_spec() -> BuildSpec:
+    from flab2bp.lab.data import load_vendored
+    from flab2bp.lab.url import parse_url
+    from flab2bp.rates.candidates import CandidatePolicy, build_candidates
+
+    url = (
+        "https://factoriolab.github.io/dsp/flow?"
+        "z=eJzLt63SMjQwUMu3dQrWMgPTzlrGILpEywgi7qRlaGZgoKVlqJZvaw4ShLLDQBrB"
+        "7MykVFsntdzcItvIOqc617pAtdyCYls3tTJbQ0MAjnsZAA__&v=11"
+    )
+    return next(
+        candidate
+        for candidate in build_candidates(
+            load_vendored(),
+            parse_url(url),
+            candidate_policies=(CandidatePolicy.ALL_PRODUCTS,),
+        ).candidates
+        if candidate.label == "all-products"
+    )
+
+
+def test_staged_static_clearance_reuses_only_the_same_physical_relation() -> None:
+    spec = band_160_all_products_spec()
+    ordinary = plan_strips(spec)
+    unsafe = next(
+        strip
+        for strip in ordinary
+        if strip.item_id == catalog.item_id("assembling-machine-2")
+        and any(
+            relation.delta_y == 1
+            for relation in freeform._staged_static_clearance_keys(strip)
+        )
+    )
+    sprayed_item = next(
+        item
+        for item in unsafe.in_lanes
+        if unsafe.machine_row - unsafe.row_of_input(item) == 1
+    )
+    coater = catalog.building(catalog.SPRAY_COATER_ID)
+    relation = freeform._staged_static_clearance_key(
+        PlacedBuilding(
+            item_id=unsafe.item_id,
+            model_index=unsafe.model_index,
+            x=0,
+            y=unsafe.machine_row,
+            width=unsafe.mw,
+            height=unsafe.mh,
+            yaw=unsafe.yaw,
+        ),
+        PlacedBuilding(
+            item_id=catalog.SPRAY_COATER_ID,
+            model_index=coater.model_index,
+            x=1 - unsafe.west_channel,
+            y=unsafe.row_of_input(sprayed_item),
+            width=1,
+            height=1,
+            yaw=Facing.EAST.value,
+        ),
+    )
+    assert relation in freeform._staged_static_clearance_keys(unsafe)
+    safe = next(
+        strip
+        for strip in ordinary
+        if strip.cargo_domain is CargoDomain.REQUIRES_SPRAY
+        and strip.item_id != unsafe.item_id
+    )
+    assert relation not in freeform._staged_static_clearance_keys(safe)
+
+    regenerated = plan_strips(
+        spec,
+        minimum_staged_static_clearance={
+            relation: unsafe.west_channel + 1,
+        },
+    )
+    equivalent = [
+        strip
+        for strip in regenerated
+        if relation in freeform._staged_static_clearance_keys(
+            replace(strip, west_channel=freeform._COATER_WEST_CHANNEL)
+        )
+    ]
+    safe_replacement = next(
+        strip
+        for strip in regenerated
+        if strip.family_id == safe.family_id
+        and strip.machine_start == safe.machine_start
+    )
+
+    assert len(equivalent) > 1
+    assert all(
+        strip.west_channel == freeform._COATER_WEST_CHANNEL + 1
+        for strip in equivalent
+    )
+    assert safe_replacement.west_channel == freeform._COATER_WEST_CHANNEL
+
+def test_all_products_band_160_learns_every_projected_coater_clearance() -> None:
+    spec = band_160_all_products_spec()
+    strips = plan_strips(spec)
+    assert len(
+        freeform._band_policy_candidate_heights(
+            strips,
+            BandPolicy("portable"),
+        )
+    ) == len(freeform._candidate_heights(strips))
+
+    placement = FreeformLayout(
+        band_policy=BandPolicy("portable"),
+    ).lay_out(spec, time_budget_s=15.0)
+
+    assert placement.frame is not None
+    assert placement.frame.primary_band == 160
+    assert validate.certify(placement, spec, expect_power=True).ok
 

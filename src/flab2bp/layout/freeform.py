@@ -120,7 +120,9 @@ if TYPE_CHECKING:
     )
 
 _NO_PITCH_REQUIREMENTS: Mapping[StripPoseId, int] = MappingProxyType({})
-_NO_STAGED_STATIC_CLEARANCE: Mapping[StripPoseId, int] = MappingProxyType({})
+_NO_STAGED_STATIC_CLEARANCE: Mapping[StagedStaticClearanceKey, int] = (
+    MappingProxyType({})
+)
 
 #: Free tiles reserved on a strip's east and south faces.  One is enough for a
 #: belt to pass; the router uses upper levels when one is not.
@@ -729,6 +731,25 @@ class StagedStaticVariantId:
             raise ValueError("staged-static west channel must be positive")
 
 
+@dataclass(frozen=True, order=True, slots=True)
+class StagedStaticClearanceKey:
+    """Translation-free identity of one staged-static/strip collider relation."""
+
+    peer_item_id: int
+    peer_model_index: int
+    peer_width: int
+    peer_height: int
+    peer_yaw: float
+    candidate_item_id: int
+    candidate_model_index: int
+    candidate_width: int
+    candidate_height: int
+    candidate_yaw: float
+    delta_x: int
+    delta_y: int
+    delta_z: Fraction
+
+
 @dataclass(frozen=True, slots=True)
 class StagedStaticClearanceRequirement:
     """A same-strip staged static needs one physically longer attachment lane."""
@@ -738,6 +759,7 @@ class StagedStaticClearanceRequirement:
     owner_strip: int
     rejected_west_channel: int
     required_west_channel: int
+    relation: StagedStaticClearanceKey
     evidence: tuple[finalize.ProjectionFailure, ...]
 
     def __post_init__(self) -> None:
@@ -1091,6 +1113,60 @@ class Strip:
     @property
     def sid(self) -> str:
         return f"{self.group_key}"
+
+
+def _staged_static_clearance_key(
+    peer: PlacedBuilding,
+    candidate: PlacedBuilding,
+) -> StagedStaticClearanceKey:
+    """Normalize one exact same-strip pair without its packed translation."""
+    return StagedStaticClearanceKey(
+        peer_item_id=peer.item_id,
+        peer_model_index=peer.model_index,
+        peer_width=peer.width,
+        peer_height=peer.height,
+        peer_yaw=peer.yaw,
+        candidate_item_id=candidate.item_id,
+        candidate_model_index=candidate.model_index,
+        candidate_width=candidate.width,
+        candidate_height=candidate.height,
+        candidate_yaw=candidate.yaw,
+        delta_x=peer.x - candidate.x,
+        delta_y=peer.y - candidate.y,
+        delta_z=peer.z - candidate.z,
+    )
+
+
+def _staged_static_clearance_keys(
+    strip: Strip,
+) -> frozenset[StagedStaticClearanceKey]:
+    """Physical W3 machine/Coater relations this strip can materialize."""
+    if (
+        strip.cargo_domain is not CargoDomain.REQUIRES_SPRAY
+        or strip.physical_variant is None
+    ):
+        return frozenset()
+    coater = catalog.building(catalog.SPRAY_COATER_ID)
+    coater_x = 1 - strip.west_channel
+    return frozenset(
+        StagedStaticClearanceKey(
+            peer_item_id=strip.item_id,
+            peer_model_index=strip.model_index,
+            peer_width=strip.mw,
+            peer_height=strip.mh,
+            peer_yaw=strip.yaw,
+            candidate_item_id=catalog.SPRAY_COATER_ID,
+            candidate_model_index=coater.model_index,
+            candidate_width=1,
+            candidate_height=1,
+            candidate_yaw=Facing.EAST.value,
+            delta_x=machine * strip.pw - coater_x,
+            delta_y=strip.machine_row - strip.row_of_input(item),
+            delta_z=Fraction(0),
+        )
+        for item in strip.in_lanes
+        for machine in range(strip.machines)
+    )
 
 
 def _box(s: Strip) -> tuple[int, int]:
@@ -1796,7 +1872,7 @@ def plan_strips(
     strip_len: int = 6,
     minimum_pitch_x: Mapping[StripPoseId, int] = _NO_PITCH_REQUIREMENTS,
     minimum_staged_static_clearance: Mapping[
-        StripPoseId,
+        StagedStaticClearanceKey,
         int,
     ] = _NO_STAGED_STATIC_CLEARANCE,
 ) -> list[Strip]:
@@ -1919,46 +1995,49 @@ def plan_strips(
                 if needs_coater_keepout
                 else WEST_CHANNEL
             )
+            selected = Strip(
+                group_key=family.group_key,
+                recipe_id=family.recipe_id,
+                item_id=family.machine_item_id,
+                model_index=family.model_index,
+                cargo_domain=(
+                    CargoDomain.REQUIRES_SPRAY
+                    if group.proliferated
+                    else CargoDomain.UNSPRAYED
+                ),
+                machines=machine_count,
+                mw=footprint_width,
+                mh=footprint_height,
+                yaw=yaw,
+                pw=pitch_width,
+                ph=pitch_height,
+                in_above=inputs_above,
+                out_lanes=outputs,
+                in_below=inputs_below,
+                lane_plan=lane_plan,
+                attachment_plan=attachment_plan,
+                port_dock_plan=port_dock_plan,
+                box_height=box_height,
+                physical_variant=physical_variant,
+                mode_params=family.mode_params,
+                flank_outputs=family.flank_outputs,
+                family_id=family.family_id,
+                machine_start=machine_start,
+                west_channel=west_channel,
+            )
             if physical_variant is not None and needs_coater_keepout:
                 west_channel = max(
-                    west_channel,
-                    minimum_staged_static_clearance.get(
-                        strip_pose_id(physical_variant),
-                        west_channel,
+                    (
+                        minimum_staged_static_clearance.get(
+                            relation,
+                            west_channel,
+                        )
+                        for relation in _staged_static_clearance_keys(selected)
                     ),
+                    default=west_channel,
                 )
-            strips.append(
-                Strip(
-                    group_key=family.group_key,
-                    recipe_id=family.recipe_id,
-                    item_id=family.machine_item_id,
-                    model_index=family.model_index,
-                    cargo_domain=(
-                        CargoDomain.REQUIRES_SPRAY
-                        if group.proliferated
-                        else CargoDomain.UNSPRAYED
-                    ),
-                    machines=machine_count,
-                    mw=footprint_width,
-                    mh=footprint_height,
-                    yaw=yaw,
-                    pw=pitch_width,
-                    ph=pitch_height,
-                    in_above=inputs_above,
-                    out_lanes=outputs,
-                    in_below=inputs_below,
-                    lane_plan=lane_plan,
-                    attachment_plan=attachment_plan,
-                    port_dock_plan=port_dock_plan,
-                    box_height=box_height,
-                    physical_variant=physical_variant,
-                    mode_params=family.mode_params,
-                    flank_outputs=family.flank_outputs,
-                    family_id=family.family_id,
-                    machine_start=machine_start,
-                    west_channel=west_channel,
-                )
-            )
+                selected = replace(selected, west_channel=west_channel)
+            strips.append(selected)
     return strips
 
 
@@ -1972,7 +2051,7 @@ def _coarsen_saturated_strip_plan(
     strip_len: int,
     minimum_pitch_x: Mapping[StripPoseId, int] = _NO_PITCH_REQUIREMENTS,
     minimum_staged_static_clearance: Mapping[
-        StripPoseId,
+        StagedStaticClearanceKey,
         int,
     ] = _NO_STAGED_STATIC_CLEARANCE,
 ) -> tuple[list[Strip], int]:
@@ -2396,8 +2475,9 @@ def _staged_static_clearance_requirement(
     strip: Strip,
     owner_strip: int,
     failure: finalize.ProjectionFailure,
+    relation: StagedStaticClearanceKey,
 ) -> StagedStaticClearanceRequirement | None:
-    """Describe the next one-tile west attachment variant for one strip."""
+    """Describe the next one-tile west attachment for one physical relation."""
     from flab2bp.layout.strip_variants import StripInstanceId
 
     variant_id = strip.staged_static_variant_id
@@ -2418,6 +2498,7 @@ def _staged_static_clearance_requirement(
         owner_strip=owner_strip,
         rejected_west_channel=strip.west_channel,
         required_west_channel=strip.west_channel + 1,
+        relation=relation,
         evidence=(failure,),
     )
 
@@ -10519,7 +10600,11 @@ def _place_coaters(
 
             failure_reasons: list[str] = []
             projected_failures: list[
-                tuple[finalize.ProjectionFailure, int | None]
+                tuple[
+                    finalize.ProjectionFailure,
+                    int | None,
+                    StagedStaticClearanceKey | None,
+                ]
             ] = []
             same_strip_static_seats = 0
             seated = False
@@ -10554,6 +10639,7 @@ def _place_coaters(
                     width=1,
                     height=1,
                     yaw=yaw,
+                    owner_strip=strip_index,
                 )
                 collider_hits = _coater_keepout_hits(
                     prospective,
@@ -10601,6 +10687,7 @@ def _place_coaters(
                     width=1,
                     height=1,
                     carries_item=proliferator_item,
+                    owner_strip=strip_index,
                 )
                 supply_index = len(prospective)
                 coater_index = supply_index + 1
@@ -10632,13 +10719,21 @@ def _place_coaters(
                         ),
                         None,
                     )
-                    peer_owner = (
-                        prospective[peer_index].owner_strip
+                    peer = (
+                        prospective[peer_index]
                         if peer_index is not None
                         and 0 <= peer_index < len(prospective)
                         else None
                     )
-                    projected_failures.append((projected_failure, peer_owner))
+                    peer_owner = peer.owner_strip if peer is not None else None
+                    relation = (
+                        _staged_static_clearance_key(peer, proposed_coater)
+                        if peer is not None and peer_owner == strip_index
+                        else None
+                    )
+                    projected_failures.append(
+                        (projected_failure, peer_owner, relation)
+                    )
                     if peer_owner == strip_index:
                         same_strip_static_seats += 1
                     failure_reasons.append(
@@ -10681,6 +10776,9 @@ def _place_coaters(
                 first_failure = (
                     projected_failures[0][0] if projected_failures else None
                 )
+                first_relation = (
+                    projected_failures[0][2] if projected_failures else None
+                )
                 all_projected = len(projected_failures) == len(seats)
                 same_strip = (
                     first_failure is not None
@@ -10691,8 +10789,13 @@ def _place_coaters(
                         strip,
                         strip_index,
                         first_failure,
+                        first_relation,
                     )
-                    if same_strip and first_failure is not None
+                    if (
+                        same_strip
+                        and first_failure is not None
+                        and first_relation is not None
+                    )
                     else None
                 )
                 raise _Unseatable(
@@ -11577,7 +11680,7 @@ class FreeformLayout:
         projection_no_goods: list[ProjectionNoGood] = []
         projection_no_good_keys: set[ProjectionNoGood] = set()
         minimum_pitch_x: dict[StripPoseId, int] = {}
-        minimum_staged_static_clearance: dict[StripPoseId, int] = {}
+        minimum_staged_static_clearance: dict[StagedStaticClearanceKey, int] = {}
         exact_pack_no_goods: list[ExactPackNoGood] = []
         exact_pack_no_good_keys: set[ExactPackNoGood] = set()
         staged_static_exact_retries: set[tuple[int, int]] = set()
@@ -11926,14 +12029,9 @@ class FreeformLayout:
                         ):
                             clearance_exhausted = True
                         else:
-                            from flab2bp.layout.strip_variants import strip_pose_id
-
-                            pose_id = strip_pose_id(
-                                selected_strip.physical_variant
-                            )
                             retained_clearance = (
                                 minimum_staged_static_clearance.get(
-                                    pose_id,
+                                    requirement.relation,
                                     selected_strip.west_channel,
                                 )
                             )
@@ -11941,9 +12039,9 @@ class FreeformLayout:
                                 requirement.required_west_channel
                                 > retained_clearance
                             ):
-                                minimum_staged_static_clearance[pose_id] = (
-                                    requirement.required_west_channel
-                                )
+                                minimum_staged_static_clearance[
+                                    requirement.relation
+                                ] = requirement.required_west_channel
                                 learned = True
 
                 # The physical variant gets one bounded upstream seat first.
