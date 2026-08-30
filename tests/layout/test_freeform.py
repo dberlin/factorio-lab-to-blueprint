@@ -7421,6 +7421,119 @@ class TestPreparedJunctionLegalityIsThreeDimensional:
         assert (29, 26, 2) in ban
 
 
+class TestProjectedCoaterSplitterBanIsPreparedBeforeRouting:
+    @staticmethod
+    def _projection() -> planet.Projection:
+        band = next(band for band in planet.bands() if band.area_segments == 160)
+        return planet.Projection(
+            band=band,
+            anchor_row=-130,
+            segment=colliders.PLANET_SEGMENT,
+            radius=colliders.PLANET_RADIUS,
+        )
+
+    @staticmethod
+    def _coater() -> PlacedBuilding:
+        info = catalog.building(catalog.SPRAY_COATER_ID)
+        return PlacedBuilding(
+            item_id=catalog.SPRAY_COATER_ID,
+            model_index=info.model_index,
+            x=26,
+            y=15,
+            yaw=90.0,
+        )
+
+    def _ban(self) -> frozenset[Cell]:
+        return freeform._prepared_junction_ban(
+            (self._coater(),),
+            (),
+            projections=(self._projection(),),
+            junction_bounds=(24, 14, 28, 19),
+        )
+
+    def test_prepared_junction_ban_adds_exact_projected_coater_splitter_keepout(
+        self,
+    ) -> None:
+        ban = self._ban()
+
+        assert (25, 17, 1) in ban
+        assert (25, 18, 1) not in ban
+
+    def test_preparation_merges_reachable_frames_into_prepared_junction_ban(
+        self,
+    ) -> None:
+        spec = proliferated_spec()
+        strips = plan_strips(spec)
+        pack = _greedy_pack(strips, _height_seed(strips))
+
+        prepared = _prepare_routing_problem(
+            spec,
+            strips,
+            pack,
+            power=False,
+            policy=BandPolicy("portable"),
+        )
+        flat_only = freeform._prepared_junction_ban(
+            prepared.building_templates,
+            prepared.power_sites,
+        )
+
+        assert (2, 5, 1) not in flat_only
+        assert (2, 5, 1) in prepared.junction_ban
+
+    def test_merge_frontier_consumes_prepared_junction_ban(self) -> None:
+        ban = self._ban()
+
+        def frontier(y: int) -> set[Cell]:
+            canvas = _Canvas(
+                junction_ban=set(ban),
+                junction_geometry_prepared=True,
+            )
+            tap = (25, y, 1)
+            canvas.blocked[tap] = _TENTATIVE
+            return freeform._merge_frontier(
+                canvas,
+                {5: (tap,)},
+                (5,),
+                canvas.junction_is_clear,
+            )
+
+        assert frontier(17) == set()
+        assert frontier(18)
+
+    def test_tap_source_consumes_prepared_junction_ban(self) -> None:
+        ban = self._ban()
+
+        def tap(y: int) -> tuple[bool, int]:
+            canvas = _Canvas(
+                junction_ban=set(ban),
+                junction_geometry_prepared=True,
+            )
+            source = canvas.add(replace(_belt(25, y, item="x"), z=F(1)))
+            onward = canvas.add(replace(_belt(26, y, item="x"), z=F(1)))
+            branch = canvas.add(replace(_belt(25, y - 1, item="x"), z=F(1)))
+            canvas.buildings[source] = _relink(
+                canvas.buildings[source],
+                output_obj=onward,
+            )
+            attached = freeform._tap_source(
+                canvas,
+                source,
+                branch,
+                2001,
+                35,
+                excused={(25, y, 1), (26, y, 1), (25, y - 1, 1)},
+            )
+            splitters = sum(
+                building.item_id == catalog.SPLITTER_ID
+                for building in canvas.buildings
+            )
+            return attached, splitters
+
+        assert tap(17) == (False, 0)
+        assert tap(18) == (True, 1)
+
+
 class TestTheMergeFrontierWithdrawsSitesAJunctionCannotHold:
     """The routing-time half, which is the half that had to exist.
 

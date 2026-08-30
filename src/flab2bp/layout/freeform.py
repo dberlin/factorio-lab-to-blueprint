@@ -2719,6 +2719,9 @@ def _junction_ban_offsets(
 def _prepared_junction_ban(
     buildings: Sequence[PlacedBuilding],
     power_sites: Sequence[tuple[int, int]],
+    *,
+    projections: Sequence[planet.Projection] = (),
+    junction_bounds: tuple[int, int, int, int] | None = None,
 ) -> frozenset[Cell]:
     """Precompute exact per-level Splitter refusals from immutable geometry."""
     obstacles = [
@@ -2752,6 +2755,150 @@ def _prepared_junction_ban(
                 obstacle.z,
             )
         )
+
+    coaters = tuple(
+        (index, _collision_pose(building))
+        for index, building in enumerate(buildings)
+        if building.item_id == catalog.SPRAY_COATER_ID
+    )
+    if coaters and projections:
+        if junction_bounds is None:
+            raise ValueError("projected junction bans require fixed junction bounds")
+        min_x, min_y, max_x, max_y = junction_bounds
+        splitter_index = len(buildings)
+        splitter_model = catalog.building(catalog.SPLITTER_ID).model_index
+        splitter_radius = planet.collider_radius(splitter_model)
+        projection_steps: list[tuple[planet.Projection, float, float]] = []
+        for projection in projections:
+            latitude_step = (
+                projection.radius
+                * planet.latitude_rad_per_grid(projection.segment)
+                * 0.9
+            )
+            longitude_step = (
+                projection.radius
+                * min(
+                    math.cos(
+                        min(abs(grid), planet.pole_grid_idx(projection.segment))
+                        * planet.latitude_rad_per_grid(projection.segment)
+                    )
+                    for grid in (
+                        projection.band.grid_lo,
+                        projection.band.grid_hi,
+                    )
+                )
+                * planet.longitude_rad_per_grid(
+                    projection.band.area_segments
+                )
+                * 0.9
+            )
+            projection_steps.append(
+                (
+                    projection,
+                    latitude_step if projection.quadrant else longitude_step,
+                    longitude_step if projection.quadrant else latitude_step,
+                )
+            )
+
+        splitter_span_x, splitter_span_y = catalog.collider_span(
+            catalog.SPLITTER_ID,
+            0.0,
+        )
+        for coater in coaters:
+            coater_span_x, coater_span_y = catalog.collider_span(
+                catalog.SPRAY_COATER_ID,
+                coater[1].yaw,
+            )
+            lateral_x = round(coater[1].yaw) % 180 == 0
+            tangent_reach_x = (
+                (coater_span_x + splitter_span_x) / 2.0
+                + (1.0 if lateral_x else 0.0)
+            ) * colliders.GRID_ARC
+            tangent_reach_y = (
+                (coater_span_y + splitter_span_y) / 2.0
+                + (0.0 if lateral_x else 1.0)
+            ) * colliders.GRID_ARC
+            tile_reach_x = max(
+                math.ceil(tangent_reach_x / x_step)
+                for _projection, x_step, _y_step in projection_steps
+            )
+            tile_reach_y = max(
+                math.ceil(tangent_reach_y / y_step)
+                for _projection, _x_step, y_step in projection_steps
+            )
+
+            # The pair sphere is a second cheap rejection after the tangent
+            # lower bound and before the exact authoritative predicate.
+            pair_reach = (
+                planet.collider_radius(coater[1].model_index)
+                + splitter_radius
+                + colliders.GRID_ARC
+            )
+            reach2 = pair_reach * pair_reach
+            projected_coater = tuple(
+                (
+                    projection,
+                    x_step,
+                    y_step,
+                    projection.position(
+                        coater[1].x,
+                        coater[1].y,
+                        coater[1].z,
+                    ),
+                )
+                for projection, x_step, y_step in projection_steps
+            )
+            for x in range(
+                max(min_x, math.floor(coater[1].x - tile_reach_x)),
+                min(max_x, math.ceil(coater[1].x + tile_reach_x)) + 1,
+            ):
+                for y in range(
+                    max(min_y, math.floor(coater[1].y - tile_reach_y)),
+                    min(max_y, math.ceil(coater[1].y + tile_reach_y)) + 1,
+                ):
+                    for level in range(LEVELS):
+                        cell = (x, y, level)
+                        if cell in banned:
+                            continue
+                        splitter = (
+                            splitter_index,
+                            _collision_pose(
+                                junction.make_splitter(x, y, Fraction(level))
+                            ),
+                        )
+                        cell_dx = abs(splitter[1].x - coater[1].x)
+                        cell_dy = abs(splitter[1].y - coater[1].y)
+                        for (
+                            projection,
+                            x_step,
+                            y_step,
+                            coater_position,
+                        ) in projected_coater:
+                            if (
+                                cell_dx * x_step > tangent_reach_x
+                                or cell_dy * y_step > tangent_reach_y
+                            ):
+                                continue
+                            splitter_position = projection.position(
+                                splitter[1].x,
+                                splitter[1].y,
+                                splitter[1].z,
+                            )
+                            dx = coater_position[0] - splitter_position[0]
+                            dy = coater_position[1] - splitter_position[1]
+                            dz = coater_position[2] - splitter_position[2]
+                            if dx * dx + dy * dy + dz * dz > reach2:
+                                continue
+                            if (
+                                finalize.projected_coater_splitter_failure(
+                                    coater,
+                                    splitter,
+                                    projection,
+                                )
+                                is not None
+                            ):
+                                banned.add(cell)
+                                break
     return frozenset(banned)
 
 
@@ -8392,7 +8539,8 @@ def _prepare_routing_problem(
     # empty by construction, which is what makes an entry belt reachable from
     # outside no matter what else the router does.
     core = _core_bounds(canvas)
-    canvas.limit = _grow(core, _ENTRY_RING)
+    capacity = _grow(core, _ENTRY_RING)
+    canvas.limit = capacity
     route_bounds = _grow(core, _ROUTE_RING)
 
     # The proliferator entry is staked BEFORE the ports are held, not after the
@@ -8574,7 +8722,16 @@ def _prepare_routing_problem(
         belt_ban=tuple(
             sorted((cell, frozenset(levels)) for cell, levels in canvas.belt_ban.items())
         ),
-        junction_ban=_prepared_junction_ban(canvas.buildings, power_sites),
+        junction_ban=_prepared_junction_ban(
+            canvas.buildings,
+            power_sites,
+            projections=(
+                _power_projection_envelope(canvas, policy)
+                if coater_list
+                else ()
+            ),
+            junction_bounds=capacity,
+        ),
         preparation_failures=preparation_failures,
     )
 
