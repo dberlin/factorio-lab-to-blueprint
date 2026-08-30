@@ -391,11 +391,17 @@ class CompactTopologyBeam:
                 )
                 model.add(row_gap >= 1).only_enforce_if(direct)
                 model.add(row_gap <= catalog.SORTER_MAX_REACH).only_enforce_if(direct)
+                origin_delta = model.new_int_var(
+                    -(target.consumer_span - 1),
+                    target.producer_span - 1,
+                    f"direct_origin_delta{target.producer}_{target.consumer}",
+                )
                 model.add(
-                    x[target.producer] <= x[target.consumer] + target.consumer_span - 1
+                    origin_delta == x[target.consumer] - x[target.producer]
                 ).only_enforce_if(direct)
-                model.add(
-                    x[target.consumer] <= x[target.producer] + target.producer_span - 1
+                model.add_allowed_assignments(
+                    [origin_delta],
+                    [(delta,) for delta in target.origin_deltas],
                 ).only_enforce_if(direct)
                 direct_successes.append(direct)
             width_weight = (

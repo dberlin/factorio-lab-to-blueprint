@@ -1524,6 +1524,98 @@ def test_parent_deadline_after_proxy_closure_is_not_proxy_cancellation() -> None
     assert fake.detailed_allowances == [75]
 
 
+def _direct_pack_adapter_scene() -> tuple[
+    BuildSpec,
+    list[freeform_module.Strip],
+    dict[tuple[int, int], freeform_module._DirectCandidate],
+    freeform_module._Pack,
+    PlacementProblem,
+]:
+    spec = two_stage_spec()
+    strips = plan_strips(spec, strip_len=6)
+    candidates = freeform_module._direct_net_candidates(strips, spec)
+    height = sum(strip.height + 1 for strip in strips)
+    pack = freeform_module._pack(
+        strips,
+        height=height,
+        width_bound=max(strip.width + 1 for strip in strips) * 2,
+        time_budget_s=0.5,
+        direct_candidates=candidates,
+        workers=1,
+    )
+    assert pack is not None and pack.direct
+    sizes = tuple(_box(strip) for strip in strips)
+    problem = PlacementProblem(
+        sizes=sizes,
+        nets=tuple(_nets_between(strips)),
+        outline_height=height,
+        area_lower_bound=sum(width * box_height for width, box_height in sizes),
+    )
+    return spec, strips, candidates, pack, problem
+
+
+def test_exact_pack_decoded_projects_typed_direct_ids_to_sequence_pairs() -> None:
+    _spec, strips, candidates, pack, problem = _direct_pack_adapter_scene()
+
+    decoded = sequence_solver_module._exact_pack_decoded(
+        pack,
+        strips,
+        problem,
+        direct_candidates=candidates,
+    )
+
+    assert decoded.direct == frozenset(
+        (direct.source_strip, direct.destination_strip) for direct in pack.direct
+    )
+
+
+def test_decoded_pack_reconstructs_typed_direct_ids_for_production_preparation() -> None:
+    spec, strips, candidates, original, problem = _direct_pack_adapter_scene()
+    x = tuple(
+        original.at[index][0] - strips[index].west_channel
+        for index in range(problem.size)
+    )
+    y = tuple(original.at[index][1] for index in range(problem.size))
+    pairs = frozenset(
+        (direct.source_strip, direct.destination_strip) for direct in original.direct
+    )
+    decoded = DecodedPlacement(
+        x=x,
+        y=y,
+        width=original.width,
+        used_height=max(
+            coordinate + box_height
+            for coordinate, (_width, box_height) in zip(
+                y,
+                problem.sizes,
+                strict=True,
+            )
+        ),
+        x_windows=tuple((coordinate, coordinate) for coordinate in x),
+        y_windows=tuple((coordinate, coordinate) for coordinate in y),
+        gap_area=0,
+        direct=pairs,
+        variant_indices=(0,) * problem.size,
+    )
+
+    rebuilt = _decoded_pack(
+        problem.outline_height,
+        decoded,
+        west_channels=tuple(strip.west_channel for strip in strips),
+        direct_candidates=candidates,
+    )
+    prepared = _prepare_routing_problem(
+        spec,
+        strips,
+        rebuilt,
+        power=False,
+        policy=BandPolicy("portable"),
+    )
+
+    assert rebuilt.direct == original.direct
+    assert prepared.promised_direct == original.direct
+
+
 def test_decoded_pack_uses_each_selected_strip_west_channel() -> None:
     problem = PlacementProblem(
         sizes=((4, 3), (5, 2)),
@@ -2025,14 +2117,28 @@ def test_tall_topology_closes_only_running_narrowest_widths() -> None:
 
 
 def test_refinement_direct_targets_encode_strip_channel_offsets() -> None:
-    target = DirectInsertTarget((0, 1), 0, 1, 2, 4, 10, 4)
+    target = DirectInsertTarget(
+        (0, 1),
+        0,
+        1,
+        2,
+        4,
+        10,
+        4,
+        tuple(range(-3, 10)),
+    )
     strips = (
         type("StripOffset", (), {"west_channel": 3})(),
         type("StripOffset", (), {"west_channel": 1})(),
     )
 
     assert sequence_solver_module._refinement_direct_targets((target,), strips) == (
-        replace(target, producer_span=12, consumer_span=2),
+        replace(
+            target,
+            producer_span=12,
+            consumer_span=2,
+            origin_deltas=tuple(range(-1, 12)),
+        ),
     )
 
 

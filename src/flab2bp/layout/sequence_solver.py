@@ -40,6 +40,7 @@ from flab2bp.layout.freeform import (
     _ROUTING_BUDGET,
     _ROUTING_EXPANSIONS_PER_SECOND,
     WEST_CHANNEL,
+    DirectInsertId,
     Strip,
     _box,
     _build_prepared,
@@ -47,6 +48,7 @@ from flab2bp.layout.freeform import (
     _coarsen_saturated_strip_plan,
     _dests,
     _direct_alignment_targets,
+    _DirectCandidate,
     _direct_net_candidates,
     _fanout_shortfall,
     _greedy_pack,
@@ -2235,7 +2237,10 @@ def _selected_direct_targets(
 ) -> tuple[DirectInsertTarget, ...]:
     """Derive pair geometry only after both complete endpoint variants are selected."""
     selected = _selected_strips(strips, problem, variant_indices)
-    return _direct_alignment_targets(_direct_net_candidates(selected, spec))
+    return _refinement_direct_targets(
+        _direct_alignment_targets(_direct_net_candidates(selected, spec)),
+        selected,
+    )
 
 
 def _balanced_compact_seed_height(problem: PlacementProblem) -> int:
@@ -2451,12 +2456,16 @@ def _refinement_direct_targets(
         consumer_offset = strips[target.consumer].west_channel
         producer_span = target.producer_span + producer_offset - consumer_offset
         consumer_span = target.consumer_span + consumer_offset - producer_offset
+        origin_shift = producer_offset - consumer_offset
         if producer_span > 0 and consumer_span > 0:
             adjusted.append(
                 replace(
                     target,
                     producer_span=producer_span,
                     consumer_span=consumer_span,
+                    origin_deltas=tuple(
+                        delta + origin_shift for delta in target.origin_deltas
+                    ),
                 )
             )
     return tuple(adjusted)
@@ -2570,10 +2579,42 @@ def _uses_shared_pack_candidate(
     )
 
 
+def _validated_direct_pair(
+    direct: DirectInsertId,
+    candidates: Mapping[tuple[int, int], _DirectCandidate],
+) -> tuple[int, int]:
+    key = (direct.source_strip, direct.destination_strip)
+    candidate = candidates.get(key)
+    if (
+        candidate is None
+        or candidate.item != direct.item
+        or candidate.cargo_domain is not direct.cargo_domain
+    ):
+        raise ValueError(f"pack direct ID does not match selected candidate metadata for {key}")
+    return key
+
+
+def _direct_id_from_pair(
+    pair: tuple[int, int],
+    candidates: Mapping[tuple[int, int], _DirectCandidate] | None,
+) -> DirectInsertId:
+    candidate = candidates.get(pair) if candidates is not None else None
+    if candidate is None:
+        raise ValueError(f"selected candidate metadata is required for direct key {pair}")
+    return DirectInsertId(
+        source_strip=pair[0],
+        destination_strip=pair[1],
+        item=candidate.item,
+        cargo_domain=candidate.cargo_domain,
+    )
+
+
 def _exact_pack_decoded(
     pack: _Pack,
     strips: Sequence[Strip],
     problem: PlacementProblem,
+    *,
+    direct_candidates: Mapping[tuple[int, int], _DirectCandidate],
 ) -> DecodedPlacement:
     """Project one exact shared packing into fixed routing windows."""
     if len(strips) != problem.size or len(pack.at) != problem.size:
@@ -2596,7 +2637,9 @@ def _exact_pack_decoded(
         x_windows=tuple((coordinate, coordinate) for coordinate in x),
         y_windows=tuple((coordinate, coordinate) for coordinate in y),
         gap_area=0,
-        direct=pack.direct,
+        direct=frozenset(
+            _validated_direct_pair(direct, direct_candidates) for direct in pack.direct
+        ),
         variant_indices=variant_indices,
     )
 
@@ -2993,7 +3036,10 @@ def _production_run(
             strip_len=planned_strip_len,
         )
         direct_candidates = _direct_net_candidates(strips, spec)
-        direct_targets = _direct_alignment_targets(direct_candidates)
+        direct_targets = _refinement_direct_targets(
+            _direct_alignment_targets(direct_candidates),
+            strips,
+        )
         sizes = tuple(_box(strip) for strip in strips)
         placement_nets = _placement_nets(strips)
         nets = tuple(endpoints for endpoints, _logical in placement_nets)
@@ -3052,7 +3098,6 @@ def _production_run(
             strip_count=len(strips),
             height=topology_beam_height,
             machine_count=spec.machine_count,
-            sprayed_lanes=len(spec.spray_lanes),
             power=power,
         )
         use_shared_pack = _uses_shared_pack_candidate(
@@ -3183,6 +3228,10 @@ def _production_run(
         tuple[tuple[StripInstanceId, ...], tuple[int, ...]],
         tuple[DirectInsertTarget, ...],
     ] = {}
+    direct_candidate_cache: dict[
+        tuple[tuple[StripInstanceId, ...], tuple[int, ...]],
+        dict[tuple[int, int], _DirectCandidate],
+    ] = {}
 
     def selected_strips(
         problem: PlacementProblem,
@@ -3195,6 +3244,20 @@ def _production_run(
             selected_cache[key] = selected
         return selected
 
+    def selected_direct_candidates(
+        problem: PlacementProblem,
+        variant_indices: tuple[int, ...],
+    ) -> dict[tuple[int, int], _DirectCandidate]:
+        key = (problem.instance_ids, variant_indices)
+        candidates = direct_candidate_cache.get(key)
+        if candidates is None:
+            candidates = _direct_net_candidates(
+                list(selected_strips(problem, variant_indices)),
+                spec,
+            )
+            direct_candidate_cache[key] = candidates
+        return candidates
+
     def selected_direct_targets(
         problem: PlacementProblem,
         variant_indices: tuple[int, ...],
@@ -3203,7 +3266,12 @@ def _production_run(
         targets = direct_cache.get(key)
         if targets is None:
             selected = selected_strips(problem, variant_indices)
-            targets = _direct_alignment_targets(_direct_net_candidates(list(selected), spec))
+            targets = _refinement_direct_targets(
+                _direct_alignment_targets(
+                    selected_direct_candidates(problem, variant_indices)
+                ),
+                selected,
+            )
             direct_cache[key] = targets
         return targets
 
@@ -3234,6 +3302,10 @@ def _production_run(
             height,
             routed,
             west_channels=tuple(strip.west_channel for strip in selected),
+            direct_candidates=selected_direct_candidates(
+                problem,
+                decoded.variant_indices,
+            ),
         )
         if deadline_reached():
             return _ProductionCandidate(
@@ -3548,7 +3620,12 @@ def _production_run(
         if shared_pack is not None:
             solver.close_exact_decoded(
                 shared_height,
-                _exact_pack_decoded(shared_pack, strips, problems[shared_height]),
+                _exact_pack_decoded(
+                    shared_pack,
+                    strips,
+                    problems[shared_height],
+                    direct_candidates=direct_candidates,
+                ),
                 reason="shared-pack",
                 allowance_cap=exact_candidate_allowance,
             )
@@ -3564,9 +3641,7 @@ def _production_run(
         strip_count=len(strips),
         sprayed_lanes=len(spec.spray_lanes),
     )
-    refinement_direct_targets = (
-        _refinement_direct_targets(direct_targets, strips) if tall_topology_role else ()
-    )
+    refinement_direct_targets = direct_targets if tall_topology_role else ()
     if (
         run_topology_beam
         and topology_beam_height is not None
@@ -3768,6 +3843,7 @@ def _decoded_pack(
     decoded: DecodedPlacement,
     *,
     west_channels: tuple[int, ...] | None = None,
+    direct_candidates: Mapping[tuple[int, int], _DirectCandidate] | None = None,
 ) -> _Pack:
     """Convert decoded box origins to their selected-strip content origins."""
     channels = (WEST_CHANNEL,) * len(decoded.x) if west_channels is None else west_channels
@@ -3781,7 +3857,9 @@ def _decoded_pack(
         width=decoded.width,
         height=height,
         status="sequence-pair",
-        direct=decoded.direct,
+        direct=frozenset(
+            _direct_id_from_pair(pair, direct_candidates) for pair in decoded.direct
+        ),
     )
 
 
@@ -3825,7 +3903,7 @@ class SequencePairLayout:
             raise ValueError("solver factory requires exactly one island")
         if compact_seed_config is not None and type(compact_seed_config) is not CompactSeedConfig:
             raise ValueError("compact seed config must be exactly CompactSeedConfig")
-        self._solver_factory = solver_factory
+        self._solver_factory: _SolverFactory | None = solver_factory
         self.band_policy = band_policy
         self.ramped = not belt_vertical_construction
         self.strip_len = strip_len

@@ -176,6 +176,8 @@ def _generated_cases(
                 consumer += 1
             producer_width, producer_height = sizes[producer]
             consumer_width, consumer_height = sizes[consumer]
+            producer_span = rng.randint(1, producer_width)
+            consumer_span = rng.randint(1, consumer_width)
             targets.append(
                 DirectInsertTarget(
                     key=(producer, ordinal),
@@ -183,8 +185,9 @@ def _generated_cases(
                     consumer=consumer,
                     producer_row=rng.randrange(producer_height),
                     consumer_row=rng.randrange(consumer_height),
-                    producer_span=rng.randint(1, producer_width),
-                    consumer_span=rng.randint(1, consumer_width),
+                    producer_span=producer_span,
+                    consumer_span=consumer_span,
+                    origin_deltas=tuple(range(-(consumer_span - 1), producer_span)),
                 )
             )
         problem = PlacementProblem(
@@ -390,6 +393,44 @@ def test_backend_selection_falls_back_for_non_float_score_inputs() -> None:
 
     assert isinstance(build_sequence_kernel(problem, integer_weight), PythonSequenceKernel)
     assert isinstance(build_sequence_kernel(problem, integer_history), PythonSequenceKernel)
+
+
+def test_direct_origin_deltas_stay_on_authoritative_kernel_path() -> None:
+    problem = PlacementProblem(
+        sizes=((2, 1), (2, 1)),
+        nets=((0, 1),),
+        outline_height=2,
+        area_lower_bound=4,
+    )
+    target = DirectInsertTarget((0, 1), 0, 1, 0, 0, 2, 2, (1,))
+    direct_context = PlacementCostContext(
+        net_weights=(1.0,),
+        net_pairs=problem.nets,
+        history_outline=(0, 2),
+        history_summed_area=(0.0, 0.0, 0.0),
+        direct_targets=(target,),
+    )
+    state = AnnealState(
+        pair=SequencePair((0, 1), (1, 0)),
+        gaps=GapProfile.zero(2),
+        base_seed=7,
+        variant_indices=(0, 0),
+    )
+
+    assert isinstance(build_sequence_kernel(problem, direct_context), PythonSequenceKernel)
+
+    plain_context = replace(direct_context, direct_targets=())
+    actual = CompiledSequenceKernel(problem, plain_context).score_state(
+        state,
+        direct_targets=(target,),
+    )
+    reference = PythonSequenceKernel(problem, plain_context).score_state(
+        state,
+        direct_targets=(target,),
+    )
+
+    assert reference.breakdown.missed_direct_inserts == 1
+    _assert_exact(actual, reference)
 
 
 def test_compiled_kernel_reuses_size_dependent_workspace() -> None:

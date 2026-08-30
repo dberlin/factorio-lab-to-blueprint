@@ -25,6 +25,7 @@ from flab2bp.layout.compact_seed import (
 from flab2bp.layout.freeform import _box, plan_strips
 from flab2bp.layout.sequence_kernel import build_sequence_kernel
 from flab2bp.layout.sequence_pair import (
+    DecodedPlacement,
     DirectInsertTarget,
     GapProfile,
     PlacementCostContext,
@@ -437,7 +438,7 @@ def test_topology_beam_enumerates_distinct_deterministic_relation_signatures() -
 
 def test_topology_refinement_validates_config_and_direct_target_types() -> None:
     problem = _fixed_problem(sizes=((2, 2), (2, 2)), nets=((0, 1),))
-    target = DirectInsertTarget((0, 1), 0, 1, 0, 0, 2, 2)
+    target = DirectInsertTarget((0, 1), 0, 1, 0, 0, 2, 2, (-1, 0, 1))
 
     config = CompactTopologyBeamConfig(refine_width_first=True)
     assert config.refine_width_first
@@ -460,7 +461,9 @@ def test_topology_refinement_validates_config_and_direct_target_types() -> None:
             width_bound=4,
             base_seed=3,
             coordinate_hint=None,
-            direct_targets=(DirectInsertTarget((0, 2), 0, 2, 0, 0, 2, 2),),
+            direct_targets=(
+                DirectInsertTarget((0, 2), 0, 2, 0, 0, 2, 2, (-1, 0, 1)),
+            ),
             config=config,
         )
 
@@ -473,7 +476,7 @@ def test_topology_refinement_is_width_first_direct_and_deterministic() -> None:
         problem.sizes,
         outline_height=problem.outline_height,
     )
-    target = DirectInsertTarget((0, 1), 0, 1, 0, 0, 2, 2)
+    target = DirectInsertTarget((0, 1), 0, 1, 0, 0, 2, 2, (-1, 0, 1))
     config = CompactTopologyBeamConfig(
         max_candidates=1,
         max_deterministic_time=0.2,
@@ -501,6 +504,43 @@ def test_topology_refinement_is_width_first_direct_and_deterministic() -> None:
     assert y[0] < y[1]
     assert x[0] <= x[1] + target.consumer_span - 1
     assert x[1] <= x[0] + target.producer_span - 1
+
+
+def test_topology_refinement_rewards_only_allowed_direct_origin_delta() -> None:
+    problem = _fixed_problem(
+        sizes=((2, 1), (2, 1), (3, 1)),
+        height=3,
+        nets=((0, 1),),
+    )
+    hint = DecodedPlacement(
+        x=(0, 0, 0),
+        y=(0, 1, 2),
+        width=3,
+        used_height=3,
+        x_windows=((0, 1), (0, 1), (0, 0)),
+        y_windows=((0, 2), (0, 2), (0, 2)),
+        gap_area=0,
+    )
+    target = DirectInsertTarget((0, 1), 0, 1, 0, 0, 2, 2, (1,))
+    beam = CompactTopologyBeam(
+        problem,
+        variant_indices=(0, 0, 0),
+        width_bound=3,
+        base_seed=23,
+        coordinate_hint=hint,
+        direct_targets=(target,),
+        config=CompactTopologyBeamConfig(
+            max_candidates=1,
+            max_deterministic_time=0.2,
+            refine_width_first=True,
+        ),
+    )
+
+    candidate = beam.solve_next()
+
+    assert candidate is not None
+    assert candidate.width == 3
+    assert candidate.x[target.consumer] - candidate.x[target.producer] == 1
 
 
 def test_topology_beam_rejects_foreign_or_duplicate_no_goods() -> None:
@@ -578,7 +618,7 @@ def test_infeasible_cancelled_deadline_and_no_incumbent_return_no_seed(
 
 def test_cp_coordinate_direct_success_is_not_accepted_as_zero_gap_decoded_truth() -> None:
     problem = _fixed_problem(sizes=((2, 1), (2, 1), (2, 1)), height=2, nets=((0, 1),))
-    target = DirectInsertTarget((0, 1), 0, 1, 0, 0, 2, 2)
+    target = DirectInsertTarget((0, 1), 0, 1, 0, 0, 2, 2, (-1, 0, 1))
     eligibility = (VariantDirectInsertTarget(0, 0, target),)
     result = solve_compact_seed(
         problem,

@@ -210,6 +210,7 @@ class DirectInsertTarget:
     consumer_row: int
     producer_span: int
     consumer_span: int
+    origin_deltas: tuple[int, ...]
 
     def __post_init__(self) -> None:
         if (
@@ -232,6 +233,20 @@ class DirectInsertTarget:
             raise ValueError("direct insert must connect distinct strips")
         _validate_positive_integer(self.producer_span, "producer span")
         _validate_positive_integer(self.consumer_span, "consumer span")
+        if (
+            not isinstance(self.origin_deltas, tuple)
+            or not self.origin_deltas
+            or any(type(delta) is not int for delta in self.origin_deltas)
+            or self.origin_deltas != tuple(sorted(set(self.origin_deltas)))
+            or any(
+                not -(self.consumer_span - 1) <= delta <= self.producer_span - 1
+                for delta in self.origin_deltas
+            )
+        ):
+            raise ValueError(
+                "direct-insert origin deltas must be a non-empty sorted unique tuple "
+                "inside the lane-overlap range"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -940,6 +955,7 @@ def align_direct_inserts(
             target.consumer_row,
             target.producer_span,
             target.consumer_span,
+            target.origin_deltas,
         ),
     )
     realized_targets = carried_targets.copy()
@@ -1004,18 +1020,29 @@ def _align_direct_target(
     producer_y_bounds = _relation_bounds(decoded, sizes, producer, consumer, axis=1)
     consumer_y_bounds = _relation_bounds(decoded, sizes, consumer, producer, axis=1)
 
-    x_difference = [-(target.consumer_span - 1), target.producer_span - 1]
+    x_pairs: list[tuple[int, int]] = []
+    for origin_delta in target.origin_deltas:
+        x_difference = [origin_delta, origin_delta]
+        _preserve_pair_relation(
+            decoded.x[producer],
+            producer_width,
+            decoded.x[consumer],
+            consumer_width,
+            x_difference,
+        )
+        x_pair = _closest_coordinate_pair(
+            decoded.x[producer],
+            producer_x_bounds,
+            decoded.x[consumer],
+            consumer_x_bounds,
+            x_difference,
+        )
+        if x_pair is not None:
+            x_pairs.append(x_pair)
     y_difference = [
         1 + target.producer_row - target.consumer_row,
         catalog.SORTER_MAX_REACH + target.producer_row - target.consumer_row,
     ]
-    _preserve_pair_relation(
-        decoded.x[producer],
-        producer_width,
-        decoded.x[consumer],
-        consumer_width,
-        x_difference,
-    )
     _preserve_pair_relation(
         decoded.y[producer],
         producer_height,
@@ -1023,12 +1050,13 @@ def _align_direct_target(
         consumer_height,
         y_difference,
     )
-    x_pair = _closest_coordinate_pair(
-        decoded.x[producer],
-        producer_x_bounds,
-        decoded.x[consumer],
-        consumer_x_bounds,
-        x_difference,
+    x_pair = min(
+        x_pairs,
+        key=lambda pair: (
+            abs(pair[0] - decoded.x[producer]) + abs(pair[1] - decoded.x[consumer]),
+            pair,
+        ),
+        default=None,
     )
     y_pair = _closest_coordinate_pair(
         decoded.y[producer],
@@ -1202,8 +1230,8 @@ def _target_is_direct(decoded: DecodedPlacement, target: DirectInsertTarget) -> 
     )
     return (
         1 <= row_gap <= catalog.SORTER_MAX_REACH
-        and decoded.x[target.producer] <= decoded.x[target.consumer] + target.consumer_span - 1
-        and decoded.x[target.consumer] <= decoded.x[target.producer] + target.producer_span - 1
+        and decoded.x[target.consumer] - decoded.x[target.producer]
+        in target.origin_deltas
     )
 
 

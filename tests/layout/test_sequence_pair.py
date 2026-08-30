@@ -245,6 +245,7 @@ def _direct_alignment_scene(
         consumer_row=0,
         producer_span=2,
         consumer_span=2,
+        origin_deltas=(-1, 0, 1),
     )
     return problem, decoded, target
 
@@ -303,8 +304,8 @@ def _conflicting_alignment_scene() -> tuple[
         y_windows=((4, 4), (6, 6), (6, 6)),
         gap_area=0,
     )
-    first = DirectInsertTarget((0, 1), 0, 1, 1, 0, 1, 1)
-    second = DirectInsertTarget((0, 2), 0, 2, 1, 0, 1, 1)
+    first = DirectInsertTarget((0, 1), 0, 1, 1, 0, 1, 1, (0,))
+    second = DirectInsertTarget((0, 2), 0, 2, 1, 0, 1, 1, (0,))
     return problem, decoded, first, second
 
 
@@ -369,6 +370,46 @@ def test_alignment_rejects_a_carried_key_whose_geometry_is_already_broken() -> N
         align_direct_inserts(problem, broken, (first, second))
 
 
+def test_sorter_occupied_overlap_is_not_a_direct_insert() -> None:
+    problem = PlacementProblem(
+        sizes=((3, 1), (3, 1)),
+        nets=((0, 1),),
+        outline_height=2,
+        area_lower_bound=6,
+    )
+    decoded = DecodedPlacement(
+        x=(0, 0),
+        y=(0, 1),
+        width=4,
+        used_height=2,
+        x_windows=((0, 0), (0, 1)),
+        y_windows=((0, 0), (1, 1)),
+        gap_area=0,
+    )
+    target = DirectInsertTarget(
+        key=(0, 1),
+        producer=0,
+        consumer=1,
+        producer_row=0,
+        consumer_row=0,
+        producer_span=3,
+        consumer_span=3,
+        origin_deltas=(1,),
+    )
+
+    aligned = align_direct_inserts(problem, decoded, (target,))
+
+    assert aligned.direct == frozenset({target.key})
+    assert aligned.x[target.consumer] - aligned.x[target.producer] == 1
+
+    carried_at_sorter_column = replace(
+        decoded,
+        direct=frozenset({target.key}),
+    )
+    with pytest.raises(ValueError, match="not realized"):
+        align_direct_inserts(problem, carried_at_sorter_column, (target,))
+
+
 def test_two_stage_alignment_retains_cp_sat_direct_opportunity() -> None:
     spec = two_stage_spec()
     strips = plan_strips(spec, strip_len=6)
@@ -406,8 +447,11 @@ def test_two_stage_alignment_retains_cp_sat_direct_opportunity() -> None:
     )
 
     aligned = align_direct_inserts(problem, decoded, targets)
-    retained = len(oracle.direct & aligned.direct)
-    missed = len(oracle.direct - aligned.direct)
+    promised_pairs = frozenset(
+        (direct.source_strip, direct.destination_strip) for direct in oracle.direct
+    )
+    retained = len(promised_pairs & aligned.direct)
+    missed = len(promised_pairs - aligned.direct)
 
     assert (len(oracle.direct), retained, missed) == (1, 1, 0)
 
@@ -443,7 +487,7 @@ def test_generated_cases_are_deterministic_legal_and_integer_only() -> None:
 
 
 def test_direct_insert_target_is_immutable() -> None:
-    target = DirectInsertTarget((0, 1), 0, 1, 1, 0, 2, 2)
+    target = DirectInsertTarget((0, 1), 0, 1, 1, 0, 2, 2, (-1, 0, 1))
 
     with pytest.raises(FrozenInstanceError):
         target.producer_span = 3  # type: ignore[misc]
@@ -739,6 +783,9 @@ def _alignment_variant_problem(
         consumer_row=0,
         producer_span=selected_sizes[0][0],
         consumer_span=selected_sizes[1][0],
+        origin_deltas=tuple(
+            range(-(selected_sizes[1][0] - 1), selected_sizes[0][0])
+        ),
     )
     return problem, decoded, target
 
@@ -1113,7 +1160,7 @@ def test_candidate_score_reports_independently_recomputed_components() -> None:
         y_windows=((2, 2), (6, 6)),
         gap_area=5,
     )
-    target = DirectInsertTarget((0, 1), 0, 1, 0, 0, 1, 1)
+    target = DirectInsertTarget((0, 1), 0, 1, 0, 0, 1, 1, (0,))
     weighted = NetId(0, 1, "iron-ingot", NetRole.INTERNAL, 0)
     context = feedback_cost_context(
         FeedbackState(
@@ -1228,7 +1275,7 @@ def test_missed_direct_insert_penalty_depends_on_candidate_geometry() -> None:
         y_windows=((1, 1), (0, 0)),
         gap_area=0,
     )
-    target = DirectInsertTarget((0, 1), 0, 1, 0, 0, 2, 2)
+    target = DirectInsertTarget((0, 1), 0, 1, 0, 0, 2, 2, (-1, 0, 1))
     context = feedback_cost_context(
         FeedbackState.empty((2, problem.outline_height)),
         problem,
@@ -1254,7 +1301,7 @@ def test_dynamic_direct_targets_score_with_one_validated_context() -> None:
         y_windows=((1, 1), (0, 0)),
         gap_area=0,
     )
-    target = DirectInsertTarget((0, 1), 0, 1, 0, 0, 2, 2)
+    target = DirectInsertTarget((0, 1), 0, 1, 0, 0, 2, 2, (-1, 0, 1))
     context = feedback_cost_context(FeedbackState.empty((2, 2)), problem)
 
     without_target = sequence_pair_module.score_candidate(

@@ -2127,6 +2127,7 @@ def _direct_alignment_targets(
             consumer_row=candidate.cons_row,
             producer_span=candidate.prod_span,
             consumer_span=candidate.cons_span,
+            origin_deltas=candidate.origin_deltas,
         )
         for key, candidate in sorted(candidates.items())
     )

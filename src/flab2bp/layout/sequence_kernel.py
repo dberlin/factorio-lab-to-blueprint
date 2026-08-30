@@ -162,6 +162,16 @@ class CompiledSequenceKernel:
             raise ValueError("direct-insert targets must be an immutable tuple")
         for target in targets:
             sequence_pair._validate_direct_target(self.problem, target, sizes)
+        if targets:
+            # The compiled target buffer represents only span overlap. Static
+            # access now requires one of the discrete collision-free origin
+            # deltas, so direct-aware scoring stays on the authoritative path.
+            return sequence_pair._score_state(
+                self.problem,
+                state,
+                self.context,
+                direct_targets=targets,
+            )
         targets_buffer = self._targets.get(targets)
         if targets_buffer is None:
             targets_buffer = _target_buffer(targets)
@@ -275,6 +285,8 @@ def _compiled_inputs_are_safe(
     problem: sequence_pair.PlacementProblem,
     context: sequence_pair.PlacementCostContext,
 ) -> bool:
+    if context.direct_targets:
+        return False
     if any(type(value) is not float for value in context.net_weights):
         return False
     if any(type(value) is not float for value in context.history_summed_area):
