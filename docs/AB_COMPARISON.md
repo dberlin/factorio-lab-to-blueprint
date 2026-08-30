@@ -206,7 +206,7 @@ Alongside area the report carries, per paired URL:
 hour, not a design.** Re-run before quoting any of them.
 
 ```
-uv run python scripts/ab_compare.py --tier small --budget 1,4 --repeat 3 --candidates 3
+uv run python scripts/ab_compare.py --tier small --budget 1,4 --repeat 3
 # 180 samples, 167s wall
 ```
 

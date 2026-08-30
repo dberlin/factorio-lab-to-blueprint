@@ -790,9 +790,9 @@ Expected: all pass with only established skips.
 Use the smallest deterministic repository smoke URL:
 
 ```bash
-uv run flab2bp "$SMOKE_URL" --strategy freeform --candidates 1 --budget 4 --band portable -o /tmp/freeform-portable.txt
-uv run flab2bp "$SMOKE_URL" --strategy sequence-pair --sequence-islands 1 --candidates 1 --budget 4 --band portable -o /tmp/sequence-portable.txt
-uv run flab2bp "$SMOKE_URL" --strategy freeform --candidates 1 --budget 4 --band 200 -o /tmp/freeform-band-200.txt
+uv run flab2bp "$SMOKE_URL" --strategy freeform --candidate-policy no-proliferator --budget 4 --band portable -o /tmp/freeform-portable.txt
+uv run flab2bp "$SMOKE_URL" --strategy sequence-pair --sequence-islands 1 --candidate-policy no-proliferator --budget 4 --band portable -o /tmp/sequence-portable.txt
+uv run flab2bp "$SMOKE_URL" --strategy freeform --candidate-policy no-proliferator --budget 4 --band 200 -o /tmp/freeform-band-200.txt
 ```
 
 Reports must name exact bands and outputs must decode. Use an existing deterministic smaller fixture if a chosen URL legitimately exhausts budget; do not raise budget to hide semantics.
