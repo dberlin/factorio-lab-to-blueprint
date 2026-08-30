@@ -385,6 +385,58 @@ def test_projection_no_good_independence_ignores_unrelated_route_geometry() -> N
     assert prove(changed_pair) is None
 
 
+def test_projected_static_batch_isolates_rotated_broad_phase_context() -> None:
+    lab = catalog.building(2303)
+    buildings = (
+        (
+            41,
+            PlacedBuilding(
+                2303,
+                lab.model_index,
+                0,
+                0,
+                width=lab.width,
+                height=lab.height,
+            ),
+        ),
+        (
+            99,
+            PlacedBuilding(
+                2303,
+                lab.model_index,
+                0,
+                11,
+                width=lab.width,
+                height=lab.height,
+            ),
+        ),
+    )
+    band = next(candidate for candidate in planet.bands() if candidate.area_segments == 4)
+    unrotated = planet.Projection(
+        band,
+        -250,
+        colliders.PLANET_SEGMENT,
+        colliders.PLANET_RADIUS,
+        quadrant=0,
+    )
+    rotated = replace(unrotated, quadrant=1)
+
+    assert finalize.projected_static_failure(buildings, unrotated) is None
+    rotated_failure = finalize.projected_static_failure(buildings, rotated)
+    batched_failure = finalize.first_projected_static_failure(
+        buildings,
+        (unrotated, rotated),
+    )
+
+    assert rotated_failure == finalize.ProjectionFailure(
+        "geom.collide",
+        (41, 99),
+        "build colliders intersect",
+        4,
+    )
+    assert batched_failure == rotated_failure
+
+
 
 def _broke2_coater() -> tuple[int, colliders.Placed]:
     coater = catalog.building(catalog.SPRAY_COATER_ID)

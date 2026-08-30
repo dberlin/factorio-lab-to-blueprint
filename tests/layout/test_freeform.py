@@ -3784,13 +3784,14 @@ def test_static_clearance_requirement_regenerates_a_distinct_lane_variant() -> N
     assert strip_pose_id(replacement.physical_variant) == pose_id
 
 
-def test_staged_static_terminal_exhaustion_retains_structured_evidence(
+def test_staged_static_terminal_exhaustion_is_bounded_across_distinct_assignments(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     spec = proliferated_spec()
     strips = plan_strips(spec)
     seen_clearance: list[int] = []
     seen_no_goods: list[tuple[freeform.ExactPackNoGood, ...]] = []
+    seen_origins: list[tuple[tuple[int, int], ...]] = []
     failure = finalize.ProjectionFailure(
         "geom.collide",
         (12, 40),
@@ -3811,7 +3812,22 @@ def test_staged_static_terminal_exhaustion_retains_structured_evidence(
             for no_good in no_goods
         )
         seen_no_goods.append(no_goods)
-        return _greedy_pack(current, height)
+        assert len(no_goods) <= 1, "W4 permits only one exact-assignment retry"
+        baseline = _greedy_pack(current, height)
+        shift = len(no_goods)
+        shifted = replace(
+            baseline,
+            at={
+                index: (x + (shift if index == 0 else 0), y)
+                for index, (x, y) in baseline.at.items()
+            },
+            width=baseline.width + shift,
+            status=f"distinct assignment {shift}",
+        )
+        origins = tuple(shifted.at[index] for index in range(len(current)))
+        assert all(no_good.origins != origins for no_good in no_goods)
+        seen_origins.append(origins)
+        return shifted
 
     def refuse(
         _spec: BuildSpec,
@@ -3858,6 +3874,8 @@ def test_staged_static_terminal_exhaustion_retains_structured_evidence(
         freeform._COATER_WEST_CHANNEL + 1,
     ]
     assert [len(no_goods) for no_goods in seen_no_goods] == [0, 0, 1]
+    assert len(set(seen_origins)) == 3
+    assert seen_origins[-1] != seen_origins[-2]
     assert seen_no_goods[-1][0].evidence == (failure,)
     assert rejected == [failure]
 

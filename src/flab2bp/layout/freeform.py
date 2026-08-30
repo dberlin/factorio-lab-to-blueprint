@@ -11026,6 +11026,7 @@ class FreeformLayout:
         minimum_staged_static_clearance: dict[StripPoseId, int] = {}
         exact_pack_no_goods: list[ExactPackNoGood] = []
         exact_pack_no_good_keys: set[ExactPackNoGood] = set()
+        staged_static_exact_retries: set[tuple[int, int]] = set()
         # This sweep's own share, never more than the CALL has left. A sweep
         # asked for 15s when 3 remain must not spend 15.
         left = time_budget_s if deadline is None else deadline - time.monotonic()
@@ -11377,12 +11378,20 @@ class FreeformLayout:
                                 learned = True
 
                 # The physical variant gets one bounded upstream seat first.
-                # If that exact extended pack still projects into its own
-                # machine, the absolute frame latitude remains pack-dependent:
-                # forbid this complete assignment once and let CP-SAT move it.
-                # Repeating the same no-good is terminal, so this adds one
-                # bounded retry rather than another work dimension.
-                if clearance_exhausted and exc.failure is not None:
+                # If an extended pack still projects into its own machine, the
+                # absolute frame latitude remains pack-dependent: forbid this
+                # complete assignment once and let CP-SAT move it.  The bound
+                # belongs to the height/arrangement retry boundary, not to the
+                # assignment identity: every successful no-good necessarily
+                # produces a distinct assignment, so identity alone can never
+                # make a second W4 exhaustion terminal.
+                retry_key = (height, arrangement)
+                if (
+                    clearance_exhausted
+                    and exc.failure is not None
+                    and retry_key not in staged_static_exact_retries
+                ):
+                    staged_static_exact_retries.add(retry_key)
                     no_good = ExactPackNoGood(
                         height=pack.height,
                         outline=tuple(_box(strip) for strip in strips),

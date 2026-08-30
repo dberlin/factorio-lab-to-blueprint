@@ -661,7 +661,7 @@ def first_projected_static_failure(
 
     pair_buildings = tuple(building for _index, building in tested)
     pairs_by_context: dict[
-        tuple[planet.Band, int, float],
+        tuple[planet.Band, int, float, int],
         tuple[tuple[int, int], ...],
     ] = {}
     for projection in projections:
@@ -669,12 +669,21 @@ def first_projected_static_failure(
             projection.band,
             projection.segment,
             projection.radius,
+            projection.quadrant,
         )
         pairs = pairs_by_context.get(context)
         if pairs is None:
+            broad_phase_buildings = (
+                tuple(
+                    replace(building, x=building.y, y=building.x)
+                    for building in pair_buildings
+                )
+                if projection.rotated
+                else pair_buildings
+            )
             pairs = tuple(
                 planet.candidate_pairs(
-                    pair_buildings,
+                    broad_phase_buildings,
                     projection.band,
                     projection.segment,
                     projection.radius,
