@@ -30,6 +30,7 @@ from urllib.parse import urlsplit
 from flab2bp import pipeline
 from flab2bp.layout.band_policy import BAND_SELECTIONS, BandPolicy, BandSelection
 from flab2bp.layout.base import LayoutAttemptFailure, NoValidLayout
+from flab2bp.rates import DEFAULT_CANDIDATE_POLICIES
 from flab2bp.rates.adjust import ProliferatorTier
 from flab2bp.web.payload import Json, JsonValue, describe, projection_failure, refusal
 
@@ -279,11 +280,16 @@ def run_build(options: Options, on_progress: pipeline.ProgressSink) -> pipeline.
     allowlist, and request-stage CDP interception aborts a forbidden main-frame
     document redirect before Chromium accesses it.
     """
+    candidate_policies = DEFAULT_CANDIDATE_POLICIES[: options.candidates]
+    if len(candidate_policies) != options.candidates:
+        raise ValueError(
+            f"candidate count must be between 1 and {len(DEFAULT_CANDIDATE_POLICIES)}"
+        )
     return pipeline.build(
         options.url,
         strategy=options.strategy,
         band=options.band,
-        candidates=options.candidates,
+        candidate_policies=candidate_policies,
         time_budget_s=options.budget_s,
         proliferator_tier=options.proliferator_tier,
         name=options.name,

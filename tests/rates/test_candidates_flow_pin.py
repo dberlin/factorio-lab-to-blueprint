@@ -34,7 +34,11 @@ from flab2bp.lab.flow import (
 from flab2bp.lab.schema import Dataset
 from flab2bp.lab.url import parse_url
 from flab2bp.rates.adjust import ProliferatorTier
-from flab2bp.rates.candidates import build_candidates, proliferation_from_flow
+from flab2bp.rates.candidates import (
+    CandidatePolicy,
+    build_candidates,
+    proliferation_from_flow,
+)
 from flab2bp.spec import ProliferatorMode
 
 URL = (
@@ -125,12 +129,27 @@ class TestPinnedFrontier:
         candidate belts in a proliferator the player never named. If this ever
         stops holding, every assertion below is vacuous.
         """
-        unpinned = build_candidates(data, parse_url(URL), count=3)
+        unpinned = build_candidates(data, parse_url(URL))
         assert len(unpinned.candidates) == 3
         assert any(
             any(i.startswith("proliferator") for i in spec.external_inputs)
             for spec in unpinned.candidates
         )
+
+    def test_selected_derived_subset_cannot_rewrite_a_pinned_flow(
+        self, data: Dataset
+    ) -> None:
+        flow = _flow(*_UNSPRAYED)
+        pinned = build_candidates(
+            data,
+            pin_request(parse_url(URL), data, flow),
+            candidate_policies=(
+                CandidatePolicy.OUTPUT_PRODUCTS,
+                CandidatePolicy.ALL_PRODUCTS,
+            ),
+            flow=flow,
+        )
+        assert tuple(spec.label for spec in pinned.candidates) == ("flow-pinned",)
 
     def test_an_unsprayed_flow_yields_one_unproliferated_build(self, data: Dataset) -> None:
         """No frontier: the choice is made, so there is nothing to explore."""
@@ -257,5 +276,5 @@ class TestPinnedFrontier:
         assert all(not item_id.startswith("proliferator-") for item_id in spec.external_inputs)
 
     def test_no_flow_keeps_all_frontier_choices(self, data: Dataset) -> None:
-        labels = {spec.label for spec in build_candidates(data, parse_url(URL), count=3).candidates}
+        labels = {spec.label for spec in build_candidates(data, parse_url(URL)).candidates}
         assert labels == {"no-proliferator", "all-products", "output-products"}

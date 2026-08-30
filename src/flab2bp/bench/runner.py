@@ -23,7 +23,7 @@ from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import LayoutStrategy, NoValidLayout, Placement
 from flab2bp.layout.freeform import FreeformLayout
 from flab2bp.layout.sequence_solver import SequencePairLayout
-from flab2bp.rates import build_candidates
+from flab2bp.rates import DEFAULT_CANDIDATE_POLICIES, build_candidates
 from flab2bp.spec import BuildSpec
 
 #: Fixed so CP-SAT cannot make the comparison noise.  Recorded in the JSON.
@@ -155,7 +155,16 @@ def specs_for(entry: CorpusEntry, *, candidates: int) -> tuple[BuildSpec, ...]:
     # `lab.url.ModHash` (it has no `locations`), and forcing it here would
     # paper over that seam rather than surface it.
     request = parse_url(entry.url)
-    return build_candidates(dataset, request, count=candidates).candidates
+    candidate_policies = DEFAULT_CANDIDATE_POLICIES[:candidates]
+    if len(candidate_policies) != candidates:
+        raise ValueError(
+            f"candidates must be between 1 and {len(DEFAULT_CANDIDATE_POLICIES)}"
+        )
+    return build_candidates(
+        dataset,
+        request,
+        candidate_policies=candidate_policies,
+    ).candidates
 
 
 def run_corpus(

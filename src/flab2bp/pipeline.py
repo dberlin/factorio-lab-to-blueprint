@@ -43,7 +43,11 @@ from flab2bp.layout.base import (
 from flab2bp.layout.freeform import FreeformLayout
 from flab2bp.layout.sequence_solver import SequencePairLayout
 from flab2bp.rates.adjust import ProliferatorTier
-from flab2bp.rates.candidates import _build_candidates_canonical
+from flab2bp.rates.candidates import (
+    DEFAULT_CANDIDATE_POLICIES,
+    CandidatePolicy,
+    _build_candidates_canonical,
+)
 from flab2bp.spec import BuildSpec, BuildSpecSet
 
 ExplicitStrategyName = Literal["freeform", "sequence-pair"]
@@ -267,7 +271,9 @@ def build(
     *,
     strategy: StrategyName = "best",
     band: BandSelection = "portable",
-    candidates: int = 3,
+    candidate_policies: tuple[
+        CandidatePolicy, ...
+    ] = DEFAULT_CANDIDATE_POLICIES,
     time_budget_s: float = 15.0,
     proliferator_tier: ProliferatorTier | None = None,
     sequence_islands: int = 1,
@@ -354,7 +360,7 @@ def build(
         data,
         request,
         tier=proliferator_tier,
-        count=candidates,
+        candidate_policies=candidate_policies,
         flow=selection,
     )
 

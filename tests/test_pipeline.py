@@ -21,7 +21,11 @@ from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import NoValidLayout, Placement
 from flab2bp.layout.freeform import FreeformLayout
 from flab2bp.layout.sequence_solver import SequencePairLayout
-from flab2bp.rates.candidates import _build_candidates_canonical
+from flab2bp.rates.candidates import (
+    DEFAULT_CANDIDATE_POLICIES,
+    CandidatePolicy,
+    _build_candidates_canonical,
+)
 from flab2bp.spec import BuildSpecSet
 
 #: Small, and known to lay out.  One candidate and one strategy so the test
@@ -69,6 +73,7 @@ def test_pipeline_canonicalizes_once_before_internal_consumers(
         assert data is canonical_data
         assert request is pinned_request
         seen.append(("candidates", data, request))
+        assert _kwargs["candidate_policies"] == DEFAULT_CANDIDATE_POLICIES
         raise ReachedCandidates
 
     monkeypatch.setattr(pipeline, "canonicalize_dataset", canonical_data_spy)
@@ -149,7 +154,7 @@ def test_build_defaults_to_one_portable_policy(
     pipeline.build(
         SMALL_URL,
         strategy="freeform",
-        candidates=1,
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
         time_budget_s=3.0,
     )
 
@@ -167,7 +172,10 @@ def test_every_pair_reports_started_and_then_how_it_ended() -> None:
         SMALL_URL,
         strategy="freeform",
         band="160",
-        candidates=2,
+        candidate_policies=(
+            CandidatePolicy.ALL_PRODUCTS,
+            CandidatePolicy.NO_PROLIFERATOR,
+        ),
         time_budget_s=3.0,
         on_progress=steps.append,
     )
@@ -204,7 +212,7 @@ def test_best_reports_freeform_and_sequence_pairs() -> None:
     build = pipeline.build(
         SMALL_URL,
         strategy="best",
-        candidates=1,
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
         time_budget_s=3.0,
         on_progress=steps.append,
     )
@@ -234,7 +242,11 @@ def test_a_sink_that_raises_is_not_swallowed() -> None:
 
     with pytest.raises(Boom):
         pipeline.build(
-            SMALL_URL, strategy="freeform", candidates=1, time_budget_s=0.5, on_progress=explode
+            SMALL_URL,
+            strategy="freeform",
+            candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+            time_budget_s=0.5,
+            on_progress=explode,
         )
 
 
@@ -277,7 +289,7 @@ def test_projection_refusal_preserves_structured_exception_text(
         pipeline.build(
             SMALL_URL,
             strategy="freeform",
-            candidates=1,
+            candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
             time_budget_s=0.5,
             on_progress=steps.append,
         )
@@ -319,7 +331,6 @@ def test_no_proliferator_keeps_only_unsprayed_candidates() -> None:
     build = pipeline.build(
         SMALL_URL,
         strategy="freeform",
-        candidates=3,
         time_budget_s=3.0,
         no_proliferator=True,
     )
@@ -356,7 +367,6 @@ def test_no_proliferator_refuses_rather_than_quietly_spraying() -> None:
             pipeline.build(
                 SMALL_URL,
                 strategy="freeform",
-                candidates=3,
                 time_budget_s=3.0,
                 no_proliferator=True,
             )
@@ -386,7 +396,7 @@ class TestFlowText:
             GRAPHENE_URL,
             strategy="freeform",
             band="160",
-            candidates=1,
+            candidate_policies=(CandidatePolicy.OUTPUT_PRODUCTS,),
             time_budget_s=2.0,
             flow_text=GRAPHENE_FLOW.read_text(encoding="utf-8-sig"),
         )
@@ -402,7 +412,7 @@ class TestFlowText:
             pipeline.build(
                 SMALL_URL,
                 strategy="freeform",
-                candidates=1,
+                candidate_policies=(CandidatePolicy.OUTPUT_PRODUCTS,),
                 time_budget_s=0.5,
                 flow_text=GRAPHENE_FLOW.read_text(encoding="utf-8-sig"),
             )
