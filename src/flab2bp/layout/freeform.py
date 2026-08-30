@@ -8900,6 +8900,7 @@ def _join_shard_islands(
                 min(sinks[b], key=lambda t: (taps[t], t)),
             )
         )
+    return extra
 
 
 def _prepare_routing_problem(
