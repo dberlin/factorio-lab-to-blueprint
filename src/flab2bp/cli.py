@@ -165,7 +165,6 @@ def main(argv: list[str] | None = None) -> int:
         help="whole-solve process islands for explicit sequence-pair (default: "
         "CPU affinity capped at 8; explicit range 1..16)",
     )
-    ap.add_argument("--no-power", dest="power", action="store_false", help="omit Tesla Towers")
     ap.add_argument(
         "--candidates",
         type=int,
@@ -235,7 +234,6 @@ def main(argv: list[str] | None = None) -> int:
             args.url,
             strategy=args.strategy,
             band=args.band,
-            power=args.power,
             candidates=args.candidates,
             time_budget_s=args.budget,
             sequence_islands=sequence_islands,

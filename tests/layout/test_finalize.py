@@ -1286,7 +1286,7 @@ def test_freeform_uses_shared_planet_finalization(
         "flab2bp.layout.freeform.finalize.finalize_placement",
         observed,
     )
-    placement = FreeformLayout(band_policy=policy, power=False).lay_out(
+    placement = FreeformLayout(band_policy=policy).lay_out(
         two_stage_spec(),
         time_budget_s=0.5,
     )

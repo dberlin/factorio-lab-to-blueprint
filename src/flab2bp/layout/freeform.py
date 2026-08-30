@@ -9314,7 +9314,6 @@ class FreeformLayout:
         self,
         *,
         band_policy: BandPolicy,
-        power: bool = True,
         strip_len: int = 6,
         workers: int | None = None,
         direct_insert: bool = True,
@@ -9322,7 +9321,6 @@ class FreeformLayout:
         belt_vertical_construction: bool = True,
     ) -> None:
         self.band_policy = band_policy
-        self.power = power
         #: Whether ramps are REQUIRED.  The game's slope limit is conditional --
         #: ``!history.beltVerticalConstruction && num25 > 0.8f`` -- so a save
         #: WITH the tech has no slope limit and a belt may gain a whole level in
@@ -9933,7 +9931,7 @@ class FreeformLayout:
                     spec,
                     strips,
                     pack,
-                    power=self.power,
+                    power=True,
                     route=True,
                     policy=self.band_policy,
                     ramped=self.ramped,
@@ -9987,7 +9985,7 @@ class FreeformLayout:
             # It costs a validation per ROUTED candidate, which is a handful per
             # sweep -- most heights never get here because their pack does not
             # wire -- against a CP-SAT solve and a full routing pass each.
-            report = validate.certify(placement, spec, expect_power=self.power)
+            report = validate.certify(placement, spec, expect_power=True)
             if report.errors:
                 if rejected is not None:
                     for finding in report.errors:

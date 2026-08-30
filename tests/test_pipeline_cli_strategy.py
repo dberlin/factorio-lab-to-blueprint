@@ -21,7 +21,6 @@ from flab2bp.layout.base import (
 class _BuildKwargs(TypedDict, total=False):
     strategy: pipeline.StrategyName
     band: BandSelection
-    power: bool
     candidates: int
     time_budget_s: float
     sequence_islands: int
@@ -65,9 +64,9 @@ def test_cli_passes_exact_explicit_strategy_name(
     monkeypatch.setattr(pipeline, "build", fake_build)
     monkeypatch.setattr(cli, "_report", lambda build, *, verbose: None)
 
-    assert cli.main(["iron-ingot", "--strategy", strategy, "--no-power"]) == 0
+    assert cli.main(["iron-ingot", "--strategy", strategy]) == 0
     assert received["strategy"] == strategy
-    assert received["power"] is False
+    assert "power" not in received
     assert received["time_budget_s"] == 15.0
     assert capsys.readouterr().out == "BLUEPRINT\n"
     assert received["band"] == "portable"
@@ -162,7 +161,24 @@ def test_strategy_help_separates_best_from_explicit_backends(
     help_text = " ".join(capsys.readouterr().out.split())
     assert "best runs freeform and sequence-pair" in help_text
     assert "smallest fitting band plus up to two wider bands" in help_text
+    assert "--no-power" not in help_text
 
+
+def test_cli_rejects_removed_no_power_option(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        pipeline,
+        "build",
+        lambda *args, **kwargs: pytest.fail("legacy CLI option reached pipeline"),
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(["iron-ingot", "--no-power"])
+
+    assert exc_info.value.code == 2
+    assert "--no-power" in capsys.readouterr().err
 
 def test_cli_band_choices_are_exact_and_reach_pipeline(
     monkeypatch: pytest.MonkeyPatch,

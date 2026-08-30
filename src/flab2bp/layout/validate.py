@@ -5466,12 +5466,11 @@ def validate(
     they are listed in ``Report.skipped`` so an unvalidated build never reads as
     a clean one.
 
-    ``expect_power=False`` declares that this placement was built with power
-    disabled, so the power checks are *skipped* rather than reporting every
-    machine as unpowered.  It is a caller declaration on purpose: the
-    validator inferring it from "there are no towers" would make a dropped
-    tower -- a real bug -- indistinguishable from a deliberate ``--no-power``
-    build, and silently stop detecting it.
+    ``expect_power=False`` is a private fixture seam for placements deliberately
+    built without towers to isolate unrelated validation rules.  Production
+    callers always pass ``True``: inferring the mode from "there are no towers"
+    would make a dropped tower -- a real bug -- indistinguishable from a fixture
+    and silently stop detecting it.
 
     ``max_belt_z`` and ``belt_vertical_construction`` are how high a belt may go
     in the SAVE this blueprint is for, and whether that save is under the

@@ -258,7 +258,6 @@ def run_sequence_islands(
     spec: BuildSpec,
     *,
     time_budget_s: float,
-    power: bool,
     band_policy: BandPolicy,
     belt_vertical_construction: bool,
     strip_len: int,
@@ -275,7 +274,7 @@ def run_sequence_islands(
     serial_attempt = _serial_compact_seed_attempt(
         spec.machine_count,
         len(spec.spray_lanes),
-        power=power,
+        power=True,
     )
     compact_attempts = (serial_attempt,) + tuple(
         attempt for attempt in range(islands) if attempt != serial_attempt
@@ -285,7 +284,7 @@ def run_sequence_islands(
             spec=spec,
             time_budget_s=time_budget_s,
             soft_deadline=soft_deadline,
-            power=power,
+            power=True,
             band_policy=band_policy,
             belt_vertical_construction=belt_vertical_construction,
             strip_len=strip_len,

@@ -72,7 +72,6 @@ def _strategy_names(strategy: StrategyName) -> tuple[ExplicitStrategyName, ...]:
 def _new_layout(
     strategy: ExplicitStrategyName,
     *,
-    power: bool,
     belt_vertical_construction: bool,
     sequence_islands: int = 1,
     band_policy: BandPolicy,
@@ -80,12 +79,10 @@ def _new_layout(
     """Construct one explicitly selected layout backend."""
     if strategy == "freeform":
         return FreeformLayout(
-            power=power,
             belt_vertical_construction=belt_vertical_construction,
             band_policy=band_policy,
         )
     return SequencePairLayout(
-        power=power,
         belt_vertical_construction=belt_vertical_construction,
         islands=sequence_islands,
         band_policy=band_policy,
@@ -270,7 +267,6 @@ def build(
     *,
     strategy: StrategyName = "best",
     band: BandSelection = "portable",
-    power: bool = True,
     candidates: int = 3,
     time_budget_s: float = 15.0,
     proliferator_tier: ProliferatorTier | None = None,
@@ -450,7 +446,6 @@ def build(
                 )
             layout = _new_layout(
                 sname,
-                power=power,
                 belt_vertical_construction=belt_rules.vertical_construction,
                 sequence_islands=sequence_islands,
                 band_policy=policy,
@@ -484,7 +479,7 @@ def build(
             placement = finalize.compact_open_boundary_belts(
                 placement,
                 spec,
-                expect_power=power,
+                expect_power=True,
             )
             try:
                 placement = finalize.finalize_placement(placement, policy)
@@ -517,7 +512,7 @@ def build(
                 placement,
                 spec,
                 ids=_id_map(spec),
-                expect_power=power,
+                expect_power=True,
                 max_belt_z=belt_rules.max_z,
                 belt_vertical_construction=belt_rules.vertical_construction,
             )

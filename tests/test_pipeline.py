@@ -16,7 +16,7 @@ from flab2bp import pipeline
 from flab2bp.lab.data import load_vendored
 from flab2bp.lab.flow import canonicalize_dataset, canonicalize_request
 from flab2bp.lab.url import parse_url
-from flab2bp.layout import finalize
+from flab2bp.layout import finalize, validate
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import NoValidLayout, Placement
 from flab2bp.layout.freeform import FreeformLayout
@@ -98,13 +98,13 @@ def test_build_defaults_to_one_portable_policy(
 ) -> None:
     """Changing the default or reparsing at either finalizer breaks this."""
     seen: list[BandPolicy] = []
+    expected_power: list[tuple[str, bool]] = []
     original_new_layout = pipeline._new_layout
     original_finalize = finalize.finalize_placement
 
     def new_layout_spy(
         strategy: pipeline.ExplicitStrategyName,
         *,
-        power: bool,
         belt_vertical_construction: bool,
         sequence_islands: int = 1,
         band_policy: BandPolicy,
@@ -112,11 +112,27 @@ def test_build_defaults_to_one_portable_policy(
         seen.append(band_policy)
         return original_new_layout(
             strategy,
-            power=power,
             belt_vertical_construction=belt_vertical_construction,
             sequence_islands=sequence_islands,
             band_policy=band_policy,
         )
+
+    def compact_spy(
+        placement: Placement,
+        _spec: object,
+        *,
+        expect_power: bool,
+    ) -> Placement:
+        expected_power.append(("compact", expect_power))
+        return placement
+
+    def validate_spy(
+        _placement: Placement,
+        _spec: object,
+        **kwargs: object,
+    ) -> validate.Report:
+        expected_power.append(("validate", kwargs["expect_power"] is True))
+        return validate.Report(findings=())
 
     def finalize_spy(
         placement: Placement,
@@ -127,6 +143,8 @@ def test_build_defaults_to_one_portable_policy(
 
     monkeypatch.setattr(pipeline, "_new_layout", new_layout_spy)
     monkeypatch.setattr(finalize, "finalize_placement", finalize_spy)
+    monkeypatch.setattr(finalize, "compact_open_boundary_belts", compact_spy)
+    monkeypatch.setattr(validate, "validate", validate_spy)
 
     pipeline.build(
         SMALL_URL,
@@ -138,6 +156,8 @@ def test_build_defaults_to_one_portable_policy(
     assert len(seen) >= 3  # construction, internal finalization, pipeline defense
     assert seen[0] == BandPolicy("portable")
     assert all(policy is seen[0] for policy in seen)
+    assert expected_power[-2:] == [("compact", True), ("validate", True)]
+    assert all(expect_power for _, expect_power in expected_power)
 
 
 @pytest.mark.slow

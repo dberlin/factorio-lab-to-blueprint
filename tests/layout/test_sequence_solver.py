@@ -92,6 +92,7 @@ Prepared = tuple[int, DecodedPlacement]
 class _ProductionRunCapture(TypedDict, total=False):
     compact_seed_attempt: int | None
     compact_seed_config: CompactSeedConfig | None
+    power: bool
 
 
 class _CompactSeedCapture(TypedDict, total=False):
@@ -1546,6 +1547,13 @@ def test_production_run_uses_requested_budget_with_supplied_absolute_deadline() 
     assert run.solver.budget.total == 2_000_000
 
 
+def test_sequence_pair_layout_rejects_removed_power_option() -> None:
+    constructor: Callable[..., SequencePairLayout] = SequencePairLayout
+
+    with pytest.raises(TypeError, match="unexpected keyword argument 'power'"):
+        constructor(band_policy=BandPolicy("portable"), power=False)
+
+
 def test_serial_layout_uses_a_budgeted_root_compact_seed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1568,13 +1576,13 @@ def test_serial_layout_uses_a_budgeted_root_compact_seed(
         del (
             band_policy,
             time_budget_s,
-            power,
             strip_len,
             config,
             belt_vertical_construction,
             absolute_deadline,
             compact_seed_base_seed,
         )
+        captured["power"] = power
         captured["compact_seed_attempt"] = compact_seed_attempt
         captured["compact_seed_config"] = compact_seed_config
         raise RuntimeError("captured production arguments")
@@ -1594,6 +1602,7 @@ def test_serial_layout_uses_a_budgeted_root_compact_seed(
     compact_config = captured["compact_seed_config"]
     assert isinstance(compact_config, CompactSeedConfig)
     assert compact_config.max_deterministic_time == pytest.approx(2.0 / 15.0)
+    assert captured["power"] is True
 
 
 def test_serial_attempt_policy_selects_only_measured_topology_roles() -> None:
@@ -2797,16 +2806,13 @@ def test_sequence_backend_returns_authoritative_finalized_placement_once(
     assert placement is finalized[0]
 
 
-@pytest.mark.parametrize("power", [False, True])
 @pytest.mark.parametrize("belt_vertical_construction", [False, True])
-def test_sequence_backend_returns_only_certified_placements(
-    power: bool,
+def test_sequence_backend_returns_only_certified_powered_placements(
     belt_vertical_construction: bool,
 ) -> None:
     spec = two_stage_spec()
     placement = SequencePairLayout(
         band_policy=BandPolicy("portable"),
-        power=power,
         belt_vertical_construction=belt_vertical_construction,
         config=SequenceSolverConfig.test(),
     ).lay_out(spec, time_budget_s=2.0)
@@ -2815,7 +2821,7 @@ def test_sequence_backend_returns_only_certified_placements(
         placement,
         spec,
         ids=validate.id_map(spec),
-        expect_power=power,
+        expect_power=True,
         belt_vertical_construction=belt_vertical_construction,
     ).errors
     backend: object = placement.stats["backend"]
@@ -2823,8 +2829,8 @@ def test_sequence_backend_returns_only_certified_placements(
     assert placement.stats["detailed_routes"] >= 1.0
     assert placement.stats["direct_candidates"] == 1.0
     assert 0.0 <= placement.stats["direct_inserts"] <= 1.0
-    assert placement.stats["power"] == float(power)
-    assert (placement.stats["towers"] > 0.0) is power
+    assert placement.stats["power"] == 1.0
+    assert placement.stats["towers"] > 0.0
     assert {
         "seeds",
         "seed",
@@ -3123,7 +3129,7 @@ def test_refinery_closed_loop_routes_the_selected_rotated_pose() -> None:
 
     refinery = next(building for building in placement.buildings if building.item_id == 2308)
     assert refinery.yaw in {90.0, 270.0}
-    assert not validate.certify(placement, spec, expect_power=False).errors
+    assert not validate.certify(placement, spec, expect_power=True).errors
     assert placement.stats["detailed_routes"] >= 1.0
     assert placement.stats["pose_count"] == 1.0
     assert (placement.stats["pose_yaw_90"] + placement.stats["pose_yaw_270"]) == 1.0
@@ -3353,7 +3359,7 @@ def test_ray_receiver_sequence_closed_loop_routes_and_validates_exactly() -> Non
     ]
 
     assert len(docks) == 2
-    assert not validate.certify(placement, spec, expect_power=False).errors
+    assert not validate.certify(placement, spec, expect_power=True).errors
 
 
 @pytest.mark.slow
@@ -3362,7 +3368,7 @@ def test_sequence_pair_routes_self_consuming_pinned_flow(
 ) -> None:
     placement = SequencePairLayout(
         band_policy=BandPolicy("portable"),
-        power=False, islands=1
+        islands=1,
     ).lay_out(
         refined_oil_feedback_spec,
         time_budget_s=15.0,
@@ -3370,5 +3376,5 @@ def test_sequence_pair_routes_self_consuming_pinned_flow(
     assert validate.certify(
         placement,
         refined_oil_feedback_spec,
-        expect_power=False,
+        expect_power=True,
     ).ok

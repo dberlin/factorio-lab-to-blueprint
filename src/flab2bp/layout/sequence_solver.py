@@ -3488,7 +3488,6 @@ class SequencePairLayout:
         self,
         *,
         band_policy: BandPolicy,
-        power: bool = False,
         belt_vertical_construction: bool = True,
         strip_len: int = 6,
         config: SequenceSolverConfig | None = None,
@@ -3496,8 +3495,6 @@ class SequencePairLayout:
         compact_seed_config: CompactSeedConfig | None = None,
         islands: int = 1,
     ) -> None:
-        if type(power) is not bool:
-            raise ValueError("power mode must be a bool")
         if type(strip_len) is not int or strip_len <= 0:
             raise ValueError("strip length must be a positive integer")
         if type(islands) is not int or not 1 <= islands <= _MAX_SEQUENCE_ISLANDS:
@@ -3508,7 +3505,6 @@ class SequencePairLayout:
             raise ValueError("compact seed config must be exactly CompactSeedConfig")
         self._solver_factory = solver_factory
         self.band_policy = band_policy
-        self.power = power
         self.ramped = not belt_vertical_construction
         self.strip_len = strip_len
         self.config = config or SequenceSolverConfig()
@@ -3527,7 +3523,7 @@ class SequencePairLayout:
             solver = self._solver_factory(
                 spec,
                 time_budget_s=time_budget_s,
-                power=self.power,
+                power=True,
                 strip_len=self.strip_len,
                 config=self.config,
             )
@@ -3557,7 +3553,6 @@ class SequencePairLayout:
             placement = run_sequence_islands(
                 spec,
                 time_budget_s=time_budget_s,
-                power=self.power,
                 band_policy=self.band_policy,
                 belt_vertical_construction=not self.ramped,
                 strip_len=self.strip_len,
@@ -3569,7 +3564,7 @@ class SequencePairLayout:
             run = _production_run(
                 spec,
                 time_budget_s=time_budget_s,
-                power=self.power,
+                power=True,
                 band_policy=self.band_policy,
                 belt_vertical_construction=not self.ramped,
                 strip_len=self.strip_len,
@@ -3577,7 +3572,7 @@ class SequencePairLayout:
                 compact_seed_attempt=_serial_compact_seed_attempt(
                     spec.machine_count,
                     len(spec.spray_lanes),
-                    power=self.power,
+                    power=True,
                 ),
                 compact_seed_base_seed=self.config.seed,
                 compact_seed_config=_budgeted_compact_seed_config(
@@ -3595,7 +3590,7 @@ class SequencePairLayout:
                     attempt_reasons=exc.attempt_reasons,
                     projection_failures=exc.projection_failures,
                 ) from exc
-            placement = _with_observational_stats(result, run, self.power, self.config)
+            placement = _with_observational_stats(result, run, True, self.config)
         return placement
 
 

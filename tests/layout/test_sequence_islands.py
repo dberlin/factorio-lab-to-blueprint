@@ -243,6 +243,7 @@ def test_compact_portfolio_uses_root_seed_once_while_search_seeds_stay_distinct(
 
     requests = _ImmediateExecutor.instances[-1].requests
     assert [request.seed for request in requests] == list(_sequence_island_seeds(root, 8))
+    assert {request.power for request in requests} == {True}
     assert len({request.seed for request in requests}) == 8
     seeded = requests
     assert [request.compact_seed_attempt for request in seeded] == list(range(8))
