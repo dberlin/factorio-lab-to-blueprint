@@ -199,6 +199,9 @@ def test_cli_band_choices_are_exact_and_reach_pipeline(
     for selection in BAND_SELECTIONS:
         assert cli.main(["iron-ingot", "--band", selection]) == 0
     assert tuple(received) == BAND_SELECTIONS
+    assert cli.main(["iron-ingot", "--band", "160"]) == 0
+    assert received[-1] == "50x800"
+
 
     with pytest.raises(SystemExit) as exc_info:
         cli.main(["iron-ingot", "--band", "240"])

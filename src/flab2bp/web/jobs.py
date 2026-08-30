@@ -28,7 +28,7 @@ from typing import Literal
 from urllib.parse import urlsplit
 
 from flab2bp import pipeline
-from flab2bp.layout.band_policy import BAND_SELECTIONS, BandSelection
+from flab2bp.layout.band_policy import BAND_SELECTIONS, BandPolicy, BandSelection
 from flab2bp.layout.base import LayoutAttemptFailure, NoValidLayout
 from flab2bp.rates.adjust import ProliferatorTier
 from flab2bp.web.payload import Json, JsonValue, describe, projection_failure, refusal
@@ -153,11 +153,14 @@ def parse_options(raw: JsonValue) -> Options:
             raise InvalidOptions("'strategy' must be one of best, freeform, sequence-pair")
 
     raw_band = raw.get("band", "portable")
-    if not isinstance(raw_band, str) or raw_band not in BAND_SELECTIONS:
+    if not isinstance(raw_band, str):
+        raise InvalidOptions("'band' must be one of " + ", ".join(BAND_SELECTIONS))
+    try:
+        band: BandSelection = BandPolicy.parse(raw_band).selection
+    except ValueError as exc:
         raise InvalidOptions(
             "'band' must be one of " + ", ".join(BAND_SELECTIONS)
-        )
-    band: BandSelection = raw_band
+        ) from exc
 
     candidates = raw.get("candidates", 3)
     if not isinstance(candidates, int) or isinstance(candidates, bool) or not 1 <= candidates <= 8:

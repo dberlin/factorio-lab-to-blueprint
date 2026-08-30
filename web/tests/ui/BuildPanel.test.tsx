@@ -239,20 +239,42 @@ test('progress says where the job is while it is still running', async () => {
   await waitFor(() => expect(screen.getByTestId('progress')).toHaveTextContent('3.5s elapsed'));
 });
 
-test('latitude band defaults to portable and submits a changed selection', async () => {
-  const calls = serving({ status: 202, body: aJob() });
+test('latitude band selector exposes every authoritative height by width option', () => {
   mount();
-  const band = screen.getByLabelText('Latitude band');
-  expect(band).toHaveValue('portable');
-  expect(band).toHaveTextContent('Portable (smallest + up to two wider)');
-
-  fireEvent.change(band, { target: { value: '160' } });
-  build();
-
-  await waitFor(() => expect(calls).toHaveLength(1));
-  const body = JSON.parse(String(calls[0]?.init?.body)) as Record<string, unknown>;
-  expect(body.band).toBe('160');
+  const band = screen.getByLabelText<HTMLSelectElement>('Latitude band');
+  expect(Array.from(band.options, (option) => [option.value, option.text])).toEqual([
+    ['portable', 'Portable (smallest + up to two wider)'],
+    ['5x20', '5 × 20 (height × width)'],
+    ['5x40', '5 × 40 (height × width)'],
+    ['5x80', '5 × 80 (height × width)'],
+    ['5x100', '5 × 100 (height × width)'],
+    ['10x160', '10 × 160 (height × width)'],
+    ['10x200', '10 × 200 (height × width)'],
+    ['15x300', '15 × 300 (height × width)'],
+    ['15x400', '15 × 400 (height × width)'],
+    ['25x500', '25 × 500 (height × width)'],
+    ['25x600', '25 × 600 (height × width)'],
+    ['50x800', '50 × 800 (height × width)'],
+    ['160x1000', '160 × 1000 (height × width)'],
+  ]);
 });
+
+test.each(['50x800', '160x1000'])(
+  'latitude band %s reaches the build request unchanged',
+  async (selection) => {
+    const calls = serving({ status: 202, body: aJob() });
+    mount();
+    const band = screen.getByLabelText('Latitude band');
+    expect(band).toHaveValue('portable');
+
+    fireEvent.change(band, { target: { value: selection } });
+    build();
+
+    await waitFor(() => expect(calls).toHaveLength(1));
+    const body = JSON.parse(String(calls[0]?.init?.body)) as Record<string, unknown>;
+    expect(body.band).toBe(selection);
+  },
+);
 
 test('the strategy choices are exactly the production strategy set', () => {
   mount();

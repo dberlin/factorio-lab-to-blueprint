@@ -21,27 +21,34 @@ def test_area_and_bounds_cover_full_footprints() -> None:
     assert p.area == 8 * 5
 
 
-def test_band_policy_parses_portable_and_every_explicit_selection() -> None:
+def test_band_policy_parses_the_exact_authoritative_dimensions_in_order() -> None:
     expected = (
         "portable",
-        "4",
-        "8",
-        "16",
-        "20",
-        "32",
-        "40",
-        "60",
-        "80",
-        "100",
-        "120",
-        "160",
-        "200",
+        "5x20",
+        "5x40",
+        "5x80",
+        "5x100",
+        "10x160",
+        "10x200",
+        "15x300",
+        "15x400",
+        "25x500",
+        "25x600",
+        "50x800",
+        "160x1000",
     )
 
-    assert expected == BAND_SELECTIONS
+    assert BAND_SELECTIONS == expected
     assert tuple(BandPolicy.parse(value).selection for value in expected) == expected
     assert BandPolicy.parse("portable").explicit_segments is None
-    assert BandPolicy.parse("160").explicit_segments == 160
+    assert BandPolicy.parse("50x800").explicit_segments == 160
+    assert BandPolicy.parse("160x1000").explicit_segments == 200
+
+
+def test_band_policy_keeps_meaningful_area_segment_requests_compatible() -> None:
+    assert BandPolicy.parse("4").selection == "5x20"
+    assert BandPolicy.parse("160").selection == "50x800"
+    assert BandPolicy.parse("200").selection == "160x1000"
 
 
 def test_band_policy_rejects_unknown_latitude_band() -> None:

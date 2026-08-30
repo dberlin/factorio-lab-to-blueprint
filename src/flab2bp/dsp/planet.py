@@ -249,11 +249,9 @@ class Band:
     #: Inclusive span of ``|latitude grid index|`` -- one hemisphere's rows.
     grid_lo: int
     grid_hi: int
-    #: Longest run of CONSECUTIVE latitude grid indices sharing this band.  For
-    #: every band but the equatorial one this is one hemisphere's worth, because
-    #: the two hemispheres' copies of the band are separated by every band
-    #: between them.  The equatorial band is the one that spans the equator, so
-    #: its run is both hemispheres plus row zero.
+    #: Published latitude-square capacity.  For non-equatorial bands this is
+    #: the count of grid indices in one hemisphere's run.  The equatorial band
+    #: has 160 squares bounded by the 161 snapped indices ``-80..80``.
     rows: int
     #: Longitude grid cells around the planet: ``area_segments * 5``.
     columns: int
@@ -312,7 +310,7 @@ def bands(segment: int = colliders.PLANET_SEGMENT) -> tuple[Band, ...]:
             continue
         grid_lo = 5 * index_lo + 1
         grid_hi = min(5 * (k - 1) + 5, pole)
-        rows = (2 * grid_hi + 1) if index_lo == 0 else (grid_hi - grid_lo + 1)
+        rows = (2 * grid_hi) if index_lo == 0 else (grid_hi - grid_lo + 1)
         out.append(
             Band(
                 area_segments=previous,

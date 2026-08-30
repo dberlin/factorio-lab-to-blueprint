@@ -56,23 +56,23 @@ test.each([false, true])(
   },
 );
 
-test('band selection uses the exact public strings and defaults to portable', () => {
+test('band selection uses the exact ordered authoritative dimensions', () => {
   const expected = [
     'portable',
-    '4',
-    '8',
-    '16',
-    '20',
-    '32',
-    '40',
-    '60',
-    '80',
-    '100',
-    '120',
-    '160',
-    '200',
+    '5x20',
+    '5x40',
+    '5x80',
+    '5x100',
+    '10x160',
+    '10x200',
+    '15x300',
+    '15x400',
+    '25x500',
+    '25x600',
+    '50x800',
+    '160x1000',
   ];
-  expect([...BandSelection.options].sort()).toEqual([...expected].sort());
+  expect(BandSelection.options).toEqual(expected);
   expect(DEFAULT_OPTIONS.band).toBe('portable');
   expect(BandSelection.safeParse(160).success).toBe(false);
   expect(BandSelection.safeParse('240').success).toBe(false);

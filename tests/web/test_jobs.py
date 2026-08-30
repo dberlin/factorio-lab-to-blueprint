@@ -394,12 +394,14 @@ def test_a_job_that_has_not_started_laying_out_claims_no_progress(
         builder.shutdown()
 
 
-def test_band_defaults_to_portable_and_accepts_only_exact_strings() -> None:
+def test_band_defaults_to_portable_and_accepts_exact_dimensions() -> None:
     assert parse_options({"url": URL}).band == "portable"
     assert tuple(
         parse_options({"url": URL, "band": selection}).band
         for selection in BAND_SELECTIONS
     ) == BAND_SELECTIONS
+    assert parse_options({"url": URL, "band": "160"}).band == "50x800"
+    assert parse_options({"url": URL, "band": "200"}).band == "160x1000"
 
     for value in (160, None, "240", "Portable"):
         with pytest.raises(InvalidOptions, match="'band'"):
@@ -417,9 +419,9 @@ def test_run_build_passes_band_to_pipeline(
 
     monkeypatch.setattr(pipeline, "build", spy)
     with pytest.raises(ValueError, match="stop after observing"):
-        run_build(Options(url=URL, band="160"), lambda _step: None)
+        run_build(Options(url=URL, band="160x1000"), lambda _step: None)
 
-    assert seen["band"] == "160"
+    assert seen["band"] == "160x1000"
 
 
 def test_run_build_does_not_forward_the_retired_power_option(

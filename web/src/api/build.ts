@@ -13,22 +13,25 @@
  * Deliberately free of React and three.js, so it can be tested without either.
  */
 import { z } from 'zod';
+import latitudeBands from '../../../src/flab2bp/dsp/data/latitude_bands.json';
+
+const BandDimension = z.object({
+  height: z.number().int().positive(),
+  width: z.number().int().positive(),
+});
+
+/** Canonical request values and labels, derived from the backend's band table. */
+export const BAND_OPTIONS = BandDimension.array()
+  .parse(latitudeBands)
+  .map(({ height, width }) => ({
+    value: `${height}x${width}`,
+    label: `${height} × ${width} (height × width)`,
+  }));
 
 /** Latitude-band policy accepted consistently by Python, CLI, and web. */
 export const BandSelection = z.enum([
   'portable',
-  '4',
-  '8',
-  '16',
-  '20',
-  '32',
-  '40',
-  '60',
-  '80',
-  '100',
-  '120',
-  '160',
-  '200',
+  ...BAND_OPTIONS.map(({ value }) => value),
 ]);
 
 /** Strategies accepted on every build request. */

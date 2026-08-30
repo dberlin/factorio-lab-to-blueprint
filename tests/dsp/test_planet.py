@@ -75,7 +75,7 @@ def test_the_two_band_index_spellings_agree() -> None:
 #: ``(area_segments, latitude_index_lo, latitude_index_hi, grid_lo, grid_hi, rows)``
 #: for a terrestrial planet, read off the game's own functions.
 TERRESTRIAL = (
-    (200, 0, 15, 1, 80, 161),
+    (200, 0, 15, 1, 80, 160),
     (160, 16, 25, 81, 130, 50),
     (120, 26, 30, 131, 155, 25),
     (100, 31, 35, 156, 180, 25),
@@ -101,41 +101,54 @@ def test_the_band_table_is_the_game_for_a_terrestrial_planet() -> None:
     ]
 
 
-def test_the_equatorial_band_is_161_rows_and_area_count_agrees() -> None:
-    """The equatorial band spans BOTH hemispheres, and it is 161 rows, not 155.
+def test_the_equatorial_band_has_160_square_capacity() -> None:
+    """The equatorial band has 160 lateral squares, as the planet grid publishes.
 
-    This is the number that is easiest to get wrong, and two wrong values are
-    already in circulation.  ``GetLongitudeSegmentCount``'s decrement puts grid
-    rows ``1..5`` in band index 0 along with row 0, so the equatorial band runs
-    ``-80..80`` inclusive.  Reading the decrement as absent gives 159; reading
-    row 0's band as five rows wide rather than eleven gives 155.
-
-    ``area_count`` is the independent oracle: it is the game's own
-    ``GetAreaCount``, and it is the function that decides
-    ``BlueprintAreaCrossTropic``.  A 161-row window centred on the equator must
-    report one area and a 162-row window must report two, whichever way it is
-    grown.
+    The snapped grid indices still run from ``-80..80`` inclusive, which gives a
+    full-height blueprint two legal anchor rows.  Capacity counts squares, not
+    the 161 boundary indices that surround them.
     """
     band = planet.bands(SEGMENT)[0]
-    assert band.rows == 161
+    assert (band.rows, band.columns) == (160, 1000)
+    assert band.anchors(160) == (-80, -79)
     assert planet.area_count(-80, 80, SEGMENT) == 1
     assert planet.area_count(-81, 80, SEGMENT) == 2
     assert planet.area_count(-80, 81, SEGMENT) == 2
 
 
+def test_terrestrial_band_dimensions_are_exact_and_ordered_pole_to_equator() -> None:
+    assert tuple(
+        (band.rows, band.columns)
+        for band in sorted(planet.bands(SEGMENT), key=lambda candidate: candidate.area_segments)
+    ) == (
+        (5, 20),
+        (5, 40),
+        (5, 80),
+        (5, 100),
+        (10, 160),
+        (10, 200),
+        (15, 300),
+        (15, 400),
+        (25, 500),
+        (25, 600),
+        (50, 800),
+        (160, 1000),
+    )
+
+
 @pytest.mark.parametrize("band", planet.bands(SEGMENT), ids=lambda b: str(b.area_segments))
 def test_every_bands_rows_are_exactly_what_area_count_permits(band: planet.Band) -> None:
-    """``Band.rows`` is a claim about ``GetAreaCount``, so ask ``GetAreaCount``.
+    """Every advertised capacity window stays inside one game area.
 
-    Every window of ``rows`` consecutive grid indices this band offers must be
-    one area, and -- unless the band is clipped by the pole -- one more row must
-    be two.
+    Non-equatorial bands are bounded by grid rows.  The equatorial published
+    capacity is 160 squares although its two legal full-height placements use
+    the 161 snapped indices surrounding those squares.
     """
     for anchor in band.anchors(band.rows):
         assert planet.area_count(anchor, anchor + band.rows - 1, SEGMENT) == 1
     assert band.anchors(band.rows + 1) == ()
     top = band.grid_hi
-    if top < planet.pole_grid_idx(SEGMENT):
+    if top < planet.pole_grid_idx(SEGMENT) and not band.is_equatorial:
         assert planet.area_count(top - band.rows, top, SEGMENT) == 2
 
 
@@ -188,18 +201,12 @@ def test_band_for_extent_considers_both_orientations() -> None:
 
 
 def test_band_for_extent_refuses_when_nothing_fits() -> None:
-    """A blueprint too big for every band pastes NOWHERE.
-
-    No fallback to 200: such an area crosses a tropic at every anchor on the
-    planet, and the game refuses it with ``BlueprintAreaCrossTropic``.
-    """
+    """A blueprint beyond the authoritative height or width pastes nowhere."""
     with pytest.raises(planet.BandRefusal, match="fits no band"):
-        planet.band_for_extent(162, 162, SEGMENT)
+        planet.band_for_extent(161, 161, SEGMENT)
     with pytest.raises(planet.BandRefusal, match="fits no band"):
         planet.band_for_extent(1001, 1001, SEGMENT)
-    # ... but 161x161 does fit, so the refusal above is about the extent and not
-    # about the function refusing everything.
-    assert planet.band_for_extent(161, 161, SEGMENT).band.area_segments == 200
+    assert planet.band_for_extent(160, 160, SEGMENT).band.area_segments == 200
 
 
 def test_the_width_bound_is_the_bands_own_column_count() -> None:
@@ -214,7 +221,7 @@ def test_anchors_are_every_window_in_the_band_and_no_others() -> None:
     assert band.anchors(49) == (-130, -129, 81, 82)
     assert band.anchors(51) == ()
     equator = planet.bands(SEGMENT)[0]
-    assert equator.anchors(161) == (-80,)
+    assert equator.anchors(161) == ()
     assert equator.anchors(160) == (-80, -79)
     for anchor in band.anchors(50):
         assert planet.area_count(anchor, anchor + 49, SEGMENT) == 1

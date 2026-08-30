@@ -189,6 +189,26 @@ def test_finalization_physically_rotates_an_extent_that_only_fits_turned() -> No
     assert (area.width, area.height, area.area_segments) == (161, 10, 40)
 
 
+@pytest.mark.parametrize(
+    ("selection", "width", "height", "area_segments"),
+    (("50x800", 800, 50, 160), ("160x1000", 1000, 160, 200)),
+)
+def test_authoritative_upper_band_dimensions_reach_finalizer_capacity(
+    selection: str,
+    width: int,
+    height: int,
+    area_segments: int,
+) -> None:
+    candidates = finalize.frame_candidates(
+        Placement(buildings=_extent(width, height)),
+        BandPolicy.parse(selection),
+    )
+
+    assert tuple(candidate.frame for candidate in candidates) == (
+        AreaFrame(width, height, area_segments, (area_segments,), False),
+    )
+
+
 def test_broke2_tower_pair_uses_the_safe_smallest_band_orientation() -> None:
     placement = Placement(
         buildings=(

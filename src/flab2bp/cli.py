@@ -16,7 +16,7 @@ from pathlib import Path
 
 from flab2bp import pipeline
 from flab2bp.layout import markers
-from flab2bp.layout.band_policy import BAND_SELECTIONS
+from flab2bp.layout.band_policy import BAND_SELECTIONS, BandPolicy
 from flab2bp.layout.base import NoValidLayout
 
 
@@ -137,6 +137,13 @@ def _available_cpu_count() -> int:
         return max(1, os.process_cpu_count() or 1)
 
 
+def _band_selection(value: str) -> str:
+    try:
+        return BandPolicy.parse(value).selection
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         prog="flab2bp",
@@ -153,6 +160,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument(
         "--band",
+        type=_band_selection,
         choices=BAND_SELECTIONS,
         default="portable",
         help="latitude-band policy (default: portable, the smallest fitting "

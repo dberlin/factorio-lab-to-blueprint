@@ -8,6 +8,7 @@
  */
 import { useEffect, useId, useRef, useState } from 'react';
 import {
+  BAND_OPTIONS,
   BandSelection,
   type BuildOptions,
   BuildRequestError,
@@ -169,13 +170,11 @@ export function BuildPanel() {
           }}
         >
           <option value="portable">Portable (smallest + up to two wider)</option>
-          {BandSelection.options
-            .filter((band) => band !== 'portable')
-            .map((band) => (
-              <option key={band} value={band}>
-                {band}
-              </option>
-            ))}
+          {BAND_OPTIONS.map(({ value, label }) => (
+            <option key={value} value={value}>
+              {label}
+            </option>
+          ))}
         </select>
 
         <label htmlFor={proliferatorTierId}>Proliferator tier</label>
