@@ -1227,6 +1227,38 @@ def _port_poses_for(prefab: str, table: _PoseTable) -> tuple[SlotPose, ...]:
     return () if entry is None else tuple(_pose(data) for data in entry["portPoses"])
 
 
+@cache
+def _port_poses_by_model() -> dict[int, tuple[SlotPose, ...]]:
+    """All ``PrefabDesc.portPoses`` arrays, including item-less model variants."""
+    values = _array(_json(_DATA), str(_DATA))
+    poses = _parse_pose_table(_json(_SLOT_POSES))
+    out: dict[int, tuple[SlotPose, ...]] = {}
+    for index, value in enumerate(values):
+        path = f"{_DATA}[{index}]"
+        row = _mapping(value, path)
+        model_value = _required(row, "modelIndex", path)
+        if model_value is None:
+            continue
+        model_index = _integer(model_value, f"{path}.modelIndex")
+        prefab = _string(_required(row, "prefab", path), f"{path}.prefab")
+        out[model_index] = _port_poses_for(prefab, poses)
+    return out
+
+
+def port_poses_for_model(model_index: int) -> tuple[SlotPose, ...]:
+    """Return the game's belt-port poses for an exact prefab model.
+
+    Items may select alternate models without separate item ids.  Splitter
+    models 38, 39 and 40 are the load-bearing case: their ports have different
+    directions and heights, so looking the item up would silently substitute
+    model 38 for the two vertical variants.
+    """
+    try:
+        return _port_poses_by_model()[model_index]
+    except KeyError as exc:
+        raise KeyError(f"unknown DSP model index {model_index}") from exc
+
+
 #: World units per altitude level, from the blueprint paste path::
 #:
 #:     lpos = dir * (localOffset_z * 1.3333333f + 0.2f + realRadius)

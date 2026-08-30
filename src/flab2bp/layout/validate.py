@@ -30,7 +30,7 @@ from enum import Enum, StrEnum
 from fractions import Fraction
 
 from flab2bp.dsp import catalog as cat
-from flab2bp.dsp import codec, colliders, params, rules
+from flab2bp.dsp import codec, colliders, params, rules, splitter_ports
 from flab2bp.dsp import colliders as dsp_colliders
 from flab2bp.layout import slots
 from flab2bp.layout.base import PlacedBuilding, Placement
@@ -2804,32 +2804,51 @@ def _junction_ports(ctx: Context) -> Iterable[Finding]:
 
 @check("junction.colocated")
 def _junction_colocated(ctx: Context) -> Iterable[Finding]:
-    """Every belt attached to a junction sits on the junction's own tile.
+    """Every belt attached to a junction shares the junction's x/y tile.
 
-    Measured on all 25 splitters in the fixture corpus and round-tripped through
-    the viewer: ``dx = dy = 0``, without exception.  A belt that names a splitter
-    from an adjacent tile is not an error the game reports -- it pastes as a
-    junction with that side unconnected -- so nothing downstream of the missing
-    side ever receives items while every building involved exists and every link
-    resolves.  Reported per attachment rather than per junction so the finding
-    names the belt to move.
+    The Splitter's alternate models have elevated ports, so altitude is not a
+    co-location constant.  ``junction.port_pose`` checks the recorded port's
+    exact model-specific height; this check owns only the shared tile invariant.
+    A belt naming a Splitter from an adjacent tile pastes with that side
+    unconnected.
     """
     bs = ctx.placement.buildings
     for j, s in ctx.of_kind(Kind.SPLITTER):
         for belt_idx in ctx.junction_attachments(j):
             b = bs[belt_idx]
-            dx, dy, dz = b.x - s.x, b.y - s.y, b.z - s.z
-            if dx == 0 and dy == 0 and dz == 0:
+            dx, dy = b.x - s.x, b.y - s.y
+            if dx == 0 and dy == 0:
                 continue
             yield Finding(
                 "junction.colocated",
                 Severity.ERROR,
                 f"belt {belt_idx} at ({b.x},{b.y},{b.z}) attaches to splitter {j} at "
-                f"({s.x},{s.y},{s.z}), offset ({dx},{dy},{dz}); every attachment must "
-                f"share the junction's tile or that side pastes unconnected",
+                f"({s.x},{s.y},{s.z}), x/y offset ({dx},{dy}); every attachment must "
+                "share the junction tile or that side pastes unconnected",
                 (belt_idx, j),
-                {"junction": j, "belt": belt_idx, "dx": dx, "dy": dy, "dz": dz},
+                {"junction": j, "belt": belt_idx, "dx": dx, "dy": dy},
             )
+
+
+@check("junction.port_pose")
+def _junction_port_pose(ctx: Context) -> Iterable[Finding]:
+    """Each recorded Splitter slot must name the physical port the belt reaches.
+
+    ``BuildTool_Path`` selects an entry of ``PrefabDesc.portPoses`` from the
+    path direction and port height.  Blueprint paste preserves that index, and
+    ``PlanetFactory`` hands the same numbered slot to
+    ``CargoTraffic.ConnectToSplitter``.  A free-but-wrong index therefore
+    creates a real connection on the wrong Splitter side rather than a usable
+    connection where the belt is drawn.
+    """
+    for issue in splitter_ports.placement_issues(ctx.placement.buildings):
+        yield Finding(
+            "junction.port_pose",
+            Severity.ERROR,
+            issue.message,
+            (issue.belt, issue.splitter),
+            issue.detail(),
+        )
 
 
 @check("junction.records_no_links")

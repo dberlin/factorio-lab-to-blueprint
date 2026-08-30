@@ -70,6 +70,7 @@ from fractions import Fraction
 
 from flab2bp.dsp import catalog as cat
 from flab2bp.dsp import colliders
+from flab2bp.dsp import splitter_ports
 from flab2bp.dsp.rules import (
     ADDON_FROM_SLOT,
     ADDON_TO_SLOT,
@@ -1090,7 +1091,8 @@ def assign_belt_slots(
       **3** (38).  Never 0, never above 3.  Those are the three INPUT slots of
       the receiving belt; slot 0 is where its own output link lives, so writing
       0 puts a predecessor's back-link in the cell the successor link needs.
-    * belt <-> splitter: **0..3**, one per side, in both directions.
+    * belt <-> splitter: the one of ports **0..3** whose model/yaw-adjusted
+      ``PrefabDesc.portPoses`` forward and height match the adjoining belt path.
     * and across all ~10,000 connection records in the corpus, **no
       ``(object, slot)`` cell is named twice.**
 
@@ -1145,7 +1147,21 @@ def assign_belt_slots(
                     continue
                 legal = range(BELT_INPUT_SLOTS[0], BELT_INPUT_SLOTS[1])
             elif peer.item_id == cat.SPLITTER_ID:
-                legal = range(0, SPLITTER_MAX_PORTS)
+                direction: splitter_ports.Direction = (
+                    "feed" if field == "output_to_slot" else "draw"
+                )
+                port = splitter_ports.expected_placement_port(
+                    buildings, i, link, direction
+                )
+                if port is None:
+                    raise SlotUndetermined(
+                        f"belt {i} at ({b.x}, {b.y}, {b.z}) cannot be matched to a "
+                        f"physical port of splitter {link} at "
+                        f"({peer.x}, {peer.y}, {peer.z}); the game selects a "
+                        "PrefabDesc.portPoses index from the adjoining path direction "
+                        "and height"
+                    )
+                legal = (port,)
             else:
                 # A machine, a station, an addon: the slot is the peer's own
                 # perimeter index and is not this function's to choose.

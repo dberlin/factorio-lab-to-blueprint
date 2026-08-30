@@ -1134,3 +1134,24 @@ def test_the_game_s_own_docks_name_the_port_this_module_computes(name: str) -> N
             assert gap <= R.BELT_PORT_MAX_TILE_GAP, (name, info.prefab, port, gap)
             checked += 1
     assert checked >= 2, f"{name} exercised {checked} docks"
+
+
+def test_assign_belt_slots_uses_the_splitter_port_facing_not_first_free() -> None:
+    """A splitter slot is a physical port, not an arbitrary free pool cell."""
+    belt = cat.building(2002)
+    splitter = cat.building(cat.SPLITTER_ID)
+    buildings = (
+        PlacedBuilding(2002, belt.model_index, 1, 0, output_obj=1),
+        PlacedBuilding(2002, belt.model_index, 0, 0, output_obj=2),
+        PlacedBuilding(cat.SPLITTER_ID, splitter.model_index, 0, 0),
+        PlacedBuilding(2002, belt.model_index, 0, 0, input_obj=2, output_obj=4),
+        PlacedBuilding(2002, belt.model_index, -1, 0),
+        PlacedBuilding(2002, belt.model_index, 0, 0, input_obj=2, output_obj=6),
+        PlacedBuilding(2002, belt.model_index, 0, -1),
+    )
+
+    wired = S.assign_belt_slots(buildings)
+
+    assert wired[1].output_to_slot == 1  # east port
+    assert wired[3].input_from_slot == 3  # west port
+    assert wired[5].input_from_slot == 2  # south port

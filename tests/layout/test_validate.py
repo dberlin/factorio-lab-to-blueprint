@@ -3151,10 +3151,38 @@ def test_junction_colocated_fires_on_an_adjacent_attachment() -> None:
     assert f.detail["belt"] == 2
 
 
-def test_junction_colocated_fires_across_altitudes_too() -> None:
-    """Same tile, wrong level, is still a side that pastes unconnected."""
-    p = place(belt(0, 0, out=1), splitter(0, 0), belt(0, 0, 1, inp=1))
-    assert fired(validate(p), "junction.colocated")
+def test_junction_colocated_allows_an_elevated_splitter_variant_port() -> None:
+    """The two vertical Splitter models expose legal ports one level higher."""
+    from dataclasses import replace
+
+    p = place(
+        replace(splitter(0, 0), model_index=39),
+        replace(belt(0, 0, 1, inp=0, out=2), input_from_slot=1),
+        belt(0, 1, 1),
+    )
+    result = validate(p)
+    assert not fired(result, "junction.colocated")
+    assert not fired(result, "junction.port_pose")
+
+
+def test_junction_port_pose_fires_when_a_free_slot_is_on_the_wrong_side() -> None:
+    from dataclasses import replace
+
+    buildings = list(junction_pair().buildings)
+    buildings[3] = replace(buildings[3], input_from_slot=0)
+    buildings[5] = replace(buildings[5], input_from_slot=0)
+    findings = validate(Placement(buildings=tuple(buildings))).by_check(
+        "junction.port_pose"
+    )
+
+    assert {
+        (
+            finding.detail["belt"],
+            finding.detail["recorded_port"],
+            finding.detail["expected_port"],
+        )
+        for finding in findings
+    } == {(3, 0, 1), (5, 0, 2)}
 
 
 def test_junction_records_no_links_fires_when_a_splitter_names_a_neighbour() -> None:
