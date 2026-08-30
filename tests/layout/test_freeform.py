@@ -7577,11 +7577,16 @@ class TestProjectedCoaterSplitterBanIsPreparedBeforeRouting:
         )
 
     def _ban(self) -> frozenset[Cell]:
+        frames = freeform._junction_projection_frames(
+            (0, 0, 42, 34),
+            (0, 0, 42, 34),
+            BandPolicy("portable"),
+        )
         return freeform._prepared_junction_ban(
             (self._coater(),),
             (),
-            projections=(self._projection(),),
-            junction_bounds=(24, 14, 28, 19),
+            projection_frames=frames,
+            junction_bounds=(0, 0, 42, 34),
         )
 
     def test_prepared_junction_ban_adds_exact_projected_coater_splitter_keepout(
@@ -7591,6 +7596,58 @@ class TestProjectedCoaterSplitterBanIsPreparedBeforeRouting:
 
         assert (25, 17, 1) in ban
         assert (25, 18, 1) not in ban
+
+    def test_prepared_junction_ban_matches_materialized_rotated_frame(
+        self,
+    ) -> None:
+        coater = replace(self._coater(), x=5, y=5, yaw=0.0)
+        frames = freeform._junction_projection_frames(
+            (-8, -8, 8, 8),
+            (-8, -8, 8, 8),
+            BandPolicy("100"),
+        )
+        rotated = next(
+            frame
+            for frame in frames
+            if frame.candidate.frame.rotated
+            and frame.candidate.frame.width == 17
+            and frame.candidate.frame.height == 17
+            and frame.candidate.south_padding == 0
+        )
+        projection = next(
+            projection
+            for projection in rotated.projections
+            if projection.band.area_segments == 100
+            and projection.anchor_row == 164
+        )
+        materialized_coater = finalize.materialize_frame_building(
+            coater,
+            bounds=rotated.bounds,
+            candidate=rotated.candidate,
+        )
+        materialized_splitter = finalize.materialize_frame_building(
+            junction.make_splitter(7, 3, F(1)),
+            bounds=rotated.bounds,
+            candidate=rotated.candidate,
+        )
+        failure = finalize.projected_coater_splitter_failure(
+            (0, freeform._collision_pose(materialized_coater)),
+            (1, freeform._collision_pose(materialized_splitter)),
+            projection,
+        )
+        assert failure is not None
+        assert failure.check == "game.addon_splitter_clearance"
+        assert failure.band == 100
+        flat_only = freeform._prepared_junction_ban((coater,), ())
+        ban = freeform._prepared_junction_ban(
+            (coater,),
+            (),
+            projection_frames=frames,
+            junction_bounds=(-8, -8, 8, 8),
+        )
+
+        assert (7, 3, 1) not in flat_only
+        assert (7, 3, 1) in ban
 
     def test_preparation_merges_reachable_frames_into_prepared_junction_ban(
         self,

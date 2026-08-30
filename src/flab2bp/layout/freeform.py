@@ -2823,10 +2823,10 @@ def _prepared_junction_ban(
     buildings: Sequence[PlacedBuilding],
     power_sites: Sequence[tuple[int, int]],
     *,
-    projections: Sequence[planet.Projection] = (),
+    projection_frames: Sequence[_JunctionProjectionFrame] = (),
     junction_bounds: tuple[int, int, int, int] | None = None,
 ) -> frozenset[Cell]:
-    """Precompute exact per-level Splitter refusals from immutable geometry."""
+    """Precompute exact flat and projected Splitter refusals."""
     obstacles = [
         building
         for building in buildings
@@ -2860,148 +2860,22 @@ def _prepared_junction_ban(
         )
 
     coaters = tuple(
-        (index, _collision_pose(building))
+        (index, building)
         for index, building in enumerate(buildings)
         if building.item_id == catalog.SPRAY_COATER_ID
     )
-    if coaters and projections:
+    if coaters and projection_frames:
         if junction_bounds is None:
             raise ValueError("projected junction bans require fixed junction bounds")
-        min_x, min_y, max_x, max_y = junction_bounds
-        splitter_index = len(buildings)
-        splitter_model = catalog.building(catalog.SPLITTER_ID).model_index
-        splitter_radius = planet.collider_radius(splitter_model)
-        projection_steps: list[tuple[planet.Projection, float, float]] = []
-        for projection in projections:
-            latitude_step = (
-                projection.radius
-                * planet.latitude_rad_per_grid(projection.segment)
-                * 0.9
+        banned.update(
+            _projected_coater_junction_ban(
+                coaters,
+                projection_frames,
+                junction_bounds,
+                already_banned=banned,
+                splitter_index=len(buildings),
             )
-            longitude_step = (
-                projection.radius
-                * min(
-                    math.cos(
-                        min(abs(grid), planet.pole_grid_idx(projection.segment))
-                        * planet.latitude_rad_per_grid(projection.segment)
-                    )
-                    for grid in (
-                        projection.band.grid_lo,
-                        projection.band.grid_hi,
-                    )
-                )
-                * planet.longitude_rad_per_grid(
-                    projection.band.area_segments
-                )
-                * 0.9
-            )
-            projection_steps.append(
-                (
-                    projection,
-                    latitude_step if projection.quadrant else longitude_step,
-                    longitude_step if projection.quadrant else latitude_step,
-                )
-            )
-
-        splitter_span_x, splitter_span_y = catalog.collider_span(
-            catalog.SPLITTER_ID,
-            0.0,
         )
-        for coater in coaters:
-            coater_span_x, coater_span_y = catalog.collider_span(
-                catalog.SPRAY_COATER_ID,
-                coater[1].yaw,
-            )
-            lateral_x = round(coater[1].yaw) % 180 == 0
-            tangent_reach_x = (
-                (coater_span_x + splitter_span_x) / 2.0
-                + (1.0 if lateral_x else 0.0)
-            ) * colliders.GRID_ARC
-            tangent_reach_y = (
-                (coater_span_y + splitter_span_y) / 2.0
-                + (0.0 if lateral_x else 1.0)
-            ) * colliders.GRID_ARC
-            tile_reach_x = max(
-                math.ceil(tangent_reach_x / x_step)
-                for _projection, x_step, _y_step in projection_steps
-            )
-            tile_reach_y = max(
-                math.ceil(tangent_reach_y / y_step)
-                for _projection, _x_step, y_step in projection_steps
-            )
-
-            # The pair sphere is a second cheap rejection after the tangent
-            # lower bound and before the exact authoritative predicate.
-            pair_reach = (
-                planet.collider_radius(coater[1].model_index)
-                + splitter_radius
-                + colliders.GRID_ARC
-            )
-            reach2 = pair_reach * pair_reach
-            projected_coater = tuple(
-                (
-                    projection,
-                    x_step,
-                    y_step,
-                    projection.position(
-                        coater[1].x,
-                        coater[1].y,
-                        coater[1].z,
-                    ),
-                )
-                for projection, x_step, y_step in projection_steps
-            )
-            for x in range(
-                max(min_x, math.floor(coater[1].x - tile_reach_x)),
-                min(max_x, math.ceil(coater[1].x + tile_reach_x)) + 1,
-            ):
-                for y in range(
-                    max(min_y, math.floor(coater[1].y - tile_reach_y)),
-                    min(max_y, math.ceil(coater[1].y + tile_reach_y)) + 1,
-                ):
-                    for level in range(LEVELS):
-                        cell = (x, y, level)
-                        if cell in banned:
-                            continue
-                        splitter = (
-                            splitter_index,
-                            _collision_pose(
-                                junction.make_splitter(x, y, Fraction(level))
-                            ),
-                        )
-                        cell_dx = abs(splitter[1].x - coater[1].x)
-                        cell_dy = abs(splitter[1].y - coater[1].y)
-                        for (
-                            projection,
-                            x_step,
-                            y_step,
-                            coater_position,
-                        ) in projected_coater:
-                            if (
-                                cell_dx * x_step > tangent_reach_x
-                                or cell_dy * y_step > tangent_reach_y
-                            ):
-                                continue
-                            splitter_position = projection.position(
-                                splitter[1].x,
-                                splitter[1].y,
-                                splitter[1].z,
-                            )
-                            dx = coater_position[0] - splitter_position[0]
-                            dy = coater_position[1] - splitter_position[1]
-                            dz = coater_position[2] - splitter_position[2]
-                            if dx * dx + dy * dy + dz * dz > reach2:
-                                continue
-                            if (
-                                finalize.projected_coater_splitter_failure(
-                                    coater,
-                                    splitter,
-                                    projection,
-                                )
-                                is not None
-                            ):
-                                banned.add(cell)
-                                break
     return frozenset(banned)
 
 
@@ -7528,6 +7402,306 @@ class _Unpowerable(Exception):
         super().__init__(message)
 
 
+@dataclass(frozen=True, slots=True)
+class _JunctionProjectionFrame:
+    """One reachable frame materialization and its finalizer projections."""
+
+    bounds: tuple[int, int, int, int]
+    candidate: finalize.FrameCandidate
+    projections: tuple[planet.Projection, ...]
+
+
+def _junction_projection_frames(
+    occupied: tuple[int, int, int, int],
+    limit: tuple[int, int, int, int],
+    policy: BandPolicy,
+) -> tuple[_JunctionProjectionFrame, ...]:
+    """Every distinct finalizer-materialized frame reachable in capacity."""
+    occupied_min_x, occupied_min_y, occupied_max_x, occupied_max_y = occupied
+    limit_min_x, limit_min_y, limit_max_x, limit_max_y = limit
+    if not (
+        limit_min_x <= occupied_min_x <= occupied_max_x <= limit_max_x
+        and limit_min_y <= occupied_min_y <= occupied_max_y <= limit_max_y
+    ):
+        raise ValueError("occupied junction bounds must lie inside canvas.limit")
+
+    by_segments = {band.area_segments: band for band in planet.bands()}
+    candidates_by_extent: dict[
+        tuple[int, int],
+        tuple[finalize.FrameCandidate, ...],
+    ] = {}
+    frame_specs: dict[
+        tuple[bool, int, int, int],
+        tuple[tuple[int, int, int, int], finalize.FrameCandidate],
+    ] = {}
+    projections_by_frame: dict[
+        tuple[bool, int, int, int],
+        dict[planet.Projection, None],
+    ] = {}
+    for min_x in range(limit_min_x, occupied_min_x + 1):
+        for min_y in range(limit_min_y, occupied_min_y + 1):
+            for max_x in range(occupied_max_x, limit_max_x + 1):
+                for max_y in range(occupied_max_y, limit_max_y + 1):
+                    width = max_x - min_x + 1
+                    height = max_y - min_y + 1
+                    extent = (width, height)
+                    candidates = candidates_by_extent.get(extent)
+                    if candidates is None:
+                        candidates = finalize._frame_candidates_for_extent(
+                            width,
+                            height,
+                            policy,
+                        )
+                        candidates_by_extent[extent] = candidates
+                    for candidate in candidates:
+                        rotated = candidate.frame.rotated
+                        transform_key = (
+                            rotated,
+                            height if rotated else 0,
+                            min_x if rotated else min_y,
+                            candidate.south_padding,
+                        )
+                        frame_specs.setdefault(
+                            transform_key,
+                            (
+                                (min_x, min_y, max_x, max_y),
+                                candidate,
+                            ),
+                        )
+                        frame_projections = projections_by_frame.setdefault(
+                            transform_key,
+                            {},
+                        )
+                        for segments in candidate.frame.certified_bands:
+                            band = by_segments[segments]
+                            for anchor in band.anchors(
+                                candidate.frame.height
+                            ):
+                                frame_projections.setdefault(
+                                    planet.Projection(
+                                        band=band,
+                                        anchor_row=anchor,
+                                        segment=colliders.PLANET_SEGMENT,
+                                        radius=colliders.PLANET_RADIUS,
+                                    ),
+                                    None,
+                                )
+    return tuple(
+        _JunctionProjectionFrame(
+            bounds=bounds,
+            candidate=candidate,
+            projections=tuple(projections_by_frame[key]),
+        )
+        for key, (bounds, candidate) in frame_specs.items()
+    )
+
+
+def _projected_coater_junction_ban(
+    coaters: Sequence[tuple[int, PlacedBuilding]],
+    frames: Sequence[_JunctionProjectionFrame],
+    junction_bounds: tuple[int, int, int, int],
+    *,
+    already_banned: Set[Cell],
+    splitter_index: int,
+) -> frozenset[Cell]:
+    """Exact Splitter bans after applying each finalizer frame transform."""
+    min_x, min_y, max_x, max_y = junction_bounds
+    splitter_span = catalog.collider_span(catalog.SPLITTER_ID, 0.0)
+    banned: set[Cell] = set()
+
+    for coater_index, coater_building in coaters:
+        prepared_frames: list[
+            tuple[
+                _JunctionProjectionFrame,
+                tuple[int, colliders.Placed],
+                float,
+                float,
+                tuple[
+                    tuple[planet.Projection, float, float, tuple[colliders.Box, ...]],
+                    ...,
+                ],
+            ]
+        ] = []
+        scan_reach_x = 0
+        scan_reach_y = 0
+        for frame in frames:
+            materialized_building = finalize.materialize_frame_building(
+                coater_building,
+                bounds=frame.bounds,
+                candidate=frame.candidate,
+            )
+            materialized_coater = (
+                coater_index,
+                _collision_pose(materialized_building),
+            )
+            coater_span_x, coater_span_y = catalog.collider_span(
+                catalog.SPRAY_COATER_ID,
+                materialized_building.yaw,
+            )
+            lateral_x = round(materialized_building.yaw) % 180 == 0
+            tangent_reach_x = (
+                (coater_span_x + splitter_span[0]) / 2.0
+                + (1.0 if lateral_x else 0.0)
+            ) * colliders.GRID_ARC
+            tangent_reach_y = (
+                (coater_span_y + splitter_span[1]) / 2.0
+                + (0.0 if lateral_x else 1.0)
+            ) * colliders.GRID_ARC
+            projection_states: list[
+                tuple[
+                    planet.Projection,
+                    float,
+                    float,
+                    tuple[colliders.Box, ...],
+                ]
+            ] = []
+            materialized_reach_x = 0
+            materialized_reach_y = 0
+            for projection in frame.projections:
+                latitude_step = (
+                    projection.radius
+                    * planet.latitude_rad_per_grid(projection.segment)
+                    * 0.9
+                )
+                longitude_step = (
+                    projection.radius
+                    * min(
+                        math.cos(
+                            min(
+                                abs(grid),
+                                planet.pole_grid_idx(projection.segment),
+                            )
+                            * planet.latitude_rad_per_grid(
+                                projection.segment
+                            )
+                        )
+                        for grid in (
+                            projection.band.grid_lo,
+                            projection.band.grid_hi,
+                        )
+                    )
+                    * planet.longitude_rad_per_grid(
+                        projection.band.area_segments
+                    )
+                    * 0.9
+                )
+                materialized_reach_x = max(
+                    materialized_reach_x,
+                    math.ceil(tangent_reach_x / longitude_step),
+                )
+                materialized_reach_y = max(
+                    materialized_reach_y,
+                    math.ceil(tangent_reach_y / latitude_step),
+                )
+                projection_states.append(
+                    (
+                        projection,
+                        longitude_step,
+                        latitude_step,
+                        finalize.projected_coater_keepout_boxes(
+                            materialized_coater[1],
+                            projection,
+                        ),
+                    )
+                )
+            if frame.candidate.frame.rotated:
+                scan_reach_x = max(scan_reach_x, materialized_reach_y)
+                scan_reach_y = max(scan_reach_y, materialized_reach_x)
+            else:
+                scan_reach_x = max(scan_reach_x, materialized_reach_x)
+                scan_reach_y = max(scan_reach_y, materialized_reach_y)
+            prepared_frames.append(
+                (
+                    frame,
+                    materialized_coater,
+                    tangent_reach_x,
+                    tangent_reach_y,
+                    tuple(projection_states),
+                )
+            )
+
+        for x in range(
+            max(min_x, coater_building.x - scan_reach_x),
+            min(max_x, coater_building.x + scan_reach_x) + 1,
+        ):
+            for y in range(
+                max(min_y, coater_building.y - scan_reach_y),
+                min(max_y, coater_building.y + scan_reach_y) + 1,
+            ):
+                for level in range(LEVELS):
+                    cell = (x, y, level)
+                    if cell in already_banned or cell in banned:
+                        continue
+                    splitter_building = junction.make_splitter(
+                        x,
+                        y,
+                        Fraction(level),
+                    )
+                    rejected = False
+                    for (
+                        frame,
+                        materialized_coater,
+                        tangent_reach_x,
+                        tangent_reach_y,
+                        frame_projection_states,
+                    ) in prepared_frames:
+                        materialized_splitter = _collision_pose(
+                            finalize.materialize_frame_building(
+                                splitter_building,
+                                bounds=frame.bounds,
+                                candidate=frame.candidate,
+                            )
+                        )
+                        cell_dx = abs(
+                            materialized_splitter.x
+                            - materialized_coater[1].x
+                        )
+                        cell_dy = abs(
+                            materialized_splitter.y
+                            - materialized_coater[1].y
+                        )
+                        for (
+                            projection,
+                            x_step,
+                            y_step,
+                            coater_boxes,
+                        ) in frame_projection_states:
+                            if (
+                                cell_dx * x_step > tangent_reach_x
+                                or cell_dy * y_step > tangent_reach_y
+                            ):
+                                continue
+                            splitter_boxes = colliders.target_boxes(
+                                materialized_splitter,
+                                *projection.pose(
+                                    materialized_splitter.x,
+                                    materialized_splitter.y,
+                                    materialized_splitter.z,
+                                    materialized_splitter.yaw,
+                                ),
+                            )
+                            if not any(
+                                colliders.obb_overlap(coater_box, splitter_box)
+                                for coater_box in coater_boxes
+                                for splitter_box in splitter_boxes
+                            ):
+                                continue
+                            if (
+                                finalize.projected_coater_splitter_failure(
+                                    materialized_coater,
+                                    (splitter_index, materialized_splitter),
+                                    projection,
+                                )
+                                is not None
+                            ):
+                                banned.add(cell)
+                                rejected = True
+                                break
+                        if rejected:
+                            break
+    return frozenset(banned)
+
+
 def _projection_envelope(
     occupied: tuple[int, int, int, int],
     limit: tuple[int, int, int, int],
@@ -8834,6 +9008,18 @@ def _prepare_routing_problem(
         for direct in sorted(promised_direct - realized_direct)
     )
 
+    junction_frames = (
+        _junction_projection_frames(
+            finalize._cleanup_survivor_bounds(
+                Placement(buildings=tuple(canvas.buildings))
+            ),
+            capacity,
+            policy,
+        )
+        if coater_list
+        else ()
+    )
+
     return _PreparedRoutingProblem(
         building_templates=tuple(deepcopy(canvas.buildings)),
         blocked=tuple(sorted(canvas.blocked.items())),
@@ -8859,11 +9045,7 @@ def _prepare_routing_problem(
         junction_ban=_prepared_junction_ban(
             canvas.buildings,
             power_sites,
-            projections=(
-                _power_projection_envelope(canvas, policy)
-                if coater_list
-                else ()
-            ),
+            projection_frames=junction_frames,
             junction_bounds=capacity,
         ),
         preparation_failures=preparation_failures,

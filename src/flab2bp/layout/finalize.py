@@ -640,12 +640,11 @@ def _projected_addon_failure(
     return None
 
 
-def _projected_coater_keepout_overlaps(
+def projected_coater_keepout_boxes(
     coater: colliders.Placed,
-    splitter: colliders.Placed,
     projection: planet.Projection,
-) -> bool:
-    """Whether one Splitter enters one Coater's exact projected keepout."""
+) -> tuple[colliders.Box, ...]:
+    """Materialize one Coater's exact projected lateral keepout boxes."""
     coater_boxes = colliders.target_boxes(
         coater,
         *projection.pose(coater.x, coater.y, coater.z, coater.yaw),
@@ -668,6 +667,16 @@ def _projected_coater_keepout_overlaps(
             else (half_x, half_y, half_z + lateral_arc)
         )
         expanded.append(replace(box, half=expanded_half))
+    return tuple(expanded)
+
+
+def _projected_coater_keepout_overlaps(
+    coater: colliders.Placed,
+    splitter: colliders.Placed,
+    projection: planet.Projection,
+) -> bool:
+    """Whether one Splitter enters one Coater's exact projected keepout."""
+    coater_boxes = projected_coater_keepout_boxes(coater, projection)
     splitter_boxes = colliders.target_boxes(
         splitter,
         *projection.pose(
@@ -679,7 +688,7 @@ def _projected_coater_keepout_overlaps(
     )
     return any(
         colliders.obb_overlap(coater_box, splitter_box)
-        for coater_box in expanded
+        for coater_box in coater_boxes
         for splitter_box in splitter_boxes
     )
 
@@ -918,44 +927,56 @@ def _certify_frame(
     return tuple(dict.fromkeys(failures))
 
 
-def _oriented(placement: Placement, *, rotated: bool) -> Placement:
-    min_x, min_y, _max_x, max_y = placement.bounds
-    height = max_y - min_y + 1
-    buildings: list[PlacedBuilding] = []
-    for building in placement.buildings:
-        if rotated:
-            x = height - (building.y - min_y + building.height)
-            y = building.x - min_x
-            x2 = (
+def materialize_frame_building(
+    building: PlacedBuilding,
+    *,
+    bounds: tuple[int, int, int, int],
+    candidate: FrameCandidate,
+    prior_rotated: bool = False,
+) -> PlacedBuilding:
+    """Apply the finalizer's exact frame transform to one building."""
+    min_x, min_y, _max_x, max_y = bounds
+    relative_rotation = prior_rotated ^ candidate.frame.rotated
+    if relative_rotation:
+        height = max_y - min_y + 1
+        materialized = replace(
+            building,
+            x=height - (building.y - min_y + building.height),
+            y=building.x - min_x,
+            width=building.height,
+            height=building.width,
+            yaw=(building.yaw - 90.0) % 360.0,
+            x2=(
                 None
                 if building.x2 is None or building.y2 is None
                 else height - 1 - (building.y2 - min_y)
-            )
-            y2 = None if building.x2 is None else building.x2 - min_x
-            buildings.append(
-                replace(
-                    building,
-                    x=x,
-                    y=y,
-                    width=building.height,
-                    height=building.width,
-                    yaw=(building.yaw - 90.0) % 360.0,
-                    x2=x2,
-                    y2=y2,
-                    yaw2=(None if building.yaw2 is None else (building.yaw2 - 90.0) % 360.0),
-                )
-            )
-        else:
-            buildings.append(
-                replace(
-                    building,
-                    x=building.x - min_x,
-                    y=building.y - min_y,
-                    x2=None if building.x2 is None else building.x2 - min_x,
-                    y2=None if building.y2 is None else building.y2 - min_y,
-                )
-            )
-    return replace(placement, buildings=tuple(buildings), frame=None)
+            ),
+            y2=None if building.x2 is None else building.x2 - min_x,
+            yaw2=(
+                None
+                if building.yaw2 is None
+                else (building.yaw2 - 90.0) % 360.0
+            ),
+        )
+    else:
+        materialized = replace(
+            building,
+            x=building.x - min_x,
+            y=building.y - min_y,
+            x2=None if building.x2 is None else building.x2 - min_x,
+            y2=None if building.y2 is None else building.y2 - min_y,
+        )
+    if candidate.south_padding:
+        materialized = replace(
+            materialized,
+            y=materialized.y + candidate.south_padding,
+            y2=(
+                None
+                if materialized.y2 is None
+                else materialized.y2 + candidate.south_padding
+            ),
+        )
+    return materialized
 
 
 def target_bands(
@@ -1079,23 +1100,20 @@ def _materialize_frame(
     candidate: FrameCandidate,
 ) -> Placement:
     prior_rotated = placement.frame.rotated if placement.frame is not None else False
-    relative_rotation = prior_rotated ^ candidate.frame.rotated
-    oriented = _oriented(placement, rotated=relative_rotation)
-    if candidate.south_padding:
-        buildings = tuple(
-            replace(
+    bounds = placement.bounds
+    return replace(
+        placement,
+        buildings=tuple(
+            materialize_frame_building(
                 building,
-                y=building.y + candidate.south_padding,
-                y2=(
-                    None
-                    if building.y2 is None
-                    else building.y2 + candidate.south_padding
-                ),
+                bounds=bounds,
+                candidate=candidate,
+                prior_rotated=prior_rotated,
             )
-            for building in oriented.buildings
-        )
-        oriented = replace(oriented, buildings=buildings, frame=None)
-    return replace(oriented, frame=candidate.frame)
+            for building in placement.buildings
+        ),
+        frame=candidate.frame,
+    )
 
 
 def _frame_content_valid(placement: Placement) -> bool:
