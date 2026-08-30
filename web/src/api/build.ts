@@ -151,20 +151,22 @@ export type Attempt = z.infer<typeof Attempt>;
 export type ProjectionFailure = z.infer<typeof ProjectionFailure>;
 export type AttemptFailure = z.infer<typeof AttemptFailure>;
 
-export const BuildOptions = z.object({
-  url: z.string(),
-  strategy: RequestStrategy,
-  candidates: z.number(),
-  budget_s: z.number(),
-  proliferator_tier: ProliferatorTier,
-  band: BandSelection,
-  name: z.string(),
-  allow_invalid: z.boolean(),
-  fetch_flow: z.boolean(),
-  /** A FactorioLab flow export's CSV text. Empty means the recipe selection is
+export const BuildOptions = z
+  .object({
+    url: z.string(),
+    strategy: RequestStrategy,
+    candidates: z.number(),
+    budget_s: z.number(),
+    proliferator_tier: ProliferatorTier,
+    band: BandSelection,
+    name: z.string(),
+    allow_invalid: z.boolean(),
+    fetch_flow: z.boolean(),
+    /** A FactorioLab flow export's CSV text. Empty means the recipe selection is
       derived rather than pinned, which the report says out loud. */
-  flow: z.string(),
-});
+    flow: z.string(),
+  })
+  .strict();
 
 export type BandSelection = z.infer<typeof BandSelection>;
 export type BuildOptions = z.infer<typeof BuildOptions>;

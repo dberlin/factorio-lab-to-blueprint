@@ -39,13 +39,22 @@ test('default options and submitted bodies omit the retired power option', async
   const calls = serving({ status: 202, body: aJob() });
   expect(DEFAULT_OPTIONS).not.toHaveProperty('power');
 
-  await Reflect.apply(submitBuild, undefined, [
-    { ...DEFAULT_OPTIONS, url: 'https://example.invalid/x', power: false },
-  ]);
+  await submitBuild({ ...DEFAULT_OPTIONS, url: 'https://example.invalid/x' });
 
   const body = JSON.parse(String(calls[0]?.init?.body)) as Record<string, unknown>;
   expect(body).not.toHaveProperty('power');
 });
+
+test.each([false, true])(
+  'submit rejects legacy power: %s before making a request',
+  async (power) => {
+    const calls = serving({ status: 202, body: aJob() });
+    const pending = Reflect.apply(submitBuild, undefined, [{ ...DEFAULT_OPTIONS, power }]);
+
+    await expect(pending).rejects.toThrow();
+    expect(calls).toHaveLength(0);
+  },
+);
 
 test('band selection uses the exact public strings and defaults to portable', () => {
   const expected = [
