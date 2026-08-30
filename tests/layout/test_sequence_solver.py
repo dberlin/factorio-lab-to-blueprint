@@ -52,11 +52,11 @@ from flab2bp.layout.sequence_pair import (
     SequencePair,
     StageBoundaryUpdate,
     TaggedAnnealIncumbent,
-    enable_variant_stage_boundary,
     apply_variant_move,
     build_elite_archive,
     decode_sequence_pair,
     decode_state,
+    enable_variant_stage_boundary,
     split_stage_boundary,
 )
 from flab2bp.layout.sequence_solver import (
@@ -81,15 +81,15 @@ from flab2bp.layout.strip_variants import (
     generate_strip_families,
     partition_strip_family,
     projection_pitch_requirement,
-    variants_for_count,
     variant_with_minimum_pitch,
+    variants_for_count,
 )
 from flab2bp.spec import BuildSpec, MachineGroup
 from tests.layout.test_freeform import (
-    proliferated_spec,
     plastic_spec,
-    ray_receiver_spec,
     projected_chemical_plant_spec,
+    proliferated_spec,
+    ray_receiver_spec,
     two_stage_spec,
 )
 
@@ -3810,6 +3810,7 @@ def test_sequence_pair_plastic_projection_pitch_feedback_finalizes_cleanly() -> 
         for left, right in zip(
             sorted(buildings, key=lambda building: building.x),
             sorted(buildings, key=lambda building: building.x)[1:],
+            strict=False,
         )
     }
 

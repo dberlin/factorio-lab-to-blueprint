@@ -95,8 +95,8 @@ from flab2bp.layout.sequence_pair import (
     anneal_stage,
     build_elite_archive,
     decode_state,
-    enable_variant_stage_boundary,
     derive_stage_seed,
+    enable_variant_stage_boundary,
     merge_stage_boundary,
     quality_archive_key,
     repair_neighbourhood,
@@ -111,12 +111,12 @@ from flab2bp.layout.strip_variants import (
     StripVariant,
     StripVariantId,
     default_strip_variant,
-    projection_pitch_requirement,
-    strip_pose_id,
     generate_strip_families,
     partition_strip_family,
-    variants_for_count,
+    projection_pitch_requirement,
+    strip_pose_id,
     variant_with_minimum_pitch,
+    variants_for_count,
 )
 from flab2bp.spec import BuildSpec
 
@@ -1525,7 +1525,9 @@ class SequenceSolver[PreparedT]:
                 True,
             )
             if transformed is not None:
-                sibling_updates: list[tuple[_RestartState, StageBoundaryUpdate]] = []
+                seed_sibling_updates: list[
+                    tuple[_RestartState, StageBoundaryUpdate]
+                ] = []
                 for other in height_state.restarts:
                     if other is primary_restart:
                         continue
@@ -1543,13 +1545,13 @@ class SequenceSolver[PreparedT]:
                         raise ValueError(
                             "stage-boundary transform must rebuild every restart identically"
                         )
-                    sibling_updates.append((other, sibling))
+                    seed_sibling_updates.append((other, sibling))
                 if self.stage_boundary_commit is not None:
                     self.stage_boundary_commit(
                         height_state.height,
                         transformed.problem,
                     )
-                for other, sibling in sibling_updates:
+                for other, sibling in seed_sibling_updates:
                     other.anneal = sibling.state
                     other.failure_signature = ()
                     other.feedback_stagnation = 0
