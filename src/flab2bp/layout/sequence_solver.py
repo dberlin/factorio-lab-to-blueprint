@@ -1156,17 +1156,16 @@ class SequenceSolver[PreparedT]:
             moves_per_stage=self.config.moves_per_stage,
             elite_count=max(self.config.global_elites, 1),
         )
-        topology_stage_config = (
-            replace(stage_config, move_kinds=TOPOLOGY_MOVE_KINDS)
-            if self.config.restarts_per_height >= 2
-            else stage_config
-        )
+        topology_stage_config = replace(stage_config, move_kinds=TOPOLOGY_MOVE_KINDS)
         results: list[_AnnealedRestart] = []
         for restart in restarts:
             topology_lane = self.config.restarts_per_height >= 2 and restart.restart == 0
-            restart_config = topology_stage_config if topology_lane else stage_config
+            feedback_lane = restart.restart == height_state.feedback_restart
+            restart_config = (
+                topology_stage_config if topology_lane or feedback_lane else stage_config
+            )
             stage_start = restart.anneal
-            if topology_lane and restart.restart != height_state.feedback_restart:
+            if topology_lane and not feedback_lane:
                 stage_start = replace(
                     stage_start,
                     gaps=GapProfile.zero(problem.size),

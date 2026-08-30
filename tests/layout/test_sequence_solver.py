@@ -2632,6 +2632,68 @@ def test_projection_pitch_feedback_rebuilds_failed_restart_and_rebases_siblings(
     assert solver._stage_stats[1].selected_variant_ids[0].placement_geometry[2] == padded.pitch_x
 
 
+def test_projection_pitch_feedback_single_restart_routes_padded_variant() -> None:
+    problem, state, placement, failure = _projection_pitch_stage_fixture()
+    padded = variant_with_minimum_pitch(
+        problem.variant(0, 0),
+        problem.variant(0, 0).pitch_x + 1,
+    )
+    detailed_results = iter(
+        (
+            DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), placement),
+            DetailedStageResult(_routing(DetailedRouteStatus.BUDGET), None),
+        )
+    )
+
+    def transform(
+        _height: int,
+        stage_problem: PlacementProblem,
+        stage_state: AnnealState,
+        _feedback: FeedbackState,
+        _detailed: DetailedStageResult,
+        _stagnation: int,
+        _projection_failures: tuple[finalize.ProjectionFailure, ...],
+        select_feedback_variant: bool,
+    ) -> StageBoundaryUpdate:
+        return enable_variant_stage_boundary(
+            stage_problem,
+            stage_state,
+            strip=0,
+            variant=padded,
+            select_variant=select_feedback_variant,
+        )
+
+    solver = SequenceSolver(
+        heights=(40,),
+        problem_for_height=lambda _height: problem,
+        adapters=StageAdapters(
+            prepare=lambda _height, decoded: decoded,
+            global_route=lambda _prepared, _feedback, _allowance: _global(),
+            detailed_route=lambda _prepared, _allowance: next(detailed_results),
+            validate=lambda _placement: ValidationVerdict(
+                False,
+                ("geom.collide",),
+                None,
+                (failure,),
+            ),
+        ),
+        expansion_budget=ExpansionBudget(17),
+        config=SequenceSolverConfig(
+            stages=1,
+            moves_per_stage=32,
+            restarts_per_height=1,
+            global_elites=1,
+        ),
+        initial_states={40: state},
+        stage_boundary_transform=transform,
+    )
+
+    with pytest.raises(NoValidLayout):
+        solver.search(max_stages=2)
+
+    assert solver._stage_stats[1].selected_variant_ids[0].placement_geometry[2] == 8
+
+
 def test_production_padded_variant_transform_maps_same_strip_projection() -> None:
     problem, state, placement, failure = _projection_pitch_stage_fixture()
     run = _production_run(
