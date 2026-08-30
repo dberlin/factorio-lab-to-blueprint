@@ -579,6 +579,9 @@ class PlacementKey:
         )
 
 
+type QualityArchiveKey = tuple[int, int, int, float, float, PlacementKey]
+
+
 @dataclass(frozen=True, slots=True)
 class AnnealIncumbent:
     """Scored annealing state retained at a stage boundary."""
@@ -1827,7 +1830,7 @@ def _blended_archive_key(candidate: AnnealIncumbent) -> tuple[SearchEnergy, Plac
 
 def quality_archive_key(
     candidate: AnnealIncumbent,
-) -> tuple[int, int, int, float, float, PlacementKey]:
+) -> QualityArchiveKey:
     breakdown = candidate.breakdown
     return (
         breakdown.hard_outline_overflow,

@@ -87,6 +87,7 @@ from flab2bp.layout.sequence_pair import (
     GapProfile,
     PlacementKey,
     PlacementProblem,
+    QualityArchiveKey,
     SearchEnergy,
     StageBoundaryUpdate,
     TaggedAnnealIncumbent,
@@ -122,7 +123,6 @@ class ObjectiveMode(StrEnum):
     QUALITY = "quality"
 
 
-type QualityArchiveKey = tuple[int, int, int, int, float, PlacementKey]
 type RefinementHint = tuple[int, tuple[int, int], DecodedPlacement]
 
 _QUALITY_REVISIT_AFTER = 2
