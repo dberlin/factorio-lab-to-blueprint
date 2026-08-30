@@ -70,9 +70,15 @@ def test_defaults_match_the_cli() -> None:
     options = parse_options({"url": URL})
     assert (options.strategy, options.candidates, options.budget_s) == ("best", 3, 15.0)
     assert options.proliferator_tier is None
-    assert options.power is True
+    assert not hasattr(options, "power")
     # The CLI refuses to emit an invalid blueprint unless asked; so does this.
     assert options.allow_invalid is False
+
+
+@pytest.mark.parametrize("legacy_power", [False, True])
+def test_legacy_power_option_is_rejected(legacy_power: bool) -> None:
+    with pytest.raises(InvalidOptions, match="power"):
+        parse_options({"url": URL, "power": legacy_power})
 
 
 @pytest.mark.parametrize(

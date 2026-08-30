@@ -5,7 +5,9 @@ from __future__ import annotations
 import dataclasses
 import threading
 import time
+from pathlib import Path
 
+import httpx
 import pytest
 
 from flab2bp import pipeline
@@ -17,8 +19,31 @@ from flab2bp.layout.base import (
 )
 from flab2bp.web.jobs import Builder, InvalidOptions, Options, parse_options, run_build
 from flab2bp.web.payload import Json, JsonValue
+from flab2bp.web.server import serve
 
 URL = "https://factoriolab.github.io/dsp/flow?o=graphene*60&v=11"
+
+
+@pytest.mark.parametrize("legacy_power", [False, True])
+def test_server_rejects_legacy_power_payload(
+    legacy_power: bool,
+    small_build: pipeline.Build,
+    tmp_path: Path,
+) -> None:
+    httpd, builder = serve(port=0, dist=tmp_path, solve=lambda _options, _progress: small_build)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        response = httpx.post(
+            f"http://127.0.0.1:{httpd.server_address[1]}/api/build",
+            json={"url": URL, "power": legacy_power},
+        )
+        assert response.status_code == 400
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        builder.shutdown()
+        thread.join(timeout=5)
 
 
 def _settled(builder: Builder, job_id: str, *, timeout_s: float = 20.0) -> Json:
@@ -395,6 +420,22 @@ def test_run_build_passes_band_to_pipeline(
         run_build(Options(url=URL, band="160"), lambda _step: None)
 
     assert seen["band"] == "160"
+
+
+def test_run_build_does_not_forward_the_retired_power_option(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: dict[str, object] = {}
+
+    def spy(*_args: object, **kwargs: object) -> object:
+        seen.update(kwargs)
+        raise ValueError("stop after observing options")
+
+    monkeypatch.setattr(pipeline, "build", spy)
+    with pytest.raises(ValueError, match="stop after observing"):
+        run_build(Options(url=URL), lambda _step: None)
+
+    assert "power" not in seen
 
 
 def test_run_build_passes_fetch_flow_and_web_url_validator(

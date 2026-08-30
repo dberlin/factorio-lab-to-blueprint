@@ -214,15 +214,6 @@ export function BuildPanel() {
           onChange={(e) => set('budget_s', Number(e.target.value))}
         />
 
-        <label className="checkbox">
-          <input
-            type="checkbox"
-            checked={options.power}
-            onChange={(e) => set('power', e.target.checked)}
-          />
-          Tesla Towers (off is the CLI's --no-power)
-        </label>
-
         <label htmlFor={nameId}>Name</label>
         <input
           id={nameId}

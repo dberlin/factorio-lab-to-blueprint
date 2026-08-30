@@ -54,7 +54,6 @@ class Options:
     #: Public and CLI callers share the same production strategy set.
     strategy: WebStrategyName = "best"
     band: BandSelection = "portable"
-    power: bool = True
     candidates: int = 3
     budget_s: float = 15.0
     proliferator_tier: ProliferatorTier | None = None
@@ -125,6 +124,23 @@ def parse_options(raw: JsonValue) -> Options:
     if not isinstance(raw, dict):
         raise InvalidOptions("expected a JSON object")
 
+    allowed = {
+        "url",
+        "strategy",
+        "band",
+        "candidates",
+        "budget_s",
+        "proliferator_tier",
+        "name",
+        "allow_invalid",
+        "flow",
+        "fetch_flow",
+    }
+    unknown = sorted(raw.keys() - allowed)
+    if unknown:
+        names = ", ".join(f"'{name}'" for name in unknown)
+        raise InvalidOptions(f"unknown option(s): {names}")
+
     url = raw.get("url")
     if not isinstance(url, str) or not url.strip():
         raise InvalidOptions("'url' is required")
@@ -171,10 +187,6 @@ def parse_options(raw: JsonValue) -> Options:
         case _:
             raise InvalidOptions("'proliferator_tier' must be one of auto, none, 1, 2, 3")
 
-    power = raw.get("power", True)
-    if not isinstance(power, bool):
-        raise InvalidOptions("'power' must be a boolean")
-
     allow_invalid = raw.get("allow_invalid", False)
     if not isinstance(allow_invalid, bool):
         raise InvalidOptions("'allow_invalid' must be a boolean")
@@ -199,7 +211,6 @@ def parse_options(raw: JsonValue) -> Options:
         url=url.strip(),
         strategy=web_strategy,
         band=band,
-        power=power,
         candidates=candidates,
         budget_s=budget,
         proliferator_tier=proliferator_tier,
@@ -269,7 +280,6 @@ def run_build(options: Options, on_progress: pipeline.ProgressSink) -> pipeline.
         options.url,
         strategy=options.strategy,
         band=options.band,
-        power=options.power,
         candidates=options.candidates,
         time_budget_s=options.budget_s,
         proliferator_tier=options.proliferator_tier,
@@ -393,7 +403,6 @@ class Builder:
                         if job.options.proliferator_tier is not None
                         else "auto"
                     ),
-                    "power": job.options.power,
                     "allow_invalid": job.options.allow_invalid,
                     "name": job.options.name,
                     # The CSV itself is not echoed -- it is up to 256kB and the

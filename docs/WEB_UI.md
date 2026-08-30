@@ -196,8 +196,10 @@ GET  /*                  the built front end, with an SPA fallback
 
 The submit body takes `url`, `strategy` (`best`/`freeform`/`sequence-pair`), `candidates`
 (1–8), positive finite `budget_s`, `band`
-(`portable`/`4`/`8`/`16`/`20`/`32`/`40`/`60`/`80`/`100`/`120`/`160`/`200`), `power`,
+(`portable`/`4`/`8`/`16`/`20`/`32`/`40`/`60`/`80`/`100`/`120`/`160`/`200`),
 `name`, `allow_invalid`, `flow`, and `fetch_flow`. `band` defaults to `portable`.
+Power is always enabled: every web build includes Tesla Towers, and the page has no power
+selector. The retired `power` request key is rejected rather than ignored.
 `flow` is a FactorioLab CSV export as text, while `fetch_flow: true` asks the server to capture
 one from an allowlisted FactorioLab page; the two are mutually exclusive. A poll echoes
 `flow_supplied` rather than the CSV itself (it can be hundreds of kB and the page already has

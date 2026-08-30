@@ -158,7 +158,6 @@ export const BuildOptions = z.object({
   budget_s: z.number(),
   proliferator_tier: ProliferatorTier,
   band: BandSelection,
-  power: z.boolean(),
   name: z.string(),
   allow_invalid: z.boolean(),
   fetch_flow: z.boolean(),
@@ -179,7 +178,6 @@ export const DEFAULT_OPTIONS: BuildOptions = {
   candidates: 3,
   budget_s: 15,
   proliferator_tier: 'auto',
-  power: true,
   name: '',
   band: 'portable',
   // Off by default, exactly as the CLI has it: a blueprint that pastes cleanly

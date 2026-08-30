@@ -31,6 +31,12 @@ test('build is disabled until there is a URL', () => {
   expect(screen.getByRole('button', { name: 'Build' })).toBeDisabled();
 });
 
+test('power is always on and has no selector', () => {
+  mount();
+  expect(screen.queryByRole('checkbox', { name: /Tesla Towers/i })).not.toBeInTheDocument();
+  expect(screen.queryByText(/--no-power/i)).not.toBeInTheDocument();
+});
+
 test('automatic flow fetch is off by default and is submitted when selected', async () => {
   const calls = serving({ status: 202, body: aJob() });
   mount();

@@ -35,6 +35,18 @@ test('submit posts sequence-pair with its exact wire spelling', async () => {
   expect(explicit.proliferator_tier).toBe('1');
 });
 
+test('default options and submitted bodies omit the retired power option', async () => {
+  const calls = serving({ status: 202, body: aJob() });
+  expect(DEFAULT_OPTIONS).not.toHaveProperty('power');
+
+  await Reflect.apply(submitBuild, undefined, [
+    { ...DEFAULT_OPTIONS, url: 'https://example.invalid/x', power: false },
+  ]);
+
+  const body = JSON.parse(String(calls[0]?.init?.body)) as Record<string, unknown>;
+  expect(body).not.toHaveProperty('power');
+});
+
 test('band selection uses the exact public strings and defaults to portable', () => {
   const expected = [
     'portable',
