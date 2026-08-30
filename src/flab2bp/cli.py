@@ -18,7 +18,7 @@ from flab2bp import pipeline
 from flab2bp.layout import markers
 from flab2bp.layout.band_policy import BAND_SELECTIONS, BandPolicy
 from flab2bp.layout.base import NoValidLayout
-from flab2bp.rates import CandidatePolicy, DEFAULT_CANDIDATE_POLICIES
+from flab2bp.rates import DEFAULT_CANDIDATE_POLICIES, CandidatePolicy
 
 
 def _report(build: pipeline.Build, *, verbose: bool) -> None:

@@ -8,8 +8,8 @@ import pytest
 from flab2bp.bench.corpus import URL_CORPUS
 from flab2bp.layout import validate
 from flab2bp.layout.base import Placement
-from flab2bp.spec import BuildSpec
 from flab2bp.rates import CandidatePolicy
+from flab2bp.spec import BuildSpec
 from scripts import ab_compare
 
 

@@ -95,8 +95,8 @@ from flab2bp.layout.base import (  # noqa: E402
 from flab2bp.layout.freeform import FreeformLayout  # noqa: E402
 from flab2bp.layout.sequence_solver import SequencePairLayout  # noqa: E402
 from flab2bp.rates import (  # noqa: E402
-    CandidatePolicy,
     DEFAULT_CANDIDATE_POLICIES,
+    CandidatePolicy,
     build_candidates,
 )
 from flab2bp.spec import BuildSpec  # noqa: E402

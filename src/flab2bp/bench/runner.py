@@ -23,7 +23,7 @@ from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import LayoutStrategy, NoValidLayout, Placement
 from flab2bp.layout.freeform import FreeformLayout
 from flab2bp.layout.sequence_solver import SequencePairLayout
-from flab2bp.rates import CandidatePolicy, DEFAULT_CANDIDATE_POLICIES, build_candidates
+from flab2bp.rates import DEFAULT_CANDIDATE_POLICIES, CandidatePolicy, build_candidates
 from flab2bp.spec import BuildSpec
 
 #: Fixed so CP-SAT cannot make the comparison noise.  Recorded in the JSON.

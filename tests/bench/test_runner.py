@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-
 from types import SimpleNamespace
 
 import pytest
@@ -94,7 +93,7 @@ def test_specs_for_default_emits_the_three_canonical_candidate_identities(
             )
         )
 
-    monkeypatch.setattr(runner.lab_data, "load_vendored", object)
+    monkeypatch.setattr("flab2bp.bench.runner.lab_data.load_vendored", object)
     monkeypatch.setattr(runner, "parse_url", lambda _url: object())
     monkeypatch.setattr(runner, "build_candidates", fake_build_candidates)
 
