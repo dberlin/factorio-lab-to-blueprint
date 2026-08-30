@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from flab2bp.bench.corpus import URL_CORPUS
 from flab2bp.layout import finalize
 from flab2bp.layout.base import (
     LayoutAttemptFailure,
@@ -12,6 +13,23 @@ from flab2bp.layout.base import (
     ProjectionFailureRecord,
 )
 from scripts import audit
+
+
+def test_build_jobs_generates_one_powered_cell_per_run_plan_arm() -> None:
+    entry = URL_CORPUS[0]
+
+    jobs = audit.build_jobs(
+        ["freeform"],
+        {entry.tier},
+        [1.0],
+        candidates=1,
+        workers=1,
+        only={entry.url_id},
+    )
+
+    assert len(jobs) == 1
+    assert jobs[0].power is True
+
 
 
 def test_run_cell_preserves_typed_refusal_evidence(
@@ -58,7 +76,7 @@ def test_run_cell_preserves_typed_refusal_evidence(
     monkeypatch.setitem(
         audit._STRATEGIES,
         "evidence",
-        lambda power, workers, vertical: RefusingStrategy(),
+        lambda workers, vertical: RefusingStrategy(),
     )
     job = audit.Job(
         strategy="evidence",
@@ -68,7 +86,6 @@ def test_run_cell_preserves_typed_refusal_evidence(
         spec_index=0,
         candidates=1,
         budget=1.0,
-        power=False,
         workers=1,
     )
 
@@ -138,7 +155,7 @@ def test_run_cell_persists_post_compaction_projection_failures(
     monkeypatch.setitem(
         audit._STRATEGIES,
         "post-projection",
-        lambda power, workers, vertical: SuccessfulStrategy(),
+        lambda workers, vertical: SuccessfulStrategy(),
     )
     monkeypatch.setattr(
         "scripts.audit.finalize.compact_open_boundary_belts",
@@ -161,7 +178,6 @@ def test_run_cell_persists_post_compaction_projection_failures(
         spec_index=0,
         candidates=1,
         budget=1.0,
-        power=False,
         workers=1,
     )
 

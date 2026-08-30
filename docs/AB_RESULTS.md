@@ -1,4 +1,7 @@
-# A/B density comparison (generated)
+# A/B density comparison (historical power-off run)
+
+These recorded power-off results predate the always-powered cutover. They remain
+historical data only and are not evidence for the current powered run plan.
 
 - tiers=trivial+small+mid  budgets=['2s', '8s']  repeat=3  candidates=3  power=off  urls=8
 - CP-SAT runs multi-worker (the shipping default), so it is nondeterministic by design; repeats measure that, they do not remove it.

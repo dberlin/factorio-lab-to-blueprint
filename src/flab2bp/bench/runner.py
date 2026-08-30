@@ -1,4 +1,4 @@
-"""Run every ``(url, candidate, strategy, power)`` cell and measure it.
+"""Run every ``(url, candidate, strategy)`` cell and measure it.
 
 Fairness is the whole point of this module.  Both strategies get the *same*
 ``BuildSpec`` object, the same time budget, and the same seed, and neither is
@@ -37,7 +37,7 @@ class StrategyHandle:
 
 
 def available_strategies(
-    *, power: bool, belt_vertical_construction: bool = True
+    *, belt_vertical_construction: bool = True
 ) -> tuple[StrategyHandle, ...]:
     """Return both implemented production strategies."""
     return (
@@ -45,7 +45,6 @@ def available_strategies(
             "freeform",
             FreeformLayout(
                 band_policy=BandPolicy("portable"),
-                power=power,
                 belt_vertical_construction=belt_vertical_construction,
             ),
         ),
@@ -53,7 +52,6 @@ def available_strategies(
             "sequence-pair",
             SequencePairLayout(
                 band_policy=BandPolicy("portable"),
-                power=power,
                 belt_vertical_construction=belt_vertical_construction,
             ),
         ),
@@ -70,7 +68,6 @@ def _run_cell(
     entry: CorpusEntry,
     spec: BuildSpec,
     *,
-    power: bool,
     time_budget_s: float,
 ) -> CellResult:
     started = time.perf_counter()
@@ -81,11 +78,11 @@ def _run_cell(
         # whole matrix on the first spec either strategy could not wire, which
         # is currently most of them -- and a bake-off that cannot run is worse
         # than one with an honest empty row.
-        return _refused_cell(handle, entry, spec, power=power, reason=exc.reason)
+        return _refused_cell(handle, entry, spec, reason=exc.reason)
     placement = finalize.compact_open_boundary_belts(
         placement,
         spec,
-        expect_power=power,
+        expect_power=True,
     )
     try:
         placement = finalize.finalize_placement(placement, BandPolicy("portable"))
@@ -94,7 +91,6 @@ def _run_cell(
             handle,
             entry,
             spec,
-            power=power,
             reason="final spherical projection rejected " + ", ".join(exc.checks),
         )
     elapsed = time.perf_counter() - started
@@ -106,14 +102,15 @@ def _run_cell(
     # could have caught a layout that pastes cleanly and does not run. The
     # scoring module ranks on `valid`, not `verified`, so that gap fed straight
     # into the winner.
-    report = validator.validate(placement, spec, ids=_id_map(spec), expect_power=power)
+    report = validator.validate(placement, spec, ids=_id_map(spec), expect_power=True)
 
+    skipped_power = tuple(c for c in report.skipped if c.startswith("power."))
     stats = placement.stats
     return CellResult(
         strategy=handle.name,
         url_id=entry.url_id,
         candidate=spec.label or "default",
-        power=power,
+        power=True,
         area=m.area,
         used_tiles=m.used_tiles,
         width=m.width,
@@ -140,15 +137,12 @@ def _run_cell(
         hit_time_budget=bool(stats.get("hit_time_budget", 0.0)),
         fallback_used=bool(stats.get("fallback_used", 0.0)),
         solver_status="OPTIMAL" if stats.get("solver_status", 0.0) else "FEASIBLE",
-        valid=report.ok,
-        errors=len(report.errors),
+        valid=report.ok and not skipped_power,
+        errors=len(report.errors) + len(skipped_power),
         warnings=len(report.warnings),
-        # A power check skipped under `--no-power` is a caller declaration, not
-        # a hole: we told the validator there would be no towers. Every other
-        # skip stays, because a check that could not run is not a check that
-        # passed.
-        skipped_checks=tuple(c for c in report.skipped if power or not c.startswith("power.")),
-        error_checks=tuple(sorted({f.check for f in report.errors})),
+        skipped_checks=report.skipped,
+        error_checks=tuple(sorted({f.check for f in report.errors}))
+        + tuple(f"unchecked:{check}" for check in skipped_power),
         checks_run=len(report.checks_run),
     )
 
@@ -169,9 +163,8 @@ def run_corpus(
     *,
     time_budget_s: float | None = None,
     candidates: int = 3,
-    powers: Sequence[bool] = (True, False),
 ) -> list[CellResult]:
-    """Run the matrix.
+    """Run one powered matrix.
 
     ``time_budget_s`` overrides the per-tier budget; leave it ``None`` to use
     each entry's tier default.
@@ -188,21 +181,18 @@ def run_corpus(
         # The save's slope rule is a property of THIS entry's URL, so it is
         # asked per entry rather than once for the run.
         rules = belt_rules_for_url(entry.url)
-        for power in powers:
-            for handle in available_strategies(
-                power=power,
-                belt_vertical_construction=rules.vertical_construction,
-            ):
-                for spec in specs:
-                    results.append(
-                        _run_cell(
-                            handle,
-                            entry,
-                            spec,
-                            power=power,
-                            time_budget_s=budget,
-                        )
+        for handle in available_strategies(
+            belt_vertical_construction=rules.vertical_construction,
+        ):
+            for spec in specs:
+                results.append(
+                    _run_cell(
+                        handle,
+                        entry,
+                        spec,
+                        time_budget_s=budget,
                     )
+                )
     return results
 
 
@@ -211,7 +201,6 @@ def _refused_cell(
     entry: CorpusEntry,
     spec: BuildSpec,
     *,
-    power: bool,
     reason: str,
 ) -> CellResult:
     """A strategy that searched and found nothing still gets a row.
@@ -225,7 +214,7 @@ def _refused_cell(
         strategy=handle.name,
         url_id=entry.url_id,
         candidate=spec.label or "default",
-        power=power,
+        power=True,
         area=0,
         used_tiles=0,
         width=0,
@@ -256,7 +245,7 @@ def _failed_cell(entry: CorpusEntry, message: str) -> CellResult:
         strategy="-",
         url_id=entry.url_id,
         candidate="-",
-        power=False,
+        power=True,
         area=0,
         used_tiles=0,
         width=0,

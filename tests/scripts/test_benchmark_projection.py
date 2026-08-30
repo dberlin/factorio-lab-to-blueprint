@@ -152,7 +152,6 @@ def test_audit_json_record_includes_build_wall_time_and_finalization_counters() 
         spec_index=0,
         candidates=1,
         budget=4.0,
-        power=True,
         workers=1,
     )
     result = audit.Result(

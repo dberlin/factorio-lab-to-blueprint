@@ -97,14 +97,14 @@ B_NAME = "freeform"
 #: The second argument is the save's slope rule, taken from the entry's URL.
 #: Both arms must get the same one or the comparison is measuring the
 #: technology set rather than the strategies.
-STRATEGIES: dict[str, Callable[[bool, bool], LayoutStrategy]] = {
-    A_NAME: lambda power, vertical: SequencePairLayout(
+STRATEGIES: dict[str, Callable[[bool], LayoutStrategy]] = {
+    A_NAME: lambda vertical: SequencePairLayout(
         band_policy=BandPolicy("portable"),
-        power=power, belt_vertical_construction=vertical
+        belt_vertical_construction=vertical,
     ),
-    B_NAME: lambda power, vertical: FreeformLayout(
+    B_NAME: lambda vertical: FreeformLayout(
         band_policy=BandPolicy("portable"),
-        power=power, belt_vertical_construction=vertical
+        belt_vertical_construction=vertical,
     ),
 }
 
@@ -116,19 +116,18 @@ class _LayoutCall:
     """Picklable solve request executed inside one fresh measurement process."""
 
     strategy: str
-    power: bool
     vertical: bool
     spec: BuildSpec
     budget_s: float
 
     def __call__(self) -> Placement:
-        placement = STRATEGIES[self.strategy](self.power, self.vertical).lay_out(
+        placement = STRATEGIES[self.strategy](self.vertical).lay_out(
             self.spec, time_budget_s=self.budget_s
         )
         compacted = finalize.compact_open_boundary_belts(
             placement,
             self.spec,
-            expect_power=self.power,
+            expect_power=True,
         )
         return finalize.finalize_placement(compacted, BandPolicy("portable"))
 
@@ -151,27 +150,22 @@ def specs_for(entry: CorpusEntry, candidates: int) -> tuple[BuildSpec, ...]:
 
 
 def judge_with(
-    spec: BuildSpec, ids: validate.IdMap, power: bool, placement: Placement
+    spec: BuildSpec, ids: validate.IdMap, placement: Placement
 ) -> tuple[bool, tuple[str, ...]]:
-    """Is this placement shippable?
+    """Return whether the powered placement is fully checked and shippable.
 
     The ``spec`` and its id map are passed to the validator deliberately.
     Without them nine spec-conformance and flow checks silently skip, and a
     build that never ran its throughput checks reads as clean -- a quieter
     version of the same artifact this harness exists to prevent.
-    (``bench/runner.py`` calls ``validate(placement)`` bare and has exactly that
-    hole; see the report for the diff that would fix it.)
 
-    A skipped check is therefore not a passed check.  The one exception is the
-    power family under ``--no-power``, which is a *caller declaration* -- we told
-    the validator there would be no towers, so those skips are expected and are
-    the only ones tolerated.
+    A skipped check is not a passed check. Current runs are always powered, so
+    skipped power checks are validation holes rather than a declared off mode.
     """
-    report = validate.validate(placement, spec, ids=ids, expect_power=power)
+    report = validate.validate(placement, spec, ids=ids, expect_power=True)
     checks = tuple(sorted({f.check for f in report.errors}))
-    unexpected = tuple(c for c in report.skipped if power or not c.startswith("power."))
-    if unexpected:
-        return False, checks + tuple(f"unchecked:{c}" for c in unexpected)
+    if report.skipped:
+        return False, checks + tuple(f"unchecked:{c}" for c in report.skipped)
     return report.ok, checks
 
 
@@ -190,7 +184,6 @@ def collect(
     budgets: list[float],
     repeat: int,
     candidates: int,
-    power: bool,
     a_name: str = A_NAME,
     b_name: str = B_NAME,
 ) -> list[Sample]:
@@ -229,13 +222,13 @@ def collect(
                             Outcome.ERROR,
                             0.0,
                             detail=spec_errors[entry.url_id],
-                            power=power,
+                            power=True,
                         )
                         for name in strategy_names
                     )
                     continue
                 for spec in specs[entry.url_id]:
-                    judge: Judge = partial(judge_with, spec, _id_map(spec), power)
+                    judge: Judge = partial(judge_with, spec, _id_map(spec))
                     encode = partial(encode_with, spec)
                     vertical = belt_rules_for_url(entry.url).vertical_construction
                     for name in strategy_names:
@@ -247,11 +240,11 @@ def collect(
                                 budget_s=budget,
                                 trial=trial,
                                 attempt=isolated_attempt(
-                                    _LayoutCall(name, power, vertical, spec, budget)
+                                    _LayoutCall(name, vertical, spec, budget)
                                 ),
                                 judge=judge,
                                 encode=encode,
-                                power=power,
+                                power=True,
                             )
                         )
                 print(
@@ -281,7 +274,6 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         "design, so one sample is noise and nothing can be declared separated",
     )
     ap.add_argument("--candidates", type=int, default=3)
-    ap.add_argument("--power", action="store_true", help="lay out with power (default off)")
     ap.add_argument("--only", default="", help="comma-separated url_ids to restrict to")
     ap.add_argument("--json", type=Path, default=None, help="write raw samples here")
     ap.add_argument("--markdown", type=Path, default=None, help="write the report here")
@@ -317,7 +309,6 @@ def main(argv: list[str] | None = None) -> int:
         budgets=budgets,
         repeat=args.repeat,
         candidates=args.candidates,
-        power=bool(args.power),
         a_name=args.a,
         b_name=args.b,
     )
@@ -332,7 +323,7 @@ def main(argv: list[str] | None = None) -> int:
         budgets=tuple(budgets),
         repeat=args.repeat,
         candidates=args.candidates,
-        power=bool(args.power),
+        power=True,
         urls=len(entries),
         started=started,
         seconds=round(time.perf_counter() - t0, 1),

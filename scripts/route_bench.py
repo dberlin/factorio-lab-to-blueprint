@@ -1,6 +1,6 @@
 """Replay real A* searches, so the inner loop can be A/B'd without CP-SAT.
 
-    uv run python scripts/route_bench.py --capture universe-matrix --power 1
+    uv run python scripts/route_bench.py --capture universe-matrix
     uv run python scripts/route_bench.py --cases /tmp/route-cases-universe-matrix.pkl
 
 WHY A REPLAY AND NOT A CELL RUN
@@ -36,8 +36,10 @@ import hashlib
 import pickle
 import sys
 import time
+from collections.abc import Iterable
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -50,7 +52,15 @@ from flab2bp.layout.base import NoValidLayout  # noqa: E402
 from flab2bp.rates.candidates import build_candidates  # noqa: E402
 
 
-def _snapshot(canvas, grid, history):
+def _snapshot(
+    canvas: freeform._Canvas,
+    grid: freeform._Grid | None,
+    history: dict[tuple[int, int, int], float],
+) -> tuple[
+    freeform._Canvas,
+    freeform._Grid | None,
+    dict[tuple[int, int, int], float],
+]:
     """The parts a routing pass moves, copied; the rest shared."""
     shot_canvas = copy.copy(canvas)
     shot_canvas.blocked = dict(canvas.blocked)
@@ -72,46 +82,66 @@ def _snapshot(canvas, grid, history):
     return shot_canvas, shot_grid, dict(history)
 
 
-def capture(url_id: str, power: int, budget: float, every: int, cap: int, out: Path):
+def capture(url_id: str, budget: float, every: int, cap: int, out: Path) -> None:
     entry = next(e for e in URL_CORPUS if e.url_id == url_id)
     spec = build_candidates(
         load_vendored(), parse_url(entry.url), count=3
     ).candidates[0]
 
     orig = freeform._astar
-    cases: list[dict] = []
+    cases: list[dict[str, Any]] = []
     seen = 0
 
-    def spy(canvas, starts, goals, history, pressure, bounds, budget_=None,
-            deadline=None, blame=None, grid=None):
+    def spy(
+        canvas: freeform._Canvas,
+        starts: list[tuple[int, int, int]],
+        goals: set[tuple[int, int, int]],
+        history: dict[tuple[int, int, int], float],
+        pressure: float,
+        bounds: tuple[int, int, int, int],
+        budget: dict[str, int] | None = None,
+        deadline: float | None = None,
+        blame: dict[tuple[int, int, int], float] | None = None,
+        grid: freeform._Grid | None = None,
+    ) -> freeform._PathSearchResult:
         nonlocal seen
         want = seen % every == 0 and len(cases) < cap
         if want:
             shot_canvas, shot_grid, shot_hist = _snapshot(canvas, grid, history)
         seen += 1
-        out_path = orig(canvas, starts, goals, history, pressure, bounds,
-                        budget_, deadline, blame, grid)
+        out_path = orig(
+            canvas,
+            starts,
+            goals,
+            history,
+            pressure,
+            bounds,
+            budget,
+            deadline,
+            blame,
+            grid,
+        )
         if want:
-            cases.append({
-                "canvas": shot_canvas,
-                "grid": shot_grid,
-                "history": shot_hist,
-                "starts": list(starts),
-                "goals": set(goals),
-                "pressure": pressure,
-                "bounds": bounds,
-                "path": out_path,
-            })
+            cases.append(
+                {
+                    "canvas": shot_canvas,
+                    "grid": shot_grid,
+                    "history": shot_hist,
+                    "starts": list(starts),
+                    "goals": set(goals),
+                    "pressure": pressure,
+                    "bounds": bounds,
+                    "path": out_path,
+                }
+            )
         return out_path
 
     freeform._astar = spy
     try:
         freeform.FreeformLayout(
             band_policy=BandPolicy("portable"),
-            power=power, workers=1
-        ).lay_out(
-            spec, time_budget_s=budget
-        )
+            workers=1,
+        ).lay_out(spec, time_budget_s=budget)
     except NoValidLayout:
         pass
     finally:
@@ -124,7 +154,7 @@ def capture(url_id: str, power: int, budget: float, every: int, cap: int, out: P
           f"{sum(lens):,} path cells")
 
 
-def digest(paths) -> str:
+def digest(paths: Iterable[Any]) -> str:
     hasher = hashlib.sha256()
     for p in paths:
         hasher.update(b"-" if p is None else repr(p).encode())
@@ -139,7 +169,7 @@ def bench(path: Path, rounds: int, check: bool, landmarks: int | None) -> int:
         # occupancy the real pass built its fields from, and the sweep is
         # deterministic, so `--landmarks 4` reproduces the capture exactly --
         # which is the control this experiment needs.
-        done: dict[int, tuple] = {}
+        done: dict[int, tuple[Any, ...]] = {}
         for case in cases:
             grid = case["grid"]
             if grid is None:
@@ -156,7 +186,7 @@ def bench(path: Path, rounds: int, check: bool, landmarks: int | None) -> int:
         # A fresh budget per round, sized so it can never bind: the point is to
         # replay the SAME work, not to re-impose a cap the capture already had.
         budget = {"left": 1 << 40}
-        got: list = []
+        got: list[Any] = []
         t0 = time.perf_counter()
         for case in cases:
             canvas = case["canvas"]
@@ -171,6 +201,8 @@ def bench(path: Path, rounds: int, check: bool, landmarks: int | None) -> int:
             best = (dt, spent, got)
         print(f"  round {r + 1}: {dt:.3f}s  {spent:,} expansions  "
               f"{1e6 * dt / max(spent, 1):.3f} us/exp")
+    if best is None:
+        raise ValueError("rounds must be positive")
     dt, spent, got = best
     print(f"BEST {dt:.3f}s  {spent:,} expansions  "
           f"{1e6 * dt / max(spent, 1):.3f} us/exp  digest {digest(got)}")
@@ -186,7 +218,6 @@ def bench(path: Path, rounds: int, check: bool, landmarks: int | None) -> int:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--capture")
-    ap.add_argument("--power", type=int, default=1)
     ap.add_argument("--budget", type=float, default=4.0)
     ap.add_argument("--every", type=int, default=8)
     ap.add_argument("--cap", type=int, default=64)
@@ -196,8 +227,8 @@ def main() -> int:
     ap.add_argument("--landmarks", type=int)
     args = ap.parse_args()
     if args.capture:
-        out = args.cases or Path(f"/tmp/route-cases-{args.capture}-p{args.power}.pkl")
-        capture(args.capture, args.power, args.budget, args.every, args.cap, out)
+        out = args.cases or Path(f"/tmp/route-cases-{args.capture}.pkl")
+        capture(args.capture, args.budget, args.every, args.cap, out)
         return 0
     if not args.cases:
         ap.error("--cases or --capture required")

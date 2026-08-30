@@ -459,11 +459,11 @@ def test_old_json_null_buildings_and_missing_metrics_parses_but_cannot_pass() ->
     assert any("RSS metric" in reason for reason in report.reasons)
 
 
-def test_repository_manifest_is_full_corpus_for_both_power_modes() -> None:
+def test_repository_manifest_is_full_corpus_and_powered_only() -> None:
     required = repository_manifest(budgets=(10.0,), repeat=2, candidates=1)
 
-    assert len(required.cells) == len(URL_CORPUS) * 2
-    assert {cell.power for cell in required.cells} == {False, True}
+    assert len(required.cells) == len(URL_CORPUS)
+    assert all(cell.power is True for cell in required.cells)
     assert all(cell.repeat == 2 and cell.candidates == 1 for cell in required.cells)
 
 

@@ -1,6 +1,6 @@
 """Can both strategies lay out everything, cleanly, right now?
 
-    uv run python scripts/audit.py                    # every tier, both power settings
+    uv run python scripts/audit.py                    # every tier, powered
     uv run python scripts/audit.py --tier mid         # up to mid
     uv run python scripts/audit.py --budget 1,4,15    # sweep the solver budget
     uv run python scripts/audit.py --strategy sequence-pair
@@ -94,17 +94,15 @@ from flab2bp.rates.candidates import build_candidates  # noqa: E402
 from flab2bp.spec import BuildSpec  # noqa: E402
 
 _TIER_ORDER = (Tier.TRIVIAL, Tier.SMALL, Tier.MID, Tier.LARGE, Tier.STRESS)
-_StrategyFactory = Callable[[bool, int, bool], LayoutStrategy]
+_StrategyFactory = Callable[[int, bool], LayoutStrategy]
 _STRATEGIES: dict[str, _StrategyFactory] = {
-    "freeform": lambda power, workers, vertical: FreeformLayout(
+    "freeform": lambda workers, vertical: FreeformLayout(
         band_policy=BandPolicy("portable"),
-        power=power,
         workers=workers,
         belt_vertical_construction=vertical,
     ),
-    "sequence-pair": lambda power, _workers, vertical: SequencePairLayout(
+    "sequence-pair": lambda _workers, vertical: SequencePairLayout(
         band_policy=BandPolicy("portable"),
-        power=power,
         belt_vertical_construction=vertical,
     ),
 }
@@ -137,8 +135,9 @@ class Job:
     spec_index: int
     candidates: int
     budget: float
-    power: bool
     workers: int
+    #: Constant historical-schema metadata. Current audit cells are always powered.
+    power: bool = field(init=False, default=True)
     #: Arrangements per height for freeform, or ``None`` for its own default.
     #: Only freeform has the notion, so it is passed only to freeform.
     arrangements: int | None = None
@@ -229,13 +228,12 @@ def run_cell(job: Job) -> Result:
         if job.arrangements is not None and job.strategy == "freeform":
             strategy = FreeformLayout(
                 band_policy=BandPolicy("portable"),
-                power=job.power,
                 workers=job.workers,
                 arrangements=job.arrangements,
                 belt_vertical_construction=belt_rules.vertical_construction,
             )
         else:
-            strategy = make_strategy(job.power, job.workers, belt_rules.vertical_construction)
+            strategy = make_strategy(job.workers, belt_rules.vertical_construction)
         placement = strategy.lay_out(
             spec,
             time_budget_s=job.budget,
@@ -263,7 +261,7 @@ def run_cell(job: Job) -> Result:
     placement = finalize.compact_open_boundary_belts(
         placement,
         spec,
-        expect_power=job.power,
+        expect_power=True,
     )
     try:
         placement = finalize.finalize_placement(placement, BandPolicy("portable"))
@@ -297,12 +295,13 @@ def run_cell(job: Job) -> Result:
         placement,
         spec,
         ids=validate.id_map(spec),
-        expect_power=job.power,
+        expect_power=True,
         max_belt_z=belt_rules.max_z,
         belt_vertical_construction=belt_rules.vertical_construction,
     )
     elapsed = time.monotonic() - t0
-    if report.ok:
+    skipped_power = tuple(c for c in report.skipped if c.startswith("power."))
+    if report.ok and not skipped_power:
         return Result(
             job,
             "CLEAN",
@@ -317,7 +316,9 @@ def run_cell(job: Job) -> Result:
             projection_power_pairs,
             projection_sorters,
         )
-    checks = tuple(sorted({f.check for f in report.errors}))
+    checks = tuple(sorted({f.check for f in report.errors})) + tuple(
+        f"unchecked:{check}" for check in skipped_power
+    )
     return Result(
         job,
         "INVALID",
@@ -408,21 +409,19 @@ def build_jobs(
         for name in strategies:
             for i in range(candidates):
                 for budget in budgets:
-                    for power in (False, True):
-                        jobs.append(
-                            Job(
-                                strategy=name,
-                                url_id=e.url_id,
-                                url=e.url,
-                                tier=e.tier.value,
-                                spec_index=i,
-                                candidates=candidates,
-                                budget=budget,
-                                power=power,
-                                workers=workers,
-                                arrangements=arrangements,
-                            )
+                    jobs.append(
+                        Job(
+                            strategy=name,
+                            url_id=e.url_id,
+                            url=e.url,
+                            tier=e.tier.value,
+                            spec_index=i,
+                            candidates=candidates,
+                            budget=budget,
+                            workers=workers,
+                            arrangements=arrangements,
                         )
+                    )
     return jobs
 
 

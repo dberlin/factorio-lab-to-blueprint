@@ -98,12 +98,11 @@ class PromotionReport:
 def repository_manifest(
     *, budgets: Sequence[float], repeat: int, candidates: int
 ) -> PromotionManifest:
-    """Require the entire repository corpus at every budget and both power modes."""
+    """Require the entire repository corpus at every budget, powered."""
     cells = tuple(
-        RequiredCell(entry.url_id, budget, power, repeat, candidates)
+        RequiredCell(entry.url_id, budget, True, repeat, candidates)
         for entry in URL_CORPUS
         for budget in budgets
-        for power in (False, True)
     )
     return PromotionManifest(cells)
 

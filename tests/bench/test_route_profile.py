@@ -60,7 +60,7 @@ def test_json_profile_emits_one_bounded_machine_readable_record(
     assert json.loads(lines[0]) == {
         "url_id": "plastic",
         "strategy": "freeform",
-        "power": 1,
+        "power": True,
         "budget_s": 4.0,
         "run": 1,
         "repeat": 1,
@@ -119,7 +119,7 @@ def test_normal_profile_honors_sequence_pair_strategy(
 
     assert route_profile.main() == 0
     assert len(selected) == 1
-    assert selected[0]["power"] is True
+    assert "power" not in selected[0]
     assert "band_policy" in selected[0]
     assert "workers" not in selected[0]
     assert "=== plastic" in capsys.readouterr().out

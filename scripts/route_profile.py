@@ -1,7 +1,7 @@
 """Where does a routing pass actually go?
 
-    uv run python scripts/route_profile.py universe-matrix --power 1 --budget 4
-    uv run python scripts/route_profile.py quantum-chip --power 1 --cprofile
+    uv run python scripts/route_profile.py universe-matrix --budget 4
+    uv run python scripts/route_profile.py quantum-chip --cprofile
 
 Two instruments, deliberately, because each lies in a way the other does not:
 
@@ -52,7 +52,7 @@ class _Layout(Protocol):
 
 
 class _Strategy(Protocol):
-    def __call__(self, *, power: int, workers: int) -> _Layout: ...
+    def __call__(self, *, workers: int) -> _Layout: ...
 
 
 class _HeightRow(TypedDict):
@@ -65,21 +65,19 @@ class _HeightRow(TypedDict):
 def _strategy(name: str) -> _Strategy:
     if name == "freeform":
 
-        def freeform_layout(*, power: int, workers: int) -> freeform.FreeformLayout:
+        def freeform_layout(*, workers: int) -> freeform.FreeformLayout:
             return freeform.FreeformLayout(
                 band_policy=BandPolicy("portable"),
-                power=bool(power),
                 workers=workers,
             )
 
         return freeform_layout
     from flab2bp.layout.sequence_solver import SequencePairLayout
 
-    def sequence_pair(*, power: int, workers: int) -> SequencePairLayout:
+    def sequence_pair(*, workers: int) -> SequencePairLayout:
         del workers
         return SequencePairLayout(
             band_policy=BandPolicy("portable"),
-            power=bool(power),
         )
 
     return sequence_pair
@@ -283,8 +281,13 @@ def install(tally: Tally) -> Callable[[], None]:
     return restore
 
 
-def heights(url_id: str, power: int, spec_index: int, workers: int,
-            ceiling: float, strategy: str = "freeform") -> int:
+def heights(
+    url_id: str,
+    spec_index: int,
+    workers: int,
+    ceiling: float,
+    strategy: str = "freeform",
+) -> int:
     """What would EVERY candidate height do, given a clock it cannot spend?
 
     The sweep tries heights in order and stops at the deadline, so a refusal
@@ -346,15 +349,14 @@ def heights(url_id: str, power: int, spec_index: int, workers: int,
     t0 = time.perf_counter()
     verdict = "OK"
     try:
-        _strategy(strategy)(power=power, workers=workers).lay_out(
-            spec, time_budget_s=ceiling
-        )
+        _strategy(strategy)(workers=workers).lay_out(spec, time_budget_s=ceiling)
     except NoValidLayout as exc:
         verdict = f"REFUSED: {exc.reason[:80]}"
     finally:
         freeform._build = orig_build
-    print(f"=== {url_id} power={power} ceiling={ceiling}s  "
-          f"{time.perf_counter() - t0:.1f}s  {verdict}")
+    print(
+        f"=== {url_id} ceiling={ceiling}s  {time.perf_counter() - t0:.1f}s  {verdict}"
+    )
     for i, row in enumerate(seen):
         print(f"  #{i:<2} height {row['height']:>5}  w={str(row['width']):>5}  "
               f"route {-1.0 if row['route_s'] is None else row['route_s']:6.1f}s "
@@ -365,7 +367,6 @@ def heights(url_id: str, power: int, spec_index: int, workers: int,
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("url_id")
-    ap.add_argument("--power", type=int, default=1)
     ap.add_argument("--budget", type=float, default=4.0)
     ap.add_argument("--spec-index", type=int, default=0)
     ap.add_argument("--workers", type=int, default=8)
@@ -377,8 +378,13 @@ def main() -> int:
     args = ap.parse_args()
 
     if args.heights:
-        return heights(args.url_id, args.power, args.spec_index,
-                       args.workers, args.budget, args.strategy)
+        return heights(
+            args.url_id,
+            args.spec_index,
+            args.workers,
+            args.budget,
+            args.strategy,
+        )
 
     spec = _spec(args.url_id, args.spec_index)
     for run in range(args.repeat):
@@ -390,9 +396,7 @@ def main() -> int:
         try:
             if prof is not None:
                 prof.enable()
-            _strategy(args.strategy)(
-                power=args.power, workers=args.workers
-            ).lay_out(
+            _strategy(args.strategy)(workers=args.workers).lay_out(
                 spec, time_budget_s=args.budget
             )
         except NoValidLayout as exc:
@@ -408,7 +412,7 @@ def main() -> int:
             print(json.dumps({
                 "url_id": args.url_id,
                 "strategy": args.strategy,
-                "power": args.power,
+                "power": True,
                 "budget_s": args.budget,
                 "run": run + 1,
                 "repeat": args.repeat,
@@ -424,8 +428,9 @@ def main() -> int:
             }, separators=(",", ":"), sort_keys=True))
             continue
 
-        print(f"=== {args.url_id} power={args.power} budget={args.budget} "
-              f"run {run + 1}/{args.repeat}")
+        print(
+            f"=== {args.url_id} budget={args.budget} run {run + 1}/{args.repeat}"
+        )
         print(f"    {verdict}")
         print(f"    wall {wall:.2f}s   routing passes {tally.passes}   "
               f"rip-up rounds {tally.rounds}")
