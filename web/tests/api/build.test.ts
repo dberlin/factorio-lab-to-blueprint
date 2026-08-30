@@ -14,13 +14,8 @@ import { aJob, aResult, restoreFetch, serving } from '../support/build';
 
 afterEach(restoreFetch);
 
-
 test('candidate policy schema defaults to all three UI choices', () => {
-  expect(CandidatePolicy.options).toEqual([
-    'no-proliferator',
-    'all-products',
-    'output-products',
-  ]);
+  expect(CandidatePolicy.options).toEqual(['no-proliferator', 'all-products', 'output-products']);
   expect(DEFAULT_OPTIONS.candidate_policies).toEqual([
     'all-products',
     'output-products',
@@ -29,7 +24,6 @@ test('candidate policy schema defaults to all three UI choices', () => {
   expect(DEFAULT_OPTIONS).not.toHaveProperty('candidates');
 });
 
-
 test('candidate policy schema preserves an exact non-empty subset', () => {
   const parsed = BuildOptions.parse({
     ...DEFAULT_OPTIONS,
@@ -37,7 +31,6 @@ test('candidate policy schema preserves an exact non-empty subset', () => {
   });
   expect(parsed.candidate_policies).toEqual(['output-products', 'no-proliferator']);
 });
-
 
 test.each([
   ['empty', []],
@@ -48,12 +41,9 @@ test.each([
   expect(BuildOptions.safeParse({ ...DEFAULT_OPTIONS, candidate_policies }).success).toBe(false);
 });
 
-
 test('strict serialization rejects the legacy numeric candidate field', async () => {
   const calls = serving({ status: 202, body: aJob() });
-  const pending = Reflect.apply(submitBuild, undefined, [
-    { ...DEFAULT_OPTIONS, candidates: 1 },
-  ]);
+  const pending = Reflect.apply(submitBuild, undefined, [{ ...DEFAULT_OPTIONS, candidates: 1 }]);
 
   await expect(pending).rejects.toThrow();
   expect(calls).toHaveLength(0);
@@ -75,11 +65,7 @@ test('submit posts sequence-pair with its exact wire spelling', async () => {
   expect(body.proliferator_tier).toBe('auto');
   expect(body.fetch_flow).toBe(false);
   expect(body.band).toBe('portable');
-  expect(body.candidate_policies).toEqual([
-    'all-products',
-    'output-products',
-    'no-proliferator',
-  ]);
+  expect(body.candidate_policies).toEqual(['all-products', 'output-products', 'no-proliferator']);
   expect(body).not.toHaveProperty('candidates');
 
   await submitBuild({ ...DEFAULT_OPTIONS, proliferator_tier: '1' });

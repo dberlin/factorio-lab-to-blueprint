@@ -29,10 +29,7 @@ export const BAND_OPTIONS = BandDimension.array()
   }));
 
 /** Latitude-band policy accepted consistently by Python, CLI, and web. */
-export const BandSelection = z.enum([
-  'portable',
-  ...BAND_OPTIONS.map(({ value }) => value),
-]);
+export const BandSelection = z.enum(['portable', ...BAND_OPTIONS.map(({ value }) => value)]);
 
 /** Strategies accepted on every build request. */
 export const RequestStrategy = z.enum(['best', 'freeform', 'sequence-pair']);
@@ -43,11 +40,7 @@ export const ExplicitStrategy = z.enum(['freeform', 'sequence-pair']);
 export const ProliferatorTier = z.enum(['auto', 'none', '1', '2', '3']);
 
 /** Named candidate policies accepted by the rate solver, in backend canonical order. */
-export const CandidatePolicy = z.enum([
-  'no-proliferator',
-  'all-products',
-  'output-products',
-]);
+export const CandidatePolicy = z.enum(['no-proliferator', 'all-products', 'output-products']);
 
 const CandidatePolicySelection = z
   .array(CandidatePolicy)

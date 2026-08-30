@@ -31,7 +31,6 @@ test('build is disabled until there is a URL', () => {
   expect(screen.getByRole('button', { name: 'Build' })).toBeDisabled();
 });
 
-
 test('candidate policies are all checked in presentation order by default', () => {
   mount();
   const group = screen.getByRole('group', { name: 'Candidate policies' });
@@ -49,7 +48,6 @@ test('candidate policies are all checked in presentation order by default', () =
   expect(noProliferator).toBeChecked();
 });
 
-
 test('an exact candidate policy subset is submitted in presentation order', async () => {
   const calls = serving({ status: 202, body: aJob() });
   mount();
@@ -63,7 +61,6 @@ test('an exact candidate policy subset is submitted in presentation order', asyn
   expect(body.candidate_policies).toEqual(['all-products']);
   expect(body).not.toHaveProperty('candidates');
 });
-
 
 test('empty candidate policy selection disables Build and shows inline validation', () => {
   const calls = serving({ status: 202, body: aJob() });
@@ -377,9 +374,7 @@ test('the budget copy follows selected and pinned effective candidates', () => {
 
   fireEvent.click(within(group).getByRole('checkbox', { name: 'output-products' }));
   fireEvent.click(within(group).getByRole('checkbox', { name: 'no-proliferator' }));
-  fireEvent.click(
-    screen.getByRole('checkbox', { name: 'Fetch FactorioLab flow automatically' }),
-  );
+  fireEvent.click(screen.getByRole('checkbox', { name: 'Fetch FactorioLab flow automatically' }));
   expect(screen.getByText(/1 candidate × 2 strategies × 15s/)).toBeInTheDocument();
   expect(screen.getByText(/up to 30s of solving/)).toBeInTheDocument();
 });

@@ -10,7 +10,6 @@ import { useEffect, useId, useRef, useState } from 'react';
 import {
   BAND_OPTIONS,
   BandSelection,
-  type CandidatePolicy,
   type BuildOptions,
   BuildRequestError,
   DEFAULT_OPTIONS,
@@ -214,12 +213,9 @@ export function BuildPanel() {
                     candidate_policies: checked
                       ? DEFAULT_OPTIONS.candidate_policies.filter(
                           (candidate) =>
-                            candidate === policy ||
-                            previous.candidate_policies.includes(candidate),
+                            candidate === policy || previous.candidate_policies.includes(candidate),
                         )
-                      : previous.candidate_policies.filter(
-                          (candidate) => candidate !== policy,
-                        ),
+                      : previous.candidate_policies.filter((candidate) => candidate !== policy),
                   }));
                 }}
               />
@@ -314,9 +310,8 @@ export function BuildPanel() {
         Budget is per layout. <code>{options.strategy}</code> runs {strategyCount}{' '}
         {strategyCount === 1 ? 'layout' : 'layouts'} per candidate, so {effectiveCandidateCount}{' '}
         candidate{effectiveCandidateCount === 1 ? '' : 's'} × {strategyCount} strategies ×{' '}
-        {options.budget_s}s is up to{' '}
-        {effectiveCandidateCount * strategyCount * options.budget_s}s of solving, plus rates,
-        validation and encoding on top.
+        {options.budget_s}s is up to {effectiveCandidateCount * strategyCount * options.budget_s}s
+        of solving, plus rates, validation and encoding on top.
       </p>
 
       {busy && job && <Progress job={job} />}
