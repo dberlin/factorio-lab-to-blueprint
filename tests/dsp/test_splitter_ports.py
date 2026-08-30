@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 from collections import Counter
+from dataclasses import replace
 from fractions import Fraction
 from pathlib import Path
 
@@ -200,6 +201,27 @@ def test_every_observed_game_port_form_is_accepted_as_a_layout_control() -> None
             direction,
             port,
         )
+
+
+def test_assignment_selects_each_port_on_all_splitter_model_variants() -> None:
+    for model_index in (38, 39, 40):
+        for direction in ("feed", "draw"):
+            for port in range(4):
+                buildings = list(_observed_placement(model_index, direction, port))
+                if direction == "feed":
+                    buildings[1] = replace(buildings[1], output_to_slot=0)
+                else:
+                    buildings[1] = replace(buildings[1], input_from_slot=0)
+
+                wired = slots.assign_belt_slots(buildings)
+
+                actual = (
+                    wired[1].output_to_slot
+                    if direction == "feed"
+                    else wired[1].input_from_slot
+                )
+                assert actual == port, (model_index, direction, port)
+                assert splitter_ports.placement_issues(wired) == ()
 
 
 def test_corrected_construction_path_emits_only_game_valid_splitter_ports() -> None:

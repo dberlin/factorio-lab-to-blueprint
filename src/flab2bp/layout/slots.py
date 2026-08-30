@@ -1051,14 +1051,12 @@ def assign_sorter_slots(
 
 
 def _docks_into_a_port(buildings: Sequence[PlacedBuilding], link: int | None) -> bool:
-    """Does ``link`` name a building a belt attaches to by PORT rather than slot?
+    """Does ``link`` name a building a belt docks into by a non-Splitter port?
 
-    Splitters are excluded although they carry ports of their own: their two
-    slot indices are the constants
-    :data:`~flab2bp.dsp.rules.SPLITTER_INPUT_TO_SLOT` and
-    :data:`~flab2bp.dsp.rules.SPLITTER_OUTPUT_FROM_SLOT`, unanimous over 25
-    junctions, and :func:`assign_belt_slots` has always assigned the junction
-    side from ``SPLITTER_MAX_PORTS`` rather than from a pose.
+    Splitters are excluded because this predicate controls the BELT's own
+    constant port-dock slot.  :func:`assign_belt_slots` handles the peer side of
+    a Splitter connection separately by selecting its exact
+    ``PrefabDesc.portPoses`` index.
     """
     if link is None or not 0 <= link < len(buildings):
         return False
