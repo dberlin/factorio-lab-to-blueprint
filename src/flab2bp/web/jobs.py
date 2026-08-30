@@ -23,14 +23,14 @@ import uuid
 from collections import OrderedDict
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Literal
 from urllib.parse import urlsplit
 
 from flab2bp import pipeline
 from flab2bp.layout.band_policy import BAND_SELECTIONS, BandPolicy, BandSelection
 from flab2bp.layout.base import LayoutAttemptFailure, NoValidLayout
-from flab2bp.rates import DEFAULT_CANDIDATE_POLICIES
+from flab2bp.rates import DEFAULT_CANDIDATE_POLICIES, CandidatePolicy
 from flab2bp.rates.adjust import ProliferatorTier
 from flab2bp.web.payload import Json, JsonValue, describe, projection_failure, refusal
 
@@ -38,8 +38,8 @@ State = Literal["queued", "running", "done", "refused", "error"]
 WebStrategyName = Literal["best", "freeform", "sequence-pair"]
 
 #: The most solver time one submitted job may ask for, in seconds.  This is a
-#: ceiling on ``candidates * strategies * budget``, because that product is
-#: what actually runs.
+#: ceiling on ``effective candidates * strategies * budget``, because that
+#: product is what actually runs.
 MAX_SOLVER_SECONDS = 300.0
 
 #: Jobs kept after they finish, so a poll that arrives late still finds its
@@ -55,7 +55,7 @@ class Options:
     #: Public and CLI callers share the same production strategy set.
     strategy: WebStrategyName = "best"
     band: BandSelection = "portable"
-    candidates: int = 3
+    candidate_policies: tuple[CandidatePolicy, ...] = DEFAULT_CANDIDATE_POLICIES
     budget_s: float = 15.0
     proliferator_tier: ProliferatorTier | None = None
     name: str = ""
@@ -73,6 +73,11 @@ class Options:
     fetch_flow: bool = False
 
     @property
+    def effective_candidate_count(self) -> int:
+        """Candidates this request executes after flow pinning."""
+        return 1 if self.flow.strip() or self.fetch_flow else len(self.candidate_policies)
+
+    @property
     def solver_ceiling_s(self) -> float:
         """An upper bound on the LAYOUT solving this job will do.
 
@@ -82,7 +87,7 @@ class Options:
         an exact finish time.
         """
         per_spec = pipeline.PRODUCTION_STRATEGY_COUNT if self.strategy == "best" else 1
-        return self.candidates * per_spec * self.budget_s
+        return self.effective_candidate_count * per_spec * self.budget_s
 
 
 class InvalidOptions(ValueError):
@@ -129,7 +134,7 @@ def parse_options(raw: JsonValue) -> Options:
         "url",
         "strategy",
         "band",
-        "candidates",
+        "candidate_policies",
         "budget_s",
         "proliferator_tier",
         "name",
@@ -163,9 +168,34 @@ def parse_options(raw: JsonValue) -> Options:
             "'band' must be one of " + ", ".join(BAND_SELECTIONS)
         ) from exc
 
-    candidates = raw.get("candidates", 3)
-    if not isinstance(candidates, int) or isinstance(candidates, bool) or not 1 <= candidates <= 8:
-        raise InvalidOptions("'candidates' must be an integer from 1 to 8")
+    raw_candidate_policies = raw.get(
+        "candidate_policies",
+        [policy.value for policy in DEFAULT_CANDIDATE_POLICIES],
+    )
+    if not isinstance(raw_candidate_policies, list) or not raw_candidate_policies:
+        raise InvalidOptions(
+            "'candidate_policies' must be a non-empty array of named policies"
+        )
+    selected_policies: set[CandidatePolicy] = set()
+    for value in raw_candidate_policies:
+        if not isinstance(value, str):
+            raise InvalidOptions(
+                f"'candidate_policies' contains an unknown policy: {value!r}"
+            )
+        try:
+            policy = CandidatePolicy(value)
+        except ValueError as exc:
+            raise InvalidOptions(
+                f"'candidate_policies' contains an unknown policy: {value!r}"
+            ) from exc
+        if policy in selected_policies:
+            raise InvalidOptions(
+                "'candidate_policies' must not contain duplicate policies"
+            )
+        selected_policies.add(policy)
+    candidate_policies = tuple(
+        policy for policy in DEFAULT_CANDIDATE_POLICIES if policy in selected_policies
+    )
 
     raw_budget = raw.get("budget_s", 15.0)
     if isinstance(raw_budget, bool) or not isinstance(raw_budget, (int, float)):
@@ -215,7 +245,7 @@ def parse_options(raw: JsonValue) -> Options:
         url=url.strip(),
         strategy=web_strategy,
         band=band,
-        candidates=candidates,
+        candidate_policies=candidate_policies,
         budget_s=budget,
         proliferator_tier=proliferator_tier,
         name=name,
@@ -225,10 +255,10 @@ def parse_options(raw: JsonValue) -> Options:
     )
     if options.solver_ceiling_s > MAX_SOLVER_SECONDS:
         raise InvalidOptions(
-            f"{options.candidates} candidate(s) x {options.strategy} at "
+            f"{options.effective_candidate_count} candidate(s) x {options.strategy} at "
             f"{options.budget_s:g}s is up to {options.solver_ceiling_s:g}s of solving, "
-            f"over the {MAX_SOLVER_SECONDS:g}s ceiling. Lower the budget or the "
-            f"candidate count, or pick an explicit strategy."
+            f"over the {MAX_SOLVER_SECONDS:g}s ceiling. Lower the budget, choose fewer "
+            f"candidate policies, or pick an explicit strategy."
         )
     return options
 
@@ -280,16 +310,11 @@ def run_build(options: Options, on_progress: pipeline.ProgressSink) -> pipeline.
     allowlist, and request-stage CDP interception aborts a forbidden main-frame
     document redirect before Chromium accesses it.
     """
-    candidate_policies = DEFAULT_CANDIDATE_POLICIES[: options.candidates]
-    if len(candidate_policies) != options.candidates:
-        raise ValueError(
-            f"candidate count must be between 1 and {len(DEFAULT_CANDIDATE_POLICIES)}"
-        )
     return pipeline.build(
         options.url,
         strategy=options.strategy,
         band=options.band,
-        candidate_policies=candidate_policies,
+        candidate_policies=options.candidate_policies,
         time_budget_s=options.budget_s,
         proliferator_tier=options.proliferator_tier,
         name=options.name,
@@ -354,7 +379,15 @@ class Builder:
             job.state = "running"
             job.started_at = time.monotonic()
 
+        expected_progress_total = job.options.effective_candidate_count * (
+            pipeline.PRODUCTION_STRATEGY_COUNT
+            if job.options.strategy == "best"
+            else 1
+        )
+
         def note(step: pipeline.AttemptProgress) -> None:
+            if step.total != expected_progress_total:
+                step = replace(step, total=expected_progress_total)
             # Called from the solve thread; a poll reads it from another.
             with job._lock:
                 job.progress = step
@@ -405,7 +438,9 @@ class Builder:
                     "url": job.options.url,
                     "strategy": job.options.strategy,
                     "band": job.options.band,
-                    "candidates": job.options.candidates,
+                    "candidate_policies": [
+                        policy.value for policy in job.options.candidate_policies
+                    ],
                     "budget_s": job.options.budget_s,
                     "proliferator_tier": (
                         job.options.proliferator_tier.value

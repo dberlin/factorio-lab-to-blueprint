@@ -17,6 +17,7 @@ from flab2bp.layout.base import (
     NoValidLayout,
     ProjectionFailureRecord,
 )
+from flab2bp.rates import DEFAULT_CANDIDATE_POLICIES, CandidatePolicy
 from flab2bp.web.jobs import Builder, InvalidOptions, Options, parse_options, run_build
 from flab2bp.web.payload import Json, JsonValue
 from flab2bp.web.server import serve
@@ -304,13 +305,77 @@ def test_the_snapshot_carries_the_ceiling_and_the_elapsed_time(
 ) -> None:
     builder = Builder(solve=lambda _o, _p: small_build)
     try:
-        options = Options(url=URL, strategy="best", candidates=2, budget_s=4.0)
+        options = Options(
+            url=URL,
+            strategy="best",
+            candidate_policies=(
+                CandidatePolicy.NO_PROLIFERATOR,
+                CandidatePolicy.ALL_PRODUCTS,
+            ),
+            budget_s=4.0,
+        )
         snap = _settled(builder, builder.submit(options).id)
         assert snap["solver_ceiling_s"] == 2 * pipeline.PRODUCTION_STRATEGY_COUNT * 4.0
         assert isinstance(snap["elapsed_s"], float)
         reported = snap["options"]
         assert isinstance(reported, dict)
         assert reported["strategy"] == "best"
+        assert reported["candidate_policies"] == [
+            CandidatePolicy.NO_PROLIFERATOR.value,
+            CandidatePolicy.ALL_PRODUCTS.value,
+        ]
+        assert "candidates" not in reported
+    finally:
+        builder.shutdown()
+
+
+@pytest.mark.parametrize(
+    ("options", "expected_total"),
+    [
+        (
+            Options(
+                url=URL,
+                strategy="freeform",
+                candidate_policies=(
+                    CandidatePolicy.NO_PROLIFERATOR,
+                    CandidatePolicy.OUTPUT_PRODUCTS,
+                ),
+            ),
+            2,
+        ),
+        (
+            Options(
+                url=URL,
+                strategy="freeform",
+                candidate_policies=DEFAULT_CANDIDATE_POLICIES,
+                flow="Recipes\nid,name\ngraphene,Graphene\n",
+            ),
+            1,
+        ),
+    ],
+)
+def test_progress_total_uses_the_effective_candidate_count(
+    options: Options,
+    expected_total: int,
+    small_build: pipeline.Build,
+) -> None:
+    def solve(_options: Options, note: pipeline.ProgressSink) -> pipeline.Build:
+        note(
+            pipeline.AttemptProgress(
+                1,
+                99,
+                "observed-candidate",
+                "freeform",
+                "started",
+            )
+        )
+        return small_build
+
+    builder = Builder(solve=solve)
+    try:
+        snap = _settled(builder, builder.submit(options).id)
+        progress = _object(snap["progress"])
+        assert progress["total"] == expected_total
     finally:
         builder.shutdown()
 
@@ -351,7 +416,16 @@ def test_a_running_job_reports_which_pair_it_is_on(small_build: pipeline.Build) 
 
     builder = Builder(solve=solve)
     try:
-        job = builder.submit(Options(url=URL, candidates=2))
+        job = builder.submit(
+            Options(
+                url=URL,
+                strategy="freeform",
+                candidate_policies=(
+                    CandidatePolicy.NO_PROLIFERATOR,
+                    CandidatePolicy.ALL_PRODUCTS,
+                ),
+            )
+        )
         assert reached_second.wait(timeout=20.0)
         snap = builder.snapshot(job)
         progress = snap["progress"]
@@ -422,6 +496,46 @@ def test_run_build_passes_band_to_pipeline(
         run_build(Options(url=URL, band="160x1000"), lambda _step: None)
 
     assert seen["band"] == "160x1000"
+
+
+def test_run_build_passes_the_exact_candidate_policy_subset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: dict[str, object] = {}
+
+    def spy(*_args: object, **kwargs: object) -> object:
+        seen.update(kwargs)
+        raise ValueError("stop after observing options")
+
+    monkeypatch.setattr(pipeline, "build", spy)
+    selected = (
+        CandidatePolicy.NO_PROLIFERATOR,
+        CandidatePolicy.OUTPUT_PRODUCTS,
+    )
+    with pytest.raises(ValueError, match="stop after observing"):
+        run_build(
+            Options(url=URL, candidate_policies=selected),
+            lambda _step: None,
+        )
+
+    assert seen["candidate_policies"] == selected
+
+
+def test_pinned_flow_snapshot_advertises_one_effective_candidate(
+    small_build: pipeline.Build,
+) -> None:
+    builder = Builder(solve=lambda _o, _p: small_build)
+    try:
+        options = Options(
+            url=URL,
+            candidate_policies=DEFAULT_CANDIDATE_POLICIES,
+            flow="Recipes\nid,name\ngraphene,Graphene\n",
+            budget_s=4.0,
+        )
+        snap = _settled(builder, builder.submit(options).id)
+        assert snap["solver_ceiling_s"] == pipeline.PRODUCTION_STRATEGY_COUNT * 4.0
+    finally:
+        builder.shutdown()
 
 
 def test_run_build_does_not_forward_the_retired_power_option(
