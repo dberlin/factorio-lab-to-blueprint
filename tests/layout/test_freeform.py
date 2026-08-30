@@ -8232,9 +8232,16 @@ class TestProjectedCoaterSplitterBanIsPreparedBeforeRouting:
                 junction_ban=set(ban),
                 junction_geometry_prepared=True,
             )
+            predecessor = canvas.add(
+                replace(_belt(24, y, item="x"), z=F(1))
+            )
             source = canvas.add(replace(_belt(25, y, item="x"), z=F(1)))
             onward = canvas.add(replace(_belt(26, y, item="x"), z=F(1)))
             branch = canvas.add(replace(_belt(25, y - 1, item="x"), z=F(1)))
+            canvas.buildings[predecessor] = _relink(
+                canvas.buildings[predecessor],
+                output_obj=source,
+            )
             canvas.buildings[source] = _relink(
                 canvas.buildings[source],
                 output_obj=onward,
@@ -8245,7 +8252,12 @@ class TestProjectedCoaterSplitterBanIsPreparedBeforeRouting:
                 branch,
                 2001,
                 35,
-                excused={(25, y, 1), (26, y, 1), (25, y - 1, 1)},
+                excused={
+                    (24, y, 1),
+                    (25, y, 1),
+                    (26, y, 1),
+                    (25, y - 1, 1),
+                },
             )
             splitters = sum(
                 building.item_id == catalog.SPLITTER_ID
@@ -8255,6 +8267,105 @@ class TestProjectedCoaterSplitterBanIsPreparedBeforeRouting:
 
         assert tap(17) == (False, 0)
         assert tap(18) == (True, 1)
+
+
+class TestSourceTapPreservesPhysicalSplitterPortIdentity:
+    @pytest.mark.parametrize(
+        ("dx", "dy"),
+        ((0, -1), (1, 0), (0, 1), (-1, 0)),
+        ids=("north", "east", "south", "west"),
+    )
+    def test_parallel_outputs_at_different_altitudes_do_not_share_one_port(
+        self,
+        dx: int,
+        dy: int,
+    ) -> None:
+        """A Splitter port is direction/height identity, not a free counter cell.
+
+        Both outputs leave in the same direction from the same ground-height
+        Splitter port. One descends after leaving and one stays level, but that
+        later altitude difference cannot make the co-located attachments use
+        distinct ports. The four rotations guard the model/yaw transformation.
+        """
+        canvas = _Canvas()
+        predecessor = canvas.add(
+            replace(_belt(-dx, -dy, item="gear"), z=F(1))
+        )
+        source = canvas.add(replace(_belt(0, 0, item="gear"), z=F(1)))
+        onward = canvas.add(replace(_belt(dx, dy, item="gear"), z=F(0)))
+        branch = canvas.add(replace(_belt(dx, dy, item="gear"), z=F(1)))
+        canvas.buildings[predecessor] = _relink(
+            canvas.buildings[predecessor],
+            output_obj=source,
+        )
+        canvas.buildings[source] = _relink(
+            canvas.buildings[source],
+            output_obj=onward,
+        )
+        rejected_reason: list[str] = []
+
+        attached = freeform._tap_source(
+            canvas,
+            source,
+            branch,
+            2001,
+            35,
+            excused={
+                (-dx, -dy, 1),
+                (0, 0, 1),
+                (dx, dy, 0),
+                (dx, dy, 1),
+            },
+            rejected_reason=rejected_reason,
+        )
+
+        assert not attached
+        assert rejected_reason == ["splitter-port"]
+        assert canvas.buildings[source].output_obj == onward
+        assert all(
+            building.item_id != catalog.SPLITTER_ID
+            for building in canvas.buildings
+        )
+
+    def test_distinct_physical_ports_remain_accepted(self) -> None:
+        canvas = _Canvas()
+        predecessor = canvas.add(replace(_belt(0, 1, item="gear"), z=F(1)))
+        source = canvas.add(replace(_belt(0, 0, item="gear"), z=F(1)))
+        onward = canvas.add(replace(_belt(0, -1, item="gear"), z=F(1)))
+        branch = canvas.add(replace(_belt(1, 0, item="gear"), z=F(1)))
+        canvas.buildings[predecessor] = _relink(
+            canvas.buildings[predecessor],
+            output_obj=source,
+        )
+        canvas.buildings[source] = _relink(
+            canvas.buildings[source],
+            output_obj=onward,
+        )
+
+        assert freeform._tap_source(
+            canvas,
+            source,
+            branch,
+            2001,
+            35,
+            excused={(0, 1, 1), (0, 0, 1), (0, -1, 1), (1, 0, 1)},
+        )
+
+        wired = slots.assign_belt_slots(canvas.buildings)
+        splitter = next(
+            index
+            for index, building in enumerate(wired)
+            if building.item_id == catalog.SPLITTER_ID
+        )
+        ports = [
+            building.output_to_slot
+            if building.output_obj == splitter
+            else building.input_from_slot
+            for building in wired
+            if building.output_obj == splitter or building.input_obj == splitter
+        ]
+        assert len(ports) == 3
+        assert len(set(ports)) == len(ports)
 
 
 class TestTheMergeFrontierWithdrawsSitesAJunctionCannotHold:

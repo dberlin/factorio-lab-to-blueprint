@@ -76,7 +76,7 @@ from typing import TYPE_CHECKING, Literal
 import numpy as np
 from ortools.sat.python import cp_model
 
-from flab2bp.dsp import catalog, codec, colliders, params, planet, rules
+from flab2bp.dsp import catalog, codec, colliders, params, planet, rules, splitter_ports
 from flab2bp.layout import finalize, junction, slots, validate
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import (
@@ -5747,6 +5747,11 @@ def _route_all(
                 return False
         return True
 
+    building_predecessors: dict[int, list[int]] = defaultdict(list)
+    for building_index, building in enumerate(canvas.buildings):
+        if building.output_obj is not None:
+            building_predecessors[building.output_obj].append(building_index)
+
     offered_source: dict[int, dict[Cell, Cell]] = {}
     offered_sink: dict[int, dict[Cell, Cell]] = {}
     offered_guard_tap: dict[int, dict[Cell, Cell]] = {}
@@ -5874,17 +5879,69 @@ def _route_all(
             canvas.buildings[source.belt].output_obj is not None
         )
         source_provenance: dict[Cell, Cell] = {}
-        starts = (
-            []
-            if needs_junction
-            and not (_can_junction(source.x, source.y, source.z) and _direct_tap_clear(net))
-            else [
-                cell
-                for dx, dy in _STEPS
-                if canvas.free(cell := (source.x + dx, source.y + dy, source.z))
-                and cell not in rejected_starts[index]
-            ]
+        starts: list[Cell] = []
+        direct_ports: set[int] = set()
+        direct_ports_valid = True
+        source_belt = canvas.buildings[source.belt]
+        prospective_splitter = junction.make_splitter(
+            source_belt.x,
+            source_belt.y,
+            source_belt.z,
+            carries_item=source_belt.carries_item,
         )
+        if needs_junction:
+            incoming = building_predecessors[source.belt]
+            if len(incoming) != 1:
+                direct_ports_valid = False
+            else:
+                feed_port = splitter_ports.expected_path_port(
+                    prospective_splitter,
+                    source_belt,
+                    canvas.buildings[incoming[0]],
+                )
+                if feed_port is None:
+                    direct_ports_valid = False
+                else:
+                    direct_ports.add(feed_port)
+            for sibling in siblings:
+                sibling_path = paths.get(sibling)
+                if not sibling_path:
+                    continue
+                first = sibling_path[0]
+                if abs(first[0] - source.x) + abs(first[1] - source.y) != 1:
+                    continue
+                port = splitter_ports.expected_path_port(
+                    prospective_splitter,
+                    source_belt,
+                    replace(source_belt, x=first[0], y=first[1]),
+                )
+                if port is None or port in direct_ports:
+                    direct_ports_valid = False
+                    break
+                direct_ports.add(port)
+        if not (
+            needs_junction
+            and (
+                not direct_ports_valid
+                or not (
+                    _can_junction(source.x, source.y, source.z)
+                    and _direct_tap_clear(net)
+                )
+            )
+        ):
+            for dx, dy in _STEPS:
+                cell = (source.x + dx, source.y + dy, source.z)
+                if not canvas.free(cell) or cell in rejected_starts[index]:
+                    continue
+                if needs_junction:
+                    port = splitter_ports.expected_path_port(
+                        prospective_splitter,
+                        source_belt,
+                        replace(source_belt, x=cell[0], y=cell[1]),
+                    )
+                    if port is None or port in direct_ports:
+                        continue
+                starts.append(cell)
         guard_provenance = dict(source_provenance)
         if needs_junction:
             direct_tap = (source.x, source.y, source.z)
@@ -7291,6 +7348,39 @@ def _tap_source(
 
     if canvas.buildings[onward].item_id == catalog.SPLITTER_ID:
         junction_idx = onward
+        splitter = canvas.buildings[junction_idx]
+        predecessors: dict[int, list[int]] = defaultdict(list)
+        for index, candidate in enumerate(canvas.buildings):
+            if candidate.output_obj is not None:
+                predecessors[candidate.output_obj].append(index)
+
+        used_ports: set[int] = set()
+        attached = 0
+        for index, candidate in enumerate(canvas.buildings):
+            outward_idx: int | None
+            if candidate.output_obj == junction_idx:
+                attached += 1
+                incoming = predecessors[index]
+                outward_idx = incoming[0] if len(incoming) == 1 else None
+            elif candidate.input_obj == junction_idx:
+                attached += 1
+                outward_idx = candidate.output_obj
+            else:
+                continue
+            port = (
+                splitter_ports.expected_path_port(
+                    splitter,
+                    candidate,
+                    canvas.buildings[outward_idx],
+                )
+                if outward_idx is not None
+                else None
+            )
+            if port is None or port in used_ports:
+                if rejected_reason is not None:
+                    rejected_reason.append("splitter-port")
+                return False
+            used_ports.add(port)
     else:
         # A junction rests on a real routing level.  A ramp midpoint cannot host
         # one, and every integer level is checked against the exact prepared
@@ -7313,9 +7403,50 @@ def _tap_source(
             if rejected_reason is not None:
                 rejected_reason.append("belt-keepout")
             return False
-        junction_idx = canvas.add(
-            junction.make_splitter(b.x, b.y, b.z, carries_item=b.carries_item)
+
+        splitter = junction.make_splitter(
+            b.x,
+            b.y,
+            b.z,
+            carries_item=b.carries_item,
         )
+        incoming = [
+            index
+            for index, candidate in enumerate(canvas.buildings)
+            if candidate.output_obj == belt_idx
+        ]
+        if len(incoming) != 1:
+            if rejected_reason is not None:
+                rejected_reason.append("splitter-port")
+            return False
+        feed_port = splitter_ports.expected_path_port(
+            splitter,
+            b,
+            canvas.buildings[incoming[0]],
+        )
+        carry_port = splitter_ports.expected_path_port(
+            splitter,
+            b,
+            canvas.buildings[onward],
+        )
+        branch_port = splitter_ports.expected_path_port(
+            splitter,
+            b,
+            canvas.buildings[branch],
+        )
+        if (
+            feed_port is None
+            or carry_port is None
+            or branch_port is None
+            or len({feed_port, carry_port, branch_port}) != 3
+        ):
+            if rejected_reason is not None:
+                rejected_reason.append("splitter-port")
+            return False
+        used_ports = {feed_port, carry_port}
+        attached = 2
+
+        junction_idx = canvas.add(splitter)
         # Nothing routed later may take the collider's room either. The passes
         # after this one -- external input runs, coater spurs, the power lattice
         # -- all ask `canvas.free`, and until now none of them knew a junction
@@ -7332,12 +7463,19 @@ def _tap_source(
         carry = canvas.add(replace(b, input_obj=junction_idx, output_obj=onward))
         del carry  # linked by construction; the index is not needed again
 
-    attached = sum(
-        1 for c in canvas.buildings if c.output_obj == junction_idx or c.input_obj == junction_idx
-    )
     if attached >= rules.SPLITTER_MAX_PORTS:
         if rejected_reason is not None:
             rejected_reason.append("splitter-ports")
+        return False
+
+    branch_port = splitter_ports.expected_path_port(
+        splitter,
+        b,
+        canvas.buildings[branch],
+    )
+    if branch_port is None or branch_port in used_ports:
+        if rejected_reason is not None:
+            rejected_reason.append("splitter-port")
         return False
 
     # The branch belt is ADJACENT to the junction, not on it, and every belt

@@ -191,12 +191,31 @@ def _expected_port(
     outward: tuple[float, float],
     ports: tuple[catalog.SlotPose, ...],
 ) -> int | None:
-    belt_height = belt.z - splitter.z
+    return _expected_path_port(
+        splitter_yaw=splitter.yaw,
+        splitter_z=splitter.z,
+        belt_z=belt.z,
+        outward=outward,
+        ports=ports,
+    )
+
+
+def _expected_path_port(
+    *,
+    splitter_yaw: float,
+    splitter_z: float,
+    belt_z: float,
+    outward: tuple[float, float],
+    ports: tuple[catalog.SlotPose, ...],
+) -> int | None:
+    belt_height = belt_z - splitter_z
     horizontal = math.hypot(*outward)
+    if horizontal <= _POSITION_TOLERANCE:
+        return None
     unit_x, unit_y = outward[0] / horizontal, outward[1] / horizontal
     candidates: list[tuple[int, float]] = []
     for index, pose in enumerate(ports):
-        forward_x, forward_y, height = _rotated_port(pose, splitter.yaw)
+        forward_x, forward_y, height = _rotated_port(pose, splitter_yaw)
         if abs(height - belt_height) > _HEIGHT_TOLERANCE:
             continue
         candidates.append((index, forward_x * unit_x + forward_y * unit_y))
@@ -414,6 +433,31 @@ def expected_placement_port(
     except KeyError:
         return None
     return _expected_port(splitter, belt, outward, ports)
+
+
+def expected_path_port(
+    splitter: PlacedBuilding,
+    belt: PlacedBuilding,
+    outward: PlacedBuilding,
+) -> int | None:
+    """Return the physical port selected by one co-located belt path.
+
+    ``belt`` is the attachment record on the Splitter's tile and ``outward`` is
+    its adjoining path segment.  This is the same game-derived direction and
+    height rule as :func:`expected_placement_port`, exposed before the records
+    are committed so a router cannot create two links naming one physical port.
+    """
+    try:
+        ports = catalog.port_poses_for_model(splitter.model_index)
+    except KeyError:
+        return None
+    return _expected_path_port(
+        splitter_yaw=splitter.yaw,
+        splitter_z=float(splitter.z),
+        belt_z=float(belt.z),
+        outward=(outward.x - belt.x, outward.y - belt.y),
+        ports=ports,
+    )
 
 
 def placement_issues(
