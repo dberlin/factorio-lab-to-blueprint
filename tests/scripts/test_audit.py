@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -77,3 +78,23 @@ def test_run_cell_preserves_typed_refusal_evidence(
     assert result.attempt_failures == (attempt_failure,)
     assert result.projection_failures == (projection_failure,)
     assert result.detail == reason
+
+    monkeypatch.setattr(audit, "_JSONL", [])
+    audit.record({"evidence": audit.Tally()}, result)
+    persisted = json.loads(json.dumps(audit._JSONL[-1]))
+
+    expected_projection = {
+        "band": 3,
+        "check": "geom.collide",
+        "buildings": [4, 9],
+        "detail": "projected buildings overlap",
+    }
+    assert persisted["attempt_failures"] == [
+        {
+            "candidate": "height=17 arrangement=2",
+            "strategy": "freeform",
+            "reason": "candidate failed authoritative spherical projection",
+            "projection_failures": [expected_projection],
+        }
+    ]
+    assert persisted["projection_failures"] == [expected_projection]

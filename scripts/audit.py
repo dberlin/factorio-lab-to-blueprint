@@ -68,7 +68,7 @@ import time
 from collections import Counter
 from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parent.parent
@@ -451,6 +451,12 @@ def record(tallies: dict[str, Tally], r: Result) -> None:
             "projection_collider_pairs": r.projection_collider_pairs,
             "projection_power_pairs": r.projection_power_pairs,
             "projection_sorters": r.projection_sorters,
+            "attempt_failures": tuple(
+                asdict(failure) for failure in r.attempt_failures
+            ),
+            "projection_failures": tuple(
+                asdict(failure) for failure in r.projection_failures
+            ),
             "detail": r.detail,
         }
     )
