@@ -7676,7 +7676,51 @@ class TestProjectedCoaterSplitterBanIsPreparedBeforeRouting:
         )
         assert prepared.junction_ban == frozenset()
 
-    def test_preparation_merges_reachable_frames_into_prepared_junction_ban(
+    def test_source_siblings_require_junction_geometry(self) -> None:
+        spec = proliferated_spec()
+        strips = plan_strips(spec)
+        prepared = _prepare_routing_problem(
+            spec,
+            strips,
+            _greedy_pack(strips, _height_seed(strips)),
+            power=False,
+            policy=BandPolicy("portable"),
+        )
+        source = next(net for net in prepared.nets if net.src is not None)
+        source_with_sibling = replace(
+            source,
+            src_group=(source.net_id,),
+        )
+
+        assert freeform._junction_geometry_required(
+            (source_with_sibling,),
+            prepared.building_templates,
+        )
+
+    def test_an_already_linked_source_requires_junction_geometry(self) -> None:
+        spec = proliferated_spec()
+        strips = plan_strips(spec)
+        prepared = _prepare_routing_problem(
+            spec,
+            strips,
+            _greedy_pack(strips, _height_seed(strips)),
+            power=False,
+            policy=BandPolicy("portable"),
+        )
+        source = next(net for net in prepared.nets if net.src is not None)
+        assert source.src is not None
+        buildings = list(prepared.building_templates)
+        buildings[source.src.belt_index] = replace(
+            buildings[source.src.belt_index],
+            output_obj=source.dst.belt_index,
+        )
+
+        assert freeform._junction_geometry_required(
+            (source,),
+            buildings,
+        )
+
+    def test_preparation_skips_junction_geometry_for_destination_only_siblings(
         self,
     ) -> None:
         base = proliferated_spec()
@@ -7699,22 +7743,25 @@ class TestProjectedCoaterSplitterBanIsPreparedBeforeRouting:
             }
         )
         strips = plan_strips(spec)
-        pack = _greedy_pack(strips, _height_seed(strips))
-
         prepared = _prepare_routing_problem(
             spec,
             strips,
-            pack,
+            _greedy_pack(strips, _height_seed(strips)),
             power=False,
             policy=BandPolicy("portable"),
         )
-        flat_only = freeform._prepared_junction_ban(
-            prepared.building_templates,
-            prepared.power_sites,
-        )
 
-        assert any(net.src_group or net.dst_group for net in prepared.nets)
-        assert prepared.junction_ban - flat_only
+        assert any(net.dst_group for net in prepared.nets)
+        assert all(
+            not net.src_group
+            and (
+                net.src is None
+                or prepared.building_templates[net.src.belt_index].output_obj
+                is None
+            )
+            for net in prepared.nets
+        )
+        assert prepared.junction_ban == frozenset()
 
     def test_merge_frontier_consumes_prepared_junction_ban(self) -> None:
         ban = self._ban()

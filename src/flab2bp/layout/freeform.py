@@ -5011,6 +5011,21 @@ def _with_sibling_groups(
     return tuple(grouped)
 
 
+def _junction_geometry_required(
+    nets: Sequence[_PreparedNet],
+    buildings: Sequence[PlacedBuilding],
+) -> bool:
+    """Whether the detailed router can introduce a Splitter for these nets."""
+    return any(
+        net.src_group
+        or (
+            net.src is not None
+            and buildings[net.src.belt_index].output_obj is not None
+        )
+        for net in nets
+    )
+
+
 @dataclass(slots=True)
 class _RoutingWorkspace:
     canvas: _Canvas
@@ -9011,18 +9026,14 @@ def _prepare_routing_problem(
 
     grouped_nets = _with_sibling_groups(prepared_nets)
     # The detailed router can introduce a Splitter only when a source already
-    # flows onward or when sibling nets can branch from / merge into one path.
-    # With neither shape present, no call can reach ``junction_is_clear``:
-    # materializing every reachable latitude frame would spend the routing
-    # budget proving legality for a building this attempt cannot emit.
-    junction_possible = any(
-        net.src_group
-        or net.dst_group
-        or (
-            net.src is not None
-            and canvas.buildings[net.src.belt_index].output_obj is not None
-        )
-        for net in grouped_nets
+    # flows onward or when source siblings can branch from one path. Destination
+    # siblings only point a routed tail at an existing sibling belt; they never
+    # call ``junction_is_clear``. With neither source shape present, materializing
+    # every reachable latitude frame would spend the routing budget proving
+    # legality for a building this attempt cannot emit.
+    junction_possible = _junction_geometry_required(
+        grouped_nets,
+        canvas.buildings,
     )
     junction_frames = (
         _junction_projection_frames(
