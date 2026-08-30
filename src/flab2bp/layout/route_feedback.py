@@ -18,6 +18,7 @@ from .sequence_pair import (
     PlacementProblem,
     SequencePair,
 )
+from .strip_variants import CargoDomain
 
 Cell = tuple[int, int, int]
 
@@ -36,6 +37,7 @@ class LogicalNetId:
     destination_family: StripFamilyId | None
     item: str
     role: NetRole
+    cargo_domain: CargoDomain = CargoDomain.UNSPRAYED
     legacy_source_strip: int | None = None
     legacy_destination_strip: int | None = None
     legacy_ordinal: int | None = None
@@ -48,19 +50,21 @@ class NetId:
     item: str
     role: NetRole
     ordinal: int
+    cargo_domain: CargoDomain = CargoDomain.UNSPRAYED
     logical_id: LogicalNetId | None = None
 
     @property
     def logical(self) -> LogicalNetId:
         """Return stable identity, deriving a legacy-local key when unavailable."""
         return self.logical_id or LogicalNetId(
-            None,
-            None,
-            self.item,
-            self.role,
-            self.source_strip,
-            self.destination_strip,
-            self.ordinal,
+            source_family=None,
+            destination_family=None,
+            item=self.item,
+            role=self.role,
+            cargo_domain=self.cargo_domain,
+            legacy_source_strip=self.source_strip,
+            legacy_destination_strip=self.destination_strip,
+            legacy_ordinal=self.ordinal,
         )
 
 

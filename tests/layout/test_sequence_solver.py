@@ -69,6 +69,7 @@ from flab2bp.layout.sequence_solver import (
     ValidationVerdict,
     _decoded_pack,
     _pose_stage_boundary_update,
+    _placement_nets,
     _production_run,
     _ProductionCandidate,
     _selected_direct_targets,
@@ -90,6 +91,7 @@ from tests.layout.test_freeform import (
     projected_chemical_plant_spec,
     proliferated_spec,
     ray_receiver_spec,
+    spray_domain_spec,
     two_stage_spec,
 )
 
@@ -126,6 +128,24 @@ def _placement(*, area: int, belt_tiles: int, valid: bool = True) -> Placement:
             "validator_clean": float(valid),
         },
     )
+
+
+def test_sequence_pair_preserves_mixed_spray_domain_logical_nets() -> None:
+    spec = spray_domain_spec(clean=True, sprayed=True)
+    strips = plan_strips(spec, strip_len=6)
+
+    iron_nets = [
+        (endpoints, logical)
+        for endpoints, logical in _placement_nets(strips)
+        if logical.item == "iron-ingot"
+    ]
+
+    assert {logical.cargo_domain.value for _endpoints, logical in iron_nets} == {
+        "requires-spray",
+        "unsprayed",
+    }
+    for (_source, destination), logical in iron_nets:
+        assert strips[destination].cargo_domain is logical.cargo_domain
 
 
 def _routing(

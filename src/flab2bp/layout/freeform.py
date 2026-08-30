@@ -100,6 +100,7 @@ from flab2bp.layout.route_feedback import (
 )
 from flab2bp.layout.sequence_pair import DirectInsertTarget
 from flab2bp.layout.slots import SlotUndetermined, assign_sorter_slots
+from flab2bp.layout.strip_variants import CargoDomain
 from flab2bp.spec import BuildSpec
 
 if TYPE_CHECKING:
@@ -659,6 +660,10 @@ def lanes_for(rate: Fraction, capacity: Fraction) -> int:
 
 
 # --- adaptation ------------------------------------------------------------
+type CargoKey = tuple[str, CargoDomain]
+type _CargoSink = tuple[str, str, CargoDomain]
+
+
 
 
 @dataclass(frozen=True, slots=True)
@@ -697,8 +702,9 @@ class _LogicalStripPlan:
     item_id: int
     model_index: int
     total_machine_count: int
+    cargo_domain: CargoDomain
     in_above: tuple[tuple[str, ...], ...]
-    out_lanes: tuple[tuple[str, str], ...]
+    out_lanes: tuple[_CargoSink, ...]
     in_below: tuple[tuple[str, ...], ...]
     mode_params: tuple[int, ...] = ()
     #: The output leaves through per-machine east gap belts rather than a sorter
@@ -736,6 +742,7 @@ class Strip:
     recipe_id: str
     item_id: int
     model_index: int
+    cargo_domain: CargoDomain
     machines: int
     mw: int
     mh: int
@@ -760,7 +767,7 @@ class Strip:
     #: machines than the sorter reach needs shards -- see :func:`_merge_lanes`.
     #: Use :func:`_dests` to read it; comparing it to a group key directly is
     #: how the two representations drift apart.
-    out_lanes: tuple[tuple[str, str], ...]
+    out_lanes: tuple[_CargoSink, ...]
     #: Lanes arriving on the south side, below ``out_lanes``.  Non-empty only
     #: when a recipe has more ingredients than one side can reach.
     in_below: tuple[tuple[str, ...], ...]
@@ -971,6 +978,7 @@ class Strip:
             kind="input",
             items=lane,
             destination_group_keys=(),
+            cargo_domain=self.cargo_domain,
             side=side,
             side_index=side_index,
         )
@@ -1107,11 +1115,11 @@ def _dests(dest: str) -> tuple[str, ...]:
 
 
 def _shard_sinks(
-    sinks: Sequence[tuple[str, str]],
+    sinks: Sequence[_CargoSink],
     *,
     cap: int | None = None,
     max_shards: int | None = None,
-) -> list[list[tuple[str, str]]]:
+) -> list[list[_CargoSink]]:
     """Chunk output sinks so no strip carries more lanes than a sorter can span.
 
     EVERY shard drains EVERY product.  One machine makes all of its recipe's
@@ -1146,39 +1154,39 @@ def _shard_sinks(
     if reach <= 0:
         raise ValueError("no room left on the south side for any output lane")
 
-    by_item: dict[str, list[str]] = {}
-    for item, dest in sinks:
-        by_item.setdefault(item, []).append(dest)
-    if not by_item:
+    by_cargo: dict[CargoKey, list[str]] = {}
+    for item, dest, cargo_domain in sinks:
+        by_cargo.setdefault((item, cargo_domain), []).append(dest)
+    if not by_cargo:
         return []
-    if len(by_item) > reach:
+    if len(by_cargo) > reach:
         raise ValueError(
-            f"a machine yields {len(by_item)} distinct products but only {reach} "
+            f"a machine yields {len(by_cargo)} distinct cargo lanes but only {reach} "
             f"output lane(s) fit inside the {catalog.SORTER_MAX_REACH}-tile sorter "
             "reach, so one of them could never be drained"
         )
 
     n = 1
-    while sum(max(1, math.ceil(len(d) / n)) for d in by_item.values()) > reach:
+    while sum(max(1, math.ceil(len(d) / n)) for d in by_cargo.values()) > reach:
         if max_shards is not None and n >= max_shards:
             break
         n += 1
 
-    out: list[list[tuple[str, str]]] = [[] for _ in range(n)]
-    for item, dests in by_item.items():
+    out: list[list[_CargoSink]] = [[] for _ in range(n)]
+    for (item, cargo_domain), dests in by_cargo.items():
         per = math.ceil(len(dests) / n)
         for s in range(n):
             chunk = dests[s * per : (s + 1) * per] or [dests[s % len(dests)]]
-            out[s].extend((item, d) for d in chunk)
+            out[s].extend((item, d, cargo_domain) for d in chunk)
     return out
 
 
 def _merge_lanes(
-    shard: Sequence[tuple[str, str]],
+    shard: Sequence[_CargoSink],
     reach: int,
-    demand: Mapping[tuple[str, str], Fraction],
+    demand: Mapping[_CargoSink, Fraction],
     capacity: Fraction,
-) -> list[tuple[str, str]]:
+) -> list[_CargoSink]:
     """Fold a shard's destinations onto at most ``reach`` output lanes.
 
     Sharding splits a producer's destinations across STRIPS and needs one
@@ -1204,33 +1212,51 @@ def _merge_lanes(
     if len(shard) <= reach:
         return list(shard)
 
-    by_item: dict[str, list[str]] = {}
-    for item, dest in shard:
-        by_item.setdefault(item, []).append(dest)
-    if len(by_item) > reach:
+    by_cargo: dict[CargoKey, list[str]] = {}
+    for item, dest, cargo_domain in shard:
+        by_cargo.setdefault((item, cargo_domain), []).append(dest)
+    if len(by_cargo) > reach:
         raise ValueError(
-            f"a machine yields {len(by_item)} distinct products but only {reach} "
+            f"a machine yields {len(by_cargo)} distinct cargo lanes but only {reach} "
             f"output lane(s) fit inside the {catalog.SORTER_MAX_REACH}-tile sorter "
             "reach, so one of them could never be drained"
         )
 
-    alloc = dict.fromkeys(by_item, 1)
-    for _ in range(reach - len(by_item)):
-        room = [item for item in by_item if alloc[item] < len(by_item[item])]
+    alloc = dict.fromkeys(by_cargo, 1)
+    for _ in range(reach - len(by_cargo)):
+        room = [cargo for cargo in by_cargo if alloc[cargo] < len(by_cargo[cargo])]
         if not room:
             break
-        alloc[max(room, key=lambda i: (Fraction(len(by_item[i]), alloc[i]), i))] += 1
+        chosen = max(
+            room,
+            key=lambda cargo: (
+                Fraction(len(by_cargo[cargo]), alloc[cargo]),
+                cargo[0],
+                cargo[1].value,
+            ),
+        )
+        alloc[chosen] += 1
 
-    out: list[tuple[str, str]] = []
-    for item in sorted(by_item):
-        k = alloc[item]
+    out: list[_CargoSink] = []
+    for item, cargo_domain in sorted(
+        by_cargo,
+        key=lambda cargo: (cargo[0], cargo[1].value),
+    ):
+        cargo = (item, cargo_domain)
+        k = alloc[cargo]
         bins: list[list[str]] = [[] for _ in range(k)]
         loads = [Fraction(0)] * k
-        order = sorted(by_item[item], key=lambda d: (-demand.get((item, d), Fraction(0)), d))
+        order = sorted(
+            by_cargo[cargo],
+            key=lambda dest: (
+                -demand.get((item, dest, cargo_domain), Fraction(0)),
+                dest,
+            ),
+        )
         for dest in order:
             b = min(range(k), key=lambda i: (loads[i], i))
             bins[b].append(dest)
-            loads[b] += demand.get((item, dest), Fraction(0))
+            loads[b] += demand.get((item, dest, cargo_domain), Fraction(0))
         for b, group in enumerate(bins):
             if not group:
                 continue
@@ -1240,14 +1266,14 @@ def _merge_lanes(
                     f"output lane carrying {loads[b]} items/s, over the "
                     f"{capacity}/s the belt sustains"
                 )
-            out.append((item, DEST_SEP.join(sorted(group))))
+            out.append((item, DEST_SEP.join(sorted(group)), cargo_domain))
     return out
 
 
 def _allocate_machines(
     count: int,
-    shards: Sequence[Sequence[tuple[str, str]]],
-    demand: Mapping[tuple[str, str], Fraction],
+    shards: Sequence[Sequence[_CargoSink]],
+    demand: Mapping[_CargoSink, Fraction],
 ) -> list[int]:
     """Split ``count`` machines across shards in proportion to demand served.
 
@@ -1261,18 +1287,19 @@ def _allocate_machines(
     still matches the spec's machine counts.
     """
     n = len(shards)
-    totals: dict[str, Fraction] = defaultdict(Fraction)
-    for (item, _dest), rate in demand.items():
-        totals[item] += rate
+    totals: dict[CargoKey, Fraction] = defaultdict(Fraction)
+    for (item, _dest, cargo_domain), rate in demand.items():
+        totals[item, cargo_domain] += rate
 
     weights: list[Fraction] = []
     for shard in shards:
-        served: dict[str, Fraction] = defaultdict(Fraction)
-        for item, dest in shard:
-            served[item] += demand.get((item, dest), Fraction(0))
+        served: dict[CargoKey, Fraction] = defaultdict(Fraction)
+        for item, dest, cargo_domain in shard:
+            cargo = (item, cargo_domain)
+            served[cargo] += demand.get((item, dest, cargo_domain), Fraction(0))
         weight = Fraction(0)
-        for item, rate in served.items():
-            total = totals.get(item, Fraction(0))
+        for cargo, rate in served.items():
+            total = totals.get(cargo, Fraction(0))
             weight = max(weight, rate / total if total > 0 else Fraction(1, n))
         weights.append(weight if weight > 0 else Fraction(1, n))
 
@@ -1561,7 +1588,7 @@ def _logical_strip_plans(spec: BuildSpec) -> tuple[_LogicalStripPlan, ...]:
         # How many lane rows this machine's poses actually reach, per side.
         above_cap, below_cap = _side_lane_caps(group.item_id, group.yaw, group.pitch_h)
         input_items = tuple(sorted(group.inputs))
-        sinks: list[tuple[str, str]] = []
+        sinks: list[_CargoSink] = []
         for item in sorted(group.outputs):
             destinations = consumers.get((key, item), [])
             boundary = item in spec.outputs or item in spec.surplus_outputs
@@ -1571,7 +1598,8 @@ def _logical_strip_plans(spec: BuildSpec) -> tuple[_LogicalStripPlan, ...]:
                 shareable = [
                     destination
                     for destination in destinations
-                    if surplus + _sink_demand(groups, spec, item, destination)
+                    if not groups[destination].proliferated
+                    and surplus + _sink_demand(groups, spec, item, destination)
                     <= spec.belt_items_per_second
                 ]
                 if shareable:
@@ -1591,11 +1619,16 @@ def _logical_strip_plans(spec: BuildSpec) -> tuple[_LogicalStripPlan, ...]:
                         if destination == shared_boundary
                         else destination
                     ),
+                    (
+                        CargoDomain.REQUIRES_SPRAY
+                        if groups[destination].proliferated
+                        else CargoDomain.UNSPRAYED
+                    ),
                 )
                 for destination in destinations
             )
             if boundary or not destinations:
-                sinks.append((item, ""))
+                sinks.append((item, "", CargoDomain.UNSPRAYED))
 
         columns = (
             len(slots.attachable_columns(slots.probe_building(group.item_id, group.yaw), -1)) or 1
@@ -1649,23 +1682,23 @@ def _logical_strip_plans(spec: BuildSpec) -> tuple[_LogicalStripPlan, ...]:
             )
         shards = _shard_sinks(sinks, cap=out_capacity, max_shards=group.count) if sinks else [[]]
         demand = {
-            (item, destination): _sink_demand(
+            (item, destination, cargo_domain): _sink_demand(
                 groups,
                 spec,
                 item,
                 destination,
             )
-            for item, destination in sinks
+            for item, destination, cargo_domain in sinks
         }
         allocation_demand = {
-            (item, destination): _sink_demand(
+            (item, destination, cargo_domain): _sink_demand(
                 groups,
                 spec,
                 item,
                 destination,
                 include_boundary=False,
             )
-            for item, destination in sinks
+            for item, destination, cargo_domain in sinks
         }
         per_shard = (
             _allocate_machines(group.count, shards, allocation_demand)
@@ -1698,6 +1731,11 @@ def _logical_strip_plans(spec: BuildSpec) -> tuple[_LogicalStripPlan, ...]:
                     item_id=group.item_id,
                     model_index=group.model_index,
                     total_machine_count=machine_count,
+                    cargo_domain=(
+                        CargoDomain.REQUIRES_SPRAY
+                        if group.proliferated
+                        else CargoDomain.UNSPRAYED
+                    ),
                     in_above=in_above,
                     out_lanes=tuple(lane_shard),
                     in_below=in_below,
@@ -1743,15 +1781,17 @@ def plan_strips(
             if lane.side == "north"
         )
         outputs = tuple(
-            (lane.items[0], DEST_SEP.join(lane.destination_group_keys))
+            (
+                lane.items[0],
+                DEST_SEP.join(lane.destination_group_keys),
+                lane.cargo_domain,
+            )
             for lane in sorted(family.output_lanes, key=lambda lane: lane.side_index)
         )
         group = groups[family.group_key]
         needs_coater_keepout = any(
-            item in spec.spray_lanes
-            and not (item in spec.lanes_requiring_split and not group.proliferated)
-            for lane in inputs_above + inputs_below
-            for item in lane
+            lane.cargo_domain is CargoDomain.REQUIRES_SPRAY
+            for lane in family.input_lanes
         )
         realized: tuple[tuple[int, int, StripVariant | None], ...]
         if family.variants:
@@ -1832,6 +1872,11 @@ def plan_strips(
                     recipe_id=family.recipe_id,
                     item_id=family.machine_item_id,
                     model_index=family.model_index,
+                    cargo_domain=(
+                        CargoDomain.REQUIRES_SPRAY
+                        if group.proliferated
+                        else CargoDomain.UNSPRAYED
+                    ),
                     machines=machine_count,
                     mw=footprint_width,
                     mh=footprint_height,
@@ -1956,16 +2001,12 @@ def _direct_net_candidates(
     out: dict[tuple[int, int], _DirectCandidate] = {}
     for i, j in _nets_between(strips):
         src, dst = strips[i], strips[j]
-        if src.takes_belt_ports:
-            continue  # a prefab belt port cannot become a machine-to-machine sorter
-        if (src.recipe_id, dst.recipe_id) not in eligible:
-            continue
-        # The producer's output lane dedicated to this destination.
         lane = next(
             (
                 (k, item)
-                for k, (item, dest) in enumerate(src.out_lanes)
-                if dst.group_key in _dests(dest)
+                for k, (item, dest, cargo_domain) in enumerate(src.out_lanes)
+                if cargo_domain is CargoDomain.UNSPRAYED
+                and dst.group_key in _dests(dest)
             ),
             None,
         )
@@ -2116,7 +2157,7 @@ def _nets_between(strips: list[Strip]) -> list[tuple[int, int]]:
         by_group[s.group_key].append(i)
     nets: set[tuple[int, int]] = set()
     for i, strip in enumerate(strips):
-        for _item, destination in strip.out_lanes:
+        for _item, destination, _cargo_domain in strip.out_lanes:
             for group_key in _dests(destination):
                 for j in by_group.get(group_key, []):
                     if i != j:
@@ -2996,6 +3037,7 @@ class _Port:
     #: an empty start set -- a search that expands zero nodes and so registers no
     #: congestion for any amount of negotiation to price.
     z: int = 0
+    cargo_domain: CargoDomain = CargoDomain.UNSPRAYED
 
     def columns(self) -> range:
         return range(self.x0, self.x1 + 1)
@@ -3018,6 +3060,7 @@ class _Port:
             self.tiles,
             self.machines,
             self.z,
+            self.cargo_domain,
         )
 
 
@@ -3031,6 +3074,7 @@ class _PreparedPort:
     tiles: tuple[int, ...]
     machines: int
     z: int = 0
+    cargo_domain: CargoDomain = CargoDomain.UNSPRAYED
 
 
 @dataclass(frozen=True, slots=True)
@@ -3070,6 +3114,7 @@ def _prepare_port(port: _Port) -> _PreparedPort:
         tiles=port.tiles,
         machines=port.machines,
         z=port.z,
+        cargo_domain=port.cargo_domain,
     )
 
 
@@ -3088,6 +3133,7 @@ def _bind_prepared_port(port: _PreparedPort, buildings: list[PlacedBuilding]) ->
         tiles=port.tiles,
         machines=port.machines,
         z=port.z,
+        cargo_domain=port.cargo_domain,
     )
 
 
@@ -3117,9 +3163,8 @@ def _emit_strip(
     rates: dict[str, Fraction],
     in_rates: Mapping[str, Fraction] | None = None,
     out_rates: Mapping[str, Fraction] | None = None,
-    sprayed: Set[str] = frozenset(),
     owner_strip: int | None = None,
-) -> tuple[dict[str, _Port], dict[tuple[str, str], _Port], int]:
+) -> tuple[dict[str, _Port], dict[_CargoSink, _Port], int]:
     """Place one strip's lanes, machines and sorters.
 
     Returns the west end of each input lane and the east end of each output lane
@@ -3146,7 +3191,7 @@ def _emit_strip(
     in_rates = in_rates or {}
     out_rates = out_rates or {}
     in_ports: dict[str, _Port] = {}
-    out_ports: dict[tuple[str, str], _Port] = {}
+    out_ports: dict[_CargoSink, _Port] = {}
     width = s.width
     machine_row = s.machine_row
 
@@ -3204,11 +3249,11 @@ def _emit_strip(
         # `WEST_CHANNEL` and `_pack` offsets every strip by it, so `ox - 1` is
         # this strip's channel column and belongs to nobody else.  The drop
         # cell is unchanged, still `(ox - 1, y)` one LEVEL up.
-        if need and any(it in sprayed for it in lane):
+        if need and s.cargo_domain is CargoDomain.REQUIRES_SPRAY:
             need = min(max(need, 2), width)
             lane_starts_west.add(row)
         lane_tiles_of[row] = need
-    for k, (item, _dest) in enumerate(s.out_lanes):
+    for k, (item, _dest, _cargo_domain) in enumerate(s.out_lanes):
         lane_item_of[s.row_of_output(k)] = item
         lane_tiles_of[s.row_of_output(k)] = width
 
@@ -3304,6 +3349,7 @@ def _emit_strip(
                 head.x + len(lane_idx[row]) - 1,
                 tuple(lane_idx[row]),
                 s.machines,
+                cargo_domain=s.cargo_domain,
             )
             placed += _link_lane(
                 canvas,
@@ -3321,9 +3367,9 @@ def _emit_strip(
     for lane in s.in_above:
         sorters += feed(s._input_attachment_plan(lane[0]))
 
-    for j, (item, dest) in enumerate(s.out_lanes):
+    for j, (item, dest, cargo_domain) in enumerate(s.out_lanes):
         row = s.row_of_output(j)
-        out_ports[item, dest] = _Port(
+        out_ports[item, dest, cargo_domain] = _Port(
             lane_idx[row][-1],
             ox + width - 1,
             oy + row,
@@ -3331,6 +3377,7 @@ def _emit_strip(
             ox + width - 1,
             tuple(lane_idx[row]),
             s.machines,
+            cargo_domain=cargo_domain,
         )
         if s.takes_belt_ports:
             sorters += _dock_lane(
@@ -4762,8 +4809,14 @@ class _Net:
     src: _Port | None
     dst: _Port
     item: str
+    cargo_domain: CargoDomain = CargoDomain.UNSPRAYED
     net_id: NetId | None = None
     boundary_goals: tuple[tuple[int, int, int], ...] = ()
+
+    def __post_init__(self) -> None:
+        ports = (self.dst,) if self.src is None else (self.src, self.dst)
+        if any(port.cargo_domain is not self.cargo_domain for port in ports):
+            raise ValueError("net ports must share one cargo domain")
 
     @property
     def source(self) -> _Port:
@@ -4778,24 +4831,30 @@ class _PreparedNet:
     src: _PreparedPort | None
     dst: _PreparedPort
     item: str
+    cargo_domain: CargoDomain = CargoDomain.UNSPRAYED
     boundary_goals: tuple[tuple[int, int, int], ...] = ()
     src_group: tuple[NetId, ...] = ()
     dst_group: tuple[NetId, ...] = ()
+
+    def __post_init__(self) -> None:
+        ports = (self.dst,) if self.src is None else (self.src, self.dst)
+        if any(port.cargo_domain is not self.cargo_domain for port in ports):
+            raise ValueError("prepared net ports must share one cargo domain")
 
 
 def _with_sibling_groups(
     nets: Sequence[_PreparedNet],
 ) -> tuple[_PreparedNet, ...]:
     """Freeze the detailed router's exact branch/merge groups onto each net."""
-    same_src: dict[tuple[int, int, int], list[NetId]] = defaultdict(list)
-    same_dst: dict[tuple[int, int, int], list[NetId]] = defaultdict(list)
+    same_src: dict[tuple[CargoDomain, int, int, int], list[NetId]] = defaultdict(list)
+    same_dst: dict[tuple[CargoDomain, int, int, int], list[NetId]] = defaultdict(list)
     for net in nets:
         if net.net_id.role is NetRole.EXTERNAL:
             continue
         if net.src is None:
             raise ValueError("non-external prepared nets require source ports")
-        same_src[net.src.y, net.src.x0, net.src.z].append(net.net_id)
-        same_dst[net.dst.x, net.dst.y, net.dst.z].append(net.net_id)
+        same_src[net.cargo_domain, net.src.y, net.src.x0, net.src.z].append(net.net_id)
+        same_dst[net.cargo_domain, net.dst.x, net.dst.y, net.dst.z].append(net.net_id)
     grouped: list[_PreparedNet] = []
     for net in nets:
         if net.net_id.role is NetRole.EXTERNAL:
@@ -4808,12 +4867,16 @@ def _with_sibling_groups(
                 net,
                 src_group=tuple(
                     sibling
-                    for sibling in same_src[net.src.y, net.src.x0, net.src.z]
+                    for sibling in same_src[
+                        net.cargo_domain, net.src.y, net.src.x0, net.src.z
+                    ]
                     if sibling != net.net_id
                 ),
                 dst_group=tuple(
                     sibling
-                    for sibling in same_dst[net.dst.x, net.dst.y, net.dst.z]
+                    for sibling in same_dst[
+                        net.cargo_domain, net.dst.x, net.dst.y, net.dst.z
+                    ]
                     if sibling != net.net_id
                 ),
             )
@@ -4878,6 +4941,7 @@ def _bind_prepared_net(net: _PreparedNet, buildings: list[PlacedBuilding]) -> _N
         src=(_bind_prepared_port(net.src, buildings) if net.src is not None else None),
         dst=_bind_prepared_port(net.dst, buildings),
         item=net.item,
+        cargo_domain=net.cargo_domain,
         net_id=net.net_id,
         boundary_goals=net.boundary_goals,
     )
@@ -7802,6 +7866,9 @@ def _pair_lanes(
     island that balances from one that starves.  Omitting them keeps the pairing
     exactly cyclic, which is what the unit tests of the pairing itself want.
     """
+    domains = {port.cargo_domain for port in (*srcs, *sinks)}
+    if len(domains) != 1:
+        raise ValueError("lane pairing requires exactly one cargo domain")
     pairs = [(k % len(srcs), k % len(sinks)) for k in range(max(len(srcs), len(sinks)))]
     for i, j in _connect_short_cuts(srcs, sinks, pairs, out_rate, in_rate):
         pairs.append((i, j))
@@ -8045,8 +8112,9 @@ def _prepare_routing_problem(
     belt_model = catalog.building(belt_id).model_index
     canvas = _Canvas(ramped=ramped)
 
+    groups = _adapt(spec)
     rates: dict[str, Fraction] = {}
-    for g in _adapt(spec).values():
+    for g in groups.values():
         for item, r in list(g.inputs.items()) + list(g.outputs.items()):
             rates[item] = max(rates.get(item, Fraction(0)), r * g.count)
 
@@ -8061,7 +8129,7 @@ def _prepare_routing_problem(
     # iron starved the machine. The overloaded sorter hid behind the underloaded
     # one, and the validator averaged the same way so it never caught it.
     per_item: dict[str, tuple[Mapping[str, Fraction], Mapping[str, Fraction]]] = {
-        key: (dict(g.inputs), dict(g.outputs)) for key, g in _adapt(spec).items()
+        key: (dict(g.inputs), dict(g.outputs)) for key, g in groups.items()
     }
 
     # EVERY strip of a group keeps its port, not just the last one emitted.
@@ -8075,12 +8143,11 @@ def _prepare_routing_problem(
     #
     # It reported `route_failures == 0` throughout, because the nets that existed
     # did route; the missing ones were never created to fail.
-    in_ports: dict[tuple[str, str], list[_Port]] = defaultdict(list)
+    in_ports: dict[tuple[str, str, CargoDomain], list[_Port]] = defaultdict(list)
     # The producer side collides the same way: sharding a producer gives several
-    # strips the SAME destination set, so keying on (group, item, dest) alone
-    # kept only the last strip's output lane. The others were emitted, drained by
-    # nobody, and left as dead belts.
-    out_ports: dict[tuple[str, str, str], list[_Port]] = defaultdict(list)
+    # strips the SAME destination set, so the key includes group, item, domain,
+    # and destination.
+    out_ports: dict[tuple[str, str, str, CargoDomain], list[_Port]] = defaultdict(list)
     strip_in_ports: list[dict[str, _Port]] = []
     # Flow-graph bookkeeping for `_join_shard_islands`, keyed by BELT index.
     #
@@ -8092,9 +8159,9 @@ def _prepare_routing_problem(
     # shard's production twice. That mistake makes a starving shard read as
     # healthy, which is the exact failure this bookkeeping exists to find.
     lane_of: dict[int, _Port] = {}
-    lane_supply: dict[str, dict[int, Fraction]] = defaultdict(dict)
-    lane_demand: dict[str, dict[int, Fraction]] = defaultdict(dict)
-    sibling_lanes: dict[str, list[tuple[int, int]]] = defaultdict(list)
+    lane_supply: dict[CargoKey, dict[int, Fraction]] = defaultdict(dict)
+    lane_demand: dict[CargoKey, dict[int, Fraction]] = defaultdict(dict)
+    sibling_lanes: dict[CargoKey, list[tuple[int, int]]] = defaultdict(list)
     strip_of_belt: dict[int, int] = {}
     sorters = 0
     for i, s in enumerate(strips):
@@ -8108,7 +8175,6 @@ def _prepare_routing_problem(
             belt_model,
             rates,
             *per_item.get(s.group_key, ({}, {})),
-            sprayed=frozenset(spec.spray_lanes),
             owner_strip=i,
         )
         sorters += placed
@@ -8117,19 +8183,34 @@ def _prepare_routing_problem(
             for belt in port.tiles:
                 strip_of_belt[belt] = i
         for item, port in ins.items():
-            in_ports[s.group_key, item].append(port)
+            in_ports[s.group_key, item, port.cargo_domain].append(port)
         made = per_item.get(s.group_key, ({}, {}))[1]
-        by_item: dict[str, list[int]] = defaultdict(list)
-        for (item, dest), port in outs.items():
-            out_ports[s.group_key, item, dest].append(port)
+        by_cargo: dict[CargoKey, list[int]] = defaultdict(list)
+        cargo_weight: dict[CargoKey, Fraction] = defaultdict(Fraction)
+        for (item, dest, cargo_domain), port in outs.items():
+            cargo = (item, cargo_domain)
+            out_ports[s.group_key, item, dest, cargo_domain].append(port)
             lane_of[port.belt] = port
-            by_item[item].append(port.belt)
-        for item, belts in by_item.items():
-            belts.sort()
-            lane_supply[item][belts[0]] = s.machines * made.get(item, Fraction(0))
-            for b in belts[1:]:
-                lane_supply[item][b] = Fraction(0)
-                sibling_lanes[item].append((belts[0], b))
+            by_cargo[cargo].append(port.belt)
+            cargo_weight[cargo] += _sink_demand(groups, spec, item, dest)
+        by_item: dict[str, list[CargoKey]] = defaultdict(list)
+        for cargo in by_cargo:
+            by_item[cargo[0]].append(cargo)
+        for item, cargo_keys in by_item.items():
+            total_weight = sum((cargo_weight[cargo] for cargo in cargo_keys), Fraction(0))
+            for cargo in cargo_keys:
+                belts = sorted(by_cargo[cargo])
+                share = (
+                    cargo_weight[cargo] / total_weight
+                    if total_weight > 0
+                    else Fraction(1, len(cargo_keys))
+                )
+                lane_supply[cargo][belts[0]] = (
+                    s.machines * made.get(item, Fraction(0)) * share
+                )
+                for belt in belts[1:]:
+                    lane_supply[cargo][belt] = Fraction(0)
+                    sibling_lanes[cargo].append((belts[0], belt))
 
     # Nets the packer arranged to bridge directly become a single sorter and no
     # belt route at all -- that saving IS the feature, so it happens before the
@@ -8142,49 +8223,76 @@ def _prepare_routing_problem(
     # the flow graph the whole build makes rather than one edge of it. Keyed by
     # BELT index, which is what makes a lane serving several destinations one
     # node instead of several.
-    joined: dict[str, list[tuple[int, int]]] = defaultdict(list)
+    joined: dict[CargoKey, list[tuple[int, int]]] = defaultdict(list)
     # Every sorter already standing, as the PASTE will test it.  Built once and
     # extended by each bridge that lands: `_bridge` is asked once per lane pair
     # and rebuilding this inside it is quadratic in the sorter count, which on a
     # stress spec is thousands.
     standing = slots.sorter_seat_boxes(canvas.buildings)
-    for (src_key, item, dest_group), srcs in out_ports.items():
+    for (src_key, item, dest_group, cargo_domain), srcs in out_ports.items():
         # One output lane may serve SEVERAL destination groups -- see
         # `_merge_lanes` -- and each of them is its own set of consumer strips to
-        # pair against. They all tap the same lane end, where `_tap_source`
-        # builds the junction, exactly as it already does when ONE destination is
-        # sharded across several consumer strips.
+        # pair against. Domain is part of the key, so a clean and a sprayed lane
+        # can never become siblings merely because they carry the same item.
+        cargo = (item, cargo_domain)
         out_rate = per_item.get(src_key, ({}, {}))[1].get(item, Fraction(0))
         for dest in _dests(dest_group):
-            sinks = in_ports.get((dest, item), [])
+            sinks = in_ports.get((dest, item, cargo_domain), [])
             if not srcs or not sinks:
                 continue
             in_rate = per_item.get(dest, ({}, {}))[0].get(item, Fraction(0))
-            # The per-machine rates on both sides, so the pairing can tell an
-            # island that feeds itself from one that starves.
             for port, sink in _pair_lanes(srcs, sinks, out_rate=out_rate, in_rate=in_rate):
-                joined[item].append((port.belt, sink.belt))
+                joined[cargo].append((port.belt, sink.belt))
                 lane_of[sink.belt] = sink
-                lane_demand[item][sink.belt] = sink.machines * in_rate
+                lane_demand[cargo][sink.belt] = sink.machines * in_rate
                 if (src_key, dest) in direct_keys and _bridge(
                     canvas, port, sink, rates, item, standing
                 ):
                     direct_placed += 1
                     continue
-                nets.append(_Net(src=port, dst=sink, item=item))
+                nets.append(
+                    _Net(
+                        src=port,
+                        dst=sink,
+                        item=item,
+                        cargo_domain=cargo_domain,
+                    )
+                )
 
-    # A shard of a producer that cannot feed its own destinations is joined to
-    # one that can. Nothing inside the pairing above can see this, because two
-    # shards of one group are never handed to it together -- see
-    # `_join_shard_islands` for the arithmetic that forces it.
-    for item in sorted(set(joined) | set(sibling_lanes)):
+    cargo_keys = set(joined) | set(sibling_lanes)
+    demand_by_item = {
+        item: sum(
+            (
+                sum(lane_demand[cargo].values(), Fraction(0))
+                for cargo in cargo_keys
+                if cargo[0] == item
+            ),
+            Fraction(0),
+        )
+        for item, _cargo_domain in cargo_keys
+    }
+    for cargo in sorted(cargo_keys, key=lambda key: (key[0], key[1].value)):
+        item, cargo_domain = cargo
+        total_demand = demand_by_item[item]
+        domain_demand = sum(lane_demand[cargo].values(), Fraction(0))
+        external = spec.external_inputs.get(item, Fraction(0))
+        domain_external = (
+            external * domain_demand / total_demand if total_demand > 0 else Fraction(0)
+        )
         for a, b in _join_shard_islands(
-            joined[item] + sibling_lanes[item],
-            lane_supply[item],
-            lane_demand[item],
-            spec.external_inputs.get(item, Fraction(0)),
+            joined[cargo] + sibling_lanes[cargo],
+            lane_supply[cargo],
+            lane_demand[cargo],
+            domain_external,
         ):
-            nets.append(_Net(src=lane_of[a], dst=lane_of[b], item=item))
+            nets.append(
+                _Net(
+                    src=lane_of[a],
+                    dst=lane_of[b],
+                    item=item,
+                    cargo_domain=cargo_domain,
+                )
+            )
 
     # Hold one cell beside every port BEFORE anything else can take it.
     #
@@ -8229,7 +8337,11 @@ def _prepare_routing_problem(
     # proliferated recipe silently runs unproliferated.
     coater_list: list[CoaterSupplyPort] = []
     prolif_item = _proliferator_item(spec)
-    if spec.spray_lanes:
+    if spec.spray_lanes or any(
+        port.cargo_domain is CargoDomain.REQUIRES_SPRAY
+        for ports in strip_in_ports
+        for port in ports.values()
+    ):
         coater_list = _place_coaters(
             canvas,
             spec,
@@ -8336,27 +8448,52 @@ def _prepare_routing_problem(
     ]
     tagged_nets.extend(
         (
-            _Net(src=None, dst=port, item=carried[belt]),
+            _Net(
+                src=None,
+                dst=port,
+                item=carried[belt],
+                cargo_domain=port.cargo_domain,
+            ),
             NetRole.EXTERNAL,
         )
         for belt, (port, _strip_index) in wanted.items()
     )
 
-    ordinals: dict[tuple[int | None, int | None, str, NetRole], int] = defaultdict(int)
+    ordinals: dict[
+        tuple[int | None, int | None, str, CargoDomain, NetRole],
+        int,
+    ] = defaultdict(int)
     prepared_nets: list[_PreparedNet] = []
     for net, role in tagged_nets:
         source_strip = strip_of_belt.get(net.src.belt) if net.src is not None else None
         destination_strip = strip_of_belt.get(net.dst.belt)
-        identity = (source_strip, destination_strip, net.item, role)
-        logical_id = LogicalNetId(
-            strips[source_strip].family_id if source_strip is not None else None,
-            (strips[destination_strip].family_id if destination_strip is not None else None),
+        identity = (
+            source_strip,
+            destination_strip,
             net.item,
+            net.cargo_domain,
             role,
         )
+        logical_id = LogicalNetId(
+            source_family=(
+                strips[source_strip].family_id if source_strip is not None else None
+            ),
+            destination_family=(
+                strips[destination_strip].family_id
+                if destination_strip is not None
+                else None
+            ),
+            item=net.item,
+            role=role,
+            cargo_domain=net.cargo_domain,
+        )
         net_id = NetId(
-            *identity,
+            source_strip=source_strip,
+            destination_strip=destination_strip,
+            item=net.item,
+            role=role,
             ordinal=ordinals[identity],
+            cargo_domain=net.cargo_domain,
             logical_id=logical_id,
         )
         ordinals[identity] += 1
@@ -8366,6 +8503,7 @@ def _prepare_routing_problem(
                 src=_prepare_port(net.src) if net.src is not None else None,
                 dst=_prepare_port(net.dst),
                 item=net.item,
+                cargo_domain=net.cargo_domain,
                 boundary_goals=boundary if role is NetRole.EXTERNAL else (),
             )
         )
@@ -8625,6 +8763,11 @@ def _bridge(
     thing it does when the lanes are out of reach.  That is not a fallback: a
     belt route is the general case and a bridge is the optimisation.
     """
+    if (
+        src.cargo_domain is not CargoDomain.UNSPRAYED
+        or dst.cargo_domain is not CargoDomain.UNSPRAYED
+    ):
+        return False
     span = dst.y - src.y
     if span < 1 or span > catalog.SORTER_MAX_REACH:
         return False
@@ -8791,10 +8934,9 @@ def _place_coaters(
       belt one tile behind it, which a proliferator net is routed to.
     * **It must sit at the lane's HEAD, where the items arrive.**  See
       :func:`_coater_seat`.
-    * **A split item is coated only on proliferated consumers' lanes.**
-      ``BuildSpec.lanes_requiring_split`` is the rate solver's authoritative
-      statement that another consumer needs the same item unsprayed; coating
-      both strips would silently over-produce that consumer.
+    * **Only ``REQUIRES_SPRAY`` lanes are coated.**  The destination-derived
+      cargo domain is authoritative even for uniform sprayed demand; the
+      item-level split set merely records coexistence.
 
     **A LANE THE SPEC WANTS SPRAYED EITHER GETS A COATER OR THIS RAISES.**  Each
     of the four ways a seat can fail used to be a ``continue``: no port for the
@@ -8811,7 +8953,6 @@ def _place_coaters(
     """
     coater = catalog.building(catalog.SPRAY_COATER_ID)
     wanted = set(spec.spray_lanes)
-    groups = _adapt(spec)
     proliferator_item = _proliferator_item(spec)
     seen: set[str] = set()
     staged: list[_StagedCoater] = []
@@ -8837,18 +8978,18 @@ def _place_coaters(
 
     for strip, in_ports in zip(strips, ports, strict=True):
         for item in strip.in_lanes:
-            if item not in wanted:
-                continue
-            if (
-                item in spec.lanes_requiring_split
-                and not groups[strip.group_key].proliferated
-            ):
+            if strip.cargo_domain is not CargoDomain.REQUIRES_SPRAY:
                 continue
             port = in_ports.get(item)
             if port is None:
                 raise _Unseatable(
                     f"the strip feeding {item} has no input port for it, so its "
                     f"Spray Coater has no lane to ride"
+                )
+            if port.cargo_domain is not CargoDomain.REQUIRES_SPRAY:
+                raise _Unseatable(
+                    f"the {item} lane is marked {port.cargo_domain.value}, so "
+                    "a Spray Coater cannot be placed on it"
                 )
             seat = _coater_seat(canvas, port)
             if seat is None:
@@ -9083,7 +9224,15 @@ def _proliferator_nets(
             key=lambda c: abs(c.x - src.x) + abs(c.y - src.y) + abs(c.z - src.z),
         )
         remaining.remove(nxt)
-        dst = _Port(nxt.supply_belt, nxt.x, nxt.y, nxt.x, nxt.x, z=nxt.z)
+        dst = _Port(
+            nxt.supply_belt,
+            nxt.x,
+            nxt.y,
+            nxt.x,
+            nxt.x,
+            z=nxt.z,
+            cargo_domain=CargoDomain.UNSPRAYED,
+        )
         source_building = canvas.buildings[src.belt]
         destination_building = canvas.buildings[dst.belt]
         if _legal_link(
@@ -9097,7 +9246,14 @@ def _proliferator_nets(
         ):
             canvas.buildings[src.belt] = _relink(source_building, output_obj=dst.belt)
         else:
-            nets.append(_Net(src=src, dst=dst, item=item))
+            nets.append(
+                _Net(
+                    src=src,
+                    dst=dst,
+                    item=item,
+                    cargo_domain=CargoDomain.UNSPRAYED,
+                )
+            )
         src = dst
     return nets
 
@@ -9142,7 +9298,14 @@ def _place_proliferator_entry(
             carries_item=item,
         )
     )
-    return _Port(idx, x, y, x, x)
+    return _Port(
+        idx,
+        x,
+        y,
+        x,
+        x,
+        cargo_domain=CargoDomain.UNSPRAYED,
+    )
 
 
 def _fanout_shortfall(strips: list[Strip]) -> list[str]:
@@ -9163,27 +9326,35 @@ def _fanout_shortfall(strips: list[Strip]) -> list[str]:
 
     Returns one description per offending edge, empty when the plan is servable.
     """
-    src_lanes: dict[tuple[str, str, str], int] = defaultdict(int)
-    src_tiles: dict[tuple[str, str, str], int] = {}
-    sink_lanes: dict[tuple[str, str], int] = defaultdict(int)
+    src_lanes: dict[tuple[str, str, str, CargoDomain], int] = defaultdict(int)
+    src_tiles: dict[tuple[str, str, str, CargoDomain], int] = {}
+    sink_lanes: dict[tuple[str, str, CargoDomain], int] = defaultdict(int)
     for s in strips:
-        for item, dest in s.out_lanes:
+        for item, dest, cargo_domain in s.out_lanes:
             for d in _dests(dest):
-                key = (s.group_key, item, d)
+                key = (s.group_key, item, d, cargo_domain)
                 src_lanes[key] += 1
                 src_tiles[key] = min(src_tiles.get(key, s.width), s.width)
         for item in s.in_lanes:
-            sink_lanes[s.group_key, item] += 1
+            sink_lanes[s.group_key, item, s.cargo_domain] += 1
 
     out: list[str] = []
-    for (src_key, item, dest), n_src in sorted(src_lanes.items()):
-        n_sink = sink_lanes.get((dest, item), 0)
+    for (src_key, item, dest, cargo_domain), n_src in sorted(
+        src_lanes.items(),
+        key=lambda entry: (
+            entry[0][0],
+            entry[0][1],
+            entry[0][2],
+            entry[0][3].value,
+        ),
+    ):
+        n_sink = sink_lanes.get((dest, item, cargo_domain), 0)
         if n_sink <= n_src:
             continue
         # Taps land on the narrowest lane of the group, so that is the one that
         # can run out. Ceiling division: the reuse is spread round-robin.
         per_lane = -(-n_sink // n_src)
-        tiles = src_tiles[src_key, item, dest]
+        tiles = src_tiles[src_key, item, dest, cargo_domain]
         if per_lane > tiles:
             out.append(
                 f"{item}: {src_key} lane is {tiles} tile(s) wide but must tap "

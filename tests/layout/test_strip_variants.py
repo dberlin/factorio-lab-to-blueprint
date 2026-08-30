@@ -13,6 +13,7 @@ from flab2bp.layout.base import PlacedBuilding, Placement
 from flab2bp.layout.finalize import ProjectionFailure
 from flab2bp.layout.freeform import plan_strips
 from flab2bp.layout.strip_variants import (
+    CargoDomain,
     LogicalLane,
     StripFamily,
     StripFamilyId,
@@ -398,8 +399,24 @@ def test_multi_lane_assembler_uses_globally_unique_slots_deterministically() -> 
 
 def test_impossible_global_slot_matching_produces_no_variant() -> None:
     lanes = (
-        LogicalLane("input:south:0", "input", ("a", "b"), (), "south", 0),
-        LogicalLane("input:south:1", "input", ("c", "d"), (), "south", 1),
+        LogicalLane(
+            "input:south:0",
+            "input",
+            ("a", "b"),
+            (),
+            CargoDomain.UNSPRAYED,
+            "south",
+            0,
+        ),
+        LogicalLane(
+            "input:south:1",
+            "input",
+            ("c", "d"),
+            (),
+            CargoDomain.UNSPRAYED,
+            "south",
+            1,
+        ),
     )
 
     assert (

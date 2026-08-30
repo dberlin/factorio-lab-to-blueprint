@@ -96,6 +96,7 @@ from flab2bp.layout.route_feedback import (
     RouteFailureKind,
 )
 from flab2bp.layout.strip_variants import (
+    CargoDomain,
     ProjectionPitchRequirement,
     StripInstance,
     StripPoseId,
@@ -545,7 +546,11 @@ def test_surplus_reuses_a_consumer_lane_when_the_combined_rate_fits() -> None:
     producer = next(
         strip for strip in plan_strips(spec) if strip.recipe_id == "plasma-refining"
     )
-    lanes = [destination for item, destination in producer.out_lanes if item == "refined-oil"]
+    lanes = [
+        destination
+        for item, destination, _cargo_domain in producer.out_lanes
+        if item == "refined-oil"
+    ]
     assert len(lanes) == 1
     assert "" in _dests(lanes[0])
     assert any(destination for destination in _dests(lanes[0]))
@@ -564,8 +569,12 @@ def test_self_consuming_product_keeps_internal_and_boundary_output_lanes(
     refined_oil_feedback_spec: BuildSpec,
 ) -> None:
     (plan,) = _logical_strip_plans(refined_oil_feedback_spec)
-    assert ("refined-oil", plan.group_key) in plan.out_lanes
-    assert ("refined-oil", "") in plan.out_lanes
+    assert (
+        "refined-oil",
+        plan.group_key,
+        CargoDomain.UNSPRAYED,
+    ) in plan.out_lanes
+    assert ("refined-oil", "", CargoDomain.UNSPRAYED) in plan.out_lanes
 
 
 def test_packer_proxy_does_not_separate_a_strip_from_itself(
@@ -1216,6 +1225,163 @@ def proliferated_spec() -> BuildSpec:
         belt_required_edges=frozenset({("iron-ingot", "gear")}),
         spray_lanes={"iron-ingot": False},
     )
+
+
+def spray_domain_spec(*, clean: bool, sprayed: bool, boundary: bool = False) -> BuildSpec:
+    """One produced item with independently controlled destination domains."""
+    consumers: list[MachineGroup] = []
+    outputs: dict[str, F] = {}
+    if clean:
+        consumers.append(
+            group(
+                "circuit-board",
+                "assembling-machine-2",
+                1,
+                {"iron-ingot": F(1)},
+                {"circuit-board": F(1)},
+            )
+        )
+        outputs["circuit-board"] = F(1)
+    if sprayed:
+        consumers.append(
+            group(
+                "gear",
+                "assembling-machine-2",
+                1,
+                {"iron-ingot": F(1)},
+                {"gear": F(1)},
+                mode=ProliferatorMode.PRODUCTS,
+            )
+        )
+        outputs["gear"] = F(1)
+    if boundary:
+        outputs["iron-ingot"] = F(1)
+    domains = int(clean or boundary) + int(sprayed)
+    return BuildSpec(
+        groups=(
+            group(
+                "iron-ingot",
+                "arc-smelter",
+                max(1, len(consumers) + int(boundary)),
+                {"iron-ore": F(1)},
+                {"iron-ingot": F(1)},
+            ),
+            *consumers,
+        ),
+        external_inputs={
+            "iron-ore": F(max(1, len(consumers) + int(boundary))),
+            **({"proliferator-3": F(1)} if sprayed else {}),
+        },
+        outputs=outputs,
+        belt_item_id="conveyor-belt-2",
+        belt_items_per_second=F(12),
+        label="spray-domain",
+        belt_required_edges=(
+            frozenset({("iron-ingot", "gear")}) if sprayed else frozenset()
+        ),
+        spray_lanes={"iron-ingot": False} if sprayed else {},
+        lanes_requiring_split=(
+            frozenset({"iron-ingot"}) if domains > 1 else frozenset()
+        ),
+    )
+
+
+def _spray_domain_flow(
+    spec: BuildSpec,
+) -> tuple[set[str], set[str], set[str], set[str], int, int]:
+    producer_plan = next(
+        plan for plan in _logical_strip_plans(spec) if plan.recipe_id == "iron-ingot"
+    )
+    plan_domains = {
+        domain.value
+        for item, _destination, domain in producer_plan.out_lanes
+        if item == "iron-ingot"
+    }
+    family = next(
+        family for family in generate_strip_families(spec) if family.recipe_id == "iron-ingot"
+    )
+    logical_domains = {
+        lane.cargo_domain.value
+        for lane in family.output_lanes
+        if lane.items == ("iron-ingot",)
+    }
+    strips = plan_strips(spec, strip_len=6)
+    strip_domains = {
+        domain.value
+        for strip in strips
+        if strip.recipe_id == "iron-ingot"
+        for item, _destination, domain in strip.out_lanes
+        if item == "iron-ingot"
+    }
+    pack = _greedy_pack(strips, sum(_box(strip)[1] for strip in strips))
+    prepared = _prepare_routing_problem(
+        spec,
+        strips,
+        pack,
+        policy=BandPolicy("portable"),
+        power=False,
+    )
+    net_domains = {
+        net.cargo_domain.value
+        for net in prepared.nets
+        if net.item == "iron-ingot" and net.net_id.role is NetRole.INTERNAL
+    }
+    assert net_domains <= strip_domains
+    for net in prepared.nets:
+        assert net.net_id.cargo_domain is net.cargo_domain
+        assert net.dst.cargo_domain is net.cargo_domain
+        assert net.src is None or net.src.cargo_domain is net.cargo_domain
+    return (
+        plan_domains,
+        logical_domains,
+        strip_domains,
+        net_domains,
+        prepared.coaters,
+        len(_direct_net_candidates(strips, spec)),
+    )
+
+def test_uniform_sprayed_lane_preserves_requires_spray_domain() -> None:
+    spec = spray_domain_spec(clean=False, sprayed=True)
+
+    plan, logical, strip, nets, coaters, direct = _spray_domain_flow(spec)
+    assert plan == logical == strip == {"requires-spray"}
+    assert coaters == 1
+    assert nets == {"requires-spray"}
+    assert direct == 0
+    assert not spec.lanes_requiring_split
+
+
+def test_uniform_unsprayed_lane_preserves_clean_domain() -> None:
+    spec = spray_domain_spec(clean=True, sprayed=False)
+
+    plan, logical, strip, nets, coaters, direct = _spray_domain_flow(spec)
+    assert plan == logical == strip == {"unsprayed"}
+    assert coaters == 0
+    assert nets == {"unsprayed"}
+    assert direct == 1
+    assert not spec.lanes_requiring_split
+
+
+def test_mixed_internal_spray_domains_remain_disjoint() -> None:
+    spec = spray_domain_spec(clean=True, sprayed=True)
+
+    plan, logical, strip, nets, coaters, direct = _spray_domain_flow(spec)
+    assert plan == logical == strip == {"unsprayed", "requires-spray"}
+    assert coaters == 1
+    assert nets == {"unsprayed", "requires-spray"}
+    assert direct == 1
+    assert spec.lanes_requiring_split == {"iron-ingot"}
+
+
+def test_requested_output_is_unsprayed_beside_proliferated_internal_lane() -> None:
+    spec = spray_domain_spec(clean=False, sprayed=True, boundary=True)
+
+    plan, logical, strip, nets, coaters, direct = _spray_domain_flow(spec)
+    assert plan == logical == strip == {"unsprayed", "requires-spray"}
+    assert coaters == 1
+    assert nets == {"requires-spray"}
+    assert direct == 0
+    assert spec.lanes_requiring_split == {"iron-ingot"}
 
 
 ALL_SPECS = [single_recipe_spec, two_stage_spec, magnetic_ring_spec, proliferated_spec]
@@ -3499,7 +3665,7 @@ class TestProducerWithManyConsumers:
             dest
             for s in strips
             if s.recipe_id == "copper-ingot"
-            for _item, dest in s.out_lanes
+            for _item, dest, _cargo_domain in s.out_lanes
             if dest
         }
         wanted = {
@@ -4465,20 +4631,26 @@ class TestEveryShardDrainsEveryProduct:
         shard's machines had nowhere to put their hydrogen.
         """
         sinks = [
-            ("hydrogen", "casimir"),
-            ("refined-oil", "organic"),
-            ("refined-oil", "plastic"),
-            ("refined-oil", "sulfuric"),
+            ("hydrogen", "casimir", CargoDomain.UNSPRAYED),
+            ("refined-oil", "organic", CargoDomain.UNSPRAYED),
+            ("refined-oil", "plastic", CargoDomain.UNSPRAYED),
+            ("refined-oil", "sulfuric", CargoDomain.UNSPRAYED),
         ]
         shards = _shard_sinks(sinks, cap=3)
         assert len(shards) >= 2, "the fixture must need more than one shard"
         for shard in shards:
-            assert {item for item, _ in shard} == {"hydrogen", "refined-oil"}, shard
+            assert {item for item, _dest, _domain in shard} == {
+                "hydrogen",
+                "refined-oil",
+            }, shard
             assert len(shard) <= 3, shard
 
     def test_a_shard_that_cannot_drain_every_product_is_refused(self) -> None:
         """Better to say so than to emit machines that quietly jam."""
-        sinks = [("a", "x"), ("b", "x"), ("c", "x"), ("d", "x")]
+        sinks = [
+            (item, "x", CargoDomain.UNSPRAYED)
+            for item in ("a", "b", "c", "d")
+        ]
         with pytest.raises(ValueError, match="never be drained"):
             _shard_sinks(sinks, cap=3)
 
@@ -4526,7 +4698,10 @@ class TestEveryShardDrainsEveryProduct:
         refiners = [s for s in strips if s.group_key.startswith("plasma-refining")]
         assert len(refiners) >= 2, "fixture must shard the refiner"
         for s in refiners:
-            assert {item for item, _ in s.out_lanes} == {"refined-oil", "hydrogen"}, (
+            assert {item for item, _dest, _domain in s.out_lanes} == {
+                "refined-oil",
+                "hydrogen",
+            }, (
                 f"shard {s.out_lanes} cannot drain both products"
             )
         p = FreeformLayout(
@@ -4593,16 +4768,29 @@ class TestOneLaneCanServeSeveralDestinations:
     """
 
     def test_sharding_stops_at_the_machine_count(self) -> None:
-        sinks = [("a", f"d{i}") for i in range(4)]
+        sinks = [
+            ("a", f"d{i}", CargoDomain.UNSPRAYED)
+            for i in range(4)
+        ]
         assert len(_shard_sinks(sinks, cap=3)) == 2, "the fixture must want two shards"
         assert len(_shard_sinks(sinks, cap=3, max_shards=1)) == 1
 
     def test_merging_keeps_every_destination_inside_the_reach(self) -> None:
-        shard = [("a", f"d{i}") for i in range(4)]
-        demand = {(item, dest): F(1) for item, dest in shard}
+        shard = [
+            ("a", f"d{i}", CargoDomain.UNSPRAYED)
+            for i in range(4)
+        ]
+        demand = {
+            (item, dest, cargo_domain): F(1)
+            for item, dest, cargo_domain in shard
+        }
         lanes = _merge_lanes(shard, 3, demand, F(12))
         assert len(lanes) == 3
-        assert {d for _item, dest in lanes for d in _dests(dest)} == {
+        assert {
+            d
+            for _item, dest, _cargo_domain in lanes
+            for d in _dests(dest)
+        } == {
             "d0",
             "d1",
             "d2",
@@ -4611,19 +4799,33 @@ class TestOneLaneCanServeSeveralDestinations:
 
     def test_a_shard_that_already_fits_is_left_exactly_as_it_was(self) -> None:
         """Merging must be additive: every plan that worked plans identically."""
-        shard = [("a", "d1"), ("b", "d2")]
+        shard = [
+            ("a", "d1", CargoDomain.UNSPRAYED),
+            ("b", "d2", CargoDomain.UNSPRAYED),
+        ]
         assert _merge_lanes(shard, 3, {}, F(12)) == shard
 
     def test_every_product_keeps_a_lane_of_its_own(self) -> None:
         """A shard that cannot drain a product has machines that back up."""
-        shard = [("a", "d1"), ("a", "d2"), ("a", "d3"), ("b", "d4")]
+        shard = [
+            ("a", "d1", CargoDomain.UNSPRAYED),
+            ("a", "d2", CargoDomain.UNSPRAYED),
+            ("a", "d3", CargoDomain.UNSPRAYED),
+            ("b", "d4", CargoDomain.UNSPRAYED),
+        ]
         lanes = _merge_lanes(shard, 2, {}, F(12))
-        assert {item for item, _dest in lanes} == {"a", "b"}
+        assert {item for item, _dest, _domain in lanes} == {"a", "b"}
 
     def test_a_merged_lane_over_belt_capacity_is_refused(self) -> None:
         """Two consumers whose combined draw jams the lane is not a layout."""
-        shard = [("a", f"d{i}") for i in range(4)]
-        demand = {(item, dest): F(7) for item, dest in shard}
+        shard = [
+            ("a", f"d{i}", CargoDomain.UNSPRAYED)
+            for i in range(4)
+        ]
+        demand = {
+            (item, dest, cargo_domain): F(7)
+            for item, dest, cargo_domain in shard
+        }
         with pytest.raises(ValueError, match="over the"):
             _merge_lanes(shard, 3, demand, F(12))
 
@@ -4634,7 +4836,11 @@ class TestOneLaneCanServeSeveralDestinations:
         assert len(producers) == 1, "one machine cannot be split across shards"
         s = producers[0]
         assert len(s.out_lanes) + len(s.in_below) <= catalog.SORTER_MAX_REACH
-        served = {d for _item, dest in s.out_lanes for d in _dests(dest)}
+        served = {
+            d
+            for _item, dest, _cargo_domain in s.out_lanes
+            for d in _dests(dest)
+        }
         wanted = {
             f"{g.recipe_id}#{i}"
             for i, g in enumerate(spec.groups)

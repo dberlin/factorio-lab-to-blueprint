@@ -10,19 +10,29 @@ must reproduce.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from enum import Enum
 from itertools import combinations, product
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from flab2bp.dsp import catalog
 from flab2bp.layout import slots
 from flab2bp.layout.base import Facing, PlacedBuilding, Placement
 from flab2bp.layout.finalize import ProjectionFailure
-from flab2bp.layout.freeform import _dests, _logical_strip_plans, _LogicalStripPlan
 from flab2bp.spec import BuildSpec
+
+if TYPE_CHECKING:
+    from flab2bp.layout.freeform import _LogicalStripPlan
 
 LaneKind = Literal["input", "output"]
 LaneSide = Literal["north", "south"]
 _CARDINAL_YAWS = (0.0, 90.0, 180.0, 270.0)
+
+
+class CargoDomain(Enum):
+    """Treatment identity that must remain disjoint while cargo is routed."""
+
+    UNSPRAYED = "unsprayed"
+    REQUIRES_SPRAY = "requires-spray"
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,6 +167,7 @@ class LogicalLane:
     kind: LaneKind
     items: tuple[str, ...]
     destination_group_keys: tuple[str, ...]
+    cargo_domain: CargoDomain
     side: LaneSide
     side_index: int
 
@@ -699,6 +710,7 @@ def lane_reach_profiles(
 def _logical_lanes(
     plan: _LogicalStripPlan,
 ) -> tuple[tuple[LogicalLane, ...], tuple[LogicalLane, ...]]:
+    from flab2bp.layout.freeform import _dests
     in_above = plan.in_above
     out_lanes = plan.out_lanes
     in_below = plan.in_below
@@ -708,6 +720,7 @@ def _logical_lanes(
             kind="input",
             items=items,
             destination_group_keys=(),
+            cargo_domain=plan.cargo_domain,
             side="south",
             side_index=index,
         )
@@ -719,6 +732,7 @@ def _logical_lanes(
             items=items,
             destination_group_keys=(),
             side="north",
+            cargo_domain=plan.cargo_domain,
             side_index=len(out_lanes) + index,
         )
         for index, items in enumerate(in_below)
@@ -729,10 +743,11 @@ def _logical_lanes(
             kind="output",
             items=(item,),
             destination_group_keys=_dests(destination),
+            cargo_domain=cargo_domain,
             side="north",
             side_index=index,
         )
-        for index, (item, destination) in enumerate(out_lanes)
+        for index, (item, destination, cargo_domain) in enumerate(out_lanes)
     )
     return inputs, outputs
 
@@ -993,6 +1008,8 @@ def _variants(
 
 def generate_strip_families(spec: BuildSpec) -> tuple[StripFamily, ...]:
     """Generate deterministic pose-valid variants for every logical lane shard."""
+    from flab2bp.layout.freeform import _logical_strip_plans
+
     families: list[StripFamily] = []
     for plan in _logical_strip_plans(spec):
         family_id = StripFamilyId(plan.group_key, plan.shard_index)
@@ -1318,6 +1335,7 @@ def validate_instance_partition(
 
 
 __all__ = [
+    "CargoDomain",
     "LaneAttachmentPlan",
     "LanePortDockPlan",
     "LanePlan",

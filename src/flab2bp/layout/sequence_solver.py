@@ -2669,14 +2669,15 @@ def _placement_nets(
         (
             (source, destination),
             LogicalNetId(
-                strip.family_id,
-                strips[destination].family_id,
-                item,
-                NetRole.INTERNAL,
+                source_family=strip.family_id,
+                destination_family=strips[destination].family_id,
+                item=item,
+                role=NetRole.INTERNAL,
+                cargo_domain=cargo_domain,
             ),
         )
         for source, strip in enumerate(strips)
-        for item, destination_groups in strip.out_lanes
+        for item, destination_groups, cargo_domain in strip.out_lanes
         for destination_group in _dests(destination_groups)
         for destination in by_group.get(destination_group, ())
     }
@@ -2686,6 +2687,7 @@ def _placement_nets(
             key=lambda entry: (
                 entry[0],
                 entry[1].item,
+                entry[1].cargo_domain.value,
                 entry[1].role.value,
             ),
         )
@@ -2703,6 +2705,7 @@ def _rebuild_stage_problem_nets(
             key=lambda entry: (
                 entry[0],
                 entry[1].item,
+                entry[1].cargo_domain.value,
                 entry[1].role.value,
             ),
         )
