@@ -223,8 +223,12 @@ class _FakeRouting:
 
     def validate(self, placement: Placement) -> ValidationVerdict:
         if placement.stats.get("validator_clean") == 1.0:
-            return ValidationVerdict(ok=True, failed_checks=())
-        return ValidationVerdict(ok=False, failed_checks=("fake.invalid",))
+            return ValidationVerdict(ok=True, failed_checks=(), placement=placement)
+        return ValidationVerdict(
+            ok=False,
+            failed_checks=("fake.invalid",),
+            placement=None,
+        )
 
     def adapters(self) -> StageAdapters[Prepared]:
         return StageAdapters(
@@ -1015,6 +1019,7 @@ def test_refusal_accumulates_distinct_validation_failures() -> None:
         validate=lambda _placement: ValidationVerdict(
             ok=False,
             failed_checks=next(failed_checks),
+            placement=None,
         ),
     )
 
@@ -1260,7 +1265,7 @@ def test_later_cancelled_proxy_closes_the_best_completed_candidate(
             prepare=lambda height, decoded: (height, decoded),
             global_route=global_route,
             detailed_route=detailed_route,
-            validate=lambda _placement: ValidationVerdict(True, ()),
+            validate=lambda placement: ValidationVerdict(True, (), placement),
         ),
         expansion_budget=ExpansionBudget(100),
         config=SequenceSolverConfig(
@@ -2001,9 +2006,12 @@ def test_validator_started_before_deadline_may_finish_exact_certification(
         absolute_deadline=time.monotonic() + 0.05,
     )
 
-    verdict = run.solver.adapters.validate(_placement(area=1, belt_tiles=1))
+    candidate = _placement(area=1, belt_tiles=1)
+    verdict = run.solver.adapters.validate(candidate)
 
-    assert verdict == ValidationVerdict(True, ())
+    assert verdict.ok
+    assert verdict.failed_checks == ()
+    assert verdict.placement is not None
 
 
 def test_deadline_without_an_exact_incumbent_raises() -> None:
@@ -2369,7 +2377,7 @@ def test_feedback_stagnation_rebuilds_the_next_fixed_cardinality_stage() -> None
                 failure,
                 None,
             ),
-            validate=lambda _placement: ValidationVerdict(False, ("unreachable",)),
+            validate=lambda _placement: ValidationVerdict(False, ("unreachable",), None),
         ),
         expansion_budget=ExpansionBudget(100),
         config=SequenceSolverConfig(
@@ -2663,6 +2671,61 @@ def test_fixed_size_problem_skips_pose_boundary_transforms_without_metadata() ->
     assert boundary_updates == [None, None]
     assert len(fake.detailed_allowances) == 2
     assert solver._heights[0].problem == problem
+
+
+def test_sequence_backend_returns_authoritative_finalized_placement_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = two_stage_spec()
+    policy = BandPolicy("portable")
+    monkeypatch.setattr(
+        validate,
+        "certify",
+        lambda *_args, **_kwargs: validate.Report(findings=()),
+    )
+    production = _production_run(
+        spec,
+        band_policy=policy,
+        time_budget_s=2.0,
+        power=False,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+    )
+    routed = _placement(area=10, belt_tiles=2)
+    fake = _FakeRouting(
+        detailed_results=(DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), routed),)
+    )
+    solver = _solver(
+        fake,
+        heights=(40,),
+        config=SequenceSolverConfig(
+            stages=1,
+            moves_per_stage=1,
+            restarts_per_height=1,
+            global_elites=1,
+        ),
+    )
+    solver.adapters = replace(
+        solver.adapters,
+        validate=production.solver.adapters.validate,
+    )
+    finalized: list[Placement] = []
+    finalize_placement = finalize.finalize_placement
+
+    def track_finalization(placement: Placement, band_policy: BandPolicy) -> Placement:
+        result = finalize_placement(placement, band_policy)
+        finalized.append(result)
+        return result
+
+    monkeypatch.setattr(finalize, "finalize_placement", track_finalization)
+
+    placement = SequencePairLayout(
+        band_policy=policy,
+        solver_factory=lambda *_args, **_kwargs: solver,
+    ).lay_out(spec, time_budget_s=2.0)
+
+    assert len(finalized) == 1
+    assert placement is finalized[0]
 
 
 @pytest.mark.parametrize("power", [False, True])

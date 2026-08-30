@@ -402,11 +402,18 @@ class ValidationVerdict:
 
     ok: bool
     failed_checks: tuple[str, ...]
+    placement: Placement | None
     projection_failures: tuple[finalize.ProjectionFailure, ...] = ()
 
     def __post_init__(self) -> None:
         if type(self.ok) is not bool:
             raise ValueError("validation verdict ok flag must be a bool")
+        if self.placement is not None and not isinstance(self.placement, Placement):
+            raise ValueError("validation placement must be a Placement or None")
+        if self.ok and self.placement is None:
+            raise ValueError("a clean validation verdict must contain its placement")
+        if not self.ok and self.placement is not None:
+            raise ValueError("a failed validation verdict cannot contain a placement")
         if not isinstance(self.failed_checks, tuple) or any(
             not isinstance(check, str) or not check for check in self.failed_checks
         ):
@@ -1440,11 +1447,13 @@ class SequenceSolver[PreparedT]:
             validation_failures = verdict.failed_checks
             projection_failures = verdict.projection_failures
             if verdict.ok:
-                exact_key = _exact_key(detailed.placement)
+                finalized = verdict.placement
+                assert finalized is not None
+                exact_key = _exact_key(finalized)
                 if self._incumbent is None or exact_key < self._incumbent.exact_key:
                     self._incumbent = _ExactIncumbent(
                         exact_key=exact_key,
-                        placement=detailed.placement,
+                        placement=finalized,
                         candidate_key=selected.key,
                         breakdown=selected.breakdown,
                         archive_categories=selected.archive_categories,
@@ -3106,12 +3115,12 @@ def _production_run(
         report = validate.certify(placement, spec, expect_power=power)
         failures = tuple(sorted({finding.check for finding in report.errors}))
         if failures:
-            return ValidationVerdict(False, failures)
+            return ValidationVerdict(False, failures, None)
         try:
-            finalize.finalize_placement(placement, band_policy)
+            finalized = finalize.finalize_placement(placement, band_policy)
         except finalize.ProjectionRefusal as exc:
-            return ValidationVerdict(False, exc.checks, exc.failures)
-        return ValidationVerdict(True, ())
+            return ValidationVerdict(False, exc.checks, None, exc.failures)
+        return ValidationVerdict(True, (), finalized)
 
     family_by_id = {family.family_id: family for family in generate_strip_families(spec)}
     telemetry.pose_feasibility_rejects = sum(
@@ -3572,23 +3581,7 @@ class SequencePairLayout:
                     projection_failures=exc.projection_failures,
                 ) from exc
             placement = _with_observational_stats(result, run, self.power, self.config)
-        try:
-            return finalize.finalize_placement(placement, self.band_policy)
-        except finalize.ProjectionRefusal as exc:
-            raise NoValidLayout(
-                "final spherical projection rejected: " + str(exc),
-                spec_label=spec.label,
-                budget_s=time_budget_s,
-                projection_failures=tuple(
-                    ProjectionFailureRecord(
-                        failure.band,
-                        failure.check,
-                        failure.buildings,
-                        failure.detail,
-                    )
-                    for failure in exc.failures
-                ),
-            ) from exc
+        return placement
 
 
 def _with_observational_stats(
