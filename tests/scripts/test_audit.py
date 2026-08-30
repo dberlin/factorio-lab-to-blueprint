@@ -4,8 +4,8 @@ import json
 from types import SimpleNamespace
 
 import pytest
-from flab2bp.layout import finalize
 
+from flab2bp.layout import finalize
 from flab2bp.layout.base import (
     LayoutAttemptFailure,
     NoValidLayout,
