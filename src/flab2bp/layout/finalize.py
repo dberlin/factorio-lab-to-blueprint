@@ -687,12 +687,9 @@ def first_projected_static_failure(
                     projection.band,
                     projection.segment,
                     projection.radius,
+                    candidate_position=candidate_position,
                 )
             )
-            if candidate_position is not None:
-                pairs = tuple(
-                    pair for pair in pairs if candidate_position in pair
-                )
             pairs_by_context[context] = pairs
         clean_context: tuple[object, ...] | None = None
         if _clean_contexts is not None:

@@ -516,3 +516,94 @@ def test_a_pair_that_is_clear_flat_collides_at_the_poleward_edge_of_its_band() -
         colliders.Placed(lab, 6.0, 0.0, 0.0, 0.0),
     ]
     assert planet.collisions_at(six, poleward) == []
+
+
+def test_candidate_focused_broad_phase_matches_all_pairs_without_peer_pair_work(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model = cat.building(2303).model_index
+    buildings = tuple(
+        colliders.Placed(model, 0.0, 0.0, 0.0, 0.0)
+        for _ in range(32)
+    )
+    band = planet.bands(SEGMENT)[0]
+    _ = planet.collider_radius(model)
+    square_roots = 0
+    sqrt = planet.math.sqrt
+
+    def counted_sqrt(value: float) -> float:
+        nonlocal square_roots
+        square_roots += 1
+        return sqrt(value)
+
+    monkeypatch.setattr(planet.math, "sqrt", counted_sqrt)
+    all_pairs = planet.candidate_pairs(
+        buildings,
+        band,
+        SEGMENT,
+        colliders.PLANET_RADIUS,
+    )
+    all_pair_roots = square_roots
+    square_roots = 0
+    candidate_position = 11
+    focused = planet.candidate_pairs(
+        buildings,
+        band,
+        SEGMENT,
+        colliders.PLANET_RADIUS,
+        candidate_position=candidate_position,
+    )
+
+    assert focused == [
+        pair for pair in all_pairs
+        if candidate_position in pair
+    ]
+    assert all_pair_roots == len(buildings) * (len(buildings) - 1) // 2
+    assert square_roots == len(buildings) - 1
+
+
+@pytest.mark.parametrize(("dx", "dy"), ((3.04, 0.0), (0.0, 3.04)))
+@pytest.mark.parametrize("quadrant", (0, 1))
+def test_candidate_focused_pairs_preserve_near_edge_exact_verdict(
+    dx: float,
+    dy: float,
+    quadrant: int,
+) -> None:
+    model = cat.building(2303).model_index
+    buildings = (
+        colliders.Placed(model, 0.0, 0.0, 0.0, 0.0),
+        colliders.Placed(model, dx, dy, 0.0, 0.0),
+        colliders.Placed(model, 20.0, 20.0, 0.0, 0.0),
+    )
+    band = planet.bands(SEGMENT)[0]
+    projection = planet.Projection(
+        band,
+        0,
+        SEGMENT,
+        colliders.PLANET_RADIUS,
+        quadrant=quadrant,
+    )
+    all_pairs = planet.candidate_pairs(
+        buildings,
+        band,
+        SEGMENT,
+        colliders.PLANET_RADIUS,
+    )
+    candidate_position = 1
+    focused = planet.candidate_pairs(
+        buildings,
+        band,
+        SEGMENT,
+        colliders.PLANET_RADIUS,
+        candidate_position=candidate_position,
+    )
+
+    assert focused == [
+        pair for pair in all_pairs
+        if candidate_position in pair
+    ]
+    assert planet.collisions_at(buildings, projection, focused) == [
+        pair
+        for pair in planet.collisions_at(buildings, projection, all_pairs)
+        if candidate_position in pair
+    ]

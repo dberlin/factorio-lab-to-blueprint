@@ -924,7 +924,12 @@ def collider_radius(model_index: int) -> float:
 
 
 def candidate_pairs(
-    buildings: Sequence[colliders.Placed], band: Band, segment: int, radius: float
+    buildings: Sequence[colliders.Placed],
+    band: Band,
+    segment: int,
+    radius: float,
+    *,
+    candidate_position: int | None = None,
 ) -> list[tuple[int, int]]:
     """Pairs that could possibly collide SOMEWHERE in this band.
 
@@ -932,7 +937,8 @@ def candidate_pairs(
     :func:`colliders.obb_overlap` and it still runs on everything this returns;
     all this does is stop the anchor loop rebuilding boxes for the overwhelming
     majority of pairs that are tens of tiles apart and could not touch at any
-    latitude.
+    latitude.  ``candidate_position`` restricts the conservative broad phase to
+    pairs containing one newly staged object; peer pairs were already certified.
 
     The bound is a LOWER bound on the world separation, so it can only ever
     over-include.  Rows are a fixed arc apart everywhere; columns are narrowest
@@ -954,6 +960,30 @@ def candidate_pairs(
     col = radius * poleward * step * 0.9
     row = radius * lat_step * 0.9
     radii = [collider_radius(b.model_index) for b in buildings]
+    if candidate_position is not None:
+        if type(candidate_position) is not int or not (
+            0 <= candidate_position < len(buildings)
+        ):
+            raise ValueError("candidate position must index the collision buildings")
+        candidate = buildings[candidate_position]
+        candidate_radius = radii[candidate_position]
+        focused: list[tuple[int, int]] = []
+        for peer_position, peer in enumerate(buildings):
+            if peer_position == candidate_position:
+                continue
+            gap = math.sqrt(
+                ((candidate.x - peer.x) * col) ** 2
+                + ((candidate.y - peer.y) * row) ** 2
+                + ((candidate.z - peer.z) * 4.0 / 3.0) ** 2
+            )
+            if gap <= candidate_radius + radii[peer_position]:
+                focused.append(
+                    (
+                        min(candidate_position, peer_position),
+                        max(candidate_position, peer_position),
+                    )
+                )
+        return sorted(focused)
     reach = max(radii, default=0.0) * 2.0
     # Bucket by column so the scan is linear in the number of NEAR pairs rather
     # than quadratic in the number of buildings.

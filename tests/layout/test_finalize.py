@@ -316,6 +316,7 @@ def test_prospective_projection_static_predicate_matches_finalizer_path(
     )
 
     candidate_pair_inputs: list[tuple[colliders.Placed, ...]] = []
+    candidate_positions: list[int | None] = []
     candidate_pairs = planet.candidate_pairs
 
     def capture_candidate_pairs(
@@ -323,9 +324,18 @@ def test_prospective_projection_static_predicate_matches_finalizer_path(
         candidate_band: planet.Band,
         segment: int,
         radius: float,
+        *,
+        candidate_position: int | None = None,
     ) -> list[tuple[int, int]]:
         candidate_pair_inputs.append(tuple(buildings))
-        return candidate_pairs(buildings, candidate_band, segment, radius)
+        candidate_positions.append(candidate_position)
+        return candidate_pairs(
+            buildings,
+            candidate_band,
+            segment,
+            radius,
+            candidate_position=candidate_position,
+        )
 
     monkeypatch.setattr(planet, "candidate_pairs", capture_candidate_pairs)
 
@@ -343,6 +353,7 @@ def test_prospective_projection_static_predicate_matches_finalizer_path(
     assert prospective == replace(authoritative, buildings=(181, 255))
     assert prospective_batch == prospective
     assert candidate_pair_inputs == [pair_buildings, pair_buildings]
+    assert candidate_positions == [1, 1]
 
 
 def test_projection_no_good_independence_ignores_unrelated_route_geometry() -> None:
@@ -427,6 +438,11 @@ def test_projected_static_batch_isolates_rotated_broad_phase_context() -> None:
         buildings,
         (unrotated, rotated),
     )
+    focused_failure = finalize.first_projected_static_failure(
+        buildings,
+        (unrotated, rotated),
+        candidate_index=99,
+    )
 
     assert rotated_failure == finalize.ProjectionFailure(
         "geom.collide",
@@ -435,6 +451,7 @@ def test_projected_static_batch_isolates_rotated_broad_phase_context() -> None:
         4,
     )
     assert batched_failure == rotated_failure
+    assert focused_failure == rotated_failure
 
 
 
