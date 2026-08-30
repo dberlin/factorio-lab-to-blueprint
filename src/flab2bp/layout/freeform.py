@@ -12036,11 +12036,14 @@ class FreeformLayout:
                         feedback_by_height.get(height),
                     )
 
-                if arrangement == 0 and (
-                    learned or _is_rescuable_near_miss(result.routing)
-                ):
+                rescuable = (
+                    arrangement == 0
+                    and not budget_failure
+                    and _is_rescuable_near_miss(result.routing)
+                )
+                if arrangement == 0 and (learned or rescuable):
                     rescuable_heights.add(height)
-                if learned:
+                if learned or rescuable:
                     next_candidate = (height, arrangement + 1, False)
                     try:
                         next_index = candidate_packs.index(

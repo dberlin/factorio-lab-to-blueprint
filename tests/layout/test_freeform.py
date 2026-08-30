@@ -2717,19 +2717,20 @@ def _sweep_after_first_routing(
     *,
     arrangements: int = 2,
     forbid_finalization: bool = False,
+    heights: tuple[int, ...] = (20,),
 ) -> tuple[Placement | None, list[tuple[int, int]], list[freeform.PackAttempt]]:
     spec = two_stage_spec()
     strips = plan_strips(spec)
-    height = 20
-    packs = tuple(
-        freeform._Pack(
+    packs = {
+        (height, arrangement): freeform._Pack(
             at={index: (index * 10, 0) for index in range(len(strips))},
             width=20,
             height=height,
             status="test",
         )
-        for _arrangement in range(arrangements)
-    )
+        for height in heights
+        for arrangement in range(arrangements)
+    }
     routed = _routing_failures()
     seen: list[tuple[int, int]] = []
 
@@ -2740,7 +2741,7 @@ def _sweep_after_first_routing(
         **_kwargs: object,
     ) -> freeform._Pack:
         seen.append((height, arrangement))
-        return packs[arrangement]
+        return packs[height, arrangement]
 
     def build(
         _spec: BuildSpec,
@@ -2748,7 +2749,7 @@ def _sweep_after_first_routing(
         pack: freeform._Pack,
         **_kwargs: object,
     ) -> _BuildResult:
-        routing = first_routing if pack is packs[0] else routed
+        routing = first_routing if pack is packs[heights[0], 0] else routed
         placement = (
             Placement(buildings=(), stats={"belt_tiles": 0.0})
             if routing.status is DetailedRouteStatus.ROUTED
@@ -2756,8 +2757,12 @@ def _sweep_after_first_routing(
         )
         return _BuildResult(placement, routing, ())
 
-    monkeypatch.setattr(freeform, "_candidate_heights", lambda _strips: [height])
-    monkeypatch.setattr(freeform, "_greedy_pack", lambda _strips, _height: packs[0])
+    monkeypatch.setattr(freeform, "_candidate_heights", lambda _strips: list(heights))
+    monkeypatch.setattr(
+        freeform,
+        "_greedy_pack",
+        lambda _strips, height: packs.get((height, 0), packs[heights[0], 0]),
+    )
     monkeypatch.setattr(freeform, "_pack", pack)
     monkeypatch.setattr(freeform, "_build", build)
     if forbid_finalization:
@@ -2809,6 +2814,18 @@ def test_a_near_miss_admits_the_next_same_height_arrangement_before_an_incumbent
     assert result is not None
     assert seen == [(20, 0), (20, 1)]
     assert [attempt.routing.failed_count for attempt in attempts] == [2, 0]
+
+
+def test_proof_scoped_near_miss_promotes_existing_feedback_retry_immediately(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _result, seen, _attempts = _sweep_after_first_routing(
+        monkeypatch,
+        _routing_failures(RouteFailureKind.SEALED_POCKET),
+        heights=(20, 21),
+    )
+
+    assert seen[:2] == [(20, 0), (20, 1)]
 
 
 
