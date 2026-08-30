@@ -38,6 +38,7 @@ from flab2bp.layout.freeform import (
     _TENTATIVE,
     LEVELS,
     MU_DIRECT,
+    DirectInsertId,
     CoaterSupplyPort,
     FreeformLayout,
     Strip,
@@ -2090,7 +2091,15 @@ class TestDirectInsertion:
         src = _Port(3, 5, 0, 5, 6, (3, 4), 1)
         dst = _Port(1, 5, 2, 5, 6, (1, 2), 1)
         boxes = slots.sorter_seat_boxes(canvas.buildings)
-        assert _bridge(canvas, src, dst, {"iron-ingot": F(1)}, "iron-ingot", boxes)
+        assert _bridge(
+            canvas,
+            src,
+            dst,
+            {"iron-ingot": F(1)},
+            "iron-ingot",
+            boxes,
+            DirectInsertId(0, 1, "iron-ingot", CargoDomain.UNSPRAYED),
+        )
         bridge = canvas.buildings[-1]
         assert catalog.is_sorter(bridge.item_id)
         assert bridge.x == 6, "took the column a standing sorter already meets"
@@ -2192,6 +2201,128 @@ class TestDirectInsertion:
         )
 
 
+def test_promised_direct_candidates_have_an_occupied_collision_clear_alignment() -> None:
+    spec = two_stage_spec()
+    candidates = _direct_net_candidates(plan_strips(spec, strip_len=6), spec)
+
+    assert candidates
+    assert all(candidate.origin_deltas for candidate in candidates.values())
+
+
+def test_unrealized_promised_direct_is_typed_evidence_not_a_restored_net(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = two_stage_spec()
+    strips = plan_strips(spec, strip_len=6)
+    candidates = _direct_net_candidates(strips, spec)
+    pack = _pack(
+        strips,
+        height=sum(strip.height + 1 for strip in strips),
+        width_bound=max(strip.width + 1 for strip in strips) * 2,
+        time_budget_s=0.5,
+        direct_candidates=candidates,
+        workers=DETERMINISTIC_WORKERS,
+    )
+    assert pack is not None and pack.direct
+    monkeypatch.setattr(freeform, "_bridge", lambda *_args, **_kwargs: None)
+
+    prepared = _prepare_routing_problem(
+        spec,
+        strips,
+        pack,
+        power=False,
+        policy=BandPolicy("portable"),
+    )
+
+    assert prepared.promised_direct == pack.direct
+    assert prepared.realized_direct == frozenset()
+    assert prepared.preparation_failures
+    assert all(
+        failure.kind is RouteFailureKind.STATIC_ACCESS
+        for failure in prepared.preparation_failures
+    )
+    routed_ids = {
+        (
+            net.net_id.source_strip,
+            net.net_id.destination_strip,
+            net.net_id.item,
+            net.net_id.cargo_domain,
+        )
+        for net in prepared.nets
+    }
+    assert not {
+        (
+            direct.source_strip,
+            direct.destination_strip,
+            direct.item,
+            direct.cargo_domain,
+        )
+        for direct in prepared.promised_direct
+    } & routed_ids
+
+
+def test_every_promised_direct_is_realized_direct() -> None:
+    spec = two_stage_spec()
+    strips = plan_strips(spec, strip_len=6)
+    candidates = _direct_net_candidates(strips, spec)
+    pack = _pack(
+        strips,
+        height=sum(strip.height + 1 for strip in strips),
+        width_bound=max(strip.width + 1 for strip in strips) * 2,
+        time_budget_s=0.5,
+        direct_candidates=candidates,
+        workers=DETERMINISTIC_WORKERS,
+    )
+    assert pack is not None and pack.direct
+
+    result = _build(
+        spec,
+        strips,
+        pack,
+        power=False,
+        route=True,
+        policy=BandPolicy("portable"),
+    )
+
+    assert result.routing.status is DetailedRouteStatus.ROUTED
+    assert result.promised_direct == result.realized_direct == pack.direct
+
+
+def test_pack_attempt_retains_complete_failed_attempt_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    routing = _routing_failures(RouteFailureKind.STATIC_ACCESS)
+    result, _seen, attempts = _sweep_after_first_routing(
+        monkeypatch,
+        routing,
+        arrangements=1,
+    )
+
+    assert result is None
+    assert len(attempts) == 1
+    attempt = attempts[0]
+    assert isinstance(attempt, freeform.PackAttempt)
+    assert attempt.origins == ((0, 0), (10, 0))
+    assert attempt.compact_width == 20
+    assert attempt.height == 20
+    assert attempt.outline == tuple(_box(strip) for strip in plan_strips(two_stage_spec()))
+    assert attempt.routing is routing
+    assert attempt.static_access == routing.failures
+    assert attempt.promised_direct == frozenset()
+    assert attempt.realized_direct == frozenset()
+    changed_outline = (
+        (attempt.outline[0][0] + 1, attempt.outline[0][1]),
+        *attempt.outline[1:],
+    )
+    changed_attempt = replace(attempt, outline=changed_outline)
+    assert changed_attempt != attempt
+    assert len({attempt, changed_attempt}) == 2, (
+        "a different physical strip outline must not reuse exact-assignment identity"
+    )
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        attempt.height = 21  # type: ignore[misc]
+
+
 class TestObjectiveStaysLexicographic:
     """Width must outrank the tie-break tier absolutely.
 
@@ -2278,7 +2409,7 @@ def _sweep_after_first_routing(
     *,
     arrangements: int = 2,
     forbid_finalization: bool = False,
-) -> tuple[Placement | None, list[tuple[int, int]], list[int]]:
+) -> tuple[Placement | None, list[tuple[int, int]], list[freeform.PackAttempt]]:
     spec = two_stage_spec()
     strips = plan_strips(spec)
     height = 20
@@ -2348,7 +2479,7 @@ def _sweep_after_first_routing(
             lambda placement, _policy: placement,
         )
 
-    attempts: list[int] = []
+    attempts: list[freeform.PackAttempt] = []
     result = FreeformLayout(
         band_policy=BandPolicy("portable"),
         arrangements=arrangements,
@@ -2369,7 +2500,7 @@ def test_a_near_miss_admits_the_next_same_height_arrangement_before_an_incumbent
 
     assert result is not None
     assert seen == [(20, 0), (20, 1)]
-    assert attempts == [2, 0]
+    assert [attempt.routing.failed_count for attempt in attempts] == [2, 0]
 
 
 @pytest.mark.parametrize(
@@ -2396,7 +2527,9 @@ def test_non_rescuable_routing_does_not_admit_an_arrangement(
 
     assert result is None
     assert seen == [(20, 0)]
-    assert attempts == [len(first_routing.failures)]
+    assert [attempt.routing.failed_count for attempt in attempts] == [
+        len(first_routing.failures)
+    ]
 
 
 def test_budget_routing_never_reaches_validation_or_projection(
@@ -2410,7 +2543,7 @@ def test_budget_routing_never_reaches_validation_or_projection(
 
     assert result is None
     assert seen == [(20, 0)]
-    assert attempts == [1]
+    assert [attempt.routing.failed_count for attempt in attempts] == [1]
 
 
 def test_a_near_miss_does_not_create_an_unconfigured_arrangement(
@@ -2424,7 +2557,7 @@ def test_a_near_miss_does_not_create_an_unconfigured_arrangement(
 
     assert result is None
     assert seen == [(20, 0)]
-    assert attempts == [1]
+    assert [attempt.routing.failed_count for attempt in attempts] == [1]
 
 
 @pytest.mark.parametrize(

@@ -1962,26 +1962,102 @@ def _direct_insert_candidates(spec: BuildSpec) -> list[tuple[str, str]]:
     return sorted(set(out))
 
 
+@dataclass(frozen=True, order=True, slots=True)
+class DirectInsertId:
+    """Exact strip net whose belt route the packer promised to replace."""
+
+    source_strip: int
+    destination_strip: int
+    item: str
+    cargo_domain: CargoDomain
+
+    @property
+    def net_id(self) -> NetId:
+        """The corresponding detailed-router identity."""
+        return NetId(
+            source_strip=self.source_strip,
+            destination_strip=self.destination_strip,
+            item=self.item,
+            role=NetRole.INTERNAL,
+            ordinal=0,
+            cargo_domain=self.cargo_domain,
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class _DirectCandidate:
-    """A net a single sorter could replace, and the geometry that would allow it.
+    """A net a single sorter could replace, and its proved legal alignments.
 
     ``prod_row`` and ``cons_row`` are offsets from each strip's origin to the
-    lane row the sorter would span, so the alignment condition stays affine in
-    the packer's ``x``/``y`` variables.
+    lane row the sorter would span. ``origin_deltas`` are consumer-minus-
+    producer strip-origin x offsets with at least one occupied column that no
+    sorter already seated on either lane meets.
     """
 
     item: str
+    cargo_domain: CargoDomain
     prod_row: int
     cons_row: int
     #: Belt tiles each lane occupies, counted east from its strip's west edge.
     #: The sorter needs a column both lanes cover, and an input lane is trimmed
     #: to its last sorter, so the consumer's span is usually SHORTER than its
-    #: strip.  Using the strip width for both would let the packer commit a pair
-    #: whose lanes share no tile, which ``_bridge`` would then refuse -- a
-    #: rewarded promise the emission stage cannot keep.
-    prod_span: int = 1
-    cons_span: int = 1
+    #: strip.
+    prod_span: int
+    cons_span: int
+    origin_deltas: tuple[int, ...]
+
+
+def _direct_clear_columns(
+    strip: Strip,
+    plan: LaneAttachmentPlan,
+    span: int,
+) -> frozenset[int]:
+    """Occupied lane columns clear of every sorter already seated on the lane.
+
+    A bridge is vertical and a strip sorter leaves that same lane vertically in
+    the opposite direction. Their seated colliders can intersect only when they
+    share the lane column: sorter bodies are narrower than one tile, while the
+    end extension is along their run. Excluding the exact planned attachment
+    columns therefore proves the collider precondition before CP-SAT can reward
+    the candidate.
+    """
+    occupied = set(range(span))
+    occupied.difference_update(
+        machine * strip.pw + attachment.column
+        for machine in range(strip.machines)
+        for attachment in plan.attachments
+    )
+    return frozenset(occupied)
+
+
+def _direct_origin_deltas(
+    source: Strip,
+    destination: Strip,
+    source_lane: int,
+    item: str,
+) -> tuple[int, ...]:
+    """Consumer origin offsets with an occupied, sorter-clear shared column."""
+    try:
+        source_plan = source._output_attachment_plan(source_lane)
+        destination_plan = destination._input_attachment_plan(item)
+    except (IndexError, KeyError):
+        return ()
+    source_columns = _direct_clear_columns(source, source_plan, source.width)
+    destination_span = destination.input_lane_tiles(destination.lane_of_input(item))
+    destination_columns = _direct_clear_columns(
+        destination,
+        destination_plan,
+        destination_span,
+    )
+    return tuple(
+        sorted(
+            {
+                source_column - destination_column
+                for source_column in source_columns
+                for destination_column in destination_columns
+            }
+        )
+    )
 
 
 def _direct_net_candidates(
@@ -2020,12 +2096,20 @@ def _direct_net_candidates(
         # Ask the strip for the rows rather than recomputing the layout here:
         # inputs may sit above or below the machine band, and duplicating that
         # arithmetic is how the two drift apart.
+        origin_deltas = _direct_origin_deltas(src, dst, k, item)
+        if not origin_deltas:
+            # With no occupied lane column clear of both strips' already seated
+            # sorters, emission cannot prove a bridge. Do not create a Boolean:
+            # an absent variable cannot earn the direct-insert reward.
+            continue
         out[i, j] = _DirectCandidate(
             item=item,
             prod_row=src.row_of_output(k),
             cons_row=dst.row_of_input(item),
             prod_span=src.width,
             cons_span=dst.input_lane_tiles(dst.lane_of_input(item)),
+            cargo_domain=CargoDomain.UNSPRAYED,
+            origin_deltas=origin_deltas,
         )
     return out
 
@@ -2075,8 +2159,8 @@ class _Pack:
     height: int
     status: str
     hit_budget: bool = False
-    #: Nets the packer arranged to bridge with a sorter instead of a belt route.
-    direct: frozenset[tuple[int, int]] = frozenset()
+    #: Exact nets the packer rewarded for replacing with one sorter.
+    direct: frozenset[DirectInsertId] = frozenset()
 
 def _projection_no_good(
     placement: Placement,
@@ -2428,14 +2512,24 @@ def _pack(
         gap = (ys[j] + cand.cons_row) - (ys[i] + cand.prod_row)
         model.add(gap >= 1).only_enforce_if(di)
         model.add(gap <= catalog.SORTER_MAX_REACH).only_enforce_if(di)
-        # The lanes must share at least one column for the sorter to run
-        # straight down, and each lane's span is its own -- an input lane stops
-        # at its last sorter, so it is generally narrower than its strip.
+        # Reward only exact x offsets with a witness column that is occupied by
+        # both lanes and clear of every sorter already seated on either lane.
+        # Encoding the witness set here keeps an unprovable candidate out of the
+        # objective instead of letting emission discover the missing precondition
+        # after the reward has already influenced the pack.
+        origin_delta = model.new_int_var(
+            -width_bound,
+            width_bound,
+            f"direct_dx{i}_{j}",
+        )
         model.add(
-            xs[i] + strips[i].west_channel <= xs[j] + strips[j].west_channel + cand.cons_span - 1
-        ).only_enforce_if(di)
-        model.add(
-            xs[j] + strips[j].west_channel <= xs[i] + strips[i].west_channel + cand.prod_span - 1
+            origin_delta
+            == (xs[j] + strips[j].west_channel)
+            - (xs[i] + strips[i].west_channel)
+        )
+        model.add_allowed_assignments(
+            [origin_delta],
+            [(delta,) for delta in cand.origin_deltas],
         ).only_enforce_if(di)
         direct_vars[i, j] = di
 
@@ -2548,7 +2642,16 @@ def _pack(
         height=height,
         status=solver.StatusName(status),
         hit_budget=status == cp_model.FEASIBLE,
-        direct=frozenset(k for k, di in direct_vars.items() if solver.Value(di)),
+        direct=frozenset(
+            DirectInsertId(
+                i,
+                j,
+                direct_candidates[i, j].item,
+                direct_candidates[i, j].cargo_domain,
+            )
+            for (i, j), di in direct_vars.items()
+            if solver.Value(di)
+        ),
     )
 
 
@@ -5058,6 +5161,8 @@ class _PreparedRoutingProblem:
     sorters: int
     coaters: int
     direct_inserts: int
+    promised_direct: frozenset[DirectInsertId] = frozenset()
+    realized_direct: frozenset[DirectInsertId] = frozenset()
     coater_supply_ports: tuple[CoaterSupplyPort, ...] = ()
     ramped: bool = False
     world_taken: frozenset[tuple[int, int, Fraction]] = frozenset()
@@ -8380,11 +8485,11 @@ def _prepare_routing_problem(
                     lane_supply[cargo][belt] = Fraction(0)
                     sibling_lanes[cargo].append((belts[0], belt))
 
-    # Nets the packer arranged to bridge directly become a single sorter and no
-    # belt route at all -- that saving IS the feature, so it happens before the
-    # net list is built rather than as a post-pass over routed belts.
-    direct_keys = {(strips[i].group_key, strips[j].group_key) for i, j in pack.direct}
-    direct_placed = 0
+    # Nets rewarded as direct inserts never silently fall back to an ordinary
+    # route. The exact strip/item/domain promise is either emitted and recorded,
+    # or retained below as STATIC_ACCESS evidence.
+    promised_direct = pack.direct
+    realized_direct: set[DirectInsertId] = set()
 
     nets: list[_Net] = []
     # Everything already joined for an item, so `_join_shard_islands` can see
@@ -8413,10 +8518,26 @@ def _prepare_routing_problem(
                 joined[cargo].append((port.belt, sink.belt))
                 lane_of[sink.belt] = sink
                 lane_demand[cargo][sink.belt] = sink.machines * in_rate
-                if (src_key, dest) in direct_keys and _bridge(
-                    canvas, port, sink, rates, item, standing
-                ):
-                    direct_placed += 1
+                direct_id = DirectInsertId(
+                    source_strip=strip_of_belt[port.belt],
+                    destination_strip=strip_of_belt[sink.belt],
+                    item=item,
+                    cargo_domain=cargo_domain,
+                )
+                if direct_id in promised_direct:
+                    realized = _bridge(
+                        canvas,
+                        port,
+                        sink,
+                        rates,
+                        item,
+                        standing,
+                        direct_id,
+                    )
+                    if realized is not None:
+                        realized_direct.add(realized)
+                    # A failed rewarded bridge is a failed attempt, not a licence
+                    # to restore the net the objective was paid to delete.
                     continue
                 nets.append(
                     _Net(
@@ -8701,6 +8822,16 @@ def _prepare_routing_problem(
         )
         if failed is not None
     )
+    preparation_failures += tuple(
+        NetFailure(
+            direct.net_id,
+            RouteFailureKind.STATIC_ACCESS,
+            (),
+            (),
+            0,
+        )
+        for direct in sorted(promised_direct - realized_direct)
+    )
 
     return _PreparedRoutingProblem(
         building_templates=tuple(deepcopy(canvas.buildings)),
@@ -8716,7 +8847,9 @@ def _prepare_routing_problem(
         sorters=sorters,
         coaters=coaters,
         coater_supply_ports=tuple(coater_list),
-        direct_inserts=direct_placed,
+        direct_inserts=len(realized_direct),
+        promised_direct=promised_direct,
+        realized_direct=frozenset(realized_direct),
         ramped=canvas.ramped,
         world_taken=frozenset(canvas.world_taken),
         belt_ban=tuple(
@@ -8736,11 +8869,36 @@ def _prepare_routing_problem(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class PackAttempt:
+    """Complete immutable evidence from one packed-and-routed assignment."""
+
+    origins: tuple[tuple[int, int], ...]
+    compact_width: int
+    height: int
+    outline: tuple[tuple[int, int], ...]
+    routing: DetailedRouteResult
+    static_access: tuple[NetFailure, ...]
+    promised_direct: frozenset[DirectInsertId]
+    realized_direct: frozenset[DirectInsertId]
+
+    def __post_init__(self) -> None:
+        if any(
+            failure.kind is not RouteFailureKind.STATIC_ACCESS
+            for failure in self.static_access
+        ):
+            raise ValueError("PackAttempt.static_access accepts only STATIC_ACCESS failures")
+        if not self.realized_direct <= self.promised_direct:
+            raise ValueError("a realized direct insert must name a rewarded promise")
+
+
 @dataclass(slots=True)
 class _BuildResult:
     placement: Placement | None
     routing: DetailedRouteResult
     towers: tuple[PlacedBuilding, ...]
+    promised_direct: frozenset[DirectInsertId] = frozenset()
+    realized_direct: frozenset[DirectInsertId] = frozenset()
 
 
 def _build(
@@ -8855,7 +9013,13 @@ def _build_prepared(
         expansions=external_routing.expansions + internal_routing.expansions,
     )
     if routing.status is DetailedRouteStatus.BUDGET:
-        return _BuildResult(None, routing, ())
+        return _BuildResult(
+            None,
+            routing,
+            (),
+            prepared.promised_direct,
+            prepared.realized_direct,
+        )
 
     # Reservations and tentative markers are attempt-local and are spent before
     # the held power sites become buildings.
@@ -8902,7 +9066,13 @@ def _build_prepared(
             "direct_inserts": float(prepared.direct_inserts),
         },
     )
-    return _BuildResult(placement, routing, towers)
+    return _BuildResult(
+        placement,
+        routing,
+        towers,
+        prepared.promised_direct,
+        prepared.realized_direct,
+    )
 
 
 def _bridge(
@@ -8912,14 +9082,13 @@ def _bridge(
     rates: dict[str, Fraction],
     item: str,
     standing: list[colliders.Box],
-) -> bool:
+    direct_id: DirectInsertId,
+) -> DirectInsertId | None:
     """Span two lane ends with one sorter, replacing a whole belt route.
 
-    Returns ``False`` rather than placing an illegal sorter if the packed
-    geometry did not actually come out within reach.  The packer's reification
-    should guarantee it does, but a sorter that cannot exist would produce a
-    blueprint that pastes and then does not run -- the worst failure mode -- so
-    this is checked rather than assumed.
+    Returns the exact promise only after emitting its sorter. ``None`` retains
+    the unrealized promise as typed static-access evidence at the caller; it
+    never restores the rewarded net as an ordinary belt route.
 
     **NOT ANY SHARED COLUMN WILL DO**, and this used to take the westmost one.
     A bridge is a BELT-TO-BELT sorter, so the game grows its collider by
@@ -8936,19 +9105,17 @@ def _bridge(
     ``standing`` is that answer prepared: the seated box of every sorter already
     placed, which the caller builds once and this extends.  Every shared column
     is tried, west to east, and the first one whose seated box clears them all
-    is the one taken.  When none
-    does, ``False`` -- and the caller routes a belt instead, which is the same
-    thing it does when the lanes are out of reach.  That is not a fallback: a
-    belt route is the general case and a bridge is the optimisation.
+    is the one taken. When none does, the promise remains unrealized and the
+    containing pack attempt fails with typed evidence.
     """
     if (
         src.cargo_domain is not CargoDomain.UNSPRAYED
         or dst.cargo_domain is not CargoDomain.UNSPRAYED
     ):
-        return False
+        return None
     span = dst.y - src.y
     if span < 1 or span > catalog.SORTER_MAX_REACH:
-        return False
+        return None
 
     tier, _ = _pick_sorter(rates.get(item, Fraction(1)), span, 1)
     for column in range(max(src.x0, dst.x0), min(src.x1, dst.x1) + 1):
@@ -8981,8 +9148,8 @@ def _bridge(
         seat = slots.seated_sorter(bridge, canvas.buildings)
         if seat is not None:
             standing.append(colliders.sorter_box(seat))
-        return True
-    return False
+        return direct_id
+    return None
 
 
 def _coater_seat(canvas: _Canvas, port: _Port) -> tuple[int, int] | None:
@@ -9927,11 +10094,10 @@ class FreeformLayout:
 
         #: Ordered authoritative findings from candidates rejected after packing.
         rejected: list[_RefusalFinding] = []
-        #: The unrouted-net count of every pack the sweep actually ROUTED.
-        #: Empty means no pack got that far.  It is what turns "the deadline
-        #: passed" from an assertion into a measurement -- see the refusal
-        #: below.
-        attempts: list[int] = []
+        #: Complete immutable evidence from every pack the sweep routed. Empty
+        #: means no pack got that far. Refusal reporting reads counts from the
+        #: detailed results without destroying identities Task 10 consumes.
+        attempts: list[PackAttempt] = []
         for sweep_s in budgets:
             if _expired(deadline):
                 break
@@ -9988,10 +10154,11 @@ class FreeformLayout:
             # sweep never got to the candidate that works" from "every candidate
             # it tried was nowhere near", and aim at the right half of the
             # program.
+            failed_counts = [attempt.routing.failed_count for attempt in attempts]
             tried = "1 pack was" if len(attempts) == 1 else f"{len(attempts)} packs were"
             if not attempts:
                 note = "no pack finished routing inside it"
-            elif min(attempts) == 0:
+            elif min(failed_counts) == 0:
                 note = (
                     f"{tried} routed in that time and at least one wired every "
                     "net, so the clock is what was missing"
@@ -9999,8 +10166,8 @@ class FreeformLayout:
             else:
                 note = (
                     f"{tried} routed in that time and the best of them still "
-                    f"left {min(attempts)} nets unrouted (worst "
-                    f"{max(attempts)}), so a longer clock alone would not have "
+                    f"left {min(failed_counts)} nets unrouted (worst "
+                    f"{max(failed_counts)}), so a longer clock alone would not have "
                     "wired this spec"
                 )
             raise NoValidLayout(
@@ -10027,14 +10194,14 @@ class FreeformLayout:
         deadline: float | None = None,
         budget: dict[str, int] | None = None,
         rejected: list[_RefusalFinding] | None = None,
-        attempts: list[int] | None = None,
+        attempts: list[PackAttempt] | None = None,
     ) -> Placement | None:
         """Try every candidate height, returning the best FULLY ROUTED placement.
 
-        ``attempts`` collects the unrouted-net count of every pack this ROUTES,
-        so a caller that has to refuse can say how close the candidates came
-        rather than only that its clock expired.  See :meth:`lay_out`'s deadline
-        refusal, which used to assert the difference and now reports it.
+        ``attempts`` collects immutable :class:`PackAttempt` records with the
+        exact assignment, full detailed routing, static-access failures, and
+        promised-versus-realized direct identities. Refusal reporting derives
+        counts from those records rather than reducing evidence to an integer.
 
         ``None`` means no height produced one -- which is a refusal, not a
         degraded answer.  Packs with unrouted nets are discarded here rather than
@@ -10425,13 +10592,31 @@ class FreeformLayout:
                 continue
             failed = result.routing.failed_count
             if attempts is not None:
-                attempts.append(failed)
+                attempts.append(
+                    PackAttempt(
+                        origins=tuple(pack.at[index] for index in range(len(pack.at))),
+                        compact_width=pack.width,
+                        height=pack.height,
+                        outline=tuple(_box(strip) for strip in strips),
+                        routing=result.routing,
+                        static_access=tuple(
+                            failure
+                            for failure in result.routing.failures
+                            if failure.kind is RouteFailureKind.STATIC_ACCESS
+                        ),
+                        promised_direct=result.promised_direct,
+                        realized_direct=result.realized_direct,
+                    )
+                )
             if failed:
                 if arrangement == 0 and _is_rescuable_near_miss(result.routing):
                     rescuable_heights.add(height)
                 continue
             if result.routing.status is not DetailedRouteStatus.ROUTED:
                 continue
+            assert result.promised_direct == result.realized_direct, (
+                "a routed pack may not retain an unrealized rewarded direct insert"
+            )
             placement = result.placement
             assert placement is not None
             # AND THE PLACEMENT HAS TO PASS OUR OWN VALIDATOR BEFORE IT COUNTS.
