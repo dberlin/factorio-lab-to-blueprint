@@ -9,6 +9,8 @@ import pytest
 
 from flab2bp.dsp import catalog
 from flab2bp.layout import slots
+from flab2bp.layout.base import PlacedBuilding, Placement
+from flab2bp.layout.finalize import ProjectionFailure
 from flab2bp.layout.freeform import plan_strips
 from flab2bp.layout.strip_variants import (
     LogicalLane,
@@ -22,10 +24,14 @@ from flab2bp.layout.strip_variants import (
     lane_reach_profiles,
     merge_strip_instances,
     partition_strip_family,
+    partition_strip_variant,
     placement_geometry,
+    projection_pitch_requirement,
     split_strip_instance,
+    strip_pose_id,
     validate_instance_partition,
     variants_for_count,
+    variant_with_minimum_pitch,
 )
 from flab2bp.spec import BuildSpec, MachineGroup
 
@@ -120,6 +126,194 @@ def test_equal_footprints_can_require_different_machine_pitch() -> None:
     assert (smelter.footprint_width, assembler.footprint_width) == (3, 3)
     assert smelter.pitch_x == 3
     assert assembler.pitch_x == 4
+
+
+def test_variant_with_minimum_pitch_regenerates_physical_identity() -> None:
+    family = _family(_single_machine_spec("chemical-plant", count=2))
+    ordinary = default_strip_variant(family)
+
+    padded = variant_with_minimum_pitch(ordinary, ordinary.pitch_x + 1)
+
+    assert padded.pitch_x == ordinary.pitch_x + 1
+    assert padded.pitch_y == ordinary.pitch_y
+    assert padded.footprint_width == ordinary.footprint_width
+    assert padded.machine_origins_x == (0, padded.pitch_x)
+    assert padded.box_width == 2 * padded.pitch_x
+    assert padded.variant_id != ordinary.variant_id
+    assert strip_pose_id(padded) == strip_pose_id(ordinary)
+    assert padded.attachment_plan == ordinary.attachment_plan
+    assert padded.lane_plan == ordinary.lane_plan
+
+
+def test_variant_with_minimum_pitch_is_idempotent_at_or_below_current_pitch() -> None:
+    ordinary = default_strip_variant(
+        _family(_single_machine_spec("chemical-plant", count=2))
+    )
+
+    assert variant_with_minimum_pitch(ordinary, ordinary.pitch_x) is ordinary
+    assert variant_with_minimum_pitch(ordinary, ordinary.pitch_x - 1) is ordinary
+
+
+@pytest.mark.parametrize("required_pitch_x", [0, -1, True, 1.5])
+def test_variant_with_minimum_pitch_rejects_non_positive_or_non_integer_requirements(
+    required_pitch_x: object,
+) -> None:
+    ordinary = default_strip_variant(
+        _family(_single_machine_spec("chemical-plant", count=2))
+    )
+
+    with pytest.raises(ValueError, match="positive integer"):
+        variant_with_minimum_pitch(ordinary, required_pitch_x)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    "control",
+    [
+        "different-owner-strips",
+        "non-adjacent-machines",
+        "different-item",
+        "different-model",
+        "different-yaw",
+        "belts",
+        "sorters",
+        "towers",
+        "missing-owner",
+        "malformed-indices",
+        "unequal-origin-separation",
+        "missing-owner-table",
+        "misaligned-owner-tables",
+        "different-check",
+    ],
+)
+def test_projection_pitch_requirement_rejects_unmapped_controls(control: str) -> None:
+    family = _family(_single_machine_spec("chemical-plant", count=6))
+    instances = partition_strip_family(family, max_machine_count=3)
+    instance_ids = tuple(instance.instance_id for instance in instances)
+    variants = tuple(instance.variant for instance in instances)
+    ordinary = variants[0]
+    machine_y = 11 + ordinary.lane_plan.machine_row
+    buildings = [
+        PlacedBuilding(
+            item_id=2309,
+            model_index=64,
+            x=3 + origin,
+            y=machine_y,
+            width=ordinary.footprint_width,
+            height=ordinary.footprint_height,
+            yaw=ordinary.yaw,
+            owner_strip=0,
+        )
+        for origin in ordinary.machine_origins_x
+    ]
+    failure = ProjectionFailure(
+        "geom.collide",
+        (0, 1),
+        "build colliders intersect",
+        160,
+    )
+
+    if control == "different-owner-strips":
+        other = variants[1]
+        buildings[1] = replace(
+            buildings[1],
+            x=40 + other.machine_origins_x[0],
+            y=11 + other.lane_plan.machine_row,
+            owner_strip=1,
+        )
+    elif control == "non-adjacent-machines":
+        failure = replace(failure, buildings=(0, 2))
+    elif control == "different-item":
+        buildings[1] = replace(
+            buildings[1],
+            item_id=catalog.item_id("assembling-machine-1"),
+        )
+    elif control == "different-model":
+        buildings[1] = replace(buildings[1], model_index=65)
+    elif control == "different-yaw":
+        buildings[1] = replace(buildings[1], yaw=(ordinary.yaw + 90.0) % 360.0)
+    elif control in {"belts", "sorters", "towers"}:
+        if control == "belts":
+            item_id = min(catalog.BELT_IDS)
+        elif control == "sorters":
+            item_id = min(catalog.SORTER_IDS)
+        else:
+            item_id = catalog.TESLA_TOWER_ID
+        model_index = catalog.building(item_id).model_index
+        buildings[0] = replace(buildings[0], item_id=item_id, model_index=model_index)
+        buildings[1] = replace(buildings[1], item_id=item_id, model_index=model_index)
+    elif control == "missing-owner":
+        buildings[1] = replace(buildings[1], owner_strip=None)
+    elif control == "malformed-indices":
+        failure = replace(failure, buildings=(0, len(buildings)))
+    elif control == "unequal-origin-separation":
+        buildings[1] = replace(buildings[1], x=buildings[1].x + 1)
+    elif control == "missing-owner-table":
+        buildings[0] = replace(buildings[0], owner_strip=2)
+        buildings[1] = replace(buildings[1], owner_strip=2)
+    elif control == "misaligned-owner-tables":
+        variants = variants[:1]
+    elif control == "different-check":
+        failure = replace(failure, check="game.power_too_close")
+
+    assert (
+        projection_pitch_requirement(
+            Placement(buildings=tuple(buildings)),
+            instance_ids=instance_ids,
+            variants=variants,
+            failure=failure,
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    "indices",
+    [
+        (),
+        (0,),
+        (0, 1, 2),
+        (-1, 1),
+        (0, 0),
+        (True, 1),
+        ("0", 1),
+    ],
+)
+def test_projection_pitch_requirement_rejects_every_malformed_index_shape(
+    indices: tuple[object, ...],
+) -> None:
+    family = _family(_single_machine_spec("chemical-plant", count=2))
+    (instance,) = partition_strip_family(family, max_machine_count=2)
+    ordinary = instance.variant
+    placement = Placement(
+        buildings=tuple(
+            PlacedBuilding(
+                item_id=2309,
+                model_index=64,
+                x=3 + origin,
+                y=11 + ordinary.lane_plan.machine_row,
+                width=ordinary.footprint_width,
+                height=ordinary.footprint_height,
+                yaw=ordinary.yaw,
+                owner_strip=0,
+            )
+            for origin in ordinary.machine_origins_x
+        )
+    )
+
+    assert (
+        projection_pitch_requirement(
+            placement,
+            instance_ids=(instance.instance_id,),
+            variants=(ordinary,),
+            failure=ProjectionFailure(
+                "geom.collide",
+                indices,  # type: ignore[arg-type]
+                "build colliders intersect",
+                160,
+            ),
+        )
+        is None
+    )
 
 
 def test_lane_profiles_exclude_collider_halo_rows() -> None:
@@ -329,6 +523,45 @@ def test_partition_realizes_each_instance_variant_at_its_exact_machine_count() -
             range(instance.machine_start, instance.machine_stop)
         )
     validate_instance_partition(family, (first, second))
+
+
+def test_explicit_padded_variant_instance_partition_conserves_family_ranges() -> None:
+    family = _family(_single_machine_spec("chemical-plant", count=5))
+    ordinary = default_strip_variant(family)
+    padded = variant_with_minimum_pitch(ordinary, ordinary.pitch_x + 1)
+
+    instances = partition_strip_variant(
+        family,
+        padded,
+        max_machine_count=2,
+    )
+
+    assert all(variant.variant_id != padded.variant_id for variant in family.variants)
+    assert [
+        (instance.machine_start, instance.machine_stop) for instance in instances
+    ] == [(0, 2), (2, 4), (4, 5)]
+    assert all(instance.family_id == family.family_id for instance in instances)
+    assert all(instance.variant.pitch_x == padded.pitch_x for instance in instances)
+    assert all(
+        strip_pose_id(instance.variant) == strip_pose_id(ordinary)
+        for instance in instances
+    )
+    assert tuple(
+        machine_ordinal
+        for instance in instances
+        for machine_ordinal, _origin in enumerate(
+            instance.variant.machine_origins_x,
+            start=instance.machine_start,
+        )
+    ) == tuple(range(family.total_machine_count))
+    validate_instance_partition(family, instances)
+
+    with pytest.raises(ValueError, match="does not belong"):
+        partition_strip_family(
+            family,
+            max_machine_count=2,
+            variant_id=padded.variant_id,
+        )
 
 
 def test_realized_variant_order_and_geometry_are_stable_for_every_count() -> None:

@@ -95,6 +95,15 @@ from flab2bp.layout.route_feedback import (
     NetRole,
     RouteFailureKind,
 )
+from flab2bp.layout.strip_variants import (
+    ProjectionPitchRequirement,
+    StripInstance,
+    StripVariant,
+    default_strip_variant,
+    generate_strip_families,
+    partition_strip_family,
+    projection_pitch_requirement,
+)
 from flab2bp.spec import BuildSpec, MachineGroup, ProliferatorMode
 
 type SpecFactory = Callable[[], BuildSpec]
@@ -2392,6 +2401,98 @@ class TestSolverActuallyRuns:
         assert "band 160" in caught.value.reason
         assert "(0, 1)" in caught.value.reason
         assert "build colliders intersect" in caught.value.reason
+
+
+@pytest.fixture
+def projected_chemical_plant_collision(
+) -> tuple[Placement, StripInstance, StripVariant, finalize.ProjectionFailure]:
+    spec = BuildSpec(
+        groups=(
+            group(
+                "plastic",
+                "chemical-plant",
+                2,
+                {"refined-oil": F(1)},
+                {"plastic": F(1)},
+            ),
+        ),
+        external_inputs={"refined-oil": F(2)},
+        outputs={"plastic": F(2)},
+        label="projected-chemical-plant-collision",
+    )
+    (family,) = generate_strip_families(spec)
+    ordinary = default_strip_variant(family)
+    (instance,) = partition_strip_family(
+        family,
+        max_machine_count=2,
+        variant_id=ordinary.variant_id,
+    )
+    (strip,) = plan_strips(spec, strip_len=2)
+    canvas = _Canvas()
+    belt_id = catalog.item_id(spec.belt_item_id)
+    _emit_strip(
+        canvas,
+        strip,
+        3,
+        11,
+        belt_id,
+        catalog.building(belt_id).model_index,
+        {},
+        owner_strip=0,
+    )
+    machines = tuple(
+        (index, building)
+        for index, building in enumerate(canvas.buildings)
+        if building.item_id == 2309
+    )
+
+    assert len(machines) == 2
+    assert ordinary.pitch_x == 7
+    assert tuple(
+        (
+            building.item_id,
+            building.model_index,
+            building.yaw,
+            building.owner_strip,
+        )
+        for _index, building in machines
+    ) == ((2309, 64, ordinary.yaw, 0), (2309, 64, ordinary.yaw, 0))
+    assert machines[1][1].x - machines[0][1].x == ordinary.pitch_x
+    failure = finalize.ProjectionFailure(
+        "geom.collide",
+        (machines[0][0], machines[1][0]),
+        "build colliders intersect",
+        160,
+    )
+    return Placement(buildings=tuple(canvas.buildings)), instance, ordinary, failure
+
+
+def test_same_strip_adjacent_machine_collision_requires_next_pitch(
+    projected_chemical_plant_collision: tuple[
+        Placement,
+        StripInstance,
+        StripVariant,
+        finalize.ProjectionFailure,
+    ],
+) -> None:
+    placement, instance, ordinary, failure = projected_chemical_plant_collision
+
+    requirement = projection_pitch_requirement(
+        placement,
+        instance_ids=(instance.instance_id,),
+        variants=(ordinary,),
+        failure=failure,
+    )
+
+    assert requirement == ProjectionPitchRequirement(
+        family_id=instance.family_id,
+        instance_id=instance.instance_id,
+        variant_id=ordinary.variant_id,
+        axis="x",
+        rejected_pitch=7,
+        required_pitch=8,
+        failure=failure,
+    )
 
 
 def test_projection_no_good_forbids_only_the_exact_failed_pair_context() -> None:

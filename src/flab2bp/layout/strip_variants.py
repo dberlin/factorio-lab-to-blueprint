@@ -9,13 +9,14 @@ must reproduce.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from itertools import combinations, product
 from typing import Literal
 
 from flab2bp.dsp import catalog
 from flab2bp.layout import slots
-from flab2bp.layout.base import Facing
+from flab2bp.layout.base import Facing, PlacedBuilding, Placement
+from flab2bp.layout.finalize import ProjectionFailure
 from flab2bp.layout.freeform import _dests, _logical_strip_plans, _LogicalStripPlan
 from flab2bp.spec import BuildSpec
 
@@ -62,6 +63,19 @@ class MachinePlacementGeometry:
             raise ValueError("horizontal halos must complete the collider pitch")
         if self.north_halo + self.footprint_height + self.south_halo != self.pitch_y:
             raise ValueError("vertical halos must complete the collider pitch")
+
+    def with_minimum_pitch_x(self, required: int) -> MachinePlacementGeometry:
+        """Return this geometry with deterministic east-side X padding."""
+        if type(required) is not int or required <= 0:
+            raise ValueError("required X pitch must be a positive integer")
+        if required <= self.pitch_x:
+            return self
+        return replace(
+            self,
+            pitch_x=required,
+            east_halo=self.east_halo + required - self.pitch_x,
+        )
+
 
     @property
     def identity(self) -> tuple[int, ...]:
@@ -250,6 +264,20 @@ class StripVariantId:
     box: tuple[int, int]
 
 
+@dataclass(frozen=True, order=True, slots=True)
+class StripPoseId:
+    """Pitch-independent identity of one logical strip family pose."""
+
+    family_id: StripFamilyId
+    yaw_degrees: int
+    footprint: tuple[int, int]
+    placement_geometry: tuple[int, int, int, int]
+    lane_rows: tuple[tuple[str, int], ...]
+    attachments: tuple[tuple[str, int, tuple[LaneSorterAttachment, ...]], ...]
+    port_docks: tuple[tuple[str, int, int, tuple[int, int], float], ...]
+    box_height: int
+
+
 @dataclass(frozen=True, slots=True)
 class StripVariant:
     """One atomic pose, exclusion envelope, lane plan, and endpoint plan."""
@@ -358,6 +386,26 @@ class StripVariant:
         )
 
 
+def strip_pose_id(variant: StripVariant) -> StripPoseId:
+    """Return the bounded pose key shared by ordinary and padded variants."""
+    geometry = variant.placement_geometry
+    return StripPoseId(
+        family_id=variant.variant_id.family_id,
+        yaw_degrees=int(variant.yaw),
+        footprint=(variant.footprint_width, variant.footprint_height),
+        placement_geometry=(
+            geometry.pitch_y,
+            geometry.west_halo,
+            geometry.north_halo,
+            geometry.south_halo,
+        ),
+        lane_rows=variant.lane_plan.lane_rows,
+        attachments=tuple(plan.identity for plan in variant.attachment_plan),
+        port_docks=tuple(plan.identity for plan in variant.port_dock_plan),
+        box_height=variant.box_height,
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class StripFamily:
     """Placement-independent work and every feasible cardinal physical pose."""
@@ -410,6 +458,19 @@ class StripInstanceId:
 
 
 @dataclass(frozen=True, slots=True)
+class ProjectionPitchRequirement:
+    """One exact projected same-strip collision requiring wider X pitch."""
+
+    family_id: StripFamilyId
+    instance_id: StripInstanceId
+    variant_id: StripVariantId
+    axis: Literal["x"]
+    rejected_pitch: int
+    required_pitch: int
+    failure: ProjectionFailure
+
+
+@dataclass(frozen=True, slots=True)
 class StripInstance:
     """A physical family range bound to one pose-valid variant."""
 
@@ -442,6 +503,132 @@ class StripInstance:
     @property
     def machine_stop(self) -> int:
         return self.machine_start + self.machine_count
+
+
+def _is_machine_building(building: PlacedBuilding) -> bool:
+    if (
+        catalog.is_belt(building.item_id)
+        or catalog.is_sorter(building.item_id)
+        or building.item_id == catalog.SPLITTER_ID
+    ):
+        return False
+    try:
+        info = catalog.building(building.item_id)
+    except KeyError:
+        return False
+    if info.is_belt_addon:
+        return False
+    if info.cover_radius <= 0:
+        return True
+    return any(
+        entry.machine_item_id == building.item_id
+        for entry in catalog.MODE_DRIVEN_MACHINE.values()
+    )
+
+
+def projection_pitch_requirement(
+    placement: Placement,
+    *,
+    instance_ids: tuple[StripInstanceId, ...],
+    variants: tuple[StripVariant, ...],
+    failure: ProjectionFailure,
+) -> ProjectionPitchRequirement | None:
+    """Map exact adjacent-machine collision evidence to one typed X requirement."""
+    if failure.check != "geom.collide" or not isinstance(failure.buildings, tuple):
+        return None
+    indices = failure.buildings
+    building_count = len(placement.buildings)
+    if (
+        len(indices) != 2
+        or indices[0] == indices[1]
+        or any(type(index) is not int for index in indices)
+        or any(not 0 <= index < building_count for index in indices)
+    ):
+        return None
+    if (
+        not isinstance(instance_ids, tuple)
+        or not isinstance(variants, tuple)
+        or not instance_ids
+        or len(instance_ids) != len(variants)
+        or any(
+            not isinstance(instance_id, StripInstanceId)
+            or not isinstance(variant, StripVariant)
+            or variant.variant_id.family_id != instance_id.family_id
+            or len(variant.machine_origins_x) != instance_id.machine_count
+            or variant.box_width != instance_id.machine_count * variant.pitch_x
+            for instance_id, variant in zip(instance_ids, variants, strict=True)
+        )
+    ):
+        return None
+
+    left = placement.buildings[indices[0]]
+    right = placement.buildings[indices[1]]
+    owner = left.owner_strip
+    if (
+        type(owner) is not int
+        or type(right.owner_strip) is not int
+        or right.owner_strip != owner
+        or not 0 <= owner < len(instance_ids)
+    ):
+        return None
+    instance_id = instance_ids[owner]
+    variant = variants[owner]
+    if (
+        not _is_machine_building(left)
+        or not _is_machine_building(right)
+        or (left.item_id, left.model_index, left.yaw)
+        != (right.item_id, right.model_index, right.yaw)
+        or left.yaw != variant.yaw
+        or (left.width, left.height)
+        != (variant.footprint_width, variant.footprint_height)
+        or (right.width, right.height)
+        != (variant.footprint_width, variant.footprint_height)
+        or abs(left.x - right.x) != variant.pitch_x
+    ):
+        return None
+
+    owned_positions = {
+        (building.x, building.y)
+        for building in placement.buildings
+        if building.owner_strip == owner
+        and _is_machine_building(building)
+        and (building.item_id, building.model_index, building.yaw)
+        == (left.item_id, left.model_index, left.yaw)
+        and (building.width, building.height)
+        == (variant.footprint_width, variant.footprint_height)
+    }
+    if len(owned_positions) != len(variant.machine_origins_x):
+        return None
+    ordinals: dict[tuple[int, int], int] | None = None
+    for local_x in variant.machine_origins_x:
+        box_x = left.x - local_x
+        box_y = left.y - variant.lane_plan.machine_row
+        expected = {
+            (box_x + origin_x, box_y + variant.lane_plan.machine_row)
+            for origin_x in variant.machine_origins_x
+        }
+        if expected == owned_positions:
+            ordinals = {
+                (box_x + origin_x, box_y + variant.lane_plan.machine_row): ordinal
+                for ordinal, origin_x in enumerate(variant.machine_origins_x)
+            }
+            break
+    if (
+        ordinals is None
+        or (left.x, left.y) not in ordinals
+        or (right.x, right.y) not in ordinals
+        or abs(ordinals[(left.x, left.y)] - ordinals[(right.x, right.y)]) != 1
+    ):
+        return None
+    return ProjectionPitchRequirement(
+        family_id=instance_id.family_id,
+        instance_id=instance_id,
+        variant_id=variant.variant_id,
+        axis="x",
+        rejected_pitch=variant.pitch_x,
+        required_pitch=variant.pitch_x + 1,
+        failure=failure,
+    )
 
 
 def placement_geometry(machine_item_id: str | int, yaw: float) -> MachinePlacementGeometry:
@@ -900,6 +1087,43 @@ def _variant_for_count(template: StripVariant, machine_count: int) -> StripVaria
     )
 
 
+def variant_with_minimum_pitch(
+    variant: StripVariant,
+    required_pitch_x: int,
+) -> StripVariant:
+    """Regenerate a physically distinct variant at the required X pitch."""
+    geometry = variant.placement_geometry.with_minimum_pitch_x(required_pitch_x)
+    if geometry is variant.placement_geometry:
+        return variant
+    machine_count = len(variant.machine_origins_x)
+    machine_origins_x = tuple(range(0, machine_count * geometry.pitch_x, geometry.pitch_x))
+    box_width = machine_count * geometry.pitch_x
+    variant_id = _variant_id(
+        variant.variant_id.family_id,
+        variant.yaw,
+        machine_origins_x,
+        geometry,
+        variant.lane_plan,
+        variant.attachment_plan,
+        variant.port_dock_plan,
+        box_width,
+        variant.box_height,
+    )
+    return StripVariant(
+        variant_id=variant_id,
+        yaw=variant.yaw,
+        footprint_width=variant.footprint_width,
+        footprint_height=variant.footprint_height,
+        placement_geometry=geometry,
+        lane_plan=variant.lane_plan,
+        box_width=box_width,
+        box_height=variant.box_height,
+        attachment_plan=variant.attachment_plan,
+        port_dock_plan=variant.port_dock_plan,
+        machine_origins_x=machine_origins_x,
+    )
+
+
 def variants_for_count(
     family: StripFamily,
     machine_count: int,
@@ -908,20 +1132,21 @@ def variants_for_count(
     return tuple(_variant_for_count(template, machine_count) for template in family.variants)
 
 
-def partition_strip_family(
+def partition_strip_variant(
     family: StripFamily,
+    variant: StripVariant,
     *,
     max_machine_count: int,
-    variant_id: StripVariantId | None = None,
 ) -> tuple[StripInstance, ...]:
-    """Create balanced initial physical ranges without mutating the logical family."""
+    """Partition a family through one explicit ordinary or padded variant."""
     if max_machine_count <= 0:
         raise ValueError("maximum strip machine count must be positive")
-    chosen_id = variant_id or default_strip_variant(family).variant_id
-    try:
-        template = next(variant for variant in family.variants if variant.variant_id == chosen_id)
-    except StopIteration:
-        raise ValueError("strip instance variant does not belong to the family") from None
+    if (
+        variant.variant_id.family_id != family.family_id
+        or strip_pose_id(variant)
+        not in {strip_pose_id(candidate) for candidate in family.variants}
+    ):
+        raise ValueError("strip instance variant does not belong to the family")
     instance_count = max(
         1,
         (family.total_machine_count + max_machine_count - 1) // max_machine_count,
@@ -937,13 +1162,36 @@ def partition_strip_family(
                 instance_id=instance_id,
                 machine_start=machine_start,
                 machine_count=machine_count,
-                variant=_variant_for_count(template, machine_count),
+                variant=_variant_for_count(variant, machine_count),
             )
         )
         machine_start += machine_count
     result = tuple(instances)
     validate_instance_partition(family, result)
     return result
+
+
+def partition_strip_family(
+    family: StripFamily,
+    *,
+    max_machine_count: int,
+    variant_id: StripVariantId | None = None,
+) -> tuple[StripInstance, ...]:
+    """Choose an ordinary family variant and partition its logical work."""
+    if max_machine_count <= 0:
+        raise ValueError("maximum strip machine count must be positive")
+    chosen_id = variant_id or default_strip_variant(family).variant_id
+    try:
+        variant = next(
+            candidate for candidate in family.variants if candidate.variant_id == chosen_id
+        )
+    except StopIteration:
+        raise ValueError("strip instance variant does not belong to the family") from None
+    return partition_strip_variant(
+        family,
+        variant,
+        max_machine_count=max_machine_count,
+    )
 
 
 def split_strip_instance(
@@ -1041,11 +1289,11 @@ def validate_instance_partition(
 ) -> None:
     """Require active physical ranges to cover ``0..total`` exactly once."""
     expected_start = 0
-    valid_templates = {variant.template_key for variant in family.variants}
+    valid_poses = {strip_pose_id(variant) for variant in family.variants}
     for instance in sorted(instances, key=lambda candidate: candidate.machine_start):
         if instance.family_id != family.family_id:
             raise ValueError("strip instances do not partition one logical family")
-        if instance.variant.template_key not in valid_templates:
+        if strip_pose_id(instance.variant) not in valid_poses:
             raise ValueError("strip instance uses a variant outside its family")
         if instance.machine_start != expected_start:
             raise ValueError("strip instance ranges do not partition the logical family")
@@ -1062,10 +1310,12 @@ __all__ = [
     "LaneSorterAttachment",
     "LogicalLane",
     "MachinePlacementGeometry",
+    "ProjectionPitchRequirement",
     "StripFamily",
     "StripFamilyId",
     "StripInstance",
     "StripInstanceId",
+    "StripPoseId",
     "StripVariant",
     "StripVariantId",
     "default_strip_variant",
@@ -1073,8 +1323,12 @@ __all__ = [
     "lane_reach_profiles",
     "merge_strip_instances",
     "partition_strip_family",
+    "partition_strip_variant",
     "placement_geometry",
+    "projection_pitch_requirement",
     "split_strip_instance",
+    "strip_pose_id",
     "validate_instance_partition",
     "variants_for_count",
+    "variant_with_minimum_pitch",
 ]
