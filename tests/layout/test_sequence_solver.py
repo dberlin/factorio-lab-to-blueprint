@@ -2751,23 +2751,26 @@ def test_sequence_backend_returns_authoritative_finalized_placement_once(
     fake = _FakeRouting(
         detailed_results=(DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), routed),)
     )
-    solver = _solver(
-        fake,
-        heights=(40,),
-        config=SequenceSolverConfig(
-            stages=1,
-            moves_per_stage=1,
-            restarts_per_height=1,
-            global_elites=1,
-        ),
-    )
-    solver.adapters = replace(
-        solver.adapters,
-        validate=production.solver.adapters.validate,
+    def global_route(
+        prepared: _ProductionCandidate,
+        feedback: FeedbackState,
+        allowance: int,
+    ) -> GlobalRouteResult:
+        return fake.global_route((prepared.height, prepared.decoded), feedback, allowance)
+
+    def detailed_route(
+        prepared: _ProductionCandidate,
+        allowance: int,
+    ) -> DetailedStageResult:
+        return fake.detailed_route((prepared.height, prepared.decoded), allowance)
+
+    production.solver.adapters = replace(
+        production.solver.adapters,
+        global_route=global_route,
+        detailed_route=detailed_route,
     )
     serial_run = replace(
         production,
-        solver=solver,
         max_search_stages=1,
     )
     monkeypatch.setattr(
@@ -3032,7 +3035,8 @@ def test_production_observability_preserves_categories_and_all_grouped_work() ->
         + placement.stats["compilation_time_s"]
     )
 
-    assert all(result.placement.stats[key] == value for key, value in original_stats.items())
+    final_stats = dict(result.placement.stats)
+    assert all(final_stats[key] == value for key, value in original_stats.items())
     assert result.placement is placement is python_placement is mixed_placement
     assert result.exact_candidate_key == exact_stage.candidate_key
 

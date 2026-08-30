@@ -141,8 +141,7 @@ def test_run_cell_persists_post_compaction_projection_failures(
         lambda power, workers, vertical: SuccessfulStrategy(),
     )
     monkeypatch.setattr(
-        audit.finalize,
-        "compact_open_boundary_belts",
+        "scripts.audit.finalize.compact_open_boundary_belts",
         lambda result, spec, *, expect_power: result,
     )
 
@@ -152,7 +151,7 @@ def test_run_cell_persists_post_compaction_projection_failures(
     ) -> object:
         raise refusal
 
-    monkeypatch.setattr(audit.finalize, "finalize_placement", reject_projection)
+    monkeypatch.setattr("scripts.audit.finalize.finalize_placement", reject_projection)
     monkeypatch.setattr(audit, "_JSONL", [])
     job = audit.Job(
         strategy="post-projection",
