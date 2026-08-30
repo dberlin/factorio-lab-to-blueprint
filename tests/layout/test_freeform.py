@@ -103,6 +103,7 @@ from flab2bp.layout.strip_variants import (
     generate_strip_families,
     partition_strip_family,
     projection_pitch_requirement,
+    strip_pose_id,
 )
 from flab2bp.spec import BuildSpec, MachineGroup, ProliferatorMode
 
@@ -187,6 +188,25 @@ def two_stage_spec() -> BuildSpec:
         belt_item_id="conveyor-belt-2",
         belt_items_per_second=F(12),
         label="two-stage",
+    )
+
+
+def plastic_spec() -> BuildSpec:
+    """The captured corpus ``plastic/all-products`` candidate."""
+    from flab2bp.bench.corpus import URL_CORPUS
+    from flab2bp.lab.data import load_vendored
+    from flab2bp.lab.url import parse_url
+    from flab2bp.rates.candidates import build_candidates
+
+    entry = next(candidate for candidate in URL_CORPUS if candidate.url_id == "plastic")
+    return next(
+        candidate
+        for candidate in build_candidates(
+            load_vendored(),
+            parse_url(entry.url),
+            count=3,
+        ).candidates
+        if candidate.label == "all-products"
     )
 
 
@@ -2403,23 +2423,125 @@ class TestSolverActuallyRuns:
         assert "build colliders intersect" in caught.value.reason
 
 
-@pytest.fixture
-def projected_chemical_plant_collision(
-) -> tuple[Placement, StripInstance, StripVariant, finalize.ProjectionFailure]:
-    spec = BuildSpec(
+def projected_chemical_plant_spec(*, machine_count: int = 2) -> BuildSpec:
+    return BuildSpec(
         groups=(
             group(
                 "plastic",
                 "chemical-plant",
-                2,
+                machine_count,
                 {"refined-oil": F(1)},
                 {"plastic": F(1)},
             ),
         ),
-        external_inputs={"refined-oil": F(2)},
-        outputs={"plastic": F(2)},
+        external_inputs={"refined-oil": F(machine_count)},
+        outputs={"plastic": F(machine_count)},
         label="projected-chemical-plant-collision",
     )
+
+
+def test_plan_strips_applies_minimum_pitch_to_one_pose() -> None:
+    ordinary = plan_strips(plastic_spec(), strip_len=6)
+    chemical = next(strip for strip in ordinary if strip.item_id == 2309)
+    assert chemical.physical_variant is not None
+    pose_id = strip_pose_id(chemical.physical_variant)
+
+    padded = plan_strips(
+        plastic_spec(),
+        strip_len=6,
+        minimum_pitch_x={pose_id: chemical.pw + 1},
+    )
+
+    padded_chemical = next(strip for strip in padded if strip.family_id == chemical.family_id)
+    assert padded_chemical.pw == chemical.pw + 1
+    assert padded_chemical.physical_variant is not None
+    assert strip_pose_id(padded_chemical.physical_variant) == pose_id
+    assert all(
+        after == before
+        for before, after in zip(ordinary, padded, strict=True)
+        if before.family_id != chemical.family_id
+    )
+
+
+def test_coarsening_preserves_pose_specific_minimum_pitch() -> None:
+    spec = projected_chemical_plant_spec(machine_count=41)
+    ordinary = plan_strips(spec, strip_len=1)
+    assert len(ordinary) == 41
+    assert ordinary[0].physical_variant is not None
+    pose_id = strip_pose_id(ordinary[0].physical_variant)
+    minimum_pitch_x = {pose_id: ordinary[0].pw + 1}
+    padded = plan_strips(
+        spec,
+        strip_len=1,
+        minimum_pitch_x=minimum_pitch_x,
+    )
+
+    coarse, effective_strip_len = freeform._coarsen_saturated_strip_plan(
+        spec,
+        padded,
+        strip_len=1,
+        minimum_pitch_x=minimum_pitch_x,
+    )
+
+    assert effective_strip_len == spec.machine_count
+    assert len(coarse) == 1
+    assert coarse[0].pw == ordinary[0].pw + 1
+    assert coarse[0].physical_variant is not None
+    assert strip_pose_id(coarse[0].physical_variant) == pose_id
+
+
+def test_poseless_compatibility_family_remains_fail_closed_with_pitch_mapping() -> None:
+    (strip,) = plan_strips(
+        mode_driven_spec(),
+        strip_len=6,
+        minimum_pitch_x={},
+    )
+
+    assert strip.physical_variant is None
+    with pytest.raises(NoValidLayout, match="no insert pose on any face"):
+        FreeformLayout(
+            band_policy=BandPolicy("portable"),
+        ).lay_out(mode_driven_spec(), time_budget_s=0.5)
+
+
+def test_freeform_retries_same_strip_projection_failure_with_padded_pitch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    planned_pitches: list[tuple[int, ...]] = []
+    ordinary_plan_strips = freeform.plan_strips
+
+    def recording_plan_strips(
+        spec: BuildSpec,
+        *,
+        strip_len: int = 6,
+        **kwargs: object,
+    ) -> list[Strip]:
+        planned = ordinary_plan_strips(spec, strip_len=strip_len, **kwargs)
+        chemical_pitches = tuple(strip.pw for strip in planned if strip.item_id == 2309)
+        if chemical_pitches:
+            planned_pitches.append(chemical_pitches)
+        return planned
+
+    monkeypatch.setattr(freeform, "plan_strips", recording_plan_strips)
+    spec = plastic_spec()
+    placement = FreeformLayout(
+        band_policy=BandPolicy("portable"),
+        workers=1,
+    ).lay_out(spec, time_budget_s=4.0)
+
+    report = validate.certify(placement, spec, expect_power=True)
+    assert report.ok
+    assert not report.by_check("geom.collide")
+    assert planned_pitches
+    assert set(planned_pitches[0]) == {7}
+    assert any(set(pitches) == {8} for pitches in planned_pitches[1:])
+    assert all(set(pitches) <= {7, 8} for pitches in planned_pitches)
+
+
+@pytest.fixture
+def projected_chemical_plant_collision(
+) -> tuple[Placement, StripInstance, StripVariant, finalize.ProjectionFailure]:
+    spec = projected_chemical_plant_spec()
     (family,) = generate_strip_families(spec)
     ordinary = default_strip_variant(family)
     (instance,) = partition_strip_family(
@@ -2493,6 +2615,174 @@ def test_same_strip_adjacent_machine_collision_requires_next_pitch(
         required_pitch=8,
         failure=failure,
     )
+
+
+def test_freeform_owner_adapter_uses_realized_strip_variant(
+    projected_chemical_plant_collision: tuple[
+        Placement,
+        StripInstance,
+        StripVariant,
+        finalize.ProjectionFailure,
+    ],
+) -> None:
+    placement, instance, ordinary, failure = projected_chemical_plant_collision
+    strips = plan_strips(projected_chemical_plant_spec(), strip_len=2)
+
+    requirement = freeform._projection_pitch_requirement(
+        placement,
+        strips,
+        failure,
+    )
+
+    assert requirement == ProjectionPitchRequirement(
+        family_id=instance.family_id,
+        instance_id=instance.instance_id,
+        variant_id=ordinary.variant_id,
+        axis="x",
+        rejected_pitch=7,
+        required_pitch=8,
+        failure=failure,
+    )
+
+
+def _sweep_with_pitch_feedback(
+    monkeypatch: pytest.MonkeyPatch,
+    required_pitches: Sequence[int],
+) -> tuple[Placement | None, list[tuple[int, int, int]], list[freeform._RefusalFinding]]:
+    spec = projected_chemical_plant_spec()
+    strips = plan_strips(spec, strip_len=2)
+    pack = freeform._Pack(
+        at={0: (3, 4)},
+        width=20,
+        height=20,
+        status="test",
+    )
+    failure = finalize.ProjectionFailure(
+        "geom.collide",
+        (0, 1),
+        "build colliders intersect",
+        160,
+    )
+    routed = DetailedRouteResult(
+        status=DetailedRouteStatus.ROUTED,
+        routed=(),
+        failures=(),
+        iterations=0,
+        expansions=0,
+    )
+    seen_candidates: list[tuple[int, int, int]] = []
+    feedback_index = 0
+    finalizations = 0
+
+    def pack_candidate(
+        current_strips: list[Strip],
+        *,
+        height: int,
+        arrangement: int,
+        **_kwargs: object,
+    ) -> freeform._Pack:
+        physical_variant = current_strips[0].physical_variant
+        assert physical_variant is not None
+        seen_candidates.append((height, arrangement, physical_variant.pitch_x))
+        return pack
+
+    def build_candidate(
+        _spec: BuildSpec,
+        _strips: list[Strip],
+        _pack: freeform._Pack,
+        **_kwargs: object,
+    ) -> _BuildResult:
+        return _BuildResult(
+            Placement(buildings=(), stats={"belt_tiles": 0.0}),
+            routed,
+            (),
+        )
+
+    def pitch_requirement(
+        _placement: Placement,
+        current_strips: list[Strip],
+        _failure: finalize.ProjectionFailure,
+    ) -> ProjectionPitchRequirement | None:
+        nonlocal feedback_index
+        required_pitch = required_pitches[feedback_index]
+        feedback_index += 1
+        strip = current_strips[0]
+        physical_variant = strip.physical_variant
+        assert strip.family_id is not None
+        assert physical_variant is not None
+        from flab2bp.layout.strip_variants import StripInstanceId
+
+        instance_id = StripInstanceId(
+            strip.family_id,
+            strip.machine_start,
+            strip.machines,
+        )
+        return ProjectionPitchRequirement(
+            family_id=strip.family_id,
+            instance_id=instance_id,
+            variant_id=physical_variant.variant_id,
+            axis="x",
+            rejected_pitch=required_pitch - 1,
+            required_pitch=required_pitch,
+            failure=failure,
+        )
+
+    def finalize_candidate(
+        placement: Placement,
+        _policy: BandPolicy,
+    ) -> Placement:
+        nonlocal finalizations
+        if finalizations < len(required_pitches):
+            finalizations += 1
+            raise finalize.ProjectionRefusal((failure,))
+        return placement
+
+    monkeypatch.setattr(freeform, "_candidate_heights", lambda _strips: [20])
+    monkeypatch.setattr(freeform, "_greedy_pack", lambda _strips, _height: pack)
+    monkeypatch.setattr(freeform, "_pack", pack_candidate)
+    monkeypatch.setattr(freeform, "_build", build_candidate)
+    monkeypatch.setattr(freeform, "_projection_pitch_requirement", pitch_requirement)
+    monkeypatch.setattr(
+        validate,
+        "certify",
+        lambda *_args, **_kwargs: validate.Report(findings=()),
+    )
+    monkeypatch.setattr(finalize, "finalize_placement", finalize_candidate)
+
+    rejected: list[freeform._RefusalFinding] = []
+    result = FreeformLayout(
+        band_policy=BandPolicy("portable"),
+        arrangements=1,
+    )._sweep(spec, strips, 1.0, rejected=rejected)
+    return result, seen_candidates, rejected
+
+
+def test_repeated_identical_pitch_feedback_does_not_duplicate_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result, seen_candidates, rejected = _sweep_with_pitch_feedback(
+        monkeypatch,
+        (8, 8),
+    )
+
+    assert result is None
+    assert seen_candidates == [(20, 0, 7), (20, 0, 8)]
+    assert len(rejected) == 1
+    assert isinstance(rejected[0], finalize.ProjectionFailure)
+
+
+def test_later_exact_pitch_failure_advances_same_candidate_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result, seen_candidates, rejected = _sweep_with_pitch_feedback(
+        monkeypatch,
+        (8, 9),
+    )
+
+    assert result is not None
+    assert seen_candidates == [(20, 0, 7), (20, 0, 8), (20, 0, 9)]
+    assert len(rejected) == 1
+    assert isinstance(rejected[0], finalize.ProjectionFailure)
 
 
 def test_projection_no_good_forbids_only_the_exact_failed_pair_context() -> None:

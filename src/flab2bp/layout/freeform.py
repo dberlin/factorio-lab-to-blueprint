@@ -70,6 +70,7 @@ from dataclasses import dataclass, field, replace
 from enum import Enum
 from fractions import Fraction
 from functools import lru_cache
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Literal
 
 import numpy as np
@@ -107,8 +108,14 @@ if TYPE_CHECKING:
         LanePlan,
         LanePortDockPlan,
         LaneSorterAttachment,
+        ProjectionPitchRequirement,
         StripFamilyId,
+        StripPoseId,
+        StripVariant,
     )
+
+
+_NO_PITCH_REQUIREMENTS: Mapping[StripPoseId, int] = MappingProxyType({})
 
 #: Free tiles reserved on a strip's east and south faces.  One is enough for a
 #: belt to pass; the router uses upper levels when one is not.
@@ -763,6 +770,8 @@ class Strip:
     attachment_plan: tuple[LaneAttachmentPlan, ...]
     #: Exact selected variant box height, including collider halos and lanes.
     box_height: int
+    #: Exact count-realized physical pose; absent only for compatibility families.
+    physical_variant: StripVariant | None = None
     #: The authoritative drawing port and relative dock cell for port-backed outputs.
     port_dock_plan: tuple[LanePortDockPlan, ...] = ()
     #: Parameter block for a machine configured by a MODE rather than a recipe
@@ -1699,7 +1708,12 @@ def _logical_strip_plans(spec: BuildSpec) -> tuple[_LogicalStripPlan, ...]:
     return tuple(plans)
 
 
-def plan_strips(spec: BuildSpec, *, strip_len: int = 6) -> list[Strip]:
+def plan_strips(
+    spec: BuildSpec,
+    *,
+    strip_len: int = 6,
+    minimum_pitch_x: Mapping[StripPoseId, int] = _NO_PITCH_REQUIREMENTS,
+) -> list[Strip]:
     """Select each logical family's deterministic compatibility pose.
 
     The legacy Freeform planner remains strip-based until the later atomic
@@ -1710,7 +1724,9 @@ def plan_strips(spec: BuildSpec, *, strip_len: int = 6) -> list[Strip]:
     from flab2bp.layout.strip_variants import (
         default_strip_variant,
         generate_strip_families,
-        partition_strip_family,
+        partition_strip_variant,
+        strip_pose_id,
+        variant_with_minimum_pitch,
     )
 
     groups = _adapt(spec)
@@ -1738,29 +1754,28 @@ def plan_strips(spec: BuildSpec, *, strip_len: int = 6) -> list[Strip]:
             for item in lane
         )
         if family.variants:
-            variant = default_strip_variant(family)
-            instances = partition_strip_family(
+            template = default_strip_variant(family)
+            required_pitch = minimum_pitch_x.get(strip_pose_id(template))
+            if required_pitch is not None:
+                template = variant_with_minimum_pitch(template, required_pitch)
+            instances = partition_strip_variant(
                 family,
+                template,
                 max_machine_count=max(1, strip_len),
-                variant_id=variant.variant_id,
             )
-            instance_ranges = tuple(
-                (instance.machine_start, instance.machine_count) for instance in instances
+            realized = tuple(
+                (
+                    instance.machine_start,
+                    instance.machine_count,
+                    instance.variant,
+                )
+                for instance in instances
             )
-            footprint_width = variant.footprint_width
-            footprint_height = variant.footprint_height
-            yaw = variant.yaw
-            pitch_width = variant.pitch_x
-            pitch_height = variant.pitch_y
-            lane_plan = variant.lane_plan
-            attachment_plan = variant.attachment_plan
-            port_dock_plan = variant.port_dock_plan
-            box_height = variant.box_height
         else:
             # Compatibility only: a mode-driven building with no sorter poses
             # still reaches emission, which owns the established structured
             # refusal.  It has no physical StripVariant and must not be exposed
-            # to sequence search as though it did.
+            # to projection feedback or sequence search as though it did.
             instance_count = max(
                 1,
                 math.ceil(family.total_machine_count / max(1, strip_len)),
@@ -1770,27 +1785,43 @@ def plan_strips(spec: BuildSpec, *, strip_len: int = 6) -> list[Strip]:
                 base + (1 if index < extra else 0) for index in range(instance_count)
             )
             machine_start = 0
-            instance_ranges_list: list[tuple[int, int]] = []
+            realized_list: list[tuple[int, int, StripVariant | None]] = []
             for machine_count in machine_counts:
-                instance_ranges_list.append((machine_start, machine_count))
+                realized_list.append((machine_start, machine_count, None))
                 machine_start += machine_count
-            instance_ranges = tuple(instance_ranges_list)
-            footprint_width = group.width
-            footprint_height = group.height
-            yaw = group.yaw
-            pitch_width = group.pitch_w + 1 if family.flank_outputs else group.pitch_w
-            pitch_height = group.pitch_h
-            lane_plan = None
-            attachment_plan = ()
-            port_dock_plan = ()
-            box_height = len(inputs_above) + pitch_height + len(outputs) + len(inputs_below)
-        for machine_start, machine_count in instance_ranges:
+            realized = tuple(realized_list)
+        for machine_start, machine_count, physical_variant in realized:
             _check_shared_lane_capacity(
                 group,
                 inputs_above + inputs_below,
                 machine_count,
                 spec,
             )
+            if physical_variant is None:
+                footprint_width = group.width
+                footprint_height = group.height
+                yaw = group.yaw
+                pitch_width = group.pitch_w + 1 if family.flank_outputs else group.pitch_w
+                pitch_height = group.pitch_h
+                lane_plan = None
+                attachment_plan = ()
+                port_dock_plan = ()
+                box_height = (
+                    len(inputs_above)
+                    + pitch_height
+                    + len(outputs)
+                    + len(inputs_below)
+                )
+            else:
+                footprint_width = physical_variant.footprint_width
+                footprint_height = physical_variant.footprint_height
+                yaw = physical_variant.yaw
+                pitch_width = physical_variant.pitch_x
+                pitch_height = physical_variant.pitch_y
+                lane_plan = physical_variant.lane_plan
+                attachment_plan = physical_variant.attachment_plan
+                port_dock_plan = physical_variant.port_dock_plan
+                box_height = physical_variant.box_height
             strips.append(
                 Strip(
                     group_key=family.group_key,
@@ -1810,11 +1841,16 @@ def plan_strips(spec: BuildSpec, *, strip_len: int = 6) -> list[Strip]:
                     attachment_plan=attachment_plan,
                     port_dock_plan=port_dock_plan,
                     box_height=box_height,
+                    physical_variant=physical_variant,
                     mode_params=family.mode_params,
                     flank_outputs=family.flank_outputs,
                     family_id=family.family_id,
                     machine_start=machine_start,
-                    west_channel=(_COATER_WEST_CHANNEL if needs_coater_keepout else WEST_CHANNEL),
+                    west_channel=(
+                        _COATER_WEST_CHANNEL
+                        if needs_coater_keepout
+                        else WEST_CHANNEL
+                    ),
                 )
             )
     return strips
@@ -1828,12 +1864,20 @@ def _coarsen_saturated_strip_plan(
     strips: list[Strip],
     *,
     strip_len: int,
+    minimum_pitch_x: Mapping[StripPoseId, int] = _NO_PITCH_REQUIREMENTS,
 ) -> tuple[list[Strip], int]:
     """Repartition redundant stress strips before packing or routing."""
     if len(strips) < _COARSE_STRIP_THRESHOLD or strip_len >= spec.machine_count:
         return strips, strip_len
     coarse_len = max(strip_len, spec.machine_count)
-    return plan_strips(spec, strip_len=coarse_len), coarse_len
+    return (
+        plan_strips(
+            spec,
+            strip_len=coarse_len,
+            minimum_pitch_x=minimum_pitch_x,
+        ),
+        coarse_len,
+    )
 
 
 # --- direct insertion ------------------------------------------------------
@@ -2025,6 +2069,38 @@ def _projection_no_good(
         left_origin=(left_x, left_y),
         right_origin=(right_x, right_y),
         pack_origins=tuple(pack.at[index] for index in range(len(pack.at))),
+        failure=failure,
+    )
+
+
+def _projection_pitch_requirement(
+    placement: Placement,
+    strips: list[Strip],
+    failure: finalize.ProjectionFailure,
+) -> ProjectionPitchRequirement | None:
+    """Map Freeform owner indices through their exact realized strip records."""
+    from flab2bp.layout.strip_variants import (
+        StripInstanceId,
+        projection_pitch_requirement,
+    )
+
+    instance_ids: list[StripInstanceId] = []
+    variants: list[StripVariant] = []
+    for strip in strips:
+        if strip.family_id is None or strip.physical_variant is None:
+            return None
+        instance_ids.append(
+            StripInstanceId(
+                strip.family_id,
+                strip.machine_start,
+                strip.machines,
+            )
+        )
+        variants.append(strip.physical_variant)
+    return projection_pitch_requirement(
+        placement,
+        instance_ids=tuple(instance_ids),
+        variants=tuple(variants),
         failure=failure,
     )
 
@@ -9727,6 +9803,7 @@ class FreeformLayout:
         ]
         projection_no_goods: list[ProjectionNoGood] = []
         projection_no_good_keys: set[tuple[int, ...]] = set()
+        minimum_pitch_x: dict[StripPoseId, int] = {}
         # This sweep's own share, never more than the CALL has left. A sweep
         # asked for 15s when 3 remain must not spend 15.
         left = time_budget_s if deadline is None else deadline - time.monotonic()
@@ -10037,28 +10114,85 @@ class FreeformLayout:
                 for failure in exc.failures:
                     if rejected is not None:
                         _retain_refusal(rejected, failure)
+
                     no_good = _projection_no_good(placement, pack, failure)
-                    if no_good is None:
-                        continue
-                    no_good_key = (
-                        no_good.left_strip,
-                        no_good.right_strip,
-                        no_good.delta_x,
-                        no_good.delta_y,
-                        no_good.pack_width,
-                        no_good.pack_height,
-                        *(
-                            coordinate
-                            for origin in no_good.pack_origins
-                            for coordinate in origin
-                        ),
+                    if no_good is not None:
+                        no_good_key = (
+                            no_good.left_strip,
+                            no_good.right_strip,
+                            no_good.delta_x,
+                            no_good.delta_y,
+                            no_good.pack_width,
+                            no_good.pack_height,
+                            *(
+                                coordinate
+                                for origin in no_good.pack_origins
+                                for coordinate in origin
+                            ),
+                        )
+                        if no_good_key not in projection_no_good_keys:
+                            projection_no_good_keys.add(no_good_key)
+                            projection_no_goods.append(no_good)
+                            learned = True
+
+                    requirement = _projection_pitch_requirement(
+                        placement,
+                        strips,
+                        failure,
                     )
-                    if no_good_key in projection_no_good_keys:
+                    if requirement is None:
                         continue
-                    projection_no_good_keys.add(no_good_key)
-                    projection_no_goods.append(no_good)
+                    selected_strip = next(
+                        (
+                            strip
+                            for strip in strips
+                            if strip.family_id == requirement.instance_id.family_id
+                            and strip.machine_start
+                            == requirement.instance_id.machine_start
+                            and strip.machines
+                            == requirement.instance_id.machine_count
+                        ),
+                        None,
+                    )
+                    if (
+                        selected_strip is None
+                        or selected_strip.physical_variant is None
+                        or selected_strip.physical_variant.variant_id
+                        != requirement.variant_id
+                    ):
+                        continue
+                    from flab2bp.layout.strip_variants import strip_pose_id
+
+                    pose_id = strip_pose_id(selected_strip.physical_variant)
+                    retained_pitch = minimum_pitch_x.get(
+                        pose_id,
+                        selected_strip.physical_variant.pitch_x,
+                    )
+                    if requirement.required_pitch <= retained_pitch:
+                        continue
+                    minimum_pitch_x[pose_id] = requirement.required_pitch
                     learned = True
                 if learned:
+                    replan_strip_len = max(strip.machines for strip in strips)
+                    strips = plan_strips(
+                        spec,
+                        strip_len=replan_strip_len,
+                        minimum_pitch_x=minimum_pitch_x,
+                    )
+                    greedy = _greedy_pack(strips, _height_seed(strips))
+                    bound = max(
+                        greedy.width,
+                        max((w for w, _h in map(_box, strips)), default=1),
+                    )
+                    net_candidates = (
+                        _direct_net_candidates(strips, spec)
+                        if self.direct_insert
+                        else {}
+                    )
+                    seeds = {
+                        candidate_height: _greedy_pack(strips, candidate_height)
+                        for candidate_height in heights
+                    }
                     candidate_packs.insert(
                         candidate_index,
                         (height, arrangement, True),
