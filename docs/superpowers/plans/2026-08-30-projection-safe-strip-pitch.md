@@ -390,7 +390,7 @@ git commit -m "Teach SequencePair projection-safe pitch feedback"
 
 **Files:**
 - Modify only if a test exposes a defect in Tasks 1-3.
-- Record ignored execution evidence under `.superpowers/sdd/2026-08-30-projection-safe-pitch/`.
+- Record ignored execution evidence under `.superpowers/sdd/2026-08-30-projection-safe-strip-pitch/`.
 
 **Interfaces:**
 - Consumes: completed Freeform and SequencePair pitch feedback.
@@ -401,7 +401,7 @@ git commit -m "Teach SequencePair projection-safe pitch feedback"
 Clear the evidence file, then execute this command three times:
 
 ```bash
-uv run python scripts/audit.py --only plastic --budget 4 --strategy both --jobs 1 --json .superpowers/sdd/2026-08-30-projection-safe-pitch/plastic-4s.jsonl
+uv run python scripts/audit.py --only plastic --budget 4 --strategy both --jobs 1 --json .superpowers/sdd/2026-08-30-projection-safe-strip-pitch/plastic-4s.jsonl
 ```
 
 Expected aggregate: 18/18 `CLEAN`; zero `REFUSED`, `INVALID`, `CRASH`, or `NOT RUN`.
@@ -409,7 +409,7 @@ Expected aggregate: 18/18 `CLEAN`; zero `REFUSED`, `INVALID`, `CRASH`, or `NOT R
 - [ ] **Step 2: Run the default-budget gate**
 
 ```bash
-uv run python scripts/audit.py --only plastic --budget 15 --strategy both --jobs 1 --json .superpowers/sdd/2026-08-30-projection-safe-pitch/plastic-15s.jsonl
+uv run python scripts/audit.py --only plastic --budget 15 --strategy both --jobs 1 --json .superpowers/sdd/2026-08-30-projection-safe-strip-pitch/plastic-15s.jsonl
 ```
 
 Expected: all six strategy/policy cells clean.
