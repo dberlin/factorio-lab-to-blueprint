@@ -76,6 +76,7 @@ from flab2bp.layout.freeform import (
     _room_for_another,
     _route_all,
     _route_external_inputs,
+    _routing_flags,
     _shard_sinks,
     _sink_for,
     _source_for,
@@ -5921,6 +5922,30 @@ class TestTheFlatGridIsTheSameSearch:
             "restoring a ripped-up cell did not put back what was there, so a "
             "later net can route through ground it does not own"
         )
+
+    def test_routing_flags_reuse_grid_owned_storage_and_refresh_exactly(self) -> None:
+        canvas, bounds = self._maze()
+        grid = _make_grid(canvas, bounds, _canvas_span(canvas, bounds), {})
+        open_cell = (2, 2, 0)
+        reserved_cell = (10, 2, 0)
+        reserved_port = (10, 3, 0)
+
+        flags = _routing_flags(grid)
+        assert flags is grid.routing_flags
+        assert flags[grid.index(open_cell)] == 1
+        assert flags[grid.index(reserved_cell)] == 0
+
+        grid.block(open_cell)
+        refreshed = _routing_flags(grid, routing_ports={reserved_port})
+        assert refreshed is flags
+        assert flags[grid.index(open_cell)] == 0
+        assert flags[grid.index(reserved_cell)] == 1
+
+        grid.restore(open_cell)
+        refreshed = _routing_flags(grid)
+        assert refreshed is flags
+        assert flags[grid.index(open_cell)] == 1
+        assert flags[grid.index(reserved_cell)] == 0
 
     def test_the_grid_agrees_with_canvas_free(self) -> None:
         """The encoding, cell by cell, against the predicate it encodes.

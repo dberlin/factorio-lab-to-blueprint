@@ -3904,6 +3904,8 @@ class _Grid:
     size: int
     base: bytes
     occ: bytearray
+    #: Per-search passability scratch, exactly refreshed by :func:`_routing_flags`.
+    routing_flags: bytearray
     #: ``(index, port)`` for every reserved cell inside the box.
     reserved: tuple[tuple[int, tuple[int, int, int]], ...]
     #: Congestion history as a flat array, or ``None`` on a round that has none.
@@ -4147,6 +4149,7 @@ def _make_grid(
         size=size,
         base=bytes(occ),
         occ=occ,
+        routing_flags=bytearray(size),
         reserved=reserved,
         hist=None,
     )
@@ -4161,7 +4164,8 @@ def _routing_flags(
     released_reservations: Collection[int] = (),
 ) -> bytearray:
     """Return hard passability with only this search's reservations opened."""
-    flags = bytearray(grid.occ)
+    flags = grid.routing_flags
+    flags[:] = grid.occ
     released = frozenset(released_reservations)
     for at, port in grid.reserved:
         if at not in released and port not in routing_ports:
@@ -4770,7 +4774,7 @@ class _PreparedRoutingProblem:
     preparation_failures: tuple[NetFailure, ...] = ()
 
     def new_workspace(self) -> _RoutingWorkspace:
-        buildings = deepcopy(list(self.building_templates))
+        buildings = list(self.building_templates)
         canvas = _Canvas(
             ramped=self.ramped,
             buildings=buildings,
