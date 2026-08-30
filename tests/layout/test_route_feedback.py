@@ -55,6 +55,45 @@ def test_detailed_result_counts_real_failures() -> None:
     assert result.failed_count == 1
     assert result.stranded == (net,)
 
+def test_exhaustive_route_proof_must_be_explicit_and_non_budget() -> None:
+    net = NetId(2, 7, "iron-ingot", NetRole.INTERNAL, 0)
+    failure = NetFailure(
+        net_id=net,
+        kind=RouteFailureKind.SEALED_POCKET,
+        wall=((4, 5, 0),),
+        blocking_nets=(),
+        expansions=41,
+    )
+
+    exhaustive = DetailedRouteResult(
+        status=DetailedRouteStatus.STRANDED,
+        routed=(),
+        failures=(failure,),
+        iterations=2,
+        expansions=41,
+        exhaustive=True,
+    )
+
+    assert exhaustive.exhaustive
+    with pytest.raises(ValueError, match="budget"):
+        DetailedRouteResult(
+            status=DetailedRouteStatus.BUDGET,
+            routed=(),
+            failures=(
+                NetFailure(
+                    net,
+                    RouteFailureKind.BUDGET,
+                    (),
+                    (),
+                    41,
+                ),
+            ),
+            iterations=2,
+            expansions=41,
+            exhaustive=True,
+        )
+
+
 
 def _detailed_failure(
     kind: RouteFailureKind,
@@ -97,6 +136,34 @@ def test_genuine_geometric_failure_bumps_net_and_wall(
     assert updated.cell_history[(4, 5, 0)] == 1.0
     assert state.net_weight == {}
     assert state.cell_history == {}
+
+def test_route_feedback_weights_exact_blocking_net_identities() -> None:
+    failed_net = NetId(2, 7, "iron-ingot", NetRole.INTERNAL, 0)
+    blocker = NetId(5, 3, "copper-ingot", NetRole.INTERNAL, 0)
+    result = DetailedRouteResult(
+        status=DetailedRouteStatus.STRANDED,
+        routed=(),
+        failures=(
+            NetFailure(
+                failed_net,
+                RouteFailureKind.CONGESTION_WALL,
+                ((4, 5, 0),),
+                (blocker,),
+                41,
+            ),
+        ),
+        iterations=2,
+        expansions=41,
+        exhaustive=True,
+    )
+
+    updated = update_feedback(FeedbackState.empty((80, 120)), result)
+
+    assert updated.net_weight == {failed_net: 1.0, blocker: 1.0}
+    assert updated.logical_net_weight == {
+        failed_net.logical: 1.0,
+        blocker.logical: 1.0,
+    }
 
 
 @pytest.mark.parametrize("kind", (RouteFailureKind.BUDGET, RouteFailureKind.STATIC_ACCESS))

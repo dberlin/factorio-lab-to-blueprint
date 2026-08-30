@@ -92,11 +92,13 @@ from flab2bp.layout.route_feedback import (
     Cell,
     DetailedRouteResult,
     DetailedRouteStatus,
+    FeedbackState,
     LogicalNetId,
     NetFailure,
     NetId,
     NetRole,
     RouteFailureKind,
+    update_feedback,
 )
 from flab2bp.layout.sequence_pair import DirectInsertTarget
 from flab2bp.layout.slots import SlotUndetermined, assign_sorter_slots
@@ -2229,6 +2231,14 @@ class ExactPackNoGood:
         if not self.evidence:
             raise ValueError("exact pack no-good requires structured evidence")
 
+@dataclass(frozen=True, slots=True)
+class _DirectRelationNoGood:
+    """One proved-impossible direct promise at one endpoint relation."""
+
+    direct_id: DirectInsertId
+    delta_x: int
+    delta_y: int
+
 
 @dataclass
 class _Pack:
@@ -2514,6 +2524,8 @@ def _pack(
     arrangement: int = 0,
     projection_no_goods: tuple[ProjectionNoGood, ...] = (),
     exact_pack_no_goods: tuple[ExactPackNoGood, ...] = (),
+    direct_relation_no_goods: tuple[_DirectRelationNoGood, ...] = (),
+    feedback: FeedbackState | None = None,
 ) -> _Pack | None:
     """Minimise width at a fixed height with CP-SAT.
 
@@ -2672,6 +2684,7 @@ def _pack(
     # Half-perimeter wirelength over the nets, which is what keeps phase 2's job
     # tractable and costs almost nothing to express.
     terms: list[cp_model.IntVar] = []
+    terms_by_pair: dict[tuple[int, int], tuple[cp_model.IntVar, cp_model.IntVar]] = {}
     for i, j in _nets_between(strips):
         dx = model.new_int_var(0, width_bound, f"dx{i}_{j}")
         dy = model.new_int_var(0, height, f"dy{i}_{j}")
@@ -2690,6 +2703,7 @@ def _pack(
 
         terms.append(dx)
         terms.append(dy)
+        terms_by_pair[i, j] = (dx, dy)
 
     # Direct insertion: one Boolean per eligible net, reified against the
     # geometry that would let a single sorter replace the whole belt route.
@@ -2741,6 +2755,39 @@ def _pack(
             [(delta,) for delta in cand.origin_deltas],
         ).only_enforce_if(di)
         direct_vars[i, j] = di
+
+    for no_good_index, no_good in enumerate(direct_relation_no_goods):
+        direct = no_good.direct_id
+        pair = (direct.source_strip, direct.destination_strip)
+        candidate = direct_candidates.get(pair)
+        di = direct_vars.get(pair)
+        if (
+            candidate is None
+            or di is None
+            or candidate.item != direct.item
+            or candidate.cargo_domain is not direct.cargo_domain
+        ):
+            continue
+        relation_x = model.new_int_var(
+            -width_bound,
+            width_bound,
+            f"direct_ng_dx{no_good_index}",
+        )
+        relation_y = model.new_int_var(
+            -height,
+            height,
+            f"direct_ng_dy{no_good_index}",
+        )
+        model.add(
+            relation_x
+            == (xs[pair[1]] + strips[pair[1]].west_channel)
+            - (xs[pair[0]] + strips[pair[0]].west_channel)
+        )
+        model.add(relation_y == ys[pair[1]] - ys[pair[0]])
+        model.add_forbidden_assignments(
+            [di, relation_x, relation_y],
+            [(1, no_good.delta_x, no_good.delta_y)],
+        )
 
     # Objective: width first, wirelength only as a tie-break.
     #
@@ -2803,7 +2850,23 @@ def _pack(
         len(terms), width_bound=width_bound, height=height, n_direct=len(direct_vars)
     )
     missed = sum(di.Not() for di in direct_vars.values())
-    model.minimize(w_var * cap + LAMBDA_HPWL * sum(terms) + MU_DIRECT * missed)
+    base_tier = LAMBDA_HPWL * sum(terms) + MU_DIRECT * missed
+    feedback_by_pair: dict[tuple[int, int], float] = defaultdict(float)
+    if feedback is not None:
+        for net, weight in feedback.net_weight.items():
+            if net.source_strip is None or net.destination_strip is None:
+                continue
+            feedback_by_pair[net.source_strip, net.destination_strip] += weight
+    evidence_tier = sum(
+        max(1, math.ceil(feedback_by_pair[pair])) * (dx + dy)
+        for pair, (dx, dy) in terms_by_pair.items()
+        if feedback_by_pair.get(pair, 0.0) > 0.0
+    )
+    if feedback is None or not feedback_by_pair:
+        model.minimize(w_var * cap + base_tier)
+    else:
+        evidence_cap = (width_bound + 1) * cap
+        model.minimize(evidence_tier * evidence_cap + w_var * cap + base_tier)
 
     # Warm start.  The seed is feasible at this height by construction, so its
     # width bounds `w_var` from above and its positions give the search an
@@ -2811,7 +2874,8 @@ def _pack(
     # each variable's domain: an out-of-domain hint is not a tighter hint, it is
     # a discarded one.
     if seed is not None:
-        model.add(w_var <= min(seed.width, width_bound))
+        if feedback is None:
+            model.add(w_var <= min(seed.width, width_bound))
         for i, (hx, hy) in seed.at.items():
             if i >= n:
                 continue
@@ -5615,6 +5679,11 @@ def _route_all(
             failures=ordered_failures,
             iterations=iterations,
             expansions=expansions,
+            exhaustive=not budget_exhausted
+            and not any(
+                failure.kind is RouteFailureKind.BUDGET
+                for failure in ordered_failures
+            ),
         )
 
     _reserve_port_access(canvas, nets)
@@ -7716,6 +7785,7 @@ def _route_external_inputs(
         failures=tuple(failures),
         iterations=0,
         expansions=expansions,
+        exhaustive=status is not DetailedRouteStatus.BUDGET,
     )
 
 
@@ -9630,6 +9700,100 @@ class PackAttempt:
         if not self.realized_direct <= self.promised_direct:
             raise ValueError("a realized direct insert must name a rewarded promise")
 
+def _proof_scoped_no_goods(
+    attempt: PackAttempt,
+    strips: list[Strip],
+    spec: BuildSpec,
+) -> tuple[tuple[_DirectRelationNoGood, ...], ExactPackNoGood | None]:
+    """Derive only relation or assignment exclusions proved by this attempt."""
+    direct_candidates = _direct_net_candidates(strips, spec)
+    local: list[_DirectRelationNoGood] = []
+    for direct in sorted(attempt.promised_direct - attempt.realized_direct):
+        source = direct.source_strip
+        destination = direct.destination_strip
+        if (
+            not 0 <= source < len(attempt.origins)
+            or not 0 <= destination < len(attempt.origins)
+        ):
+            continue
+        candidate = direct_candidates.get((source, destination))
+        source_origin = attempt.origins[source]
+        destination_origin = attempt.origins[destination]
+        delta_x = destination_origin[0] - source_origin[0]
+        delta_y = destination_origin[1] - source_origin[1]
+        structurally_impossible = (
+            candidate is None
+            or candidate.item != direct.item
+            or candidate.cargo_domain is not direct.cargo_domain
+            or delta_x not in candidate.origin_deltas
+            or not (
+                1
+                <= delta_y + candidate.cons_row - candidate.prod_row
+                <= catalog.SORTER_MAX_REACH
+            )
+        )
+        if structurally_impossible:
+            local.append(
+                _DirectRelationNoGood(
+                    direct_id=direct,
+                    delta_x=delta_x,
+                    delta_y=delta_y,
+                )
+            )
+
+    if local:
+        return tuple(local), None
+
+    routing = attempt.routing
+    if (
+        not routing.exhaustive
+        or routing.status is not DetailedRouteStatus.STRANDED
+        or not routing.failures
+        or any(
+            failure.kind is RouteFailureKind.BUDGET
+            for failure in routing.failures
+        )
+    ):
+        return (), None
+
+    evidence = tuple(
+        finalize.ProjectionFailure(
+            check="route.exhaustive",
+            buildings=(),
+            detail=(
+                f"{failure.kind.value}: net={failure.net_id!r}; "
+                f"wall={failure.wall!r}; blockers={failure.blocking_nets!r}; "
+                f"expansions={failure.expansions}"
+            ),
+            band=0,
+        )
+        for failure in routing.failures
+    )
+    return (
+        (),
+        ExactPackNoGood(
+            height=attempt.height,
+            outline=attempt.outline,
+            width=attempt.compact_width,
+            origins=attempt.origins,
+            evidence=evidence,
+        ),
+    )
+
+
+def _attempt_feedback_state(
+    attempt: PackAttempt,
+    previous: FeedbackState | None,
+) -> FeedbackState:
+    """Accumulate immutable failed-net, blocker, and hot-wall evidence."""
+    outline = (attempt.compact_width, attempt.height)
+    state = (
+        FeedbackState.empty(outline)
+        if previous is None
+        else previous.for_outline(outline)
+    )
+    return update_feedback(state, attempt.routing)
+
 
 @dataclass(slots=True)
 class _BuildResult:
@@ -9701,7 +9865,14 @@ def _build_prepared(
         if net.net_id is not None and net.net_id.role is not NetRole.EXTERNAL
     ]
 
-    empty_routing = DetailedRouteResult(DetailedRouteStatus.ROUTED, (), (), 0, 0)
+    empty_routing = DetailedRouteResult(
+        DetailedRouteStatus.ROUTED,
+        (),
+        (),
+        0,
+        0,
+        exhaustive=True,
+    )
     external_routing = empty_routing
     internal_routing = empty_routing
 
@@ -9752,6 +9923,11 @@ def _build_prepared(
         failures=failures,
         iterations=internal_routing.iterations,
         expansions=external_routing.expansions + internal_routing.expansions,
+        exhaustive=(
+            not prepared.preparation_failures
+            and external_routing.exhaustive
+            and internal_routing.exhaustive
+        ),
     )
     if routing.status is DetailedRouteStatus.BUDGET:
         return _BuildResult(
@@ -11183,6 +11359,10 @@ class FreeformLayout:
         exact_pack_no_goods: list[ExactPackNoGood] = []
         exact_pack_no_good_keys: set[ExactPackNoGood] = set()
         staged_static_exact_retries: set[tuple[int, int]] = set()
+        direct_relation_no_goods: list[_DirectRelationNoGood] = []
+        direct_relation_no_good_keys: set[_DirectRelationNoGood] = set()
+        feedback_by_height: dict[int, FeedbackState] = {}
+        compact_width_by_height: dict[int, int] = {}
         # This sweep's own share, never more than the CALL has left. A sweep
         # asked for 15s when 3 remain must not spend 15.
         left = time_budget_s if deadline is None else deadline - time.monotonic()
@@ -11360,10 +11540,17 @@ class FreeformLayout:
             # arrangement with audit job allocation.  Those 24+ strip cells
             # route in one round from the deterministic seed; pin only their
             # packing solve so jobs=2 and a standalone call ask the same model.
+            feedback = feedback_by_height.get(height)
+            width_bound = max(bound * 2, 8)
+            if feedback is not None and height in compact_width_by_height:
+                width_bound = min(
+                    width_bound,
+                    math.ceil(1.10 * compact_width_by_height[height]),
+                )
             pack = _pack(
                 strips,
                 height=height,
-                width_bound=max(bound * 2, 8),
+                width_bound=width_bound,
                 time_budget_s=remaining,
                 direct_candidates=net_candidates,
                 workers=(1 if len(strips) >= _DETERMINISTIC_PACK_STRIPS else self.workers),
@@ -11371,9 +11558,13 @@ class FreeformLayout:
                 arrangement=arrangement,
                 projection_no_goods=tuple(projection_no_goods),
                 exact_pack_no_goods=tuple(exact_pack_no_goods),
+                direct_relation_no_goods=tuple(direct_relation_no_goods),
+                feedback=feedback,
             )
             if pack is None:
                 continue
+            if feedback is None:
+                compact_width_by_height.setdefault(height, pack.width)
             # RATIONING THE CLOCK BETWEEN HEIGHTS WAS TRIED AND IS WORSE.
             #
             # The observation is real: a routing pass that will wire this pack
@@ -11592,26 +11783,74 @@ class FreeformLayout:
                     )
                 continue
             failed = result.routing.failed_count
+            attempt = PackAttempt(
+                origins=tuple(pack.at[index] for index in range(len(pack.at))),
+                compact_width=pack.width,
+                height=pack.height,
+                outline=tuple(_box(strip) for strip in strips),
+                routing=result.routing,
+                static_access=tuple(
+                    failure
+                    for failure in result.routing.failures
+                    if failure.kind is RouteFailureKind.STATIC_ACCESS
+                ),
+                promised_direct=result.promised_direct,
+                realized_direct=result.realized_direct,
+            )
             if attempts is not None:
-                attempts.append(
-                    PackAttempt(
-                        origins=tuple(pack.at[index] for index in range(len(pack.at))),
-                        compact_width=pack.width,
-                        height=pack.height,
-                        outline=tuple(_box(strip) for strip in strips),
-                        routing=result.routing,
-                        static_access=tuple(
-                            failure
-                            for failure in result.routing.failures
-                            if failure.kind is RouteFailureKind.STATIC_ACCESS
-                        ),
-                        promised_direct=result.promised_direct,
-                        realized_direct=result.realized_direct,
+                attempts.append(attempt)
+            if failed:
+                local_no_goods, exact_no_good = _proof_scoped_no_goods(
+                    attempt,
+                    strips,
+                    spec,
+                )
+                learned = False
+                for no_good in local_no_goods:
+                    if no_good in direct_relation_no_good_keys:
+                        continue
+                    direct_relation_no_good_keys.add(no_good)
+                    direct_relation_no_goods.append(no_good)
+                    learned = True
+                if (
+                    exact_no_good is not None
+                    and exact_no_good not in exact_pack_no_good_keys
+                ):
+                    exact_pack_no_good_keys.add(exact_no_good)
+                    exact_pack_no_goods.append(exact_no_good)
+                    learned = True
+
+                budget_failure = (
+                    result.routing.status is DetailedRouteStatus.BUDGET
+                    or any(
+                        failure.kind is RouteFailureKind.BUDGET
+                        for failure in result.routing.failures
                     )
                 )
-            if failed:
-                if arrangement == 0 and _is_rescuable_near_miss(result.routing):
+                if not budget_failure:
+                    feedback_by_height[height] = _attempt_feedback_state(
+                        attempt,
+                        feedback_by_height.get(height),
+                    )
+
+                if arrangement == 0 and (
+                    learned or _is_rescuable_near_miss(result.routing)
+                ):
                     rescuable_heights.add(height)
+                if learned:
+                    next_candidate = (height, arrangement + 1, False)
+                    try:
+                        next_index = candidate_packs.index(
+                            next_candidate,
+                            candidate_index,
+                        )
+                    except ValueError:
+                        pass
+                    else:
+                        candidate_packs.insert(
+                            candidate_index,
+                            candidate_packs.pop(next_index),
+                        )
                 continue
             if result.routing.status is not DetailedRouteStatus.ROUTED:
                 continue

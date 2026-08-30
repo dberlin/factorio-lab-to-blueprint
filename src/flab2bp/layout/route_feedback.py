@@ -50,8 +50,8 @@ class NetId:
     item: str
     role: NetRole
     ordinal: int
-    cargo_domain: CargoDomain = CargoDomain.UNSPRAYED
     logical_id: LogicalNetId | None = None
+    cargo_domain: CargoDomain = CargoDomain.UNSPRAYED
 
     @property
     def logical(self) -> LogicalNetId:
@@ -101,6 +101,19 @@ class DetailedRouteResult:
     failures: tuple[NetFailure, ...]
     iterations: int
     expansions: int
+    exhaustive: bool = False
+
+    def __post_init__(self) -> None:
+        if type(self.exhaustive) is not bool:
+            raise ValueError("route exhaustion marker must be boolean")
+        if self.exhaustive and (
+            self.status is DetailedRouteStatus.BUDGET
+            or any(
+                failure.kind is RouteFailureKind.BUDGET
+                for failure in self.failures
+            )
+        ):
+            raise ValueError("budget routing cannot be marked exhaustive")
 
     @property
     def failed_count(self) -> int:
@@ -212,13 +225,15 @@ def update_feedback(state: FeedbackState, result: DetailedRouteResult) -> Feedba
     cell_history = dict(state.cell_history)
     width, height = state.outline
     for failure in geometric:
-        logical = failure.net_id.logical
-        weight = min(
-            _MAX_NET_WEIGHT,
-            logical_net_weight.get(logical, 0.0) + 1.0,
-        )
-        logical_net_weight[logical] = weight
-        net_weight[failure.net_id] = weight
+        implicated = (failure.net_id, *failure.blocking_nets)
+        for net in dict.fromkeys(implicated):
+            logical = net.logical
+            weight = min(
+                _MAX_NET_WEIGHT,
+                logical_net_weight.get(logical, 0.0) + 1.0,
+            )
+            logical_net_weight[logical] = weight
+            net_weight[net] = weight
         for cell in failure.wall:
             if _valid_cell(cell, width, height):
                 cell_history[cell] = cell_history.get(cell, 0.0) + 1.0

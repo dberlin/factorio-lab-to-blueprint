@@ -91,6 +91,7 @@ from flab2bp.layout.route_feedback import (
     Cell,
     DetailedRouteResult,
     DetailedRouteStatus,
+    FeedbackState,
     NetFailure,
     NetId,
     NetRole,
@@ -211,6 +212,22 @@ def plastic_spec() -> BuildSpec:
         ).candidates
         if candidate.label == "all-products"
     )
+
+def captured_output_products_spec() -> BuildSpec:
+    """The reported 17-strip casimir-crystal/output-products refusal."""
+    from flab2bp.bench.corpus import URL_CORPUS
+    from flab2bp.lab.data import load_vendored
+    from flab2bp.lab.url import parse_url
+    from flab2bp.rates.candidates import CandidatePolicy, build_candidates
+
+    entry = next(
+        candidate for candidate in URL_CORPUS if candidate.url_id == "casimir-crystal"
+    )
+    return build_candidates(
+        load_vendored(),
+        parse_url(entry.url),
+        candidate_policies=(CandidatePolicy.OUTPUT_PRODUCTS,),
+    ).candidates[0]
 
 
 def test_prepared_problem_creates_fresh_workspaces() -> None:
@@ -2351,7 +2368,10 @@ class TestObjectiveStaysLexicographic:
         assert with_di - without == MU_DIRECT * 7
 
 
-def _routing_failures(*kinds: RouteFailureKind) -> DetailedRouteResult:
+def _routing_failures(
+    *kinds: RouteFailureKind,
+    exhaustive: bool = False,
+) -> DetailedRouteResult:
     failures = tuple(
         NetFailure(
             NetId(0, 1, f"item-{ordinal}", NetRole.INTERNAL, ordinal),
@@ -2367,7 +2387,143 @@ def _routing_failures(*kinds: RouteFailureKind) -> DetailedRouteResult:
         if RouteFailureKind.BUDGET in kinds
         else (DetailedRouteStatus.STRANDED if failures else DetailedRouteStatus.ROUTED)
     )
-    return DetailedRouteResult(status, (), failures, 0, 0)
+    arguments = (status, (), failures, 0, 0)
+    if exhaustive:
+        return DetailedRouteResult(*arguments, exhaustive=True)
+    return DetailedRouteResult(*arguments)
+
+
+def _proof_attempt(
+    routing: DetailedRouteResult,
+    strips: list[Strip],
+    *,
+    origins: tuple[tuple[int, int], ...] | None = None,
+    promised_direct: frozenset[DirectInsertId] = frozenset(),
+    realized_direct: frozenset[DirectInsertId] = frozenset(),
+) -> freeform.PackAttempt:
+    return freeform.PackAttempt(
+        origins=origins
+        or tuple((index * 10, 0) for index in range(len(strips))),
+        compact_width=20,
+        height=20,
+        outline=tuple(_box(strip) for strip in strips),
+        routing=routing,
+        static_access=tuple(
+            failure
+            for failure in routing.failures
+            if failure.kind is RouteFailureKind.STATIC_ACCESS
+        ),
+        promised_direct=promised_direct,
+        realized_direct=realized_direct,
+    )
+
+
+def test_static_access_without_an_independent_relation_proof_is_evidence_only() -> None:
+    spec = two_stage_spec()
+    strips = plan_strips(spec)
+    attempt = _proof_attempt(
+        _routing_failures(RouteFailureKind.STATIC_ACCESS),
+        strips,
+    )
+
+    local, exact = freeform._proof_scoped_no_goods(attempt, strips, spec)
+
+    assert local == ()
+    assert exact is None
+
+
+def test_static_access_structurally_impossible_direct_creates_only_local_no_good() -> None:
+    spec = two_stage_spec()
+    strips = plan_strips(spec)
+    (source, destination), candidate = next(
+        iter(_direct_net_candidates(strips, spec).items())
+    )
+    direct = DirectInsertId(
+        source,
+        destination,
+        candidate.item,
+        candidate.cargo_domain,
+    )
+    origins = [(index * 10, 0) for index in range(len(strips))]
+    origins[destination] = (
+        origins[source][0] + max(candidate.origin_deltas) + 1,
+        origins[source][1] + 1,
+    )
+    routing = DetailedRouteResult(
+        DetailedRouteStatus.STRANDED,
+        (),
+        (
+            NetFailure(
+                direct.net_id,
+                RouteFailureKind.STATIC_ACCESS,
+                (),
+                (),
+                0,
+            ),
+        ),
+        0,
+        0,
+    )
+    attempt = _proof_attempt(
+        routing,
+        strips,
+        origins=tuple(origins),
+        promised_direct=frozenset({direct}),
+    )
+
+    local, exact = freeform._proof_scoped_no_goods(attempt, strips, spec)
+
+    assert len(local) == 1
+    assert local[0].direct_id == direct
+    assert local[0].delta_x == origins[destination][0] - origins[source][0]
+    assert local[0].delta_y == origins[destination][1] - origins[source][1]
+    assert exact is None
+
+
+def test_exhaustive_non_budget_failure_creates_full_assignment_no_good() -> None:
+    spec = two_stage_spec()
+    strips = plan_strips(spec)
+    attempt = _proof_attempt(
+        _routing_failures(
+            RouteFailureKind.CONGESTION_WALL,
+            exhaustive=True,
+        ),
+        strips,
+    )
+
+    local, exact = freeform._proof_scoped_no_goods(attempt, strips, spec)
+
+    assert local == ()
+    assert exact is not None
+    assert exact.height == attempt.height
+    assert exact.outline == attempt.outline
+    assert exact.width == attempt.compact_width
+    assert exact.origins == attempt.origins
+    assert exact.evidence
+    assert all(failure.check == "route.exhaustive" for failure in exact.evidence)
+
+
+@pytest.mark.parametrize(
+    "routing",
+    [
+        pytest.param(
+            _routing_failures(RouteFailureKind.CONGESTION_WALL),
+            id="non-exhaustive",
+        ),
+        pytest.param(
+            _routing_failures(RouteFailureKind.BUDGET),
+            id="budget",
+        ),
+    ],
+)
+def test_unproved_and_budget_failures_do_not_exclude_geometry(
+    routing: DetailedRouteResult,
+) -> None:
+    spec = two_stage_spec()
+    strips = plan_strips(spec)
+    attempt = _proof_attempt(routing, strips)
+
+    assert freeform._proof_scoped_no_goods(attempt, strips, spec) == ((), None)
 
 
 @pytest.mark.parametrize(
@@ -2501,6 +2657,103 @@ def test_a_near_miss_admits_the_next_same_height_arrangement_before_an_incumbent
     assert result is not None
     assert seen == [(20, 0), (20, 1)]
     assert [attempt.routing.failed_count for attempt in attempts] == [2, 0]
+
+def test_proof_scoped_route_feedback_uses_only_configured_width_slack(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = two_stage_spec()
+    strips = plan_strips(spec)
+    height = 20
+    compact = freeform._Pack(
+        at={index: (index * 10, 0) for index in range(len(strips))},
+        width=20,
+        height=height,
+        status="compact",
+    )
+    alternative = freeform._Pack(
+        at={index: (index * 10 + index, 0) for index in range(len(strips))},
+        width=22,
+        height=height,
+        status="feedback",
+    )
+    failed = _routing_failures(
+        RouteFailureKind.CONGESTION_WALL,
+        exhaustive=True,
+    )
+    routed = _routing_failures(exhaustive=True)
+    calls: list[dict[str, object]] = []
+
+    def pack(
+        *_args: object,
+        arrangement: int,
+        **kwargs: object,
+    ) -> freeform._Pack:
+        calls.append({"arrangement": arrangement, **kwargs})
+        return compact if arrangement == 0 else alternative
+
+    def build(
+        _spec: BuildSpec,
+        _strips: list[Strip],
+        pack: freeform._Pack,
+        **_kwargs: object,
+    ) -> _BuildResult:
+        routing = failed if pack is compact else routed
+        placement = (
+            None
+            if routing.failed_count
+            else Placement(buildings=(), stats={"belt_tiles": 0.0})
+        )
+        return _BuildResult(placement, routing, ())
+
+    monkeypatch.setattr(freeform, "_candidate_heights", lambda _strips: [height])
+    monkeypatch.setattr(freeform, "_greedy_pack", lambda _strips, _height: compact)
+    monkeypatch.setattr(freeform, "_pack", pack)
+    monkeypatch.setattr(freeform, "_build", build)
+    monkeypatch.setattr(
+        validate,
+        "certify",
+        lambda *_args, **_kwargs: validate.Report(findings=()),
+    )
+    monkeypatch.setattr(
+        finalize,
+        "finalize_placement",
+        lambda placement, _policy: placement,
+    )
+
+    attempts: list[freeform.PackAttempt] = []
+    result = FreeformLayout(
+        band_policy=BandPolicy("portable"),
+        arrangements=2,
+    )._sweep(spec, strips, 1.0, attempts=attempts)
+
+    assert result is not None
+    assert [call["arrangement"] for call in calls] == [0, 1]
+    assert calls[1]["width_bound"] == math.ceil(1.10 * compact.width)
+    feedback = calls[1]["feedback"]
+    assert isinstance(feedback, FeedbackState)
+    assert feedback.net_weight[failed.failures[0].net_id] == 1.0
+    exact_no_goods = calls[1]["exact_pack_no_goods"]
+    assert isinstance(exact_no_goods, tuple) and len(exact_no_goods) == 1
+    rejected = exact_no_goods[0]
+    assert isinstance(rejected, freeform.ExactPackNoGood)
+    assert rejected.origins == tuple(
+        compact.at[index] for index in range(len(compact.at))
+    )
+    assert attempts[0].origins != attempts[1].origins
+
+def test_proof_scoped_feedback_routes_captured_output_products_at_existing_deadline() -> None:
+    spec = captured_output_products_spec()
+    assert len(plan_strips(spec, strip_len=6)) == 17
+
+    placement = FreeformLayout(
+        band_policy=BandPolicy("portable"),
+        workers=1,
+    ).lay_out(spec, time_budget_s=4.0)
+
+    report = validate.validate(placement, spec, expect_power=True)
+    assert report.ok, "\n".join(
+        f"{finding.check}: {finding.message}" for finding in report.errors
+    )
 
 
 @pytest.mark.parametrize(
