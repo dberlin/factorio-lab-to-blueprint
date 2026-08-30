@@ -9726,6 +9726,11 @@ class FreeformLayout:
 
         best: Placement | None = None
         best_key: tuple[int, float] | None = None
+        #: Heights whose first arrangement left only one to three authoritative
+        #: non-budget route failures. Each may spend one already-configured next
+        #: arrangement before an incumbent exists; admitting it removes the
+        #: height, so a second miss cannot cascade into more work.
+        rescuable_heights: set[int] = set()
         #: The dearest candidate this sweep has COMPLETED, pack through validate.
         #: What `_room_for_another` charges the next improvement arrangement.
         dearest_candidate_s = 0.0
@@ -9742,7 +9747,7 @@ class FreeformLayout:
             # a full routing pass into the wall.
             if started_at is not None:
                 dearest_candidate_s = max(dearest_candidate_s, time.monotonic() - started_at)
-            # A SECOND ARRANGEMENT IMPROVES; IT NEVER SEARCHES FOR THE FIRST.
+            # A SECOND ARRANGEMENT NORMALLY IMPROVES; ONE STRONG NEAR MISS MAY RESCUE.
             #
             # This is the whole shape of the feature and it was measured into
             # existence rather than designed. Extra arrangements were tried
@@ -9760,7 +9765,7 @@ class FreeformLayout:
             # cells on the corpus (paired, six rounds, t = +3.80). Re-measured
             # after it: -0.33 (t = -0.79). The rewrite lifted the baseline from
             # 70.0 to 71.8 of 72 and took the headroom with it, so what was a
-            # routability lever is now purely a density one.
+            # routability lever is now primarily a density one.
             #
             # Where they DO pay is on a spec that has already wired and has clock
             # left, because the sweep keeps the best `(area, belt_tiles)` it has
@@ -9774,8 +9779,8 @@ class FreeformLayout:
             # and density is the objective it is spent on.
             #
             # So the first pass over the heights is exactly what shipped before,
-            # and arrangements past it are gated TWICE: on having something to
-            # improve, and on being able to afford the improvement.
+            # and arrangements past it are normally gated TWICE: on having
+            # something to improve, and on being able to afford the improvement.
             #
             # `best is None` alone was not enough, and the number that says so
             # was measured at the DEFAULT budget rather than at the budget the
@@ -9824,8 +9829,18 @@ class FreeformLayout:
             # So the default is the one both ends support, which is the thing the
             # unconditional version got wrong: it was measured at budget 60 and
             # shipped to budget 4.
+            # One bounded exception lets a strong near miss look at the next
+            # arrangement for that exact height. The candidate already exists in
+            # `candidate_packs`; this only admits it through the incumbent gate.
+            # It still pays the ordinary affordability and deadline checks below.
+            # Skipping non-matching heights preserves arrangement-outer ordering
+            # until the tracked height is reached.
             if not projection_retry and arrangement and best is None:
-                break
+                if height not in rescuable_heights:
+                    if not rescuable_heights:
+                        break
+                    continue
+                rescuable_heights.remove(height)
             if (
                 not projection_retry
                 and arrangement
@@ -9946,6 +9961,8 @@ class FreeformLayout:
             if attempts is not None:
                 attempts.append(failed)
             if failed:
+                if arrangement == 0 and _is_rescuable_near_miss(result.routing):
+                    rescuable_heights.add(height)
                 continue
             placement = result.placement
             # AND THE PLACEMENT HAS TO PASS OUR OWN VALIDATOR BEFORE IT COUNTS.
@@ -10027,6 +10044,13 @@ class FreeformLayout:
                 placement.stats["area"] = float(placement.area)
                 best, best_key = placement, key
         return best
+
+
+def _is_rescuable_near_miss(routing: DetailedRouteResult) -> bool:
+    """Whether one fixed-work arrangement retry may rescue this routing result."""
+    return 1 <= len(routing.failures) <= 3 and all(
+        failure.kind is not RouteFailureKind.BUDGET for failure in routing.failures
+    )
 
 
 def _room_for_another(deadline: float | None, soft: float, candidate_s: float) -> bool:

@@ -57,6 +57,7 @@ from flab2bp.layout.freeform import (
     _greedy_pack,
     _Grid,
     _height_seed,
+    _is_rescuable_near_miss,
     _join_shard_islands,
     _logical_strip_plans,
     _machines_without_poses,
@@ -1915,6 +1916,178 @@ class TestObjectiveStaysLexicographic:
         with_di = tie_break_cap(4, width_bound=20, height=10, n_direct=7)
         assert with_di > without
         assert with_di - without == MU_DIRECT * 7
+
+
+def _routing_failures(*kinds: RouteFailureKind) -> DetailedRouteResult:
+    failures = tuple(
+        NetFailure(
+            NetId(0, 1, f"item-{ordinal}", NetRole.INTERNAL, ordinal),
+            kind,
+            (),
+            (),
+            0,
+        )
+        for ordinal, kind in enumerate(kinds)
+    )
+    status = (
+        DetailedRouteStatus.BUDGET
+        if RouteFailureKind.BUDGET in kinds
+        else (DetailedRouteStatus.STRANDED if failures else DetailedRouteStatus.ROUTED)
+    )
+    return DetailedRouteResult(status, (), failures, 0, 0)
+
+
+@pytest.mark.parametrize(
+    ("kinds", "expected"),
+    [
+        pytest.param((), False, id="zero-failures"),
+        pytest.param((RouteFailureKind.SEALED_POCKET,), True, id="one-geometric-failure"),
+        pytest.param(
+            (
+                RouteFailureKind.STATIC_ACCESS,
+                RouteFailureKind.CONGESTION_WALL,
+                RouteFailureKind.COMMIT_LINK,
+            ),
+            True,
+            id="three-mixed-non-budget-failures",
+        ),
+        pytest.param(
+            (RouteFailureKind.DYNAMIC_ACCESS,) * 4,
+            False,
+            id="four-failures",
+        ),
+        pytest.param(
+            (RouteFailureKind.SEALED_POCKET, RouteFailureKind.BUDGET),
+            False,
+            id="contains-budget-failure",
+        ),
+    ],
+)
+def test_only_one_to_three_non_budget_route_failures_are_rescuable(
+    kinds: tuple[RouteFailureKind, ...],
+    expected: bool,
+) -> None:
+    assert _is_rescuable_near_miss(_routing_failures(*kinds)) is expected
+
+
+def _sweep_after_first_routing(
+    monkeypatch: pytest.MonkeyPatch,
+    first_routing: DetailedRouteResult,
+    *,
+    arrangements: int = 2,
+) -> tuple[Placement | None, list[tuple[int, int]], list[int]]:
+    spec = two_stage_spec()
+    strips = plan_strips(spec)
+    height = 20
+    packs = tuple(
+        freeform._Pack(
+            at={index: (index * 10, 0) for index in range(len(strips))},
+            width=20,
+            height=height,
+            status="test",
+        )
+        for _arrangement in range(arrangements)
+    )
+    routed = _routing_failures()
+    seen: list[tuple[int, int]] = []
+
+    def pack(
+        *_args: object,
+        height: int,
+        arrangement: int,
+        **_kwargs: object,
+    ) -> freeform._Pack:
+        seen.append((height, arrangement))
+        return packs[arrangement]
+
+    def build(
+        _spec: BuildSpec,
+        _strips: list[Strip],
+        pack: freeform._Pack,
+        **_kwargs: object,
+    ) -> _BuildResult:
+        routing = first_routing if pack is packs[0] else routed
+        return _BuildResult(
+            Placement(buildings=(), stats={"belt_tiles": 0.0}),
+            routing,
+            (),
+        )
+
+    monkeypatch.setattr(freeform, "_candidate_heights", lambda _strips: [height])
+    monkeypatch.setattr(freeform, "_greedy_pack", lambda _strips, _height: packs[0])
+    monkeypatch.setattr(freeform, "_pack", pack)
+    monkeypatch.setattr(freeform, "_build", build)
+    monkeypatch.setattr(
+        validate,
+        "certify",
+        lambda *_args, **_kwargs: validate.Report(findings=()),
+    )
+    monkeypatch.setattr(finalize, "finalize_placement", lambda placement, _policy: placement)
+
+    attempts: list[int] = []
+    result = FreeformLayout(
+        band_policy=BandPolicy("portable"),
+        power=False,
+        arrangements=arrangements,
+    )._sweep(spec, strips, 1.0, attempts=attempts)
+    return result, seen, attempts
+
+
+def test_a_near_miss_admits_the_next_same_height_arrangement_before_an_incumbent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result, seen, attempts = _sweep_after_first_routing(
+        monkeypatch,
+        _routing_failures(
+            RouteFailureKind.SEALED_POCKET,
+            RouteFailureKind.COMMIT_LINK,
+        ),
+    )
+
+    assert result is not None
+    assert seen == [(20, 0), (20, 1)]
+    assert attempts == [2, 0]
+
+
+@pytest.mark.parametrize(
+    "first_routing",
+    [
+        pytest.param(
+            _routing_failures(
+                RouteFailureKind.SEALED_POCKET,
+                RouteFailureKind.BUDGET,
+            ),
+            id="budget",
+        ),
+        pytest.param(
+            _routing_failures(*(RouteFailureKind.DYNAMIC_ACCESS,) * 4),
+            id="four-failures",
+        ),
+    ],
+)
+def test_non_rescuable_routing_does_not_admit_an_arrangement(
+    monkeypatch: pytest.MonkeyPatch,
+    first_routing: DetailedRouteResult,
+) -> None:
+    result, seen, attempts = _sweep_after_first_routing(monkeypatch, first_routing)
+
+    assert result is None
+    assert seen == [(20, 0)]
+    assert attempts == [len(first_routing.failures)]
+
+
+def test_a_near_miss_does_not_create_an_unconfigured_arrangement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result, seen, attempts = _sweep_after_first_routing(
+        monkeypatch,
+        _routing_failures(RouteFailureKind.CONGESTION_WALL),
+        arrangements=1,
+    )
+
+    assert result is None
+    assert seen == [(20, 0)]
+    assert attempts == [1]
 
 
 @pytest.mark.parametrize(
