@@ -7649,10 +7649,55 @@ class TestProjectedCoaterSplitterBanIsPreparedBeforeRouting:
         assert (7, 3, 1) not in flat_only
         assert (7, 3, 1) in ban
 
-    def test_preparation_merges_reachable_frames_into_prepared_junction_ban(
+    def test_preparation_skips_junction_geometry_when_no_net_can_branch(
         self,
     ) -> None:
         spec = proliferated_spec()
+        strips = plan_strips(spec)
+        pack = _greedy_pack(strips, _height_seed(strips))
+
+        prepared = _prepare_routing_problem(
+            spec,
+            strips,
+            pack,
+            power=False,
+            policy=BandPolicy("portable"),
+        )
+
+        assert all(
+            not net.src_group
+            and not net.dst_group
+            and (
+                net.src is None
+                or prepared.building_templates[net.src.belt_index].output_obj
+                is None
+            )
+            for net in prepared.nets
+        )
+        assert prepared.junction_ban == frozenset()
+
+    def test_preparation_merges_reachable_frames_into_prepared_junction_ban(
+        self,
+    ) -> None:
+        base = proliferated_spec()
+        producer = base.groups[0].model_copy(update={"count": 8})
+        second_consumer = group(
+            "circuit-board",
+            "assembling-machine-2",
+            4,
+            {"iron-ingot": F(1)},
+            {"circuit-board": F(1)},
+            mode=ProliferatorMode.PRODUCTS,
+        )
+        spec = base.model_copy(
+            update={
+                "groups": (producer, base.groups[1], second_consumer),
+                "external_inputs": {**base.external_inputs, "iron-ore": F(8)},
+                "outputs": {**base.outputs, "circuit-board": F(4)},
+                "belt_required_edges": base.belt_required_edges
+                | {("iron-ingot", "circuit-board")},
+            }
+        )
         strips = plan_strips(spec)
         pack = _greedy_pack(strips, _height_seed(strips))
 
@@ -7668,8 +7713,8 @@ class TestProjectedCoaterSplitterBanIsPreparedBeforeRouting:
             prepared.power_sites,
         )
 
-        assert (2, 5, 1) not in flat_only
-        assert (2, 5, 1) in prepared.junction_ban
+        assert any(net.src_group or net.dst_group for net in prepared.nets)
+        assert prepared.junction_ban - flat_only
 
     def test_merge_frontier_consumes_prepared_junction_ban(self) -> None:
         ban = self._ban()

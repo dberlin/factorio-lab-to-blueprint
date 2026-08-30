@@ -9009,6 +9009,21 @@ def _prepare_routing_problem(
         for direct in sorted(promised_direct - realized_direct)
     )
 
+    grouped_nets = _with_sibling_groups(prepared_nets)
+    # The detailed router can introduce a Splitter only when a source already
+    # flows onward or when sibling nets can branch from / merge into one path.
+    # With neither shape present, no call can reach ``junction_is_clear``:
+    # materializing every reachable latitude frame would spend the routing
+    # budget proving legality for a building this attempt cannot emit.
+    junction_possible = any(
+        net.src_group
+        or net.dst_group
+        or (
+            net.src is not None
+            and canvas.buildings[net.src.belt_index].output_obj is not None
+        )
+        for net in grouped_nets
+    )
     junction_frames = (
         _junction_projection_frames(
             finalize._cleanup_survivor_bounds(
@@ -9017,8 +9032,18 @@ def _prepare_routing_problem(
             capacity,
             policy,
         )
-        if coater_list
+        if coater_list and junction_possible
         else ()
+    )
+    junction_ban = (
+        _prepared_junction_ban(
+            canvas.buildings,
+            power_sites,
+            projection_frames=junction_frames,
+            junction_bounds=capacity,
+        )
+        if junction_possible
+        else frozenset()
     )
 
     return _PreparedRoutingProblem(
@@ -9027,7 +9052,7 @@ def _prepare_routing_problem(
         solid=frozenset(canvas.solid),
         reserved=tuple(sorted(canvas.reserved.items())),
         keep_out=frozenset(canvas.keep_out),
-        nets=_with_sibling_groups(prepared_nets),
+        nets=grouped_nets,
         core=core,
         route_bounds=route_bounds,
         limit=canvas.limit,
@@ -9043,12 +9068,7 @@ def _prepare_routing_problem(
         belt_ban=tuple(
             sorted((cell, frozenset(levels)) for cell, levels in canvas.belt_ban.items())
         ),
-        junction_ban=_prepared_junction_ban(
-            canvas.buildings,
-            power_sites,
-            projection_frames=junction_frames,
-            junction_bounds=capacity,
-        ),
+        junction_ban=junction_ban,
         preparation_failures=preparation_failures,
     )
 
