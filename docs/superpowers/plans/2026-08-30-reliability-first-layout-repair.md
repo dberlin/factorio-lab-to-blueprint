@@ -156,7 +156,7 @@ uv run mypy src/flab2bp/layout/freeform.py tests/layout/test_freeform.py
 - Modify: `tests/layout/test_freeform.py`
 - Modify: `tests/layout/test_finalize.py` only for predicate parity
 
-- [ ] Add RED tests for an ownerless staged coater versus an existing machine whose flat placement is clear but one reachable projection produces `geom.collide`; include an ordered alternate seat that is projection-safe.
+- [ ] Add RED tests for both observed ownerless-static classes: a staged coater versus an existing machine with an ordered projection-safe alternate seat, and plastic/output-products' post-pitch Chemical Plant owner strip 2 versus direct power building item 2201 owner `None` pair `(181, 255)`.
 - [ ] Add shared immutable `ExactPackNoGood(height, outline, width, origins, evidence)` and the existing Freeform packer consumer before using it here. Tasks 8 and 10 extend this same mechanism.
 - [ ] Expose/reuse a prospective staged-static predicate with the same collider condition, projection ordering, and reachable envelope as finalization.
 - [ ] Change deterministic seat/offset selection to enumerate alternatives and choose the first projection-safe seat.

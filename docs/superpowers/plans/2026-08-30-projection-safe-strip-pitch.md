@@ -404,7 +404,7 @@ Clear the evidence file, then execute this command three times:
 uv run python scripts/audit.py --only plastic --budget 4 --strategy both --jobs 1 --json .superpowers/sdd/2026-08-30-projection-safe-strip-pitch/plastic-4s.jsonl
 ```
 
-Expected aggregate: 18/18 `CLEAN`; zero `REFUSED`, `INVALID`, `CRASH`, or `NOT RUN`.
+Expected aggregate: 15/18 `CLEAN`; zero `INVALID`, `CRASH`, or `NOT RUN`. The three SequencePair/output-products cells must first rerun the mapped adjacent Chemical Plant relation at pitch eight, then retain only the separately diagnosed unmapped ownerless-static collision `(181, 255)` as structured `REFUSED` evidence. Any terminal observation that still maps to `ProjectionPitchRequirement` fails this gate.
 
 - [ ] **Step 2: Run the default-budget gate**
 
@@ -412,7 +412,7 @@ Expected aggregate: 18/18 `CLEAN`; zero `REFUSED`, `INVALID`, `CRASH`, or `NOT R
 uv run python scripts/audit.py --only plastic --budget 15 --strategy both --jobs 1 --json .superpowers/sdd/2026-08-30-projection-safe-strip-pitch/plastic-15s.jsonl
 ```
 
-Expected: all six strategy/policy cells clean.
+Expected: five clean cells. SequencePair/output-products may retain the same owner-strip-2 Chemical Plant versus ownerless direct power building refusal only after its padded rerun; no mapped pitch requirement may remain terminal. This blocker transfers to the reliability plan's staged-static task and does not authorize generic different-strip feedback here.
 
 - [ ] **Step 3: Run deterministic geometry and routing regressions**
 
@@ -431,7 +431,7 @@ uv run python scripts/audit.py --budget 4 --strategy both --jobs 16 --json "$EVI
 uv run python scripts/audit.py --budget 4 --strategy both --jobs 16 --json "$EVIDENCE/candidate.jsonl"
 ```
 
-Repeat that pair three times. Add an ignored `$EVIDENCE/compare_gate.py` that assigns repeat ordinals per `(url_id, spec_index, power, strategy, budget)`, rejects missing/duplicate cells, and prints: clean coverage by arm, lost baseline-clean cells, paired area ratios, geometric-mean candidate/baseline area, and median candidate/baseline `build_wall_time_s`. Run it with:
+Repeat that pair three times. Add an ignored `$EVIDENCE/compare_gate.py` that assigns repeat ordinals per `(url_id, spec_index, power, strategy, budget)`, rejects missing/duplicate cells, and prints: clean trial and cell coverage by arm, lost baseline-clean cells, per-cell median-clean area ratios, geometric-mean candidate/baseline area, and median candidate/baseline `build_wall_time_s`. Repeat ordinals validate the matrix only; they are not paired observations because concurrent audit scheduling makes their completion order arbitrary.
 
 ```bash
 uv run python "$EVIDENCE/compare_gate.py" "$EVIDENCE/baseline.jsonl" "$EVIDENCE/candidate.jsonl"
@@ -439,9 +439,9 @@ uv run python "$EVIDENCE/compare_gate.py" "$EVIDENCE/baseline.jsonl" "$EVIDENCE/
 
 Acceptance:
 
-- no baseline-clean cell loses coverage;
-- paired geometric-mean area regression on baseline-clean cells is at most 1%;
-- median wall regression on baseline-clean cells is at most 5%;
+- no cell that is `CLEAN` in any baseline repeat loses all clean coverage in the candidate arm;
+- the geometric mean of candidate/baseline median-clean area per shared clean cell regresses by at most 1%;
+- the median candidate/baseline median-clean wall time per shared clean cell regresses by at most 5%;
 - the focused Task 1-3 feedback tests remain the authority that padded geometry appears only after an exact typed requirement.
 
 - [ ] **Step 5: Run complete static and test validation**
