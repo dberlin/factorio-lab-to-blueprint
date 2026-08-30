@@ -82,7 +82,12 @@ from flab2bp.lab.techs import belt_rules_for_url  # noqa: E402
 from flab2bp.lab.url import parse_url  # noqa: E402
 from flab2bp.layout import finalize, validate  # noqa: E402
 from flab2bp.layout.band_policy import BandPolicy  # noqa: E402
-from flab2bp.layout.base import LayoutStrategy, NoValidLayout  # noqa: E402
+from flab2bp.layout.base import (  # noqa: E402
+    LayoutAttemptFailure,
+    LayoutStrategy,
+    NoValidLayout,
+    ProjectionFailureRecord,
+)
 from flab2bp.layout.freeform import FreeformLayout  # noqa: E402
 from flab2bp.layout.sequence_solver import SequencePairLayout  # noqa: E402
 from flab2bp.rates.candidates import build_candidates  # noqa: E402
@@ -165,6 +170,8 @@ class Result:
     projection_collider_pairs: int = 0
     projection_power_pairs: int = 0
     projection_sorters: int = 0
+    attempt_failures: tuple[LayoutAttemptFailure, ...] = ()
+    projection_failures: tuple[ProjectionFailureRecord, ...] = ()
 
     @property
     def label(self) -> str:
@@ -234,7 +241,16 @@ def run_cell(job: Job) -> Result:
             time_budget_s=job.budget,
         )
     except NoValidLayout as exc:
-        return Result(job, "REFUSED", label, exc.reason[:70], ("<refused>",), time.monotonic() - t0)
+        return Result(
+            job,
+            "REFUSED",
+            label,
+            exc.reason,
+            ("<refused>",),
+            time.monotonic() - t0,
+            attempt_failures=exc.attempt_failures,
+            projection_failures=exc.projection_failures,
+        )
     except Exception as exc:  # noqa: BLE001
         return Result(
             job,

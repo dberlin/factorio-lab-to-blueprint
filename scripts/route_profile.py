@@ -90,20 +90,20 @@ def install(tally: Tally):
 
     def astar(canvas, starts, goals, history, pressure, bounds, budget=None,
               deadline=None, blame=None, grid=None):
-        before = budget["left"] if budget is not None else 0
         t0 = time.perf_counter()
         out = orig_astar(canvas, starts, goals, history, pressure, bounds,
                          budget, deadline, blame, grid)
         dt = time.perf_counter() - t0
         tally.add("astar", dt)
-        spent = (before - budget["left"]) if budget is not None else 0
-        tally.expansions += spent
-        if out is None:
+        tally.expansions += out.expansions
+        if out.path is None:
             tally.astar_none += 1
         else:
             tally.astar_hit += 1
-            tally.path_cells += len(out)
-        tally.calls.append((spent, dt, -1 if out is None else len(out)))
+            tally.path_cells += len(out.path)
+        tally.calls.append(
+            (out.expansions, dt, -1 if out.path is None else len(out.path))
+        )
         return out
 
     def route_all(canvas, nets, belt_id, belt_model, bounds, deadline=None,
