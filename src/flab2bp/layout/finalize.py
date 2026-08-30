@@ -592,6 +592,54 @@ def _projected_static_failure(
     )
 
 
+def projected_static_failure(
+    buildings: Sequence[tuple[int, PlacedBuilding]],
+    projection: planet.Projection,
+    *,
+    candidate_index: int | None = None,
+) -> ProjectionFailure | None:
+    """Return the finalizer's exact static-collider verdict for one projection.
+
+    ``buildings`` retain their placement indices so a prospective object that is
+    not committed yet can produce the same structured evidence as finalization.
+    Belts and sorters are omitted by the same condition as
+    :func:`_projection_invariants`.  When ``candidate_index`` is supplied, only
+    candidate pairs involving that staged object are considered, in the order
+    :func:`planet.candidate_pairs` gives them.
+    """
+    retained = tuple(
+        (index, building)
+        for index, building in buildings
+        if not catalog.is_belt(building.item_id)
+        and not catalog.is_sorter(building.item_id)
+    )
+    tested = tuple(
+        (index, _collision_placed(building))
+        for index, building in retained
+    )
+    pairs = tuple(
+        planet.candidate_pairs(
+            tuple(building for _index, building in tested),
+            projection.band,
+            projection.segment,
+            projection.radius,
+        )
+    )
+    if candidate_index is not None:
+        try:
+            candidate_position = next(
+                position
+                for position, (index, _building) in enumerate(retained)
+                if index == candidate_index
+            )
+        except StopIteration:
+            raise ValueError("prospective static candidate is not collision-tested") from None
+        pairs = tuple(
+            pair for pair in pairs if candidate_position in pair
+        )
+    return _projected_static_failure(tested, pairs, projection)
+
+
 def _projected_addon_failure(
     belts: Sequence[tuple[int, PlacedBuilding]],
     addons: Sequence[

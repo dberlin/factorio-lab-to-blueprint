@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from fractions import Fraction
 from typing import cast
@@ -279,6 +280,64 @@ def test_projected_power_failure_rejects_flat_legal_pair_in_required_projection(
         finalize.projected_power_failure(_diagonal_tesla_pair(3, 2), projection) is None
         for projection in _required_power_projections(40)
     )
+
+def test_prospective_projection_static_predicate_matches_finalizer_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    chemical = _building(2309, 0, 0)
+    tower = _building(catalog.TESLA_TOWER_ID, 2, 1)
+    placement = Placement(buildings=(chemical, tower))
+    band = next(candidate for candidate in planet.bands() if candidate.area_segments == 100)
+    projection = planet.Projection(
+        band=band,
+        anchor_row=0,
+        segment=colliders.PLANET_SEGMENT,
+        radius=colliders.PLANET_RADIUS,
+    )
+    invariants = finalize._projection_invariants(placement)
+    pair_buildings = tuple(building for _index, building in invariants.tested)
+    pairs = tuple(
+        planet.candidate_pairs(
+            pair_buildings,
+            band,
+            colliders.PLANET_SEGMENT,
+            colliders.PLANET_RADIUS,
+        )
+    )
+    authoritative = next(
+        failure
+        for failure in finalize._failure_at_projection(
+            invariants,
+            pairs,
+            projection,
+            finalize._ProjectionCounters(),
+        )
+        if failure.check == "geom.collide"
+    )
+
+    candidate_pair_inputs: list[tuple[colliders.Placed, ...]] = []
+    candidate_pairs = planet.candidate_pairs
+
+    def capture_candidate_pairs(
+        buildings: Sequence[colliders.Placed],
+        candidate_band: planet.Band,
+        segment: int,
+        radius: float,
+    ) -> list[tuple[int, int]]:
+        candidate_pair_inputs.append(tuple(buildings))
+        return candidate_pairs(buildings, candidate_band, segment, radius)
+
+    monkeypatch.setattr(planet, "candidate_pairs", capture_candidate_pairs)
+
+    prospective = finalize.projected_static_failure(
+        ((181, chemical), (255, tower)),
+        projection,
+        candidate_index=255,
+    )
+
+    assert prospective == replace(authoritative, buildings=(181, 255))
+    assert candidate_pair_inputs == [pair_buildings]
+
 
 
 def _broke2_coater() -> tuple[int, colliders.Placed]:

@@ -3439,6 +3439,313 @@ def test_projection_same_strip_and_unowned_failures_create_no_cut() -> None:
 
 
 
+def test_staged_static_exact_pack_no_good_forbids_only_the_full_assignment() -> None:
+    strip = plan_strips(single_recipe_spec())[0]
+    strips = [
+        replace(strip, group_key=f"staged-static-{index}", west_channel=1)
+        for index in range(2)
+    ]
+    height = 2 * max(_box(candidate)[1] for candidate in strips)
+    width_bound = 2 * max(_box(candidate)[0] for candidate in strips)
+    baseline = _pack(
+        strips,
+        height=height,
+        width_bound=width_bound,
+        time_budget_s=0.5,
+        direct_candidates={},
+        workers=DETERMINISTIC_WORKERS,
+    )
+    assert baseline is not None
+    failure = finalize.ProjectionFailure(
+        "geom.collide",
+        (181, 255),
+        "build colliders intersect",
+        100,
+    )
+    no_good = freeform.ExactPackNoGood(
+        height=baseline.height,
+        outline=tuple(_box(candidate) for candidate in strips),
+        width=baseline.width,
+        origins=tuple(baseline.at[index] for index in range(len(strips))),
+        evidence=(failure,),
+    )
+
+    assert tuple(field.name for field in dataclasses.fields(no_good)) == (
+        "height",
+        "outline",
+        "width",
+        "origins",
+        "evidence",
+    )
+    retry = _pack(
+        strips,
+        height=height,
+        width_bound=width_bound,
+        time_budget_s=0.5,
+        direct_candidates={},
+        workers=DETERMINISTIC_WORKERS,
+        exact_pack_no_goods=(no_good,),
+    )
+
+    assert retry is not None
+    assert (
+        retry.height,
+        tuple(_box(candidate) for candidate in strips),
+        retry.width,
+        tuple(retry.at[index] for index in range(len(strips))),
+    ) != (
+        no_good.height,
+        no_good.outline,
+        no_good.width,
+        no_good.origins,
+    )
+
+
+def test_prospective_projection_matches_finalizer_for_exact_ownerless_pair() -> None:
+    belt = catalog.building(2001)
+    chemical = catalog.building(2309)
+    tower = catalog.building(catalog.TESLA_TOWER_ID)
+    buildings = [
+        PlacedBuilding(2001, belt.model_index, 0, 0)
+        for _index in range(256)
+    ]
+    buildings[181] = PlacedBuilding(
+        2309,
+        chemical.model_index,
+        0,
+        0,
+        width=chemical.width,
+        height=chemical.height,
+        owner_strip=2,
+    )
+    buildings[255] = PlacedBuilding(
+        catalog.TESLA_TOWER_ID,
+        tower.model_index,
+        2,
+        1,
+        width=tower.width,
+        height=tower.height,
+    )
+    placement = Placement(buildings=tuple(buildings))
+    policy = BandPolicy("portable")
+    frames = freeform._junction_projection_frames(
+        placement.bounds,
+        placement.bounds,
+        policy,
+    )
+
+    prospective = freeform._prospective_static_failure(
+        (
+            (181, placement.buildings[181]),
+            (255, placement.buildings[255]),
+        ),
+        frames,
+        candidate_index=255,
+    )
+    with pytest.raises(finalize.ProjectionRefusal) as caught:
+        finalize.finalize_placement(placement, policy)
+
+    assert placement.buildings[181].item_id == 2309
+    assert placement.buildings[181].owner_strip == 2
+    assert placement.buildings[255].item_id == 2201
+    assert placement.buildings[255].owner_strip is None
+    assert prospective is not None
+    assert prospective.buildings == (181, 255)
+    assert prospective in caught.value.failures
+
+
+def test_staged_static_pack_dependent_exhaustion_learns_exact_no_good(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = two_stage_spec()
+    strips = plan_strips(spec)
+    first = _greedy_pack(strips, 20)
+    second = replace(
+        first,
+        at={
+            index: (x + (1 if index == 0 else 0), y)
+            for index, (x, y) in first.at.items()
+        },
+        width=first.width + 1,
+        status="repacked",
+    )
+    packs = iter((first, second))
+    seen_no_goods: list[tuple[freeform.ExactPackNoGood, ...]] = []
+    failure = finalize.ProjectionFailure(
+        "geom.collide",
+        (181, 255),
+        "build colliders intersect",
+        100,
+    )
+
+    def pack_retry(*_args: object, **kwargs: object) -> freeform._Pack:
+        no_goods = kwargs.get("exact_pack_no_goods", ())
+        assert isinstance(no_goods, tuple)
+        assert all(isinstance(item, freeform.ExactPackNoGood) for item in no_goods)
+        seen_no_goods.append(no_goods)
+        return next(packs)
+
+    def build(
+        _spec: BuildSpec,
+        _strips: list[Strip],
+        pack: freeform._Pack,
+        **_kwargs: object,
+    ) -> _BuildResult:
+        if pack is first:
+            raise _Unpowerable(
+                "every staged power seat collides after projection",
+                failure=failure,
+                pack_dependent=True,
+            )
+        return _BuildResult(
+            placement=Placement(buildings=(), stats={"belt_tiles": 0.0}),
+            routing=DetailedRouteResult(
+                status=DetailedRouteStatus.ROUTED,
+                routed=(),
+                failures=(),
+                iterations=0,
+                expansions=0,
+            ),
+            towers=(),
+        )
+
+    monkeypatch.setattr(
+        freeform,
+        "_band_policy_candidate_heights",
+        lambda _strips, _policy: (20,),
+    )
+    monkeypatch.setattr(freeform, "_pack", pack_retry)
+    monkeypatch.setattr(freeform, "_build", build)
+    monkeypatch.setattr(
+        validate,
+        "certify",
+        lambda *_args, **_kwargs: validate.Report(findings=()),
+    )
+    monkeypatch.setattr(
+        finalize,
+        "finalize_placement",
+        lambda placement, _policy: placement,
+    )
+
+    result = FreeformLayout(
+        band_policy=BandPolicy("portable"),
+        arrangements=1,
+    )._sweep(spec, strips, 1.0)
+
+    assert result is not None
+    assert seen_no_goods[0] == ()
+    assert len(seen_no_goods[1]) == 1
+    learned = seen_no_goods[1][0]
+    assert (
+        learned.height,
+        learned.outline,
+        learned.width,
+        learned.origins,
+        learned.evidence,
+    ) == (
+        first.height,
+        tuple(_box(strip) for strip in strips),
+        first.width,
+        tuple(first.at[index] for index in range(len(strips))),
+        (failure,),
+    )
+
+
+def test_static_clearance_requirement_regenerates_a_distinct_lane_variant() -> None:
+    spec = proliferated_spec()
+    ordinary = plan_strips(spec)
+    selected = next(strip for strip in ordinary if "iron-ingot" in strip.in_lanes)
+    assert selected.physical_variant is not None
+    pose_id = strip_pose_id(selected.physical_variant)
+    before_identity = selected.staged_static_variant_id
+
+    extended = plan_strips(
+        spec,
+        minimum_staged_static_clearance={
+            pose_id: selected.west_channel + 1,
+        },
+    )
+    replacement = next(
+        strip
+        for strip in extended
+        if strip.family_id == selected.family_id
+        and strip.machine_start == selected.machine_start
+    )
+
+    assert replacement.west_channel == selected.west_channel + 1
+    assert _box(replacement)[0] == _box(selected)[0] + 1
+    assert replacement.staged_static_variant_id != before_identity
+    assert replacement.physical_variant is not None
+    assert strip_pose_id(replacement.physical_variant) == pose_id
+
+
+def test_staged_static_terminal_exhaustion_retains_structured_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = proliferated_spec()
+    strips = plan_strips(spec)
+    seen_clearance: list[int] = []
+    failure = finalize.ProjectionFailure(
+        "geom.collide",
+        (12, 40),
+        "build colliders intersect",
+        160,
+    )
+
+    def pack_retry(
+        current: list[Strip],
+        *,
+        height: int,
+        **_kwargs: object,
+    ) -> freeform._Pack:
+        return _greedy_pack(current, height)
+
+    def refuse(
+        _spec: BuildSpec,
+        current: list[Strip],
+        _pack: freeform._Pack,
+        **_kwargs: object,
+    ) -> _BuildResult:
+        selected_index, selected = next(
+            (index, strip)
+            for index, strip in enumerate(current)
+            if "iron-ingot" in strip.in_lanes
+        )
+        seen_clearance.append(selected.west_channel)
+        requirement = freeform._staged_static_clearance_requirement(
+            selected,
+            selected_index,
+            failure,
+        )
+        assert requirement is not None
+        raise freeform._Unseatable(
+            "all staged-static seats collide",
+            failure=failure,
+            clearance_requirement=requirement,
+        )
+
+    monkeypatch.setattr(
+        freeform,
+        "_band_policy_candidate_heights",
+        lambda _strips, _policy: (30,),
+    )
+    monkeypatch.setattr(freeform, "_pack", pack_retry)
+    monkeypatch.setattr(freeform, "_build", refuse)
+    rejected: list[freeform._RefusalFinding] = []
+
+    result = FreeformLayout(
+        band_policy=BandPolicy("portable"),
+        arrangements=1,
+    )._sweep(spec, strips, 1.0, rejected=rejected)
+
+    assert result is None
+    assert seen_clearance == [
+        freeform._COATER_WEST_CHANNEL,
+        freeform._COATER_WEST_CHANNEL + 1,
+    ]
+    assert rejected == [failure]
+
+
 def test_projection_strip_static_objects_retain_non_encoded_owner() -> None:
     spec = two_stage_spec()
     strips = plan_strips(spec)
@@ -8226,6 +8533,67 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
                 35,
                 policy=BandPolicy("portable"),
             )
+
+    def test_staged_static_alternate_seat_advances_in_order(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        canvas, spec, strips, ports = self._fixture(4)
+        assembler_id = catalog.item_id("assembling-machine-2")
+        assembler = catalog.building(assembler_id)
+        obstacle_index = canvas.add(
+            PlacedBuilding(
+                assembler_id,
+                assembler.model_index,
+                5,
+                4,
+                width=assembler.width,
+                height=assembler.height,
+                owner_strip=0,
+            ),
+            solid=True,
+        )
+        attempted: list[int] = []
+
+        def projected_failure(
+            indexed: Sequence[tuple[int, PlacedBuilding]],
+            _frames: Sequence[freeform._JunctionProjectionFrame],
+            *,
+            candidate_index: int,
+        ) -> finalize.ProjectionFailure | None:
+            candidate = next(
+                building for index, building in indexed if index == candidate_index
+            )
+            attempted.append(candidate.x)
+            if candidate.x != 1:
+                return None
+            return finalize.ProjectionFailure(
+                "geom.collide",
+                (obstacle_index, candidate_index),
+                "build colliders intersect",
+                160,
+            )
+
+        monkeypatch.setattr(
+            freeform,
+            "_prospective_static_failure",
+            projected_failure,
+        )
+
+        got = freeform._place_coaters(
+            canvas,
+            spec,
+            strips,
+            ports,
+            2001,
+            35,
+            policy=BandPolicy("portable"),
+        )
+
+        assert attempted[:2] == [1, 2]
+        assert len(got) == 1
+        assert got[0].host_x == 2
+
 
     def test_the_same_fixture_unblocked_seats_one(self) -> None:
         """Without this the two above pass for a fixture that seats nothing."""

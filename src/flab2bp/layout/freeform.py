@@ -111,12 +111,14 @@ if TYPE_CHECKING:
         LaneSorterAttachment,
         ProjectionPitchRequirement,
         StripFamilyId,
+        StripInstanceId,
         StripPoseId,
         StripVariant,
+        StripVariantId,
     )
 
-
 _NO_PITCH_REQUIREMENTS: Mapping[StripPoseId, int] = MappingProxyType({})
+_NO_STAGED_STATIC_CLEARANCE: Mapping[StripPoseId, int] = MappingProxyType({})
 
 #: Free tiles reserved on a strip's east and south faces.  One is enough for a
 #: belt to pass; the router uses upper levels when one is not.
@@ -713,6 +715,36 @@ class _LogicalStripPlan:
     flank_outputs: bool = False
 
 
+@dataclass(frozen=True, order=True, slots=True)
+class StagedStaticVariantId:
+    """One strip pose plus the physical west lane reserved for staged statics."""
+
+    strip_variant_id: StripVariantId
+    west_channel: int
+
+    def __post_init__(self) -> None:
+        if self.west_channel <= 0:
+            raise ValueError("staged-static west channel must be positive")
+
+
+@dataclass(frozen=True, slots=True)
+class StagedStaticClearanceRequirement:
+    """A same-strip staged static needs one physically longer attachment lane."""
+
+    instance_id: StripInstanceId
+    variant_id: StagedStaticVariantId
+    owner_strip: int
+    rejected_west_channel: int
+    required_west_channel: int
+    evidence: tuple[finalize.ProjectionFailure, ...]
+
+    def __post_init__(self) -> None:
+        if self.required_west_channel != self.rejected_west_channel + 1:
+            raise ValueError("staged-static clearance advances exactly one tile")
+        if not self.evidence:
+            raise ValueError("staged-static clearance requires projection evidence")
+
+
 @dataclass(frozen=True, slots=True)
 class Strip:
     """A run of machines of one recipe, with its lanes attached.
@@ -806,6 +838,16 @@ class Strip:
     family_id: StripFamilyId | None = None
     machine_start: int = 0
     west_channel: int = WEST_CHANNEL
+
+    @property
+    def staged_static_variant_id(self) -> StagedStaticVariantId | None:
+        """Identity of physical strip geometry that seats ownerless statics."""
+        if self.physical_variant is None:
+            return None
+        return StagedStaticVariantId(
+            self.physical_variant.variant_id,
+            self.west_channel,
+        )
 
     @property
     def in_lanes(self) -> tuple[str, ...]:
@@ -1751,6 +1793,10 @@ def plan_strips(
     *,
     strip_len: int = 6,
     minimum_pitch_x: Mapping[StripPoseId, int] = _NO_PITCH_REQUIREMENTS,
+    minimum_staged_static_clearance: Mapping[
+        StripPoseId,
+        int,
+    ] = _NO_STAGED_STATIC_CLEARANCE,
 ) -> list[Strip]:
     """Select each logical family's deterministic compatibility pose.
 
@@ -1866,6 +1912,19 @@ def plan_strips(
                 attachment_plan = physical_variant.attachment_plan
                 port_dock_plan = physical_variant.port_dock_plan
                 box_height = physical_variant.box_height
+            west_channel = (
+                _COATER_WEST_CHANNEL
+                if needs_coater_keepout
+                else WEST_CHANNEL
+            )
+            if physical_variant is not None and needs_coater_keepout:
+                west_channel = max(
+                    west_channel,
+                    minimum_staged_static_clearance.get(
+                        strip_pose_id(physical_variant),
+                        west_channel,
+                    ),
+                )
             strips.append(
                 Strip(
                     group_key=family.group_key,
@@ -1895,11 +1954,7 @@ def plan_strips(
                     flank_outputs=family.flank_outputs,
                     family_id=family.family_id,
                     machine_start=machine_start,
-                    west_channel=(
-                        _COATER_WEST_CHANNEL
-                        if needs_coater_keepout
-                        else WEST_CHANNEL
-                    ),
+                    west_channel=west_channel,
                 )
             )
     return strips
@@ -1914,6 +1969,10 @@ def _coarsen_saturated_strip_plan(
     *,
     strip_len: int,
     minimum_pitch_x: Mapping[StripPoseId, int] = _NO_PITCH_REQUIREMENTS,
+    minimum_staged_static_clearance: Mapping[
+        StripPoseId,
+        int,
+    ] = _NO_STAGED_STATIC_CLEARANCE,
 ) -> tuple[list[Strip], int]:
     """Repartition redundant stress strips before packing or routing."""
     if len(strips) < _COARSE_STRIP_THRESHOLD or strip_len >= spec.machine_count:
@@ -1924,6 +1983,7 @@ def _coarsen_saturated_strip_plan(
             spec,
             strip_len=coarse_len,
             minimum_pitch_x=minimum_pitch_x,
+            minimum_staged_static_clearance=minimum_staged_static_clearance,
         ),
         coarse_len,
     )
@@ -2151,6 +2211,25 @@ def tie_break_cap(n_terms: int, *, width_bound: int, height: int, n_direct: int)
 # --- phase 1: packing ------------------------------------------------------
 
 
+@dataclass(frozen=True, slots=True)
+class ExactPackNoGood:
+    """One immutable full packed assignment rejected by exact evidence."""
+
+    height: int
+    outline: tuple[tuple[int, int], ...]
+    width: int
+    origins: tuple[tuple[int, int], ...]
+    evidence: tuple[finalize.ProjectionFailure, ...]
+
+    def __post_init__(self) -> None:
+        if self.height <= 0 or self.width <= 0:
+            raise ValueError("exact pack dimensions must be positive")
+        if len(self.outline) != len(self.origins):
+            raise ValueError("exact pack outline and origins must cover every strip")
+        if not self.evidence:
+            raise ValueError("exact pack no-good requires structured evidence")
+
+
 @dataclass
 class _Pack:
     """Strip origins chosen by the packer."""
@@ -2237,6 +2316,36 @@ def _projection_pitch_requirement(
     )
 
 
+def _staged_static_clearance_requirement(
+    strip: Strip,
+    owner_strip: int,
+    failure: finalize.ProjectionFailure,
+) -> StagedStaticClearanceRequirement | None:
+    """Describe the next one-tile west attachment variant for one strip."""
+    from flab2bp.layout.strip_variants import StripInstanceId
+
+    variant_id = strip.staged_static_variant_id
+    if (
+        strip.family_id is None
+        or variant_id is None
+        or owner_strip < 0
+        or failure.check != "geom.collide"
+    ):
+        return None
+    return StagedStaticClearanceRequirement(
+        instance_id=StripInstanceId(
+            strip.family_id,
+            strip.machine_start,
+            strip.machines,
+        ),
+        variant_id=variant_id,
+        owner_strip=owner_strip,
+        rejected_west_channel=strip.west_channel,
+        required_west_channel=strip.west_channel + 1,
+        evidence=(failure,),
+    )
+
+
 def _nets_between(strips: list[Strip]) -> list[tuple[int, int]]:
     """Strip index pairs that will need a belt route."""
     by_group: dict[str, list[int]] = defaultdict(list)
@@ -2273,6 +2382,30 @@ def _greedy_pack(strips: list[Strip], height: int) -> _Pack:
         shelf_h = max(shelf_h, w)
         width = max(width, shelf_x + w)
     return _Pack(at=at, width=width, height=height, status="greedy")
+
+def _add_exact_pack_no_good(
+    model: cp_model.CpModel,
+    width: cp_model.IntVar,
+    xs: Sequence[cp_model.IntVar],
+    ys: Sequence[cp_model.IntVar],
+    strips: Sequence[Strip],
+    no_good: ExactPackNoGood,
+) -> None:
+    """Forbid the one complete assignment named by ``no_good``."""
+    if len(no_good.origins) != len(strips):
+        raise ValueError("exact pack no-good must retain every strip origin")
+    variables = [width]
+    values = [no_good.width]
+    for strip_index, origin in enumerate(no_good.origins):
+        variables.extend((xs[strip_index], ys[strip_index]))
+        values.extend(
+            (
+                origin[0] - strips[strip_index].west_channel,
+                origin[1],
+            )
+        )
+    model.add_forbidden_assignments(variables, [tuple(values)])
+
 
 def _add_projection_no_good(
     model: cp_model.CpModel,
@@ -2311,6 +2444,7 @@ def _pack(
     seed: _Pack | None = None,
     arrangement: int = 0,
     projection_no_goods: tuple[ProjectionNoGood, ...] = (),
+    exact_pack_no_goods: tuple[ExactPackNoGood, ...] = (),
 ) -> _Pack | None:
     """Minimise width at a fixed height with CP-SAT.
 
@@ -2367,6 +2501,11 @@ def _pack(
         model.add(x + w <= w_var)
 
     model.add_no_overlap_2d(x_iv, y_iv)
+
+    for no_good in exact_pack_no_goods:
+        if no_good.height != height or no_good.outline != tuple(sizes):
+            continue
+        _add_exact_pack_no_good(model, w_var, xs, ys, strips, no_good)
 
     for no_good in projection_no_goods:
         if (
@@ -7381,9 +7520,13 @@ class _Unseatable(NoValidLayout):
         message: str,
         *,
         failure: finalize.ProjectionFailure | None = None,
+        clearance_requirement: StagedStaticClearanceRequirement | None = None,
+        pack_dependent: bool = False,
     ) -> None:
         self.failure = failure
         self.failures = () if failure is None else (failure,)
+        self.clearance_requirement = clearance_requirement
+        self.pack_dependent = pack_dependent
         if failure is not None:
             message = (
                 f"{message}: band {failure.band} {failure.check} "
@@ -7407,9 +7550,11 @@ class _Unpowerable(Exception):
         message: str,
         *,
         failure: finalize.ProjectionFailure | None = None,
+        pack_dependent: bool = False,
     ) -> None:
         self.failure = failure
         self.failures = () if failure is None else (failure,)
+        self.pack_dependent = pack_dependent
         if failure is not None:
             message = (
                 f"{message}: band {failure.band} {failure.check} "
@@ -7510,6 +7655,36 @@ def _junction_projection_frames(
         )
         for key, (bounds, candidate) in frame_specs.items()
     )
+
+
+def _prospective_static_failure(
+    buildings: Sequence[tuple[int, PlacedBuilding]],
+    frames: Sequence[_JunctionProjectionFrame],
+    *,
+    candidate_index: int,
+) -> finalize.ProjectionFailure | None:
+    """First exact candidate collision over finalizer-reachable materializations."""
+    for frame in frames:
+        materialized = tuple(
+            (
+                index,
+                finalize.materialize_frame_building(
+                    building,
+                    bounds=frame.bounds,
+                    candidate=frame.candidate,
+                ),
+            )
+            for index, building in buildings
+        )
+        for projection in frame.projections:
+            failure = finalize.projected_static_failure(
+                materialized,
+                projection,
+                candidate_index=candidate_index,
+            )
+            if failure is not None:
+                return failure
+    return None
 
 
 def _projected_coater_junction_ban(
@@ -8023,6 +8198,11 @@ def _power_plan(
                 free[gx, gy] = False
 
     projections = _power_projection_envelope(canvas, policy)
+    static_buildings = list(enumerate(canvas.buildings))
+    static_frames_by_bounds: dict[
+        tuple[int, int, int, int],
+        tuple[_JunctionProjectionFrame, ...],
+    ] = {}
     for projection in projections:
         existing_failure = finalize.projected_power_failure(power_nodes, projection)
         if existing_failure is not None:
@@ -8161,47 +8341,69 @@ def _power_plan(
                 raise _Unpowerable(
                     "the tower network cannot reach the rest of the block",
                     failure=projected_refusal,
+                    pack_dependent=(
+                        projected_refusal is not None
+                        and projected_refusal.check == "geom.collide"
+                    ),
                 )
             target = np.argwhere(remaining)[0]
             gx, gy = cand[np.argmin(((cand - target) ** 2).sum(axis=1))].tolist()
         site = (gx - pad + min_x, gy - pad + min_y)
-        candidate: tuple[int, PlacedBuilding, rules.PowerNode] | None = None
-        candidate_failure: finalize.ProjectionFailure | None = None
-        if projections:
-            candidate = (
-                len(canvas.buildings) + len(sites),
-                PlacedBuilding(
-                    item_id=catalog.TESLA_TOWER_ID,
-                    model_index=tower.model_index,
-                    x=site[0],
-                    y=site[1],
-                    width=tower.width,
-                    height=tower.height,
-                ),
-                tower.power_node,
-            )
-            candidate_failure = next(
-                (
-                    candidate_failure
-                    for projection in projections
-                    for peer in power_nodes
-                    if (
-                        candidate_failure := finalize.projected_power_failure(
-                            (peer, candidate),
-                            projection,
-                        )
+        candidate = (
+            len(canvas.buildings) + len(sites),
+            PlacedBuilding(
+                item_id=catalog.TESLA_TOWER_ID,
+                model_index=tower.model_index,
+                x=site[0],
+                y=site[1],
+                width=tower.width,
+                height=tower.height,
+            ),
+            tower.power_node,
+        )
+        candidate_failure = next(
+            (
+                candidate_failure
+                for projection in projections
+                for peer in power_nodes
+                if (
+                    candidate_failure := finalize.projected_power_failure(
+                        (peer, candidate),
+                        projection,
                     )
-                    is not None
-                ),
-                None,
+                )
+                is not None
+            ),
+            None,
+        )
+        if candidate_failure is None:
+            candidate_buildings = (
+                *(building for _, building in static_buildings),
+                candidate[1],
+            )
+            candidate_bounds = finalize._cleanup_survivor_bounds(
+                Placement(buildings=candidate_buildings)
+            )
+            static_frames = static_frames_by_bounds.get(candidate_bounds)
+            if static_frames is None:
+                static_frames = _junction_projection_frames(
+                    candidate_bounds,
+                    canvas.limit or candidate_bounds,
+                    policy,
+                )
+                static_frames_by_bounds[candidate_bounds] = static_frames
+            candidate_failure = _prospective_static_failure(
+                (*static_buildings, (candidate[0], candidate[1])),
+                static_frames,
+                candidate_index=candidate[0],
             )
         if candidate_failure is not None:
             projected_refusal = projected_refusal or candidate_failure
             free[gx, gy] = False
             continue
         sites.append(site)
-        if candidate is not None:
-            power_nodes.append(candidate)
+        power_nodes.append(candidate)
+        static_buildings.append((candidate[0], candidate[1]))
         # The cell itself AND every cell inside the paste's power-node spacing
         # rule.  Marking only the cell is what shipped a blueprint the game
         # refused; the halo is what makes this greedy incapable of producing one.
@@ -8224,6 +8426,10 @@ def _power_plan(
         raise _Unpowerable(
             "tower placement did not converge",
             failure=projected_refusal,
+            pack_dependent=(
+                projected_refusal is not None
+                and projected_refusal.check == "geom.collide"
+            ),
         )
 
     for site in sites:
@@ -9367,6 +9573,14 @@ def _bridge(
     return None
 
 
+def _coater_seats(canvas: _Canvas, port: _Port) -> tuple[tuple[int, int], ...]:
+    """Straight-through lane seats, in upstream-to-downstream order."""
+    return tuple(
+        (canvas.buildings[index].x, canvas.buildings[index].y)
+        for index in port.tiles[1:-1]
+    )
+
+
 def _coater_seat(canvas: _Canvas, port: _Port) -> tuple[int, int] | None:
     """The lane tile a Spray Coater rides: its SECOND, one east of the head.
 
@@ -9419,10 +9633,8 @@ def _coater_seat(canvas: _Canvas, port: _Port) -> tuple[int, int] | None:
     west into the channel -- so the drop cell is the same tile it always was,
     one level above the new head.
     """
-    if len(port.tiles) < 2:
-        return None
-    b = canvas.buildings[port.tiles[1]]
-    return b.x, b.y
+    seats = _coater_seats(canvas, port)
+    return seats[0] if seats else None
 
 
 def _reserve_staged_coater_belt_ban(
@@ -9529,6 +9741,7 @@ def _place_coaters(
         if splitters
         else None
     )
+    static_capacity = canvas.limit or _grow(_core_bounds(canvas), _ENTRY_RING)
 
     belt_at: dict[tuple[int, int, int], int] = {
         (building.x, building.y, int(building.z)): index
@@ -9536,7 +9749,9 @@ def _place_coaters(
         if catalog.is_belt(building.item_id) and building.z.denominator == 1
     }
 
-    for strip, in_ports in zip(strips, ports, strict=True):
+    for strip_index, (strip, in_ports) in enumerate(
+        zip(strips, ports, strict=True)
+    ):
         for item in strip.in_lanes:
             if strip.cargo_domain is not CargoDomain.REQUIRES_SPRAY:
                 continue
@@ -9551,118 +9766,187 @@ def _place_coaters(
                     f"the {item} lane is marked {port.cargo_domain.value}, so "
                     "a Spray Coater cannot be placed on it"
                 )
-            seat = _coater_seat(canvas, port)
-            if seat is None:
+            seats = _coater_seats(canvas, port)
+            if not seats:
                 raise _Unseatable(
                     f"the {item} lane at ({port.x}, {port.y}) is "
                     f"{len(port.tiles)} tile(s) long, and a coater needs a tile "
                     f"with a lane tile on both sides of it to ride straight"
                 )
-            cx, cy = seat
-            host_z = port.z
-            host = belt_at.get((cx, cy, host_z))
-            yaw = Facing.EAST.value
-            drop_cell = slots.addon_supply_cell(
-                catalog.SPRAY_COATER_ID,
-                x=cx,
-                y=cy,
-                z=Fraction(host_z),
-                yaw=yaw,
-                area=1,
-            )
-            if host is None:
-                raise _Unseatable(
-                    f"the {item} lane's seat ({cx}, {cy}) carries no belt at "
-                    f"level {host_z}, so there is nothing for a coater to ride"
-                )
-            if host in staged_hosts:
-                seen.add(item)
-                continue
 
-            proposed_coater = PlacedBuilding(
-                item_id=catalog.SPRAY_COATER_ID,
-                model_index=coater.model_index,
-                x=cx,
-                y=cy,
-                z=Fraction(host_z),
-                width=1,
-                height=1,
-                yaw=yaw,
-            )
-            collider_hits = _coater_keepout_hits(
-                prospective,
-                proposed_coater,
-            )
-            if collider_hits:
-                obstacles = ", ".join(
-                    f"{catalog.building(prospective[index].item_id).name} "
-                    f"at ({prospective[index].x}, "
-                    f"{prospective[index].y}, z={prospective[index].z})"
-                    for index in collider_hits
+            failure_reasons: list[str] = []
+            projected_failures: list[
+                tuple[finalize.ProjectionFailure, int | None]
+            ] = []
+            seated = False
+            for cx, cy in seats:
+                host_z = port.z
+                host = belt_at.get((cx, cy, host_z))
+                yaw = Facing.EAST.value
+                drop_cell = slots.addon_supply_cell(
+                    catalog.SPRAY_COATER_ID,
+                    x=cx,
+                    y=cy,
+                    z=Fraction(host_z),
+                    yaw=yaw,
+                    area=1,
                 )
-                raise _Unseatable(
-                    f"the {item} coater at ({cx}, {cy}, z={host_z}) has a "
-                    f"full-body keepout intersecting {obstacles}"
-                )
-            within_capacity = (
-                projected_capacity is None
-                or (
-                    projected_capacity[0] <= drop_cell[0] <= projected_capacity[2]
-                    and projected_capacity[1]
-                    <= drop_cell[1]
-                    <= projected_capacity[3]
-                )
-            )
-            if (
-                not within_capacity
-                or drop_cell in staged_drop_cells
-                or not canvas.free(drop_cell)
-            ):
-                raise _Unseatable(
-                    f"the {item} coater at ({cx}, {cy}) cannot have its "
-                    f"proliferator drop at {drop_cell}: that cell is taken, and "
-                    f"the game supplies an addon from its area and nowhere else"
-                )
+                if host is None:
+                    failure_reasons.append(
+                        f"the {item} lane's seat ({cx}, {cy}) carries no belt at "
+                        f"level {host_z}, so there is nothing for a coater to ride"
+                    )
+                    continue
+                if host in staged_hosts:
+                    seated = True
+                    break
 
-            supply = PlacedBuilding(
-                item_id=belt_id,
-                model_index=belt_model,
-                x=drop_cell[0],
-                y=drop_cell[1],
-                z=Fraction(drop_cell[2]),
-                width=1,
-                height=1,
-                carries_item=proliferator_item,
-            )
-            supply_index = len(prospective)
-            coater_index = supply_index + 1
-            prepared_port = CoaterSupplyPort(
-                coater=coater_index,
-                host_belt=host,
-                supply_belt=supply_index,
-                item=item,
-                yaw=yaw,
-                host_x=cx,
-                host_y=cy,
-                host_z=host_z,
-                x=drop_cell[0],
-                y=drop_cell[1],
-                z=drop_cell[2],
-            )
-            staged.append(
-                _StagedCoater(
-                    supply=supply,
-                    coater=proposed_coater,
-                    projected_pair=(
-                        coater_index,
-                        _collision_pose(proposed_coater),
+                proposed_coater = PlacedBuilding(
+                    item_id=catalog.SPRAY_COATER_ID,
+                    model_index=coater.model_index,
+                    x=cx,
+                    y=cy,
+                    z=Fraction(host_z),
+                    width=1,
+                    height=1,
+                    yaw=yaw,
+                )
+                collider_hits = _coater_keepout_hits(
+                    prospective,
+                    proposed_coater,
+                )
+                if collider_hits:
+                    obstacles = ", ".join(
+                        f"{catalog.building(prospective[index].item_id).name} "
+                        f"at ({prospective[index].x}, "
+                        f"{prospective[index].y}, z={prospective[index].z})"
+                        for index in collider_hits
+                    )
+                    failure_reasons.append(
+                        f"the {item} coater at ({cx}, {cy}, z={host_z}) has a "
+                        f"full-body keepout intersecting {obstacles}"
+                    )
+                    continue
+                within_capacity = (
+                    static_capacity[0] <= drop_cell[0] <= static_capacity[2]
+                    and static_capacity[1] <= drop_cell[1] <= static_capacity[3]
+                )
+                if (
+                    not within_capacity
+                    or drop_cell in staged_drop_cells
+                    or not canvas.free(drop_cell)
+                ):
+                    failure_reasons.append(
+                        f"the {item} coater at ({cx}, {cy}) cannot have its "
+                        f"proliferator drop at {drop_cell}: that cell is taken, and "
+                        f"the game supplies an addon from its area and nowhere else"
+                    )
+                    continue
+
+                supply = PlacedBuilding(
+                    item_id=belt_id,
+                    model_index=belt_model,
+                    x=drop_cell[0],
+                    y=drop_cell[1],
+                    z=Fraction(drop_cell[2]),
+                    width=1,
+                    height=1,
+                    carries_item=proliferator_item,
+                )
+                supply_index = len(prospective)
+                coater_index = supply_index + 1
+                candidate_buildings = (*prospective, supply, proposed_coater)
+                candidate_bounds = finalize._cleanup_survivor_bounds(
+                    Placement(buildings=candidate_buildings)
+                )
+                static_frames = _junction_projection_frames(
+                    candidate_bounds,
+                    static_capacity,
+                    policy,
+                )
+                projected_failure = _prospective_static_failure(
+                    (
+                        *enumerate(prospective),
+                        (coater_index, proposed_coater),
                     ),
-                    port=prepared_port,
+                    static_frames,
+                    candidate_index=coater_index,
                 )
-            )
-            prospective.extend((supply, proposed_coater))
-            staged_hosts.add(host)
-            staged_drop_cells.add(drop_cell)
+                if projected_failure is not None:
+                    peer_index = next(
+                        (
+                            index
+                            for index in projected_failure.buildings
+                            if index != coater_index
+                        ),
+                        None,
+                    )
+                    peer_owner = (
+                        prospective[peer_index].owner_strip
+                        if peer_index is not None
+                        and 0 <= peer_index < len(prospective)
+                        else None
+                    )
+                    projected_failures.append((projected_failure, peer_owner))
+                    failure_reasons.append(
+                        f"the {item} coater at ({cx}, {cy}, z={host_z}) enters "
+                        "a projected static collider"
+                    )
+                    continue
+
+                prepared_port = CoaterSupplyPort(
+                    coater=coater_index,
+                    host_belt=host,
+                    supply_belt=supply_index,
+                    item=item,
+                    yaw=yaw,
+                    host_x=cx,
+                    host_y=cy,
+                    host_z=host_z,
+                    x=drop_cell[0],
+                    y=drop_cell[1],
+                    z=drop_cell[2],
+                )
+                staged.append(
+                    _StagedCoater(
+                        supply=supply,
+                        coater=proposed_coater,
+                        projected_pair=(
+                            coater_index,
+                            _collision_pose(proposed_coater),
+                        ),
+                        port=prepared_port,
+                    )
+                )
+                prospective.extend((supply, proposed_coater))
+                staged_hosts.add(host)
+                staged_drop_cells.add(drop_cell)
+                seated = True
+                break
+
+            if not seated:
+                first_failure = (
+                    projected_failures[0][0] if projected_failures else None
+                )
+                all_projected = len(projected_failures) == len(seats)
+                same_strip = all_projected and all(
+                    owner == strip_index for _, owner in projected_failures
+                )
+                clearance_requirement = (
+                    _staged_static_clearance_requirement(
+                        strip,
+                        strip_index,
+                        first_failure,
+                    )
+                    if same_strip and first_failure is not None
+                    else None
+                )
+                raise _Unseatable(
+                    failure_reasons[0],
+                    failure=first_failure,
+                    clearance_requirement=clearance_requirement,
+                    pack_dependent=all_projected and not same_strip,
+                )
             seen.add(item)
 
     # The loop walks only lanes that exist. Refuse a requested sprayed item that
@@ -10539,6 +10823,9 @@ class FreeformLayout:
         projection_no_goods: list[ProjectionNoGood] = []
         projection_no_good_keys: set[tuple[int, ...]] = set()
         minimum_pitch_x: dict[StripPoseId, int] = {}
+        minimum_staged_static_clearance: dict[StripPoseId, int] = {}
+        exact_pack_no_goods: list[ExactPackNoGood] = []
+        exact_pack_no_good_keys: set[ExactPackNoGood] = set()
         # This sweep's own share, never more than the CALL has left. A sweep
         # asked for 15s when 3 remain must not spend 15.
         left = time_budget_s if deadline is None else deadline - time.monotonic()
@@ -10725,6 +11012,7 @@ class FreeformLayout:
                 seed=seeds[height],
                 arrangement=arrangement,
                 projection_no_goods=tuple(projection_no_goods),
+                exact_pack_no_goods=tuple(exact_pack_no_goods),
             )
             if pack is None:
                 continue
@@ -10791,6 +11079,23 @@ class FreeformLayout:
             except _Unpowerable as exc:
                 if rejected is not None:
                     _retain_refusal(rejected, exc.failure or "power.coverage")
+                if exc.pack_dependent and exc.failure is not None:
+                    no_good = ExactPackNoGood(
+                        height=pack.height,
+                        outline=tuple(_box(strip) for strip in strips),
+                        width=pack.width,
+                        origins=tuple(
+                            pack.at[index] for index in range(len(strips))
+                        ),
+                        evidence=exc.failures,
+                    )
+                    if no_good not in exact_pack_no_good_keys:
+                        exact_pack_no_good_keys.add(no_good)
+                        exact_pack_no_goods.append(no_good)
+                        candidate_packs.insert(
+                            candidate_index,
+                            (height, arrangement, True),
+                        )
                 continue
             except _Unseatable as exc:
                 # A pack that cannot seat one of its Spray Coaters is not a
@@ -10803,6 +11108,90 @@ class FreeformLayout:
                     _retain_refusal(
                         rejected,
                         exc.failure or "prolif.sprayed_cargo_reaches_machines",
+                    )
+
+                learned = False
+                if exc.pack_dependent and exc.failure is not None:
+                    no_good = ExactPackNoGood(
+                        height=pack.height,
+                        outline=tuple(_box(strip) for strip in strips),
+                        width=pack.width,
+                        origins=tuple(
+                            pack.at[index] for index in range(len(strips))
+                        ),
+                        evidence=exc.failures,
+                    )
+                    if no_good not in exact_pack_no_good_keys:
+                        exact_pack_no_good_keys.add(no_good)
+                        exact_pack_no_goods.append(no_good)
+                        learned = True
+
+                requirement = exc.clearance_requirement
+                if requirement is not None:
+                    selected_strip = next(
+                        (
+                            strip
+                            for strip in strips
+                            if strip.family_id
+                            == requirement.instance_id.family_id
+                            and strip.machine_start
+                            == requirement.instance_id.machine_start
+                            and strip.machines
+                            == requirement.instance_id.machine_count
+                        ),
+                        None,
+                    )
+                    if (
+                        selected_strip is not None
+                        and selected_strip.physical_variant is not None
+                        and selected_strip.staged_static_variant_id
+                        == requirement.variant_id
+                        and requirement.required_west_channel
+                        <= _COATER_WEST_CHANNEL + 1
+                    ):
+                        from flab2bp.layout.strip_variants import strip_pose_id
+
+                        pose_id = strip_pose_id(selected_strip.physical_variant)
+                        retained_clearance = minimum_staged_static_clearance.get(
+                            pose_id,
+                            selected_strip.west_channel,
+                        )
+                        if (
+                            requirement.required_west_channel
+                            > retained_clearance
+                        ):
+                            minimum_staged_static_clearance[pose_id] = (
+                                requirement.required_west_channel
+                            )
+                            learned = True
+
+                if learned:
+                    replan_strip_len = max(strip.machines for strip in strips)
+                    strips = plan_strips(
+                        spec,
+                        strip_len=replan_strip_len,
+                        minimum_pitch_x=minimum_pitch_x,
+                        minimum_staged_static_clearance=(
+                            minimum_staged_static_clearance
+                        ),
+                    )
+                    greedy = _greedy_pack(strips, _height_seed(strips))
+                    bound = max(
+                        greedy.width,
+                        max((w for w, _h in map(_box, strips)), default=1),
+                    )
+                    net_candidates = (
+                        _direct_net_candidates(strips, spec)
+                        if self.direct_insert
+                        else {}
+                    )
+                    seeds = {
+                        candidate_height: _greedy_pack(strips, candidate_height)
+                        for candidate_height in heights
+                    }
+                    candidate_packs.insert(
+                        candidate_index,
+                        (height, arrangement, True),
                     )
                 continue
             failed = result.routing.failed_count
@@ -10936,6 +11325,9 @@ class FreeformLayout:
                         spec,
                         strip_len=replan_strip_len,
                         minimum_pitch_x=minimum_pitch_x,
+                        minimum_staged_static_clearance=(
+                            minimum_staged_static_clearance
+                        ),
                     )
                     greedy = _greedy_pack(strips, _height_seed(strips))
                     bound = max(
