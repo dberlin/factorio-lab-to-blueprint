@@ -196,6 +196,62 @@ Build an archive whose final two width-first candidates share a relation signatu
 
 Reuse `_archive_dedupe_key`; replace redundant work rather than increasing `effective_cap` or configured elite counts.
 
-- [ ] **Step 7: Verify Task 5 and full branch**
+- [ ] **Step 7: Verify Task 5**
 
-Run SequencePair, feedback, and kernel tests. Then run the full Python suite, `uv run ruff check .`, and `uv run mypy src scripts`.
+Run SequencePair, feedback, and kernel tests. Full branch validation remains the final integration task.
+
+### Task 6: Profile and conditionally compile exact A*
+
+**Files:**
+- Modify: `scripts/route_profile.py:231-325`
+- Create only when the materiality gate passes: `Cargo.toml`
+- Create only when the materiality gate passes: `native/astar/src/lib.rs`
+- Modify only when the materiality gate passes: `setup.py`
+- Modify only when the materiality gate passes: `pyproject.toml`
+- Modify only when the materiality gate passes: `src/flab2bp/layout/freeform.py:4180-4673`
+- Create: `tests/bench/test_route_profile.py`
+- Create only when the materiality gate passes: `tests/layout/test_native_astar.py`
+
+**Interfaces:**
+- Profiling consumes the repaired `Tally` fields and emits machine-readable per-run wall, `_route_all`, and `_astar` seconds.
+- The conditional native kernel consumes flat flags/history, dimensions, starts/goals, exact movement/toll parameters, and expansion/deadline limits. It produces the same path indices or ordered exhausted wall plus exact expansion accounting as Python `_astar`.
+
+- [ ] **Step 1: Write failing machine-readable profiler test**
+
+Invoke the profiler entry point around a synthetic `Tally` and assert a JSON record contains `wall_s`, `route_all_s`, `astar_s`, `astar_routing_share`, `astar_wall_share`, expansions, hits, and misses. Assert `--strategy sequence-pair` selects `SequencePairLayout` rather than always constructing Freeform.
+
+- [ ] **Step 2: Verify RED, then implement bounded JSON output**
+
+Run: `uv run pytest -q tests/bench/test_route_profile.py`. Add `--json` without changing existing human output and honor the existing `--strategy` option in normal mode.
+
+- [ ] **Step 3: Measure the materiality gate**
+
+Run two 4-second repeats for `plastic`, `super-magnetic-ring`, and `quantum-chip`. Save the six JSON records in the ignored SDD report, compute medians per case, and apply this exact gate: build native code only when A* is at least 25% of `_route_all` and 10% of wall in two cases, or at least 1.0 second absolute in any case.
+
+- [ ] **Step 4: Record the conditional decision**
+
+If the gate is false, record `NO BUILD`, the six measurements, and the dominant measured phase in the report; commit only the profiler/test work and proceed to full validation. If the gate is true, record `BUILD PYO3` and continue.
+
+- [ ] **Step 5: Write failing exact replay tests**
+
+Capture deterministic in-memory cases through public test fixtures: one successful flat path, one ramp path, one many-goal path, one history-heavy path, one budget exhaustion, and one sealed-pocket failure. Before native integration, assert `_native_astar` is unavailable or lacks the semantic-mirror entry point.
+
+- [ ] **Step 6: Add the PyO3 build alongside Cython**
+
+Keep setuptools as the build backend. Add current `setuptools-rust` and PyO3 build configuration alongside the existing Cython extension; do not replace `_sequence_kernel`. The Rust module name is `flab2bp.layout._native_astar`.
+
+- [ ] **Step 7: Implement the semantic mirror**
+
+Port only the flat per-expansion heap/search loop. Preserve Python's `(f, g, x-major-index)` ordering, float expression order, stale entry behavior, reopening behavior, four planar moves, two-cell ramp/via legality, exact goal termination, periodic budget/deadline checkpoints, predecessor/via reconstruction, and exhausted reachable-pocket ordering. Keep reservations, stake/unstake, owner mapping, blame, and result construction in Python.
+
+- [ ] **Step 8: Verify RED to GREEN and differential equality**
+
+Run the focused native replay tests. Every expected field must compare exactly; equal route cost alone is insufficient. Then run the complete detailed/global router tests.
+
+- [ ] **Step 9: Benchmark the native replay**
+
+Measure warm steady-state replay excluding compilation. Keep the extension only if it is at least 2x faster end-to-end on the captured A* calls and passes exact differential tests; otherwise remove all Rust/build changes and retain the profiler commit only.
+
+- [ ] **Step 10: Verify the full branch**
+
+Run the full Python suite, `uv run ruff check .`, and `uv run mypy src scripts`. When Rust remains, also run `cargo test` and `cargo clippy --all-targets -- -D warnings`.
