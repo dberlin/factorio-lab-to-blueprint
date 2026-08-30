@@ -3790,6 +3790,7 @@ def test_staged_static_terminal_exhaustion_retains_structured_evidence(
     spec = proliferated_spec()
     strips = plan_strips(spec)
     seen_clearance: list[int] = []
+    seen_no_goods: list[tuple[freeform.ExactPackNoGood, ...]] = []
     failure = finalize.ProjectionFailure(
         "geom.collide",
         (12, 40),
@@ -3801,8 +3802,15 @@ def test_staged_static_terminal_exhaustion_retains_structured_evidence(
         current: list[Strip],
         *,
         height: int,
-        **_kwargs: object,
+        **kwargs: object,
     ) -> freeform._Pack:
+        no_goods = kwargs.get("exact_pack_no_goods", ())
+        assert isinstance(no_goods, tuple)
+        assert all(
+            isinstance(no_good, freeform.ExactPackNoGood)
+            for no_good in no_goods
+        )
+        seen_no_goods.append(no_goods)
         return _greedy_pack(current, height)
 
     def refuse(
@@ -3847,7 +3855,10 @@ def test_staged_static_terminal_exhaustion_retains_structured_evidence(
     assert seen_clearance == [
         freeform._COATER_WEST_CHANNEL,
         freeform._COATER_WEST_CHANNEL + 1,
+        freeform._COATER_WEST_CHANNEL + 1,
     ]
+    assert [len(no_goods) for no_goods in seen_no_goods] == [0, 0, 1]
+    assert seen_no_goods[-1][0].evidence == (failure,)
     assert rejected == [failure]
 
 
@@ -8665,6 +8676,7 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
             _frames: Sequence[freeform._JunctionProjectionFrame],
             *,
             candidate_index: int,
+            cache: freeform._StagedStaticCache,
         ) -> finalize.ProjectionFailure | None:
             candidate = next(
                 building for index, building in indexed if index == candidate_index
@@ -8727,6 +8739,7 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
             _frames: Sequence[freeform._JunctionProjectionFrame],
             *,
             candidate_index: int,
+            cache: freeform._StagedStaticCache,
         ) -> finalize.ProjectionFailure | None:
             candidate = next(
                 building for index, building in indexed if index == candidate_index
@@ -8766,6 +8779,78 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
             caught.value.clearance_requirement.required_west_channel
             == freeform._COATER_WEST_CHANNEL + 1
         )
+        assert not caught.value.pack_dependent
+
+    def test_staged_static_mixed_same_strip_seat_failures_request_clearance(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        canvas, spec, strips, ports = self._fixture(4)
+        assembler_id = catalog.item_id("assembling-machine-2")
+        assembler = catalog.building(assembler_id)
+        obstacle_index = canvas.add(
+            PlacedBuilding(
+                assembler_id,
+                assembler.model_index,
+                6,
+                4,
+                width=assembler.width,
+                height=assembler.height,
+                owner_strip=0,
+            ),
+            solid=True,
+        )
+        projected: list[int] = []
+        keepout: list[int] = []
+
+        def keepout_hits(
+            _buildings: Sequence[PlacedBuilding],
+            candidate: PlacedBuilding,
+        ) -> tuple[int, ...]:
+            keepout.append(candidate.x)
+            return (obstacle_index,) if candidate.x == 2 else ()
+
+        def projected_failure(
+            indexed: Sequence[tuple[int, PlacedBuilding]],
+            _frames: Sequence[freeform._JunctionProjectionFrame],
+            *,
+            candidate_index: int,
+            cache: freeform._StagedStaticCache,
+        ) -> finalize.ProjectionFailure | None:
+            candidate = next(
+                building for index, building in indexed if index == candidate_index
+            )
+            projected.append(candidate.x)
+            return finalize.ProjectionFailure(
+                "geom.collide",
+                (obstacle_index, candidate_index),
+                "build colliders intersect",
+                160,
+            )
+
+        monkeypatch.setattr(freeform, "_coater_keepout_hits", keepout_hits)
+        monkeypatch.setattr(
+            freeform,
+            "_prospective_static_failure",
+            projected_failure,
+        )
+
+        with pytest.raises(freeform._Unseatable) as caught:
+            freeform._place_coaters(
+                canvas,
+                spec,
+                strips,
+                ports,
+                2001,
+                35,
+                policy=BandPolicy("portable"),
+            )
+
+        assert keepout == [1, 2]
+        assert projected == [1]
+        assert caught.value.failure is not None
+        assert caught.value.failure.check == "geom.collide"
+        assert caught.value.clearance_requirement is not None
         assert not caught.value.pack_dependent
 
 

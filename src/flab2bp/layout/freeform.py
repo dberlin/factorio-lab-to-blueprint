@@ -7641,6 +7641,48 @@ class _JunctionProjectionFrame:
     projections: tuple[planet.Projection, ...]
 
 
+@dataclass(slots=True)
+class _StagedStaticCache:
+    """Attempt-local memoization of pure finalizer projection inputs."""
+
+    frames: dict[
+        tuple[
+            tuple[int, int, int, int],
+            tuple[int, int, int, int],
+            BandPolicy,
+        ],
+        tuple[_JunctionProjectionFrame, ...],
+    ] = field(default_factory=dict)
+    materialized: dict[
+        tuple[
+            PlacedBuilding,
+            tuple[int, int, int, int],
+            finalize.FrameCandidate,
+        ],
+        PlacedBuilding,
+    ] = field(default_factory=dict)
+    clean_contexts: set[tuple[object, ...]] = field(default_factory=set)
+    boxes: dict[
+        tuple[colliders.Placed, planet.Projection],
+        tuple[colliders.Box, ...],
+    ] = field(default_factory=dict)
+
+
+def _cached_junction_projection_frames(
+    cache: _StagedStaticCache,
+    occupied: tuple[int, int, int, int],
+    limit: tuple[int, int, int, int],
+    policy: BandPolicy,
+) -> tuple[_JunctionProjectionFrame, ...]:
+    """Return exact reachable frames once per attempt-local geometry signature."""
+    key = (occupied, limit, policy)
+    frames = cache.frames.get(key)
+    if frames is None:
+        frames = _junction_projection_frames(occupied, limit, policy)
+        cache.frames[key] = frames
+    return frames
+
+
 def _junction_projection_frames(
     occupied: tuple[int, int, int, int],
     limit: tuple[int, int, int, int],
@@ -7666,7 +7708,11 @@ def _junction_projection_frames(
     ] = {}
     projections_by_frame: dict[
         tuple[bool, int, int, int],
-        dict[planet.Projection, None],
+        dict[tuple[int, int], None],
+    ] = {}
+    projection_signatures_by_frame: dict[
+        tuple[bool, int, int, int],
+        set[tuple[int, tuple[int, ...]]],
     ] = {}
     for min_x in range(limit_min_x, occupied_min_x + 1):
         for min_y in range(limit_min_y, occupied_min_y + 1):
@@ -7702,25 +7748,41 @@ def _junction_projection_frames(
                             transform_key,
                             {},
                         )
+                        projection_signatures = (
+                            projection_signatures_by_frame.setdefault(
+                                transform_key,
+                                set(),
+                            )
+                        )
+                        projection_signature = (
+                            candidate.frame.height,
+                            candidate.frame.certified_bands,
+                        )
+                        if projection_signature in projection_signatures:
+                            continue
+                        projection_signatures.add(projection_signature)
                         for segments in candidate.frame.certified_bands:
                             band = by_segments[segments]
                             for anchor in band.anchors(
                                 candidate.frame.height
                             ):
                                 frame_projections.setdefault(
-                                    planet.Projection(
-                                        band=band,
-                                        anchor_row=anchor,
-                                        segment=colliders.PLANET_SEGMENT,
-                                        radius=colliders.PLANET_RADIUS,
-                                    ),
+                                    (segments, anchor),
                                     None,
                                 )
     return tuple(
         _JunctionProjectionFrame(
             bounds=bounds,
             candidate=candidate,
-            projections=tuple(projections_by_frame[key]),
+            projections=tuple(
+                planet.Projection(
+                    band=by_segments[segments],
+                    anchor_row=anchor,
+                    segment=colliders.PLANET_SEGMENT,
+                    radius=colliders.PLANET_RADIUS,
+                )
+                for segments, anchor in projections_by_frame[key]
+            ),
         )
         for key, (bounds, candidate) in frame_specs.items()
     )
@@ -7731,28 +7793,41 @@ def _prospective_static_failure(
     frames: Sequence[_JunctionProjectionFrame],
     *,
     candidate_index: int,
+    cache: _StagedStaticCache | None = None,
 ) -> finalize.ProjectionFailure | None:
     """First exact candidate collision over finalizer-reachable materializations."""
+    if cache is None:
+        cache = _StagedStaticCache()
     for frame in frames:
-        materialized = tuple(
-            (
-                index,
-                finalize.materialize_frame_building(
+        materialized_buildings: list[tuple[int, PlacedBuilding]] = []
+        # The authoritative predicate excludes belts and sorters before testing.
+        # Their item identity is invariant under frame materialization, so skip
+        # thousands of pure transforms that the predicate would immediately
+        # discard.
+        for index, building in buildings:
+            if catalog.is_belt(building.item_id) or catalog.is_sorter(
+                building.item_id
+            ):
+                continue
+            materialized_key = (building, frame.bounds, frame.candidate)
+            materialized = cache.materialized.get(materialized_key)
+            if materialized is None:
+                materialized = finalize.materialize_frame_building(
                     building,
                     bounds=frame.bounds,
                     candidate=frame.candidate,
-                ),
-            )
-            for index, building in buildings
+                )
+                cache.materialized[materialized_key] = materialized
+            materialized_buildings.append((index, materialized))
+        failure = finalize.first_projected_static_failure(
+            materialized_buildings,
+            frame.projections,
+            _clean_contexts=cache.clean_contexts,
+            _box_cache=cache.boxes,
+            candidate_index=candidate_index,
         )
-        for projection in frame.projections:
-            failure = finalize.projected_static_failure(
-                materialized,
-                projection,
-                candidate_index=candidate_index,
-            )
-            if failure is not None:
-                return failure
+        if failure is not None:
+            return failure
     return None
 
 
@@ -8066,6 +8141,7 @@ def _power_plan(
     demand: tuple[int, int, int, int],
     *,
     policy: BandPolicy,
+    staged_static_cache: _StagedStaticCache | None = None,
 ) -> list[tuple[int, int]]:
     """Where every tower goes, decided BEFORE anything routes.
 
@@ -8123,6 +8199,8 @@ def _power_plan(
     It used to point the other way, which is measured at three corpus cells --
     see the tie-break itself, where the numbers are.
     """
+    if staged_static_cache is None:
+        staged_static_cache = _StagedStaticCache()
     tower = catalog.building(catalog.TESLA_TOWER_ID)
     reach2 = math.floor((2 * tower.cover_radius) ** 2)
     link2 = math.floor((2 * tower.connect_distance) ** 2)
@@ -8455,7 +8533,8 @@ def _power_plan(
             )
             static_frames = static_frames_by_bounds.get(candidate_bounds)
             if static_frames is None:
-                static_frames = _junction_projection_frames(
+                static_frames = _cached_junction_projection_frames(
+                    staged_static_cache,
                     candidate_bounds,
                     canvas.limit or candidate_bounds,
                     policy,
@@ -8465,6 +8544,7 @@ def _power_plan(
                 (*static_buildings, (candidate[0], candidate[1])),
                 static_frames,
                 candidate_index=candidate[0],
+                cache=staged_static_cache,
             )
         if candidate_failure is not None:
             projected_refusal = projected_refusal or candidate_failure
@@ -8820,7 +8900,6 @@ def _join_shard_islands(
                 min(sinks[b], key=lambda t: (taps[t], t)),
             )
         )
-    return extra
 
 
 def _prepare_routing_problem(
@@ -8832,11 +8911,14 @@ def _prepare_routing_problem(
     policy: BandPolicy,
     ramped: bool = False,
     _reserve_ports: bool = True,
+    staged_static_cache: _StagedStaticCache | None = None,
 ) -> _PreparedRoutingProblem:
     """Build immutable exact geometry shared by both routing engines."""
     belt_id = catalog.get_item_id(spec.belt_item_id) or 2001
     belt_model = catalog.building(belt_id).model_index
     canvas = _Canvas(ramped=ramped)
+    if staged_static_cache is None:
+        staged_static_cache = _StagedStaticCache()
 
     groups = _adapt(spec)
     rates: dict[str, Fraction] = {}
@@ -9080,6 +9162,7 @@ def _prepare_routing_problem(
     # routed to its drop belt. Placing them afterwards -- as this used to --
     # leaves them mounted on belts with nothing feeding them, so every
     # proliferated recipe silently runs unproliferated.
+    assert staged_static_cache is not None
     coater_list: list[CoaterSupplyPort] = []
     prolif_item = _proliferator_item(spec)
     if spec.spray_lanes or any(
@@ -9095,6 +9178,7 @@ def _prepare_routing_problem(
             belt_id,
             belt_model,
             policy=policy,
+            staged_static_cache=staged_static_cache,
         )
     coaters = len(coater_list)
     for coater in coater_list:
@@ -9171,7 +9255,16 @@ def _prepare_routing_problem(
     # of the change: an unpowerable pack is infeasible, so it is refused here --
     # before a single belt is routed -- rather than emerging as a coverage
     # failure once the pack and the routing have both spent the ground.
-    power_sites = _power_plan(canvas, route_bounds, policy=policy) if power else []
+    power_sites = (
+        _power_plan(
+            canvas,
+            route_bounds,
+            policy=policy,
+            staged_static_cache=staged_static_cache,
+        )
+        if power
+        else []
+    )
 
     # External-input nets retain the existing lane-deduplication and item
     # precedence, while exposing their shared boundary cells immutably.
@@ -9402,6 +9495,7 @@ def _build(
     ramped: bool = False,
     deadline: float | None = None,
     budget: dict[str, int] | None = None,
+    staged_static_cache: _StagedStaticCache | None = None,
 ) -> _BuildResult:
     """Prepare one pack, then emit it through the reusable detailed entry point."""
     prepared = _prepare_routing_problem(
@@ -9412,6 +9506,7 @@ def _build(
         policy=policy,
         _reserve_ports=route,
         ramped=ramped,
+        staged_static_cache=staged_static_cache,
     )
     return _build_prepared(
         spec,
@@ -9774,6 +9869,7 @@ def _place_coaters(
     belt_model: int,
     *,
     policy: BandPolicy,
+    staged_static_cache: _StagedStaticCache | None = None,
 ) -> list[CoaterSupplyPort]:
     """Place one Spray Coater per sprayed input lane and its supply belt.
 
@@ -9810,6 +9906,8 @@ def _place_coaters(
     ``prolif.sprayed_cargo_reaches_machines`` -- so neither this nor a future
     strategy can put the miss back.
     """
+    if staged_static_cache is None:
+        staged_static_cache = _StagedStaticCache()
     coater = catalog.building(catalog.SPRAY_COATER_ID)
     wanted = set(spec.spray_lanes)
     proliferator_item = _proliferator_item(spec)
@@ -9869,6 +9967,7 @@ def _place_coaters(
             projected_failures: list[
                 tuple[finalize.ProjectionFailure, int | None]
             ] = []
+            same_strip_static_seats = 0
             seated = False
             for cx, cy in seats:
                 host_z = port.z
@@ -9907,6 +10006,11 @@ def _place_coaters(
                     proposed_coater,
                 )
                 if collider_hits:
+                    if all(
+                        prospective[index].owner_strip == strip_index
+                        for index in collider_hits
+                    ):
+                        same_strip_static_seats += 1
                     obstacles = ", ".join(
                         f"{catalog.building(prospective[index].item_id).name} "
                         f"at ({prospective[index].x}, "
@@ -9950,7 +10054,8 @@ def _place_coaters(
                 candidate_bounds = finalize._cleanup_survivor_bounds(
                     Placement(buildings=candidate_buildings)
                 )
-                static_frames = _junction_projection_frames(
+                static_frames = _cached_junction_projection_frames(
+                    staged_static_cache,
                     candidate_bounds,
                     static_capacity,
                     policy,
@@ -9962,6 +10067,7 @@ def _place_coaters(
                     ),
                     static_frames,
                     candidate_index=coater_index,
+                    cache=staged_static_cache,
                 )
                 if projected_failure is not None:
                     peer_index = next(
@@ -9979,6 +10085,8 @@ def _place_coaters(
                         else None
                     )
                     projected_failures.append((projected_failure, peer_owner))
+                    if peer_owner == strip_index:
+                        same_strip_static_seats += 1
                     failure_reasons.append(
                         f"the {item} coater at ({cx}, {cy}, z={host_z}) enters "
                         "a projected static collider"
@@ -10020,8 +10128,9 @@ def _place_coaters(
                     projected_failures[0][0] if projected_failures else None
                 )
                 all_projected = len(projected_failures) == len(seats)
-                same_strip = all_projected and all(
-                    owner == strip_index for _, owner in projected_failures
+                same_strip = (
+                    first_failure is not None
+                    and same_strip_static_seats == len(seats)
                 )
                 clearance_requirement = (
                     _staged_static_clearance_requirement(
@@ -10957,6 +11066,7 @@ class FreeformLayout:
         dearest_candidate_s = 0.0
         started_at: float | None = None
         candidate_index = 0
+        staged_static_cache = _StagedStaticCache()
         while candidate_index < len(candidate_packs):
             height, arrangement, projection_retry = candidate_packs[candidate_index]
             candidate_index += 1
@@ -11161,6 +11271,7 @@ class FreeformLayout:
                     ramped=self.ramped,
                     deadline=deadline,
                     budget=budget,
+                    staged_static_cache=staged_static_cache,
                 )
             except finalize.ProjectionRefusal as exc:
                 if rejected is not None:
@@ -11217,6 +11328,7 @@ class FreeformLayout:
                         exact_pack_no_goods.append(no_good)
                         learned = True
 
+                clearance_exhausted = False
                 requirement = exc.clearance_requirement
                 if requirement is not None:
                     selected_strip = next(
@@ -11237,24 +11349,53 @@ class FreeformLayout:
                         and selected_strip.physical_variant is not None
                         and selected_strip.staged_static_variant_id
                         == requirement.variant_id
-                        and requirement.required_west_channel
-                        <= _COATER_WEST_CHANNEL + 1
                     ):
-                        from flab2bp.layout.strip_variants import strip_pose_id
-
-                        pose_id = strip_pose_id(selected_strip.physical_variant)
-                        retained_clearance = minimum_staged_static_clearance.get(
-                            pose_id,
-                            selected_strip.west_channel,
-                        )
                         if (
                             requirement.required_west_channel
-                            > retained_clearance
+                            > _COATER_WEST_CHANNEL + 1
                         ):
-                            minimum_staged_static_clearance[pose_id] = (
-                                requirement.required_west_channel
+                            clearance_exhausted = True
+                        else:
+                            from flab2bp.layout.strip_variants import strip_pose_id
+
+                            pose_id = strip_pose_id(
+                                selected_strip.physical_variant
                             )
-                            learned = True
+                            retained_clearance = (
+                                minimum_staged_static_clearance.get(
+                                    pose_id,
+                                    selected_strip.west_channel,
+                                )
+                            )
+                            if (
+                                requirement.required_west_channel
+                                > retained_clearance
+                            ):
+                                minimum_staged_static_clearance[pose_id] = (
+                                    requirement.required_west_channel
+                                )
+                                learned = True
+
+                # The physical variant gets one bounded upstream seat first.
+                # If that exact extended pack still projects into its own
+                # machine, the absolute frame latitude remains pack-dependent:
+                # forbid this complete assignment once and let CP-SAT move it.
+                # Repeating the same no-good is terminal, so this adds one
+                # bounded retry rather than another work dimension.
+                if clearance_exhausted and exc.failure is not None:
+                    no_good = ExactPackNoGood(
+                        height=pack.height,
+                        outline=tuple(_box(strip) for strip in strips),
+                        width=pack.width,
+                        origins=tuple(
+                            pack.at[index] for index in range(len(strips))
+                        ),
+                        evidence=exc.failures,
+                    )
+                    if no_good not in exact_pack_no_good_keys:
+                        exact_pack_no_good_keys.add(no_good)
+                        exact_pack_no_goods.append(no_good)
+                        learned = True
 
                 if learned:
                     replan_strip_len = max(strip.machines for strip in strips)

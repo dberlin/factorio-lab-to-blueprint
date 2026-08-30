@@ -591,11 +591,21 @@ def _projected_static_failure(
     projection: planet.Projection,
     *,
     counters: _ProjectionCounters | None = None,
+    _box_cache: dict[
+        tuple[colliders.Placed, planet.Projection],
+        tuple[colliders.Box, ...],
+    ]
+    | None = None,
 ) -> ProjectionFailure | None:
     placed = [building for _index, building in tested]
     if counters is not None:
         counters.collider_pairs += len(pairs)
-    hits = planet.collisions_at(placed, projection, pairs)
+    hits = planet.collisions_at(
+        placed,
+        projection,
+        pairs,
+        _box_cache=_box_cache,
+    )
     if not hits:
         return None
     left, right = hits[0]
@@ -605,6 +615,127 @@ def _projected_static_failure(
         detail="build colliders intersect",
         band=projection.band.area_segments,
     )
+
+
+def first_projected_static_failure(
+    buildings: Sequence[tuple[int, PlacedBuilding]],
+    projections: Sequence[planet.Projection],
+    *,
+    candidate_index: int | None = None,
+    _clean_contexts: set[tuple[object, ...]] | None = None,
+    _box_cache: dict[
+        tuple[colliders.Placed, planet.Projection],
+        tuple[colliders.Box, ...],
+    ]
+    | None = None,
+) -> ProjectionFailure | None:
+    """Return the first exact static failure across ordered projections.
+
+    Building collider poses are invariant within one materialized frame and the
+    broad-phase candidate pairs vary only by band geometry, not by anchor row.
+    Prepare each pose once and each distinct band context once, then run the
+    authoritative exact verdict in caller-supplied projection order.
+    """
+    retained = tuple(
+        (index, building)
+        for index, building in buildings
+        if not catalog.is_belt(building.item_id)
+        and not catalog.is_sorter(building.item_id)
+    )
+    tested = tuple(
+        (index, _collision_placed(building))
+        for index, building in retained
+    )
+    candidate_position: int | None = None
+    if candidate_index is not None:
+        try:
+            candidate_position = next(
+                position
+                for position, (index, _building) in enumerate(retained)
+                if index == candidate_index
+            )
+        except StopIteration:
+            raise ValueError(
+                "prospective static candidate is not collision-tested"
+            ) from None
+
+    pair_buildings = tuple(building for _index, building in tested)
+    pairs_by_context: dict[
+        tuple[planet.Band, int, float],
+        tuple[tuple[int, int], ...],
+    ] = {}
+    for projection in projections:
+        context = (
+            projection.band,
+            projection.segment,
+            projection.radius,
+        )
+        pairs = pairs_by_context.get(context)
+        if pairs is None:
+            pairs = tuple(
+                planet.candidate_pairs(
+                    pair_buildings,
+                    projection.band,
+                    projection.segment,
+                    projection.radius,
+                )
+            )
+            if candidate_position is not None:
+                pairs = tuple(
+                    pair for pair in pairs if candidate_position in pair
+                )
+            pairs_by_context[context] = pairs
+        clean_context: tuple[object, ...] | None = None
+        if _clean_contexts is not None:
+            wanted = tuple(sorted({position for pair in pairs for position in pair}))
+            # Uniform longitude is a rigid rotation of the whole spherical
+            # configuration. Normalize it away so capacity frames that differ
+            # only by that rotation share the same exact clean verdict.
+            base_longitude = 0.0
+            if wanted:
+                base = tested[wanted[0]][1]
+                base_longitude = (
+                    base.y if projection.rotated else base.x
+                )
+            placed_context: list[tuple[object, ...]] = []
+            for position in wanted:
+                placed = tested[position][1]
+                longitude, latitude = (
+                    (placed.y, placed.x)
+                    if projection.rotated
+                    else (placed.x, placed.y)
+                )
+                placed_context.append(
+                    (
+                        position,
+                        placed.model_index,
+                        longitude - base_longitude,
+                        projection.anchor_row + latitude,
+                        placed.z,
+                        placed.yaw,
+                    )
+                )
+            clean_context = (
+                projection.band.area_segments,
+                projection.segment,
+                projection.radius,
+                projection.quadrant,
+                pairs,
+                tuple(placed_context),
+            )
+            if clean_context in _clean_contexts:
+                continue
+        failure = _projected_static_failure(
+            tested,
+            pairs,
+            projection,
+            _box_cache=_box_cache,
+        )
+        if failure is not None:
+            return failure
+        if clean_context is not None:
+            _clean_contexts.add(clean_context)
+    return None
 
 
 def projected_static_failure(
@@ -622,37 +753,11 @@ def projected_static_failure(
     candidate pairs involving that staged object are considered, in the order
     :func:`planet.candidate_pairs` gives them.
     """
-    retained = tuple(
-        (index, building)
-        for index, building in buildings
-        if not catalog.is_belt(building.item_id)
-        and not catalog.is_sorter(building.item_id)
+    return first_projected_static_failure(
+        buildings,
+        (projection,),
+        candidate_index=candidate_index,
     )
-    tested = tuple(
-        (index, _collision_placed(building))
-        for index, building in retained
-    )
-    pairs = tuple(
-        planet.candidate_pairs(
-            tuple(building for _index, building in tested),
-            projection.band,
-            projection.segment,
-            projection.radius,
-        )
-    )
-    if candidate_index is not None:
-        try:
-            candidate_position = next(
-                position
-                for position, (index, _building) in enumerate(retained)
-                if index == candidate_index
-            )
-        except StopIteration:
-            raise ValueError("prospective static candidate is not collision-tested") from None
-        pairs = tuple(
-            pair for pair in pairs if candidate_position in pair
-        )
-    return _projected_static_failure(tested, pairs, projection)
 
 
 def _projected_addon_failure(

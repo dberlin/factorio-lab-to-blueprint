@@ -983,6 +983,12 @@ def collisions_at(
     buildings: Sequence[colliders.Placed],
     projection: Projection,
     pairs: Sequence[tuple[int, int]] | None = None,
+    *,
+    _box_cache: dict[
+        tuple[colliders.Placed, Projection],
+        tuple[colliders.Box, ...],
+    ]
+    | None = None,
 ) -> list[tuple[int, int]]:
     """``EBuildCondition.Collide`` pairs among machines projected into a band.
 
@@ -1020,14 +1026,28 @@ def collisions_at(
     if not pairs:
         return []
     wanted = {i for pair in pairs for i in pair}
-    boxes = {
-        i: colliders.target_boxes(buildings[i], *projection.pose(*_placed_at(buildings[i])))
-        for i in wanted
-    }
+    boxes: dict[int, tuple[colliders.Box, ...]] = {}
+    for i in wanted:
+        cache_key = (buildings[i], projection)
+        built = None if _box_cache is None else _box_cache.get(cache_key)
+        if built is None:
+            built = tuple(
+                colliders.target_boxes(
+                    buildings[i],
+                    *projection.pose(*_placed_at(buildings[i])),
+                )
+            )
+            if _box_cache is not None:
+                _box_cache[cache_key] = built
+        boxes[i] = built
     hits = [
         pair
         for pair in pairs
-        if any(colliders.obb_overlap(q, t) for q in boxes[pair[0]] for t in boxes[pair[1]])
+        if any(
+            colliders.obb_overlap(query, target)
+            for query in boxes[pair[0]]
+            for target in boxes[pair[1]]
+        )
     ]
     return sorted(hits)
 

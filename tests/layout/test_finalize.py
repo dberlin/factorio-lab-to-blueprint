@@ -334,9 +334,15 @@ def test_prospective_projection_static_predicate_matches_finalizer_path(
         projection,
         candidate_index=255,
     )
+    prospective_batch = finalize.first_projected_static_failure(
+        ((181, chemical), (255, tower)),
+        (projection,),
+        candidate_index=255,
+    )
 
     assert prospective == replace(authoritative, buildings=(181, 255))
-    assert candidate_pair_inputs == [pair_buildings]
+    assert prospective_batch == prospective
+    assert candidate_pair_inputs == [pair_buildings, pair_buildings]
 
 
 def test_projection_no_good_independence_ignores_unrelated_route_geometry() -> None:
