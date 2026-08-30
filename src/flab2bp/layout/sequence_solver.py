@@ -787,6 +787,17 @@ class SequenceSolver[PreparedT]:
                         allowance,
                         closure_allowance=closure_allowance,
                     )
+                    followup_spent, followup_cancelled = (
+                        self._run_pending_projection_feedback(
+                            height_state,
+                            0,
+                            stage_limit,
+                            prior_cancelled=cancelled,
+                            closure_allowance=closure_allowance - spent,
+                        )
+                    )
+                    spent += followup_spent
+                    cancelled = cancelled or followup_cancelled
                     self.budget.settle_detailed_discovery(
                         height_state.height,
                         spent,
@@ -794,6 +805,16 @@ class SequenceSolver[PreparedT]:
                     self._borrow_first_discovery = False
                 else:
                     spent, cancelled = self._run_discovery(height_state, allowance)
+                    followup_spent, followup_cancelled = (
+                        self._run_pending_projection_feedback(
+                            height_state,
+                            allowance - spent,
+                            stage_limit,
+                            prior_cancelled=cancelled,
+                        )
+                    )
+                    spent += followup_spent
+                    cancelled = cancelled or followup_cancelled
                     self.budget.settle_discovery(height_state.height, spent)
             else:
                 if self.budget.shared_left == 0:
@@ -1131,15 +1152,59 @@ class SequenceSolver[PreparedT]:
         )
         return detailed
 
+    def _run_pending_projection_feedback(
+        self,
+        height_state: _HeightState,
+        allowance: int,
+        stage_limit: int,
+        *,
+        prior_cancelled: bool,
+        closure_allowance: int | None = None,
+    ) -> tuple[int, bool]:
+        feedback_restart = next(
+            (
+                restart
+                for restart in height_state.restarts
+                if restart.restart == height_state.feedback_restart
+                and restart.stages < self.config.stages
+            ),
+            None,
+        )
+        scheduled_stages = sum(
+            stage.global_skip_reason not in ("shared-pack", "topology-beam")
+            for stage in self._stage_stats
+        )
+        if (
+            prior_cancelled
+            or feedback_restart is None
+            or scheduled_stages >= stage_limit
+            or self.deadline_reached()
+        ):
+            return 0, False
+        return self._run_stage(
+            height_state,
+            feedback_restart,
+            allowance,
+            closure_allowance=closure_allowance,
+        )
+
+
     def _run_stage(
         self,
         height_state: _HeightState,
         restart: _RestartState,
         allowance: int,
+        *,
+        closure_allowance: int | None = None,
     ) -> tuple[int, bool]:
         annealed = self._anneal_restarts(height_state, (restart,))
         self._persist_annealed_restarts(annealed)
-        return self._route_annealed(height_state, annealed, allowance)
+        return self._route_annealed(
+            height_state,
+            annealed,
+            allowance,
+            closure_allowance=closure_allowance,
+        )
 
     def _anneal_restarts(
         self,

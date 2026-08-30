@@ -2694,6 +2694,98 @@ def test_projection_pitch_feedback_single_restart_routes_padded_variant() -> Non
     assert solver._stage_stats[1].selected_variant_ids[0].placement_geometry[2] == 8
 
 
+@pytest.mark.parametrize("borrow_first_discovery", [False, True])
+def test_projection_pitch_feedback_runs_before_the_next_height_discovery(
+    borrow_first_discovery: bool,
+) -> None:
+    problem, state, placement, failure = _projection_pitch_stage_fixture()
+    padded = variant_with_minimum_pitch(
+        problem.variant(0, 0),
+        problem.variant(0, 0).pitch_x + 1,
+    )
+    validations = 0
+    global_allowances: list[int] = []
+
+    def global_route(
+        _prepared: tuple[int, DecodedPlacement],
+        _feedback: FeedbackState,
+        allowance: int,
+    ) -> GlobalRouteResult:
+        global_allowances.append(allowance)
+        return _global()
+
+
+    def detailed_route(
+        prepared: tuple[int, DecodedPlacement],
+        _allowance: int,
+    ) -> DetailedStageResult:
+        height, _decoded = prepared
+        if height != 40:
+            return DetailedStageResult(_routing(DetailedRouteStatus.BUDGET), None)
+        return DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), placement)
+
+    def validate_projection(candidate: Placement) -> ValidationVerdict:
+        nonlocal validations
+        validations += 1
+        if validations == 1:
+            return ValidationVerdict(
+                False,
+                ("geom.collide",),
+                None,
+                (failure,),
+            )
+        return ValidationVerdict(
+            True,
+            (),
+            replace(candidate, stats={"area": 1.0, "belt_tiles": 0.0}),
+        )
+
+    def transform(
+        _height: int,
+        stage_problem: PlacementProblem,
+        stage_state: AnnealState,
+        _feedback: FeedbackState,
+        _detailed: DetailedStageResult,
+        _stagnation: int,
+        _projection_failures: tuple[finalize.ProjectionFailure, ...],
+        select_feedback_variant: bool,
+    ) -> StageBoundaryUpdate:
+        return enable_variant_stage_boundary(
+            stage_problem,
+            stage_state,
+            strip=0,
+            variant=padded,
+            select_variant=select_feedback_variant,
+        )
+
+    solver = SequenceSolver(
+        heights=(40, 41),
+        problem_for_height=lambda height: replace(problem, outline_height=height),
+        adapters=StageAdapters(
+            prepare=lambda height, decoded: (height, decoded),
+            global_route=global_route,
+            detailed_route=detailed_route,
+            validate=validate_projection,
+        ),
+        expansion_budget=ExpansionBudget(17),
+        config=SequenceSolverConfig(
+            stages=2,
+            moves_per_stage=1,
+            restarts_per_height=1,
+            global_elites=1,
+        ),
+        stage_boundary_transform=transform,
+        borrow_first_discovery=borrow_first_discovery,
+    )
+    solver._heights[0].restarts[0].anneal = state
+
+    result = solver.search(max_stages=2)
+
+    assert [stage.height for stage in result.stages] == [40, 40]
+    assert result.stages[1].selected_variant_ids[0].placement_geometry[2] == 8
+    assert bool(global_allowances) is not borrow_first_discovery
+
+
 def test_production_padded_variant_transform_maps_same_strip_projection() -> None:
     problem, state, placement, failure = _projection_pitch_stage_fixture()
     run = _production_run(
