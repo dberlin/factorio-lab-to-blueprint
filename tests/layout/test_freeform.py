@@ -4236,6 +4236,60 @@ def test_prospective_projection_matches_finalizer_for_exact_ownerless_pair() -> 
     assert prospective.buildings == (181, 255)
     assert prospective in caught.value.failures
 
+def test_prospective_static_deadline_unwinds_inside_materialization_without_cache_artifact() -> None:
+    chemical = catalog.building(2309)
+    tower = catalog.building(catalog.TESLA_TOWER_ID)
+    buildings = (
+        (
+            181,
+            PlacedBuilding(
+                2309,
+                chemical.model_index,
+                0,
+                0,
+                width=chemical.width,
+                height=chemical.height,
+            ),
+        ),
+        (
+            255,
+            PlacedBuilding(
+                catalog.TESLA_TOWER_ID,
+                tower.model_index,
+                2,
+                1,
+                width=tower.width,
+                height=tower.height,
+            ),
+        ),
+    )
+    placement = Placement(buildings=tuple(building for _index, building in buildings))
+    frames = freeform._junction_projection_frames(
+        placement.bounds,
+        placement.bounds,
+        BandPolicy("portable"),
+    )
+    cache = freeform._StagedStaticCache()
+    checks = 0
+
+    def cancelled() -> bool:
+        nonlocal checks
+        checks += 1
+        return checks >= 4
+
+    with pytest.raises(freeform._PreparationDeadline):
+        freeform._prospective_static_failure(
+            buildings,
+            frames,
+            candidate_index=255,
+            cache=cache,
+            cancelled=cancelled,
+        )
+
+    assert checks == 4
+    assert cache.materialized == {}
+    assert cache.clean_contexts == set()
+
 
 def test_staged_static_pack_dependent_exhaustion_learns_exact_no_good(
     monkeypatch: pytest.MonkeyPatch,
@@ -9477,6 +9531,7 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
             *,
             candidate_index: int,
             cache: freeform._StagedStaticCache,
+            cancelled: Callable[[], bool] | None = None,
         ) -> finalize.ProjectionFailure | None:
             candidate = next(
                 building for index, building in indexed if index == candidate_index
@@ -9540,6 +9595,7 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
             *,
             candidate_index: int,
             cache: freeform._StagedStaticCache,
+            cancelled: Callable[[], bool] | None = None,
         ) -> finalize.ProjectionFailure | None:
             candidate = next(
                 building for index, building in indexed if index == candidate_index
@@ -9616,6 +9672,7 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
             *,
             candidate_index: int,
             cache: freeform._StagedStaticCache,
+            cancelled: Callable[[], bool] | None = None,
         ) -> finalize.ProjectionFailure | None:
             candidate = next(
                 building for index, building in indexed if index == candidate_index

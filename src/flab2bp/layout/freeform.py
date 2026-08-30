@@ -8089,6 +8089,10 @@ def _route_external_inputs(
     )
 
 
+class _PreparationDeadline(Exception):
+    """Exact candidate preparation stopped before producing a reusable result."""
+
+
 class _Unseatable(NoValidLayout):
     """A sprayed lane could not be given a Spray Coater, so this pack is not one.
 
@@ -8319,30 +8323,44 @@ def _prospective_static_failure(
     *,
     candidate_index: int,
     cache: _StagedStaticCache | None = None,
+    cancelled: Callable[[], bool] | None = None,
 ) -> finalize.ProjectionFailure | None:
     """First exact candidate collision over finalizer-reachable materializations."""
     if cache is None:
         cache = _StagedStaticCache()
+    if cancelled is not None and cancelled():
+        raise _PreparationDeadline
     for frame in frames:
+        if cancelled is not None and cancelled():
+            raise _PreparationDeadline
         materialized_buildings: list[tuple[int, PlacedBuilding]] = []
+        pending_materialized: dict[
+            tuple[PlacedBuilding, tuple[int, int, int, int], finalize.FrameCandidate],
+            PlacedBuilding,
+        ] = {}
         # The authoritative predicate excludes belts and sorters before testing.
         # Their item identity is invariant under frame materialization, so skip
         # thousands of pure transforms that the predicate would immediately
         # discard.
         for index, building in buildings:
+            if cancelled is not None and cancelled():
+                raise _PreparationDeadline
             if catalog.is_belt(building.item_id) or catalog.is_sorter(
                 building.item_id
             ):
                 continue
             materialized_key = (building, frame.bounds, frame.candidate)
-            materialized = cache.materialized.get(materialized_key)
+            materialized = cache.materialized.get(
+                materialized_key,
+                pending_materialized.get(materialized_key),
+            )
             if materialized is None:
                 materialized = finalize.materialize_frame_building(
                     building,
                     bounds=frame.bounds,
                     candidate=frame.candidate,
                 )
-                cache.materialized[materialized_key] = materialized
+                pending_materialized[materialized_key] = materialized
             materialized_buildings.append((index, materialized))
         failure = finalize.first_projected_static_failure(
             materialized_buildings,
@@ -8350,7 +8368,9 @@ def _prospective_static_failure(
             _clean_contexts=cache.clean_contexts,
             _box_cache=cache.boxes,
             candidate_index=candidate_index,
+            cancelled=cancelled,
         )
+        cache.materialized.update(pending_materialized)
         if failure is not None:
             return failure
     return None
@@ -8667,6 +8687,7 @@ def _power_plan(
     *,
     policy: BandPolicy,
     staged_static_cache: _StagedStaticCache | None = None,
+    cancelled: Callable[[], bool] | None = None,
 ) -> list[tuple[int, int]]:
     """Where every tower goes, decided BEFORE anything routes.
 
@@ -8726,6 +8747,8 @@ def _power_plan(
     """
     if staged_static_cache is None:
         staged_static_cache = _StagedStaticCache()
+    if cancelled is not None and cancelled():
+        raise _PreparationDeadline
     tower = catalog.building(catalog.TESLA_TOWER_ID)
     reach2 = math.floor((2 * tower.cover_radius) ** 2)
     link2 = math.floor((2 * tower.connect_distance) ** 2)
@@ -8760,6 +8783,8 @@ def _power_plan(
 
     free = np.zeros(shape, dtype=bool)
     for x in range(min_x, max_x + 1):
+        if cancelled is not None and cancelled():
+            raise _PreparationDeadline
         for y in range(min_y, max_y + 1):
             if not canvas.free((x, y, 0)) or (x, y) in canvas.solid:
                 continue
@@ -8792,6 +8817,8 @@ def _power_plan(
     # tiles.
     dark = in_demand.copy()
     for b in canvas.buildings:
+        if cancelled is not None and cancelled():
+            raise _PreparationDeadline
         if catalog.is_belt(b.item_id) or b.item_id == catalog.TESLA_TOWER_ID:
             continue
         for tx, ty, _ in b.tiles():
@@ -8876,6 +8903,8 @@ def _power_plan(
         tuple[_JunctionProjectionFrame, ...],
     ] = {}
     for projection in projections:
+        if cancelled is not None and cancelled():
+            raise _PreparationDeadline
         existing_failure = finalize.projected_power_failure(power_nodes, projection)
         if existing_failure is not None:
             raise _Unpowerable(
@@ -8923,6 +8952,8 @@ def _power_plan(
     # A cap, not a schedule: every round either consumes or rejects one free
     # cell, so a placement that has not finished by then is not converging.
     for _ in range(int(np.count_nonzero(free)) + 1):
+        if cancelled is not None and cancelled():
+            raise _PreparationDeadline
         if not remaining.any():
             break
         # WHERE a tower stands costs the router, because a tower cell is held in
@@ -9070,6 +9101,7 @@ def _power_plan(
                 static_frames,
                 candidate_index=candidate[0],
                 cache=staged_static_cache,
+                cancelled=cancelled,
             )
         if candidate_failure is not None:
             projected_refusal = projected_refusal or candidate_failure
@@ -9438,6 +9470,7 @@ def _prepare_routing_problem(
     ramped: bool = False,
     _reserve_ports: bool = True,
     staged_static_cache: _StagedStaticCache | None = None,
+    cancelled: Callable[[], bool] | None = None,
 ) -> _PreparedRoutingProblem:
     """Build immutable exact geometry shared by both routing engines."""
     belt_id = catalog.get_item_id(spec.belt_item_id) or 2001
@@ -9445,6 +9478,8 @@ def _prepare_routing_problem(
     canvas = _Canvas(ramped=ramped)
     if staged_static_cache is None:
         staged_static_cache = _StagedStaticCache()
+    if cancelled is not None and cancelled():
+        raise _PreparationDeadline
 
     groups = _adapt(spec)
     rates: dict[str, Fraction] = {}
@@ -9499,6 +9534,8 @@ def _prepare_routing_problem(
     strip_of_belt: dict[int, int] = {}
     sorters = 0
     for i, s in enumerate(strips):
+        if cancelled is not None and cancelled():
+            raise _PreparationDeadline
         ox, oy = pack.at[i]
         ins, outs, placed = _emit_strip(
             canvas,
@@ -9567,6 +9604,8 @@ def _prepare_routing_problem(
     # stress spec is thousands.
     standing = slots.sorter_seat_boxes(canvas.buildings)
     for (src_key, item, dest_group, cargo_domain), srcs in out_ports.items():
+        if cancelled is not None and cancelled():
+            raise _PreparationDeadline
         # One output lane may serve SEVERAL destination groups -- see
         # `_merge_lanes` -- and each of them is its own set of consumer strips to
         # pair against. Domain is part of the key, so a clean and a sprayed lane
@@ -9625,6 +9664,8 @@ def _prepare_routing_problem(
         for item, _cargo_domain in active_cargo
     }
     for cargo in sorted(active_cargo, key=lambda key: (key[0], key[1].value)):
+        if cancelled is not None and cancelled():
+            raise _PreparationDeadline
         item, cargo_domain = cargo
         total_demand = demand_by_item[item]
         domain_demand = sum(lane_demand[cargo].values(), Fraction(0))
@@ -9689,6 +9730,8 @@ def _prepare_routing_problem(
     # leaves them mounted on belts with nothing feeding them, so every
     # proliferated recipe silently runs unproliferated.
     assert staged_static_cache is not None
+    if cancelled is not None and cancelled():
+        raise _PreparationDeadline
     coater_list: list[CoaterSupplyPort] = []
     prolif_item = _proliferator_item(spec)
     if spec.spray_lanes or any(
@@ -9705,6 +9748,7 @@ def _prepare_routing_problem(
             belt_model,
             policy=policy,
             staged_static_cache=staged_static_cache,
+            cancelled=cancelled,
         )
     coaters = len(coater_list)
     for coater in coater_list:
@@ -9787,6 +9831,7 @@ def _prepare_routing_problem(
             route_bounds,
             policy=policy,
             staged_static_cache=staged_static_cache,
+            cancelled=cancelled,
         )
         if power
         else []
@@ -9797,6 +9842,8 @@ def _prepare_routing_problem(
     wanted: dict[int, tuple[_Port, int]] = {}
     carried: dict[int, str] = {}
     for strip_index, ports in enumerate(strip_in_ports):
+        if cancelled is not None and cancelled():
+            raise _PreparationDeadline
         for item, port in sorted(ports.items()):
             if item in spec.external_inputs:
                 wanted.setdefault(port.belt, (port, strip_index))
@@ -9840,6 +9887,8 @@ def _prepare_routing_problem(
     ] = defaultdict(int)
     prepared_nets: list[_PreparedNet] = []
     for net, role in tagged_nets:
+        if cancelled is not None and cancelled():
+            raise _PreparationDeadline
         source_strip = strip_of_belt.get(net.src.belt) if net.src is not None else None
         destination_strip = strip_of_belt.get(net.dst.belt)
         identity = (
@@ -9935,6 +9984,8 @@ def _prepare_routing_problem(
         grouped_nets,
         canvas.buildings,
     )
+    if cancelled is not None and cancelled():
+        raise _PreparationDeadline
     junction_frames = (
         _junction_projection_frames(
             finalize._cleanup_survivor_bounds(
@@ -10538,6 +10589,7 @@ def _place_coaters(
     *,
     policy: BandPolicy,
     staged_static_cache: _StagedStaticCache | None = None,
+    cancelled: Callable[[], bool] | None = None,
 ) -> list[CoaterSupplyPort]:
     """Place one Spray Coater per sprayed input lane and its supply belt.
 
@@ -10576,6 +10628,8 @@ def _place_coaters(
     """
     if staged_static_cache is None:
         staged_static_cache = _StagedStaticCache()
+    if cancelled is not None and cancelled():
+        raise _PreparationDeadline
     coater = catalog.building(catalog.SPRAY_COATER_ID)
     wanted = set(spec.spray_lanes)
     proliferator_item = _proliferator_item(spec)
@@ -10605,7 +10659,11 @@ def _place_coaters(
     for strip_index, (strip, in_ports) in enumerate(
         zip(strips, ports, strict=True)
     ):
+        if cancelled is not None and cancelled():
+            raise _PreparationDeadline
         for item in strip.in_lanes:
+            if cancelled is not None and cancelled():
+                raise _PreparationDeadline
             if strip.cargo_domain is not CargoDomain.REQUIRES_SPRAY:
                 continue
             port = in_ports.get(item)
@@ -10642,6 +10700,8 @@ def _place_coaters(
             same_strip_static_seats = 0
             seated = False
             for cx, cy in seats:
+                if cancelled is not None and cancelled():
+                    raise _PreparationDeadline
                 host_z = port.z
                 host = belt_at.get((cx, cy, host_z))
                 yaw = Facing.EAST.value
@@ -10742,6 +10802,7 @@ def _place_coaters(
                     static_frames,
                     candidate_index=coater_index,
                     cache=staged_static_cache,
+                    cancelled=cancelled,
                 )
                 if projected_failure is not None:
                     peer_index = next(

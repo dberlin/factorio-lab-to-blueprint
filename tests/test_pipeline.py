@@ -9,6 +9,7 @@ because by the time there is a return value the answer is "none of them".
 from __future__ import annotations
 
 from pathlib import Path
+import time
 
 import pytest
 
@@ -32,6 +33,12 @@ from flab2bp.spec import BuildSpecSet
 #: costs a second of CP-SAT rather than a minute -- the sequence is the subject,
 #: not the packing.
 SMALL_URL = "https://factoriolab.github.io/dsp/flow?o=electromagnetic-matrix*60&v=11"
+DEADLINE_REGRESSION_URL = (
+    "https://factoriolab.github.io/dsp/flow?"
+    "z=eJzLt63SMjQwUMu3dQrWMgPTzlrGILpEywgi7qRlaGZgoKVlqJZvaw4ShLLDQBr"
+    "B7MykVFsntdzcItvIOqc617pAtdyCYls3tTJbQ0MAjnsZAA__&v=11"
+)
+
 
 @pytest.mark.parametrize("pinned", [False, True])
 def test_pipeline_canonicalizes_once_before_internal_consumers(
@@ -426,3 +433,17 @@ class TestFlowText:
                 flow=GRAPHENE_FLOW,
                 flow_text=GRAPHENE_FLOW.read_text(encoding="utf-8-sig"),
             )
+
+@pytest.mark.slow
+def test_all_products_sequence_pair_honours_the_exact_layout_deadline() -> None:
+    started = time.monotonic()
+
+    with pytest.raises(NoValidLayout, match="deadline exhausted"):
+        pipeline.build(
+            DEADLINE_REGRESSION_URL,
+            strategy="sequence-pair",
+            candidate_policies=(CandidatePolicy.ALL_PRODUCTS,),
+            time_budget_s=10.0,
+        )
+
+    assert time.monotonic() - started < 12.5

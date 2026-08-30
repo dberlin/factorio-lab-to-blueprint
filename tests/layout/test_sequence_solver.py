@@ -1719,6 +1719,49 @@ def test_production_run_uses_requested_budget_with_supplied_absolute_deadline() 
     assert run.ceiling == 2.0
     assert run.solver.budget.total == 2_000_000
 
+def test_production_exact_preparation_propagates_deadline_and_reuses_only_pure_cache(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    caches: list[object] = []
+    checks: list[bool] = []
+
+    def cancelled_prepare(
+        *_args: object,
+        staged_static_cache: object,
+        cancelled: Callable[[], bool],
+        **_kwargs: object,
+    ) -> Never:
+        caches.append(staged_static_cache)
+        checks.append(cancelled())
+        raise freeform_module._PreparationDeadline
+
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "_prepare_routing_problem",
+        cancelled_prepare,
+    )
+    run = _production_run(
+        two_stage_spec(),
+        band_policy=BandPolicy("portable"),
+        time_budget_s=2.0,
+        power=False,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+    )
+    height = run.solver._heights[0]
+    decoded = decode_state(height.problem, height.restarts[0].anneal)
+
+    first = run.solver.adapters.prepare_exact(height.height, decoded)
+    second = run.solver.adapters.prepare_exact(height.height, decoded)
+
+    assert first.prepared is None
+    assert first.preparation_error == "deadline"
+    assert second.prepared is None
+    assert second.preparation_error == "deadline"
+    assert checks == [False, False]
+    assert len(caches) == 2
+    assert caches[0] is caches[1]
+
 
 def test_sequence_pair_layout_rejects_removed_power_option() -> None:
     constructor: Callable[..., SequencePairLayout] = SequencePairLayout

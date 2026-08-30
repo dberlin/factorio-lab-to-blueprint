@@ -29,6 +29,10 @@ class ProjectionFailure:
     detail: str
     band: int
 
+
+class ProjectionCancelled(Exception):
+    """Exact projected validation stopped before producing a verdict."""
+
 type ProjectionGeometrySignature = tuple[object, ...]
 
 
@@ -628,6 +632,7 @@ def first_projected_static_failure(
         tuple[colliders.Box, ...],
     ]
     | None = None,
+    cancelled: Callable[[], bool] | None = None,
 ) -> ProjectionFailure | None:
     """Return the first exact static failure across ordered projections.
 
@@ -636,6 +641,8 @@ def first_projected_static_failure(
     Prepare each pose once and each distinct band context once, then run the
     authoritative exact verdict in caller-supplied projection order.
     """
+    if cancelled is not None and cancelled():
+        raise ProjectionCancelled
     retained = tuple(
         (index, building)
         for index, building in buildings
@@ -665,6 +672,8 @@ def first_projected_static_failure(
         tuple[tuple[int, int], ...],
     ] = {}
     for projection in projections:
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
         context = (
             projection.band,
             projection.segment,
@@ -672,6 +681,8 @@ def first_projected_static_failure(
             projection.quadrant,
         )
         pairs = pairs_by_context.get(context)
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
         if pairs is None:
             broad_phase_buildings = (
                 tuple(
@@ -705,6 +716,8 @@ def first_projected_static_failure(
                 )
             placed_context: list[tuple[object, ...]] = []
             for position in wanted:
+                if cancelled is not None and cancelled():
+                    raise ProjectionCancelled
                 placed = tested[position][1]
                 longitude, latitude = (
                     (placed.y, placed.x)
@@ -731,6 +744,8 @@ def first_projected_static_failure(
             )
             if clean_context in _clean_contexts:
                 continue
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
         failure = _projected_static_failure(
             tested,
             pairs,
@@ -739,7 +754,7 @@ def first_projected_static_failure(
         )
         if failure is not None:
             return failure
-        if clean_context is not None:
+        if clean_context is not None and _clean_contexts is not None:
             _clean_contexts.add(clean_context)
     return None
 

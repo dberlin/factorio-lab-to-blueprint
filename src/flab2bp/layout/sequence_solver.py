@@ -58,7 +58,9 @@ from flab2bp.layout.freeform import (
     _Pack,
     _pack,
     _prepare_routing_problem,
+    _PreparationDeadline,
     _PreparedRoutingProblem,
+    _StagedStaticCache,
     _projection_no_good,
     _exact_projection_pair,
     _projection_strip_pair,
@@ -3372,6 +3374,7 @@ def _production_run(
         tuple[tuple[StripInstanceId, ...], tuple[int, ...]],
         dict[tuple[int, int], _DirectCandidate],
     ] = {}
+    staged_static_cache = _StagedStaticCache()
 
     def selected_strips(
         problem: PlacementProblem,
@@ -3465,6 +3468,18 @@ def _production_run(
                 power=power,
                 policy=band_policy,
                 ramped=not belt_vertical_construction,
+                staged_static_cache=staged_static_cache,
+                cancelled=deadline_reached,
+            )
+        except (_PreparationDeadline, finalize.ProjectionCancelled):
+            return _ProductionCandidate(
+                height=height,
+                problem=problem,
+                decoded=routed,
+                pack=pack,
+                prepared=None,
+                preparation_error="deadline",
+                selected_strips=selected,
             )
         except finalize.ProjectionRefusal as exc:
             return _ProductionCandidate(
