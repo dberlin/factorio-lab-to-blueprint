@@ -76,6 +76,10 @@ from flab2bp.bench.ab import (  # noqa: E402
     trials_from,
 )
 from flab2bp.bench.corpus import URL_CORPUS, CorpusEntry, Tier  # noqa: E402
+from flab2bp.cli import (  # noqa: E402
+    add_candidate_policy_argument,
+    candidate_policies_from_args,
+)
 from flab2bp.dsp import codec  # noqa: E402
 from flab2bp.lab.techs import belt_rules_for_url  # noqa: E402
 from flab2bp.layout import finalize, markers, validate  # noqa: E402
@@ -84,6 +88,11 @@ from flab2bp.layout.base import LayoutStrategy, Placement  # noqa: E402
 from flab2bp.layout.freeform import FreeformLayout  # noqa: E402
 from flab2bp.layout.sequence_solver import SequencePairLayout  # noqa: E402
 from flab2bp.pipeline import _id_map  # noqa: E402
+from flab2bp.rates import (  # noqa: E402
+    CandidatePolicy,
+    DEFAULT_CANDIDATE_POLICIES,
+    build_candidates,
+)
 from flab2bp.spec import BuildSpec  # noqa: E402
 
 _TIER_ORDER = (Tier.TRIVIAL, Tier.SMALL, Tier.MID, Tier.LARGE, Tier.STRESS)
@@ -132,7 +141,12 @@ class _LayoutCall:
         return finalize.finalize_placement(compacted, BandPolicy("portable"))
 
 
-def specs_for(entry: CorpusEntry, candidates: int) -> tuple[BuildSpec, ...]:
+def specs_for(
+    entry: CorpusEntry,
+    candidate_policies: tuple[
+        CandidatePolicy, ...
+    ] = DEFAULT_CANDIDATE_POLICIES,
+) -> tuple[BuildSpec, ...]:
     """Resolve a URL to its candidate frontier, once, shared by both strategies.
 
     Every candidate is laid out by both strategies and the smallest VALID result
@@ -143,10 +157,13 @@ def specs_for(entry: CorpusEntry, candidates: int) -> tuple[BuildSpec, ...]:
     """
     from flab2bp.lab.data import load_vendored
     from flab2bp.lab.url import parse_url
-    from flab2bp.rates.candidates import build_candidates
 
     request = parse_url(entry.url)
-    return build_candidates(load_vendored(), request, count=candidates).candidates
+    return build_candidates(
+        load_vendored(),
+        request,
+        candidate_policies=candidate_policies,
+    ).candidates
 
 
 def judge_with(
@@ -183,7 +200,9 @@ def collect(
     *,
     budgets: list[float],
     repeat: int,
-    candidates: int,
+    candidate_policies: tuple[
+        CandidatePolicy, ...
+    ] = DEFAULT_CANDIDATE_POLICIES,
     a_name: str = A_NAME,
     b_name: str = B_NAME,
 ) -> list[Sample]:
@@ -199,7 +218,7 @@ def collect(
     spec_errors: dict[str, str] = {}
     for entry in entries:
         try:
-            specs[entry.url_id] = specs_for(entry, candidates)
+            specs[entry.url_id] = specs_for(entry, candidate_policies)
         except Exception as exc:  # noqa: BLE001 - a bad URL must not kill the sweep
             spec_errors[entry.url_id] = f"spec: {type(exc).__name__}: {exc}"
             print(f"  spec error {entry.url_id}: {exc}", file=sys.stderr)
@@ -273,7 +292,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="trials per cell. CP-SAT is multi-worker and nondeterministic by "
         "design, so one sample is noise and nothing can be declared separated",
     )
-    ap.add_argument("--candidates", type=int, default=3)
+    add_candidate_policy_argument(ap)
     ap.add_argument("--only", default="", help="comma-separated url_ids to restrict to")
     ap.add_argument("--json", type=Path, default=None, help="write raw samples here")
     ap.add_argument("--markdown", type=Path, default=None, help="write the report here")
@@ -282,7 +301,9 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         action="store_true",
         help="skip the independent TypeScript decoder (reported as SKIPPED, never as a pass)",
     )
-    return ap.parse_args(argv)
+    args = ap.parse_args(argv)
+    args.candidate_policies = candidate_policies_from_args(ap, args)
+    return args
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -308,7 +329,7 @@ def main(argv: list[str] | None = None) -> int:
         entries,
         budgets=budgets,
         repeat=args.repeat,
-        candidates=args.candidates,
+        candidate_policies=args.candidate_policies,
         a_name=args.a,
         b_name=args.b,
     )
@@ -322,7 +343,7 @@ def main(argv: list[str] | None = None) -> int:
         tiers=tuple(t.value for t in _TIER_ORDER[: cutoff + 1]),
         budgets=tuple(budgets),
         repeat=args.repeat,
-        candidates=args.candidates,
+        candidates=len(args.candidate_policies),
         power=True,
         urls=len(entries),
         started=started,

@@ -12,6 +12,7 @@ from flab2bp.layout.base import (
     NoValidLayout,
     ProjectionFailureRecord,
 )
+from flab2bp.rates import CandidatePolicy
 from scripts import audit
 
 
@@ -22,13 +23,34 @@ def test_build_jobs_generates_one_powered_cell_per_run_plan_arm() -> None:
         ["freeform"],
         {entry.tier},
         [1.0],
-        candidates=1,
         workers=1,
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
         only={entry.url_id},
     )
 
     assert len(jobs) == 1
     assert jobs[0].power is True
+
+
+def test_build_jobs_defaults_to_all_three_canonical_candidate_identities() -> None:
+    entry = URL_CORPUS[0]
+
+    jobs = audit.build_jobs(
+        ["freeform"],
+        {entry.tier},
+        [1.0],
+        workers=1,
+        only={entry.url_id},
+    )
+
+    expected = (
+        CandidatePolicy.NO_PROLIFERATOR,
+        CandidatePolicy.ALL_PRODUCTS,
+        CandidatePolicy.OUTPUT_PRODUCTS,
+    )
+    assert len(jobs) == 3
+    assert all(job.candidate_policies == expected for job in jobs)
+    assert tuple(job.candidate_policies[job.spec_index] for job in jobs) == expected
 
 
 
@@ -66,7 +88,7 @@ def test_run_cell_preserves_typed_refusal_evidence(
     monkeypatch.setattr(
         audit,
         "_specs_for",
-        lambda url, count: (SimpleNamespace(label="evidence fixture"),),
+        lambda url, candidate_policies: (SimpleNamespace(label="evidence fixture"),),
     )
     monkeypatch.setattr(
         audit,
@@ -84,7 +106,7 @@ def test_run_cell_preserves_typed_refusal_evidence(
         url="test://evidence",
         tier="trivial",
         spec_index=0,
-        candidates=1,
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
         budget=1.0,
         workers=1,
     )
@@ -145,7 +167,7 @@ def test_run_cell_persists_post_compaction_projection_failures(
     monkeypatch.setattr(
         audit,
         "_specs_for",
-        lambda url, count: (SimpleNamespace(label="projection fixture"),),
+        lambda url, candidate_policies: (SimpleNamespace(label="projection fixture"),),
     )
     monkeypatch.setattr(
         audit,
@@ -176,7 +198,7 @@ def test_run_cell_persists_post_compaction_projection_failures(
         url="test://projection",
         tier="trivial",
         spec_index=0,
-        candidates=1,
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
         budget=1.0,
         workers=1,
     )

@@ -76,6 +76,10 @@ sys.path.insert(0, str(_ROOT))
 sys.path.insert(0, str(_ROOT / "src"))
 
 from flab2bp.bench.corpus import URL_CORPUS, Tier  # noqa: E402
+from flab2bp.cli import (  # noqa: E402
+    add_candidate_policy_argument,
+    candidate_policies_from_args,
+)
 from flab2bp.dsp import catalog  # noqa: E402
 from flab2bp.lab.data import load_vendored  # noqa: E402
 from flab2bp.lab.techs import belt_rules_for_url  # noqa: E402
@@ -90,7 +94,11 @@ from flab2bp.layout.base import (  # noqa: E402
 )
 from flab2bp.layout.freeform import FreeformLayout  # noqa: E402
 from flab2bp.layout.sequence_solver import SequencePairLayout  # noqa: E402
-from flab2bp.rates.candidates import build_candidates  # noqa: E402
+from flab2bp.rates import (  # noqa: E402
+    CandidatePolicy,
+    DEFAULT_CANDIDATE_POLICIES,
+    build_candidates,
+)
 from flab2bp.spec import BuildSpec  # noqa: E402
 
 _TIER_ORDER = (Tier.TRIVIAL, Tier.SMALL, Tier.MID, Tier.LARGE, Tier.STRESS)
@@ -133,7 +141,7 @@ class Job:
     url: str
     tier: str
     spec_index: int
-    candidates: int
+    candidate_policies: tuple[CandidatePolicy, ...]
     budget: float
     workers: int
     #: Constant historical-schema metadata. Current audit cells are always powered.
@@ -183,13 +191,25 @@ class Result:
 # Per-process spec cache. Rebuilding candidates for every cell would re-run the
 # rate solver six times per URL; a worker handles several cells of the same URL,
 # so caching here pays for itself and cannot skew the layout timings.
-_SPECS: dict[tuple[str, int], tuple[BuildSpec, ...]] = {}
+_SPECS: dict[
+    tuple[str, tuple[CandidatePolicy, ...]],
+    tuple[BuildSpec, ...],
+] = {}
 
 
-def _specs_for(url: str, count: int) -> tuple[BuildSpec, ...]:
-    key = (url, count)
+def _specs_for(
+    url: str,
+    candidate_policies: tuple[
+        CandidatePolicy, ...
+    ] = DEFAULT_CANDIDATE_POLICIES,
+) -> tuple[BuildSpec, ...]:
+    key = (url, candidate_policies)
     if key not in _SPECS:
-        _SPECS[key] = build_candidates(load_vendored(), parse_url(url), count=count).candidates
+        _SPECS[key] = build_candidates(
+            load_vendored(),
+            parse_url(url),
+            candidate_policies=candidate_policies,
+        ).candidates
     return _SPECS[key]
 
 
@@ -213,7 +233,7 @@ def run_cell(job: Job) -> Result:
     """Lay one cell out and judge it. Runs in a worker process."""
     t0 = time.monotonic()
     try:
-        specs = _specs_for(job.url, job.candidates)
+        specs = _specs_for(job.url, job.candidate_policies)
     except Exception as exc:  # noqa: BLE001
         return Result(job, "SPEC", "?", f"{type(exc).__name__}: {exc}", (), time.monotonic() - t0)
     if job.spec_index >= len(specs):
@@ -391,8 +411,10 @@ def build_jobs(
     strategies: list[str],
     tiers: set[Tier],
     budgets: list[float],
-    candidates: int,
     workers: int,
+    candidate_policies: tuple[
+        CandidatePolicy, ...
+    ] = DEFAULT_CANDIDATE_POLICIES,
     only: set[str] | None = None,
     skip: set[str] | None = None,
     arrangements: int | None = None,
@@ -407,7 +429,7 @@ def build_jobs(
     jobs = []
     for e in entries:
         for name in strategies:
-            for i in range(candidates):
+            for i, _policy in enumerate(candidate_policies):
                 for budget in budgets:
                     jobs.append(
                         Job(
@@ -416,7 +438,7 @@ def build_jobs(
                             url=e.url,
                             tier=e.tier.value,
                             spec_index=i,
-                            candidates=candidates,
+                            candidate_policies=candidate_policies,
                             budget=budget,
                             workers=workers,
                             arrangements=arrangements,
@@ -495,7 +517,7 @@ def main() -> int:
         default="15",
         help="comma-separated solver budgets in seconds; sweeping is the point",
     )
-    ap.add_argument("--candidates", type=int, default=3)
+    add_candidate_policy_argument(ap)
     ap.add_argument(
         "--strategy",
         default="both",
@@ -544,6 +566,7 @@ def main() -> int:
         "which cells moved and what they cost",
     )
     args = ap.parse_args()
+    candidate_policies = candidate_policies_from_args(ap, args)
 
     cutoff = _TIER_ORDER.index(Tier(args.tier))
     tiers = set(_TIER_ORDER[: cutoff + 1])
@@ -559,11 +582,11 @@ def main() -> int:
         names,
         tiers,
         budgets,
-        args.candidates,
         per_cell_workers,
-        only,
-        skip,
-        args.arrangements,
+        candidate_policies=candidate_policies,
+        only=only,
+        skip=skip,
+        arrangements=args.arrangements,
     )
     if not jobs:
         raise SystemExit(

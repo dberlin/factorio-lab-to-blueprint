@@ -23,7 +23,7 @@ from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import LayoutStrategy, NoValidLayout, Placement
 from flab2bp.layout.freeform import FreeformLayout
 from flab2bp.layout.sequence_solver import SequencePairLayout
-from flab2bp.rates import DEFAULT_CANDIDATE_POLICIES, build_candidates
+from flab2bp.rates import CandidatePolicy, DEFAULT_CANDIDATE_POLICIES, build_candidates
 from flab2bp.spec import BuildSpec
 
 #: Fixed so CP-SAT cannot make the comparison noise.  Recorded in the JSON.
@@ -147,7 +147,13 @@ def _run_cell(
     )
 
 
-def specs_for(entry: CorpusEntry, *, candidates: int) -> tuple[BuildSpec, ...]:
+def specs_for(
+    entry: CorpusEntry,
+    *,
+    candidate_policies: tuple[
+        CandidatePolicy, ...
+    ] = DEFAULT_CANDIDATE_POLICIES,
+) -> tuple[BuildSpec, ...]:
     """Compute the candidate frontier once, to be shared by every strategy."""
     dataset = lab_data.load_vendored()
     # Every corpus URL is bare (no `z=`), so no hash index is needed to resolve
@@ -155,11 +161,6 @@ def specs_for(entry: CorpusEntry, *, candidates: int) -> tuple[BuildSpec, ...]:
     # `lab.url.ModHash` (it has no `locations`), and forcing it here would
     # paper over that seam rather than surface it.
     request = parse_url(entry.url)
-    candidate_policies = DEFAULT_CANDIDATE_POLICIES[:candidates]
-    if len(candidate_policies) != candidates:
-        raise ValueError(
-            f"candidates must be between 1 and {len(DEFAULT_CANDIDATE_POLICIES)}"
-        )
     return build_candidates(
         dataset,
         request,
@@ -171,7 +172,9 @@ def run_corpus(
     entries: Sequence[CorpusEntry] = URL_CORPUS,
     *,
     time_budget_s: float | None = None,
-    candidates: int = 3,
+    candidate_policies: tuple[
+        CandidatePolicy, ...
+    ] = DEFAULT_CANDIDATE_POLICIES,
 ) -> list[CellResult]:
     """Run one powered matrix.
 
@@ -182,7 +185,7 @@ def run_corpus(
     for entry in entries:
         budget = time_budget_s if time_budget_s is not None else entry.tier.time_budget_s
         try:
-            specs = specs_for(entry, candidates=candidates)
+            specs = specs_for(entry, candidate_policies=candidate_policies)
         except Exception as exc:  # noqa: BLE001 - a bad URL must not kill the run
             results.append(_failed_cell(entry, str(exc)))
             continue

@@ -49,7 +49,7 @@ from flab2bp.lab.url import parse_url  # noqa: E402
 from flab2bp.layout import freeform  # noqa: E402
 from flab2bp.layout.band_policy import BandPolicy  # noqa: E402
 from flab2bp.layout.base import NoValidLayout  # noqa: E402
-from flab2bp.rates.candidates import build_candidates  # noqa: E402
+from flab2bp.rates import CandidatePolicy, build_candidates  # noqa: E402
 
 
 def _snapshot(
@@ -85,7 +85,9 @@ def _snapshot(
 def capture(url_id: str, budget: float, every: int, cap: int, out: Path) -> None:
     entry = next(e for e in URL_CORPUS if e.url_id == url_id)
     spec = build_candidates(
-        load_vendored(), parse_url(entry.url), count=3
+        load_vendored(),
+        parse_url(entry.url),
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
     ).candidates[0]
 
     orig = freeform._astar

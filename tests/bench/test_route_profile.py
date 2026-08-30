@@ -10,6 +10,7 @@ import pytest
 
 from flab2bp.layout import freeform, sequence_solver
 from flab2bp.layout.route_feedback import DetailedRouteResult, DetailedRouteStatus
+from flab2bp.rates import CandidatePolicy
 from scripts import route_profile
 
 
@@ -44,13 +45,27 @@ def test_json_profile_emits_one_bounded_machine_readable_record(
     times = _clock([10.0, 15.0])
     monkeypatch.setattr(route_profile, "Tally", lambda: tally)
     monkeypatch.setattr(route_profile, "install", lambda _tally: lambda: None)
-    monkeypatch.setattr(route_profile, "_spec", lambda _url_id, _index: _SPEC)
+    selected_policies: list[CandidatePolicy] = []
+
+    def fake_spec(_url_id: str, policy: CandidatePolicy) -> object:
+        selected_policies.append(policy)
+        return _SPEC
+
+    monkeypatch.setattr(route_profile, "_spec", fake_spec)
     monkeypatch.setattr(time, "perf_counter", lambda: next(times))
     monkeypatch.setattr(freeform, "FreeformLayout", _Layout)
     monkeypatch.setattr(
         sys,
         "argv",
-        ["route_profile.py", "plastic", "--workers", "1", "--json"],
+        [
+            "route_profile.py",
+            "plastic",
+            "--workers",
+            "1",
+            "--json",
+            "--candidate-policy",
+            "output-products",
+        ],
     )
 
     assert route_profile.main() == 0
@@ -74,6 +89,7 @@ def test_json_profile_emits_one_bounded_machine_readable_record(
         "hits": 2,
         "misses": 1,
     }
+    assert selected_policies == [CandidatePolicy.OUTPUT_PRODUCTS]
 
 
 def test_tally_reads_iterations_from_detailed_route_result(

@@ -41,7 +41,7 @@ from flab2bp.layout import freeform  # noqa: E402
 from flab2bp.layout.band_policy import BandPolicy  # noqa: E402
 from flab2bp.layout.base import NoValidLayout, Placement  # noqa: E402
 from flab2bp.layout.route_feedback import Cell, DetailedRouteResult  # noqa: E402
-from flab2bp.rates.candidates import build_candidates  # noqa: E402
+from flab2bp.rates import CandidatePolicy, build_candidates  # noqa: E402
 from flab2bp.spec import BuildSpec  # noqa: E402
 
 
@@ -83,10 +83,13 @@ def _strategy(name: str) -> _Strategy:
     return sequence_pair
 
 
-def _spec(url_id: str, index: int) -> BuildSpec:
+def _spec(url_id: str, candidate_policy: CandidatePolicy) -> BuildSpec:
     entry = next(e for e in URL_CORPUS if e.url_id == url_id)
-    cands = build_candidates(load_vendored(), parse_url(entry.url), count=3).candidates
-    return cands[index]
+    return build_candidates(
+        load_vendored(),
+        parse_url(entry.url),
+        candidate_policies=(candidate_policy,),
+    ).candidates[0]
 
 
 class Tally:
@@ -283,7 +286,7 @@ def install(tally: Tally) -> Callable[[], None]:
 
 def heights(
     url_id: str,
-    spec_index: int,
+    candidate_policy: CandidatePolicy,
     workers: int,
     ceiling: float,
     strategy: str = "freeform",
@@ -297,7 +300,7 @@ def heights(
     takes them -- which is the measurement that decides whether routing heights
     IN PARALLEL would convert a refusal or merely reach more failures sooner.
     """
-    spec = _spec(url_id, spec_index)
+    spec = _spec(url_id, candidate_policy)
     orig_build = freeform._build
     seen: list[_HeightRow] = []
 
@@ -368,7 +371,12 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("url_id")
     ap.add_argument("--budget", type=float, default=4.0)
-    ap.add_argument("--spec-index", type=int, default=0)
+    ap.add_argument(
+        "--candidate-policy",
+        type=CandidatePolicy,
+        choices=tuple(CandidatePolicy),
+        default=CandidatePolicy.NO_PROLIFERATOR,
+    )
     ap.add_argument("--workers", type=int, default=8)
     ap.add_argument("--cprofile", action="store_true")
     ap.add_argument("--repeat", type=int, default=1)
@@ -380,13 +388,13 @@ def main() -> int:
     if args.heights:
         return heights(
             args.url_id,
-            args.spec_index,
+            args.candidate_policy,
             args.workers,
             args.budget,
             args.strategy,
         )
 
-    spec = _spec(args.url_id, args.spec_index)
+    spec = _spec(args.url_id, args.candidate_policy)
     for run in range(args.repeat):
         tally = Tally()
         restore = install(tally)

@@ -73,6 +73,111 @@ def test_cli_passes_exact_explicit_strategy_name(
     assert received["band"] == "portable"
 
 
+
+@pytest.mark.parametrize(
+    ("policy_args", "expected"),
+    (
+        (
+            [],
+            (
+                CandidatePolicy.NO_PROLIFERATOR,
+                CandidatePolicy.ALL_PRODUCTS,
+                CandidatePolicy.OUTPUT_PRODUCTS,
+            ),
+        ),
+        (
+            ["--candidate-policy", "output-products"],
+            (CandidatePolicy.OUTPUT_PRODUCTS,),
+        ),
+        (
+            ["--candidate-policy", "output-products,no-proliferator"],
+            (
+                CandidatePolicy.NO_PROLIFERATOR,
+                CandidatePolicy.OUTPUT_PRODUCTS,
+            ),
+        ),
+        (
+            [
+                "--candidate-policy",
+                "output-products",
+                "--candidate-policy",
+                "all-products,no-proliferator",
+            ],
+            (
+                CandidatePolicy.NO_PROLIFERATOR,
+                CandidatePolicy.ALL_PRODUCTS,
+                CandidatePolicy.OUTPUT_PRODUCTS,
+            ),
+        ),
+    ),
+)
+def test_cli_candidate_policy_selections_reach_pipeline_in_canonical_order(
+    policy_args: list[str],
+    expected: tuple[CandidatePolicy, ...],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    received: dict[str, object] = {}
+
+    def fake_build(url: str, **kwargs: Unpack[_BuildKwargs]) -> SimpleNamespace:
+        del url
+        received.update(kwargs)
+        return SimpleNamespace(
+            blueprint="BLUEPRINT",
+            report=SimpleNamespace(errors=()),
+        )
+
+    monkeypatch.setattr(pipeline, "build", fake_build)
+    monkeypatch.setattr(cli, "_report", lambda build, *, verbose: None)
+
+    assert cli.main(["iron-ingot", *policy_args]) == 0
+    assert received["candidate_policies"] == expected
+
+
+@pytest.mark.parametrize(
+    ("policy_args", "diagnostic"),
+    (
+        (["--candidate-policy", ""], "candidate policy must not be empty"),
+        (
+            ["--candidate-policy", "no-proliferator,"],
+            "candidate policy must not be empty",
+        ),
+        (
+            ["--candidate-policy", "no-proliferator,no-proliferator"],
+            "duplicate candidate policy: no-proliferator",
+        ),
+        (
+            [
+                "--candidate-policy",
+                "no-proliferator",
+                "--candidate-policy",
+                "no-proliferator",
+            ],
+            "duplicate candidate policy: no-proliferator",
+        ),
+        (
+            ["--candidate-policy", "balanced"],
+            "unknown candidate policy: 'balanced'",
+        ),
+    ),
+)
+def test_cli_rejects_invalid_candidate_policy_selections(
+    policy_args: list[str],
+    diagnostic: str,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        pipeline,
+        "build",
+        lambda *args, **kwargs: pytest.fail("invalid CLI arguments reached pipeline"),
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(["iron-ingot", *policy_args])
+
+    assert exc_info.value.code == 2
+    assert diagnostic in capsys.readouterr().err
+
 @pytest.mark.parametrize(("affinity", "expected"), ((3, 3), (64, 8)))
 def test_cli_sequence_pair_uses_affinity_capped_auto_islands(
     monkeypatch: pytest.MonkeyPatch,
