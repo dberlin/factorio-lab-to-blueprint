@@ -1155,3 +1155,25 @@ def test_assign_belt_slots_uses_the_splitter_port_facing_not_first_free() -> Non
     assert wired[1].output_to_slot == 1  # east port
     assert wired[3].input_from_slot == 3  # west port
     assert wired[5].input_from_slot == 2  # south port
+    assert wired[3].input_to_slot == R.BELT_PORT_DRAW_TO_SLOT
+    assert wired[5].input_to_slot == R.BELT_PORT_DRAW_TO_SLOT
+    assert (wired[3].input_obj, wired[3].output_obj) == (2, 4)
+    assert (wired[5].input_obj, wired[5].output_obj) == (2, 6)
+
+
+def test_splitter_draw_reserves_belt_slot_one_from_an_upstream_feeder() -> None:
+    belt = cat.building(2002)
+    splitter = cat.building(cat.SPLITTER_ID)
+    buildings = (
+        PlacedBuilding(cat.SPLITTER_ID, splitter.model_index, 0, 0),
+        PlacedBuilding(2002, belt.model_index, 0, 0, input_obj=0, output_obj=2),
+        PlacedBuilding(2002, belt.model_index, -1, 0),
+        PlacedBuilding(2002, belt.model_index, 0, 1, output_obj=1),
+    )
+
+    wired = S.assign_belt_slots(buildings)
+
+    assert wired[1].input_from_slot == 3
+    assert wired[1].input_to_slot == R.BELT_PORT_DRAW_TO_SLOT
+    assert wired[1].output_from_slot == R.BELT_PORT_FEED_FROM_SLOT
+    assert wired[3].output_to_slot == 2

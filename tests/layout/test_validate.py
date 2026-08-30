@@ -3185,6 +3185,30 @@ def test_junction_port_pose_fires_when_a_free_slot_is_on_the_wrong_side() -> Non
     } == {(3, 0, 1), (5, 0, 2)}
 
 
+def test_junction_port_pose_rejects_a_draw_using_belt_own_slot_zero() -> None:
+    from dataclasses import replace
+
+    buildings = list(junction_pair().buildings)
+    buildings[3] = replace(buildings[3], input_to_slot=0)
+
+    findings = validate(Placement(buildings=tuple(buildings))).by_check(
+        "junction.port_pose"
+    )
+
+    assert len(findings) == 1
+    assert findings[0].detail == {
+        "code": "own_slot",
+        "splitter": 2,
+        "belt": 3,
+        "direction": "draw",
+        "recorded_port": 1,
+        "expected_port": 1,
+        "own_slot_field": "input_to_slot",
+        "recorded_own_slot": 0,
+        "expected_own_slot": 1,
+    }
+
+
 def test_junction_records_no_links_fires_when_a_splitter_names_a_neighbour() -> None:
     """A junction names nobody; the belts around it name it.
 

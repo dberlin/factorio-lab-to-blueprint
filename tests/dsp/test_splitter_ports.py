@@ -10,8 +10,7 @@ from pathlib import Path
 
 from flab2bp.dsp import catalog, codec, splitter_ports
 from flab2bp.dsp.envelope import BlueprintFormatError
-from flab2bp.dsp.records import BlueprintBuilding
-from flab2bp.dsp.rules import WORLD_UNITS_PER_LEVEL
+from flab2bp.dsp.rules import BELT_PORT_DRAW_TO_SLOT, WORLD_UNITS_PER_LEVEL
 from flab2bp.layout import slots
 from flab2bp.layout.base import AreaFrame, PlacedBuilding, Placement
 
@@ -100,6 +99,7 @@ def _observed_placement(
             input_obj=0,
             output_obj=2,
             input_from_slot=port,
+            input_to_slot=BELT_PORT_DRAW_TO_SLOT,
         ),
         neighbour,
     )
@@ -112,7 +112,10 @@ def test_supplied_blueprint_is_rejected_with_all_wrong_ports_named() -> None:
 
     issues = splitter_ports.blueprint_issues(blueprint.buildings)
 
-    assert Counter(issue.code for issue in issues) == {"direction": 7}
+    assert Counter(issue.code for issue in issues) == {
+        "direction": 7,
+        "own_slot": 6,
+    }
     assert {
         issue.belt: (issue.recorded_port, issue.expected_port)
         for issue in issues
@@ -125,6 +128,14 @@ def test_supplied_blueprint_is_rejected_with_all_wrong_ports_named() -> None:
         1338: (0, 1),
         1639: (1, 3),
         1640: (2, 0),
+    }
+    assert {issue.belt for issue in issues if issue.code == "own_slot"} == {
+        1633,
+        1634,
+        1636,
+        1637,
+        1639,
+        1640,
     }
 
 
@@ -236,6 +247,11 @@ def test_corrected_construction_path_emits_only_game_valid_splitter_ports() -> N
     assert splitter_ports.blueprint_issues(blueprint.buildings) == ()
     assert wired[1].output_to_slot == 1
     assert [wired[index].input_from_slot for index in (3, 5)] == [3, 2]
+    assert [wired[index].input_to_slot for index in (3, 5)] == [1, 1]
+    assert [(wired[index].input_obj, wired[index].output_obj) for index in (3, 5)] == [
+        (2, 4),
+        (2, 6),
+    ]
 
 
 def test_splitter_model_variants_expose_their_actual_port_heights() -> None:

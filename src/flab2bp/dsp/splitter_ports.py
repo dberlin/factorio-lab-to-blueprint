@@ -20,11 +20,16 @@ from typing import Literal
 
 from flab2bp.dsp import catalog
 from flab2bp.dsp.records import BlueprintBuilding
-from flab2bp.dsp.rules import WORLD_UNITS_PER_LEVEL
+from flab2bp.dsp.rules import (
+    BELT_PORT_DRAW_TO_SLOT,
+    BELT_PORT_FEED_FROM_SLOT,
+    WORLD_UNITS_PER_LEVEL,
+)
 from flab2bp.layout.base import PlacedBuilding
 
 type Direction = Literal["feed", "draw"]
-type IssueCode = Literal["slot", "height", "direction", "path"]
+type IssueCode = Literal["slot", "own_slot", "height", "direction", "path"]
+type OwnSlotField = Literal["output_from_slot", "input_to_slot"]
 
 _HEIGHT_TOLERANCE = 0.01
 _POSITION_TOLERANCE = 0.01
@@ -42,9 +47,12 @@ class SplitterPortIssue:
     recorded_port: int
     expected_port: int | None
     message: str
+    own_slot_field: OwnSlotField | None = None
+    recorded_own_slot: int | None = None
+    expected_own_slot: int | None = None
 
     def detail(self) -> dict[str, int | str | None]:
-        return {
+        detail: dict[str, int | str | None] = {
             "code": self.code,
             "splitter": self.splitter,
             "belt": self.belt,
@@ -52,6 +60,15 @@ class SplitterPortIssue:
             "recorded_port": self.recorded_port,
             "expected_port": self.expected_port,
         }
+        if self.own_slot_field is not None:
+            detail.update(
+                {
+                    "own_slot_field": self.own_slot_field,
+                    "recorded_own_slot": self.recorded_own_slot,
+                    "expected_own_slot": self.expected_own_slot,
+                }
+            )
+        return detail
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,6 +85,8 @@ class _Node:
     input_obj: int | None
     output_to_slot: int
     input_from_slot: int
+    output_from_slot: int
+    input_to_slot: int
 
 
 def _raw_placement_nodes(buildings: Sequence[PlacedBuilding]) -> tuple[_Node, ...]:
@@ -85,6 +104,8 @@ def _raw_placement_nodes(buildings: Sequence[PlacedBuilding]) -> tuple[_Node, ..
             input_obj=building.input_obj,
             output_to_slot=building.output_to_slot,
             input_from_slot=building.input_from_slot,
+            output_from_slot=building.output_from_slot,
+            input_to_slot=building.input_to_slot,
         )
         for index, building in enumerate(buildings)
     )
@@ -105,6 +126,8 @@ def _blueprint_nodes(buildings: Sequence[BlueprintBuilding]) -> tuple[_Node, ...
             input_obj=None if building.input_obj_idx < 0 else building.input_obj_idx,
             output_to_slot=building.output_to_slot,
             input_from_slot=building.input_from_slot,
+            output_from_slot=building.output_from_slot,
+            input_to_slot=building.input_to_slot,
         )
         for building in buildings
     )
@@ -212,6 +235,42 @@ def _issue(
     )
 
 
+def _own_slot_issue(
+    splitter: _Node,
+    belt: _Node,
+    direction: Direction,
+    recorded_port: int,
+    expected_port: int | None,
+) -> SplitterPortIssue | None:
+    if direction == "feed":
+        field: OwnSlotField = "output_from_slot"
+        recorded_own = belt.output_from_slot
+        expected_own = BELT_PORT_FEED_FROM_SLOT
+    else:
+        field = "input_to_slot"
+        recorded_own = belt.input_to_slot
+        expected_own = BELT_PORT_DRAW_TO_SLOT
+    if recorded_own == expected_own:
+        return None
+    relation = "feeds" if direction == "feed" else "draws from"
+    return SplitterPortIssue(
+        code="own_slot",
+        splitter=splitter.id,
+        belt=belt.id,
+        direction=direction,
+        recorded_port=recorded_port,
+        expected_port=expected_port,
+        message=(
+            f"belt {belt.id} {relation} splitter {splitter.id} with {field} = "
+            f"{recorded_own}, expected {expected_own}; both ends are connection-pool "
+            "cells and a wrong belt-side slot can evict its onward connection"
+        ),
+        own_slot_field=field,
+        recorded_own_slot=recorded_own,
+        expected_own_slot=expected_own,
+    )
+
+
 def _issues(nodes: tuple[_Node, ...]) -> tuple[SplitterPortIssue, ...]:
     by_id = {node.id: node for node in nodes}
     predecessors: dict[int, list[_Node]] = defaultdict(list)
@@ -244,13 +303,28 @@ def _issues(nodes: tuple[_Node, ...]) -> tuple[SplitterPortIssue, ...]:
                 )
                 # Blueprint local offsets are per area.  Without the Blueprint
                 # area's placement transform, coordinates from different areas
-                # cannot be subtracted.  Placement nodes all use area 0.
-                if belt.area_index != splitter.area_index or (
-                    neighbour is not None
-                    and neighbour.area_index != belt.area_index
-                ):
+                # cannot be subtracted.  The belt-side pool slot is independent
+                # of geometry and is still checked across an area boundary.
+                same_area = belt.area_index == splitter.area_index and (
+                    neighbour is None or neighbour.area_index == belt.area_index
+                )
+                outward = (
+                    _outward(belt, direction, by_id, predecessors)
+                    if same_area
+                    else None
+                )
+                expected = (
+                    _expected_port(splitter, belt, outward, ports)
+                    if outward is not None
+                    else None
+                )
+                own_slot_issue = _own_slot_issue(
+                    splitter, belt, direction, recorded, expected
+                )
+                if own_slot_issue is not None:
+                    out.append(own_slot_issue)
+                if not same_area:
                     continue
-                outward = _outward(belt, direction, by_id, predecessors)
                 if outward is None:
                     out.append(
                         _issue(
@@ -265,7 +339,6 @@ def _issues(nodes: tuple[_Node, ...]) -> tuple[SplitterPortIssue, ...]:
                         )
                     )
                     continue
-                expected = _expected_port(splitter, belt, outward, ports)
                 if not 0 <= recorded < len(ports):
                     out.append(
                         _issue(

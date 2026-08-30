@@ -1050,6 +1050,16 @@ def assign_sorter_slots(
     return assign_belt_slots(_assign_sorter_slots_only(buildings))
 
 
+def _links_splitter(
+    buildings: Sequence[PlacedBuilding], link: int | None
+) -> bool:
+    return (
+        link is not None
+        and 0 <= link < len(buildings)
+        and buildings[link].item_id == cat.SPLITTER_ID
+    )
+
+
 def _docks_into_a_port(buildings: Sequence[PlacedBuilding], link: int | None) -> bool:
     """Does ``link`` name a building a belt docks into by a non-Splitter port?
 
@@ -1117,7 +1127,10 @@ def assign_belt_slots(
     """
     taken: dict[int, set[int]] = {}
     for i, b in enumerate(buildings):
-        if cat.is_belt(b.item_id) and _docks_into_a_port(buildings, b.input_obj):
+        if cat.is_belt(b.item_id) and (
+            _docks_into_a_port(buildings, b.input_obj)
+            or _links_splitter(buildings, b.input_obj)
+        ):
             taken.setdefault(i, set()).add(BELT_PORT_DRAW_TO_SLOT)
     out: list[PlacedBuilding] = []
     for i, b in enumerate(buildings):
@@ -1125,14 +1138,20 @@ def assign_belt_slots(
             out.append(b)
             continue
         changes: dict[str, int] = {}
-        # The belt's OWN end of a port dock. Constant, and counted: 178 records
-        # over the fixture corpus, `(out, 0)` on all 70 that feed a port and
-        # `(in, 1)` on all 108 that draw from one.
-        if _docks_into_a_port(buildings, b.output_obj):
+        # The belt's OWN end of a port dock. Constant for machines and
+        # Splitters alike: `(out, 0)` when feeding and `(in, 1)` when drawing.
+        if _docks_into_a_port(buildings, b.output_obj) or _links_splitter(
+            buildings, b.output_obj
+        ):
             changes["output_from_slot"] = BELT_PORT_FEED_FROM_SLOT
-        if _docks_into_a_port(buildings, b.input_obj):
+        if _docks_into_a_port(buildings, b.input_obj) or _links_splitter(
+            buildings, b.input_obj
+        ):
             changes["input_to_slot"] = BELT_PORT_DRAW_TO_SLOT
-        for field, link in (("output_to_slot", b.output_obj), ("input_from_slot", b.input_obj)):
+        for field, link in (
+            ("output_to_slot", b.output_obj),
+            ("input_from_slot", b.input_obj),
+        ):
             if link is None or not 0 <= link < len(buildings):
                 continue
             peer = buildings[link]
