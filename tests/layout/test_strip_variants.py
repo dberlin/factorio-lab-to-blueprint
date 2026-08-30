@@ -30,8 +30,8 @@ from flab2bp.layout.strip_variants import (
     split_strip_instance,
     strip_pose_id,
     validate_instance_partition,
-    variants_for_count,
     variant_with_minimum_pitch,
+    variants_for_count,
 )
 from flab2bp.spec import BuildSpec, MachineGroup
 
