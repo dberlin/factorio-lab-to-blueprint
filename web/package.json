@@ -22,7 +22,7 @@
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "three": "0.185.1",
-    "zod": "latest"
+    "zod": "4.5.4"
   },
   "devDependencies": {
     "@biomejs/biome": "latest",
@@ -40,7 +40,7 @@
     "concurrently": "^10.0.5",
     "eslint": "^10.9.1",
     "eslint-plugin-react-hooks": "^7.1.1",
-    "happy-dom": "^20.11.13",
+    "happy-dom": "^20.12.0",
     "typescript": "^5.9.3",
     "wait-on": "^9.1.0"
   }
