@@ -9573,11 +9573,25 @@ def _bridge(
     return None
 
 
-def _coater_seats(canvas: _Canvas, port: _Port) -> tuple[tuple[int, int], ...]:
-    """Straight-through lane seats, in upstream-to-downstream order."""
+def _coater_seats(
+    canvas: _Canvas,
+    port: _Port,
+    *,
+    west_channel: int,
+) -> tuple[tuple[int, int], ...]:
+    """Straight seats before the first possible machine pickup, in flow order.
+
+    Sprayed input lanes start ``west_channel`` cells west of the strip.  The
+    machine-facing lane begins at index ``west_channel``, so that tile and every
+    later one may already feed a machine.  Seating there would let that consumer
+    take unsprayed cargo before it reaches the Coater.  Index zero is the routing
+    turn and the last tile has no successor; only the bounded interior channel
+    offsets between them are candidates.
+    """
+    stop = min(len(port.tiles) - 1, west_channel)
     return tuple(
         (canvas.buildings[index].x, canvas.buildings[index].y)
-        for index in port.tiles[1:-1]
+        for index in port.tiles[1:stop]
     )
 
 
@@ -9633,7 +9647,11 @@ def _coater_seat(canvas: _Canvas, port: _Port) -> tuple[int, int] | None:
     west into the channel -- so the drop cell is the same tile it always was,
     one level above the new head.
     """
-    seats = _coater_seats(canvas, port)
+    seats = _coater_seats(
+        canvas,
+        port,
+        west_channel=max(0, len(port.tiles) - 1),
+    )
     return seats[0] if seats else None
 
 
@@ -9766,7 +9784,11 @@ def _place_coaters(
                     f"the {item} lane is marked {port.cargo_domain.value}, so "
                     "a Spray Coater cannot be placed on it"
                 )
-            seats = _coater_seats(canvas, port)
+            seats = _coater_seats(
+                canvas,
+                port,
+                west_channel=strip.west_channel,
+            )
             if not seats:
                 raise _Unseatable(
                     f"the {item} lane at ({port.x}, {port.y}) is "

@@ -8594,6 +8594,75 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
         assert len(got) == 1
         assert got[0].host_x == 2
 
+    def test_staged_static_alternate_seat_never_passes_the_first_pickup(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        canvas, spec, strips, ports = self._fixture(6)
+        assert strips[0].west_channel == 3
+        first_pickup_x = strips[0].west_channel
+        assembler_id = catalog.item_id("assembling-machine-2")
+        assembler = catalog.building(assembler_id)
+        obstacle_index = canvas.add(
+            PlacedBuilding(
+                assembler_id,
+                assembler.model_index,
+                8,
+                4,
+                width=assembler.width,
+                height=assembler.height,
+                owner_strip=0,
+            ),
+            solid=True,
+        )
+        attempted: list[int] = []
+
+        def projected_failure(
+            indexed: Sequence[tuple[int, PlacedBuilding]],
+            _frames: Sequence[freeform._JunctionProjectionFrame],
+            *,
+            candidate_index: int,
+        ) -> finalize.ProjectionFailure | None:
+            candidate = next(
+                building for index, building in indexed if index == candidate_index
+            )
+            attempted.append(candidate.x)
+            if candidate.x >= first_pickup_x:
+                return None
+            return finalize.ProjectionFailure(
+                "geom.collide",
+                (obstacle_index, candidate_index),
+                "build colliders intersect",
+                160,
+            )
+
+        monkeypatch.setattr(
+            freeform,
+            "_prospective_static_failure",
+            projected_failure,
+        )
+
+        with pytest.raises(freeform._Unseatable) as caught:
+            freeform._place_coaters(
+                canvas,
+                spec,
+                strips,
+                ports,
+                2001,
+                35,
+                policy=BandPolicy("portable"),
+            )
+
+        assert attempted == [1, 2]
+        assert caught.value.failure is not None
+        assert caught.value.failure.check == "geom.collide"
+        assert caught.value.clearance_requirement is not None
+        assert (
+            caught.value.clearance_requirement.required_west_channel
+            == freeform._COATER_WEST_CHANNEL + 1
+        )
+        assert not caught.value.pack_dependent
+
 
     def test_the_same_fixture_unblocked_seats_one(self) -> None:
         """Without this the two above pass for a fixture that seats nothing."""
