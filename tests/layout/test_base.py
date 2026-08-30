@@ -38,7 +38,7 @@ def test_band_policy_parses_the_exact_authoritative_dimensions_in_order() -> Non
         "160x1000",
     )
 
-    assert BAND_SELECTIONS == expected
+    assert expected == BAND_SELECTIONS
     assert tuple(BandPolicy.parse(value).selection for value in expected) == expected
     assert BandPolicy.parse("portable").explicit_segments is None
     assert BandPolicy.parse("50x800").explicit_segments == 160
