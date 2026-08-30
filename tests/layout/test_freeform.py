@@ -4911,6 +4911,65 @@ class TestPowerClaimsItsGroundBeforeRouting:
                 output_obj=index,
             )
 
+    def test_route_ring_power_is_planned_before_a_splitter_is_emitted(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A legal route-ring junction must not be the router's dark surprise."""
+        demands: list[tuple[int, int, int, int]] = []
+        plan = freeform._power_plan
+
+        def observe_demand(
+            canvas: _Canvas,
+            demand: tuple[int, int, int, int],
+            *,
+            policy: BandPolicy,
+        ) -> list[tuple[int, int]]:
+            demands.append(demand)
+            return plan(canvas, demand, policy=policy)
+
+        monkeypatch.setattr(freeform, "_power_plan", observe_demand)
+        spec = two_stage_spec()
+        strips = plan_strips(spec)
+        prepared = _prepare_routing_problem(
+            spec,
+            strips,
+            _greedy_pack(strips, _height_seed(strips)),
+            power=True,
+            policy=BandPolicy("160"),
+        )
+
+        route_ring = (prepared.core[0], prepared.route_bounds[3])
+        control = (prepared.core[0], prepared.core[3])
+        workspace = prepared.new_workspace()
+        assert workspace.canvas.junction_is_clear(*route_ring, 0)
+        assert workspace.canvas.junction_is_clear(*control, 0)
+
+        workspace.canvas.add(junction.make_splitter(*route_ring))
+        workspace.canvas.add(junction.make_splitter(*control))
+        workspace.canvas.keep_out.clear()
+        freeform._place_power(workspace.canvas, prepared.power_sites)
+
+        tower = catalog.building(catalog.TESLA_TOWER_ID)
+        reach2 = math.floor((2 * tower.cover_radius) ** 2)
+        assert any(
+            (2 * (control[0] - x)) ** 2 + (2 * (control[1] - y)) ** 2 <= reach2
+            for x, y in prepared.power_sites
+        ), "the in-radius core control must stay covered"
+        report = validate.validate(
+            Placement(buildings=tuple(workspace.canvas.buildings)),
+            only=["power.coverage"],
+        )
+        assert report.ok, "\n".join(f.message for f in report.errors)
+
+        assert demands == [prepared.route_bounds]
+        assert prepared.limit == (
+            prepared.route_bounds[0] - 1,
+            prepared.route_bounds[1] - 1,
+            prepared.route_bounds[2] + 1,
+            prepared.route_bounds[3] + 1,
+        ), "the outer entry ring is standing capacity, not powered demand"
+
     def test_planned_sites_are_closed_to_everything_else(self) -> None:
         canvas = _Canvas(limit=(0, 0, 40, 40))
         canvas.add(self._machine(10, 10), solid=True)

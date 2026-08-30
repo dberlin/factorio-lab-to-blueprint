@@ -7377,7 +7377,7 @@ def _power_projection_envelope(
 
 def _power_plan(
     canvas: _Canvas,
-    core: tuple[int, int, int, int],
+    demand: tuple[int, int, int, int],
     *,
     policy: BandPolicy,
 ) -> list[tuple[int, int]]:
@@ -7387,6 +7387,9 @@ def _power_plan(
     is a property of the PACK and makes it infeasible.  Otherwise it returns a
     placement that covers every powered tile and is connected, and the cells are
     held in ``canvas.keep_out`` so the router paths around them.
+
+    ``demand`` is the full route-capable powered-emission envelope.
+    ``canvas.limit`` remains the separate boundary for where towers may stand.
 
     WHY THIS IS A PLAN AND NOT A LATTICE WITH A REPAIR BEHIND IT
     ------------------------------------------------------------
@@ -7437,25 +7440,26 @@ def _power_plan(
     tower = catalog.building(catalog.TESLA_TOWER_ID)
     reach2 = math.floor((2 * tower.cover_radius) ** 2)
     link2 = math.floor((2 * tower.connect_distance) ** 2)
-    core_x0, core_y0, core_x1, core_y1 = core
-    # A TOWER MAY STAND OUTSIDE THE CORE. WHAT IT COVERS MAY NOT.
+    demand_x0, demand_y0, demand_x1, demand_y1 = demand
+    # A TOWER MAY STAND OUTSIDE THE POWER DEMAND. WHAT IT COVERS MAY NOT.
     #
-    # Standing ground is the whole canvas, the entry ring included, because on a
-    # small dense build the core is packed SOLID -- every cell a machine or a
-    # lane -- and a tower restricted to it would have nowhere at all to go. The
-    # old lattice was restricted to the core and its repair pass was not
-    # (`try_place` never checked), so towers in the ring are what that build was
-    # relying on all along, without anybody saying so.
+    # Standing ground is the whole canvas, the outer entry ring included,
+    # because on a small dense build the powered demand is packed SOLID -- every
+    # cell a machine or a lane -- and a tower restricted to it would have
+    # nowhere at all to go. The old lattice was restricted to the core and its
+    # repair pass was not (`try_place` never checked), so towers in the ring are
+    # what that build was relying on all along, without anybody saying so.
     #
-    # It is a second choice, not a free one: the ring is where the external
-    # input runs come in, and a tower in one breaks the straight run out to it.
-    # So the core is searched first and the ring is reached into only for tiles
-    # the core cannot cover -- see `in_core` at the placement loop.
-    min_x, min_y, max_x, max_y = canvas.limit or core
-    min_x, min_y = min(min_x, core_x0), min(min_y, core_y0)
-    max_x, max_y = max(max_x, core_x1), max(max_y, core_y1)
+    # It is a second choice, not a free one: the outer ring is where the
+    # external input runs come in, and a tower in one breaks the straight run
+    # out to it. So the demand envelope is searched first and the outer ring is
+    # reached into only for tiles the demand envelope cannot cover -- see
+    # `in_demand` at the placement loop.
+    min_x, min_y, max_x, max_y = canvas.limit or demand
+    min_x, min_y = min(min_x, demand_x0), min(min_y, demand_y0)
+    max_x, max_y = max(max_x, demand_x1), max(max_y, demand_y1)
     width, height = max_x - min_x + 1, max_y - min_y + 1
-    if core_x1 < core_x0 or core_y1 < core_y0:
+    if demand_x1 < demand_x0 or demand_y1 < demand_y0:
         return []
 
     # Padded so a disc or link stamp near an edge needs no clipping. The stamps
@@ -7474,28 +7478,30 @@ def _power_plan(
                 continue
             free[x - min_x + pad, y - min_y + pad] = True
 
-    in_core = np.zeros(shape, dtype=bool)
-    in_core[
-        core_x0 - min_x + pad : core_x1 - min_x + pad + 1,
-        core_y0 - min_y + pad : core_y1 - min_y + pad + 1,
+    in_demand = np.zeros(shape, dtype=bool)
+    in_demand[
+        demand_x0 - min_x + pad : demand_x1 - min_x + pad + 1,
+        demand_y0 - min_y + pad : demand_y1 - min_y + pad + 1,
     ] = True
 
-    # WHAT HAS TO BE COVERED IS THE CORE, NOT THE BUILDINGS STANDING IN IT.
+    # WHAT HAS TO BE COVERED IS THE ROUTE-CAPABLE POWER DEMAND, NOT ONLY THE
+    # BUILDINGS STANDING IN IT.
     #
-    # This runs BEFORE routing, and routing is what places the sorters and the
-    # spray coaters -- both of which draw power. Covering the buildings that
-    # exist right now leaves every one of those dark, and the placement then
-    # fails `power.coverage` at certify having looked perfectly correct here.
-    # Measured, and it is not a corner case: covering only the machines refused
-    # `universe-matrix` at free-proliferation and max-proliferation on every
-    # height, in three audits out of four.
+    # This runs BEFORE routing, and routing is what places the sorters, spray
+    # coaters and Splitters -- all of which draw power. Covering the buildings
+    # that exist right now leaves those future receivers dark, and the placement
+    # then fails `power.coverage` at certify having looked perfectly correct
+    # here. Measured, and it is not a corner case: covering only the machines
+    # refused `universe-matrix` at free-proliferation and max-proliferation on
+    # every height, in three audits out of four.
     #
-    # The core is the region powered buildings are allowed to occupy -- the
-    # entry ring outside it holds belts, which are unpowered -- so covering all
-    # of it is the condition that does not depend on what has been placed yet.
-    # It is still need-based rather than a grid: a tower covers a 346-tile disc
-    # and the core is covered by discs, not by a point every nine tiles.
-    dark = in_core.copy()
+    # The demand envelope is the region routing may occupy with powered
+    # buildings. The outer entry ring beyond it remains belt-only, so covering
+    # the explicit demand is the condition that does not depend on what has been
+    # placed yet. It is still need-based rather than a grid: a tower covers a
+    # 346-tile disc and the demand is covered by discs, not by a point every nine
+    # tiles.
+    dark = in_demand.copy()
     for b in canvas.buildings:
         if catalog.is_belt(b.item_id) or b.item_id == catalog.TESLA_TOWER_ID:
             continue
@@ -7694,11 +7700,12 @@ def _power_plan(
         # an enclosed cell covers fewer tiles and so more of them are needed.
         key = score * 5 + openness
         reachable_now = free if not sites else (free & linked)
-        # The core first, and the ring only for what the core cannot reach.
-        # Widening is per ROUND rather than once and for all, so a build that
-        # needs one ring cell takes one, not a placement's worth.
+        # The demand envelope first, and the outer entry ring only for what the
+        # demand cannot reach. Widening is per ROUND rather than once and for
+        # all, so a build that needs one outer-ring cell takes one, not a
+        # placement's worth.
         gx = gy = -1
-        for allowed in (reachable_now & in_core, reachable_now):
+        for allowed in (reachable_now & in_demand, reachable_now):
             flat = int(np.where(allowed, key, -1).argmax())
             cx, cy = divmod(flat, shape[1])
             if allowed[cx, cy] and score[cx, cy] > 0:
@@ -8420,7 +8427,7 @@ def _prepare_routing_problem(
     # of the change: an unpowerable pack is infeasible, so it is refused here --
     # before a single belt is routed -- rather than emerging as a coverage
     # failure once the pack and the routing have both spent the ground.
-    power_sites = _power_plan(canvas, core, policy=policy) if power else []
+    power_sites = _power_plan(canvas, route_bounds, policy=policy) if power else []
 
     # External-input nets retain the existing lane-deduplication and item
     # precedence, while exposing their shared boundary cells immutably.
