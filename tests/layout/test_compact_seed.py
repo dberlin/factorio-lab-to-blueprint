@@ -10,6 +10,7 @@ from typing import cast
 import pytest
 from ortools.sat.python import cp_model
 
+import flab2bp.layout.compact_seed as compact_seed_module
 import flab2bp.layout.sequence_solver as sequence_solver_module
 from flab2bp.lab.data import load_vendored
 from flab2bp.lab.url import parse_url
@@ -614,6 +615,51 @@ def test_infeasible_cancelled_deadline_and_no_incumbent_return_no_seed(
     unknown = solve_compact_seed(problem, base_seed=1, attempt=0)
     assert unknown.status is CompactSeedStatus.UNKNOWN
     assert unknown.state is None
+
+
+@pytest.mark.parametrize(
+    ("origin_delta", "expected"),
+    ((0, frozenset()), (1, frozenset({(0, 1)}))),
+)
+def test_normal_compact_seed_requires_allowed_direct_origin_delta(
+    origin_delta: int,
+    expected: frozenset[tuple[int, int]],
+) -> None:
+    problem = _fixed_problem(
+        sizes=((2, 1), (2, 1)),
+        height=2,
+        nets=((0, 1),),
+    )
+    target = DirectInsertTarget((0, 1), 0, 1, 0, 0, 2, 2, (1,))
+    eligibility = (VariantDirectInsertTarget(0, 0, target),)
+    plan = compact_seed_module._prepare_model_plan(problem, eligibility, 17)
+    model, variables = compact_seed_module._build_model(problem, plan)
+    model.add(variables.x[0] == 0)
+    model.add(variables.x[1] == origin_delta)
+    model.add(variables.y[0] == 0)
+    model.add(variables.y[1] == 1)
+    solver = cp_model.CpSolver()
+    solver.parameters.num_workers = 1
+
+    assert solver.solve(model) == cp_model.OPTIMAL
+    cp_direct = frozenset(
+        key for key, success in variables.direct_successes if solver.value(success)
+    )
+    decoded = DecodedPlacement(
+        x=(0, origin_delta),
+        y=(0, 1),
+        width=origin_delta + 2,
+        used_height=2,
+        x_windows=((0, 0), (origin_delta, origin_delta)),
+        y_windows=((0, 0), (1, 1)),
+        gap_area=0,
+    )
+
+    assert cp_direct == expected
+    assert (
+        compact_seed_module._decoded_direct_keys(decoded, (0, 0), eligibility)
+        == expected
+    )
 
 
 def test_cp_coordinate_direct_success_is_not_accepted_as_zero_gap_decoded_truth() -> None:

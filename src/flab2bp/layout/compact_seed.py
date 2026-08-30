@@ -895,11 +895,17 @@ def _build_model(
             )
             model.add(row_gap >= 1).only_enforce_if(success)
             model.add(row_gap <= catalog.SORTER_MAX_REACH).only_enforce_if(success)
+            origin_delta = model.new_int_var(
+                -(target.consumer_span - 1),
+                target.producer_span - 1,
+                f"direct_origin_delta_{direct_index}_{combo_index}",
+            )
             model.add(
-                x[target.producer] <= x[target.consumer] + target.consumer_span - 1
+                origin_delta == x[target.consumer] - x[target.producer]
             ).only_enforce_if(success)
-            model.add(
-                x[target.consumer] <= x[target.producer] + target.producer_span - 1
+            model.add_allowed_assignments(
+                [origin_delta],
+                [(delta,) for delta in target.origin_deltas],
             ).only_enforce_if(success)
             successes.append(success)
             direct_successes.append((key, success))
@@ -1273,8 +1279,8 @@ def _target_is_direct(decoded: DecodedPlacement, target: DirectInsertTarget) -> 
     )
     return (
         1 <= row_gap <= catalog.SORTER_MAX_REACH
-        and decoded.x[target.producer] <= decoded.x[target.consumer] + target.consumer_span - 1
-        and decoded.x[target.consumer] <= decoded.x[target.producer] + target.producer_span - 1
+        and decoded.x[target.consumer] - decoded.x[target.producer]
+        in target.origin_deltas
     )
 
 
