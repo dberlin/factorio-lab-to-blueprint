@@ -1029,7 +1029,10 @@ def test_unreachable_elevated_port_returns_structured_failure_without_route() ->
     assert result.routed == ()
     assert result.failures
     assert result.failures[0].net_id == net_id
+    assert result.failures[0].source == (0, 0, 0)
+    assert result.failures[0].destination == (6, 0, 1)
     assert tuple(canvas.buildings) == before
+    assert not result.exhaustive, "bounded rip-up/reroute is not a completeness proof"
 
 
 
@@ -1073,8 +1076,90 @@ def test_external_route_world_collision_commits_no_prefix(
 
     assert result.status is DetailedRouteStatus.STRANDED
     assert result.failures[0].kind is RouteFailureKind.COMMIT_LINK
+    assert result.failures[0].destination == (2, 0, 0)
     assert tuple(canvas.buildings) == before_buildings
     assert canvas.blocked == before_blocked
+
+
+def test_external_route_order_control_is_non_exhaustive_and_emits_no_no_good(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    shared = (1, 0, 0)
+
+    def scene() -> tuple[_Canvas, tuple[_Net, _Net]]:
+        canvas = _Canvas(limit=(0, -2, 4, 3))
+        first_port = canvas.add(
+            PlacedBuilding(2001, 35, 2, 0, carries_item="ore-a")
+        )
+        second_port = canvas.add(
+            PlacedBuilding(2001, 35, 2, 2, carries_item="ore-b")
+        )
+        first = _Net(
+            None,
+            _Port(first_port, 2, 0, 2, 2),
+            "ore-a",
+            net_id=NetId(None, 0, "ore-a", NetRole.EXTERNAL, 0),
+            boundary_goals=((0, 0, 0), (0, -1, 0)),
+        )
+        second = _Net(
+            None,
+            _Port(second_port, 2, 2, 2, 2),
+            "ore-b",
+            net_id=NetId(None, 1, "ore-b", NetRole.EXTERNAL, 0),
+            boundary_goals=((0, 2, 0),),
+        )
+        return canvas, (first, second)
+
+    def order_sensitive_path(
+        canvas: _Canvas,
+        port: _Port,
+        _bounds: tuple[int, int, int, int],
+    ) -> list[Cell] | None:
+        if port.y == 2:
+            return [shared, (1, 1, 0), (1, 2, 0)] if canvas.free(shared) else None
+        if canvas.free(shared):
+            return [(0, 0, 0), shared]
+        return [(0, -1, 0), (1, -1, 0), (2, -1, 0)]
+
+    monkeypatch.setattr(freeform, "_straight_to_edge", order_sensitive_path)
+    monkeypatch.setattr(
+        freeform,
+        "_astar",
+        lambda *_args, **_kwargs: _PathSearchResult(
+            None,
+            RouteFailureKind.SEALED_POCKET,
+            (shared,),
+            1,
+        ),
+    )
+
+    failed_canvas, (first, second) = scene()
+    failed = _route_external_inputs(
+        failed_canvas,
+        [first, second],
+        2001,
+        35,
+        (0, 0, 2, 2),
+    )
+    routed_canvas, (first, second) = scene()
+    routed = _route_external_inputs(
+        routed_canvas,
+        [second, first],
+        2001,
+        35,
+        (0, 0, 2, 2),
+    )
+
+    assert failed.status is DetailedRouteStatus.STRANDED
+    assert not failed.exhaustive
+    assert failed.failures[0].destination == (2, 2, 0)
+    assert routed.status is DetailedRouteStatus.ROUTED, (
+        "the same routes exist when the greedy external-input order is reversed"
+    )
+    spec = two_stage_spec()
+    strips = plan_strips(spec)
+    attempt = _proof_attempt(failed, strips)
+    assert freeform._proof_scoped_no_goods(attempt, strips, spec) == ((), None)
 
 
 def test_elevated_external_port_bypasses_ground_fast_path_and_routes_a_ramp(
@@ -2658,6 +2743,13 @@ def test_a_near_miss_admits_the_next_same_height_arrangement_before_an_incumbent
     assert seen == [(20, 0), (20, 1)]
     assert [attempt.routing.failed_count for attempt in attempts] == [2, 0]
 
+
+
+def test_width_slack_uses_exact_integer_ceiling_at_decimal_boundaries() -> None:
+    assert freeform._width_slack_cap(50) == 55
+    assert freeform._width_slack_cap(51) == 57
+
+
 def test_proof_scoped_route_feedback_uses_only_configured_width_slack(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2728,7 +2820,7 @@ def test_proof_scoped_route_feedback_uses_only_configured_width_slack(
 
     assert result is not None
     assert [call["arrangement"] for call in calls] == [0, 1]
-    assert calls[1]["width_bound"] == math.ceil(1.10 * compact.width)
+    assert calls[1]["width_bound"] == freeform._width_slack_cap(compact.width)
     feedback = calls[1]["feedback"]
     assert isinstance(feedback, FeedbackState)
     assert feedback.net_weight[failed.failures[0].net_id] == 1.0
@@ -2740,6 +2832,91 @@ def test_proof_scoped_route_feedback_uses_only_configured_width_slack(
         compact.at[index] for index in range(len(compact.at))
     )
     assert attempts[0].origins != attempts[1].origins
+
+
+def test_route_feedback_objective_keeps_exact_net_terms_and_hot_walls() -> None:
+    first = NetId(
+        0,
+        1,
+        "ore",
+        NetRole.INTERNAL,
+        0,
+        cargo_domain=CargoDomain.UNSPRAYED,
+    )
+    second = NetId(
+        0,
+        1,
+        "ore",
+        NetRole.INTERNAL,
+        1,
+        cargo_domain=CargoDomain.REQUIRES_SPRAY,
+    )
+    endpoints = {
+        first: ((4, 2, 0), (1, 3, 0)),
+        second: ((7, 5, 0), (2, 1, 0)),
+    }
+    cold = FeedbackState(
+        outline=(60, 20),
+        net_weight={first: 1.0, second: 3.0},
+        cell_history={},
+        endpoint_offsets=endpoints,
+    )
+    hot = FeedbackState(
+        outline=cold.outline,
+        net_weight=cold.net_weight,
+        cell_history={(12, 5, 0): 2.0},
+        endpoint_offsets=endpoints,
+    )
+
+    cold_terms = freeform._feedback_objective_evidence(cold, strip_count=2)
+    hot_terms = freeform._feedback_objective_evidence(hot, strip_count=2)
+
+    by_net = {term.net_id: term for term in cold_terms}
+    assert set(by_net) == {first, second}
+    assert {net: term.weight for net, term in by_net.items()} == {
+        first: 1,
+        second: 3,
+    }
+    assert by_net[first].source_offset == (4, 2, 0)
+    assert by_net[second].source_offset == (7, 5, 0)
+    origins = ((0, 0), (20, 0))
+    assert freeform._feedback_objective_score(
+        hot_terms,
+        origins,
+        hot.outline,
+    ) > freeform._feedback_objective_score(
+        cold_terms,
+        origins,
+        cold.outline,
+    )
+
+
+def test_route_feedback_exact_terms_build_a_valid_pack_model() -> None:
+    strips = plan_strips(two_stage_spec(), strip_len=6)
+    height = sum(_box(strip)[1] for strip in strips)
+    seed = _greedy_pack(strips, height)
+    net = NetId(0, 1, "ore", NetRole.INTERNAL, 0)
+    feedback = FeedbackState(
+        outline=(seed.width, height),
+        net_weight={net: 1.0},
+        cell_history={(0, 0, 0): 1.0},
+        endpoint_offsets={net: ((0, 0, 0), (0, 0, 0))},
+    )
+
+    packed = _pack(
+        strips,
+        height=height,
+        width_bound=seed.width,
+        time_budget_s=0.5,
+        direct_candidates={},
+        workers=DETERMINISTIC_WORKERS,
+        seed=seed,
+        feedback=feedback,
+    )
+
+    assert packed is not None
+    assert packed.width <= seed.width
+
 
 def test_proof_scoped_feedback_routes_captured_output_products_at_existing_deadline() -> None:
     spec = captured_output_products_spec()

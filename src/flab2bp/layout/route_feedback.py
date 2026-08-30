@@ -92,6 +92,26 @@ class NetFailure:
     wall: tuple[Cell, ...]
     blocking_nets: tuple[NetId, ...]
     expansions: int
+    source: Cell | None = None
+    destination: Cell | None = None
+    blocking_endpoints: tuple[tuple[Cell | None, Cell | None], ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.blocking_endpoints and len(self.blocking_endpoints) != len(
+            self.blocking_nets
+        ):
+            raise ValueError("blocking endpoints must align with blocking net identities")
+        cells = (
+            self.source,
+            self.destination,
+            *(
+                cell
+                for endpoints in self.blocking_endpoints
+                for cell in endpoints
+            ),
+        )
+        if any(cell is not None and not _coordinate_cell(cell) for cell in cells):
+            raise ValueError("route failure endpoints must be integer coordinate cells")
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,6 +165,7 @@ class FeedbackState:
     net_weight: Mapping[NetId, float]
     cell_history: Mapping[Cell, float]
     logical_net_weight: Mapping[LogicalNetId, float] = field(default_factory=dict)
+    endpoint_offsets: Mapping[NetId, tuple[Cell, Cell]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if (
@@ -157,6 +178,7 @@ class FeedbackState:
         net_weight = dict(self.net_weight)
         cell_history = dict(self.cell_history)
         logical_net_weight = dict(self.logical_net_weight)
+        endpoint_offsets = dict(self.endpoint_offsets)
         if any(
             not isinstance(net, NetId)
             or not math.isfinite(value)
@@ -184,12 +206,27 @@ class FeedbackState:
             raise ValueError(
                 "feedback cell history must be finite, non-negative, and inside the outline"
             )
+        if any(
+            not isinstance(net, NetId)
+            or not isinstance(endpoints, tuple)
+            or len(endpoints) != 2
+            or any(not _coordinate_cell(cell) for cell in endpoints)
+            for net, endpoints in endpoint_offsets.items()
+        ):
+            raise ValueError(
+                "feedback endpoint offsets must map exact nets to two integer cells"
+            )
         object.__setattr__(self, "net_weight", MappingProxyType(net_weight))
         object.__setattr__(self, "cell_history", MappingProxyType(cell_history))
         object.__setattr__(
             self,
             "logical_net_weight",
             MappingProxyType(logical_net_weight),
+        )
+        object.__setattr__(
+            self,
+            "endpoint_offsets",
+            MappingProxyType(endpoint_offsets),
         )
 
     @classmethod
@@ -200,6 +237,7 @@ class FeedbackState:
             net_weight={},
             cell_history={},
             logical_net_weight={},
+            endpoint_offsets={},
         )
 
     def for_outline(self, outline: tuple[int, int]) -> FeedbackState:
@@ -211,10 +249,16 @@ class FeedbackState:
             net_weight=self.net_weight,
             cell_history={},
             logical_net_weight=self.logical_net_weight,
+            endpoint_offsets=self.endpoint_offsets,
         )
 
 
-def update_feedback(state: FeedbackState, result: DetailedRouteResult) -> FeedbackState:
+def update_feedback(
+    state: FeedbackState,
+    result: DetailedRouteResult,
+    *,
+    origins: tuple[tuple[int, int], ...] | None = None,
+) -> FeedbackState:
     """Add genuine geometric failure evidence without applying stage decay."""
     geometric = tuple(failure for failure in result.failures if failure.kind in _GEOMETRIC_FAILURES)
     if not geometric:
@@ -223,6 +267,7 @@ def update_feedback(state: FeedbackState, result: DetailedRouteResult) -> Feedba
     net_weight = dict(state.net_weight)
     logical_net_weight = dict(state.logical_net_weight)
     cell_history = dict(state.cell_history)
+    endpoint_offsets = dict(state.endpoint_offsets)
     width, height = state.outline
     for failure in geometric:
         implicated = (failure.net_id, *failure.blocking_nets)
@@ -234,6 +279,32 @@ def update_feedback(state: FeedbackState, result: DetailedRouteResult) -> Feedba
             )
             logical_net_weight[logical] = weight
             net_weight[net] = weight
+        if origins is not None:
+            blocker_rows = (
+                tuple(
+                    (net, source, destination)
+                    for net, (source, destination) in zip(
+                        failure.blocking_nets,
+                        failure.blocking_endpoints,
+                        strict=True,
+                    )
+                )
+                if failure.blocking_endpoints
+                else ()
+            )
+            endpoint_rows = (
+                (failure.net_id, failure.source, failure.destination),
+                *blocker_rows,
+            )
+            for net, source, destination in endpoint_rows:
+                offsets = _local_endpoint_offsets(
+                    net,
+                    source,
+                    destination,
+                    origins,
+                )
+                if offsets is not None:
+                    endpoint_offsets[net] = offsets
         for cell in failure.wall:
             if _valid_cell(cell, width, height):
                 cell_history[cell] = cell_history.get(cell, 0.0) + 1.0
@@ -242,6 +313,7 @@ def update_feedback(state: FeedbackState, result: DetailedRouteResult) -> Feedba
         net_weight,
         cell_history,
         logical_net_weight,
+        endpoint_offsets,
     )
 
 
@@ -267,6 +339,11 @@ def decay_feedback(state: FeedbackState) -> FeedbackState:
         net_weight,
         cell_history,
         logical_net_weight,
+        {
+            net: endpoints
+            for net, endpoints in state.endpoint_offsets.items()
+            if net in net_weight
+        },
     )
 
 
@@ -290,6 +367,43 @@ def remap_feedback_nets(
         physical,
         {},
         state.logical_net_weight,
+        {
+            net: endpoints
+            for net, endpoints in state.endpoint_offsets.items()
+            if net in physical
+        },
+    )
+
+
+def _local_endpoint_offsets(
+    net: NetId,
+    source: Cell | None,
+    destination: Cell | None,
+    origins: tuple[tuple[int, int], ...],
+) -> tuple[Cell, Cell] | None:
+    """Translate one exact internal net's absolute ports into strip-local cells."""
+    if (
+        source is None
+        or destination is None
+        or net.source_strip is None
+        or net.destination_strip is None
+        or not 0 <= net.source_strip < len(origins)
+        or not 0 <= net.destination_strip < len(origins)
+    ):
+        return None
+    source_origin = origins[net.source_strip]
+    destination_origin = origins[net.destination_strip]
+    return (
+        (
+            source[0] - source_origin[0],
+            source[1] - source_origin[1],
+            source[2],
+        ),
+        (
+            destination[0] - destination_origin[0],
+            destination[1] - destination_origin[1],
+            destination[2],
+        ),
     )
 
 
@@ -439,6 +553,14 @@ def select_lns_neighbourhood(
     if stagnation >= grow_after:
         neighbourhood.update(_sequence_neighbours(pair, neighbourhood))
     return frozenset(neighbourhood)
+
+
+def _coordinate_cell(cell: object) -> bool:
+    return (
+        isinstance(cell, tuple)
+        and len(cell) == 3
+        and all(type(value) is int for value in cell)
+    )
 
 
 def _valid_cell(cell: object, width: int, height: int) -> bool:

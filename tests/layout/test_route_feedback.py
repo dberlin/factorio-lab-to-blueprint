@@ -166,6 +166,40 @@ def test_route_feedback_weights_exact_blocking_net_identities() -> None:
     }
 
 
+
+def test_route_feedback_retains_exact_local_endpoint_offsets() -> None:
+    failed_net = NetId(0, 1, "iron-ingot", NetRole.INTERNAL, 0)
+    blocker = NetId(0, 1, "iron-ingot", NetRole.INTERNAL, 1)
+    result = DetailedRouteResult(
+        status=DetailedRouteStatus.STRANDED,
+        routed=(),
+        failures=(
+            NetFailure(
+                failed_net,
+                RouteFailureKind.CONGESTION_WALL,
+                ((14, 7, 0),),
+                (blocker,),
+                41,
+                source=(14, 7, 0),
+                destination=(31, 9, 0),
+                blocking_endpoints=(((16, 8, 0), (33, 6, 0)),),
+            ),
+        ),
+        iterations=2,
+        expansions=41,
+    )
+
+    updated = update_feedback(
+        FeedbackState.empty((80, 120)),
+        result,
+        origins=((10, 5), (30, 4)),
+    )
+
+    assert updated.endpoint_offsets == {
+        failed_net: ((4, 2, 0), (1, 5, 0)),
+        blocker: ((6, 3, 0), (3, 2, 0)),
+    }
+
 @pytest.mark.parametrize("kind", (RouteFailureKind.BUDGET, RouteFailureKind.STATIC_ACCESS))
 def test_non_geometric_failure_is_an_exact_feedback_no_op(
     kind: RouteFailureKind,

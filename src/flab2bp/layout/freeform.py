@@ -2510,6 +2510,99 @@ def _add_projection_no_good(
     model.add_forbidden_assignments(variables, [values])
 
 
+@dataclass(frozen=True, slots=True)
+class _FeedbackObjectiveEvidence:
+    """One exact physical net and the route evidence that may move its endpoints."""
+
+    net_id: NetId
+    weight: int
+    source_offset: Cell
+    destination_offset: Cell
+    hot_cells: tuple[tuple[Cell, int], ...]
+
+
+def _feedback_objective_evidence(
+    feedback: FeedbackState,
+    *,
+    strip_count: int,
+) -> tuple[_FeedbackObjectiveEvidence, ...]:
+    """Keep exact net identities separate when translating feedback to CP terms."""
+    evidence: list[_FeedbackObjectiveEvidence] = []
+    ordered = sorted(
+        feedback.net_weight.items(),
+        key=lambda pair: (
+            -1 if pair[0].source_strip is None else pair[0].source_strip,
+            -1 if pair[0].destination_strip is None else pair[0].destination_strip,
+            pair[0].item,
+            pair[0].cargo_domain.value,
+            pair[0].role.value,
+            pair[0].ordinal,
+        ),
+    )
+    for net, weight in ordered:
+        if (
+            net.source_strip is None
+            or net.destination_strip is None
+            or not 0 <= net.source_strip < strip_count
+            or not 0 <= net.destination_strip < strip_count
+            or (offsets := feedback.endpoint_offsets.get(net)) is None
+            or weight <= 0.0
+        ):
+            continue
+        source_offset, destination_offset = offsets
+        levels = {source_offset[2], destination_offset[2]}
+        hot_cells = tuple(
+            (cell, max(1, math.ceil(history)))
+            for cell, history in sorted(feedback.cell_history.items())
+            if history > 0.0 and cell[2] in levels
+        )
+        evidence.append(
+            _FeedbackObjectiveEvidence(
+                net_id=net,
+                weight=max(1, math.ceil(weight)),
+                source_offset=source_offset,
+                destination_offset=destination_offset,
+                hot_cells=hot_cells,
+            )
+        )
+    return tuple(evidence)
+
+
+def _feedback_objective_score(
+    evidence: tuple[_FeedbackObjectiveEvidence, ...],
+    origins: tuple[tuple[int, int], ...],
+    outline: tuple[int, int],
+) -> int:
+    """Evaluate the same exact-net evidence tier for one concrete assignment."""
+    max_distance = outline[0] + outline[1]
+    score = 0
+    for term in evidence:
+        source_strip = term.net_id.source_strip
+        destination_strip = term.net_id.destination_strip
+        if source_strip is None or destination_strip is None:
+            continue
+        source = (
+            origins[source_strip][0] + term.source_offset[0],
+            origins[source_strip][1] + term.source_offset[1],
+        )
+        destination = (
+            origins[destination_strip][0] + term.destination_offset[0],
+            origins[destination_strip][1] + term.destination_offset[1],
+        )
+        score += term.weight * (
+            abs(source[0] - destination[0]) + abs(source[1] - destination[1])
+        )
+        for (wall_x, wall_y, _level), history in term.hot_cells:
+            wall_distance = (
+                abs(source[0] - wall_x)
+                + abs(source[1] - wall_y)
+                + abs(destination[0] - wall_x)
+                + abs(destination[1] - wall_y)
+            )
+            score += term.weight * history * max(0, max_distance - wall_distance)
+    return score
+
+
 
 
 def _pack(
@@ -2684,7 +2777,6 @@ def _pack(
     # Half-perimeter wirelength over the nets, which is what keeps phase 2's job
     # tractable and costs almost nothing to express.
     terms: list[cp_model.IntVar] = []
-    terms_by_pair: dict[tuple[int, int], tuple[cp_model.IntVar, cp_model.IntVar]] = {}
     for i, j in _nets_between(strips):
         dx = model.new_int_var(0, width_bound, f"dx{i}_{j}")
         dy = model.new_int_var(0, height, f"dy{i}_{j}")
@@ -2703,7 +2795,6 @@ def _pack(
 
         terms.append(dx)
         terms.append(dy)
-        terms_by_pair[i, j] = (dx, dy)
 
     # Direct insertion: one Boolean per eligible net, reified against the
     # geometry that would let a single sorter replace the whole belt route.
@@ -2851,22 +2942,67 @@ def _pack(
     )
     missed = sum(di.Not() for di in direct_vars.values())
     base_tier = LAMBDA_HPWL * sum(terms) + MU_DIRECT * missed
-    feedback_by_pair: dict[tuple[int, int], float] = defaultdict(float)
-    if feedback is not None:
-        for net, weight in feedback.net_weight.items():
-            if net.source_strip is None or net.destination_strip is None:
-                continue
-            feedback_by_pair[net.source_strip, net.destination_strip] += weight
-    evidence_tier = sum(
-        max(1, math.ceil(feedback_by_pair[pair])) * (dx + dy)
-        for pair, (dx, dy) in terms_by_pair.items()
-        if feedback_by_pair.get(pair, 0.0) > 0.0
+    evidence = (
+        ()
+        if feedback is None
+        else _feedback_objective_evidence(feedback, strip_count=n)
     )
-    if feedback is None or not feedback_by_pair:
+    evidence_terms: list[cp_model.LinearExpr] = []
+    max_distance = width_bound + height
+    for evidence_index, term in enumerate(evidence):
+        source_strip = term.net_id.source_strip
+        destination_strip = term.net_id.destination_strip
+        if source_strip is None or destination_strip is None:
+            continue
+        source_x = (
+            xs[source_strip]
+            + strips[source_strip].west_channel
+            + term.source_offset[0]
+        )
+        source_y = ys[source_strip] + term.source_offset[1]
+        destination_x = (
+            xs[destination_strip]
+            + strips[destination_strip].west_channel
+            + term.destination_offset[0]
+        )
+        destination_y = ys[destination_strip] + term.destination_offset[1]
+        dx = model.new_int_var(0, width_bound, f"feedback_dx{evidence_index}")
+        dy = model.new_int_var(0, height, f"feedback_dy{evidence_index}")
+        model.add_abs_equality(dx, source_x - destination_x)
+        model.add_abs_equality(dy, source_y - destination_y)
+        evidence_terms.append(term.weight * (dx + dy))
+        for wall_index, ((wall_x, wall_y, _level), history) in enumerate(
+            term.hot_cells
+        ):
+            distances: list[cp_model.IntVar] = []
+            for label, coordinate, wall, upper in (
+                ("sx", source_x, wall_x, width_bound),
+                ("sy", source_y, wall_y, height),
+                ("dx", destination_x, wall_x, width_bound),
+                ("dy", destination_y, wall_y, height),
+            ):
+                distance = model.new_int_var(
+                    0,
+                    upper,
+                    f"feedback_wall_{label}{evidence_index}_{wall_index}",
+                )
+                model.add_abs_equality(distance, coordinate - wall)
+                distances.append(distance)
+            proximity = model.new_int_var(
+                0,
+                max_distance,
+                f"feedback_hot{evidence_index}_{wall_index}",
+            )
+            model.add_max_equality(
+                proximity,
+                [0, max_distance - sum(distances)],
+            )
+            evidence_terms.append(term.weight * history * proximity)
+    if not evidence_terms:
         model.minimize(w_var * cap + base_tier)
     else:
         evidence_cap = (width_bound + 1) * cap
-        model.minimize(evidence_tier * evidence_cap + w_var * cap + base_tier)
+        model.minimize(sum(evidence_terms) * evidence_cap + w_var * cap + base_tier)
 
     # Warm start.  The seed is feasible at this height by construction, so its
     # width bounds `w_var` from above and its positions give the search an
@@ -5565,6 +5701,22 @@ def _route_all(
             raise ValueError("detailed routing requires stable net IDs")
         return net_id
 
+    def _endpoint_cells(net: _Net) -> tuple[Cell | None, Cell]:
+        source = None if net.src is None else (net.src.x, net.src.y, net.src.z)
+        return source, (net.dst.x, net.dst.y, net.dst.z)
+
+    net_by_id = {_net_id(index): net for index, net in enumerate(nets)}
+
+    def _blocking_endpoint_cells(
+        blocking_nets: tuple[NetId, ...],
+    ) -> tuple[tuple[Cell | None, Cell | None], ...]:
+        return tuple(
+            _endpoint_cells(net_by_id[blocker])
+            if blocker in net_by_id
+            else (None, None)
+            for blocker in blocking_nets
+        )
+
     def _blocking_nets(wall: Sequence[Cell]) -> tuple[NetId, ...]:
         # Sort transient integer indices, which have a total order. NetId's
         # optional strip fields deliberately do not compare across None/int.
@@ -5578,12 +5730,16 @@ def _route_all(
         search: _PathSearchResult,
         blocking_nets: tuple[NetId, ...],
     ) -> NetFailure:
+        source, destination = _endpoint_cells(nets[index])
         return NetFailure(
             net_id=_net_id(index),
             kind=search.kind or RouteFailureKind.DYNAMIC_ACCESS,
             wall=search.wall,
             blocking_nets=blocking_nets,
             expansions=search.expansions,
+            source=source,
+            destination=destination,
+            blocking_endpoints=_blocking_endpoint_cells(blocking_nets),
         )
 
     def _budget_result() -> DetailedRouteResult:
@@ -5649,15 +5805,20 @@ def _route_all(
                     )
         for index in unlinked:
             detail = details.get(index)
+            source, destination = _endpoint_cells(nets[index])
+            blockers = tuple(
+                _net_id(blocker)
+                for blocker in (detail.blocking_indices if detail is not None else ())
+            )
             failures[index] = NetFailure(
                 _net_id(index),
                 RouteFailureKind.COMMIT_LINK,
                 ((detail.cell, *detail.blocking_cells) if detail is not None else ()),
-                tuple(
-                    _net_id(blocker)
-                    for blocker in (detail.blocking_indices if detail is not None else ())
-                ),
+                blockers,
                 0,
+                source=source,
+                destination=destination,
+                blocking_endpoints=_blocking_endpoint_cells(blockers),
             )
         routed = tuple(
             _net_id(index)
@@ -5679,11 +5840,6 @@ def _route_all(
             failures=ordered_failures,
             iterations=iterations,
             expansions=expansions,
-            exhaustive=not budget_exhausted
-            and not any(
-                failure.kind is RouteFailureKind.BUDGET
-                for failure in ordered_failures
-            ),
         )
 
     _reserve_port_access(canvas, nets)
@@ -7619,9 +7775,6 @@ def _route_external_inputs(
 ) -> DetailedRouteResult:
     """Run every outside input from the block edge to the lane that wants it.
 
-    A lane the deadline or budget ran out on is a structured unknown, never a
-    placement missing an entry run.
-
     Without this, an external input was just a lane wearing a marker icon.  On a
     packed build that lane is frequently WALLED IN -- above it another lane,
     below it the machine band, either side the lane itself -- so no belt could
@@ -7673,11 +7826,19 @@ def _route_external_inputs(
             search.wall,
             (),
             search.expansions,
+            destination=(net.dst.x, net.dst.y, net.dst.z),
         )
 
     if not starts:
         failures.extend(
-            NetFailure(net_id(net), RouteFailureKind.DYNAMIC_ACCESS, (), (), 0)
+            NetFailure(
+                net_id(net),
+                RouteFailureKind.DYNAMIC_ACCESS,
+                (),
+                (),
+                0,
+                destination=(net.dst.x, net.dst.y, net.dst.z),
+            )
             for _belt, net in ordered
         )
     else:
@@ -7719,6 +7880,7 @@ def _route_external_inputs(
                             (),
                             (),
                             0,
+                            destination=(net.dst.x, net.dst.y, net.dst.z),
                         )
                     )
                     continue
@@ -7741,14 +7903,32 @@ def _route_external_inputs(
 
             profile = _altitude_profile(path, ramped=canvas.ramped)
             if profile is None:
-                failures.append(NetFailure(net_id(net), RouteFailureKind.COMMIT_LINK, (), (), 0))
+                failures.append(
+                    NetFailure(
+                        net_id(net),
+                        RouteFailureKind.COMMIT_LINK,
+                        (),
+                        (),
+                        0,
+                        destination=(net.dst.x, net.dst.y, net.dst.z),
+                    )
+                )
                 continue
             route_cells = tuple(zip(path, profile, strict=True))
             if any(
                 not canvas.free((x, y, level)) or not canvas.free_world(x, y, altitude)
                 for (x, y, level), altitude in route_cells
             ):
-                failures.append(NetFailure(net_id(net), RouteFailureKind.COMMIT_LINK, (), (), 0))
+                failures.append(
+                    NetFailure(
+                        net_id(net),
+                        RouteFailureKind.COMMIT_LINK,
+                        (),
+                        (),
+                        0,
+                        destination=(net.dst.x, net.dst.y, net.dst.z),
+                    )
+                )
                 continue
 
             indices = [
@@ -7785,7 +7965,6 @@ def _route_external_inputs(
         failures=tuple(failures),
         iterations=0,
         expansions=expansions,
-        exhaustive=status is not DetailedRouteStatus.BUDGET,
     )
 
 
@@ -9590,6 +9769,12 @@ def _prepare_routing_problem(
             (failed,),
             (),
             0,
+            source=(
+                None
+                if net.src is None
+                else (net.src.x, net.src.y, net.src.z)
+            ),
+            destination=(net.dst.x, net.dst.y, net.dst.z),
         )
         for net in prepared_nets
         for failed in (
@@ -9700,6 +9885,13 @@ class PackAttempt:
         if not self.realized_direct <= self.promised_direct:
             raise ValueError("a realized direct insert must name a rewarded promise")
 
+def _width_slack_cap(compact_width: int) -> int:
+    """Return ``ceil(1.10 * compact_width)`` without floating-point drift."""
+    if type(compact_width) is not int or compact_width <= 0:
+        raise ValueError("compact width must be a positive integer")
+    return (11 * compact_width + 9) // 10
+
+
 def _proof_scoped_no_goods(
     attempt: PackAttempt,
     strips: list[Strip],
@@ -9792,7 +9984,11 @@ def _attempt_feedback_state(
         if previous is None
         else previous.for_outline(outline)
     )
-    return update_feedback(state, attempt.routing)
+    return update_feedback(
+        state,
+        attempt.routing,
+        origins=attempt.origins,
+    )
 
 
 @dataclass(slots=True)
@@ -11545,7 +11741,7 @@ class FreeformLayout:
             if feedback is not None and height in compact_width_by_height:
                 width_bound = min(
                     width_bound,
-                    math.ceil(1.10 * compact_width_by_height[height]),
+                    _width_slack_cap(compact_width_by_height[height]),
                 )
             pack = _pack(
                 strips,
