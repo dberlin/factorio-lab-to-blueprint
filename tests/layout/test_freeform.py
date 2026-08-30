@@ -6875,6 +6875,71 @@ class TestDetailedRoutingDiagnostics:
             for level in range(LEVELS):
                 canvas.blocked[x, y, level] = 0
 
+    def test_prelinked_carry_port_is_not_offered_at_another_height(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The routing frontier reserves the carry's physical port before A*.
+
+        The onward belt descends east after leaving the elevated source.  A new
+        east start at level 1 would still name that same co-located east port;
+        routing height cannot make a second connection-pool cell.
+        """
+        canvas = _Canvas()
+        bounds = (-4, -4, 4, 6)
+        canvas.limit = bounds
+        predecessor = canvas.add(replace(_belt(-1, 0, item="gear"), z=F(1)))
+        source = canvas.add(replace(_belt(0, 0, item="gear"), z=F(1)))
+        onward = canvas.add(replace(_belt(1, 0, item="gear"), z=F(0)))
+        destination = canvas.add(replace(_belt(0, 4, item="gear"), z=F(1)))
+        canvas.buildings[predecessor] = _relink(
+            canvas.buildings[predecessor],
+            output_obj=source,
+        )
+        canvas.buildings[source] = _relink(
+            canvas.buildings[source],
+            output_obj=onward,
+        )
+        net = _Net(
+            src=_Port(
+                source,
+                0,
+                0,
+                -1,
+                1,
+                (predecessor, source, onward),
+                z=1,
+            ),
+            dst=_Port(destination, 0, 4, 0, 0, (destination,), z=1),
+            net_id=NetId(source, destination, "gear", NetRole.INTERNAL, 0),
+            item="gear",
+        )
+        observed: list[tuple[Cell, ...]] = []
+
+        def inspect_starts(
+            _canvas: _Canvas,
+            starts: Sequence[Cell],
+            *_args: object,
+            **_kwargs: object,
+        ) -> _PathSearchResult:
+            observed.append(tuple(starts))
+            return _PathSearchResult(
+                None,
+                RouteFailureKind.DYNAMIC_ACCESS,
+                (),
+                0,
+            )
+
+        monkeypatch.setattr("flab2bp.layout.freeform._astar", inspect_starts)
+        monkeypatch.setattr("flab2bp.layout.freeform.RRR_MAX", 1)
+        monkeypatch.setattr("flab2bp.layout.freeform._REPAIR_PASSES", 0)
+
+        _route_all(canvas, [net], 2001, 35, bounds)
+
+        assert observed
+        assert (1, 0, 1) not in observed[0]
+        assert {(0, -1, 1), (0, 1, 1)} <= set(observed[0])
+
     def test_a_sealed_pocket_reports_the_failed_net_and_blocking_owner(
         self,
     ) -> None:
@@ -8333,6 +8398,9 @@ class TestSourceTapPreservesPhysicalSplitterPortIdentity:
         source = canvas.add(replace(_belt(0, 0, item="gear"), z=F(1)))
         onward = canvas.add(replace(_belt(0, -1, item="gear"), z=F(1)))
         branch = canvas.add(replace(_belt(1, 0, item="gear"), z=F(1)))
+        second_branch = canvas.add(
+            replace(_belt(-1, 0, item="gear"), z=F(1))
+        )
         canvas.buildings[predecessor] = _relink(
             canvas.buildings[predecessor],
             output_obj=source,
@@ -8341,6 +8409,15 @@ class TestSourceTapPreservesPhysicalSplitterPortIdentity:
             canvas.buildings[source],
             output_obj=onward,
         )
+        canvas.add(
+            PlacedBuilding(
+                item_id=2011,
+                model_index=catalog.building(2011).model_index,
+                x=0,
+                y=0,
+                output_obj=source,
+            )
+        )
 
         assert freeform._tap_source(
             canvas,
@@ -8348,7 +8425,20 @@ class TestSourceTapPreservesPhysicalSplitterPortIdentity:
             branch,
             2001,
             35,
-            excused={(0, 1, 1), (0, 0, 1), (0, -1, 1), (1, 0, 1)},
+            excused={
+                (-1, 0, 1),
+                (0, 1, 1),
+                (0, 0, 1),
+                (0, -1, 1),
+                (1, 0, 1),
+            },
+        )
+        assert freeform._tap_source(
+            canvas,
+            source,
+            second_branch,
+            2001,
+            35,
         )
 
         wired = slots.assign_belt_slots(canvas.buildings)
@@ -8364,7 +8454,7 @@ class TestSourceTapPreservesPhysicalSplitterPortIdentity:
             for building in wired
             if building.output_obj == splitter or building.input_obj == splitter
         ]
-        assert len(ports) == 3
+        assert len(ports) == 4
         assert len(set(ports)) == len(ports)
 
 

@@ -5749,7 +5749,10 @@ def _route_all(
 
     building_predecessors: dict[int, list[int]] = defaultdict(list)
     for building_index, building in enumerate(canvas.buildings):
-        if building.output_obj is not None:
+        if (
+            catalog.is_belt(building.item_id)
+            and building.output_obj is not None
+        ):
             building_predecessors[building.output_obj].append(building_index)
 
     offered_source: dict[int, dict[Cell, Cell]] = {}
@@ -5903,6 +5906,16 @@ def _route_all(
                     direct_ports_valid = False
                 else:
                     direct_ports.add(feed_port)
+            if source_belt.output_obj is not None:
+                carry_port = splitter_ports.expected_path_port(
+                    prospective_splitter,
+                    source_belt,
+                    canvas.buildings[source_belt.output_obj],
+                )
+                if carry_port is None or carry_port in direct_ports:
+                    direct_ports_valid = False
+                else:
+                    direct_ports.add(carry_port)
             for sibling in siblings:
                 sibling_path = paths.get(sibling)
                 if not sibling_path:
@@ -7351,7 +7364,10 @@ def _tap_source(
         splitter = canvas.buildings[junction_idx]
         predecessors: dict[int, list[int]] = defaultdict(list)
         for index, candidate in enumerate(canvas.buildings):
-            if candidate.output_obj is not None:
+            if (
+                catalog.is_belt(candidate.item_id)
+                and candidate.output_obj is not None
+            ):
                 predecessors[candidate.output_obj].append(index)
 
         used_ports: set[int] = set()
@@ -7413,7 +7429,8 @@ def _tap_source(
         incoming = [
             index
             for index, candidate in enumerate(canvas.buildings)
-            if candidate.output_obj == belt_idx
+            if catalog.is_belt(candidate.item_id)
+            and candidate.output_obj == belt_idx
         ]
         if len(incoming) != 1:
             if rejected_reason is not None:
