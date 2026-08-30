@@ -58,7 +58,6 @@ from flab2bp.layout.freeform import (
     _greedy_pack,
     _Grid,
     _height_seed,
-    _is_rescuable_near_miss,
     _join_shard_islands,
     _logical_strip_plans,
     _machines_without_poses,
@@ -2545,6 +2544,30 @@ def _routing_failures(
     return DetailedRouteResult(*arguments)
 
 
+def _feedback_bearing_routing(
+    count: int = 1,
+) -> DetailedRouteResult:
+    failures = tuple(
+        NetFailure(
+            NetId(0, 1, f"feedback-{ordinal}", NetRole.INTERNAL, ordinal),
+            RouteFailureKind.SEALED_POCKET,
+            ((5 + ordinal, 5, 0),),
+            (),
+            1,
+            source=(1, 1 + ordinal, 0),
+            destination=(11, 1 + ordinal, 0),
+        )
+        for ordinal in range(count)
+    )
+    return DetailedRouteResult(
+        DetailedRouteStatus.STRANDED,
+        (),
+        failures,
+        1,
+        count,
+    )
+
+
 def _proof_attempt(
     routing: DetailedRouteResult,
     strips: list[Strip],
@@ -2678,37 +2701,6 @@ def test_unproved_and_budget_failures_do_not_exclude_geometry(
     assert freeform._proof_scoped_no_goods(attempt, strips, spec) == ((), None)
 
 
-@pytest.mark.parametrize(
-    ("kinds", "expected"),
-    [
-        pytest.param((), False, id="zero-failures"),
-        pytest.param((RouteFailureKind.SEALED_POCKET,), True, id="one-geometric-failure"),
-        pytest.param(
-            (
-                RouteFailureKind.STATIC_ACCESS,
-                RouteFailureKind.CONGESTION_WALL,
-                RouteFailureKind.COMMIT_LINK,
-            ),
-            True,
-            id="three-mixed-non-budget-failures",
-        ),
-        pytest.param(
-            (RouteFailureKind.DYNAMIC_ACCESS,) * 4,
-            False,
-            id="four-failures",
-        ),
-        pytest.param(
-            (RouteFailureKind.SEALED_POCKET, RouteFailureKind.BUDGET),
-            False,
-            id="contains-budget-failure",
-        ),
-    ],
-)
-def test_only_one_to_three_non_budget_route_failures_are_rescuable(
-    kinds: tuple[RouteFailureKind, ...],
-    expected: bool,
-) -> None:
-    assert _is_rescuable_near_miss(_routing_failures(*kinds)) is expected
 
 
 def _sweep_after_first_routing(
@@ -2800,20 +2792,17 @@ def _sweep_after_first_routing(
     return result, seen, attempts
 
 
-def test_a_near_miss_admits_the_next_same_height_arrangement_before_an_incumbent(
+def test_exact_one_net_feedback_admits_the_next_configured_arrangement(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     result, seen, attempts = _sweep_after_first_routing(
         monkeypatch,
-        _routing_failures(
-            RouteFailureKind.SEALED_POCKET,
-            RouteFailureKind.COMMIT_LINK,
-        ),
+        _feedback_bearing_routing(),
     )
 
     assert result is not None
     assert seen == [(20, 0), (20, 1)]
-    assert [attempt.routing.failed_count for attempt in attempts] == [2, 0]
+    assert [attempt.routing.failed_count for attempt in attempts] == [1, 0]
 
 
 def test_proof_scoped_near_miss_promotes_existing_feedback_retry_immediately(
@@ -2821,11 +2810,49 @@ def test_proof_scoped_near_miss_promotes_existing_feedback_retry_immediately(
 ) -> None:
     _result, seen, _attempts = _sweep_after_first_routing(
         monkeypatch,
-        _routing_failures(RouteFailureKind.SEALED_POCKET),
+        _feedback_bearing_routing(),
         heights=(20, 21),
     )
 
     assert seen[:2] == [(20, 0), (20, 1)]
+
+
+@pytest.mark.parametrize(
+    "routing",
+    [
+        pytest.param(_feedback_bearing_routing(2), id="two-failures"),
+        pytest.param(
+            _routing_failures(RouteFailureKind.STATIC_ACCESS),
+            id="static-with-empty-feedback",
+        ),
+    ],
+)
+def test_proof_scoped_ineligible_failures_preserve_base_height_order(
+    monkeypatch: pytest.MonkeyPatch,
+    routing: DetailedRouteResult,
+) -> None:
+    _result, seen, _attempts = _sweep_after_first_routing(
+        monkeypatch,
+        routing,
+        heights=(20, 21),
+    )
+
+    assert seen[:2] == [(20, 0), (21, 0)]
+
+
+def test_unaffordable_feedback_retry_preserves_later_base_height(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(freeform, "_room_for_another", lambda *_args: False)
+
+    result, seen, _attempts = _sweep_after_first_routing(
+        monkeypatch,
+        _feedback_bearing_routing(),
+        heights=(20, 21),
+    )
+
+    assert result is not None
+    assert seen[:2] == [(20, 0), (21, 0)]
 
 
 

@@ -9998,6 +9998,25 @@ def _attempt_feedback_state(
     )
 
 
+def _feedback_retry_eligible(
+    attempt: PackAttempt,
+    feedback: FeedbackState,
+) -> bool:
+    """Whether this exact attempt earned one bounded evidence-driven retry."""
+    routing = attempt.routing
+    if (
+        routing.exhaustive
+        or routing.status is not DetailedRouteStatus.STRANDED
+        or len(routing.failures) != 1
+    ):
+        return False
+    failure = routing.failures[0]
+    return (
+        failure.net_id in feedback.net_weight
+        and failure.net_id in feedback.endpoint_offsets
+    )
+
+
 @dataclass(slots=True)
 class _BuildResult:
     placement: Placement | None
@@ -12030,20 +12049,22 @@ class FreeformLayout:
                         for failure in result.routing.failures
                     )
                 )
+                feedback_state: FeedbackState | None = None
                 if not budget_failure:
-                    feedback_by_height[height] = _attempt_feedback_state(
+                    feedback_state = _attempt_feedback_state(
                         attempt,
                         feedback_by_height.get(height),
                     )
+                    feedback_by_height[height] = feedback_state
 
-                rescuable = (
-                    arrangement == 0
-                    and not budget_failure
-                    and _is_rescuable_near_miss(result.routing)
+                feedback_retry = (
+                    feedback_state is not None
+                    and _feedback_retry_eligible(attempt, feedback_state)
                 )
-                if arrangement == 0 and (learned or rescuable):
-                    rescuable_heights.add(height)
-                if learned or rescuable:
+                promote_retry = arrangement == 0 and (
+                    learned or feedback_retry
+                )
+                if promote_retry:
                     next_candidate = (height, arrangement + 1, False)
                     try:
                         next_index = candidate_packs.index(
@@ -12053,10 +12074,25 @@ class FreeformLayout:
                     except ValueError:
                         pass
                     else:
-                        candidate_packs.insert(
-                            candidate_index,
-                            candidate_packs.pop(next_index),
+                        current_candidate_s = (
+                            0.0
+                            if started_at is None
+                            else time.monotonic() - started_at
                         )
+                        retry_cost = max(
+                            dearest_candidate_s,
+                            current_candidate_s,
+                        )
+                        if _room_for_another(
+                            deadline,
+                            soft,
+                            retry_cost,
+                        ):
+                            rescuable_heights.add(height)
+                            candidate_packs.insert(
+                                candidate_index,
+                                candidate_packs.pop(next_index),
+                            )
                 continue
             if result.routing.status is not DetailedRouteStatus.ROUTED:
                 continue
@@ -12218,11 +12254,6 @@ class FreeformLayout:
         return best
 
 
-def _is_rescuable_near_miss(routing: DetailedRouteResult) -> bool:
-    """Whether one fixed-work arrangement retry may rescue this routing result."""
-    return 1 <= len(routing.failures) <= 3 and all(
-        failure.kind is not RouteFailureKind.BUDGET for failure in routing.failures
-    )
 
 
 def _room_for_another(deadline: float | None, soft: float, candidate_s: float) -> bool:
