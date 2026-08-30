@@ -275,6 +275,87 @@ def test_prepared_static_access_failure_spends_no_route_budget(
     assert result.routing.failures == failed.preparation_failures
     assert result.routing.expansions == 0
 
+def test_prepared_budget_result_stops_before_every_emission_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = two_stage_spec()
+    strips = plan_strips(spec, strip_len=6)
+    pack = _greedy_pack(strips, _height_seed(strips))
+    prepared = _prepare_routing_problem(
+        spec,
+        strips,
+        pack,
+        policy=BandPolicy("portable"),
+        power=True,
+    )
+    internal_net = next(
+        net
+        for net in prepared.nets
+        if net.net_id is not None and net.net_id.role is not NetRole.EXTERNAL
+    )
+    assert internal_net.net_id is not None
+    evidence = DetailedRouteResult(
+        status=DetailedRouteStatus.BUDGET,
+        routed=(),
+        failures=(
+            NetFailure(
+                internal_net.net_id,
+                RouteFailureKind.BUDGET,
+                (),
+                (),
+                7,
+            ),
+        ),
+        iterations=2,
+        expansions=7,
+    )
+    empty = DetailedRouteResult(DetailedRouteStatus.ROUTED, (), (), 0, 0)
+
+    monkeypatch.setattr(
+        freeform,
+        "_route_external_inputs",
+        lambda *_args, **_kwargs: empty,
+    )
+    monkeypatch.setattr(
+        freeform,
+        "_route_all",
+        lambda *_args, **_kwargs: evidence,
+    )
+    monkeypatch.setattr(
+        freeform,
+        "_place_power",
+        lambda *_args, **_kwargs: pytest.fail(
+            "a budgeted build reached power placement"
+        ),
+    )
+    monkeypatch.setattr(
+        freeform,
+        "assign_sorter_slots",
+        lambda *_args, **_kwargs: pytest.fail(
+            "a budgeted build reached sorter-slot emission"
+        ),
+    )
+    monkeypatch.setattr(
+        freeform,
+        "Placement",
+        lambda *_args, **_kwargs: pytest.fail(
+            "a budgeted build reached Placement construction"
+        ),
+    )
+
+    result = _build_prepared(
+        spec,
+        strips,
+        prepared,
+        power=True,
+        route=True,
+        budget={"left": 100},
+    )
+
+    assert result.routing == evidence
+    assert result.placement is None
+    assert result.towers == ()
+
 
 def test_strip_emission_reproduces_every_precomputed_attachment() -> None:
     spec = two_stage_spec()
@@ -501,9 +582,11 @@ def test_self_consuming_refined_oil_feedback_routes_and_validates(
         route=True,
         budget={"left": 5_000_000},
     )
-    assert result.routing.failed_count == 0
+    assert result.routing.status is DetailedRouteStatus.ROUTED
+    placement = result.placement
+    assert placement is not None
     report = validate.certify(
-        result.placement,
+        placement,
         refined_oil_feedback_spec,
         expect_power=False,
     )
@@ -732,8 +815,10 @@ def test_slope_limited_prepared_coater_routing_is_structured() -> None:
         DetailedRouteStatus.BUDGET,
     }
     if result.routing.status is DetailedRouteStatus.ROUTED:
+        placement = result.placement
+        assert placement is not None
         assert not validate.certify(
-            result.placement, spec, expect_power=False
+            placement, spec, expect_power=False
         ).errors
     else:
         assert result.routing.failures
@@ -1699,6 +1784,8 @@ class TestDirectInsertion:
             route=True,
             policy=BandPolicy("portable"),
         )
+        assert result.routing.status is DetailedRouteStatus.ROUTED
+        assert result.placement is not None
         return result.placement, pack
 
     def test_the_bridge_is_a_lane_to_lane_transfer_not_a_machine_pair(self) -> None:
@@ -1974,6 +2061,7 @@ def _sweep_after_first_routing(
     first_routing: DetailedRouteResult,
     *,
     arrangements: int = 2,
+    forbid_finalization: bool = False,
 ) -> tuple[Placement | None, list[tuple[int, int]], list[int]]:
     spec = two_stage_spec()
     strips = plan_strips(spec)
@@ -2006,22 +2094,43 @@ def _sweep_after_first_routing(
         **_kwargs: object,
     ) -> _BuildResult:
         routing = first_routing if pack is packs[0] else routed
-        return _BuildResult(
-            Placement(buildings=(), stats={"belt_tiles": 0.0}),
-            routing,
-            (),
+        placement = (
+            Placement(buildings=(), stats={"belt_tiles": 0.0})
+            if routing.status is DetailedRouteStatus.ROUTED
+            else None
         )
+        return _BuildResult(placement, routing, ())
 
     monkeypatch.setattr(freeform, "_candidate_heights", lambda _strips: [height])
     monkeypatch.setattr(freeform, "_greedy_pack", lambda _strips, _height: packs[0])
     monkeypatch.setattr(freeform, "_pack", pack)
     monkeypatch.setattr(freeform, "_build", build)
-    monkeypatch.setattr(
-        validate,
-        "certify",
-        lambda *_args, **_kwargs: validate.Report(findings=()),
-    )
-    monkeypatch.setattr(finalize, "finalize_placement", lambda placement, _policy: placement)
+    if forbid_finalization:
+        monkeypatch.setattr(
+            validate,
+            "certify",
+            lambda *_args, **_kwargs: pytest.fail(
+                "a budgeted build reached validation"
+            ),
+        )
+        monkeypatch.setattr(
+            finalize,
+            "finalize_placement",
+            lambda *_args, **_kwargs: pytest.fail(
+                "a budgeted build reached projection"
+            ),
+        )
+    else:
+        monkeypatch.setattr(
+            validate,
+            "certify",
+            lambda *_args, **_kwargs: validate.Report(findings=()),
+        )
+        monkeypatch.setattr(
+            finalize,
+            "finalize_placement",
+            lambda placement, _policy: placement,
+        )
 
     attempts: list[int] = []
     result = FreeformLayout(
@@ -2072,6 +2181,20 @@ def test_non_rescuable_routing_does_not_admit_an_arrangement(
     assert result is None
     assert seen == [(20, 0)]
     assert attempts == [len(first_routing.failures)]
+
+
+def test_budget_routing_never_reaches_validation_or_projection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result, seen, attempts = _sweep_after_first_routing(
+        monkeypatch,
+        _routing_failures(RouteFailureKind.BUDGET),
+        forbid_finalization=True,
+    )
+
+    assert result is None
+    assert seen == [(20, 0)]
+    assert attempts == [1]
 
 
 def test_a_near_miss_does_not_create_an_unconfigured_arrangement(
@@ -5101,7 +5224,7 @@ class TestTheTimeBudgetIsAWall:
         assert result.routing.failed_count > 0, (
             "an expired build must report every net as unrouted"
         )
-        assert result.placement.stats["routed"] == 0.0
+        assert result.placement is None
 
 
 class TestThroughTrafficLeavesTheGround:
@@ -5672,6 +5795,74 @@ class TestDetailedRoutingDiagnostics:
         assert result.failures[0].kind is RouteFailureKind.BUDGET
         assert result.failures[0].wall == ()
         assert result.failures[0].blocking_nets == ()
+
+    def test_bottom_of_round_deadline_never_commits_and_keeps_budget_evidence(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        canvas = _Canvas()
+        bounds = (-8, -8, 8, 8)
+        canvas.limit = bounds
+        first_id = NetId(0, 1, "first", NetRole.INTERNAL, 0)
+        second_id = NetId(2, 3, "second", NetRole.INTERNAL, 0)
+        nets = [
+            self._net(canvas, (-6, -2), (-4, -2), first_id),
+            self._net(canvas, (-6, 2), (-4, 2), second_id),
+        ]
+        walls = (((0, -1, 0),), ((0, 1, 0),))
+        searches = iter(
+            (
+                _PathSearchResult(
+                    None, RouteFailureKind.SEALED_POCKET, walls[0], 3
+                ),
+                _PathSearchResult(
+                    None, RouteFailureKind.SEALED_POCKET, walls[1], 5
+                ),
+            )
+        )
+        ticks = iter((0.0, 0.0, 2.0, 2.0))
+
+        monkeypatch.setattr(
+            freeform,
+            "_astar",
+            lambda *_args, **_kwargs: next(searches),
+        )
+        monkeypatch.setattr(freeform, "_REPAIR_PASSES", 0)
+        monkeypatch.setattr(
+            "flab2bp.layout.freeform.time.monotonic",
+            lambda: next(ticks),
+        )
+        monkeypatch.setattr(
+            freeform,
+            "_commit_paths",
+            lambda *_args, **_kwargs: pytest.fail(
+                "an expired routing round reached path commit"
+            ),
+        )
+
+        result = _route_all(
+            canvas,
+            nets,
+            2001,
+            35,
+            bounds,
+            deadline=1.0,
+            budget={"left": 100},
+        )
+
+        assert result.status is DetailedRouteStatus.BUDGET
+        assert tuple(failure.net_id for failure in result.failures) == (
+            first_id,
+            second_id,
+        )
+        assert tuple(failure.kind for failure in result.failures) == (
+            RouteFailureKind.BUDGET,
+            RouteFailureKind.BUDGET,
+        )
+        assert tuple(failure.wall for failure in result.failures) == ((), ())
+        assert tuple(failure.blocking_nets for failure in result.failures) == ((), ())
+        assert tuple(failure.expansions for failure in result.failures) == (3, 5)
+        assert result.expansions == 8
+
     def test_empty_live_starts_take_precedence_over_budget(self) -> None:
         canvas = _Canvas()
         bounds = (-2, -2, 2, 2)

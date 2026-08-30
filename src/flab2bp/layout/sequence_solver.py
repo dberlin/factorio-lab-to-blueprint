@@ -2661,9 +2661,13 @@ def _route_detailed_candidate(
             DetailedRouteStatus.UNPOWERABLE,
             expansions=expansions,
         )
+    placement: Placement | None = None
+    if built.routing.status is DetailedRouteStatus.ROUTED:
+        placement = built.placement
+        assert placement is not None
     return DetailedStageResult(
         routing=built.routing,
-        placement=(built.placement if built.routing.status is DetailedRouteStatus.ROUTED else None),
+        placement=placement,
     )
 
 

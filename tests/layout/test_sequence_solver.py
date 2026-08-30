@@ -1383,6 +1383,59 @@ def test_unseatable_prepared_candidate_remains_searchable_refusal(
     assert candidate.preparation_error == "unseatable"
 
 
+def test_production_detailed_adapter_withholds_budget_placement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = two_stage_spec()
+    strips = plan_strips(spec, strip_len=6)
+    pack = _greedy_pack(strips, max(_box(strip)[1] for strip in strips))
+    prepared = _prepare_routing_problem(
+        spec,
+        strips,
+        pack,
+        policy=BandPolicy("portable"),
+        power=False,
+    )
+    net_id = next(
+        net.net_id
+        for net in prepared.nets
+        if net.net_id is not None and net.net_id.role is not NetRole.EXTERNAL
+    )
+    evidence = DetailedRouteResult(
+        status=DetailedRouteStatus.BUDGET,
+        routed=(),
+        failures=(
+            NetFailure(
+                net_id,
+                RouteFailureKind.BUDGET,
+                (),
+                (),
+                9,
+            ),
+        ),
+        iterations=1,
+        expansions=9,
+    )
+    built = freeform_module._BuildResult(None, evidence, ())
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "_build_prepared",
+        lambda *_args, **_kwargs: built,
+    )
+
+    result = sequence_solver_module._route_detailed_candidate(
+        spec,
+        strips,
+        prepared,
+        power=False,
+        deadline=None,
+        allowance=20,
+    )
+
+    assert result.routing is evidence
+    assert result.placement is None
+
+
 def test_cancelled_proxy_without_an_exact_candidate_remains_an_honest_refusal() -> None:
     detailed_allowances: list[int] = []
 

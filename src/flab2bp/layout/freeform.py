@@ -5026,11 +5026,25 @@ def _route_all(
         )
 
     def _budget_result() -> DetailedRouteResult:
+        # Deadline cancellation makes every net unknown, so geometric walls and
+        # blockers are deliberately empty.  A failed incumbent still owns the
+        # expansions already charged to its search.
         return DetailedRouteResult(
             status=DetailedRouteStatus.BUDGET,
             routed=(),
             failures=tuple(
-                NetFailure(_net_id(i), RouteFailureKind.BUDGET, (), (), 0) for i in range(len(nets))
+                NetFailure(
+                    _net_id(i),
+                    RouteFailureKind.BUDGET,
+                    (),
+                    (),
+                    (
+                        previous.expansions
+                        if (previous := best_failures.get(i)) is not None
+                        else 0
+                    ),
+                )
+                for i in range(len(nets))
             ),
             iterations=iterations,
             expansions=expansions,
@@ -5919,19 +5933,22 @@ def _route_all(
         # round does: every further round would re-run every net against a
         # budget of zero and fail all of them, and the counters would read as
         # congestion rather than as work nobody had left to do.
+        if _expired(deadline):
+            return _budget_result()
         if (
             stale >= _RRR_STALE_ROUNDS
             or it == RRR_MAX - 1
             or budget["left"] <= 0
-            or _expired(deadline)
         ):
             break
+    if _expired(deadline):
+        return _budget_result()
     return _finish(
         best_paths,
         best_failures,
         best_source_hints,
         best_sink_hints,
-        budget_exhausted=budget["left"] <= 0 or _expired(deadline),
+        budget_exhausted=budget["left"] <= 0,
     )
 
 
@@ -8313,7 +8330,7 @@ def _prepare_routing_problem(
 
 @dataclass(slots=True)
 class _BuildResult:
-    placement: Placement
+    placement: Placement | None
     routing: DetailedRouteResult
     towers: tuple[PlacedBuilding, ...]
 
@@ -8429,6 +8446,8 @@ def _build_prepared(
         iterations=internal_routing.iterations,
         expansions=external_routing.expansions + internal_routing.expansions,
     )
+    if routing.status is DetailedRouteStatus.BUDGET:
+        return _BuildResult(None, routing, ())
 
     # Reservations and tentative markers are attempt-local and are spent before
     # the held power sites become buildings.
@@ -9257,7 +9276,9 @@ def fallback_placement(
         policy=band_policy,
         ramped=ramped,
     )
+    assert result.routing.status is DetailedRouteStatus.ROUTED
     placement = result.placement
+    assert placement is not None
     placement.stats["fallback_used"] = 1.0
     placement.stats["solver_status"] = 0.0
     # The fallback stacks strips vertically without ever asking whether two of
@@ -9962,7 +9983,10 @@ class FreeformLayout:
                 if arrangement == 0 and _is_rescuable_near_miss(result.routing):
                     rescuable_heights.add(height)
                 continue
+            if result.routing.status is not DetailedRouteStatus.ROUTED:
+                continue
             placement = result.placement
+            assert placement is not None
             # AND THE PLACEMENT HAS TO PASS OUR OWN VALIDATOR BEFORE IT COUNTS.
             #
             # `lay_out` promises a valid `Placement` or `NoValidLayout`, and
