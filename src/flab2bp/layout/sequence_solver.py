@@ -3531,7 +3531,26 @@ class SequencePairLayout:
                 strip_len=self.strip_len,
                 config=self.config,
             )
-            placement = solver.search().placement
+            try:
+                placement = finalize.finalize_placement(
+                    solver.search().placement,
+                    self.band_policy,
+                )
+            except finalize.ProjectionRefusal as exc:
+                raise NoValidLayout(
+                    "final spherical projection rejected: " + str(exc),
+                    spec_label=spec.label,
+                    budget_s=time_budget_s,
+                    projection_failures=tuple(
+                        ProjectionFailureRecord(
+                            failure.band,
+                            failure.check,
+                            failure.buildings,
+                            failure.detail,
+                        )
+                        for failure in exc.failures
+                    ),
+                ) from exc
         elif self.islands > 1:
             from flab2bp.layout.sequence_islands import run_sequence_islands
 
