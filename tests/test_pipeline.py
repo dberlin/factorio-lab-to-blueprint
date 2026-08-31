@@ -8,9 +8,9 @@ because by the time there is a return value the answer is "none of them".
 
 from __future__ import annotations
 
+import time
 from fractions import Fraction
 from pathlib import Path
-import time
 
 import pytest
 
