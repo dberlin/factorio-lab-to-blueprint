@@ -471,6 +471,33 @@ def test_topology_beam_can_stop_at_the_first_width_admitted_incumbent() -> None:
     assert candidate.status is CompactSeedStatus.FEASIBLE
 
 
+def test_topology_beam_outline_width_cannot_exceed_its_coordinate_extent() -> None:
+    problem = _fixed_problem(
+        sizes=((3, 2), (2, 2), (1, 2), (2, 1)),
+        height=4,
+        nets=(),
+    )
+    beam = CompactTopologyBeam(
+        problem,
+        variant_indices=(0,) * problem.size,
+        width_bound=8,
+        base_seed=17,
+        coordinate_hint=None,
+        config=CompactTopologyBeamConfig(
+            max_candidates=1,
+            max_deterministic_time=0.2,
+        ),
+    )
+    beam._model.add(beam._variables.outline_width == 8)
+    for coordinate, (width, _height) in zip(
+        beam._variables.x,
+        beam.sizes,
+        strict=True,
+    ):
+        beam._model.add(coordinate + width <= 7)
+
+    assert beam.solve_next(stop_when_width_admits=lambda _width: True) is None
+
 def test_topology_refinement_validates_config_and_direct_target_types() -> None:
     problem = _fixed_problem(sizes=((2, 2), (2, 2)), nets=((0, 1),))
     target = DirectInsertTarget((0, 1), 0, 1, 0, 0, 2, 2, (-1, 0, 1))

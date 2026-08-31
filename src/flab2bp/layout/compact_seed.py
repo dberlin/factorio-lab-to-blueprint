@@ -323,7 +323,6 @@ class CompactTopologyBeam:
                     f"beam_y_interval_{strip}",
                 )
             )
-            model.add(strip_x + width <= outline_width)
             if coordinate_hint is not None:
                 model.add_hint(
                     strip_x,
@@ -336,6 +335,13 @@ class CompactTopologyBeam:
                         self.problem.outline_height - height,
                     ),
                 )
+        model.add_max_equality(
+            outline_width,
+            tuple(
+                coordinate + width
+                for coordinate, (width, _height) in zip(x, self.sizes, strict=True)
+            ),
+        )
         model.add_no_overlap_2d(x_intervals, y_intervals)
 
         relations: list[tuple[cp_model.IntVar, ...]] = []
