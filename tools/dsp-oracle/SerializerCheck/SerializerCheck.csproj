@@ -29,6 +29,7 @@
     <Compile Include="../Json.cs" />
     <Compile Include="../Capture.cs" />
     <Compile Include="../Dumper.cs" />
+    <Compile Include="../TargetCapture.cs" />
   </ItemGroup>
 
   <ItemGroup>

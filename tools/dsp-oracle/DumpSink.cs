@@ -40,5 +40,25 @@ namespace FlabOracle
                 Oracle.Log.LogError("flab2bp oracle dump (" + trigger + ") failed: " + e);
             }
         }
+
+        internal static void DumpTargetCapture(TargetCaptureSession capture, bool? checkResult)
+        {
+            try
+            {
+                string json = capture.Serialize(
+                    "createprebuilds-prefix",
+                    checkResult,
+                    Time.frameCount,
+                    Oracle.OverlapPatchApplied,
+                    Oracle.CapsulePatchApplied);
+                string path = Oracle.NextTargetCapturePath();
+                File.WriteAllText(path, json);
+                Oracle.Log.LogMessage("flab2bp oracle wrote automatic model40 belt capture " + path);
+            }
+            catch (Exception e)
+            {
+                Oracle.Log.LogError("flab2bp oracle automatic model40 belt capture failed: " + e);
+            }
+        }
     }
 }

@@ -1,0 +1,378 @@
+using System;
+using System.Collections.Generic;
+using System.Runtime.CompilerServices;
+using UnityEngine;
+
+namespace FlabOracle
+{
+    internal sealed class TargetCaptureSession
+    {
+        internal const string SchemaId = "flab2bp-model40-belts/1";
+        private const int EventLimit = 128;
+        private readonly BuildTool_BlueprintPaste _tool;
+        private readonly BlueprintData _blueprint;
+        private readonly BuildPreview[] _pool;
+        private readonly string _blueprintPath;
+        private readonly BlueprintArea _area;
+        private readonly int _areaArraySlot;
+        private readonly Target[] _targets;
+        private readonly Target _splitter;
+        private readonly List<Event> _events = new List<Event>(32);
+        private int _sequence;
+        private bool _truncated;
+        private bool _sphereHookFired;
+        private bool _capsuleHookFired;
+
+        private TargetCaptureSession(BuildTool_BlueprintPaste tool, BlueprintArea area, int areaArraySlot, Target[] targets, Target splitter)
+        {
+            _tool = tool;
+            _blueprint = tool.blueprint;
+            _pool = tool.bpPool;
+            _blueprintPath = tool.blueprintPath;
+            _area = area;
+            _areaArraySlot = areaArraySlot;
+            _targets = targets;
+            _splitter = splitter;
+            _splitter.Tool = tool;
+            for (int i = 0; i < _targets.Length; i++) _targets[i].Tool = tool;
+        }
+
+        internal BuildTool_BlueprintPaste Tool { get { return _tool; } }
+
+        internal bool Matches(BuildTool_BlueprintPaste tool)
+        {
+            return ReferenceEquals(_tool, tool) &&
+                ReferenceEquals(_blueprint, tool != null ? tool.blueprint : null) &&
+                ReferenceEquals(_pool, tool != null ? tool.bpPool : null);
+        }
+
+        internal static bool TryCreate(BuildTool_BlueprintPaste tool, out TargetCaptureSession capture)
+        {
+            capture = null;
+            if (tool == null || tool.blueprint == null || tool.blueprint.areas == null || tool.blueprint.buildings == null || tool.bpPool == null) return false;
+            BlueprintArea matchedArea = null;
+            int matchedAreaArraySlot = -1;
+            for (int i = 0; i < tool.blueprint.areas.Length; i++)
+            {
+                BlueprintArea a = tool.blueprint.areas[i];
+                if (a != null && a.width == 75 && a.height == 36 && a.areaSegments == 160)
+                {
+                    if (matchedArea != null) return false;
+                    matchedArea = a;
+                    matchedAreaArraySlot = i;
+                }
+            }
+            if (matchedArea == null) return false;
+
+            BlueprintBuilding[] bs = tool.blueprint.buildings;
+            int splitter = Find(bs, 40, 45f, 2f, 0f);
+            int outerFeed = Find(bs, 36, 44f, 2f, 1f);
+            int feed = Find(bs, 36, 44.7723007f, 2.00012708f, 1.00009131f);
+            int draw = Find(bs, 36, 45.2276993f, 2.00012708f, 1.00009131f);
+            int outerDraw = Find(bs, 36, 46f, 2f, 1f);
+            if (splitter < 0 || outerFeed < 0 || feed < 0 || draw < 0 || outerDraw < 0) return false;
+            int areaIndex = matchedArea.index;
+            if (bs[splitter].areaIndex != areaIndex || bs[outerFeed].areaIndex != areaIndex ||
+                bs[feed].areaIndex != areaIndex || bs[draw].areaIndex != areaIndex ||
+                bs[outerDraw].areaIndex != areaIndex) return false;
+            if (!Near(bs[splitter].yaw, 90f) || !ReferenceEquals(bs[feed].outputObj, bs[splitter]) || !ReferenceEquals(bs[draw].inputObj, bs[splitter])) return false;
+
+            int[] slots = { outerFeed, feed, draw, outerDraw, splitter };
+            BuildPreview[] previews = new BuildPreview[5];
+            if (!FindPreviewGroup(tool, slots, previews)) return false;
+            Target[] targets =
+            {
+                new Target("outer-feed", outerFeed, bs[outerFeed], previews[0]),
+                new Target("splitter-feed", feed, bs[feed], previews[1]),
+                new Target("splitter-draw", draw, bs[draw], previews[2]),
+                new Target("outer-draw", outerDraw, bs[outerDraw], previews[3])
+            };
+            capture = new TargetCaptureSession(tool, matchedArea, matchedAreaArraySlot, targets, new Target("model40-splitter", splitter, bs[splitter], previews[4]));
+            return true;
+        }
+
+        internal void ResetCycle()
+        {
+            _events.Clear();
+            _sequence = 0;
+            _truncated = false;
+            _sphereHookFired = false;
+            _capsuleHookFired = false;
+            for (int i = 0; i < _targets.Length; i++)
+            {
+                _targets[i].QueryCount = 0;
+                _targets[i].AddErrorCount = 0;
+            }
+        }
+
+        internal void SnapshotAll(string phase)
+        {
+            if (!Reserve()) return;
+            Event e = NewEvent(phase, null);
+            e.States = new PreviewState[4];
+            for (int i = 0; i < 4; i++) e.States[i] = PreviewState.Read(_tool, _targets[i].Preview);
+            _events.Add(e);
+        }
+
+        internal void RecordAddError(BuildPreview bp, EBuildCondition argument)
+        {
+            Target target = TargetFor(bp);
+            if (target == null || !Reserve()) return;
+            target.AddErrorCount++;
+            Event e = NewEvent("add-error-message", target);
+            e.TargetEventOrdinal = target.AddErrorCount;
+            e.ArgumentCondition = (int)argument;
+            e.ArgumentConditionName = argument.ToString();
+            e.State = PreviewState.Read(_tool, bp);
+            _events.Add(e);
+        }
+
+        internal void RecordSphere(Vector3 center, float radius, Collider[] results, int mask, QueryTriggerInteraction qti, int result)
+        {
+            _sphereHookFired = true;
+            RecordQuery("sphere", center, center, radius, results, mask, qti, result);
+        }
+
+        internal void RecordCapsule(Vector3 p0, Vector3 p1, float radius, Collider[] results, int mask, QueryTriggerInteraction qti, int result)
+        {
+            _capsuleHookFired = true;
+            RecordQuery("capsule", p0, p1, radius, results, mask, qti, result);
+        }
+
+        internal string Serialize(string trigger, bool? checkResult, int frame, bool spherePatchApplied, bool capsulePatchApplied)
+        {
+            JsonWriter w = new JsonWriter();
+            w.BeginObject();
+            w.Prop("schema", SchemaId);
+            w.Prop("trigger", trigger);
+            w.Prop("unityFrame", frame);
+            w.Prop("blueprintPath", _blueprintPath);
+            w.Prop("blueprintBuildingCount", _blueprint.buildings.Length);
+            w.Prop("areaArraySlot", _areaArraySlot); w.Prop("areaIndex", _area.index);
+            w.Prop("areaWidth", _area.width); w.Prop("areaHeight", _area.height); w.Prop("areaSegments", _area.areaSegments);
+            w.Prop("bpCursor", _tool.bpCursor);
+            w.Prop("eventLimit", EventLimit); w.Prop("eventsTruncated", _truncated);
+            w.Prop("spherePatchApplied", spherePatchApplied);
+            w.Prop("capsulePatchApplied", capsulePatchApplied);
+            w.Prop("sphereHookFiredDuringTargetCheck", _sphereHookFired);
+            w.Prop("capsuleHookFiredDuringTargetCheck", _capsuleHookFired);
+            if (checkResult.HasValue) w.Prop("checkBuildConditionsResult", checkResult.Value); else w.Prop("checkBuildConditionsResult", (string)null);
+            WriteTarget(w, "splitter", _splitter);
+            w.BeginArray("targets");
+            for (int i = 0; i < 4; i++) { w.BeginObject(); WriteTargetFields(w, _targets[i]); w.EndObject(); }
+            w.EndArray();
+            w.BeginArray("events");
+            for (int i = 0; i < _events.Count; i++) WriteEvent(w, _events[i]);
+            w.EndArray();
+            w.EndObject();
+            return w.ToString();
+        }
+
+        private void RecordQuery(string shape, Vector3 p0, Vector3 p1, float radius, Collider[] results, int mask, QueryTriggerInteraction qti, int result)
+        {
+            if (mask != 395264 || !Near(radius, 0.23f)) return;
+            for (int i = 0; i < 4; i++)
+            {
+                Target target = _targets[i];
+                Vector3 expected = target.Preview.lpos + target.Preview.lpos.normalized * 0.2f;
+                float distance = shape == "sphere" ? Vector3.Distance(expected, p0) : SegmentDistance(expected, p0, p1);
+                if (distance > 0.025f || !Reserve()) continue;
+                target.QueryCount++;
+                Event e = NewEvent(shape + "-overlap", target);
+                e.TargetEventOrdinal = target.QueryCount;
+                e.State = PreviewState.Read(_tool, target.Preview);
+                e.Query = Query.Read(_tool, shape, p0, p1, radius, mask, qti, result, results);
+                _events.Add(e);
+            }
+        }
+
+        private bool Reserve()
+        {
+            if (_events.Count >= EventLimit)
+            {
+                _events.RemoveAt(0);
+                _truncated = true;
+            }
+            return true;
+        }
+        private Event NewEvent(string phase, Target target) { return new Event { Sequence = ++_sequence, Phase = phase, Target = target }; }
+        private Target TargetFor(BuildPreview bp) { for (int i = 0; i < 4; i++) if (ReferenceEquals(_targets[i].Preview, bp)) return _targets[i]; return null; }
+        private static bool Near(float a, float b) { return a == b; }
+
+        private static int Find(BlueprintBuilding[] bs, short model, float x, float y, float z)
+        {
+            int found = -1;
+            for (int i = 0; i < bs.Length; i++)
+            {
+                BlueprintBuilding b = bs[i];
+                if (b != null && b.modelIndex == model && Near(b.localOffset_x, x) && Near(b.localOffset_y, y) && Near(b.localOffset_z, z))
+                { if (found >= 0) return -1; found = i; }
+            }
+            return found;
+        }
+
+        private static bool FindPreviewGroup(BuildTool_BlueprintPaste tool, int[] slots, BuildPreview[] output)
+        {
+            int n = tool.blueprint.buildings.Length;
+            int active = Math.Min(tool.bpCursor, tool.bpPool.Length);
+            for (int i = 0; i < active; i++)
+            {
+                BuildPreview first = tool.bpPool[i];
+                if (first == null || first.bpgpuiModelId <= 0 || (first.bpgpuiModelId - 1) % n != slots[0]) continue;
+                int group = (first.bpgpuiModelId - 1) / n;
+                bool ok = true;
+                for (int t = 0; t < slots.Length; t++)
+                {
+                    output[t] = null;
+                    int id = group * n + slots[t] + 1;
+                    for (int p = 0; p < active; p++) if (tool.bpPool[p] != null && tool.bpPool[p].bpgpuiModelId == id) { output[t] = tool.bpPool[p]; break; }
+                    if (output[t] == null) { ok = false; break; }
+                }
+                if (ok) return true;
+            }
+            return false;
+        }
+
+        private static float SegmentDistance(Vector3 p, Vector3 a, Vector3 b)
+        {
+            Vector3 ab = b - a; float d = Vector3.Dot(ab, ab);
+            if (d <= 1e-12f) return Vector3.Distance(p, a);
+            float t = Mathf.Clamp01(Vector3.Dot(p - a, ab) / d);
+            return Vector3.Distance(p, a + ab * t);
+        }
+
+        private static int? Slot(BuildTool_BlueprintPaste tool, BuildPreview bp, bool activeOnly)
+        {
+            if (bp == null || tool == null || tool.bpPool == null) return null;
+            int n = activeOnly ? Math.Min(tool.bpCursor, tool.bpPool.Length) : tool.bpPool.Length;
+            for (int i = 0; i < n; i++) if (ReferenceEquals(tool.bpPool[i], bp)) return i;
+            return null;
+        }
+
+        private static void WriteTarget(JsonWriter w, string key, Target t) { w.BeginObject(key); WriteTargetFields(w, t); w.EndObject(); }
+        private static void WriteTargetFields(JsonWriter w, Target t)
+        {
+            w.Prop("semantic", t.Semantic); w.Prop("blueprintArraySlot", t.BlueprintSlot); w.Prop("blueprintIndexField", t.Building.index);
+            w.Prop("modelIndex", (int)t.Building.modelIndex); w.Prop("itemId", (int)t.Building.itemId);
+            w.Prop("localOffset", new Vector3(t.Building.localOffset_x, t.Building.localOffset_y, t.Building.localOffset_z)); w.Prop("yaw", t.Building.yaw);
+            WriteState(w, "final", PreviewState.Read(t.Tool, t.Preview));
+        }
+
+        private static void WriteEvent(JsonWriter w, Event e)
+        {
+            w.BeginObject(); w.Prop("sequence", e.Sequence); w.Prop("phase", e.Phase);
+            if (e.Target != null) w.Prop("semantic", e.Target.Semantic);
+            if (e.TargetEventOrdinal > 0) w.Prop("targetEventOrdinal", e.TargetEventOrdinal);
+            if (e.ArgumentCondition.HasValue) { w.Prop("argumentCondition", e.ArgumentCondition.Value); w.Prop("argumentConditionName", e.ArgumentConditionName); }
+            if (e.State.HasValue) WriteState(w, "state", e.State.Value);
+            if (e.States != null)
+            {
+                string[] names = { "outer-feed", "splitter-feed", "splitter-draw", "outer-draw" };
+                w.BeginArray("targetStates");
+                for (int i = 0; i < e.States.Length; i++) { w.BeginObject(); w.Prop("semantic", names[i]); WriteStateFields(w, e.States[i]); w.EndObject(); }
+                w.EndArray();
+            }
+            if (e.Query != null) WriteQuery(w, e.Query);
+            w.EndObject();
+        }
+
+        private static void WriteState(JsonWriter w, string key, PreviewState s) { w.BeginObject(key); WriteStateFields(w, s); w.EndObject(); }
+        private static void WriteStateFields(JsonWriter w, PreviewState s)
+        {
+            w.Prop("referenceIdentity", s.Identity); w.PropNullableInt("bpPoolSlot", s.PoolSlot); w.PropNullableInt("activeSlot", s.ActiveSlot);
+            w.Prop("bpgpuiModelId", s.ModelId); w.Prop("previewIndex", s.PreviewIndex); w.Prop("condition", s.Condition); w.Prop("conditionName", s.ConditionName);
+            w.Prop("lpos", s.Lpos); w.Prop("lpos2", s.Lpos2); w.Prop("isBelt", s.IsBelt); w.Prop("isSplitter", s.IsSplitter); w.Prop("multiLevel", s.MultiLevel); w.Prop("addonType", s.AddonType);
+            w.Prop("inputObjId", s.InputObjId); w.Prop("inputFromSlot", s.InputFromSlot); w.Prop("inputToSlot", s.InputToSlot); w.Prop("inputOffset", s.InputOffset);
+            w.Prop("outputObjId", s.OutputObjId); w.Prop("outputFromSlot", s.OutputFromSlot); w.Prop("outputToSlot", s.OutputToSlot); w.Prop("outputOffset", s.OutputOffset);
+            WritePointer(w, "input", s.Input); WritePointer(w, "output", s.Output); WritePointer(w, "coverbp", s.Cover);
+        }
+
+        private static void WritePointer(JsonWriter w, string key, PreviewPointer p)
+        {
+            if (!p.Exists) { w.Prop(key, (string)null); return; }
+            w.BeginObject(key); w.Prop("referenceIdentity", p.Identity); w.PropNullableInt("bpPoolSlot", p.PoolSlot); w.PropNullableInt("activeSlot", p.ActiveSlot);
+            w.Prop("bpgpuiModelId", p.ModelId); w.Prop("previewIndex", p.PreviewIndex); w.Prop("condition", p.Condition); w.Prop("conditionName", p.ConditionName);
+            w.Prop("isBelt", p.IsBelt); w.Prop("isSplitter", p.IsSplitter); w.EndObject();
+        }
+
+        private static void WriteQuery(JsonWriter w, Query q)
+        {
+            w.BeginObject("query"); w.Prop("shape", q.Shape); w.Prop("point0", q.P0); w.Prop("point1", q.P1); w.Prop("center", (q.P0 + q.P1) * 0.5f);
+            w.Prop("radius", q.Radius); w.Prop("layerMask", q.Mask); w.Prop("queryTriggerInteraction", q.Qti); w.Prop("returnedCount", q.Returned);
+            w.Prop("capturedCount", q.Colliders.Length); w.Prop("collidersTruncated", q.Returned > q.Colliders.Length); w.BeginArray("colliders");
+            for (int i = 0; i < q.Colliders.Length; i++)
+            {
+                ColliderInfo c = q.Colliders[i]; w.BeginObject(); w.Prop("resultIndex", i); w.Prop("isNull", c.IsNull); w.Prop("instanceId", c.InstanceId);
+                w.Prop("name", c.Name); w.Prop("gameObjectLayer", c.Layer); w.Prop("boundsCenter", c.BoundsCenter); w.Prop("boundsExtents", c.BoundsExtents);
+                w.Prop("transformPosition", c.TransformPosition); w.Prop("transformRotation", c.TransformRotation); w.Prop("hasBuildPreviewModel", c.HasModel); w.Prop("buildPreviewModelIndex", c.ModelIndex);
+                if (c.Preview.HasValue) WriteState(w, "buildPreview", c.Preview.Value); else w.Prop("buildPreview", (string)null);
+                w.Prop("hasColliderData", c.HasColliderData); w.Prop("colliderDataObjId", c.ObjId); w.Prop("colliderDataObjType", c.ObjType); w.Prop("colliderDataUsage", c.Usage); w.Prop("colliderDataShape", c.ColliderShape); w.EndObject();
+            }
+            w.EndArray(); w.EndObject();
+        }
+
+        private sealed class Target
+        {
+            internal string Semantic; internal int BlueprintSlot; internal BlueprintBuilding Building; internal BuildPreview Preview; internal BuildTool_BlueprintPaste Tool;
+            internal int QueryCount; internal int AddErrorCount;
+            internal Target(string semantic, int slot, BlueprintBuilding building, BuildPreview preview) { Semantic = semantic; BlueprintSlot = slot; Building = building; Preview = preview; }
+        }
+        private sealed class Event
+        {
+            internal int Sequence; internal string Phase; internal Target Target; internal int TargetEventOrdinal; internal int? ArgumentCondition; internal string ArgumentConditionName;
+            internal PreviewState? State; internal PreviewState[] States; internal Query Query;
+        }
+
+        private struct PreviewState
+        {
+            internal int Identity, ModelId, PreviewIndex, Condition; internal int? PoolSlot, ActiveSlot; internal string ConditionName, AddonType;
+            internal Vector3 Lpos, Lpos2; internal bool IsBelt, IsSplitter, MultiLevel;
+            internal int InputObjId, InputFromSlot, InputToSlot, InputOffset, OutputObjId, OutputFromSlot, OutputToSlot, OutputOffset;
+            internal PreviewPointer Input, Output, Cover;
+            internal static PreviewState Read(BuildTool_BlueprintPaste tool, BuildPreview bp)
+            {
+                PreviewState s = new PreviewState(); if (bp == null) return s;
+                s.Identity = RuntimeHelpers.GetHashCode(bp); s.PoolSlot = Slot(tool, bp, false); s.ActiveSlot = Slot(tool, bp, true); s.ModelId = bp.bpgpuiModelId; s.PreviewIndex = bp.previewIndex;
+                s.Condition = (int)bp.condition; s.ConditionName = bp.condition.ToString(); s.Lpos = bp.lpos; s.Lpos2 = bp.lpos2;
+                s.IsBelt = bp.desc != null && bp.desc.isBelt; s.IsSplitter = bp.desc != null && bp.desc.isSplitter; s.MultiLevel = bp.desc != null && bp.desc.multiLevel; s.AddonType = bp.desc != null ? bp.desc.addonType.ToString() : null;
+                s.InputObjId = bp.inputObjId; s.InputFromSlot = bp.inputFromSlot; s.InputToSlot = bp.inputToSlot; s.InputOffset = bp.inputOffset;
+                s.OutputObjId = bp.outputObjId; s.OutputFromSlot = bp.outputFromSlot; s.OutputToSlot = bp.outputToSlot; s.OutputOffset = bp.outputOffset;
+                s.Input = PreviewPointer.Read(tool, bp.input); s.Output = PreviewPointer.Read(tool, bp.output); s.Cover = PreviewPointer.Read(tool, bp.coverbp); return s;
+            }
+        }
+
+        private struct PreviewPointer
+        {
+            internal bool Exists, IsBelt, IsSplitter; internal int Identity, ModelId, PreviewIndex, Condition; internal int? PoolSlot, ActiveSlot; internal string ConditionName;
+            internal static PreviewPointer Read(BuildTool_BlueprintPaste tool, BuildPreview bp)
+            {
+                PreviewPointer p = new PreviewPointer(); if (bp == null) return p; p.Exists = true; p.Identity = RuntimeHelpers.GetHashCode(bp); p.PoolSlot = Slot(tool, bp, false); p.ActiveSlot = Slot(tool, bp, true);
+                p.ModelId = bp.bpgpuiModelId; p.PreviewIndex = bp.previewIndex; p.Condition = (int)bp.condition; p.ConditionName = bp.condition.ToString(); p.IsBelt = bp.desc != null && bp.desc.isBelt; p.IsSplitter = bp.desc != null && bp.desc.isSplitter; return p;
+            }
+        }
+
+        private sealed class Query
+        {
+            internal string Shape, Qti; internal Vector3 P0, P1; internal float Radius; internal int Mask, Returned; internal ColliderInfo[] Colliders;
+            internal static Query Read(BuildTool_BlueprintPaste tool, string shape, Vector3 p0, Vector3 p1, float radius, int mask, QueryTriggerInteraction qti, int returned, Collider[] results)
+            {
+                Query q = new Query { Shape = shape, P0 = p0, P1 = p1, Radius = radius, Mask = mask, Qti = qti.ToString(), Returned = returned };
+                int n = results == null ? 0 : Math.Min(Math.Max(returned, 0), results.Length); q.Colliders = new ColliderInfo[n];
+                for (int i = 0; i < n; i++) q.Colliders[i] = ColliderInfo.Read(tool, results[i]); return q;
+            }
+        }
+
+        private struct ColliderInfo
+        {
+            internal bool IsNull, HasModel, HasColliderData; internal int InstanceId, Layer, ModelIndex, ObjId; internal string Name, ObjType, Usage, ColliderShape;
+            internal Vector3 BoundsCenter, BoundsExtents, TransformPosition; internal Quaternion TransformRotation; internal PreviewState? Preview;
+            internal static ColliderInfo Read(BuildTool_BlueprintPaste tool, Collider col)
+            {
+                ColliderInfo c = new ColliderInfo { Layer = -1, ModelIndex = -1 }; if (col == null) { c.IsNull = true; return c; }
+                try { c.InstanceId = col.GetInstanceID(); c.BoundsCenter = col.bounds.center; c.BoundsExtents = col.bounds.extents; GameObject go = col.gameObject; if (go != null) { c.Name = go.name; c.Layer = go.layer; } Transform tr = col.transform; if (tr != null) { c.TransformPosition = tr.position; c.TransformRotation = tr.rotation; } BuildPreviewModel m = col.GetComponent<BuildPreviewModel>(); if (m != null) { c.HasModel = true; c.ModelIndex = m.index; if (m.buildPreview != null) c.Preview = PreviewState.Read(tool, m.buildPreview); } } catch (Exception) { }
+                try { PlanetPhysics physics = tool != null && tool.planet != null ? tool.planet.physics : null; ColliderData d; if (physics != null && physics.GetColliderData(col, out d)) { c.HasColliderData = true; c.ObjId = d.objId; c.ObjType = d.objType.ToString(); c.Usage = d.usage.ToString(); c.ColliderShape = d.shape.ToString(); } } catch (Exception) { }
+                return c;
+            }
+        }
+    }
+}
