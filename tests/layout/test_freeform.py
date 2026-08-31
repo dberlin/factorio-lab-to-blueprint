@@ -13142,6 +13142,59 @@ def test_plan_strips_batches_all_exact_preclearance_relations(
     )
 
 
+def test_batched_relation_anchor_collection_cancels_without_caching(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    strip = next(
+        strip
+        for strip in plan_strips(proliferated_spec())
+        if freeform._staged_static_clearance_keys(strip)
+    )
+    relation = next(iter(freeform._staged_static_clearance_keys(strip)))
+
+    class InstrumentedAnchors:
+        yielded = 0
+        exhausted = False
+
+        def __iter__(self) -> Iterator[int]:
+            self.yielded += 1
+            yield 0
+            self.exhausted = True
+            yield 1
+
+    class AnchorBounds:
+        start = 0
+        stop = 2
+
+    anchors = InstrumentedAnchors()
+    monkeypatch.setattr(
+        freeform,
+        "_staged_static_effective_anchor_ranges",
+        lambda _pair_height, _band: (AnchorBounds(),),
+    )
+    monkeypatch.setattr(
+        freeform,
+        "range",
+        lambda _start, _stop: anchors,
+        raising=False,
+    )
+    freeform._STAGED_STATIC_RELATION_RISK_CACHE.clear()
+    token = freeform._STAGED_STATIC_PROOF_CANCELLED.set(
+        lambda: anchors.yielded >= 1
+    )
+    try:
+        with pytest.raises(freeform._PreparationDeadline):
+            freeform._staged_static_relation_projection_risks(
+                (relation,),
+                BandPolicy("portable"),
+            )
+    finally:
+        freeform._STAGED_STATIC_PROOF_CANCELLED.reset(token)
+
+    assert not anchors.exhausted
+    assert not freeform._STAGED_STATIC_RELATION_RISK_CACHE
+
+
 def test_staged_static_preclearance_cancels_inside_cold_proof_without_caching(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

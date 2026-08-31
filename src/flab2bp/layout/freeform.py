@@ -1345,8 +1345,11 @@ def _staged_static_relation_projection_risks_uncached(
             members,
             start=1,
         ):
+            _poll_staged_static_proof_deadline()
             for anchor_range in anchor_ranges:
+                _poll_staged_static_proof_deadline()
                 for anchor in anchor_range:
+                    _poll_staged_static_proof_deadline()
                     positions_by_anchor.setdefault(anchor, []).append(position)
         for anchor, positions in sorted(positions_by_anchor.items()):
             _poll_staged_static_proof_deadline()
