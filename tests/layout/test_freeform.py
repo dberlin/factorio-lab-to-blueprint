@@ -1401,29 +1401,34 @@ def spray_domain_spec(*, clean: bool, sprayed: bool, boundary: bool = False) -> 
     """One produced item with independently controlled destination domains."""
     consumers: list[MachineGroup] = []
     outputs: dict[str, F] = {}
+    # A one-machine assembling strip trims its input lane to one tile, which
+    # its seated input sorter already occupies.  Two clean consumers preserve
+    # this fixture's independent, collision-clear direct-insert opportunity.
+    clean_machines = 2 if clean else 0
+    sprayed_machines = int(sprayed)
     if clean:
         consumers.append(
             group(
                 "circuit-board",
                 "assembling-machine-2",
-                1,
+                clean_machines,
                 {"iron-ingot": F(1)},
                 {"circuit-board": F(1)},
             )
         )
-        outputs["circuit-board"] = F(1)
+        outputs["circuit-board"] = F(clean_machines)
     if sprayed:
         consumers.append(
             group(
                 "gear",
                 "assembling-machine-2",
-                1,
+                sprayed_machines,
                 {"iron-ingot": F(1)},
                 {"gear": F(1)},
                 mode=ProliferatorMode.PRODUCTS,
             )
         )
-        outputs["gear"] = F(1)
+        outputs["gear"] = F(sprayed_machines)
     if boundary:
         outputs["iron-ingot"] = F(1)
     domains = int(clean or boundary) + int(sprayed)
@@ -1432,14 +1437,16 @@ def spray_domain_spec(*, clean: bool, sprayed: bool, boundary: bool = False) -> 
             group(
                 "iron-ingot",
                 "arc-smelter",
-                max(1, len(consumers) + int(boundary)),
+                max(1, clean_machines + sprayed_machines + int(boundary)),
                 {"iron-ore": F(1)},
                 {"iron-ingot": F(1)},
             ),
             *consumers,
         ),
         external_inputs={
-            "iron-ore": F(max(1, len(consumers) + int(boundary))),
+            "iron-ore": F(
+                max(1, clean_machines + sprayed_machines + int(boundary))
+            ),
             **({"proliferator-3": F(1)} if sprayed else {}),
         },
         outputs=outputs,
@@ -1541,6 +1548,36 @@ def test_mixed_internal_spray_domains_remain_disjoint() -> None:
     assert nets == {"unsprayed", "requires-spray"}
     assert direct == 1
     assert spec.lanes_requiring_split == {"iron-ingot"}
+
+
+def test_mixed_spray_domain_direct_candidate_is_clean_and_exact() -> None:
+    spec = spray_domain_spec(clean=True, sprayed=True)
+    strips = plan_strips(spec, strip_len=6)
+
+    candidates = _direct_net_candidates(strips, spec)
+
+    assert list(candidates) == [(0, 1)]
+    candidate = candidates[0, 1]
+    assert strips[0].recipe_id == "iron-ingot"
+    assert strips[1].recipe_id == "circuit-board"
+    assert strips[2].recipe_id == "gear"
+    assert (
+        candidate.item,
+        candidate.cargo_domain,
+        candidate.prod_row,
+        candidate.cons_row,
+        candidate.prod_span,
+        candidate.cons_span,
+        candidate.origin_deltas,
+    ) == (
+        "iron-ingot",
+        CargoDomain.UNSPRAYED,
+        4,
+        0,
+        9,
+        5,
+        tuple(range(-2, 8)),
+    )
 
 
 def test_requested_output_is_unsprayed_beside_proliferated_internal_lane() -> None:
