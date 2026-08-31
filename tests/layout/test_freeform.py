@@ -8677,6 +8677,26 @@ class TestPowerClaimsItsGroundBeforeRouting:
         assert cache.broad_phase_hits < cache.broad_phase_queries
         assert frame_queries <= cache.broad_phase_hits
 
+    def test_power_candidates_do_not_recertify_boundary_cleanup(self) -> None:
+        core = (0, 0, 60, 9)
+        canvas = _Canvas(limit=core)
+        self._pin_projection_extent(canvas, core)
+        initial_buildings = len(canvas.buildings)
+        cache = freeform._StagedStaticCache()
+
+        sites = _power_plan(
+            canvas,
+            core,
+            policy=BandPolicy("portable"),
+            staged_static_cache=cache,
+        )
+
+        assert len(sites) >= 3
+        assert cache.cleanup_operations.node_visits == 2 * initial_buildings, (
+            "the initial graph construction and exact survivor proof each visit "
+            "the packed buildings once; static tower proposals must add no visits"
+        )
+
     def test_power_peer_broad_phase_retains_periodic_seam_failure(self) -> None:
         tower = catalog.building(catalog.TESLA_TOWER_ID)
         band = next(candidate for candidate in planet.bands() if candidate.area_segments == 8)
@@ -12125,6 +12145,49 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
                 35,
                 policy=BandPolicy("portable"),
             )
+    def test_coater_keepout_prepares_flat_candidates_in_one_pass(self) -> None:
+        class CountedBuildings(Sequence[PlacedBuilding]):
+            def __init__(self, buildings: tuple[PlacedBuilding, ...]) -> None:
+                self.buildings = buildings
+                self.iterations = 0
+
+            def __len__(self) -> int:
+                return len(self.buildings)
+
+            def __getitem__(self, index: int) -> PlacedBuilding:
+                return self.buildings[index]
+
+            def __iter__(self) -> Iterator[PlacedBuilding]:
+                self.iterations += 1
+                return iter(self.buildings)
+
+        coater = catalog.building(catalog.SPRAY_COATER_ID)
+        buildings = CountedBuildings(
+            (
+                _belt(0, 0, item=self.ITEM),
+                PlacedBuilding(
+                    item_id=2303,
+                    model_index=catalog.building(2303).model_index,
+                    x=20,
+                    y=20,
+                    width=3,
+                    height=3,
+                ),
+            )
+        )
+        candidate = PlacedBuilding(
+            item_id=catalog.SPRAY_COATER_ID,
+            model_index=coater.model_index,
+            x=2,
+            y=2,
+            width=coater.width,
+            height=coater.height,
+        )
+
+        freeform._coater_keepout_hits(buildings, candidate)
+
+        assert buildings.iterations == 1
+
 
     def test_staged_static_alternate_seat_advances_in_order(
         self,
@@ -12331,6 +12394,28 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
         assert len(got) == 1, f"expected one coater on the sprayed lane, got {got}"
         assert canvas.buildings[got[0].coater].owner_strip == 0
         assert canvas.buildings[got[0].supply_belt].owner_strip == 0
+
+    def test_coater_candidates_do_not_recertify_boundary_cleanup(self) -> None:
+        canvas, spec, strips, ports = self._fixture(4)
+        initial_buildings = len(canvas.buildings)
+        cache = freeform._StagedStaticCache()
+
+        got = freeform._place_coaters(
+            canvas,
+            spec,
+            strips,
+            ports,
+            2001,
+            35,
+            policy=BandPolicy("portable"),
+            staged_static_cache=cache,
+        )
+
+        assert len(got) == 1
+        assert cache.cleanup_operations.node_visits == 2 * initial_buildings, (
+            "the initial graph construction and exact survivor proof each visit "
+            "the lane once; static coater proposals must add no visits"
+        )
 
     def test_items_sharing_one_lane_share_one_positional_coater(self) -> None:
         canvas, spec, strips, ports = self._fixture(4)
@@ -12694,6 +12779,84 @@ def test_freeform_extent_gate_uses_realized_core_not_nominal_pack_ceiling() -> N
     ).frame_candidates(core_width, core_height)
 
 
+@pytest.mark.parametrize(
+    "band",
+    (
+        next(band for band in planet.bands() if band.is_equatorial),
+        next(band for band in planet.bands() if not band.is_equatorial and band.rows >= 10),
+    ),
+)
+def test_staged_static_effective_anchor_ranges_replace_padding_cross_product(
+    band: planet.Band,
+) -> None:
+    pair_height = band.rows - 2 * _ENTRY_RING - 2
+    reference = {
+        anchor + row
+        for frame_height in range(
+            pair_height + 2 * _ENTRY_RING,
+            band.rows + 1,
+        )
+        for anchor in band.anchors(frame_height)
+        for row in range(
+            _ENTRY_RING,
+            frame_height - pair_height - _ENTRY_RING + 1,
+        )
+    }
+
+    ranges = freeform._staged_static_effective_anchor_ranges(pair_height, band)
+
+    assert len(ranges) <= 2
+    assert tuple(anchor for interval in ranges for anchor in interval) == tuple(
+        sorted(reference)
+    )
+
+
+def test_staged_static_projection_risk_batches_each_band_exactly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    strip = next(
+        strip
+        for strip in plan_strips(proliferated_spec())
+        if freeform._staged_static_clearance_keys(strip)
+    )
+    relation = next(iter(freeform._staged_static_clearance_keys(strip)))
+    original_batch = finalize.first_projected_static_failure
+    original_single = finalize.projected_static_failure
+    batch_sizes: list[int] = []
+    single_calls = 0
+
+    def counted_batch(
+        buildings: Sequence[tuple[int, PlacedBuilding]],
+        projections: Sequence[planet.Projection],
+        **kwargs: object,
+    ) -> finalize.ProjectionFailure | None:
+        batch_sizes.append(len(projections))
+        return original_batch(buildings, projections, **kwargs)
+
+    def counted_single(
+        buildings: Sequence[tuple[int, PlacedBuilding]],
+        projection: planet.Projection,
+        **kwargs: object,
+    ) -> finalize.ProjectionFailure | None:
+        nonlocal single_calls
+        single_calls += 1
+        return original_single(buildings, projection, **kwargs)
+
+    monkeypatch.setattr(finalize, "first_projected_static_failure", counted_batch)
+    monkeypatch.setattr(finalize, "projected_static_failure", counted_single)
+
+    result = freeform._staged_static_relation_projection_risk_uncached(
+        relation,
+        BandPolicy("160"),
+    )
+
+    assert isinstance(result, bool)
+    assert batch_sizes and max(batch_sizes) > 1
+    assert single_calls == 0, (
+        "one exact batch per band must replace rebuilding the same pair predicate "
+        "for every reachable anchor"
+    )
+
 def band_160_all_products_spec() -> BuildSpec:
     from flab2bp.lab.data import load_vendored
     from flab2bp.lab.url import parse_url
@@ -13033,6 +13196,8 @@ def test_prepared_junction_ban_reuses_complete_geometry_offsets_per_attempt(
 
     assert calls == 1
     assert ban == frozenset({(1, 5, 2), (19, 5, 2)})
+
+
 
 
 def test_projected_coater_junction_ban_cancels_inside_obb_product(

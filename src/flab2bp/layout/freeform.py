@@ -1189,6 +1189,29 @@ def _poll_staged_static_proof_deadline() -> None:
         raise _PreparationDeadline
 
 
+def _staged_static_effective_anchor_ranges(
+    pair_height: int,
+    band: planet.Band,
+) -> tuple[range, ...]:
+    """Exact pair latitudes without enumerating redundant empty frame padding.
+
+    A reachable frame contains the pair plus ``_ENTRY_RING`` rows on each side.
+    For any taller frame, moving the pair through its interior produces exactly
+    the same absolute latitude interval as moving the tight frame itself through
+    the band. ``Band.anchor_ranges`` already represents those contiguous
+    intervals, so translating its tight-frame anchors by the south perimeter is
+    the complete sorted witness set.
+    """
+    tight_height = pair_height + 2 * _ENTRY_RING
+    return tuple(
+        range(
+            anchor_range.start + _ENTRY_RING,
+            anchor_range.stop + _ENTRY_RING,
+        )
+        for anchor_range in band.anchor_ranges(tight_height)
+    )
+
+
 def _staged_static_relation_projection_risk_uncached(
     relation: StagedStaticClearanceKey,
     policy: BandPolicy,
@@ -1281,32 +1304,38 @@ def _staged_static_relation_projection_risk_uncached(
                 colliders.PLANET_RADIUS,
             ):
                 continue
-            effective_anchor_set: set[int] = set()
-            for frame_height in range(
-                pair_height + 2 * _ENTRY_RING,
-                band.rows + 1,
-            ):
-                _poll_staged_static_proof_deadline()
-                for anchor in band.anchors(frame_height):
-                    for row in range(
-                        _ENTRY_RING,
-                        frame_height - pair_height - _ENTRY_RING + 1,
-                    ):
-                        effective_anchor_set.add(anchor + row)
-            effective_anchors = tuple(sorted(effective_anchor_set))
-            for anchor in effective_anchors:
-                _poll_staged_static_proof_deadline()
-                failure = finalize.projected_static_failure(
-                    normalized,
-                    planet.Projection(
-                        band=band,
-                        anchor_row=anchor,
-                        segment=colliders.PLANET_SEGMENT,
-                        radius=colliders.PLANET_RADIUS,
-                    ),
+            effective_anchor_ranges = _staged_static_effective_anchor_ranges(
+                pair_height,
+                band,
+            )
+            projections = tuple(
+                planet.Projection(
+                    band=band,
+                    anchor_row=anchor,
+                    segment=colliders.PLANET_SEGMENT,
+                    radius=colliders.PLANET_RADIUS,
                 )
-                if failure is not None:
-                    return True
+                for effective_anchors in effective_anchor_ranges
+                for anchor in effective_anchors
+            )
+            cancelled = _STAGED_STATIC_PROOF_CANCELLED.get()
+            try:
+                failure = (
+                    finalize.first_projected_static_failure(
+                        normalized,
+                        projections,
+                    )
+                    if cancelled is None
+                    else finalize.first_projected_static_failure(
+                        normalized,
+                        projections,
+                        cancelled=cancelled,
+                    )
+                )
+            except finalize.ProjectionCancelled:
+                raise _PreparationDeadline from None
+            if failure is not None:
+                return True
     return False
 
 
@@ -3524,7 +3553,6 @@ def _coater_keepout_hits(
     the one-cell lateral row around the coater's real oriented 3x1 body; do not
     inflate its long axis, where its predecessor and successor must stand.
     """
-    hits = set(_building_collider_hits(buildings, candidate))
     width, height = catalog.oriented_footprint(
         catalog.SPRAY_COATER_ID,
         candidate.yaw,
@@ -3539,23 +3567,70 @@ def _coater_keepout_hits(
     else:
         x0 -= 1
         x1 += 1
+
+    try:
+        candidate_span = max(catalog.collider_span(candidate.item_id, candidate.yaw))
+    except KeyError, ValueError:
+        candidate_span = max(candidate.width, candidate.height) * colliders.GRID_ARC
+    candidate_x = candidate.x + (candidate.width - 1) / 2.0
+    candidate_y = candidate.y + (candidate.height - 1) / 2.0
+    hits: set[int] = set()
+    collider_candidates: list[tuple[int, PlacedBuilding]] = []
     for index, building in enumerate(buildings):
-        if index in hits or building.z != candidate.z:
+        is_belt = catalog.is_belt(building.item_id)
+        is_sorter = catalog.is_sorter(building.item_id)
+        if is_belt or is_sorter:
             continue
         try:
-            occupies = catalog.building(building.item_id).occupies_tiles
+            info = catalog.building(building.item_id)
         except KeyError:
-            continue
+            info = None
         if (
-            occupies
-            and not catalog.is_belt(building.item_id)
-            and not catalog.is_sorter(building.item_id)
+            building.z == candidate.z
+            and info is not None
+            and info.occupies_tiles
             and x0 <= building.x + building.width - 1
             and building.x <= x1
             and y0 <= building.y + building.height - 1
             and building.y <= y1
         ):
             hits.add(index)
+            continue
+        try:
+            obstacle_span = max(
+                catalog.collider_span(building.item_id, building.yaw)
+            )
+        except KeyError, ValueError:
+            obstacle_span = (
+                max(building.width, building.height) * colliders.GRID_ARC
+            )
+        radius = (
+            (candidate_span + obstacle_span) / (2.0 * colliders.GRID_ARC)
+            + 3.0
+        )
+        obstacle_x = building.x + (building.width - 1) / 2.0
+        obstacle_y = building.y + (building.height - 1) / 2.0
+        if (
+            math.hypot(
+                candidate_x - obstacle_x,
+                candidate_y - obstacle_y,
+            )
+            <= radius
+        ):
+            collider_candidates.append((index, building))
+    if collider_candidates:
+        poses = [
+            _collision_pose(candidate),
+            *(
+                _collision_pose(building)
+                for _index, building in collider_candidates
+            ),
+        ]
+        for left, right in colliders.collisions(poses):
+            if left == 0 and right:
+                hits.add(collider_candidates[right - 1][0])
+            elif right == 0 and left:
+                hits.add(collider_candidates[left - 1][0])
     return tuple(sorted(hits))
 
 
@@ -10433,10 +10508,23 @@ def _power_plan(
                 staged_static_cache,
                 cancelled=cancelled,
             )
-            candidate_cleanup, candidate_bounds = cleanup_prefix.extended_snapshot(
-                (candidate[1],),
-                cleanup_bounds,
-                cancelled=cancelled,
+            # A proposed tower is a linkless non-belt. It cannot change the
+            # already-certified boundary-belt survivor set, so extending the
+            # cleanup graph and re-sorting every survivor coordinate would
+            # repeat the same exact proof once per proposal. Its only cleanup
+            # effect is its own immutable rectangle joining the survivor bounds.
+            candidate_building = candidate[1]
+            candidate_bounds = (
+                min(cleanup_bounds[0], candidate_building.x),
+                min(cleanup_bounds[1], candidate_building.y),
+                max(
+                    cleanup_bounds[2],
+                    candidate_building.x + candidate_building.width - 1,
+                ),
+                max(
+                    cleanup_bounds[3],
+                    candidate_building.y + candidate_building.height - 1,
+                ),
             )
             if potential_peers:
                 static_frames = static_frames_by_bounds.get(candidate_bounds)
@@ -10476,7 +10564,7 @@ def _power_plan(
         sites.append(site)
         power_nodes.append(candidate)
         cleanup_bounds = candidate_bounds
-        cleanup_prefix = candidate_cleanup
+
         # The cell itself AND every cell inside the paste's power-node spacing
         # rule.  Marking only the cell is what shipped a blueprint the game
         # refused; the halo is what makes this greedy incapable of producing one.
@@ -12130,12 +12218,11 @@ def _place_coaters(
         else None
     )
     static_capacity = canvas.limit or _grow(_core_bounds(canvas), _ENTRY_RING)
-    cleanup_prefix = finalize._CleanupSurvivorGraph(
+    cleanup_bounds = finalize._CleanupSurvivorGraph(
         Placement(buildings=tuple(prospective)),
         cancelled=cancelled,
         _operations=staged_static_cache.cleanup_operations,
-    )
-    cleanup_bounds = cleanup_prefix.snapshot_bounds()
+    ).snapshot_bounds()
 
     belt_at: dict[tuple[int, int, int], int] = {
         (building.x, building.y, int(building.z)): index
@@ -12272,12 +12359,23 @@ def _place_coaters(
                 )
                 supply_index = len(prospective)
                 coater_index = supply_index + 1
-                candidate_cleanup, candidate_bounds = (
-                    cleanup_prefix.extended_snapshot(
-                        (supply, proposed_coater),
-                        cleanup_bounds,
-                        cancelled=cancelled,
-                    )
+                # The supply is an unlinked boundary belt, and the Coater is a
+                # linkless static. Neither can change the already-certified
+                # survivor set. The exact cleanup fast path therefore changes
+                # only the bounds when the Coater itself extends them; derive
+                # that rectangle directly instead of rebuilding and re-sorting
+                # the same survivor graph for every deterministic seat.
+                candidate_bounds = (
+                    min(cleanup_bounds[0], proposed_coater.x),
+                    min(cleanup_bounds[1], proposed_coater.y),
+                    max(
+                        cleanup_bounds[2],
+                        proposed_coater.x + proposed_coater.width - 1,
+                    ),
+                    max(
+                        cleanup_bounds[3],
+                        proposed_coater.y + proposed_coater.height - 1,
+                    ),
                 )
                 static_frames = _cached_junction_projection_frames(
                     staged_static_cache,
@@ -12390,7 +12488,6 @@ def _place_coaters(
                 prospective.extend((supply, proposed_coater))
                 obstacle_index.add(coater_index, proposed_coater)
                 cleanup_bounds = candidate_bounds
-                cleanup_prefix = candidate_cleanup
                 staged_hosts.add(host)
                 staged_drop_cells.add(drop_cell)
                 seated = True
