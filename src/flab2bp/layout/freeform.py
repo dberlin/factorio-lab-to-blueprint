@@ -1212,38 +1212,51 @@ def _staged_static_effective_anchor_ranges(
     )
 
 
-def _staged_static_relation_projection_risk_uncached(
-    relation: StagedStaticClearanceKey,
+def _staged_static_relation_projection_risks_uncached(
+    relations: Sequence[StagedStaticClearanceKey],
     policy: BandPolicy,
-) -> bool:
-    """Whether this exact planar relation collides in a reachable projection."""
+) -> tuple[bool, ...]:
+    """Evaluate relations sharing a projected candidate in one exact predicate."""
     _poll_staged_static_proof_deadline()
-    candidate = PlacedBuilding(
-        item_id=relation.candidate_item_id,
-        model_index=relation.candidate_model_index,
-        x=0,
-        y=0,
-        z=Fraction(0),
-        width=relation.candidate_width,
-        height=relation.candidate_height,
-        yaw=relation.candidate_yaw,
+    risks = [False] * len(relations)
+    bands = (
+        tuple(
+            band
+            for band in planet.bands()
+            if band.area_segments == policy.explicit_segments
+        )
+        if policy.explicit_segments is not None
+        else planet.bands()
     )
-    peer = PlacedBuilding(
-        item_id=relation.peer_item_id,
-        model_index=relation.peer_model_index,
-        x=relation.delta_x,
-        y=relation.delta_y,
-        z=relation.delta_z,
-        width=relation.peer_width,
-        height=relation.peer_height,
-        yaw=relation.peer_yaw,
-    )
-    pair = ((0, peer), (1, candidate))
-    for rotated in (False, True):
+    groups: dict[
+        tuple[planet.Band, PlacedBuilding, int],
+        list[tuple[int, PlacedBuilding]],
+    ] = {}
+    for ordinal, relation in enumerate(relations):
         _poll_staged_static_proof_deadline()
-        oriented = tuple(
-            (
-                index,
+        candidate = PlacedBuilding(
+            item_id=relation.candidate_item_id,
+            model_index=relation.candidate_model_index,
+            x=0,
+            y=0,
+            z=Fraction(0),
+            width=relation.candidate_width,
+            height=relation.candidate_height,
+            yaw=relation.candidate_yaw,
+        )
+        peer = PlacedBuilding(
+            item_id=relation.peer_item_id,
+            model_index=relation.peer_model_index,
+            x=relation.delta_x,
+            y=relation.delta_y,
+            z=relation.delta_z,
+            width=relation.peer_width,
+            height=relation.peer_height,
+            yaw=relation.peer_yaw,
+        )
+        for rotated in (False, True):
+            _poll_staged_static_proof_deadline()
+            oriented = tuple(
                 (
                     replace(
                         building,
@@ -1255,97 +1268,137 @@ def _staged_static_relation_projection_risk_uncached(
                     )
                     if rotated
                     else building
-                ),
+                )
+                for building in (peer, candidate)
             )
-            for index, building in pair
-        )
-        min_x = min(building.x for _index, building in oriented)
-        min_y = min(building.y for _index, building in oriented)
-        normalized = tuple(
-            (
-                index,
+            min_x = min(building.x for building in oriented)
+            min_y = min(building.y for building in oriented)
+            normalized_peer, normalized_candidate = tuple(
                 replace(
                     building,
                     x=building.x - min_x,
                     y=building.y - min_y,
-                ),
-            )
-            for index, building in oriented
-        )
-        pair_width = max(
-            building.x + building.width for _index, building in normalized
-        )
-        pair_height = max(
-            building.y + building.height for _index, building in normalized
-        )
-        collision_pair = tuple(
-            _collision_pose(building) for _index, building in normalized
-        )
-        bands = (
-            tuple(
-                band
-                for band in planet.bands()
-                if band.area_segments == policy.explicit_segments
-            )
-            if policy.explicit_segments is not None
-            else planet.bands()
-        )
-        for band in bands:
-            _poll_staged_static_proof_deadline()
-            if (
-                pair_width + 2 * _ENTRY_RING > band.columns
-                or pair_height + 2 * _ENTRY_RING > band.rows
-            ):
-                continue
-            if not planet.candidate_pairs(
-                collision_pair,
-                band,
-                colliders.PLANET_SEGMENT,
-                colliders.PLANET_RADIUS,
-            ):
-                continue
-            effective_anchor_ranges = _staged_static_effective_anchor_ranges(
-                pair_height,
-                band,
-            )
-            projections = tuple(
-                planet.Projection(
-                    band=band,
-                    anchor_row=anchor,
-                    segment=colliders.PLANET_SEGMENT,
-                    radius=colliders.PLANET_RADIUS,
                 )
-                for effective_anchors in effective_anchor_ranges
-                for anchor in effective_anchors
+                for building in oriented
             )
-            cancelled = _STAGED_STATIC_PROOF_CANCELLED.get()
-            try:
-                failure = (
-                    finalize.first_projected_static_failure(
-                        normalized,
-                        projections,
+            pair_width = max(
+                building.x + building.width
+                for building in (normalized_peer, normalized_candidate)
+            )
+            pair_height = max(
+                building.y + building.height
+                for building in (normalized_peer, normalized_candidate)
+            )
+            collision_pair = (
+                _collision_pose(normalized_peer),
+                _collision_pose(normalized_candidate),
+            )
+            for band in bands:
+                _poll_staged_static_proof_deadline()
+                if (
+                    pair_width + 2 * _ENTRY_RING > band.columns
+                    or pair_height + 2 * _ENTRY_RING > band.rows
+                    or not planet.candidate_pairs(
+                        collision_pair,
+                        band,
+                        colliders.PLANET_SEGMENT,
+                        colliders.PLANET_RADIUS,
                     )
-                    if cancelled is None
-                    else finalize.first_projected_static_failure(
-                        normalized,
-                        projections,
+                ):
+                    continue
+                groups.setdefault(
+                    (band, normalized_candidate, pair_height),
+                    [],
+                ).append((ordinal, normalized_peer))
+
+    cancelled = _STAGED_STATIC_PROOF_CANCELLED.get()
+    for (band, candidate, pair_height), members in groups.items():
+        collision_buildings = (
+            _collision_pose(candidate),
+            *(_collision_pose(peer) for _ordinal, peer in members),
+        )
+        for anchor_range in _staged_static_effective_anchor_ranges(
+            pair_height,
+            band,
+        ):
+            for anchor in anchor_range:
+                _poll_staged_static_proof_deadline()
+                active_pairs = tuple(
+                    (0, position)
+                    for position, (ordinal, _peer) in enumerate(members, start=1)
+                    if not risks[ordinal]
+                )
+                if not active_pairs:
+                    break
+                try:
+                    hits = planet.collisions_at(
+                        collision_buildings,
+                        planet.Projection(
+                            band=band,
+                            anchor_row=anchor,
+                            segment=colliders.PLANET_SEGMENT,
+                            radius=colliders.PLANET_RADIUS,
+                        ),
+                        active_pairs,
                         cancelled=cancelled,
                     )
-                )
-            except finalize.ProjectionCancelled:
-                raise _PreparationDeadline from None
-            if failure is not None:
-                return True
-    return False
+                except finalize.ProjectionCancelled:
+                    raise _PreparationDeadline from None
+                for _candidate_position, peer_position in hits:
+                    risks[members[peer_position - 1][0]] = True
+    return tuple(risks)
 
 
-@cache
+def _staged_static_relation_projection_risk_uncached(
+    relation: StagedStaticClearanceKey,
+    policy: BandPolicy,
+) -> bool:
+    """Whether this exact planar relation collides in a reachable projection."""
+    return _staged_static_relation_projection_risks_uncached(
+        (relation,),
+        policy,
+    )[0]
+
+
+_STAGED_STATIC_RELATION_RISK_CACHE: dict[
+    tuple[StagedStaticClearanceKey, BandPolicy],
+    bool,
+] = {}
+
+
+def _staged_static_relation_projection_risks(
+    relations: Sequence[StagedStaticClearanceKey],
+    policy: BandPolicy,
+) -> tuple[bool, ...]:
+    """Install a completed exact batch transactionally in the relation cache."""
+    missing = tuple(
+        dict.fromkeys(
+            relation
+            for relation in relations
+            if (relation, policy) not in _STAGED_STATIC_RELATION_RISK_CACHE
+        )
+    )
+    if missing:
+        computed = _staged_static_relation_projection_risks_uncached(
+            missing,
+            policy,
+        )
+        _STAGED_STATIC_RELATION_RISK_CACHE.update(
+            ((relation, policy), risk)
+            for relation, risk in zip(missing, computed, strict=True)
+        )
+    return tuple(
+        _STAGED_STATIC_RELATION_RISK_CACHE[(relation, policy)]
+        for relation in relations
+    )
+
+
 def _staged_static_relation_projection_risk(
     relation: StagedStaticClearanceKey,
     policy: BandPolicy,
 ) -> bool:
     """Cache the finite exact witness search by physical relation and policy."""
-    return _staged_static_relation_projection_risk_uncached(relation, policy)
+    return _staged_static_relation_projection_risks((relation,), policy)[0]
 
 
 def _staged_static_preclearance_proof_uncached(
@@ -1353,10 +1406,12 @@ def _staged_static_preclearance_proof_uncached(
     policy: BandPolicy,
 ) -> bool:
     """Prove W3 can collide and moving its Coater one tile west is always clean."""
-    if not _staged_static_relation_projection_risk(relation, policy):
-        return False
     cleared = replace(relation, delta_x=relation.delta_x + 1)
-    return not _staged_static_relation_projection_risk(cleared, policy)
+    rejected_risk, cleared_risk = _staged_static_relation_projection_risks(
+        (relation, cleared),
+        policy,
+    )
+    return rejected_risk and not cleared_risk
 
 
 @cache
@@ -1390,7 +1445,7 @@ class _StagedStaticPreclearanceProof:
 
     def cache_clear(self) -> None:
         _cached_staged_static_preclearance_proved.cache_clear()
-        _staged_static_relation_projection_risk.cache_clear()
+        _STAGED_STATIC_RELATION_RISK_CACHE.clear()
 
 
 _staged_static_preclearance_proved = _StagedStaticPreclearanceProof()

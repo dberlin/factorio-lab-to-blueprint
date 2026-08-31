@@ -12874,7 +12874,7 @@ def test_staged_static_effective_anchor_ranges_replace_padding_cross_product(
     )
 
 
-def test_staged_static_projection_risk_batches_each_band_exactly(
+def test_staged_static_projection_risk_uses_one_exact_pair_per_relation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     strip = next(
@@ -12883,30 +12883,19 @@ def test_staged_static_projection_risk_batches_each_band_exactly(
         if freeform._staged_static_clearance_keys(strip)
     )
     relation = next(iter(freeform._staged_static_clearance_keys(strip)))
-    original_batch = finalize.first_projected_static_failure
-    original_single = finalize.projected_static_failure
-    batch_sizes: list[int] = []
-    single_calls = 0
+    original = planet.collisions_at
+    pair_counts: list[int] = []
 
-    def counted_batch(
-        buildings: Sequence[tuple[int, PlacedBuilding]],
-        projections: Sequence[planet.Projection],
-        **kwargs: object,
-    ) -> finalize.ProjectionFailure | None:
-        batch_sizes.append(len(projections))
-        return original_batch(buildings, projections, **kwargs)
-
-    def counted_single(
-        buildings: Sequence[tuple[int, PlacedBuilding]],
+    def counted(
+        buildings: Sequence[colliders.Placed],
         projection: planet.Projection,
+        pairs: Sequence[tuple[int, int]] | None = None,
         **kwargs: object,
-    ) -> finalize.ProjectionFailure | None:
-        nonlocal single_calls
-        single_calls += 1
-        return original_single(buildings, projection, **kwargs)
+    ) -> list[tuple[int, int]]:
+        pair_counts.append(0 if pairs is None else len(pairs))
+        return original(buildings, projection, pairs, **kwargs)
 
-    monkeypatch.setattr(finalize, "first_projected_static_failure", counted_batch)
-    monkeypatch.setattr(finalize, "projected_static_failure", counted_single)
+    monkeypatch.setattr(planet, "collisions_at", counted)
 
     result = freeform._staged_static_relation_projection_risk_uncached(
         relation,
@@ -12914,11 +12903,53 @@ def test_staged_static_projection_risk_batches_each_band_exactly(
     )
 
     assert isinstance(result, bool)
-    assert batch_sizes and max(batch_sizes) > 1
-    assert single_calls == 0, (
-        "one exact batch per band must replace rebuilding the same pair predicate "
-        "for every reachable anchor"
+    assert pair_counts
+    assert set(pair_counts) == {1}
+
+
+def test_staged_static_preclearance_batches_both_exact_relations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    peer = catalog.building(2305)
+    coater = catalog.building(catalog.SPRAY_COATER_ID)
+    relation = freeform.StagedStaticClearanceKey(
+        peer_item_id=2305,
+        peer_model_index=peer.model_index,
+        peer_width=peer.width,
+        peer_height=peer.height,
+        peer_yaw=0.0,
+        candidate_item_id=catalog.SPRAY_COATER_ID,
+        candidate_model_index=coater.model_index,
+        candidate_width=coater.width,
+        candidate_height=coater.height,
+        candidate_yaw=Facing.EAST.value,
+        delta_x=2,
+        delta_y=1,
+        delta_z=F(0),
     )
+    original = planet.collisions_at
+    pair_counts: list[int] = []
+
+    def counted(
+        buildings: Sequence[colliders.Placed],
+        projection: planet.Projection,
+        pairs: Sequence[tuple[int, int]] | None = None,
+        **kwargs: object,
+    ) -> list[tuple[int, int]]:
+        pair_counts.append(0 if pairs is None else len(pairs))
+        return original(buildings, projection, pairs, **kwargs)
+
+    monkeypatch.setattr(planet, "collisions_at", counted)
+
+    assert freeform._staged_static_preclearance_proof_uncached(
+        relation,
+        BandPolicy("160"),
+    )
+    assert max(pair_counts) >= 2, (
+        "the rejected and one-tile-cleared relations must share each exact "
+        "candidate projection rather than rebuilding it separately"
+    )
+
 
 def band_160_all_products_spec() -> BuildSpec:
     from flab2bp.lab.data import load_vendored
