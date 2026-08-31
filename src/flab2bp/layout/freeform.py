@@ -8849,7 +8849,8 @@ def _power_projection_envelope(
         raise _PreparationDeadline
     occupied = _core_bounds(canvas)
     cleanup_inner = finalize._cleanup_survivor_bounds(
-        Placement(buildings=tuple(canvas.buildings))
+        Placement(buildings=tuple(canvas.buildings)),
+        cancelled=cancelled,
     )
     return _projection_envelope(
         cleanup_inner,
@@ -9276,7 +9277,8 @@ def _power_plan(
                 candidate[1],
             )
             candidate_bounds = finalize._cleanup_survivor_bounds(
-                Placement(buildings=candidate_buildings)
+                Placement(buildings=candidate_buildings),
+                cancelled=cancelled,
             )
             static_frames = static_frames_by_bounds.get(candidate_bounds)
             if static_frames is None:
@@ -10181,7 +10183,8 @@ def _prepare_routing_problem(
     junction_frames = (
         _junction_projection_frames(
             finalize._cleanup_survivor_bounds(
-                Placement(buildings=tuple(canvas.buildings))
+                Placement(buildings=tuple(canvas.buildings)),
+                cancelled=cancelled,
             ),
             capacity,
             policy,
@@ -10997,7 +11000,8 @@ def _place_coaters(
                 coater_index = supply_index + 1
                 candidate_buildings = (*prospective, supply, proposed_coater)
                 candidate_bounds = finalize._cleanup_survivor_bounds(
-                    Placement(buildings=candidate_buildings)
+                    Placement(buildings=candidate_buildings),
+                    cancelled=cancelled,
                 )
                 static_frames = _cached_junction_projection_frames(
                     staged_static_cache,

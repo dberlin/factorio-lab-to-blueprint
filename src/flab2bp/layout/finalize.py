@@ -1821,8 +1821,15 @@ def finalize_placement(
     raise ProjectionRefusal(failures)
 
 
-def _remove_buildings(placement: Placement, removed: frozenset[int]) -> Placement:
+def _remove_buildings(
+    placement: Placement,
+    removed: frozenset[int],
+    *,
+    cancelled: Callable[[], bool] | None = None,
+) -> Placement:
     """Remove indices, bypass their links, and rewrite every surviving reference."""
+    if cancelled is not None and cancelled():
+        raise ProjectionCancelled
     if not removed:
         return placement
     size = len(placement.buildings)
@@ -1831,56 +1838,85 @@ def _remove_buildings(placement: Placement, removed: frozenset[int]) -> Placemen
     if len(removed) == size:
         return placement
 
-    mapping = {
-        old: new for new, old in enumerate(index for index in range(size) if index not in removed)
-    }
+    mapping: dict[int, int] = {}
+    for old in range(size):
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
+        if old not in removed:
+            mapping[old] = len(mapping)
 
     def remap(value: int | None, direction: _Direction) -> int | None:
         seen: set[int] = set()
         while value is not None and value in removed and value not in seen:
+            if cancelled is not None and cancelled():
+                raise ProjectionCancelled
             seen.add(value)
             building = placement.buildings[value]
             value = building.output_obj if direction == "output" else building.input_obj
         return mapping.get(value) if value is not None else None
 
-    buildings = tuple(
-        replace(
-            building,
-            output_obj=remap(building.output_obj, "output"),
-            input_obj=remap(building.input_obj, "input"),
+    surviving: list[PlacedBuilding] = []
+    for index, building in enumerate(placement.buildings):
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
+        if index in removed:
+            continue
+        surviving.append(
+            replace(
+                building,
+                output_obj=remap(building.output_obj, "output"),
+                input_obj=remap(building.input_obj, "input"),
+            )
         )
-        for index, building in enumerate(placement.buildings)
-        if index not in removed
-    )
-    candidate = replace(placement, buildings=buildings, frame=None)
+    candidate = replace(placement, buildings=tuple(surviving), frame=None)
     stats = placement.stats.copy()
     if "area" in stats:
         stats["area"] = float(candidate.area)
     if "belt_tiles" in stats:
         belt_tiles = stats["belt_tiles"]
         stats["belt_tiles"] = float(belt_tiles) - len(removed)
+    if cancelled is not None and cancelled():
+        raise ProjectionCancelled
     return replace(candidate, stats=stats)
 
 
-def _prunable_open_belts(placement: Placement) -> frozenset[int]:
+def _prunable_open_belts(
+    placement: Placement,
+    *,
+    cancelled: Callable[[], bool] | None = None,
+) -> frozenset[int]:
     """Unreferenced outer belt leaves that can be removed as one structural wave."""
     buildings = placement.buildings
-    belts = {index for index, building in enumerate(buildings) if catalog.is_belt(building.item_id)}
+    belts: set[int] = set()
+    for index, building in enumerate(buildings):
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
+        if catalog.is_belt(building.item_id):
+            belts.add(index)
     predecessors: dict[int, set[int]] = {index: set() for index in belts}
     for index in belts:
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
         target = buildings[index].output_obj
         if target in belts:
             predecessors[target].add(index)
-    nonbelt_references = {
-        target
-        for index, building in enumerate(buildings)
-        if index not in belts
-        for target in (building.input_obj, building.output_obj)
-        if target in belts
-    }
+    nonbelt_references: set[int] = set()
+    for index, building in enumerate(buildings):
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
+        if index in belts:
+            continue
+        for target in (building.input_obj, building.output_obj):
+            if cancelled is not None and cancelled():
+                raise ProjectionCancelled
+            if target in belts:
+                assert target is not None
+                nonbelt_references.add(target)
     left, bottom, right, top = placement.bounds
     selected: set[int] = set()
     for index in belts:
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
         building = buildings[index]
         successor = building.output_obj if building.output_obj in belts else None
         neighbours = len(predecessors[index]) + int(successor is not None)
@@ -1897,35 +1933,66 @@ def _prunable_open_belts(placement: Placement) -> frozenset[int]:
     return frozenset(selected)
 
 
-def _boundary_open_belts(placement: Placement, side: _Side) -> frozenset[int]:
+def _boundary_open_belts(
+    placement: Placement,
+    side: _Side,
+    *,
+    cancelled: Callable[[], bool] | None = None,
+) -> frozenset[int]:
     """Open belts on one current bounding side for the certified fallback."""
     left, bottom, right, top = placement.bounds
-    return frozenset(
-        index
-        for index, building in enumerate(placement.buildings)
-        if catalog.is_belt(building.item_id)
-        and (building.input_obj is None or building.output_obj is None)
-        and (
-            (side == "left" and building.x == left)
-            or (side == "bottom" and building.y == bottom)
-            or (side == "right" and building.x + building.width - 1 == right)
-            or (side == "top" and building.y + building.height - 1 == top)
-        )
-    )
+    selected: set[int] = set()
+    for index, building in enumerate(placement.buildings):
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
+        if (
+            catalog.is_belt(building.item_id)
+            and (building.input_obj is None or building.output_obj is None)
+            and (
+                (side == "left" and building.x == left)
+                or (side == "bottom" and building.y == bottom)
+                or (side == "right" and building.x + building.width - 1 == right)
+                or (side == "top" and building.y + building.height - 1 == top)
+            )
+        ):
+            selected.add(index)
+    return frozenset(selected)
 
 
 def _cleanup_survivor_bounds(
     placement: Placement,
+    *,
+    cancelled: Callable[[], bool] | None = None,
 ) -> tuple[int, int, int, int]:
     """Innermost bounds reachable through existing cleanup eligibility."""
+    if cancelled is not None and cancelled():
+        raise ProjectionCancelled
     candidate = placement
     for _wave in range(len(placement.buildings)):
-        removable = set(_prunable_open_belts(candidate))
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
+        removable = set(
+            _prunable_open_belts(candidate, cancelled=cancelled)
+        )
         for side in ("left", "bottom", "right", "top"):
-            removable.update(_boundary_open_belts(candidate, side))
+            if cancelled is not None and cancelled():
+                raise ProjectionCancelled
+            removable.update(
+                _boundary_open_belts(
+                    candidate,
+                    side,
+                    cancelled=cancelled,
+                )
+            )
         if not removable:
             break
-        candidate = _remove_buildings(candidate, frozenset(removable))
+        candidate = _remove_buildings(
+            candidate,
+            frozenset(removable),
+            cancelled=cancelled,
+        )
+    if cancelled is not None and cancelled():
+        raise ProjectionCancelled
     return candidate.bounds
 
 

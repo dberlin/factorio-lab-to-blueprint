@@ -1654,3 +1654,26 @@ def test_finalize_placement_cancels_inside_frame_certification() -> None:
 
     assert checks == 12
     assert placement.frame is None
+
+
+def test_cleanup_survivor_bounds_cancels_inside_building_scan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    placement = Placement(buildings=_extent(12, 12))
+    inspected = 0
+    original_is_belt = catalog.is_belt
+
+    def observed_is_belt(item_id: int) -> bool:
+        nonlocal inspected
+        inspected += 1
+        return original_is_belt(item_id)
+
+    monkeypatch.setattr(catalog, "is_belt", observed_is_belt)
+
+    with pytest.raises(finalize.ProjectionCancelled):
+        finalize._cleanup_survivor_bounds(
+            placement,
+            cancelled=lambda: inspected >= 1,
+        )
+
+    assert inspected == 1

@@ -10203,7 +10203,9 @@ def test_all_products_band_160_learns_every_projected_coater_clearance() -> None
     assert validate.certify(placement, spec, expect_power=True).ok
 
 
-def test_power_projection_envelope_cancels_inside_rectangle_generation() -> None:
+def test_power_projection_envelope_cancels_inside_rectangle_generation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     machine = catalog.building(2303)
     canvas = _Canvas()
     canvas.add(
@@ -10218,6 +10220,16 @@ def test_power_projection_envelope_cancels_inside_rectangle_generation() -> None
         solid=True,
     )
     canvas.limit = (-3, -3, 6, 6)
+
+    def cleanup_bounds(
+        placement: Placement,
+        *,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> tuple[int, int, int, int]:
+        assert cancelled is not None
+        return placement.bounds
+
+    monkeypatch.setattr(finalize, "_cleanup_survivor_bounds", cleanup_bounds)
     checks = 0
 
     def cancelled() -> bool:
