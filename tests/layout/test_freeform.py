@@ -12,7 +12,7 @@ import itertools
 import math
 import random
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import replace
 from fractions import Fraction as F
 from pathlib import Path
@@ -24,8 +24,8 @@ from flab2bp.dsp import catalog, codec, colliders, planet, rules
 from flab2bp.layout import finalize, freeform, junction, slots, validate
 from flab2bp.layout.band_policy import BandPolicy, BandSelection
 from flab2bp.layout.base import (
-    AreaFrame,
     DETERMINISTIC_WORKERS,
+    AreaFrame,
     Facing,
     NoValidLayout,
     PlacedBuilding,
@@ -56,8 +56,8 @@ from flab2bp.layout.freeform import (
     _commit_paths,
     _connect_short_cuts,
     _dests,
-    _direct_net_candidates,
     _direct_column_deltas,
+    _direct_net_candidates,
     _emit_strip,
     _greedy_pack,
     _Grid,
@@ -4430,7 +4430,7 @@ def test_freeform_keeps_projection_valid_with_evidence_scoped_pitch(
         spec: BuildSpec,
         *,
         strip_len: int = 6,
-        band_policy: BandPolicy = BandPolicy("portable"),
+        band_policy: BandPolicy = freeform._DEFAULT_BAND_POLICY,
         minimum_pitch_x: Mapping[StripPoseId, int] = freeform._NO_PITCH_REQUIREMENTS,
         minimum_staged_static_clearance: Mapping[
             freeform.StagedStaticClearanceKey,
@@ -4703,7 +4703,7 @@ def test_pitch_retry_affordability_is_decided_before_geometry_replan(
         spec: BuildSpec,
         *,
         strip_len: int = 6,
-        band_policy: BandPolicy = BandPolicy("portable"),
+        band_policy: BandPolicy = freeform._DEFAULT_BAND_POLICY,
         minimum_pitch_x: Mapping[StripPoseId, int] = freeform._NO_PITCH_REQUIREMENTS,
         minimum_staged_static_clearance: Mapping[
             freeform.StagedStaticClearanceKey,

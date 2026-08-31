@@ -13418,7 +13418,8 @@ class FreeformLayout:
         # becoming the thing that ends the sweep. See
         # `_ROUTING_EXPANSIONS_PER_SECOND`.
         budget = {"left": max(_ROUTING_BUDGET, int(_ROUTING_EXPANSIONS_PER_SECOND * ceiling))}
-        planning_cancelled = lambda: _expired(deadline)
+        def planning_cancelled() -> bool:
+            return _expired(deadline)
 
         try:
             strips = plan_strips(
