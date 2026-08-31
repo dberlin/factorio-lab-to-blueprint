@@ -19,14 +19,14 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Literal
 
-from flab2bp.dsp import catalog, colliders
+from flab2bp.dsp import catalog, colliders, planet
 from flab2bp.dsp.records import BlueprintBuilding
 from flab2bp.dsp.rules import (
     BELT_PORT_DRAW_TO_SLOT,
     BELT_PORT_FEED_FROM_SLOT,
     WORLD_UNITS_PER_LEVEL,
 )
-from flab2bp.layout.base import PlacedBuilding
+from flab2bp.layout.base import AreaFrame, PlacedBuilding
 
 type Direction = Literal["feed", "draw"]
 type IssueCode = Literal["model", "slot", "own_slot", "height", "position", "direction", "path"]
@@ -185,32 +185,115 @@ def _rotated_port(pose: catalog.SlotPose, yaw: float) -> tuple[float, float, flo
     )
 
 
-def blueprint_port_offset(
+def _rotate_vector(
+    rotation: planet.Quat,
+    vector: planet.Vec3,
+) -> planet.Vec3:
+    """Apply one Unity quaternion to a vector."""
+    x, y, z, w = rotation
+    vx, vy, vz = vector
+    tx = 2.0 * (y * vz - z * vy)
+    ty = 2.0 * (z * vx - x * vz)
+    tz = 2.0 * (x * vy - y * vx)
+    return (
+        vx + w * tx + (y * tz - z * ty),
+        vy + w * ty + (z * tx - x * tz),
+        vz + w * tz + (x * ty - y * tx),
+    )
+
+
+def _inverse_projection(
+    projection: planet.Projection,
+    position: planet.Vec3,
+) -> tuple[float, float, float]:
+    """Invert ``BlueprintUtils.RefreshBuildPreview`` for one world position."""
+    radius = math.sqrt(sum(component * component for component in position))
+    direction = tuple(component / radius for component in position)
+    latitude = math.asin(max(-1.0, min(1.0, direction[1])))
+    longitude = math.atan2(direction[0], -direction[2])
+    longitude_offset = longitude / projection.longitude_step
+    latitude_offset = latitude / projection.latitude_step - projection.anchor_row
+    if projection.rotated:
+        x, y = latitude_offset, longitude_offset
+    else:
+        x, y = longitude_offset, latitude_offset
+    z = (radius - projection.radius - 0.2) / WORLD_UNITS_PER_LEVEL
+    return x, y, z
+
+
+def blueprint_port_anchor(
     model_index: int,
     port: int,
     yaw: float,
+    *,
+    x: float,
+    y: float,
+    z: float,
+    frame: AreaFrame,
 ) -> tuple[float, float, float]:
-    """Return one physical port pose in blueprint-local grid coordinates.
+    """Return a band-safe blueprint coordinate for one physical Splitter port.
 
-    ``BuildTool_Path.DeterminePreviews`` puts the endpoint belt at
-    ``objectPose + objectRotation * PrefabDesc.portPoses[port]``.  Prefab poses
-    are world units; blueprint x/y are grid units and z uses the game's 4/3
-    world-units-per-level conversion.
+    The game writes a port endpoint by adding ``rotation * portPose`` in WORLD
+    space and only then converting that point to blueprint angular offsets.
+    Longitude compression means ``portPose / GRID_ARC`` is not that inverse
+    outside the equator.  A blueprint may move to every legal anchor in its
+    recorded band, so this uses the legal anchor that needs the endpoint
+    farthest outward.  At every other anchor the direct link remains well below
+    the game's four-world-unit building-link limit and cannot move inward into
+    the Splitter collider.
     """
     ports = catalog.port_poses_for_model(model_index)
     if not 0 <= port < len(ports):
         raise ValueError(f"model {model_index} defines {len(ports)} ports, not port {port}")
+    band = next(
+        (
+            candidate
+            for candidate in planet.bands(colliders.PLANET_SEGMENT)
+            if candidate.area_segments == frame.primary_band
+        ),
+        None,
+    )
+    if band is None:
+        raise ValueError(f"area frame primary band {frame.primary_band} names no DSP band")
+    anchors = band.anchors(frame.height)
+    if not anchors:
+        raise ValueError(
+            f"area frame height {frame.height} fits no anchor in band {frame.primary_band}"
+        )
+
     pose = ports[port]
     radians = math.radians(yaw)
     cosine = math.cos(radians)
     sine = math.sin(radians)
-    local_x = pose.dx / colliders.GRID_ARC
-    local_y = pose.dy / colliders.GRID_ARC
-    return (
-        local_x * cosine + local_y * sine,
-        -local_x * sine + local_y * cosine,
-        pose.dz / WORLD_UNITS_PER_LEVEL,
-    )
+    axis_x = pose.dx * cosine + pose.dy * sine
+    axis_y = -pose.dx * sine + pose.dy * cosine
+    axis_length = math.hypot(axis_x, axis_y)
+    if axis_length <= 1e-12:
+        raise ValueError(f"model {model_index} port {port} has no horizontal direction")
+    axis_x /= axis_length
+    axis_y /= axis_length
+
+    candidates: list[tuple[float, tuple[float, float, float]]] = []
+    for anchor_row in anchors:
+        projection = planet.Projection(
+            band=band,
+            anchor_row=anchor_row,
+            segment=colliders.PLANET_SEGMENT,
+            radius=colliders.PLANET_RADIUS,
+        )
+        centre, rotation = projection.pose(x, y, z, yaw)
+        # SlotPose uses our (x, north, up) axes. Unity's local vector is
+        # (x, up, forward).
+        offset = _rotate_vector(rotation, (pose.dx, pose.dz, pose.dy))
+        world_port = (
+            centre[0] + offset[0],
+            centre[1] + offset[1],
+            centre[2] + offset[2],
+        )
+        local_port = _inverse_projection(projection, world_port)
+        score = (local_port[0] - x) * axis_x + (local_port[1] - y) * axis_y
+        candidates.append((score, local_port))
+    return max(candidates, key=lambda candidate: candidate[0])[1]
 
 
 def _outward_neighbour(
@@ -370,7 +453,7 @@ def _own_slot_issue(
 def _issues(
     nodes: tuple[_Node, ...],
     *,
-    check_dock_position: bool = False,
+    frame: AreaFrame | None = None,
 ) -> tuple[SplitterPortIssue, ...]:
     index = _NodeIndex.build(nodes)
     out: list[SplitterPortIssue] = []
@@ -428,16 +511,17 @@ def _issues(
                     )
                 )
                 continue
-            if check_dock_position:
-                dx, dy, dz = blueprint_port_offset(
+            if frame is not None:
+                anchor = blueprint_port_anchor(
                     splitter.model_index,
                     recorded,
                     splitter.yaw,
+                    x=splitter.x,
+                    y=splitter.y,
+                    z=splitter.z,
+                    frame=frame,
                 )
-                position_error = math.dist(
-                    (belt.x, belt.y, belt.z),
-                    (splitter.x + dx, splitter.y + dy, splitter.z + dz),
-                )
+                position_error = math.dist((belt.x, belt.y, belt.z), anchor)
                 if position_error > _DOCK_POSITION_TOLERANCE:
                     out.append(
                         _issue(
@@ -448,7 +532,7 @@ def _issues(
                             recorded,
                             expected,
                             "the endpoint belt is not anchored at the transformed "
-                            f"port pose (error {position_error:.6g} tiles)",
+                            f"band-safe port pose (error {position_error:.6g} tiles)",
                         )
                     )
             port_z = _rotated_port(ports[recorded], splitter.yaw)[2]
@@ -563,15 +647,13 @@ def placement_issues(
 def blueprint_issues(
     buildings: Sequence[BlueprintBuilding],
     *,
-    require_port_anchors: bool = False,
+    frame: AreaFrame | None = None,
 ) -> tuple[SplitterPortIssue, ...]:
-    """Judge decoded connections, optionally requiring current-game dock poses.
+    """Judge decoded connections, with strict current-game anchors when framed.
 
     DSP 0.8 blueprints used centred Splitter endpoint records and the current
-    game retains import compatibility.  Fresh 0.10 emission must use transformed
-    port anchors or the paste collider marks the pair broken.
+    game retains import compatibility, so unframed historical decoding checks
+    connection semantics only.  Fresh emission supplies its area frame and is
+    checked against the spherical, band-safe port anchor.
     """
-    return _issues(
-        _blueprint_nodes(buildings),
-        check_dock_position=require_port_anchors,
-    )
+    return _issues(_blueprint_nodes(buildings), frame=frame)

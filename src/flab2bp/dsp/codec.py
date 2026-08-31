@@ -25,6 +25,8 @@ from flab2bp.dsp.records import (
     write_building,
 )
 from flab2bp.dsp.rules import (
+    INPUT_TO_SLOT,
+    OUTPUT_FROM_SLOT,
     SPLITTER_INPUT_FROM_SLOT,
     SPLITTER_INPUT_TO_SLOT,
     SPLITTER_OUTPUT_FROM_SLOT,
@@ -274,6 +276,9 @@ def placement_to_blueprint(
     List position becomes the DSP building ``index``, and ``None`` connections
     become ``-1``.
     """
+    area = _area_for(placement)
+    frame = placement.frame
+    assert frame is not None
     local_offsets = [
         tile_to_local_offset(b.x, b.y, b.z, b.width, b.height) for b in placement.buildings
     ]
@@ -293,12 +298,17 @@ def placement_to_blueprint(
                 continue
             splitter = placement.buildings[peer_index]
             splitter_x, splitter_y, splitter_z = local_offsets[peer_index]
-            dx, dy, dz = splitter_ports.blueprint_port_offset(
-                splitter.model_index,
-                port,
-                splitter.yaw,
+            anchors.append(
+                splitter_ports.blueprint_port_anchor(
+                    splitter.model_index,
+                    port,
+                    splitter.yaw,
+                    x=splitter_x,
+                    y=splitter_y,
+                    z=splitter_z,
+                    frame=frame,
+                )
             )
-            anchors.append((splitter_x + dx, splitter_y + dy, splitter_z + dz))
         if anchors:
             anchor = anchors[0]
             if any(math.dist(anchor, other) > 1e-9 for other in anchors[1:]):
@@ -315,6 +325,7 @@ def placement_to_blueprint(
                 b.x2, b.y2 or 0, b.z2 if b.z2 is not None else Fraction(0), 1, 1
             )
         is_splitter = b.item_id == catalog.SPLITTER_ID
+        is_belt = catalog.is_belt(b.item_id)
         buildings.append(
             BlueprintBuilding(
                 # Path == index selects the simplest record shape, which every
@@ -336,8 +347,20 @@ def placement_to_blueprint(
                 input_obj_idx=-1 if b.input_obj is None else b.input_obj,
                 output_to_slot=(SPLITTER_OUTPUT_TO_SLOT if is_splitter else b.output_to_slot),
                 input_from_slot=(SPLITTER_INPUT_FROM_SLOT if is_splitter else b.input_from_slot),
-                output_from_slot=(SPLITTER_OUTPUT_FROM_SLOT if is_splitter else b.output_from_slot),
-                input_to_slot=(SPLITTER_INPUT_TO_SLOT if is_splitter else b.input_to_slot),
+                output_from_slot=(
+                    SPLITTER_OUTPUT_FROM_SLOT
+                    if is_splitter
+                    else OUTPUT_FROM_SLOT
+                    if is_belt
+                    else b.output_from_slot
+                ),
+                input_to_slot=(
+                    SPLITTER_INPUT_TO_SLOT
+                    if is_splitter
+                    else INPUT_TO_SLOT
+                    if is_belt
+                    else b.input_to_slot
+                ),
                 output_offset=b.output_offset,
                 input_offset=b.input_offset,
                 recipe_id=b.recipe_id,
@@ -358,7 +381,6 @@ def placement_to_blueprint(
         attributes=(),
         description=placement.description,
     )
-    area = _area_for(placement)
 
     return Blueprint(
         header=header,

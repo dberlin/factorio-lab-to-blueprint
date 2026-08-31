@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from flab2bp.dsp import catalog, codec, colliders, splitter_ports
+from flab2bp.dsp import catalog, codec, colliders, planet, splitter_ports
 from flab2bp.dsp.envelope import BlueprintFormatError
 from flab2bp.dsp.records import BlueprintBuilding
 from flab2bp.dsp.rules import BELT_PORT_DRAW_TO_SLOT, WORLD_UNITS_PER_LEVEL
@@ -474,25 +474,25 @@ def test_indexed_attachment_lookup_preserves_order_and_ignores_non_belts() -> No
 
 def test_corrected_construction_path_emits_only_game_valid_splitter_ports() -> None:
     wired = slots.assign_belt_slots(_minimal_broken_shape())
+    frame = AreaFrame(56, 42, 160, (160,), False)
     placement = Placement(
         buildings=wired,
-        frame=AreaFrame(8, 4, 4, (4,), False),
+        frame=frame,
     )
     blueprint = codec.placement_to_blueprint(placement, timestamp=0)
     splitter = blueprint.buildings[2]
 
     assert splitter_ports.placement_issues(wired) == ()
-    assert (
-        splitter_ports.blueprint_issues(
-            blueprint.buildings,
-            require_port_anchors=True,
-        )
-        == ()
-    )
+    assert splitter_ports.blueprint_issues(blueprint.buildings, frame=frame) == ()
     assert (splitter.output_to_slot, splitter.input_from_slot) == (14, 15)
     assert wired[1].output_to_slot == 1
     assert [wired[index].input_from_slot for index in (3, 5)] == [3, 2]
     assert [wired[index].input_to_slot for index in (3, 5)] == [1, 1]
+    assert {
+        (building.output_from_slot, building.input_to_slot)
+        for building in blueprint.buildings
+        if catalog.is_belt(building.item_id)
+    } == {(0, 1)}
     assert [(wired[index].input_obj, wired[index].output_obj) for index in (3, 5)] == [
         (2, 4),
         (2, 6),
@@ -505,18 +505,42 @@ def test_corrected_construction_path_emits_only_game_valid_splitter_ports() -> N
     )
     for belt_index, port in attached:
         belt = blueprint.buildings[belt_index]
-        dx, dy, dz = splitter_ports.blueprint_port_offset(
+        anchor = splitter_ports.blueprint_port_anchor(
             splitter.model_index,
             port,
             splitter.yaw,
+            x=splitter.x,
+            y=splitter.y,
+            z=splitter.z,
+            frame=frame,
         )
-        assert (belt.x, belt.y, belt.z) == pytest.approx(
-            (splitter.x + dx, splitter.y + dy, splitter.z + dz)
+        assert (belt.x, belt.y, belt.z) == pytest.approx(anchor)
+        assert belt.z > splitter.z
+        physical_port = catalog.port_poses_for_model(splitter.model_index)[port]
+        port_distance = math.sqrt(physical_port.dx**2 + physical_port.dy**2 + physical_port.dz**2)
+        band = next(
+            candidate
+            for candidate in planet.bands()
+            if candidate.area_segments == frame.primary_band
         )
-        assert math.dist(
-            (belt.x, belt.y, belt.z),
-            (splitter.x, splitter.y, splitter.z),
-        ) == pytest.approx(0.25 / colliders.GRID_ARC)
+        for anchor_row in band.anchors(frame.height):
+            projection = planet.Projection(band, anchor_row, 200, 200.0)
+            emitted_distance = math.dist(
+                projection.position(splitter.x, splitter.y, splitter.z),
+                projection.position(belt.x, belt.y, belt.z),
+            )
+            assert emitted_distance + 1e-9 >= port_distance
+
+    # Port 1 lies on the longitude-compressed axis in this orientation.  The
+    # flat-grid conversion places it inside the real port at a poleward legal
+    # anchor; the spherical envelope must therefore sit farther out.
+    assert (
+        math.dist(
+            (blueprint.buildings[1].x, blueprint.buildings[1].y),
+            (splitter.x, splitter.y),
+        )
+        > 0.25 / colliders.GRID_ARC
+    )
 
     centred_belt = replace(
         blueprint.buildings[1],
@@ -527,10 +551,7 @@ def test_corrected_construction_path_emits_only_game_valid_splitter_ports() -> N
     centred = blueprint.buildings[:1] + (centred_belt,) + blueprint.buildings[2:]
     position_issues = [
         issue
-        for issue in splitter_ports.blueprint_issues(
-            centred,
-            require_port_anchors=True,
-        )
+        for issue in splitter_ports.blueprint_issues(centred, frame=frame)
         if issue.code == "position"
     ]
     assert [(issue.splitter, issue.belt) for issue in position_issues] == [(2, 1)]
