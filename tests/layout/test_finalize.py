@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
-from dataclasses import dataclass, replace
-import random
-from fractions import Fraction
 import math
 import random
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, replace
+from fractions import Fraction
 from typing import cast
 
 import pytest
@@ -221,6 +220,64 @@ def test_cleanup_survivor_graph_visits_chain_nodes_and_edges_linearly() -> None:
     assert graph.survivor_bounds() == _brute_cleanup_survivor_bounds(placement)
     assert graph.node_visits <= 6 * len(placement.buildings)
     assert graph.edge_visits <= 16 * len(placement.buildings)
+
+
+def test_cleanup_prefix_snapshots_match_oracle_with_linear_aggregate_work() -> None:
+    belt_count = 97
+    buildings: tuple[PlacedBuilding, ...] = (
+        *(
+            _linked_belt(
+                index,
+                0,
+                input_obj=index - 1 if index else None,
+                output_obj=index + 1 if index + 1 < belt_count else None,
+            )
+            for index in range(belt_count)
+        ),
+        _building(2302, 0, 0),
+        _building(2302, belt_count - 1, 0),
+    )
+    operations = finalize._CleanupOperations()
+    prefix = finalize._CleanupSurvivorGraph(
+        Placement(buildings=buildings),
+        _operations=operations,
+    )
+    observed = prefix.snapshot_bounds()
+    for ordinal in range(24):
+        addition = _linked_belt(
+            belt_count + ordinal,
+            0,
+            input_obj=None,
+            output_obj=None,
+        )
+        buildings = (*buildings, addition)
+        prefix, observed = prefix.extended_snapshot((addition,), observed)
+        assert observed == _brute_cleanup_survivor_bounds(
+            Placement(buildings=buildings)
+        )
+    scale = len(buildings)
+    assert operations.node_visits <= 12 * scale
+    assert operations.edge_visits <= 20 * scale
+
+
+def test_cleanup_prefix_snapshot_rechecks_linked_and_boundary_additions() -> None:
+    buildings = (
+        _linked_belt(0, 0, input_obj=None, output_obj=1),
+        _linked_belt(1, 0, input_obj=0, output_obj=None),
+        _building(2302, 1, 1),
+    )
+    prefix = finalize._CleanupSurvivorGraph(Placement(buildings=buildings))
+    bounds = prefix.snapshot_bounds()
+    additions = (
+        _linked_belt(1, 1, input_obj=None, output_obj=0),
+        _building(2302, 20, 0),
+    )
+    for addition in additions:
+        buildings = (*buildings, addition)
+        prefix, bounds = prefix.extended_snapshot((addition,), bounds)
+        assert bounds == _brute_cleanup_survivor_bounds(
+            Placement(buildings=buildings)
+        )
 
 def test_compaction_prunes_open_belt_leaves_to_a_structural_fixed_point(
     monkeypatch: pytest.MonkeyPatch,
@@ -1422,7 +1479,14 @@ def test_certification_can_select_the_other_physical_orientation(
         projection: planet.Projection,
         *,
         counters: finalize._ProjectionCounters | None = None,
+        _box_cache: dict[
+            tuple[colliders.Placed, planet.Projection],
+            tuple[colliders.Box, ...],
+        ]
+        | None = None,
+        cancelled: Callable[[], bool] | None = None,
     ) -> finalize.ProjectionFailure | None:
+        del _box_cache, cancelled
         if counters is not None:
             counters.collider_pairs += len(pairs)
         if any(building.x > 1.0 for _index, building in tested):
@@ -1452,7 +1516,14 @@ def test_padding_search_uses_the_first_legal_south_north_split(
         projection: planet.Projection,
         *,
         counters: finalize._ProjectionCounters | None = None,
+        _box_cache: dict[
+            tuple[colliders.Placed, planet.Projection],
+            tuple[colliders.Box, ...],
+        ]
+        | None = None,
+        cancelled: Callable[[], bool] | None = None,
     ) -> finalize.ProjectionFailure | None:
+        del _box_cache, cancelled
         if counters is not None:
             counters.collider_pairs += len(pairs)
         if tested[0][1].y < 2.0:
@@ -1500,7 +1571,14 @@ def test_portable_certifies_same_coordinates_at_every_required_anchor(
         projection: planet.Projection,
         *,
         counters: finalize._ProjectionCounters | None = None,
+        _box_cache: dict[
+            tuple[colliders.Placed, planet.Projection],
+            tuple[colliders.Box, ...],
+        ]
+        | None = None,
+        cancelled: Callable[[], bool] | None = None,
     ) -> None:
+        del _box_cache, cancelled
         if counters is not None:
             counters.collider_pairs += len(pairs)
         seen.append(
@@ -1545,7 +1623,14 @@ def test_portable_never_promotes_primary_after_projection_failure(
         projection: planet.Projection,
         *,
         counters: finalize._ProjectionCounters | None = None,
+        _box_cache: dict[
+            tuple[colliders.Placed, planet.Projection],
+            tuple[colliders.Box, ...],
+        ]
+        | None = None,
+        cancelled: Callable[[], bool] | None = None,
     ) -> finalize.ProjectionFailure | None:
+        del _box_cache, cancelled
         if counters is not None:
             counters.collider_pairs += len(pairs)
         seen_bands.append(projection.band.area_segments)
@@ -1600,7 +1685,14 @@ def test_five_row_polar_band_passes_only_unpadded_or_refuses(
         projection: planet.Projection,
         *,
         counters: finalize._ProjectionCounters | None = None,
+        _box_cache: dict[
+            tuple[colliders.Placed, planet.Projection],
+            tuple[colliders.Box, ...],
+        ]
+        | None = None,
+        cancelled: Callable[[], bool] | None = None,
     ) -> finalize.ProjectionFailure:
+        del _box_cache, cancelled
         if counters is not None:
             counters.collider_pairs += len(pairs)
         return finalize.ProjectionFailure(
@@ -1703,34 +1795,82 @@ def test_projection_collects_simultaneous_rule_category_failures(
         "game.addon_splitter_clearance",
     )
 
-    def refusing(check: str) -> object:
-        def predicate(
-            *args: object,
-            counters: finalize._ProjectionCounters | None = None,
-        ) -> finalize.ProjectionFailure:
-            del counters
-            projection = cast(planet.Projection, args[-1])
-            return finalize.ProjectionFailure(
-                check=check,
-                buildings=(0,),
-                detail=f"simultaneous {check}",
-                band=projection.band.area_segments,
-            )
+    def failure(
+        check: str,
+        projection: planet.Projection,
+    ) -> finalize.ProjectionFailure:
+        return finalize.ProjectionFailure(
+            check=check,
+            buildings=(0,),
+            detail=f"simultaneous {check}",
+            band=projection.band.area_segments,
+        )
 
-        return predicate
+    def refuse_power(
+        _nodes: object,
+        projection: planet.Projection,
+        *,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> finalize.ProjectionFailure:
+        del cancelled
+        return failure(ordered_checks[0], projection)
 
-    for name, check in zip(
-        (
-            "projected_power_failure",
-            "_projected_sorter_failure",
-            "_projected_static_failure",
-            "_projected_addon_failure",
-            "_projected_addon_splitter_failure",
-        ),
-        ordered_checks,
-        strict=True,
-    ):
-        monkeypatch.setattr(finalize, name, refusing(check))
+    def refuse_sorter(
+        _sorters: object,
+        projection: planet.Projection,
+        *,
+        counters: finalize._ProjectionCounters | None = None,
+        cancelled: Callable[[], bool] | None = None,
+        _condition_cache: dict[tuple[object, ...], str | None] | None = None,
+    ) -> finalize.ProjectionFailure:
+        del counters, cancelled, _condition_cache
+        return failure(ordered_checks[1], projection)
+
+    def refuse_static(
+        _tested: object,
+        _pairs: object,
+        projection: planet.Projection,
+        *,
+        counters: finalize._ProjectionCounters | None = None,
+        _box_cache: dict[
+            tuple[colliders.Placed, planet.Projection],
+            tuple[colliders.Box, ...],
+        ]
+        | None = None,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> finalize.ProjectionFailure:
+        del counters, _box_cache, cancelled
+        return failure(ordered_checks[2], projection)
+
+    def refuse_addon(
+        _belts: object,
+        _addons: object,
+        projection: planet.Projection,
+        *,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> finalize.ProjectionFailure:
+        del cancelled
+        return failure(ordered_checks[3], projection)
+
+    def refuse_addon_splitter(
+        _coaters: object,
+        _splitters: object,
+        projection: planet.Projection,
+        *,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> finalize.ProjectionFailure:
+        del cancelled
+        return failure(ordered_checks[4], projection)
+
+    monkeypatch.setattr(finalize, "projected_power_failure", refuse_power)
+    monkeypatch.setattr(finalize, "_projected_sorter_failure", refuse_sorter)
+    monkeypatch.setattr(finalize, "_projected_static_failure", refuse_static)
+    monkeypatch.setattr(finalize, "_projected_addon_failure", refuse_addon)
+    monkeypatch.setattr(
+        finalize,
+        "_projected_addon_splitter_failure",
+        refuse_addon_splitter,
+    )
 
     with pytest.raises(finalize.ProjectionRefusal) as caught:
         finalize.finalize_placement(
@@ -1793,12 +1933,11 @@ def test_projection_counters_count_only_observed_rule_loop_work(
         _nodes: object,
         projection: planet.Projection,
         *,
-        counters: finalize._ProjectionCounters | None = None,
+        cancelled: Callable[[], bool] | None = None,
     ) -> finalize.ProjectionFailure | None:
+        del cancelled
         work = 1 if not power_work else len(pairs)
         power_work.append(work)
-        if counters is not None:
-            counters.power_pairs += work
         if len(power_work) == 1:
             return finalize.ProjectionFailure(
                 "game.power_too_close",
@@ -1813,7 +1952,10 @@ def test_projection_counters_count_only_observed_rule_loop_work(
         projection: planet.Projection,
         *,
         counters: finalize._ProjectionCounters | None = None,
+        cancelled: Callable[[], bool] | None = None,
+        _condition_cache: dict[tuple[object, ...], str | None] | None = None,
     ) -> finalize.ProjectionFailure | None:
+        del cancelled, _condition_cache
         work = 1 if not sorter_work else len(invariants.sorters)
         sorter_work.append(work)
         if counters is not None:
@@ -1833,7 +1975,14 @@ def test_projection_counters_count_only_observed_rule_loop_work(
         _projection: planet.Projection,
         *,
         counters: finalize._ProjectionCounters | None = None,
+        _box_cache: dict[
+            tuple[colliders.Placed, planet.Projection],
+            tuple[colliders.Box, ...],
+        ]
+        | None = None,
+        cancelled: Callable[[], bool] | None = None,
     ) -> None:
+        del _box_cache, cancelled
         collider_work.append(len(tested_pairs))
         if counters is not None:
             counters.collider_pairs += len(tested_pairs)
@@ -1945,6 +2094,117 @@ def test_projected_addon_supply_projects_each_belt_once_per_projection() -> None
     assert projection.calls == len(belts) + len(areas)
 
 
+
+
+@pytest.mark.parametrize("quadrant", [0, 1])
+def test_projected_sorter_gate_reuses_longitude_translations(
+    monkeypatch: pytest.MonkeyPatch,
+    quadrant: int,
+) -> None:
+    sorter = planet.Sorter(
+        x=0.0,
+        y=0.0,
+        z=0.0,
+        x2=1.0,
+        y2=0.0,
+        z2=0.0,
+        yaw=90.0,
+        yaw2=90.0,
+        input_belt=True,
+        output_belt=True,
+        ref_x=0.5,
+        ref_y=0.0,
+        ref_z=0.0,
+    )
+    translated = (
+        replace(sorter, y=10.0, y2=10.0, ref_y=10.0)
+        if quadrant
+        else replace(sorter, x=10.0, x2=11.0, ref_x=10.5)
+    )
+    calls = 0
+
+    def condition(
+        candidate: planet.Sorter,
+        projection: planet.Projection,
+    ) -> str | None:
+        nonlocal calls
+        calls += 1
+        return None
+
+    band = next(band for band in planet.bands() if band.area_segments == 4)
+    projection = planet.Projection(
+        band,
+        0,
+        colliders.PLANET_SEGMENT,
+        colliders.PLANET_RADIUS,
+        quadrant=quadrant,
+    )
+    assert planet.sorter_condition(sorter, projection) == planet.sorter_condition(
+        translated,
+        projection,
+    )
+    monkeypatch.setattr(planet, "sorter_condition", condition)
+
+    assert finalize._projected_sorter_failure(
+        ((0, sorter), (1, translated)),
+        projection,
+    ) is None
+    assert calls == 1
+
+
+@pytest.mark.parametrize("quadrant", [0, 1])
+def test_projection_cache_reuses_sorter_at_same_physical_latitude(
+    monkeypatch: pytest.MonkeyPatch,
+    quadrant: int,
+) -> None:
+    sorter = planet.Sorter(
+        x=0.0,
+        y=0.0,
+        z=0.0,
+        x2=1.0,
+        y2=0.0,
+        z2=0.0,
+        yaw=90.0,
+        yaw2=90.0,
+        input_belt=True,
+        output_belt=True,
+        ref_x=0.5,
+        ref_y=0.0,
+        ref_z=0.0,
+    )
+    shifted = (
+        replace(sorter, x=1.0, x2=2.0, ref_x=1.5)
+        if quadrant
+        else replace(sorter, y=1.0, y2=1.0, ref_y=1.0)
+    )
+    calls = 0
+
+    def condition(
+        candidate: planet.Sorter,
+        projection: planet.Projection,
+    ) -> str | None:
+        nonlocal calls
+        calls += 1
+        return None
+
+    monkeypatch.setattr(planet, "sorter_condition", condition)
+    band = next(band for band in planet.bands() if band.area_segments == 4)
+    first = planet.Projection(
+        band,
+        0,
+        colliders.PLANET_SEGMENT,
+        colliders.PLANET_RADIUS,
+        quadrant=quadrant,
+    )
+    second = replace(first, anchor_row=-1)
+    counters = finalize._ProjectionCounters()
+    cache = finalize._ProjectionCache(counters)
+
+    assert cache.sorter_failure(((0, sorter),), first) is None
+    assert cache.sorter_failure(((0, shifted),), second) is None
+    assert calls == 1
+
+
 def test_projection_cache_reuses_only_invariant_frame_work() -> None:
     placement = Placement(
         buildings=_extent(1, 1),
@@ -1969,6 +2229,44 @@ def test_projection_cache_reuses_only_invariant_frame_work() -> None:
         cache=cache,
     ) == ()
 
+    assert counters.invariant_cache_hits == 1
+    assert counters.pair_cache_hits == 1
+    assert counters.projection_cache_hits == first_projection_count
+
+
+def test_projection_cache_reuses_exact_work_while_polling_cancellation() -> None:
+    placement = Placement(
+        buildings=_extent(1, 1),
+        frame=AreaFrame(1, 1, 4, (4,), False),
+    )
+    frame = placement.frame
+    assert frame is not None
+    checks = 0
+
+    def cancelled() -> bool:
+        nonlocal checks
+        checks += 1
+        return False
+
+    counters = finalize._ProjectionCounters()
+    cache = finalize._ProjectionCache(counters, cancelled=cancelled)
+    assert finalize._certify_frame(
+        placement,
+        frame,
+        counters,
+        cache=cache,
+        cancelled=cancelled,
+    ) == ()
+    first_projection_count = counters.projections
+    assert finalize._certify_frame(
+        placement,
+        frame,
+        counters,
+        cache=cache,
+        cancelled=cancelled,
+    ) == ()
+
+    assert checks > 0
     assert counters.invariant_cache_hits == 1
     assert counters.pair_cache_hits == 1
     assert counters.projection_cache_hits == first_projection_count
@@ -2011,20 +2309,70 @@ def test_projection_result_cache_reuses_only_complete_exact_check_keys(
         "addon_splitter": 0,
     }
 
-    def observed(name: str) -> object:
-        def predicate(*args: object, **kwargs: object) -> None:
-            calls[name] += 1
+    def observe_power(
+        _nodes: object,
+        _projection: planet.Projection,
+        *,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> None:
+        del cancelled
+        calls["power"] += 1
 
-        return predicate
+    def observe_sorter(
+        _sorters: object,
+        _projection: planet.Projection,
+        *,
+        counters: finalize._ProjectionCounters | None = None,
+        cancelled: Callable[[], bool] | None = None,
+        _condition_cache: dict[tuple[object, ...], str | None] | None = None,
+    ) -> None:
+        del counters, cancelled, _condition_cache
+        calls["sorter"] += 1
 
-    monkeypatch.setattr(finalize, "projected_power_failure", observed("power"))
-    monkeypatch.setattr(finalize, "_projected_sorter_failure", observed("sorter"))
-    monkeypatch.setattr(finalize, "_projected_static_failure", observed("static"))
-    monkeypatch.setattr(finalize, "_projected_addon_failure", observed("addon"))
+    def observe_static(
+        _tested: object,
+        _pairs: object,
+        _projection: planet.Projection,
+        *,
+        counters: finalize._ProjectionCounters | None = None,
+        _box_cache: dict[
+            tuple[colliders.Placed, planet.Projection],
+            tuple[colliders.Box, ...],
+        ]
+        | None = None,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> None:
+        del counters, _box_cache, cancelled
+        calls["static"] += 1
+
+    def observe_addon(
+        _belts: object,
+        _addons: object,
+        _projection: planet.Projection,
+        *,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> None:
+        del cancelled
+        calls["addon"] += 1
+
+    def observe_addon_splitter(
+        _coaters: object,
+        _splitters: object,
+        _projection: planet.Projection,
+        *,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> None:
+        del cancelled
+        calls["addon_splitter"] += 1
+
+    monkeypatch.setattr(finalize, "projected_power_failure", observe_power)
+    monkeypatch.setattr(finalize, "_projected_sorter_failure", observe_sorter)
+    monkeypatch.setattr(finalize, "_projected_static_failure", observe_static)
+    monkeypatch.setattr(finalize, "_projected_addon_failure", observe_addon)
     monkeypatch.setattr(
         finalize,
         "_projected_addon_splitter_failure",
-        observed("addon_splitter"),
+        observe_addon_splitter,
     )
     band = next(candidate for candidate in planet.bands() if candidate.area_segments == 4)
     first = planet.Projection(
@@ -2155,32 +2503,80 @@ def test_projection_result_cache_reuses_none_and_first_failure_results(
     }
     calls = dict.fromkeys(names, 0)
 
-    def refusing(name: str) -> object:
-        def predicate(
-            *args: object,
-            counters: finalize._ProjectionCounters | None = None,
-        ) -> finalize.ProjectionFailure:
-            calls[name] += 1
-            if counters is not None and name == "sorter":
-                counters.sorters += 3
-            if counters is not None and name == "static":
-                counters.collider_pairs += 2
-            return failures[name]
+    def refuse_power(
+        _nodes: object,
+        _projection: planet.Projection,
+        *,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> finalize.ProjectionFailure:
+        del cancelled
+        calls["power"] += 1
+        return failures["power"]
 
-        return predicate
+    def refuse_sorter(
+        _sorters: object,
+        _projection: planet.Projection,
+        *,
+        counters: finalize._ProjectionCounters | None = None,
+        cancelled: Callable[[], bool] | None = None,
+        _condition_cache: dict[tuple[object, ...], str | None] | None = None,
+    ) -> finalize.ProjectionFailure:
+        del cancelled, _condition_cache
+        calls["sorter"] += 1
+        if counters is not None:
+            counters.sorters += 3
+        return failures["sorter"]
 
-    for function, name in zip(
-        (
-            "projected_power_failure",
-            "_projected_sorter_failure",
-            "_projected_static_failure",
-            "_projected_addon_failure",
-            "_projected_addon_splitter_failure",
-        ),
-        names,
-        strict=True,
-    ):
-        monkeypatch.setattr(finalize, function, refusing(name))
+    def refuse_static(
+        _tested: object,
+        _pairs: object,
+        _projection: planet.Projection,
+        *,
+        counters: finalize._ProjectionCounters | None = None,
+        _box_cache: dict[
+            tuple[colliders.Placed, planet.Projection],
+            tuple[colliders.Box, ...],
+        ]
+        | None = None,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> finalize.ProjectionFailure:
+        del _box_cache, cancelled
+        calls["static"] += 1
+        if counters is not None:
+            counters.collider_pairs += 2
+        return failures["static"]
+
+    def refuse_addon(
+        _belts: object,
+        _addons: object,
+        _projection: planet.Projection,
+        *,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> finalize.ProjectionFailure:
+        del cancelled
+        calls["addon"] += 1
+        return failures["addon"]
+
+    def refuse_addon_splitter(
+        _coaters: object,
+        _splitters: object,
+        _projection: planet.Projection,
+        *,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> finalize.ProjectionFailure:
+        del cancelled
+        calls["addon_splitter"] += 1
+        return failures["addon_splitter"]
+
+    monkeypatch.setattr(finalize, "projected_power_failure", refuse_power)
+    monkeypatch.setattr(finalize, "_projected_sorter_failure", refuse_sorter)
+    monkeypatch.setattr(finalize, "_projected_static_failure", refuse_static)
+    monkeypatch.setattr(finalize, "_projected_addon_failure", refuse_addon)
+    monkeypatch.setattr(
+        finalize,
+        "_projected_addon_splitter_failure",
+        refuse_addon_splitter,
+    )
     band = next(candidate for candidate in planet.bands() if candidate.area_segments == 4)
     projection = planet.Projection(
         band,
@@ -2227,24 +2623,71 @@ def test_projection_result_cache_lifetime_is_one_finalization(
     names = ("power", "sorter", "static", "addon", "addon_splitter")
     calls = dict.fromkeys(names, 0)
 
-    def observed(name: str) -> object:
-        def predicate(*args: object, **kwargs: object) -> None:
-            calls[name] += 1
+    def observe_power(
+        _nodes: object,
+        _projection: planet.Projection,
+        *,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> None:
+        del cancelled
+        calls["power"] += 1
 
-        return predicate
+    def observe_sorter(
+        _sorters: object,
+        _projection: planet.Projection,
+        *,
+        counters: finalize._ProjectionCounters | None = None,
+        cancelled: Callable[[], bool] | None = None,
+        _condition_cache: dict[tuple[object, ...], str | None] | None = None,
+    ) -> None:
+        del counters, cancelled, _condition_cache
+        calls["sorter"] += 1
 
-    for function, name in zip(
-        (
-            "projected_power_failure",
-            "_projected_sorter_failure",
-            "_projected_static_failure",
-            "_projected_addon_failure",
-            "_projected_addon_splitter_failure",
-        ),
-        names,
-        strict=True,
-    ):
-        monkeypatch.setattr(finalize, function, observed(name))
+    def observe_static(
+        _tested: object,
+        _pairs: object,
+        _projection: planet.Projection,
+        *,
+        counters: finalize._ProjectionCounters | None = None,
+        _box_cache: dict[
+            tuple[colliders.Placed, planet.Projection],
+            tuple[colliders.Box, ...],
+        ]
+        | None = None,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> None:
+        del counters, _box_cache, cancelled
+        calls["static"] += 1
+
+    def observe_addon(
+        _belts: object,
+        _addons: object,
+        _projection: planet.Projection,
+        *,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> None:
+        del cancelled
+        calls["addon"] += 1
+
+    def observe_addon_splitter(
+        _coaters: object,
+        _splitters: object,
+        _projection: planet.Projection,
+        *,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> None:
+        del cancelled
+        calls["addon_splitter"] += 1
+
+    monkeypatch.setattr(finalize, "projected_power_failure", observe_power)
+    monkeypatch.setattr(finalize, "_projected_sorter_failure", observe_sorter)
+    monkeypatch.setattr(finalize, "_projected_static_failure", observe_static)
+    monkeypatch.setattr(finalize, "_projected_addon_failure", observe_addon)
+    monkeypatch.setattr(
+        finalize,
+        "_projected_addon_splitter_failure",
+        observe_addon_splitter,
+    )
     placement = Placement(buildings=_extent(1, 1))
     policy = BandPolicy("4")
 

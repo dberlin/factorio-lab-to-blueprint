@@ -226,6 +226,7 @@ type _FailureCache = Callable[..., ProjectionFailure | None]
 @dataclass(slots=True)
 class _ProjectionCache:
     counters: _ProjectionCounters
+    cancelled: Callable[[], bool] | None = None
     invariants: dict[tuple[PlacedBuilding, ...], _ProjectionInvariants] = field(
         default_factory=dict
     )
@@ -234,6 +235,9 @@ class _ProjectionCache:
         tuple[tuple[int, int], ...],
     ] = field(default_factory=dict)
     projections: dict[tuple[int, int, int, int], planet.Projection] = field(
+        default_factory=dict
+    )
+    sorter_conditions: dict[tuple[object, ...], str | None] = field(
         default_factory=dict
     )
     _sorter_misses: int = field(init=False, default=0)
@@ -258,6 +262,8 @@ class _ProjectionCache:
                 sorters,
                 projection,
                 counters=self.counters,
+                cancelled=self.cancelled,
+                _condition_cache=self.sorter_conditions,
             )
 
         @cache
@@ -272,6 +278,7 @@ class _ProjectionCache:
                 pairs,
                 projection,
                 counters=self.counters,
+                cancelled=self.cancelled,
             )
 
         @cache
@@ -280,7 +287,11 @@ class _ProjectionCache:
             projection: planet.Projection,
         ) -> ProjectionFailure | None:
             self._power_misses += 1
-            failure = projected_power_failure(nodes, projection)
+            failure = projected_power_failure(
+                nodes,
+                projection,
+                cancelled=self.cancelled,
+            )
             self.counters.power_pairs += _power_pairs_examined(nodes, failure)
             return failure
 
@@ -298,7 +309,12 @@ class _ProjectionCache:
             projection: planet.Projection,
         ) -> ProjectionFailure | None:
             self._addon_misses += 1
-            return _projected_addon_failure(belts, addons, projection)
+            return _projected_addon_failure(
+                belts,
+                addons,
+                projection,
+                cancelled=self.cancelled,
+            )
 
         @cache
         def addon_splitter_failure(
@@ -311,6 +327,7 @@ class _ProjectionCache:
                 coaters,
                 splitters,
                 projection,
+                cancelled=self.cancelled,
             )
 
         self._sorter_failure = sorter_failure
@@ -319,11 +336,17 @@ class _ProjectionCache:
         self._addon_failure = addon_failure
         self._addon_splitter_failure = addon_splitter_failure
 
+
+    def _poll_cancellation(self) -> None:
+        if self.cancelled is not None and self.cancelled():
+            raise ProjectionCancelled
+
     def sorter_failure(
         self,
         sorters: tuple[tuple[int, planet.Sorter], ...],
         projection: planet.Projection,
     ) -> ProjectionFailure | None:
+        self._poll_cancellation()
         misses = self._sorter_misses
         failure = self._sorter_failure(sorters, projection)
         if self._sorter_misses == misses:
@@ -336,6 +359,7 @@ class _ProjectionCache:
         pairs: tuple[tuple[int, int], ...],
         projection: planet.Projection,
     ) -> ProjectionFailure | None:
+        self._poll_cancellation()
         misses = self._static_misses
         failure = self._static_failure(tested, pairs, projection)
         if self._static_misses == misses:
@@ -347,6 +371,7 @@ class _ProjectionCache:
         nodes: tuple[tuple[int, PlacedBuilding, rules.PowerNode], ...],
         projection: planet.Projection,
     ) -> ProjectionFailure | None:
+        self._poll_cancellation()
         misses = self._power_misses
         failure = self._power_failure(nodes, projection)
         if self._power_misses == misses:
@@ -366,6 +391,7 @@ class _ProjectionCache:
         ],
         projection: planet.Projection,
     ) -> ProjectionFailure | None:
+        self._poll_cancellation()
         misses = self._addon_misses
         failure = self._addon_failure(belts, addons, projection)
         if self._addon_misses == misses:
@@ -378,6 +404,7 @@ class _ProjectionCache:
         splitters: tuple[tuple[int, colliders.Placed], ...],
         projection: planet.Projection,
     ) -> ProjectionFailure | None:
+        self._poll_cancellation()
         misses = self._addon_splitter_misses
         failure = self._addon_splitter_failure(coaters, splitters, projection)
         if self._addon_splitter_misses == misses:
@@ -529,13 +556,59 @@ def _projected_sorter_failure(
     *,
     counters: _ProjectionCounters | None = None,
     cancelled: Callable[[], bool] | None = None,
+    _condition_cache: dict[tuple[object, ...], str | None] | None = None,
 ) -> ProjectionFailure | None:
+    conditions = {} if _condition_cache is None else _condition_cache
+    projection_context = (
+        projection.band,
+        projection.segment,
+        projection.radius,
+        projection.quadrant,
+    )
     for index, sorter in sorters:
         if cancelled is not None and cancelled():
             raise ProjectionCancelled
         if counters is not None:
             counters.sorters += 1
-        condition = planet.sorter_condition(sorter, projection)
+        if projection.rotated:
+            longitude_origin = sorter.ref_y
+            condition_key = (
+                *projection_context,
+                sorter.y - longitude_origin,
+                projection.anchor_row + sorter.x,
+                sorter.z,
+                sorter.y2 - longitude_origin,
+                projection.anchor_row + sorter.x2,
+                sorter.z2,
+                sorter.yaw,
+                sorter.yaw2,
+                sorter.input_belt,
+                sorter.output_belt,
+                projection.anchor_row + sorter.ref_x,
+                sorter.ref_z,
+            )
+        else:
+            longitude_origin = sorter.ref_x
+            condition_key = (
+                *projection_context,
+                sorter.x - longitude_origin,
+                projection.anchor_row + sorter.y,
+                sorter.z,
+                sorter.x2 - longitude_origin,
+                projection.anchor_row + sorter.y2,
+                sorter.z2,
+                sorter.yaw,
+                sorter.yaw2,
+                sorter.input_belt,
+                sorter.output_belt,
+                projection.anchor_row + sorter.ref_y,
+                sorter.ref_z,
+            )
+        if condition_key in conditions:
+            condition = conditions[condition_key]
+        else:
+            condition = planet.sorter_condition(sorter, projection)
+            conditions[condition_key] = condition
         if condition is not None:
             return ProjectionFailure(
                 check="game.inserter_paste",
@@ -1435,7 +1508,10 @@ def _failure_at_projection(
         raise ProjectionCancelled
     counters.projections += 1
     failures: list[ProjectionFailure] = []
-    use_cache = cache is not None and cancelled is None
+    use_cache = (
+        cache is not None
+        and (cancelled is None or cache.cancelled is cancelled)
+    )
     if not use_cache:
         power_failure = (
             projected_power_failure(invariants.nodes, projection)
@@ -1547,7 +1623,12 @@ def _certify_frame(
 ) -> tuple[ProjectionFailure, ...]:
     if cancelled is not None and cancelled():
         raise ProjectionCancelled
-    active_cache = cache if cancelled is None else None
+    active_cache = (
+        cache
+        if cache is not None
+        and (cancelled is None or cache.cancelled is cancelled)
+        else None
+    )
     building_key = placement.buildings
     invariants = (
         None
@@ -1779,6 +1860,7 @@ def _frame_candidate_for_primary(
     )
 
 
+@cache
 def _frame_candidates_for_extent(
     width: int,
     height: int,
@@ -2173,7 +2255,7 @@ def finalize_placement(
     if not candidates:
         raise ProjectionRefusal((_extent_failure(placement, policy),))
     counters = _ProjectionCounters()
-    cache = _ProjectionCache(counters)
+    cache = _ProjectionCache(counters, cancelled=cancelled)
     failures: list[ProjectionFailure] = []
     for candidate in candidates:
         if cancelled is not None and cancelled():
@@ -2334,6 +2416,14 @@ def _boundary_open_belts(
     return frozenset(selected)
 
 
+@dataclass(slots=True)
+class _CleanupOperations:
+    """Aggregate work shared by immutable cleanup-prefix snapshots."""
+
+    node_visits: int = 0
+    edge_visits: int = 0
+
+
 class _CleanupSurvivorGraph:
     """Event-driven form of the cleanup wave fixed point.
 
@@ -2352,11 +2442,11 @@ class _CleanupSurvivorGraph:
         placement: Placement,
         *,
         cancelled: Callable[[], bool] | None = None,
+        _operations: _CleanupOperations | None = None,
     ) -> None:
         self.buildings = placement.buildings
         self.cancelled = cancelled
-        self.node_visits = 0
-        self.edge_visits = 0
+        self._operations = _operations or _CleanupOperations()
         self.active = [True] * len(self.buildings)
         self.active_count = len(self.buildings)
         self.belts: list[bool] = []
@@ -2436,6 +2526,186 @@ class _CleanupSurvivorGraph:
         self.bottom_position = 0
         self.right_position = 0
         self.top_position = 0
+
+    @property
+    def node_visits(self) -> int:
+        return self._operations.node_visits
+
+    @node_visits.setter
+    def node_visits(self, value: int) -> None:
+        self._operations.node_visits = value
+
+    @property
+    def edge_visits(self) -> int:
+        return self._operations.edge_visits
+
+    @edge_visits.setter
+    def edge_visits(self, value: int) -> None:
+        self._operations.edge_visits = value
+
+    def _fork(self) -> _CleanupSurvivorGraph:
+        """Copy mutable cleanup state while sharing its aggregate work counter."""
+        fork = object.__new__(type(self))
+        fork.buildings = self.buildings
+        fork.cancelled = self.cancelled
+        fork._operations = self._operations
+        fork.active = self.active.copy()
+        fork.active_count = self.active_count
+        fork.belts = self.belts.copy()
+        fork.input_jump = self.input_jump.copy()
+        fork.output_jump = self.output_jump.copy()
+        fork.remapped_once = self.remapped_once
+        fork.predecessors = self.predecessors.copy()
+        fork.nonbelt_input = self.nonbelt_input.copy()
+        fork.nonbelt_output = self.nonbelt_output.copy()
+        fork.input_head = self.input_head.copy()
+        fork.input_tail = self.input_tail.copy()
+        fork.input_next = self.input_next.copy()
+        fork.output_head = self.output_head.copy()
+        fork.output_tail = self.output_tail.copy()
+        fork.output_next = self.output_next.copy()
+        fork.external_input_sources = self.external_input_sources.copy()
+        fork.external_output_sources = self.external_output_sources.copy()
+        fork.left_records = {
+            coordinate: records.copy()
+            for coordinate, records in self.left_records.items()
+        }
+        fork.bottom_records = {
+            coordinate: records.copy()
+            for coordinate, records in self.bottom_records.items()
+        }
+        fork.right_records = {
+            coordinate: records.copy()
+            for coordinate, records in self.right_records.items()
+        }
+        fork.top_records = {
+            coordinate: records.copy()
+            for coordinate, records in self.top_records.items()
+        }
+        fork.left_counts = self.left_counts.copy()
+        fork.bottom_counts = self.bottom_counts.copy()
+        fork.right_counts = self.right_counts.copy()
+        fork.top_counts = self.top_counts.copy()
+        fork.left_coordinates = self.left_coordinates.copy()
+        fork.bottom_coordinates = self.bottom_coordinates.copy()
+        fork.right_coordinates = self.right_coordinates.copy()
+        fork.top_coordinates = self.top_coordinates.copy()
+        fork.left_position = self.left_position
+        fork.bottom_position = self.bottom_position
+        fork.right_position = self.right_position
+        fork.top_position = self.top_position
+        return fork
+
+    def extended(
+        self,
+        additions: Sequence[PlacedBuilding],
+        *,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> _CleanupSurvivorGraph:
+        """Return an immutable-prefix extension without rescanning prefix edges."""
+        extended = self._fork()
+        extended.cancelled = cancelled if cancelled is not None else self.cancelled
+        old_size = len(extended.buildings)
+        additions = tuple(additions)
+        extended.buildings += additions
+        extended.active.extend(True for _building in additions)
+        extended.active_count += len(additions)
+        for building in additions:
+            extended._poll()
+            extended.node_visits += 1
+            extended.belts.append(catalog.is_belt(building.item_id))
+            extended.input_jump.append(building.input_obj)
+            extended.output_jump.append(building.output_obj)
+            extended.predecessors.append(0)
+            extended.nonbelt_input.append(0)
+            extended.nonbelt_output.append(0)
+            extended.input_head.append(None)
+            extended.input_tail.append(None)
+            extended.input_next.append(None)
+            extended.output_head.append(None)
+            extended.output_tail.append(None)
+            extended.output_next.append(None)
+
+        size = len(extended.buildings)
+        for source in range(old_size, size):
+            building = extended.buildings[source]
+            for direction, target in (
+                ("input", building.input_obj),
+                ("output", building.output_obj),
+            ):
+                extended.edge_visits += 1
+                if extended.belts[source]:
+                    if target is not None and 0 <= target < size and extended.belts[target]:
+                        extended._append_owner(direction, target, source)
+                        if direction == "output":
+                            extended.predecessors[target] += 1
+                    elif target is not None and not 0 <= target < size:
+                        external = (
+                            extended.external_input_sources
+                            if direction == "input"
+                            else extended.external_output_sources
+                        )
+                        external.append(source)
+                elif target is not None and 0 <= target < size and extended.belts[target]:
+                    protected = (
+                        extended.nonbelt_input
+                        if direction == "input"
+                        else extended.nonbelt_output
+                    )
+                    protected[target] += 1
+
+        for index in range(old_size, size):
+            building = extended.buildings[index]
+            right = building.x + building.width - 1
+            top = building.y + building.height - 1
+            for coordinate, records, counts in (
+                (building.x, extended.left_records, extended.left_counts),
+                (building.y, extended.bottom_records, extended.bottom_counts),
+                (right, extended.right_records, extended.right_counts),
+                (top, extended.top_records, extended.top_counts),
+            ):
+                records.setdefault(coordinate, []).append(index)
+                counts[coordinate] = counts.get(coordinate, 0) + 1
+        extended.left_coordinates = sorted(extended.left_counts)
+        extended.bottom_coordinates = sorted(extended.bottom_counts)
+        extended.right_coordinates = sorted(extended.right_counts, reverse=True)
+        extended.top_coordinates = sorted(extended.top_counts, reverse=True)
+        extended.left_position = 0
+        extended.bottom_position = 0
+        extended.right_position = 0
+        extended.top_position = 0
+        return extended
+
+    def snapshot_bounds(self) -> tuple[int, int, int, int]:
+        """Evaluate this immutable prefix without consuming it."""
+        return self._fork().survivor_bounds()
+
+    def extended_snapshot(
+        self,
+        additions: Sequence[PlacedBuilding],
+        bounds: tuple[int, int, int, int],
+        *,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> tuple[_CleanupSurvivorGraph, tuple[int, int, int, int]]:
+        """Extend a prefix, reevaluating only additions that can change survivors."""
+        extended = self.extended(additions, cancelled=cancelled)
+        if all(
+            building.input_obj is None
+            and building.output_obj is None
+            and (
+                catalog.is_belt(building.item_id)
+                or (
+                    bounds[0] <= building.x
+                    and bounds[1] <= building.y
+                    and building.x + building.width - 1 <= bounds[2]
+                    and building.y + building.height - 1 <= bounds[3]
+                )
+            )
+            for building in additions
+        ):
+            return extended, bounds
+        return extended, extended.snapshot_bounds()
+
 
     def _poll(self) -> None:
         if self.cancelled is not None and self.cancelled():

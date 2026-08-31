@@ -2584,7 +2584,11 @@ def _proof_attempt(
         height=20,
         outline=tuple(_box(strip) for strip in strips),
         routing=routing,
-        budget_stage=None,
+        budget_stage=(
+            freeform._BuildBudgetStage.ROUTING
+            if routing.status is DetailedRouteStatus.BUDGET
+            else None
+        ),
         static_access=tuple(
             failure
             for failure in routing.failures
@@ -2759,6 +2763,7 @@ def _sweep_after_first_routing(
     subsequent_routing: DetailedRouteResult | None = None,
     deadline: float | None = None,
     finalizer: Callable[..., Placement] | None = None,
+    certifier: Callable[..., validate.Report] | None = None,
 ) -> tuple[Placement | None, list[tuple[int, int]], list[freeform.PackAttempt]]:
     spec = two_stage_spec()
     strips = plan_strips(spec)
@@ -2796,7 +2801,16 @@ def _sweep_after_first_routing(
             if routing.status is DetailedRouteStatus.ROUTED
             else None
         )
-        return _BuildResult(placement, routing, ())
+        return _BuildResult(
+            placement=placement,
+            routing=routing,
+            budget_stage=(
+                freeform._BuildBudgetStage.ROUTING
+                if routing.status is DetailedRouteStatus.BUDGET
+                else None
+            ),
+            towers=(),
+        )
 
     monkeypatch.setattr(freeform, "_candidate_heights", lambda _strips: list(heights))
     monkeypatch.setattr(
@@ -2825,7 +2839,11 @@ def _sweep_after_first_routing(
         monkeypatch.setattr(
             validate,
             "certify",
-            lambda *_args, **_kwargs: validate.Report(findings=()),
+            (
+                certifier
+                if certifier is not None
+                else lambda *_args, **_kwargs: validate.Report(findings=())
+            ),
         )
         monkeypatch.setattr(
             finalize,
@@ -2978,6 +2996,49 @@ def test_sweep_var_keyword_finalizer_receives_cancellation(
 
     assert observed
     assert result is None
+
+
+def test_sweep_reserves_measured_certify_and_finalize_cost_before_admission(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = 0.0
+
+    def monotonic() -> float:
+        return clock
+
+    def certify(*_args: object, **_kwargs: object) -> validate.Report:
+        nonlocal clock
+        clock += 0.2
+        return validate.Report(findings=())
+
+    def finish(
+        placement: Placement,
+        _policy: BandPolicy,
+        **_kwargs: object,
+    ) -> Placement:
+        nonlocal clock
+        clock += 0.2
+        return placement
+
+    monkeypatch.setattr(freeform.time, "monotonic", monotonic)
+    result, seen, _attempts = _sweep_after_first_routing(
+        monkeypatch,
+        DetailedRouteResult(
+            DetailedRouteStatus.ROUTED,
+            (),
+            (),
+            0,
+            0,
+        ),
+        arrangements=1,
+        heights=(20, 21),
+        deadline=0.6,
+        certifier=certify,
+        finalizer=finish,
+    )
+
+    assert result is not None
+    assert seen == [(20, 0)]
 
 
 def test_exact_one_net_feedback_admits_the_next_configured_arrangement(
@@ -3160,7 +3221,12 @@ def test_proof_scoped_route_feedback_uses_only_configured_width_slack(
             if routing.failed_count
             else Placement(buildings=(), stats={"belt_tiles": 0.0})
         )
-        return _BuildResult(placement, routing, ())
+        return _BuildResult(
+            placement=placement,
+            routing=routing,
+            budget_stage=None,
+            towers=(),
+        )
 
     monkeypatch.setattr(freeform, "_candidate_heights", lambda _strips: [height])
     monkeypatch.setattr(freeform, "_greedy_pack", lambda _strips, _height: compact)
@@ -3587,6 +3653,7 @@ class TestSolverActuallyRuns:
                 iterations=0,
                 expansions=0,
             ),
+            budget_stage=None,
             towers=(),
         )
         monkeypatch.setattr(freeform, "_candidate_heights", lambda _strips: [8])
@@ -3898,9 +3965,10 @@ def _sweep_with_pitch_feedback(
         **_kwargs: object,
     ) -> _BuildResult:
         return _BuildResult(
-            Placement(buildings=(), stats={"belt_tiles": 0.0}),
-            routed,
-            (),
+            placement=Placement(buildings=(), stats={"belt_tiles": 0.0}),
+            routing=routed,
+            budget_stage=None,
+            towers=(),
         )
 
     def pitch_requirements(
@@ -4082,15 +4150,16 @@ def test_unaffordable_pitch_feedback_replans_later_base_height(
         if pack.height == 21:
             assert variant.pitch_x == 8
         return _BuildResult(
-            Placement(
+            placement=Placement(
                 buildings=(),
                 stats={
                     "belt_tiles": 0.0,
                     "test_height": float(pack.height),
                 },
             ),
-            routed,
-            (),
+            routing=routed,
+            budget_stage=None,
+            towers=(),
         )
 
     def pitch_requirements(
@@ -4231,11 +4300,17 @@ def test_geometry_replan_discards_feedback_width_and_direct_cuts_from_old_strips
         **_kwargs: object,
     ) -> _BuildResult:
         if pack.status == "pack-1":
-            return _BuildResult(None, _feedback_bearing_routing(), ())
+            return _BuildResult(
+                placement=None,
+                routing=_feedback_bearing_routing(),
+                budget_stage=None,
+                towers=(),
+            )
         return _BuildResult(
-            Placement(buildings=(), stats={"belt_tiles": 0.0}),
-            routed,
-            (),
+            placement=Placement(buildings=(), stats={"belt_tiles": 0.0}),
+            routing=routed,
+            budget_stage=None,
+            towers=(),
         )
 
     def pitch_requirements(
@@ -4637,6 +4712,7 @@ def test_projection_no_good_owned_strip_collision_learns_and_repacks(
                 iterations=0,
                 expansions=0,
             ),
+            budget_stage=None,
             towers=(),
         )
 
@@ -5200,6 +5276,55 @@ def test_prospective_projection_matches_finalizer_for_exact_ownerless_pair() -> 
     assert prospective in caught.value.failures
 
 
+def test_projected_obstacle_gate_preserves_exact_candidate_verdicts() -> None:
+    chemical = catalog.building(2309)
+    tower = catalog.building(catalog.TESLA_TOWER_ID)
+    base = PlacedBuilding(
+        2309,
+        chemical.model_index,
+        0,
+        0,
+        width=chemical.width,
+        height=chemical.height,
+    )
+    frames = freeform._junction_projection_frames(
+        (0, 0, 30, 5),
+        (0, 0, 30, 5),
+        BandPolicy("portable"),
+    )
+    obstacle_index = freeform._ProjectedObstacleIndex.build(((181, base),))
+
+    for x in (0, 2, 5, 20):
+        candidate = PlacedBuilding(
+            catalog.TESLA_TOWER_ID,
+            tower.model_index,
+            x,
+            1,
+            width=tower.width,
+            height=tower.height,
+        )
+        exact = freeform._prospective_static_failure(
+            ((181, base), (255, candidate)),
+            frames,
+            candidate_index=255,
+        )
+        peers = obstacle_index.candidates(candidate, frames)
+        gated = (
+            freeform._prospective_static_failure(
+                (
+                    *((index, base) for index in peers),
+                    (255, candidate),
+                ),
+                frames,
+                candidate_index=255,
+            )
+            if peers
+            else None
+        )
+
+        assert gated == exact
+
+
 def test_prospective_static_cache_reuses_only_the_immutable_base(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -5269,7 +5394,8 @@ def test_prospective_static_cache_reuses_only_the_immutable_base(
         assert materialized.count(candidate) == len(frames)
 
 
-def test_prospective_static_deadline_unwinds_inside_materialization_without_cache_artifact() -> None:
+def test_prospective_static_deadline_unwinds_inside_materialization_without_cache_artifact(
+) -> None:
     chemical = catalog.building(2309)
     tower = catalog.building(catalog.TESLA_TOWER_ID)
     buildings = (
@@ -5386,6 +5512,7 @@ def test_staged_static_pack_dependent_exhaustion_learns_exact_no_good(
                 iterations=0,
                 expansions=0,
             ),
+            budget_stage=None,
             towers=(),
         )
 
@@ -5756,15 +5883,16 @@ def test_clearance_feedback_replans_later_base_height_without_minting_retry(
             )
         assert selected.west_channel == freeform._COATER_WEST_CHANNEL + 1
         return _BuildResult(
-            Placement(
+            placement=Placement(
                 buildings=(),
                 stats={
                     "belt_tiles": 0.0,
                     "test_height": float(pack.height),
                 },
             ),
-            routed,
-            (),
+            routing=routed,
+            budget_stage=None,
+            towers=(),
         )
 
     monkeypatch.setattr(
@@ -5969,7 +6097,12 @@ def _sweep_with_repeated_exact_feedback(
             },
         )
         if pack.height != 20 or source == "finalizer":
-            return _BuildResult(placement, routed, ())
+            return _BuildResult(
+                placement=placement,
+                routing=routed,
+                budget_stage=None,
+                towers=(),
+            )
         if source == "power":
             raise freeform._Unpowerable(
                 "exact power relation failed",
@@ -7854,31 +7987,104 @@ class TestPowerClaimsItsGroundBeforeRouting:
         with pytest.raises(_Unpowerable):
             _power_plan(canvas, (0, 0, 40, 40), policy=BandPolicy("160"))
 
-    def test_power_candidates_reuse_the_static_cleanup_bounds(
+    def test_power_candidates_exact_check_only_broad_phase_hits(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         core = (0, 0, 60, 9)
         canvas = _Canvas(limit=core)
         self._pin_projection_extent(canvas, core)
-        original = freeform._cached_cleanup_survivor_bounds
-        calls = 0
+        cache = freeform._StagedStaticCache()
+        frame_queries = 0
+        original_frames = freeform._cached_junction_projection_frames
 
-        def counted(
-            cache: freeform._StagedStaticCache,
-            buildings: tuple[PlacedBuilding, ...],
-            *,
-            cancelled: Callable[[], bool] | None = None,
-        ) -> tuple[int, int, int, int]:
-            nonlocal calls
-            calls += 1
-            return original(cache, buildings, cancelled=cancelled)
+        def counted_frames(*args: object, **kwargs: object) -> object:
+            nonlocal frame_queries
+            frame_queries += 1
+            return original_frames(*args, **kwargs)  # type: ignore[no-any-return]
 
-        monkeypatch.setattr(freeform, "_cached_cleanup_survivor_bounds", counted)
-        sites = _power_plan(canvas, core, policy=BandPolicy("portable"))
+        monkeypatch.setattr(
+            freeform,
+            "_cached_junction_projection_frames",
+            counted_frames,
+        )
+
+        sites = _power_plan(
+            canvas,
+            core,
+            policy=BandPolicy("portable"),
+            staged_static_cache=cache,
+        )
 
         assert len(sites) >= 3
-        assert calls == 1
+        assert cache.broad_phase_queries >= len(sites)
+        assert cache.exact_static_queries == cache.broad_phase_hits
+        assert cache.broad_phase_hits < cache.broad_phase_queries
+        assert frame_queries <= cache.broad_phase_hits
+
+    def test_power_peer_broad_phase_retains_periodic_seam_failure(self) -> None:
+        tower = catalog.building(catalog.TESLA_TOWER_ID)
+        band = next(candidate for candidate in planet.bands() if candidate.area_segments == 8)
+        projection = planet.Projection(
+            band,
+            band.grid_lo,
+            colliders.PLANET_SEGMENT,
+            colliders.PLANET_RADIUS,
+        )
+
+        def node(
+            index: int,
+            x: int,
+        ) -> tuple[int, PlacedBuilding, rules.PowerNode]:
+            return (
+                index,
+                PlacedBuilding(
+                    item_id=catalog.TESLA_TOWER_ID,
+                    model_index=tower.model_index,
+                    x=x,
+                    y=0,
+                    width=tower.width,
+                    height=tower.height,
+                ),
+                tower.power_node,
+            )
+
+        candidate = node(0, 0)
+        contexts = (
+            (
+                band.columns,
+                projection.rotated,
+                freeform._minimum_projection_grid_scale((band,)),
+            ),
+        )
+        seam_peer = node(1, band.columns - 1)
+        seam_failure = finalize.projected_power_failure(
+            (candidate, seam_peer),
+            projection,
+        )
+        assert seam_failure is not None
+        assert freeform._projected_power_peer_possible(
+            candidate,
+            seam_peer,
+            contexts,
+        )
+
+        for index, x in enumerate((1, 2, 3, 20, 37, 38, 39), 2):
+            peer = node(index, x)
+            exact_failure = finalize.projected_power_failure(
+                (candidate, peer),
+                projection,
+            )
+            gated_failure = (
+                exact_failure
+                if freeform._projected_power_peer_possible(
+                    candidate,
+                    peer,
+                    contexts,
+                )
+                else None
+            )
+            assert gated_failure == exact_failure
 
     def test_covering_by_need_beats_covering_by_grid(self) -> None:
         """Fewer towers is the density win, and it is the point.
@@ -10223,7 +10429,10 @@ class TestAJunctionIsNotBuiltBesideAForeignBelt:
     """
 
     def _scene(
-        self, *, stranger: bool
+        self,
+        *,
+        stranger: bool,
+        stranger_level: int = 0,
     ) -> tuple[_Canvas, list[_Net], dict[int, list[tuple[int, int, int]]]]:
         canvas = _Canvas()
         upstream = canvas.add(_belt(0, -1, item="x"))
@@ -10236,7 +10445,9 @@ class TestAJunctionIsNotBuiltBesideAForeignBelt:
         if stranger:
             # One tile east of the tap, carrying something else and linked to
             # nothing the tap can reach.  This is the cell the game refuses.
-            canvas.add(_belt(1, 0, item="y"))
+            canvas.add(
+                replace(_belt(1, 0, item="y"), z=F(stranger_level))
+            )
         dst = canvas.add(_belt(-2, 0, item="x"))
         net = _Net(
             src=_Port(lane, 0, 0, 0, 0),
@@ -10262,6 +10473,16 @@ class TestAJunctionIsNotBuiltBesideAForeignBelt:
         assert unlinked == (0,), (
             "the tap was refused, so net 0 must be named as unlinked"
         )
+
+    def test_the_site_is_refused_when_an_elevated_stranger_grazes_the_collider(
+        self,
+    ) -> None:
+        canvas, nets, paths = self._scene(stranger=True, stranger_level=1)
+
+        unlinked = _commit_paths(canvas, nets, paths, 2001, 35)
+
+        assert not self._splitters(canvas)
+        assert unlinked == (0,)
 
     def test_the_same_site_is_taken_when_nothing_foreign_is_beside_it(self) -> None:
         """The control, without which the test above passes for free.

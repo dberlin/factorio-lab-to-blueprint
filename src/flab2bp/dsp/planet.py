@@ -264,6 +264,17 @@ class Band:
     def is_equatorial(self) -> bool:
         return self.latitude_index_lo == 0
 
+    def anchor_ranges(self, rows: int) -> tuple[range, ...]:
+        """Contiguous southmost-row ranges for an extent of ``rows`` rows."""
+        if rows > self.rows:
+            return ()
+        if self.is_equatorial:
+            return (range(-self.grid_hi, self.grid_hi - rows + 2),)
+        return (
+            range(-self.grid_hi, -self.grid_lo - rows + 2),
+            range(self.grid_lo, self.grid_hi - rows + 2),
+        )
+
     def anchors(self, rows: int) -> tuple[int, ...]:
         """Every southmost grid row an extent of ``rows`` rows may occupy here.
 
@@ -285,13 +296,11 @@ class Band:
         (``BlueprintUtils.cs:2034``, ``num3``).  Enumerating both is what makes
         the flip unnecessary to model separately.
         """
-        if rows > self.rows:
-            return ()
-        if self.is_equatorial:
-            return tuple(range(-self.grid_hi, self.grid_hi - rows + 2))
-        north = range(self.grid_lo, self.grid_hi - rows + 2)
-        south = range(-self.grid_hi, -self.grid_lo - rows + 2)
-        return tuple(south) + tuple(north)
+        return tuple(
+            anchor
+            for anchor_range in self.anchor_ranges(rows)
+            for anchor in anchor_range
+        )
 
 
 @lru_cache(maxsize=8)
@@ -625,7 +634,7 @@ class Projection:
             spherical_rotation(d, yaw + self.yaw_offset),
         )
 
-    def _shell(self, z: float) -> float:
+    def shell_radius(self, z: float) -> float:
         """The radius a building at level ``z`` actually sits on.
 
         ``localOffset_z * 1.3333333f + 0.2f + realRadius``
@@ -645,11 +654,11 @@ class Projection:
         ``(radius + 0.2) / radius``; everywhere else it is smaller or larger, and
         how much is the whole reason this module exists.
         """
-        return self._shell(z) * math.cos(self.latitude(x, y)) * self.longitude_step
+        return self.shell_radius(z) * math.cos(self.latitude(x, y)) * self.longitude_step
 
     def row_arc(self, z: float = 0.0) -> float:
         """World units between adjacent ROWS.  Constant over the planet."""
-        return self._shell(z) * self.latitude_step
+        return self.shell_radius(z) * self.latitude_step
 
 
 def projections_for(
@@ -854,8 +863,20 @@ def sorter_condition(sorter: Sorter, projection: Projection) -> str | None:
     """
     belts = sorter.belt_ends
     min_len, max_len = rules.SORTER_LENGTH[belts]
-    lpos = projection.position(sorter.x, sorter.y, sorter.z)
-    lpos2 = projection.position(sorter.x2, sorter.y2, sorter.z2)
+    direction = projection.direction(sorter.x, sorter.y)
+    direction2 = projection.direction(sorter.x2, sorter.y2)
+    scale = projection.shell_radius(sorter.z)
+    scale2 = projection.shell_radius(sorter.z2)
+    lpos = (
+        direction[0] * scale,
+        direction[1] * scale,
+        direction[2] * scale,
+    )
+    lpos2 = (
+        direction2[0] * scale2,
+        direction2[1] * scale2,
+        direction2[2] * scale2,
+    )
     reference = projection.position(sorter.ref_x, sorter.ref_y, sorter.ref_z)
 
     magnitude = math.dist(lpos, lpos2)
@@ -872,8 +893,8 @@ def sorter_condition(sorter: Sorter, projection: Projection) -> str | None:
         return "TooClose"
 
     offset = projection.yaw_offset
-    lrot = spherical_rotation(projection.direction(sorter.x, sorter.y), sorter.yaw + offset)
-    lrot2 = spherical_rotation(projection.direction(sorter.x2, sorter.y2), sorter.yaw2 + offset)
+    lrot = spherical_rotation(direction, sorter.yaw + offset)
+    lrot2 = spherical_rotation(direction2, sorter.yaw2 + offset)
     if quaternion_angle_deg(lrot, lrot2) > rules.SKEW_PAIR_DEG:
         return "TooSkew"
     axis = _norm((lpos2[0] - lpos[0], lpos2[1] - lpos[1], lpos2[2] - lpos[2]))
@@ -914,17 +935,28 @@ def _magnitude(v: Vec3) -> float:
 
 @cache
 def collider_radius(model_index: int) -> float:
-    """Cached sphere containing every collider for one immutable model.
+    """Cached exact sphere containing every collider for one immutable model.
 
     Used only to rule pairs OUT before the exact test -- see
-    :func:`candidate_pairs`.  Over-estimating it costs time; under-estimating it
-    would lose a collision, so it is the sum of the offset's magnitude and the
-    half-extent's, which is the corner-to-corner bound and cannot be too small.
+    :func:`candidate_pairs`.  Shipped build-collider quaternions are identity
+    (a separately tested data invariant), so the farthest box corner along an
+    axis is ``abs(position) + extent``.  Measuring that corner is tighter than
+    adding the position and extent magnitudes; that triangle bound retained
+    pairs whose boxes could never meet.
     """
-    worst = 0.0
-    for pos, ext, _q in colliders.build_colliders(model_index):
-        worst = max(worst, _magnitude(pos) + _magnitude(ext))
-    return worst
+    worst2 = 0.0
+    identity = (0.0, 0.0, 0.0, 1.0)
+    for position, extent, rotation in colliders.build_colliders(model_index):
+        if rotation != identity:
+            raise AssertionError("build collider quaternion must be identity")
+        worst2 = max(
+            worst2,
+            sum(
+                (abs(coordinate) + half_extent) ** 2
+                for coordinate, half_extent in zip(position, extent, strict=True)
+            ),
+        )
+    return math.sqrt(worst2)
 
 
 def candidate_pairs(

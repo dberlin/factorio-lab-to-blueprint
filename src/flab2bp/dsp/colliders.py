@@ -435,6 +435,7 @@ def own_centre_extent(model_index: int, yaw: float) -> tuple[float, float]:
 # --- overlap ----------------------------------------------------------------
 
 
+@cache
 def _axes(q: Quat) -> tuple[Vec3, Vec3, Vec3]:
     return (
         _qrot(q, (1.0, 0.0, 0.0)),
@@ -443,15 +444,31 @@ def _axes(q: Quat) -> tuple[Vec3, Vec3, Vec3]:
     )
 
 
+@cache
+def _box_radius(half: Vec3) -> float:
+    """Bounding-sphere radius shared by every instance of one collider box."""
+    return math.sqrt(half[0] * half[0] + half[1] * half[1] + half[2] * half[2])
+
+
 def obb_overlap(a: Box, b: Box) -> bool:
     """Separating-axis test, matching ``Physics.OverlapBox`` on two boxes."""
+    delta = (
+        b.centre[0] - a.centre[0],
+        b.centre[1] - a.centre[1],
+        b.centre[2] - a.centre[2],
+    )
+    radius = _box_radius(a.half) + _box_radius(b.half)
+    if (
+        delta[0] ** 2 + delta[1] ** 2 + delta[2] ** 2
+        > radius**2
+    ):
+        return False
     ax = _axes(a.rot)
     bx = _axes(b.rot)
     rot = [[_dot(ax[i], bx[j]) for j in range(3)] for i in range(3)]
     # The epsilon guards the cross-product axes when two boxes are parallel,
     # which every axis-aligned pair here is.
     abs_rot = [[abs(rot[i][j]) + 1e-9 for j in range(3)] for i in range(3)]
-    delta = (b.centre[0] - a.centre[0], b.centre[1] - a.centre[1], b.centre[2] - a.centre[2])
     t = (_dot(delta, ax[0]), _dot(delta, ax[1]), _dot(delta, ax[2]))
     ea, eb = a.half, b.half
     for i in range(3):

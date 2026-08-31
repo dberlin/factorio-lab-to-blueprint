@@ -223,6 +223,11 @@ def test_anchors_are_every_window_in_the_band_and_no_others() -> None:
     equator = planet.bands(SEGMENT)[0]
     assert equator.anchors(161) == ()
     assert equator.anchors(160) == (-80, -79)
+    assert tuple(equator.anchor_ranges(160)) == (range(-80, -78),)
+    assert tuple(band.anchor_ranges(49)) == (
+        range(-130, -128),
+        range(81, 83),
+    )
     for anchor in band.anchors(50):
         assert planet.area_count(anchor, anchor + 49, SEGMENT) == 1
 
@@ -516,6 +521,23 @@ def test_a_pair_that_is_clear_flat_collides_at_the_poleward_edge_of_its_band() -
         colliders.Placed(lab, 6.0, 0.0, 0.0, 0.0),
     ]
     assert planet.collisions_at(six, poleward) == []
+
+
+
+
+def test_collider_radius_is_the_exact_farthest_collider_corner() -> None:
+    model = cat.building(2303).model_index
+    expected = max(
+        math.sqrt(
+            sum(
+                (abs(coordinate) + half_extent) ** 2
+                for coordinate, half_extent in zip(position, extent, strict=True)
+            )
+        )
+        for position, extent, _rotation in colliders.build_colliders(model)
+    )
+
+    assert planet.collider_radius(model) == pytest.approx(expected)
 
 
 def test_candidate_focused_broad_phase_matches_all_pairs_without_peer_pair_work(
