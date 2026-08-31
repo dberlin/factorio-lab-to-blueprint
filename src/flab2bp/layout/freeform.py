@@ -65,7 +65,7 @@ import math
 import time
 from bisect import bisect_left, bisect_right
 from collections import defaultdict
-from collections.abc import Callable, Collection, Mapping, Sequence, Set
+from collections.abc import Callable, Collection, Iterator, Mapping, Sequence, Set
 from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
@@ -1362,19 +1362,19 @@ def _staged_static_relation_projection_risks_uncached(
             candidate_position = projection.pose(
                 candidate.x,
                 candidate.y,
-                candidate.z,
+                float(candidate.z),
                 candidate.yaw,
             )[0]
             active: list[tuple[int, int]] = []
             for position in positions:
                 if risks[members[position - 1][0]]:
                     continue
-                peer = collision_buildings[position]
+                collision_peer = collision_buildings[position]
                 peer_position = projection.pose(
-                    peer.x,
-                    peer.y,
-                    peer.z,
-                    peer.yaw,
+                    collision_peer.x,
+                    collision_peer.y,
+                    float(collision_peer.z),
+                    collision_peer.yaw,
                 )[0]
                 radius = collider_radii[0] + collider_radii[position]
                 if sum(
@@ -1397,8 +1397,8 @@ def _staged_static_relation_projection_risks_uncached(
                 )
             except finalize.ProjectionCancelled:
                 raise _PreparationDeadline from None
-            for _candidate_position, peer_position in hits:
-                risks[members[peer_position - 1][0]] = True
+            for _candidate_index, peer_index in hits:
+                risks[members[peer_index - 1][0]] = True
     return tuple(risks)
 
 
@@ -3269,21 +3269,21 @@ def _pack(
 
     model.add_no_overlap_2d(x_iv, y_iv)
 
-    for no_good in exact_pack_no_goods:
-        if no_good.height != height or no_good.outline != tuple(sizes):
+    for exact_no_good in exact_pack_no_goods:
+        if exact_no_good.height != height or exact_no_good.outline != tuple(sizes):
             continue
-        _add_exact_pack_no_good(model, w_var, xs, ys, strips, no_good)
+        _add_exact_pack_no_good(model, w_var, xs, ys, strips, exact_no_good)
 
-    for no_good in projection_no_goods:
+    for projection_no_good in projection_no_goods:
         if (
-            no_good.left_strip == no_good.right_strip
-            or not 0 <= no_good.left_strip < n
-            or not 0 <= no_good.right_strip < n
+            projection_no_good.left_strip == projection_no_good.right_strip
+            or not 0 <= projection_no_good.left_strip < n
+            or not 0 <= projection_no_good.right_strip < n
         ):
             raise ValueError("projection no-good must name two distinct packed strips")
-        if no_good.pack_height != height:
+        if projection_no_good.pack_height != height:
             continue
-        _add_projection_no_good(model, w_var, xs, ys, strips, no_good)
+        _add_projection_no_good(model, w_var, xs, ys, strips, projection_no_good)
 
     # CUT 3 -- ROUTING CAPACITY was built here, measured, and taken out.
     #
@@ -3435,14 +3435,14 @@ def _pack(
         model.add(origin_delta == permitted_delta).only_enforce_if(di)
         direct_vars[i, j] = di
 
-    for no_good_index, no_good in enumerate(direct_relation_no_goods):
-        direct = no_good.direct_id
+    for no_good_index, relation_no_good in enumerate(direct_relation_no_goods):
+        direct = relation_no_good.direct_id
         pair = (direct.source_strip, direct.destination_strip)
         candidate = direct_candidates.get(pair)
-        di = direct_vars.get(pair)
+        direct_var = direct_vars.get(pair)
         if (
             candidate is None
-            or di is None
+            or direct_var is None
             or candidate.item != direct.item
             or candidate.cargo_domain is not direct.cargo_domain
         ):
@@ -3464,8 +3464,8 @@ def _pack(
         )
         model.add(relation_y == ys[pair[1]] - ys[pair[0]])
         model.add_forbidden_assignments(
-            [di, relation_x, relation_y],
-            [(1, no_good.delta_x, no_good.delta_y)],
+            [direct_var, relation_x, relation_y],
+            [(1, relation_no_good.delta_x, relation_no_good.delta_y)],
         )
 
     # Objective: width first, wirelength only as a tie-break.
@@ -9569,7 +9569,7 @@ def _junction_projection_frames(
         rows: int,
         cross_min: int,
         cross_max: int,
-    ):
+    ) -> Iterator[tuple[planet.Band, int, int]]:
         """Primary band and inclusive cross-extent ranges for fixed rows."""
         explicit = policy.explicit_segments
         if explicit is not None:
@@ -9663,19 +9663,19 @@ def _junction_projection_frames(
                         candidate=candidate,
                     )
                     intervals.append(interval)
-                    projection_key = (
+                    interval_projection_key = (
                         rotated,
                         interval.offset_lo,
                         interval.offset_hi,
                         candidate.frame.height,
                         candidate.frame.certified_bands,
                     )
-                    prior = projection_intervals.get(projection_key)
+                    prior = projection_intervals.get(interval_projection_key)
                     if (
                         prior is None
                         or interval.ordering_key() < prior.ordering_key()
                     ):
-                        projection_intervals[projection_key] = interval
+                        projection_intervals[interval_projection_key] = interval
 
     offset_ranges = {
         rotated: (
@@ -9761,14 +9761,14 @@ def _junction_projection_frames(
             ):
                 if cancelled is not None and cancelled():
                     raise _PreparationDeadline
-                projection_key = (segments, anchor)
-                state_key = (interval.rotated, projection_key)
-                following = next_projection_offset.get(state_key)
-                if following is None:
-                    following = list(range(upper - base + 2))
-                    next_projection_offset[state_key] = following
+                band_anchor = (segments, anchor)
+                state_key = (interval.rotated, band_anchor)
+                projection_following = next_projection_offset.get(state_key)
+                if projection_following is None:
+                    projection_following = list(range(upper - base + 2))
+                    next_projection_offset[state_key] = projection_following
                 position = first_unassigned(
-                    following,
+                    projection_following,
                     interval.offset_lo - base,
                 )
                 stop = interval.offset_hi - base
@@ -9778,13 +9778,13 @@ def _junction_projection_frames(
                     offset = base + position
                     _bounds, rank = interval.witness(offset)
                     projection_ranks[(interval.rotated, offset)][
-                        projection_key
+                        band_anchor
                     ] = (*rank, band_index, anchor_index)
-                    following[position] = first_unassigned(
-                        following,
+                    projection_following[position] = first_unassigned(
+                        projection_following,
                         position + 1,
                     )
-                    position = following[position]
+                    position = projection_following[position]
 
     frames: list[_JunctionProjectionFrame] = []
     for key in sorted(frame_specs, key=frame_ranks.__getitem__):
@@ -9947,7 +9947,7 @@ def _projected_coater_junction_ban(
     ] = {}
     projected_splitter_boxes: dict[
         tuple[colliders.Placed, planet.Projection],
-        tuple[colliders.Box, ...],
+        list[colliders.Box],
     ] = {}
     projected_relation_overlaps: dict[tuple[object, ...], bool] = {}
     projected_context_states: dict[
@@ -10179,12 +10179,12 @@ def _projected_coater_junction_ban(
                             - materialized_coater[1].y
                         )
                         for (
-                            projection,
+                            candidate_projection,
                             x_step,
                             y_step,
                             coater_boxes,
                             canonical_coater,
-                            projection_context,
+                            candidate_projection_context,
                         ) in frame_projection_states:
                             if cancelled is not None and cancelled():
                                 raise _PreparationDeadline
@@ -10206,7 +10206,7 @@ def _projected_coater_junction_ban(
                                 - materialized_coater[1].z
                             )
                             relation_key = (
-                                projection_context,
+                                candidate_projection_context,
                                 delta_x,
                                 delta_y,
                                 delta_z,
@@ -10222,7 +10222,7 @@ def _projected_coater_junction_ban(
                                 )
                                 boxes_key = (
                                     canonical_splitter,
-                                    projection,
+                                    candidate_projection,
                                 )
                                 splitter_boxes = projected_splitter_boxes.get(
                                     boxes_key
@@ -10230,7 +10230,7 @@ def _projected_coater_junction_ban(
                                 if splitter_boxes is None:
                                     splitter_boxes = colliders.target_boxes(
                                         canonical_splitter,
-                                        *projection.pose(
+                                        *candidate_projection.pose(
                                             canonical_splitter.x,
                                             canonical_splitter.y,
                                             canonical_splitter.z,
@@ -10885,17 +10885,17 @@ def _power_plan(
         for projection in projections:
             if cancelled is not None and cancelled():
                 raise _PreparationDeadline
-            for peer in projected_power_peers:
+            for projected_peer in projected_power_peers:
                 if cancelled is not None and cancelled():
                     raise _PreparationDeadline
                 candidate_failure = (
                     finalize.projected_power_failure(
-                        (peer, candidate),
+                        (projected_peer, candidate),
                         projection,
                     )
                     if cancelled is None
                     else finalize.projected_power_failure(
-                        (peer, candidate),
+                        (projected_peer, candidate),
                         projection,
                         cancelled=cancelled,
                     )
@@ -12963,7 +12963,7 @@ def _place_coaters(
         for candidate_position, candidate in enumerate(staged):
             if cancelled is not None and cancelled():
                 raise _PreparationDeadline
-            projected_failure: finalize.ProjectionFailure | None = None
+            splitter_failure: finalize.ProjectionFailure | None = None
             for projection, candidates in zip(
                 projections,
                 splitter_candidates_by_projection,
@@ -12974,23 +12974,23 @@ def _place_coaters(
                 for splitter in candidates[candidate_position]:
                     if cancelled is not None and cancelled():
                         raise _PreparationDeadline
-                    projected_failure = finalize.projected_coater_splitter_failure(
+                    splitter_failure = finalize.projected_coater_splitter_failure(
                         candidate.projected_pair,
                         splitter,
                         projection,
                         cancelled=cancelled,
                     )
-                    if projected_failure is not None:
+                    if splitter_failure is not None:
                         break
-                if projected_failure is not None:
+                if splitter_failure is not None:
                     break
-            if projected_failure is not None:
+            if splitter_failure is not None:
                 raise _Unseatable(
                     f"the {candidate.port.item} coater at "
                     f"({candidate.port.host_x}, {candidate.port.host_y}, "
                     f"z={candidate.port.host_z}) enters a Splitter projected "
                     "lateral keepout",
-                    failure=projected_failure,
+                    failure=splitter_failure,
                 )
         if cancelled is not None and cancelled():
             raise _PreparationDeadline
@@ -14603,11 +14603,11 @@ class FreeformLayout:
                     strips,
                 )
                 learned = False
-                for no_good in local_no_goods:
-                    if no_good in direct_relation_no_good_keys:
+                for relation_no_good in local_no_goods:
+                    if relation_no_good in direct_relation_no_good_keys:
                         continue
-                    direct_relation_no_good_keys.add(no_good)
-                    direct_relation_no_goods.append(no_good)
+                    direct_relation_no_good_keys.add(relation_no_good)
+                    direct_relation_no_goods.append(relation_no_good)
                     learned = True
                 if (
                     exact_no_good is not None
@@ -14755,7 +14755,7 @@ class FreeformLayout:
                         ),
                         strip,
                     )
-                for failure, requirement in zip(
+                for failure, pitch_requirement in zip(
                     exc.failures,
                     pitch_requirements,
                     strict=True,
@@ -14764,14 +14764,14 @@ class FreeformLayout:
                         _retain_refusal(rejected, failure)
 
                     strip_pair = _projection_strip_pair(placement, failure)
-                    no_good = _projection_no_good(
+                    projection_no_good = _projection_no_good(
                         placement,
                         pack,
                         strips,
                         failure,
                         self.band_policy,
                     )
-                    if strip_pair is not None and no_good is None:
+                    if strip_pair is not None and projection_no_good is None:
                         if exact_projection_pair is None:
                             exact_projection_pair = _exact_projection_pair(
                                 strips,
@@ -14783,21 +14783,21 @@ class FreeformLayout:
                                 failure,
                                 dict(enumerate(placement.buildings)),
                             )
-                    if no_good is not None:
-                        no_good_key = no_good
-                        if no_good_key not in projection_no_good_keys:
-                            projection_no_good_keys.add(no_good_key)
-                            projection_no_goods.append(no_good)
+                    if projection_no_good is not None:
+                        projection_no_good_key = projection_no_good
+                        if projection_no_good_key not in projection_no_good_keys:
+                            projection_no_good_keys.add(projection_no_good_key)
+                            projection_no_goods.append(projection_no_good)
                             learned = True
 
-                    if requirement is None:
+                    if pitch_requirement is None:
                         continue
-                    selected_strip = strips_by_instance.get(requirement.instance_id)
+                    selected_strip = strips_by_instance.get(pitch_requirement.instance_id)
                     if (
                         selected_strip is None
                         or selected_strip.physical_variant is None
                         or selected_strip.physical_variant.variant_id
-                        != requirement.variant_id
+                        != pitch_requirement.variant_id
                     ):
                         continue
 
@@ -14807,9 +14807,9 @@ class FreeformLayout:
                         pose_id,
                         selected_strip.physical_variant.pitch_x,
                     )
-                    if requirement.required_pitch <= retained_pitch:
+                    if pitch_requirement.required_pitch <= retained_pitch:
                         continue
-                    minimum_pitch_x[pose_id] = requirement.required_pitch
+                    minimum_pitch_x[pose_id] = pitch_requirement.required_pitch
                     learned = True
                     geometry_learned = True
                 retry_promoted = False
