@@ -50,7 +50,7 @@ import json
 import sys
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
@@ -84,7 +84,11 @@ from flab2bp.dsp import codec  # noqa: E402
 from flab2bp.lab.techs import belt_rules_for_url  # noqa: E402
 from flab2bp.layout import finalize, markers, validate  # noqa: E402
 from flab2bp.layout.band_policy import BandPolicy  # noqa: E402
-from flab2bp.layout.base import LayoutStrategy, Placement  # noqa: E402
+from flab2bp.layout.base import (  # noqa: E402
+    LayoutStrategy,
+    Placement,
+    PlacementCompletion,
+)
 from flab2bp.layout.freeform import FreeformLayout  # noqa: E402
 from flab2bp.layout.sequence_solver import SequencePairLayout  # noqa: E402
 from flab2bp.pipeline import _id_map  # noqa: E402
@@ -133,12 +137,18 @@ class _LayoutCall:
         placement = STRATEGIES[self.strategy](self.vertical).lay_out(
             self.spec, time_budget_s=self.budget_s
         )
+        if placement.completion is PlacementCompletion.COMPACTED_AND_FINALIZED:
+            return placement
         compacted = finalize.compact_open_boundary_belts(
             placement,
             self.spec,
             expect_power=True,
         )
-        return finalize.finalize_placement(compacted, BandPolicy("portable"))
+        finalized = finalize.finalize_placement(compacted, BandPolicy("portable"))
+        return replace(
+            finalized,
+            completion=PlacementCompletion.COMPACTED_AND_FINALIZED,
+        )
 
 
 def specs_for(

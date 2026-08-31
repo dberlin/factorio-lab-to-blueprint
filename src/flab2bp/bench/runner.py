@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from flab2bp.bench.corpus import URL_CORPUS, CorpusEntry
 from flab2bp.bench.metrics import measure
@@ -20,7 +20,12 @@ from flab2bp.lab.url import parse_url
 from flab2bp.layout import finalize
 from flab2bp.layout import validate as validator
 from flab2bp.layout.band_policy import BandPolicy
-from flab2bp.layout.base import LayoutStrategy, NoValidLayout, Placement
+from flab2bp.layout.base import (
+    LayoutStrategy,
+    NoValidLayout,
+    Placement,
+    PlacementCompletion,
+)
 from flab2bp.layout.freeform import FreeformLayout
 from flab2bp.layout.sequence_solver import SequencePairLayout
 from flab2bp.rates import DEFAULT_CANDIDATE_POLICIES, CandidatePolicy, build_candidates
@@ -79,19 +84,24 @@ def _run_cell(
         # is currently most of them -- and a bake-off that cannot run is worse
         # than one with an honest empty row.
         return _refused_cell(handle, entry, spec, reason=exc.reason)
-    placement = finalize.compact_open_boundary_belts(
-        placement,
-        spec,
-        expect_power=True,
-    )
-    try:
-        placement = finalize.finalize_placement(placement, BandPolicy("portable"))
-    except finalize.ProjectionRefusal as exc:
-        return _refused_cell(
-            handle,
-            entry,
+    if placement.completion is not PlacementCompletion.COMPACTED_AND_FINALIZED:
+        placement = finalize.compact_open_boundary_belts(
+            placement,
             spec,
-            reason="final spherical projection rejected " + ", ".join(exc.checks),
+            expect_power=True,
+        )
+        try:
+            placement = finalize.finalize_placement(placement, BandPolicy("portable"))
+        except finalize.ProjectionRefusal as exc:
+            return _refused_cell(
+                handle,
+                entry,
+                spec,
+                reason="final spherical projection rejected " + ", ".join(exc.checks),
+            )
+        placement = replace(
+            placement,
+            completion=PlacementCompletion.COMPACTED_AND_FINALIZED,
         )
     elapsed = time.perf_counter() - started
 
