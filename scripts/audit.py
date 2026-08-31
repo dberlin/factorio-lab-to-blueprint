@@ -68,7 +68,7 @@ import time
 from collections import Counter
 from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parent.parent
@@ -90,6 +90,7 @@ from flab2bp.layout.base import (  # noqa: E402
     LayoutAttemptFailure,
     LayoutStrategy,
     NoValidLayout,
+    PlacementCompletion,
     ProjectionFailureRecord,
 )
 from flab2bp.layout.freeform import FreeformLayout  # noqa: E402
@@ -278,32 +279,37 @@ def run_cell(job: Job) -> Result:
             ("<crash>",),
             time.monotonic() - t0,
         )
-    placement = finalize.compact_open_boundary_belts(
-        placement,
-        spec,
-        expect_power=True,
-    )
-    try:
-        placement = finalize.finalize_placement(placement, BandPolicy("portable"))
-    except finalize.ProjectionRefusal as exc:
-        reason = "final spherical projection rejected " + ", ".join(exc.checks)
-        projection_failures = tuple(
-            ProjectionFailureRecord(
-                band=failure.band,
-                check=failure.check,
-                buildings=failure.buildings,
-                detail=failure.detail,
-            )
-            for failure in exc.failures
+    if placement.completion is not PlacementCompletion.COMPACTED_AND_FINALIZED:
+        placement = finalize.compact_open_boundary_belts(
+            placement,
+            spec,
+            expect_power=True,
         )
-        return Result(
-            job,
-            "REFUSED",
-            label,
-            reason[:70],
-            exc.checks,
-            time.monotonic() - t0,
-            projection_failures=projection_failures,
+        try:
+            placement = finalize.finalize_placement(placement, BandPolicy("portable"))
+        except finalize.ProjectionRefusal as exc:
+            reason = "final spherical projection rejected " + ", ".join(exc.checks)
+            projection_failures = tuple(
+                ProjectionFailureRecord(
+                    band=failure.band,
+                    check=failure.check,
+                    buildings=failure.buildings,
+                    detail=failure.detail,
+                )
+                for failure in exc.failures
+            )
+            return Result(
+                job,
+                "REFUSED",
+                label,
+                reason[:70],
+                exc.checks,
+                time.monotonic() - t0,
+                projection_failures=projection_failures,
+            )
+        placement = replace(
+            placement,
+            completion=PlacementCompletion.COMPACTED_AND_FINALIZED,
         )
     projection_frame_candidates = int(placement.stats.get("projection_frame_candidates", 0))
     projection_count = int(placement.stats.get("projection_count", 0))
