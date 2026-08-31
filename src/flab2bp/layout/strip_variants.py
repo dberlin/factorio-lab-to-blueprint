@@ -9,10 +9,12 @@ must reproduce.
 
 from __future__ import annotations
 
+from collections import defaultdict
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, replace
 from enum import Enum
 from itertools import combinations, product
-from typing import TYPE_CHECKING, Literal
+from typing import Literal
 
 from flab2bp.dsp import catalog
 from flab2bp.layout import slots
@@ -20,8 +22,6 @@ from flab2bp.layout.base import Facing, PlacedBuilding, Placement
 from flab2bp.layout.finalize import ProjectionFailure
 from flab2bp.spec import BuildSpec
 
-if TYPE_CHECKING:
-    from flab2bp.layout.freeform import _LogicalStripPlan
 
 LaneKind = Literal["input", "output"]
 LaneSide = Literal["north", "south"]
@@ -33,6 +33,24 @@ class CargoDomain(Enum):
 
     UNSPRAYED = "unsprayed"
     REQUIRES_SPRAY = "requires-spray"
+
+
+@dataclass(frozen=True, slots=True)
+class _LogicalStripPlan:
+    """One immutable rate/shard allocation before choosing physical geometry."""
+
+    group_key: str
+    shard_index: int
+    recipe_id: str
+    item_id: int
+    model_index: int
+    total_machine_count: int
+    cargo_domain: CargoDomain
+    in_above: tuple[tuple[str, ...], ...]
+    out_lanes: tuple[tuple[str, str, CargoDomain], ...]
+    in_below: tuple[tuple[str, ...], ...]
+    mode_params: tuple[int, ...] = ()
+    flank_outputs: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -760,20 +778,19 @@ def lane_reach_profiles(
     return tuple(profiles)
 
 
-def _logical_lanes(
-    plan: _LogicalStripPlan,
-) -> tuple[tuple[LogicalLane, ...], tuple[LogicalLane, ...]]:
-    from flab2bp.layout.freeform import _dests
-    in_above = plan.in_above
-    out_lanes = plan.out_lanes
-    in_below = plan.in_below
-    inputs = tuple(
+def _input_logical_lanes(
+    in_above: Sequence[tuple[str, ...]],
+    in_below: Sequence[tuple[str, ...]],
+    cargo_domain: CargoDomain,
+    output_count: int,
+) -> tuple[LogicalLane, ...]:
+    return tuple(
         LogicalLane(
             lane_id=f"input:south:{index}",
             kind="input",
             items=items,
             destination_group_keys=(),
-            cargo_domain=plan.cargo_domain,
+            cargo_domain=cargo_domain,
             side="south",
             side_index=index,
         )
@@ -785,24 +802,314 @@ def _logical_lanes(
             items=items,
             destination_group_keys=(),
             side="north",
-            cargo_domain=plan.cargo_domain,
-            side_index=len(out_lanes) + index,
+            cargo_domain=cargo_domain,
+            side_index=output_count + index,
         )
         for index, items in enumerate(in_below)
     )
-    outputs = tuple(
+
+
+def _output_side_assignments(count: int) -> Iterable[tuple[LaneSide, ...]]:
+    """Yield the historical face first, then deterministic overflow assignments."""
+    return product(("north", "south"), repeat=count)
+
+
+def _output_logical_lanes(
+    plan: _LogicalStripPlan,
+    sides: tuple[LaneSide, ...],
+) -> tuple[LogicalLane, ...]:
+    from flab2bp.layout.freeform import _dests
+
+    if len(sides) != len(plan.out_lanes):
+        raise ValueError("output side assignment does not cover every output lane")
+    return tuple(
         LogicalLane(
-            lane_id=f"output:north:{index}",
+            lane_id=f"output:{side}:{index}",
             kind="output",
             items=(item,),
             destination_group_keys=_dests(destination),
             cargo_domain=cargo_domain,
-            side="north",
+            side=side,
             side_index=index,
         )
-        for index, (item, destination, cargo_domain) in enumerate(out_lanes)
+        for index, ((item, destination, cargo_domain), side) in enumerate(
+            zip(plan.out_lanes, sides, strict=True)
+        )
     )
-    return inputs, outputs
+
+
+def _cargo_keys(sinks: Sequence[tuple[str, str, CargoDomain]]) -> set[tuple[str, CargoDomain]]:
+    return {(item, cargo_domain) for item, _destination, cargo_domain in sinks}
+
+
+def _has_exact_two_face_seating(
+    item_id: int,
+    in_above: Sequence[tuple[str, ...]],
+    in_below: Sequence[tuple[str, ...]],
+    input_domain: CargoDomain,
+    output_count: int,
+) -> bool:
+    """Prove one lane per cargo key against exact rows, slots, and sorter spans."""
+    # One lane occupies one row, and each of the two faces exposes at most the
+    # catalog reach in contiguous rows.  Reject above that physical constant
+    # before enumerating side assignments; input size never sets this search.
+    if output_count > 2 * catalog.SORTER_MAX_REACH:
+        return False
+    inputs = _input_logical_lanes(in_above, in_below, input_domain, output_count)
+    for sides in _output_side_assignments(output_count):
+        outputs = tuple(
+            LogicalLane(
+                lane_id=f"output:{side}:{index}",
+                kind="output",
+                items=(f"cargo-{index}",),
+                destination_group_keys=(),
+                cargo_domain=CargoDomain.UNSPRAYED,
+                side=side,
+                side_index=index,
+            )
+            for index, side in enumerate(sides)
+        )
+        lanes = inputs + outputs
+        if any(
+            _attachment_plan_seatings(item_id, yaw, lanes)
+            for yaw in _CARDINAL_YAWS
+        ):
+            return True
+    return False
+
+
+def _logical_strip_plans(spec: BuildSpec) -> tuple[_LogicalStripPlan, ...]:
+    """Allocate lane shards, admitting exact two-face output overflow.
+
+    The historical planner budgets outputs only on the face below the machine
+    band.  Keep that byte-identical path whenever it can represent every cargo
+    key.  When it cannot, ask the pose-aware slot matcher whether the minimum
+    one-lane-per-cargo representation fits across both existing faces.  This is
+    an exact legality proof, not a widened reach: every accepted connection has
+    a prefab slot and a span no greater than ``SORTER_MAX_REACH``.
+    """
+    from flab2bp.layout.freeform import (
+        DEST_SEP,
+        _adapt,
+        _allocate_machines,
+        _flank_seat,
+        _merge_lanes,
+        _seat_inputs,
+        _shard_sinks,
+        _sink_demand,
+    )
+
+    groups = _adapt(spec)
+    producers: dict[str, list[str]] = defaultdict(list)
+    for key, group in groups.items():
+        for item in group.outputs:
+            producers[item].append(key)
+
+    consumers: dict[tuple[str, str], list[str]] = defaultdict(list)
+    for key, group in groups.items():
+        for item in group.inputs:
+            for source in producers.get(item, []):
+                consumers[source, item].append(key)
+
+    plans: list[_LogicalStripPlan] = []
+    for key, group in groups.items():
+        above_cap, below_cap = _legacy_side_lane_caps(
+            group.item_id,
+            group.yaw,
+            group.pitch_h,
+        )
+        input_items = tuple(sorted(group.inputs))
+        sinks: list[tuple[str, str, CargoDomain]] = []
+        for item in sorted(group.outputs):
+            destinations = consumers.get((key, item), [])
+            boundary = item in spec.outputs or item in spec.surplus_outputs
+            shared_boundary: str | None = None
+            if item in spec.surplus_outputs and destinations:
+                surplus = spec.surplus_outputs[item]
+                shareable = [
+                    destination
+                    for destination in destinations
+                    if not groups[destination].proliferated
+                    and surplus + _sink_demand(groups, spec, item, destination)
+                    <= spec.belt_items_per_second
+                ]
+                if shareable:
+                    shared_boundary = min(
+                        shareable,
+                        key=lambda destination: (
+                            _sink_demand(groups, spec, item, destination),
+                            destination,
+                        ),
+                    )
+                    boundary = False
+            sinks.extend(
+                (
+                    item,
+                    (
+                        DEST_SEP.join((destination, ""))
+                        if destination == shared_boundary
+                        else destination
+                    ),
+                    (
+                        CargoDomain.REQUIRES_SPRAY
+                        if groups[destination].proliferated
+                        else CargoDomain.UNSPRAYED
+                    ),
+                )
+                for destination in destinations
+            )
+            if boundary or not destinations:
+                sinks.append((item, "", CargoDomain.UNSPRAYED))
+
+        probe = slots.probe_building(group.item_id, group.yaw)
+        columns = len(slots.attachable_columns(probe, -1)) or 1
+        flank = False
+        try:
+            in_above, in_below = _seat_inputs(
+                input_items,
+                len(sinks),
+                above_cap,
+                below_cap,
+                max_per_lane=group.width,
+                columns=columns,
+            )
+        except ValueError as exc:
+            seat = (
+                _flank_seat(group.item_id, group.yaw, group.pitch_w)
+                if len(sinks) == 1
+                else None
+            )
+            if seat is None:
+                raise ValueError(f"recipe {group.recipe_id!r}: {exc}") from None
+            try:
+                in_above, in_below = _seat_inputs(
+                    input_items,
+                    len(sinks),
+                    above_cap,
+                    below_cap,
+                    max_per_lane=group.width,
+                    columns=columns,
+                    flank_outputs=True,
+                )
+            except ValueError as flanked:
+                raise ValueError(f"recipe {group.recipe_id!r}: {flanked}") from None
+            flank = True
+
+        south_columns = len(slots.attachable_columns(probe, group.pitch_h))
+        out_capacity = below_cap - len(in_below)
+        if flank:
+            out_capacity = min(out_capacity, 1)
+        elif south_columns:
+            out_capacity = min(
+                out_capacity,
+                south_columns - sum(len(lane) for lane in in_below),
+            )
+
+        cargo_count = len(_cargo_keys(sinks))
+        input_domain = (
+            CargoDomain.REQUIRES_SPRAY
+            if group.proliferated
+            else CargoDomain.UNSPRAYED
+        )
+        if (
+            not flank
+            and cargo_count > out_capacity
+            and _has_exact_two_face_seating(
+                group.item_id,
+                in_above,
+                in_below,
+                input_domain,
+                cargo_count,
+            )
+        ):
+            out_capacity = cargo_count
+
+        shards = (
+            _shard_sinks(sinks, cap=out_capacity, max_shards=group.count)
+            if sinks
+            else [[]]
+        )
+        demand = {
+            (item, destination, cargo_domain): _sink_demand(
+                groups,
+                spec,
+                item,
+                destination,
+            )
+            for item, destination, cargo_domain in sinks
+        }
+        allocation_demand = {
+            (item, destination, cargo_domain): _sink_demand(
+                groups,
+                spec,
+                item,
+                destination,
+                include_boundary=False,
+            )
+            for item, destination, cargo_domain in sinks
+        }
+        per_shard = (
+            _allocate_machines(group.count, shards, allocation_demand)
+            if len(shards) > 1
+            else [group.count]
+        )
+        try:
+            lane_shards = [
+                _merge_lanes(
+                    shard,
+                    out_capacity,
+                    demand,
+                    spec.belt_items_per_second,
+                )
+                for shard in shards
+            ]
+        except ValueError as exc:
+            raise ValueError(f"recipe {group.recipe_id!r}: {exc}") from None
+
+        for shard_index, (lane_shard, machine_count) in enumerate(
+            zip(lane_shards, per_shard, strict=True)
+        ):
+            if machine_count <= 0:
+                continue
+            plans.append(
+                _LogicalStripPlan(
+                    group_key=key,
+                    shard_index=shard_index,
+                    recipe_id=group.recipe_id,
+                    item_id=group.item_id,
+                    model_index=group.model_index,
+                    total_machine_count=machine_count,
+                    cargo_domain=input_domain,
+                    in_above=in_above,
+                    out_lanes=tuple(lane_shard),
+                    in_below=in_below,
+                    mode_params=group.mode_params,
+                    flank_outputs=flank,
+                )
+            )
+    return tuple(plans)
+
+
+def _legacy_side_lane_caps(item_id: int, yaw: float, band_rows: int) -> tuple[int, int]:
+    from flab2bp.layout.freeform import _side_lane_caps
+
+    return _side_lane_caps(item_id, yaw, band_rows)
+
+
+def _logical_lanes(
+    plan: _LogicalStripPlan,
+    output_sides: tuple[LaneSide, ...] | None = None,
+) -> tuple[tuple[LogicalLane, ...], tuple[LogicalLane, ...]]:
+    sides = output_sides or ("north",) * len(plan.out_lanes)
+    return (
+        _input_logical_lanes(
+            plan.in_above,
+            plan.in_below,
+            plan.cargo_domain,
+            len(plan.out_lanes),
+        ),
+        _output_logical_lanes(plan, sides),
+    )
 
 
 def _match_attachment_plans(
@@ -1061,14 +1368,11 @@ def _variants(
 
 def generate_strip_families(spec: BuildSpec) -> tuple[StripFamily, ...]:
     """Generate deterministic pose-valid variants for every logical lane shard."""
-    from flab2bp.layout.freeform import _logical_strip_plans
-
     families: list[StripFamily] = []
     for plan in _logical_strip_plans(spec):
         family_id = StripFamilyId(plan.group_key, plan.shard_index)
-        input_lanes, output_lanes = _logical_lanes(plan)
-        lanes = input_lanes + output_lanes
         building = catalog.building(plan.item_id)
+        input_lanes, output_lanes = _logical_lanes(plan)
         generated: tuple[StripVariant, ...]
         if plan.flank_outputs:
             generated = ()
@@ -1086,17 +1390,25 @@ def generate_strip_families(spec: BuildSpec) -> tuple[StripFamily, ...]:
                 )
             )
         else:
-            generated = tuple(
-                candidate
-                for yaw in _CARDINAL_YAWS
-                for candidate in _variants(
-                    family_id,
-                    plan.item_id,
-                    plan.total_machine_count,
-                    lanes,
-                    yaw,
+            generated = ()
+            for sides in _output_side_assignments(len(plan.out_lanes)):
+                candidate_inputs, candidate_outputs = _logical_lanes(plan, sides)
+                candidates = tuple(
+                    candidate
+                    for yaw in _CARDINAL_YAWS
+                    for candidate in _variants(
+                        family_id,
+                        plan.item_id,
+                        plan.total_machine_count,
+                        candidate_inputs + candidate_outputs,
+                        yaw,
+                    )
                 )
-            )
+                if candidates:
+                    input_lanes = candidate_inputs
+                    output_lanes = candidate_outputs
+                    generated = candidates
+                    break
         unique = {candidate.variant_id: candidate for candidate in generated}
         variants = tuple(sorted(unique.values(), key=lambda candidate: candidate.sort_key))
         families.append(

@@ -39,7 +39,7 @@ from flab2bp.layout.strip_variants import (
     variant_with_minimum_pitch,
     variants_for_count,
 )
-from flab2bp.spec import BuildSpec, MachineGroup
+from flab2bp.spec import BuildSpec, MachineGroup, ProliferatorMode
 
 
 def _group(
@@ -975,6 +975,98 @@ def test_multi_lane_assembler_uses_globally_unique_slots_deterministically() -> 
         assert len(set(independent_first_choices)) < len(independent_first_choices)
         assert len(set(assigned)) == len(assigned)
 
+
+
+def test_collider_coproduct_domains_use_both_faces_with_exact_unique_slots() -> None:
+    """One machine may drain distinct cargo domains across both reachable faces.
+
+    ``mass-energy-storage`` in the all-products universe-matrix candidate has
+    one critical-photon input and four non-interchangeable outputs: sprayed and
+    unsprayed antimatter, plus sprayed and unsprayed hydrogen.  The miniature
+    particle collider has six distinct north/south attachment slots, so those
+    five connections are legal even though no one face can carry four lanes.
+    """
+    one = Fraction(1)
+    sprayed = ProliferatorMode.PRODUCTS
+    spec = BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id="mass-energy-storage",
+                machine_item_id="miniature-particle-collider",
+                count=1,
+                inputs_per_machine={"critical-photon": one},
+                outputs_per_machine={"antimatter": 2 * one, "hydrogen": 2 * one},
+            ),
+            MachineGroup(
+                recipe_id="universe-matrix",
+                machine_item_id="matrix-lab",
+                count=1,
+                proliferator_mode=sprayed,
+                inputs_per_machine={"antimatter": one},
+                outputs_per_machine={"universe-matrix": one},
+            ),
+            MachineGroup(
+                recipe_id="deuterium",
+                machine_item_id="miniature-particle-collider",
+                count=1,
+                inputs_per_machine={"hydrogen": one},
+                outputs_per_machine={"deuterium": one},
+            ),
+            MachineGroup(
+                recipe_id="energy-matrix",
+                machine_item_id="matrix-lab",
+                count=1,
+                proliferator_mode=sprayed,
+                inputs_per_machine={"hydrogen": one},
+                outputs_per_machine={"energy-matrix": one},
+            ),
+        ),
+        external_inputs={"critical-photon": one},
+        outputs={
+            "universe-matrix": one,
+            "deuterium": one,
+            "energy-matrix": one,
+        },
+        surplus_outputs={"antimatter": one},
+        belt_item_id="conveyor-belt-3",
+        belt_items_per_second=Fraction(30),
+        label="four-cargo-domains",
+    )
+
+    family = next(
+        family
+        for family in generate_strip_families(spec)
+        if family.recipe_id == "mass-energy-storage"
+    )
+    variant = default_strip_variant(family)
+    cargo = {
+        (lane.items[0], lane.cargo_domain)
+        for lane in family.output_lanes
+    }
+    attachments = tuple(
+        attachment
+        for plan in variant.attachment_plan
+        for attachment in plan.attachments
+    )
+
+    assert cargo == {
+        ("antimatter", CargoDomain.REQUIRES_SPRAY),
+        ("antimatter", CargoDomain.UNSPRAYED),
+        ("hydrogen", CargoDomain.REQUIRES_SPRAY),
+        ("hydrogen", CargoDomain.UNSPRAYED),
+    }
+    assert {lane.side for lane in family.output_lanes} == {"north", "south"}
+    profile_side = {
+        profile.lane_y: profile.side
+        for profile in lane_reach_profiles(family.machine_item_id, variant.yaw)
+    }
+    assert all(
+        profile_side[plan.lane_y] == plan.lane.side
+        for plan in variant.attachment_plan
+    )
+    assert len(attachments) == 5
+    assert len({attachment.slot for attachment in attachments}) == 5
+    assert all(attachment.span <= catalog.SORTER_MAX_REACH for attachment in attachments)
 
 def test_impossible_global_slot_matching_produces_no_variant() -> None:
     lanes = (
