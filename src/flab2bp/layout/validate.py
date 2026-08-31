@@ -3554,31 +3554,49 @@ def _group_resolved(ctx: Context) -> Iterable[Finding]:
 
 @check("machine.inputs_supplied", needs_spec=True, needs_groups=True)
 def _inputs_supplied(ctx: Context) -> Iterable[Finding]:
-    """Every ingredient has a sorter delivering it.
+    """Every ingredient has a sorter or authoritative feeding belt-port dock.
 
-    A sorter carries one item type, so a machine needing *k* distinct
-    ingredients needs at least *k* sorters feeding it.  That is checkable
-    without per-lane item labelling, and it catches the failure that matters:
-    a strategy that wired up some inputs and quietly forgot the rest.
+    A sorter carries one item type, so a sorter-served machine needing *k*
+    distinct ingredients needs at least *k* sorters.  Sorterless prefab hosts
+    use the game's other connection mechanism: a belt whose output names the
+    machine and an exact ``portPoses`` index.  ``belt.port_dock`` owns the
+    physical validity of that record; this check counts the feed connection.
     """
     assert ctx.spec is not None
-    feeds: dict[int, int] = defaultdict(int)
-    for _i, s in ctx.of_kind(Kind.SORTER):
-        if s.output_obj is not None:
-            feeds[s.output_obj] += 1
-    for i, _b in ctx.of_kind(Kind.MACHINE):
+    sorter_feeds: dict[int, int] = defaultdict(int)
+    port_feed_items: dict[int, set[str]] = defaultdict(set)
+    for _i, sorter in ctx.of_kind(Kind.SORTER):
+        if sorter.output_obj is not None:
+            sorter_feeds[sorter.output_obj] += 1
+    for _i, belt in ctx.of_kind(Kind.BELT):
+        target = belt.output_obj
+        if target is None or not 0 <= target < len(ctx.placement.buildings):
+            continue
+        peer = ctx.placement.buildings[target]
+        if (
+            ctx.kinds[target] is Kind.MACHINE
+            and cat.building(peer.item_id).takes_belt_ports
+            and belt.carries_item is not None
+        ):
+            port_feed_items[target].add(belt.carries_item)
+    for i, machine in ctx.of_kind(Kind.MACHINE):
         g = ctx.group_for(i)
         if g is None:
             continue
-        need = len(g.inputs_per_machine)
-        if need and feeds[i] < need:
+        required = set(g.inputs_per_machine)
+        if cat.building(machine.item_id).takes_belt_ports:
+            feeds = len(required & port_feed_items[i])
+        else:
+            feeds = sorter_feeds[i]
+        need = len(required)
+        if feeds < need:
             yield Finding(
                 "machine.inputs_supplied",
                 Severity.ERROR,
                 f"machine {i} runs {g.recipe_id}, which needs {need} distinct "
-                f"ingredients, but only {feeds[i]} sorters feed it",
+                f"ingredients, but only {feeds} feed connection(s) reach it",
                 (i,),
-                {"recipe": g.recipe_id, "needed": need, "sorters": feeds[i]},
+                {"recipe": g.recipe_id, "needed": need, "feeds": feeds},
             )
 
 

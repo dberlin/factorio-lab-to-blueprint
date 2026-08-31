@@ -703,25 +703,6 @@ class _Group:
     mode_params: tuple[int, ...] = ()
 
 
-@dataclass(frozen=True, slots=True)
-class _LogicalStripPlan:
-    """One immutable rate/shard allocation before choosing physical geometry."""
-
-    group_key: str
-    shard_index: int
-    recipe_id: str
-    item_id: int
-    model_index: int
-    total_machine_count: int
-    cargo_domain: CargoDomain
-    in_above: tuple[tuple[str, ...], ...]
-    out_lanes: tuple[_CargoSink, ...]
-    in_below: tuple[tuple[str, ...], ...]
-    mode_params: tuple[int, ...] = ()
-    #: The output leaves through per-machine east gap belts rather than a sorter
-    #: on the south face. Such families retain legacy Freeform emission but are
-    #: not exposed as pose variants until east-face attachments are modeled.
-    flank_outputs: bool = False
 
 
 @dataclass(frozen=True, order=True, slots=True)
@@ -962,8 +943,13 @@ class Strip:
         """Row index of the machine band's top edge, relative to the strip."""
         if self.lane_plan is not None:
             return self.lane_plan.machine_row
-        if self.flank_outputs or self.takes_belt_ports:
+        if self.flank_outputs:
             return len(self.in_above)
+        if self.takes_belt_ports:
+            # A splitter on an input lane has a real collider.  Keep one row
+            # between that lane and the machine band rather than relying on the
+            # belt-only overlap excusal that applies to the dock run itself.
+            return len(self.in_above) + bool(self.in_above)
         name = catalog.building(self.item_id).name
         raise NoValidLayout(f"{name} has no legal slot pose for its lanes")
 
@@ -1085,6 +1071,11 @@ class Strip:
 
     def row_of_input(self, item: str) -> int:
         """Row index carrying ``item``, relative to the strip's top."""
+        if self.takes_belt_ports:
+            lane = self.lane_of_input(item)
+            if lane in self.in_above:
+                return self.in_above.index(lane)
+            return self.first_row_below_band + len(self.out_lanes) + self.in_below.index(lane)
         return self.machine_row + self._input_attachment_plan(item).lane_y
 
     def row_of_output(self, k: int) -> int:
@@ -1105,6 +1096,20 @@ class Strip:
 
     def input_lane_tiles(self, lane: tuple[str, ...]) -> int:
         """Belt tiles an input lane needs through its last planned attachment."""
+        if self.takes_belt_ports:
+            lanes = self.in_above + self.in_below
+            lane_index = lanes.index(lane)
+            docks = tuple(
+                dock
+                for _port, dock in sorted(
+                    slots.port_docks(slots.probe_building(self.item_id, self.yaw)).items()
+                )
+                if dock.facing is Facing.EAST
+            )
+            if lane_index >= len(docks):
+                return self.width
+            last_tap = (self.machines - 1) * self.pw + docks[lane_index].cell[0] + 1
+            return min(self.width, last_tap + 1)
         plan = self._input_attachment_plan(lane[0])
         if plan.lane.items != lane:
             raise ValueError("input lane does not match the selected attachment plan")
@@ -1896,192 +1901,6 @@ def _seat_inputs(
     )
 
 
-def _logical_strip_plans(spec: BuildSpec) -> tuple[_LogicalStripPlan, ...]:
-    """Allocate immutable logical lane shards without choosing a machine pose.
-
-    A shard carries one output lane per destination, which is what removes the
-    need for splitters.  Machine ranges are deliberately absent here: a logical
-    shard owns its total count, while physical strip instances partition that
-    count later.
-
-    Inputs are fed from both sides.  Sharding cannot help a machine that needs
-    all ingredients simultaneously, so overflow ingredients share filtered
-    lanes according to :func:`_seat_inputs`.
-    """
-    groups = _adapt(spec)
-
-    producers: dict[str, list[str]] = defaultdict(list)
-    for key, group in groups.items():
-        for item in group.outputs:
-            producers[item].append(key)
-
-    consumers: dict[tuple[str, str], list[str]] = defaultdict(list)
-    for key, group in groups.items():
-        for item in group.inputs:
-            for source in producers.get(item, []):
-                consumers[source, item].append(key)
-
-    plans: list[_LogicalStripPlan] = []
-    for key, group in groups.items():
-        # How many lane rows this machine's poses actually reach, per side.
-        above_cap, below_cap = _side_lane_caps(group.item_id, group.yaw, group.pitch_h)
-        input_items = tuple(sorted(group.inputs))
-        sinks: list[_CargoSink] = []
-        for item in sorted(group.outputs):
-            destinations = consumers.get((key, item), [])
-            boundary = item in spec.outputs or item in spec.surplus_outputs
-            shared_boundary: str | None = None
-            if item in spec.surplus_outputs and destinations:
-                surplus = spec.surplus_outputs[item]
-                shareable = [
-                    destination
-                    for destination in destinations
-                    if not groups[destination].proliferated
-                    and surplus + _sink_demand(groups, spec, item, destination)
-                    <= spec.belt_items_per_second
-                ]
-                if shareable:
-                    shared_boundary = min(
-                        shareable,
-                        key=lambda destination: (
-                            _sink_demand(groups, spec, item, destination),
-                            destination,
-                        ),
-                    )
-                    boundary = False
-            sinks.extend(
-                (
-                    item,
-                    (
-                        DEST_SEP.join((destination, ""))
-                        if destination == shared_boundary
-                        else destination
-                    ),
-                    (
-                        CargoDomain.REQUIRES_SPRAY
-                        if groups[destination].proliferated
-                        else CargoDomain.UNSPRAYED
-                    ),
-                )
-                for destination in destinations
-            )
-            if boundary or not destinations:
-                sinks.append((item, "", CargoDomain.UNSPRAYED))
-
-        columns = (
-            len(slots.attachable_columns(slots.probe_building(group.item_id, group.yaw), -1)) or 1
-        )
-        # THE EAST FACE IS THE SECOND ATTEMPT, NEVER THE FIRST.  Flanking buys a
-        # seventh connection and costs a belt column per machine, so a recipe that
-        # seats on the north and south faces alone must keep seating exactly as it
-        # did -- otherwise every strip in the corpus pays for a slot only
-        # `universe-matrix` needs.
-        flank = False
-        try:
-            in_above, in_below = _seat_inputs(
-                input_items,
-                len(sinks),
-                above_cap,
-                below_cap,
-                max_per_lane=group.width,
-                columns=columns,
-            )
-        except ValueError as exc:
-            # One sink, because one gap belt beside a machine carries one item.
-            seat = _flank_seat(group.item_id, group.yaw, group.pitch_w) if len(sinks) == 1 else None
-            if seat is None:
-                raise ValueError(f"recipe {group.recipe_id!r}: {exc}") from None
-            try:
-                in_above, in_below = _seat_inputs(
-                    input_items,
-                    len(sinks),
-                    above_cap,
-                    below_cap,
-                    max_per_lane=group.width,
-                    columns=columns,
-                    flank_outputs=True,
-                )
-            except ValueError as flanked:
-                raise ValueError(f"recipe {group.recipe_id!r}: {flanked}") from None
-            flank = True
-
-        # Output lanes share the south side with overflow inputs. They consume
-        # both row and machine-slot capacity unless the output leaves east.
-        south_columns = len(
-            slots.attachable_columns(slots.probe_building(group.item_id, group.yaw), group.pitch_h)
-        )
-        out_capacity = below_cap - len(in_below)
-        if flank:
-            out_capacity = min(out_capacity, 1)
-        elif south_columns:
-            out_capacity = min(
-                out_capacity,
-                south_columns - sum(len(lane) for lane in in_below),
-            )
-        shards = _shard_sinks(sinks, cap=out_capacity, max_shards=group.count) if sinks else [[]]
-        demand = {
-            (item, destination, cargo_domain): _sink_demand(
-                groups,
-                spec,
-                item,
-                destination,
-            )
-            for item, destination, cargo_domain in sinks
-        }
-        allocation_demand = {
-            (item, destination, cargo_domain): _sink_demand(
-                groups,
-                spec,
-                item,
-                destination,
-                include_boundary=False,
-            )
-            for item, destination, cargo_domain in sinks
-        }
-        per_shard = (
-            _allocate_machines(group.count, shards, allocation_demand)
-            if len(shards) > 1
-            else [group.count]
-        )
-        try:
-            lane_shards = [
-                _merge_lanes(
-                    shard,
-                    out_capacity,
-                    demand,
-                    spec.belt_items_per_second,
-                )
-                for shard in shards
-            ]
-        except ValueError as exc:
-            raise ValueError(f"recipe {group.recipe_id!r}: {exc}") from None
-
-        for shard_index, (lane_shard, machine_count) in enumerate(
-            zip(lane_shards, per_shard, strict=True)
-        ):
-            if machine_count <= 0:
-                continue
-            plans.append(
-                _LogicalStripPlan(
-                    group_key=key,
-                    shard_index=shard_index,
-                    recipe_id=group.recipe_id,
-                    item_id=group.item_id,
-                    model_index=group.model_index,
-                    total_machine_count=machine_count,
-                    cargo_domain=(
-                        CargoDomain.REQUIRES_SPRAY
-                        if group.proliferated
-                        else CargoDomain.UNSPRAYED
-                    ),
-                    in_above=in_above,
-                    out_lanes=tuple(lane_shard),
-                    in_below=in_below,
-                    mode_params=group.mode_params,
-                    flank_outputs=flank,
-                )
-            )
-    return tuple(plans)
 
 
 def plan_strips(
@@ -2189,13 +2008,23 @@ def plan_strips(
                 footprint_width = group.width
                 footprint_height = group.height
                 yaw = group.yaw
-                pitch_width = group.pitch_w + 1 if family.flank_outputs else group.pitch_w
+                building = catalog.building(family.machine_item_id)
+                port_inputs = bool(
+                    (inputs_above or inputs_below)
+                    and building.takes_belt_ports
+                    and not building.slot_poses
+                )
+                # Port-input branches occupy the pitch column immediately east
+                # of each machine.  Keep one more column so adjacent machine
+                # colliders remain disjoint after spherical projection.
+                pitch_width = group.pitch_w + int(family.flank_outputs or port_inputs)
                 pitch_height = group.pitch_h
                 lane_plan = None
                 attachment_plan = ()
                 port_dock_plan = ()
                 box_height = (
                     len(inputs_above)
+                    + int(bool(inputs_above) and port_inputs)
                     + pitch_height
                     + len(outputs)
                     + len(inputs_below)
@@ -4496,33 +4325,52 @@ def _emit_strip(
             return got
         return rates.get(item, Fraction(1))
 
-    def feed(plan: LaneAttachmentPlan) -> int:
-        """Emit the preplanned filtered sorter for every (item, machine)."""
-        lane = plan.lane.items
-        row = machine_row + plan.lane_y
+    def feed(lane: tuple[str, ...]) -> int:
+        """Connect every machine to one input lane by its authoritative mechanism."""
+        row = s.row_of_input(lane[0])
         lane_indices = lane_idx[row]
         if not lane_indices:
             name = catalog.building(s.item_id).name
-            raise NoValidLayout(f"{name} has no legal slot pose for input lane {lane!r}")
+            raise NoValidLayout(f"{name} has no legal connection for input lane {lane!r}")
+        head = canvas.buildings[lane_indices[0]]
+        port = _Port(
+            lane_indices[0],
+            head.x,
+            oy + row,
+            head.x,
+            head.x + len(lane_indices) - 1,
+            tuple(lane_indices),
+            s.machines,
+            cargo_domain=s.cargo_domain,
+        )
+        for item in lane:
+            in_ports[item] = port
+        if s.takes_belt_ports:
+            if len(lane) != 1:
+                name = catalog.building(s.item_id).name
+                raise NoValidLayout(
+                    f"{name} cannot filter shared belt-port input lane {lane!r}"
+                )
+            _dock_input_lane(
+                canvas,
+                machines,
+                lane_indices,
+                oy + row,
+                lane[0],
+                belt_id,
+                belt_model,
+                claimed,
+            )
+            return 0
+
+        plan = s._input_attachment_plan(lane[0])
         placed = 0
         shared = len(lane) > 1
         for attachment in plan.attachments:
             item = attachment.item
-            # Read the real lane head: sprayed lanes begin west of the strip.
-            head = canvas.buildings[lane_idx[row][0]]
-            in_ports[item] = _Port(
-                lane_idx[row][0],
-                head.x,
-                oy + row,
-                head.x,
-                head.x + len(lane_idx[row]) - 1,
-                tuple(lane_idx[row]),
-                s.machines,
-                cargo_domain=s.cargo_domain,
-            )
             placed += _link_lane(
                 canvas,
-                lane_idx[row],
+                lane_indices,
                 machines,
                 oy + row,
                 attachment,
@@ -4534,7 +4382,7 @@ def _emit_strip(
         return placed
 
     for lane in s.in_above:
-        sorters += feed(s._input_attachment_plan(lane[0]))
+        sorters += feed(lane)
 
     for j, (item, dest, cargo_domain) in enumerate(s.out_lanes):
         row = s.row_of_output(j)
@@ -4549,7 +4397,7 @@ def _emit_strip(
             cargo_domain=cargo_domain,
         )
         if s.takes_belt_ports:
-            sorters += _dock_lane(
+            _dock_lane(
                 canvas,
                 machines,
                 lane_idx[row],
@@ -4595,7 +4443,7 @@ def _emit_strip(
         )
 
     for lane in s.in_below:
-        sorters += feed(s._input_attachment_plan(lane[0]))
+        sorters += feed(lane)
 
     return in_ports, out_ports, sorters
 
@@ -4698,6 +4546,119 @@ def _flank_lane(
                 owner_strip=m.owner_strip,
             )
         )
+        placed += 1
+    return placed
+
+
+def _dock_input_lane(
+    canvas: _Canvas,
+    machines: list[int],
+    in_lane: list[int],
+    lane_y: int,
+    item: str,
+    belt_id: int,
+    belt_model: int,
+    claimed: dict[int, set[int]],
+) -> int:
+    """Fan one east-running lane into each machine's exact prefab input port.
+
+    A lane tile cannot both continue east and feed a branch.  Every intermediate
+    tap therefore uses :func:`_tap_source`, which materializes the game's
+    splitter representation; only the final tap may point straight at its branch.
+    The branch approaches an east-facing port from its open pitch column, so the
+    dock belt runs west exactly opposite the port's drawing direction.
+    """
+    lane_by_x = {canvas.buildings[index].x: index for index in in_lane}
+    placed = 0
+    for machine_index in machines:
+        machine = canvas.buildings[machine_index]
+        taken = claimed.setdefault(machine_index, set())
+        dock = next(
+            (
+                candidate
+                for _port, candidate in sorted(slots.port_docks(machine).items())
+                if candidate.port not in taken
+                and candidate.facing is Facing.EAST
+                and candidate.cell[0] + 1 in lane_by_x
+            ),
+            None,
+        )
+        if dock is None:
+            name = catalog.building(machine.item_id).name
+            raise NoValidLayout(
+                f"{name} cannot feed {item!r} from its east-running input lane "
+                "through a distinct exact belt port"
+            )
+
+        tap_x = dock.cell[0] + 1
+        step_y = 1 if dock.cell[1] > lane_y else -1
+        branch_cells = (
+            [(dock.cell[0], dock.cell[1])]
+            if dock.cell[1] == lane_y
+            else [
+                (tap_x, y)
+                for y in range(lane_y + step_y, dock.cell[1] + step_y, step_y)
+            ]
+            + [(dock.cell[0], dock.cell[1])]
+        )
+        branch: list[int] = []
+        for cell_index, (x, y) in enumerate(branch_cells):
+            if cell_index + 1 < len(branch_cells):
+                nx, ny = branch_cells[cell_index + 1]
+                delta = (nx - x, ny - y)
+                facing = next(candidate for candidate in Facing if candidate.delta == delta)
+            else:
+                facing = dock.facing.opposite()
+            branch.append(
+                canvas.add(
+                    PlacedBuilding(
+                        item_id=belt_id,
+                        model_index=belt_model,
+                        x=x,
+                        y=y,
+                        width=1,
+                        height=1,
+                        yaw=facing.value,
+                        carries_item=item,
+                        owner_strip=machine.owner_strip,
+                    )
+                )
+            )
+        for before, after in zip(branch, branch[1:], strict=False):
+            canvas.buildings[before] = _relink(canvas.buildings[before], output_obj=after)
+        canvas.buildings[branch[-1]] = replace(
+            canvas.buildings[branch[-1]],
+            output_obj=machine_index,
+            output_to_slot=dock.port,
+            output_from_slot=rules.BELT_PORT_FEED_FROM_SLOT,
+        )
+
+        excused = {
+            (
+                canvas.buildings[index].x,
+                canvas.buildings[index].y,
+                int(canvas.buildings[index].z),
+            )
+            for index in (*in_lane, *branch)
+            if canvas.buildings[index].z.denominator == 1
+        }
+        rejected_reason: list[str] = []
+        if not _tap_source(
+            canvas,
+            lane_by_x[tap_x],
+            branch[0],
+            belt_id,
+            belt_model,
+            excused,
+            rejected_reason=rejected_reason,
+        ):
+            name = catalog.building(machine.item_id).name
+            raise NoValidLayout(
+                f"{name} cannot split {item!r} from its shared input lane at "
+                f"({tap_x}, {lane_y}) without an illegal belt fan-out "
+                f"({', '.join(rejected_reason) or 'unrepresentable tap'})"
+            )
+        taken.add(dock.port)
         placed += 1
     return placed
 
@@ -12768,6 +12729,22 @@ def _drainable_by_port(strip: Strip) -> bool:
     return bool(strip.out_lanes) and len(strip.out_lanes) <= capacity
 
 
+def _feedable_by_port(strip: Strip) -> bool:
+    """Can each input lane branch through a distinct east-facing prefab port?"""
+    probe = slots.probe_building(strip.item_id, strip.yaw)
+    docks = slots.port_docks(probe).values()
+    capacity = sum(
+        dock.facing is Facing.EAST and dock.cell[0] + 1 < strip.pw for dock in docks
+    )
+    lanes = strip.in_above + strip.in_below
+    return (
+        bool(lanes)
+        and all(len(lane) == 1 for lane in lanes)
+        and len(lanes) <= capacity
+        and (not strip.out_lanes or _drainable_by_port(strip))
+    )
+
+
 def _machines_without_poses(strips: list[Strip]) -> list[str]:
     """Lanes seated where no sorter of any tier can join them to their machine.
 
@@ -12811,11 +12788,10 @@ def _machines_without_poses(strips: list[Strip]) -> list[str]:
     ``_side_lane_caps`` now keeps seating inside what the poses reach, so this
     is a guard against a future seating bug rather than a routine outcome.
 
-    A sorterless pure source is not a refusal when an authoritative belt port
-    faces its output lane: :func:`_dock_lane` emits that connection.  Inputs on
-    the same kind of host remain a refusal because one logical lane would have
-    to split into one dock run per machine, geometry this strip model does not
-    represent.
+    A sorterless belt-port host is not a refusal when every lane can claim an
+    authoritative dock.  Output docks merge into their lane; input docks branch
+    from their shared lane through explicit splitters, because a belt tile has
+    only one output link.
 
     Returns one description per distinct offending building and combined lane
     role, empty when every lane in the plan can be joined to its machine.
@@ -12830,7 +12806,14 @@ def _machines_without_poses(strips: list[Strip]) -> list[str]:
             if s.flank_outputs:
                 continue
             building = catalog.building(s.item_id)
-            if s.takes_belt_ports and not s.in_lanes and s.out_lanes and _drainable_by_port(s):
+            if (
+                s.takes_belt_ports
+                and not s.in_lanes
+                and s.out_lanes
+                and _drainable_by_port(s)
+            ):
+                continue
+            if s.takes_belt_ports and s.in_lanes and _feedable_by_port(s):
                 continue
             kinds = tuple(
                 kind
@@ -12849,11 +12832,10 @@ def _machines_without_poses(strips: list[Strip]) -> list[str]:
             seen.add(key)
             if s.takes_belt_ports and s.in_lanes:
                 out.append(
-                    f"{building.name} ({s.recipe_id}): the game's prefab gives "
-                    "it no insert pose on any face, so its ingredient lane can "
-                    f"only use one of its {len(building.port_poses)} belt "
-                    "port(s); preparation supports a drawing OUTPUT dock, not "
-                    "splitting one input lane into a dock per machine"
+                    f"{building.name} ({s.recipe_id}): its ingredient lanes cannot "
+                    f"claim distinct east-facing input docks from its "
+                    f"{len(building.port_poses)} belt port(s) while preserving one "
+                    "legal splitter-backed fan-out per machine"
                 )
             elif s.takes_belt_ports:
                 out.append(

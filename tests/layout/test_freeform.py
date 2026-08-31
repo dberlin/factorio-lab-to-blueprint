@@ -62,7 +62,6 @@ from flab2bp.layout.freeform import (
     _Grid,
     _height_seed,
     _join_shard_islands,
-    _logical_strip_plans,
     _machines_without_poses,
     _make_grid,
     _merge_lanes,
@@ -408,6 +407,182 @@ def test_prepared_budget_result_stops_before_every_emission_boundary(
     assert result.towers == ()
 
 
+def fractionator_spec(*, machine_count: int = 2) -> BuildSpec:
+    return BuildSpec(
+        groups=(
+            group(
+                "deuterium-fractionation",
+                "fractionator",
+                machine_count,
+                {"hydrogen": F(1)},
+                {"deuterium": F(1)},
+            ),
+        ),
+        external_inputs={"hydrogen": F(machine_count)},
+        outputs={"deuterium": F(machine_count)},
+        belt_item_id="conveyor-belt-2",
+        belt_items_per_second=F(12),
+        label="fractionator",
+    )
+
+
+def test_belt_port_input_lane_fans_out_through_exact_machine_ports() -> None:
+    spec = fractionator_spec()
+    (strip,) = plan_strips(spec)
+    canvas = _Canvas()
+    belt_id = catalog.item_id(spec.belt_item_id)
+
+    inputs, _outputs, _connections = _emit_strip(
+        canvas,
+        strip,
+        0,
+        0,
+        belt_id,
+        catalog.building(belt_id).model_index,
+        {},
+    )
+    wired = slots.assign_sorter_slots(canvas.buildings)
+    machine_indices = tuple(
+        index for index, building in enumerate(wired) if building.item_id == strip.item_id
+    )
+
+    assert strip.physical_variant is None
+    assert strip.attachment_plan == ()
+    assert tuple(inputs) == ("hydrogen",)
+    assert not [building for building in wired if catalog.is_sorter(building.item_id)]
+    assert _connections == 0
+    assert sum(building.item_id == catalog.SPLITTER_ID for building in wired) == 1
+    for machine_index in machine_indices:
+        machine = wired[machine_index]
+        docks = slots.port_docks(machine)
+        feeder = next(
+            building
+            for building in wired
+            if catalog.is_belt(building.item_id)
+            and building.output_obj == machine_index
+            and building.carries_item == "hydrogen"
+        )
+        product = next(
+            building
+            for building in wired
+            if catalog.is_belt(building.item_id)
+            and building.input_obj == machine_index
+            and building.carries_item == "deuterium"
+        )
+
+        assert (feeder.x, feeder.y) == docks[1].cell
+        assert feeder.yaw == docks[1].facing.opposite().value
+        assert feeder.output_to_slot == 1
+        assert feeder.output_from_slot == rules.BELT_PORT_FEED_FROM_SLOT
+        assert (product.x, product.y) == docks[0].cell
+        assert product.yaw == docks[0].facing.value
+        assert product.input_from_slot == 0
+        assert product.input_to_slot == rules.BELT_PORT_DRAW_TO_SLOT
+
+    report = validate.validate(Placement(tuple(wired)), expect_power=False)
+    assert not report.by_check("belt.port_dock")
+    assert not report.by_check("junction.colocated")
+    assert not report.by_check("game.slot_occupancy")
+
+
+def test_belt_port_input_supply_rejects_a_wrong_item_dock() -> None:
+    spec = fractionator_spec()
+    (strip,) = plan_strips(spec)
+    canvas = _Canvas()
+    belt_id = catalog.item_id(spec.belt_item_id)
+    _emit_strip(
+        canvas,
+        strip,
+        0,
+        0,
+        belt_id,
+        catalog.building(belt_id).model_index,
+        {},
+    )
+    wired = list(slots.assign_sorter_slots(canvas.buildings))
+    feeder_index = next(
+        index
+        for index, building in enumerate(wired)
+        if catalog.is_belt(building.item_id)
+        and building.output_obj is not None
+        and wired[building.output_obj].item_id == strip.item_id
+        and building.carries_item == "hydrogen"
+    )
+    machine_index = wired[feeder_index].output_obj
+    assert machine_index is not None
+    wired[feeder_index] = replace(wired[feeder_index], carries_item="deuterium")
+
+    report = validate.validate(
+        Placement(tuple(wired)),
+        spec,
+        ids=_id_map_for(spec),
+        expect_power=False,
+    )
+
+    assert [
+        finding.buildings
+        for finding in report.by_check("machine.inputs_supplied")
+    ] == [(machine_index,)]
+
+
+def test_belt_port_input_strip_is_not_refused_as_poseless() -> None:
+    (strip,) = plan_strips(fractionator_spec())
+
+    assert _machines_without_poses([strip]) == []
+
+
+def test_belt_port_input_emission_refuses_an_unfilterable_shared_lane() -> None:
+    spec = fractionator_spec()
+    (strip,) = plan_strips(spec)
+    strip = replace(strip, in_above=(("hydrogen", "deuterium"),))
+    belt_id = catalog.item_id(spec.belt_item_id)
+
+    with pytest.raises(NoValidLayout, match="cannot filter shared belt-port input lane"):
+        _emit_strip(
+            _Canvas(),
+            strip,
+            0,
+            0,
+            belt_id,
+            catalog.building(belt_id).model_index,
+            {},
+        )
+
+
+def test_freeform_fractionator_path_emits_projection_valid_port_fanout() -> None:
+    spec = fractionator_spec()
+
+    placement = FreeformLayout(
+        band_policy=BandPolicy("portable"),
+        workers=1,
+    ).lay_out(spec, time_budget_s=4.0)
+
+    report = validate.certify(placement, spec, expect_power=True)
+    assert report.ok, "\n".join(
+        f"{finding.check}: {finding.message}" for finding in report.errors
+    )
+    assert not [
+        building for building in placement.buildings if catalog.is_sorter(building.item_id)
+    ]
+
+
+def test_sequence_pair_fractionator_path_emits_projection_valid_port_fanout() -> None:
+    from flab2bp.layout.sequence_solver import SequencePairLayout
+
+    spec = fractionator_spec()
+    placement = SequencePairLayout(
+        band_policy=BandPolicy("portable"),
+    ).lay_out(spec, time_budget_s=4.0)
+
+    report = validate.certify(placement, spec, expect_power=True)
+    assert report.ok, "\n".join(
+        f"{finding.check}: {finding.message}" for finding in report.errors
+    )
+    assert not [
+        building for building in placement.buildings if catalog.is_sorter(building.item_id)
+    ]
+
+
 def test_strip_emission_reproduces_every_precomputed_attachment() -> None:
     spec = two_stage_spec()
     strip = next(strip for strip in plan_strips(spec) if strip.recipe_id == "gear")
@@ -588,13 +763,13 @@ def test_surplus_reuses_a_consumer_lane_when_the_combined_rate_fits() -> None:
 def test_self_consuming_product_keeps_internal_and_boundary_output_lanes(
     refined_oil_feedback_spec: BuildSpec,
 ) -> None:
-    (plan,) = _logical_strip_plans(refined_oil_feedback_spec)
-    assert (
-        "refined-oil",
-        plan.group_key,
-        CargoDomain.UNSPRAYED,
-    ) in plan.out_lanes
-    assert ("refined-oil", "", CargoDomain.UNSPRAYED) in plan.out_lanes
+    (family,) = generate_strip_families(refined_oil_feedback_spec)
+    lanes = {
+        (lane.items[0], lane.destination_group_keys, lane.cargo_domain)
+        for lane in family.output_lanes
+    }
+    assert ("refined-oil", (family.group_key,), CargoDomain.UNSPRAYED) in lanes
+    assert ("refined-oil", (), CargoDomain.UNSPRAYED) in lanes
 
 
 def test_packer_proxy_does_not_separate_a_strip_from_itself(
@@ -1467,15 +1642,7 @@ def spray_domain_spec(*, clean: bool, sprayed: bool, boundary: bool = False) -> 
 
 def _spray_domain_flow(
     spec: BuildSpec,
-) -> tuple[set[str], set[str], set[str], set[str], int, int]:
-    producer_plan = next(
-        plan for plan in _logical_strip_plans(spec) if plan.recipe_id == "iron-ingot"
-    )
-    plan_domains = {
-        domain.value
-        for item, _destination, domain in producer_plan.out_lanes
-        if item == "iron-ingot"
-    }
+) -> tuple[set[str], set[str], set[str], int, int]:
     family = next(
         family for family in generate_strip_families(spec) if family.recipe_id == "iron-ingot"
     )
@@ -1511,7 +1678,6 @@ def _spray_domain_flow(
         assert net.dst.cargo_domain is net.cargo_domain
         assert net.src is None or net.src.cargo_domain is net.cargo_domain
     return (
-        plan_domains,
         logical_domains,
         strip_domains,
         net_domains,
@@ -1522,8 +1688,8 @@ def _spray_domain_flow(
 def test_uniform_sprayed_lane_preserves_requires_spray_domain() -> None:
     spec = spray_domain_spec(clean=False, sprayed=True)
 
-    plan, logical, strip, nets, coaters, direct = _spray_domain_flow(spec)
-    assert plan == logical == strip == {"requires-spray"}
+    logical, strip, nets, coaters, direct = _spray_domain_flow(spec)
+    assert logical == strip == {"requires-spray"}
     assert coaters == 1
     assert nets == {"requires-spray"}
     assert direct == 0
@@ -1533,8 +1699,8 @@ def test_uniform_sprayed_lane_preserves_requires_spray_domain() -> None:
 def test_uniform_unsprayed_lane_preserves_clean_domain() -> None:
     spec = spray_domain_spec(clean=True, sprayed=False)
 
-    plan, logical, strip, nets, coaters, direct = _spray_domain_flow(spec)
-    assert plan == logical == strip == {"unsprayed"}
+    logical, strip, nets, coaters, direct = _spray_domain_flow(spec)
+    assert logical == strip == {"unsprayed"}
     assert coaters == 0
     assert nets == {"unsprayed"}
     assert direct == 1
@@ -1544,8 +1710,8 @@ def test_uniform_unsprayed_lane_preserves_clean_domain() -> None:
 def test_mixed_internal_spray_domains_remain_disjoint() -> None:
     spec = spray_domain_spec(clean=True, sprayed=True)
 
-    plan, logical, strip, nets, coaters, direct = _spray_domain_flow(spec)
-    assert plan == logical == strip == {"unsprayed", "requires-spray"}
+    logical, strip, nets, coaters, direct = _spray_domain_flow(spec)
+    assert logical == strip == {"unsprayed", "requires-spray"}
     assert coaters == 1
     assert nets == {"unsprayed", "requires-spray"}
     assert direct == 1
@@ -1585,8 +1751,8 @@ def test_mixed_spray_domain_direct_candidate_is_clean_and_exact() -> None:
 def test_requested_output_is_unsprayed_beside_proliferated_internal_lane() -> None:
     spec = spray_domain_spec(clean=False, sprayed=True, boundary=True)
 
-    plan, logical, strip, nets, coaters, direct = _spray_domain_flow(spec)
-    assert plan == logical == strip == {"unsprayed", "requires-spray"}
+    logical, strip, nets, coaters, direct = _spray_domain_flow(spec)
+    assert logical == strip == {"unsprayed", "requires-spray"}
     assert coaters == 1
     assert nets == {"requires-spray"}
     assert direct == 0
