@@ -645,8 +645,8 @@ def build(
 
     # Label the belts you have to connect to something. Done here rather than
     # in each strategy: it needs only the Placement graph plus the spec's
-    # external inputs, so one implementation covers every layout backend.
-    marked = markers.mark_external_inputs(best.placement, chosen_spec)
+    # boundary items, so one implementation covers every layout backend.
+    marked = markers.mark_external_belts(best.placement, chosen_spec)
 
     # Titles ride on the Placement, not on encode(), so stamp them here.
     labelled = replace(
