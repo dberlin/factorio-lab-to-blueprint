@@ -12463,6 +12463,67 @@ def test_projected_coater_junction_ban_cancels_inside_obb_product(
 
     assert overlaps == 1
 
+def test_power_peer_broad_phase_cancels_before_no_hit_pruning() -> None:
+    tower = catalog.building(catalog.TESLA_TOWER_ID)
+    band = planet.bands()[0]
+
+    def node(index: int, x: int) -> tuple[int, PlacedBuilding, rules.PowerNode]:
+        return (
+            index,
+            PlacedBuilding(
+                catalog.TESLA_TOWER_ID,
+                tower.model_index,
+                x,
+                0,
+                width=tower.width,
+                height=tower.height,
+            ),
+            tower.power_node,
+        )
+
+    context = (
+        band.columns,
+        False,
+        freeform._minimum_projection_grid_scale((band,)),
+    )
+    candidate = node(0, 0)
+    peer = node(1, band.columns // 2)
+    assert not freeform._projected_power_peer_possible(candidate, peer, (context,))
+
+    for context_count in (1, 8):
+        checks = 0
+
+        def active() -> bool:
+            nonlocal checks
+            checks += 1
+            return False
+
+        assert not freeform._projected_power_peer_possible(
+            candidate,
+            peer,
+            (context,) * context_count,
+            cancelled=active,
+        )
+        assert checks == 3
+
+    checks = 0
+
+    def cancelled() -> bool:
+        nonlocal checks
+        checks += 1
+        return checks >= 3
+
+    with pytest.raises(freeform._PreparationDeadline):
+        freeform._projected_power_peer_possible(
+            candidate,
+            peer,
+            (context,) * 8,
+            cancelled=cancelled,
+        )
+
+    assert checks == 3
+
+
 
 def test_power_plan_cancels_inside_proposal_projection_node_scan(
     monkeypatch: pytest.MonkeyPatch,
@@ -12511,6 +12572,21 @@ def test_power_plan_cancels_inside_proposal_projection_node_scan(
         lambda *_args, **_kwargs: tuple(projections),
     )
     monkeypatch.setattr(finalize, "projected_power_failure", power_failure)
+    def retain_power_peer(
+        _candidate: tuple[int, PlacedBuilding, rules.PowerNode],
+        _peer: tuple[int, PlacedBuilding, rules.PowerNode],
+        _contexts: Sequence[tuple[int, bool, float]],
+        *,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> bool:
+        assert cancelled is not None
+        return True
+
+    monkeypatch.setattr(
+        freeform,
+        "_projected_power_peer_possible",
+        retain_power_peer,
+    )
     cache = freeform._StagedStaticCache()
 
     with pytest.raises(freeform._PreparationDeadline):

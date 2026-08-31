@@ -3854,6 +3854,7 @@ def _prepared_junction_ban(
         )
 
     banned: set[Cell] = set()
+    offset_cache = {} if cache is None else cache.junction_offsets
     for obstacle in obstacles:
         if cancelled is not None and cancelled():
             raise _PreparationDeadline
@@ -3865,15 +3866,16 @@ def _prepared_junction_ban(
             obstacle.yaw,
             obstacle.z,
         )
-        offsets = None if cache is None else cache.junction_offsets.get(offset_key)
+        offsets = offset_cache.get(offset_key)
         if offsets is None:
             offsets = (
                 _junction_ban_offsets(*offset_key)
                 if cancelled is None
                 else _cancellable_junction_ban_offsets(*offset_key, cancelled)
             )
-            if cache is not None:
-                cache.junction_offsets[offset_key] = offsets
+            if cancelled is not None and cancelled():
+                raise _PreparationDeadline
+            offset_cache[offset_key] = offsets
         for dx, dy, level in offsets:
             if cancelled is not None and cancelled():
                 raise _PreparationDeadline
@@ -8783,8 +8785,12 @@ def _projected_power_peer_possible(
     candidate: tuple[int, PlacedBuilding, rules.PowerNode],
     peer: tuple[int, PlacedBuilding, rules.PowerNode],
     projection_contexts: Sequence[tuple[int, bool, float]],
+    *,
+    cancelled: Callable[[], bool] | None = None,
 ) -> bool:
     """Whether curvature could bring this node pair inside either paste gate."""
+    if cancelled is not None and cancelled():
+        raise _PreparationDeadline
     _candidate_index, candidate_building, candidate_node = candidate
     _peer_index, peer_building, peer_node = peer
     candidate_centre = codec.tile_to_local_offset(
@@ -8810,6 +8816,8 @@ def _projected_power_peer_possible(
         gates.append(peer_node.gate_sqr)
     if lo <= peer_building.item_id < hi:
         gates.append(candidate_node.gate_sqr)
+    if cancelled is not None and cancelled():
+        raise _PreparationDeadline
     if not gates:
         return False
     gate_distance2 = max(gates)
@@ -8825,7 +8833,11 @@ def _projected_power_peer_possible(
             + vertical * vertical
         )
         if lower_distance2 < gate_distance2:
+            if cancelled is not None and cancelled():
+                raise _PreparationDeadline
             return True
+    if cancelled is not None and cancelled():
+        raise _PreparationDeadline
     return False
 
 
@@ -10409,6 +10421,7 @@ def _power_plan(
                 candidate,
                 peer,
                 power_projection_contexts,
+                cancelled=cancelled,
             )
         )
         candidate_failure: finalize.ProjectionFailure | None = None
