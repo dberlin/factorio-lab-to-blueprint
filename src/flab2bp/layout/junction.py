@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Sequence
+from dataclasses import replace
 from fractions import Fraction
 
 from flab2bp.dsp import catalog
@@ -176,6 +177,56 @@ def make_splitter(
     )
 
 
+def splitter_stack_levels(level: int) -> tuple[int, ...]:
+    """Blueprint heights needed to support a Splitter at routing ``level``.
+
+    DSP Splitters stack at the prefab's two-level pitch.  A one-level offset
+    intersects the lower Splitter collider, and an elevated Splitter without
+    the linked chain below it fails the paste foundation check.
+    """
+    pitch = catalog.stack_pitch_z(catalog.SPLITTER_ID)
+    if pitch is None or pitch.denominator != 1:
+        raise RuntimeError("DSP Splitter prefab defines no integral stack pitch")
+    step = int(pitch)
+    if level < 0 or level % step:
+        raise ValueError(
+            f"Splitter routing level {level} does not align to stack pitch {step}"
+        )
+    return tuple(range(0, level + 1, step))
+
+
+def make_splitter_stack(
+    x: int,
+    y: int,
+    level: int,
+    *,
+    first_index: int,
+    carries_item: str | None = None,
+) -> tuple[PlacedBuilding, ...]:
+    """Materialize a legal ground-supported Splitter stack.
+
+    ``first_index`` is the placement index the bottom support will receive.
+    Every higher member names the member immediately below through the
+    Splitter's slot-15 support connection.  Only the top member participates in
+    belt flow bookkeeping.
+    """
+    if first_index < 0:
+        raise ValueError("Splitter stack first index must be non-negative")
+    levels = splitter_stack_levels(level)
+    buildings: list[PlacedBuilding] = []
+    for offset, z in enumerate(levels):
+        splitter = make_splitter(
+            x,
+            y,
+            Fraction(z),
+            carries_item=carries_item if z == level else None,
+        )
+        if offset:
+            splitter = replace(splitter, input_obj=first_index + offset - 1)
+        buildings.append(splitter)
+    return tuple(buildings)
+
+
 def check_ports(buildings: list[PlacedBuilding] | tuple[PlacedBuilding, ...]) -> None:
     """Raise if any splitter has more belts attached than it has sides.
 
@@ -189,6 +240,8 @@ def check_ports(buildings: list[PlacedBuilding] | tuple[PlacedBuilding, ...]) ->
         return
     ports: dict[int, int] = dict.fromkeys(junctions, 0)
     for b in buildings:
+        if not catalog.is_belt(b.item_id):
+            continue
         for link in (b.output_obj, b.input_obj):
             if link is not None and link in ports:
                 ports[link] += 1
@@ -215,7 +268,6 @@ def attach_output(belt: PlacedBuilding, junction: int) -> PlacedBuilding:
 def _replace_links(
     belt: PlacedBuilding, *, output_obj: int | None = None, input_obj: int | None = None
 ) -> PlacedBuilding:
-    from dataclasses import replace
 
     changes: dict[str, int] = {}
     if output_obj is not None:

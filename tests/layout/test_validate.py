@@ -14,7 +14,6 @@ from pathlib import Path
 import pytest
 
 import flab2bp.layout.validate as validate_module
-
 from flab2bp.dsp import params, rules
 from flab2bp.dsp.catalog import (
     DEFAULT_MAX_BELT_Z,
@@ -3216,6 +3215,75 @@ def test_junction_ports_clean_at_four_attachments() -> None:
         belt(0, 0, inp=1),  # 4
     )
     assert not fired(validate(p), "junction.ports")
+
+
+def test_junction_stack_uses_two_level_pitch_and_names_its_support() -> None:
+    stack = junction.make_splitter_stack(
+        4,
+        5,
+        2,
+        first_index=7,
+        carries_item="iron-ore",
+    )
+
+    assert [(building.z, building.input_obj, building.carries_item) for building in stack] == [
+        (0, None, None),
+        (2, 7, "iron-ore"),
+    ]
+
+
+@pytest.mark.parametrize("level", [1, 3])
+def test_junction_stack_rejects_unsupported_one_level_offsets(level: int) -> None:
+    with pytest.raises(ValueError, match="stack pitch"):
+        junction.make_splitter_stack(4, 5, level, first_index=7)
+
+
+def test_junction_support_link_does_not_consume_a_physical_port() -> None:
+    base, upper = junction.make_splitter_stack(0, 0, 2, first_index=0)
+    placement = place(
+        base,
+        upper,
+        belt(0, 0, out=0),
+        belt(0, 0, inp=0),
+        belt(0, 0, inp=0),
+        belt(0, 0, inp=0),
+    )
+
+    assert not fired(validate(placement), "junction.ports")
+
+
+def test_junction_stack_support_link_is_valid_and_support_may_be_idle() -> None:
+    base, upper = junction.make_splitter_stack(0, 0, 2, first_index=0)
+    placement = place(
+        base,
+        upper,
+        belt(0, 0, z=2, out=1),
+        belt(0, 0, z=2, inp=1),
+    )
+
+    report = validate(placement)
+
+    assert not fired(report, "junction.stack_support")
+    assert not fired(report, "junction.records_no_links")
+    assert not any(
+        finding.detail.get("junction") == 0
+        for finding in report.by_check("belt.continuity")
+    )
+
+
+def test_junction_stack_support_fires_without_the_required_lower_splitter() -> None:
+    placement = place(
+        splitter(0, 0, 2),
+        belt(0, 0, z=2, out=0),
+        belt(0, 0, z=2, inp=0),
+    )
+
+    report = validate(placement)
+
+    assert fired(report, "junction.stack_support")
+    finding = report.by_check("junction.stack_support")[0]
+    assert finding.detail["junction"] == 0
+    assert finding.detail["expected_z"] == "0"
 
 
 def test_junction_ports_fires_on_a_fifth_attachment() -> None:

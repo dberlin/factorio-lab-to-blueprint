@@ -2791,9 +2791,16 @@ def _continuity(ctx: Context) -> Iterable[Finding]:
                 (i,),
                 {"output_obj": o},
             )
+    supports = {
+        support
+        for junction_index, splitter in ctx.of_kind(Kind.SPLITTER)
+        if (support := _splitter_support_index(ctx, junction_index, splitter)) is not None
+    }
     for j, s in ctx.of_kind(Kind.SPLITTER):
         feeding = ctx.junction_in.get(j, ())
         drawing = ctx.junction_out.get(j, ())
+        if not feeding and not drawing and j in supports:
+            continue
         if feeding:
             continue  # the far side is `belt.termination`'s question
         if not drawing:
@@ -2817,6 +2824,56 @@ def _continuity(ctx: Context) -> Iterable[Finding]:
 
 
 # --- junctions -------------------------------------------------------------
+
+
+def _splitter_support_index(
+    ctx: Context,
+    junction_index: int,
+    splitter: PlacedBuilding,
+) -> int | None:
+    """Return the exact lower Splitter named by a valid stack connection."""
+    pitch = cat.stack_pitch_z(cat.SPLITTER_ID)
+    if pitch is None or splitter.z <= 0 or splitter.z % pitch:
+        return None
+    support_index = splitter.input_obj
+    if support_index is None or not 0 <= support_index < len(ctx.placement.buildings):
+        return None
+    support = ctx.placement.buildings[support_index]
+    if (
+        ctx.kinds[support_index] is not Kind.SPLITTER
+        or support.x != splitter.x
+        or support.y != splitter.y
+        or support.z != splitter.z - pitch
+        or splitter.input_from_slot != rules.SPLITTER_INPUT_FROM_SLOT
+    ):
+        return None
+    return support_index
+
+
+@check("junction.stack_support")
+def _junction_stack_support(ctx: Context) -> Iterable[Finding]:
+    """Every elevated Splitter rests on the prefab's linked two-level stack."""
+    pitch = cat.stack_pitch_z(cat.SPLITTER_ID)
+    if pitch is None:
+        return
+    for junction_index, splitter in ctx.of_kind(Kind.SPLITTER):
+        if splitter.z <= 0 or _splitter_support_index(ctx, junction_index, splitter) is not None:
+            continue
+        expected_z = splitter.z - pitch
+        yield Finding(
+            "junction.stack_support",
+            Severity.ERROR,
+            f"splitter {junction_index} at ({splitter.x},{splitter.y},{splitter.z}) has no "
+            f"linked splitter support at ({splitter.x},{splitter.y},{expected_z}); "
+            f"the game requires stack pitch {pitch} and otherwise reports Foundation required",
+            (junction_index,),
+            {
+                "junction": junction_index,
+                "expected_z": str(expected_z),
+                "stack_pitch": str(pitch),
+                "input_obj": splitter.input_obj,
+            },
+        )
 
 
 @check("junction.ports")
@@ -2897,28 +2954,27 @@ def _junction_port_pose(ctx: Context) -> Iterable[Finding]:
 
 @check("junction.records_no_links")
 def _junction_records_no_links(ctx: Context) -> Iterable[Finding]:
-    """A splitter names nobody; the belts around it do the naming.
+    """A splitter names only its immediate lower multilevel support.
 
-    Unanimous across the corpus: ``output_obj`` and ``input_obj`` are both unset
-    on all 25 splitters.  A splitter that names a neighbour encodes a link the
-    game does not expect on that building, and -- because ``_context`` reads the
-    junction's attachments off the BELTS -- such a link is invisible to every
-    other check here, so the connection it claims is never verified by anything.
+    Ordinary belt links live on the belts around the junction.  An elevated
+    Splitter is the exception: its ``input_obj`` names the same-position
+    Splitter one prefab stack pitch below through slot 15.
     """
     for j, b in ctx.of_kind(Kind.SPLITTER):
+        support = _splitter_support_index(ctx, j, b)
         named = {
             label: link
             for label, link in (("output_obj", b.output_obj), ("input_obj", b.input_obj))
-            if link is not None
+            if link is not None and not (label == "input_obj" and link == support)
         }
         if not named:
             continue
         yield Finding(
             "junction.records_no_links",
             Severity.ERROR,
-            f"splitter {j} at ({b.x},{b.y}) records {named}; a junction records no "
-            f"links of its own and the belts around it name it instead, so this "
-            f"connection is verified by nothing",
+            f"splitter {j} at ({b.x},{b.y}) records unsupported links {named}; "
+            f"only an elevated splitter's slot-15 input link to its immediate lower "
+            f"support is legal, while surrounding belts own every cargo connection",
             (j,),
             {"junction": j, **{k: str(v) for k, v in named.items()}},
         )
