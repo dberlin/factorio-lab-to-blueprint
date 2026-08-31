@@ -11094,6 +11094,51 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
         )
         return canvas, spec, strips[:1], [{self.ITEM: port}]
 
+    def _projected_risk_obstacle(
+        self,
+        canvas: _Canvas,
+        strip: Strip,
+        port: _Port,
+    ) -> int:
+        """Add a same-strip peer with a real projected-only collision relation."""
+        cx, cy = freeform._coater_seats(
+            canvas,
+            port,
+            west_channel=strip.west_channel,
+        )[0]
+        assembler_id = catalog.item_id("assembling-machine-2")
+        assembler = catalog.building(assembler_id)
+        peer = PlacedBuilding(
+            assembler_id,
+            assembler.model_index,
+            cx + 2,
+            cy + 1,
+            width=assembler.width,
+            height=assembler.height,
+            owner_strip=0,
+        )
+        obstacle_index = canvas.add(peer, solid=True)
+        coater = catalog.building(catalog.SPRAY_COATER_ID)
+        candidate = PlacedBuilding(
+            catalog.SPRAY_COATER_ID,
+            coater.model_index,
+            cx,
+            cy,
+            z=F(port.z),
+            width=1,
+            height=1,
+            yaw=Facing.EAST.value,
+            owner_strip=0,
+        )
+        relation = freeform._staged_static_clearance_key(peer, candidate)
+
+        assert not freeform._coater_keepout_hits(canvas.buildings, candidate)
+        assert freeform._staged_static_relation_projection_risk(
+            relation,
+            BandPolicy("portable"),
+        )
+        return obstacle_index
+
     def _broke2_fixture(
         self,
         splitter_y: int,
@@ -11295,8 +11340,41 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
         assert caught.value.failure is failure
 
     def test_sprayed_lane_reserves_the_full_coater_body_west(self) -> None:
+        policy = BandPolicy("portable")
         _canvas, _spec, strips, _ports = self._fixture(4)
-        assert strips[0].west_channel == freeform._COATER_WEST_CHANNEL == 3
+        strip = strips[0]
+        w3 = replace(strip, west_channel=freeform._COATER_WEST_CHANNEL)
+        risky = tuple(
+            relation
+            for relation in freeform._staged_static_clearance_keys(w3)
+            if freeform._staged_static_preclearance_proved(relation, policy)
+        )
+
+        assert risky, "fixture lost the exact W3 relation that requires preclearance"
+        assert strip.west_channel == freeform._COATER_WEST_CHANNEL + 1 == 4
+        assert all(
+            not freeform._staged_static_relation_projection_risk(relation, policy)
+            for relation in freeform._staged_static_clearance_keys(strip)
+        )
+
+    def test_universally_safe_sprayed_relation_keeps_the_w3_body_reservation(
+        self,
+    ) -> None:
+        policy = BandPolicy("portable")
+        safe = next(
+            strip
+            for strip in plan_strips(band_160_all_products_spec(), band_policy=policy)
+            if strip.cargo_domain is CargoDomain.REQUIRES_SPRAY
+            and strip.west_channel == freeform._COATER_WEST_CHANNEL
+            and freeform._staged_static_clearance_keys(strip)
+        )
+        relations = freeform._staged_static_clearance_keys(safe)
+
+        assert relations
+        assert all(
+            not freeform._staged_static_relation_projection_risk(relation, policy)
+            for relation in relations
+        )
 
 
     def test_a_lane_too_short_to_seat_a_coater_is_refused(self) -> None:
@@ -11427,19 +11505,10 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         canvas, spec, strips, ports = self._fixture(4)
-        assembler_id = catalog.item_id("assembling-machine-2")
-        assembler = catalog.building(assembler_id)
-        obstacle_index = canvas.add(
-            PlacedBuilding(
-                assembler_id,
-                assembler.model_index,
-                5,
-                4,
-                width=assembler.width,
-                height=assembler.height,
-                owner_strip=0,
-            ),
-            solid=True,
+        obstacle_index = self._projected_risk_obstacle(
+            canvas,
+            strips[0],
+            ports[0][self.ITEM],
         )
         attempted: list[int] = []
 
@@ -11466,6 +11535,11 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
 
         monkeypatch.setattr(
             freeform,
+            "_coater_keepout_hits",
+            lambda _buildings, _candidate: (),
+        )
+        monkeypatch.setattr(
+            freeform,
             "_prospective_static_failure",
             projected_failure,
         )
@@ -11489,21 +11563,12 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         canvas, spec, strips, ports = self._fixture(6)
-        assert strips[0].west_channel == 3
+        assert strips[0].west_channel == freeform._COATER_WEST_CHANNEL + 1 == 4
         first_pickup_x = strips[0].west_channel
-        assembler_id = catalog.item_id("assembling-machine-2")
-        assembler = catalog.building(assembler_id)
-        obstacle_index = canvas.add(
-            PlacedBuilding(
-                assembler_id,
-                assembler.model_index,
-                8,
-                4,
-                width=assembler.width,
-                height=assembler.height,
-                owner_strip=0,
-            ),
-            solid=True,
+        obstacle_index = self._projected_risk_obstacle(
+            canvas,
+            strips[0],
+            ports[0][self.ITEM],
         )
         attempted: list[int] = []
 
@@ -11530,6 +11595,11 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
 
         monkeypatch.setattr(
             freeform,
+            "_coater_keepout_hits",
+            lambda _buildings, _candidate: (),
+        )
+        monkeypatch.setattr(
+            freeform,
             "_prospective_static_failure",
             projected_failure,
         )
@@ -11545,13 +11615,13 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
                 policy=BandPolicy("portable"),
             )
 
-        assert attempted == [1, 2]
+        assert attempted == [1, 2, 3]
         assert caught.value.failure is not None
         assert caught.value.failure.check == "geom.collide"
         assert caught.value.clearance_requirement is not None
         assert (
             caught.value.clearance_requirement.required_west_channel
-            == freeform._COATER_WEST_CHANNEL + 1
+            == strips[0].west_channel + 1
         )
         assert caught.value.exact_retry_evidence is None
 
@@ -11560,19 +11630,10 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         canvas, spec, strips, ports = self._fixture(4)
-        assembler_id = catalog.item_id("assembling-machine-2")
-        assembler = catalog.building(assembler_id)
-        obstacle_index = canvas.add(
-            PlacedBuilding(
-                assembler_id,
-                assembler.model_index,
-                6,
-                4,
-                width=assembler.width,
-                height=assembler.height,
-                owner_strip=0,
-            ),
-            solid=True,
+        obstacle_index = self._projected_risk_obstacle(
+            canvas,
+            strips[0],
+            ports[0][self.ITEM],
         )
         projected: list[int] = []
         keepout: list[int] = []
@@ -12029,63 +12090,61 @@ def band_160_all_products_spec() -> BuildSpec:
 
 
 def test_staged_static_clearance_reuses_only_the_same_physical_relation() -> None:
+    policy = BandPolicy("portable")
     spec = band_160_all_products_spec()
-    ordinary = plan_strips(spec)
+    ordinary = plan_strips(spec, band_policy=policy)
     unsafe = next(
         strip
         for strip in ordinary
         if strip.item_id == catalog.item_id("assembling-machine-2")
+        and strip.west_channel == freeform._COATER_WEST_CHANNEL + 1
         and any(
-            relation.delta_y == 1
-            for relation in freeform._staged_static_clearance_keys(strip)
+            freeform._staged_static_preclearance_proved(relation, policy)
+            for relation in freeform._staged_static_clearance_keys(
+                replace(strip, west_channel=freeform._COATER_WEST_CHANNEL)
+            )
         )
     )
-    sprayed_item = next(
-        item
-        for item in unsafe.in_lanes
-        if unsafe.machine_row - unsafe.row_of_input(item) == 1
+    unsafe_w3 = replace(
+        unsafe,
+        west_channel=freeform._COATER_WEST_CHANNEL,
     )
-    coater = catalog.building(catalog.SPRAY_COATER_ID)
-    relation = freeform._staged_static_clearance_key(
-        PlacedBuilding(
-            item_id=unsafe.item_id,
-            model_index=unsafe.model_index,
-            x=0,
-            y=unsafe.machine_row,
-            width=unsafe.mw,
-            height=unsafe.mh,
-            yaw=unsafe.yaw,
-        ),
+    relation = next(
+        relation
+        for relation in freeform._staged_static_clearance_keys(unsafe_w3)
+        if freeform._staged_static_preclearance_proved(relation, policy)
+    )
+    assert freeform._staged_static_relation_projection_risk(relation, policy)
+    assert not freeform._staged_static_relation_projection_risk(
+        replace(relation, delta_x=relation.delta_x + 1),
+        policy,
+    )
 
-        PlacedBuilding(
-            item_id=catalog.SPRAY_COATER_ID,
-            model_index=coater.model_index,
-            x=1 - unsafe.west_channel,
-            y=unsafe.row_of_input(sprayed_item),
-            width=1,
-            height=1,
-            yaw=Facing.EAST.value,
-        ),
-    )
-    assert relation in freeform._staged_static_clearance_keys(unsafe)
     safe = next(
         strip
         for strip in ordinary
         if strip.cargo_domain is CargoDomain.REQUIRES_SPRAY
-        and strip.item_id != unsafe.item_id
+        and strip.west_channel == freeform._COATER_WEST_CHANNEL
+        and freeform._staged_static_clearance_keys(strip)
+        and all(
+            not freeform._staged_static_relation_projection_risk(candidate, policy)
+            for candidate in freeform._staged_static_clearance_keys(strip)
+        )
     )
     assert relation not in freeform._staged_static_clearance_keys(safe)
 
     regenerated = plan_strips(
         spec,
+        band_policy=policy,
         minimum_staged_static_clearance={
-            relation: unsafe.west_channel + 1,
+            relation: freeform._COATER_WEST_CHANNEL + 1,
         },
     )
     equivalent = [
         strip
         for strip in regenerated
-        if relation in freeform._staged_static_clearance_keys(
+        if relation
+        in freeform._staged_static_clearance_keys(
             replace(strip, west_channel=freeform._COATER_WEST_CHANNEL)
         )
     ]
