@@ -3822,15 +3822,40 @@ def _coater_keepout_hits(
     return tuple(sorted(hits))
 
 
+def _splitter_stack_geometry(
+    x: int,
+    y: int,
+    level: int,
+    *,
+    carry_direction: tuple[int, int] | None = None,
+) -> tuple[PlacedBuilding, ...]:
+    """Exact members of the stack serving one routing carry level."""
+    direction = carry_direction
+    if level % 2 and direction is None:
+        # Model 40's collider is a rotationally symmetric cross.  Static
+        # preparation has no path direction yet, so use one cardinal yaw; the
+        # materialized junction replaces it with the actual carry direction.
+        direction = (0, 1)
+    return junction.make_splitter_stack(
+        x,
+        y,
+        level,
+        first_index=0,
+        carry_direction=direction,
+    )
+
+
 def _junction_site_is_clear(
     buildings: Sequence[PlacedBuilding],
     x: int,
     y: int,
     level: int,
 ) -> bool:
-    """Does the exact Splitter collider clear every non-belt static object?"""
-    splitter = junction.make_splitter(x, y, Fraction(level))
-    return not _building_collider_hits(buildings, splitter)
+    """Does every real stack member clear every non-belt static object?"""
+    return all(
+        not _building_collider_hits(buildings, splitter)
+        for splitter in _splitter_stack_geometry(x, y, level)
+    )
 
 
 @lru_cache(maxsize=256)
@@ -4183,12 +4208,8 @@ class _Canvas:
         return idx
 
     def junction_is_clear(self, x: int, y: int, level: int) -> bool:
-        """Apply exact legality to every member of a supported Splitter stack."""
-        try:
-            stack_levels = junction.splitter_stack_levels(level)
-        except ValueError:
-            return False
-        if any((x, y, stack_level) in self.junction_ban for stack_level in stack_levels):
+        """Apply exact legality to every real member of a junction stack."""
+        if (x, y, level) in self.junction_ban:
             return False
         buildings = (
             [
@@ -4200,8 +4221,8 @@ class _Canvas:
             else self.buildings
         )
         return all(
-            _junction_site_is_clear(buildings, x, y, stack_level)
-            for stack_level in stack_levels
+            not _building_collider_hits(buildings, stack_member)
+            for stack_member in _splitter_stack_geometry(x, y, level)
         )
 
     def free_world(self, x: int, y: int, z: Fraction) -> bool:
@@ -6370,6 +6391,33 @@ def _bind_prepared_net(net: _PreparedNet, buildings: list[PlacedBuilding]) -> _N
     )
 
 
+def _cardinal_direction(
+    origin: PlacedBuilding,
+    outward: PlacedBuilding,
+) -> tuple[int, int] | None:
+    direction = (outward.x - origin.x, outward.y - origin.y)
+    return direction if abs(direction[0]) + abs(direction[1]) == 1 else None
+
+
+def _straight_path_direction(
+    path: Sequence[Cell],
+    at: int,
+) -> tuple[int, int] | None:
+    """Flow direction through one straight, cardinal interior path cell."""
+    if not 0 < at < len(path) - 1:
+        return None
+    x, y, _level = path[at]
+    before = (path[at - 1][0] - x, path[at - 1][1] - y)
+    after = (path[at + 1][0] - x, path[at + 1][1] - y)
+    if (
+        abs(before[0]) + abs(before[1]) != 1
+        or abs(after[0]) + abs(after[1]) != 1
+        or before != (-after[0], -after[1])
+    ):
+        return None
+    return after
+
+
 def _merge_frontier(
     canvas: _Canvas,
     paths: Mapping[int, Sequence[Cell]],
@@ -6427,17 +6475,30 @@ def _merge_frontier(
         if altitudes is None:
             continue
         for at, ((x, y, lvl), altitude) in enumerate(zip(path, altitudes, strict=True)):
-            # A source-side Splitter rests on a routing level.  A destination
-            # merge builds no junction and keeps the ramp alternatives it had.
+            # A source-side junction requires an integer carry plane.  Model 40
+            # serves odd planes from one level lower and exposes only its
+            # orthogonal lower ports to the new branch.
             if junctionable is not None and altitude.denominator != 1:
                 continue
             actual_level = int(altitude) if altitude.denominator == 1 else lvl
             if junctionable is not None and not junctionable(x, y, actual_level):
                 continue
+            carry_direction = (
+                _straight_path_direction(path, at)
+                if junctionable is not None and actual_level % 2
+                else None
+            )
+            if junctionable is not None and actual_level % 2 and carry_direction is None:
+                continue
+            branch_level = actual_level - 1 if carry_direction is not None else lvl
             free = [
                 cell
                 for dx, dy in _STEPS
-                if canvas.free(cell := (x + dx, y + dy, lvl))
+                if (
+                    carry_direction is None
+                    or dx * carry_direction[0] + dy * carry_direction[1] == 0
+                )
+                and canvas.free(cell := (x + dx, y + dy, branch_level))
             ]
             if not free:
                 continue
@@ -6452,7 +6513,12 @@ def _merge_frontier(
                     width=1,
                     height=1,
                 )
-                splitter = junction.make_splitter(x, y, altitude)
+                splitter = _splitter_stack_geometry(
+                    x,
+                    y,
+                    actual_level,
+                    carry_direction=carry_direction,
+                )[-1]
                 used_ports: set[int] = set()
                 path_ports_valid = True
                 for neighbour_index in (at - 1, at + 1):
@@ -6478,10 +6544,18 @@ def _merge_frontier(
                     continue
                 available: list[Cell] = []
                 for cell in free:
+                    branch_attachment = replace(
+                        attachment,
+                        z=Fraction(cell[2]),
+                    )
                     port = splitter_ports.expected_path_port(
                         splitter,
-                        attachment,
-                        replace(attachment, x=cell[0], y=cell[1]),
+                        branch_attachment,
+                        replace(
+                            branch_attachment,
+                            x=cell[0],
+                            y=cell[1],
+                        ),
                     )
                     if port is not None and port not in used_ports:
                         available.append(cell)
@@ -6522,12 +6596,19 @@ def _junction_belt_clear(
     """
     excused = set(path[max(0, at - 2) : at + 3])
     try:
-        stack_levels = junction.splitter_stack_levels(tap[2])
+        stack = _splitter_stack_geometry(tap[0], tap[1], tap[2])
     except ValueError:
         return False
-    for stack_level in stack_levels:
-        for cell in junction.keepout_cells(tap[0], tap[1], stack_level):
-            if stack_level == tap[2] and cell in excused:
+    for offset, stack_member in enumerate(stack):
+        top = offset == len(stack) - 1
+        for cell in junction.keepout_cells(
+            tap[0],
+            tap[1],
+            int(stack_member.z),
+            model_index=stack_member.model_index,
+            yaw=stack_member.yaw,
+        ):
+            if top and cell in excused:
                 continue
             who = canvas.blocked.get(cell)
             if who is None:
@@ -6869,20 +6950,17 @@ def _route_all(
         if cell in canvas.guard and not planned_here:
             return False
         nearby = [
-            junction.make_splitter(tx, ty, Fraction(stack_level))
+            stack_member
             for tx, ty, tz in planned_taps
             if (tx, ty, tz) != cell
             and abs(tx - x) <= 3
             and abs(ty - y) <= 3
             and abs(tz - level) <= 3
-            for stack_level in junction.splitter_stack_levels(tz)
+            for stack_member in _splitter_stack_geometry(tx, ty, tz)
         ]
         return all(
-            not _building_collider_hits(
-                nearby,
-                junction.make_splitter(x, y, Fraction(stack_level)),
-            )
-            for stack_level in junction.splitter_stack_levels(level)
+            not _building_collider_hits(nearby, stack_member)
+            for stack_member in _splitter_stack_geometry(x, y, level)
         )
 
     def _direct_tap_clear(net: _Net) -> bool:
@@ -6900,12 +6978,19 @@ def _route_all(
             is not None
         }
         try:
-            stack_levels = junction.splitter_stack_levels(tap[2])
+            stack = _splitter_stack_geometry(tap[0], tap[1], tap[2])
         except ValueError:
             return False
-        for stack_level in stack_levels:
-            for cell in junction.keepout_cells(tap[0], tap[1], stack_level):
-                if stack_level == tap[2] and cell in excused:
+        for offset, stack_member in enumerate(stack):
+            top = offset == len(stack) - 1
+            for cell in junction.keepout_cells(
+                tap[0],
+                tap[1],
+                int(stack_member.z),
+                model_index=stack_member.model_index,
+                yaw=stack_member.yaw,
+            ):
+                if top and cell in excused:
                     continue
                 who = canvas.blocked.get(cell)
                 if who == _TENTATIVE:
@@ -6963,14 +7048,23 @@ def _route_all(
             if tap in sibling_path:
                 excused.update(sibling_path)
         claimed: set[Cell] = set()
-        for cell in junction.keepout_cells(*tap):
-            if cell in excused or not _inside_grid(cell):
-                continue
-            guard_claims[cell].add(index)
-            canvas.guard.add(cell)
-            if cell not in owner:
-                grid.block(cell)
-            claimed.add(cell)
+        stack = _splitter_stack_geometry(tap[0], tap[1], tap[2])
+        for offset, stack_member in enumerate(stack):
+            top = offset == len(stack) - 1
+            for cell in junction.keepout_cells(
+                tap[0],
+                tap[1],
+                int(stack_member.z),
+                model_index=stack_member.model_index,
+                yaw=stack_member.yaw,
+            ):
+                if (top and cell in excused) or not _inside_grid(cell):
+                    continue
+                guard_claims[cell].add(index)
+                canvas.guard.add(cell)
+                if cell not in owner:
+                    grid.block(cell)
+                claimed.add(cell)
         if claimed:
             path_guards[index] = claimed
 
@@ -7065,14 +7159,36 @@ def _route_all(
         direct_ports: set[int] = set()
         direct_ports_valid = True
         source_belt = canvas.buildings[source.belt]
-        prospective_splitter = junction.make_splitter(
+        incoming = building_predecessors[source.belt]
+        mixed_height = needs_junction and bool(source.z % 2)
+        carry_direction: tuple[int, int] | None = None
+        if mixed_height:
+            if len(incoming) != 1 or source_belt.output_obj is None:
+                direct_ports_valid = False
+            else:
+                feed_direction = _cardinal_direction(
+                    source_belt,
+                    canvas.buildings[incoming[0]],
+                )
+                carry_direction = _cardinal_direction(
+                    source_belt,
+                    canvas.buildings[source_belt.output_obj],
+                )
+                if (
+                    feed_direction is None
+                    or carry_direction is None
+                    or feed_direction
+                    != (-carry_direction[0], -carry_direction[1])
+                ):
+                    direct_ports_valid = False
+                    carry_direction = None
+        prospective_splitter = _splitter_stack_geometry(
             source_belt.x,
             source_belt.y,
-            source_belt.z,
-            carries_item=source_belt.carries_item,
-        )
+            source.z,
+            carry_direction=carry_direction,
+        )[-1]
         if needs_junction:
-            incoming = building_predecessors[source.belt]
             if len(incoming) != 1:
                 direct_ports_valid = False
             else:
@@ -7102,10 +7218,14 @@ def _route_all(
                 first = sibling_path[0]
                 if abs(first[0] - source.x) + abs(first[1] - source.y) != 1:
                     continue
+                branch_attachment = replace(
+                    source_belt,
+                    z=Fraction(first[2]),
+                )
                 port = splitter_ports.expected_path_port(
                     prospective_splitter,
-                    source_belt,
-                    replace(source_belt, x=first[0], y=first[1]),
+                    branch_attachment,
+                    replace(branch_attachment, x=first[0], y=first[1]),
                 )
                 if port is None or port in direct_ports:
                     direct_ports_valid = False
@@ -7121,15 +7241,26 @@ def _route_all(
                 )
             )
         ):
+            branch_level = source.z - 1 if mixed_height else source.z
             for dx, dy in _STEPS:
-                cell = (source.x + dx, source.y + dy, source.z)
+                if (
+                    mixed_height
+                    and carry_direction is not None
+                    and dx * carry_direction[0] + dy * carry_direction[1] != 0
+                ):
+                    continue
+                cell = (source.x + dx, source.y + dy, branch_level)
                 if not canvas.free(cell) or cell in rejected_starts[index]:
                     continue
                 if needs_junction:
+                    branch_attachment = replace(
+                        source_belt,
+                        z=Fraction(branch_level),
+                    )
                     port = splitter_ports.expected_path_port(
                         prospective_splitter,
-                        source_belt,
-                        replace(source_belt, x=cell[0], y=cell[1]),
+                        branch_attachment,
+                        replace(branch_attachment, x=cell[0], y=cell[1]),
                     )
                     if port is None or port in direct_ports:
                         continue
@@ -8158,6 +8289,18 @@ def _commit_paths(
     return tuple(unlinked)
 
 
+def _mixed_height_branch_endpoint(
+    tap: Cell,
+    branch: PlacedBuilding,
+) -> bool:
+    """Whether model 40 can join this odd carry tap to its lower branch."""
+    return (
+        bool(tap[2] % 2)
+        and branch.z == tap[2] - 1
+        and abs(branch.x - tap[0]) + abs(branch.y - tap[1]) == 1
+    )
+
+
 def _source_for(
     canvas: _Canvas,
     first: int,
@@ -8238,14 +8381,17 @@ def _source_for(
             if (
                 catalog.is_belt(other.item_id)
                 and other.carries_item == net.item
-                and _legal_link(
-                    other.x,
-                    other.y,
-                    other.z,
-                    head.x,
-                    head.y,
-                    head.z,
-                    ramped=canvas.ramped,
+                and (
+                    _legal_link(
+                        other.x,
+                        other.y,
+                        other.z,
+                        head.x,
+                        head.y,
+                        head.z,
+                        ramped=canvas.ramped,
+                    )
+                    or _mixed_height_branch_endpoint(hint, head)
                 )
             ):
                 return who
@@ -8571,6 +8717,17 @@ def _tap_source(
     if canvas.buildings[onward].item_id == catalog.SPLITTER_ID:
         junction_idx = onward
         splitter = canvas.buildings[junction_idx]
+        branch_attachment = b
+        if splitter.model_index == 40:
+            if (
+                b.z != splitter.z + 1
+                or canvas.buildings[branch].z != splitter.z
+                or _cardinal_direction(b, canvas.buildings[branch]) is None
+            ):
+                if rejected_reason is not None:
+                    rejected_reason.append("splitter-port")
+                return False
+            branch_attachment = replace(b, z=splitter.z)
         predecessors: dict[int, list[int]] = defaultdict(list)
         for index, candidate in enumerate(canvas.buildings):
             if (
@@ -8608,51 +8765,13 @@ def _tap_source(
             used_ports.add(port)
     else:
         # A junction rests on a real routing level.  A ramp midpoint cannot host
-        # one, and every integer level is checked against the exact prepared
-        # Splitter collider cache -- machines and reserved towers included.
+        # one, and every real stack member is checked against the exact prepared
+        # collider cache plus all dynamic belts.
         if b.z.denominator != 1:
             if rejected_reason is not None:
                 rejected_reason.append("ramp")
             return False
         level = int(b.z)
-        try:
-            stack_levels = junction.splitter_stack_levels(level)
-        except ValueError:
-            if rejected_reason is not None:
-                rejected_reason.append("splitter-stack")
-            return False
-        if not canvas.junction_is_clear(b.x, b.y, level):
-            if rejected_reason is not None:
-                rejected_reason.append("junction-collider")
-            return False
-        # The upper member's own run is excused.  Every lower support has no
-        # belt attachments, so any belt in its keepout is foreign.
-        belt_blockers: set[Cell] = set()
-        for stack_level in stack_levels:
-            belt_blockers.update(
-                _belt_keepout_blockers(
-                    canvas,
-                    b.x,
-                    b.y,
-                    stack_level,
-                    excused if stack_level == level else frozenset(),
-                )
-            )
-        if belt_blockers:
-            if rejected_cells is not None:
-                rejected_cells.update(belt_blockers)
-            if rejected_reason is not None:
-                rejected_reason.append("belt-keepout")
-            return False
-
-        splitter_stack = junction.make_splitter_stack(
-            b.x,
-            b.y,
-            level,
-            first_index=len(canvas.buildings),
-            carries_item=b.carries_item,
-        )
-        splitter = splitter_stack[-1]
         incoming = [
             index
             for index, candidate in enumerate(canvas.buildings)
@@ -8663,6 +8782,53 @@ def _tap_source(
             if rejected_reason is not None:
                 rejected_reason.append("splitter-port")
             return False
+        carry_direction: tuple[int, int] | None = None
+        if level % 2:
+            feed_direction = _cardinal_direction(
+                b,
+                canvas.buildings[incoming[0]],
+            )
+            carry_direction = _cardinal_direction(
+                b,
+                canvas.buildings[onward],
+            )
+            branch_direction = _cardinal_direction(
+                b,
+                canvas.buildings[branch],
+            )
+            if (
+                feed_direction is None
+                or carry_direction is None
+                or feed_direction != (-carry_direction[0], -carry_direction[1])
+                or branch_direction is None
+                or branch_direction[0] * carry_direction[0]
+                + branch_direction[1] * carry_direction[1]
+                != 0
+                or canvas.buildings[branch].z != level - 1
+            ):
+                if rejected_reason is not None:
+                    rejected_reason.append("splitter-port")
+                return False
+        try:
+            splitter_stack = junction.make_splitter_stack(
+                b.x,
+                b.y,
+                level,
+                first_index=len(canvas.buildings),
+                carries_item=b.carries_item,
+                carry_direction=carry_direction,
+            )
+        except ValueError:
+            if rejected_reason is not None:
+                rejected_reason.append("splitter-stack")
+            return False
+        if not canvas.junction_is_clear(b.x, b.y, level):
+            if rejected_reason is not None:
+                rejected_reason.append("junction-collider")
+            return False
+
+        splitter = splitter_stack[-1]
+        branch_attachment = replace(b, z=splitter.z) if level % 2 else b
         feed_port = splitter_ports.expected_path_port(
             splitter,
             b,
@@ -8675,7 +8841,7 @@ def _tap_source(
         )
         branch_port = splitter_ports.expected_path_port(
             splitter,
-            b,
+            branch_attachment,
             canvas.buildings[branch],
         )
         if (
@@ -8687,26 +8853,55 @@ def _tap_source(
             if rejected_reason is not None:
                 rejected_reason.append("splitter-port")
             return False
+
+        # Only the top member owns this run.  Every lower support has no belt
+        # attachments, so every belt in its exact model/yaw keepout is foreign.
+        belt_blockers: set[Cell] = set()
+        for offset, stack_member in enumerate(splitter_stack):
+            top = offset == len(splitter_stack) - 1
+            for cell in junction.keepout_cells(
+                b.x,
+                b.y,
+                int(stack_member.z),
+                model_index=stack_member.model_index,
+                yaw=stack_member.yaw,
+            ):
+                if top and cell in excused:
+                    continue
+                who = canvas.blocked.get(cell)
+                if (
+                    who is not None
+                    and 0 <= who < len(canvas.buildings)
+                    and catalog.is_belt(canvas.buildings[who].item_id)
+                ):
+                    belt_blockers.add(cell)
+        if belt_blockers:
+            if rejected_cells is not None:
+                rejected_cells.update(belt_blockers)
+            if rejected_reason is not None:
+                rejected_reason.append("belt-keepout")
+            return False
+
         used_ports = {feed_port, carry_port}
         attached = 2
-
         junction_idx = -1
         for stack_member in splitter_stack:
             junction_idx = canvas.add(stack_member)
+            canvas.guard.update(
+                junction.keepout_cells(
+                    b.x,
+                    b.y,
+                    int(stack_member.z),
+                    model_index=stack_member.model_index,
+                    yaw=stack_member.yaw,
+                )
+            )
         assert junction_idx >= 0
-        # Nothing routed later may take any stack member's collider room.
-        for stack_level in stack_levels:
-            canvas.guard.update(junction.keepout_cells(b.x, b.y, stack_level))
         canvas.buildings[belt_idx] = _relink(b, output_obj=junction_idx)
-        # Carry the lane onward FROM the junction, so everything downstream of
-        # the tap stays fed. Dropping this would starve the rest of the lane in
-        # order to feed the branch -- trading one silent break for another.
-        # `replace`, not a fresh PlacedBuilding: the carry belt IS the lane belt
-        # continuing past the junction, so every field it does not change should
-        # come across untouched. Listing fields by hand is how `carries_item`
-        # and `parameters` got silently dropped elsewhere in this file.
+        # Carry the lane onward on the elevated model-40 pair (or the flat
+        # model-38 plane), preserving every other belt field.
         carry = canvas.add(replace(b, input_obj=junction_idx, output_obj=onward))
-        del carry  # linked by construction; the index is not needed again
+        del carry
 
     if attached >= rules.SPLITTER_MAX_PORTS:
         if rejected_reason is not None:
@@ -8715,7 +8910,7 @@ def _tap_source(
 
     branch_port = splitter_ports.expected_path_port(
         splitter,
-        b,
+        branch_attachment,
         canvas.buildings[branch],
     )
     if branch_port is None or branch_port in used_ports:
@@ -8731,7 +8926,7 @@ def _tap_source(
     # tile, and the route starts from there.
     stub = canvas.add(
         replace(
-            b,
+            branch_attachment,
             yaw=canvas.buildings[branch].yaw,
             input_obj=junction_idx,
             output_obj=branch,
@@ -9943,7 +10138,7 @@ def _projected_coater_junction_ban(
     banned: set[Cell] = set()
     materialized_splitters: dict[
         tuple[Cell, tuple[int, int, int, int], finalize.FrameCandidate],
-        colliders.Placed,
+        tuple[colliders.Placed, ...],
     ] = {}
     projected_splitter_boxes: dict[
         tuple[colliders.Placed, planet.Projection],
@@ -10136,11 +10331,7 @@ def _projected_coater_junction_ban(
                     cell = (x, y, level)
                     if cell in already_banned or cell in banned:
                         continue
-                    splitter_building = junction.make_splitter(
-                        x,
-                        y,
-                        Fraction(level),
-                    )
+                    splitter_stack = _splitter_stack_geometry(x, y, level)
                     rejected = False
                     for (
                         frame,
@@ -10156,109 +10347,120 @@ def _projected_coater_junction_ban(
                             frame.bounds,
                             frame.candidate,
                         )
-                        materialized_splitter = materialized_splitters.get(
+                        materialized_stack = materialized_splitters.get(
                             materialized_key
                         )
-                        if materialized_splitter is None:
-                            materialized_splitter = _collision_pose(
-                                finalize.materialize_frame_building(
-                                    splitter_building,
-                                    bounds=frame.bounds,
-                                    candidate=frame.candidate,
+                        if materialized_stack is None:
+                            materialized_stack = tuple(
+                                _collision_pose(
+                                    finalize.materialize_frame_building(
+                                        stack_member,
+                                        bounds=frame.bounds,
+                                        candidate=frame.candidate,
+                                    )
                                 )
+                                for stack_member in splitter_stack
                             )
                             materialized_splitters[materialized_key] = (
-                                materialized_splitter
+                                materialized_stack
                             )
-                        cell_dx = abs(
-                            materialized_splitter.x
-                            - materialized_coater[1].x
-                        )
-                        cell_dy = abs(
-                            materialized_splitter.y
-                            - materialized_coater[1].y
-                        )
-                        for (
-                            candidate_projection,
-                            x_step,
-                            y_step,
-                            coater_boxes,
-                            canonical_coater,
-                            candidate_projection_context,
-                        ) in frame_projection_states:
-                            if cancelled is not None and cancelled():
-                                raise _PreparationDeadline
-                            if (
-                                cell_dx * x_step > tangent_reach_x
-                                or cell_dy * y_step > tangent_reach_y
-                            ):
-                                continue
-                            delta_x = (
+                        for materialized_splitter in materialized_stack:
+                            cell_dx = abs(
                                 materialized_splitter.x
                                 - materialized_coater[1].x
                             )
-                            delta_y = (
+                            cell_dy = abs(
                                 materialized_splitter.y
                                 - materialized_coater[1].y
                             )
-                            delta_z = (
-                                materialized_splitter.z
-                                - materialized_coater[1].z
-                            )
-                            relation_key = (
+                            for (
+                                candidate_projection,
+                                x_step,
+                                y_step,
+                                coater_boxes,
+                                canonical_coater,
                                 candidate_projection_context,
-                                delta_x,
-                                delta_y,
-                                delta_z,
-                                materialized_splitter.yaw,
-                            )
-                            overlap = projected_relation_overlaps.get(relation_key)
-                            if overlap is None:
-                                canonical_splitter = replace(
-                                    materialized_splitter,
-                                    x=canonical_coater.x + delta_x,
-                                    y=canonical_coater.y + delta_y,
-                                    z=canonical_coater.z + delta_z,
+                            ) in frame_projection_states:
+                                if cancelled is not None and cancelled():
+                                    raise _PreparationDeadline
+                                if (
+                                    cell_dx * x_step > tangent_reach_x
+                                    or cell_dy * y_step > tangent_reach_y
+                                ):
+                                    continue
+                                delta_x = (
+                                    materialized_splitter.x
+                                    - materialized_coater[1].x
                                 )
-                                boxes_key = (
-                                    canonical_splitter,
-                                    candidate_projection,
+                                delta_y = (
+                                    materialized_splitter.y
+                                    - materialized_coater[1].y
                                 )
-                                splitter_boxes = projected_splitter_boxes.get(
-                                    boxes_key
+                                delta_z = (
+                                    materialized_splitter.z
+                                    - materialized_coater[1].z
                                 )
-                                if splitter_boxes is None:
-                                    splitter_boxes = colliders.target_boxes(
+                                relation_key = (
+                                    candidate_projection_context,
+                                    materialized_splitter.model_index,
+                                    delta_x,
+                                    delta_y,
+                                    delta_z,
+                                    materialized_splitter.yaw,
+                                )
+                                overlap = projected_relation_overlaps.get(
+                                    relation_key
+                                )
+                                if overlap is None:
+                                    canonical_splitter = replace(
+                                        materialized_splitter,
+                                        x=canonical_coater.x + delta_x,
+                                        y=canonical_coater.y + delta_y,
+                                        z=canonical_coater.z + delta_z,
+                                    )
+                                    boxes_key = (
                                         canonical_splitter,
-                                        *candidate_projection.pose(
-                                            canonical_splitter.x,
-                                            canonical_splitter.y,
-                                            canonical_splitter.z,
-                                            canonical_splitter.yaw,
-                                        ),
+                                        candidate_projection,
                                     )
-                                    projected_splitter_boxes[boxes_key] = (
-                                        splitter_boxes
+                                    splitter_boxes = projected_splitter_boxes.get(
+                                        boxes_key
                                     )
-                                overlap = False
-                                for coater_box in coater_boxes:
-                                    if cancelled is not None and cancelled():
-                                        raise _PreparationDeadline
-                                    for splitter_box in splitter_boxes:
+                                    if splitter_boxes is None:
+                                        splitter_boxes = colliders.target_boxes(
+                                            canonical_splitter,
+                                            *candidate_projection.pose(
+                                                canonical_splitter.x,
+                                                canonical_splitter.y,
+                                                canonical_splitter.z,
+                                                canonical_splitter.yaw,
+                                            ),
+                                        )
+                                        projected_splitter_boxes[boxes_key] = (
+                                            splitter_boxes
+                                        )
+                                    overlap = False
+                                    for coater_box in coater_boxes:
                                         if cancelled is not None and cancelled():
                                             raise _PreparationDeadline
-                                        if colliders.obb_overlap(
-                                            coater_box,
-                                            splitter_box,
-                                        ):
-                                            overlap = True
+                                        for splitter_box in splitter_boxes:
+                                            if cancelled is not None and cancelled():
+                                                raise _PreparationDeadline
+                                            if colliders.obb_overlap(
+                                                coater_box,
+                                                splitter_box,
+                                            ):
+                                                overlap = True
+                                                break
+                                        if overlap:
                                             break
-                                    if overlap:
-                                        break
-                                projected_relation_overlaps[relation_key] = overlap
-                            if overlap:
-                                banned.add(cell)
-                                rejected = True
+                                    projected_relation_overlaps[
+                                        relation_key
+                                    ] = overlap
+                                if overlap:
+                                    banned.add(cell)
+                                    rejected = True
+                                    break
+                            if rejected:
                                 break
                         if rejected:
                             break

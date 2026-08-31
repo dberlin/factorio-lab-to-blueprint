@@ -3232,10 +3232,37 @@ def test_junction_stack_uses_two_level_pitch_and_names_its_support() -> None:
     ]
 
 
-@pytest.mark.parametrize("level", [1, 3])
-def test_junction_stack_rejects_unsupported_one_level_offsets(level: int) -> None:
-    with pytest.raises(ValueError, match="stack pitch"):
-        junction.make_splitter_stack(4, 5, level, first_index=7)
+@pytest.mark.parametrize(
+    ("level", "expected"),
+    [
+        (1, [(Fraction(0), 40, None, "iron-ore")]),
+        (
+            3,
+            [
+                (Fraction(0), 38, None, None),
+                (Fraction(2), 40, 7, "iron-ore"),
+            ],
+        ),
+    ],
+)
+def test_odd_level_junction_stack_uses_a_mixed_height_top(
+    level: int,
+    expected: list[tuple[Fraction, int, int | None, str | None]],
+) -> None:
+    stack = junction.make_splitter_stack(
+        4,
+        5,
+        level,
+        first_index=7,
+        carries_item="iron-ore",
+        carry_direction=(1, 0),
+    )
+
+    assert [
+        (building.z, building.model_index, building.input_obj, building.carries_item)
+        for building in stack
+    ] == expected
+    assert stack[-1].yaw == 90.0
 
 
 def test_junction_support_link_does_not_consume_a_physical_port() -> None:

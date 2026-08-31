@@ -20,7 +20,7 @@ from pathlib import Path
 import pytest
 from ortools.sat.python import cp_model
 
-from flab2bp.dsp import catalog, codec, colliders, planet, rules
+from flab2bp.dsp import catalog, codec, colliders, planet, rules, splitter_ports
 from flab2bp.layout import finalize, freeform, junction, slots, validate
 from flab2bp.layout.band_policy import BandPolicy, BandSelection
 from flab2bp.layout.base import (
@@ -11731,12 +11731,21 @@ class TestProjectedCoaterSplitterBanIsPreparedBeforeRouting:
 
 class TestSourceTapMaterializesSupportedSplitterStacks:
     @staticmethod
-    def _scene(level: int) -> tuple[_Canvas, int, int]:
+    def _scene(
+        level: int,
+        *,
+        branch_level: int | None = None,
+    ) -> tuple[_Canvas, int, int]:
         canvas = _Canvas()
         predecessor = canvas.add(replace(_belt(-1, 0, item="gear"), z=F(level)))
         source = canvas.add(replace(_belt(0, 0, item="gear"), z=F(level)))
         onward = canvas.add(replace(_belt(1, 0, item="gear"), z=F(level)))
-        branch = canvas.add(replace(_belt(0, -1, item="gear"), z=F(level)))
+        branch = canvas.add(
+            replace(
+                _belt(0, -1, item="gear"),
+                z=F(level if branch_level is None else branch_level),
+            )
+        )
         canvas.buildings[predecessor] = _relink(
             canvas.buildings[predecessor],
             output_obj=source,
@@ -11747,9 +11756,8 @@ class TestSourceTapMaterializesSupportedSplitterStacks:
         )
         return canvas, source, branch
 
-    def test_one_level_splitter_offset_is_rejected_before_materialization(self) -> None:
-        canvas, source, branch = self._scene(1)
-        rejected_reason: list[str] = []
+    def test_level_one_tap_uses_model_40_with_a_lower_branch_plane(self) -> None:
+        canvas, source, branch = self._scene(1, branch_level=0)
 
         attached = freeform._tap_source(
             canvas,
@@ -11757,16 +11765,104 @@ class TestSourceTapMaterializesSupportedSplitterStacks:
             branch,
             2001,
             35,
-            excused={(-1, 0, 1), (0, 0, 1), (1, 0, 1), (0, -1, 1)},
-            rejected_reason=rejected_reason,
+            excused={(-1, 0, 1), (0, 0, 1), (1, 0, 1), (0, -1, 0)},
         )
 
-        assert not attached
-        assert rejected_reason == ["splitter-stack"]
-        assert all(
-            building.item_id != catalog.SPLITTER_ID
+        assert attached
+        splitters = [
+            (index, building)
+            for index, building in enumerate(canvas.buildings)
+            if building.item_id == catalog.SPLITTER_ID
+        ]
+        assert len(splitters) == 1
+        splitter_index, splitter = splitters[0]
+        assert (splitter.model_index, splitter.z, splitter.yaw) == (40, F(0), 90.0)
+        attachments = [
+            building
             for building in canvas.buildings
+            if building.output_obj == splitter_index
+            or building.input_obj == splitter_index
+        ]
+        assert sorted(building.z for building in attachments) == [0, 1, 1]
+        wired = slots.assign_belt_slots(canvas.buildings)
+        assert not splitter_ports.placement_issues(wired)
+
+    def test_level_one_model_40_uses_both_lower_branch_ports(self) -> None:
+        canvas, source, first_branch = self._scene(1, branch_level=0)
+
+        assert freeform._tap_source(
+            canvas,
+            source,
+            first_branch,
+            2001,
+            35,
+            excused={(-1, 0, 1), (0, 0, 1), (1, 0, 1), (0, -1, 0)},
         )
+        second_branch = canvas.add(replace(_belt(0, 1, item="gear"), z=F(0)))
+        assert freeform._tap_source(
+            canvas,
+            source,
+            second_branch,
+            2001,
+            35,
+        )
+
+        wired = slots.assign_belt_slots(canvas.buildings)
+        assert not splitter_ports.placement_issues(wired)
+        splitter_index = next(
+            index
+            for index, building in enumerate(wired)
+            if building.item_id == catalog.SPLITTER_ID
+        )
+        ports = {
+            building.output_to_slot
+            if building.output_obj == splitter_index
+            else building.input_from_slot
+            for building in wired
+            if building.output_obj == splitter_index
+            or building.input_obj == splitter_index
+        }
+        assert ports == {0, 1, 2, 3}
+
+    def test_level_three_tap_uses_ground_support_and_model_40_top(self) -> None:
+        canvas, source, branch = self._scene(3, branch_level=2)
+
+        assert freeform._tap_source(
+            canvas,
+            source,
+            branch,
+            2001,
+            35,
+            excused={(-1, 0, 3), (0, 0, 3), (1, 0, 3), (0, -1, 2)},
+        )
+
+        splitters = [
+            (index, building)
+            for index, building in enumerate(canvas.buildings)
+            if building.item_id == catalog.SPLITTER_ID
+        ]
+        assert [
+            (
+                building.model_index,
+                building.z,
+                building.input_obj,
+                building.carries_item,
+            )
+            for _index, building in splitters
+        ] == [
+            (38, F(0), None, None),
+            (40, F(2), splitters[0][0], "gear"),
+        ]
+        for _index, building in splitters:
+            assert set(
+                junction.keepout_cells(
+                    0,
+                    0,
+                    int(building.z),
+                    model_index=building.model_index,
+                    yaw=building.yaw,
+                )
+            ) <= canvas.guard
 
     def test_level_two_tap_materializes_linked_ground_support_and_upper_splitter(
         self,
@@ -11895,6 +11991,24 @@ class TestSourceTapPreservesPhysicalSplitterPortIdentity:
         )
 
         assert frontier == {(-1, 0, 2), (1, 0, 2)}
+
+    def test_odd_level_source_frontier_offers_the_lower_orthogonal_plane(
+        self,
+    ) -> None:
+        canvas = _Canvas(limit=(-2, -2, 2, 2))
+        path = ((0, -1, 1), (0, 0, 1), (0, 1, 1))
+        for cell in path:
+            canvas.blocked[cell] = freeform._TENTATIVE
+
+        frontier = freeform._merge_frontier(
+            canvas,
+            {5: path},
+            (5,),
+            lambda x, y, level: (x, y, level) == (0, 0, 1),
+            belt_prefab=(2001, 35),
+        )
+
+        assert frontier == {(-1, 0, 0), (1, 0, 0)}
 
     def test_distinct_physical_ports_remain_accepted(self) -> None:
         canvas = _Canvas()
