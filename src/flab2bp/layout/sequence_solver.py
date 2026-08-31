@@ -3966,6 +3966,8 @@ def _production_run(
         if deadline_reached():
             return budget_verdict()
         report = validate.certify(finalized, spec, expect_power=power)
+        if deadline_reached():
+            return budget_verdict()
         failures = tuple(sorted({finding.check for finding in report.errors}))
         if failures:
             return ValidationVerdict(False, failures, None)

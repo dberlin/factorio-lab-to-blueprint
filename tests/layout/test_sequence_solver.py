@@ -1416,7 +1416,6 @@ def test_measured_stage_reserves_search_and_completion_spans_once_each() -> None
     assert admission.try_start() is None
 
 
-
 def test_measured_stage_reserves_bounded_work_without_an_incumbent() -> None:
     now = 0.0
     admission = sequence_solver_module._MeasuredStageAdmission(
@@ -4352,7 +4351,6 @@ def test_sequence_completion_compacts_then_finalizes_then_validates_once(
         **_kwargs: object,
     ) -> validate.Report:
         trace.append(("validate", candidate))
-        monkeypatch.setattr(sequence_solver_module.time, "monotonic", lambda: float("inf"))
         return validate.Report(findings=())
 
     monkeypatch.setattr(finalize, "compact_open_boundary_belts_certified", compact)
