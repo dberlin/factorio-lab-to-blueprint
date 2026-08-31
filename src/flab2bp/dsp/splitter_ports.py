@@ -29,7 +29,7 @@ from flab2bp.dsp.rules import (
 from flab2bp.layout.base import PlacedBuilding
 
 type Direction = Literal["feed", "draw"]
-type IssueCode = Literal["slot", "own_slot", "height", "direction", "path"]
+type IssueCode = Literal["model", "slot", "own_slot", "height", "direction", "path"]
 type OwnSlotField = Literal["output_from_slot", "input_to_slot"]
 
 _HEIGHT_TOLERANCE = 0.01
@@ -39,28 +39,34 @@ _BEST_DIRECTION_TOLERANCE = 1e-6
 
 @dataclass(frozen=True, slots=True)
 class SplitterPortIssue:
-    """One connection the game would install on the wrong physical port."""
+    """One unsupported Splitter model or invalid physical-port connection."""
 
     code: IssueCode
     splitter: int
-    belt: int
-    direction: Direction
-    recorded_port: int
+    belt: int | None
+    direction: Direction | None
+    recorded_port: int | None
     expected_port: int | None
+    model_index: int
     message: str
     own_slot_field: OwnSlotField | None = None
     recorded_own_slot: int | None = None
     expected_own_slot: int | None = None
 
-    def detail(self) -> dict[str, int | str | None]:
-        detail: dict[str, int | str | None] = {
+    def detail(self) -> dict[str, object]:
+        detail: dict[str, object] = {
             "code": self.code,
             "splitter": self.splitter,
             "belt": self.belt,
             "direction": self.direction,
             "recorded_port": self.recorded_port,
             "expected_port": self.expected_port,
+            "model_index": self.model_index,
         }
+        if self.code == "model":
+            detail["supported_models"] = tuple(
+                sorted(catalog.SPLITTER_MODEL_INDICES)
+            )
         if self.own_slot_field is not None:
             detail.update(
                 {
@@ -276,6 +282,26 @@ def _expected_path_port(
     return winners[0] if len(winners) == 1 else None
 
 
+def _unsupported_model_issue(splitter: _Node) -> SplitterPortIssue:
+    supported = ", ".join(
+        str(model) for model in sorted(catalog.SPLITTER_MODEL_INDICES)
+    )
+    return SplitterPortIssue(
+        code="model",
+        splitter=splitter.id,
+        belt=None,
+        direction=None,
+        recorded_port=None,
+        expected_port=None,
+        model_index=splitter.model_index,
+        message=(
+            f"splitter {splitter.id} uses model {splitter.model_index}, but item "
+            f"{catalog.SPLITTER_ID} supports only models {supported}; a foreign "
+            "prefab's port table does not make it a Splitter variant"
+        ),
+    )
+
+
 def _issue(
     code: IssueCode,
     splitter: _Node,
@@ -293,6 +319,7 @@ def _issue(
         direction=direction,
         recorded_port=recorded,
         expected_port=expected,
+        model_index=splitter.model_index,
         message=(
             f"belt {belt.id} {relation} splitter {splitter.id} through recorded port "
             f"{recorded}{'' if expected is None else f', expected port {expected}'}: {reason}"
@@ -325,6 +352,7 @@ def _own_slot_issue(
         direction=direction,
         recorded_port=recorded_port,
         expected_port=expected_port,
+        model_index=splitter.model_index,
         message=(
             f"belt {belt.id} {relation} splitter {splitter.id} with {field} = "
             f"{recorded_own}, expected {expected_own}; both ends are connection-pool "
@@ -342,10 +370,10 @@ def _issues(nodes: tuple[_Node, ...]) -> tuple[SplitterPortIssue, ...]:
     for splitter in nodes:
         if splitter.item_id != catalog.SPLITTER_ID:
             continue
-        try:
-            ports = catalog.port_poses_for_model(splitter.model_index)
-        except KeyError:
-            ports = ()
+        if splitter.model_index not in catalog.SPLITTER_MODEL_INDICES:
+            out.append(_unsupported_model_issue(splitter))
+            continue
+        ports = catalog.port_poses_for_model(splitter.model_index)
         for belt, direction, recorded in index.attachments_by_splitter.get(
             splitter.id, ()
         ):
@@ -459,10 +487,9 @@ class PlacementPortContext:
         )
         if outward is None:
             return None
-        try:
-            ports = catalog.port_poses_for_model(splitter.model_index)
-        except KeyError:
+        if splitter.model_index not in catalog.SPLITTER_MODEL_INDICES:
             return None
+        ports = catalog.port_poses_for_model(splitter.model_index)
         return _expected_port(splitter, belt, outward, ports)
 
 
@@ -498,10 +525,9 @@ def expected_path_port(
     height rule as :func:`expected_placement_port`, exposed before the records
     are committed so a router cannot create two links naming one physical port.
     """
-    try:
-        ports = catalog.port_poses_for_model(splitter.model_index)
-    except KeyError:
+    if splitter.model_index not in catalog.SPLITTER_MODEL_INDICES:
         return None
+    ports = catalog.port_poses_for_model(splitter.model_index)
     return _expected_path_port(
         splitter_yaw=splitter.yaw,
         splitter_z=float(splitter.z),

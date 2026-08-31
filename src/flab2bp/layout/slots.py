@@ -1125,6 +1125,21 @@ def assign_belt_slots(
     takes a feeder, so it does not settle the case; it is settled the same way
     the pool is settled everywhere else, by not sharing a cell.
     """
+    supported_models = ", ".join(
+        str(model) for model in sorted(cat.SPLITTER_MODEL_INDICES)
+    )
+    for i, building in enumerate(buildings):
+        if (
+            building.item_id == cat.SPLITTER_ID
+            and building.model_index not in cat.SPLITTER_MODEL_INDICES
+        ):
+            raise SlotUndetermined(
+                f"splitter {i} uses model {building.model_index}; item "
+                f"{cat.SPLITTER_ID} supports only the supported models "
+                f"{supported_models}, so a foreign prefab's port table cannot be "
+                "encoded as a Splitter"
+            )
+
     port_context = splitter_ports.placement_port_context(buildings)
     taken: dict[int, set[int]] = {}
     for i, b in enumerate(buildings):

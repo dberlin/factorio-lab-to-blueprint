@@ -229,6 +229,12 @@ def _optional_boolean(
 BELT_IDS = range(2001, 2010)
 SORTER_IDS = range(2011, 2020)
 SPLITTER_ID = 2020
+#: Exact prefab models the Splitter item may select.
+#:
+#: Model 121 (Storage Tank) is a representative trap: it also exposes four
+#: cardinal ``portPoses``, but an item/model pair of Splitter/Storage Tank is not
+#: a Splitter variant and must never reach the encoder.
+SPLITTER_MODEL_INDICES = frozenset((38, 39, 40))
 SPRAY_COATER_ID = 2313
 FRACTIONATOR_ID = 2314
 TESLA_TOWER_ID = 2201

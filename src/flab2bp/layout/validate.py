@@ -1692,63 +1692,76 @@ def _slot_occupancy(ctx: Context) -> Iterable[Finding]:
     quoted.  A second connection written to an occupied slot does not fail: it
     calls ``ClearObjectConn`` on the sitting tenant first and evicts it.
 
-    So a blueprint that names one machine slot from two sorters is not a
-    blueprint the game rejects on the pool; it is a blueprint that pastes with
-    one of the two sorters silently unwired.  What the player sees is the
-    geometry that goes with it -- the paste snaps BOTH ends onto the same slot
-    pose, so the sorters land on top of one another and go ``Collide``, and
-    every sorter attached to a building in error is reddened after them with
-    ``ConnWithErrorBuilding``, "Connection target cannot be laid".  That is the
-    pair of messages the paste which produced this check reported.
+    Every directed record occupies one cell on BOTH endpoints:
 
-    Scope is every connection record carrying an EXPLICIT slot, on any peer,
-    because the pool does not distinguish: belt-to-belt links occupy a belt's
-    input slots 1..3 by the same arithmetic.  Ends recorded as
-    :data:`~flab2bp.dsp.rules.BELT_SLOT` are exempt and must be -- ``-1`` means
-    "the game picks", and ``WriteObjectConn`` then takes the first free cell in
-    :data:`~flab2bp.dsp.rules.BELT_SLOT_AUTO_RANGE`, so such an end names no
-    fixed cell to share.
+    * ``output_obj`` uses this object's ``output_from_slot`` and the peer's
+      ``output_to_slot``;
+    * ``input_obj`` uses this object's ``input_to_slot`` and the peer's
+      ``input_from_slot``.
 
-    The negative control is the corpus: over the 10 real game blueprints in
-    ``tests/fixtures``, ~10,000 connection records, this check finds nothing on
-    either reading of its scope.  Our own ``freeform`` output, by contrast, put
-    three sorters on slot 8 of one Assembling Machine and the whole suite
-    reported ``ok=True``, because nothing here had ever looked.
+    Counting only the peer fields misses a dock or Splitter draw spending the
+    receiving belt's own slot 1 while an upstream feeder names that same belt
+    and slot.  Conversely, the two fields of one self-link may name the same
+    cell; that is one connection and is counted once, not mistaken for two
+    different records.
+
+    Ends recorded as :data:`~flab2bp.dsp.rules.BELT_SLOT` are exempt.
+    ``-1`` means "the game picks", and ``WriteObjectConn`` then takes the first
+    free cell in :data:`~flab2bp.dsp.rules.BELT_SLOT_AUTO_RANGE`, so such an end
+    names no fixed cell to share.
     """
     bs = ctx.placement.buildings
     claims: dict[tuple[int, int], list[tuple[int, str]]] = defaultdict(list)
     for i, b in enumerate(bs):
-        for label, link, slot in (
-            ("output", b.output_obj, b.output_to_slot),
-            ("input", b.input_obj, b.input_from_slot),
+        for record, link, own_slot, peer_slot in (
+            (
+                "output",
+                b.output_obj,
+                b.output_from_slot,
+                b.output_to_slot,
+            ),
+            (
+                "input",
+                b.input_obj,
+                b.input_to_slot,
+                b.input_from_slot,
+            ),
         ):
             if link is None or not 0 <= link < len(bs):
                 continue
-            if slot < 0:
-                continue
-            claims[(link, slot)].append((i, label))
+            record_cells: dict[tuple[int, int], str] = {}
+            if own_slot >= 0:
+                record_cells[(i, own_slot)] = "own"
+            if peer_slot >= 0:
+                record_cells.setdefault((link, peer_slot), "peer")
+            for cell, side in record_cells.items():
+                claims[cell].append((i, f"{record} {side}"))
 
-    for (link, slot), occupants in sorted(claims.items()):
+    for (object_index, slot), occupants in sorted(claims.items()):
         if len(occupants) < 2:
             continue
-        peer = bs[link]
+        claimed = bs[object_index]
         try:
-            name = cat.building(peer.item_id).name
+            name = cat.building(claimed.item_id).name
         except KeyError:
-            name = f"item {peer.item_id}"
+            name = f"item {claimed.item_id}"
         who = ", ".join(f"{i} ({label})" for i, label in occupants)
+        buildings = tuple(
+            dict.fromkeys((object_index, *(i for i, _label in occupants)))
+        )
         yield Finding(
             "game.slot_occupancy",
             Severity.ERROR,
-            f"slot {slot} of building {link} ({name}) at ({peer.x}, {peer.y}) is "
-            f"named by {len(occupants)} connections: {who}. The game stores one "
-            f"connection per slot, so pasting this leaves only the last of them "
-            f"attached and drops the rest",
-            (link, *(i for i, _ in occupants)),
+            f"slot {slot} of building {object_index} ({name}) at "
+            f"({claimed.x}, {claimed.y}) is named by {len(occupants)} "
+            f"connections: {who}. The game stores one connection per slot, so "
+            "pasting this leaves only the last of them attached and drops the rest",
+            buildings,
             {
-                "peer": link,
+                "object": object_index,
                 "slot": slot,
-                "peer_item_id": peer.item_id,
+                "object_item_id": claimed.item_id,
+                "claim_count": len(occupants),
                 "claims": who,
             },
         )
@@ -2832,21 +2845,26 @@ def _junction_colocated(ctx: Context) -> Iterable[Finding]:
 
 @check("junction.port_pose")
 def _junction_port_pose(ctx: Context) -> Iterable[Finding]:
-    """Each recorded Splitter slot must name the physical port the belt reaches.
+    """A Splitter model and every recorded physical port must be authoritative.
 
+    Only models 38, 39 and 40 belong to item 2020.  For one of those models,
     ``BuildTool_Path`` selects an entry of ``PrefabDesc.portPoses`` from the
     path direction and port height.  Blueprint paste preserves that index, and
     ``PlanetFactory`` hands the same numbered slot to
-    ``CargoTraffic.ConnectToSplitter``.  A free-but-wrong index therefore
-    creates a real connection on the wrong Splitter side rather than a usable
-    connection where the belt is drawn.
+    ``CargoTraffic.ConnectToSplitter``.  A foreign model or a free-but-wrong
+    index therefore cannot encode a usable Splitter connection.
     """
     for issue in splitter_ports.placement_issues(ctx.placement.buildings):
+        buildings = (
+            (issue.splitter,)
+            if issue.belt is None
+            else (issue.belt, issue.splitter)
+        )
         yield Finding(
             "junction.port_pose",
             Severity.ERROR,
             issue.message,
-            (issue.belt, issue.splitter),
+            buildings,
             issue.detail(),
         )
 
@@ -2983,9 +3001,9 @@ def _port_dock(ctx: Context) -> Iterable[Finding]:
     ends, so a belt drawing from a port has spent its own slot 1 -- the first
     index ``slots.assign_belt_slots`` hands to a belt-to-belt feeder.  Two
     connections in that cell means ``WriteObjectConn`` evicts one, and the lane
-    pastes cleanly and carries nothing.  ``game.slot_occupancy`` cannot see it:
-    it keys on the PEER side, which is where every other clash lives.  So the
-    last clause below is the own-side half, scoped to the cells a dock spends.
+    pastes cleanly and carries nothing.  ``game.slot_occupancy`` detects that
+    pool collision globally; the last clause below retains the port-specific
+    finding that names which dock already spends the slot.
 
     A belt naming a building with NO port is the same defect one step earlier.
     Nothing in the game will attach it -- ``BuildTool_Path`` drops a cast target

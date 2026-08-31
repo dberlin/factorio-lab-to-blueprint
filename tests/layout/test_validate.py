@@ -924,12 +924,50 @@ def test_game_slot_occupancy_fires_when_two_sorters_name_one_machine_slot() -> N
     assert fired(r, "game.slot_occupancy")
     assert not r.ok
     finding = r.by_check("game.slot_occupancy")[0]
-    assert finding.detail["peer"] == 0
+    assert finding.detail["object"] == 0
     assert finding.detail["slot"] == 8, finding.message
     # The report has to NAME the machine and the slot, not merely count.
     assert "Assembling Machine" in finding.message
     assert "slot 8" in finding.message
 
+
+
+def test_game_slot_occupancy_fires_on_a_splitter_draw_own_slot_collision() -> None:
+    """The draw and upstream feeder are different records claiming belt slot 1."""
+    reservation = place(
+        splitter(0, 0),
+        belt(0, 0, inp=0, out=2),
+        belt(-1, 0),
+        belt(0, 1, out=1),
+    )
+    assert reservation.buildings[3].output_to_slot == 2
+    buildings = list(reservation.buildings)
+    buildings[3] = dataclasses.replace(buildings[3], output_to_slot=1)
+
+    report = validate(
+        Placement(buildings=tuple(buildings)),
+        only=SLOT_OCCUPANCY,
+    )
+
+    finding = report.by_check("game.slot_occupancy")[0]
+    assert finding.detail["object"] == 1
+    assert finding.detail["slot"] == 1
+    assert finding.detail["claim_count"] == 2
+    assert "input own" in finding.detail["claims"]
+    assert "output peer" in finding.detail["claims"]
+
+
+def test_game_slot_occupancy_counts_one_record_once_when_both_ends_share_a_cell() -> None:
+    self_link = dataclasses.replace(
+        belt(0, 0, out=0),
+        output_from_slot=1,
+        output_to_slot=1,
+    )
+
+    assert not fired(
+        validate(Placement(buildings=(self_link,)), only=SLOT_OCCUPANCY),
+        "game.slot_occupancy",
+    )
 
 def test_game_slot_occupancy_exempts_the_belt_end_of_a_sorter() -> None:
     """A belt end carries -1, which names no cell, so two may share one belt.
@@ -953,11 +991,11 @@ def test_game_slot_occupancy_exempts_the_belt_end_of_a_sorter() -> None:
 
 @pytest.mark.parametrize("name", GEOMETRY_SAFE_FIXTURES)
 def test_real_blueprint_never_shares_a_connection_slot(name: str) -> None:
-    """The wider negative control: blueprints the GAME wrote.
+    """The wider own-and-peer endpoint control over blueprints the game wrote.
 
     Run on the decoded records rather than through
     :func:`decode_fixture_to_placement`, which drops sorters and addons -- the
-    very records that carry the machine-side slot indices this check is about.
+    very records that carry the connection-pool indices this check is about.
     """
     from collections import defaultdict
 
@@ -965,16 +1003,34 @@ def test_real_blueprint_never_shares_a_connection_slot(name: str) -> None:
 
     raw = decode((Path("tests/fixtures") / f"{name}.txt").read_text()).buildings
     by_index = {b.index: b for b in raw}
-    claims: dict[tuple[int, int], list[int]] = defaultdict(list)
+    claims: dict[tuple[int, int], list[tuple[int, str]]] = defaultdict(list)
     for b in raw:
-        for link, slot in (
-            (b.output_obj_idx, b.output_to_slot),
-            (b.input_obj_idx, b.input_from_slot),
+        for record, link, own_slot, peer_slot in (
+            (
+                "output",
+                b.output_obj_idx,
+                b.output_from_slot,
+                b.output_to_slot,
+            ),
+            (
+                "input",
+                b.input_obj_idx,
+                b.input_to_slot,
+                b.input_from_slot,
+            ),
         ):
-            if link not in by_index or slot < 0:
+            if link not in by_index:
                 continue
-            claims[(link, slot)].append(b.index)
-    shared = {k: v for k, v in claims.items() if len(v) > 1}
+            record_cells = {
+                cell
+                for cell in ((b.index, own_slot), (link, peer_slot))
+                if cell[1] >= 0
+            }
+            for cell in record_cells:
+                claims[cell].append((b.index, record))
+    shared = {
+        key: occupants for key, occupants in claims.items() if len(occupants) > 1
+    }
     assert not shared, f"{name}: {list(shared.items())[:5]}"
     assert claims, f"{name} decoded to no connection at all"
 
@@ -3203,9 +3259,32 @@ def test_junction_port_pose_rejects_a_draw_using_belt_own_slot_zero() -> None:
         "direction": "draw",
         "recorded_port": 1,
         "expected_port": 1,
+        "model_index": 38,
         "own_slot_field": "input_to_slot",
         "recorded_own_slot": 0,
         "expected_own_slot": 1,
+    }
+
+
+def test_junction_port_pose_rejects_foreign_splitter_model_structurally() -> None:
+    foreign = dataclasses.replace(splitter(0, 0), model_index=121)
+
+    findings = validate(
+        Placement(buildings=(foreign,)),
+        only={"junction.port_pose"},
+    ).by_check("junction.port_pose")
+
+    assert len(findings) == 1
+    assert findings[0].buildings == (0,)
+    assert findings[0].detail == {
+        "code": "model",
+        "splitter": 0,
+        "belt": None,
+        "direction": None,
+        "recorded_port": None,
+        "expected_port": None,
+        "model_index": 121,
+        "supported_models": (38, 39, 40),
     }
 
 
@@ -4626,13 +4705,7 @@ def test_belt_port_dock_fires_on_the_wrong_own_slot() -> None:
 
 
 def test_belt_port_dock_fires_when_a_feeder_takes_the_docked_belt_s_own_slot() -> None:
-    """``entityConnPool[objId * 16 + slot]`` is one cell, and this names it twice.
-
-    ``game.slot_occupancy`` cannot see this: it keys on the PEER side of every
-    record, and both of these name a different peer -- the dock names the Ray
-    Receiver, the feeder names the belt.  The clash is on the BELT, which is the
-    peer of only one of them.
-    """
+    """Both the global pool check and dock-specific finding name the collision."""
     p = Placement(
         buildings=(
             receiver(0, 0),
@@ -4647,10 +4720,12 @@ def test_belt_port_dock_fires_when_a_feeder_takes_the_docked_belt_s_own_slot() -
             dataclasses.replace(p.buildings[2], output_to_slot=1),
         )
     )
-    r = validate(hand, only={"belt.port_dock"})
+    r = validate(hand, only={"belt.port_dock", "game.slot_occupancy"})
     assert fired(r, "belt.port_dock")
     assert "already spends that slot" in r.by_check("belt.port_dock")[-1].message
-    assert not fired(validate(hand, only={"game.slot_occupancy"}), "game.slot_occupancy")
+    pool = r.by_check("game.slot_occupancy")[0]
+    assert pool.detail["object"] == 1
+    assert pool.detail["slot"] == 1
 
 
 def test_assign_belt_slots_never_hands_out_a_docked_belt_s_own_slot() -> None:

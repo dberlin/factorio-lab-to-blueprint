@@ -1177,3 +1177,37 @@ def test_splitter_draw_reserves_belt_slot_one_from_an_upstream_feeder() -> None:
     assert wired[1].input_to_slot == R.BELT_PORT_DRAW_TO_SLOT
     assert wired[1].output_from_slot == R.BELT_PORT_FEED_FROM_SLOT
     assert wired[3].output_to_slot == 2
+
+
+def test_assign_belt_slots_rejects_a_foreign_four_port_splitter_model() -> None:
+    belt = cat.building(2002)
+    pose = cat.port_poses_for_model(121)[0]
+    outward_x, outward_y = (
+        round(value) for value in S.to_world((pose.fx, pose.fy), 0.0)
+    )
+    height = Fraction(pose.dz / R.WORLD_UNITS_PER_LEVEL).limit_denominator(10_000)
+    buildings = (
+        PlacedBuilding(
+            2002,
+            belt.model_index,
+            outward_x,
+            outward_y,
+            z=height,
+            output_obj=1,
+        ),
+        PlacedBuilding(
+            2002,
+            belt.model_index,
+            0,
+            0,
+            z=height,
+            output_obj=2,
+        ),
+        PlacedBuilding(cat.SPLITTER_ID, 121, 0, 0),
+    )
+
+    with pytest.raises(
+        S.SlotUndetermined,
+        match=r"splitter 2.*model 121.*supported models 38, 39, 40",
+    ):
+        S.assign_belt_slots(buildings)

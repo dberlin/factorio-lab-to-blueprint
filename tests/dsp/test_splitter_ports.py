@@ -54,14 +54,20 @@ def _minimal_broken_shape() -> tuple[PlacedBuilding, ...]:
 
 
 def _observed_placement(
-    model_index: int, direction: splitter_ports.Direction, port: int
+    model_index: int,
+    direction: splitter_ports.Direction,
+    port: int,
+    *,
+    yaw: float = 0.0,
 ) -> tuple[PlacedBuilding, ...]:
     belt = catalog.building(2002)
     pose = catalog.port_poses_for_model(model_index)[port]
-    outward_x, outward_y = round(pose.fx), round(pose.fy)
+    outward_x, outward_y = (
+        round(value) for value in slots.to_world((pose.fx, pose.fy), yaw)
+    )
     height = Fraction(pose.dz / WORLD_UNITS_PER_LEVEL).limit_denominator(10_000)
-    splitter = PlacedBuilding(catalog.SPLITTER_ID, model_index, 3, 3)
     attached = PlacedBuilding(2002, belt.model_index, 3, 3, z=height)
+    splitter = PlacedBuilding(catalog.SPLITTER_ID, model_index, 3, 3, yaw=yaw)
     neighbour = PlacedBuilding(
         2002,
         belt.model_index,
@@ -323,25 +329,30 @@ def test_every_observed_game_port_form_is_accepted_as_a_layout_control() -> None
         )
 
 
-def test_assignment_selects_each_port_on_all_splitter_model_variants() -> None:
+def test_assignment_selects_each_port_at_exact_model_yaw_and_height() -> None:
     for model_index in (38, 39, 40):
-        for direction in ("feed", "draw"):
-            for port in range(4):
-                buildings = list(_observed_placement(model_index, direction, port))
-                if direction == "feed":
-                    buildings[1] = replace(buildings[1], output_to_slot=0)
-                else:
-                    buildings[1] = replace(buildings[1], input_from_slot=0)
+        for yaw in (0.0, 90.0, 180.0, 270.0):
+            for direction in ("feed", "draw"):
+                for port in range(4):
+                    buildings = list(
+                        _observed_placement(
+                            model_index, direction, port, yaw=yaw
+                        )
+                    )
+                    if direction == "feed":
+                        buildings[1] = replace(buildings[1], output_to_slot=0)
+                    else:
+                        buildings[1] = replace(buildings[1], input_from_slot=0)
 
-                wired = slots.assign_belt_slots(buildings)
+                    wired = slots.assign_belt_slots(buildings)
 
-                actual = (
-                    wired[1].output_to_slot
-                    if direction == "feed"
-                    else wired[1].input_from_slot
-                )
-                assert actual == port, (model_index, direction, port)
-                assert splitter_ports.placement_issues(wired) == ()
+                    actual = (
+                        wired[1].output_to_slot
+                        if direction == "feed"
+                        else wired[1].input_from_slot
+                    )
+                    assert actual == port, (model_index, yaw, direction, port)
+                    assert splitter_ports.placement_issues(wired) == ()
 
 
 def test_reusable_context_matches_public_convenience_query() -> None:
@@ -502,6 +513,18 @@ def test_corrected_construction_path_emits_only_game_valid_splitter_ports() -> N
         (2, 4),
         (2, 6),
     ]
+
+
+def test_foreign_four_port_model_is_not_a_supported_splitter_variant() -> None:
+    buildings = _observed_placement(121, "feed", 0)
+    assert len(catalog.port_poses_for_model(121)) == 4
+
+    issues = splitter_ports.placement_issues(buildings)
+
+    assert len(issues) == 1
+    assert issues[0].code == "model"
+    assert issues[0].detail()["model_index"] == 121
+    assert issues[0].detail()["supported_models"] == (38, 39, 40)
 
 
 def test_splitter_model_variants_expose_their_actual_port_heights() -> None:
