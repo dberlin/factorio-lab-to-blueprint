@@ -3724,6 +3724,123 @@ def test_later_exact_pitch_failure_advances_same_candidate_once(
     assert isinstance(rejected[0], finalize.ProjectionFailure)
 
 
+def test_unaffordable_pitch_feedback_replans_later_base_height(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = projected_chemical_plant_spec()
+    strips = plan_strips(spec, strip_len=2)
+    failure = finalize.ProjectionFailure(
+        "geom.collide",
+        (0, 1),
+        "adjacent projected machines collide",
+        160,
+    )
+    routed = DetailedRouteResult(
+        status=DetailedRouteStatus.ROUTED,
+        routed=(),
+        failures=(),
+        iterations=0,
+        expansions=0,
+    )
+    seen_candidates: list[tuple[int, int, int]] = []
+
+    def pack_candidate(
+        current: list[Strip],
+        *,
+        height: int,
+        arrangement: int,
+        **_kwargs: object,
+    ) -> freeform._Pack:
+        variant = current[0].physical_variant
+        assert variant is not None
+        seen_candidates.append((height, arrangement, variant.pitch_x))
+        return replace(_greedy_pack(current, height), status="pitch carry-forward")
+
+    def build_candidate(
+        _spec: BuildSpec,
+        current: list[Strip],
+        pack: freeform._Pack,
+        **_kwargs: object,
+    ) -> _BuildResult:
+        variant = current[0].physical_variant
+        assert variant is not None
+        if pack.height == 21:
+            assert variant.pitch_x == 8
+        return _BuildResult(
+            Placement(
+                buildings=(),
+                stats={
+                    "belt_tiles": 0.0,
+                    "test_height": float(pack.height),
+                },
+            ),
+            routed,
+            (),
+        )
+
+    def pitch_requirement(
+        _placement: Placement,
+        current: list[Strip],
+        _failure: finalize.ProjectionFailure,
+    ) -> ProjectionPitchRequirement:
+        strip = current[0]
+        variant = strip.physical_variant
+        assert strip.family_id is not None
+        assert variant is not None
+        from flab2bp.layout.strip_variants import StripInstanceId
+
+        return ProjectionPitchRequirement(
+            family_id=strip.family_id,
+            instance_id=StripInstanceId(
+                strip.family_id,
+                strip.machine_start,
+                strip.machines,
+            ),
+            variant_id=variant.variant_id,
+            axis="x",
+            rejected_pitch=7,
+            required_pitch=8,
+            failure=failure,
+        )
+
+    def finalize_candidate(
+        placement: Placement,
+        _policy: BandPolicy,
+    ) -> Placement:
+        if placement.stats["test_height"] == 20.0:
+            raise finalize.ProjectionRefusal((failure,))
+        return placement
+
+    monkeypatch.setattr(
+        freeform,
+        "_band_policy_candidate_heights",
+        lambda _strips, _policy: (20, 21),
+    )
+    monkeypatch.setattr(freeform, "_pack", pack_candidate)
+    monkeypatch.setattr(freeform, "_build", build_candidate)
+    monkeypatch.setattr(freeform, "_projection_pitch_requirement", pitch_requirement)
+    monkeypatch.setattr(
+        validate,
+        "certify",
+        lambda *_args, **_kwargs: validate.Report(findings=()),
+    )
+    monkeypatch.setattr(finalize, "finalize_placement", finalize_candidate)
+    monkeypatch.setattr(
+        freeform,
+        "_room_for_another",
+        lambda *_args, **_kwargs: False,
+    )
+
+    result = FreeformLayout(
+        band_policy=BandPolicy("portable"),
+        arrangements=1,
+    )._sweep(spec, strips, 1.0)
+
+    assert result is not None
+    assert result.stats["test_height"] == 21.0
+    assert seen_candidates == [(20, 0, 7), (21, 0, 8)]
+
+
 def test_projection_no_good_forbids_only_the_exact_failed_pair_context() -> None:
     strip = plan_strips(single_recipe_spec())[0]
     strips = [
@@ -4559,6 +4676,114 @@ def test_staged_static_terminal_exhaustion_is_bounded_across_distinct_assignment
     assert seen_origins[-1] != seen_origins[-2]
     assert seen_no_goods[-1][0].evidence == (failure,)
     assert rejected == [failure]
+
+
+def test_unaffordable_clearance_feedback_replans_later_base_height(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = proliferated_spec()
+    strips = plan_strips(spec)
+    failure = finalize.ProjectionFailure(
+        "geom.collide",
+        (12, 40),
+        "coater enters its machine after projection",
+        160,
+    )
+    routed = DetailedRouteResult(
+        status=DetailedRouteStatus.ROUTED,
+        routed=(),
+        failures=(),
+        iterations=0,
+        expansions=0,
+    )
+    seen_candidates: list[tuple[int, int, int]] = []
+
+    def pack_candidate(
+        current: list[Strip],
+        *,
+        height: int,
+        arrangement: int,
+        **_kwargs: object,
+    ) -> freeform._Pack:
+        selected = next(strip for strip in current if "iron-ingot" in strip.in_lanes)
+        seen_candidates.append((height, arrangement, selected.west_channel))
+        return replace(
+            _greedy_pack(current, height),
+            status="clearance carry-forward",
+        )
+
+    def build_candidate(
+        _spec: BuildSpec,
+        current: list[Strip],
+        pack: freeform._Pack,
+        **_kwargs: object,
+    ) -> _BuildResult:
+        selected_index, selected = next(
+            (index, strip)
+            for index, strip in enumerate(current)
+            if "iron-ingot" in strip.in_lanes
+        )
+        if pack.height == 20:
+            relation = next(iter(freeform._staged_static_clearance_keys(selected)))
+            requirement = freeform._staged_static_clearance_requirement(
+                selected,
+                selected_index,
+                failure,
+                relation,
+            )
+            assert requirement is not None
+            raise freeform._Unseatable(
+                "all staged-static seats collide",
+                failure=failure,
+                clearance_requirement=requirement,
+            )
+        assert selected.west_channel == freeform._COATER_WEST_CHANNEL + 1
+        return _BuildResult(
+            Placement(
+                buildings=(),
+                stats={
+                    "belt_tiles": 0.0,
+                    "test_height": float(pack.height),
+                },
+            ),
+            routed,
+            (),
+        )
+
+    monkeypatch.setattr(
+        freeform,
+        "_band_policy_candidate_heights",
+        lambda _strips, _policy: (20, 21),
+    )
+    monkeypatch.setattr(freeform, "_pack", pack_candidate)
+    monkeypatch.setattr(freeform, "_build", build_candidate)
+    monkeypatch.setattr(
+        validate,
+        "certify",
+        lambda *_args, **_kwargs: validate.Report(findings=()),
+    )
+    monkeypatch.setattr(
+        finalize,
+        "finalize_placement",
+        lambda placement, _policy: placement,
+    )
+    monkeypatch.setattr(
+        freeform,
+        "_room_for_another",
+        lambda *_args, **_kwargs: False,
+    )
+
+    result = FreeformLayout(
+        band_policy=BandPolicy("portable"),
+        arrangements=1,
+    )._sweep(spec, strips, 1.0)
+
+    assert result is not None
+    assert result.stats["test_height"] == 21.0
+    assert seen_candidates == [
+        (20, 0, freeform._COATER_WEST_CHANNEL),
+        (21, 0, freeform._COATER_WEST_CHANNEL + 1),
+    ]
 
 
 def test_exact_retry_evidence_ignores_assignment_coordinates_but_retains_relation() -> None:

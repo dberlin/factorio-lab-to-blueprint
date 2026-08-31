@@ -12191,6 +12191,34 @@ class FreeformLayout:
                 soft,
                 max(dearest_candidate_s, current_candidate_s),
             )
+
+        def replan_strips_for_learned_geometry() -> None:
+            nonlocal strips, greedy, bound, net_candidates, seeds
+
+            replan_strip_len = max(strip.machines for strip in strips)
+            strips = plan_strips(
+                spec,
+                strip_len=replan_strip_len,
+                minimum_pitch_x=minimum_pitch_x,
+                minimum_staged_static_clearance=(
+                    minimum_staged_static_clearance
+                ),
+            )
+            greedy = _greedy_pack(strips, _height_seed(strips))
+            bound = max(
+                greedy.width,
+                max((w for w, _h in map(_box, strips)), default=1),
+            )
+            net_candidates = (
+                _direct_net_candidates(strips, spec)
+                if self.direct_insert
+                else {}
+            )
+            seeds = {
+                candidate_height: _greedy_pack(strips, candidate_height)
+                for candidate_height in heights
+            }
+
         while candidate_index < len(candidate_packs):
             height, arrangement, projection_retry = candidate_packs[candidate_index]
             candidate_index += 1
@@ -12539,37 +12567,15 @@ class FreeformLayout:
                         staged_static_exact_retries.add(staged_retry_key)
                         retry_promoted = True
 
-                if (
-                    pending_clearance is not None
-                    and not retry_promoted
-                    and projection_retry_affordable()
-                ):
+                if pending_clearance is not None:
                     relation, required_west_channel = pending_clearance
                     minimum_staged_static_clearance[relation] = required_west_channel
-                    replan_strip_len = max(strip.machines for strip in strips)
-                    strips = plan_strips(
-                        spec,
-                        strip_len=replan_strip_len,
-                        minimum_pitch_x=minimum_pitch_x,
-                        minimum_staged_static_clearance=(
-                            minimum_staged_static_clearance
-                        ),
-                    )
-                    greedy = _greedy_pack(strips, _height_seed(strips))
-                    bound = max(
-                        greedy.width,
-                        max((w for w, _h in map(_box, strips)), default=1),
-                    )
-                    net_candidates = (
-                        _direct_net_candidates(strips, spec)
-                        if self.direct_insert
-                        else {}
-                    )
-                    seeds = {
-                        candidate_height: _greedy_pack(strips, candidate_height)
-                        for candidate_height in heights
-                    }
-                    retry_promoted = True
+                    replan_strips_for_learned_geometry()
+                    if (
+                        not retry_promoted
+                        and projection_retry_affordable()
+                    ):
+                        retry_promoted = True
                 if retry_promoted:
                     candidate_packs.insert(
                         candidate_index,
@@ -12719,6 +12725,7 @@ class FreeformLayout:
             except finalize.ProjectionRefusal as exc:
                 learned = False
                 exact_projection_pair: ExactProjectionPair | None = None
+                geometry_learned = False
                 exact_retry_evidence: _ExactRetryEvidence | None = None
                 for failure in exc.failures:
                     if rejected is not None:
@@ -12788,6 +12795,7 @@ class FreeformLayout:
                         continue
                     minimum_pitch_x[pose_id] = requirement.required_pitch
                     learned = True
+                    geometry_learned = True
                 retry_promoted = False
                 if exact_retry_evidence is not None:
                     exact_no_good = ExactPackNoGood(
@@ -12810,32 +12818,13 @@ class FreeformLayout:
                         exact_no_good,
                         affordable=projection_retry_affordable(),
                     )
-                if learned and (
-                    retry_promoted or projection_retry_affordable()
+                if geometry_learned:
+                    replan_strips_for_learned_geometry()
+                if (
+                    learned
+                    and not retry_promoted
+                    and projection_retry_affordable()
                 ):
-                    replan_strip_len = max(strip.machines for strip in strips)
-                    strips = plan_strips(
-                        spec,
-                        strip_len=replan_strip_len,
-                        minimum_pitch_x=minimum_pitch_x,
-                        minimum_staged_static_clearance=(
-                            minimum_staged_static_clearance
-                        ),
-                    )
-                    greedy = _greedy_pack(strips, _height_seed(strips))
-                    bound = max(
-                        greedy.width,
-                        max((w for w, _h in map(_box, strips)), default=1),
-                    )
-                    net_candidates = (
-                        _direct_net_candidates(strips, spec)
-                        if self.direct_insert
-                        else {}
-                    )
-                    seeds = {
-                        candidate_height: _greedy_pack(strips, candidate_height)
-                        for candidate_height in heights
-                    }
                     retry_promoted = True
                 if retry_promoted:
                     candidate_packs.insert(
