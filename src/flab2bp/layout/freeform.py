@@ -2184,21 +2184,67 @@ def _direct_origin_deltas(
         destination_plan = destination._input_attachment_plan(item)
     except (IndexError, KeyError):
         return ()
-    source_columns = _direct_clear_columns(source, source_plan, source.width)
-    destination_span = destination.input_lane_tiles(destination.lane_of_input(item))
-    destination_columns = _direct_clear_columns(
-        destination,
-        destination_plan,
-        destination_span,
+    source_columns = sorted(
+        _direct_clear_columns(source, source_plan, source.width)
     )
-    return tuple(
-        sorted(
-            {
-                source_column - destination_column
-                for source_column in source_columns
-                for destination_column in destination_columns
-            }
+    destination_span = destination.input_lane_tiles(destination.lane_of_input(item))
+    destination_columns = sorted(
+        _direct_clear_columns(
+            destination,
+            destination_plan,
+            destination_span,
         )
+    )
+    if not source_columns or not destination_columns:
+        return ()
+
+    source_runs: list[tuple[int, int]] = []
+    run_start = run_end = source_columns[0]
+    for column in source_columns[1:]:
+        if column != run_end + 1:
+            source_runs.append((run_start, run_end))
+            run_start = column
+        run_end = column
+    source_runs.append((run_start, run_end))
+
+    destination_runs: list[tuple[int, int]] = []
+    run_start = run_end = destination_columns[0]
+    for column in destination_columns[1:]:
+        if column != run_end + 1:
+            destination_runs.append((run_start, run_end))
+            run_start = column
+        run_end = column
+    destination_runs.append((run_start, run_end))
+
+    # Every pair of contiguous runs has a contiguous difference set:
+    # [source_start - destination_end, source_end - destination_start].
+    # Merge those intervals rather than enumerating every column pair.
+    intervals = [
+        (source_start - destination_end, source_end - destination_start)
+        for source_start, source_end in source_runs
+        for destination_start, destination_end in destination_runs
+    ]
+    intervals.sort()
+
+    merged_count = 0
+    for interval_start, interval_end in intervals:
+        if merged_count == 0:
+            intervals[0] = (interval_start, interval_end)
+            merged_count = 1
+            continue
+        previous_start, previous_end = intervals[merged_count - 1]
+        if interval_start <= previous_end + 1:
+            if interval_end > previous_end:
+                intervals[merged_count - 1] = (previous_start, interval_end)
+            continue
+        intervals[merged_count] = (interval_start, interval_end)
+        merged_count += 1
+    del intervals[merged_count:]
+
+    return tuple(
+        delta
+        for interval_start, interval_end in intervals
+        for delta in range(interval_start, interval_end + 1)
     )
 
 
