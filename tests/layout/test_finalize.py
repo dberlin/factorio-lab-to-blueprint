@@ -964,6 +964,89 @@ def _broke2_projection() -> planet.Projection:
     )
 
 
+def _model40_opposing_carry() -> tuple[PlacedBuilding, ...]:
+    belt_item = min(catalog.BELT_IDS)
+    belt_model = catalog.building(belt_item).model_index
+    return (
+        replace(
+            _building(catalog.SPLITTER_ID, 45, 2),
+            model_index=40,
+            yaw=90.0,
+        ),
+        PlacedBuilding(
+            item_id=belt_item,
+            model_index=belt_model,
+            x=45,
+            y=2,
+            z=Fraction(1),
+            yaw=270.0,
+            output_obj=0,
+            output_to_slot=2,
+        ),
+        PlacedBuilding(
+            item_id=belt_item,
+            model_index=belt_model,
+            x=45,
+            y=2,
+            z=Fraction(1),
+            yaw=270.0,
+            input_obj=0,
+            input_from_slot=0,
+        ),
+    )
+
+
+def test_projected_model40_port_belts_reject_compressed_broke4_anchor() -> None:
+    frame = AreaFrame(75, 36, 160, (160,), False)
+
+    failure = finalize.projected_model40_port_belt_failure(
+        _model40_opposing_carry(),
+        frame,
+        _broke2_projection(),
+    )
+
+    assert failure == finalize.ProjectionFailure(
+        check="game.belt_collide",
+        buildings=(1, 2, 0),
+        detail="opposing model 40 port belts intersect after exact planet projection",
+        band=160,
+    )
+
+
+def test_projected_model40_port_belts_accept_clearer_broke4_anchor() -> None:
+    frame = AreaFrame(75, 36, 160, (160,), False)
+    projection = replace(_broke2_projection(), anchor_row=-128)
+
+    assert (
+        finalize.projected_model40_port_belt_failure(
+            _model40_opposing_carry(),
+            frame,
+            projection,
+        )
+        is None
+    )
+
+
+def test_projected_model40_port_belts_accept_equatorial_yaw90_control() -> None:
+    band = next(candidate for candidate in planet.bands() if candidate.area_segments == 200)
+    frame = AreaFrame(8, 8, 200, (200,), False)
+    projection = planet.Projection(
+        band,
+        0,
+        colliders.PLANET_SEGMENT,
+        colliders.PLANET_RADIUS,
+    )
+
+    assert (
+        finalize.projected_model40_port_belt_failure(
+            _model40_opposing_carry(),
+            frame,
+            projection,
+        )
+        is None
+    )
+
+
 def test_projected_coater_splitter_failure_uses_exact_broke2_geometry() -> None:
     failure = finalize.projected_coater_splitter_failure(
         coater=_broke2_coater(),
