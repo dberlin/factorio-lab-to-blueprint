@@ -250,10 +250,13 @@ def test_prepared_problem_creates_fresh_workspaces() -> None:
 
     first.canvas.blocked[(999, 999, 0)] = -1
     first.canvas.reserved[(999, 999, 0)] = (999, 999, 0)
+    first.canvas.guard.add((999, 999, 1))
     first.nets[0].item = "mutated-only-in-first"
 
     assert (999, 999, 0) not in second.canvas.blocked
     assert (999, 999, 0) not in second.canvas.reserved
+    assert second.canvas.guard == set(prepared.guard)
+    assert (999, 999, 1) not in second.canvas.guard
     assert second.nets[0].item == second_item
     assert first.buildings is not second.buildings
     assert first.nets[0] is not second.nets[0]
@@ -10133,6 +10136,30 @@ class TestABranchLeavesFromItsOwnSource:
             "its feeder"
         )
 
+    def test_selected_sibling_tap_wins_over_an_adjacent_lane_end(self) -> None:
+        canvas = _Canvas()
+        src_belt = canvas.add(_belt(0, 0, item="gear"))
+        sibling = canvas.add(_belt(0, 1, item="gear"))
+        head = canvas.add(_belt(1, 0, item="gear"))
+        net = _Net(
+            src=_Port(src_belt, 0, 0, 0, 0),
+            dst=_Port(canvas.add(_belt(0, 80, item="gear")), 0, 80, 0, 80),
+            item="gear",
+        )
+
+        assert (
+            _source_for(
+                canvas,
+                head,
+                net,
+                {head},
+                {(0, 1, 0)},
+                hint=(0, 1, 0),
+            )
+            == sibling
+        )
+
+
     def test_a_head_beside_its_own_lane_is_untouched(self) -> None:
         """The common case never reaches the scan and must not change."""
         canvas = _Canvas()
@@ -10602,6 +10629,59 @@ class TestDetailedRoutingDiagnostics:
         assert result.kind is RouteFailureKind.SEALED_POCKET
         assert result.wall == ()
         assert blame == {}
+
+    def test_occupied_destination_docks_name_their_blocking_net(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        canvas = _Canvas()
+        bounds = (-8, -8, 8, 8)
+        canvas.limit = bounds
+        blocker_id = NetId(0, 1, "blocker", NetRole.INTERNAL, 0)
+        failed_id = NetId(2, 3, "failed", NetRole.INTERNAL, 0)
+        nets = [
+            self._net(canvas, (-7, -7), (7, 7), blocker_id),
+            self._net(canvas, (-4, 0), (0, 0), failed_id),
+        ]
+        destination_docks = (
+            (1, 0, 0),
+            (-1, 0, 0),
+            (0, 1, 0),
+            (0, -1, 0),
+        )
+        searches = iter(
+            (
+                _PathSearchResult(destination_docks, None, (), 1),
+                _PathSearchResult(
+                    None,
+                    RouteFailureKind.DYNAMIC_ACCESS,
+                    (),
+                    0,
+                ),
+            )
+        )
+
+        def scripted_astar(
+            _canvas: _Canvas,
+            _starts: list[Cell],
+            goals: set[Cell],
+            *_args: object,
+            **_kwargs: object,
+        ) -> _PathSearchResult:
+            result = next(searches)
+            if result.path is None:
+                assert goals == set()
+            return result
+
+        monkeypatch.setattr("flab2bp.layout.freeform._astar", scripted_astar)
+        monkeypatch.setattr("flab2bp.layout.freeform.RRR_MAX", 1)
+        monkeypatch.setattr("flab2bp.layout.freeform._REPAIR_PASSES", 0)
+
+        result = _route_all(canvas, nets, 2001, 35, bounds)
+
+        failure = next(f for f in result.failures if f.net_id == failed_id)
+        assert set(failure.wall) == set(destination_docks)
+        assert failure.blocking_nets == (blocker_id,)
+
 
     def test_blocking_owners_are_snapshotted_when_the_search_fails(
         self, monkeypatch: pytest.MonkeyPatch

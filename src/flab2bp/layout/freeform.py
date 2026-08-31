@@ -6309,6 +6309,7 @@ class _PreparedRoutingProblem:
         ...,
     ]
     keep_out: frozenset[tuple[int, int]]
+    guard: frozenset[Cell]
     nets: tuple[_PreparedNet, ...]
     core: tuple[int, int, int, int]
     route_bounds: tuple[int, int, int, int]
@@ -6339,6 +6340,7 @@ class _PreparedRoutingProblem:
             limit=self.limit,
             keep_out=set(self.keep_out),
             belt_ban={cell: set(levels) for cell, levels in self.belt_ban},
+            guard=set(self.guard),
             junction_ban=set(self.junction_ban),
             junction_geometry_prepared=True,
         )
@@ -6908,6 +6910,13 @@ def _route_all(
     guard_claims: dict[Cell, set[int]] = defaultdict(set)
     path_guards: dict[int, set[Cell]] = {}
     planned_taps: dict[Cell, set[int]] = defaultdict(set)
+    access_walls: dict[int, tuple[Cell, ...]] = {}
+    # Splitters emitted before detailed routing already own permanent keep-out
+    # cells.  A speculative tap may overlap one of those cells; withdrawing the
+    # tap must remove only its conditional claim, never the older Splitter's
+    # guard.  Otherwise a later net can route a foreign belt through the cleared
+    # cell and exact certification refuses the finished placement.
+    permanent_guard = frozenset(canvas.guard)
     path_tap: dict[int, Cell] = {}
 
     def _inside_grid(cell: Cell) -> bool:
@@ -6978,7 +6987,8 @@ def _route_all(
             if claims:
                 continue
             del guard_claims[cell]
-            canvas.guard.discard(cell)
+            if cell not in permanent_guard:
+                canvas.guard.discard(cell)
             if cell not in owner and canvas.free(cell):
                 grid.restore(cell)
         source_hint.pop(index, None)
@@ -7121,12 +7131,15 @@ def _route_all(
         offered_source[index] = source_provenance
         offered_guard_tap[index] = guard_provenance
 
+        destination_access = tuple(
+            (net.dst.x + dx, net.dst.y + dy, net.dst.z)
+            for dx, dy in _STEPS
+        )
         sink_provenance: dict[Cell, Cell] = {}
         goals = {
             cell
-            for dx, dy in _STEPS
-            if canvas.free(cell := (net.dst.x + dx, net.dst.y + dy, net.dst.z))
-            and cell not in rejected_goals[index]
+            for cell in destination_access
+            if canvas.free(cell) and cell not in rejected_goals[index]
         }
         frontier = _merge_frontier(
             canvas,
@@ -7139,6 +7152,16 @@ def _route_all(
             for cell in frontier
             if cell not in rejected_goals[index]
             and sink_provenance.get(cell) not in rejected_sink_hints[index]
+        )
+        # A zero-expansion access miss can still be congestion: earlier paths
+        # may occupy every direct dock, leaving A* no goal and therefore no
+        # explored wall to attribute.  Retain those exact owners so repair can
+        # rip up the paths that closed the endpoint instead of repeating the
+        # same order with an anonymous dynamic-access failure.
+        access_walls[index] = (
+            tuple(cell for cell in destination_access if cell in owner)
+            if not goals
+            else ()
         )
         offered_sink[index] = sink_provenance
         return starts, goals
@@ -7310,6 +7333,11 @@ def _route_all(
                 still.append(index)
                 continue
             starts, goals = _ends(index)
+            # The repair grid deliberately makes settled paths passable.  Let
+            # it reach an endpoint dock those paths currently occupy as well;
+            # the transaction below will move every owning victim before this
+            # path is staked.
+            goals.update(access_walls.get(index, ()))
             through = _astar(
                 canvas,
                 starts,
@@ -7498,6 +7526,10 @@ def _route_all(
                 blame,
                 grid,
             )
+            if searched.path is None and not searched.wall:
+                access_wall = access_walls.get(i, ())
+                if access_wall:
+                    searched = replace(searched, wall=access_wall)
             canvas.routing_ports = frozenset()
             expansions += searched.expansions
             round_expansions[i] = round_expansions.get(i, 0) + searched.expansions
@@ -8165,8 +8197,6 @@ def _source_for(
     head = canvas.buildings[first]
     source = net.source
     src = canvas.buildings[source.belt]
-    if _legal_link(src.x, src.y, src.z, head.x, head.y, head.z, ramped=canvas.ramped):
-        return source.belt
     if hint is not None:
         who = canvas.blocked.get(hint)
         if (
@@ -8192,6 +8222,8 @@ def _source_for(
             ):
                 return who
         return None
+    if _legal_link(src.x, src.y, src.z, head.x, head.y, head.z, ramped=canvas.ramped):
+        return source.belt
     # `head` rests on a level, so it has a lattice cell; a ramp tile would
     # not, and `_lattice_cell` says so rather than rounding it onto one.
     at = _lattice_cell(head.x, head.y, head.z)
@@ -11835,6 +11867,7 @@ def _prepare_routing_problem(
         solid=frozenset(canvas.solid),
         reserved=tuple(sorted(canvas.reserved.items())),
         keep_out=frozenset(canvas.keep_out),
+        guard=frozenset(canvas.guard),
         nets=grouped_nets,
         core=core,
         route_bounds=route_bounds,
@@ -13946,6 +13979,24 @@ class FreeformLayout:
         started_at: float | None = None
         candidate_index = 0
         staged_static_cache = _StagedStaticCache()
+        projection_envelope = finalize.band_policy_search_envelope(
+            self.band_policy,
+            perimeter=_ENTRY_RING,
+        )
+
+        def strip_outline(pack: _Pack) -> tuple[int, int]:
+            left = min(origin[0] for origin in pack.at.values())
+            bottom = min(origin[1] for origin in pack.at.values())
+            right = max(
+                pack.at[index][0] + _box(strip)[0]
+                for index, strip in enumerate(strips)
+            )
+            top = max(
+                pack.at[index][1] + _box(strip)[1]
+                for index, strip in enumerate(strips)
+            )
+            return right - left, top - bottom
+
         compaction_reserve_s = 0.0
         finalize_reserve_s = 0.0
         validation_reserve_s = 0.0
@@ -14147,6 +14198,21 @@ class FreeformLayout:
                 and deadline - time.monotonic() < completion_reserve_s
             ):
                 break
+            seed = seeds[height]
+            seed_width, seed_height = strip_outline(seed)
+            if not projection_envelope.frame_candidates(
+                seed_width,
+                seed_height,
+            ):
+                if rejected is not None:
+                    _retain_refusal(
+                        rejected,
+                        projection_envelope.extent_failure(
+                            seed_width,
+                            seed_height,
+                        ),
+                    )
+                continue
             started_at = time.monotonic()
             remaining = (
                 per_solve
@@ -14177,7 +14243,7 @@ class FreeformLayout:
                     if len(strips) >= _DETERMINISTIC_PACK_STRIPS
                     else self.workers
                 ),
-                seed=seeds[height],
+                seed=seed,
                 arrangement=arrangement,
                 projection_no_goods=tuple(projection_no_goods),
                 exact_pack_no_goods=tuple(exact_no_good_state.no_goods),
@@ -14214,7 +14280,6 @@ class FreeformLayout:
             # candidate rather than acting as the deleted loose fallback.  If
             # the exact incumbent is too narrow to admit the seed, CP-SAT keeps
             # its normal bounded search and the final incumbent is routed.
-            seed = seeds[height]
             if (
                 candidate_index == 1
                 and arrangement == 0
@@ -14232,6 +14297,26 @@ class FreeformLayout:
                     status="WARM_START",
                     hit_budget=pack.hit_budget,
                 )
+            # Reject a provably oversized strip outline before emitting coaters,
+            # reserving power, and preparing exact routing geometry.  The
+            # emitted core contains every packed strip, so an outline that fits
+            # no legal frame cannot become feasible when later passes only add
+            # buildings.  This is the same projection envelope `_prepare` asks,
+            # moved to the first point where the exact solved origins exist.
+            outline_width, outline_height = strip_outline(pack)
+            if not projection_envelope.frame_candidates(
+                outline_width,
+                outline_height,
+            ):
+                if rejected is not None:
+                    _retain_refusal(
+                        rejected,
+                        projection_envelope.extent_failure(
+                            outline_width,
+                            outline_height,
+                        ),
+                    )
+                continue
             # RATIONING THE CLOCK BETWEEN HEIGHTS WAS TRIED AND IS WORSE.
             #
             # The observation is real: a routing pass that will wire this pack
