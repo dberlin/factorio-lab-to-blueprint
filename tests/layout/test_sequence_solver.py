@@ -2805,6 +2805,7 @@ def test_different_strip_feedback_changes_only_unchanged_exact_relation() -> Non
         no_good,
         west_channels=channels,
         geometry_signatures=geometries,
+        deadline=float("inf"),
     )
     assert repaired is not None
     changed_pack = _decoded_pack(
@@ -2834,6 +2835,7 @@ def test_different_strip_feedback_changes_only_unchanged_exact_relation() -> Non
         no_good,
         west_channels=channels,
         geometry_signatures=geometries,
+        deadline=float("inf"),
     )
     assert unchanged == StageBoundaryUpdate(problem, already_changed)
     changed_geometry = sequence_solver_module._projection_feedback_stage_update(
@@ -2842,6 +2844,7 @@ def test_different_strip_feedback_changes_only_unchanged_exact_relation() -> Non
         no_good,
         west_channels=channels,
         geometry_signatures=(("variant-a-changed",), *geometries[1:]),
+        deadline=float("inf"),
     )
     assert changed_geometry == StageBoundaryUpdate(problem, state)
 
@@ -2852,13 +2855,29 @@ def test_different_strip_feedback_changes_only_unchanged_exact_relation() -> Non
         width=baseline.width,
         origins=tuple(baseline.at[index] for index in range(problem.size)),
         evidence=(failure,),
+        projection_pair=freeform_module.ExactProjectionPair(
+            left_strip=0,
+            right_strip=1,
+            left_geometry=geometries[0],
+            right_geometry=geometries[1],
+        ),
     )
+    changed_exact_geometry = sequence_solver_module._projection_feedback_stage_update(
+        problem,
+        state,
+        exact,
+        west_channels=channels,
+        geometry_signatures=(("variant-a-changed",), *geometries[1:]),
+        deadline=float("inf"),
+    )
+    assert changed_exact_geometry == StageBoundaryUpdate(problem, state)
     exact_repair = sequence_solver_module._projection_feedback_stage_update(
         problem,
         state,
         exact,
         west_channels=channels,
         geometry_signatures=geometries,
+        deadline=float("inf"),
     )
     assert exact_repair is not None
     exact_pack = _decoded_pack(
@@ -2871,6 +2890,105 @@ def test_different_strip_feedback_changes_only_unchanged_exact_relation() -> Non
         exact_pack.width,
         tuple(exact_pack.at[index] for index in range(problem.size)),
     ) != (exact.height, exact.width, exact.origins)
+
+
+def test_exact_projection_feedback_trials_stay_constant_for_many_strips(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    size = 64
+    problem = PlacementProblem(
+        sizes=((2, 2),) * size,
+        nets=(),
+        outline_height=128,
+        area_lower_bound=4 * size,
+    )
+    state = AnnealState(
+        pair=SequencePair(tuple(range(size)), tuple(range(size))),
+        gaps=GapProfile.zero(size),
+        base_seed=19,
+        variant_indices=(0,) * size,
+    )
+    channels = (1,) * size
+    geometries = tuple((f"variant-{index}",) for index in range(size))
+    baseline = _decoded_pack(
+        problem.outline_height,
+        decode_state(problem, state),
+        west_channels=channels,
+    )
+    implicated = (17, 43)
+    failure = finalize.ProjectionFailure(
+        "geom.collide",
+        implicated,
+        "build colliders intersect",
+        160,
+    )
+    exact = freeform_module.ExactPackNoGood(
+        height=baseline.height,
+        outline=problem.sizes,
+        width=baseline.width,
+        origins=tuple(baseline.at[index] for index in range(size)),
+        evidence=(failure,),
+        projection_pair=freeform_module.ExactProjectionPair(
+            left_strip=implicated[0],
+            right_strip=implicated[1],
+            left_geometry=geometries[implicated[0]],
+            right_geometry=geometries[implicated[1]],
+        ),
+    )
+    original_decode = sequence_solver_module.decode_state
+    decoded = 0
+
+    def counted_decode(
+        candidate_problem: PlacementProblem,
+        candidate_state: AnnealState,
+    ) -> DecodedPlacement:
+        nonlocal decoded
+        decoded += 1
+        return original_decode(candidate_problem, candidate_state)
+
+    monkeypatch.setattr(sequence_solver_module, "decode_state", counted_decode)
+    repaired = sequence_solver_module._projection_feedback_stage_update(
+        problem,
+        state,
+        exact,
+        west_channels=channels,
+        geometry_signatures=geometries,
+        deadline=float("inf"),
+    )
+
+    assert repaired is not None
+    assert decoded == 2
+    assert repaired.state.pair.positive == state.pair.positive
+    assert {
+        index
+        for index, (before, after) in enumerate(
+            zip(state.pair.negative, repaired.state.pair.negative, strict=True)
+        )
+        if before != after
+    } == set(implicated)
+
+    sibling = sequence_solver_module._projection_feedback_stage_update(
+        problem,
+        repaired.state,
+        exact,
+        west_channels=channels,
+        geometry_signatures=geometries,
+        deadline=float("inf"),
+    )
+    assert sibling == StageBoundaryUpdate(problem, repaired.state)
+    assert decoded == 3
+
+    ownerless = replace(exact, projection_pair=None)
+    expired = sequence_solver_module._projection_feedback_stage_update(
+        problem,
+        state,
+        ownerless,
+        west_channels=channels,
+        geometry_signatures=geometries,
+        deadline=time.monotonic() - 1.0,
+    )
+    assert expired is None
+    assert decoded == 3
 
 
 def test_projection_pitch_feedback_single_restart_routes_padded_variant() -> None:

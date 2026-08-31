@@ -13,6 +13,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from fractions import Fraction
+from itertools import islice
 from types import MappingProxyType
 from typing import Protocol
 
@@ -59,6 +60,7 @@ from flab2bp.layout.freeform import (
     _prepare_routing_problem,
     _PreparedRoutingProblem,
     _projection_no_good,
+    _exact_projection_pair,
     _projection_strip_pair,
     _strip_geometry_signature,
     _Unpowerable,
@@ -2003,13 +2005,25 @@ def _projection_feedback_matches(
             and geometry_signatures[no_good.right_strip] == no_good.right_geometry
             and pack.at[no_good.right_strip] == no_good.right_origin
         )
+    pair = no_good.projection_pair
     return (
         pack.height == no_good.height
         and problem.selected_sizes(state.variant_indices) == no_good.outline
         and pack.width == no_good.width
         and tuple(pack.at[index] for index in range(problem.size))
         == no_good.origins
+        and (
+            pair is None
+            or (
+                pair.right_strip < len(geometry_signatures)
+                and geometry_signatures[pair.left_strip] == pair.left_geometry
+                and geometry_signatures[pair.right_strip] == pair.right_geometry
+            )
+        )
     )
+
+
+_EXACT_PROJECTION_FALLBACK_PAIR_TRIALS = 8
 
 
 def _projection_feedback_stage_update(
@@ -2019,11 +2033,14 @@ def _projection_feedback_stage_update(
     *,
     west_channels: tuple[int, ...],
     geometry_signatures: tuple[finalize.ProjectionGeometrySignature, ...],
+    deadline: float | None,
 ) -> StageBoundaryUpdate | None:
     """Move an unchanged exact refusal to the nearest changed pair relation."""
-    decoded = decode_state(problem, state)
     if len(geometry_signatures) != problem.size:
         raise ValueError("projection feedback requires one geometry signature per strip")
+    if deadline is not None and time.monotonic() >= deadline:
+        return None
+    decoded = decode_state(problem, state)
     pack = _decoded_pack(
         problem.outline_height,
         decoded,
@@ -2039,12 +2056,18 @@ def _projection_feedback_stage_update(
         return StageBoundaryUpdate(problem, state)
 
     if isinstance(no_good, finalize.ProjectionNoGood):
-        pairs = ((no_good.left_strip, no_good.right_strip),)
+        pairs = iter(((no_good.left_strip, no_good.right_strip),))
+    elif no_good.projection_pair is not None:
+        pair = no_good.projection_pair
+        pairs = iter(((pair.left_strip, pair.right_strip),))
     else:
-        pairs = tuple(
-            (left, right)
-            for left in range(problem.size)
-            for right in range(left + 1, problem.size)
+        pairs = islice(
+            (
+                (left, right)
+                for left in range(problem.size)
+                for right in range(left + 1, problem.size)
+            ),
+            _EXACT_PROJECTION_FALLBACK_PAIR_TRIALS,
         )
 
     def swapped(
@@ -2061,8 +2084,12 @@ def _projection_feedback_stage_update(
         )
         return tuple(values)
 
+    if deadline is not None and time.monotonic() >= deadline:
+        return None
     for left, right in pairs:
         for axis in ("negative", "positive"):
+            if deadline is not None and time.monotonic() >= deadline:
+                return None
             pair = (
                 replace(
                     state.pair,
@@ -3649,7 +3676,8 @@ def _production_run(
                     west_channels=tuple(strip.west_channel for strip in selected),
                 )
                 for failure in projection_failures:
-                    if _projection_strip_pair(detailed.placement, failure) is None:
+                    strip_pair = _projection_strip_pair(detailed.placement, failure)
+                    if strip_pair is None:
                         continue
                     no_good = _projection_no_good(
                         detailed.placement,
@@ -3667,6 +3695,10 @@ def _production_run(
                                 pack.at[index] for index in range(len(selected))
                             ),
                             evidence=projection_failures,
+                            projection_pair=_exact_projection_pair(
+                                selected,
+                                strip_pair,
+                            ),
                         )
                     projection_relation_feedback = (
                         problem,
@@ -3703,6 +3735,7 @@ def _production_run(
                     geometry_signatures=tuple(
                         _strip_geometry_signature(strip) for strip in selected
                     ),
+                    deadline=deadline,
                 )
 
         transformed = _pose_stage_boundary_update(

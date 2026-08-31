@@ -2293,6 +2293,22 @@ def tie_break_cap(n_terms: int, *, width_bound: int, height: int, n_direct: int)
 
 
 @dataclass(frozen=True, slots=True)
+class ExactProjectionPair:
+    """The two physical strips implicated by one exact projection refusal."""
+
+    left_strip: int
+    right_strip: int
+    left_geometry: finalize.ProjectionGeometrySignature
+    right_geometry: finalize.ProjectionGeometrySignature
+
+    def __post_init__(self) -> None:
+        if self.left_strip < 0 or self.left_strip >= self.right_strip:
+            raise ValueError("exact projection pair requires two ordered strips")
+        if not self.left_geometry or not self.right_geometry:
+            raise ValueError("exact projection pair requires physical signatures")
+
+
+@dataclass(frozen=True, slots=True)
 class ExactPackNoGood:
     """One immutable full packed assignment rejected by exact evidence."""
 
@@ -2301,6 +2317,7 @@ class ExactPackNoGood:
     width: int
     origins: tuple[tuple[int, int], ...]
     evidence: tuple[finalize.ProjectionFailure, ...]
+    projection_pair: ExactProjectionPair | None = None
 
     def __post_init__(self) -> None:
         if self.height <= 0 or self.width <= 0:
@@ -2390,6 +2407,22 @@ def _projection_strip_pair(
         (left_strip, right_strip)
         if left_strip < right_strip
         else (right_strip, left_strip)
+    )
+
+
+def _exact_projection_pair(
+    strips: Sequence[Strip],
+    strip_pair: tuple[int, int],
+) -> ExactProjectionPair | None:
+    """Retain an implicated pair only when both physical strips still exist."""
+    left_strip, right_strip = strip_pair
+    if not 0 <= left_strip < right_strip < len(strips):
+        return None
+    return ExactProjectionPair(
+        left_strip=left_strip,
+        right_strip=right_strip,
+        left_geometry=_strip_geometry_signature(strips[left_strip]),
+        right_geometry=_strip_geometry_signature(strips[right_strip]),
     )
 
 
@@ -12226,6 +12259,7 @@ class FreeformLayout:
             except finalize.ProjectionRefusal as exc:
                 learned = False
                 requires_exact_pack_no_good = False
+                exact_projection_pair: ExactProjectionPair | None = None
                 for failure in exc.failures:
                     if rejected is not None:
                         _retain_refusal(rejected, failure)
@@ -12240,6 +12274,11 @@ class FreeformLayout:
                     )
                     if strip_pair is not None and no_good is None:
                         requires_exact_pack_no_good = True
+                        if exact_projection_pair is None:
+                            exact_projection_pair = _exact_projection_pair(
+                                strips,
+                                strip_pair,
+                            )
                     if no_good is not None:
                         no_good_key = no_good
                         if no_good_key not in projection_no_good_keys:
@@ -12293,6 +12332,7 @@ class FreeformLayout:
                             pack.at[index] for index in range(len(strips))
                         ),
                         evidence=exc.failures,
+                        projection_pair=exact_projection_pair,
                     )
                     if exact_no_good not in exact_pack_no_good_keys:
                         exact_pack_no_good_keys.add(exact_no_good)
