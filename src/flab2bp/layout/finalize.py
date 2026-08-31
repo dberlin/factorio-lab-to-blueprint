@@ -991,10 +991,12 @@ def _projected_coater_splitter_candidates(
     pair omitted here cannot reach the authoritative OBB predicate.
 
     A projection in quadrant 1 swaps blueprint axes before applying those
-    spacings.  Bucketing the transformed longitude axis makes construction and
-    all queries ``O(C + S + K)`` for the returned candidate count ``K``.  The
-    constant-width merge restores original Splitter order, including co-located
-    duplicates; callers consequently retain the old coater-major issue order.
+    spacings, and longitude wraps after ``band.columns`` cells.  A three-axis
+    grid therefore buckets periodic transformed longitude, bounded latitude,
+    and level.  Construction and queries are ``O(C + S + K)`` for returned
+    candidate count ``K``.  Merging the constant number of neighbouring buckets
+    restores original Splitter order, including co-located and seam duplicates;
+    callers consequently retain the old coater-major issue order.
     """
     if cancelled is not None and cancelled():
         raise ProjectionCancelled
@@ -1057,22 +1059,45 @@ def _projected_coater_splitter_candidates(
         splitter_bounds_list.append(planet.collider_radius(splitter.model_index))
     splitter_bounds = tuple(splitter_bounds_list)
     maximum_reach = max(coater_bounds) + max(splitter_bounds)
-    bucket_span = max(
+    longitude_span = max(
         1.0,
         maximum_reach / max(column_lower_bound, 1e-9),
     )
+    latitude_span = max(
+        1.0,
+        maximum_reach / max(row_lower_bound, 1e-9),
+    )
+    level_span = max(1.0, maximum_reach / (4.0 / 3.0))
+    longitude_bucket_count = max(
+        1,
+        int(projection.band.columns / longitude_span),
+    )
+    longitude_bucket_span = (
+        projection.band.columns / longitude_bucket_count
+    )
 
-    def bucket_key(longitude: float) -> int:
-        if column_lower_bound <= 1e-9:
-            return 0
-        return math.floor(longitude / bucket_span)
+    def bucket_key(
+        longitude: float,
+        latitude: float,
+        level: float,
+    ) -> tuple[int, int, int]:
+        return (
+            math.floor(
+                (longitude % projection.band.columns)
+                / longitude_bucket_span
+            )
+            % longitude_bucket_count,
+            math.floor(latitude / latitude_span),
+            math.floor(level / level_span),
+        )
 
     buckets: dict[
-        int,
+        tuple[int, int, int],
         list[
             tuple[
                 int,
                 tuple[int, colliders.Placed],
+                float,
                 float,
                 float,
                 float,
@@ -1085,13 +1110,17 @@ def _projected_coater_splitter_candidates(
         if cancelled is not None and cancelled():
             raise ProjectionCancelled
         longitude, latitude = transformed(splitter[1])
-        buckets.setdefault(bucket_key(longitude), []).append(
+        buckets.setdefault(
+            bucket_key(longitude, latitude, splitter[1].z),
+            [],
+        ).append(
             (
                 position,
                 splitter,
                 splitter_bound,
                 longitude,
                 latitude,
+                splitter[1].z,
             )
         )
 
@@ -1100,11 +1129,29 @@ def _projected_coater_splitter_candidates(
         if cancelled is not None and cancelled():
             raise ProjectionCancelled
         longitude, latitude = transformed(coater[1])
-        key = bucket_key(longitude)
+        longitude_key, latitude_key, level_key = bucket_key(
+            longitude,
+            latitude,
+            coater[1].z,
+        )
+        longitude_keys = {
+            (longitude_key + offset) % longitude_bucket_count
+            for offset in (-1, 0, 1)
+        }
         nearby = merge(
-            buckets.get(key - 1, ()),
-            buckets.get(key, ()),
-            buckets.get(key + 1, ()),
+            *(
+                buckets.get(
+                    (
+                        neighbour_longitude,
+                        latitude_key + latitude_offset,
+                        level_key + level_offset,
+                    ),
+                    (),
+                )
+                for neighbour_longitude in longitude_keys
+                for latitude_offset in (-1, 0, 1)
+                for level_offset in (-1, 0, 1)
+            ),
             key=lambda entry: entry[0],
         )
         peers: list[tuple[int, colliders.Placed]] = []
@@ -1114,13 +1161,22 @@ def _projected_coater_splitter_candidates(
             splitter_bound,
             splitter_longitude,
             splitter_latitude,
+            splitter_level,
         ) in nearby:
             if cancelled is not None and cancelled():
                 raise ProjectionCancelled
+            longitude_gap = (
+                abs(longitude - splitter_longitude)
+                % projection.band.columns
+            )
+            longitude_gap = min(
+                longitude_gap,
+                projection.band.columns - longitude_gap,
+            )
             gap = math.sqrt(
-                ((longitude - splitter_longitude) * column_lower_bound) ** 2
+                (longitude_gap * column_lower_bound) ** 2
                 + ((latitude - splitter_latitude) * row_lower_bound) ** 2
-                + ((coater[1].z - splitter[1].z) * 4.0 / 3.0) ** 2
+                + ((coater[1].z - splitter_level) * 4.0 / 3.0) ** 2
             )
             if gap <= coater_bound + splitter_bound:
                 peers.append(splitter)

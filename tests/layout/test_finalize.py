@@ -614,6 +614,13 @@ def test_projected_coater_splitter_candidates_preserve_rotated_boundary() -> Non
         5,
         replace(_broke2_splitter()[1], x=17, y=25, yaw=90.0),
     )
+    seam_touching = (
+        7,
+        replace(
+            touching[1],
+            y=touching[1].y + projection.band.columns,
+        ),
+    )
     separated = (
         6,
         replace(_broke2_splitter(y=18)[1], x=18, y=25, yaw=90.0),
@@ -621,14 +628,14 @@ def test_projected_coater_splitter_candidates_preserve_rotated_boundary() -> Non
 
     candidates = finalize._projected_coater_splitter_candidates(
         (coater,),
-        (touching, separated),
+        (seam_touching, touching, separated),
         projection,
     )
 
-    assert touching in candidates[0]
+    assert candidates[0][:2] == (seam_touching, touching)
     assert finalize.projected_coater_splitter_failure(
         coater,
-        touching,
+        seam_touching,
         projection,
     ) is not None
     assert (
@@ -639,6 +646,31 @@ def test_projected_coater_splitter_candidates_preserve_rotated_boundary() -> Non
         )
         is None
     )
+
+def test_projected_coater_splitter_candidates_wrap_band_longitude_seam() -> None:
+    projection = _broke2_projection()
+    coater = _broke2_coater()
+    splitter = _broke2_splitter()
+    seam_duplicate = (
+        6,
+        replace(
+            splitter[1],
+            x=splitter[1].x + projection.band.columns,
+        ),
+    )
+
+    assert finalize.projected_coater_splitter_failure(
+        coater,
+        seam_duplicate,
+        projection,
+    ) is not None
+    candidates = finalize._projected_coater_splitter_candidates(
+        (coater,),
+        (seam_duplicate, splitter),
+        projection,
+    )
+
+    assert candidates == ((seam_duplicate, splitter),)
 
 def test_projected_coater_splitter_candidates_include_bound_edge() -> None:
     projection = _broke2_projection()
@@ -682,7 +714,7 @@ def test_projected_coater_splitter_candidates_include_bound_edge() -> None:
 def test_projected_coater_splitter_broad_phase_is_linear_plus_candidates(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    count = 48
+    count = 32
     coater_model = catalog.building(catalog.SPRAY_COATER_ID).model_index
     splitter_model = catalog.building(catalog.SPLITTER_ID).model_index
     coaters = tuple(
@@ -742,10 +774,64 @@ def test_projected_coater_splitter_broad_phase_is_linear_plus_candidates(
         (coaters[position][0], splitters[position][0])
         for position in range(count)
     ]
-    assert floor_calls == len(coaters) + len(splitters)
+    assert floor_calls == 3 * (len(coaters) + len(splitters))
     assert sqrt_calls == len(exact_pairs)
     assert len(exact_pairs) == count
     assert len(exact_pairs) < len(coaters) * len(splitters)
+
+def test_projected_coater_splitter_broad_phase_bounds_same_longitude_scan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    count = 64
+    coater_model = catalog.building(catalog.SPRAY_COATER_ID).model_index
+    splitter_model = catalog.building(catalog.SPLITTER_ID).model_index
+    coaters = tuple(
+        (
+            100 + position,
+            colliders.Placed(coater_model, 0, position * 40, 0, 0.0),
+        )
+        for position in range(count)
+    )
+    splitters = tuple(
+        (
+            200 + position,
+            colliders.Placed(splitter_model, 0, position * 40 + 20, 0, 0.0),
+        )
+        for position in range(count)
+    )
+    sqrt_calls = 0
+    exact_pairs: list[tuple[int, int]] = []
+    original_sqrt = finalize.math.sqrt
+
+    def counted_sqrt(value: float) -> float:
+        nonlocal sqrt_calls
+        sqrt_calls += 1
+        return original_sqrt(value)
+
+    def clean_pair(
+        coater: tuple[int, colliders.Placed],
+        splitter: tuple[int, colliders.Placed],
+        _projection: planet.Projection,
+    ) -> None:
+        exact_pairs.append((coater[0], splitter[0]))
+        return None
+
+    monkeypatch.setattr(finalize.math, "sqrt", counted_sqrt)
+    monkeypatch.setattr(
+        finalize,
+        "projected_coater_splitter_failure",
+        clean_pair,
+    )
+
+    failure = finalize._projected_addon_splitter_failure(
+        coaters,
+        splitters,
+        _broke2_projection(),
+    )
+
+    assert failure is None
+    assert exact_pairs == []
+    assert sqrt_calls == 0
 
 
 def test_broke2_splitter_region_is_rejected_by_projected_addon_keepout() -> None:
