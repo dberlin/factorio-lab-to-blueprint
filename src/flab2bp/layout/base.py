@@ -185,6 +185,12 @@ class AreaFrame:
             raise ValueError("area frame primary band must be the first certified band")
 
 
+class PlacementCompletion(Enum):
+    """Externally visible geometry has passed both completion transforms."""
+
+    COMPACTED_AND_FINALIZED = "compacted-and-finalized"
+
+
 class PlacementStats(TypedDict, total=False):
     """Complete cross-strategy schema for observational layout diagnostics."""
 
@@ -336,6 +342,12 @@ class Placement:
     stats: PlacementStats = field(default_factory=PlacementStats)
     #: Finalized area authority. ``None`` while geometry is still being laid out.
     frame: AreaFrame | None = None
+    #: Explicit ownership handoff: pipeline completion is skipped only when set.
+    completion: PlacementCompletion | None = None
+
+    def __post_init__(self) -> None:
+        if self.completion is not None and self.frame is None:
+            raise ValueError("completed placement requires a finalized area frame")
 
     @property
     def bounds(self) -> tuple[int, int, int, int]:

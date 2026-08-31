@@ -14,7 +14,12 @@ import flab2bp.layout.sequence_solver as sequence_solver_module
 from flab2bp.dsp import catalog, rules
 from flab2bp.layout import finalize, slots, validate
 from flab2bp.layout.band_policy import BandPolicy
-from flab2bp.layout.base import NoValidLayout, PlacedBuilding, Placement
+from flab2bp.layout.base import (
+    NoValidLayout,
+    PlacedBuilding,
+    Placement,
+    PlacementCompletion,
+)
 from flab2bp.layout.compact_seed import (
     CompactSeedConfig,
     CompactSeedDiagnostics,
@@ -288,6 +293,7 @@ def _solver(
     deadline_reached: Callable[[], bool] | None = None,
     initial_states: dict[int, AnnealState] | None = None,
     borrow_first_discovery: bool = False,
+    stage_admission: sequence_solver_module._MeasuredStageAdmission | None = None,
 ) -> SequenceSolver[Prepared]:
     return SequenceSolver(
         heights=heights,
@@ -309,6 +315,7 @@ def _solver(
         deadline_reached=deadline_reached or (lambda: False),
         initial_states=initial_states,
         borrow_first_discovery=borrow_first_discovery,
+        stage_admission=stage_admission,
     )
 
 
@@ -1303,6 +1310,75 @@ def test_discovery_reservations_are_equal_and_unused_budget_is_shared_afterward(
     assert budget.final_reserved == 26
     assert fake.global_allowances[:3] == [18, 18, 18]
     assert fake.global_allowances[3] == 56
+
+
+def test_measured_stage_admits_another_complete_stage_when_its_span_fits() -> None:
+    now = 0.0
+    detailed_calls = 0
+    exact = _placement(area=20, belt_tiles=4)
+    fake = _FakeRouting(
+        detailed_results=(DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), exact),)
+    )
+
+    def delayed_detailed_route(
+        prepared: Prepared,
+        allowance: int,
+    ) -> DetailedStageResult:
+        nonlocal now, detailed_calls
+        detailed_calls += 1
+        result = fake.detailed_route(prepared, allowance)
+        now += 4.0
+        return result
+
+    solver = _solver(
+        fake,
+        heights=(40,),
+        config=SequenceSolverConfig(
+            stages=3,
+            moves_per_stage=1,
+            restarts_per_height=1,
+            global_elites=1,
+        ),
+        stage_admission=sequence_solver_module._MeasuredStageAdmission(
+            deadline=10.0,
+            monotonic=lambda: now,
+        ),
+    )
+    solver.adapters = replace(
+        solver.adapters,
+        detailed_route=delayed_detailed_route,
+    )
+
+    result = solver.search(max_stages=3)
+
+    assert result.placement is exact
+    assert result.termination == "deadline"
+    assert detailed_calls == 2
+    assert now == 8.0
+
+
+def test_measured_stage_reserves_search_and_completion_spans_once_each() -> None:
+    now = 0.0
+    admission = sequence_solver_module._MeasuredStageAdmission(
+        deadline=10.0,
+        monotonic=lambda: now,
+    )
+
+    first = admission.try_start(completion_reserve=False)
+    assert first == 0.0
+    now = 4.0
+    admission.record_completion(1.0)
+    admission.finish(first, retain=True)
+
+    assert admission.dearest_speculative_s == 3.0
+    assert admission.dearest_completion_s == 1.0
+    second = admission.try_start(completion_reserve=True)
+    assert second == 4.0
+    now = 8.0
+    admission.record_completion(1.0)
+    admission.finish(second, retain=True)
+
+    assert admission.try_start(completion_reserve=True) is None
 
 
 def test_later_cancelled_proxy_closes_the_best_completed_candidate(
@@ -4026,7 +4102,11 @@ def test_sequence_backend_returns_authoritative_finalized_placement_once(
     ).lay_out(spec, time_budget_s=2.0)
 
     assert len(finalized) == 1
-    assert placement is finalized[0]
+    assert placement == replace(
+        finalized[0],
+        completion=PlacementCompletion.COMPACTED_AND_FINALIZED,
+    )
+    assert placement.completion is PlacementCompletion.COMPACTED_AND_FINALIZED
 
 
 @pytest.mark.parametrize("belt_vertical_construction", [False, True])

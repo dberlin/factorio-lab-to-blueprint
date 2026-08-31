@@ -38,6 +38,7 @@ from flab2bp.layout.base import (
     LayoutAttemptFailure,
     NoValidLayout,
     Placement,
+    PlacementCompletion,
     ProjectionFailureRecord,
 )
 from flab2bp.layout.freeform import FreeformLayout
@@ -482,35 +483,40 @@ def build(
                         )
                     )
                 continue
-            placement = finalize.compact_open_boundary_belts(
-                placement,
-                spec,
-                expect_power=True,
-            )
-            try:
-                placement = finalize.finalize_placement(placement, policy)
-            except finalize.ProjectionRefusal as exc:
-                reason = str(exc)
-                failure = LayoutAttemptFailure(
-                    candidate=spec.label,
-                    strategy=sname,
-                    reason=reason,
-                    projection_failures=_projection_records(exc.failures),
+            if placement.completion is not PlacementCompletion.COMPACTED_AND_FINALIZED:
+                placement = finalize.compact_open_boundary_belts(
+                    placement,
+                    spec,
+                    expect_power=True,
                 )
-                refused.append(failure)
-                if on_progress is not None:
-                    on_progress(
-                        AttemptProgress(
-                            index=pair_index,
-                            total=total_pairs,
-                            candidate=spec.label,
-                            strategy=sname,
-                            phase="refused",
-                            reason=reason,
-                            projection_failures=failure.projection_failures,
-                        )
+                try:
+                    placement = finalize.finalize_placement(placement, policy)
+                except finalize.ProjectionRefusal as exc:
+                    reason = str(exc)
+                    failure = LayoutAttemptFailure(
+                        candidate=spec.label,
+                        strategy=sname,
+                        reason=reason,
+                        projection_failures=_projection_records(exc.failures),
                     )
-                continue
+                    refused.append(failure)
+                    if on_progress is not None:
+                        on_progress(
+                            AttemptProgress(
+                                index=pair_index,
+                                total=total_pairs,
+                                candidate=spec.label,
+                                strategy=sname,
+                                phase="refused",
+                                reason=reason,
+                                projection_failures=failure.projection_failures,
+                            )
+                        )
+                    continue
+                placement = replace(
+                    placement,
+                    completion=PlacementCompletion.COMPACTED_AND_FINALIZED,
+                )
             # Pass the spec AND the id map. Without them the nine
             # spec-dependent checks are skipped, and a build that never ran its
             # throughput or proliferator checks reads as clean.

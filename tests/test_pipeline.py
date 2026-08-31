@@ -19,7 +19,12 @@ from flab2bp.lab.flow import canonicalize_dataset, canonicalize_request
 from flab2bp.lab.url import parse_url
 from flab2bp.layout import finalize, validate
 from flab2bp.layout.band_policy import BandPolicy
-from flab2bp.layout.base import NoValidLayout, Placement
+from flab2bp.layout.base import (
+    AreaFrame,
+    NoValidLayout,
+    Placement,
+    PlacementCompletion,
+)
 from flab2bp.layout.freeform import FreeformLayout
 from flab2bp.layout.sequence_solver import SequencePairLayout
 from flab2bp.rates.candidates import (
@@ -170,6 +175,51 @@ def test_build_defaults_to_one_portable_policy(
     assert all(policy is seen[0] for policy in seen)
     assert expected_power[-2:] == [("compact", True), ("validate", True)]
     assert all(expect_power for _, expect_power in expected_power)
+
+
+def test_completed_backend_output_skips_duplicate_completion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    completed = Placement(
+        buildings=(),
+        frame=AreaFrame(1, 1, 4, (4,), False),
+        completion=PlacementCompletion.COMPACTED_AND_FINALIZED,
+    )
+
+    class CompletedLayout:
+        def lay_out(self, _spec: object, *, time_budget_s: float) -> Placement:
+            del time_budget_s
+            return completed
+
+    monkeypatch.setattr(
+        pipeline,
+        "_new_layout",
+        lambda *_args, **_kwargs: CompletedLayout(),
+    )
+    monkeypatch.setattr(
+        finalize,
+        "compact_open_boundary_belts",
+        lambda *_args, **_kwargs: pytest.fail("pipeline repeated backend compaction"),
+    )
+    monkeypatch.setattr(
+        finalize,
+        "finalize_placement",
+        lambda *_args, **_kwargs: pytest.fail("pipeline repeated backend finalization"),
+    )
+    monkeypatch.setattr(
+        validate,
+        "validate",
+        lambda *_args, **_kwargs: validate.Report(findings=()),
+    )
+
+    result = pipeline.build(
+        SMALL_URL,
+        strategy="sequence-pair",
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+        time_budget_s=0.5,
+    )
+
+    assert result.placement.completion is PlacementCompletion.COMPACTED_AND_FINALIZED
 
 
 @pytest.mark.slow

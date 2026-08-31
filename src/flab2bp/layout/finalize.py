@@ -2326,7 +2326,12 @@ def _remove_buildings(
                 input_obj=remap(building.input_obj, "input"),
             )
         )
-    candidate = replace(placement, buildings=tuple(surviving), frame=None)
+    candidate = replace(
+        placement,
+        buildings=tuple(surviving),
+        frame=None,
+        completion=None,
+    )
     stats = placement.stats.copy()
     if "area" in stats:
         stats["area"] = float(candidate.area)

@@ -24,6 +24,7 @@ from flab2bp.layout.base import (
     DETERMINISTIC_WORKERS,
     NoValidLayout,
     Placement,
+    PlacementCompletion,
     ProjectionFailureRecord,
 )
 from flab2bp.layout.compact_seed import (
@@ -477,6 +478,58 @@ class StageAdapters[PreparedT]:
     prepare_exact: Callable[[int, DecodedPlacement], PreparedT] | None = None
 
 
+@dataclass(slots=True)
+class _MeasuredStageAdmission:
+    """Reserve the measured search and completion spans of one more stage."""
+
+    deadline: float
+    monotonic: Callable[[], float] = time.monotonic
+    dearest_speculative_s: float = 0.0
+    dearest_completion_s: float = 0.0
+    _active_started: float | None = None
+    _active_completion_s: float = 0.0
+
+    def try_start(self, *, completion_reserve: bool) -> float | None:
+        now = self.monotonic()
+        remaining = self.deadline - now
+        required = self.dearest_speculative_s
+        if completion_reserve:
+            required += self.dearest_completion_s
+        if remaining <= 0.0 or (required > 0.0 and remaining <= required):
+            return None
+        self._active_started = now
+        self._active_completion_s = 0.0
+        return now
+
+    def record_completion(self, elapsed: float) -> None:
+        if self._active_started is not None:
+            self._active_completion_s += max(0.0, elapsed)
+
+    def can_continue(self, started: float, *, completion_reserve: bool) -> bool:
+        now = self.monotonic()
+        elapsed = max(0.0, now - started)
+        completion = min(elapsed, self._active_completion_s)
+        required = max(self.dearest_speculative_s, elapsed - completion)
+        if completion_reserve:
+            required += max(self.dearest_completion_s, completion)
+        return self.deadline - now > required
+
+    def finish(self, started: float, *, retain: bool) -> None:
+        elapsed = max(0.0, self.monotonic() - started)
+        completion = min(elapsed, self._active_completion_s)
+        if retain:
+            self.dearest_speculative_s = max(
+                self.dearest_speculative_s,
+                elapsed - completion,
+            )
+            self.dearest_completion_s = max(
+                self.dearest_completion_s,
+                completion,
+            )
+        self._active_started = None
+        self._active_completion_s = 0.0
+
+
 @dataclass(frozen=True, slots=True)
 class StageObservation:
     """Deterministic observations from one closed temperature stage."""
@@ -662,6 +715,7 @@ class SequenceSolver[PreparedT]:
         stage_boundary_commit: StageBoundaryCommit | None = None,
         borrow_first_discovery: bool = False,
         stop_on_stable_exact: bool = False,
+        stage_admission: _MeasuredStageAdmission | None = None,
     ) -> None:
         if (
             not isinstance(heights, tuple)
@@ -690,6 +744,7 @@ class SequenceSolver[PreparedT]:
         self.budget = expansion_budget
         self.deadline_reached = deadline_reached or (lambda: False)
         self.stop_on_stable_exact = stop_on_stable_exact
+        self.stage_admission = stage_admission
         if not isinstance(direct_targets, tuple):
             raise ValueError("direct-insert targets must be an immutable tuple")
         self.direct_targets = direct_targets
@@ -722,6 +777,33 @@ class SequenceSolver[PreparedT]:
         self._stage_stats: list[StageObservation] = []
         self._incumbent: _ExactIncumbent | None = None
         self._last_height: int | None = None
+
+    def _start_measured_stage(self) -> tuple[bool, float]:
+        admission = self.stage_admission
+        if admission is None:
+            return True, 0.0
+        started = admission.try_start(
+            completion_reserve=self._incumbent is not None,
+        )
+        return started is not None, 0.0 if started is None else started
+
+    def _finish_measured_stage(self, started: float) -> None:
+        if self.stage_admission is not None:
+            self.stage_admission.finish(
+                started,
+                retain=self._incumbent is not None,
+            )
+
+    def _measured_stage_can_continue(self, started: float) -> bool:
+        admission = self.stage_admission
+        if admission is None:
+            return True
+        if self._incumbent is None:
+            return not self.deadline_reached()
+        return admission.can_continue(
+            started,
+            completion_reserve=True,
+        )
 
     @property
     def exact_incumbent_reason(self) -> str | None:
@@ -785,6 +867,10 @@ class SequenceSolver[PreparedT]:
             if self.stop_on_stable_exact and self._has_stable_exact_incumbent():
                 termination = "exact-stable"
                 break
+            admitted, measured_stage_started = self._start_measured_stage()
+            if not admitted:
+                termination = "deadline"
+                break
             seed_height = next(
                 (
                     height
@@ -797,6 +883,7 @@ class SequenceSolver[PreparedT]:
                 seed_height.routing_seed_closed = True
                 allowance = self.budget.detailed_discovery_allowance(seed_height.height)
                 spent, cancelled = self._route_seed_closure(seed_height, allowance)
+                self._finish_measured_stage(measured_stage_started)
                 self.budget.charge_detailed_discovery(seed_height.height, spent)
                 self._last_height = seed_height.height
                 if cancelled:
@@ -828,6 +915,8 @@ class SequenceSolver[PreparedT]:
                             prior_cancelled=cancelled,
                             closure_allowance=closure_allowance - spent,
                         )
+                        if self._measured_stage_can_continue(measured_stage_started)
+                        else (0, False)
                     )
                     spent += followup_spent
                     cancelled = cancelled or followup_cancelled
@@ -845,6 +934,8 @@ class SequenceSolver[PreparedT]:
                             stage_limit,
                             prior_cancelled=cancelled,
                         )
+                        if self._measured_stage_can_continue(measured_stage_started)
+                        else (0, False)
                     )
                     spent += followup_spent
                     cancelled = cancelled or followup_cancelled
@@ -874,6 +965,7 @@ class SequenceSolver[PreparedT]:
                 restart = self._select_restart(height_state)
                 spent, cancelled = self._run_stage(height_state, restart, allowance)
                 self.budget.settle_shared(spent)
+            self._finish_measured_stage(measured_stage_started)
             self._last_height = height_state.height
             if cancelled:
                 termination = "cancelled"
@@ -1584,6 +1676,8 @@ class SequenceSolver[PreparedT]:
             validation_started = time.perf_counter()
             verdict = self.adapters.validate(detailed.placement)
             validation_time_s = time.perf_counter() - validation_started
+            if self.stage_admission is not None:
+                self.stage_admission.record_completion(validation_time_s)
             validation_failures = verdict.failed_checks
             projection_failures = verdict.projection_failures
             if verdict.status is DetailedRouteStatus.BUDGET:
@@ -3214,6 +3308,10 @@ def _production_run(
     started = time.monotonic()
     ceiling = time_budget_s
     deadline = started + ceiling if absolute_deadline is None else absolute_deadline
+    stage_admission = _MeasuredStageAdmission(
+        deadline=deadline,
+        monotonic=time.monotonic,
+    )
 
     def deadline_reached() -> bool:
         return time.monotonic() >= deadline
@@ -3804,7 +3902,8 @@ def _production_run(
         failures = tuple(sorted({finding.check for finding in report.errors}))
         if failures:
             return ValidationVerdict(False, failures, None)
-        try:
+
+        def project(candidate: Placement) -> Placement:
             finalizer_parameters = inspect.signature(
                 finalize.finalize_placement
             ).parameters
@@ -3812,16 +3911,32 @@ def _production_run(
                 parameter.kind is inspect.Parameter.VAR_KEYWORD
                 for parameter in finalizer_parameters.values()
             ):
-                finalized = finalize.finalize_placement(
-                    placement,
+                return finalize.finalize_placement(
+                    candidate,
                     band_policy,
                     cancelled=deadline_reached,
                 )
-            else:
-                finalized = finalize.finalize_placement(
-                    placement,
-                    band_policy,
-                )
+            return finalize.finalize_placement(candidate, band_policy)
+
+        try:
+            projected = project(placement)
+            compacted = finalize.compact_open_boundary_belts_certified(
+                projected,
+                spec,
+                expect_power=power,
+                cancelled=deadline_reached,
+            )
+            compacted_report = compacted.report or report
+            compacted_failures = tuple(
+                sorted({finding.check for finding in compacted_report.errors})
+            )
+            if compacted_failures:
+                return ValidationVerdict(False, compacted_failures, None)
+            finalized = (
+                projected
+                if compacted.placement is projected
+                else project(compacted.placement)
+            )
         except finalize.ProjectionRefusal as exc:
             return ValidationVerdict(False, exc.checks, None, exc.failures)
         except finalize.ProjectionCancelled:
@@ -3838,7 +3953,14 @@ def _production_run(
                 None,
                 status=DetailedRouteStatus.BUDGET,
             )
-        return ValidationVerdict(True, (), finalized)
+        return ValidationVerdict(
+            True,
+            (),
+            replace(
+                finalized,
+                completion=PlacementCompletion.COMPACTED_AND_FINALIZED,
+            ),
+        )
 
     family_by_id = {family.family_id: family for family in generate_strip_families(spec)}
     telemetry.pose_feasibility_rejects = sum(
@@ -4020,6 +4142,7 @@ def _production_run(
         speculative_candidates=(1 + _TOPOLOGY_BEAM_CANDIDATES + _TOPOLOGY_REFINEMENT_CANDIDATES),
     )
     solver = SequenceSolver(
+        stage_admission=stage_admission,
         heights=heights,
         problem_for_height=problems.__getitem__,
         adapters=StageAdapters(
@@ -4055,6 +4178,11 @@ def _production_run(
     )
     if use_shared_pack and not deadline_reached():
         shared_started = time.monotonic()
+        shared_stage_started = stage_admission.try_start(
+            completion_reserve=solver._incumbent is not None,
+        )
+        if shared_stage_started is None:
+            use_shared_pack = False
         shared_height_rank = _shared_pack_height_rank(
             machine_count=spec.machine_count,
             strip_count=len(strips),
@@ -4064,7 +4192,11 @@ def _production_run(
         )
         shared_height = coarse_heights[min(shared_height_rank, len(coarse_heights) - 1)]
         shared_seed = seeds[shared_height]
-        shared_left = seed_deadline - time.monotonic()
+        shared_left = (
+            0.0
+            if shared_stage_started is None
+            else seed_deadline - time.monotonic()
+        )
         shared_pack = (
             _pack(
                 strips,
@@ -4091,6 +4223,11 @@ def _production_run(
                 allowance_cap=exact_candidate_allowance,
             )
             telemetry.shared_pack_candidates = 1
+        if shared_stage_started is not None:
+            stage_admission.finish(
+                shared_stage_started,
+                retain=solver._incumbent is not None,
+            )
         telemetry.shared_pack_wall_time_s = time.monotonic() - shared_started
     run_topology_beam = _needs_topology_beam(
         topology_role=use_topology_beam,
@@ -4184,6 +4321,11 @@ def _production_run(
         narrowest_width_seen: int | None = None
         refinement_attempted = False
         for topology_index in range(beam.config.max_candidates):
+            topology_stage_started = stage_admission.try_start(
+                completion_reserve=solver._incumbent is not None,
+            )
+            if topology_stage_started is None:
+                break
             candidate = beam.solve_next(
                 absolute_deadline=(
                     deadline if topology_index < protected_candidates else seed_deadline
@@ -4191,6 +4333,10 @@ def _production_run(
                 cancelled=deadline_reached,
             )
             if candidate is None:
+                stage_admission.finish(
+                    topology_stage_started,
+                    retain=solver._incumbent is not None,
+                )
                 break
             close_normal = not tall_topology_role or _is_running_narrowest(
                 candidate.width,
@@ -4205,6 +4351,10 @@ def _production_run(
             if not close_normal:
                 if topology_index + 1 < beam.config.max_candidates:
                     beam.exclude(candidate.signature)
+                stage_admission.finish(
+                    topology_stage_started,
+                    retain=solver._incumbent is not None,
+                )
                 continue
             decoded = _topology_candidate_decoded(candidate)
             solver.close_exact_decoded(
@@ -4220,6 +4370,7 @@ def _production_run(
                     exact_key=solver._stage_stats[-1].exact_key,
                     decoded=decoded,
                 )
+            stop_topology = False
             if (
                 tall_topology_role
                 and refinement_direct_targets
@@ -4263,7 +4414,13 @@ def _production_run(
                     )
                     telemetry.topology_beam_candidates += 1
                     if solver._stage_stats[-1].exact_key is not None:
-                        break
+                        stop_topology = True
+            stage_admission.finish(
+                topology_stage_started,
+                retain=solver._incumbent is not None,
+            )
+            if stop_topology:
+                break
             if topology_index + 1 < beam.config.max_candidates:
                 beam.exclude(candidate.signature)
         telemetry.topology_beam_wall_time_s = time.monotonic() - beam_started
