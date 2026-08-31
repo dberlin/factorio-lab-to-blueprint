@@ -486,6 +486,68 @@ def test_generated_cases_are_deterministic_legal_and_integer_only() -> None:
             _assert_no_overlap(first, sizes)
 
 
+class _ComparisonCountingOriginDeltas:
+    values: tuple[int, ...]
+    comparisons: int
+
+    def __init__(self, values: tuple[int, ...]) -> None:
+        self.values = values
+        self.comparisons = 0
+
+    def __contains__(self, value: object) -> bool:
+        for candidate in self.values:
+            self.comparisons += 1
+            if candidate == value:
+                return True
+        return False
+
+    def __len__(self) -> int:
+        return len(self.values)
+
+    def __getitem__(self, index: int) -> int:
+        self.comparisons += 1
+        return self.values[index]
+
+
+def test_direct_origin_lookup_scales_sublinearly_and_preserves_holes() -> None:
+    for size in (8, 128, 2_048):
+        origin_deltas = tuple(range(0, size * 2, 2))
+        target = DirectInsertTarget(
+            (0, 1),
+            0,
+            1,
+            0,
+            0,
+            size * 2,
+            1,
+            origin_deltas,
+        )
+
+        allowed_deltas = _ComparisonCountingOriginDeltas(origin_deltas)
+        object.__setattr__(target, "origin_deltas", allowed_deltas)
+        allowed = DecodedPlacement(
+            x=(0, origin_deltas[-1]),
+            y=(0, 1),
+            width=size * 2,
+            used_height=2,
+            x_windows=((0, 0), (origin_deltas[-1], origin_deltas[-1])),
+            y_windows=((0, 0), (1, 1)),
+            gap_area=0,
+        )
+        assert sequence_pair_module._target_is_direct(allowed, target)
+        assert allowed_deltas.comparisons <= size.bit_length() + 1
+
+        hole_deltas = _ComparisonCountingOriginDeltas(origin_deltas)
+        object.__setattr__(target, "origin_deltas", hole_deltas)
+        hole = replace(
+            allowed,
+            x=(0, origin_deltas[-1] - 1),
+            x_windows=((0, 0), (origin_deltas[-1] - 1, origin_deltas[-1] - 1)),
+        )
+        assert not sequence_pair_module._target_is_direct(hole, target)
+        assert hole_deltas.comparisons <= size.bit_length() + 1
+
+
 def test_direct_insert_target_is_immutable() -> None:
     target = DirectInsertTarget((0, 1), 0, 1, 1, 0, 2, 2, (-1, 0, 1))
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import random
+from bisect import bisect_left
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from enum import Enum
@@ -1228,11 +1229,14 @@ def _target_is_direct(decoded: DecodedPlacement, target: DirectInsertTarget) -> 
         - decoded.y[target.producer]
         - target.producer_row
     )
-    return (
-        1 <= row_gap <= catalog.SORTER_MAX_REACH
-        and decoded.x[target.consumer] - decoded.x[target.producer]
-        in target.origin_deltas
-    )
+    if not 1 <= row_gap <= catalog.SORTER_MAX_REACH:
+        return False
+    origin_delta = decoded.x[target.consumer] - decoded.x[target.producer]
+    origin_deltas = target.origin_deltas
+    # One check runs per target for every annealing score. Construction validates
+    # this tuple as sorted, so binary search keeps each check logarithmic.
+    origin_index = bisect_left(origin_deltas, origin_delta)
+    return origin_index < len(origin_deltas) and origin_deltas[origin_index] == origin_delta
 
 
 def derive_stage_seed(base_seed: int, stage_index: int) -> int:
