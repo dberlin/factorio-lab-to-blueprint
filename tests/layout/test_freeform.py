@@ -11671,7 +11671,7 @@ class TestProjectedCoaterSplitterBanIsPreparedBeforeRouting:
                 junction_ban=set(ban),
                 junction_geometry_prepared=True,
             )
-            tap = (25, y, 1)
+            tap = (25, y, 2)
             canvas.blocked[tap] = _TENTATIVE
             return freeform._merge_frontier(
                 canvas,
@@ -11692,11 +11692,11 @@ class TestProjectedCoaterSplitterBanIsPreparedBeforeRouting:
                 junction_geometry_prepared=True,
             )
             predecessor = canvas.add(
-                replace(_belt(24, y, item="x"), z=F(1))
+                replace(_belt(24, y, item="x"), z=F(2))
             )
-            source = canvas.add(replace(_belt(25, y, item="x"), z=F(1)))
-            onward = canvas.add(replace(_belt(26, y, item="x"), z=F(1)))
-            branch = canvas.add(replace(_belt(25, y - 1, item="x"), z=F(1)))
+            source = canvas.add(replace(_belt(25, y, item="x"), z=F(2)))
+            onward = canvas.add(replace(_belt(26, y, item="x"), z=F(2)))
+            branch = canvas.add(replace(_belt(25, y - 1, item="x"), z=F(2)))
             canvas.buildings[predecessor] = _relink(
                 canvas.buildings[predecessor],
                 output_obj=source,
@@ -11712,10 +11712,10 @@ class TestProjectedCoaterSplitterBanIsPreparedBeforeRouting:
                 2001,
                 35,
                 excused={
-                    (24, y, 1),
-                    (25, y, 1),
-                    (26, y, 1),
-                    (25, y - 1, 1),
+                    (24, y, 2),
+                    (25, y, 2),
+                    (26, y, 2),
+                    (25, y - 1, 2),
                 },
             )
             splitters = sum(
@@ -11725,8 +11725,101 @@ class TestProjectedCoaterSplitterBanIsPreparedBeforeRouting:
             return attached, splitters
 
         assert tap(17) == (False, 0)
-        assert tap(18) == (True, 1)
+        assert tap(18) == (True, 2)
 
+
+
+class TestSourceTapMaterializesSupportedSplitterStacks:
+    @staticmethod
+    def _scene(level: int) -> tuple[_Canvas, int, int]:
+        canvas = _Canvas()
+        predecessor = canvas.add(replace(_belt(-1, 0, item="gear"), z=F(level)))
+        source = canvas.add(replace(_belt(0, 0, item="gear"), z=F(level)))
+        onward = canvas.add(replace(_belt(1, 0, item="gear"), z=F(level)))
+        branch = canvas.add(replace(_belt(0, -1, item="gear"), z=F(level)))
+        canvas.buildings[predecessor] = _relink(
+            canvas.buildings[predecessor],
+            output_obj=source,
+        )
+        canvas.buildings[source] = _relink(
+            canvas.buildings[source],
+            output_obj=onward,
+        )
+        return canvas, source, branch
+
+    def test_one_level_splitter_offset_is_rejected_before_materialization(self) -> None:
+        canvas, source, branch = self._scene(1)
+        rejected_reason: list[str] = []
+
+        attached = freeform._tap_source(
+            canvas,
+            source,
+            branch,
+            2001,
+            35,
+            excused={(-1, 0, 1), (0, 0, 1), (1, 0, 1), (0, -1, 1)},
+            rejected_reason=rejected_reason,
+        )
+
+        assert not attached
+        assert rejected_reason == ["splitter-stack"]
+        assert all(
+            building.item_id != catalog.SPLITTER_ID
+            for building in canvas.buildings
+        )
+
+    def test_level_two_tap_materializes_linked_ground_support_and_upper_splitter(
+        self,
+    ) -> None:
+        canvas, source, branch = self._scene(2)
+
+        attached = freeform._tap_source(
+            canvas,
+            source,
+            branch,
+            2001,
+            35,
+            excused={(-1, 0, 2), (0, 0, 2), (1, 0, 2), (0, -1, 2)},
+        )
+
+        assert attached
+        splitters = [
+            (index, building)
+            for index, building in enumerate(canvas.buildings)
+            if building.item_id == catalog.SPLITTER_ID
+        ]
+        assert [
+            (building.z, building.input_obj, building.carries_item)
+            for _index, building in splitters
+        ] == [
+            (0, None, None),
+            (2, splitters[0][0], "gear"),
+        ]
+        assert canvas.buildings[source].output_obj == splitters[1][0]
+        for level in (0, 2):
+            assert set(junction.keepout_cells(0, 0, level)) <= canvas.guard
+
+    def test_level_two_tap_rejects_a_ground_belt_inside_support_keepout(self) -> None:
+        canvas, source, branch = self._scene(2)
+        canvas.add(_belt(1, 0, item="foreign"))
+        rejected_reason: list[str] = []
+
+        attached = freeform._tap_source(
+            canvas,
+            source,
+            branch,
+            2001,
+            35,
+            excused={(-1, 0, 2), (0, 0, 2), (1, 0, 2), (0, -1, 2)},
+            rejected_reason=rejected_reason,
+        )
+
+        assert not attached
+        assert rejected_reason == ["belt-keepout"]
+        assert all(
+            building.item_id != catalog.SPLITTER_ID
+            for building in canvas.buildings
+        )
 
 class TestSourceTapPreservesPhysicalSplitterPortIdentity:
     @pytest.mark.parametrize(
@@ -11741,18 +11834,18 @@ class TestSourceTapPreservesPhysicalSplitterPortIdentity:
     ) -> None:
         """A Splitter port is direction/height identity, not a free counter cell.
 
-        Both outputs leave in the same direction from the same ground-height
-        Splitter port. One descends after leaving and one stays level, but that
-        later altitude difference cannot make the co-located attachments use
-        distinct ports. The four rotations guard the model/yaw transformation.
+        Both outputs leave in the same direction from one elevated Splitter
+        port. One descends after leaving and one stays level, but that later
+        altitude difference cannot make the co-located attachments use distinct
+        ports. The four rotations guard the model/yaw transformation.
         """
         canvas = _Canvas()
         predecessor = canvas.add(
-            replace(_belt(-dx, -dy, item="gear"), z=F(1))
+            replace(_belt(-dx, -dy, item="gear"), z=F(2))
         )
-        source = canvas.add(replace(_belt(0, 0, item="gear"), z=F(1)))
-        onward = canvas.add(replace(_belt(dx, dy, item="gear"), z=F(0)))
-        branch = canvas.add(replace(_belt(dx, dy, item="gear"), z=F(1)))
+        source = canvas.add(replace(_belt(0, 0, item="gear"), z=F(2)))
+        onward = canvas.add(replace(_belt(dx, dy, item="gear"), z=F(3)))
+        branch = canvas.add(replace(_belt(dx, dy, item="gear"), z=F(2)))
         canvas.buildings[predecessor] = _relink(
             canvas.buildings[predecessor],
             output_obj=source,
@@ -11770,10 +11863,10 @@ class TestSourceTapPreservesPhysicalSplitterPortIdentity:
             2001,
             35,
             excused={
-                (-dx, -dy, 1),
-                (0, 0, 1),
-                (dx, dy, 0),
-                (dx, dy, 1),
+                (-dx, -dy, 2),
+                (0, 0, 2),
+                (dx, dy, 3),
+                (dx, dy, 2),
             },
             rejected_reason=rejected_reason,
         )
@@ -11789,7 +11882,7 @@ class TestSourceTapPreservesPhysicalSplitterPortIdentity:
 
     def test_source_frontier_withholds_a_path_occupied_physical_port(self) -> None:
         canvas = _Canvas(limit=(-2, -2, 2, 2))
-        path = ((0, -1, 2), (0, 0, 3), (0, 1, 3))
+        path = ((0, -1, 2), (0, 0, 2), (0, 1, 2))
         for cell in path:
             canvas.blocked[cell] = freeform._TENTATIVE
 
@@ -11797,20 +11890,20 @@ class TestSourceTapPreservesPhysicalSplitterPortIdentity:
             canvas,
             {5: path},
             (5,),
-            lambda x, y, level: (x, y, level) == (0, 0, 3),
+            lambda x, y, level: (x, y, level) == (0, 0, 2),
             belt_prefab=(2001, 35),
         )
 
-        assert frontier == {(-1, 0, 3), (1, 0, 3)}
+        assert frontier == {(-1, 0, 2), (1, 0, 2)}
 
     def test_distinct_physical_ports_remain_accepted(self) -> None:
         canvas = _Canvas()
-        predecessor = canvas.add(replace(_belt(0, 1, item="gear"), z=F(1)))
-        source = canvas.add(replace(_belt(0, 0, item="gear"), z=F(1)))
-        onward = canvas.add(replace(_belt(0, -1, item="gear"), z=F(1)))
-        branch = canvas.add(replace(_belt(1, 0, item="gear"), z=F(1)))
+        predecessor = canvas.add(replace(_belt(0, 1, item="gear"), z=F(2)))
+        source = canvas.add(replace(_belt(0, 0, item="gear"), z=F(2)))
+        onward = canvas.add(replace(_belt(0, -1, item="gear"), z=F(2)))
+        branch = canvas.add(replace(_belt(1, 0, item="gear"), z=F(2)))
         second_branch = canvas.add(
-            replace(_belt(-1, 0, item="gear"), z=F(1))
+            replace(_belt(-1, 0, item="gear"), z=F(2))
         )
         canvas.buildings[predecessor] = _relink(
             canvas.buildings[predecessor],
@@ -11826,6 +11919,7 @@ class TestSourceTapPreservesPhysicalSplitterPortIdentity:
                 model_index=catalog.building(2011).model_index,
                 x=0,
                 y=0,
+                z=F(2),
                 output_obj=source,
             )
         )
@@ -11837,11 +11931,11 @@ class TestSourceTapPreservesPhysicalSplitterPortIdentity:
             2001,
             35,
             excused={
-                (-1, 0, 1),
-                (0, 1, 1),
-                (0, 0, 1),
-                (0, -1, 1),
-                (1, 0, 1),
+                (-1, 0, 2),
+                (0, 1, 2),
+                (0, 0, 2),
+                (0, -1, 2),
+                (1, 0, 2),
             },
         )
         assert freeform._tap_source(
@@ -11853,11 +11947,14 @@ class TestSourceTapPreservesPhysicalSplitterPortIdentity:
         )
 
         wired = slots.assign_belt_slots(canvas.buildings)
-        splitter = next(
-            index
-            for index, building in enumerate(wired)
-            if building.item_id == catalog.SPLITTER_ID
-        )
+        splitter = max(
+            (
+                (index, building)
+                for index, building in enumerate(wired)
+                if building.item_id == catalog.SPLITTER_ID
+            ),
+            key=lambda pair: pair[1].z,
+        )[0]
         ports = [
             building.output_to_slot
             if building.output_obj == splitter

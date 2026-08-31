@@ -4183,15 +4183,26 @@ class _Canvas:
         return idx
 
     def junction_is_clear(self, x: int, y: int, level: int) -> bool:
-        """Apply prepared static legality plus exact dynamic Splitter legality."""
-        if (x, y, level) in self.junction_ban:
+        """Apply exact legality to every member of a supported Splitter stack."""
+        try:
+            stack_levels = junction.splitter_stack_levels(level)
+        except ValueError:
             return False
-        if self.junction_geometry_prepared:
-            dynamic = [
-                building for building in self.buildings if building.item_id == catalog.SPLITTER_ID
+        if any((x, y, stack_level) in self.junction_ban for stack_level in stack_levels):
+            return False
+        buildings = (
+            [
+                building
+                for building in self.buildings
+                if building.item_id == catalog.SPLITTER_ID
             ]
-            return _junction_site_is_clear(dynamic, x, y, level)
-        return _junction_site_is_clear(self.buildings, x, y, level)
+            if self.junction_geometry_prepared
+            else self.buildings
+        )
+        return all(
+            _junction_site_is_clear(buildings, x, y, stack_level)
+            for stack_level in stack_levels
+        )
 
     def free_world(self, x: int, y: int, z: Fraction) -> bool:
         """Is the real cell at this altitude clear of belts?
@@ -6510,16 +6521,24 @@ def _junction_belt_clear(
     this rule's business.  ``junction.site_is_clear`` asks the machine half.
     """
     excused = set(path[max(0, at - 2) : at + 3])
-    for cell in junction.keepout_cells(*tap):
-        if cell in excused:
-            continue
-        who = canvas.blocked.get(cell)
-        if who is None:
-            continue
-        if who == _TENTATIVE:
-            return False
-        if 0 <= who < len(canvas.buildings) and catalog.is_belt(canvas.buildings[who].item_id):
-            return False
+    try:
+        stack_levels = junction.splitter_stack_levels(tap[2])
+    except ValueError:
+        return False
+    for stack_level in stack_levels:
+        for cell in junction.keepout_cells(tap[0], tap[1], stack_level):
+            if stack_level == tap[2] and cell in excused:
+                continue
+            who = canvas.blocked.get(cell)
+            if who is None:
+                continue
+            if who == _TENTATIVE:
+                return False
+            if (
+                0 <= who < len(canvas.buildings)
+                and catalog.is_belt(canvas.buildings[who].item_id)
+            ):
+                return False
     return True
 
 
@@ -6850,16 +6869,20 @@ def _route_all(
         if cell in canvas.guard and not planned_here:
             return False
         nearby = [
-            junction.make_splitter(tx, ty, Fraction(tz))
+            junction.make_splitter(tx, ty, Fraction(stack_level))
             for tx, ty, tz in planned_taps
             if (tx, ty, tz) != cell
             and abs(tx - x) <= 3
             and abs(ty - y) <= 3
             and abs(tz - level) <= 3
+            for stack_level in junction.splitter_stack_levels(tz)
         ]
-        return not _building_collider_hits(
-            nearby,
-            junction.make_splitter(x, y, Fraction(level)),
+        return all(
+            not _building_collider_hits(
+                nearby,
+                junction.make_splitter(x, y, Fraction(stack_level)),
+            )
+            for stack_level in junction.splitter_stack_levels(level)
         )
 
     def _direct_tap_clear(net: _Net) -> bool:
@@ -6876,18 +6899,23 @@ def _route_all(
             )
             is not None
         }
-        for cell in junction.keepout_cells(*tap):
-            if cell in excused:
-                continue
-            who = canvas.blocked.get(cell)
-            if who == _TENTATIVE:
-                return False
-            if (
-                who is not None
-                and 0 <= who < len(canvas.buildings)
-                and catalog.is_belt(canvas.buildings[who].item_id)
-            ):
-                return False
+        try:
+            stack_levels = junction.splitter_stack_levels(tap[2])
+        except ValueError:
+            return False
+        for stack_level in stack_levels:
+            for cell in junction.keepout_cells(tap[0], tap[1], stack_level):
+                if stack_level == tap[2] and cell in excused:
+                    continue
+                who = canvas.blocked.get(cell)
+                if who == _TENTATIVE:
+                    return False
+                if (
+                    who is not None
+                    and 0 <= who < len(canvas.buildings)
+                    and catalog.is_belt(canvas.buildings[who].item_id)
+                ):
+                    return False
         return True
 
     building_predecessors: dict[int, list[int]] = defaultdict(list)
@@ -8587,13 +8615,29 @@ def _tap_source(
                 rejected_reason.append("ramp")
             return False
         level = int(b.z)
+        try:
+            stack_levels = junction.splitter_stack_levels(level)
+        except ValueError:
+            if rejected_reason is not None:
+                rejected_reason.append("splitter-stack")
+            return False
         if not canvas.junction_is_clear(b.x, b.y, level):
             if rejected_reason is not None:
                 rejected_reason.append("junction-collider")
             return False
-        # The belt half remains dynamic: all paths are laid before taps are
-        # committed, so foreign runs are visible here.
-        belt_blockers = _belt_keepout_blockers(canvas, b.x, b.y, level, excused)
+        # The upper member's own run is excused.  Every lower support has no
+        # belt attachments, so any belt in its keepout is foreign.
+        belt_blockers: set[Cell] = set()
+        for stack_level in stack_levels:
+            belt_blockers.update(
+                _belt_keepout_blockers(
+                    canvas,
+                    b.x,
+                    b.y,
+                    stack_level,
+                    excused if stack_level == level else frozenset(),
+                )
+            )
         if belt_blockers:
             if rejected_cells is not None:
                 rejected_cells.update(belt_blockers)
@@ -8601,12 +8645,14 @@ def _tap_source(
                 rejected_reason.append("belt-keepout")
             return False
 
-        splitter = junction.make_splitter(
+        splitter_stack = junction.make_splitter_stack(
             b.x,
             b.y,
-            b.z,
+            level,
+            first_index=len(canvas.buildings),
             carries_item=b.carries_item,
         )
+        splitter = splitter_stack[-1]
         incoming = [
             index
             for index, candidate in enumerate(canvas.buildings)
@@ -8644,12 +8690,13 @@ def _tap_source(
         used_ports = {feed_port, carry_port}
         attached = 2
 
-        junction_idx = canvas.add(splitter)
-        # Nothing routed later may take the collider's room either. The passes
-        # after this one -- external input runs, coater spurs, the power lattice
-        # -- all ask `canvas.free`, and until now none of them knew a junction
-        # was there at all: it is belt-integrated and reports no occupied tile.
-        canvas.guard.update(junction.keepout_cells(b.x, b.y, level))
+        junction_idx = -1
+        for stack_member in splitter_stack:
+            junction_idx = canvas.add(stack_member)
+        assert junction_idx >= 0
+        # Nothing routed later may take any stack member's collider room.
+        for stack_level in stack_levels:
+            canvas.guard.update(junction.keepout_cells(b.x, b.y, stack_level))
         canvas.buildings[belt_idx] = _relink(b, output_obj=junction_idx)
         # Carry the lane onward FROM the junction, so everything downstream of
         # the tap stays fed. Dropping this would starve the rest of the lane in
