@@ -1364,21 +1364,21 @@ def test_measured_stage_reserves_search_and_completion_spans_once_each() -> None
         monotonic=lambda: now,
     )
 
-    first = admission.try_start(completion_reserve=False)
+    first = admission.try_start()
     assert first == 0.0
     now = 4.0
     admission.record_completion(1.0)
-    admission.finish(first, retain=True)
+    admission.finish(first)
 
     assert admission.dearest_speculative_s == 3.0
     assert admission.dearest_completion_s == 1.0
-    second = admission.try_start(completion_reserve=True)
+    second = admission.try_start()
     assert second == 4.0
     now = 8.0
     admission.record_completion(1.0)
-    admission.finish(second, retain=True)
+    admission.finish(second)
 
-    assert admission.try_start(completion_reserve=True) is None
+    assert admission.try_start() is None
 
 
 def test_later_cancelled_proxy_closes_the_best_completed_candidate(
@@ -3062,7 +3062,7 @@ def test_projection_pitch_feedback_rebuilds_failed_restart_and_rebases_siblings(
     assert len(solver._stage_stats) == 2
     assert [stage.anneal_moves for stage in solver._stage_stats] == [
         0,
-        config.moves_per_stage * config.restarts_per_height,
+        config.moves_per_stage,
     ]
     assert all(stage.expansions == 0 for stage in solver._stage_stats)
     assert budget.spent == 0
@@ -3466,6 +3466,90 @@ def test_projection_pitch_feedback_runs_before_the_next_height_discovery(
     assert [stage.height for stage in result.stages] == [40, 40]
     assert result.stages[1].selected_variant_ids[0].placement_geometry[2] == 8
     assert bool(global_allowances) is not borrow_first_discovery
+
+
+def test_routing_seed_projection_feedback_closes_only_the_protected_restart() -> None:
+    problem, state, placement, failure = _projection_pitch_stage_fixture()
+    padded = variant_with_minimum_pitch(
+        problem.variant(0, 0),
+        problem.variant(0, 0).pitch_x + 1,
+    )
+    validations = 0
+    global_allowances: list[int] = []
+
+    def global_route(
+        _prepared: tuple[int, DecodedPlacement],
+        _feedback: FeedbackState,
+        allowance: int,
+    ) -> GlobalRouteResult:
+        global_allowances.append(allowance)
+        return _global()
+
+    def validate_projection(candidate: Placement) -> ValidationVerdict:
+        nonlocal validations
+        validations += 1
+        if validations == 1:
+            return ValidationVerdict(
+                False,
+                ("geom.collide",),
+                None,
+                (failure,),
+            )
+        return ValidationVerdict(
+            True,
+            (),
+            replace(candidate, stats={"area": 1.0, "belt_tiles": 0.0}),
+        )
+
+    def transform(
+        _height: int,
+        stage_problem: PlacementProblem,
+        stage_state: AnnealState,
+        _feedback: FeedbackState,
+        _detailed: DetailedStageResult,
+        _stagnation: int,
+        _projection_failures: tuple[finalize.ProjectionFailure, ...],
+        select_feedback_variant: bool,
+    ) -> StageBoundaryUpdate:
+        return enable_variant_stage_boundary(
+            stage_problem,
+            stage_state,
+            strip=0,
+            variant=padded,
+            select_variant=select_feedback_variant,
+        )
+
+    solver = SequenceSolver(
+        heights=(40,),
+        problem_for_height=lambda height: replace(problem, outline_height=height),
+        adapters=StageAdapters(
+            prepare=lambda height, decoded: (height, decoded),
+            global_route=global_route,
+            detailed_route=lambda _prepared, _allowance: DetailedStageResult(
+                _routing(DetailedRouteStatus.ROUTED),
+                placement,
+            ),
+            validate=validate_projection,
+        ),
+        expansion_budget=ExpansionBudget(17),
+        config=SequenceSolverConfig(
+            stages=2,
+            moves_per_stage=1,
+            restarts_per_height=2,
+            global_elites=1,
+        ),
+        stage_boundary_transform=transform,
+    )
+    height_state = solver._heights[0]
+    height_state.routing_seed = state
+
+    result = solver.search(max_stages=2)
+
+    assert [stage.height for stage in result.stages] == [40, 40]
+    assert result.stages[1].selected_variant_ids[0].placement_geometry[2] == 8
+    assert result.stages[1].anneal_seeds == (height_state.restarts[0].seed,)
+    assert global_allowances == []
+    assert solver.budget.discovery_complete
 
 
 @pytest.mark.parametrize("closure_allowance", [None, 0])
