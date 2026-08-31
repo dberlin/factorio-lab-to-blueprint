@@ -1506,7 +1506,6 @@ _staged_static_preclearance_proved = _StagedStaticPreclearanceProof()
 
 
 
-
 def _staged_static_projection_peers(
     buildings: Sequence[PlacedBuilding],
     candidate: PlacedBuilding,
@@ -2075,7 +2074,6 @@ def plan_strips(
     groups = _adapt(spec)
     families = tuple(generate_strip_families(spec))
     templates: dict[StripFamilyId, StripVariant] = {}
-
     for family in families:
         if not family.variants:
             continue
