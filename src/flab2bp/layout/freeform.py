@@ -2817,13 +2817,12 @@ def _feedback_objective_evidence(
         ):
             continue
         source_offset, destination_offset = offsets
-        levels = {source_offset[2], destination_offset[2]}
         hot_cells = tuple(
             (cell, max(1, math.ceil(history)))
             for cell, history in sorted(
                 feedback.net_cell_history.get(net, {}).items()
             )
-            if history > 0.0 and cell[2] in levels
+            if history > 0.0
         )
         evidence.append(
             _FeedbackObjectiveEvidence(

@@ -171,7 +171,6 @@ def test_route_feedback_weights_exact_blocking_net_identities() -> None:
     }
     assert updated.net_cell_history == {
         failed_net: {(4, 5, 0): 1.0},
-        blocker: {(4, 5, 0): 1.0},
     }
 
 
@@ -250,7 +249,7 @@ def test_feedback_state_copies_and_freezes_input_mappings() -> None:
     with pytest.raises(TypeError):
         cast(dict[Cell, float], state.net_cell_history[net])[(4, 5, 0)] = 4.0
 
-def test_shared_history_is_2d_bounded_while_exact_history_retains_levels() -> None:
+def test_shared_and_exact_history_both_retain_routing_levels() -> None:
     net = NetId(2, 7, "iron-ingot", NetRole.INTERNAL, 0)
     exact = {
         (4, 5, 0): 1.0,
@@ -264,8 +263,7 @@ def test_shared_history_is_2d_bounded_while_exact_history_retains_levels() -> No
         net_cell_history={net: exact},
     )
 
-    assert state.cell_history == {(4, 5, 0): 3.0}
-    assert state.net_cell_history == {net: exact}
+    assert state.cell_history == exact
 
 
 def test_feedback_is_bounded_decayed_and_pruned_at_stage_boundary() -> None:

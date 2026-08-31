@@ -3150,6 +3150,37 @@ def test_route_feedback_objective_keeps_exact_net_terms_and_hot_walls() -> None:
         cold.outline,
     )
 
+def test_ground_net_retains_elevated_wall_as_an_exact_cp_term() -> None:
+    net = NetId(0, 1, "ore", NetRole.INTERNAL, 0)
+    wall = (12, 5, 2)
+    feedback = freeform.update_feedback(
+        FeedbackState.empty((60, 20)),
+        DetailedRouteResult(
+            DetailedRouteStatus.STRANDED,
+            (),
+            (
+                NetFailure(
+                    net,
+                    RouteFailureKind.CONGESTION_WALL,
+                    (wall,),
+                    (),
+                    1,
+                    source=(4, 2, 0),
+                    destination=(21, 3, 0),
+                ),
+            ),
+            0,
+            1,
+        ),
+        origins=((0, 0), (20, 0)),
+    )
+
+    terms = freeform._feedback_objective_evidence(feedback, strip_count=2)
+
+    assert len(terms) == 1
+    assert terms[0].source_offset[2] == terms[0].destination_offset[2] == 0
+    assert terms[0].hot_cells == ((wall, 1),)
+
 
 def test_route_feedback_disjoint_walls_create_only_linear_exact_terms() -> None:
     count = 6
