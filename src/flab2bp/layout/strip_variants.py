@@ -610,22 +610,19 @@ def projection_pitch_requirement(
     }
     if len(owned_positions) != len(variant.machine_origins_x):
         return None
-    ordinals: dict[tuple[int, int], int] | None = None
-    for local_x in variant.machine_origins_x:
-        box_x = left.x - local_x
-        box_y = left.y - variant.lane_plan.machine_row
-        expected = {
-            (box_x + origin_x, box_y + variant.lane_plan.machine_row)
-            for origin_x in variant.machine_origins_x
-        }
-        if expected == owned_positions:
-            ordinals = {
-                (box_x + origin_x, box_y + variant.lane_plan.machine_row): ordinal
-                for ordinal, origin_x in enumerate(variant.machine_origins_x)
-            }
-            break
+    local_origin_x = variant.machine_origins_x[0]
+    placed_origin_x, placed_origin_y = min(owned_positions)
+    translation_x = placed_origin_x - local_origin_x
+    translation_y = placed_origin_y - variant.lane_plan.machine_row
+    ordinals = {
+        (
+            translation_x + origin_x,
+            translation_y + variant.lane_plan.machine_row,
+        ): ordinal
+        for ordinal, origin_x in enumerate(variant.machine_origins_x)
+    }
     if (
-        ordinals is None
+        ordinals.keys() != owned_positions
         or (left.x, left.y) not in ordinals
         or (right.x, right.y) not in ordinals
         or abs(ordinals[(left.x, left.y)] - ordinals[(right.x, right.y)]) != 1

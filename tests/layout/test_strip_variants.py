@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import fields, replace
 from fractions import Fraction
+from itertools import combinations_with_replacement
+from typing import ClassVar
 
 import pytest
 
@@ -15,6 +17,7 @@ from flab2bp.layout.freeform import plan_strips
 from flab2bp.layout.strip_variants import (
     CargoDomain,
     LogicalLane,
+    ProjectionPitchRequirement,
     StripFamily,
     StripFamilyId,
     StripInstance,
@@ -315,6 +318,278 @@ def test_projection_pitch_requirement_rejects_every_malformed_index_shape(
         )
         is None
     )
+
+def _brute_force_projection_origin_ordinals(
+    local_origins_x: tuple[int, ...],
+    owned_positions: set[tuple[int, int]],
+    *,
+    anchor: tuple[int, int],
+    machine_row: int,
+) -> dict[tuple[int, int], int] | None:
+    """Quadratic pre-optimization matcher retained only as a parity oracle."""
+    if len(owned_positions) != len(local_origins_x):
+        return None
+    for local_x in local_origins_x:
+        box_x = anchor[0] - local_x
+        box_y = anchor[1] - machine_row
+        expected = {
+            (box_x + origin_x, box_y + machine_row) for origin_x in local_origins_x
+        }
+        if expected == owned_positions:
+            return {
+                (box_x + origin_x, box_y + machine_row): ordinal
+                for ordinal, origin_x in enumerate(local_origins_x)
+            }
+    return None
+
+
+def _projection_machine(
+    variant: StripVariant,
+    *,
+    x: int,
+    y: int,
+    owner: int = 0,
+    machine: str = "chemical-plant",
+) -> PlacedBuilding:
+    item_id = catalog.item_id(machine)
+    return PlacedBuilding(
+        item_id=item_id,
+        model_index=catalog.building(item_id).model_index,
+        x=x,
+        y=y,
+        width=variant.footprint_width,
+        height=variant.footprint_height,
+        yaw=variant.yaw,
+        owner_strip=owner,
+    )
+
+
+@pytest.mark.parametrize(
+    ("machine", "yaw"),
+    [("chemical-plant", 0.0), ("oil-refinery", 90.0)],
+)
+@pytest.mark.parametrize("machine_count", [2, 3, 4])
+def test_projection_pitch_requirement_matches_brute_force_origin_oracle_exhaustively(
+    machine: str,
+    yaw: float,
+    machine_count: int,
+) -> None:
+    family = _family(_single_machine_spec(machine, count=machine_count))
+    variant = _at_yaw(family, yaw)[0]
+    (instance,) = partition_strip_family(
+        family,
+        max_machine_count=machine_count,
+        variant_id=variant.variant_id,
+    )
+    base_x = 13
+    machine_y = 17 + variant.lane_plan.machine_row
+    candidates = tuple(
+        (base_x + offset * variant.pitch_x, machine_y + row_offset)
+        for offset in range(-1, machine_count + 1)
+        for row_offset in (0, 1)
+    )
+    checked = 0
+    equivalent = 0
+
+    for positions in combinations_with_replacement(candidates, machine_count):
+        placement = Placement(
+            buildings=tuple(
+                _projection_machine(variant, x=x, y=y, machine=machine)
+                for x, y in positions
+            )
+        )
+        owned_positions = set(positions)
+        for left_index in range(machine_count):
+            for right_index in range(machine_count):
+                if left_index == right_index:
+                    continue
+                failure = ProjectionFailure(
+                    "geom.collide",
+                    (left_index, right_index),
+                    "build colliders intersect",
+                    160,
+                )
+                left_position = positions[left_index]
+                right_position = positions[right_index]
+                ordinals = _brute_force_projection_origin_ordinals(
+                    variant.machine_origins_x,
+                    owned_positions,
+                    anchor=left_position,
+                    machine_row=variant.lane_plan.machine_row,
+                )
+                oracle_matches = (
+                    ordinals is not None
+                    and abs(left_position[0] - right_position[0]) == variant.pitch_x
+                    and left_position in ordinals
+                    and right_position in ordinals
+                    and abs(ordinals[left_position] - ordinals[right_position]) == 1
+                )
+
+                requirement = projection_pitch_requirement(
+                    placement,
+                    instance_ids=(instance.instance_id,),
+                    variants=(variant,),
+                    failure=failure,
+                )
+
+                assert (requirement is not None) is oracle_matches
+                if requirement is not None:
+                    equivalent += 1
+                    assert requirement.rejected_pitch == variant.pitch_x
+                    assert requirement.required_pitch == variant.pitch_x + 1
+                checked += 1
+
+    assert checked == {2: 72, 3: 1_320, 4: 16_380}[machine_count]
+    assert equivalent > 0
+
+
+@pytest.mark.parametrize(
+    ("machine_count", "origin_ordinals", "failure_indices"),
+    [
+        pytest.param(1, (), (0, 1), id="empty"),
+        pytest.param(1, (0,), (0, 0), id="singleton"),
+        pytest.param(2, (0, 0), (0, 1), id="duplicate"),
+    ],
+)
+def test_projection_pitch_requirement_rejects_degenerate_origin_collections(
+    machine_count: int,
+    origin_ordinals: tuple[int, ...],
+    failure_indices: tuple[int, int],
+) -> None:
+    family = _family(_single_machine_spec("chemical-plant", count=machine_count))
+    variant = default_strip_variant(family)
+    (instance,) = partition_strip_family(family, max_machine_count=machine_count)
+    machine_y = 17 + variant.lane_plan.machine_row
+    placement = Placement(
+        buildings=tuple(
+            _projection_machine(
+                variant,
+                x=13 + ordinal * variant.pitch_x,
+                y=machine_y,
+            )
+            for ordinal in origin_ordinals
+        )
+    )
+
+    assert (
+        projection_pitch_requirement(
+            placement,
+            instance_ids=(instance.instance_id,),
+            variants=(variant,),
+            failure=ProjectionFailure(
+                "geom.collide",
+                failure_indices,
+                "build colliders intersect",
+                160,
+            ),
+        )
+        is None
+    )
+
+
+def test_projection_pitch_requirement_maps_exact_rotated_shard() -> None:
+    family = _family(_single_machine_spec("oil-refinery", count=4))
+    rotated = _at_yaw(family, 90.0)[0]
+    instances = partition_strip_family(
+        family,
+        max_machine_count=2,
+        variant_id=rotated.variant_id,
+    )
+    buildings: list[PlacedBuilding] = []
+    for owner, instance in enumerate(instances):
+        machine_y = 20 + owner * 10 + instance.variant.lane_plan.machine_row
+        buildings.extend(
+            _projection_machine(
+                instance.variant,
+                x=30 + owner * 20 + origin_x,
+                y=machine_y,
+                owner=owner,
+                machine="oil-refinery",
+            )
+            for origin_x in instance.variant.machine_origins_x
+        )
+    failure = ProjectionFailure(
+        "geom.collide",
+        (2, 3),
+        "build colliders intersect",
+        160,
+    )
+
+    requirement = projection_pitch_requirement(
+        Placement(buildings=tuple(buildings)),
+        instance_ids=tuple(instance.instance_id for instance in instances),
+        variants=tuple(instance.variant for instance in instances),
+        failure=failure,
+    )
+
+    assert requirement == ProjectionPitchRequirement(
+        family_id=instances[1].family_id,
+        instance_id=instances[1].instance_id,
+        variant_id=instances[1].variant_id,
+        axis="x",
+        rejected_pitch=instances[1].variant.pitch_x,
+        required_pitch=instances[1].variant.pitch_x + 1,
+        failure=failure,
+    )
+
+
+class _OriginArithmeticCounter(int):
+    operations: ClassVar[int] = 0
+
+    def __add__(self, other: int) -> _OriginArithmeticCounter:
+        type(self).operations += 1
+        return type(self)(int(self) + int(other))
+
+    def __sub__(self, other: int) -> _OriginArithmeticCounter:
+        type(self).operations += 1
+        return type(self)(int(self) - int(other))
+
+
+def _adversarial_projection_origin_operations(machine_count: int) -> int:
+    family = _family(_single_machine_spec("chemical-plant", count=machine_count))
+    variant = default_strip_variant(family)
+    (instance,) = partition_strip_family(family, max_machine_count=machine_count)
+    adversarial_origins = (
+        *variant.machine_origins_x[:-1],
+        variant.machine_origins_x[-1] + variant.pitch_x,
+    )
+    machine_y = 17 + variant.lane_plan.machine_row
+    placement = Placement(
+        buildings=tuple(
+            _projection_machine(
+                variant,
+                x=_OriginArithmeticCounter(13 + origin_x),
+                y=machine_y,
+            )
+            for origin_x in adversarial_origins
+        )
+    )
+    failure = ProjectionFailure(
+        "geom.collide",
+        (0, 1),
+        "build colliders intersect",
+        160,
+    )
+    _OriginArithmeticCounter.operations = 0
+
+    requirement = projection_pitch_requirement(
+        placement,
+        instance_ids=(instance.instance_id,),
+        variants=(variant,),
+        failure=failure,
+    )
+
+    assert requirement is None
+    return _OriginArithmeticCounter.operations
+
+
+def test_projection_pitch_origin_matching_has_linear_structural_growth() -> None:
+    small_count = _adversarial_projection_origin_operations(32)
+    large_count = _adversarial_projection_origin_operations(128)
+
+    assert large_count <= small_count * 5
+    assert large_count <= 128 * 4
+
 
 
 def test_lane_profiles_exclude_collider_halo_rows() -> None:
