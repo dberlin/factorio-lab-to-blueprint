@@ -24,11 +24,13 @@ from flab2bp.dsp import catalog, codec, colliders, planet, rules
 from flab2bp.layout import finalize, freeform, junction, slots, validate
 from flab2bp.layout.band_policy import BandPolicy, BandSelection
 from flab2bp.layout.base import (
+    AreaFrame,
     DETERMINISTIC_WORKERS,
     Facing,
     NoValidLayout,
     PlacedBuilding,
     Placement,
+    PlacementCompletion,
 )
 from flab2bp.layout.finalize import ProjectionNoGood
 from flab2bp.layout.freeform import (
@@ -2898,6 +2900,162 @@ def _sweep_after_first_routing(
     return result, seen, attempts
 
 
+def test_routed_attempt_expiring_in_certification_names_certification_stage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = 0.0
+
+    def monotonic() -> float:
+        return clock
+
+    def expire_in_certification(
+        *_args: object,
+        **_kwargs: object,
+    ) -> validate.Report:
+        nonlocal clock
+        clock += 0.2
+        return validate.Report(findings=())
+
+    monkeypatch.setattr(freeform.time, "monotonic", monotonic)
+    result, _seen, attempts = _sweep_after_first_routing(
+        monkeypatch,
+        _routing_failures(),
+        arrangements=1,
+        deadline=0.1,
+        certifier=expire_in_certification,
+        finalizer=lambda *_args, **_kwargs: pytest.fail(
+            "an attempt that exhausted certification reached finalization"
+        ),
+    )
+
+    assert result is None
+    assert len(attempts) == 1
+    assert attempts[0].routing.status is DetailedRouteStatus.ROUTED
+    assert attempts[0].budget_stage is freeform._BuildBudgetStage.CERTIFICATION
+
+
+
+
+def test_terminal_refusal_names_completion_stage_after_every_net_wired(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = 0.0
+
+    def monotonic() -> float:
+        return clock
+
+    def expire_after_routing(
+        _layout: FreeformLayout,
+        _spec: BuildSpec,
+        strips: list[Strip],
+        _sweep_s: float,
+        _deadline: float,
+        _budget: dict[str, int],
+        rejected: list[freeform._RefusalFinding],
+        attempts: list[freeform.PackAttempt],
+    ) -> None:
+        nonlocal clock
+        rejected.append(
+            validate.Finding(
+                "flow.conservation",
+                validate.Severity.ERROR,
+                "earlier routed pack was invalid",
+                (),
+                {},
+            )
+        )
+        routed = _proof_attempt(_routing_failures(), strips)
+        attempts.append(
+            replace(
+                routed,
+                budget_stage=freeform._BuildBudgetStage.CERTIFICATION,
+            )
+        )
+        clock = 2.0
+        return None
+
+    monkeypatch.setattr(freeform.time, "monotonic", monotonic)
+    monkeypatch.setattr(FreeformLayout, "_sweep", expire_after_routing)
+
+    with pytest.raises(NoValidLayout) as caught:
+        FreeformLayout(band_policy=BandPolicy("portable")).lay_out(
+            two_stage_spec(),
+            time_budget_s=1.0,
+        )
+
+    reason = str(caught.value)
+    assert "no completed packing" in reason
+    assert "at least one wired every net" in reason
+    assert "deadline passed during CERTIFICATION" in reason
+    assert "earlier routed pack was invalid" in reason
+    assert "no wired packing" not in reason
+
+
+def test_sweep_reuses_complete_compaction_certification_before_finalization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    report = validate.Report(findings=())
+    compacted = Placement(
+        buildings=(),
+        stats={"belt_tiles": 0.0, "boundary_belts_removed": 1.0},
+    )
+    stages: list[str] = []
+
+    @dataclasses.dataclass(frozen=True, slots=True)
+    class CompactionResult:
+        placement: Placement
+        report: validate.Report | None
+
+    def compact(
+        _placement: Placement,
+        _spec: BuildSpec,
+        *,
+        expect_power: bool,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> CompactionResult:
+        assert expect_power
+        assert cancelled is not None
+        assert not cancelled()
+        stages.append("certification")
+        return CompactionResult(compacted, report)
+
+    def finish(
+        placement: Placement,
+        _policy: BandPolicy,
+        **_kwargs: object,
+    ) -> Placement:
+        assert placement is compacted
+        stages.append("finalization")
+        return replace(
+            placement,
+            frame=AreaFrame(1, 1, 4, (4,), False),
+        )
+
+    monkeypatch.setattr(
+        finalize,
+        "compact_open_boundary_belts_certified",
+        compact,
+        raising=False,
+    )
+    result, _seen, attempts = _sweep_after_first_routing(
+        monkeypatch,
+        _routing_failures(),
+        arrangements=1,
+        deadline=time.monotonic() + 10.0,
+        certifier=lambda *_args, **_kwargs: pytest.fail(
+            "a complete immutable compaction report was recomputed"
+        ),
+        finalizer=finish,
+    )
+
+    assert result is not None
+    assert result.buildings == compacted.buildings
+    assert result.completion is PlacementCompletion.COMPACTED_AND_FINALIZED
+    assert stages == ["certification", "finalization"]
+    assert len(attempts) == 1
+    assert attempts[0].budget_stage is None
+
+
 def test_sweep_cancellation_inside_finalization_cannot_install_best(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2913,7 +3071,7 @@ def test_sweep_cancellation_inside_finalization_cannot_install_best(
         observed.append(cancelled)
         raise finalize.ProjectionCancelled
 
-    result, _seen, _attempts = _sweep_after_first_routing(
+    result, _seen, attempts = _sweep_after_first_routing(
         monkeypatch,
         DetailedRouteResult(
             DetailedRouteStatus.ROUTED,
@@ -2929,6 +3087,8 @@ def test_sweep_cancellation_inside_finalization_cannot_install_best(
 
     assert observed
     assert result is None
+    assert len(attempts) == 1
+    assert attempts[0].budget_stage is freeform._BuildBudgetStage.FINALIZATION
 
 
 def test_sweep_legacy_finalizer_crossing_deadline_cannot_install_best(
@@ -3139,6 +3299,35 @@ def test_unaffordable_feedback_retry_preserves_later_base_height(
 
     assert result is not None
     assert seen[:2] == [(20, 0), (21, 0)]
+
+def test_feedback_retry_admission_uses_measured_nonzero_candidate_cost(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ticks = itertools.count()
+    measured: list[float] = []
+
+    monkeypatch.setattr(freeform.time, "monotonic", lambda: float(next(ticks)))
+
+    def refuse_retry(
+        _deadline: float | None,
+        _soft: float,
+        candidate_s: float,
+    ) -> bool:
+        measured.append(candidate_s)
+        return False
+
+    monkeypatch.setattr(freeform, "_room_for_another", refuse_retry)
+
+    _result, seen, _attempts = _sweep_after_first_routing(
+        monkeypatch,
+        _feedback_bearing_routing(),
+        heights=(20, 21),
+    )
+
+    assert seen[:2] == [(20, 0), (21, 0)]
+    assert measured
+    assert measured[0] > 0.0
+
 
 
 def test_admitted_feedback_retry_is_not_rechecked_at_deadline_boundary(

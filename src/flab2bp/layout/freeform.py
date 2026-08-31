@@ -88,6 +88,7 @@ from flab2bp.layout.base import (
     NoValidLayout,
     PlacedBuilding,
     Placement,
+    PlacementCompletion,
     ProjectionFailureRecord,
 )
 from flab2bp.layout.finalize import ProjectionNoGood
@@ -11475,6 +11476,8 @@ class _BuildBudgetStage(Enum):
 
     PREPARATION = "preparation"
     ROUTING = "routing"
+    CERTIFICATION = "certification"
+    FINALIZATION = "finalization"
 
 
 @dataclass(frozen=True, slots=True)
@@ -11499,10 +11502,21 @@ class PackAttempt:
         ):
             raise ValueError("PackAttempt.static_access accepts only STATIC_ACCESS failures")
         if self.routing.status is DetailedRouteStatus.BUDGET:
-            if self.budget_stage is None:
-                raise ValueError("a budget-limited attempt must name its build stage")
-        elif self.budget_stage is not None:
-            raise ValueError("only a budget-limited attempt may name a build stage")
+            if self.budget_stage not in (
+                _BuildBudgetStage.PREPARATION,
+                _BuildBudgetStage.ROUTING,
+            ):
+                raise ValueError("a routing-budget attempt must name its routing stage")
+        elif self.budget_stage in (
+            _BuildBudgetStage.PREPARATION,
+            _BuildBudgetStage.ROUTING,
+        ):
+            raise ValueError("only a routing-budget attempt may name a routing stage")
+        if self.budget_stage in (
+            _BuildBudgetStage.CERTIFICATION,
+            _BuildBudgetStage.FINALIZATION,
+        ) and self.routing.status is not DetailedRouteStatus.ROUTED:
+            raise ValueError("completion-stage evidence requires a fully routed attempt")
         if self.budget_stage is _BuildBudgetStage.PREPARATION and (
             self.routing.routed or self.routing.failures
         ):
@@ -13183,21 +13197,30 @@ class FreeformLayout:
             if best is not None:
                 return best
 
+        deadline_expired = _expired(deadline)
+        completion_expired = deadline_expired and any(
+            attempt.budget_stage
+            in (
+                _BuildBudgetStage.CERTIFICATION,
+                _BuildBudgetStage.FINALIZATION,
+            )
+            for attempt in attempts
+        )
+        projection_failures = tuple(
+            ProjectionFailureRecord(
+                finding.band,
+                finding.check,
+                finding.buildings,
+                finding.detail,
+            )
+            for finding in rejected
+            if isinstance(finding, finalize.ProjectionFailure)
+        )
         # A build that WIRED and then failed our own validator is a different
         # defect from one that could not be wired, and saying so is the whole
         # value of checking: "the packer produced packs its own router cannot
         # wire" would be false here and would send the next reader to the packer.
-        if rejected:
-            projection_failures = tuple(
-                ProjectionFailureRecord(
-                    finding.band,
-                    finding.check,
-                    finding.buildings,
-                    finding.detail,
-                )
-                for finding in rejected
-                if isinstance(finding, finalize.ProjectionFailure)
-            )
+        if rejected and not completion_expired:
             raise NoValidLayout(
                 "every packing that wired was rejected by our own validator ("
                 + _refusal_summary(rejected)
@@ -13208,7 +13231,7 @@ class FreeformLayout:
                 budget_s=budgets[-1],
                 projection_failures=projection_failures,
             )
-        if _expired(deadline):
+        if deadline_expired:
             # AND IT HAS TO SAY HOW CLOSE THE PACKS CAME, because the clock
             # expiring is not evidence that the clock is what was missing.
             #
@@ -13238,6 +13261,17 @@ class FreeformLayout:
                 if attempt.budget_stage is not _BuildBudgetStage.PREPARATION
             ]
             preparation_cancellations = len(attempts) - len(routing_attempts)
+            completion_stages = tuple(
+                dict.fromkeys(
+                    attempt.budget_stage.value.upper()
+                    for attempt in routing_attempts
+                    if attempt.budget_stage
+                    in (
+                        _BuildBudgetStage.CERTIFICATION,
+                        _BuildBudgetStage.FINALIZATION,
+                    )
+                )
+            )
             failed_counts = [
                 attempt.routing.failed_count for attempt in routing_attempts
             ]
@@ -13255,9 +13289,15 @@ class FreeformLayout:
                     "during exact preparation, before a net set existed to route"
                 )
             elif min(failed_counts) == 0:
+                completed = " and ".join(completion_stages)
                 note = (
                     f"{tried} routed in that time and at least one wired every "
-                    "net, so the clock is what was missing"
+                    "net"
+                    + (
+                        f", but the deadline passed during {completed}"
+                        if completed
+                        else ", so the clock is what was missing"
+                    )
                 )
             else:
                 note = (
@@ -13272,12 +13312,18 @@ class FreeformLayout:
                     f"; {preparation_cancellations} other {noun} stopped during "
                     "exact preparation"
                 )
+            if rejected:
+                note += (
+                    "; earlier completed packs were also rejected by our own "
+                    f"validator ({_refusal_summary(rejected)})"
+                )
             raise NoValidLayout(
-                f"the {ceiling:g}s deadline passed with no wired packing of "
+                f"the {ceiling:g}s deadline passed with no completed packing of "
                 f"{len(strips)} strips; {note}. This is a REFUSAL and not a "
                 "verdict on the spec",
                 spec_label=spec.label,
                 budget_s=ceiling,
+                projection_failures=projection_failures,
             )
         raise NoValidLayout(
             f"no packing of {len(strips)} strips could be wired at any candidate "
@@ -13689,7 +13735,9 @@ class FreeformLayout:
                 break
             started_at = time.monotonic()
             remaining = (
-                per_solve if deadline is None else min(per_solve, deadline - time.monotonic())
+                per_solve
+                if deadline is None
+                else min(per_solve, deadline - time.monotonic())
             )
             if remaining <= 0:
                 break
@@ -13950,8 +13998,21 @@ class FreeformLayout:
                 realized_direct=result.realized_direct,
                 direct_candidates=direct_candidate_snapshot,
             )
-            if attempts is not None:
-                attempts.append(attempt)
+
+            def retain_attempt(
+                stage: _BuildBudgetStage | None = None,
+                *,
+                current: PackAttempt = attempt,
+            ) -> None:
+                if attempts is not None:
+                    attempts.append(
+                        current
+                        if stage is None
+                        else replace(current, budget_stage=stage)
+                    )
+
+            if failed:
+                retain_attempt()
             if failed:
                 local_no_goods, exact_no_good = _proof_scoped_no_goods(
                     attempt,
@@ -14021,6 +14082,7 @@ class FreeformLayout:
                             )
                 continue
             if result.routing.status is not DetailedRouteStatus.ROUTED:
+                retain_attempt()
                 continue
             assert result.promised_direct == result.realized_direct, (
                 "a routed pack may not retain an unrealized rewarded direct insert"
@@ -14046,30 +14108,51 @@ class FreeformLayout:
             # is a search, and refusing outright is honest, while an invalid
             # blueprint is the worst outcome this program has.
             #
-            # It costs a validation per ROUTED candidate, which is a handful per
-            # sweep -- most heights never get here because their pack does not
-            # wire -- against a CP-SAT solve and a full routing pass each.
+            # Complete boundary cleanup belongs to candidate certification, not
+            # to a second post-layout finalization.  The cleanup returns the
+            # exact immutable report it had to compute before accepting changed
+            # survivors; reuse only that complete result.  An unchanged
+            # placement carries no report and is certified once here.
             if (
                 deadline is not None
                 and deadline - time.monotonic()
                 < certify_reserve_s + finalize_reserve_s
             ):
+                retain_attempt(_BuildBudgetStage.CERTIFICATION)
                 break
             certify_started = time.monotonic()
-            report = validate.certify(placement, spec, expect_power=True)
+            try:
+                compacted = finalize.compact_open_boundary_belts_certified(
+                    placement,
+                    spec,
+                    expect_power=True,
+                    cancelled=cancelled,
+                )
+            except finalize.ProjectionCancelled:
+                retain_attempt(_BuildBudgetStage.CERTIFICATION)
+                break
+            placement = compacted.placement
+            report = compacted.report
+            if report is None:
+                report = validate.certify(placement, spec, expect_power=True)
             certify_reserve_s = max(
                 certify_reserve_s,
                 time.monotonic() - certify_started,
             )
+            if cancelled is not None and cancelled():
+                retain_attempt(_BuildBudgetStage.CERTIFICATION)
+                break
             if report.errors:
                 if rejected is not None:
                     for finding in report.errors:
                         _retain_refusal(rejected, finding)
+                retain_attempt()
                 continue
             if (
                 deadline is not None
                 and deadline - time.monotonic() < finalize_reserve_s
             ):
+                retain_attempt(_BuildBudgetStage.FINALIZATION)
                 break
             finalize_started = time.monotonic()
             try:
@@ -14086,8 +14169,10 @@ class FreeformLayout:
                     )
                 )
             except finalize.ProjectionCancelled:
+                retain_attempt(_BuildBudgetStage.FINALIZATION)
                 break
             except finalize.ProjectionRefusal as exc:
+                retain_attempt()
                 learned = False
                 exact_projection_pair: ExactProjectionPair | None = None
                 geometry_learned = False
@@ -14213,7 +14298,14 @@ class FreeformLayout:
                 time.monotonic() - finalize_started,
             )
             if cancelled is not None and cancelled():
+                retain_attempt(_BuildBudgetStage.FINALIZATION)
                 break
+            if placement.frame is not None:
+                placement = replace(
+                    placement,
+                    completion=PlacementCompletion.COMPACTED_AND_FINALIZED,
+                )
+            retain_attempt()
             # Area, then belt count. Two packs of equal area are not equally
             # good: the one with fewer belt tiles is fewer buildings to paste,
             # and a direct insert shows up here as exactly that. Without the
