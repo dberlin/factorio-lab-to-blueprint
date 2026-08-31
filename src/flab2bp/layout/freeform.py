@@ -66,11 +66,12 @@ import math
 import time
 from collections import defaultdict
 from collections.abc import Callable, Collection, Mapping, Sequence, Set
+from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from enum import Enum
 from fractions import Fraction
-from functools import lru_cache
+from functools import cache, lru_cache
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Literal
 
@@ -124,6 +125,7 @@ _NO_PITCH_REQUIREMENTS: Mapping[StripPoseId, int] = MappingProxyType({})
 _NO_STAGED_STATIC_CLEARANCE: Mapping[StagedStaticClearanceKey, int] = (
     MappingProxyType({})
 )
+_DEFAULT_BAND_POLICY = BandPolicy("portable")
 
 #: Free tiles reserved on a strip's east and south faces.  One is enough for a
 #: belt to pass; the router uses upper levels when one is not.
@@ -1168,6 +1170,219 @@ def _staged_static_clearance_keys(
         for item in strip.in_lanes
         for machine in range(strip.machines)
     )
+_STAGED_STATIC_PROOF_CANCELLED: ContextVar[Callable[[], bool] | None] = ContextVar(
+    "_STAGED_STATIC_PROOF_CANCELLED",
+    default=None,
+)
+
+
+def _poll_staged_static_proof_deadline() -> None:
+    cancelled = _STAGED_STATIC_PROOF_CANCELLED.get()
+    if cancelled is not None and cancelled():
+        raise _PreparationDeadline
+
+
+def _staged_static_relation_projection_risk_uncached(
+    relation: StagedStaticClearanceKey,
+    policy: BandPolicy,
+) -> bool:
+    """Whether this exact planar relation collides in a reachable projection."""
+    _poll_staged_static_proof_deadline()
+    candidate = PlacedBuilding(
+        item_id=relation.candidate_item_id,
+        model_index=relation.candidate_model_index,
+        x=0,
+        y=0,
+        z=Fraction(0),
+        width=relation.candidate_width,
+        height=relation.candidate_height,
+        yaw=relation.candidate_yaw,
+    )
+    peer = PlacedBuilding(
+        item_id=relation.peer_item_id,
+        model_index=relation.peer_model_index,
+        x=relation.delta_x,
+        y=relation.delta_y,
+        z=relation.delta_z,
+        width=relation.peer_width,
+        height=relation.peer_height,
+        yaw=relation.peer_yaw,
+    )
+    pair = ((0, peer), (1, candidate))
+    for rotated in (False, True):
+        _poll_staged_static_proof_deadline()
+        oriented = tuple(
+            (
+                index,
+                (
+                    replace(
+                        building,
+                        x=-(building.y + building.height),
+                        y=building.x,
+                        width=building.height,
+                        height=building.width,
+                        yaw=(building.yaw - 90.0) % 360.0,
+                    )
+                    if rotated
+                    else building
+                ),
+            )
+            for index, building in pair
+        )
+        min_x = min(building.x for _index, building in oriented)
+        min_y = min(building.y for _index, building in oriented)
+        normalized = tuple(
+            (
+                index,
+                replace(
+                    building,
+                    x=building.x - min_x,
+                    y=building.y - min_y,
+                ),
+            )
+            for index, building in oriented
+        )
+        pair_width = max(
+            building.x + building.width for _index, building in normalized
+        )
+        pair_height = max(
+            building.y + building.height for _index, building in normalized
+        )
+        collision_pair = tuple(
+            _collision_pose(building) for _index, building in normalized
+        )
+        bands = (
+            tuple(
+                band
+                for band in planet.bands()
+                if band.area_segments == policy.explicit_segments
+            )
+            if policy.explicit_segments is not None
+            else planet.bands()
+        )
+        for band in bands:
+            _poll_staged_static_proof_deadline()
+            if (
+                pair_width + 2 * _ENTRY_RING > band.columns
+                or pair_height + 2 * _ENTRY_RING > band.rows
+            ):
+                continue
+            if not planet.candidate_pairs(
+                collision_pair,
+                band,
+                colliders.PLANET_SEGMENT,
+                colliders.PLANET_RADIUS,
+            ):
+                continue
+            effective_anchor_set: set[int] = set()
+            for frame_height in range(
+                pair_height + 2 * _ENTRY_RING,
+                band.rows + 1,
+            ):
+                _poll_staged_static_proof_deadline()
+                for anchor in band.anchors(frame_height):
+                    for row in range(
+                        _ENTRY_RING,
+                        frame_height - pair_height - _ENTRY_RING + 1,
+                    ):
+                        effective_anchor_set.add(anchor + row)
+            effective_anchors = tuple(sorted(effective_anchor_set))
+            for anchor in effective_anchors:
+                _poll_staged_static_proof_deadline()
+                failure = finalize.projected_static_failure(
+                    normalized,
+                    planet.Projection(
+                        band=band,
+                        anchor_row=anchor,
+                        segment=colliders.PLANET_SEGMENT,
+                        radius=colliders.PLANET_RADIUS,
+                    ),
+                )
+                if failure is not None:
+                    return True
+    return False
+
+
+@cache
+def _staged_static_relation_projection_risk(
+    relation: StagedStaticClearanceKey,
+    policy: BandPolicy,
+) -> bool:
+    """Cache the finite exact witness search by physical relation and policy."""
+    return _staged_static_relation_projection_risk_uncached(relation, policy)
+
+
+def _staged_static_preclearance_proof_uncached(
+    relation: StagedStaticClearanceKey,
+    policy: BandPolicy,
+) -> bool:
+    """Prove W3 can collide and moving its Coater one tile west is always clean."""
+    if not _staged_static_relation_projection_risk(relation, policy):
+        return False
+    cleared = replace(relation, delta_x=relation.delta_x + 1)
+    return not _staged_static_relation_projection_risk(cleared, policy)
+
+
+@cache
+def _cached_staged_static_preclearance_proved(
+    relation: StagedStaticClearanceKey,
+    policy: BandPolicy,
+) -> bool:
+    """Run the pair-local clearance proof once per exact relation and policy."""
+    return _staged_static_preclearance_proof_uncached(relation, policy)
+
+
+class _StagedStaticPreclearanceProof:
+    """Deadline-aware facade over transactionally installed exact proofs."""
+
+    def __call__(
+        self,
+        relation: StagedStaticClearanceKey,
+        policy: BandPolicy,
+        *,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> bool:
+        if cancelled is None:
+            return _cached_staged_static_preclearance_proved(relation, policy)
+        if cancelled():
+            raise _PreparationDeadline
+        token = _STAGED_STATIC_PROOF_CANCELLED.set(cancelled)
+        try:
+            return _cached_staged_static_preclearance_proved(relation, policy)
+        finally:
+            _STAGED_STATIC_PROOF_CANCELLED.reset(token)
+
+    def cache_clear(self) -> None:
+        _cached_staged_static_preclearance_proved.cache_clear()
+        _staged_static_relation_projection_risk.cache_clear()
+
+
+_staged_static_preclearance_proved = _StagedStaticPreclearanceProof()
+def _staged_static_projection_peers(
+    buildings: Sequence[PlacedBuilding],
+    candidate: PlacedBuilding,
+    *,
+    owner_strip: int,
+    policy: BandPolicy,
+) -> tuple[tuple[int, PlacedBuilding], ...]:
+    """Retain every unknown pair and omit only proved-clean same-strip pairs."""
+    return tuple(
+        (index, peer)
+        for index, peer in enumerate(buildings)
+        if not catalog.is_belt(peer.item_id)
+        and not catalog.is_sorter(peer.item_id)
+        and (
+            peer.owner_strip != owner_strip
+            or _staged_static_relation_projection_risk(
+                _staged_static_clearance_key(peer, candidate),
+                policy,
+            )
+        )
+    )
+
+
+
+
 
 
 def _box(s: Strip) -> tuple[int, int]:
@@ -1871,11 +2086,13 @@ def plan_strips(
     spec: BuildSpec,
     *,
     strip_len: int = 6,
+    band_policy: BandPolicy = _DEFAULT_BAND_POLICY,
     minimum_pitch_x: Mapping[StripPoseId, int] = _NO_PITCH_REQUIREMENTS,
     minimum_staged_static_clearance: Mapping[
         StagedStaticClearanceKey,
         int,
     ] = _NO_STAGED_STATIC_CLEARANCE,
+    cancelled: Callable[[], bool] | None = None,
 ) -> list[Strip]:
     """Select each logical family's deterministic compatibility pose.
 
@@ -2029,9 +2246,16 @@ def plan_strips(
             if physical_variant is not None and needs_coater_keepout:
                 west_channel = max(
                     (
-                        minimum_staged_static_clearance.get(
-                            relation,
-                            west_channel,
+                        minimum_staged_static_clearance[relation]
+                        if relation in minimum_staged_static_clearance
+                        else (
+                            _COATER_WEST_CHANNEL + 1
+                            if _staged_static_preclearance_proved(
+                                relation,
+                                band_policy,
+                                cancelled=cancelled,
+                            )
+                            else _COATER_WEST_CHANNEL
                         )
                         for relation in _staged_static_clearance_keys(selected)
                     ),
@@ -2050,11 +2274,13 @@ def _coarsen_saturated_strip_plan(
     strips: list[Strip],
     *,
     strip_len: int,
+    band_policy: BandPolicy = _DEFAULT_BAND_POLICY,
     minimum_pitch_x: Mapping[StripPoseId, int] = _NO_PITCH_REQUIREMENTS,
     minimum_staged_static_clearance: Mapping[
         StagedStaticClearanceKey,
         int,
     ] = _NO_STAGED_STATIC_CLEARANCE,
+    cancelled: Callable[[], bool] | None = None,
 ) -> tuple[list[Strip], int]:
     """Repartition redundant stress strips before packing or routing."""
     if len(strips) < _COARSE_STRIP_THRESHOLD or strip_len >= spec.machine_count:
@@ -2064,8 +2290,10 @@ def _coarsen_saturated_strip_plan(
         plan_strips(
             spec,
             strip_len=coarse_len,
+            band_policy=band_policy,
             minimum_pitch_x=minimum_pitch_x,
             minimum_staged_static_clearance=minimum_staged_static_clearance,
+            cancelled=cancelled,
         ),
         coarse_len,
     )
@@ -3629,29 +3857,32 @@ def _prepared_junction_ban(
         )
 
     banned: set[Cell] = set()
+    offset_cache: dict[
+        tuple[int, int, int, int, float, Fraction],
+        frozenset[Cell],
+    ] = {}
     for obstacle in obstacles:
         if cancelled is not None and cancelled():
             raise _PreparationDeadline
-        offsets = (
-            _junction_ban_offsets(
-                obstacle.item_id,
-                obstacle.model_index,
-                obstacle.width,
-                obstacle.height,
-                obstacle.yaw,
-                obstacle.z,
-            )
-            if cancelled is None
-            else _cancellable_junction_ban_offsets(
-                obstacle.item_id,
-                obstacle.model_index,
-                obstacle.width,
-                obstacle.height,
-                obstacle.yaw,
-                obstacle.z,
-                cancelled,
-            )
+        offset_key = (
+            obstacle.item_id,
+            obstacle.model_index,
+            obstacle.width,
+            obstacle.height,
+            obstacle.yaw,
+            obstacle.z,
         )
+        offsets = offset_cache.get(offset_key)
+        if offsets is None:
+            offsets = (
+                _junction_ban_offsets(*offset_key)
+                if cancelled is None
+                else _cancellable_junction_ban_offsets(
+                    *offset_key,
+                    cancelled,
+                )
+            )
+            offset_cache[offset_key] = offsets
         for dx, dy, level in offsets:
             if cancelled is not None and cancelled():
                 raise _PreparationDeadline
@@ -8903,6 +9134,14 @@ def _projected_coater_junction_ban(
     min_x, min_y, max_x, max_y = junction_bounds
     splitter_span = catalog.collider_span(catalog.SPLITTER_ID, 0.0)
     banned: set[Cell] = set()
+    materialized_splitters: dict[
+        tuple[Cell, tuple[int, int, int, int], finalize.FrameCandidate],
+        colliders.Placed,
+    ] = {}
+    projected_splitter_boxes: dict[
+        tuple[colliders.Placed, planet.Projection],
+        tuple[colliders.Box, ...],
+    ] = {}
 
     for coater_index, coater_building in coaters:
         if cancelled is not None and cancelled():
@@ -8919,6 +9158,7 @@ def _projected_coater_junction_ban(
                 ],
             ]
         ] = []
+        seen_projection_contexts: set[tuple[object, ...]] = set()
         scan_reach_x = 0
         scan_reach_y = 0
         for frame in frames:
@@ -8959,6 +9199,24 @@ def _projected_coater_junction_ban(
             for projection in frame.projections:
                 if cancelled is not None and cancelled():
                     raise _PreparationDeadline
+                latitude = (
+                    materialized_coater[1].x
+                    if projection.rotated
+                    else materialized_coater[1].y
+                )
+                projection_context = (
+                    frame.candidate.frame.rotated,
+                    projection.band,
+                    projection.segment,
+                    projection.radius,
+                    projection.quadrant,
+                    projection.anchor_row + latitude,
+                    materialized_coater[1].z,
+                    materialized_coater[1].yaw,
+                )
+                if projection_context in seen_projection_contexts:
+                    continue
+                seen_projection_contexts.add(projection_context)
                 latitude_step = (
                     projection.radius
                     * planet.latitude_rad_per_grid(projection.segment)
@@ -9005,6 +9263,8 @@ def _projected_coater_junction_ban(
                         ),
                     )
                 )
+            if not projection_states:
+                continue
             if frame.candidate.frame.rotated:
                 scan_reach_x = max(scan_reach_x, materialized_reach_y)
                 scan_reach_y = max(scan_reach_y, materialized_reach_x)
@@ -9054,13 +9314,25 @@ def _projected_coater_junction_ban(
                     ) in prepared_frames:
                         if cancelled is not None and cancelled():
                             raise _PreparationDeadline
-                        materialized_splitter = _collision_pose(
-                            finalize.materialize_frame_building(
-                                splitter_building,
-                                bounds=frame.bounds,
-                                candidate=frame.candidate,
-                            )
+                        materialized_key = (
+                            cell,
+                            frame.bounds,
+                            frame.candidate,
                         )
+                        materialized_splitter = materialized_splitters.get(
+                            materialized_key
+                        )
+                        if materialized_splitter is None:
+                            materialized_splitter = _collision_pose(
+                                finalize.materialize_frame_building(
+                                    splitter_building,
+                                    bounds=frame.bounds,
+                                    candidate=frame.candidate,
+                                )
+                            )
+                            materialized_splitters[materialized_key] = (
+                                materialized_splitter
+                            )
                         cell_dx = abs(
                             materialized_splitter.x
                             - materialized_coater[1].x
@@ -9082,15 +9354,21 @@ def _projected_coater_junction_ban(
                                 or cell_dy * y_step > tangent_reach_y
                             ):
                                 continue
-                            splitter_boxes = colliders.target_boxes(
-                                materialized_splitter,
-                                *projection.pose(
-                                    materialized_splitter.x,
-                                    materialized_splitter.y,
-                                    materialized_splitter.z,
-                                    materialized_splitter.yaw,
-                                ),
+                            boxes_key = (materialized_splitter, projection)
+                            splitter_boxes = projected_splitter_boxes.get(
+                                boxes_key
                             )
+                            if splitter_boxes is None:
+                                splitter_boxes = colliders.target_boxes(
+                                    materialized_splitter,
+                                    *projection.pose(
+                                        materialized_splitter.x,
+                                        materialized_splitter.y,
+                                        materialized_splitter.z,
+                                        materialized_splitter.yaw,
+                                    ),
+                                )
+                                projected_splitter_boxes[boxes_key] = splitter_boxes
                             overlap = False
                             for coater_box in coater_boxes:
                                 if cancelled is not None and cancelled():
@@ -11449,7 +11727,12 @@ def _place_coaters(
                 )
                 projected_failure = _prospective_static_failure(
                     (
-                        *enumerate(prospective),
+                        *_staged_static_projection_peers(
+                            prospective,
+                            proposed_coater,
+                            owner_strip=strip_index,
+                            policy=policy,
+                        ),
                         (coater_index, proposed_coater),
                     ),
                     static_frames,
@@ -12013,7 +12296,11 @@ def fallback_placement(
     the construction for its bounding value, use :func:`_greedy_pack`, which is
     what :func:`_pack` warm-starts from.
     """
-    strips = plan_strips(spec, strip_len=max(1, spec.machine_count))
+    strips = plan_strips(
+        spec,
+        strip_len=max(1, spec.machine_count),
+        band_policy=band_policy,
+    )
     at: dict[int, tuple[int, int]] = {}
     y = 0
     for i, s in enumerate(strips):
@@ -12170,15 +12457,40 @@ class FreeformLayout:
         # becoming the thing that ends the sweep. See
         # `_ROUTING_EXPANSIONS_PER_SECOND`.
         budget = {"left": max(_ROUTING_BUDGET, int(_ROUTING_EXPANSIONS_PER_SECOND * ceiling))}
+        planning_cancelled = lambda: _expired(deadline)
 
         try:
-            strips = plan_strips(spec, strip_len=self.strip_len)
+            strips = plan_strips(
+                spec,
+                strip_len=self.strip_len,
+                band_policy=self.band_policy,
+                cancelled=planning_cancelled,
+            )
+        except _PreparationDeadline as exc:
+            raise NoValidLayout(
+                "the requested deadline passed while proving strip projection "
+                "clearance",
+                spec_label=spec.label,
+                budget_s=time_budget_s,
+            ) from exc
         except (ValueError, KeyError) as exc:
             # One retry with every machine of a group on a single strip. That is
             # the coarsest legal strip plan, so if it also fails the spec cannot
             # be turned into strips at all and no budget will change that.
             try:
-                strips = plan_strips(spec, strip_len=max(1, spec.machine_count))
+                strips = plan_strips(
+                    spec,
+                    strip_len=max(1, spec.machine_count),
+                    band_policy=self.band_policy,
+                    cancelled=planning_cancelled,
+                )
+            except _PreparationDeadline as deadline_exc:
+                raise NoValidLayout(
+                    "the requested deadline passed while proving fallback strip "
+                    "projection clearance",
+                    spec_label=spec.label,
+                    budget_s=time_budget_s,
+                ) from deadline_exc
             except ValueError, KeyError:
                 raise NoValidLayout(
                     f"the spec cannot be split into strips: {exc}",
@@ -12191,11 +12503,21 @@ class FreeformLayout:
         # one-net/zero-expansion misses; the same authoritative families
         # partitioned coarsely are 27-46 strips and route in one round.
         # Choose that representation before packing, not as a rescue afterward.
-        strips, _effective_strip_len = _coarsen_saturated_strip_plan(
-            spec,
-            strips,
-            strip_len=self.strip_len,
-        )
+        try:
+            strips, _effective_strip_len = _coarsen_saturated_strip_plan(
+                spec,
+                strips,
+                strip_len=self.strip_len,
+                band_policy=self.band_policy,
+                cancelled=planning_cancelled,
+            )
+        except _PreparationDeadline as exc:
+            raise NoValidLayout(
+                "the requested deadline passed while proving coarsened strip "
+                "projection clearance",
+                spec_label=spec.label,
+                budget_s=time_budget_s,
+            ) from exc
         if not strips:
             raise NoValidLayout(
                 "the spec contains no machine groups",
@@ -12247,7 +12569,23 @@ class FreeformLayout:
         for sweep_s in budgets:
             if _expired(deadline):
                 break
-            best = self._sweep(spec, strips, sweep_s, deadline, budget, rejected, attempts)
+            try:
+                best = self._sweep(
+                    spec,
+                    strips,
+                    sweep_s,
+                    deadline,
+                    budget,
+                    rejected,
+                    attempts,
+                )
+            except _PreparationDeadline as exc:
+                raise NoValidLayout(
+                    "candidate PREPARATION deadline passed while applying learned "
+                    "projection geometry",
+                    spec_label=spec.label,
+                    budget_s=time_budget_s,
+                ) from exc
             if best is not None:
                 return best
 
@@ -12552,10 +12890,12 @@ class FreeformLayout:
             strips = plan_strips(
                 spec,
                 strip_len=replan_strip_len,
+                band_policy=self.band_policy,
                 minimum_pitch_x=minimum_pitch_x,
                 minimum_staged_static_clearance=(
                     minimum_staged_static_clearance
                 ),
+                cancelled=cancelled,
             )
             greedy = _greedy_pack(strips, _height_seed(strips))
             bound = max(
@@ -12680,6 +13020,16 @@ class FreeformLayout:
             # affordability check passes. The marker preserves that admission
             # through this gate and the hard deadline still applies. A failed
             # admitted retry cannot unlock the height's later arrangements.
+            # Once a valid candidate exists, every later base height is an
+            # improvement attempt too. Starting one without enough measured
+            # clock for a complete candidate can only discard the valid result
+            # at the hard deadline; it cannot improve it.
+            if (
+                not projection_retry
+                and best is not None
+                and not _room_for_another(deadline, soft, dearest_candidate_s)
+            ):
+                break
             if not projection_retry and arrangement and best is None:
                 break
             if (
@@ -12933,11 +13283,6 @@ class FreeformLayout:
                     relation, required_west_channel = pending_clearance
                     minimum_staged_static_clearance[relation] = required_west_channel
                     replan_strips_for_learned_geometry()
-                    if (
-                        not retry_promoted
-                        and projection_retry_affordable()
-                    ):
-                        retry_promoted = True
                 if retry_promoted:
                     candidate_packs.insert(
                         candidate_index,
@@ -13245,10 +13590,20 @@ def _height_seed(strips: list[Strip]) -> int:
     return max(tall, int(math.isqrt(max(1, area))))
 
 
+def _candidate_height_box(strip: Strip) -> tuple[int, int]:
+    """Exclude lateral staged-static feedback from the fixed height schedule."""
+    width, height = _box(strip)
+    if strip.cargo_domain is CargoDomain.REQUIRES_SPRAY:
+        width -= max(0, strip.west_channel - _COATER_WEST_CHANNEL)
+    return width, height
+
+
 def _candidate_heights(strips: list[Strip]) -> list[int]:
     """Heights to sweep, since ``W * H`` is too weak a form to minimise directly."""
-    h0 = _height_seed(strips)
-    tall = max((h for _w, h in map(_box, strips)), default=1)
+    boxes = tuple(_candidate_height_box(strip) for strip in strips)
+    area = sum(width * height for width, height in boxes)
+    tall = max((height for _width, height in boxes), default=1)
+    h0 = max(tall, int(math.isqrt(max(1, area))))
     out = {max(tall, int(h0 * f)) for f in (0.6, 0.8, 1.0, 1.25, 1.6)}
     return sorted(out)
 

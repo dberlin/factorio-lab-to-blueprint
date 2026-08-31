@@ -5318,8 +5318,138 @@ def test_staged_static_pack_dependent_exhaustion_learns_exact_no_good(
     )
 
 
-def test_static_clearance_requirement_regenerates_a_distinct_lane_variant() -> None:
+def test_plan_strips_preselects_projection_risk_clearance_for_direct_preparation() -> None:
+    freeform._staged_static_preclearance_proved.cache_clear()
     spec = proliferated_spec()
+    strips = plan_strips(spec)
+    risky = [
+        (strip, relation)
+        for strip in strips
+        for relation in freeform._staged_static_clearance_keys(
+            replace(strip, west_channel=freeform._COATER_WEST_CHANNEL)
+        )
+        if freeform._staged_static_preclearance_proved(
+            relation,
+            BandPolicy("portable"),
+        )
+    ]
+
+    assert risky
+    assert all(
+        strip.west_channel == freeform._COATER_WEST_CHANNEL + 1
+        for strip, _relation in risky
+    )
+    pack = _greedy_pack(strips, _height_seed(strips))
+    prepared = _prepare_routing_problem(
+        spec,
+        strips,
+        pack,
+        policy=BandPolicy("portable"),
+        power=False,
+    )
+    assert prepared.coaters > 0
+    assert prepared.coater_supply_ports
+
+
+def test_plan_time_preclearance_preserves_candidate_height_schedule(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = band_160_all_products_spec()
+    precleared = plan_strips(spec)
+    freeform._staged_static_preclearance_proved.cache_clear()
+    monkeypatch.setattr(
+        freeform,
+        "_staged_static_preclearance_proof_uncached",
+        lambda _relation, _policy: False,
+    )
+    ordinary = plan_strips(spec)
+    monkeypatch.undo()
+    freeform._staged_static_preclearance_proved.cache_clear()
+
+    assert freeform._candidate_heights(precleared) == freeform._candidate_heights(
+        ordinary
+    )
+
+
+def test_proved_clean_same_strip_relation_skips_only_its_redundant_projection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    coater = PlacedBuilding(
+        item_id=catalog.SPRAY_COATER_ID,
+        model_index=catalog.building(catalog.SPRAY_COATER_ID).model_index,
+        x=0,
+        y=0,
+        width=1,
+        height=1,
+        yaw=Facing.EAST.value,
+        owner_strip=0,
+    )
+    peer = PlacedBuilding(
+        item_id=catalog.item_id("assembling-machine-2"),
+        model_index=catalog.building(
+            catalog.item_id("assembling-machine-2")
+        ).model_index,
+        x=3,
+        y=1,
+        width=3,
+        height=3,
+        owner_strip=0,
+    )
+    other_owner = replace(peer, owner_strip=1)
+    risky = replace(peer, x=2)
+    monkeypatch.setattr(
+        freeform,
+        "_staged_static_relation_projection_risk",
+        lambda relation, _policy: relation.delta_x == 2,
+    )
+
+    retained = freeform._staged_static_projection_peers(
+        (peer, other_owner, risky),
+        coater,
+        owner_strip=0,
+        policy=BandPolicy("portable"),
+    )
+
+    assert [index for index, _building in retained] == [1, 2]
+
+
+def test_plan_time_projection_risk_is_proved_once_per_distinct_relation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    freeform._staged_static_preclearance_proved.cache_clear()
+    calls: list[freeform.StagedStaticClearanceKey] = []
+    monkeypatch.setattr(
+        freeform,
+        "_staged_static_preclearance_proof_uncached",
+        lambda relation, _policy: (calls.append(relation), False)[1],
+    )
+    spec = proliferated_spec()
+
+    first = plan_strips(spec)
+    second = plan_strips(spec)
+    monkeypatch.undo()
+    freeform._staged_static_preclearance_proved.cache_clear()
+    relations = {
+        relation
+        for strip in first
+        for relation in freeform._staged_static_clearance_keys(strip)
+    }
+
+    assert first == second
+    assert set(calls) == relations
+    assert len(calls) == len(relations)
+
+
+def test_static_clearance_requirement_regenerates_a_distinct_lane_variant(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = proliferated_spec()
+    freeform._staged_static_preclearance_proved.cache_clear()
+    monkeypatch.setattr(
+        freeform,
+        "_staged_static_preclearance_proof_uncached",
+        lambda _relation, _policy: False,
+    )
     ordinary = plan_strips(spec)
     selected = next(strip for strip in ordinary if "iron-ingot" in strip.in_lanes)
     assert selected.physical_variant is not None
@@ -5339,6 +5469,8 @@ def test_static_clearance_requirement_regenerates_a_distinct_lane_variant() -> N
         if strip.family_id == selected.family_id
         and strip.machine_start == selected.machine_start
     )
+    monkeypatch.undo()
+    freeform._staged_static_preclearance_proved.cache_clear()
 
     assert replacement.west_channel == selected.west_channel + 1
     assert _box(replacement)[0] == _box(selected)[0] + 1
@@ -5434,21 +5566,26 @@ def test_staged_static_terminal_exhaustion_is_bounded_across_distinct_assignment
 
     assert result is None
     assert seen_clearance == [
-        freeform._COATER_WEST_CHANNEL,
         freeform._COATER_WEST_CHANNEL + 1,
         freeform._COATER_WEST_CHANNEL + 1,
     ]
-    assert [len(no_goods) for no_goods in seen_no_goods] == [0, 0, 1]
-    assert len(set(seen_origins)) == 3
+    assert [len(no_goods) for no_goods in seen_no_goods] == [0, 1]
+    assert len(set(seen_origins)) == 2
     assert seen_origins[-1] != seen_origins[-2]
     assert seen_no_goods[-1][0].evidence == (failure,)
     assert rejected == [failure]
 
 
-def test_unaffordable_clearance_feedback_replans_later_base_height(
+def test_clearance_feedback_replans_later_base_height_without_minting_retry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     spec = proliferated_spec()
+    freeform._staged_static_preclearance_proved.cache_clear()
+    monkeypatch.setattr(
+        freeform,
+        "_staged_static_preclearance_proof_uncached",
+        lambda _relation, _policy: False,
+    )
     strips = plan_strips(spec)
     failure = finalize.ProjectionFailure(
         "geom.collide",
@@ -5534,17 +5671,14 @@ def test_unaffordable_clearance_feedback_replans_later_base_height(
         "finalize_placement",
         lambda placement, _policy: placement,
     )
-    monkeypatch.setattr(
-        freeform,
-        "_room_for_another",
-        lambda *_args, **_kwargs: False,
-    )
 
     result = FreeformLayout(
         band_policy=BandPolicy("portable"),
         arrangements=1,
     )._sweep(spec, strips, 1.0)
 
+    monkeypatch.undo()
+    freeform._staged_static_preclearance_proved.cache_clear()
     assert result is not None
     assert result.stats["test_height"] == 21.0
     assert seen_candidates == [
@@ -5813,6 +5947,80 @@ def test_unaffordable_exact_feedback_preserves_later_base_height(
     assert result.stats["test_height"] == 21.0
     assert seen_candidates == [(20, 0), (21, 0)]
     assert applicable_counts == [0, 0]
+
+
+def test_unaffordable_base_height_is_not_started_after_valid_candidate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = two_stage_spec()
+    strips = plan_strips(spec, strip_len=2)
+    routed = DetailedRouteResult(
+        status=DetailedRouteStatus.ROUTED,
+        routed=(),
+        failures=(),
+        iterations=0,
+        expansions=0,
+    )
+    seen_heights: list[int] = []
+
+    def pack_candidate(
+        current: list[Strip],
+        *,
+        height: int,
+        **_kwargs: object,
+    ) -> freeform._Pack:
+        seen_heights.append(height)
+        return _greedy_pack(current, height)
+
+    def build_candidate(
+        _spec: BuildSpec,
+        _strips: list[Strip],
+        pack: freeform._Pack,
+        **_kwargs: object,
+    ) -> _BuildResult:
+        return _BuildResult(
+            Placement(
+                buildings=(),
+                stats={
+                    "belt_tiles": 0.0,
+                    "test_height": float(pack.height),
+                },
+            ),
+            routed,
+            (),
+        )
+
+    monkeypatch.setattr(
+        freeform,
+        "_band_policy_candidate_heights",
+        lambda _strips, _policy: (20, 21),
+    )
+    monkeypatch.setattr(freeform, "_pack", pack_candidate)
+    monkeypatch.setattr(freeform, "_build", build_candidate)
+    monkeypatch.setattr(
+        validate,
+        "certify",
+        lambda *_args, **_kwargs: validate.Report(findings=()),
+    )
+    monkeypatch.setattr(
+        finalize,
+        "finalize_placement",
+        lambda placement, _policy: placement,
+    )
+    monkeypatch.setattr(
+        freeform,
+        "_room_for_another",
+        lambda *_args, **_kwargs: False,
+    )
+
+    result = FreeformLayout(
+        band_policy=BandPolicy("portable"),
+        arrangements=1,
+    )._sweep(spec, strips, 1.0)
+
+    assert result is not None
+    assert result.stats["test_height"] == 20.0
+    assert seen_heights == [20]
 
 
 def test_projection_strip_static_objects_retain_non_encoded_owner() -> None:
@@ -11485,15 +11693,9 @@ def test_staged_static_clearance_reuses_only_the_same_physical_relation() -> Non
     )
     assert safe_replacement.west_channel == freeform._COATER_WEST_CHANNEL
 
-def test_all_products_band_160_learns_every_projected_coater_clearance() -> None:
+def test_all_products_band_160_cold_proof_reaches_a_valid_layout() -> None:
     spec = band_160_all_products_spec()
-    strips = plan_strips(spec)
-    assert len(
-        freeform._band_policy_candidate_heights(
-            strips,
-            BandPolicy("portable"),
-        )
-    ) == len(freeform._candidate_heights(strips))
+    freeform._staged_static_preclearance_proved.cache_clear()
 
     placement = FreeformLayout(
         band_policy=BandPolicy("portable"),
@@ -11502,6 +11704,44 @@ def test_all_products_band_160_learns_every_projected_coater_clearance() -> None
     assert placement.frame is not None
     assert placement.frame.primary_band == 160
     assert validate.certify(placement, spec, expect_power=True).ok
+
+
+def test_staged_static_preclearance_cancels_inside_cold_proof_without_caching(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    strip = next(
+        strip
+        for strip in plan_strips(proliferated_spec())
+        if freeform._staged_static_clearance_keys(strip)
+    )
+    relation = next(iter(freeform._staged_static_clearance_keys(strip)))
+    freeform._staged_static_preclearance_proved.cache_clear()
+    checks = 0
+
+    def cancelled() -> bool:
+        nonlocal checks
+        checks += 1
+        return checks >= 8
+
+    with pytest.raises(freeform._PreparationDeadline):
+        freeform._staged_static_preclearance_proved(
+            relation,
+            BandPolicy("portable"),
+            cancelled=cancelled,
+        )
+
+    monkeypatch.setattr(
+        freeform,
+        "_staged_static_preclearance_proof_uncached",
+        lambda _relation, _policy: True,
+    )
+    assert freeform._staged_static_preclearance_proved(
+        relation,
+        BandPolicy("portable"),
+    )
+    assert checks == 8
+    monkeypatch.undo()
+    freeform._staged_static_preclearance_proved.cache_clear()
 
 
 def test_power_projection_envelope_cancels_inside_rectangle_generation(
@@ -11604,6 +11844,44 @@ def test_prepared_junction_ban_cancels_inside_cell_level_scan(
         )
 
     assert sites == 1
+
+
+def test_prepared_junction_ban_reuses_complete_geometry_offsets_per_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    machine = catalog.building(2303)
+    obstacles = (
+        PlacedBuilding(
+            2303,
+            machine.model_index,
+            x,
+            4,
+            width=machine.width,
+            height=machine.height,
+        )
+        for x in (2, 20)
+    )
+    calls = 0
+
+    def offsets(*_args: object) -> frozenset[Cell]:
+        nonlocal calls
+        calls += 1
+        return frozenset({(-1, 1, 2)})
+
+    monkeypatch.setattr(
+        freeform,
+        "_cancellable_junction_ban_offsets",
+        offsets,
+    )
+
+    ban = freeform._prepared_junction_ban(
+        tuple(obstacles),
+        (),
+        cancelled=lambda: False,
+    )
+
+    assert calls == 1
+    assert ban == frozenset({(1, 5, 2), (19, 5, 2)})
 
 
 def test_projected_coater_junction_ban_cancels_inside_obb_product(
@@ -11753,3 +12031,27 @@ def test_regular_build_maps_cancelled_preparation_to_budget(
 
     assert result.placement is None
     assert result.routing.status is DetailedRouteStatus.BUDGET
+
+
+def test_post_feedback_replan_deadline_is_a_typed_preparation_refusal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def expire_replan(
+        _layout: FreeformLayout,
+        *_args: object,
+        **_kwargs: object,
+    ) -> Placement | None:
+        raise freeform._PreparationDeadline
+
+    monkeypatch.setattr(FreeformLayout, "_sweep", expire_replan)
+
+    with pytest.raises(
+        NoValidLayout,
+        match="PREPARATION deadline passed while applying learned projection geometry",
+    ) as caught:
+        FreeformLayout(band_policy=BandPolicy("portable")).lay_out(
+            two_stage_spec(),
+            time_budget_s=1.0,
+        )
+
+    assert isinstance(caught.value.__cause__, freeform._PreparationDeadline)
