@@ -852,6 +852,208 @@ def test_projected_coater_splitter_candidates_include_bound_edge() -> None:
 
     assert candidates == ((splitter,),)
 
+def test_no_deadline_projected_failure_preserves_legacy_overlap_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[colliders.Placed, colliders.Placed, planet.Projection]] = []
+
+    def legacy_overlap(
+        coater: colliders.Placed,
+        splitter: colliders.Placed,
+        projection: planet.Projection,
+    ) -> bool:
+        calls.append((coater, splitter, projection))
+        return False
+
+    monkeypatch.setattr(
+        finalize,
+        "_projected_coater_keepout_overlaps",
+        legacy_overlap,
+    )
+
+    failure = finalize.projected_coater_splitter_failure(
+        _broke2_coater(),
+        _broke2_splitter(),
+        _broke2_projection(),
+    )
+
+    assert failure is None
+    assert calls == [
+        (
+            _broke2_coater()[1],
+            _broke2_splitter()[1],
+            _broke2_projection(),
+        )
+    ]
+
+
+def test_no_deadline_candidates_preserve_legacy_tree_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[finalize._CoaterSplitterKdPoint, ...]] = []
+
+    def legacy_tree(
+        points: tuple[finalize._CoaterSplitterKdPoint, ...],
+    ) -> None:
+        calls.append(points)
+        return None
+
+    monkeypatch.setattr(finalize, "_coater_splitter_kd_tree", legacy_tree)
+    monkeypatch.setattr(
+        finalize,
+        "_coater_splitter_kd_range",
+        lambda *_args, **_kwargs: None,
+    )
+
+    candidates = finalize._projected_coater_splitter_candidates(
+        (_broke2_coater(),),
+        (_broke2_splitter(),),
+        _broke2_projection(),
+    )
+
+    assert candidates == ((),)
+    assert len(calls) == 1
+
+
+def test_no_deadline_candidates_preserve_legacy_range_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    def legacy_range(
+        node: finalize._CoaterSplitterKdNode | None,
+        centre: tuple[float, float, float],
+        radius2: float,
+        found: set[int],
+    ) -> None:
+        nonlocal calls
+        calls += 1
+
+    monkeypatch.setattr(finalize, "_coater_splitter_kd_range", legacy_range)
+
+    finalize._projected_coater_splitter_candidates(
+        (_broke2_coater(),),
+        (_broke2_splitter(),),
+        _broke2_projection(),
+    )
+
+    assert calls >= 1
+
+
+def test_no_deadline_kd_recursion_preserves_legacy_range_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    child_point = finalize._CoaterSplitterKdPoint(0, (0.0, 0.0, 0.0))
+    root_point = finalize._CoaterSplitterKdPoint(1, (1.0, 0.0, 0.0))
+    child = finalize._CoaterSplitterKdNode(
+        child_point,
+        child_point.coordinates,
+        child_point.coordinates,
+        None,
+        None,
+    )
+    root = finalize._CoaterSplitterKdNode(
+        root_point,
+        child.lower,
+        root_point.coordinates,
+        child,
+        None,
+    )
+    original = finalize._coater_splitter_kd_range
+    calls = 0
+
+    def legacy_range(
+        node: finalize._CoaterSplitterKdNode | None,
+        centre: tuple[float, float, float],
+        radius2: float,
+        found: set[int],
+    ) -> None:
+        nonlocal calls
+        calls += 1
+        original(node, centre, radius2, found)
+
+    monkeypatch.setattr(finalize, "_coater_splitter_kd_range", legacy_range)
+    found: set[int] = set()
+
+    legacy_range(root, (0.0, 0.0, 0.0), 4.0, found)
+
+    assert found == {0, 1}
+    assert calls >= 2
+
+
+def test_no_deadline_addon_failure_preserves_legacy_candidate_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    def legacy_candidates(
+        coaters: tuple[tuple[int, colliders.Placed], ...],
+        splitters: tuple[tuple[int, colliders.Placed], ...],
+        projection: planet.Projection,
+    ) -> tuple[tuple[tuple[int, colliders.Placed], ...], ...]:
+        nonlocal calls
+        calls += 1
+        return tuple(() for _coater in coaters)
+
+    monkeypatch.setattr(
+        finalize,
+        "_projected_coater_splitter_candidates",
+        legacy_candidates,
+    )
+
+    failure = finalize._projected_addon_splitter_failure(
+        (_broke2_coater(),),
+        (_broke2_splitter(),),
+        _broke2_projection(),
+    )
+
+    assert failure is None
+    assert calls == 1
+
+def test_no_deadline_addon_failure_preserves_legacy_exact_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    def candidates(
+        coaters: tuple[tuple[int, colliders.Placed], ...],
+        splitters: tuple[tuple[int, colliders.Placed], ...],
+        _projection: planet.Projection,
+        *,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> tuple[tuple[tuple[int, colliders.Placed], ...], ...]:
+        del cancelled
+        return tuple((splitters[0],) for _coater in coaters)
+
+    def legacy_exact(
+        _coater: tuple[int, colliders.Placed],
+        _splitter: tuple[int, colliders.Placed],
+        _projection: planet.Projection,
+    ) -> None:
+        nonlocal calls
+        calls += 1
+        return None
+
+    monkeypatch.setattr(
+        finalize,
+        "_projected_coater_splitter_candidates",
+        candidates,
+    )
+    monkeypatch.setattr(
+        finalize,
+        "projected_coater_splitter_failure",
+        legacy_exact,
+    )
+
+    failure = finalize._projected_addon_splitter_failure(
+        (_broke2_coater(),),
+        (_broke2_splitter(),),
+        _broke2_projection(),
+    )
+
+    assert failure is None
+    assert calls == 1
+
 
 def test_projected_coater_splitter_broad_phase_is_linear_plus_candidates(
     monkeypatch: pytest.MonkeyPatch,

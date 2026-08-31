@@ -955,12 +955,21 @@ def projected_coater_splitter_failure(
     *,
     cancelled: Callable[[], bool] | None = None,
 ) -> ProjectionFailure | None:
-    if not _projected_coater_keepout_overlaps(
-        coater[1],
-        splitter[1],
-        projection,
-        cancelled=cancelled,
-    ):
+    overlaps = (
+        _projected_coater_keepout_overlaps(
+            coater[1],
+            splitter[1],
+            projection,
+        )
+        if cancelled is None
+        else _projected_coater_keepout_overlaps(
+            coater[1],
+            splitter[1],
+            projection,
+            cancelled=cancelled,
+        )
+    )
+    if not overlaps:
         return None
     return ProjectionFailure(
         check="game.addon_splitter_clearance",
@@ -1129,20 +1138,22 @@ def _coater_splitter_kd_range(
         <= radius2
     ):
         found.add(node.point.position)
-    _coater_splitter_kd_range(
-        node.left,
-        centre,
-        radius2,
-        found,
-        cancelled=cancelled,
-    )
-    _coater_splitter_kd_range(
-        node.right,
-        centre,
-        radius2,
-        found,
-        cancelled=cancelled,
-    )
+    for child in (node.left, node.right):
+        if cancelled is None:
+            _coater_splitter_kd_range(
+                child,
+                centre,
+                radius2,
+                found,
+            )
+        else:
+            _coater_splitter_kd_range(
+                child,
+                centre,
+                radius2,
+                found,
+                cancelled=cancelled,
+            )
 
 
 def _projected_coater_splitter_candidates(
@@ -1255,9 +1266,13 @@ def _projected_coater_splitter_candidates(
                 coordinates=coordinates(splitter[1]),
             )
         )
-    tree = _coater_splitter_kd_tree(
-        tuple(points),
-        cancelled=cancelled,
+    tree = (
+        _coater_splitter_kd_tree(tuple(points))
+        if cancelled is None
+        else _coater_splitter_kd_tree(
+            tuple(points),
+            cancelled=cancelled,
+        )
     )
     longitude_period = projection.band.columns * column_lower_bound
     candidates: list[tuple[tuple[int, colliders.Placed], ...]] = []
@@ -1275,13 +1290,21 @@ def _projected_coater_splitter_candidates(
         }:
             if cancelled is not None and cancelled():
                 raise ProjectionCancelled
-            _coater_splitter_kd_range(
-                tree,
-                (longitude, centre[1], centre[2]),
-                radius2,
-                found,
-                cancelled=cancelled,
-            )
+            if cancelled is None:
+                _coater_splitter_kd_range(
+                    tree,
+                    (longitude, centre[1], centre[2]),
+                    radius2,
+                    found,
+                )
+            else:
+                _coater_splitter_kd_range(
+                    tree,
+                    (longitude, centre[1], centre[2]),
+                    radius2,
+                    found,
+                    cancelled=cancelled,
+                )
         candidates.append(
             tuple(splitters[position] for position in sorted(found))
         )
@@ -1298,11 +1321,19 @@ def _projected_addon_splitter_failure(
     cancelled: Callable[[], bool] | None = None,
 ) -> ProjectionFailure | None:
     """Authoritative coater/splitter keepout from the broke2 in-game refusal."""
-    candidates = _projected_coater_splitter_candidates(
-        coaters,
-        splitters,
-        projection,
-        cancelled=cancelled,
+    candidates = (
+        _projected_coater_splitter_candidates(
+            coaters,
+            splitters,
+            projection,
+        )
+        if cancelled is None
+        else _projected_coater_splitter_candidates(
+            coaters,
+            splitters,
+            projection,
+            cancelled=cancelled,
+        )
     )
     for coater, peers in zip(coaters, candidates, strict=True):
         if cancelled is not None and cancelled():
@@ -1310,11 +1341,19 @@ def _projected_addon_splitter_failure(
         for splitter in peers:
             if cancelled is not None and cancelled():
                 raise ProjectionCancelled
-            failure = projected_coater_splitter_failure(
-                coater,
-                splitter,
-                projection,
-                cancelled=cancelled,
+            failure = (
+                projected_coater_splitter_failure(
+                    coater,
+                    splitter,
+                    projection,
+                )
+                if cancelled is None
+                else projected_coater_splitter_failure(
+                    coater,
+                    splitter,
+                    projection,
+                    cancelled=cancelled,
+                )
             )
             if failure is not None:
                 return failure
