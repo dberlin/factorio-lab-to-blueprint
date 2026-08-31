@@ -160,7 +160,7 @@ _DENSE_SPRAY_COMPACT_SEED_ATTEMPT = 4
 _DENSE_SPRAY_NO_POWER_MACHINE_THRESHOLD = 120
 _COARSE_SPRAY_NO_POWER_MACHINE_THRESHOLD = 250
 _COMPACT_LARGE_VARIANT_SIZE = 40
-_COMPACT_LARGE_VARIANT_DETERMINISTIC_CAP = 0.5
+_COMPACT_LARGE_VARIANT_DETERMINISTIC_CAP = 0.1
 _TOPOLOGY_BEAM_MIN_STRIPS = 7
 _TOPOLOGY_BEAM_MAX_STRIPS = 24
 _TOPOLOGY_BEAM_DETERMINISTIC_SECONDS = 0.2
@@ -477,6 +477,7 @@ class StageAdapters[PreparedT]:
     validate: Callable[[Placement], ValidationVerdict]
 
     prepare_exact: Callable[[int, DecodedPlacement], PreparedT] | None = None
+    feedback_origins: Callable[[PreparedT], tuple[tuple[int, int], ...]] | None = None
 
 
 @dataclass(slots=True)
@@ -1144,7 +1145,7 @@ class SequenceSolver[PreparedT]:
         detailed_route_time_s = time.perf_counter() - detailed_started
         spent = detailed.routing.expansions
         _check_spend(spent, allowance)
-        return self._complete_routing_stage(
+        outcome = self._complete_routing_stage(
             height_state,
             selected,
             detailed,
@@ -1162,6 +1163,19 @@ class SequenceSolver[PreparedT]:
             global_route_time_s=0.0,
             detailed_route_time_s=detailed_route_time_s,
         )
+        restart = height_state.restarts[0]
+        substitution, neighbourhood = _routing_feedback_substitution(
+            detailed.routing,
+            incumbent.state,
+            problem,
+            incumbent.decoded,
+            seed=restart.seed,
+            stage_index=restart.anneal.stage_index,
+        )
+        if neighbourhood and restart.stages < self.config.stages:
+            restart.anneal = substitution
+            height_state.feedback_restart = restart.restart
+        return outcome
 
     def _run_discovery(
         self,
@@ -1819,9 +1833,15 @@ class SequenceSolver[PreparedT]:
                     height_state.narrowest_key = None
         if not observation.continue_search:
             if detailed.routing.failures:
+                origins = (
+                    None
+                    if self.adapters.feedback_origins is None
+                    else self.adapters.feedback_origins(selected.prepared)
+                )
                 height_state.feedback = update_feedback(
                     decay_feedback(height_state.feedback),
                     detailed.routing,
+                    origins=origins,
                 )
             self._record_routing_observation(
                 height_state,
@@ -1900,8 +1920,15 @@ class SequenceSolver[PreparedT]:
                 RouteFailureKind.BUDGET,
             }
         )
+        origins = (
+            None
+            if self.adapters.feedback_origins is None
+            else self.adapters.feedback_origins(selected.prepared)
+        )
         height_state.feedback = update_feedback(
-            decay_feedback(height_state.feedback), detailed.routing
+            decay_feedback(height_state.feedback),
+            detailed.routing,
+            origins=origins,
         )
         if signature:
             restart.feedback_stagnation = (
@@ -1911,7 +1938,6 @@ class SequenceSolver[PreparedT]:
             restart.feedback_stagnation = 0
         restart.failure_signature = signature
 
-        neighbourhood = frozenset[int]()
         next_anneal = AnnealState(
             pair=selected.state.pair,
             gaps=selected.state.gaps,
@@ -1919,25 +1945,21 @@ class SequenceSolver[PreparedT]:
             stage_index=annealed.final_state.stage_index,
             variant_indices=selected.state.variant_indices,
         )
-        if starting_mode is ObjectiveMode.EXPLORATION and 0 < detailed.routing.failed_count <= 3:
-            neighbourhood = _lns_neighbourhood(
-                detailed.routing, selected.state, problem, selected.decoded
+        neighbourhood = frozenset[int]()
+        if starting_mode is ObjectiveMode.EXPLORATION:
+            next_anneal, neighbourhood = _routing_feedback_substitution(
+                detailed.routing,
+                selected.state,
+                problem,
+                selected.decoded,
+                seed=restart.seed,
+                stage_index=annealed.final_state.stage_index,
             )
-            if neighbourhood:
-                repaired = repair_neighbourhood(
-                    selected.state.pair,
-                    selected.state.gaps,
-                    neighbourhood,
-                    seed=derive_stage_seed(restart.seed, annealed.final_state.stage_index),
-                    variant_indices=selected.state.variant_indices,
-                )
-                next_anneal = AnnealState(
-                    pair=repaired.pair,
-                    gaps=repaired.gaps,
-                    base_seed=restart.seed,
-                    stage_index=annealed.final_state.stage_index,
-                    variant_indices=repaired.variant_indices,
-                )
+            if neighbourhood and restart.stages < self.config.stages:
+                # This is an already-scheduled search candidate with exact local
+                # failure evidence, not another speculative retry. Close its LNS
+                # substitution before discovery advances to an unrelated height.
+                height_state.feedback_restart = restart.restart
         split_count = 0
         merge_count = 0
         topology_changed = False
@@ -2142,6 +2164,52 @@ class SequenceSolver[PreparedT]:
                 stagnation_count=height_state.quality_stagnation,
             )
         )
+
+
+def _routing_feedback_substitution(
+    detailed: DetailedRouteResult,
+    selected_state: AnnealState,
+    problem: PlacementProblem,
+    decoded: DecodedPlacement,
+    *,
+    seed: int,
+    stage_index: int,
+) -> tuple[AnnealState, frozenset[int]]:
+    """Replace a near-miss candidate with one local evidence-scoped repair."""
+    unchanged = AnnealState(
+        pair=selected_state.pair,
+        gaps=selected_state.gaps,
+        base_seed=seed,
+        stage_index=stage_index,
+        variant_indices=selected_state.variant_indices,
+    )
+    if not 0 < detailed.failed_count <= 3:
+        return unchanged, frozenset()
+    neighbourhood = _lns_neighbourhood(
+        detailed,
+        selected_state,
+        problem,
+        decoded,
+    )
+    if not neighbourhood:
+        return unchanged, neighbourhood
+    repaired = repair_neighbourhood(
+        selected_state.pair,
+        selected_state.gaps,
+        neighbourhood,
+        seed=derive_stage_seed(seed, stage_index + 1),
+        variant_indices=selected_state.variant_indices,
+    )
+    return (
+        AnnealState(
+            pair=repaired.pair,
+            gaps=repaired.gaps,
+            base_seed=seed,
+            stage_index=stage_index,
+            variant_indices=repaired.variant_indices,
+        ),
+        neighbourhood,
+    )
 
 
 def _lns_neighbourhood(
@@ -4162,6 +4230,10 @@ def _production_run(
             detailed_route=detailed_route,
             validate=certify,
             prepare_exact=prepare_exact,
+            feedback_origins=lambda candidate: tuple(
+                candidate.pack.at[index]
+                for index in range(len(candidate.selected_strips))
+            ),
         ),
         expansion_budget=ExpansionBudget(expansion_total),
         borrow_first_discovery=(

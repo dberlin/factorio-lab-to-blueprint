@@ -164,6 +164,8 @@ def _routing(
     expansions: int = 0,
     geometric_failure: bool = False,
     failure_kind: RouteFailureKind | None = None,
+    source: tuple[int, int, int] | None = None,
+    destination: tuple[int, int, int] | None = None,
 ) -> DetailedRouteResult:
     failures: tuple[NetFailure, ...] = ()
     if status is not DetailedRouteStatus.ROUTED:
@@ -188,6 +190,8 @@ def _routing(
                 ),
                 blocking_nets=(),
                 expansions=expansions,
+                source=source,
+                destination=destination,
             ),
         )
     return DetailedRouteResult(
@@ -231,6 +235,7 @@ class _FakeRouting:
     detailed_allowances: list[int] = field(default_factory=list)
     prepared_candidates: list[Prepared] = field(default_factory=list)
     feedback_seen: list[FeedbackState] = field(default_factory=list)
+    feedback_origins: Callable[[Prepared], tuple[tuple[int, int], ...]] | None = None
     _detailed_index: int = 0
 
     def prepare(self, height: int, decoded: DecodedPlacement) -> Prepared:
@@ -284,6 +289,7 @@ class _FakeRouting:
             global_route=self.global_route,
             detailed_route=self.detailed_route,
             validate=self.validate,
+            feedback_origins=self.feedback_origins,
         )
 
 
@@ -649,11 +655,14 @@ def test_exact_seed_routing_failure_becomes_shared_search_feedback() -> None:
                     DetailedRouteStatus.STRANDED,
                     geometric_failure=True,
                     failure_kind=RouteFailureKind.CONGESTION_WALL,
+                    source=(3, 4, 0),
+                    destination=(6, 7, 0),
                 ),
                 None,
             ),
         )
     )
+    fake.feedback_origins = lambda _prepared: ((2, 3),)
     solver = _solver(fake, heights=(40,))
     decoded = DecodedPlacement(
         x=(0,),
@@ -671,6 +680,74 @@ def test_exact_seed_routing_failure_becomes_shared_search_feedback() -> None:
     feedback = solver._heights[0].feedback
     assert feedback.net_weight
     assert feedback.cell_history
+    assert feedback.endpoint_offsets == {
+        NetId(0, 0, "item", NetRole.INTERNAL, 0): ((1, 1, 0), (4, 4, 0))
+    }
+
+
+def test_compact_seed_near_miss_substitutes_local_repair_without_proxy() -> None:
+    exact = _placement(area=20, belt_tiles=4)
+    fake = _FakeRouting(
+        detailed_results=(
+            DetailedStageResult(
+                _routing(
+                    DetailedRouteStatus.STRANDED,
+                    geometric_failure=True,
+                    failure_kind=RouteFailureKind.CONGESTION_WALL,
+                ),
+                None,
+            ),
+            DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), exact),
+        )
+    )
+    solver = _solver(
+        fake,
+        heights=(40, 60),
+        initial_states={40: AnnealState.initial(1, 7)},
+        config=SequenceSolverConfig(
+            stages=2,
+            moves_per_stage=1,
+            restarts_per_height=1,
+            global_elites=1,
+        ),
+    )
+
+    result = solver.search(max_stages=2)
+
+    assert result.placement is exact
+    assert [stage.height for stage in result.stages] == [40, 40]
+    assert [stage.global_skip_reason for stage in result.stages] == [
+        "compact-seed",
+        "proxy-budget",
+    ]
+    assert fake.global_allowances == []
+    assert fake.prepared_candidates[1][1].gap_area == 1
+
+
+def test_geometric_near_miss_substitutes_feedback_candidate_before_next_height() -> None:
+    exact = _placement(area=20, belt_tiles=4)
+    fake = _FakeRouting(
+        detailed_results=(
+            DetailedStageResult(
+                _routing(
+                    DetailedRouteStatus.STRANDED,
+                    geometric_failure=True,
+                    failure_kind=RouteFailureKind.CONGESTION_WALL,
+                ),
+                None,
+            ),
+            DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), exact),
+        )
+    )
+    solver = _solver(fake, heights=(40, 60))
+
+    result = solver.search(max_stages=2)
+
+    assert result.placement is exact
+    assert [stage.height for stage in result.stages] == [40, 40]
+    assert result.stages[0].lns_size == 1
+    assert result.stages[1].global_skip_reason == "proxy-budget"
+    assert len(fake.global_allowances) == 1
 
 
 def test_unseeded_solver_has_no_compact_closure() -> None:
