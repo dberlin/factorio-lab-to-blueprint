@@ -6364,6 +6364,7 @@ def _merge_frontier(
     junctionable: Callable[[int, int, int], bool] | None = None,
     *,
     provenance: dict[Cell, Cell] | None = None,
+    belt_prefab: tuple[int, int] | None = None,
 ) -> set[Cell]:
     """Free cells beside a sibling net's path -- somewhere to merge into.
 
@@ -6399,6 +6400,12 @@ def _merge_frontier(
     point that can be built -- and withdrawing it costs the router one of the
     several cells a frontier offers, where refusing at commit time costs the
     whole pack.
+
+    ``belt_prefab`` makes that source-side proof include physical Splitter port
+    identity.  A ramp and a branch may occupy different routing levels in the
+    same compass direction, but they still name one port.  Such a neighbour is
+    withheld here so A* can choose another side instead of discovering the
+    duplicate only after every path has been committed.
     """
     out: set[Cell] = set()
     for sibling in siblings:
@@ -6414,7 +6421,58 @@ def _merge_frontier(
             actual_level = int(altitude) if altitude.denominator == 1 else lvl
             if junctionable is not None and not junctionable(x, y, actual_level):
                 continue
-            free = [cell for dx, dy in _STEPS if canvas.free(cell := (x + dx, y + dy, lvl))]
+            free = [
+                cell
+                for dx, dy in _STEPS
+                if canvas.free(cell := (x + dx, y + dy, lvl))
+            ]
+            if not free:
+                continue
+            if junctionable is not None and belt_prefab is not None:
+                belt_item, belt_model = belt_prefab
+                attachment = PlacedBuilding(
+                    item_id=belt_item,
+                    model_index=belt_model,
+                    x=x,
+                    y=y,
+                    z=altitude,
+                    width=1,
+                    height=1,
+                )
+                splitter = junction.make_splitter(x, y, altitude)
+                used_ports: set[int] = set()
+                path_ports_valid = True
+                for neighbour_index in (at - 1, at + 1):
+                    if not 0 <= neighbour_index < len(path):
+                        continue
+                    neighbour_x, neighbour_y, _neighbour_level = path[
+                        neighbour_index
+                    ]
+                    port = splitter_ports.expected_path_port(
+                        splitter,
+                        attachment,
+                        replace(
+                            attachment,
+                            x=neighbour_x,
+                            y=neighbour_y,
+                        ),
+                    )
+                    if port is None or port in used_ports:
+                        path_ports_valid = False
+                        break
+                    used_ports.add(port)
+                if not path_ports_valid:
+                    continue
+                available: list[Cell] = []
+                for cell in free:
+                    port = splitter_ports.expected_path_port(
+                        splitter,
+                        attachment,
+                        replace(attachment, x=cell[0], y=cell[1]),
+                    )
+                    if port is not None and port not in used_ports:
+                        available.append(cell)
+                free = available
             if not free:
                 continue
             if junctionable is not None and not _junction_belt_clear(
@@ -7049,6 +7107,7 @@ def _route_all(
             siblings,
             _can_junction,
             provenance=source_provenance,
+            belt_prefab=(belt_id, belt_model),
         )
         guard_provenance.update(source_provenance)
         starts.extend(
@@ -13722,11 +13781,11 @@ class FreeformLayout:
         minute has not been given a budget, and the bake-off cannot sweep a
         parameter the code ignores.
 
-        The deadline is polled between search phases and inside preparation and
-        routing. An interrupted search candidate is discarded because a
-        half-routed pack is not a result. Once one candidate has routed every
-        net, its compaction, finalization, and certification finish atomically;
-        their measured cost is then reserved before admitting any improvement.
+        The deadline is polled between search phases and inside preparation,
+        routing, compaction, and final projection. An interrupted candidate is
+        discarded because a half-routed or half-certified pack is not a result.
+        Certification is checked again after it returns, so a completed phase
+        that crossed the wall can never install a late placement.
         """
         cancelled = None if deadline is None else lambda: _expired(deadline)
         candidates = _direct_insert_candidates(spec)
@@ -14501,21 +14560,24 @@ class FreeformLayout:
             # is a search, and refusing outright is honest, while an invalid
             # blueprint is the worst outcome this program has.
             #
-            # A fully routed incumbent has crossed the search boundary.  Its
-            # three completion transforms are one atomic acceptance operation:
-            # cancelling between them throws away the only wireable answer and
-            # spends the entire search budget for no observable result.  Finish
-            # this incumbent exactly, mark the completed handoff, then use the
-            # measured tail as the admission reserve for any improvement.
+            # A fully routed incumbent still has to finish three exact completion
+            # transforms inside the caller's wall.  Each cancellable phase gets
+            # the same deadline predicate, and certification is checked after it
+            # returns because its public contract is not cancellable.  Crossing
+            # the wall records the exact stage and refuses; it never turns a
+            # late placement into a successful return.
             compaction_started = time.monotonic()
             try:
                 compacted = finalize.compact_open_boundary_belts_certified(
                     placement,
                     spec,
                     expect_power=True,
-                    cancelled=None,
+                    cancelled=cancelled,
                 )
             except finalize.ProjectionCancelled:
+                retain_attempt(_BuildBudgetStage.CERTIFICATION)
+                break
+            if _expired(deadline):
                 retain_attempt(_BuildBudgetStage.CERTIFICATION)
                 break
             placement = compacted.placement
@@ -14528,6 +14590,7 @@ class FreeformLayout:
                 placement = finalize.finalize_placement(
                     placement,
                     self.band_policy,
+                    cancelled=cancelled,
                 )
             except finalize.ProjectionCancelled:
                 retain_attempt(_BuildBudgetStage.FINALIZATION)
@@ -14654,6 +14717,9 @@ class FreeformLayout:
                         (height, arrangement, True),
                     )
                 continue
+            if _expired(deadline):
+                retain_attempt(_BuildBudgetStage.FINALIZATION)
+                break
             finalize_reserve_s = max(
                 finalize_reserve_s,
                 time.monotonic() - finalize_started,
@@ -14664,10 +14730,13 @@ class FreeformLayout:
                 validation_reserve_s,
                 time.monotonic() - certify_started,
             )
+            if report.errors and rejected is not None:
+                for finding in report.errors:
+                    _retain_refusal(rejected, finding)
+            if _expired(deadline):
+                retain_attempt(_BuildBudgetStage.CERTIFICATION)
+                break
             if report.errors:
-                if rejected is not None:
-                    for finding in report.errors:
-                        _retain_refusal(rejected, finding)
                 retain_attempt()
                 continue
             if placement.frame is not None:

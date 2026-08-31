@@ -3145,7 +3145,7 @@ def _sweep_after_first_routing(
             "finalize_placement",
             finalizer
             if finalizer is not None
-            else lambda placement, _policy: placement,
+            else lambda placement, _policy, **_kwargs: placement,
         )
 
     attempts: list[freeform.PackAttempt] = []
@@ -3156,7 +3156,7 @@ def _sweep_after_first_routing(
     return result, seen, attempts
 
 
-def test_first_fully_routed_attempt_finishes_atomic_completion_tail(
+def test_fully_routed_attempt_crossing_certification_deadline_is_not_returned(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     clock = 0.0
@@ -3185,11 +3185,10 @@ def test_first_fully_routed_attempt_finishes_atomic_completion_tail(
         ),
     )
 
-    assert result is not None
-    assert result.completion is PlacementCompletion.COMPACTED_AND_FINALIZED
+    assert result is None
     assert len(attempts) == 1
     assert attempts[0].routing.status is DetailedRouteStatus.ROUTED
-    assert attempts[0].budget_stage is None
+    assert attempts[0].budget_stage is freeform._BuildBudgetStage.CERTIFICATION
 
 
 def test_terminal_refusal_names_completion_stage_after_every_net_wired(
@@ -3269,7 +3268,8 @@ def test_sweep_validates_exact_compacted_and_finalized_placement_before_completi
         expect_power: bool,
         cancelled: Callable[[], bool] | None = None,
     ) -> CompactionResult:
-        assert cancelled is None
+        assert cancelled is not None
+        assert not cancelled()
         stages.append("compaction")
         return CompactionResult(compacted, report)
 
@@ -3385,7 +3385,7 @@ def test_sweep_reserves_compaction_finalization_and_validation_as_exact_sum(
     assert len(attempts) == 1
 
 
-def test_sweep_atomic_finalizer_receives_no_search_cancellation(
+def test_sweep_finalizer_receives_search_cancellation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     observed: list[dict[str, object]] = []
@@ -3415,7 +3415,10 @@ def test_sweep_atomic_finalizer_receives_no_search_cancellation(
         finalizer=finish,
     )
 
-    assert observed == [{}]
+    assert len(observed) == 1
+    cancelled = observed[0]["cancelled"]
+    assert callable(cancelled)
+    assert not cancelled()
     assert result is not None
     assert result.completion is PlacementCompletion.COMPACTED_AND_FINALIZED
     assert len(attempts) == 1
@@ -11702,6 +11705,23 @@ class TestSourceTapPreservesPhysicalSplitterPortIdentity:
             building.item_id != catalog.SPLITTER_ID
             for building in canvas.buildings
         )
+
+
+    def test_source_frontier_withholds_a_path_occupied_physical_port(self) -> None:
+        canvas = _Canvas(limit=(-2, -2, 2, 2))
+        path = ((0, -1, 2), (0, 0, 3), (0, 1, 3))
+        for cell in path:
+            canvas.blocked[cell] = freeform._TENTATIVE
+
+        frontier = freeform._merge_frontier(
+            canvas,
+            {5: path},
+            (5,),
+            lambda x, y, level: (x, y, level) == (0, 0, 3),
+            belt_prefab=(2001, 35),
+        )
+
+        assert frontier == {(-1, 0, 3), (1, 0, 3)}
 
     def test_distinct_physical_ports_remain_accepted(self) -> None:
         canvas = _Canvas()
