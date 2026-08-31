@@ -731,21 +731,7 @@ def test_projected_coater_splitter_broad_phase_is_linear_plus_candidates(
         )
         for position in range(count)
     )
-    floor_calls = 0
-    sqrt_calls = 0
     exact_pairs: list[tuple[int, int]] = []
-    original_floor = finalize.math.floor
-    original_sqrt = finalize.math.sqrt
-
-    def counted_floor(value: float) -> int:
-        nonlocal floor_calls
-        floor_calls += 1
-        return original_floor(value)
-
-    def counted_sqrt(value: float) -> float:
-        nonlocal sqrt_calls
-        sqrt_calls += 1
-        return original_sqrt(value)
 
     def clean_pair(
         coater: tuple[int, colliders.Placed],
@@ -755,8 +741,6 @@ def test_projected_coater_splitter_broad_phase_is_linear_plus_candidates(
         exact_pairs.append((coater[0], splitter[0]))
         return None
 
-    monkeypatch.setattr(finalize.math, "floor", counted_floor)
-    monkeypatch.setattr(finalize.math, "sqrt", counted_sqrt)
     monkeypatch.setattr(
         finalize,
         "projected_coater_splitter_failure",
@@ -774,8 +758,6 @@ def test_projected_coater_splitter_broad_phase_is_linear_plus_candidates(
         (coaters[position][0], splitters[position][0])
         for position in range(count)
     ]
-    assert floor_calls == 3 * (len(coaters) + len(splitters))
-    assert sqrt_calls == len(exact_pairs)
     assert len(exact_pairs) == count
     assert len(exact_pairs) < len(coaters) * len(splitters)
 
@@ -832,6 +814,119 @@ def test_projected_coater_splitter_broad_phase_bounds_same_longitude_scan(
     assert failure is None
     assert exact_pairs == []
     assert sqrt_calls == 0
+
+def test_projected_coater_splitter_range_query_prunes_dense_diagonal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    count = 64
+    projection = _broke2_projection()
+    coater_model = catalog.building(catalog.SPRAY_COATER_ID).model_index
+    splitter_model = catalog.building(catalog.SPLITTER_ID).model_index
+    prototype = colliders.Placed(coater_model, 0, 0, 0, 0.0)
+    lateral_arc = math.dist(
+        projection.position(0, 0, 0),
+        projection.position(1, 0, 0),
+    )
+    reach = (
+        planet.collider_radius(coater_model)
+        + lateral_arc
+        + planet.collider_radius(splitter_model)
+    )
+    latitude_step = planet.latitude_rad_per_grid(projection.segment)
+    poleward = min(
+        math.cos(
+            min(abs(grid), planet.pole_grid_idx(projection.segment))
+            * latitude_step
+        )
+        for grid in (
+            projection.band.grid_lo,
+            projection.band.grid_hi,
+        )
+    )
+    column_lower_bound = (
+        projection.radius
+        * poleward
+        * planet.longitude_rad_per_grid(projection.band.area_segments)
+        * 0.9
+    )
+    row_lower_bound = projection.radius * latitude_step * 0.9
+    splitter_pose = colliders.Placed(
+        splitter_model,
+        0.75 * reach / column_lower_bound,
+        0.75 * reach / row_lower_bound,
+        0.75 * reach / (4.0 / 3.0),
+        0.0,
+    )
+    coaters = tuple((100 + position, prototype) for position in range(count))
+    splitters = tuple(
+        (200 + position, splitter_pose) for position in range(count)
+    )
+    assert (
+        finalize.projected_coater_splitter_failure(
+            coaters[0],
+            splitters[0],
+            projection,
+        )
+        is None
+    )
+
+    point_work = 0
+    box_work = 0
+    exact_pairs: list[tuple[int, int]] = []
+    original_point_distance = finalize._coater_splitter_point_distance2
+    original_box_distance = finalize._coater_splitter_box_distance2
+
+    def counted_point_distance(
+        left: tuple[float, float, float],
+        right: tuple[float, float, float],
+    ) -> float:
+        nonlocal point_work
+        point_work += 1
+        return original_point_distance(left, right)
+
+    def counted_box_distance(
+        point: tuple[float, float, float],
+        lower: tuple[float, float, float],
+        upper: tuple[float, float, float],
+    ) -> float:
+        nonlocal box_work
+        box_work += 1
+        return original_box_distance(point, lower, upper)
+
+    def clean_pair(
+        coater: tuple[int, colliders.Placed],
+        splitter: tuple[int, colliders.Placed],
+        _projection: planet.Projection,
+    ) -> None:
+        exact_pairs.append((coater[0], splitter[0]))
+        return None
+
+    monkeypatch.setattr(
+        finalize,
+        "_coater_splitter_point_distance2",
+        counted_point_distance,
+    )
+    monkeypatch.setattr(
+        finalize,
+        "_coater_splitter_box_distance2",
+        counted_box_distance,
+    )
+    monkeypatch.setattr(
+        finalize,
+        "projected_coater_splitter_failure",
+        clean_pair,
+    )
+
+    failure = finalize._projected_addon_splitter_failure(
+        coaters,
+        splitters,
+        projection,
+    )
+
+    assert failure is None
+    assert exact_pairs == []
+    assert point_work + box_work <= count * 12
+    assert point_work + box_work < len(coaters) * len(splitters)
 
 
 def test_broke2_splitter_region_is_rejected_by_projected_addon_keepout() -> None:

@@ -7,7 +7,6 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from functools import cache
-from heapq import merge
 from itertools import combinations
 from typing import Literal, cast
 
@@ -973,6 +972,179 @@ def projected_coater_splitter_failure(
         band=projection.band.area_segments,
     )
 
+type _CoaterSplitterCoordinates = tuple[float, float, float]
+
+
+@dataclass(frozen=True, slots=True)
+class _CoaterSplitterKdPoint:
+    position: int
+    coordinates: _CoaterSplitterCoordinates
+
+
+@dataclass(frozen=True, slots=True)
+class _CoaterSplitterKdNode:
+    point: _CoaterSplitterKdPoint
+    lower: _CoaterSplitterCoordinates
+    upper: _CoaterSplitterCoordinates
+    left: _CoaterSplitterKdNode | None
+    right: _CoaterSplitterKdNode | None
+
+
+def _coater_splitter_point_distance2(
+    left: _CoaterSplitterCoordinates,
+    right: _CoaterSplitterCoordinates,
+) -> float:
+    return sum((a - b) ** 2 for a, b in zip(left, right, strict=True))
+
+
+def _coater_splitter_box_distance2(
+    point: _CoaterSplitterCoordinates,
+    lower: _CoaterSplitterCoordinates,
+    upper: _CoaterSplitterCoordinates,
+) -> float:
+    return sum(
+        (lo - value) ** 2
+        if value < lo
+        else (value - hi) ** 2
+        if value > hi
+        else 0.0
+        for value, lo, hi in zip(point, lower, upper, strict=True)
+    )
+
+
+def _coater_splitter_kd_tree(
+    points: Sequence[_CoaterSplitterKdPoint],
+    *,
+    cancelled: Callable[[], bool] | None = None,
+) -> _CoaterSplitterKdNode | None:
+    """Build a balanced 3D range tree in ``O(S log S)`` preprocessing."""
+    if not points:
+        return None
+    orders_list: list[tuple[_CoaterSplitterKdPoint, ...]] = []
+    for axis in range(3):
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
+        orders_list.append(
+            tuple(
+                sorted(
+                    points,
+                    key=lambda point: (
+                        point.coordinates[axis],
+                        point.position,
+                    ),
+                )
+            )
+        )
+    orders = tuple(orders_list)
+
+    def build(
+        ordered: tuple[tuple[_CoaterSplitterKdPoint, ...], ...],
+        depth: int,
+    ) -> _CoaterSplitterKdNode | None:
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
+        if not ordered[0]:
+            return None
+        axis = depth % 3
+        axis_order = ordered[axis]
+        middle = len(axis_order) // 2
+        point = axis_order[middle]
+        left_positions = {
+            candidate.position for candidate in axis_order[:middle]
+        }
+        right_positions = {
+            candidate.position for candidate in axis_order[middle + 1 :]
+        }
+        left = build(
+            tuple(
+                tuple(
+                    candidate
+                    for candidate in order
+                    if candidate.position in left_positions
+                )
+                for order in ordered
+            ),
+            depth + 1,
+        )
+        right = build(
+            tuple(
+                tuple(
+                    candidate
+                    for candidate in order
+                    if candidate.position in right_positions
+                )
+                for order in ordered
+            ),
+            depth + 1,
+        )
+        lower = list(point.coordinates)
+        upper = list(point.coordinates)
+        for child in (left, right):
+            if cancelled is not None and cancelled():
+                raise ProjectionCancelled
+            if child is None:
+                continue
+            for coordinate in range(3):
+                lower[coordinate] = min(
+                    lower[coordinate],
+                    child.lower[coordinate],
+                )
+                upper[coordinate] = max(
+                    upper[coordinate],
+                    child.upper[coordinate],
+                )
+        return _CoaterSplitterKdNode(
+            point=point,
+            lower=(lower[0], lower[1], lower[2]),
+            upper=(upper[0], upper[1], upper[2]),
+            left=left,
+            right=right,
+        )
+
+    return build(orders, 0)
+
+
+def _coater_splitter_kd_range(
+    node: _CoaterSplitterKdNode | None,
+    centre: _CoaterSplitterCoordinates,
+    radius2: float,
+    found: set[int],
+    *,
+    cancelled: Callable[[], bool] | None = None,
+) -> None:
+    """Report every indexed point inside one exact broad-phase sphere."""
+    if cancelled is not None and cancelled():
+        raise ProjectionCancelled
+    if node is None or _coater_splitter_box_distance2(
+        centre,
+        node.lower,
+        node.upper,
+    ) > radius2:
+        return
+    if (
+        _coater_splitter_point_distance2(
+            centre,
+            node.point.coordinates,
+        )
+        <= radius2
+    ):
+        found.add(node.point.position)
+    _coater_splitter_kd_range(
+        node.left,
+        centre,
+        radius2,
+        found,
+        cancelled=cancelled,
+    )
+    _coater_splitter_kd_range(
+        node.right,
+        centre,
+        radius2,
+        found,
+        cancelled=cancelled,
+    )
+
+
 def _projected_coater_splitter_candidates(
     coaters: Sequence[tuple[int, colliders.Placed]],
     splitters: Sequence[tuple[int, colliders.Placed]],
@@ -991,12 +1163,13 @@ def _projected_coater_splitter_candidates(
     pair omitted here cannot reach the authoritative OBB predicate.
 
     A projection in quadrant 1 swaps blueprint axes before applying those
-    spacings, and longitude wraps after ``band.columns`` cells.  A three-axis
-    grid therefore buckets periodic transformed longitude, bounded latitude,
-    and level.  Construction and queries are ``O(C + S + K)`` for returned
-    candidate count ``K``.  Merging the constant number of neighbouring buckets
-    restores original Splitter order, including co-located and seam duplicates;
-    callers consequently retain the old coater-major issue order.
+    spacings, and longitude wraps after ``band.columns`` cells.  Splitters are
+    indexed once in a balanced three-dimensional range tree over periodic
+    longitude, latitude, and level.  Each coater performs three seam-aware
+    spherical range queries and only the radially possible positions reach the
+    exact OBB predicate.  Sorting those original positions preserves Splitter
+    order, including co-located and seam duplicates, without a density-dependent
+    box-candidate product.
     """
     if cancelled is not None and cancelled():
         raise ProjectionCancelled
@@ -1058,129 +1231,60 @@ def _projected_coater_splitter_candidates(
             raise ProjectionCancelled
         splitter_bounds_list.append(planet.collider_radius(splitter.model_index))
     splitter_bounds = tuple(splitter_bounds_list)
-    maximum_reach = max(coater_bounds) + max(splitter_bounds)
-    longitude_span = max(
-        1.0,
-        maximum_reach / max(column_lower_bound, 1e-9),
-    )
-    latitude_span = max(
-        1.0,
-        maximum_reach / max(row_lower_bound, 1e-9),
-    )
-    level_span = max(1.0, maximum_reach / (4.0 / 3.0))
-    longitude_bucket_count = max(
-        1,
-        int(projection.band.columns / longitude_span),
-    )
-    longitude_bucket_span = (
-        projection.band.columns / longitude_bucket_count
-    )
-
-    def bucket_key(
-        longitude: float,
-        latitude: float,
-        level: float,
-    ) -> tuple[int, int, int]:
-        return (
-            math.floor(
-                (longitude % projection.band.columns)
-                / longitude_bucket_span
-            )
-            % longitude_bucket_count,
-            math.floor(latitude / latitude_span),
-            math.floor(level / level_span),
+    splitter_bound = splitter_bounds[0]
+    if any(bound != splitter_bound for bound in splitter_bounds[1:]):
+        raise ValueError(
+            "projected coater keepout index requires one Splitter collider model"
         )
 
-    buckets: dict[
-        tuple[int, int, int],
-        list[
-            tuple[
-                int,
-                tuple[int, colliders.Placed],
-                float,
-                float,
-                float,
-                float,
-            ]
-        ],
-    ] = {}
-    for position, (splitter, splitter_bound) in enumerate(
-        zip(splitters, splitter_bounds, strict=True)
-    ):
+    def coordinates(building: colliders.Placed) -> _CoaterSplitterCoordinates:
+        longitude, latitude = transformed(building)
+        return (
+            (longitude % projection.band.columns) * column_lower_bound,
+            latitude * row_lower_bound,
+            building.z * 4.0 / 3.0,
+        )
+
+    points: list[_CoaterSplitterKdPoint] = []
+    for position, splitter in enumerate(splitters):
         if cancelled is not None and cancelled():
             raise ProjectionCancelled
-        longitude, latitude = transformed(splitter[1])
-        buckets.setdefault(
-            bucket_key(longitude, latitude, splitter[1].z),
-            [],
-        ).append(
-            (
-                position,
-                splitter,
-                splitter_bound,
-                longitude,
-                latitude,
-                splitter[1].z,
+        points.append(
+            _CoaterSplitterKdPoint(
+                position=position,
+                coordinates=coordinates(splitter[1]),
             )
         )
-
+    tree = _coater_splitter_kd_tree(
+        tuple(points),
+        cancelled=cancelled,
+    )
+    longitude_period = projection.band.columns * column_lower_bound
     candidates: list[tuple[tuple[int, colliders.Placed], ...]] = []
     for coater, coater_bound in zip(coaters, coater_bounds, strict=True):
         if cancelled is not None and cancelled():
             raise ProjectionCancelled
-        longitude, latitude = transformed(coater[1])
-        longitude_key, latitude_key, level_key = bucket_key(
-            longitude,
-            latitude,
-            coater[1].z,
-        )
-        longitude_keys = {
-            (longitude_key + offset) % longitude_bucket_count
-            for offset in (-1, 0, 1)
-        }
-        nearby = merge(
-            *(
-                buckets.get(
-                    (
-                        neighbour_longitude,
-                        latitude_key + latitude_offset,
-                        level_key + level_offset,
-                    ),
-                    (),
-                )
-                for neighbour_longitude in longitude_keys
-                for latitude_offset in (-1, 0, 1)
-                for level_offset in (-1, 0, 1)
-            ),
-            key=lambda entry: entry[0],
-        )
-        peers: list[tuple[int, colliders.Placed]] = []
-        for (
-            _position,
-            splitter,
-            splitter_bound,
-            splitter_longitude,
-            splitter_latitude,
-            splitter_level,
-        ) in nearby:
+        centre = coordinates(coater[1])
+        radius = coater_bound + splitter_bound
+        radius2 = math.nextafter(radius * radius, math.inf)
+        found: set[int] = set()
+        for longitude in {
+            centre[0] - longitude_period,
+            centre[0],
+            centre[0] + longitude_period,
+        }:
             if cancelled is not None and cancelled():
                 raise ProjectionCancelled
-            longitude_gap = (
-                abs(longitude - splitter_longitude)
-                % projection.band.columns
+            _coater_splitter_kd_range(
+                tree,
+                (longitude, centre[1], centre[2]),
+                radius2,
+                found,
+                cancelled=cancelled,
             )
-            longitude_gap = min(
-                longitude_gap,
-                projection.band.columns - longitude_gap,
-            )
-            gap = math.sqrt(
-                (longitude_gap * column_lower_bound) ** 2
-                + ((latitude - splitter_latitude) * row_lower_bound) ** 2
-                + ((coater[1].z - splitter_level) * 4.0 / 3.0) ** 2
-            )
-            if gap <= coater_bound + splitter_bound:
-                peers.append(splitter)
-        candidates.append(tuple(peers))
+        candidates.append(
+            tuple(splitters[position] for position in sorted(found))
+        )
     return tuple(candidates)
 
 
