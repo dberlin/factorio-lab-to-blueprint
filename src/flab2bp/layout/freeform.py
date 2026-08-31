@@ -1228,8 +1228,8 @@ def _staged_static_relation_projection_risks_uncached(
         else planet.bands()
     )
     groups: dict[
-        tuple[planet.Band, PlacedBuilding, int],
-        list[tuple[int, PlacedBuilding]],
+        tuple[planet.Band, PlacedBuilding],
+        list[tuple[int, PlacedBuilding, tuple[range, ...]]],
     ] = {}
     for ordinal, relation in enumerate(relations):
         _poll_staged_static_proof_deadline()
@@ -1305,46 +1305,97 @@ def _staged_static_relation_projection_risks_uncached(
                     )
                 ):
                     continue
+                candidate_origin = replace(
+                    normalized_candidate,
+                    x=0,
+                    y=0,
+                )
+                peer_relative = replace(
+                    normalized_peer,
+                    x=normalized_peer.x - normalized_candidate.x,
+                    y=normalized_peer.y - normalized_candidate.y,
+                )
+                anchor_ranges = tuple(
+                    range(
+                        anchor_range.start + normalized_candidate.y,
+                        anchor_range.stop + normalized_candidate.y,
+                    )
+                    for anchor_range in _staged_static_effective_anchor_ranges(
+                        pair_height,
+                        band,
+                    )
+                )
                 groups.setdefault(
-                    (band, normalized_candidate, pair_height),
+                    (band, candidate_origin),
                     [],
-                ).append((ordinal, normalized_peer))
+                ).append((ordinal, peer_relative, anchor_ranges))
 
     cancelled = _STAGED_STATIC_PROOF_CANCELLED.get()
-    for (band, candidate, pair_height), members in groups.items():
+    for (band, candidate), members in groups.items():
         collision_buildings = (
             _collision_pose(candidate),
-            *(_collision_pose(peer) for _ordinal, peer in members),
+            *(_collision_pose(peer) for _ordinal, peer, _ranges in members),
         )
-        for anchor_range in _staged_static_effective_anchor_ranges(
-            pair_height,
-            band,
+        collider_radii = tuple(
+            planet.collider_radius(building.model_index)
+            for building in collision_buildings
+        )
+        positions_by_anchor: dict[int, list[int]] = {}
+        for position, (_ordinal, _peer, anchor_ranges) in enumerate(
+            members,
+            start=1,
         ):
-            for anchor in anchor_range:
-                _poll_staged_static_proof_deadline()
-                active_pairs = tuple(
-                    (0, position)
-                    for position, (ordinal, _peer) in enumerate(members, start=1)
-                    if not risks[ordinal]
-                )
-                if not active_pairs:
-                    break
-                try:
-                    hits = planet.collisions_at(
-                        collision_buildings,
-                        planet.Projection(
-                            band=band,
-                            anchor_row=anchor,
-                            segment=colliders.PLANET_SEGMENT,
-                            radius=colliders.PLANET_RADIUS,
-                        ),
-                        active_pairs,
-                        cancelled=cancelled,
+            for anchor_range in anchor_ranges:
+                for anchor in anchor_range:
+                    positions_by_anchor.setdefault(anchor, []).append(position)
+        for anchor, positions in sorted(positions_by_anchor.items()):
+            _poll_staged_static_proof_deadline()
+            projection = planet.Projection(
+                band=band,
+                anchor_row=anchor,
+                segment=colliders.PLANET_SEGMENT,
+                radius=colliders.PLANET_RADIUS,
+            )
+            candidate_position = projection.pose(
+                candidate.x,
+                candidate.y,
+                candidate.z,
+                candidate.yaw,
+            )[0]
+            active: list[tuple[int, int]] = []
+            for position in positions:
+                if risks[members[position - 1][0]]:
+                    continue
+                peer = collision_buildings[position]
+                peer_position = projection.pose(
+                    peer.x,
+                    peer.y,
+                    peer.z,
+                    peer.yaw,
+                )[0]
+                radius = collider_radii[0] + collider_radii[position]
+                if sum(
+                    (left - right) ** 2
+                    for left, right in zip(
+                        candidate_position,
+                        peer_position,
+                        strict=True,
                     )
-                except finalize.ProjectionCancelled:
-                    raise _PreparationDeadline from None
-                for _candidate_position, peer_position in hits:
-                    risks[members[peer_position - 1][0]] = True
+                ) <= radius * radius:
+                    active.append((0, position))
+            if not active:
+                continue
+            try:
+                hits = planet.collisions_at(
+                    collision_buildings,
+                    projection,
+                    active,
+                    cancelled=cancelled,
+                )
+            except finalize.ProjectionCancelled:
+                raise _PreparationDeadline from None
+            for _candidate_position, peer_position in hits:
+                risks[members[peer_position - 1][0]] = True
     return tuple(risks)
 
 
@@ -2021,6 +2072,7 @@ def plan_strips(
     groups = _adapt(spec)
     families = tuple(generate_strip_families(spec))
     templates: dict[StripFamilyId, StripVariant] = {}
+
     for family in families:
         if not family.variants:
             continue
@@ -2029,6 +2081,7 @@ def plan_strips(
         if required_pitch is not None:
             template = variant_with_minimum_pitch(template, required_pitch)
         templates[family.family_id] = template
+
     strips: list[Strip] = []
     for family in families:
         inputs_above = tuple(
@@ -2169,27 +2222,64 @@ def plan_strips(
                 machine_start=machine_start,
                 west_channel=west_channel,
             )
-            if physical_variant is not None and needs_coater_keepout:
-                west_channel = max(
-                    (
-                        minimum_staged_static_clearance[relation]
-                        if relation in minimum_staged_static_clearance
-                        else (
-                            _COATER_WEST_CHANNEL + 1
-                            if _staged_static_preclearance_proved(
-                                relation,
-                                band_policy,
-                                cancelled=cancelled,
-                            )
-                            else _COATER_WEST_CHANNEL
-                        )
-                        for relation in _staged_static_clearance_keys(selected)
-                    ),
-                    default=west_channel,
-                )
-                selected = replace(selected, west_channel=west_channel)
             strips.append(selected)
-    return strips
+    clearance_keys = tuple(
+        _staged_static_clearance_keys(strip)
+        for strip in strips
+    )
+    unresolved = tuple(
+        dict.fromkeys(
+            relation
+            for relations in clearance_keys
+            for relation in relations
+            if relation not in minimum_staged_static_clearance
+        )
+    )
+    precleared: frozenset[StagedStaticClearanceKey] = frozenset()
+    if unresolved:
+        exact_relations = tuple(
+            candidate
+            for relation in unresolved
+            for candidate in (
+                relation,
+                replace(relation, delta_x=relation.delta_x + 1),
+            )
+        )
+        if cancelled is not None and cancelled():
+            raise _PreparationDeadline
+        token = _STAGED_STATIC_PROOF_CANCELLED.set(cancelled)
+        try:
+            exact_risks = _staged_static_relation_projection_risks(
+                exact_relations,
+                band_policy,
+            )
+        finally:
+            _STAGED_STATIC_PROOF_CANCELLED.reset(token)
+        precleared = frozenset(
+            relation
+            for ordinal, relation in enumerate(unresolved)
+            if exact_risks[2 * ordinal]
+            and not exact_risks[2 * ordinal + 1]
+        )
+    return [
+        replace(
+            strip,
+            west_channel=max(
+                (
+                    minimum_staged_static_clearance[relation]
+                    if relation in minimum_staged_static_clearance
+                    else (
+                        _COATER_WEST_CHANNEL + 1
+                        if relation in precleared
+                        else _COATER_WEST_CHANNEL
+                    )
+                    for relation in relations
+                ),
+                default=strip.west_channel,
+            ),
+        )
+        for strip, relations in zip(strips, clearance_keys, strict=True)
+    ]
 
 
 _COARSE_STRIP_THRESHOLD = 40
@@ -9696,6 +9786,7 @@ def _prospective_static_failure(
     return None
 
 
+
 def _projected_coater_junction_ban(
     coaters: Sequence[tuple[int, PlacedBuilding]],
     frames: Sequence[_JunctionProjectionFrame],
@@ -9719,6 +9810,15 @@ def _projected_coater_junction_ban(
         tuple[colliders.Placed, planet.Projection],
         tuple[colliders.Box, ...],
     ] = {}
+    projected_relation_overlaps: dict[tuple[object, ...], bool] = {}
+    projected_context_states: dict[
+        tuple[object, ...],
+        tuple[
+            planet.Projection,
+            colliders.Placed,
+            tuple[colliders.Box, ...],
+        ],
+    ] = {}
 
     for coater_index, coater_building in coaters:
         if cancelled is not None and cancelled():
@@ -9730,7 +9830,14 @@ def _projected_coater_junction_ban(
                 float,
                 float,
                 tuple[
-                    tuple[planet.Projection, float, float, tuple[colliders.Box, ...]],
+                    tuple[
+                        planet.Projection,
+                        float,
+                        float,
+                        tuple[colliders.Box, ...],
+                        colliders.Placed,
+                        tuple[object, ...],
+                    ],
                     ...,
                 ],
             ]
@@ -9769,6 +9876,8 @@ def _projected_coater_junction_ban(
                     float,
                     float,
                     tuple[colliders.Box, ...],
+                    colliders.Placed,
+                    tuple[object, ...],
                 ]
             ] = []
             materialized_reach_x = 0
@@ -9782,7 +9891,6 @@ def _projected_coater_junction_ban(
                     else materialized_coater[1].y
                 )
                 projection_context = (
-                    frame.candidate.frame.rotated,
                     projection.band,
                     projection.segment,
                     projection.radius,
@@ -9829,19 +9937,32 @@ def _projected_coater_junction_ban(
                     materialized_reach_y,
                     math.ceil(tangent_reach_y / latitude_step),
                 )
-                projection_states.append(
-                    (
+                context_state = projected_context_states.get(projection_context)
+                if context_state is None:
+                    context_state = (
                         projection,
-                        longitude_step,
-                        latitude_step,
+                        materialized_coater[1],
                         finalize.projected_coater_keepout_boxes(
                             materialized_coater[1],
                             projection,
                         ),
                     )
+                    projected_context_states[projection_context] = context_state
+                (
+                    canonical_projection,
+                    canonical_coater,
+                    coater_boxes,
+                ) = context_state
+                projection_states.append(
+                    (
+                        canonical_projection,
+                        longitude_step,
+                        latitude_step,
+                        coater_boxes,
+                        canonical_coater,
+                        projection_context,
+                    )
                 )
-            if not projection_states:
-                continue
             if frame.candidate.frame.rotated:
                 scan_reach_x = max(scan_reach_x, materialized_reach_y)
                 scan_reach_y = max(scan_reach_y, materialized_reach_x)
@@ -9923,6 +10044,8 @@ def _projected_coater_junction_ban(
                             x_step,
                             y_step,
                             coater_boxes,
+                            canonical_coater,
+                            projection_context,
                         ) in frame_projection_states:
                             if cancelled is not None and cancelled():
                                 raise _PreparationDeadline
@@ -9931,47 +10054,70 @@ def _projected_coater_junction_ban(
                                 or cell_dy * y_step > tangent_reach_y
                             ):
                                 continue
-                            boxes_key = (materialized_splitter, projection)
-                            splitter_boxes = projected_splitter_boxes.get(
-                                boxes_key
+                            delta_x = (
+                                materialized_splitter.x
+                                - materialized_coater[1].x
                             )
-                            if splitter_boxes is None:
-                                splitter_boxes = colliders.target_boxes(
+                            delta_y = (
+                                materialized_splitter.y
+                                - materialized_coater[1].y
+                            )
+                            delta_z = (
+                                materialized_splitter.z
+                                - materialized_coater[1].z
+                            )
+                            relation_key = (
+                                projection_context,
+                                delta_x,
+                                delta_y,
+                                delta_z,
+                                materialized_splitter.yaw,
+                            )
+                            overlap = projected_relation_overlaps.get(relation_key)
+                            if overlap is None:
+                                canonical_splitter = replace(
                                     materialized_splitter,
-                                    *projection.pose(
-                                        materialized_splitter.x,
-                                        materialized_splitter.y,
-                                        materialized_splitter.z,
-                                        materialized_splitter.yaw,
-                                    ),
+                                    x=canonical_coater.x + delta_x,
+                                    y=canonical_coater.y + delta_y,
+                                    z=canonical_coater.z + delta_z,
                                 )
-                                projected_splitter_boxes[boxes_key] = splitter_boxes
-                            overlap = False
-                            for coater_box in coater_boxes:
-                                if cancelled is not None and cancelled():
-                                    raise _PreparationDeadline
-                                for splitter_box in splitter_boxes:
+                                boxes_key = (
+                                    canonical_splitter,
+                                    projection,
+                                )
+                                splitter_boxes = projected_splitter_boxes.get(
+                                    boxes_key
+                                )
+                                if splitter_boxes is None:
+                                    splitter_boxes = colliders.target_boxes(
+                                        canonical_splitter,
+                                        *projection.pose(
+                                            canonical_splitter.x,
+                                            canonical_splitter.y,
+                                            canonical_splitter.z,
+                                            canonical_splitter.yaw,
+                                        ),
+                                    )
+                                    projected_splitter_boxes[boxes_key] = (
+                                        splitter_boxes
+                                    )
+                                overlap = False
+                                for coater_box in coater_boxes:
                                     if cancelled is not None and cancelled():
                                         raise _PreparationDeadline
-                                    if colliders.obb_overlap(
-                                        coater_box,
-                                        splitter_box,
-                                    ):
-                                        overlap = True
+                                    for splitter_box in splitter_boxes:
+                                        if cancelled is not None and cancelled():
+                                            raise _PreparationDeadline
+                                        if colliders.obb_overlap(
+                                            coater_box,
+                                            splitter_box,
+                                        ):
+                                            overlap = True
+                                            break
+                                    if overlap:
                                         break
-                                if overlap:
-                                    break
-                            if not overlap:
-                                continue
-                            if (
-                                finalize.projected_coater_splitter_failure(
-                                    materialized_coater,
-                                    (splitter_index, materialized_splitter),
-                                    projection,
-                                    cancelled=cancelled,
-                                )
-                                is not None
-                            ):
+                                projected_relation_overlaps[relation_key] = overlap
+                            if overlap:
                                 banned.add(cell)
                                 rejected = True
                                 break

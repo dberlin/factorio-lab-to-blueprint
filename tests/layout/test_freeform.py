@@ -6259,8 +6259,8 @@ def test_plan_time_preclearance_preserves_candidate_height_schedule(
     freeform._staged_static_preclearance_proved.cache_clear()
     monkeypatch.setattr(
         freeform,
-        "_staged_static_preclearance_proof_uncached",
-        lambda _relation, _policy: False,
+        "_staged_static_relation_projection_risks",
+        lambda relations, _policy: tuple(False for _relation in relations),
     )
     ordinary = plan_strips(spec)
     monkeypatch.undo()
@@ -6313,15 +6313,24 @@ def test_proved_clean_same_strip_relation_skips_only_its_redundant_projection(
     assert [index for index, _building in retained] == [1, 2]
 
 
-def test_plan_time_projection_risk_is_proved_once_per_distinct_relation(
+def test_plan_time_projection_risks_are_batched_and_cached(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     freeform._staged_static_preclearance_proved.cache_clear()
-    calls: list[freeform.StagedStaticClearanceKey] = []
+    batches: list[tuple[freeform.StagedStaticClearanceKey, ...]] = []
+    original = freeform._staged_static_relation_projection_risks_uncached
+
+    def counted(
+        relations: Sequence[freeform.StagedStaticClearanceKey],
+        policy: BandPolicy,
+    ) -> tuple[bool, ...]:
+        batches.append(tuple(relations))
+        return original(relations, policy)
+
     monkeypatch.setattr(
         freeform,
-        "_staged_static_preclearance_proof_uncached",
-        lambda relation, _policy: (calls.append(relation), False)[1],
+        "_staged_static_relation_projection_risks_uncached",
+        counted,
     )
     spec = proliferated_spec()
 
@@ -6329,15 +6338,11 @@ def test_plan_time_projection_risk_is_proved_once_per_distinct_relation(
     second = plan_strips(spec)
     monkeypatch.undo()
     freeform._staged_static_preclearance_proved.cache_clear()
-    relations = {
-        relation
-        for strip in first
-        for relation in freeform._staged_static_clearance_keys(strip)
-    }
+    proved = tuple(relation for batch in batches for relation in batch)
 
     assert first == second
-    assert set(calls) == relations
-    assert len(calls) == len(relations)
+    assert max(map(len, batches)) > 2
+    assert len(proved) == len(set(proved))
 
 
 def test_static_clearance_requirement_regenerates_a_distinct_lane_variant(
@@ -6347,8 +6352,8 @@ def test_static_clearance_requirement_regenerates_a_distinct_lane_variant(
     freeform._staged_static_preclearance_proved.cache_clear()
     monkeypatch.setattr(
         freeform,
-        "_staged_static_preclearance_proof_uncached",
-        lambda _relation, _policy: False,
+        "_staged_static_relation_projection_risks",
+        lambda relations, _policy: tuple(False for _relation in relations),
     )
     ordinary = plan_strips(spec)
     selected = next(strip for strip in ordinary if "iron-ingot" in strip.in_lanes)
@@ -6483,8 +6488,8 @@ def test_clearance_feedback_replans_later_base_height_without_minting_retry(
     freeform._staged_static_preclearance_proved.cache_clear()
     monkeypatch.setattr(
         freeform,
-        "_staged_static_preclearance_proof_uncached",
-        lambda _relation, _policy: False,
+        "_staged_static_relation_projection_risks",
+        lambda relations, _policy: tuple(False for _relation in relations),
     )
     strips = plan_strips(spec)
     failure = finalize.ProjectionFailure(
@@ -13107,6 +13112,36 @@ def test_all_products_band_160_cold_proof_reaches_a_valid_layout() -> None:
     assert validate.certify(placement, spec, expect_power=True).ok
 
 
+def test_plan_strips_batches_all_exact_preclearance_relations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    freeform._staged_static_preclearance_proved.cache_clear()
+    original = planet.collisions_at
+    pair_counts: list[int] = []
+
+    def counted(
+        buildings: Sequence[colliders.Placed],
+        projection: planet.Projection,
+        pairs: Sequence[tuple[int, int]] | None = None,
+        **kwargs: object,
+    ) -> list[tuple[int, int]]:
+        pair_counts.append(0 if pairs is None else len(pairs))
+        return original(buildings, projection, pairs, **kwargs)
+
+    monkeypatch.setattr(planet, "collisions_at", counted)
+
+    plan_strips(proliferated_spec(), band_policy=BandPolicy("portable"))
+
+    assert max(pair_counts) > 2, (
+        "all strip relations sharing a projected candidate must use one exact "
+        "predicate rather than one rejected/cleared pair at a time"
+    )
+    assert len(pair_counts) < 2_000, (
+        "candidate-relative anchors must share one exact predicate per absolute "
+        "latitude rather than replaying each pair-height frame"
+    )
+
+
 def test_staged_static_preclearance_cancels_inside_cold_proof_without_caching(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -13339,6 +13374,72 @@ def test_prepared_junction_ban_reuses_complete_geometry_offsets_per_attempt(
 
     assert calls == 1
     assert ban == frozenset({(1, 5, 2), (19, 5, 2)})
+
+
+
+
+def test_projected_coater_junction_ban_reuses_identical_exact_relations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    coater_info = catalog.building(catalog.SPRAY_COATER_ID)
+    coater = PlacedBuilding(
+        catalog.SPRAY_COATER_ID,
+        coater_info.model_index,
+        0,
+        0,
+        width=coater_info.width,
+        height=coater_info.height,
+    )
+    placement = Placement(buildings=(coater,))
+    candidate = finalize.frame_candidates(placement, BandPolicy("portable"))[0]
+    band = next(
+        band
+        for band in planet.bands()
+        if band.area_segments == candidate.frame.certified_bands[0]
+    )
+    projection = planet.Projection(
+        band,
+        next(iter(band.anchors(candidate.frame.height))),
+        colliders.PLANET_SEGMENT,
+        colliders.PLANET_RADIUS,
+    )
+    frame = freeform._JunctionProjectionFrame(
+        placement.bounds,
+        candidate,
+        (projection,),
+    )
+    overlaps = 0
+    keepouts = 0
+    boxes = (object(), object())
+
+    def no_overlap(_left: object, _right: object) -> bool:
+        nonlocal overlaps
+        overlaps += 1
+        return False
+
+    def coater_boxes(*_args: object) -> tuple[object, object]:
+        nonlocal keepouts
+        keepouts += 1
+        return boxes
+
+    monkeypatch.setattr(
+        finalize,
+        "projected_coater_keepout_boxes",
+        coater_boxes,
+    )
+    monkeypatch.setattr(colliders, "target_boxes", lambda *_args: boxes)
+    monkeypatch.setattr(colliders, "obb_overlap", no_overlap)
+
+    freeform._projected_coater_junction_ban(
+        ((0, coater), (1, coater)),
+        (frame,),
+        placement.bounds,
+        already_banned=set(),
+        splitter_index=2,
+    )
+
+    assert overlaps == 3 * LEVELS * len(boxes) ** 2
+    assert keepouts == 1
 
 
 
