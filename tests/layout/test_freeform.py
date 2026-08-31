@@ -3066,7 +3066,7 @@ def _sweep_after_first_routing(
     return result, seen, attempts
 
 
-def test_routed_attempt_expiring_in_certification_names_certification_stage(
+def test_first_fully_routed_attempt_finishes_atomic_completion_tail(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     clock = 0.0
@@ -3095,12 +3095,11 @@ def test_routed_attempt_expiring_in_certification_names_certification_stage(
         ),
     )
 
-    assert result is None
+    assert result is not None
+    assert result.completion is PlacementCompletion.COMPACTED_AND_FINALIZED
     assert len(attempts) == 1
     assert attempts[0].routing.status is DetailedRouteStatus.ROUTED
-    assert attempts[0].budget_stage is freeform._BuildBudgetStage.CERTIFICATION
-
-
+    assert attempts[0].budget_stage is None
 
 
 def test_terminal_refusal_names_completion_stage_after_every_net_wired(
@@ -3180,9 +3179,7 @@ def test_sweep_validates_exact_compacted_and_finalized_placement_before_completi
         expect_power: bool,
         cancelled: Callable[[], bool] | None = None,
     ) -> CompactionResult:
-        assert expect_power
-        assert cancelled is not None
-        assert not cancelled()
+        assert cancelled is None
         stages.append("compaction")
         return CompactionResult(compacted, report)
 
@@ -3298,20 +3295,21 @@ def test_sweep_reserves_compaction_finalization_and_validation_as_exact_sum(
     assert len(attempts) == 1
 
 
-def test_sweep_cancellation_inside_finalization_cannot_install_best(
+def test_sweep_atomic_finalizer_receives_no_search_cancellation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    observed: list[Callable[[], bool]] = []
+    observed: list[dict[str, object]] = []
 
-    def cancel_finalization(
-        _placement: Placement,
+    def finish(
+        placement: Placement,
         _policy: BandPolicy,
-        *,
-        cancelled: Callable[[], bool] | None = None,
-    ) -> None:
-        assert cancelled is not None
-        observed.append(cancelled)
-        raise finalize.ProjectionCancelled
+        **kwargs: object,
+    ) -> Placement:
+        observed.append(kwargs)
+        return replace(
+            placement,
+            frame=AreaFrame(1, 1, 4, (4,), False),
+        )
 
     result, _seen, attempts = _sweep_after_first_routing(
         monkeypatch,
@@ -3324,117 +3322,14 @@ def test_sweep_cancellation_inside_finalization_cannot_install_best(
         ),
         arrangements=1,
         deadline=time.monotonic() + 10.0,
-        finalizer=cancel_finalization,
+        finalizer=finish,
     )
 
-    assert observed
-    assert result is None
+    assert observed == [{}]
+    assert result is not None
+    assert result.completion is PlacementCompletion.COMPACTED_AND_FINALIZED
     assert len(attempts) == 1
-    assert attempts[0].budget_stage is freeform._BuildBudgetStage.FINALIZATION
-
-
-def test_sweep_legacy_finalizer_crossing_deadline_cannot_install_best(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    expired = False
-    finalized: list[Placement] = []
-
-    def legacy_finalizer(
-        placement: Placement,
-        _policy: BandPolicy,
-    ) -> Placement:
-        nonlocal expired
-        finalized.append(placement)
-        expired = True
-        return placement
-
-    monkeypatch.setattr(freeform, "_expired", lambda _deadline: expired)
-    result, _seen, _attempts = _sweep_after_first_routing(
-        monkeypatch,
-        DetailedRouteResult(
-            DetailedRouteStatus.ROUTED,
-            (),
-            (),
-            0,
-            0,
-        ),
-        arrangements=1,
-        deadline=time.monotonic() + 10.0,
-        finalizer=legacy_finalizer,
-    )
-
-    assert finalized
-    assert result is None
-
-
-def test_sweep_positional_only_cancelled_parameter_uses_legacy_dispatch(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    expired = [False]
-    finalized: list[Placement] = []
-
-    class PositionalOnlyFinalizer:
-        def __call__(
-            self,
-            placement: Placement,
-            _policy: BandPolicy,
-            cancelled: Callable[[], bool] | None = None,
-            /,
-        ) -> Placement:
-            finalized.append(placement)
-            expired[0] = True
-            return placement
-
-    monkeypatch.setattr(freeform, "_expired", lambda _deadline: expired[0])
-    result, _seen, _attempts = _sweep_after_first_routing(
-        monkeypatch,
-        DetailedRouteResult(
-            DetailedRouteStatus.ROUTED,
-            (),
-            (),
-            0,
-            0,
-        ),
-        arrangements=1,
-        deadline=time.monotonic() + 10.0,
-        finalizer=PositionalOnlyFinalizer(),
-    )
-
-    assert finalized
-    assert result is None
-
-
-def test_sweep_var_keyword_finalizer_receives_cancellation(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    observed: list[Callable[[], bool]] = []
-
-    class KeywordFinalizer:
-        def __call__(
-            self,
-            _placement: Placement,
-            _policy: BandPolicy,
-            **kwargs: Callable[[], bool],
-        ) -> Placement:
-            observed.append(kwargs["cancelled"])
-            raise finalize.ProjectionCancelled
-
-    result, _seen, _attempts = _sweep_after_first_routing(
-        monkeypatch,
-        DetailedRouteResult(
-            DetailedRouteStatus.ROUTED,
-            (),
-            (),
-            0,
-            0,
-        ),
-        arrangements=1,
-        deadline=time.monotonic() + 10.0,
-        finalizer=KeywordFinalizer(),
-    )
-
-    assert observed
-    assert result is None
+    assert attempts[0].budget_stage is None
 
 
 def test_sweep_reserves_measured_certify_and_finalize_cost_before_admission(

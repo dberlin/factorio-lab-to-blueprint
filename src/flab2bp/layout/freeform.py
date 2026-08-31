@@ -61,7 +61,6 @@ rather than tidiness.
 from __future__ import annotations
 
 import heapq
-import inspect
 import math
 import time
 from bisect import bisect_left, bisect_right
@@ -13532,12 +13531,11 @@ class FreeformLayout:
         minute has not been given a budget, and the bake-off cannot sweep a
         parameter the code ignores.
 
-        The deadline is polled between phases and inside preparation, routing,
-        and projection.  An interrupted candidate is discarded because a
-        half-routed pack is not a result.  Once certification and finalization
-        have completed, their measured costs are reserved before admitting the
-        next candidate so a last-moment improvement cannot knowingly overrun
-        the wall.
+        The deadline is polled between search phases and inside preparation and
+        routing. An interrupted search candidate is discarded because a
+        half-routed pack is not a result. Once one candidate has routed every
+        net, its compaction, finalization, and certification finish atomically;
+        their measured cost is then reserved before admitting any improvement.
         """
         cancelled = None if deadline is None else lambda: _expired(deadline)
         candidates = _direct_insert_candidates(spec)
@@ -13698,21 +13696,6 @@ class FreeformLayout:
         started_at: float | None = None
         candidate_index = 0
         staged_static_cache = _StagedStaticCache()
-        finalizer_parameters = inspect.signature(
-            finalize.finalize_placement
-        ).parameters
-        cancelled_parameter = finalizer_parameters.get("cancelled")
-        finalizer_accepts_cancelled = (
-            cancelled_parameter is not None
-            and cancelled_parameter.kind
-            in (
-                inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                inspect.Parameter.KEYWORD_ONLY,
-            )
-        ) or any(
-            parameter.kind is inspect.Parameter.VAR_KEYWORD
-            for parameter in finalizer_parameters.values()
-        )
         compaction_reserve_s = 0.0
         finalize_reserve_s = 0.0
         validation_reserve_s = 0.0
@@ -14327,27 +14310,19 @@ class FreeformLayout:
             # is a search, and refusing outright is honest, while an invalid
             # blueprint is the worst outcome this program has.
             #
-            # Boundary cleanup certifies every changed survivor set for its own
-            # rollback decision.  That cached report is not this layout
-            # strategy's return contract: final projection still changes the
-            # exact placement, so Freeform consumes its authoritative validator
-            # only after both compaction and finalization are complete.
-            if (
-                deadline is not None
-                and deadline - time.monotonic()
-                < compaction_reserve_s
-                + finalize_reserve_s
-                + validation_reserve_s
-            ):
-                retain_attempt(_BuildBudgetStage.CERTIFICATION)
-                break
+            # A fully routed incumbent has crossed the search boundary.  Its
+            # three completion transforms are one atomic acceptance operation:
+            # cancelling between them throws away the only wireable answer and
+            # spends the entire search budget for no observable result.  Finish
+            # this incumbent exactly, mark the completed handoff, then use the
+            # measured tail as the admission reserve for any improvement.
             compaction_started = time.monotonic()
             try:
                 compacted = finalize.compact_open_boundary_belts_certified(
                     placement,
                     spec,
                     expect_power=True,
-                    cancelled=cancelled,
+                    cancelled=None,
                 )
             except finalize.ProjectionCancelled:
                 retain_attempt(_BuildBudgetStage.CERTIFICATION)
@@ -14357,29 +14332,11 @@ class FreeformLayout:
                 compaction_reserve_s,
                 time.monotonic() - compaction_started,
             )
-            if cancelled is not None and cancelled():
-                retain_attempt(_BuildBudgetStage.CERTIFICATION)
-                break
-            if (
-                deadline is not None
-                and deadline - time.monotonic()
-                < finalize_reserve_s + validation_reserve_s
-            ):
-                retain_attempt(_BuildBudgetStage.FINALIZATION)
-                break
             finalize_started = time.monotonic()
             try:
-                placement = (
-                    finalize.finalize_placement(
-                        placement,
-                        self.band_policy,
-                    )
-                    if cancelled is None or not finalizer_accepts_cancelled
-                    else finalize.finalize_placement(
-                        placement,
-                        self.band_policy,
-                        cancelled=cancelled,
-                    )
+                placement = finalize.finalize_placement(
+                    placement,
+                    self.band_policy,
                 )
             except finalize.ProjectionCancelled:
                 retain_attempt(_BuildBudgetStage.FINALIZATION)
@@ -14510,24 +14467,12 @@ class FreeformLayout:
                 finalize_reserve_s,
                 time.monotonic() - finalize_started,
             )
-            if cancelled is not None and cancelled():
-                retain_attempt(_BuildBudgetStage.FINALIZATION)
-                break
-            if (
-                deadline is not None
-                and deadline - time.monotonic() < validation_reserve_s
-            ):
-                retain_attempt(_BuildBudgetStage.CERTIFICATION)
-                break
             certify_started = time.monotonic()
             report = validate.certify(placement, spec, expect_power=True)
             validation_reserve_s = max(
                 validation_reserve_s,
                 time.monotonic() - certify_started,
             )
-            if cancelled is not None and cancelled():
-                retain_attempt(_BuildBudgetStage.CERTIFICATION)
-                break
             if report.errors:
                 if rejected is not None:
                     for finding in report.errors:
