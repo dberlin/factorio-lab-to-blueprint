@@ -3460,6 +3460,38 @@ def test_geom_belt_single_occupancy_allows_belts_stacked_on_a_junction() -> None
     """
     assert not fired(validate(junction_pair()), "geom.belt_single_occupancy")
 
+def test_geom_belt_single_occupancy_allows_model_40_elevated_carry() -> None:
+    """Model 40's straight pair is one level above its Splitter anchor."""
+    elevated = place(
+        dataclasses.replace(splitter(0, 0), model_index=40),  # 0
+        belt(0, 0, 1, out=0),  # 1
+        belt(0, 0, 1, inp=0),  # 2
+    )
+
+    assert not fired(
+        validate(elevated, only={"geom.belt_single_occupancy"}),
+        "geom.belt_single_occupancy",
+    )
+
+
+def test_geom_belt_single_occupancy_rejects_foreign_belt_above_model_40() -> None:
+    """The elevated-port exemption still requires every belt to name the Splitter."""
+    elevated = place(
+        dataclasses.replace(splitter(0, 0), model_index=40),  # 0
+        belt(0, 0, 1, out=0),  # 1
+        belt(0, 0, 1, inp=0),  # 2
+        belt(0, 0, 1),  # 3: merely crosses the physical port
+    )
+
+    findings = validate(
+        elevated,
+        only={"geom.belt_single_occupancy"},
+    ).by_check("geom.belt_single_occupancy")
+
+    assert len(findings) == 1
+    assert findings[0].buildings == (3,)
+    assert findings[0].detail["unattached"] == 1
+
 
 def test_geom_belt_single_occupancy_still_fires_on_an_unattached_stack() -> None:
     """The exemption is for junction attachments, not for junction tiles.

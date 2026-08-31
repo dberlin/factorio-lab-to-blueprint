@@ -1009,26 +1009,30 @@ def _sorter_collide(ctx: Context) -> Iterable[Finding]:
 
 @check("geom.belt_single_occupancy")
 def _belt_single(ctx: Context) -> Iterable[Finding]:
-    """One belt per tile -- unless the tile is a junction, where several is how
-    the game itself records it.
+    """One belt per tile -- except belts attached to one Splitter port plane.
 
-    A belt running THROUGH a splitter is two belt buildings on the splitter's
-    tile, one ending at the junction and one starting from it, and a branch adds
-    a third.  Splitter 140 in ``factory-quick-start-step-3-red-cube`` has exactly
-    that: three belts co-located with it, one drawing and two feeding.  Reporting
-    it would flag a blueprint the game produced.
+    A belt running THROUGH a Splitter is represented by two belt buildings on
+    the same horizontal tile, one ending at the junction and one starting from
+    it, and a branch adds a third.  Models 39 and 40 also put two physical ports
+    one level above the Splitter's anchor, so the junction need only share the
+    belts' ``(x, y)``.  ``junction.port_pose`` separately proves that their
+    recorded ports exist at the belts' exact height.
 
-    The exemption is narrow on purpose.  Every belt on the tile must be ATTACHED
-    to the splitter standing there -- naming it as ``input_obj`` or
-    ``output_obj``.  A belt that merely happens to share a junction's tile
-    without naming it is not part of the junction; it is the ordinary collision
-    this check exists to catch, wearing a splitter as cover.
+    The exemption is narrow on purpose.  Every belt in the shared cell must be
+    ATTACHED to the Splitter on that horizontal tile -- naming it as
+    ``input_obj`` or ``output_obj``.  A belt that merely crosses a junction's
+    port plane without naming it is the ordinary collision this check exists to
+    catch, wearing a Splitter as cover.
     """
     for cell, occupants in sorted(ctx.occupancy.items()):
         belts = [i for i in occupants if ctx.kinds[i] is Kind.BELT]
         if len(belts) < 2:
             continue
-        junctions = [i for i in occupants if ctx.kinds[i] is Kind.SPLITTER]
+        junctions = [
+            i
+            for i, splitter in ctx.of_kind(Kind.SPLITTER)
+            if (splitter.x, splitter.y) == cell[:2]
+        ]
         attached = {b for j in junctions for b in ctx.junction_attachments(j)}
         loose = [i for i in belts if i not in attached]
         if junctions and not loose:

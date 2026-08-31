@@ -1075,6 +1075,23 @@ def test_projected_coater_splitter_candidates_match_brute_force_oracle() -> None
 
             assert got == want
 
+def test_projected_coater_splitter_candidates_accept_mixed_collider_models() -> None:
+    """A multi-level Splitter uses models 38, 39, and 40 in one blueprint."""
+    coater = _broke2_coater()
+    base = _broke2_splitter()[1]
+    splitters = (
+        (5, base),
+        (6, replace(base, model_index=40)),
+    )
+
+    candidates = finalize._projected_coater_splitter_candidates(
+        (coater,),
+        splitters,
+        _broke2_projection(),
+    )
+
+    assert candidates == (splitters,)
+
 
 def test_projected_coater_splitter_candidates_preserve_rotated_boundary() -> None:
     projection = replace(_broke2_projection(), quadrant=1)

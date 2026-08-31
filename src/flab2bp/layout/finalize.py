@@ -1375,8 +1375,10 @@ def _projected_coater_splitter_candidates(
 
     The exact rule expands each Coater OBB by one projected lateral grid arc.
     A sphere around that expanded OBB is therefore bounded by the immutable
-    model's collider radius plus that exact arc.  The Splitter uses its ordinary
-    collider sphere.  As in :func:`planet.candidate_pairs`, the distance below
+    Coater model's collider radius plus that exact arc.  The Splitter uses the
+    largest collider radius present in the index, admitting conservative false
+    positives when a multi-level junction mixes models 38, 39, and 40.  As in
+    :func:`planet.candidate_pairs`, the distance below
     is a lower bound: row spacing is fixed, column spacing uses the band's
     poleward minimum, and both arcs are reduced for chord curvature.  Thus a
     pair omitted here cannot reach the authoritative OBB predicate.
@@ -1444,16 +1446,13 @@ def _projected_coater_splitter_candidates(
         coater_bounds.append(
             planet.collider_radius(coater.model_index) + lateral_arc
         )
-    splitter_bounds_list: list[float] = []
+    splitter_bound = 0.0
     for _index, splitter in splitters:
         if cancelled is not None and cancelled():
             raise ProjectionCancelled
-        splitter_bounds_list.append(planet.collider_radius(splitter.model_index))
-    splitter_bounds = tuple(splitter_bounds_list)
-    splitter_bound = splitter_bounds[0]
-    if any(bound != splitter_bound for bound in splitter_bounds[1:]):
-        raise ValueError(
-            "projected coater keepout index requires one Splitter collider model"
+        splitter_bound = max(
+            splitter_bound,
+            planet.collider_radius(splitter.model_index),
         )
 
     def coordinates(building: colliders.Placed) -> _CoaterSplitterCoordinates:
