@@ -4265,6 +4265,58 @@ def test_plan_strips_applies_minimum_pitch_to_one_pose() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    "machine",
+    ("chemical-plant", "quantum-chemical-plant"),
+)
+def test_plan_strips_preclears_adjacent_machine_projected_pitch(
+    machine: str,
+) -> None:
+    spec = BuildSpec(
+        groups=(
+            group(
+                "plastic",
+                machine,
+                2,
+                {"refined-oil": F(1)},
+                {"plastic": F(1)},
+            ),
+        ),
+        external_inputs={"refined-oil": F(2)},
+        outputs={"plastic": F(2)},
+        belt_item_id="conveyor-belt-2",
+        belt_items_per_second=F(12),
+        label=f"projected-{machine}-pitch",
+    )
+
+    (strip,) = plan_strips(spec, band_policy=BandPolicy("portable"))
+    relation = freeform.StagedStaticClearanceKey(
+        peer_item_id=strip.item_id,
+        peer_model_index=strip.model_index,
+        peer_width=strip.mw,
+        peer_height=strip.mh,
+        peer_yaw=strip.yaw,
+        candidate_item_id=strip.item_id,
+        candidate_model_index=strip.model_index,
+        candidate_width=strip.mw,
+        candidate_height=strip.mh,
+        candidate_yaw=strip.yaw,
+        delta_x=strip.pw - 1,
+        delta_y=0,
+        delta_z=F(0),
+    )
+
+    assert strip.pw == 8
+    assert freeform._staged_static_relation_projection_risk(
+        relation,
+        BandPolicy("portable"),
+    )
+    assert not freeform._staged_static_relation_projection_risk(
+        replace(relation, delta_x=relation.delta_x + 1),
+        BandPolicy("portable"),
+    )
+
+
 def test_coarsening_preserves_pose_specific_minimum_pitch() -> None:
     spec = projected_chemical_plant_spec(machine_count=41)
     ordinary = plan_strips(spec, strip_len=1)
@@ -4348,11 +4400,11 @@ def test_freeform_keeps_projection_valid_with_evidence_scoped_pitch(
     assert report.ok
     assert not report.by_check("geom.collide")
     assert planned_pitches
-    assert set(planned_pitches[0]) == {7}
-    # Padding is learned only from an exact refusal. This fixture can now certify
-    # its first pitch-7 arrangement, in which case adding a retry would be
-    # unsupported work; deterministic refusal coverage lives below.
-    assert all(set(pitches) <= {7, 8} for pitches in planned_pitches)
+    assert set(planned_pitches[0]) == {8}
+    # The finite adjacent-machine relation is proved before packing, so the
+    # first arrangement consumes the same exact pitch evidence that a later
+    # finalizer refusal would have learned.
+    assert all(set(pitches) == {8} for pitches in planned_pitches)
 
 
 @pytest.fixture

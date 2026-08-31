@@ -1448,6 +1448,46 @@ class _StagedStaticPreclearanceProof:
 
 
 _staged_static_preclearance_proved = _StagedStaticPreclearanceProof()
+
+
+def _projected_machine_pitch_requirement(
+    item_id: int,
+    model_index: int,
+    variant: StripVariant,
+    policy: BandPolicy,
+    *,
+    cancelled: Callable[[], bool] | None = None,
+) -> int | None:
+    """Return the next pitch only when exact projection proves that cutover."""
+    relation = StagedStaticClearanceKey(
+        peer_item_id=item_id,
+        peer_model_index=model_index,
+        peer_width=variant.footprint_width,
+        peer_height=variant.footprint_height,
+        peer_yaw=variant.yaw,
+        candidate_item_id=item_id,
+        candidate_model_index=model_index,
+        candidate_width=variant.footprint_width,
+        candidate_height=variant.footprint_height,
+        candidate_yaw=variant.yaw,
+        delta_x=variant.pitch_x,
+        delta_y=0,
+        delta_z=Fraction(0),
+    )
+    cleared = replace(relation, delta_x=relation.delta_x + 1)
+    if cancelled is not None and cancelled():
+        raise _PreparationDeadline
+    token = _STAGED_STATIC_PROOF_CANCELLED.set(cancelled)
+    try:
+        rejected_risk, cleared_risk = _staged_static_relation_projection_risks(
+            (relation, cleared),
+            policy,
+        )
+    finally:
+        _STAGED_STATIC_PROOF_CANCELLED.reset(token)
+    return relation.delta_x + 1 if rejected_risk and not cleared_risk else None
+
+
 def _staged_static_projection_peers(
     buildings: Sequence[PlacedBuilding],
     candidate: PlacedBuilding,
@@ -2045,6 +2085,19 @@ def plan_strips(
             required_pitch = minimum_pitch_x.get(strip_pose_id(template))
             if required_pitch is not None:
                 template = variant_with_minimum_pitch(template, required_pitch)
+            if min(family.total_machine_count, max(1, strip_len)) > 1:
+                projected_pitch = _projected_machine_pitch_requirement(
+                    family.machine_item_id,
+                    family.model_index,
+                    template,
+                    band_policy,
+                    cancelled=cancelled,
+                )
+                if projected_pitch is not None:
+                    template = variant_with_minimum_pitch(
+                        template,
+                        projected_pitch,
+                    )
             instances = partition_strip_variant(
                 family,
                 template,
