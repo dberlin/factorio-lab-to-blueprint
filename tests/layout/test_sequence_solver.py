@@ -2253,27 +2253,113 @@ def test_tall_topology_role_protects_every_measured_candidate() -> None:
         == 3
     )
 
-@pytest.mark.parametrize(
-    ("strip_count", "sprayed_lanes", "expected"),
-    (
-        (13, 3, True),
-        (14, 3, False),
-        (13, 0, False),
-        (13, 11, False),
-    ),
-)
-def test_sparse_compact_topology_routes_the_first_diverse_relation(
-    strip_count: int,
-    sprayed_lanes: int,
-    expected: bool,
+def test_sparse_topology_preserves_candidate_zero_when_only_one_stage_is_admitted(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    assert (
-        sequence_solver_module._uses_sparse_compact_topology_diversity(
-            strip_count=strip_count,
-            sprayed_lanes=sprayed_lanes,
+    closed: list[tuple[int, ...]] = []
+
+    class FirstOnlyAdmission:
+        def __init__(self, **_kwargs: object) -> None:
+            self.starts = 0
+
+        def try_start(self) -> float | None:
+            self.starts += 1
+            return 0.0 if self.starts == 1 else None
+
+        def finish(self, _started: float) -> None:
+            return None
+
+    class CandidateZeroBeam:
+        def __init__(
+            self,
+            problem: PlacementProblem,
+            *,
+            coordinate_hint: DecodedPlacement,
+            config: object,
+            **_kwargs: object,
+        ) -> None:
+            self.problem = problem
+            self.hint = coordinate_hint
+            self.config = config
+
+        def solve_next(self, **_kwargs: object) -> CompactTopologyCandidate:
+            pairs = tuple(
+                ((first, second), (True, False, False, False))
+                for first in range(self.problem.size)
+                for second in range(first + 1, self.problem.size)
+            )
+            return CompactTopologyCandidate(
+                topology_index=0,
+                status=CompactSeedStatus.FEASIBLE,
+                x=self.hint.x,
+                y=self.hint.y,
+                width=self.hint.width,
+                used_height=self.hint.used_height,
+                variant_indices=self.hint.variant_indices,
+                signature=PairwiseRelationSignature(pairs),
+                deterministic_time=0.0,
+            )
+
+        def exclude(self, _signature: PairwiseRelationSignature) -> None:
+            return None
+
+    def close_candidate_zero(
+        _solver: SequenceSolver[object],
+        _height: int,
+        decoded: DecodedPlacement,
+        *,
+        reason: str,
+        allowance_cap: int | None = None,
+    ) -> DetailedStageResult:
+        del allowance_cap
+        assert reason == "topology-beam"
+        closed.append(decoded.x)
+        return sequence_solver_module._closed_detailed_result(
+            DetailedRouteStatus.STRANDED
         )
-        is expected
+
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "_MeasuredStageAdmission",
+        FirstOnlyAdmission,
     )
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "_topology_beam_height",
+        lambda _seeds, coarse, **_kwargs: coarse[0],
+    )
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "_uses_topology_beam",
+        lambda **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "_uses_sparse_compact_topology_diversity",
+        lambda **_kwargs: True,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "CompactTopologyBeam",
+        CandidateZeroBeam,
+    )
+    monkeypatch.setattr(
+        sequence_solver_module.SequenceSolver,
+        "close_exact_decoded",
+        close_candidate_zero,
+    )
+
+    _production_run(
+        two_stage_spec(),
+        band_policy=BandPolicy("portable"),
+        time_budget_s=2.0,
+        power=False,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+    )
+
+    assert len(closed) == 1
 
 
 @pytest.mark.parametrize(

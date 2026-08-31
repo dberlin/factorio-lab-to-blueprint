@@ -462,6 +462,64 @@ def test_child_soft_deadline_leaves_parent_time_to_collect_result(
     assert executor.shutdown_calls[-1] == (True, False)
 
 
+def test_island_reuses_authoritative_search_validation_after_soft_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    placement = _placement(area=20, belt_tiles=4)
+
+    class Solver:
+        def search(self) -> object:
+            return object()
+
+    class Run:
+        solver = Solver()
+
+    monkeypatch.setattr(
+        islands_module,
+        "_production_run",
+        lambda *_args, **_kwargs: Run(),
+    )
+    monkeypatch.setattr(
+        islands_module,
+        "_with_observational_stats",
+        lambda *_args, **_kwargs: placement,
+    )
+    monkeypatch.setattr(islands_module.time, "monotonic", lambda: 101.0)
+
+    def reject_revalidation(*_args: object, **_kwargs: object) -> Never:
+        raise AssertionError("island must reuse the solver's authoritative validation")
+
+    class RejectingValidator:
+        certify = staticmethod(reject_revalidation)
+
+    monkeypatch.setattr(
+        islands_module,
+        "validate",
+        RejectingValidator,
+        raising=False,
+    )
+    request = _SequenceIslandRequest(
+        spec=two_stage_spec(),
+        time_budget_s=1.0,
+        soft_deadline=100.0,
+        power=False,
+        band_policy=BandPolicy("portable"),
+        belt_vertical_construction=True,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+        island_id=0,
+        seed=SequenceSolverConfig.test().seed,
+        compact_seed_attempt=None,
+        compact_seed_base_seed=SequenceSolverConfig.test().seed,
+        compact_seed_config=CompactSeedConfig(max_deterministic_time=0.01),
+    )
+
+    outcome = _run_sequence_island(request)
+
+    assert outcome.status == "completed"
+    assert outcome.placement is placement
+
+
 @pytest.mark.parametrize(
     ("time_budget_s", "ceiling", "soft_deadline", "hard_deadline"),
     (

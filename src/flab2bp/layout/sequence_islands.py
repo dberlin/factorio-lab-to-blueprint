@@ -9,7 +9,6 @@ from concurrent.futures import Future, ProcessPoolExecutor, wait
 from dataclasses import dataclass, replace
 from typing import Literal
 
-from flab2bp.layout import validate
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import NoValidLayout, Placement, ProjectionFailureRecord
 from flab2bp.layout.compact_seed import CompactSeedConfig
@@ -149,8 +148,6 @@ def _run_sequence_island(request: _SequenceIslandRequest) -> _SequenceIslandOutc
             projection_failures=exc.projection_failures,
         )
 
-    if validate.certify(placement, request.spec, expect_power=request.power).errors:
-        return _SequenceIslandOutcome.invalid(request.island_id, request.seed, placement)
     return _SequenceIslandOutcome.completed(request.island_id, request.seed, placement)
 
 
