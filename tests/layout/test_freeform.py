@@ -4265,56 +4265,27 @@ def test_plan_strips_applies_minimum_pitch_to_one_pose() -> None:
     )
 
 
-@pytest.mark.parametrize(
-    "machine",
-    ("chemical-plant", "quantum-chemical-plant"),
-)
-def test_plan_strips_preclears_adjacent_machine_projected_pitch(
-    machine: str,
-) -> None:
-    spec = BuildSpec(
-        groups=(
-            group(
-                "plastic",
-                machine,
-                2,
-                {"refined-oil": F(1)},
-                {"plastic": F(1)},
-            ),
-        ),
-        external_inputs={"refined-oil": F(2)},
-        outputs={"plastic": F(2)},
-        belt_item_id="conveyor-belt-2",
-        belt_items_per_second=F(12),
-        label=f"projected-{machine}-pitch",
-    )
 
-    (strip,) = plan_strips(spec, band_policy=BandPolicy("portable"))
-    relation = freeform.StagedStaticClearanceKey(
-        peer_item_id=strip.item_id,
-        peer_model_index=strip.model_index,
-        peer_width=strip.mw,
-        peer_height=strip.mh,
-        peer_yaw=strip.yaw,
-        candidate_item_id=strip.item_id,
-        candidate_model_index=strip.model_index,
-        candidate_width=strip.mw,
-        candidate_height=strip.mh,
-        candidate_yaw=strip.yaw,
-        delta_x=strip.pw - 1,
-        delta_y=0,
-        delta_z=F(0),
-    )
 
-    assert strip.pw == 8
-    assert freeform._staged_static_relation_projection_risk(
-        relation,
-        BandPolicy("portable"),
+def test_pitch_replan_does_not_contaminate_later_ordinary_strip_plans() -> None:
+    spec = projected_chemical_plant_spec()
+    (family,) = generate_strip_families(spec)
+    ordinary_pitch = default_strip_variant(family).pitch_x
+    before = plan_strips(spec, strip_len=2)
+    variant = before[0].physical_variant
+    assert variant is not None
+    pose_id = strip_pose_id(variant)
+
+    widened = plan_strips(
+        spec,
+        strip_len=2,
+        minimum_pitch_x={pose_id: ordinary_pitch + 1},
     )
-    assert not freeform._staged_static_relation_projection_risk(
-        replace(relation, delta_x=relation.delta_x + 1),
-        BandPolicy("portable"),
-    )
+    after = plan_strips(spec, strip_len=2)
+
+    assert before[0].pw == ordinary_pitch
+    assert widened[0].pw == ordinary_pitch + 1
+    assert after[0].pw == ordinary_pitch
 
 
 def test_coarsening_preserves_pose_specific_minimum_pitch() -> None:
@@ -4344,18 +4315,19 @@ def test_coarsening_preserves_pose_specific_minimum_pitch() -> None:
     assert strip_pose_id(coarse[0].physical_variant) == pose_id
 
 
-def test_poseless_compatibility_family_remains_fail_closed_with_pitch_mapping() -> None:
+def test_port_driven_family_remains_directly_routable_with_pitch_mapping() -> None:
+    spec = mode_driven_spec()
     (strip,) = plan_strips(
-        mode_driven_spec(),
+        spec,
         strip_len=6,
         minimum_pitch_x={},
     )
 
     assert strip.physical_variant is None
-    with pytest.raises(NoValidLayout, match="no insert pose on any face"):
-        FreeformLayout(
-            band_policy=BandPolicy("portable"),
-        ).lay_out(mode_driven_spec(), time_budget_s=0.5)
+    placement = FreeformLayout(
+        band_policy=BandPolicy("portable"),
+    ).lay_out(spec, time_budget_s=4.0)
+    _assert_energy_exchanger_port_routing(placement, spec)
 
 
 def test_freeform_keeps_projection_valid_with_evidence_scoped_pitch(
@@ -4400,11 +4372,8 @@ def test_freeform_keeps_projection_valid_with_evidence_scoped_pitch(
     assert report.ok
     assert not report.by_check("geom.collide")
     assert planned_pitches
-    assert set(planned_pitches[0]) == {8}
-    # The finite adjacent-machine relation is proved before packing, so the
-    # first arrangement consumes the same exact pitch evidence that a later
-    # finalizer refusal would have learned.
-    assert all(set(pitches) == {8} for pitches in planned_pitches)
+    assert set(planned_pitches[0]) == {7}
+    assert set(planned_pitches[-1]) == {8}
 
 
 @pytest.fixture
@@ -7564,6 +7533,50 @@ def mode_driven_spec() -> BuildSpec:
     )
 
 
+def _assert_energy_exchanger_port_routing(
+    placement: Placement,
+    spec: BuildSpec,
+) -> None:
+    buildings = placement.buildings
+    machine_indices = tuple(
+        index
+        for index, building in enumerate(buildings)
+        if building.model_index == 45
+    )
+    assert machine_indices
+    assert not any(catalog.is_sorter(building.item_id) for building in buildings)
+    for machine_index in machine_indices:
+        machine = buildings[machine_index]
+        docks = slots.port_docks(machine)
+        feeders = tuple(
+            building
+            for building in buildings
+            if catalog.is_belt(building.item_id)
+            and building.output_obj == machine_index
+        )
+        products = tuple(
+            building
+            for building in buildings
+            if catalog.is_belt(building.item_id)
+            and building.input_obj == machine_index
+        )
+
+        assert len(feeders) == len(products) == 1
+        feeder = feeders[0]
+        product = products[0]
+        feed_dock = docks[feeder.output_to_slot]
+        product_dock = docks[product.input_from_slot]
+        assert feed_dock.port != product_dock.port
+        assert (feeder.x, feeder.y, feeder.z) == (*feed_dock.cell, F(0))
+        assert feeder.yaw == feed_dock.facing.opposite().value
+        assert feeder.output_from_slot == rules.BELT_PORT_FEED_FROM_SLOT
+        assert (product.x, product.y, product.z) == (*product_dock.cell, F(0))
+        assert product.yaw == product_dock.facing.value
+        assert product.input_to_slot == rules.BELT_PORT_DRAW_TO_SLOT
+
+    assert validate.certify(placement, spec, expect_power=True).ok
+
+
 class TestModeDrivenMachines:
     """Some machines are configured by a MODE, not a recipe id.
 
@@ -7573,19 +7586,18 @@ class TestModeDrivenMachines:
     as it turns out, the WIRING differ.
     """
 
-    def test_a_poseless_belt_port_machine_refuses_with_the_prefab_cause(self) -> None:
+    def test_empty_sorter_poses_use_exact_bidirectional_prefab_ports(self) -> None:
         info = catalog.building(catalog.ENERGY_EXCHANGER_ID)
+        assert info.model_index == 45
         assert info.slot_poses == ()
         assert len(info.port_poses) == 4
 
-        with pytest.raises(NoValidLayout) as exc:
-            FreeformLayout(
-                band_policy=BandPolicy("portable"),
-            ).lay_out(mode_driven_spec(), time_budget_s=0.5)
-        reason = exc.value.reason
-        assert "no insert pose on any face" in reason
-        assert "Energy Exchanger" in reason
-        assert "4 belt port(s)" in reason
+        spec = mode_driven_spec()
+        placement = FreeformLayout(
+            band_policy=BandPolicy("portable"),
+        ).lay_out(spec, time_budget_s=4.0)
+
+        _assert_energy_exchanger_port_routing(placement, spec)
 
     def test_the_machine_carries_the_mode_not_a_recipe(self) -> None:
         """Asked of the unit that decides it, since no placement reaches here.
