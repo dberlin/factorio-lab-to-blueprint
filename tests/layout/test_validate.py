@@ -13,6 +13,8 @@ from pathlib import Path
 
 import pytest
 
+import flab2bp.layout.validate as validate_module
+
 from flab2bp.dsp import params, rules
 from flab2bp.dsp.catalog import (
     DEFAULT_MAX_BELT_Z,
@@ -1349,6 +1351,32 @@ def test_game_belt_crossing_excuses_a_belt_beside_a_coater_on_the_ground() -> No
     assert not fired(validate(p, only=CROSSING), "game.belt_crossing")
 
 
+def test_game_belt_crossing_exact_probe_ignores_distant_belts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exact = validate_module.dsp_colliders.belt_crossings
+    probes = 0
+
+    def counted(*args: object, **kwargs: object) -> list[tuple[int, int]]:
+        nonlocal probes
+        probes += len(args[0])  # type: ignore[arg-type]
+        return exact(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(validate_module.dsp_colliders, "belt_crossings", counted)
+    placement = _coater_with_a_belt_at(1)
+    placement = Placement(
+        buildings=(
+            *placement.buildings,
+            *(belt(1_000 + offset, 1_000, 1) for offset in range(64)),
+        )
+    )
+
+    report = validate(placement, only=CROSSING)
+
+    assert fired(report, "game.belt_crossing")
+    assert probes == 1
+
+
 def test_game_inserter_paste_allows_a_purely_radial_stretch() -> None:
     """0.90 world units straight out of the face is legal on paste, not on copy.
 
@@ -1506,6 +1534,41 @@ COATER_SPEC = BuildSpec(
     external_inputs={"proliferator-3": Fraction(1)},
     spray_lanes={"ore": True},
 )
+
+
+def test_addon_belt_lookup_reuses_exact_result_across_checks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exact = validate_module.slots.world_gap
+    probes = 0
+
+    def counted(dx: float, dy: float, dz: float) -> float:
+        nonlocal probes
+        probes += 1
+        return exact(dx, dy, dz)
+
+    monkeypatch.setattr(validate_module.slots, "world_gap", counted)
+    placement = place(
+        belt(0, 0, carries="ore"),
+        belt(-1, 0, 1, carries="proliferator-3"),
+        _coater(0, 0),
+        *(belt(1_000 + offset, 1_000, 1) for offset in range(64)),
+    )
+
+    report = validate(
+        placement,
+        COATER_SPEC,
+        ids=IdMap(),
+        only={
+            "game.addon_supply",
+            "belt.termination",
+            "prolif.coaters_are_supplied",
+        },
+    )
+
+    assert not fired(report, "game.addon_supply")
+    assert not fired(report, "prolif.coaters_are_supplied")
+    assert probes <= 4
 
 
 def _coater_supply_report(

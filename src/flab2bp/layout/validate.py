@@ -268,6 +268,9 @@ class _Cache:
     sorter_peers: _SorterPeers | None = None
     coater_rides: dict[int, int] | None = None
     port_docks: tuple[_Dock, ...] | None = None
+    belts_by_tile: dict[tuple[int, int], tuple[int, ...]] | None = None
+    addon_area_belts: dict[tuple[PlacedBuilding, int], int | None] = field(default_factory=dict)
+    addon_crossing_reach: dict[tuple[int, int, int], int] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -1936,6 +1939,18 @@ def _inserter_skew(ctx: Context) -> Iterable[Finding]:
                 )
 
 
+def _belts_by_tile(ctx: Context) -> Mapping[tuple[int, int], tuple[int, ...]]:
+    """Belt indices by plan tile, preserving placement order within each tile."""
+    got = ctx.cache.belts_by_tile
+    if got is None:
+        mutable: dict[tuple[int, int], list[int]] = defaultdict(list)
+        for i, belt in ctx.of_kind(Kind.BELT):
+            mutable[(belt.x, belt.y)].append(i)
+        got = {tile: tuple(indices) for tile, indices in mutable.items()}
+        ctx.cache.belts_by_tile = got
+    return got
+
+
 def _belt_in_addon_area(
     ctx: Context,
     addon: PlacedBuilding,
@@ -1943,6 +1958,10 @@ def _belt_in_addon_area(
     area: int,
 ) -> int | None:
     """Nearest belt the game selects, breaking exact distance ties by index."""
+    key = (addon, area)
+    if key in ctx.cache.addon_area_belts:
+        return ctx.cache.addon_area_belts[key]
+
     want = slots.addon_supply_position(
         addon.item_id,
         x=addon.x,
@@ -1951,18 +1970,28 @@ def _belt_in_addon_area(
         yaw=addon.yaw,
         area=area,
     )
+    # ``world_gap`` remains the authority.  This square is only its conservative
+    # horizontal broadphase: outside it, one axis alone already exceeds the
+    # spherical addon radius.
+    reach = math.ceil(rules.ADDON_AREA_RADIUS / colliders.GRID_ARC)
+    anchor_x = math.floor(float(want[0]))
+    anchor_y = math.floor(float(want[1]))
+    by_tile = _belts_by_tile(ctx)
     candidates = []
-    for i, belt in enumerate(ctx.placement.buildings):
-        if ctx.kinds[i] is not Kind.BELT:
-            continue
-        distance = slots.world_gap(
-            float(want[0] - belt.x),
-            float(want[1] - belt.y),
-            float(want[2] - belt.z),
-        )
-        if distance < rules.ADDON_AREA_RADIUS:
-            candidates.append((distance, i))
-    return min(candidates)[1] if candidates else None
+    for x in range(anchor_x - reach, anchor_x + reach + 1):
+        for y in range(anchor_y - reach, anchor_y + reach + 1):
+            for i in by_tile.get((x, y), ()):
+                belt = ctx.placement.buildings[i]
+                distance = slots.world_gap(
+                    float(want[0] - belt.x),
+                    float(want[1] - belt.y),
+                    float(want[2] - belt.z),
+                )
+                if distance < rules.ADDON_AREA_RADIUS:
+                    candidates.append((distance, i))
+    selected = min(candidates)[1] if candidates else None
+    ctx.cache.addon_area_belts[key] = selected
+    return selected
 
 
 def _expected_addon_items(
@@ -2394,6 +2423,37 @@ def _belt_crossing(ctx: Context) -> Iterable[Finding]:
     yield from _addon_crossings(ctx)
 
 
+def _addon_crossing_tile_reach(ctx: Context, addon: PlacedBuilding) -> int:
+    """Conservative plan-tile radius containing every exact collider hit."""
+    key = (addon.model_index, addon.width, addon.height)
+    got = ctx.cache.addon_crossing_reach.get(key)
+    if got is not None:
+        return got
+
+    # The plan anchor is the footprint's minimum corner while the collider is
+    # placed about its centre.  A sphere enclosing every oriented collider box
+    # is yaw-independent, so this bound cannot discard an exact crossing for
+    # any model or orientation.  The final belt_crossings call remains the
+    # verdict.
+    anchor_to_centre = max((addon.width - 1) / 2.0, (addon.height - 1) / 2.0)
+    collider_radius = max(
+        (
+            math.dist((0.0, 0.0, 0.0), position)
+            + math.dist((0.0, 0.0, 0.0), half_extents)
+            for position, half_extents, _rotation in dsp_colliders.build_colliders(
+                addon.model_index
+            )
+        ),
+        default=0.0,
+    )
+    got = math.ceil(
+        anchor_to_centre
+        + (collider_radius + dsp_colliders.BELT_PROBE_RADIUS) / colliders.GRID_ARC
+    )
+    ctx.cache.addon_crossing_reach[key] = got
+    return got
+
+
 def _addon_crossings(ctx: Context) -> Iterable[Finding]:
     """A belt passing OVER a belt addon owes it the same clearance as anything else.
 
@@ -2435,8 +2495,8 @@ def _addon_crossings(ctx: Context) -> Iterable[Finding]:
     addons = [i for i, b in enumerate(bs) if ctx.kinds[i] is Kind.ADDON]
     if not addons:
         return
-    belts = [i for i, b in enumerate(bs) if cat.is_belt(b.item_id)]
-    if not belts:
+    belts_by_tile = _belts_by_tile(ctx)
+    if not belts_by_tile:
         return
     for ai in addons:
         ab = bs[ai]
@@ -2469,7 +2529,14 @@ def _addon_crossings(ctx: Context) -> Iterable[Finding]:
             *codec.tile_to_local_offset(ab.x, ab.y, ab.z, ab.width, ab.height),
             ab.yaw,
         )
-        for bi in belts:
+        reach = _addon_crossing_tile_reach(ctx, ab)
+        candidate_belts = {
+            bi
+            for x in range(ab.x - reach, ab.x + reach + 1)
+            for y in range(ab.y - reach, ab.y + reach + 1)
+            for bi in belts_by_tile.get((x, y), ())
+        }
+        for bi in sorted(candidate_belts):
             b = bs[bi]
             if b.z <= ab.z:
                 continue
