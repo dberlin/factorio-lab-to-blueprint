@@ -296,9 +296,12 @@ RRR_MAX = 8
 #: pack arrangements than on replaying one greedy routing order.
 _SINGLE_ROUND_NETS = 64
 
-#: Above this size CP-SAT's portfolio variance changes corpus completeness with
-#: audit job allocation; the fixed seed is meaningful only with one worker.
-_DETERMINISTIC_PACK_STRIPS = 24
+#: At fifteen strips CP-SAT's multi-worker portfolio already changes whether the
+#: fixed-seed packing can be routed: the same fifteen-strip plan repeatedly
+#: wires with one worker and can exhaust every candidate with the default
+#: portfolio.  Pin this structural size and larger so the seed actually names a
+#: reproducible candidate, independent of audit job allocation.
+_DETERMINISTIC_PACK_STRIPS = 15
 
 #: Rip-up rounds with no improvement in the failure count before giving up.
 #:

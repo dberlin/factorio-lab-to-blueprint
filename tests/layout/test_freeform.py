@@ -3630,6 +3630,41 @@ def test_admitted_feedback_retry_cannot_cascade_to_a_third_arrangement(
 
 
 
+def test_fifteen_strip_pack_uses_one_reproducible_solver_worker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    base = plan_strips(two_stage_spec())
+    strips = [base[index % len(base)] for index in range(15)]
+    seed = freeform._Pack(
+        at={index: (0, 0) for index in range(len(strips))},
+        width=20,
+        height=20,
+        status="seed",
+    )
+    seen_workers: list[int] = []
+
+    def pack(*_args: object, workers: int, **_kwargs: object) -> None:
+        seen_workers.append(workers)
+        return None
+
+    monkeypatch.setattr(
+        freeform,
+        "_band_policy_candidate_heights",
+        lambda _strips, _policy: (20,),
+    )
+    monkeypatch.setattr(freeform, "_greedy_pack", lambda *_args: seed)
+    monkeypatch.setattr(freeform, "_pack", pack)
+
+    result = FreeformLayout(
+        band_policy=BandPolicy("portable"),
+        workers=8,
+        arrangements=1,
+    )._sweep(two_stage_spec(), strips, 1.0)
+
+    assert result is None
+    assert seen_workers == [1]
+
+
 def test_route_aware_height_order_preserves_exact_candidate_set(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -11786,6 +11821,26 @@ class TestSourceTapMaterializesSupportedSplitterStacks:
         assert sorted(building.z for building in attachments) == [0, 1, 1]
         wired = slots.assign_belt_slots(canvas.buildings)
         assert not splitter_ports.placement_issues(wired)
+
+    def test_level_one_model_40_carry_is_one_valid_occupancy(self) -> None:
+        canvas, source, branch = self._scene(1, branch_level=0)
+
+        assert freeform._tap_source(
+            canvas,
+            source,
+            branch,
+            2001,
+            35,
+            excused={(-1, 0, 1), (0, 0, 1), (1, 0, 1), (0, -1, 0)},
+        )
+
+        wired = slots.assign_belt_slots(canvas.buildings)
+        report = validate.validate(
+            Placement(tuple(wired)),
+            only=["geom.belt_single_occupancy"],
+            expect_power=False,
+        )
+        assert not report.errors, "\n".join(finding.message for finding in report.errors)
 
     def test_level_one_model_40_uses_both_lower_branch_ports(self) -> None:
         canvas, source, first_branch = self._scene(1, branch_level=0)
