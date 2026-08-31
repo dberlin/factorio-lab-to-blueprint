@@ -12477,12 +12477,17 @@ class FreeformLayout:
         finalizer_parameters = inspect.signature(
             finalize.finalize_placement
         ).parameters
+        cancelled_parameter = finalizer_parameters.get("cancelled")
         finalizer_accepts_cancelled = (
-            "cancelled" in finalizer_parameters
-            or any(
-                parameter.kind is inspect.Parameter.VAR_KEYWORD
-                for parameter in finalizer_parameters.values()
+            cancelled_parameter is not None
+            and cancelled_parameter.kind
+            in (
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                inspect.Parameter.KEYWORD_ONLY,
             )
+        ) or any(
+            parameter.kind is inspect.Parameter.VAR_KEYWORD
+            for parameter in finalizer_parameters.values()
         )
 
         def projection_retry_affordable() -> bool:

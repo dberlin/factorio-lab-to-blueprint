@@ -2909,6 +2909,76 @@ def test_sweep_legacy_finalizer_crossing_deadline_cannot_install_best(
     assert result is None
 
 
+def test_sweep_positional_only_cancelled_parameter_uses_legacy_dispatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    expired = [False]
+    finalized: list[Placement] = []
+
+    class PositionalOnlyFinalizer:
+        def __call__(
+            self,
+            placement: Placement,
+            _policy: BandPolicy,
+            cancelled: Callable[[], bool] | None = None,
+            /,
+        ) -> Placement:
+            finalized.append(placement)
+            expired[0] = True
+            return placement
+
+    monkeypatch.setattr(freeform, "_expired", lambda _deadline: expired[0])
+    result, _seen, _attempts = _sweep_after_first_routing(
+        monkeypatch,
+        DetailedRouteResult(
+            DetailedRouteStatus.ROUTED,
+            (),
+            (),
+            0,
+            0,
+        ),
+        arrangements=1,
+        deadline=time.monotonic() + 10.0,
+        finalizer=PositionalOnlyFinalizer(),
+    )
+
+    assert finalized
+    assert result is None
+
+
+def test_sweep_var_keyword_finalizer_receives_cancellation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: list[Callable[[], bool]] = []
+
+    class KeywordFinalizer:
+        def __call__(
+            self,
+            _placement: Placement,
+            _policy: BandPolicy,
+            **kwargs: Callable[[], bool],
+        ) -> Placement:
+            observed.append(kwargs["cancelled"])
+            raise finalize.ProjectionCancelled
+
+    result, _seen, _attempts = _sweep_after_first_routing(
+        monkeypatch,
+        DetailedRouteResult(
+            DetailedRouteStatus.ROUTED,
+            (),
+            (),
+            0,
+            0,
+        ),
+        arrangements=1,
+        deadline=time.monotonic() + 10.0,
+        finalizer=KeywordFinalizer(),
+    )
+
+    assert observed
+    assert result is None
+
+
 def test_exact_one_net_feedback_admits_the_next_configured_arrangement(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
