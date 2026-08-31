@@ -2769,7 +2769,9 @@ def _feedback_objective_evidence(
         levels = {source_offset[2], destination_offset[2]}
         hot_cells = tuple(
             (cell, max(1, math.ceil(history)))
-            for cell, history in sorted(feedback.cell_history.items())
+            for cell, history in sorted(
+                feedback.net_cell_history.get(net, {}).items()
+            )
             if history > 0.0 and cell[2] in levels
         )
         evidence.append(

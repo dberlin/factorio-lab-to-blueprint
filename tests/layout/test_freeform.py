@@ -2912,6 +2912,36 @@ def test_admitted_feedback_retry_is_not_rechecked_at_deadline_boundary(
     assert result is not None
     assert seen[:2] == [(20, 0), (20, 1)]
 
+
+def test_failed_assignments_enumerate_direct_candidates_once_per_strip_plan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    enumerations = 0
+    enumerate_candidates = freeform._direct_net_candidates
+
+    def counted_candidates(
+        strips: list[Strip],
+        spec: BuildSpec,
+    ) -> dict[tuple[int, int], object]:
+        nonlocal enumerations
+        enumerations += 1
+        return enumerate_candidates(strips, spec)
+
+    monkeypatch.setattr(freeform, "_direct_net_candidates", counted_candidates)
+    failure = _routing_failures(RouteFailureKind.CONGESTION_WALL)
+
+    result, seen, _attempts = _sweep_after_first_routing(
+        monkeypatch,
+        failure,
+        arrangements=1,
+        heights=(20, 21, 22),
+        subsequent_routing=failure,
+    )
+
+    assert result is None
+    assert seen == [(20, 0), (21, 0), (22, 0)]
+    assert enumerations == 1
+
 def test_admitted_feedback_retry_cannot_cascade_to_a_third_arrangement(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3051,6 +3081,7 @@ def test_route_feedback_objective_keeps_exact_net_terms_and_hot_walls() -> None:
         net_weight=cold.net_weight,
         cell_history={(12, 5, 0): 2.0},
         endpoint_offsets=endpoints,
+        net_cell_history={first: {(12, 5, 0): 2.0}},
     )
 
     cold_terms = freeform._feedback_objective_evidence(cold, strip_count=2)
@@ -3076,6 +3107,52 @@ def test_route_feedback_objective_keeps_exact_net_terms_and_hot_walls() -> None:
     )
 
 
+def test_route_feedback_disjoint_walls_create_only_linear_exact_terms() -> None:
+    count = 6
+    origins = ((0, 0), (20, 0))
+    nets = tuple(
+        NetId(0, 1, f"item-{index}", NetRole.INTERNAL, index)
+        for index in range(count)
+    )
+    walls = tuple((index + 5, 10, 0) for index in range(count))
+    failures = tuple(
+        NetFailure(
+            net,
+            RouteFailureKind.CONGESTION_WALL,
+            (wall,),
+            (),
+            1,
+            source=(2, index + 1, 0),
+            destination=(22, index + 1, 0),
+        )
+        for index, (net, wall) in enumerate(zip(nets, walls, strict=True))
+    )
+    feedback = freeform.update_feedback(
+        FeedbackState.empty((40, 20)),
+        DetailedRouteResult(
+            DetailedRouteStatus.STRANDED,
+            (),
+            failures,
+            0,
+            count,
+        ),
+        origins=origins,
+    )
+
+    terms = freeform._feedback_objective_evidence(feedback, strip_count=2)
+    by_net = {term.net_id: term for term in terms}
+
+    assert len(terms) == count
+    assert sum(len(term.hot_cells) for term in terms) == count
+    assert {
+        net: tuple(cell for cell, _history in by_net[net].hot_cells)
+        for net in nets
+    } == {
+        net: (wall,)
+        for net, wall in zip(nets, walls, strict=True)
+    }
+
+
 def test_route_feedback_exact_terms_build_a_valid_pack_model() -> None:
     strips = plan_strips(two_stage_spec(), strip_len=6)
     height = sum(_box(strip)[1] for strip in strips)
@@ -3086,6 +3163,7 @@ def test_route_feedback_exact_terms_build_a_valid_pack_model() -> None:
         net_weight={net: 1.0},
         cell_history={(0, 0, 0): 1.0},
         endpoint_offsets={net: ((0, 0, 0), (0, 0, 0))},
+        net_cell_history={net: {(0, 0, 0): 1.0}},
     )
 
     packed = _pack(

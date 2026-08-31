@@ -166,6 +166,11 @@ class FeedbackState:
     cell_history: Mapping[Cell, float]
     logical_net_weight: Mapping[LogicalNetId, float] = field(default_factory=dict)
     endpoint_offsets: Mapping[NetId, tuple[Cell, Cell]] = field(default_factory=dict)
+    #: Exact hot-wall histories keyed by the physical nets implicated in the
+    #: failure that produced each wall. The shared history above remains the
+    #: routing penalty grid; packing must never form its Cartesian product with
+    #: every failed net.
+    net_cell_history: Mapping[NetId, Mapping[Cell, float]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if (
@@ -179,6 +184,10 @@ class FeedbackState:
         cell_history = dict(self.cell_history)
         logical_net_weight = dict(self.logical_net_weight)
         endpoint_offsets = dict(self.endpoint_offsets)
+        net_cell_history = {
+            net: dict(history)
+            for net, history in self.net_cell_history.items()
+        }
         if any(
             not isinstance(net, NetId)
             or not math.isfinite(value)
@@ -208,6 +217,20 @@ class FeedbackState:
             )
         if any(
             not isinstance(net, NetId)
+            or any(
+                not _valid_cell(cell, width, height)
+                or not math.isfinite(value)
+                or value < 0.0
+                for cell, value in history.items()
+            )
+            for net, history in net_cell_history.items()
+        ):
+            raise ValueError(
+                "per-net feedback cell history must be finite, non-negative, "
+                "and inside the outline"
+            )
+        if any(
+            not isinstance(net, NetId)
             or not isinstance(endpoints, tuple)
             or len(endpoints) != 2
             or any(not _coordinate_cell(cell) for cell in endpoints)
@@ -228,6 +251,16 @@ class FeedbackState:
             "endpoint_offsets",
             MappingProxyType(endpoint_offsets),
         )
+        object.__setattr__(
+            self,
+            "net_cell_history",
+            MappingProxyType(
+                {
+                    net: MappingProxyType(history)
+                    for net, history in net_cell_history.items()
+                }
+            ),
+        )
 
     @classmethod
     def empty(cls, outline: tuple[int, int]) -> FeedbackState:
@@ -238,6 +271,7 @@ class FeedbackState:
             cell_history={},
             logical_net_weight={},
             endpoint_offsets={},
+            net_cell_history={},
         )
 
     def for_outline(self, outline: tuple[int, int]) -> FeedbackState:
@@ -250,6 +284,7 @@ class FeedbackState:
             cell_history={},
             logical_net_weight=self.logical_net_weight,
             endpoint_offsets=self.endpoint_offsets,
+            net_cell_history={},
         )
 
 
@@ -268,10 +303,14 @@ def update_feedback(
     logical_net_weight = dict(state.logical_net_weight)
     cell_history = dict(state.cell_history)
     endpoint_offsets = dict(state.endpoint_offsets)
+    net_cell_history = {
+        net: dict(history)
+        for net, history in state.net_cell_history.items()
+    }
     width, height = state.outline
     for failure in geometric:
-        implicated = (failure.net_id, *failure.blocking_nets)
-        for net in dict.fromkeys(implicated):
+        implicated = tuple(dict.fromkeys((failure.net_id, *failure.blocking_nets)))
+        for net in implicated:
             logical = net.logical
             weight = min(
                 _MAX_NET_WEIGHT,
@@ -305,15 +344,24 @@ def update_feedback(
                 )
                 if offsets is not None:
                     endpoint_offsets[net] = offsets
-        for cell in failure.wall:
-            if _valid_cell(cell, width, height):
-                cell_history[cell] = cell_history.get(cell, 0.0) + 1.0
+        wall = tuple(
+            cell
+            for cell in failure.wall
+            if _valid_cell(cell, width, height)
+        )
+        for cell in wall:
+            cell_history[cell] = cell_history.get(cell, 0.0) + 1.0
+        for net in implicated:
+            history = net_cell_history.setdefault(net, {})
+            for cell in wall:
+                history[cell] = history.get(cell, 0.0) + 1.0
     return FeedbackState(
         state.outline,
         net_weight,
         cell_history,
         logical_net_weight,
         endpoint_offsets,
+        net_cell_history=net_cell_history,
     )
 
 
@@ -334,6 +382,15 @@ def decay_feedback(state: FeedbackState) -> FeedbackState:
         for cell, value in state.cell_history.items()
         if (decayed := value * _DECAY_FACTOR) >= _PRUNE_BELOW
     }
+    net_cell_history = {
+        net: {
+            cell: decayed
+            for cell, value in history.items()
+            if (decayed := value * _DECAY_FACTOR) >= _PRUNE_BELOW
+        }
+        for net, history in state.net_cell_history.items()
+        if net in net_weight
+    }
     return FeedbackState(
         state.outline,
         net_weight,
@@ -344,6 +401,7 @@ def decay_feedback(state: FeedbackState) -> FeedbackState:
             for net, endpoints in state.endpoint_offsets.items()
             if net in net_weight
         },
+        net_cell_history=net_cell_history,
     )
 
 
@@ -372,6 +430,7 @@ def remap_feedback_nets(
             for net, endpoints in state.endpoint_offsets.items()
             if net in physical
         },
+        net_cell_history={},
     )
 
 
