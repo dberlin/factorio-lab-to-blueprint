@@ -4801,3 +4801,44 @@ def test_production_certify_maps_projection_cancellation_to_budget(
     assert verdict.placement is None
     assert verdict.failed_checks == ()
     assert verdict.projection_failures == ()
+
+
+def test_legacy_finalizer_crossing_deadline_returns_incomplete_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    deadline = time.monotonic() + 100.0
+    run = _production_run(
+        two_stage_spec(),
+        band_policy=BandPolicy("portable"),
+        time_budget_s=2.0,
+        power=False,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+        absolute_deadline=deadline,
+    )
+    monkeypatch.setattr(
+        validate,
+        "certify",
+        lambda *_args, **_kwargs: SimpleNamespace(errors=()),
+    )
+    monkeypatch.setattr(
+        finalize,
+        "finalize_placement",
+        lambda placement, _policy: placement,
+    )
+    clock = iter((deadline - 1.0, deadline - 1.0, deadline + 1.0))
+    monkeypatch.setattr(
+        sequence_solver_module.time,
+        "monotonic",
+        lambda: next(clock),
+    )
+
+    verdict = run.solver.adapters.validate(_placement(area=20, belt_tiles=4))
+
+    assert not verdict.ok
+    assert verdict.status is DetailedRouteStatus.BUDGET
+    assert verdict.placement is None
+    assert verdict.failed_checks == ()
+    assert verdict.projection_failures == ()

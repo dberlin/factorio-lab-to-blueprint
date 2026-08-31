@@ -3751,6 +3751,13 @@ def _production_run(
                 None,
                 status=DetailedRouteStatus.BUDGET,
             )
+        if deadline_reached():
+            return ValidationVerdict(
+                False,
+                (),
+                None,
+                status=DetailedRouteStatus.BUDGET,
+            )
         return ValidationVerdict(True, (), finalized)
 
     family_by_id = {family.family_id: family for family in generate_strip_families(spec)}
