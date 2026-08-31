@@ -4983,9 +4983,9 @@ def test_junction_projection_frames_preserve_legacy_first_witness() -> None:
     assert frames[0].bounds == (-1, -1, 0, 0)
 
 
-def test_junction_projection_frame_order_matches_random_small_brute_oracle() -> None:
+def test_junction_projection_frame_order_matches_randomized_small_brute_oracle() -> None:
     randomizer = random.Random(0xF24A)
-    for _fixture in range(24):
+    for _fixture in range(64):
         min_x = randomizer.randrange(-2, 3)
         min_y = randomizer.randrange(-2, 3)
         occupied = (
@@ -4995,7 +4995,7 @@ def test_junction_projection_frame_order_matches_random_small_brute_oracle() -> 
             min_y + randomizer.randrange(1, 4),
         )
         left, bottom, right, top = (
-            randomizer.randrange(3) for _side in range(4)
+            randomizer.randrange(4) for _side in range(4)
         )
         limit = (
             occupied[0] - left,
@@ -5015,28 +5015,48 @@ def test_junction_projection_frame_order_matches_random_small_brute_oracle() -> 
         )
 
 
-def test_junction_projection_frame_work_grows_quadratically_not_quartically() -> None:
-    def measured(slack: int) -> tuple[int, int]:
-        checks = 0
+def test_junction_projection_frame_work_is_output_sensitive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    candidate_calls = 0
+    original = finalize._frame_candidates_for_extent
 
-        def cancelled() -> bool:
-            nonlocal checks
-            checks += 1
-            return False
-
-        frames = freeform._junction_projection_frames(
-            (0, 0, 2, 2),
-            (-slack, -slack, 2 + slack, 2 + slack),
-            BandPolicy("portable"),
-            cancelled=cancelled,
+    def counted_candidates(
+        width: int,
+        height: int,
+        policy: BandPolicy,
+        *,
+        prior_rotated: bool = False,
+    ) -> tuple[finalize.FrameCandidate, ...]:
+        nonlocal candidate_calls
+        candidate_calls += 1
+        return original(
+            width,
+            height,
+            policy,
+            prior_rotated=prior_rotated,
         )
-        return checks, len(frames)
 
-    small_checks, small_frames = measured(4)
-    large_checks, large_frames = measured(8)
+    monkeypatch.setattr(
+        finalize,
+        "_frame_candidates_for_extent",
+        counted_candidates,
+    )
 
-    assert large_checks <= 6 * small_checks
-    assert large_frames <= 3 * small_frames
+    def measured(size: int) -> tuple[int, int]:
+        before = candidate_calls
+        frames = freeform._junction_projection_frames(
+            (0, 0, 0, 0),
+            (-(size // 2 - 1), -(size // 2 - 1), size // 2, size // 2),
+            BandPolicy("portable"),
+        )
+        return candidate_calls - before, len(frames)
+
+    small_calls, small_frames = measured(8)
+    large_calls, large_frames = measured(16)
+
+    assert large_frames < 3 * small_frames
+    assert large_calls < 3 * small_calls
 
 
 def test_cleanup_survivor_cache_is_scoped_to_complete_candidate_geometry(

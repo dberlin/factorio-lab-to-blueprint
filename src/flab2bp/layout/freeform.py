@@ -8833,11 +8833,11 @@ def _junction_projection_frames(
     """Distinct physical frames in exact legacy first-encounter order.
 
     A finalizer transform depends on orientation and latitude offset only:
-    longitude translation is a rigid rotation of the planet.  Width/height
-    still select certified bands and anchors, so each distinct extent is
-    enumerated once.  Every candidate covers a contiguous offset interval.
-    Offset disjoint sets choose the lexicographically first old four-edge
-    witness without enumerating its left/bottom/right/top combinations.
+    longitude translation is a rigid rotation of the planet.  For each
+    orientation and latitude extent, primary-band thresholds partition the
+    longitude extents into a handful of equivalent ranges.  Only the legacy
+    first witness in each range can contribute a frame or projection, avoiding
+    the Cartesian width/height grid while preserving exact ordering.
     """
     if cancelled is not None and cancelled():
         raise _PreparationDeadline
@@ -8854,59 +8854,121 @@ def _junction_projection_frames(
     limit_width = limit_max_x - limit_min_x + 1
     limit_height = limit_max_y - limit_min_y + 1
     by_segments = {band.area_segments: band for band in planet.bands()}
+    ordered_bands = tuple(
+        sorted(by_segments.values(), key=lambda band: band.area_segments)
+    )
+
+    def primary_cross_ranges(
+        rows: int,
+        cross_min: int,
+        cross_max: int,
+    ):
+        """Primary band and inclusive cross-extent ranges for fixed rows."""
+        explicit = policy.explicit_segments
+        if explicit is not None:
+            yield by_segments[explicit], cross_min, cross_max
+            return
+
+        previous_fit_hi = 0
+        for band in ordered_bands:
+            if cancelled is not None and cancelled():
+                raise _PreparationDeadline
+            fit_hi = 0
+            if rows <= band.rows:
+                fit_hi = band.columns
+            if rows <= band.columns:
+                fit_hi = max(fit_hi, band.rows)
+            range_lo = max(cross_min, previous_fit_hi + 1)
+            range_hi = min(cross_max, fit_hi)
+            previous_fit_hi = max(previous_fit_hi, fit_hi)
+            if range_lo <= range_hi:
+                yield band, range_lo, range_hi
+
     intervals: list[_ReachableFrameInterval] = []
     projection_intervals: dict[
         tuple[bool, int, int, int, tuple[int, ...]],
         _ReachableFrameInterval,
     ] = {}
 
-    for width in range(occupied_width, limit_width + 1):
-        min_x_lo = max(limit_min_x, occupied_max_x - width + 1)
-        min_x_hi = min(occupied_min_x, limit_max_x - width + 1)
-        for height in range(occupied_height, limit_height + 1):
+    for rotated in (False, True):
+        if rotated:
+            row_min, row_max = occupied_width, limit_width
+            cross_min, cross_max = occupied_height, limit_height
+            occupied_cross_max = occupied_max_y
+            limit_cross_min = limit_min_y
+        else:
+            row_min, row_max = occupied_height, limit_height
+            cross_min, cross_max = occupied_width, limit_width
+            occupied_cross_max = occupied_max_x
+            limit_cross_min = limit_min_x
+        leftmost_cross_extent = occupied_cross_max - limit_cross_min + 1
+
+        for rows in range(row_min, row_max + 1):
             if cancelled is not None and cancelled():
                 raise _PreparationDeadline
-            min_y_lo = max(limit_min_y, occupied_max_y - height + 1)
-            min_y_hi = min(occupied_min_y, limit_max_y - height + 1)
-            candidates = finalize._frame_candidates_for_extent(
-                width,
-                height,
-                policy,
-            )
-            for candidate_index, candidate in enumerate(candidates):
+            for primary, range_lo, range_hi in primary_cross_ranges(
+                rows,
+                cross_min,
+                cross_max,
+            ):
                 if cancelled is not None and cancelled():
                     raise _PreparationDeadline
-                rotated = candidate.frame.rotated
-                coordinate_lo, coordinate_hi = (
-                    (min_x_lo, min_x_hi)
-                    if rotated
-                    else (min_y_lo, min_y_hi)
+                range_hi = min(range_hi, primary.columns)
+                if rows > primary.rows or range_lo > range_hi:
+                    continue
+                cross = min(
+                    max(leftmost_cross_extent, range_lo),
+                    range_hi,
                 )
-                interval = _ReachableFrameInterval(
-                    rotated=rotated,
-                    offset_lo=candidate.south_padding - coordinate_hi,
-                    offset_hi=candidate.south_padding - coordinate_lo,
-                    width=width,
-                    height=height,
-                    min_x_lo=min_x_lo,
-                    min_y_lo=min_y_lo,
-                    candidate_index=candidate_index,
-                    candidate=candidate,
+                width, height = (
+                    (rows, cross) if rotated else (cross, rows)
                 )
-                intervals.append(interval)
-                projection_key = (
-                    rotated,
-                    interval.offset_lo,
-                    interval.offset_hi,
-                    candidate.frame.height,
-                    candidate.frame.certified_bands,
+                min_x_lo = max(limit_min_x, occupied_max_x - width + 1)
+                min_x_hi = min(occupied_min_x, limit_max_x - width + 1)
+                min_y_lo = max(limit_min_y, occupied_max_y - height + 1)
+                min_y_hi = min(occupied_min_y, limit_max_y - height + 1)
+                candidates = finalize._frame_candidates_for_extent(
+                    width,
+                    height,
+                    policy,
                 )
-                prior = projection_intervals.get(projection_key)
-                if (
-                    prior is None
-                    or interval.ordering_key() < prior.ordering_key()
-                ):
-                    projection_intervals[projection_key] = interval
+                for candidate_index, candidate in enumerate(candidates):
+                    if candidate.frame.rotated is not rotated:
+                        continue
+                    if candidate.frame.primary_band != primary.area_segments:
+                        continue
+                    if cancelled is not None and cancelled():
+                        raise _PreparationDeadline
+                    coordinate_lo, coordinate_hi = (
+                        (min_x_lo, min_x_hi)
+                        if rotated
+                        else (min_y_lo, min_y_hi)
+                    )
+                    interval = _ReachableFrameInterval(
+                        rotated=rotated,
+                        offset_lo=candidate.south_padding - coordinate_hi,
+                        offset_hi=candidate.south_padding - coordinate_lo,
+                        width=width,
+                        height=height,
+                        min_x_lo=min_x_lo,
+                        min_y_lo=min_y_lo,
+                        candidate_index=candidate_index,
+                        candidate=candidate,
+                    )
+                    intervals.append(interval)
+                    projection_key = (
+                        rotated,
+                        interval.offset_lo,
+                        interval.offset_hi,
+                        candidate.frame.height,
+                        candidate.frame.certified_bands,
+                    )
+                    prior = projection_intervals.get(projection_key)
+                    if (
+                        prior is None
+                        or interval.ordering_key() < prior.ordering_key()
+                    ):
+                        projection_intervals[projection_key] = interval
 
     offset_ranges = {
         rotated: (
