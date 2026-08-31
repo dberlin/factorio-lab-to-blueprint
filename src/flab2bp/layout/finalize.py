@@ -295,7 +295,12 @@ class _ProjectionCache:
                 projection,
                 cancelled=self.cancelled,
             )
-            self.counters.power_pairs += _power_pairs_examined(nodes, failure)
+            self.counters.power_pairs += _power_pairs_examined(
+                nodes,
+                failure,
+                projection,
+                cancelled=self.cancelled,
+            )
             return failure
 
         @cache
@@ -638,6 +643,49 @@ def _power_pair_condition(
     return condition
 
 
+def _projected_power_candidates(
+    nodes: Sequence[tuple[int, PlacedBuilding, rules.PowerNode]],
+    projection: planet.Projection,
+    *,
+    cancelled: Callable[[], bool] | None = None,
+) -> tuple[tuple[tuple[float, float, float], ...], tuple[tuple[int, int], ...]]:
+    """Projected poses and every pair that can reach an authoritative gate."""
+    poses_list: list[tuple[float, float, float]] = []
+    for _index, building, _node in nodes:
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
+        poses_list.append(projection.position(*_building_centre(building)))
+    poses = tuple(poses_list)
+    if len(nodes) < 2:
+        return poses, ()
+
+    # Every spacing refusal first requires ``distance² < node.gate_sqr``.
+    # Buckets as wide as the largest gate therefore make the 26 neighbours a
+    # conservative broadphase.  Candidate pairs are sorted back into
+    # ``itertools.combinations`` order before the unchanged exact predicate
+    # runs, preserving the validator's first failure and deterministic detail.
+    cell_size = math.sqrt(max(node.gate_sqr for _index, _building, node in nodes))
+    grid: dict[tuple[int, int, int], list[int]] = {}
+    pairs: list[tuple[int, int]] = []
+    for right, pose in enumerate(poses):
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
+        cell = tuple(math.floor(axis / cell_size) for axis in pose)
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                for dz in (-1, 0, 1):
+                    pairs.extend(
+                        (left, right)
+                        for left in grid.get(
+                            (cell[0] + dx, cell[1] + dy, cell[2] + dz),
+                            (),
+                        )
+                    )
+        grid.setdefault(cell, []).append(right)
+    pairs.sort()
+    return poses, tuple(pairs)
+
+
 def projected_power_failure(
     nodes: Sequence[tuple[int, PlacedBuilding, rules.PowerNode]],
     projection: planet.Projection,
@@ -645,13 +693,12 @@ def projected_power_failure(
     cancelled: Callable[[], bool] | None = None,
 ) -> ProjectionFailure | None:
     """Return the first authoritative power-pair refusal in one projection."""
-    poses_list: list[tuple[float, float, float]] = []
-    for _index, building, _node in nodes:
-        if cancelled is not None and cancelled():
-            raise ProjectionCancelled
-        poses_list.append(projection.position(*_building_centre(building)))
-    poses = tuple(poses_list)
-    for left, right in combinations(range(len(nodes)), 2):
+    poses, pairs = _projected_power_candidates(
+        nodes,
+        projection,
+        cancelled=cancelled,
+    )
+    for left, right in pairs:
         if cancelled is not None and cancelled():
             raise ProjectionCancelled
         distance2 = math.dist(poses[left], poses[right]) ** 2
@@ -672,15 +719,23 @@ def projected_power_failure(
 def _power_pairs_examined(
     nodes: Sequence[tuple[int, PlacedBuilding, rules.PowerNode]],
     failure: ProjectionFailure | None,
+    projection: planet.Projection,
+    *,
+    cancelled: Callable[[], bool] | None = None,
 ) -> int:
-    """Count pairs the shared first-failure predicate necessarily evaluated."""
-    for examined, (left, right) in enumerate(combinations(range(len(nodes)), 2), 1):
+    """Count exact pair predicates the shared first-failure scan evaluated."""
+    _poses, pairs = _projected_power_candidates(
+        nodes,
+        projection,
+        cancelled=cancelled,
+    )
+    for examined, (left, right) in enumerate(pairs, 1):
         if failure is not None and failure.buildings == (
             nodes[left][0],
             nodes[right][0],
         ):
             return examined
-    return len(nodes) * (len(nodes) - 1) // 2
+    return len(pairs)
 
 
 def _projected_static_failure(
@@ -1528,6 +1583,8 @@ def _failure_at_projection(
         counters.power_pairs += _power_pairs_examined(
             invariants.nodes,
             power_failure,
+            projection,
+            cancelled=cancelled,
         )
     else:
         assert cache is not None

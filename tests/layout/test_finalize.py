@@ -686,6 +686,47 @@ def test_projected_power_failure_rejects_flat_legal_pair_in_required_projection(
     )
 
 
+def test_projected_power_failure_exact_probe_skips_distant_pairs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FlatProjection:
+        band = planet.bands()[0]
+
+        def position(self, x: float, y: float, z: float) -> tuple[float, float, float]:
+            return (x, y, z)
+
+    tower = catalog.building(catalog.TESLA_TOWER_ID)
+    nodes = tuple(
+        (
+            index,
+            _building(catalog.TESLA_TOWER_ID, index * 20, 0),
+            tower.power_node,
+        )
+        for index in range(256)
+    )
+    exact = finalize._power_pair_condition
+    probes = 0
+
+    def counted(
+        left: tuple[int, PlacedBuilding, rules.PowerNode],
+        right: tuple[int, PlacedBuilding, rules.PowerNode],
+        distance2: float,
+    ) -> str | None:
+        nonlocal probes
+        probes += 1
+        return exact(left, right, distance2)
+
+    monkeypatch.setattr(finalize, "_power_pair_condition", counted)
+
+    failure = finalize.projected_power_failure(
+        nodes,
+        cast(planet.Projection, FlatProjection()),
+    )
+
+    assert failure is None
+    assert probes == 0
+
+
 @pytest.mark.parametrize(
     ("item_id", "yaw", "machine_count", "box_height", "flat_pitch", "safe_pitch"),
     (
