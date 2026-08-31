@@ -250,6 +250,7 @@ def install(tally: Tally) -> Callable[[], None]:
         junctionable: Callable[[int, int, int], bool] | None = None,
         *,
         provenance: dict[Cell, Cell] | None = None,
+        belt_prefab: tuple[int, int] | None = None,
     ) -> set[Cell]:
         t0 = time.perf_counter()
         out = orig_merge(
@@ -258,6 +259,7 @@ def install(tally: Tally) -> Callable[[], None]:
             siblings,
             junctionable,
             provenance=provenance,
+            belt_prefab=belt_prefab,
         )
         tally.add("merge_frontier", time.perf_counter() - t0)
         return out

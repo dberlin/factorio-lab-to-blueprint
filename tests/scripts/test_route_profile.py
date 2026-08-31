@@ -54,3 +54,33 @@ def test_install_records_failed_path_result(monkeypatch: pytest.MonkeyPatch) -> 
     assert tally.astar_none == 1
     assert tally.path_cells == 0
     assert tally.expansions == 11
+
+
+def test_install_forwards_merge_frontier_belt_prefab(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    expected = {(1, 2, 3)}
+    received: list[tuple[int, int] | None] = []
+
+    def merge(
+        *_args: object,
+        belt_prefab: tuple[int, int] | None = None,
+        **_kwargs: object,
+    ) -> set[tuple[int, int, int]]:
+        received.append(belt_prefab)
+        return expected
+
+    monkeypatch.setattr(freeform, "_merge_frontier", merge)
+    restore = route_profile.install(route_profile.Tally())
+    try:
+        returned = freeform._merge_frontier(
+            object(),  # type: ignore[arg-type]
+            {},
+            (),
+            belt_prefab=(2001, 35),
+        )
+    finally:
+        restore()
+
+    assert returned is expected
+    assert received == [(2001, 35)]
