@@ -9,7 +9,7 @@ from dataclasses import dataclass, field, replace
 from functools import cache
 from typing import Literal, cast
 
-from flab2bp.dsp import catalog, codec, colliders, planet, rules, splitter_ports
+from flab2bp.dsp import catalog, codec, colliders, planet, rules
 from flab2bp.layout import slots
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import AreaFrame, PlacedBuilding, Placement
@@ -971,128 +971,6 @@ def projected_static_failure(
     )
 
 
-def projected_model40_port_belt_failure(
-    buildings: Sequence[PlacedBuilding],
-    frame: AreaFrame,
-    projection: planet.Projection,
-    *,
-    cancelled: Callable[[], bool] | None = None,
-) -> ProjectionFailure | None:
-    """Reject opposing model-40 port belts compressed into each other's OBB.
-
-    Encoder docking moves each attached belt from the shared Splitter tile to
-    its physical port anchor.  Near a tropic, longitude compression can move
-    opposing elevated endpoints close enough that the paste's 0.23 belt probe
-    enters the other belt's active build collider even though flat geometry is
-    clear.
-    """
-    for splitter_index, splitter in enumerate(buildings):
-        if cancelled is not None and cancelled():
-            raise ProjectionCancelled
-        if splitter.item_id != catalog.SPLITTER_ID or splitter.model_index != 40:
-            continue
-        attachments: list[tuple[int, PlacedBuilding, int]] = []
-        for belt_index, belt in enumerate(buildings):
-            if not catalog.is_belt(belt.item_id):
-                continue
-            port = (
-                belt.output_to_slot
-                if belt.output_obj == splitter_index
-                else belt.input_from_slot
-                if belt.input_obj == splitter_index
-                else None
-            )
-            if port is None:
-                continue
-            pose = catalog.port_poses_for_model(splitter.model_index)[port]
-            if abs(pose.dz / rules.WORLD_UNITS_PER_LEVEL - 1.0) <= 0.01:
-                attachments.append((belt_index, belt, port))
-        projected: list[
-            tuple[int, PlacedBuilding, tuple[float, float, float], planet.Quat]
-        ] = []
-        for belt_index, belt, port in attachments:
-            anchor = splitter_ports.blueprint_port_anchor(
-                splitter.model_index,
-                port,
-                splitter.yaw,
-                x=float(splitter.x),
-                y=float(splitter.y),
-                z=float(splitter.z),
-                frame=frame,
-            )
-            position, rotation = projection.pose(*anchor, belt.yaw)
-            projected.append((belt_index, belt, position, rotation))
-        def probe(position: tuple[float, float, float]) -> tuple[float, float, float]:
-            scale = colliders.BELT_PROBE_LIFT / math.sqrt(
-                sum(component * component for component in position)
-            )
-            return (
-                position[0] * (1.0 + scale),
-                position[1] * (1.0 + scale),
-                position[2] * (1.0 + scale),
-            )
-
-        for left in range(len(projected)):
-            left_index, left_belt, left_position, left_rotation = projected[left]
-            for right in range(left + 1, len(projected)):
-                if cancelled is not None and cancelled():
-                    raise ProjectionCancelled
-                right_index, right_belt, right_position, right_rotation = projected[right]
-                right_placed = colliders.Placed(
-                    right_belt.model_index,
-                    0.0,
-                    0.0,
-                    0.0,
-                    right_belt.yaw,
-                )
-                right_boxes = colliders.target_boxes(
-                    right_placed,
-                    right_position,
-                    right_rotation,
-                )
-                left_placed = colliders.Placed(
-                    left_belt.model_index,
-                    0.0,
-                    0.0,
-                    0.0,
-                    left_belt.yaw,
-                )
-                left_boxes = colliders.target_boxes(
-                    left_placed,
-                    left_position,
-                    left_rotation,
-                )
-                if not (
-                    any(
-                        colliders.sphere_box_overlap(
-                            probe(left_position),
-                            colliders.BELT_PROBE_RADIUS,
-                            box,
-                        )
-                        for box in right_boxes
-                    )
-                    or any(
-                        colliders.sphere_box_overlap(
-                            probe(right_position),
-                            colliders.BELT_PROBE_RADIUS,
-                            box,
-                        )
-                        for box in left_boxes
-                    )
-                ):
-                    continue
-                return ProjectionFailure(
-                    check="game.belt_collide",
-                    buildings=(left_index, right_index, splitter_index),
-                    detail=(
-                        "opposing model 40 port belts intersect after exact "
-                        "planet projection"
-                    ),
-                    band=projection.band.area_segments,
-                )
-    return None
-
-
 def _projected_addon_failure(
     belts: Sequence[tuple[int, PlacedBuilding]],
     addons: Sequence[
@@ -2020,12 +1898,6 @@ def _certify_frame(
                     active_cache.projections[projection_key] = projection
             else:
                 counters.projection_cache_hits += 1
-            port_belt_failure = projected_model40_port_belt_failure(
-                placement.buildings,
-                frame,
-                projection,
-                cancelled=cancelled,
-            )
             projection_failures = (
                 _failure_at_projection(
                     invariants,
@@ -2044,8 +1916,6 @@ def _certify_frame(
                     cancelled=cancelled,
                 )
             )
-            if port_belt_failure is not None:
-                projection_failures = (port_belt_failure, *projection_failures)
             if projection_failures:
                 failures.extend(projection_failures)
                 if stop_after_failure:
