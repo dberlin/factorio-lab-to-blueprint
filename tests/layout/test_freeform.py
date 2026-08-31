@@ -4351,6 +4351,15 @@ def test_staged_static_pack_dependent_exhaustion_learns_exact_no_good(
         "build colliders intersect",
         100,
     )
+    exact_retry_evidence = freeform._exact_retry_evidence(
+        "power",
+        failure,
+        {
+            181: PlacedBuilding(2309, 2309, 0, 0, owner_strip=0),
+            255: PlacedBuilding(2201, 2201, 1, 0),
+        },
+    )
+    assert exact_retry_evidence is not None
 
     def pack_retry(*_args: object, **kwargs: object) -> freeform._Pack:
         no_goods = kwargs.get("exact_pack_no_goods", ())
@@ -4369,7 +4378,7 @@ def test_staged_static_pack_dependent_exhaustion_learns_exact_no_good(
             raise _Unpowerable(
                 "every staged power seat collides after projection",
                 failure=failure,
-                pack_dependent=True,
+                exact_retry_evidence=exact_retry_evidence,
             )
         return _BuildResult(
             placement=Placement(buildings=(), stats={"belt_tiles": 0.0}),
@@ -4550,6 +4559,268 @@ def test_staged_static_terminal_exhaustion_is_bounded_across_distinct_assignment
     assert seen_origins[-1] != seen_origins[-2]
     assert seen_no_goods[-1][0].evidence == (failure,)
     assert rejected == [failure]
+
+
+def test_exact_retry_evidence_ignores_assignment_coordinates_but_retains_relation() -> None:
+    failure = finalize.ProjectionFailure(
+        "geom.collide",
+        (3, 8),
+        "build colliders intersect",
+        160,
+    )
+    first = {
+        3: PlacedBuilding(2309, 64, 4, 9, width=3, height=3, owner_strip=0),
+        8: PlacedBuilding(2201, 44, 7, 2, width=2, height=2),
+    }
+    moved = {
+        index: replace(building, x=building.x + 100, y=building.y - 50)
+        for index, building in first.items()
+    }
+    changed_relation = {
+        **moved,
+        3: replace(moved[3], owner_strip=1),
+    }
+
+    evidence = freeform._exact_retry_evidence("power", failure, first)
+
+    assert evidence is not None
+    assert freeform._exact_retry_evidence("power", failure, moved) == evidence
+    assert (
+        freeform._exact_retry_evidence("power", failure, changed_relation)
+        != evidence
+    )
+
+
+def test_exact_retry_state_shares_one_candidate_token_across_evidence_sources() -> None:
+    failure = finalize.ProjectionFailure(
+        "geom.collide",
+        (0, 1),
+        "build colliders intersect",
+        160,
+    )
+    buildings = {
+        0: PlacedBuilding(2309, 64, 0, 0, owner_strip=0),
+        1: PlacedBuilding(2201, 44, 2, 0),
+    }
+    power = freeform._exact_retry_evidence("power", failure, buildings)
+    seating = freeform._exact_retry_evidence("seating", failure, buildings)
+    assert power is not None
+    assert seating is not None
+    first = freeform.ExactPackNoGood(
+        height=20,
+        outline=((4, 5),),
+        width=10,
+        origins=((1, 2),),
+        evidence=(failure,),
+    )
+    second = replace(first, width=11, origins=((2, 2),))
+    state = freeform._ExactPackNoGoodState()
+
+    assert state.admit_retry(
+        freeform._ExactRetryKey(20, 0, power),
+        first,
+        affordable=True,
+    )
+    assert not state.admit_retry(
+        freeform._ExactRetryKey(20, 0, seating),
+        second,
+        affordable=True,
+    )
+    assert state.no_goods == [first]
+
+
+def _sweep_with_repeated_exact_feedback(
+    monkeypatch: pytest.MonkeyPatch,
+    source: str,
+    *,
+    affordable: bool,
+) -> tuple[
+    Placement | None,
+    list[tuple[int, int]],
+    list[int],
+]:
+    spec = two_stage_spec()
+    strips = plan_strips(spec)
+    failure = finalize.ProjectionFailure(
+        "geom.collide",
+        (0, 1),
+        f"{source} exact relation remains impossible",
+        160,
+    )
+    seen_candidates: list[tuple[int, int]] = []
+    applicable_no_good_counts: list[int] = []
+    exact_retry_evidence = freeform._exact_retry_evidence(
+        "power" if source == "power" else "seating",
+        failure,
+        {
+            0: PlacedBuilding(1, 1, 0, 0, owner_strip=0),
+            1: PlacedBuilding(1, 1, 1, 0, owner_strip=1),
+        },
+    )
+    assert exact_retry_evidence is not None
+    attempts_by_height: dict[int, int] = {}
+
+    def pack_distinct_assignment(
+        current: list[Strip],
+        *,
+        height: int,
+        arrangement: int,
+        **kwargs: object,
+    ) -> freeform._Pack:
+        exact_no_goods = kwargs.get("exact_pack_no_goods", ())
+        assert isinstance(exact_no_goods, tuple)
+        applicable = tuple(
+            no_good
+            for no_good in exact_no_goods
+            if isinstance(no_good, freeform.ExactPackNoGood)
+            and no_good.height == height
+            and no_good.outline == tuple(_box(strip) for strip in current)
+        )
+        applicable_no_good_counts.append(len(applicable))
+        attempt = attempts_by_height.get(height, 0)
+        attempts_by_height[height] = attempt + 1
+        if attempt >= 2:
+            pytest.fail(
+                f"{source} exact feedback admitted more than one retry "
+                "for one height/arrangement"
+            )
+        baseline = _greedy_pack(current, height)
+        candidate = replace(
+            baseline,
+            at={
+                index: (x + (attempt if index == 0 else 0), y)
+                for index, (x, y) in baseline.at.items()
+            },
+            width=baseline.width + attempt,
+            status=f"{source} distinct assignment {attempt}",
+        )
+        assignment = (
+            candidate.width,
+            tuple(candidate.at[index] for index in range(len(current))),
+        )
+        assert all(
+            assignment != (no_good.width, no_good.origins)
+            for no_good in applicable
+        ), "the fake pack must obey every accumulated exact no-good"
+        seen_candidates.append((height, arrangement))
+        return candidate
+
+    routed = DetailedRouteResult(
+        status=DetailedRouteStatus.ROUTED,
+        routed=(),
+        failures=(),
+        iterations=0,
+        expansions=0,
+    )
+
+    def build_or_refuse(
+        _spec: BuildSpec,
+        _strips: list[Strip],
+        pack: freeform._Pack,
+        **_kwargs: object,
+    ) -> _BuildResult:
+        placement = Placement(
+            buildings=(
+                PlacedBuilding(1, 1, 0, 0, owner_strip=0),
+                PlacedBuilding(1, 1, 1, 0, owner_strip=1),
+            ),
+            stats={
+                "belt_tiles": 0.0,
+                "test_height": float(pack.height),
+            },
+        )
+        if pack.height != 20 or source == "finalizer":
+            return _BuildResult(placement, routed, ())
+        if source == "power":
+            raise freeform._Unpowerable(
+                "exact power relation failed",
+                failure=failure,
+                exact_retry_evidence=exact_retry_evidence,
+            )
+        if source == "seating":
+            raise freeform._Unseatable(
+                "exact coater relation failed",
+                failure=failure,
+                exact_retry_evidence=exact_retry_evidence,
+            )
+        raise AssertionError(f"unknown exact-feedback source {source}")
+
+    def finalize_or_refuse(
+        placement: Placement,
+        _policy: BandPolicy,
+    ) -> Placement:
+        if source == "finalizer" and placement.stats["test_height"] == 20.0:
+            raise finalize.ProjectionRefusal((failure,))
+        return placement
+
+    monkeypatch.setattr(
+        freeform,
+        "_band_policy_candidate_heights",
+        lambda _strips, _policy: (20, 21),
+    )
+    monkeypatch.setattr(freeform, "_pack", pack_distinct_assignment)
+    monkeypatch.setattr(freeform, "_build", build_or_refuse)
+    monkeypatch.setattr(
+        freeform,
+        "_projection_pitch_requirement",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        finalize,
+        "independent_projection_pair",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        validate,
+        "certify",
+        lambda *_args, **_kwargs: validate.Report(findings=()),
+    )
+    monkeypatch.setattr(finalize, "finalize_placement", finalize_or_refuse)
+    monkeypatch.setattr(
+        freeform,
+        "_room_for_another",
+        lambda *_args, **_kwargs: affordable,
+    )
+
+    result = FreeformLayout(
+        band_policy=BandPolicy("portable"),
+        arrangements=1,
+    )._sweep(spec, strips, 1.0)
+    return result, seen_candidates, applicable_no_good_counts
+
+
+@pytest.mark.parametrize("source", ["power", "seating", "finalizer"])
+def test_exact_feedback_admits_at_most_one_distinct_assignment_retry_per_candidate(
+    monkeypatch: pytest.MonkeyPatch,
+    source: str,
+) -> None:
+    result, seen_candidates, applicable_counts = _sweep_with_repeated_exact_feedback(
+        monkeypatch,
+        source,
+        affordable=True,
+    )
+
+    assert result is not None
+    assert result.stats["test_height"] == 21.0
+    assert seen_candidates == [(20, 0), (20, 0), (21, 0)]
+    assert applicable_counts == [0, 1, 0]
+
+
+@pytest.mark.parametrize("source", ["power", "seating", "finalizer"])
+def test_unaffordable_exact_feedback_preserves_later_base_height(
+    monkeypatch: pytest.MonkeyPatch,
+    source: str,
+) -> None:
+    result, seen_candidates, applicable_counts = _sweep_with_repeated_exact_feedback(
+        monkeypatch,
+        source,
+        affordable=False,
+    )
+
+    assert result is not None
+    assert result.stats["test_height"] == 21.0
+    assert seen_candidates == [(20, 0), (21, 0)]
+    assert applicable_counts == [0, 0]
 
 
 def test_projection_strip_static_objects_retain_non_encoded_owner() -> None:
@@ -9672,7 +9943,7 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
             caught.value.clearance_requirement.required_west_channel
             == freeform._COATER_WEST_CHANNEL + 1
         )
-        assert not caught.value.pack_dependent
+        assert caught.value.exact_retry_evidence is None
 
     def test_staged_static_mixed_same_strip_seat_failures_request_clearance(
         self,
@@ -9745,7 +10016,7 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
         assert caught.value.failure is not None
         assert caught.value.failure.check == "geom.collide"
         assert caught.value.clearance_requirement is not None
-        assert not caught.value.pack_dependent
+        assert caught.value.exact_retry_evidence is None
 
 
     def test_the_same_fixture_unblocked_seats_one(self) -> None:

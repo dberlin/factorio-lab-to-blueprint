@@ -2292,6 +2292,70 @@ def tie_break_cap(n_terms: int, *, width_bound: int, height: int, n_direct: int)
 # --- phase 1: packing ------------------------------------------------------
 
 
+type _ExactRetrySource = Literal["power", "seating", "finalizer"]
+type _ExactRetryBuildingSignature = tuple[
+    int,
+    int,
+    Fraction,
+    int,
+    int,
+    float,
+    int | None,
+]
+
+
+@dataclass(frozen=True, slots=True)
+class _ExactRetryEvidence:
+    """Assignment-independent identity of one exact projected relation."""
+
+    source: _ExactRetrySource
+    check: str
+    relation: tuple[tuple[int, _ExactRetryBuildingSignature], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _ExactRetryKey:
+    """One proof-scoped retry token for a configured pack candidate."""
+
+    height: int
+    arrangement: int
+    evidence: _ExactRetryEvidence
+
+
+def _exact_retry_evidence(
+    source: _ExactRetrySource,
+    failure: finalize.ProjectionFailure,
+    buildings: Mapping[int, PlacedBuilding],
+) -> _ExactRetryEvidence | None:
+    """Drop assignment coordinates while retaining the implicated exact relation."""
+    relation: list[tuple[int, _ExactRetryBuildingSignature]] = []
+    for index in failure.buildings:
+        building = buildings.get(index)
+        if building is None:
+            return None
+        relation.append(
+            (
+                index,
+                (
+                    building.item_id,
+                    building.model_index,
+                    building.z,
+                    building.width,
+                    building.height,
+                    building.yaw,
+                    building.owner_strip,
+                ),
+            )
+        )
+    if not relation:
+        return None
+    return _ExactRetryEvidence(
+        source=source,
+        check=failure.check,
+        relation=tuple(relation),
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class ExactProjectionPair:
     """The two physical strips implicated by one exact projection refusal."""
@@ -2326,6 +2390,44 @@ class ExactPackNoGood:
             raise ValueError("exact pack outline and origins must cover every strip")
         if not self.evidence:
             raise ValueError("exact pack no-good requires structured evidence")
+
+
+@dataclass(slots=True)
+class _ExactPackNoGoodState:
+    """Deduplicated exact cuts plus the bounded retry tokens they justified."""
+
+    no_goods: list[ExactPackNoGood] = field(default_factory=list)
+    no_good_keys: set[ExactPackNoGood] = field(default_factory=set)
+    retry_keys: set[_ExactRetryKey] = field(default_factory=set)
+    retried_candidates: set[tuple[int, int]] = field(default_factory=set)
+
+    def remember(self, no_good: ExactPackNoGood) -> bool:
+        if no_good in self.no_good_keys:
+            return False
+        self.no_good_keys.add(no_good)
+        self.no_goods.append(no_good)
+        return True
+
+    def admit_retry(
+        self,
+        key: _ExactRetryKey,
+        no_good: ExactPackNoGood,
+        *,
+        affordable: bool,
+    ) -> bool:
+        candidate = (key.height, key.arrangement)
+        if (
+            not affordable
+            or candidate in self.retried_candidates
+            or key in self.retry_keys
+            or no_good in self.no_good_keys
+        ):
+            return False
+        self.retried_candidates.add(candidate)
+        self.retry_keys.add(key)
+        self.no_good_keys.add(no_good)
+        self.no_goods.append(no_good)
+        return True
 
 @dataclass(frozen=True, slots=True)
 class _DirectRelationNoGood:
@@ -8197,12 +8299,12 @@ class _Unseatable(NoValidLayout):
         *,
         failure: finalize.ProjectionFailure | None = None,
         clearance_requirement: StagedStaticClearanceRequirement | None = None,
-        pack_dependent: bool = False,
+        exact_retry_evidence: _ExactRetryEvidence | None = None,
     ) -> None:
         self.failure = failure
         self.failures = () if failure is None else (failure,)
         self.clearance_requirement = clearance_requirement
-        self.pack_dependent = pack_dependent
+        self.exact_retry_evidence = exact_retry_evidence
         if failure is not None:
             message = (
                 f"{message}: band {failure.band} {failure.check} "
@@ -8226,11 +8328,11 @@ class _Unpowerable(Exception):
         message: str,
         *,
         failure: finalize.ProjectionFailure | None = None,
-        pack_dependent: bool = False,
+        exact_retry_evidence: _ExactRetryEvidence | None = None,
     ) -> None:
         self.failure = failure
         self.failures = () if failure is None else (failure,)
-        self.pack_dependent = pack_dependent
+        self.exact_retry_evidence = exact_retry_evidence
         if failure is not None:
             message = (
                 f"{message}: band {failure.band} {failure.check} "
@@ -9140,6 +9242,7 @@ def _power_plan(
     linked = np.zeros(shape, dtype=bool)
     sites: list[tuple[int, int]] = []
     projected_refusal: finalize.ProjectionFailure | None = None
+    projected_retry_evidence: _ExactRetryEvidence | None = None
     # A cap, not a schedule: every round either consumes or rejects one free
     # cell, so a placement that has not finished by then is not converging.
     for _ in range(int(np.count_nonzero(free)) + 1):
@@ -9235,10 +9338,7 @@ def _power_plan(
                 raise _Unpowerable(
                     "the tower network cannot reach the rest of the block",
                     failure=projected_refusal,
-                    pack_dependent=(
-                        projected_refusal is not None
-                        and projected_refusal.check == "geom.collide"
-                    ),
+                    exact_retry_evidence=projected_retry_evidence,
                 )
             target = np.argwhere(remaining)[0]
             gx, gy = cand[np.argmin(((cand - target) ** 2).sum(axis=1))].tolist()
@@ -9298,7 +9398,14 @@ def _power_plan(
                 cancelled=cancelled,
             )
         if candidate_failure is not None:
-            projected_refusal = projected_refusal or candidate_failure
+            if projected_refusal is None:
+                projected_refusal = candidate_failure
+                if candidate_failure.check == "geom.collide":
+                    projected_retry_evidence = _exact_retry_evidence(
+                        "power",
+                        candidate_failure,
+                        dict((*static_buildings, (candidate[0], candidate[1]))),
+                    )
             free[gx, gy] = False
             continue
         sites.append(site)
@@ -9326,10 +9433,7 @@ def _power_plan(
         raise _Unpowerable(
             "tower placement did not converge",
             failure=projected_refusal,
-            pack_dependent=(
-                projected_refusal is not None
-                and projected_refusal.check == "geom.collide"
-            ),
+            exact_retry_evidence=projected_retry_evidence,
         )
 
     for site in sites:
@@ -10925,6 +11029,7 @@ def _place_coaters(
                     finalize.ProjectionFailure,
                     int | None,
                     StagedStaticClearanceKey | None,
+                    _ExactRetryEvidence | None,
                 ]
             ] = []
             same_strip_static_seats = 0
@@ -11058,7 +11163,16 @@ def _place_coaters(
                         else None
                     )
                     projected_failures.append(
-                        (projected_failure, peer_owner, relation)
+                        (
+                            projected_failure,
+                            peer_owner,
+                            relation,
+                            _exact_retry_evidence(
+                                "seating",
+                                projected_failure,
+                                dict(enumerate(candidate_buildings)),
+                            ),
+                        )
                     )
                     if peer_owner == strip_index:
                         same_strip_static_seats += 1
@@ -11105,6 +11219,9 @@ def _place_coaters(
                 first_relation = (
                     projected_failures[0][2] if projected_failures else None
                 )
+                first_exact_retry_evidence = (
+                    projected_failures[0][3] if projected_failures else None
+                )
                 all_projected = len(projected_failures) == len(seats)
                 same_strip = (
                     first_failure is not None
@@ -11128,7 +11245,11 @@ def _place_coaters(
                     failure_reasons[0],
                     failure=first_failure,
                     clearance_requirement=clearance_requirement,
-                    pack_dependent=all_projected and not same_strip,
+                    exact_retry_evidence=(
+                        first_exact_retry_evidence
+                        if all_projected and not same_strip
+                        else None
+                    ),
                 )
             seen.add(item)
 
@@ -12018,8 +12139,7 @@ class FreeformLayout:
         projection_no_good_keys: set[ProjectionNoGood] = set()
         minimum_pitch_x: dict[StripPoseId, int] = {}
         minimum_staged_static_clearance: dict[StagedStaticClearanceKey, int] = {}
-        exact_pack_no_goods: list[ExactPackNoGood] = []
-        exact_pack_no_good_keys: set[ExactPackNoGood] = set()
+        exact_no_good_state = _ExactPackNoGoodState()
         staged_static_exact_retries: set[tuple[int, int]] = set()
         direct_relation_no_goods: list[_DirectRelationNoGood] = []
         direct_relation_no_good_keys: set[_DirectRelationNoGood] = set()
@@ -12061,6 +12181,16 @@ class FreeformLayout:
         started_at: float | None = None
         candidate_index = 0
         staged_static_cache = _StagedStaticCache()
+
+        def projection_retry_affordable() -> bool:
+            current_candidate_s = (
+                0.0 if started_at is None else time.monotonic() - started_at
+            )
+            return _room_for_another(
+                deadline,
+                soft,
+                max(dearest_candidate_s, current_candidate_s),
+            )
         while candidate_index < len(candidate_packs):
             height, arrangement, projection_retry = candidate_packs[candidate_index]
             candidate_index += 1
@@ -12210,7 +12340,7 @@ class FreeformLayout:
                 seed=seeds[height],
                 arrangement=arrangement,
                 projection_no_goods=tuple(projection_no_goods),
-                exact_pack_no_goods=tuple(exact_pack_no_goods),
+                exact_pack_no_goods=tuple(exact_no_good_state.no_goods),
                 direct_relation_no_goods=tuple(direct_relation_no_goods),
                 feedback=feedback,
             )
@@ -12282,7 +12412,8 @@ class FreeformLayout:
             except _Unpowerable as exc:
                 if rejected is not None:
                     _retain_refusal(rejected, exc.failure or "power.coverage")
-                if exc.pack_dependent and exc.failure is not None:
+                evidence = exc.exact_retry_evidence
+                if evidence is not None and exc.failure is not None:
                     no_good = ExactPackNoGood(
                         height=pack.height,
                         outline=tuple(_box(strip) for strip in strips),
@@ -12292,9 +12423,12 @@ class FreeformLayout:
                         ),
                         evidence=exc.failures,
                     )
-                    if no_good not in exact_pack_no_good_keys:
-                        exact_pack_no_good_keys.add(no_good)
-                        exact_pack_no_goods.append(no_good)
+                    retry_key = _ExactRetryKey(height, arrangement, evidence)
+                    if exact_no_good_state.admit_retry(
+                        retry_key,
+                        no_good,
+                        affordable=projection_retry_affordable(),
+                    ):
                         candidate_packs.insert(
                             candidate_index,
                             (height, arrangement, True),
@@ -12313,8 +12447,9 @@ class FreeformLayout:
                         exc.failure or "prolif.sprayed_cargo_reaches_machines",
                     )
 
-                learned = False
-                if exc.pack_dependent and exc.failure is not None:
+                retry_promoted = False
+                evidence = exc.exact_retry_evidence
+                if evidence is not None and exc.failure is not None:
                     no_good = ExactPackNoGood(
                         height=pack.height,
                         outline=tuple(_box(strip) for strip in strips),
@@ -12324,10 +12459,14 @@ class FreeformLayout:
                         ),
                         evidence=exc.failures,
                     )
-                    if no_good not in exact_pack_no_good_keys:
-                        exact_pack_no_good_keys.add(no_good)
-                        exact_pack_no_goods.append(no_good)
-                        learned = True
+                    retry_key = _ExactRetryKey(height, arrangement, evidence)
+                    retry_promoted = exact_no_good_state.admit_retry(
+                        retry_key,
+                        no_good,
+                        affordable=projection_retry_affordable(),
+                    )
+
+                pending_clearance: tuple[StagedStaticClearanceKey, int] | None = None
 
                 clearance_exhausted = False
                 requirement = exc.clearance_requirement
@@ -12367,10 +12506,10 @@ class FreeformLayout:
                                 requirement.required_west_channel
                                 > retained_clearance
                             ):
-                                minimum_staged_static_clearance[
-                                    requirement.relation
-                                ] = requirement.required_west_channel
-                                learned = True
+                                pending_clearance = (
+                                    requirement.relation,
+                                    requirement.required_west_channel,
+                                )
 
                 # The physical variant gets one bounded upstream seat first.
                 # If an extended pack still projects into its own machine, the
@@ -12380,13 +12519,13 @@ class FreeformLayout:
                 # assignment identity: every successful no-good necessarily
                 # produces a distinct assignment, so identity alone can never
                 # make a second W4 exhaustion terminal.
-                retry_key = (height, arrangement)
+                staged_retry_key = (height, arrangement)
                 if (
                     clearance_exhausted
                     and exc.failure is not None
-                    and retry_key not in staged_static_exact_retries
+                    and staged_retry_key not in staged_static_exact_retries
+                    and projection_retry_affordable()
                 ):
-                    staged_static_exact_retries.add(retry_key)
                     no_good = ExactPackNoGood(
                         height=pack.height,
                         outline=tuple(_box(strip) for strip in strips),
@@ -12396,12 +12535,17 @@ class FreeformLayout:
                         ),
                         evidence=exc.failures,
                     )
-                    if no_good not in exact_pack_no_good_keys:
-                        exact_pack_no_good_keys.add(no_good)
-                        exact_pack_no_goods.append(no_good)
-                        learned = True
+                    if exact_no_good_state.remember(no_good):
+                        staged_static_exact_retries.add(staged_retry_key)
+                        retry_promoted = True
 
-                if learned:
+                if (
+                    pending_clearance is not None
+                    and not retry_promoted
+                    and projection_retry_affordable()
+                ):
+                    relation, required_west_channel = pending_clearance
+                    minimum_staged_static_clearance[relation] = required_west_channel
                     replan_strip_len = max(strip.machines for strip in strips)
                     strips = plan_strips(
                         spec,
@@ -12425,6 +12569,8 @@ class FreeformLayout:
                         candidate_height: _greedy_pack(strips, candidate_height)
                         for candidate_height in heights
                     }
+                    retry_promoted = True
+                if retry_promoted:
                     candidate_packs.insert(
                         candidate_index,
                         (height, arrangement, True),
@@ -12462,10 +12608,8 @@ class FreeformLayout:
                     learned = True
                 if (
                     exact_no_good is not None
-                    and exact_no_good not in exact_pack_no_good_keys
+                    and exact_no_good_state.remember(exact_no_good)
                 ):
-                    exact_pack_no_good_keys.add(exact_no_good)
-                    exact_pack_no_goods.append(exact_no_good)
                     learned = True
 
                 budget_failure = (
@@ -12574,8 +12718,8 @@ class FreeformLayout:
                 break
             except finalize.ProjectionRefusal as exc:
                 learned = False
-                requires_exact_pack_no_good = False
                 exact_projection_pair: ExactProjectionPair | None = None
+                exact_retry_evidence: _ExactRetryEvidence | None = None
                 for failure in exc.failures:
                     if rejected is not None:
                         _retain_refusal(rejected, failure)
@@ -12589,11 +12733,16 @@ class FreeformLayout:
                         self.band_policy,
                     )
                     if strip_pair is not None and no_good is None:
-                        requires_exact_pack_no_good = True
                         if exact_projection_pair is None:
                             exact_projection_pair = _exact_projection_pair(
                                 strips,
                                 strip_pair,
+                            )
+                        if exact_retry_evidence is None:
+                            exact_retry_evidence = _exact_retry_evidence(
+                                "finalizer",
+                                failure,
+                                dict(enumerate(placement.buildings)),
                             )
                     if no_good is not None:
                         no_good_key = no_good
@@ -12639,7 +12788,8 @@ class FreeformLayout:
                         continue
                     minimum_pitch_x[pose_id] = requirement.required_pitch
                     learned = True
-                if requires_exact_pack_no_good:
+                retry_promoted = False
+                if exact_retry_evidence is not None:
                     exact_no_good = ExactPackNoGood(
                         height=pack.height,
                         outline=tuple(_box(strip) for strip in strips),
@@ -12650,11 +12800,19 @@ class FreeformLayout:
                         evidence=exc.failures,
                         projection_pair=exact_projection_pair,
                     )
-                    if exact_no_good not in exact_pack_no_good_keys:
-                        exact_pack_no_good_keys.add(exact_no_good)
-                        exact_pack_no_goods.append(exact_no_good)
-                        learned = True
-                if learned:
+                    retry_key = _ExactRetryKey(
+                        height,
+                        arrangement,
+                        exact_retry_evidence,
+                    )
+                    retry_promoted = exact_no_good_state.admit_retry(
+                        retry_key,
+                        exact_no_good,
+                        affordable=projection_retry_affordable(),
+                    )
+                if learned and (
+                    retry_promoted or projection_retry_affordable()
+                ):
                     replan_strip_len = max(strip.machines for strip in strips)
                     strips = plan_strips(
                         spec,
@@ -12678,6 +12836,8 @@ class FreeformLayout:
                         candidate_height: _greedy_pack(strips, candidate_height)
                         for candidate_height in heights
                     }
+                    retry_promoted = True
+                if retry_promoted:
                     candidate_packs.insert(
                         candidate_index,
                         (height, arrangement, True),
