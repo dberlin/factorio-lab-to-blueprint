@@ -2307,6 +2307,9 @@ def test_projected_addon_supply_preserves_strict_radius_boundary(
         band = next(
             candidate for candidate in planet.bands() if candidate.area_segments == 4
         )
+        segment = colliders.PLANET_SEGMENT
+        radius = colliders.PLANET_RADIUS
+        rotated = False
 
         def position(self, x: float, y: float, z: float) -> tuple[float, float, float]:
             return (x, y, z)
@@ -2378,6 +2381,9 @@ def test_projected_addon_supply_projects_only_nearby_belts_once() -> None:
         band = next(
             candidate for candidate in planet.bands() if candidate.area_segments == 4
         )
+        segment = colliders.PLANET_SEGMENT
+        radius = colliders.PLANET_RADIUS
+        rotated = False
 
         def __init__(self) -> None:
             self.calls = 0
