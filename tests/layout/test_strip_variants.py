@@ -544,24 +544,43 @@ class _OriginArithmeticCounter(int):
         type(self).operations += 1
         return type(self)(int(self) - int(other))
 
+    def __hash__(self) -> int:
+        type(self).operations += 1
+        return int.__hash__(self)
 
-def _adversarial_projection_origin_operations(machine_count: int) -> int:
+    def __eq__(self, other: object) -> bool:
+        type(self).operations += 1
+        return int(self) == other
+
+    def __lt__(self, other: int) -> bool:
+        type(self).operations += 1
+        return int(self) < int(other)
+
+
+def _adversarial_projection_fixture(
+    machine_count: int,
+) -> tuple[StripInstance, tuple[tuple[_OriginArithmeticCounter, int], ...]]:
     family = _family(_single_machine_spec("chemical-plant", count=machine_count))
-    variant = default_strip_variant(family)
     (instance,) = partition_strip_family(family, max_machine_count=machine_count)
+    variant = instance.variant
     adversarial_origins = (
         *variant.machine_origins_x[:-1],
         variant.machine_origins_x[-1] + variant.pitch_x,
     )
     machine_y = 17 + variant.lane_plan.machine_row
+    positions = tuple(
+        (_OriginArithmeticCounter(13 + origin_x), machine_y)
+        for origin_x in adversarial_origins
+    )
+    return instance, positions
+
+
+def _adversarial_projection_origin_operations(machine_count: int) -> int:
+    instance, positions = _adversarial_projection_fixture(machine_count)
+    variant = instance.variant
     placement = Placement(
         buildings=tuple(
-            _projection_machine(
-                variant,
-                x=_OriginArithmeticCounter(13 + origin_x),
-                y=machine_y,
-            )
-            for origin_x in adversarial_origins
+            _projection_machine(variant, x=x, y=y) for x, y in positions
         )
     )
     failure = ProjectionFailure(
@@ -583,12 +602,31 @@ def _adversarial_projection_origin_operations(machine_count: int) -> int:
     return _OriginArithmeticCounter.operations
 
 
+def _adversarial_brute_force_origin_operations(machine_count: int) -> int:
+    instance, positions = _adversarial_projection_fixture(machine_count)
+    variant = instance.variant
+    _OriginArithmeticCounter.operations = 0
+    ordinals = _brute_force_projection_origin_ordinals(
+        variant.machine_origins_x,
+        set(positions),
+        anchor=positions[0],
+        machine_row=variant.lane_plan.machine_row,
+    )
+
+    assert ordinals is None
+    return _OriginArithmeticCounter.operations
+
+
 def test_projection_pitch_origin_matching_has_linear_structural_growth() -> None:
     small_count = _adversarial_projection_origin_operations(32)
     large_count = _adversarial_projection_origin_operations(128)
+    brute_small_count = _adversarial_brute_force_origin_operations(32)
+    brute_large_count = _adversarial_brute_force_origin_operations(128)
 
     assert large_count <= small_count * 5
-    assert large_count <= 128 * 4
+    assert large_count <= 128 * 10
+    assert brute_large_count >= brute_small_count * 12
+    assert brute_large_count >= 2 * 128**2
 
 
 
