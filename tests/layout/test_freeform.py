@@ -4641,6 +4641,206 @@ def test_staged_static_exact_pack_no_good_forbids_only_the_full_assignment() -> 
     )
 
 
+def _brute_junction_projection_frames(
+    occupied: tuple[int, int, int, int],
+    limit: tuple[int, int, int, int],
+    policy: BandPolicy,
+) -> tuple[freeform._JunctionProjectionFrame, ...]:
+    """Retained four-edge oracle for reachable prospective materializations."""
+    occupied_min_x, occupied_min_y, occupied_max_x, occupied_max_y = occupied
+    limit_min_x, limit_min_y, limit_max_x, limit_max_y = limit
+    by_segments = {band.area_segments: band for band in planet.bands()}
+    candidates_by_extent: dict[
+        tuple[int, int],
+        tuple[finalize.FrameCandidate, ...],
+    ] = {}
+    frame_specs: dict[
+        tuple[bool, int, int, int],
+        tuple[tuple[int, int, int, int], finalize.FrameCandidate],
+    ] = {}
+    projections_by_frame: dict[
+        tuple[bool, int, int, int],
+        dict[tuple[int, int], None],
+    ] = {}
+    projection_signatures_by_frame: dict[
+        tuple[bool, int, int, int],
+        set[tuple[int, tuple[int, ...]]],
+    ] = {}
+    for min_x in range(limit_min_x, occupied_min_x + 1):
+        for min_y in range(limit_min_y, occupied_min_y + 1):
+            for max_x in range(occupied_max_x, limit_max_x + 1):
+                for max_y in range(occupied_max_y, limit_max_y + 1):
+                    width = max_x - min_x + 1
+                    height = max_y - min_y + 1
+                    extent = (width, height)
+                    candidates = candidates_by_extent.get(extent)
+                    if candidates is None:
+                        candidates = finalize._frame_candidates_for_extent(
+                            width,
+                            height,
+                            policy,
+                        )
+                        candidates_by_extent[extent] = candidates
+                    for candidate in candidates:
+                        rotated = candidate.frame.rotated
+                        key = (
+                            rotated,
+                            height if rotated else 0,
+                            min_x if rotated else min_y,
+                            candidate.south_padding,
+                        )
+                        frame_specs.setdefault(
+                            key,
+                            ((min_x, min_y, max_x, max_y), candidate),
+                        )
+                        signature = (
+                            candidate.frame.height,
+                            candidate.frame.certified_bands,
+                        )
+                        signatures = projection_signatures_by_frame.setdefault(
+                            key,
+                            set(),
+                        )
+                        if signature in signatures:
+                            continue
+                        signatures.add(signature)
+                        projections = projections_by_frame.setdefault(key, {})
+                        for segments in candidate.frame.certified_bands:
+                            band = by_segments[segments]
+                            for anchor in band.anchors(candidate.frame.height):
+                                projections.setdefault((segments, anchor), None)
+    return tuple(
+        freeform._JunctionProjectionFrame(
+            bounds,
+            candidate,
+            tuple(
+                planet.Projection(
+                    by_segments[segments],
+                    anchor,
+                    colliders.PLANET_SEGMENT,
+                    colliders.PLANET_RADIUS,
+                )
+                for segments, anchor in projections_by_frame.get(key, ())
+            ),
+        )
+        for key, (bounds, candidate) in frame_specs.items()
+    )
+
+
+def _physical_projection_frames(
+    frames: Sequence[freeform._JunctionProjectionFrame],
+) -> dict[tuple[bool, int], frozenset[tuple[int, int]]]:
+    physical: dict[tuple[bool, int], set[tuple[int, int]]] = {}
+    for frame in frames:
+        rotated = frame.candidate.frame.rotated
+        origin = frame.bounds[0] if rotated else frame.bounds[1]
+        key = (rotated, frame.candidate.south_padding - origin)
+        projections = physical.setdefault(key, set())
+        projections.update(
+            (projection.band.area_segments, projection.anchor_row)
+            for projection in frame.projections
+        )
+    return {key: frozenset(value) for key, value in physical.items()}
+
+
+@pytest.mark.parametrize(
+    ("occupied", "limit", "policy"),
+    (
+        ((0, 0, 2, 2), (-2, -1, 4, 5), BandPolicy("portable")),
+        ((-1, -2, 1, 0), (-3, -4, 4, 3), BandPolicy("100")),
+        ((2, 3, 4, 6), (0, 0, 7, 9), BandPolicy("portable")),
+    ),
+)
+def test_junction_projection_frames_match_four_edge_brute_oracle(
+    occupied: tuple[int, int, int, int],
+    limit: tuple[int, int, int, int],
+    policy: BandPolicy,
+) -> None:
+    expected = _physical_projection_frames(
+        _brute_junction_projection_frames(occupied, limit, policy)
+    )
+
+    actual = _physical_projection_frames(
+        freeform._junction_projection_frames(occupied, limit, policy)
+    )
+
+    assert actual == expected
+
+
+def test_junction_projection_frame_work_grows_quadratically_not_quartically() -> None:
+    def measured(slack: int) -> tuple[int, int]:
+        checks = 0
+
+        def cancelled() -> bool:
+            nonlocal checks
+            checks += 1
+            return False
+
+        frames = freeform._junction_projection_frames(
+            (0, 0, 2, 2),
+            (-slack, -slack, 2 + slack, 2 + slack),
+            BandPolicy("portable"),
+            cancelled=cancelled,
+        )
+        return checks, len(frames)
+
+    small_checks, small_frames = measured(4)
+    large_checks, large_frames = measured(8)
+
+    assert large_checks <= 6 * small_checks
+    assert large_frames <= 3 * small_frames
+
+
+def test_cleanup_survivor_cache_is_scoped_to_complete_candidate_geometry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    machine = catalog.building(2303)
+    first = (
+        PlacedBuilding(
+            2303,
+            machine.model_index,
+            0,
+            0,
+            width=machine.width,
+            height=machine.height,
+            owner_strip=1,
+        ),
+    )
+    second = (replace(first[0], owner_strip=2),)
+    calls: list[tuple[PlacedBuilding, ...]] = []
+
+    def survivor_bounds(
+        placement: Placement,
+        *,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> tuple[int, int, int, int]:
+        assert cancelled is not None
+        calls.append(placement.buildings)
+        owner = placement.buildings[0].owner_strip
+        assert owner is not None
+        return (owner, 0, owner, 0)
+
+    monkeypatch.setattr(finalize, "_cleanup_survivor_bounds", survivor_bounds)
+    cache = freeform._StagedStaticCache()
+
+    assert freeform._cached_cleanup_survivor_bounds(
+        cache,
+        first,
+        cancelled=lambda: False,
+    ) == (1, 0, 1, 0)
+    assert freeform._cached_cleanup_survivor_bounds(
+        cache,
+        first,
+        cancelled=lambda: False,
+    ) == (1, 0, 1, 0)
+    assert freeform._cached_cleanup_survivor_bounds(
+        cache,
+        second,
+        cancelled=lambda: False,
+    ) == (2, 0, 2, 0)
+    assert calls == [first, second]
+
+
 def test_prospective_projection_matches_finalizer_for_exact_ownerless_pair() -> None:
     belt = catalog.building(2001)
     chemical = catalog.building(2309)
@@ -10974,6 +11174,7 @@ def test_staged_static_clearance_reuses_only_the_same_physical_relation() -> Non
             height=unsafe.mh,
             yaw=unsafe.yaw,
         ),
+
         PlacedBuilding(
             item_id=catalog.SPRAY_COATER_ID,
             model_index=coater.model_index,

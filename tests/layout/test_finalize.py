@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
+import random
 from fractions import Fraction
 import math
 import random
@@ -79,6 +80,139 @@ def test_remove_buildings_bypasses_removed_chain_and_reindexes() -> None:
         (2, None),
     ]
 
+
+
+def _brute_cleanup_survivor_bounds(
+    placement: Placement,
+) -> tuple[int, int, int, int]:
+    """Retained wave-by-wave oracle for the optimized survivor fixed point."""
+    candidate = placement
+    for _wave in range(len(placement.buildings)):
+        removable = set(finalize._prunable_open_belts(candidate))
+        for side in ("left", "bottom", "right", "top"):
+            removable.update(finalize._boundary_open_belts(candidate, side))
+        if not removable:
+            break
+        candidate = finalize._remove_buildings(candidate, frozenset(removable))
+    return candidate.bounds
+
+
+def _linked_belt(
+    x: int,
+    y: int,
+    *,
+    input_obj: int | None,
+    output_obj: int | None,
+) -> PlacedBuilding:
+    return replace(
+        _belt(x, y, output=output_obj),
+        input_obj=input_obj,
+    )
+
+
+def test_cleanup_survivor_bounds_matches_multiwave_brute_oracle() -> None:
+    belt_count = 41
+    machine = _building(2302, belt_count // 2, 0)
+    placement = Placement(
+        buildings=(
+            *(
+                _linked_belt(
+                    index,
+                    0,
+                    input_obj=index - 1 if index else None,
+                    output_obj=index + 1 if index + 1 < belt_count else None,
+                )
+                for index in range(belt_count)
+            ),
+            machine,
+        )
+    )
+
+    assert finalize._cleanup_survivor_bounds(
+        placement
+    ) == _brute_cleanup_survivor_bounds(placement)
+
+
+def test_cleanup_survivor_bounds_matches_duplicate_and_colocated_records() -> None:
+    machine = replace(
+        _building(2302, 1, 0),
+        input_obj=0,
+        output_obj=3,
+    )
+    placement = Placement(
+        buildings=(
+            _linked_belt(0, 0, input_obj=None, output_obj=1),
+            _linked_belt(0, 0, input_obj=0, output_obj=2),
+            _linked_belt(1, 0, input_obj=1, output_obj=3),
+            _linked_belt(1, 0, input_obj=2, output_obj=None),
+            machine,
+        )
+    )
+
+    assert finalize._cleanup_survivor_bounds(
+        placement
+    ) == _brute_cleanup_survivor_bounds(placement)
+
+
+def test_cleanup_survivor_bounds_matches_random_small_brute_oracle() -> None:
+    randomizer = random.Random(0xC1EA)
+    belt_id = min(catalog.BELT_IDS)
+    belt_model = catalog.building(belt_id).model_index
+    for size in range(1, 14):
+        for _fixture in range(20):
+            buildings: list[PlacedBuilding] = []
+            for _index in range(size):
+                buildings.append(
+                    PlacedBuilding(
+                        item_id=belt_id,
+                        model_index=belt_model,
+                        x=randomizer.randrange(-3, 4),
+                        y=randomizer.randrange(-3, 4),
+                        input_obj=randomizer.choice((*range(size + 1), None)),
+                        output_obj=randomizer.choice((*range(size + 1), None)),
+                        parameters=(
+                            ()
+                            if randomizer.randrange(5)
+                            else (randomizer.randrange(1, 4),)
+                        ),
+                    )
+                )
+            machine = _building(2302, 0, 0)
+            buildings.append(
+                replace(
+                    machine,
+                    input_obj=randomizer.choice((*range(size), None)),
+                    output_obj=randomizer.choice((*range(size), None)),
+                )
+            )
+            placement = Placement(buildings=tuple(buildings))
+
+            assert finalize._cleanup_survivor_bounds(
+                placement
+            ) == _brute_cleanup_survivor_bounds(placement)
+
+
+def test_cleanup_survivor_graph_visits_chain_nodes_and_edges_linearly() -> None:
+    belt_count = 257
+    placement = Placement(
+        buildings=(
+            *(
+                _linked_belt(
+                    index,
+                    0,
+                    input_obj=index - 1 if index else None,
+                    output_obj=index + 1 if index + 1 < belt_count else None,
+                )
+                for index in range(belt_count)
+            ),
+            _building(2302, belt_count // 2, 0),
+        )
+    )
+
+    graph = finalize._CleanupSurvivorGraph(placement)
+    assert graph.survivor_bounds() == _brute_cleanup_survivor_bounds(placement)
+    assert graph.node_visits <= 6 * len(placement.buildings)
+    assert graph.edge_visits <= 16 * len(placement.buildings)
 
 def test_compaction_prunes_open_belt_leaves_to_a_structural_fixed_point(
     monkeypatch: pytest.MonkeyPatch,
@@ -1949,9 +2083,11 @@ def test_freeform_uses_shared_planet_finalization(
     def observed(
         placement: Placement,
         band_policy: BandPolicy,
+        *,
+        cancelled: Callable[[], bool] | None = None,
     ) -> Placement:
         calls.append((placement, band_policy))
-        return original(placement, band_policy)
+        return original(placement, band_policy, cancelled=cancelled)
 
     monkeypatch.setattr(
         "flab2bp.layout.freeform.finalize.finalize_placement",
@@ -1980,7 +2116,10 @@ def test_sequence_pair_uses_shared_planet_finalization(
     def observed(
         placement: Placement,
         band_policy: BandPolicy,
+        *,
+        cancelled: Callable[[], bool] | None = None,
     ) -> Placement:
+        del cancelled
         calls.append((placement, band_policy))
         return replace(
             placement,

@@ -2282,41 +2282,420 @@ def _boundary_open_belts(
     return frozenset(selected)
 
 
+class _CleanupSurvivorGraph:
+    """Event-driven form of the cleanup wave fixed point.
+
+    Active belt records are graph vertices.  A belt output contributes one
+    predecessor edge to the first active belt reached by following removed
+    outputs; non-belt references contribute protection in the same way.
+    Removing a wave contracts those reference chains.  Counts and linked owner
+    bags move across each contraction once, while four coordinate indexes wake
+    belts only when they become part of the active bounding rectangle.
+    """
+
+    _EXTERNAL = -1
+
+    def __init__(
+        self,
+        placement: Placement,
+        *,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> None:
+        self.buildings = placement.buildings
+        self.cancelled = cancelled
+        self.node_visits = 0
+        self.edge_visits = 0
+        self.active = [True] * len(self.buildings)
+        self.active_count = len(self.buildings)
+        self.belts: list[bool] = []
+        for building in self.buildings:
+            self._poll()
+            self.node_visits += 1
+            self.belts.append(catalog.is_belt(building.item_id))
+
+        self.input_jump = [building.input_obj for building in self.buildings]
+        self.output_jump = [building.output_obj for building in self.buildings]
+        self.remapped_once = False
+        size = len(self.buildings)
+        self.predecessors = [0] * size
+        self.nonbelt_input = [0] * size
+        self.nonbelt_output = [0] * size
+        self.input_head: list[int | None] = [None] * size
+        self.input_tail: list[int | None] = [None] * size
+        self.input_next: list[int | None] = [None] * size
+        self.output_head: list[int | None] = [None] * size
+        self.output_tail: list[int | None] = [None] * size
+        self.output_next: list[int | None] = [None] * size
+        self.external_input_sources: list[int] = []
+        self.external_output_sources: list[int] = []
+
+        for source, building in enumerate(self.buildings):
+            self._poll()
+            references: tuple[tuple[_Direction, int | None], ...] = (
+                ("input", building.input_obj),
+                ("output", building.output_obj),
+            )
+            for direction, target in references:
+                self.edge_visits += 1
+                if self.belts[source]:
+                    if target is not None and 0 <= target < size and self.belts[target]:
+                        self._append_owner(direction, target, source)
+                        if direction == "output":
+                            self.predecessors[target] += 1
+                    elif target is not None and not 0 <= target < size:
+                        external = (
+                            self.external_input_sources
+                            if direction == "input"
+                            else self.external_output_sources
+                        )
+                        external.append(source)
+                elif target is not None and 0 <= target < size and self.belts[target]:
+                    protected = (
+                        self.nonbelt_input
+                        if direction == "input"
+                        else self.nonbelt_output
+                    )
+                    protected[target] += 1
+
+        self.left_records: dict[int, list[int]] = {}
+        self.bottom_records: dict[int, list[int]] = {}
+        self.right_records: dict[int, list[int]] = {}
+        self.top_records: dict[int, list[int]] = {}
+        self.left_counts: dict[int, int] = {}
+        self.bottom_counts: dict[int, int] = {}
+        self.right_counts: dict[int, int] = {}
+        self.top_counts: dict[int, int] = {}
+        for index, building in enumerate(self.buildings):
+            right = building.x + building.width - 1
+            top = building.y + building.height - 1
+            for coordinate, records, counts in (
+                (building.x, self.left_records, self.left_counts),
+                (building.y, self.bottom_records, self.bottom_counts),
+                (right, self.right_records, self.right_counts),
+                (top, self.top_records, self.top_counts),
+            ):
+                records.setdefault(coordinate, []).append(index)
+                counts[coordinate] = counts.get(coordinate, 0) + 1
+        self.left_coordinates = sorted(self.left_counts)
+        self.bottom_coordinates = sorted(self.bottom_counts)
+        self.right_coordinates = sorted(self.right_counts, reverse=True)
+        self.top_coordinates = sorted(self.top_counts, reverse=True)
+        self.left_position = 0
+        self.bottom_position = 0
+        self.right_position = 0
+        self.top_position = 0
+
+    def _poll(self) -> None:
+        if self.cancelled is not None and self.cancelled():
+            raise ProjectionCancelled
+
+    def _append_owner(self, direction: _Direction, target: int, source: int) -> None:
+        heads, tails, following = self._bags(direction)
+        tail = tails[target]
+        if tail is None:
+            heads[target] = source
+        else:
+            following[tail] = source
+        tails[target] = source
+
+    def _bags(
+        self,
+        direction: _Direction,
+    ) -> tuple[list[int | None], list[int | None], list[int | None]]:
+        if direction == "input":
+            return self.input_head, self.input_tail, self.input_next
+        return self.output_head, self.output_tail, self.output_next
+
+    def _move_owner_bag(
+        self,
+        direction: _Direction,
+        source_target: int,
+        destination: int | None,
+        pending: set[int],
+    ) -> None:
+        heads, tails, following = self._bags(direction)
+        head = heads[source_target]
+        tail = tails[source_target]
+        heads[source_target] = None
+        tails[source_target] = None
+        if head is None:
+            return
+        if (
+            destination is not None
+            and destination != self._EXTERNAL
+            and self.active[destination]
+            and self.belts[destination]
+        ):
+            destination_tail = tails[destination]
+            if destination_tail is None:
+                heads[destination] = head
+            else:
+                following[destination_tail] = head
+            tails[destination] = tail
+            return
+
+        owner: int | None = head
+        while owner is not None:
+            self.edge_visits += 1
+            if self.active[owner]:
+                pending.add(owner)
+            owner = following[owner]
+
+    def _resolve(
+        self,
+        value: int | None,
+        direction: _Direction,
+    ) -> int | None:
+        jump = self.input_jump if direction == "input" else self.output_jump
+        path: list[int] = []
+        positions: set[int] = set()
+        while value is not None:
+            self.edge_visits += 1
+            if value < 0 or value >= len(self.buildings):
+                result = None if self.remapped_once else self._EXTERNAL
+                break
+            if self.active[value]:
+                result = value
+                break
+            if value in positions:
+                result = None
+                break
+            positions.add(value)
+            path.append(value)
+            value = jump[value]
+        else:
+            result = None
+        for removed in path:
+            jump[removed] = result
+        return result
+
+    def _current_bounds(self) -> tuple[int, int, int, int]:
+        indexed = (
+            (self.left_coordinates, self.left_counts, "left_position"),
+            (self.bottom_coordinates, self.bottom_counts, "bottom_position"),
+            (self.right_coordinates, self.right_counts, "right_position"),
+            (self.top_coordinates, self.top_counts, "top_position"),
+        )
+        values: list[int] = []
+        for coordinates, counts, position_name in indexed:
+            position = cast(int, getattr(self, position_name))
+            while not counts[coordinates[position]]:
+                position += 1
+            setattr(self, position_name, position)
+            values.append(coordinates[position])
+        return cast(tuple[int, int, int, int], tuple(values))
+
+    def _enqueue_outer(
+        self,
+        bounds: tuple[int, int, int, int],
+        pending: set[int],
+        *,
+        prior: tuple[int, int, int, int] | None = None,
+    ) -> None:
+        for side, (coordinate, records) in enumerate(
+            zip(
+                bounds,
+                (
+                    self.left_records,
+                    self.bottom_records,
+                    self.right_records,
+                    self.top_records,
+                ),
+                strict=True,
+            )
+        ):
+            if prior is not None and coordinate == prior[side]:
+                continue
+            for index in records[coordinate]:
+                if self.active[index] and self.belts[index]:
+                    pending.add(index)
+
+    def _is_outer(
+        self,
+        index: int,
+        bounds: tuple[int, int, int, int],
+    ) -> bool:
+        building = self.buildings[index]
+        left, bottom, right, top = bounds
+        return (
+            building.x == left
+            or building.y == bottom
+            or building.x + building.width - 1 == right
+            or building.y + building.height - 1 == top
+        )
+
+    def _eligible(
+        self,
+        index: int,
+        bounds: tuple[int, int, int, int],
+    ) -> bool:
+        self._poll()
+        self.node_visits += 1
+        if not self.active[index] or not self._is_outer(index, bounds):
+            return False
+        building = self.buildings[index]
+        input_target = self._resolve(building.input_obj, "input")
+        output_target = self._resolve(building.output_obj, "output")
+        boundary_open = input_target is None or output_target is None
+        successor_is_belt = (
+            output_target is not None
+            and output_target != self._EXTERNAL
+            and self.active[output_target]
+            and self.belts[output_target]
+        )
+        predecessor_count = self.predecessors[index]
+        open_end = predecessor_count == 0 or not successor_is_belt
+        protected = (
+            self.nonbelt_input[index] > 0
+            or self.nonbelt_output[index] > 0
+            or bool(building.parameters)
+        )
+        prunable = (
+            open_end
+            and not protected
+            and predecessor_count + int(successor_is_belt) <= 1
+        )
+        return boundary_open or prunable
+
+    def _transfer_protection(
+        self,
+        direction: _Direction,
+        removed: int,
+        pending: set[int],
+    ) -> None:
+        counts = (
+            self.nonbelt_input if direction == "input" else self.nonbelt_output
+        )
+        count = counts[removed]
+        if not count:
+            return
+        target = self._resolve(
+            self.input_jump[removed]
+            if direction == "input"
+            else self.output_jump[removed],
+            direction,
+        )
+        if (
+            target is not None
+            and target != self._EXTERNAL
+            and self.active[target]
+            and self.belts[target]
+        ):
+            counts[target] += count
+            pending.add(target)
+
+    def _remove_wave(
+        self,
+        wave: set[int],
+        bounds: tuple[int, int, int, int],
+        pending: set[int],
+    ) -> tuple[int, int, int, int]:
+        removed_sources: dict[int, int] = {}
+        for source in wave:
+            target = self._resolve(self.buildings[source].output_obj, "output")
+            if (
+                target is not None
+                and target != self._EXTERNAL
+                and self.belts[target]
+            ):
+                removed_sources[target] = removed_sources.get(target, 0) + 1
+
+        for index in wave:
+            self._poll()
+            self.node_visits += 1
+            self.active[index] = False
+            self.active_count -= 1
+            building = self.buildings[index]
+            right = building.x + building.width - 1
+            top = building.y + building.height - 1
+            self.left_counts[building.x] -= 1
+            self.bottom_counts[building.y] -= 1
+            self.right_counts[right] -= 1
+            self.top_counts[top] -= 1
+        first_remap = not self.remapped_once
+        self.remapped_once = True
+
+        for target, count in removed_sources.items():
+            if self.active[target]:
+                self.predecessors[target] -= count
+                pending.add(target)
+
+        for removed in wave:
+            remaining_predecessors = (
+                self.predecessors[removed] - removed_sources.get(removed, 0)
+            )
+            output_target = self._resolve(self.output_jump[removed], "output")
+            if (
+                output_target is not None
+                and output_target != self._EXTERNAL
+                and self.active[output_target]
+                and self.belts[output_target]
+            ):
+                self.predecessors[output_target] += remaining_predecessors
+                pending.add(output_target)
+            self._move_owner_bag(
+                "output",
+                removed,
+                output_target,
+                pending,
+            )
+            input_target = self._resolve(self.input_jump[removed], "input")
+            self._move_owner_bag(
+                "input",
+                removed,
+                input_target,
+                pending,
+            )
+            self._transfer_protection("output", removed, pending)
+            self._transfer_protection("input", removed, pending)
+
+        if first_remap:
+            pending.update(
+                source
+                for source in (
+                    *self.external_input_sources,
+                    *self.external_output_sources,
+                )
+                if self.active[source]
+            )
+        changed_bounds = self._current_bounds()
+        if changed_bounds != bounds:
+            self._enqueue_outer(changed_bounds, pending, prior=bounds)
+        return changed_bounds
+
+    def survivor_bounds(self) -> tuple[int, int, int, int]:
+        """Return the survivor bounds after the exact simultaneous peel waves."""
+        self._poll()
+        bounds = self._current_bounds()
+        pending: set[int] = set()
+        self._enqueue_outer(bounds, pending)
+        while pending:
+            wave = {
+                index
+                for index in pending
+                if self._eligible(index, bounds)
+            }
+            pending.clear()
+            if not wave:
+                break
+            # `_remove_buildings` intentionally keeps an all-removed placement.
+            if len(wave) == self.active_count:
+                break
+            bounds = self._remove_wave(wave, bounds, pending)
+        self._poll()
+        return bounds
+
+
 def _cleanup_survivor_bounds(
     placement: Placement,
     *,
     cancelled: Callable[[], bool] | None = None,
 ) -> tuple[int, int, int, int]:
     """Innermost bounds reachable through existing cleanup eligibility."""
-    if cancelled is not None and cancelled():
-        raise ProjectionCancelled
-    candidate = placement
-    for _wave in range(len(placement.buildings)):
-        if cancelled is not None and cancelled():
-            raise ProjectionCancelled
-        removable = set(
-            _prunable_open_belts(candidate, cancelled=cancelled)
-        )
-        for side in ("left", "bottom", "right", "top"):
-            if cancelled is not None and cancelled():
-                raise ProjectionCancelled
-            removable.update(
-                _boundary_open_belts(
-                    candidate,
-                    side,
-                    cancelled=cancelled,
-                )
-            )
-        if not removable:
-            break
-        candidate = _remove_buildings(
-            candidate,
-            frozenset(removable),
-            cancelled=cancelled,
-        )
-    if cancelled is not None and cancelled():
-        raise ProjectionCancelled
-    return candidate.bounds
+    return _CleanupSurvivorGraph(
+        placement,
+        cancelled=cancelled,
+    ).survivor_bounds()
 
 
 def uses_tall_saturated_role(

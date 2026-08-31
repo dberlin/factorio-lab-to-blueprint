@@ -8414,6 +8414,10 @@ class _StagedStaticCache:
         ],
         tuple[_JunctionProjectionFrame, ...],
     ] = field(default_factory=dict)
+    cleanup_bounds: dict[
+        tuple[PlacedBuilding, ...],
+        tuple[int, int, int, int],
+    ] = field(default_factory=dict)
     materialized: dict[
         tuple[
             PlacedBuilding,
@@ -8427,6 +8431,27 @@ class _StagedStaticCache:
         tuple[colliders.Placed, planet.Projection],
         tuple[colliders.Box, ...],
     ] = field(default_factory=dict)
+
+
+def _cached_cleanup_survivor_bounds(
+    cache: _StagedStaticCache,
+    buildings: tuple[PlacedBuilding, ...],
+    *,
+    cancelled: Callable[[], bool] | None = None,
+) -> tuple[int, int, int, int]:
+    """Cache only a complete candidate geometry, never a bounds-only proxy."""
+    if cancelled is not None and cancelled():
+        raise _PreparationDeadline
+    bounds = cache.cleanup_bounds.get(buildings)
+    if bounds is None:
+        bounds = finalize._cleanup_survivor_bounds(
+            Placement(buildings=buildings),
+            cancelled=cancelled,
+        )
+        if cancelled is not None and cancelled():
+            raise _PreparationDeadline
+        cache.cleanup_bounds[buildings] = bounds
+    return bounds
 
 
 def _cached_junction_projection_frames(
@@ -8462,7 +8487,15 @@ def _junction_projection_frames(
     *,
     cancelled: Callable[[], bool] | None = None,
 ) -> tuple[_JunctionProjectionFrame, ...]:
-    """Every distinct finalizer-materialized frame reachable in capacity."""
+    """Distinct physical frame transforms reachable inside ``limit``.
+
+    A finalizer transform depends on orientation and latitude offset only:
+    longitude translation is a rigid rotation of the planet.  Width/height
+    still select the certified bands and projection anchors, so enumerate each
+    distinct extent once, then union those projection signatures over the
+    contiguous offsets at which that extent is reachable.  This replaces four
+    independently chosen rectangle edges with two extent dimensions.
+    """
     if cancelled is not None and cancelled():
         raise _PreparationDeadline
     occupied_min_x, occupied_min_y, occupied_max_x, occupied_max_y = occupied
@@ -8473,102 +8506,192 @@ def _junction_projection_frames(
     ):
         raise ValueError("occupied junction bounds must lie inside canvas.limit")
 
+    occupied_width = occupied_max_x - occupied_min_x + 1
+    occupied_height = occupied_max_y - occupied_min_y + 1
+    limit_width = limit_max_x - limit_min_x + 1
+    limit_height = limit_max_y - limit_min_y + 1
     by_segments = {band.area_segments: band for band in planet.bands()}
-    candidates_by_extent: dict[
-        tuple[int, int],
-        tuple[finalize.FrameCandidate, ...],
+    interval_specs: list[
+        tuple[
+            bool,
+            int,
+            int,
+            int,
+            int,
+            int,
+            int,
+            finalize.FrameCandidate,
+        ]
+    ] = []
+    projection_intervals: dict[
+        tuple[bool, int, int, int, tuple[int, ...]],
+        None,
     ] = {}
-    frame_specs: dict[
-        tuple[bool, int, int, int],
-        tuple[tuple[int, int, int, int], finalize.FrameCandidate],
-    ] = {}
-    projections_by_frame: dict[
-        tuple[bool, int, int, int],
-        dict[tuple[int, int], None],
-    ] = {}
-    projection_signatures_by_frame: dict[
-        tuple[bool, int, int, int],
-        set[tuple[int, tuple[int, ...]]],
-    ] = {}
-    for min_x in range(limit_min_x, occupied_min_x + 1):
-        if cancelled is not None and cancelled():
-            raise _PreparationDeadline
-        for min_y in range(limit_min_y, occupied_min_y + 1):
+
+    for width in range(occupied_width, limit_width + 1):
+        min_x_lo = max(limit_min_x, occupied_max_x - width + 1)
+        min_x_hi = min(occupied_min_x, limit_max_x - width + 1)
+        for height in range(occupied_height, limit_height + 1):
             if cancelled is not None and cancelled():
                 raise _PreparationDeadline
-            for max_x in range(occupied_max_x, limit_max_x + 1):
+            min_y_lo = max(limit_min_y, occupied_max_y - height + 1)
+            min_y_hi = min(occupied_min_y, limit_max_y - height + 1)
+            candidates = finalize._frame_candidates_for_extent(
+                width,
+                height,
+                policy,
+            )
+            for candidate in candidates:
                 if cancelled is not None and cancelled():
                     raise _PreparationDeadline
-                for max_y in range(occupied_max_y, limit_max_y + 1):
-                    if cancelled is not None and cancelled():
-                        raise _PreparationDeadline
-                    width = max_x - min_x + 1
-                    height = max_y - min_y + 1
-                    extent = (width, height)
-                    candidates = candidates_by_extent.get(extent)
-                    if candidates is None:
-                        candidates = finalize._frame_candidates_for_extent(
-                            width,
-                            height,
-                            policy,
-                        )
-                        candidates_by_extent[extent] = candidates
-                    for candidate in candidates:
-                        if cancelled is not None and cancelled():
-                            raise _PreparationDeadline
-                        rotated = candidate.frame.rotated
-                        transform_key = (
-                            rotated,
-                            height if rotated else 0,
-                            min_x if rotated else min_y,
-                            candidate.south_padding,
-                        )
-                        frame_specs.setdefault(
-                            transform_key,
-                            (
-                                (min_x, min_y, max_x, max_y),
-                                candidate,
-                            ),
-                        )
-                        frame_projections = projections_by_frame.setdefault(
-                            transform_key,
-                            {},
-                        )
-                        projection_signatures = (
-                            projection_signatures_by_frame.setdefault(
-                                transform_key,
-                                set(),
-                            )
-                        )
-                        projection_signature = (
-                            candidate.frame.height,
-                            candidate.frame.certified_bands,
-                        )
-                        if projection_signature in projection_signatures:
-                            continue
-                        projection_signatures.add(projection_signature)
-                        for segments in candidate.frame.certified_bands:
-                            if cancelled is not None and cancelled():
-                                raise _PreparationDeadline
-                            band = by_segments[segments]
-                            for anchor in band.anchors(
-                                candidate.frame.height
-                            ):
-                                if cancelled is not None and cancelled():
-                                    raise _PreparationDeadline
-                                frame_projections.setdefault(
-                                    (segments, anchor),
-                                    None,
-                                )
+                rotated = candidate.frame.rotated
+                coordinate_lo, coordinate_hi = (
+                    (min_x_lo, min_x_hi)
+                    if rotated
+                    else (min_y_lo, min_y_hi)
+                )
+                offset_lo = candidate.south_padding - coordinate_hi
+                offset_hi = candidate.south_padding - coordinate_lo
+                interval_specs.append(
+                    (
+                        rotated,
+                        offset_lo,
+                        offset_hi,
+                        width,
+                        height,
+                        min_x_lo,
+                        min_y_lo,
+                        candidate,
+                    )
+                )
+                projection_intervals.setdefault(
+                    (
+                        rotated,
+                        offset_lo,
+                        offset_hi,
+                        candidate.frame.height,
+                        candidate.frame.certified_bands,
+                    ),
+                    None,
+                )
+
+    # Assign one exact reachable representative to each physical transform.
+    # Interval-disjoint-set skipping means each offset is materialized once;
+    # already-covered intervals cost one near-constant `find`, not their span.
+    frame_specs: dict[
+        tuple[bool, int],
+        tuple[tuple[int, int, int, int], finalize.FrameCandidate],
+    ] = {}
+    offset_ranges = {
+        rotated: (
+            min(spec[1] for spec in interval_specs if spec[0] is rotated),
+            max(spec[2] for spec in interval_specs if spec[0] is rotated),
+        )
+        for rotated in (False, True)
+        if any(spec[0] is rotated for spec in interval_specs)
+    }
+    next_unassigned = {
+        rotated: list(range(upper - lower + 2))
+        for rotated, (lower, upper) in offset_ranges.items()
+    }
+
+    def first_unassigned(rotated: bool, position: int) -> int:
+        following = next_unassigned[rotated]
+        root = position
+        while following[root] != root:
+            if cancelled is not None and cancelled():
+                raise _PreparationDeadline
+            root = following[root]
+        while following[position] != position:
+            if cancelled is not None and cancelled():
+                raise _PreparationDeadline
+            parent = following[position]
+            following[position] = root
+            position = parent
+        return root
+
+    for (
+        rotated,
+        offset_lo,
+        offset_hi,
+        width,
+        height,
+        min_x_lo,
+        min_y_lo,
+        candidate,
+    ) in interval_specs:
+        if cancelled is not None and cancelled():
+            raise _PreparationDeadline
+        base, _upper = offset_ranges[rotated]
+        position = first_unassigned(rotated, offset_lo - base)
+        stop = offset_hi - base
+        while position <= stop:
+            if cancelled is not None and cancelled():
+                raise _PreparationDeadline
+            offset = base + position
+            min_x = (
+                candidate.south_padding - offset
+                if rotated
+                else min_x_lo
+            )
+            min_y = (
+                min_y_lo
+                if rotated
+                else candidate.south_padding - offset
+            )
+            frame_specs[(rotated, offset)] = (
+                (
+                    min_x,
+                    min_y,
+                    min_x + width - 1,
+                    min_y + height - 1,
+                ),
+                candidate,
+            )
+            following = next_unassigned[rotated]
+            following[position] = first_unassigned(rotated, position + 1)
+            position = following[position]
+
+    projections_by_frame: dict[
+        tuple[bool, int],
+        dict[tuple[int, int], None],
+    ] = {key: {} for key in frame_specs}
+    for (
+        rotated,
+        offset_lo,
+        offset_hi,
+        frame_height,
+        certified_bands,
+    ) in projection_intervals:
+        if cancelled is not None and cancelled():
+            raise _PreparationDeadline
+        projection_keys: list[tuple[int, int]] = []
+        for segments in certified_bands:
+            if cancelled is not None and cancelled():
+                raise _PreparationDeadline
+            band = by_segments[segments]
+            projection_keys.extend(
+                (segments, anchor)
+                for anchor in band.anchors(frame_height)
+            )
+        for offset in range(offset_lo, offset_hi + 1):
+            if cancelled is not None and cancelled():
+                raise _PreparationDeadline
+            frame_projections = projections_by_frame[(rotated, offset)]
+            for projection_key in projection_keys:
+                if cancelled is not None and cancelled():
+                    raise _PreparationDeadline
+                frame_projections.setdefault(projection_key, None)
+
     frames: list[_JunctionProjectionFrame] = []
     for key, (bounds, candidate) in frame_specs.items():
         if cancelled is not None and cancelled():
             raise _PreparationDeadline
-        projections: list[planet.Projection] = []
+        projections_list: list[planet.Projection] = []
         for segments, anchor in projections_by_frame[key]:
             if cancelled is not None and cancelled():
                 raise _PreparationDeadline
-            projections.append(
+            projections_list.append(
                 planet.Projection(
                     band=by_segments[segments],
                     anchor_row=anchor,
@@ -8576,11 +8699,12 @@ def _junction_projection_frames(
                     radius=colliders.PLANET_RADIUS,
                 )
             )
+        projections = tuple(projections_list)
         frames.append(
             _JunctionProjectionFrame(
                 bounds=bounds,
                 candidate=candidate,
-                projections=tuple(projections),
+                projections=projections,
             )
         )
     if cancelled is not None and cancelled():
@@ -9428,8 +9552,9 @@ def _power_plan(
                 *(building for _, building in static_buildings),
                 candidate[1],
             )
-            candidate_bounds = finalize._cleanup_survivor_bounds(
-                Placement(buildings=candidate_buildings),
+            candidate_bounds = _cached_cleanup_survivor_bounds(
+                staged_static_cache,
+                candidate_buildings,
                 cancelled=cancelled,
             )
             static_frames = static_frames_by_bounds.get(candidate_bounds)
@@ -11174,8 +11299,9 @@ def _place_coaters(
                 supply_index = len(prospective)
                 coater_index = supply_index + 1
                 candidate_buildings = (*prospective, supply, proposed_coater)
-                candidate_bounds = finalize._cleanup_survivor_bounds(
-                    Placement(buildings=candidate_buildings),
+                candidate_bounds = _cached_cleanup_survivor_bounds(
+                    staged_static_cache,
+                    candidate_buildings,
                     cancelled=cancelled,
                 )
                 static_frames = _cached_junction_projection_frames(
