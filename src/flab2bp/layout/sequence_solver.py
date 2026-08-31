@@ -296,6 +296,32 @@ def _moderate_routed_initial_strip_len(
         return max(requested, _MODERATE_ROUTED_STRIP_LEN)
     return requested
 
+
+def _mid_unsprayed_initial_strip_len(
+    requested: int,
+    *,
+    machine_count: int,
+    sprayed_lanes: int,
+    strip_count: int,
+    direct_candidates: int,
+) -> int:
+    """Keep a direct-rich mid plan below the expensive fine-topology cohort."""
+    if not (
+        requested == 6
+        and sprayed_lanes == 0
+        and _MID_NO_SPRAY_COMPACT_MIN_MACHINES
+        <= machine_count
+        <= _MID_NO_SPRAY_COMPACT_MAX_MACHINES
+        and _MID_NO_SPRAY_COMPACT_MIN_STRIPS
+        <= strip_count
+        <= _MID_NO_SPRAY_COMPACT_MAX_STRIPS
+    ):
+        return requested
+    if direct_candidates >= strip_count:
+        return _MODERATE_ROUTED_STRIP_LEN
+    return 4
+
+
 def _topology_budget_signature(
     detailed: DetailedStageResult,
 ) -> int | None:
@@ -3519,15 +3545,15 @@ def _production_run(
                     spec_label=spec.label,
                     budget_s=time_budget_s,
                 ) from exc
-        if (
-            planned_strip_len == 6
-            and len(spec.spray_lanes) == 0
-            and _MID_NO_SPRAY_COMPACT_MIN_MACHINES
-            <= spec.machine_count
-            <= _MID_NO_SPRAY_COMPACT_MAX_MACHINES
-            and _MID_NO_SPRAY_COMPACT_MIN_STRIPS <= len(strips) <= _MID_NO_SPRAY_COMPACT_MAX_STRIPS
-        ):
-            planned_strip_len = 4
+        mid_strip_len = _mid_unsprayed_initial_strip_len(
+            planned_strip_len,
+            machine_count=spec.machine_count,
+            sprayed_lanes=len(spec.spray_lanes),
+            strip_count=len(strips),
+            direct_candidates=len(_direct_net_candidates(strips, spec)),
+        )
+        if mid_strip_len != planned_strip_len:
+            planned_strip_len = mid_strip_len
             strips = plan_strips(
                 spec,
                 strip_len=planned_strip_len,

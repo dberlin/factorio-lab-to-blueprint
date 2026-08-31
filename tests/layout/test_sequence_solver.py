@@ -2078,6 +2078,44 @@ def test_serial_attempt_policy_selects_only_measured_topology_roles() -> None:
     assert sequence_solver_module._serial_compact_seed_attempt(168, 2, power=False) == 0
     assert sequence_solver_module._serial_compact_seed_attempt(58, 23, power=False) == 0
 
+
+@pytest.mark.parametrize(
+    (
+        "requested",
+        "machine_count",
+        "sprayed_lanes",
+        "strip_count",
+        "direct_candidates",
+        "expected",
+    ),
+    (
+        (6, 62, 0, 15, 24, 12),
+        (6, 62, 0, 15, 14, 4),
+        (6, 49, 0, 15, 24, 6),
+        (6, 62, 1, 15, 24, 6),
+        (6, 62, 0, 9, 24, 6),
+    ),
+)
+def test_mid_unsprayed_direct_rich_plan_coarsens_before_topology_admission(
+    requested: int,
+    machine_count: int,
+    sprayed_lanes: int,
+    strip_count: int,
+    direct_candidates: int,
+    expected: int,
+) -> None:
+    assert (
+        sequence_solver_module._mid_unsprayed_initial_strip_len(
+            requested,
+            machine_count=machine_count,
+            sprayed_lanes=sprayed_lanes,
+            strip_count=strip_count,
+            direct_candidates=direct_candidates,
+        )
+        == expected
+    )
+
+
 @pytest.mark.parametrize(
     ("requested", "sprayed_lanes", "direct_candidates", "expected"),
     (
