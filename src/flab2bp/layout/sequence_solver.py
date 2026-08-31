@@ -41,6 +41,7 @@ from flab2bp.layout.freeform import (
     _ENTRY_RING,
     _ROUTING_BUDGET,
     _ROUTING_EXPANSIONS_PER_SECOND,
+    _COATER_WEST_CHANNEL,
     WEST_CHANNEL,
     DirectInsertId,
     ExactPackNoGood,
@@ -62,6 +63,8 @@ from flab2bp.layout.freeform import (
     _PreparationDeadline,
     _PreparedRoutingProblem,
     _StagedStaticCache,
+    _staged_static_clearance_keys,
+    _staged_static_preclearance_proved,
     _projection_no_good,
     _exact_projection_pair,
     _projection_strip_pair,
@@ -117,6 +120,7 @@ from flab2bp.layout.sequence_pair import (
     split_stage_boundary,
 )
 from flab2bp.layout.strip_variants import (
+    CargoDomain,
     ProjectionPitchRequirement,
     StripFamily,
     StripFamilyId,
@@ -2383,11 +2387,25 @@ def _variant_search_inputs(
         raise ValueError("physical strip plan contains unmatched compatibility strips")
     return tuple(instance_ids), tuple(variant_tables)
 
+def _sequence_reservation_strips(strips: Sequence[Strip]) -> list[Strip]:
+    """Reserve W4 so a later exact pose swap cannot outgrow its proxy box."""
+    return [
+        (
+            replace(strip, west_channel=_COATER_WEST_CHANNEL + 1)
+            if strip.physical_variant is not None
+            and strip.cargo_domain is CargoDomain.REQUIRES_SPRAY
+            else strip
+        )
+        for strip in strips
+    ]
+
 
 def _selected_strips(
     strips: list[Strip],
     problem: PlacementProblem,
     variant_indices: tuple[int, ...],
+    *,
+    band_policy: BandPolicy,
 ) -> list[Strip]:
     """Project current instance ranges into exact Freeform physical plans."""
     problem.selected_sizes(variant_indices)
@@ -2413,23 +2431,41 @@ def _selected_strips(
                 raise ValueError("physical strip templates do not cover the placement instances")
             strip = strips[index]
         variant = problem.variant(index, variant_indices[index])
-        selected.append(
-            replace(
-                strip,
-                machines=instance_id.machine_count,
-                mw=variant.footprint_width,
-                mh=variant.footprint_height,
-                yaw=variant.yaw,
-                pw=variant.pitch_x,
-                ph=variant.pitch_y,
-                lane_plan=variant.lane_plan,
-                attachment_plan=variant.attachment_plan,
-                port_dock_plan=variant.port_dock_plan,
-                box_height=variant.box_height,
-                family_id=instance_id.family_id,
-                machine_start=instance_id.machine_start,
-            )
+        selected_strip = replace(
+            strip,
+            machines=instance_id.machine_count,
+            mw=variant.footprint_width,
+            mh=variant.footprint_height,
+            yaw=variant.yaw,
+            pw=variant.pitch_x,
+            ph=variant.pitch_y,
+            lane_plan=variant.lane_plan,
+            attachment_plan=variant.attachment_plan,
+            port_dock_plan=variant.port_dock_plan,
+            box_height=variant.box_height,
+            physical_variant=variant,
+            family_id=instance_id.family_id,
+            machine_start=instance_id.machine_start,
+            west_channel=(
+                _COATER_WEST_CHANNEL
+                if strip.cargo_domain is CargoDomain.REQUIRES_SPRAY
+                else WEST_CHANNEL
+            ),
         )
+        if strip.cargo_domain is CargoDomain.REQUIRES_SPRAY:
+            selected_strip = replace(
+                selected_strip,
+                west_channel=max(
+                    (
+                        _COATER_WEST_CHANNEL + 1
+                        if _staged_static_preclearance_proved(relation, band_policy)
+                        else _COATER_WEST_CHANNEL
+                        for relation in _staged_static_clearance_keys(selected_strip)
+                    ),
+                    default=_COATER_WEST_CHANNEL,
+                ),
+            )
+        selected.append(selected_strip)
     return selected
 
 
@@ -2438,9 +2474,16 @@ def _selected_direct_targets(
     strips: list[Strip],
     problem: PlacementProblem,
     variant_indices: tuple[int, ...],
+    *,
+    band_policy: BandPolicy,
 ) -> tuple[DirectInsertTarget, ...]:
     """Derive pair geometry only after both complete endpoint variants are selected."""
-    selected = _selected_strips(strips, problem, variant_indices)
+    selected = _selected_strips(
+        strips,
+        problem,
+        variant_indices,
+        band_policy=band_policy,
+    )
     return _refinement_direct_targets(
         _direct_alignment_targets(_direct_net_candidates(selected, spec)),
         selected,
@@ -2868,10 +2911,18 @@ def _variant_direct_eligibility(
     spec: BuildSpec,
     strips: list[Strip],
     problem: PlacementProblem,
+    *,
+    band_policy: BandPolicy,
 ) -> tuple[VariantDirectInsertTarget, ...]:
     """Enumerate only endpoint-variant pairs production can directly attach."""
     defaults = (0,) * problem.size
-    baseline = _selected_direct_targets(spec, strips, problem, defaults)
+    baseline = _selected_direct_targets(
+        spec,
+        strips,
+        problem,
+        defaults,
+        band_policy=band_policy,
+    )
     if not baseline:
         return ()
 
@@ -2894,6 +2945,7 @@ def _variant_direct_eligibility(
                         strips,
                         problem,
                         tuple(selection),
+                        band_policy=band_policy,
                     )
                 }
                 target = selected.get(candidate.key)
@@ -3193,11 +3245,19 @@ def _production_run(
     try:
         planned_strip_len = strip_len
         try:
-            strips = plan_strips(spec, strip_len=planned_strip_len)
+            strips = plan_strips(
+                spec,
+                strip_len=planned_strip_len,
+                band_policy=band_policy,
+            )
         except (KeyError, ValueError) as exc:
             try:
                 planned_strip_len = max(1, spec.machine_count)
-                strips = plan_strips(spec, strip_len=planned_strip_len)
+                strips = plan_strips(
+                    spec,
+                    strip_len=planned_strip_len,
+                    band_policy=band_policy,
+                )
             except KeyError, ValueError:
                 raise NoValidLayout(
                     f"the spec cannot be split into strips: {exc}",
@@ -3213,12 +3273,18 @@ def _production_run(
             and _MID_NO_SPRAY_COMPACT_MIN_STRIPS <= len(strips) <= _MID_NO_SPRAY_COMPACT_MAX_STRIPS
         ):
             planned_strip_len = 4
-            strips = plan_strips(spec, strip_len=planned_strip_len)
+            strips = plan_strips(
+                spec,
+                strip_len=planned_strip_len,
+                band_policy=band_policy,
+            )
         strips, planned_strip_len = _coarsen_saturated_strip_plan(
             spec,
             strips,
             strip_len=planned_strip_len,
+            band_policy=band_policy,
         )
+        strips = _sequence_reservation_strips(strips)
         if not strips:
             raise NoValidLayout(
                 "the spec contains no machine groups",
@@ -3366,6 +3432,7 @@ def _production_run(
                         spec,
                         strips,
                         problems[compact_height],
+                        band_policy=band_policy,
                     )
                     if ceiling >= _COMPACT_SEED_DIRECT_MIN_BUDGET_S and not deadline_reached()
                     else ()
@@ -3446,7 +3513,14 @@ def _production_run(
         key = (problem.instance_ids, variant_indices)
         selected = selected_cache.get(key)
         if selected is None:
-            selected = tuple(_selected_strips(strips, problem, variant_indices))
+            selected = tuple(
+                _selected_strips(
+                    strips,
+                    problem,
+                    variant_indices,
+                    band_policy=band_policy,
+                )
+            )
             selected_cache[key] = selected
         return selected
 
@@ -3835,6 +3909,7 @@ def _production_run(
                     strips,
                     problem,
                     state.variant_indices,
+                    band_policy=band_policy,
                 )
                 decoded = decode_state(problem, state)
                 pack = _decoded_pack(
@@ -3893,6 +3968,7 @@ def _production_run(
                     strips,
                     problem,
                     state.variant_indices,
+                    band_policy=band_policy,
                 )
                 return _projection_feedback_stage_update(
                     problem,
@@ -3919,6 +3995,7 @@ def _production_run(
             strips,
             transformed.problem,
             transformed.state.variant_indices,
+            band_policy=band_policy,
         )
         rebuilt = _rebuild_stage_problem_nets(
             transformed.problem,

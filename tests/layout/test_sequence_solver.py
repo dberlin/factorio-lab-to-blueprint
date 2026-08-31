@@ -2347,8 +2347,15 @@ def _two_stage_variant_problem() -> tuple[
 
 def test_direct_targets_derive_geometry_from_both_selected_endpoint_variants() -> None:
     spec, strips, problem = _two_stage_variant_problem()
+    policy = BandPolicy("portable")
     default = (0,) * problem.size
-    baseline = _selected_direct_targets(spec, strips, problem, default)
+    baseline = _selected_direct_targets(
+        spec,
+        strips,
+        problem,
+        default,
+        band_policy=policy,
+    )
     assert len(baseline) == 1
     target = baseline[0]
 
@@ -2360,21 +2367,49 @@ def test_direct_targets_derive_geometry_from_both_selected_endpoint_variants() -
                 variant if strip == target.producer else 0 for strip in range(problem.size)
             )
         )
-        and _selected_direct_targets(spec, strips, problem, selection)[0].producer_row
+        and _selected_direct_targets(
+            spec,
+            strips,
+            problem,
+            selection,
+            band_policy=policy,
+        )[0].producer_row
         != target.producer_row
     )
     consumer_selection = tuple(
         4 if strip == target.consumer else 0 for strip in range(problem.size)
     )
 
-    producer_changed = _selected_direct_targets(spec, strips, problem, producer_selection)[0]
-    consumer_plans = _selected_strips(strips, problem, consumer_selection)
-    consumer_changed = _selected_direct_targets(spec, strips, problem, consumer_selection)[0]
+    producer_changed = _selected_direct_targets(
+        spec,
+        strips,
+        problem,
+        producer_selection,
+        band_policy=policy,
+    )[0]
+    consumer_plans = _selected_strips(
+        strips,
+        problem,
+        consumer_selection,
+        band_policy=policy,
+    )
+    consumer_changed = _selected_direct_targets(
+        spec,
+        strips,
+        problem,
+        consumer_selection,
+        band_policy=policy,
+    )[0]
     assert producer_changed.producer_row != target.producer_row
     assert producer_changed.consumer_row == target.consumer_row
     assert (
         consumer_plans[target.consumer].lane_plan
-        != _selected_strips(strips, problem, default)[target.consumer].lane_plan
+        != _selected_strips(
+            strips,
+            problem,
+            default,
+            band_policy=policy,
+        )[target.consumer].lane_plan
     )
     assert (
         consumer_changed
@@ -2387,6 +2422,7 @@ def test_direct_targets_derive_geometry_from_both_selected_endpoint_variants() -
 
 def test_compact_direct_eligibility_contains_exactly_authoritative_variant_targets() -> None:
     spec, strips, problem = _two_stage_variant_problem()
+    policy = BandPolicy("portable")
     enumerate_eligibility = getattr(
         sequence_solver_module,
         "_variant_direct_eligibility",
@@ -2394,13 +2430,19 @@ def test_compact_direct_eligibility_contains_exactly_authoritative_variant_targe
     )
     assert enumerate_eligibility is not None
 
-    actual = enumerate_eligibility(spec, strips, problem)
+    actual = enumerate_eligibility(
+        spec,
+        strips,
+        problem,
+        band_policy=policy,
+    )
     expected: set[VariantDirectInsertTarget] = set()
     for baseline in _selected_direct_targets(
         spec,
         strips,
         problem,
         (0,) * problem.size,
+        band_policy=policy,
     ):
         for producer_variant in range(len(problem.variant_tables[baseline.producer])):
             for consumer_variant in range(len(problem.variant_tables[baseline.consumer])):
@@ -2414,6 +2456,7 @@ def test_compact_direct_eligibility_contains_exactly_authoritative_variant_targe
                         strips,
                         problem,
                         tuple(selection),
+                        band_policy=policy,
                     )
                 }
                 target = selected.get(baseline.key)
@@ -2458,7 +2501,12 @@ def test_selected_strips_rebuild_from_child_instance_ranges() -> None:
     state = AnnealState.initial(problem.size, seed=17)
 
     split = split_stage_boundary(problem, state, family, target)
-    selected = _selected_strips(strips, split.problem, split.state.variant_indices)
+    selected = _selected_strips(
+        strips,
+        split.problem,
+        split.state.variant_indices,
+        band_policy=BandPolicy("portable"),
+    )
 
     assert [strip.machines for strip in selected[target : target + 2]] == [
         split.problem.instance_ids[target].machine_count,
@@ -2469,6 +2517,104 @@ def test_selected_strips_rebuild_from_child_instance_ranges() -> None:
         split.problem.instance_ids[target + 1].machine_start,
     ]
     assert all(strip.family_id is not None for strip in selected)
+
+@pytest.mark.parametrize(
+    ("risky_yaw", "expected_west_channels"),
+    (
+        pytest.param(
+            0.0,
+            (
+                freeform_module._COATER_WEST_CHANNEL + 1,
+                freeform_module._COATER_WEST_CHANNEL,
+            ),
+            id="W4-to-W3",
+        ),
+        pytest.param(
+            90.0,
+            (
+                freeform_module._COATER_WEST_CHANNEL,
+                freeform_module._COATER_WEST_CHANNEL + 1,
+            ),
+            id="W3-to-W4",
+        ),
+    ),
+)
+def test_selected_variant_recomputes_its_own_staged_static_clearance(
+    monkeypatch: pytest.MonkeyPatch,
+    risky_yaw: float,
+    expected_west_channels: tuple[int, int],
+) -> None:
+    spec = proliferated_spec()
+    policy = BandPolicy("120")
+    strips = sequence_solver_module._sequence_reservation_strips(
+        plan_strips(spec, strip_len=6, band_policy=policy)
+    )
+    instance_ids, variant_tables = _variant_search_inputs(
+        spec,
+        strips,
+        strip_len=6,
+    )
+    target = next(
+        index
+        for index, strip in enumerate(strips)
+        if strip.cargo_domain is freeform_module.CargoDomain.REQUIRES_SPRAY
+        and {variant.yaw for variant in variant_tables[index]} >= {0.0, 90.0}
+    )
+    problem = PlacementProblem(
+        sizes=tuple(_box(strip) for strip in strips),
+        nets=tuple(_nets_between(strips)),
+        outline_height=40,
+        area_lower_bound=1,
+        instance_ids=instance_ids,
+        variant_tables=variant_tables,
+    )
+    proof_policies: list[BandPolicy] = []
+
+    def prove_relation(
+        relation: freeform_module.StagedStaticClearanceKey,
+        selected_policy: BandPolicy,
+    ) -> bool:
+        proof_policies.append(selected_policy)
+        return relation.peer_yaw == risky_yaw
+
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "_staged_static_preclearance_proved",
+        prove_relation,
+    )
+    selections = tuple(
+        tuple(
+            next(
+                variant_index
+                for variant_index, variant in enumerate(variant_tables[target])
+                if variant.yaw == yaw
+            )
+            if strip == target
+            else 0
+            for strip in range(problem.size)
+        )
+        for yaw in (0.0, 90.0)
+    )
+    selected = tuple(
+        _selected_strips(
+            strips,
+            problem,
+            selection,
+            band_policy=policy,
+        )[target]
+        for selection in selections
+    )
+
+    assert tuple(strip.west_channel for strip in selected) == expected_west_channels
+    assert tuple(strip.physical_variant for strip in selected) == tuple(
+        problem.variant(target, selection[target]) for selection in selections
+    )
+    assert all(
+        problem.selected_sizes(selection)[target][0] >= _box(strip)[0]
+        for selection, strip in zip(selections, selected, strict=True)
+    )
+    assert proof_policies
+    assert set(proof_policies) == {policy}
 
 
 def test_prepared_physical_nets_keep_stable_logical_family_edges() -> None:
@@ -2589,6 +2735,7 @@ def test_production_stage_boundary_rebuilds_preparation_for_children() -> None:
             initial_strips,
             update.problem,
             update.state.variant_indices,
+            band_policy=BandPolicy("portable"),
         )
         assert update.problem.selected_sizes(update.state.variant_indices) == tuple(
             _box(strip) for strip in selected
@@ -4075,7 +4222,12 @@ def test_production_observability_preserves_categories_and_all_grouped_work() ->
     assert result.exact_candidate_key == exact_stage.candidate_key
 
 
-def test_sequence_reuses_adaptive_coarse_strip_partition_before_problem_identity() -> None:
+def test_sequence_reuses_adaptive_coarse_strip_partition_before_problem_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    policy = BandPolicy("120")
+    coarse_replans: list[tuple[int, BandPolicy]] = []
+    real_plan_strips = freeform_module.plan_strips
     unit = Fraction(1)
     spec = BuildSpec(
         groups=(
@@ -4093,12 +4245,29 @@ def test_sequence_reuses_adaptive_coarse_strip_partition_before_problem_identity
         belt_items_per_second=Fraction(30),
         label="coarse-sequence-partition",
     )
-    fine = plan_strips(spec, strip_len=6)
+    fine = plan_strips(spec, strip_len=6, band_policy=policy)
     assert len(fine) == 40
+
+    def track_coarse_replan(
+        selected_spec: BuildSpec,
+        *,
+        strip_len: int = 6,
+        band_policy: BandPolicy = BandPolicy("portable"),
+        **kwargs: object,
+    ) -> list[freeform_module.Strip]:
+        coarse_replans.append((strip_len, band_policy))
+        return real_plan_strips(
+            selected_spec,
+            strip_len=strip_len,
+            band_policy=band_policy,
+            **kwargs,
+        )
+
+    monkeypatch.setattr(freeform_module, "plan_strips", track_coarse_replan)
 
     run = _production_run(
         spec,
-        band_policy=BandPolicy("portable"),
+        band_policy=policy,
         time_budget_s=2.0,
         power=False,
         strip_len=6,
@@ -4111,6 +4280,7 @@ def test_sequence_reuses_adaptive_coarse_strip_partition_before_problem_identity
     assert {instance.family_id for instance in problem.instance_ids} == {
         strip.family_id for strip in fine
     }
+    assert coarse_replans == [(spec.machine_count, policy)]
 
 
 def _single_real_machine_spec(
@@ -4298,7 +4468,12 @@ def test_selected_port_variant_reaches_shared_prepared_docking_geometry() -> Non
         instance_ids=instance_ids,
         variant_tables=variant_tables,
     )
-    selected = _selected_strips(strips, problem, (0,) * problem.size)
+    selected = _selected_strips(
+        strips,
+        problem,
+        (0,) * problem.size,
+        band_policy=BandPolicy("portable"),
+    )
     receiver_index, receiver = next(
         (index, strip)
         for index, strip in enumerate(selected)
@@ -4328,6 +4503,7 @@ def test_selected_port_variant_reaches_shared_prepared_docking_geometry() -> Non
             strips,
             problem,
             (0,) * problem.size,
+            band_policy=BandPolicy("portable"),
         )
         == ()
     )
@@ -4452,6 +4628,118 @@ def test_sequence_pair_routes_self_consuming_pinned_flow(
         refined_oil_feedback_spec,
         expect_power=True,
     ).ok
+
+
+def test_production_forwards_fixed_band_through_initial_compact_and_coarsen_plans(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    policy = BandPolicy("120")
+    plan_calls: list[tuple[int, BandPolicy]] = []
+    coarsen_calls: list[BandPolicy] = []
+    real_plan_strips = sequence_solver_module.plan_strips
+    real_coarsen = sequence_solver_module._coarsen_saturated_strip_plan
+
+    def track_plan(
+        spec: BuildSpec,
+        *,
+        strip_len: int = 6,
+        band_policy: BandPolicy = BandPolicy("portable"),
+        **kwargs: object,
+    ) -> list[freeform_module.Strip]:
+        plan_calls.append((strip_len, band_policy))
+        return real_plan_strips(
+            spec,
+            strip_len=strip_len,
+            band_policy=band_policy,
+            **kwargs,
+        )
+
+    def track_coarsen(
+        spec: BuildSpec,
+        strips: list[freeform_module.Strip],
+        *,
+        strip_len: int,
+        band_policy: BandPolicy = BandPolicy("portable"),
+        **kwargs: object,
+    ) -> tuple[list[freeform_module.Strip], int]:
+        coarsen_calls.append(band_policy)
+        return real_coarsen(
+            spec,
+            strips,
+            strip_len=strip_len,
+            band_policy=band_policy,
+            **kwargs,
+        )
+
+    monkeypatch.setattr(sequence_solver_module, "plan_strips", track_plan)
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "_coarsen_saturated_strip_plan",
+        track_coarsen,
+    )
+    monkeypatch.setattr(sequence_solver_module, "_MID_NO_SPRAY_COMPACT_MIN_MACHINES", 0)
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "_MID_NO_SPRAY_COMPACT_MAX_MACHINES",
+        10**9,
+    )
+    monkeypatch.setattr(sequence_solver_module, "_MID_NO_SPRAY_COMPACT_MIN_STRIPS", 0)
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "_MID_NO_SPRAY_COMPACT_MAX_STRIPS",
+        10**9,
+    )
+
+    _production_run(
+        two_stage_spec(),
+        band_policy=policy,
+        time_budget_s=2.0,
+        power=False,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+    )
+
+    assert plan_calls == [(6, policy), (4, policy)]
+    assert coarsen_calls == [policy]
+
+
+def test_production_forwards_fixed_band_through_fallback_replan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = two_stage_spec()
+    policy = BandPolicy("120")
+    plan_calls: list[tuple[int, BandPolicy]] = []
+    real_plan_strips = sequence_solver_module.plan_strips
+
+    def fail_once_then_plan(
+        selected_spec: BuildSpec,
+        *,
+        strip_len: int = 6,
+        band_policy: BandPolicy = BandPolicy("portable"),
+        **kwargs: object,
+    ) -> list[freeform_module.Strip]:
+        plan_calls.append((strip_len, band_policy))
+        if len(plan_calls) == 1:
+            raise ValueError("force production fallback")
+        return real_plan_strips(
+            selected_spec,
+            strip_len=strip_len,
+            band_policy=band_policy,
+            **kwargs,
+        )
+
+    monkeypatch.setattr(sequence_solver_module, "plan_strips", fail_once_then_plan)
+
+    _production_run(
+        spec,
+        band_policy=policy,
+        time_budget_s=2.0,
+        power=False,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+    )
+
+    assert plan_calls == [(6, policy), (spec.machine_count, policy)]
 
 
 def test_sequence_band_policy_height_reserves_one_band_120_boundary_slot() -> None:

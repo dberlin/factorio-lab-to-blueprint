@@ -14,6 +14,7 @@ import flab2bp.layout.compact_seed as compact_seed_module
 import flab2bp.layout.sequence_solver as sequence_solver_module
 from flab2bp.lab.data import load_vendored
 from flab2bp.lab.url import parse_url
+from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.compact_seed import (
     CompactSeedConfig,
     CompactSeedStatus,
@@ -695,12 +696,15 @@ _REFINERY_URL = "https://factoriolab.github.io/dsp/list?z=eJxFyrEKwkAQRdG.meJVM0
 
 @pytest.mark.slow
 def test_real_refinery_fixed_outline_seed_is_cython_decodable_without_witness_hint() -> None:
+    policy = BandPolicy("portable")
     spec = build_candidates(
         load_vendored(),
         parse_url(_REFINERY_URL),
         candidate_policies=DEFAULT_CANDIDATE_POLICIES,
     ).candidates[2]
-    strips = plan_strips(spec, strip_len=4)
+    strips = sequence_solver_module._sequence_reservation_strips(
+        plan_strips(spec, strip_len=4, band_policy=policy)
+    )
     instance_ids, variant_tables = _variant_search_inputs(spec, strips, strip_len=4)
     sizes = tuple(_box(strip) for strip in strips)
     placement_nets = _placement_nets(strips)
@@ -733,7 +737,12 @@ def test_real_refinery_fixed_outline_seed_is_cython_decodable_without_witness_hi
     )
     assert enumerate_eligibility is not None
     assert selected_direct_targets is not None
-    eligibility = enumerate_eligibility(spec, strips, problem)
+    eligibility = enumerate_eligibility(
+        spec,
+        strips,
+        problem,
+        band_policy=policy,
+    )
     identities = {
         (
             entry.target.key,
@@ -750,6 +759,7 @@ def test_real_refinery_fixed_outline_seed_is_cython_decodable_without_witness_hi
         strips,
         problem,
         (0,) * problem.size,
+        band_policy=policy,
     )
     default_keys = {target.key for target in default_targets}
     assert default_keys
