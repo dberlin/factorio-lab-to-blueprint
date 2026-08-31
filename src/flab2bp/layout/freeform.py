@@ -9156,6 +9156,28 @@ def _cached_cleanup_survivor_bounds(
     return bounds
 
 
+def _cleanup_snapshot_with_linkless_static(
+    prefix: finalize._CleanupSurvivorGraph,
+    bounds: tuple[int, int, int, int],
+    candidate: PlacedBuilding,
+    *,
+    cancelled: Callable[[], bool] | None = None,
+) -> tuple[finalize._CleanupSurvivorGraph, tuple[int, int, int, int]]:
+    """Reuse certified bounds only while a linkless static stays inside them."""
+    if (
+        bounds[0] <= candidate.x
+        and bounds[1] <= candidate.y
+        and candidate.x + candidate.width - 1 <= bounds[2]
+        and candidate.y + candidate.height - 1 <= bounds[3]
+    ):
+        return prefix, bounds
+    return prefix.extended_snapshot(
+        (candidate,),
+        bounds,
+        cancelled=cancelled,
+    )
+
+
 def _cached_junction_projection_frames(
     cache: _StagedStaticCache,
     occupied: tuple[int, int, int, int],
@@ -10508,23 +10530,17 @@ def _power_plan(
                 staged_static_cache,
                 cancelled=cancelled,
             )
-            # A proposed tower is a linkless non-belt. It cannot change the
-            # already-certified boundary-belt survivor set, so extending the
-            # cleanup graph and re-sorting every survivor coordinate would
-            # repeat the same exact proof once per proposal. Its only cleanup
-            # effect is its own immutable rectangle joining the survivor bounds.
-            candidate_building = candidate[1]
-            candidate_bounds = (
-                min(cleanup_bounds[0], candidate_building.x),
-                min(cleanup_bounds[1], candidate_building.y),
-                max(
-                    cleanup_bounds[2],
-                    candidate_building.x + candidate_building.width - 1,
-                ),
-                max(
-                    cleanup_bounds[3],
-                    candidate_building.y + candidate_building.height - 1,
-                ),
+            # A linkless tower already inside the certified rectangle cannot
+            # change cleanup survivors. Extending any side can revive a linked
+            # belt that the old boundary pruned, including one that expands the
+            # orthogonal axis, so that case must advance the exact prefix.
+            candidate_cleanup, candidate_bounds = (
+                _cleanup_snapshot_with_linkless_static(
+                    cleanup_prefix,
+                    cleanup_bounds,
+                    candidate[1],
+                    cancelled=cancelled,
+                )
             )
             if potential_peers:
                 static_frames = static_frames_by_bounds.get(candidate_bounds)
@@ -10564,6 +10580,7 @@ def _power_plan(
         sites.append(site)
         power_nodes.append(candidate)
         cleanup_bounds = candidate_bounds
+        cleanup_prefix = candidate_cleanup
 
         # The cell itself AND every cell inside the paste's power-node spacing
         # rule.  Marking only the cell is what shipped a blueprint the game
@@ -12218,11 +12235,12 @@ def _place_coaters(
         else None
     )
     static_capacity = canvas.limit or _grow(_core_bounds(canvas), _ENTRY_RING)
-    cleanup_bounds = finalize._CleanupSurvivorGraph(
+    cleanup_prefix = finalize._CleanupSurvivorGraph(
         Placement(buildings=tuple(prospective)),
         cancelled=cancelled,
         _operations=staged_static_cache.cleanup_operations,
-    ).snapshot_bounds()
+    )
+    cleanup_bounds = cleanup_prefix.snapshot_bounds()
 
     belt_at: dict[tuple[int, int, int], int] = {
         (building.x, building.y, int(building.z)): index
@@ -12359,23 +12377,17 @@ def _place_coaters(
                 )
                 supply_index = len(prospective)
                 coater_index = supply_index + 1
-                # The supply is an unlinked boundary belt, and the Coater is a
-                # linkless static. Neither can change the already-certified
-                # survivor set. The exact cleanup fast path therefore changes
-                # only the bounds when the Coater itself extends them; derive
-                # that rectangle directly instead of rebuilding and re-sorting
-                # the same survivor graph for every deterministic seat.
-                candidate_bounds = (
-                    min(cleanup_bounds[0], proposed_coater.x),
-                    min(cleanup_bounds[1], proposed_coater.y),
-                    max(
-                        cleanup_bounds[2],
-                        proposed_coater.x + proposed_coater.width - 1,
-                    ),
-                    max(
-                        cleanup_bounds[3],
-                        proposed_coater.y + proposed_coater.height - 1,
-                    ),
+                # The unlinked supply belt remains ignorable. A linkless Coater
+                # already inside the certified rectangle is also free, but one
+                # that extends a side can revive old boundary-linked belts and
+                # expand the orthogonal axis, so advance the exact prefix.
+                candidate_cleanup, candidate_bounds = (
+                    _cleanup_snapshot_with_linkless_static(
+                        cleanup_prefix,
+                        cleanup_bounds,
+                        proposed_coater,
+                        cancelled=cancelled,
+                    )
                 )
                 static_frames = _cached_junction_projection_frames(
                     staged_static_cache,
@@ -12488,6 +12500,7 @@ def _place_coaters(
                 prospective.extend((supply, proposed_coater))
                 obstacle_index.add(coater_index, proposed_coater)
                 cleanup_bounds = candidate_bounds
+                cleanup_prefix = candidate_cleanup
                 staged_hosts.add(host)
                 staged_drop_cells.add(drop_cell)
                 seated = True

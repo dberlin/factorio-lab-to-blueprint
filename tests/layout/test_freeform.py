@@ -7776,6 +7776,69 @@ def _belt(x: int, y: int, *, item: str | None = None) -> PlacedBuilding:
     )
 
 
+@pytest.mark.parametrize(
+    "item_id",
+    (catalog.TESLA_TOWER_ID, catalog.SPRAY_COATER_ID),
+)
+def test_linkless_static_extension_rechecks_orthogonal_cleanup_survivors(
+    item_id: int,
+) -> None:
+    coordinates = ((-2, 0), (1, -3), (-3, 0), (-3, -1), (5, 0), (3, 6))
+    belts = tuple(
+        replace(
+            _belt(x, y),
+            input_obj=index - 1 if index else None,
+            output_obj=index + 1 if index + 1 < len(coordinates) else None,
+        )
+        for index, (x, y) in enumerate(coordinates)
+    )
+    anchor_info = catalog.building(2302)
+    anchor = PlacedBuilding(
+        item_id=2302,
+        model_index=anchor_info.model_index,
+        x=2,
+        y=4,
+        width=anchor_info.width,
+        height=anchor_info.height,
+    )
+    prefix = finalize._CleanupSurvivorGraph(
+        Placement(buildings=(*belts, anchor))
+    )
+    bounds = prefix.snapshot_bounds()
+    candidate_info = catalog.building(item_id)
+    candidate = PlacedBuilding(
+        item_id=item_id,
+        model_index=candidate_info.model_index,
+        x=9,
+        y=4,
+        width=candidate_info.width,
+        height=candidate_info.height,
+    )
+    direct_union = (
+        min(bounds[0], candidate.x),
+        min(bounds[1], candidate.y),
+        max(bounds[2], candidate.x + candidate.width - 1),
+        max(bounds[3], candidate.y + candidate.height - 1),
+    )
+    expected_prefix, expected_bounds = prefix.extended_snapshot(
+        (candidate,),
+        bounds,
+    )
+
+    observed_prefix, observed_bounds = (
+        freeform._cleanup_snapshot_with_linkless_static(
+            prefix,
+            bounds,
+            candidate,
+        )
+    )
+
+    assert expected_bounds != direct_union
+    assert expected_bounds[:2] == (-3, -3)
+    assert observed_bounds == expected_bounds
+    assert observed_prefix.snapshot_bounds() == expected_prefix.snapshot_bounds()
+
+
 def _packable_machine_ids() -> set[int]:
     """Every machine item a recipe or mode-driven spec group can select."""
     from flab2bp.lab.data import load_vendored
