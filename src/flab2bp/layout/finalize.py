@@ -2666,6 +2666,9 @@ class _CleanupSurvivorGraph:
     def survivor_bounds(self) -> tuple[int, int, int, int]:
         """Return the survivor bounds after the exact simultaneous peel waves."""
         self._poll()
+        if not self.active_count:
+            self._poll()
+            return (0, 0, 0, 0)
         bounds = self._current_bounds()
         pending: set[int] = set()
         self._enqueue_outer(bounds, pending)

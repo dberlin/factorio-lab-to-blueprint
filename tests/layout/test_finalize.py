@@ -110,6 +110,14 @@ def _linked_belt(
     )
 
 
+def test_cleanup_survivor_bounds_preserves_empty_placement_bounds() -> None:
+    placement = Placement(buildings=())
+
+    assert finalize._cleanup_survivor_bounds(
+        placement
+    ) == _brute_cleanup_survivor_bounds(placement)
+
+
 def test_cleanup_survivor_bounds_matches_multiwave_brute_oracle() -> None:
     belt_count = 41
     machine = _building(2302, belt_count // 2, 0)
