@@ -2096,6 +2096,7 @@ def _projection_feedback_stage_update(
     west_channels: tuple[int, ...],
     geometry_signatures: tuple[finalize.ProjectionGeometrySignature, ...],
     deadline: float | None,
+    try_relation_update: bool,
 ) -> StageBoundaryUpdate | None:
     """Move an unchanged exact refusal to the nearest changed pair relation."""
     if len(geometry_signatures) != problem.size:
@@ -2115,6 +2116,8 @@ def _projection_feedback_stage_update(
         no_good,
         geometry_signatures,
     ):
+        return StageBoundaryUpdate(problem, state)
+    if not try_relation_update:
         return StageBoundaryUpdate(problem, state)
 
     if isinstance(no_good, finalize.ProjectionNoGood):
@@ -3900,6 +3903,7 @@ def _production_run(
                         _strip_geometry_signature(strip) for strip in selected
                     ),
                     deadline=deadline,
+                    try_relation_update=select_feedback_variant,
                 )
 
         transformed = _pose_stage_boundary_update(

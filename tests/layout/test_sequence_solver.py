@@ -2850,6 +2850,7 @@ def test_different_strip_feedback_changes_only_unchanged_exact_relation() -> Non
         west_channels=channels,
         geometry_signatures=geometries,
         deadline=float("inf"),
+        try_relation_update=True,
     )
     assert repaired is not None
     changed_pack = _decoded_pack(
@@ -2880,6 +2881,7 @@ def test_different_strip_feedback_changes_only_unchanged_exact_relation() -> Non
         west_channels=channels,
         geometry_signatures=geometries,
         deadline=float("inf"),
+        try_relation_update=True,
     )
     assert unchanged == StageBoundaryUpdate(problem, already_changed)
     changed_geometry = sequence_solver_module._projection_feedback_stage_update(
@@ -2889,6 +2891,7 @@ def test_different_strip_feedback_changes_only_unchanged_exact_relation() -> Non
         west_channels=channels,
         geometry_signatures=(("variant-a-changed",), *geometries[1:]),
         deadline=float("inf"),
+        try_relation_update=True,
     )
     assert changed_geometry == StageBoundaryUpdate(problem, state)
 
@@ -2913,6 +2916,7 @@ def test_different_strip_feedback_changes_only_unchanged_exact_relation() -> Non
         west_channels=channels,
         geometry_signatures=(("variant-a-changed",), *geometries[1:]),
         deadline=float("inf"),
+        try_relation_update=True,
     )
     assert changed_exact_geometry == StageBoundaryUpdate(problem, state)
     exact_repair = sequence_solver_module._projection_feedback_stage_update(
@@ -2922,6 +2926,7 @@ def test_different_strip_feedback_changes_only_unchanged_exact_relation() -> Non
         west_channels=channels,
         geometry_signatures=geometries,
         deadline=float("inf"),
+        try_relation_update=True,
     )
     assert exact_repair is not None
     exact_pack = _decoded_pack(
@@ -2998,6 +3003,7 @@ def test_exact_projection_feedback_trials_stay_constant_for_many_strips(
         west_channels=channels,
         geometry_signatures=geometries,
         deadline=float("inf"),
+        try_relation_update=True,
     )
 
     assert repaired is not None
@@ -3013,13 +3019,14 @@ def test_exact_projection_feedback_trials_stay_constant_for_many_strips(
 
     sibling = sequence_solver_module._projection_feedback_stage_update(
         problem,
-        repaired.state,
+        state,
         exact,
         west_channels=channels,
         geometry_signatures=geometries,
         deadline=float("inf"),
+        try_relation_update=False,
     )
-    assert sibling == StageBoundaryUpdate(problem, repaired.state)
+    assert sibling == StageBoundaryUpdate(problem, state)
     assert decoded == 3
 
     ownerless = replace(exact, projection_pair=None)
@@ -3030,6 +3037,7 @@ def test_exact_projection_feedback_trials_stay_constant_for_many_strips(
         west_channels=channels,
         geometry_signatures=geometries,
         deadline=time.monotonic() - 1.0,
+        try_relation_update=True,
     )
     assert expired is None
     assert decoded == 3
