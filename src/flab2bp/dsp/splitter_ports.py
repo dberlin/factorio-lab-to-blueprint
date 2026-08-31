@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Literal
 
-from flab2bp.dsp import catalog
+from flab2bp.dsp import catalog, colliders
 from flab2bp.dsp.records import BlueprintBuilding
 from flab2bp.dsp.rules import (
     BELT_PORT_DRAW_TO_SLOT,
@@ -29,11 +29,12 @@ from flab2bp.dsp.rules import (
 from flab2bp.layout.base import PlacedBuilding
 
 type Direction = Literal["feed", "draw"]
-type IssueCode = Literal["model", "slot", "own_slot", "height", "direction", "path"]
+type IssueCode = Literal["model", "slot", "own_slot", "height", "position", "direction", "path"]
 type OwnSlotField = Literal["output_from_slot", "input_to_slot"]
 
 _HEIGHT_TOLERANCE = 0.01
 _POSITION_TOLERANCE = 0.01
+_DOCK_POSITION_TOLERANCE = 0.02
 _BEST_DIRECTION_TOLERANCE = 1e-6
 
 
@@ -64,9 +65,7 @@ class SplitterPortIssue:
             "model_index": self.model_index,
         }
         if self.code == "model":
-            detail["supported_models"] = tuple(
-                sorted(catalog.SPLITTER_MODEL_INDICES)
-            )
+            detail["supported_models"] = tuple(sorted(catalog.SPLITTER_MODEL_INDICES))
         if self.own_slot_field is not None:
             detail.update(
                 {
@@ -119,23 +118,17 @@ class _NodeIndex:
                     unique_belt_predecessor[node.output_obj] = None
                 else:
                     unique_belt_predecessor[node.output_obj] = node
-                attachments[node.output_obj].append(
-                    (node, "feed", node.output_to_slot)
-                )
+                attachments[node.output_obj].append((node, "feed", node.output_to_slot))
             if node.input_obj is not None and node.input_obj != node.output_obj:
-                attachments[node.input_obj].append(
-                    (node, "draw", node.input_from_slot)
-                )
+                attachments[node.input_obj].append((node, "draw", node.input_from_slot))
         return cls(
             by_id=MappingProxyType(by_id),
             unique_belt_predecessor=MappingProxyType(unique_belt_predecessor),
             attachments_by_splitter=MappingProxyType(
-                {
-                    splitter: tuple(linked)
-                    for splitter, linked in attachments.items()
-                }
+                {splitter: tuple(linked) for splitter, linked in attachments.items()}
             ),
         )
+
 
 def _raw_placement_nodes(buildings: Sequence[PlacedBuilding]) -> tuple[_Node, ...]:
     return tuple(
@@ -181,9 +174,7 @@ def _blueprint_nodes(buildings: Sequence[BlueprintBuilding]) -> tuple[_Node, ...
     )
 
 
-def _rotated_port(
-    pose: catalog.SlotPose, yaw: float
-) -> tuple[float, float, float]:
+def _rotated_port(pose: catalog.SlotPose, yaw: float) -> tuple[float, float, float]:
     radians = math.radians(yaw)
     cosine = math.cos(radians)
     sine = math.sin(radians)
@@ -194,6 +185,32 @@ def _rotated_port(
     )
 
 
+def blueprint_port_offset(
+    model_index: int,
+    port: int,
+    yaw: float,
+) -> tuple[float, float, float]:
+    """Return one physical port pose in blueprint-local grid coordinates.
+
+    ``BuildTool_Path.DeterminePreviews`` puts the endpoint belt at
+    ``objectPose + objectRotation * PrefabDesc.portPoses[port]``.  Prefab poses
+    are world units; blueprint x/y are grid units and z uses the game's 4/3
+    world-units-per-level conversion.
+    """
+    ports = catalog.port_poses_for_model(model_index)
+    if not 0 <= port < len(ports):
+        raise ValueError(f"model {model_index} defines {len(ports)} ports, not port {port}")
+    pose = ports[port]
+    radians = math.radians(yaw)
+    cosine = math.cos(radians)
+    sine = math.sin(radians)
+    local_x = pose.dx / colliders.GRID_ARC
+    local_y = pose.dy / colliders.GRID_ARC
+    return (
+        local_x * cosine + local_y * sine,
+        -local_x * sine + local_y * cosine,
+        pose.dz / WORLD_UNITS_PER_LEVEL,
+    )
 
 
 def _outward_neighbour(
@@ -205,16 +222,10 @@ def _outward_neighbour(
     if direction == "feed":
         return unique_belt_predecessor.get(belt.id)
     neighbour = by_id.get(belt.output_obj) if belt.output_obj is not None else None
-    return (
-        neighbour
-        if neighbour is not None and catalog.is_belt(neighbour.item_id)
-        else None
-    )
+    return neighbour if neighbour is not None and catalog.is_belt(neighbour.item_id) else None
 
 
-def _outward_from_neighbour(
-    belt: _Node, neighbour: _Node | None
-) -> tuple[float, float] | None:
+def _outward_from_neighbour(belt: _Node, neighbour: _Node | None) -> tuple[float, float] | None:
     if neighbour is None:
         return None
     dx, dy = neighbour.x - belt.x, neighbour.y - belt.y
@@ -231,9 +242,7 @@ def _outward(
 ) -> tuple[float, float] | None:
     return _outward_from_neighbour(
         belt,
-        _outward_neighbour(
-            belt, direction, by_id, unique_belt_predecessor
-        ),
+        _outward_neighbour(belt, direction, by_id, unique_belt_predecessor),
     )
 
 
@@ -274,18 +283,12 @@ def _expected_path_port(
     if not candidates:
         return None
     best = max(score for _index, score in candidates)
-    winners = [
-        index
-        for index, score in candidates
-        if best - score <= _BEST_DIRECTION_TOLERANCE
-    ]
+    winners = [index for index, score in candidates if best - score <= _BEST_DIRECTION_TOLERANCE]
     return winners[0] if len(winners) == 1 else None
 
 
 def _unsupported_model_issue(splitter: _Node) -> SplitterPortIssue:
-    supported = ", ".join(
-        str(model) for model in sorted(catalog.SPLITTER_MODEL_INDICES)
-    )
+    supported = ", ".join(str(model) for model in sorted(catalog.SPLITTER_MODEL_INDICES))
     return SplitterPortIssue(
         code="model",
         splitter=splitter.id,
@@ -364,7 +367,11 @@ def _own_slot_issue(
     )
 
 
-def _issues(nodes: tuple[_Node, ...]) -> tuple[SplitterPortIssue, ...]:
+def _issues(
+    nodes: tuple[_Node, ...],
+    *,
+    check_dock_position: bool = False,
+) -> tuple[SplitterPortIssue, ...]:
     index = _NodeIndex.build(nodes)
     out: list[SplitterPortIssue] = []
     for splitter in nodes:
@@ -374,9 +381,7 @@ def _issues(nodes: tuple[_Node, ...]) -> tuple[SplitterPortIssue, ...]:
             out.append(_unsupported_model_issue(splitter))
             continue
         ports = catalog.port_poses_for_model(splitter.model_index)
-        for belt, direction, recorded in index.attachments_by_splitter.get(
-            splitter.id, ()
-        ):
+        for belt, direction, recorded in index.attachments_by_splitter.get(splitter.id, ()):
             neighbour = _outward_neighbour(
                 belt, direction, index.by_id, index.unique_belt_predecessor
             )
@@ -387,17 +392,11 @@ def _issues(nodes: tuple[_Node, ...]) -> tuple[SplitterPortIssue, ...]:
             same_area = belt.area_index == splitter.area_index and (
                 neighbour is None or neighbour.area_index == belt.area_index
             )
-            outward = (
-                _outward_from_neighbour(belt, neighbour) if same_area else None
-            )
+            outward = _outward_from_neighbour(belt, neighbour) if same_area else None
             expected = (
-                _expected_port(splitter, belt, outward, ports)
-                if outward is not None
-                else None
+                _expected_port(splitter, belt, outward, ports) if outward is not None else None
             )
-            own_slot_issue = _own_slot_issue(
-                splitter, belt, direction, recorded, expected
-            )
+            own_slot_issue = _own_slot_issue(splitter, belt, direction, recorded, expected)
             if own_slot_issue is not None:
                 out.append(own_slot_issue)
             if not same_area:
@@ -429,6 +428,29 @@ def _issues(nodes: tuple[_Node, ...]) -> tuple[SplitterPortIssue, ...]:
                     )
                 )
                 continue
+            if check_dock_position:
+                dx, dy, dz = blueprint_port_offset(
+                    splitter.model_index,
+                    recorded,
+                    splitter.yaw,
+                )
+                position_error = math.dist(
+                    (belt.x, belt.y, belt.z),
+                    (splitter.x + dx, splitter.y + dy, splitter.z + dz),
+                )
+                if position_error > _DOCK_POSITION_TOLERANCE:
+                    out.append(
+                        _issue(
+                            "position",
+                            splitter,
+                            belt,
+                            direction,
+                            recorded,
+                            expected,
+                            "the endpoint belt is not anchored at the transformed "
+                            f"port pose (error {position_error:.6g} tiles)",
+                        )
+                    )
             port_z = _rotated_port(ports[recorded], splitter.yaw)[2]
             if abs(port_z - (belt.z - splitter.z)) > _HEIGHT_TOLERANCE:
                 out.append(
@@ -452,8 +474,7 @@ def _issues(nodes: tuple[_Node, ...]) -> tuple[SplitterPortIssue, ...]:
                         direction,
                         recorded,
                         expected,
-                        "the port forward vector does not face the adjoining "
-                        "belt path",
+                        "the port forward vector does not face the adjoining belt path",
                     )
                 )
     return tuple(out)
@@ -472,10 +493,7 @@ class PlacementPortContext:
         splitter_index: int,
         direction: Direction,
     ) -> int | None:
-        if not (
-            0 <= belt_index < len(self._nodes)
-            and 0 <= splitter_index < len(self._nodes)
-        ):
+        if not (0 <= belt_index < len(self._nodes) and 0 <= splitter_index < len(self._nodes)):
             return None
         belt = self._nodes[belt_index]
         splitter = self._nodes[splitter_index]
@@ -508,9 +526,7 @@ def expected_placement_port(
     direction: Direction,
 ) -> int | None:
     """Return one physical Splitter port without retaining a placement index."""
-    return placement_port_context(buildings).expected_port(
-        belt_index, splitter_index, direction
-    )
+    return placement_port_context(buildings).expected_port(belt_index, splitter_index, direction)
 
 
 def expected_path_port(
@@ -546,6 +562,16 @@ def placement_issues(
 
 def blueprint_issues(
     buildings: Sequence[BlueprintBuilding],
+    *,
+    require_port_anchors: bool = False,
 ) -> tuple[SplitterPortIssue, ...]:
-    """Judge the exact connection fields decoded from a blueprint artifact."""
-    return _issues(_blueprint_nodes(buildings))
+    """Judge decoded connections, optionally requiring current-game dock poses.
+
+    DSP 0.8 blueprints used centred Splitter endpoint records and the current
+    game retains import compatibility.  Fresh 0.10 emission must use transformed
+    port anchors or the paste collider marks the pair broken.
+    """
+    return _issues(
+        _blueprint_nodes(buildings),
+        check_dock_position=require_port_anchors,
+    )

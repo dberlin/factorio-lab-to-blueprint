@@ -5,27 +5,21 @@ single ``output_obj``, so a lane feeding two consumers could only ever be linked
 to one of them, so this shared junction primitive provides explicit fan-in and
 fan-out.
 
-The convention below is not invented.  It is read off the 25 splitters in the
-fixture corpus, every one of which agrees:
+The connection convention is read from the game and its blueprints:
 
-* The splitter records **no links of its own** -- ``output_obj`` and
-  ``input_obj`` are both ``-1``.  It is a passive junction; the belts around it
-  do the naming.
-* ``input_to_slot = 14`` and ``output_from_slot = 15`` on all 25, with both
-  offsets ``0``.  These are constants, not geometry --
-  ``rules.SPLITTER_INPUT_TO_SLOT`` and ``rules.SPLITTER_OUTPUT_FROM_SLOT``.
-* Every belt attached to it sits at **exactly the same tile**: ``dx = dy = 0``.
-  A belt that runs *through* a splitter is recorded as two belt buildings on
-  that tile, one ending at the junction and one starting from it.
+* The splitter records **no ordinary links of its own** -- ``output_obj`` and
+  ``input_obj`` are both ``-1``.  The belts around it do the naming.
+* Its four multilevel sentinel fields are ``14, 15, 15, 14``.
 * A belt feeding the junction names it as that belt's ``output_obj``; a belt
   drawing from it names it as that belt's ``input_obj``.
-* Observed fan-in was 1 or 2 belts.  The game's splitter has four ports, so up
-  to four attachments on a tile is legal; ``rules.SPLITTER_MAX_PORTS`` records that and
-  :func:`check_ports` enforces it, because exceeding it would paste as a
-  splitter quietly dropping connections rather than as an error.
+* In the integer layout lattice an attachment shares the splitter tile.  At
+  blueprint emission the belt anchor moves to the exact transformed
+  ``PrefabDesc.portPoses`` entry.  Keeping the emitted anchor at the tile centre
+  makes the paste collider test mark both the belt and splitter broken.
+* The game exposes four physical ports, so at most four belts may attach.
 
-Because attachments share a tile, any occupancy check must treat splitters and
-belts as overlays -- which ``catalog.BELT_INTEGRATED_IDS`` already does.
+Integer occupancy therefore treats splitters and belts as overlays.  Emission
+materializes the distinct physical port anchors.
 """
 
 from __future__ import annotations
@@ -37,9 +31,11 @@ from fractions import Fraction
 from flab2bp.dsp import catalog
 from flab2bp.dsp import colliders as dsp_colliders
 from flab2bp.dsp.rules import (
+    SPLITTER_INPUT_FROM_SLOT,
     SPLITTER_INPUT_TO_SLOT,
     SPLITTER_MAX_PORTS,
     SPLITTER_OUTPUT_FROM_SLOT,
+    SPLITTER_OUTPUT_TO_SLOT,
 )
 from flab2bp.layout.base import PlacedBuilding
 
@@ -55,9 +51,7 @@ class TooManyPorts(ValueError):
 
 
 def _keepout() -> frozenset[tuple[int, int, int]]:
-    return dsp_colliders.belt_keepout_offsets(
-        catalog.building(catalog.SPLITTER_ID).model_index
-    )
+    return dsp_colliders.belt_keepout_offsets(catalog.building(catalog.SPLITTER_ID).model_index)
 
 
 def keepout_cells(x: int, y: int, level: int) -> tuple[tuple[int, int, int], ...]:
@@ -77,9 +71,7 @@ def keepout_cells(x: int, y: int, level: int) -> tuple[tuple[int, int, int], ...
     ``level`` is a ROUTING LEVEL, and it is the same integer as the junction's
     blueprint ``z`` because a junction always rests on a level.
     """
-    return tuple(
-        (x + dx, y + dy, level + dz) for dx, dy, dz in _KEEPOUT
-    )
+    return tuple((x + dx, y + dy, level + dz) for dx, dy, dz in _KEEPOUT)
 
 
 #: The offsets, resolved once. :func:`keepout_cells` is in a routing inner loop.
@@ -172,10 +164,12 @@ def make_splitter(
         z=z,
         width=1,
         height=1,
-        # Deliberately unlinked. The corpus is unanimous: the junction names
-        # nobody, and the belts around it name it.
+        # Ordinary links live on the belts.  The four sentinel fields are still
+        # initialized exactly as BlueprintUtils initializes every Splitter.
         input_obj=None,
         output_obj=None,
+        output_to_slot=SPLITTER_OUTPUT_TO_SLOT,
+        input_from_slot=SPLITTER_INPUT_FROM_SLOT,
         input_to_slot=SPLITTER_INPUT_TO_SLOT,
         output_from_slot=SPLITTER_OUTPUT_FROM_SLOT,
         carries_item=carries_item,
@@ -190,9 +184,7 @@ def check_ports(buildings: list[PlacedBuilding] | tuple[PlacedBuilding, ...]) ->
     one of them, which is precisely the class of bug splitters were introduced
     to fix.
     """
-    junctions = {
-        i for i, b in enumerate(buildings) if b.item_id == catalog.SPLITTER_ID
-    }
+    junctions = {i for i, b in enumerate(buildings) if b.item_id == catalog.SPLITTER_ID}
     if not junctions:
         return
     ports: dict[int, int] = dict.fromkeys(junctions, 0)

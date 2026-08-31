@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 from collections import Counter
 from dataclasses import replace
 from fractions import Fraction
@@ -10,8 +11,9 @@ from pathlib import Path
 
 import pytest
 
-from flab2bp.dsp import catalog, codec, splitter_ports
+from flab2bp.dsp import catalog, codec, colliders, splitter_ports
 from flab2bp.dsp.envelope import BlueprintFormatError
+from flab2bp.dsp.records import BlueprintBuilding
 from flab2bp.dsp.rules import BELT_PORT_DRAW_TO_SLOT, WORLD_UNITS_PER_LEVEL
 from flab2bp.layout import slots
 from flab2bp.layout.base import AreaFrame, PlacedBuilding, Placement
@@ -62,9 +64,7 @@ def _observed_placement(
 ) -> tuple[PlacedBuilding, ...]:
     belt = catalog.building(2002)
     pose = catalog.port_poses_for_model(model_index)[port]
-    outward_x, outward_y = (
-        round(value) for value in slots.to_world((pose.fx, pose.fy), yaw)
-    )
+    outward_x, outward_y = (round(value) for value in slots.to_world((pose.fx, pose.fy), yaw))
     height = Fraction(pose.dz / WORLD_UNITS_PER_LEVEL).limit_denominator(10_000)
     attached = PlacedBuilding(2002, belt.model_index, 3, 3, z=height)
     splitter = PlacedBuilding(catalog.SPLITTER_ID, model_index, 3, 3, yaw=yaw)
@@ -121,8 +121,7 @@ def _validation_complexity_fixture(
     sorter_model = catalog.building(2011).model_index
     assembler_model = catalog.building(2303).model_index
     buildings = [
-        PlacedBuilding(catalog.SPLITTER_ID, splitter_model, 0, 0)
-        for _ in range(splitter_count)
+        PlacedBuilding(catalog.SPLITTER_ID, splitter_model, 0, 0) for _ in range(splitter_count)
     ]
     buildings.extend(
         PlacedBuilding(
@@ -134,14 +133,8 @@ def _validation_complexity_fixture(
         )
         for splitter in range(splitter_count)
     )
-    buildings.extend(
-        PlacedBuilding(2011, sorter_model, 0, 0)
-        for _ in range(splitter_count)
-    )
-    buildings.extend(
-        PlacedBuilding(2303, assembler_model, 0, 0)
-        for _ in range(splitter_count)
-    )
+    buildings.extend(PlacedBuilding(2011, sorter_model, 0, 0) for _ in range(splitter_count))
+    buildings.extend(PlacedBuilding(2303, assembler_model, 0, 0) for _ in range(splitter_count))
     return tuple(buildings)
 
 
@@ -181,15 +174,9 @@ def _many_observed_placements(
                 replace(
                     building,
                     output_obj=(
-                        None
-                        if building.output_obj is None
-                        else building.output_obj + offset
+                        None if building.output_obj is None else building.output_obj + offset
                     ),
-                    input_obj=(
-                        None
-                        if building.input_obj is None
-                        else building.input_obj + offset
-                    ),
+                    input_obj=(None if building.input_obj is None else building.input_obj + offset),
                 )
             )
     return tuple(buildings)
@@ -334,11 +321,7 @@ def test_assignment_selects_each_port_at_exact_model_yaw_and_height() -> None:
         for yaw in (0.0, 90.0, 180.0, 270.0):
             for direction in ("feed", "draw"):
                 for port in range(4):
-                    buildings = list(
-                        _observed_placement(
-                            model_index, direction, port, yaw=yaw
-                        )
-                    )
+                    buildings = list(_observed_placement(model_index, direction, port, yaw=yaw))
                     if direction == "feed":
                         buildings[1] = replace(buildings[1], output_to_slot=0)
                     else:
@@ -347,9 +330,7 @@ def test_assignment_selects_each_port_at_exact_model_yaw_and_height() -> None:
                     wired = slots.assign_belt_slots(buildings)
 
                     actual = (
-                        wired[1].output_to_slot
-                        if direction == "feed"
-                        else wired[1].input_from_slot
+                        wired[1].output_to_slot if direction == "feed" else wired[1].input_from_slot
                     )
                     assert actual == port, (model_index, yaw, direction, port)
                     assert splitter_ports.placement_issues(wired) == ()
@@ -378,9 +359,7 @@ def test_slot_assignment_builds_one_context_for_all_splitter_links(
         context_builds += 1
         return real_raw_placement_nodes(buildings)
 
-    monkeypatch.setattr(
-        splitter_ports, "_raw_placement_nodes", counted_raw_placement_nodes
-    )
+    monkeypatch.setattr(splitter_ports, "_raw_placement_nodes", counted_raw_placement_nodes)
     buildings = _many_observed_placements(12)
 
     wired = slots.assign_belt_slots(buildings)
@@ -422,10 +401,7 @@ def test_duplicate_splitters_use_bounded_predecessor_lookup(
     splitter_count = 8
     predecessor_count = 8
     nodes = (
-        *(
-            _validation_node(7, catalog.SPLITTER_ID)
-            for _ in range(splitter_count)
-        ),
+        *(_validation_node(7, catalog.SPLITTER_ID) for _ in range(splitter_count)),
         _validation_node(100, 2002, output_obj=7),
         *(
             _validation_node(200 + index, 2002, output_obj=100)
@@ -446,9 +422,9 @@ def test_duplicate_splitters_use_bounded_predecessor_lookup(
 
     issues = splitter_ports._issues(nodes)
 
-    assert [
-        (issue.splitter, issue.belt, issue.code) for issue in issues
-    ] == [(7, 100, "path")] * splitter_count
+    assert [(issue.splitter, issue.belt, issue.code) for issue in issues] == [
+        (7, 100, "path")
+    ] * splitter_count
     assert examinations == len(nodes)
 
 
@@ -503,9 +479,17 @@ def test_corrected_construction_path_emits_only_game_valid_splitter_ports() -> N
         frame=AreaFrame(8, 4, 4, (4,), False),
     )
     blueprint = codec.placement_to_blueprint(placement, timestamp=0)
+    splitter = blueprint.buildings[2]
 
     assert splitter_ports.placement_issues(wired) == ()
-    assert splitter_ports.blueprint_issues(blueprint.buildings) == ()
+    assert (
+        splitter_ports.blueprint_issues(
+            blueprint.buildings,
+            require_port_anchors=True,
+        )
+        == ()
+    )
+    assert (splitter.output_to_slot, splitter.input_from_slot) == (14, 15)
     assert wired[1].output_to_slot == 1
     assert [wired[index].input_from_slot for index in (3, 5)] == [3, 2]
     assert [wired[index].input_to_slot for index in (3, 5)] == [1, 1]
@@ -513,6 +497,43 @@ def test_corrected_construction_path_emits_only_game_valid_splitter_ports() -> N
         (2, 4),
         (2, 6),
     ]
+
+    attached = (
+        (1, wired[1].output_to_slot),
+        (3, wired[3].input_from_slot),
+        (5, wired[5].input_from_slot),
+    )
+    for belt_index, port in attached:
+        belt = blueprint.buildings[belt_index]
+        dx, dy, dz = splitter_ports.blueprint_port_offset(
+            splitter.model_index,
+            port,
+            splitter.yaw,
+        )
+        assert (belt.x, belt.y, belt.z) == pytest.approx(
+            (splitter.x + dx, splitter.y + dy, splitter.z + dz)
+        )
+        assert math.dist(
+            (belt.x, belt.y, belt.z),
+            (splitter.x, splitter.y, splitter.z),
+        ) == pytest.approx(0.25 / colliders.GRID_ARC)
+
+    centred_belt = replace(
+        blueprint.buildings[1],
+        x=splitter.x,
+        y=splitter.y,
+        z=splitter.z,
+    )
+    centred = blueprint.buildings[:1] + (centred_belt,) + blueprint.buildings[2:]
+    position_issues = [
+        issue
+        for issue in splitter_ports.blueprint_issues(
+            centred,
+            require_port_anchors=True,
+        )
+        if issue.code == "position"
+    ]
+    assert [(issue.splitter, issue.belt) for issue in position_issues] == [(2, 1)]
 
 
 def test_foreign_four_port_model_is_not_a_supported_splitter_variant() -> None:
