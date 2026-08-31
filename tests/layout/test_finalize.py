@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from fractions import Fraction
+import math
+import random
 from typing import cast
 
 import pytest
@@ -514,6 +516,236 @@ def test_projected_coater_splitter_failure_uses_exact_broke2_geometry() -> None:
         )
         is None
     )
+
+def test_projected_coater_splitter_candidates_match_brute_force_oracle() -> None:
+    rng = random.Random(0xC047E2)
+    coater_model = catalog.building(catalog.SPRAY_COATER_ID).model_index
+    splitter_model = catalog.building(catalog.SPLITTER_ID).model_index
+    band = next(band for band in planet.bands() if band.area_segments == 160)
+
+    for quadrant in (0, 1):
+        projection = planet.Projection(
+            band=band,
+            anchor_row=-130,
+            segment=colliders.PLANET_SEGMENT,
+            radius=colliders.PLANET_RADIUS,
+            quadrant=quadrant,
+        )
+        for _fixture in range(24):
+            coaters = tuple(
+                (
+                    100 + position,
+                    colliders.Placed(
+                        coater_model,
+                        rng.randint(-8, 8),
+                        rng.randint(-8, 8),
+                        rng.randint(0, 3),
+                        rng.choice((0.0, 90.0, 180.0, 270.0)),
+                    ),
+                )
+                for position in range(1 + rng.randrange(5))
+            )
+            splitters = [
+                (
+                    200 + position,
+                    colliders.Placed(
+                        splitter_model,
+                        rng.randint(-8, 8),
+                        rng.randint(-8, 8),
+                        rng.randint(0, 3),
+                        rng.choice((0.0, 90.0)),
+                    ),
+                )
+                for position in range(1 + rng.randrange(6))
+            ]
+            # Duplicate coordinates are distinct buildings and must retain their
+            # input order rather than being collapsed by the spatial buckets.
+            splitters.extend(
+                (
+                    300 + duplicate,
+                    replace(
+                        coaters[0][1],
+                        model_index=splitter_model,
+                        yaw=float(90 * duplicate),
+                    ),
+                )
+                for duplicate in range(2)
+            )
+            splitter_tuple = tuple(splitters)
+
+            candidates = finalize._projected_coater_splitter_candidates(
+                coaters,
+                splitter_tuple,
+                projection,
+            )
+            got = [
+                (coater[0], splitter[0])
+                for coater, peers in zip(coaters, candidates, strict=True)
+                for splitter in peers
+                if finalize.projected_coater_splitter_failure(
+                    coater,
+                    splitter,
+                    projection,
+                )
+                is not None
+            ]
+            want = [
+                (coater[0], splitter[0])
+                for coater in coaters
+                for splitter in splitter_tuple
+                if finalize.projected_coater_splitter_failure(
+                    coater,
+                    splitter,
+                    projection,
+                )
+                is not None
+            ]
+
+            assert got == want
+
+
+def test_projected_coater_splitter_candidates_preserve_rotated_boundary() -> None:
+    projection = replace(_broke2_projection(), quadrant=1)
+    coater = (
+        4,
+        replace(_broke2_coater()[1], x=15, y=26, yaw=180.0),
+    )
+    touching = (
+        5,
+        replace(_broke2_splitter()[1], x=17, y=25, yaw=90.0),
+    )
+    separated = (
+        6,
+        replace(_broke2_splitter(y=18)[1], x=18, y=25, yaw=90.0),
+    )
+
+    candidates = finalize._projected_coater_splitter_candidates(
+        (coater,),
+        (touching, separated),
+        projection,
+    )
+
+    assert touching in candidates[0]
+    assert finalize.projected_coater_splitter_failure(
+        coater,
+        touching,
+        projection,
+    ) is not None
+    assert (
+        finalize.projected_coater_splitter_failure(
+            coater,
+            separated,
+            projection,
+        )
+        is None
+    )
+
+def test_projected_coater_splitter_candidates_include_bound_edge() -> None:
+    projection = _broke2_projection()
+    coater = _broke2_coater()
+    splitter_radius = planet.collider_radius(
+        catalog.building(catalog.SPLITTER_ID).model_index
+    )
+    lateral_arc = math.dist(
+        projection.position(coater[1].x, coater[1].y, coater[1].z),
+        projection.position(coater[1].x, coater[1].y + 1, coater[1].z),
+    )
+    reach = (
+        planet.collider_radius(coater[1].model_index)
+        + lateral_arc
+        + splitter_radius
+    )
+    splitter = (
+        5,
+        colliders.Placed(
+            catalog.building(catalog.SPLITTER_ID).model_index,
+            coater[1].x,
+            coater[1].y,
+            coater[1].z + reach * 0.75,
+            0.0,
+        ),
+    )
+    lower_bound = math.sqrt(
+        ((coater[1].z - splitter[1].z) * 4.0 / 3.0) ** 2
+    )
+    assert lower_bound == reach
+
+    candidates = finalize._projected_coater_splitter_candidates(
+        (coater,),
+        (splitter,),
+        projection,
+    )
+
+    assert candidates == ((splitter,),)
+
+
+def test_projected_coater_splitter_broad_phase_is_linear_plus_candidates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    count = 48
+    coater_model = catalog.building(catalog.SPRAY_COATER_ID).model_index
+    splitter_model = catalog.building(catalog.SPLITTER_ID).model_index
+    coaters = tuple(
+        (
+            100 + position,
+            colliders.Placed(coater_model, position * 20, 0, position % 4, 0.0),
+        )
+        for position in range(count)
+    )
+    splitters = tuple(
+        (
+            200 + position,
+            colliders.Placed(splitter_model, position * 20, 0, position % 4, 0.0),
+        )
+        for position in range(count)
+    )
+    floor_calls = 0
+    sqrt_calls = 0
+    exact_pairs: list[tuple[int, int]] = []
+    original_floor = finalize.math.floor
+    original_sqrt = finalize.math.sqrt
+
+    def counted_floor(value: float) -> int:
+        nonlocal floor_calls
+        floor_calls += 1
+        return original_floor(value)
+
+    def counted_sqrt(value: float) -> float:
+        nonlocal sqrt_calls
+        sqrt_calls += 1
+        return original_sqrt(value)
+
+    def clean_pair(
+        coater: tuple[int, colliders.Placed],
+        splitter: tuple[int, colliders.Placed],
+        _projection: planet.Projection,
+    ) -> None:
+        exact_pairs.append((coater[0], splitter[0]))
+        return None
+
+    monkeypatch.setattr(finalize.math, "floor", counted_floor)
+    monkeypatch.setattr(finalize.math, "sqrt", counted_sqrt)
+    monkeypatch.setattr(
+        finalize,
+        "projected_coater_splitter_failure",
+        clean_pair,
+    )
+
+    failure = finalize._projected_addon_splitter_failure(
+        coaters,
+        splitters,
+        _broke2_projection(),
+    )
+
+    assert failure is None
+    assert exact_pairs == [
+        (coaters[position][0], splitters[position][0])
+        for position in range(count)
+    ]
+    assert floor_calls == len(coaters) + len(splitters)
+    assert sqrt_calls == len(exact_pairs)
+    assert len(exact_pairs) == count
+    assert len(exact_pairs) < len(coaters) * len(splitters)
 
 
 def test_broke2_splitter_region_is_rejected_by_projected_addon_keepout() -> None:

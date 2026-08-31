@@ -7,6 +7,7 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from functools import cache
+from heapq import merge
 from itertools import combinations
 from typing import Literal, cast
 
@@ -972,6 +973,162 @@ def projected_coater_splitter_failure(
         band=projection.band.area_segments,
     )
 
+def _projected_coater_splitter_candidates(
+    coaters: Sequence[tuple[int, colliders.Placed]],
+    splitters: Sequence[tuple[int, colliders.Placed]],
+    projection: planet.Projection,
+    *,
+    cancelled: Callable[[], bool] | None = None,
+) -> tuple[tuple[tuple[int, colliders.Placed], ...], ...]:
+    """Conservative coater-to-Splitter candidates in exact input order.
+
+    The exact rule expands each Coater OBB by one projected lateral grid arc.
+    A sphere around that expanded OBB is therefore bounded by the immutable
+    model's collider radius plus that exact arc.  The Splitter uses its ordinary
+    collider sphere.  As in :func:`planet.candidate_pairs`, the distance below
+    is a lower bound: row spacing is fixed, column spacing uses the band's
+    poleward minimum, and both arcs are reduced for chord curvature.  Thus a
+    pair omitted here cannot reach the authoritative OBB predicate.
+
+    A projection in quadrant 1 swaps blueprint axes before applying those
+    spacings.  Bucketing the transformed longitude axis makes construction and
+    all queries ``O(C + S + K)`` for the returned candidate count ``K``.  The
+    constant-width merge restores original Splitter order, including co-located
+    duplicates; callers consequently retain the old coater-major issue order.
+    """
+    if cancelled is not None and cancelled():
+        raise ProjectionCancelled
+    if not coaters:
+        return ()
+    if not splitters:
+        return tuple(() for _coater in coaters)
+
+    latitude_step = planet.latitude_rad_per_grid(projection.segment)
+    poleward = min(
+        math.cos(
+            min(
+                abs(grid),
+                planet.pole_grid_idx(projection.segment),
+            )
+            * latitude_step
+        )
+        for grid in (
+            projection.band.grid_lo,
+            projection.band.grid_hi,
+        )
+    )
+    column_lower_bound = (
+        projection.radius
+        * poleward
+        * planet.longitude_rad_per_grid(projection.band.area_segments)
+        * 0.9
+    )
+    row_lower_bound = projection.radius * latitude_step * 0.9
+
+    def transformed(building: colliders.Placed) -> tuple[float, float]:
+        return (
+            (building.y, building.x)
+            if projection.rotated
+            else (building.x, building.y)
+        )
+
+    coater_bounds: list[float] = []
+    for _index, coater in coaters:
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
+        lateral_step = (
+            (1, 0) if round(coater.yaw) % 180 == 0 else (0, 1)
+        )
+        lateral_arc = math.dist(
+            projection.position(coater.x, coater.y, coater.z),
+            projection.position(
+                coater.x + lateral_step[0],
+                coater.y + lateral_step[1],
+                coater.z,
+            ),
+        )
+        coater_bounds.append(
+            planet.collider_radius(coater.model_index) + lateral_arc
+        )
+    splitter_bounds_list: list[float] = []
+    for _index, splitter in splitters:
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
+        splitter_bounds_list.append(planet.collider_radius(splitter.model_index))
+    splitter_bounds = tuple(splitter_bounds_list)
+    maximum_reach = max(coater_bounds) + max(splitter_bounds)
+    bucket_span = max(
+        1.0,
+        maximum_reach / max(column_lower_bound, 1e-9),
+    )
+
+    def bucket_key(longitude: float) -> int:
+        if column_lower_bound <= 1e-9:
+            return 0
+        return math.floor(longitude / bucket_span)
+
+    buckets: dict[
+        int,
+        list[
+            tuple[
+                int,
+                tuple[int, colliders.Placed],
+                float,
+                float,
+                float,
+            ]
+        ],
+    ] = {}
+    for position, (splitter, splitter_bound) in enumerate(
+        zip(splitters, splitter_bounds, strict=True)
+    ):
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
+        longitude, latitude = transformed(splitter[1])
+        buckets.setdefault(bucket_key(longitude), []).append(
+            (
+                position,
+                splitter,
+                splitter_bound,
+                longitude,
+                latitude,
+            )
+        )
+
+    candidates: list[tuple[tuple[int, colliders.Placed], ...]] = []
+    for coater, coater_bound in zip(coaters, coater_bounds, strict=True):
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
+        longitude, latitude = transformed(coater[1])
+        key = bucket_key(longitude)
+        nearby = merge(
+            buckets.get(key - 1, ()),
+            buckets.get(key, ()),
+            buckets.get(key + 1, ()),
+            key=lambda entry: entry[0],
+        )
+        peers: list[tuple[int, colliders.Placed]] = []
+        for (
+            _position,
+            splitter,
+            splitter_bound,
+            splitter_longitude,
+            splitter_latitude,
+        ) in nearby:
+            if cancelled is not None and cancelled():
+                raise ProjectionCancelled
+            gap = math.sqrt(
+                ((longitude - splitter_longitude) * column_lower_bound) ** 2
+                + ((latitude - splitter_latitude) * row_lower_bound) ** 2
+                + ((coater[1].z - splitter[1].z) * 4.0 / 3.0) ** 2
+            )
+            if gap <= coater_bound + splitter_bound:
+                peers.append(splitter)
+        candidates.append(tuple(peers))
+    return tuple(candidates)
+
+
+
 
 def _projected_addon_splitter_failure(
     coaters: Sequence[tuple[int, colliders.Placed]],
@@ -981,10 +1138,16 @@ def _projected_addon_splitter_failure(
     cancelled: Callable[[], bool] | None = None,
 ) -> ProjectionFailure | None:
     """Authoritative coater/splitter keepout from the broke2 in-game refusal."""
-    for coater in coaters:
+    candidates = _projected_coater_splitter_candidates(
+        coaters,
+        splitters,
+        projection,
+        cancelled=cancelled,
+    )
+    for coater, peers in zip(coaters, candidates, strict=True):
         if cancelled is not None and cancelled():
             raise ProjectionCancelled
-        for splitter in splitters:
+        for splitter in peers:
             if cancelled is not None and cancelled():
                 raise ProjectionCancelled
             failure = projected_coater_splitter_failure(

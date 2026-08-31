@@ -11324,14 +11324,31 @@ def _place_coaters(
             capacity=projected_capacity,
             cancelled=cancelled,
         )
-        for candidate in staged:
+        staged_pairs = tuple(candidate.projected_pair for candidate in staged)
+        try:
+            splitter_candidates_by_projection = tuple(
+                finalize._projected_coater_splitter_candidates(
+                    staged_pairs,
+                    splitters,
+                    projection,
+                    cancelled=cancelled,
+                )
+                for projection in projections
+            )
+        except finalize.ProjectionCancelled:
+            raise _PreparationDeadline from None
+        for candidate_position, candidate in enumerate(staged):
             if cancelled is not None and cancelled():
                 raise _PreparationDeadline
             projected_failure: finalize.ProjectionFailure | None = None
-            for projection in projections:
+            for projection, candidates in zip(
+                projections,
+                splitter_candidates_by_projection,
+                strict=True,
+            ):
                 if cancelled is not None and cancelled():
                     raise _PreparationDeadline
-                for splitter in splitters:
+                for splitter in candidates[candidate_position]:
                     if cancelled is not None and cancelled():
                         raise _PreparationDeadline
                     projected_failure = finalize.projected_coater_splitter_failure(
