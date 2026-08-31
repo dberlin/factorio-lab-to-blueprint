@@ -2253,8 +2253,14 @@ def test_tall_topology_role_protects_every_measured_candidate() -> None:
         == 3
     )
 
-def test_sparse_topology_preserves_candidate_zero_when_only_one_stage_is_admitted(
+@pytest.mark.parametrize(
+    ("tall_role",),
+    ((False,), (True,)),
+    ids=("ordinary", "tall-direct-refinement"),
+)
+def test_topology_candidate_zero_survives_single_admission_and_tall_refinement(
     monkeypatch: pytest.MonkeyPatch,
+    tall_role: bool,
 ) -> None:
     closed: list[tuple[int, ...]] = []
 
@@ -2312,6 +2318,11 @@ def test_sparse_topology_preserves_candidate_zero_when_only_one_stage_is_admitte
         allowance_cap: int | None = None,
     ) -> DetailedStageResult:
         del allowance_cap
+        if tall_role:
+            class Stage:
+                exact_key: tuple[int, int] | None = None
+
+            _solver._stage_stats.append(Stage())  # type: ignore[arg-type]
         assert reason == "topology-beam"
         closed.append(decoded.x)
         return sequence_solver_module._closed_detailed_result(
@@ -2332,6 +2343,18 @@ def test_sparse_topology_preserves_candidate_zero_when_only_one_stage_is_admitte
         sequence_solver_module,
         "_uses_topology_beam",
         lambda **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "_uses_tall_topology_height",
+        lambda **_kwargs: tall_role,
+    )
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "_direct_alignment_targets",
+        lambda _candidates: (
+            DirectInsertTarget((0, 1), 0, 1, 0, 0, 1, 1, (0,)),
+        ),
     )
     monkeypatch.setattr(
         sequence_solver_module,
@@ -2557,17 +2580,22 @@ def test_validator_crossing_deadline_returns_incomplete_budget(
     class Report:
         errors: tuple[()] = ()
 
-    def slow_certify(
+    now = [0.0]
+    certify_called = [False]
+
+    def crossing_certify(
         _placement: Placement,
         _spec: BuildSpec,
         *,
         expect_power: bool,
     ) -> Report:
         del expect_power
-        time.sleep(0.1)
+        certify_called[0] = True
+        now[0] = 2.0
         return Report()
 
-    monkeypatch.setattr(validate, "certify", slow_certify)
+    monkeypatch.setattr(sequence_solver_module.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(validate, "certify", crossing_certify)
     run = _production_run(
         two_stage_spec(),
         band_policy=BandPolicy("portable"),
@@ -2575,11 +2603,12 @@ def test_validator_crossing_deadline_returns_incomplete_budget(
         power=False,
         strip_len=6,
         config=SequenceSolverConfig.test(),
-        absolute_deadline=time.monotonic() + 0.05,
+        absolute_deadline=1.0,
     )
 
     candidate = _placement(area=1, belt_tiles=1)
     verdict = run.solver.adapters.validate(candidate)
+    assert certify_called == [True]
 
     assert not verdict.ok
     assert verdict.status is DetailedRouteStatus.BUDGET

@@ -777,12 +777,15 @@ class SequenceSolver[PreparedT]:
         self._incumbent: _ExactIncumbent | None = None
         self._last_height: int | None = None
 
+
     def _start_measured_stage(self) -> tuple[bool, float]:
         admission = self.stage_admission
         if admission is None:
             return True, 0.0
         started = admission.try_start()
         return started is not None, 0.0 if started is None else started
+
+
 
     def _finish_measured_stage(self, started: float) -> None:
         if self.stage_admission is not None:
@@ -4322,6 +4325,7 @@ def _production_run(
             ),
         )
         narrowest_width_seen: int | None = None
+        refinement_attempted = False
         for topology_index in range(beam.config.max_candidates):
             topology_stage_started = stage_admission.try_start()
             if topology_stage_started is None:
