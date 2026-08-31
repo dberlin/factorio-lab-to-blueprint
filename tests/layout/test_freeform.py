@@ -3775,17 +3775,21 @@ def test_freeform_keeps_projection_valid_with_evidence_scoped_pitch(
         spec: BuildSpec,
         *,
         strip_len: int = 6,
+        band_policy: BandPolicy = BandPolicy("portable"),
         minimum_pitch_x: Mapping[StripPoseId, int] = freeform._NO_PITCH_REQUIREMENTS,
         minimum_staged_static_clearance: Mapping[
             freeform.StagedStaticClearanceKey,
             int,
         ] = freeform._NO_STAGED_STATIC_CLEARANCE,
+        cancelled: Callable[[], bool] | None = None,
     ) -> list[Strip]:
         planned = ordinary_plan_strips(
             spec,
             strip_len=strip_len,
+            band_policy=band_policy,
             minimum_pitch_x=minimum_pitch_x,
             minimum_staged_static_clearance=minimum_staged_static_clearance,
+            cancelled=cancelled,
         )
         chemical_pitches = tuple(strip.pw for strip in planned if strip.item_id == 2309)
         if chemical_pitches:
@@ -4047,11 +4051,13 @@ def test_pitch_retry_affordability_is_decided_before_geometry_replan(
         spec: BuildSpec,
         *,
         strip_len: int = 6,
+        band_policy: BandPolicy = BandPolicy("portable"),
         minimum_pitch_x: Mapping[StripPoseId, int] = freeform._NO_PITCH_REQUIREMENTS,
         minimum_staged_static_clearance: Mapping[
             freeform.StagedStaticClearanceKey,
             int,
         ] = freeform._NO_STAGED_STATIC_CLEARANCE,
+        cancelled: Callable[[], bool] | None = None,
     ) -> list[Strip]:
         nonlocal geometry_replanned
         if minimum_pitch_x:
@@ -4059,8 +4065,10 @@ def test_pitch_retry_affordability_is_decided_before_geometry_replan(
         return ordinary_plan_strips(
             spec,
             strip_len=strip_len,
+            band_policy=band_policy,
             minimum_pitch_x=minimum_pitch_x,
             minimum_staged_static_clearance=minimum_staged_static_clearance,
+            cancelled=cancelled,
         )
 
     monkeypatch.setattr(freeform, "plan_strips", recording_plan_strips)
@@ -6225,15 +6233,16 @@ def test_unaffordable_base_height_is_not_started_after_valid_candidate(
         **_kwargs: object,
     ) -> _BuildResult:
         return _BuildResult(
-            Placement(
+            placement=Placement(
                 buildings=(),
                 stats={
                     "belt_tiles": 0.0,
                     "test_height": float(pack.height),
                 },
             ),
-            routed,
-            (),
+            routing=routed,
+            budget_stage=None,
+            towers=(),
         )
 
     monkeypatch.setattr(

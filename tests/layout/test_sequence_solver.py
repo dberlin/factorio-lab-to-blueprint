@@ -1445,7 +1445,12 @@ def test_production_detailed_adapter_withholds_budget_placement(
         iterations=1,
         expansions=9,
     )
-    built = freeform_module._BuildResult(None, evidence, ())
+    built = freeform_module._BuildResult(
+        placement=None,
+        routing=evidence,
+        budget_stage=freeform_module._BuildBudgetStage.ROUTING,
+        towers=(),
+    )
     monkeypatch.setattr(
         sequence_solver_module,
         "_build_prepared",
