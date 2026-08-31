@@ -2584,6 +2584,7 @@ def _proof_attempt(
         height=20,
         outline=tuple(_box(strip) for strip in strips),
         routing=routing,
+        budget_stage=None,
         static_access=tuple(
             failure
             for failure in routing.failures
@@ -5198,6 +5199,76 @@ def test_prospective_projection_matches_finalizer_for_exact_ownerless_pair() -> 
     assert prospective.buildings == (181, 255)
     assert prospective in caught.value.failures
 
+
+def test_prospective_static_cache_reuses_only_the_immutable_base(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    chemical = catalog.building(2309)
+    tower = catalog.building(catalog.TESLA_TOWER_ID)
+    base = PlacedBuilding(
+        2309,
+        chemical.model_index,
+        0,
+        0,
+        width=chemical.width,
+        height=chemical.height,
+    )
+    candidates = (
+        PlacedBuilding(
+            catalog.TESLA_TOWER_ID,
+            tower.model_index,
+            x,
+            1,
+            width=tower.width,
+            height=tower.height,
+        )
+        for x in (20, 25)
+    )
+    candidates = tuple(candidates)
+    frames = freeform._junction_projection_frames(
+        (0, 0, 30, 5),
+        (0, 0, 30, 5),
+        BandPolicy("portable"),
+    )
+    expected = tuple(
+        freeform._prospective_static_failure(
+            ((181, base), (255, candidate)),
+            frames,
+            candidate_index=255,
+        )
+        for candidate in candidates
+    )
+
+    original = finalize.materialize_frame_building
+    materialized: list[PlacedBuilding] = []
+
+    def counted(
+        building: PlacedBuilding,
+        *,
+        bounds: tuple[int, int, int, int],
+        candidate: finalize.FrameCandidate,
+    ) -> PlacedBuilding:
+        materialized.append(building)
+        return original(building, bounds=bounds, candidate=candidate)
+
+    monkeypatch.setattr(finalize, "materialize_frame_building", counted)
+    cache = freeform._StagedStaticCache()
+    actual = tuple(
+        freeform._prospective_static_failure(
+            ((181, base), (255, candidate)),
+            frames,
+            candidate_index=255,
+            cache=cache,
+        )
+        for candidate in candidates
+    )
+
+    assert actual == expected
+    assert materialized.count(base) == len(frames)
+    for candidate in candidates:
+        assert materialized.count(candidate) == len(frames)
+
+
 def test_prospective_static_deadline_unwinds_inside_materialization_without_cache_artifact() -> None:
     chemical = catalog.building(2309)
     tower = catalog.building(catalog.TESLA_TOWER_ID)
@@ -5251,6 +5322,7 @@ def test_prospective_static_deadline_unwinds_inside_materialization_without_cach
     assert checks == 4
     assert cache.materialized == {}
     assert cache.clean_contexts == set()
+    assert cache.materialized_bases == {}
 
 
 def test_staged_static_pack_dependent_exhaustion_learns_exact_no_good(
@@ -7782,6 +7854,32 @@ class TestPowerClaimsItsGroundBeforeRouting:
         with pytest.raises(_Unpowerable):
             _power_plan(canvas, (0, 0, 40, 40), policy=BandPolicy("160"))
 
+    def test_power_candidates_reuse_the_static_cleanup_bounds(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        core = (0, 0, 60, 9)
+        canvas = _Canvas(limit=core)
+        self._pin_projection_extent(canvas, core)
+        original = freeform._cached_cleanup_survivor_bounds
+        calls = 0
+
+        def counted(
+            cache: freeform._StagedStaticCache,
+            buildings: tuple[PlacedBuilding, ...],
+            *,
+            cancelled: Callable[[], bool] | None = None,
+        ) -> tuple[int, int, int, int]:
+            nonlocal calls
+            calls += 1
+            return original(cache, buildings, cancelled=cancelled)
+
+        monkeypatch.setattr(freeform, "_cached_cleanup_survivor_bounds", counted)
+        sites = _power_plan(canvas, core, policy=BandPolicy("portable"))
+
+        assert len(sites) >= 3
+        assert calls == 1
+
     def test_covering_by_need_beats_covering_by_grid(self) -> None:
         """Fewer towers is the density win, and it is the point.
 
@@ -7813,24 +7911,17 @@ class TestPowerClaimsItsGroundBeforeRouting:
         see it: a Tesla Tower has no build collider, so it is invisible to
         ``geom.collide``, and the greedy marked only the cell it stood on.
 
-        The geometry is a WIDE, SHALLOW core -- 61 by 10, sown with powered
-        tiles -- because that is the shape that produces it: the greedy walks
-        left to right, and when what is still dark is a thin tail off the end of
-        the last disc, the cell that covers most of it is the one right beside
-        the tower it just placed.  Found by search rather than by reasoning, and
-        the six other shapes tried (a 60x4 strip, a 60x1 line, a crowded field,
-        a one-row corridor, two pockets, and a 30-cell size sweep) produce
-        between zero and one such pair each.  Under the unfixed greedy this
-        plans towers at (31, 4) and (32, 4), 1.777 world units apart.
+        The geometry is a WIDE, SHALLOW core -- 61 by 10 -- because that is
+        the shape that produces it: the greedy walks left to right, and when
+        what is still dark is a thin tail off the end of the last disc, the cell
+        that covers most of it is the one right beside the tower it just
+        placed.  The two linked belts pin that projected extent without filling
+        every legal tower site with solid geometry.  Under the unfixed greedy
+        this plans towers at (31, 4) and (32, 4), 1.777 world units apart.
         """
         core = (0, 0, 60, 9)
         canvas = _Canvas(limit=core)
-        for x in range(0, 61, 3):
-            for y in range(0, 10, 3):
-                canvas.add(
-                    PlacedBuilding(item_id=2303, model_index=65, x=x, y=y, width=1, height=1),
-                    solid=True,
-                )
+        self._pin_projection_extent(canvas, core)
         sites = _power_plan(canvas, core, policy=BandPolicy("portable"))
         assert len(sites) >= 3, "the sample must contain several towers to be a test"
         keepout = {
@@ -8654,12 +8745,14 @@ class TestTheTimeBudgetIsAWall:
             is None
         )
 
-    def test_running_out_of_clock_is_a_route_failure_never_a_thin_placement(
+    def test_preparation_cancellation_is_not_fabricated_as_route_failures(
         self,
     ) -> None:
-        """The deadline is only ever read where the answer is "this net did not
-        route", and a pack with an unrouted net is discarded rather than
-        emitted. So a deadline can cost a placement and can never degrade one.
+        """An expired preparation has no net set from which failures could exist.
+
+        The shared deadline still discards the pack, but its typed build-stage
+        evidence must distinguish that honest empty result from a routed pack
+        that wired every net.
         """
         spec = magnetic_ring_spec()
         strips = plan_strips(spec, strip_len=6)
@@ -8673,9 +8766,9 @@ class TestTheTimeBudgetIsAWall:
             policy=BandPolicy("portable"),
             deadline=time.monotonic() - 1.0,
         )
-        assert result.routing.failed_count > 0, (
-            "an expired build must report every net as unrouted"
-        )
+        assert result.routing.status is DetailedRouteStatus.BUDGET
+        assert result.routing.failures == ()
+        assert result.budget_stage is freeform._BuildBudgetStage.PREPARATION
         assert result.placement is None
 
 
@@ -10133,8 +10226,12 @@ class TestAJunctionIsNotBuiltBesideAForeignBelt:
         self, *, stranger: bool
     ) -> tuple[_Canvas, list[_Net], dict[int, list[tuple[int, int, int]]]]:
         canvas = _Canvas()
+        upstream = canvas.add(_belt(0, -1, item="x"))
         lane = canvas.add(_belt(0, 0, item="x"))
         onward = canvas.add(_belt(0, 1, item="x"))
+        canvas.buildings[upstream] = _relink(
+            canvas.buildings[upstream], output_obj=lane
+        )
         canvas.buildings[lane] = _relink(canvas.buildings[lane], output_obj=onward)
         if stranger:
             # One tile east of the tap, carrying something else and linked to
@@ -10950,14 +11047,19 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
             )
 
     def test_a_taken_drop_cell_is_refused(self) -> None:
-        """The coater's addon area is the ONLY place its proliferator may sit.
+        """A lane with one legal coater seat must refuse an occupied drop cell.
 
-        With the cell occupied there is no supply, and the old code answered by
-        placing no coater -- which reads as "this lane needs none".
+        With that cell occupied there is no supply, and the old code answered
+        by placing no coater -- which reads as "this lane needs none".
         """
-        canvas, spec, strips, ports = self._fixture(4)
-        seat = freeform._coater_seat(canvas, ports[0][self.ITEM])
-        assert seat is not None, "the fixture lane must be long enough to seat one"
+        canvas, spec, strips, ports = self._fixture(3)
+        seats = freeform._coater_seats(
+            canvas,
+            ports[0][self.ITEM],
+            west_channel=strips[0].west_channel,
+        )
+        assert len(seats) == 1, "the fixture must expose exactly one legal seat"
+        seat = seats[0]
         drop = slots.addon_supply_cell(
             catalog.SPRAY_COATER_ID,
             x=seat[0],
@@ -11863,6 +11965,7 @@ def test_prepared_junction_ban_cancels_inside_cell_level_scan(
         width=machine.width,
         height=machine.height,
     )
+    cache = freeform._StagedStaticCache()
     sites = 0
 
     def site_is_clear(
@@ -11882,9 +11985,64 @@ def test_prepared_junction_ban_cancels_inside_cell_level_scan(
             (obstacle,),
             (),
             cancelled=lambda: sites >= 1,
+            cache=cache,
         )
 
     assert sites == 1
+    assert cache.junction_offsets == {}
+
+
+def test_prepared_junction_ban_reuses_complete_immutable_offsets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    machine = catalog.building(2303)
+    obstacles = tuple(
+        PlacedBuilding(
+            2303,
+            machine.model_index,
+            x,
+            0,
+            width=machine.width,
+            height=machine.height,
+        )
+        for x in (0, 20)
+    )
+    expected = freeform._prepared_junction_ban(obstacles, ())
+    original = freeform._cancellable_junction_ban_offsets
+    calls = 0
+
+    def counted(
+        item_id: int,
+        model_index: int,
+        width: int,
+        height: int,
+        yaw: float,
+        z: F,
+        cancelled: Callable[[], bool],
+    ) -> frozenset[Cell]:
+        nonlocal calls
+        calls += 1
+        return original(
+            item_id,
+            model_index,
+            width,
+            height,
+            yaw,
+            z,
+            cancelled,
+        )
+
+    monkeypatch.setattr(freeform, "_cancellable_junction_ban_offsets", counted)
+    cache = freeform._StagedStaticCache()
+    actual = freeform._prepared_junction_ban(
+        obstacles,
+        (),
+        cancelled=lambda: False,
+        cache=cache,
+    )
+
+    assert actual == expected
+    assert calls == 1
 
 
 def test_prepared_junction_ban_reuses_complete_geometry_offsets_per_attempt(

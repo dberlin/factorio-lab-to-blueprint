@@ -652,6 +652,7 @@ def first_projected_static_failure(
         tuple[colliders.Box, ...],
     ]
     | None = None,
+    _placed_cache: dict[PlacedBuilding, colliders.Placed] | None = None,
     cancelled: Callable[[], bool] | None = None,
 ) -> ProjectionFailure | None:
     """Return the first exact static failure across ordered projections.
@@ -669,10 +670,22 @@ def first_projected_static_failure(
         if not catalog.is_belt(building.item_id)
         and not catalog.is_sorter(building.item_id)
     )
-    tested = tuple(
-        (index, _collision_placed(building))
-        for index, building in retained
-    )
+    tested_list: list[tuple[int, colliders.Placed]] = []
+    pending_placed: dict[PlacedBuilding, colliders.Placed] = {}
+    for index, building in retained:
+        placed = (
+            None
+            if _placed_cache is None
+            else _placed_cache.get(building, pending_placed.get(building))
+        )
+        if placed is None:
+            placed = _collision_placed(building)
+            if _placed_cache is not None:
+                pending_placed[building] = placed
+        tested_list.append((index, placed))
+    tested = tuple(tested_list)
+    if _placed_cache is not None:
+        _placed_cache.update(pending_placed)
     candidate_position: int | None = None
     if candidate_index is not None:
         try:

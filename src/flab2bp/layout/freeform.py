@@ -3374,20 +3374,15 @@ def _pack(
         # Encoding the witness set here keeps an unprovable candidate out of the
         # objective instead of letting emission discover the missing precondition
         # after the reward has already influenced the pack.
-        origin_delta = model.new_int_var(
-            -width_bound,
-            width_bound,
-            f"direct_dx{i}_{j}",
-        )
-        model.add(
-            origin_delta
-            == (xs[j] + strips[j].west_channel)
+        origin_delta = (
+            (xs[j] + strips[j].west_channel)
             - (xs[i] + strips[i].west_channel)
         )
-        model.add_allowed_assignments(
-            [origin_delta],
-            [(delta,) for delta in cand.origin_deltas],
-        ).only_enforce_if(di)
+        permitted_delta = model.new_int_var_from_domain(
+            cp_model.Domain.from_values(cand.origin_deltas),
+            f"direct_dx{i}_{j}",
+        )
+        model.add(origin_delta == permitted_delta).only_enforce_if(di)
         direct_vars[i, j] = di
 
     for no_good_index, no_good in enumerate(direct_relation_no_goods):
@@ -3831,6 +3826,7 @@ def _prepared_junction_ban(
     projection_frames: Sequence[_JunctionProjectionFrame] = (),
     junction_bounds: tuple[int, int, int, int] | None = None,
     cancelled: Callable[[], bool] | None = None,
+    cache: _StagedStaticCache | None = None,
 ) -> frozenset[Cell]:
     """Precompute exact flat and projected Splitter refusals."""
     obstacles: list[PlacedBuilding] = []
@@ -3857,10 +3853,6 @@ def _prepared_junction_ban(
         )
 
     banned: set[Cell] = set()
-    offset_cache: dict[
-        tuple[int, int, int, int, float, Fraction],
-        frozenset[Cell],
-    ] = {}
     for obstacle in obstacles:
         if cancelled is not None and cancelled():
             raise _PreparationDeadline
@@ -3872,17 +3864,15 @@ def _prepared_junction_ban(
             obstacle.yaw,
             obstacle.z,
         )
-        offsets = offset_cache.get(offset_key)
+        offsets = None if cache is None else cache.junction_offsets.get(offset_key)
         if offsets is None:
             offsets = (
                 _junction_ban_offsets(*offset_key)
                 if cancelled is None
-                else _cancellable_junction_ban_offsets(
-                    *offset_key,
-                    cancelled,
-                )
+                else _cancellable_junction_ban_offsets(*offset_key, cancelled)
             )
-            offset_cache[offset_key] = offsets
+            if cache is not None:
+                cache.junction_offsets[offset_key] = offsets
         for dx, dy, level in offsets:
             if cancelled is not None and cancelled():
                 raise _PreparationDeadline
@@ -8763,10 +8753,23 @@ class _StagedStaticCache:
         ],
         PlacedBuilding,
     ] = field(default_factory=dict)
+    materialized_bases: dict[
+        tuple[
+            tuple[tuple[int, PlacedBuilding], ...],
+            tuple[int, int, int, int],
+            finalize.FrameCandidate,
+        ],
+        tuple[tuple[int, PlacedBuilding], ...],
+    ] = field(default_factory=dict)
     clean_contexts: set[tuple[object, ...]] = field(default_factory=set)
     boxes: dict[
         tuple[colliders.Placed, planet.Projection],
         tuple[colliders.Box, ...],
+    ] = field(default_factory=dict)
+    placed: dict[PlacedBuilding, colliders.Placed] = field(default_factory=dict)
+    junction_offsets: dict[
+        tuple[int, int, int, int, float, Fraction],
+        frozenset[Cell],
     ] = field(default_factory=dict)
 
 
@@ -9125,44 +9128,78 @@ def _prospective_static_failure(
         cache = _StagedStaticCache()
     if cancelled is not None and cancelled():
         raise _PreparationDeadline
+    retained = tuple(
+        (index, building)
+        for index, building in buildings
+        if not catalog.is_belt(building.item_id)
+        and not catalog.is_sorter(building.item_id)
+    )
+    try:
+        candidate_position = next(
+            position
+            for position, (index, _building) in enumerate(retained)
+            if index == candidate_index
+        )
+    except StopIteration:
+        raise ValueError(
+            "prospective static candidate is not collision-tested"
+        ) from None
+    candidate = retained[candidate_position]
+    base = retained[:candidate_position] + retained[candidate_position + 1 :]
     for frame in frames:
         if cancelled is not None and cancelled():
             raise _PreparationDeadline
-        materialized_buildings: list[tuple[int, PlacedBuilding]] = []
         pending_materialized: dict[
             tuple[PlacedBuilding, tuple[int, int, int, int], finalize.FrameCandidate],
             PlacedBuilding,
         ] = {}
-        # The authoritative predicate excludes belts and sorters before testing.
-        # Their item identity is invariant under frame materialization, so skip
-        # thousands of pure transforms that the predicate would immediately
-        # discard.
-        for index, building in buildings:
-            if cancelled is not None and cancelled():
-                raise _PreparationDeadline
-            if catalog.is_belt(building.item_id) or catalog.is_sorter(
-                building.item_id
-            ):
-                continue
-            materialized_key = (building, frame.bounds, frame.candidate)
-            materialized = cache.materialized.get(
-                materialized_key,
-                pending_materialized.get(materialized_key),
-            )
-            if materialized is None:
-                materialized = finalize.materialize_frame_building(
-                    building,
-                    bounds=frame.bounds,
-                    candidate=frame.candidate,
+        base_key = (base, frame.bounds, frame.candidate)
+        materialized_base = cache.materialized_bases.get(base_key)
+        if materialized_base is None:
+            pending_base: list[tuple[int, PlacedBuilding]] = []
+            for index, building in base:
+                if cancelled is not None and cancelled():
+                    raise _PreparationDeadline
+                materialized_key = (building, frame.bounds, frame.candidate)
+                materialized = cache.materialized.get(
+                    materialized_key,
+                    pending_materialized.get(materialized_key),
                 )
-                pending_materialized[materialized_key] = materialized
-            materialized_buildings.append((index, materialized))
+                if materialized is None:
+                    materialized = finalize.materialize_frame_building(
+                        building,
+                        bounds=frame.bounds,
+                        candidate=frame.candidate,
+                    )
+                    pending_materialized[materialized_key] = materialized
+                pending_base.append((index, materialized))
+            materialized_base = tuple(pending_base)
+        if cancelled is not None and cancelled():
+            raise _PreparationDeadline
+        candidate_key = (candidate[1], frame.bounds, frame.candidate)
+        materialized_candidate = cache.materialized.get(
+            candidate_key,
+            pending_materialized.get(candidate_key),
+        )
+        if materialized_candidate is None:
+            materialized_candidate = finalize.materialize_frame_building(
+                candidate[1],
+                bounds=frame.bounds,
+                candidate=frame.candidate,
+            )
+            pending_materialized[candidate_key] = materialized_candidate
+        materialized_buildings = (
+            materialized_base[:candidate_position]
+            + ((candidate[0], materialized_candidate),)
+            + materialized_base[candidate_position:]
+        )
         failure = (
             finalize.first_projected_static_failure(
                 materialized_buildings,
                 frame.projections,
                 _clean_contexts=cache.clean_contexts,
                 _box_cache=cache.boxes,
+                _placed_cache=cache.placed,
                 candidate_index=candidate_index,
             )
             if cancelled is None
@@ -9171,11 +9208,13 @@ def _prospective_static_failure(
                 frame.projections,
                 _clean_contexts=cache.clean_contexts,
                 _box_cache=cache.boxes,
+                _placed_cache=cache.placed,
                 candidate_index=candidate_index,
                 cancelled=cancelled,
             )
         )
         cache.materialized.update(pending_materialized)
+        cache.materialized_bases.setdefault(base_key, materialized_base)
         if failure is not None:
             return failure
     return None
@@ -9504,56 +9543,79 @@ def _projection_envelope(
         tuple[finalize.FrameCandidate, ...],
     ] = {}
     projection_keys: dict[tuple[int, int, int], None] = {}
-    expanded: set[tuple[int, int, int, bool]] = set()
-    for min_x in range(limit_min_x, occupied_min_x + 1):
+    first_expansions: dict[
+        tuple[int, int, int, int],
+        set[tuple[int, bool]],
+    ] = defaultdict(set)
+    occupied_width = occupied_max_x - occupied_min_x + 1
+    occupied_height = occupied_max_y - occupied_min_y + 1
+    limit_width = limit_max_x - limit_min_x + 1
+    limit_height = limit_max_y - limit_min_y + 1
+    for width in range(occupied_width, limit_width + 1):
         if cancelled is not None and cancelled():
             raise _PreparationDeadline
-        for min_y in range(limit_min_y, occupied_min_y + 1):
+        min_x_lo = max(limit_min_x, occupied_max_x - width + 1)
+        min_x_hi = min(occupied_min_x, limit_max_x - width + 1)
+        for height in range(occupied_height, limit_height + 1):
             if cancelled is not None and cancelled():
                 raise _PreparationDeadline
-            for max_x in range(occupied_max_x, limit_max_x + 1):
+            min_y_lo = max(limit_min_y, occupied_max_y - height + 1)
+            min_y_hi = min(occupied_min_y, limit_max_y - height + 1)
+            for min_y in range(min_y_lo, min_y_hi + 1):
                 if cancelled is not None and cancelled():
                     raise _PreparationDeadline
-                for max_y in range(occupied_max_y, limit_max_y + 1):
+                first_expansions[
+                    (min_x_lo, min_y, min_x_lo + width - 1, min_y + height - 1)
+                ].add((min_y, False))
+            for min_x in range(min_x_lo, min_x_hi + 1):
+                if cancelled is not None and cancelled():
+                    raise _PreparationDeadline
+                first_expansions[
+                    (min_x, min_y_lo, min_x + width - 1, min_y_lo + height - 1)
+                ].add((min_x, True))
+
+    # Sorting these first-witness rectangles is the exact legacy
+    # min-x/min-y/max-x/max-y encounter order. At a witness shared by both
+    # orientations, retain FrameCandidate order so structured first-failure
+    # evidence does not change.
+    for min_x, min_y, max_x, max_y in sorted(first_expansions):
+        if cancelled is not None and cancelled():
+            raise _PreparationDeadline
+        width = max_x - min_x + 1
+        height = max_y - min_y + 1
+        extent = (width, height)
+        candidates = candidates_by_extent.get(extent)
+        if candidates is None:
+            candidates = finalize._frame_candidates_for_extent(
+                width,
+                height,
+                policy,
+            )
+            candidates_by_extent[extent] = candidates
+        witnessed = first_expansions[(min_x, min_y, max_x, max_y)]
+        for candidate in candidates:
+            if cancelled is not None and cancelled():
+                raise _PreparationDeadline
+            rotated = candidate.frame.rotated
+            origin = min_x if rotated else min_y
+            if (origin, rotated) not in witnessed:
+                continue
+            row_origin = origin - candidate.south_padding
+            for segments in candidate.frame.certified_bands:
+                if cancelled is not None and cancelled():
+                    raise _PreparationDeadline
+                band = by_segments[segments]
+                for anchor in band.anchors(candidate.frame.height):
                     if cancelled is not None and cancelled():
                         raise _PreparationDeadline
-                    width = max_x - min_x + 1
-                    height = max_y - min_y + 1
-                    extent = (width, height)
-                    candidates = candidates_by_extent.get(extent)
-                    if candidates is None:
-                        candidates = finalize._frame_candidates_for_extent(
-                            width,
-                            height,
-                            policy,
-                        )
-                        candidates_by_extent[extent] = candidates
-                    for candidate in candidates:
-                        if cancelled is not None and cancelled():
-                            raise _PreparationDeadline
-                        rotated = candidate.frame.rotated
-                        origin = min_x if rotated else min_y
-                        expansion = (width, height, origin, rotated)
-                        if expansion in expanded:
-                            continue
-                        row_origin = origin - candidate.south_padding
-                        for segments in candidate.frame.certified_bands:
-                            if cancelled is not None and cancelled():
-                                raise _PreparationDeadline
-                            band = by_segments[segments]
-                            for anchor in band.anchors(candidate.frame.height):
-                                if cancelled is not None and cancelled():
-                                    raise _PreparationDeadline
-                                projection_keys.setdefault(
-                                    (
-                                        segments,
-                                        anchor - row_origin,
-                                        int(rotated),
-                                    ),
-                                    None,
-                                )
-                    expanded.add((width, height, min_y, False))
-                    expanded.add((width, height, min_x, True))
+                    projection_keys.setdefault(
+                        (
+                            segments,
+                            anchor - row_origin,
+                            int(rotated),
+                        ),
+                        None,
+                    )
     projections: list[planet.Projection] = []
     for segments, anchor_row, quadrant in projection_keys:
         if cancelled is not None and cancelled():
@@ -9826,6 +9888,11 @@ def _power_plan(
         cancelled=cancelled,
     )
     static_buildings = list(enumerate(canvas.buildings))
+    static_cleanup_bounds = _cached_cleanup_survivor_bounds(
+        staged_static_cache,
+        tuple(building for _, building in static_buildings),
+        cancelled=cancelled,
+    )
     static_frames_by_bounds: dict[
         tuple[int, int, int, int],
         tuple[_JunctionProjectionFrame, ...],
@@ -10025,14 +10092,17 @@ def _power_plan(
             if candidate_failure is not None:
                 break
         if candidate_failure is None:
-            candidate_buildings = (
-                *(building for _, building in static_buildings),
-                candidate[1],
-            )
-            candidate_bounds = _cached_cleanup_survivor_bounds(
-                staged_static_cache,
-                candidate_buildings,
-                cancelled=cancelled,
+            candidate_bounds = (
+                min(static_cleanup_bounds[0], candidate[1].x),
+                min(static_cleanup_bounds[1], candidate[1].y),
+                max(
+                    static_cleanup_bounds[2],
+                    candidate[1].x + candidate[1].width - 1,
+                ),
+                max(
+                    static_cleanup_bounds[3],
+                    candidate[1].y + candidate[1].height - 1,
+                ),
             )
             static_frames = static_frames_by_bounds.get(candidate_bounds)
             if static_frames is None:
@@ -10065,6 +10135,7 @@ def _power_plan(
         sites.append(site)
         power_nodes.append(candidate)
         static_buildings.append((candidate[0], candidate[1]))
+        static_cleanup_bounds = candidate_bounds
         # The cell itself AND every cell inside the paste's power-node spacing
         # rule.  Marking only the cell is what shipped a blueprint the game
         # refused; the halo is what makes this greedy incapable of producing one.
@@ -10973,6 +11044,7 @@ def _prepare_routing_problem(
             projection_frames=junction_frames,
             junction_bounds=capacity,
             cancelled=cancelled,
+            cache=staged_static_cache,
         )
         if junction_possible or power_sites
         else frozenset()
@@ -11007,6 +11079,13 @@ def _prepare_routing_problem(
     )
 
 
+class _BuildBudgetStage(Enum):
+    """The phase whose shared deadline prevented a build attempt from finishing."""
+
+    PREPARATION = "preparation"
+    ROUTING = "routing"
+
+
 @dataclass(frozen=True, slots=True)
 class PackAttempt:
     """Complete immutable evidence from one packed-and-routed assignment."""
@@ -11016,6 +11095,7 @@ class PackAttempt:
     height: int
     outline: tuple[tuple[int, int], ...]
     routing: DetailedRouteResult
+    budget_stage: _BuildBudgetStage | None
     static_access: tuple[NetFailure, ...]
     promised_direct: frozenset[DirectInsertId]
     realized_direct: frozenset[DirectInsertId]
@@ -11027,6 +11107,15 @@ class PackAttempt:
             for failure in self.static_access
         ):
             raise ValueError("PackAttempt.static_access accepts only STATIC_ACCESS failures")
+        if self.routing.status is DetailedRouteStatus.BUDGET:
+            if self.budget_stage is None:
+                raise ValueError("a budget-limited attempt must name its build stage")
+        elif self.budget_stage is not None:
+            raise ValueError("only a budget-limited attempt may name a build stage")
+        if self.budget_stage is _BuildBudgetStage.PREPARATION and (
+            self.routing.routed or self.routing.failures
+        ):
+            raise ValueError("preparation stopped before routing evidence existed")
         if not self.realized_direct <= self.promised_direct:
             raise ValueError("a realized direct insert must name a rewarded promise")
 
@@ -11160,6 +11249,7 @@ def _feedback_retry_eligible(
 class _BuildResult:
     placement: Placement | None
     routing: DetailedRouteResult
+    budget_stage: _BuildBudgetStage | None
     towers: tuple[PlacedBuilding, ...]
     promised_direct: frozenset[DirectInsertId] = frozenset()
     realized_direct: frozenset[DirectInsertId] = frozenset()
@@ -11179,7 +11269,7 @@ def _build(
     staged_static_cache: _StagedStaticCache | None = None,
 ) -> _BuildResult:
     """Prepare one pack, then emit it through the reusable detailed entry point."""
-    cancelled = None if deadline is None else lambda: _expired(deadline)
+    cancelled = None if deadline is None else lambda: time.monotonic() >= deadline
     try:
         prepared = _prepare_routing_problem(
             spec,
@@ -11194,15 +11284,16 @@ def _build(
         )
     except (_PreparationDeadline, finalize.ProjectionCancelled):
         return _BuildResult(
-            None,
-            DetailedRouteResult(
+            placement=None,
+            routing=DetailedRouteResult(
                 DetailedRouteStatus.BUDGET,
                 (),
                 (),
                 0,
                 0,
             ),
-            (),
+            towers=(),
+            budget_stage=_BuildBudgetStage.PREPARATION,
         )
     return _build_prepared(
         spec,
@@ -11307,11 +11398,12 @@ def _build_prepared(
     )
     if routing.status is DetailedRouteStatus.BUDGET:
         return _BuildResult(
-            None,
-            routing,
-            (),
-            prepared.promised_direct,
-            prepared.realized_direct,
+            placement=None,
+            routing=routing,
+            towers=(),
+            budget_stage=_BuildBudgetStage.ROUTING,
+            promised_direct=prepared.promised_direct,
+            realized_direct=prepared.realized_direct,
         )
 
     # Reservations and tentative markers are attempt-local and are spent before
@@ -11360,11 +11452,12 @@ def _build_prepared(
         },
     )
     return _BuildResult(
-        placement,
-        routing,
-        towers,
-        prepared.promised_direct,
-        prepared.realized_direct,
+        placement=placement,
+        routing=routing,
+        towers=towers,
+        budget_stage=None,
+        promised_direct=prepared.promised_direct,
+        realized_direct=prepared.realized_direct,
     )
 
 
@@ -12700,10 +12793,28 @@ class FreeformLayout:
             # sweep never got to the candidate that works" from "every candidate
             # it tried was nowhere near", and aim at the right half of the
             # program.
-            failed_counts = [attempt.routing.failed_count for attempt in attempts]
-            tried = "1 pack was" if len(attempts) == 1 else f"{len(attempts)} packs were"
+            routing_attempts = [
+                attempt
+                for attempt in attempts
+                if attempt.budget_stage is not _BuildBudgetStage.PREPARATION
+            ]
+            preparation_cancellations = len(attempts) - len(routing_attempts)
+            failed_counts = [
+                attempt.routing.failed_count for attempt in routing_attempts
+            ]
+            tried = (
+                "1 pack was"
+                if len(routing_attempts) == 1
+                else f"{len(routing_attempts)} packs were"
+            )
             if not attempts:
-                note = "no pack finished routing inside it"
+                note = "no pack finished exact preparation inside it"
+            elif not routing_attempts:
+                noun = "pack" if preparation_cancellations == 1 else "packs"
+                note = (
+                    f"{preparation_cancellations} {noun} exhausted the deadline "
+                    "during exact preparation, before a net set existed to route"
+                )
             elif min(failed_counts) == 0:
                 note = (
                     f"{tried} routed in that time and at least one wired every "
@@ -12715,6 +12826,12 @@ class FreeformLayout:
                     f"left {min(failed_counts)} nets unrouted (worst "
                     f"{max(failed_counts)}), so a longer clock alone would not have "
                     "wired this spec"
+                )
+            if preparation_cancellations and routing_attempts:
+                noun = "pack" if preparation_cancellations == 1 else "packs"
+                note += (
+                    f"; {preparation_cancellations} other {noun} stopped during "
+                    "exact preparation"
                 )
             raise NoValidLayout(
                 f"the {ceiling:g}s deadline passed with no wired packing of "
@@ -13138,7 +13255,11 @@ class FreeformLayout:
                 width_bound=width_bound,
                 time_budget_s=remaining,
                 direct_candidates=net_candidates,
-                workers=(1 if len(strips) >= _DETERMINISTIC_PACK_STRIPS else self.workers),
+                workers=(
+                    1
+                    if len(strips) >= _DETERMINISTIC_PACK_STRIPS
+                    else self.workers
+                ),
                 seed=seeds[height],
                 arrangement=arrangement,
                 projection_no_goods=tuple(projection_no_goods),
@@ -13358,6 +13479,7 @@ class FreeformLayout:
                 height=pack.height,
                 outline=tuple(_box(strip) for strip in strips),
                 routing=result.routing,
+                budget_stage=result.budget_stage,
                 static_access=tuple(
                     failure
                     for failure in result.routing.failures
@@ -13406,9 +13528,7 @@ class FreeformLayout:
                     feedback_state is not None
                     and _feedback_retry_eligible(attempt, feedback_state)
                 )
-                promote_retry = arrangement == 0 and (
-                    learned or feedback_retry
-                )
+                promote_retry = arrangement == 0 and (learned or feedback_retry)
                 if promote_retry:
                     next_candidate = (height, arrangement + 1, False)
                     try:
