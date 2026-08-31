@@ -3485,6 +3485,7 @@ def test_junction_records_no_links_clean_on_the_corpus_shape() -> None:
     assert not fired(validate(junction_pair()), "junction.records_no_links")
 
 
+
 def test_geom_belt_single_occupancy_allows_belts_stacked_on_a_junction() -> None:
     """Three belts on a splitter tile is what the game itself records.
 
@@ -4592,6 +4593,50 @@ def test_belt_crossing_names_the_height_it_needs() -> None:
     r = validate(_belt_over_assembler(Fraction(1)), only={"game.belt_crossing"})
     (f,) = r.by_check("game.belt_crossing")
     assert f.detail["needs_z_above"] == "3.5325"
+
+
+def test_model40_carry_rejects_a_foreign_run_stacked_through_its_collision_envelope() -> None:
+    """full5: the z2 run breaks all four z1 carry previews around model40."""
+    placement = place(
+        dataclasses.replace(splitter(0, 0), model_index=40, yaw=90.0),  # 0
+        belt(-1, 0, 1, out=2),  # 1: feed-side outer carry
+        belt(0, 0, 1, out=0),  # 2: feed endpoint
+        belt(0, 0, 1, inp=0, out=4),  # 3: draw endpoint
+        belt(1, 0, 1),  # 4: draw-side outer carry
+        belt(0, -1, 0, inp=0),  # 5: legal lower branch
+        belt(-1, 0, 2, out=7),  # 6: foreign stacked run
+        belt(0, 0, 2, out=8),  # 7
+        belt(1, 0, 2),  # 8
+    )
+
+    findings = validate(
+        placement,
+        only={"game.belt_collide"},
+    ).by_check("game.belt_collide")
+
+    assert len(findings) == 4
+    assert {finding.buildings[0] for finding in findings} == {1, 2, 3, 4}
+    assert all(finding.buildings[-1] == 0 for finding in findings)
+    assert all(finding.detail["foreign_level"] == "2" for finding in findings)
+
+
+def test_model40_carry_allows_an_unstacked_foreign_run_elsewhere() -> None:
+    placement = place(
+        dataclasses.replace(splitter(0, 0), model_index=40, yaw=90.0),  # 0
+        belt(-1, 0, 1, out=2),  # 1
+        belt(0, 0, 1, out=0),  # 2
+        belt(0, 0, 1, inp=0, out=4),  # 3
+        belt(1, 0, 1),  # 4
+        belt(0, -1, 0, inp=0),  # 5
+        belt(-1, 1, 2, out=7),  # 6: ordinary adjacent-level run, different row
+        belt(0, 1, 2, out=8),  # 7
+        belt(1, 1, 2),  # 8
+    )
+
+    assert not fired(
+        validate(placement, only={"game.belt_collide"}),
+        "game.belt_collide",
+    )
 
 
 #: Every fixture whose coordinates survive rounding into tile space, so that a

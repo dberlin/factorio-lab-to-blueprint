@@ -1047,6 +1047,7 @@ def _belt_single(ctx: Context) -> Iterable[Finding]:
         )
 
 
+
 @check("geom.machine_ground")
 def _machine_ground(ctx: Context) -> Iterable[Finding]:
     """Machines this GENERATOR places sit on the ground.
@@ -2675,6 +2676,24 @@ def _belt_collide(ctx: Context) -> Iterable[Finding]:
     arrange.  Fix the footprints (steps 1 and 2 of the entry) and this comes on
     by name first, then by default.
     """
+    for carry, foreign, splitter in splitter_ports.model40_carry_stack_conflicts(
+        ctx.placement.buildings
+    ):
+        carry_belt = ctx.placement.buildings[carry]
+        foreign_belt = ctx.placement.buildings[foreign]
+        yield Finding(
+            "game.belt_collide",
+            Severity.ERROR,
+            f"foreign belt {foreign} at z={foreign_belt.z} is stacked through "
+            f"model 40 Splitter {splitter}'s elevated carry belt {carry} at "
+            f"z={carry_belt.z}; the four-piece carry collision excusal fails",
+            (carry, foreign, splitter),
+            {
+                "carry_level": str(carry_belt.z),
+                "foreign_level": str(foreign_belt.z),
+                "splitter": splitter,
+            },
+        )
     yield from _belt_collide_findings(ctx, "game.belt_collide", crossings_only=False)
 
 
