@@ -3473,6 +3473,168 @@ def test_admitted_feedback_retry_cannot_cascade_to_a_third_arrangement(
 
 
 
+def test_route_aware_height_order_preserves_exact_candidate_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = two_stage_spec()
+    strips = plan_strips(spec)
+    original_heights = (20, 40, 30)
+    widths = {20: 50, 40: 35, 30: 35}
+    seeds = {
+        height: freeform._Pack(
+            at={index: (index * 10, 0) for index in range(len(strips))},
+            width=widths[height],
+            height=height,
+            status="seed",
+        )
+        for height in original_heights
+    }
+    seen: list[tuple[int, int, int]] = []
+
+    def pack(
+        *_args: object,
+        height: int,
+        seed: freeform._Pack,
+        **_kwargs: object,
+    ) -> freeform._Pack:
+        assert seed is seeds[height]
+        seen.append((height, seed.width, seed.height))
+        return seed
+
+    failed = _routing_failures(RouteFailureKind.BUDGET)
+
+    def build(*_args: object, **_kwargs: object) -> _BuildResult:
+        return _BuildResult(
+            placement=None,
+            routing=failed,
+            budget_stage=freeform._BuildBudgetStage.ROUTING,
+            towers=(),
+        )
+
+    monkeypatch.setattr(
+        freeform,
+        "_band_policy_candidate_heights",
+        lambda _strips, _policy: original_heights,
+    )
+    monkeypatch.setattr(
+        freeform,
+        "_greedy_pack",
+        lambda _strips, height: seeds[height],
+    )
+    monkeypatch.setattr(freeform, "_pack", pack)
+    monkeypatch.setattr(
+        freeform,
+        "_height_seed",
+        lambda _strips: original_heights[0],
+    )
+    monkeypatch.setattr(freeform, "_build", build)
+
+    result = FreeformLayout(
+        band_policy=BandPolicy("portable"),
+        arrangements=1,
+    )._sweep(spec, strips, 1.0)
+
+    assert result is None
+    assert [height for height, _width, _seed_height in seen] == [30, 40, 20]
+    assert len(seen) == len(original_heights)
+    assert {height for height, _width, _seed_height in seen} == set(
+        original_heights
+    )
+    assert all(height == seed_height for height, _width, seed_height in seen)
+
+
+@pytest.mark.parametrize(
+    ("seed_width", "uses_seed"),
+    ((22, True), (23, False)),
+)
+def test_first_warm_start_substitution_is_width_bounded_and_attempt_neutral(
+    monkeypatch: pytest.MonkeyPatch,
+    seed_width: int,
+    uses_seed: bool,
+) -> None:
+    spec = two_stage_spec()
+    strips = plan_strips(spec)
+    height = 20
+    compact = freeform._Pack(
+        at={index: (index * 10, 0) for index in range(len(strips))},
+        width=20,
+        height=height,
+        status="compact",
+    )
+    seed = freeform._Pack(
+        at={index: (index * 10 + 1, 0) for index in range(len(strips))},
+        width=seed_width,
+        height=height,
+        status="seed",
+    )
+    routed = _routing_failures(exhaustive=True)
+    placement = Placement(buildings=(), stats={"belt_tiles": 0.0})
+    pack_calls = 0
+    routed_packs: list[freeform._Pack] = []
+
+    def pack(*_args: object, **_kwargs: object) -> freeform._Pack:
+        nonlocal pack_calls
+        pack_calls += 1
+        return compact
+
+    def build(
+        _spec: BuildSpec,
+        _strips: list[Strip],
+        selected: freeform._Pack,
+        **_kwargs: object,
+    ) -> _BuildResult:
+        routed_packs.append(selected)
+        return _BuildResult(
+            placement=placement,
+            routing=routed,
+            budget_stage=None,
+            towers=(),
+        )
+
+    monkeypatch.setattr(
+        freeform,
+        "_band_policy_candidate_heights",
+        lambda _strips, _policy: (height,),
+    )
+    monkeypatch.setattr(freeform, "_greedy_pack", lambda *_args: seed)
+    monkeypatch.setattr(freeform, "_pack", pack)
+    monkeypatch.setattr(freeform, "_build", build)
+    monkeypatch.setattr(
+        finalize,
+        "compact_open_boundary_belts_certified",
+        lambda candidate, *_args, **_kwargs: finalize.BoundaryCompactionResult(
+            candidate,
+            None,
+        ),
+    )
+    monkeypatch.setattr(
+        finalize,
+        "finalize_placement",
+        lambda candidate, _policy: candidate,
+    )
+    monkeypatch.setattr(
+        validate,
+        "certify",
+        lambda *_args, **_kwargs: validate.Report(findings=()),
+    )
+
+    result = FreeformLayout(
+        band_policy=BandPolicy("portable"),
+        arrangements=1,
+    )._sweep(spec, strips, 1.0)
+
+    assert result is not None
+    assert pack_calls == len(routed_packs) == 1
+    selected = routed_packs[0]
+    expected = seed if uses_seed else compact
+    assert (selected.at, selected.width, selected.height) == (
+        expected.at,
+        expected.width,
+        expected.height,
+    )
+    assert (seed.width <= freeform._width_slack_cap(compact.width)) is uses_seed
+
+
 def test_width_slack_uses_exact_integer_ceiling_at_decimal_boundaries() -> None:
     assert freeform._width_slack_cap(50) == 55
     assert freeform._width_slack_cap(51) == 57
@@ -9232,6 +9394,23 @@ class TestAShardThatCannotFeedItself:
 
 class TestTheTimeBudgetIsAWall:
     """``time_budget_s`` is the one deadline shared by every search phase."""
+
+    def test_magnetic_ring_repeated_one_second_calls_complete(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _ = monkeypatch
+        spec = magnetic_ring_spec()
+        for repeat in range(12):
+            placement = FreeformLayout(
+                band_policy=BandPolicy("160"),
+            ).lay_out(spec, time_budget_s=1.0)
+            assert (
+                placement.completion
+                is PlacementCompletion.COMPACTED_AND_FINALIZED
+            ), repeat
+            report = _full_report(placement, spec)
+            assert report.ok, (repeat, report.errors[:3])
 
     def test_a_refusal_uses_exactly_the_requested_budget(
         self, monkeypatch: pytest.MonkeyPatch

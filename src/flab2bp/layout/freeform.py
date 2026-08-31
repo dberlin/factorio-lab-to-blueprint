@@ -2984,9 +2984,10 @@ def _nets_between(strips: list[Strip]) -> list[tuple[int, int]]:
 def _greedy_pack(strips: list[Strip], height: int) -> _Pack:
     """Shelf packing -- always succeeds, and seeds the solver's upper bound.
 
-    A SEED, and only a seed.  It bounds `_pack`'s width from above and hints its
-    variables; it is never returned as a layout.  Returning it was tried twice
-    and deleted twice -- see the note above ``_ENTRY_RING``.
+    A deterministic seed, not a loose fallback.  It bounds `_pack`'s width from
+    above and hints its variables.  `_sweep` may route it in place of the first
+    exact incumbent only after that incumbent proves the seed fits the existing
+    width-slack cap; a failed solve can never return it.
     """
     at: dict[int, tuple[int, int]] = {}
     shelf_x, shelf_y, shelf_h = 0, 0, 0
@@ -13033,8 +13034,10 @@ class FreeformLayout:
         On the calibration spec it returned 3162 tiles against the solver's 2208
         while carrying the same unsourced lanes, so it traded area away for
         nothing.  What replaces it is the shelf packing it was built on, handed
-        to :func:`_pack` as a warm start: same construction, bounding the search
-        instead of substituting for it.
+        to :func:`_pack` as a warm start.  It normally bounds the search; the
+        first candidate may substitute it only after an exact incumbent proves
+        that it fits the same evidence-bound width slack.  It is never used when
+        the solve fails.
 
         ``time_budget_s`` is the wall-clock search deadline for the whole call.
         Every phase takes what is left of exactly the budget the caller asked
@@ -13431,11 +13434,11 @@ class FreeformLayout:
         # message rather than bought back.
         # SO HERE IS THAT ORDER, AND IT DEPENDS ON THE STRIPS.
         #
-        # Not "shortest", not "tallest": NARROWEST-PACK FIRST, measured on the
-        # greedy shelf pack each height gets as its warm start.  Routing cost is
-        # a function of how far a net has to travel and a pack's width is what
-        # sets that, so the cheapest height to WIRE is the one whose pack comes
-        # out narrowest -- whichever direction that happens to lie in.
+        # Not "shortest", not "tallest", and not width alone: try the
+        # warm-start with the smallest LONGEST AXIS first.  The detailed router,
+        # boundary projection, and exact validator all traverse a two-dimensional
+        # build; bounding the longer realized axis is the deterministic
+        # model-derived proxy shared by all three.
         #
         # Measured on `universe-matrix/no-proliferator` power=0, one routing
         # pass per height on a fixed pack, no routing clock:
@@ -13450,10 +13453,21 @@ class FreeformLayout:
         # second half is right and the first is backwards, which is how that
         # experiment came out even.
         #
-        # The greedy pack is already built per height as `_pack`'s seed, so
-        # building them all up front costs nothing and only moves the work.
+        # The greedy pack is already built per height as `_pack`'s seed, so the
+        # order adds no model, solve, candidate, or work.
         heights = list(_band_policy_candidate_heights(strips, self.band_policy))
         seeds = {height: _greedy_pack(strips, height) for height in heights}
+        original_height_ordinal = {
+            height: ordinal for ordinal, height in enumerate(heights)
+        }
+        heights.sort(
+            key=lambda height: (
+                max(seeds[height].width, seeds[height].height),
+                seeds[height].width,
+                seeds[height].height,
+                original_height_ordinal[height],
+            )
+        )
         # AND A CANDIDATE IS A (HEIGHT, ARRANGEMENT) PAIR, NOT A HEIGHT.
         #
         # The note above ends "the lever is the packer's arrangement, not the
@@ -13787,6 +13801,34 @@ class FreeformLayout:
                 break
             if feedback is None:
                 compact_width_by_height.setdefault(height, pack.width)
+            # Route the deterministic warm-start once this exact solve has
+            # produced a compact incumbent that admits it under the existing
+            # evidence-bound width contract.  The width-36 warm-start routes on
+            # the fourteen-strip calibration chain, while continuing to tighten
+            # it can replace it with a width-35 arrangement that strands one net.
+            #
+            # It does not add a solve, route, arrangement, worker, or deadline,
+            # and the seed REPLACES the candidate rather than acting as the
+            # deleted loose fallback.  If the exact incumbent is too narrow to
+            # admit the seed, the final incumbent is routed instead.
+            seed = seeds[height]
+            if (
+                candidate_index == 1
+                and arrangement == 0
+                and not projection_retry
+                and feedback is None
+                and seed.width <= _width_slack_cap(pack.width)
+                and (
+                    seed.at != pack.at
+                    or seed.width != pack.width
+                    or seed.height != pack.height
+                )
+            ):
+                pack = replace(
+                    seed,
+                    status="WARM_START",
+                    hit_budget=pack.hit_budget,
+                )
             # RATIONING THE CLOCK BETWEEN HEIGHTS WAS TRIED AND IS WORSE.
             #
             # The observation is real: a routing pass that will wire this pack
