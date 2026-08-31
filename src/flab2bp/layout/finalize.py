@@ -2257,7 +2257,7 @@ def finalize_placement(
         raise ProjectionRefusal((_extent_failure(placement, policy),))
     counters = _ProjectionCounters()
     cache = _ProjectionCache(counters, cancelled=cancelled)
-    failures: list[ProjectionFailure] = []
+    rejected_frames: list[tuple[Placement, AreaFrame]] = []
     for candidate in candidates:
         if cancelled is not None and cancelled():
             raise ProjectionCancelled
@@ -2267,15 +2267,31 @@ def finalize_placement(
             framed,
             candidate.frame,
             counters,
+            stop_after_failure=True,
             cache=cache,
             cancelled=cancelled,
         )
         if candidate_failures:
-            failures.extend(candidate_failures)
+            rejected_frames.append((framed, candidate.frame))
             continue
         if cancelled is not None and cancelled():
             raise ProjectionCancelled
         return _with_projection_stats(framed, counters)
+
+    failures: list[ProjectionFailure] = []
+    for framed, frame in rejected_frames:
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
+        failures.extend(
+            _certify_frame(
+                framed,
+                frame,
+                counters,
+                stop_after_failure=False,
+                cache=cache,
+                cancelled=cancelled,
+            )
+        )
     raise ProjectionRefusal(failures)
 
 

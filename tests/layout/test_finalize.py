@@ -3080,3 +3080,186 @@ def test_compact_open_boundary_belts_cancels_during_incremental_scan(
         )
 
     assert checks == 12
+
+
+def test_finalizer_stops_rejected_frame_search_after_first_exact_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    placement = Placement(buildings=_extent(2, 2))
+    candidates = (
+        finalize.FrameCandidate(AreaFrame(2, 2, 4, (4,), False), 0, 0),
+        finalize.FrameCandidate(AreaFrame(2, 2, 4, (4,), True), 0, 0),
+    )
+    failure = finalize.ProjectionFailure("geom.collide", (0, 1), "first frame", 4)
+    stop_modes: list[bool] = []
+
+    def certify(
+        _placement: Placement,
+        _frame: AreaFrame,
+        _counters: finalize._ProjectionCounters,
+        *,
+        stop_after_failure: bool = False,
+        **_kwargs: object,
+    ) -> tuple[finalize.ProjectionFailure, ...]:
+        stop_modes.append(stop_after_failure)
+        return (failure,) if len(stop_modes) == 1 else ()
+
+    monkeypatch.setattr(finalize, "frame_candidates", lambda *_args: candidates)
+    monkeypatch.setattr(
+        finalize,
+        "_materialize_frame",
+        lambda candidate_placement, candidate: replace(
+            candidate_placement,
+            frame=candidate.frame,
+        ),
+    )
+    monkeypatch.setattr(finalize, "_certify_frame", certify)
+
+    finalized = finalize.finalize_placement(placement, BandPolicy("portable"))
+
+    assert finalized.frame == candidates[1].frame
+    assert stop_modes == [True, True]
+
+
+def test_finalizer_replays_all_frames_for_complete_refusal_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    placement = Placement(buildings=_extent(2, 2))
+    candidates = (
+        finalize.FrameCandidate(AreaFrame(2, 2, 4, (4,), False), 0, 0),
+        finalize.FrameCandidate(AreaFrame(2, 2, 4, (4,), True), 0, 0),
+    )
+    first = finalize.ProjectionFailure("geom.collide", (0, 1), "first", 4)
+    second = finalize.ProjectionFailure("game.inserter_paste", (0,), "second", 4)
+    stop_modes: list[bool] = []
+    caches: list[finalize._ProjectionCache | None] = []
+
+    def certify(
+        _placement: Placement,
+        _frame: AreaFrame,
+        _counters: finalize._ProjectionCounters,
+        *,
+        stop_after_failure: bool = False,
+        cache: finalize._ProjectionCache | None = None,
+        **_kwargs: object,
+    ) -> tuple[finalize.ProjectionFailure, ...]:
+        stop_modes.append(stop_after_failure)
+        caches.append(cache)
+        return (first,) if stop_after_failure else (first, second)
+
+    monkeypatch.setattr(finalize, "frame_candidates", lambda *_args: candidates)
+    monkeypatch.setattr(
+        finalize,
+        "_materialize_frame",
+        lambda candidate_placement, candidate: replace(
+            candidate_placement,
+            frame=candidate.frame,
+        ),
+    )
+    monkeypatch.setattr(finalize, "_certify_frame", certify)
+
+    with pytest.raises(finalize.ProjectionRefusal) as caught:
+        finalize.finalize_placement(placement, BandPolicy("portable"))
+
+    assert caught.value.failures == (first, second)
+    assert stop_modes == [True, True, False, False]
+    assert caches[0] is not None
+    assert all(cache is caches[0] for cache in caches)
+
+
+def _legacy_exhaustive_frame_oracle(
+    placement: Placement,
+    policy: BandPolicy,
+) -> Placement:
+    candidates = finalize.frame_candidates(placement, policy)
+    if not candidates:
+        raise finalize.ProjectionRefusal((finalize._extent_failure(placement, policy),))
+    counters = finalize._ProjectionCounters()
+    cache = finalize._ProjectionCache(counters)
+    failures: list[finalize.ProjectionFailure] = []
+    for candidate in candidates:
+        counters.frame_candidates += 1
+        framed = finalize._materialize_frame(placement, candidate)
+        candidate_failures = finalize._certify_frame(
+            framed,
+            candidate.frame,
+            counters,
+            stop_after_failure=False,
+            cache=cache,
+        )
+        if not candidate_failures:
+            return framed
+        failures.extend(candidate_failures)
+    raise finalize.ProjectionRefusal(failures)
+
+
+def test_search_first_success_matches_real_exhaustive_frame_oracle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    placement = Placement(
+        buildings=(
+            _building(2302, 0, 0),
+            _building(2302, 5, 0),
+        )
+    )
+    policy = BandPolicy("40")
+
+    def reject_wide_orientation(
+        tested: tuple[tuple[int, colliders.Placed], ...],
+        _pairs: tuple[tuple[int, int], ...],
+        projection: planet.Projection,
+        **_kwargs: object,
+    ) -> finalize.ProjectionFailure | None:
+        if any(building.x > 1.0 for _index, building in tested):
+            return finalize.ProjectionFailure(
+                "geom.collide",
+                (0, 1),
+                "synthetic orientation refusal",
+                projection.band.area_segments,
+            )
+        return None
+
+    monkeypatch.setattr(
+        finalize,
+        "_projected_static_failure",
+        reject_wide_orientation,
+    )
+
+    exhaustive = _legacy_exhaustive_frame_oracle(placement, policy)
+    search_first = finalize.finalize_placement(placement, policy)
+
+    assert search_first.frame == exhaustive.frame
+    assert search_first.buildings == exhaustive.buildings
+
+
+def test_search_first_refusal_matches_real_exhaustive_ordered_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    placement = Placement(buildings=_extent(2, 2))
+    policy = BandPolicy("40")
+
+    def reject_every_projection(
+        tested: tuple[tuple[int, colliders.Placed], ...],
+        _pairs: tuple[tuple[int, int], ...],
+        projection: planet.Projection,
+        **_kwargs: object,
+    ) -> finalize.ProjectionFailure:
+        return finalize.ProjectionFailure(
+            "geom.collide",
+            (0, 1),
+            f"synthetic refusal at anchor {projection.anchor_row}",
+            projection.band.area_segments,
+        )
+
+    monkeypatch.setattr(
+        finalize,
+        "_projected_static_failure",
+        reject_every_projection,
+    )
+
+    with pytest.raises(finalize.ProjectionRefusal) as exhaustive:
+        _legacy_exhaustive_frame_oracle(placement, policy)
+    with pytest.raises(finalize.ProjectionRefusal) as search_first:
+        finalize.finalize_placement(placement, policy)
+
+    assert search_first.value.failures == exhaustive.value.failures
