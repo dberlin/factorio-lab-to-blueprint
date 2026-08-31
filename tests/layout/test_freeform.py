@@ -3593,7 +3593,7 @@ def test_poseless_compatibility_family_remains_fail_closed_with_pitch_mapping() 
         ).lay_out(mode_driven_spec(), time_budget_s=0.5)
 
 
-def test_freeform_retries_same_strip_projection_failure_with_padded_pitch(
+def test_freeform_keeps_projection_valid_with_evidence_scoped_pitch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     planned_pitches: list[tuple[int, ...]] = []
@@ -3604,11 +3604,16 @@ def test_freeform_retries_same_strip_projection_failure_with_padded_pitch(
         *,
         strip_len: int = 6,
         minimum_pitch_x: Mapping[StripPoseId, int] = freeform._NO_PITCH_REQUIREMENTS,
+        minimum_staged_static_clearance: Mapping[
+            freeform.StagedStaticClearanceKey,
+            int,
+        ] = freeform._NO_STAGED_STATIC_CLEARANCE,
     ) -> list[Strip]:
         planned = ordinary_plan_strips(
             spec,
             strip_len=strip_len,
             minimum_pitch_x=minimum_pitch_x,
+            minimum_staged_static_clearance=minimum_staged_static_clearance,
         )
         chemical_pitches = tuple(strip.pw for strip in planned if strip.item_id == 2309)
         if chemical_pitches:
@@ -3627,7 +3632,9 @@ def test_freeform_retries_same_strip_projection_failure_with_padded_pitch(
     assert not report.by_check("geom.collide")
     assert planned_pitches
     assert set(planned_pitches[0]) == {7}
-    assert any(set(pitches) == {8} for pitches in planned_pitches[1:])
+    # Padding is learned only from an exact refusal. This fixture can now certify
+    # its first pitch-7 arrangement, in which case adding a retry would be
+    # unsupported work; deterministic refusal coverage lives below.
     assert all(set(pitches) <= {7, 8} for pitches in planned_pitches)
 
 
@@ -3848,6 +3855,48 @@ def _sweep_with_pitch_feedback(
         arrangements=1,
     )._sweep(spec, strips, 1.0, rejected=rejected)
     return result, seen_candidates, rejected
+
+
+def test_pitch_retry_affordability_is_decided_before_geometry_replan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ordinary_plan_strips = freeform.plan_strips
+    geometry_replanned = False
+
+    def recording_plan_strips(
+        spec: BuildSpec,
+        *,
+        strip_len: int = 6,
+        minimum_pitch_x: Mapping[StripPoseId, int] = freeform._NO_PITCH_REQUIREMENTS,
+        minimum_staged_static_clearance: Mapping[
+            freeform.StagedStaticClearanceKey,
+            int,
+        ] = freeform._NO_STAGED_STATIC_CLEARANCE,
+    ) -> list[Strip]:
+        nonlocal geometry_replanned
+        if minimum_pitch_x:
+            geometry_replanned = True
+        return ordinary_plan_strips(
+            spec,
+            strip_len=strip_len,
+            minimum_pitch_x=minimum_pitch_x,
+            minimum_staged_static_clearance=minimum_staged_static_clearance,
+        )
+
+    monkeypatch.setattr(freeform, "plan_strips", recording_plan_strips)
+    monkeypatch.setattr(
+        freeform,
+        "_room_for_another",
+        lambda *_args, **_kwargs: not geometry_replanned,
+    )
+
+    result, seen_candidates, _rejected = _sweep_with_pitch_feedback(
+        monkeypatch,
+        (8,),
+    )
+
+    assert result is not None
+    assert seen_candidates == [(20, 0, 7), (20, 0, 8)]
 
 
 def test_repeated_identical_pitch_feedback_does_not_duplicate_retry(
@@ -4603,12 +4652,15 @@ def test_staged_static_exact_pack_no_good_forbids_only_the_full_assignment() -> 
         "build colliders intersect",
         100,
     )
+    projection_pair = freeform._exact_projection_pair(strips, (0, 1))
+    assert projection_pair is not None
     no_good = freeform.ExactPackNoGood(
         height=baseline.height,
         outline=tuple(_box(candidate) for candidate in strips),
         width=baseline.width,
         origins=tuple(baseline.at[index] for index in range(len(strips))),
         evidence=(failure,),
+        projection_pair=projection_pair,
     )
 
     assert tuple(field.name for field in dataclasses.fields(no_good)) == (
@@ -4617,7 +4669,9 @@ def test_staged_static_exact_pack_no_good_forbids_only_the_full_assignment() -> 
         "width",
         "origins",
         "evidence",
+        "projection_pair",
     )
+    assert no_good.projection_pair == projection_pair
     retry = _pack(
         strips,
         height=height,

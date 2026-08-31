@@ -13083,13 +13083,14 @@ class FreeformLayout:
                         exact_no_good,
                         affordable=projection_retry_affordable(),
                     )
-                if geometry_learned:
-                    replan_strips_for_learned_geometry()
-                if (
+                learned_retry_affordable = (
                     learned
                     and not retry_promoted
                     and projection_retry_affordable()
-                ):
+                )
+                if geometry_learned:
+                    replan_strips_for_learned_geometry()
+                if learned_retry_affordable:
                     retry_promoted = True
                 if retry_promoted:
                     candidate_packs.insert(
