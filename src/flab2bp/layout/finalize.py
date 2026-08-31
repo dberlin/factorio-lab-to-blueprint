@@ -15,6 +15,7 @@ from flab2bp.layout import slots
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import AreaFrame, PlacedBuilding, Placement
 from flab2bp.layout.validate import certify as _certify
+from flab2bp.layout.validate import Report
 from flab2bp.spec import BuildSpec
 
 type _Direction = Literal["input", "output"]
@@ -2422,6 +2423,7 @@ class _CleanupOperations:
 
     node_visits: int = 0
     edge_visits: int = 0
+    coordinate_visits: int = 0
 
 
 class _CleanupSurvivorGraph:
@@ -2435,6 +2437,8 @@ class _CleanupSurvivorGraph:
     belts only when they become part of the active bounding rectangle.
     """
 
+    _COORDINATE_MIN = -(1 << 63)
+    _COORDINATE_MAX = (1 << 63) - 1
     _EXTERNAL = -1
 
     def __init__(
@@ -2443,10 +2447,12 @@ class _CleanupSurvivorGraph:
         *,
         cancelled: Callable[[], bool] | None = None,
         _operations: _CleanupOperations | None = None,
+        _include_boundary_open: bool = True,
     ) -> None:
         self.buildings = placement.buildings
         self.cancelled = cancelled
         self._operations = _operations or _CleanupOperations()
+        self.include_boundary_open = _include_boundary_open
         self.active = [True] * len(self.buildings)
         self.active_count = len(self.buildings)
         self.belts: list[bool] = []
@@ -2508,6 +2514,7 @@ class _CleanupSurvivorGraph:
         self.right_counts: dict[int, int] = {}
         self.top_counts: dict[int, int] = {}
         for index, building in enumerate(self.buildings):
+            self._poll()
             right = building.x + building.width - 1
             top = building.y + building.height - 1
             for coordinate, records, counts in (
@@ -2518,10 +2525,16 @@ class _CleanupSurvivorGraph:
             ):
                 records.setdefault(coordinate, []).append(index)
                 counts[coordinate] = counts.get(coordinate, 0) + 1
-        self.left_coordinates = sorted(self.left_counts)
-        self.bottom_coordinates = sorted(self.bottom_counts)
-        self.right_coordinates = sorted(self.right_counts, reverse=True)
-        self.top_coordinates = sorted(self.top_counts, reverse=True)
+        self.left_coordinates = self._ordered_coordinates(self.left_counts)
+        self.bottom_coordinates = self._ordered_coordinates(self.bottom_counts)
+        self.right_coordinates = self._ordered_coordinates(
+            self.right_counts,
+            reverse=True,
+        )
+        self.top_coordinates = self._ordered_coordinates(
+            self.top_counts,
+            reverse=True,
+        )
         self.left_position = 0
         self.bottom_position = 0
         self.right_position = 0
@@ -2543,12 +2556,66 @@ class _CleanupSurvivorGraph:
     def edge_visits(self, value: int) -> None:
         self._operations.edge_visits = value
 
+    @property
+    def coordinate_visits(self) -> int:
+        return self._operations.coordinate_visits
+
+    @coordinate_visits.setter
+    def coordinate_visits(self, value: int) -> None:
+        self._operations.coordinate_visits = value
+
+    def _ordered_coordinates(
+        self,
+        counts: Mapping[int, int],
+        *,
+        reverse: bool = False,
+    ) -> list[int]:
+        """Order validated signed-64 coordinates in eight cancellable radix passes."""
+        values: list[int] = []
+        for value in counts:
+            self._poll()
+            self.coordinate_visits += 1
+            if not self._COORDINATE_MIN <= value <= self._COORDINATE_MAX:
+                raise ValueError("cleanup coordinates must fit a signed 64-bit integer")
+            values.append(value)
+        if len(values) < 2:
+            return values
+        for shift in range(0, 64, 8):
+            buckets: list[list[int]] = []
+            for _bucket in range(256):
+                self._poll()
+                self.coordinate_visits += 1
+                buckets.append([])
+            for value in values:
+                self._poll()
+                self.coordinate_visits += 1
+                unsigned = value - self._COORDINATE_MIN
+                buckets[(unsigned >> shift) & 0xFF].append(value)
+            ordered: list[int] = []
+            for bucket in buckets:
+                self._poll()
+                self.coordinate_visits += 1
+                for value in bucket:
+                    self._poll()
+                    self.coordinate_visits += 1
+                    ordered.append(value)
+            values = ordered
+        if reverse:
+            descending: list[int] = []
+            for value in reversed(values):
+                self._poll()
+                self.coordinate_visits += 1
+                descending.append(value)
+            values = descending
+        return values
+
     def _fork(self) -> _CleanupSurvivorGraph:
         """Copy mutable cleanup state while sharing its aggregate work counter."""
         fork = object.__new__(type(self))
         fork.buildings = self.buildings
         fork.cancelled = self.cancelled
         fork._operations = self._operations
+        fork.include_boundary_open = self.include_boundary_open
         fork.active = self.active.copy()
         fork.active_count = self.active_count
         fork.belts = self.belts.copy()
@@ -2628,6 +2695,7 @@ class _CleanupSurvivorGraph:
 
         size = len(extended.buildings)
         for source in range(old_size, size):
+            extended._poll()
             building = extended.buildings[source]
             for direction, target in (
                 ("input", building.input_obj),
@@ -2655,6 +2723,7 @@ class _CleanupSurvivorGraph:
                     protected[target] += 1
 
         for index in range(old_size, size):
+            extended._poll()
             building = extended.buildings[index]
             right = building.x + building.width - 1
             top = building.y + building.height - 1
@@ -2666,10 +2735,20 @@ class _CleanupSurvivorGraph:
             ):
                 records.setdefault(coordinate, []).append(index)
                 counts[coordinate] = counts.get(coordinate, 0) + 1
-        extended.left_coordinates = sorted(extended.left_counts)
-        extended.bottom_coordinates = sorted(extended.bottom_counts)
-        extended.right_coordinates = sorted(extended.right_counts, reverse=True)
-        extended.top_coordinates = sorted(extended.top_counts, reverse=True)
+        extended.left_coordinates = extended._ordered_coordinates(
+            extended.left_counts,
+        )
+        extended.bottom_coordinates = extended._ordered_coordinates(
+            extended.bottom_counts,
+        )
+        extended.right_coordinates = extended._ordered_coordinates(
+            extended.right_counts,
+            reverse=True,
+        )
+        extended.top_coordinates = extended._ordered_coordinates(
+            extended.top_counts,
+            reverse=True,
+        )
         extended.left_position = 0
         extended.bottom_position = 0
         extended.right_position = 0
@@ -2758,6 +2837,7 @@ class _CleanupSurvivorGraph:
 
         owner: int | None = head
         while owner is not None:
+            self._poll()
             self.edge_visits += 1
             if self.active[owner]:
                 pending.add(owner)
@@ -2772,6 +2852,7 @@ class _CleanupSurvivorGraph:
         path: list[int] = []
         positions: set[int] = set()
         while value is not None:
+            self._poll()
             self.edge_visits += 1
             if value < 0 or value >= len(self.buildings):
                 result = None if self.remapped_once else self._EXTERNAL
@@ -2788,6 +2869,7 @@ class _CleanupSurvivorGraph:
         else:
             result = None
         for removed in path:
+            self._poll()
             jump[removed] = result
         return result
 
@@ -2800,8 +2882,10 @@ class _CleanupSurvivorGraph:
         )
         values: list[int] = []
         for coordinates, counts, position_name in indexed:
+            self._poll()
             position = cast(int, getattr(self, position_name))
             while not counts[coordinates[position]]:
+                self._poll()
                 position += 1
             setattr(self, position_name, position)
             values.append(coordinates[position])
@@ -2826,9 +2910,11 @@ class _CleanupSurvivorGraph:
                 strict=True,
             )
         ):
+            self._poll()
             if prior is not None and coordinate == prior[side]:
                 continue
             for index in records[coordinate]:
+                self._poll()
                 if self.active[index] and self.belts[index]:
                     pending.add(index)
 
@@ -2877,7 +2963,7 @@ class _CleanupSurvivorGraph:
             and not protected
             and predecessor_count + int(successor_is_belt) <= 1
         )
-        return boundary_open or prunable
+        return (self.include_boundary_open and boundary_open) or prunable
 
     def _transfer_protection(
         self,
@@ -2914,6 +3000,7 @@ class _CleanupSurvivorGraph:
     ) -> tuple[int, int, int, int]:
         removed_sources: dict[int, int] = {}
         for source in wave:
+            self._poll()
             target = self._resolve(self.buildings[source].output_obj, "output")
             if (
                 target is not None
@@ -2938,11 +3025,13 @@ class _CleanupSurvivorGraph:
         self.remapped_once = True
 
         for target, count in removed_sources.items():
+            self._poll()
             if self.active[target]:
                 self.predecessors[target] -= count
                 pending.add(target)
 
         for removed in wave:
+            self._poll()
             remaining_predecessors = (
                 self.predecessors[removed] - removed_sources.get(removed, 0)
             )
@@ -2972,21 +3061,22 @@ class _CleanupSurvivorGraph:
             self._transfer_protection("input", removed, pending)
 
         if first_remap:
-            pending.update(
-                source
-                for source in (
-                    *self.external_input_sources,
-                    *self.external_output_sources,
-                )
-                if self.active[source]
-            )
+            for sources in (
+                self.external_input_sources,
+                self.external_output_sources,
+            ):
+                for source in sources:
+                    self._poll()
+                    self.edge_visits += 1
+                    if self.active[source]:
+                        pending.add(source)
         changed_bounds = self._current_bounds()
         if changed_bounds != bounds:
             self._enqueue_outer(changed_bounds, pending, prior=bounds)
         return changed_bounds
 
-    def survivor_bounds(self) -> tuple[int, int, int, int]:
-        """Return the survivor bounds after the exact simultaneous peel waves."""
+    def _peel(self) -> tuple[int, int, int, int]:
+        """Consume exact simultaneous peel waves and return survivor bounds."""
         self._poll()
         if not self.active_count:
             self._poll()
@@ -3009,6 +3099,21 @@ class _CleanupSurvivorGraph:
             bounds = self._remove_wave(wave, bounds, pending)
         self._poll()
         return bounds
+
+    def survivor_indices(self) -> frozenset[int]:
+        """Return original indices surviving the exact simultaneous peel waves."""
+        _ = self._peel()
+        survivors: set[int] = set()
+        for index, active in enumerate(self.active):
+            self._poll()
+            self.node_visits += 1
+            if active:
+                survivors.add(index)
+        return frozenset(survivors)
+
+    def survivor_bounds(self) -> tuple[int, int, int, int]:
+        """Return the survivor bounds after the exact simultaneous peel waves."""
+        return self._peel()
 
 
 def _cleanup_survivor_bounds(
@@ -3038,21 +3143,28 @@ def _certified_side_fallback(
     spec: BuildSpec,
     *,
     expect_power: bool,
-) -> tuple[Placement, int]:
+    cancelled: Callable[[], bool] | None = None,
+) -> tuple[Placement, int, Report | None]:
     """Use bounded side batches when structural pruning breaks addon geometry."""
     compacted = placement
     removed_total = 0
+    accepted_report: Report | None = None
 
     def attempt(removed: frozenset[int]) -> bool:
-        nonlocal compacted, removed_total
-        candidate = _remove_buildings(compacted, removed)
+        nonlocal compacted, removed_total, accepted_report
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
+        candidate = _remove_buildings(compacted, removed, cancelled=cancelled)
         if candidate is compacted or candidate.area >= compacted.area:
             return False
-        errors = _certify(candidate, spec, expect_power=expect_power).errors
-        if errors:
+        report = _certify(candidate, spec, expect_power=expect_power)
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
+        if report.errors:
             return False
         compacted = candidate
         removed_total += len(removed)
+        accepted_report = report
         return True
 
     machines = placement.stats.get("machines", 0.0)
@@ -3063,15 +3175,108 @@ def _certified_side_fallback(
         sprayed_lanes=len(spec.spray_lanes),
     ):
         for side in ("left", "bottom", "right", "top"):
-            _ = attempt(_boundary_open_belts(compacted, side))
+            _ = attempt(
+                _boundary_open_belts(
+                    compacted,
+                    side,
+                    cancelled=cancelled,
+                )
+            )
     else:
         for _round in range(4):
-            removed = _boundary_open_belts(compacted, "left") | _boundary_open_belts(
-                compacted, "bottom"
+            removed = _boundary_open_belts(
+                compacted,
+                "left",
+                cancelled=cancelled,
+            ) | _boundary_open_belts(
+                compacted,
+                "bottom",
+                cancelled=cancelled,
             )
             if not attempt(removed):
                 break
-    return compacted, removed_total
+    return compacted, removed_total, accepted_report
+
+
+@dataclass(frozen=True, slots=True)
+class BoundaryCompactionResult:
+    """Compacted placement and its reusable exact certification, when changed."""
+
+    placement: Placement
+    report: Report | None
+
+
+def compact_open_boundary_belts_certified(
+    placement: Placement,
+    spec: BuildSpec,
+    *,
+    expect_power: bool,
+    cancelled: Callable[[], bool] | None = None,
+) -> BoundaryCompactionResult:
+    """Prune structural belt leaves once, retaining exact certification."""
+    started = time.perf_counter()
+    if cancelled is not None and cancelled():
+        raise ProjectionCancelled
+    graph = _CleanupSurvivorGraph(
+        placement,
+        cancelled=cancelled,
+        _include_boundary_open=False,
+    )
+    survivors = graph.survivor_indices()
+    removed_values: set[int] = set()
+    for index in range(len(placement.buildings)):
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
+        if index not in survivors:
+            removed_values.add(index)
+    removed = frozenset(removed_values)
+    compacted = _remove_buildings(
+        placement,
+        removed,
+        cancelled=cancelled,
+    )
+    removed_total = len(removed) if compacted is not placement else 0
+    structural_report = (
+        _certify(compacted, spec, expect_power=expect_power)
+        if compacted is not placement
+        else None
+    )
+    if cancelled is not None and cancelled():
+        raise ProjectionCancelled
+    tall_role = uses_tall_saturated_role(
+        machine_count=float(placement.stats.get("machines", 0.0)),
+        strip_count=float(placement.stats.get("strips", 0.0)),
+        sprayed_lanes=len(spec.spray_lanes),
+    )
+    report = structural_report
+    if compacted is placement or (
+        structural_report is not None and structural_report.errors
+    ):
+        compacted, removed_total, report = _certified_side_fallback(
+            placement,
+            spec,
+            expect_power=expect_power,
+            cancelled=cancelled,
+        )
+    elif tall_role:
+        compacted, side_removed, fallback_report = _certified_side_fallback(
+            compacted,
+            spec,
+            expect_power=expect_power,
+            cancelled=cancelled,
+        )
+        removed_total += side_removed
+        if fallback_report is not None:
+            report = fallback_report
+    if compacted is placement:
+        return BoundaryCompactionResult(placement, None)
+    stats = compacted.stats.copy()
+    stats["boundary_belts_removed"] = float(removed_total)
+    stats["boundary_cleanup_time_s"] = time.perf_counter() - started
+    return BoundaryCompactionResult(
+        replace(compacted, stats=stats),
+        report,
+    )
 
 
 def compact_open_boundary_belts(
@@ -3079,47 +3284,12 @@ def compact_open_boundary_belts(
     spec: BuildSpec,
     *,
     expect_power: bool,
+    cancelled: Callable[[], bool] | None = None,
 ) -> Placement:
     """Prune structural belt leaves once, with a bounded certified fallback."""
-    started = time.perf_counter()
-    compacted = placement
-    removed_total = 0
-    for _wave in range(len(placement.buildings)):
-        removed = _prunable_open_belts(compacted)
-        if not removed:
-            break
-        candidate = _remove_buildings(compacted, removed)
-        if candidate is compacted:
-            break
-        compacted = candidate
-        removed_total += len(removed)
-
-    structural_errors = (
-        _certify(compacted, spec, expect_power=expect_power).errors
-        if compacted is not placement
-        else ()
-    )
-    tall_role = uses_tall_saturated_role(
-        machine_count=float(placement.stats.get("machines", 0.0)),
-        strip_count=float(placement.stats.get("strips", 0.0)),
-        sprayed_lanes=len(spec.spray_lanes),
-    )
-    if compacted is placement or structural_errors:
-        compacted, removed_total = _certified_side_fallback(
-            placement,
-            spec,
-            expect_power=expect_power,
-        )
-    elif tall_role:
-        compacted, side_removed = _certified_side_fallback(
-            compacted,
-            spec,
-            expect_power=expect_power,
-        )
-        removed_total += side_removed
-    if compacted is placement:
-        return placement
-    stats = compacted.stats.copy()
-    stats["boundary_belts_removed"] = float(removed_total)
-    stats["boundary_cleanup_time_s"] = time.perf_counter() - started
-    return replace(compacted, stats=stats)
+    return compact_open_boundary_belts_certified(
+        placement,
+        spec,
+        expect_power=expect_power,
+        cancelled=cancelled,
+    ).placement

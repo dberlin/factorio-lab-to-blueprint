@@ -222,6 +222,89 @@ def test_cleanup_survivor_graph_visits_chain_nodes_and_edges_linearly() -> None:
     assert graph.edge_visits <= 16 * len(placement.buildings)
 
 
+def test_cleanup_coordinate_index_uses_linear_cancellable_radix_passes() -> None:
+    class CountedCoordinate(int):
+        comparisons = 0
+
+        def __lt__(self, other: object) -> bool:
+            type(self).comparisons += 1
+            return super().__lt__(other)
+
+        def __gt__(self, other: object) -> bool:
+            type(self).comparisons += 1
+            return super().__gt__(other)
+
+    belt_count = 2_048
+
+    placement = Placement(
+        buildings=tuple(
+            replace(
+                _linked_belt(
+                    CountedCoordinate((index * 104_729) % belt_count),
+                    CountedCoordinate(-((index * 130_363) % belt_count)),
+                    input_obj=index - 1 if index else None,
+                    output_obj=index + 1 if index + 1 < belt_count else None,
+                ),
+                parameters=(1,) if index == belt_count // 2 else (),
+            )
+            for index in range(belt_count)
+        )
+    )
+    operations = finalize._CleanupOperations()
+
+    graph = finalize._CleanupSurvivorGraph(
+        placement,
+        _operations=operations,
+        _include_boundary_open=False,
+    )
+    _ = graph.survivor_indices()
+
+    assert CountedCoordinate.comparisons <= 10 * belt_count
+    assert operations.coordinate_visits <= 80 * belt_count
+
+
+def test_cleanup_coordinate_index_rejects_outside_signed_64_bit_domain() -> None:
+    placement = Placement(
+        buildings=(
+            _linked_belt(0, 0, input_obj=None, output_obj=1),
+            _linked_belt(1 << 2_048, 0, input_obj=0, output_obj=None),
+        )
+    )
+
+    with pytest.raises(ValueError, match="signed 64-bit"):
+        finalize._CleanupSurvivorGraph(placement)
+
+
+def test_cleanup_coordinate_index_cancels_during_radix_ordering() -> None:
+    belt_count = 128
+    placement = Placement(
+        buildings=tuple(
+            _linked_belt(
+                index,
+                -index,
+                input_obj=index - 1 if index else None,
+                output_obj=index + 1 if index + 1 < belt_count else None,
+            )
+            for index in range(belt_count)
+        )
+    )
+    checks = 0
+    cancellation_check = 3 * belt_count + 5
+
+    def cancelled() -> bool:
+        nonlocal checks
+        checks += 1
+        return checks >= cancellation_check
+
+    with pytest.raises(finalize.ProjectionCancelled):
+        finalize._CleanupSurvivorGraph(
+            placement,
+            cancelled=cancelled,
+        )
+
+    assert checks == cancellation_check
+
+
 def test_cleanup_prefix_snapshots_match_oracle_with_linear_aggregate_work() -> None:
     belt_count = 97
     buildings: tuple[PlacedBuilding, ...] = (
@@ -306,6 +389,82 @@ def test_compaction_prunes_open_belt_leaves_to_a_structural_fixed_point(
     assert len(calls) == 1
     assert compacted.area == 1
     assert [(belt.x, belt.y) for belt in compacted.buildings] == [(1, 1)]
+
+
+def test_structural_compaction_matches_wave_oracle_with_linear_work(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    belt_count = 257
+    protected = belt_count // 2
+    placement = Placement(
+        buildings=tuple(
+            replace(
+                _linked_belt(
+                    index,
+                    0,
+                    input_obj=index - 1 if index else None,
+                    output_obj=index + 1 if index + 1 < belt_count else None,
+                ),
+                parameters=(1,) if index == protected else (),
+            )
+            for index in range(belt_count)
+        )
+    )
+    expected = placement
+    for _wave in range(len(placement.buildings)):
+        removed = finalize._prunable_open_belts(expected)
+        if not removed:
+            break
+        expected = finalize._remove_buildings(expected, removed)
+    operations = finalize._CleanupOperations()
+    graph = finalize._CleanupSurvivorGraph(
+        placement,
+        _operations=operations,
+        _include_boundary_open=False,
+    )
+
+    survivors = graph.survivor_indices()
+    observed = finalize._remove_buildings(
+        placement,
+        frozenset(set(range(belt_count)) - survivors),
+    )
+
+    assert observed.buildings == expected.buildings
+    assert operations.node_visits <= 6 * belt_count
+    assert operations.edge_visits <= 16 * belt_count
+    assert operations.coordinate_visits <= 80 * belt_count
+
+    monkeypatch.setattr(finalize, "_certify", lambda *_args, **_kwargs: _Report())
+    compacted = finalize.compact_open_boundary_belts(
+        placement,
+        two_stage_spec(),
+        expect_power=False,
+    )
+    assert compacted.buildings == expected.buildings
+
+
+def test_certified_compaction_returns_the_exact_clean_report(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    placement = Placement(
+        buildings=(
+            _belt(0, 1, output=1),
+            _belt(1, 1, output=2),
+            _belt(2, 1, output=None),
+            _belt(1, 0, output=1),
+        )
+    )
+    report = _Report()
+    monkeypatch.setattr(finalize, "_certify", lambda *_args, **_kwargs: report)
+
+    result = finalize.compact_open_boundary_belts_certified(
+        placement,
+        two_stage_spec(),
+        expect_power=False,
+    )
+
+    assert result.placement is not placement
+    assert result.report is report
 
 
 def test_framed_boundary_fallback_returns_unfinalized_smaller_geometry(
@@ -2880,5 +3039,44 @@ def test_cleanup_survivor_bounds_cancels_inside_building_scan(
             placement,
             cancelled=lambda: inspected >= 1,
         )
-
     assert inspected == 1
+
+
+
+def test_compact_open_boundary_belts_cancels_during_incremental_scan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    belt_count = 257
+    placement = Placement(
+        buildings=tuple(
+            _linked_belt(
+                index,
+                0,
+                input_obj=index - 1 if index else None,
+                output_obj=index + 1 if index + 1 < belt_count else None,
+            )
+            for index in range(belt_count)
+        )
+    )
+    checks = 0
+
+    def cancelled() -> bool:
+        nonlocal checks
+        checks += 1
+        return checks >= 12
+
+    monkeypatch.setattr(
+        finalize,
+        "_certify",
+        lambda *_args, **_kwargs: pytest.fail("certification must not start after cancellation"),
+    )
+
+    with pytest.raises(finalize.ProjectionCancelled):
+        finalize.compact_open_boundary_belts(
+            placement,
+            two_stage_spec(),
+            expect_power=False,
+            cancelled=cancelled,
+        )
+
+    assert checks == 12
