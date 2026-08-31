@@ -295,9 +295,9 @@ uv run mypy src/flab2bp/layout/freeform.py src/flab2bp/layout/route_feedback.py 
 - [ ] Record a before/after manifest of exact values for per-layout deadlines, Freeform arrangements and candidate-height cardinality, detailed/global expansion limits, SequencePair stage/move/archive/island limits, and search workers.
 - [ ] Run the deterministic focused regression set for every reported failure.
 - [ ] Run three paired frozen-baseline-then-candidate repetitions with `--jobs 1` for every supplied external `(URL, strategy, policy, requested band)` scenario at its unchanged budget; pair by repeat ordinal.
-- [ ] Run three paired baseline-then-candidate repetitions of `URL_CORPUS × 2 strategies × 3 policies` at budget 4 with 16 audit jobs: exactly 216 external requests per arm.
-- [ ] Require at least `99% CLEAN / 216`, zero `INVALID`, zero `CRASH`, no paired baseline-clean coverage loss, and no candidate identity loss.
-- [ ] Require every paired clean final-frame area ratio and the paired geometric mean to be at most 1.10. For refused baseline repetitions, report absolute candidate area without inventing a ratio.
+- [ ] Run three paired baseline-then-candidate repetitions of `URL_CORPUS × 2 strategies × 3 policies` at budget 15 with 16 audit jobs: exactly 216 external requests per arm.
+- [ ] Require 216/216 `CLEAN`, zero `INVALID`, zero `CRASH`, no paired baseline-clean coverage loss, and no candidate identity loss.
+- [ ] Require every paired clean final-frame area ratio and the paired geometric mean to be at most 1.10. Report any non-clean baseline repetition as absolute candidate area without inventing a ratio; every candidate repetition must still be `CLEAN`.
 - [ ] Require the work-bound manifest values to remain identical.
 - [ ] Run final static/full verification once:
 

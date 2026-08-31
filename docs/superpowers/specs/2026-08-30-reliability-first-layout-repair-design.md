@@ -208,12 +208,12 @@ Run three repetitions with one audit job for every supplied external `(URL, stra
 
 ### Corpus gate
 
-Run `URL_CORPUS × 2 strategies × 3 policies × 3 paired repetitions` at budget 4 with 16 audit jobs: 216 external layout requests per arm. Execute each baseline run immediately before its candidate run and pair by repeat ordinal. Require:
+Run `URL_CORPUS × 2 strategies × 3 policies × 3 paired repetitions` at budget 15 with 16 audit jobs: 216 external layout requests per arm. Execute each baseline run immediately before its candidate run and pair by repeat ordinal. Require:
 
-- at least 99% `CLEAN / 216`; `REFUSED`, `INVALID`, `CRASH`, and `NOT RUN` are non-clean;
+- exactly 216/216 `CLEAN` candidate requests; `REFUSED`, `INVALID`, `CRASH`, and `NOT RUN` are non-clean;
 - zero `INVALID` and `CRASH`;
 - no baseline-clean paired request loses coverage and no candidate identity disappears;
-- every paired final clean result has area ratio at most 1.10; paired geometric-mean area ratio is at most 1.10; previously refused baseline repetitions report absolute area;
+- every paired final clean result has area ratio at most 1.10; paired geometric-mean area ratio is at most 1.10; non-clean baseline repetitions report absolute candidate area while the paired candidate must still be `CLEAN`;
 
 ### Static and full-suite gate
 
