@@ -3630,7 +3630,7 @@ def test_admitted_feedback_retry_cannot_cascade_to_a_third_arrangement(
 
 
 
-def test_fifteen_strip_pack_uses_one_reproducible_solver_worker(
+def test_fifteen_strip_pack_uses_reproducible_solver_budget(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     base = plan_strips(two_stage_spec())
@@ -3641,10 +3641,15 @@ def test_fifteen_strip_pack_uses_one_reproducible_solver_worker(
         height=20,
         status="seed",
     )
-    seen_workers: list[int] = []
+    seen_solver_modes: list[tuple[int, bool]] = []
 
-    def pack(*_args: object, workers: int, **_kwargs: object) -> None:
-        seen_workers.append(workers)
+    def pack(
+        *_args: object,
+        workers: int,
+        deterministic: bool,
+        **_kwargs: object,
+    ) -> None:
+        seen_solver_modes.append((workers, deterministic))
         return None
 
     monkeypatch.setattr(
@@ -3662,7 +3667,7 @@ def test_fifteen_strip_pack_uses_one_reproducible_solver_worker(
     )._sweep(two_stage_spec(), strips, 1.0)
 
     assert result is None
-    assert seen_workers == [1]
+    assert seen_solver_modes == [(1, True)]
 
 
 def test_route_aware_height_order_preserves_exact_candidate_set(

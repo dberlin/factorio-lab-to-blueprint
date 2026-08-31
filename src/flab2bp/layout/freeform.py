@@ -302,6 +302,14 @@ _SINGLE_ROUND_NETS = 64
 #: portfolio.  Pin this structural size and larger so the seed actually names a
 #: reproducible candidate, independent of audit job allocation.
 _DETERMINISTIC_PACK_STRIPS = 15
+#: Fixed CP-SAT work for reproducible large-pack incumbents.  A wall-clock
+#: cutoff still raced at one worker: the authoritative fifteen-strip cell
+#: alternated between a clean width-48 packing and a width-47 packing whose
+#: routing failed exact validation.  0.02 deterministic units reaches the same
+#: routable incumbent well inside its 0.6s wall allowance; 0.005 stopped before
+#: that incumbent existed.  The wall limit remains armed as the hard deadline.
+_DETERMINISTIC_PACK_WORK = 0.02
+
 
 #: Rip-up rounds with no improvement in the failure count before giving up.
 #:
@@ -3208,6 +3216,7 @@ def _pack(
     time_budget_s: float,
     direct_candidates: Mapping[tuple[int, int], _DirectCandidate],
     workers: int,
+    deterministic: bool = False,
     seed: _Pack | None = None,
     arrangement: int = 0,
     projection_no_goods: tuple[ProjectionNoGood, ...] = (),
@@ -3627,6 +3636,15 @@ def _pack(
     # Determinism is load-bearing for the bake-off: multi-worker CP-SAT would
     # make the A-vs-B comparison noise rather than measurement.
     solver.parameters.num_search_workers = workers
+    if deterministic:
+        # A single CP-SAT worker removes portfolio races, but a wall-clock
+        # cutoff can still return a different incumbent under CPU contention.
+        # Deterministic time counts solver work instead, while the wall limit
+        # above remains the hard deadline if the machine cannot finish it.
+        solver.parameters.max_deterministic_time = min(
+            time_budget_s,
+            _DETERMINISTIC_PACK_WORK,
+        )
     # A FUNCTION of `arrangement`, never a clock or a counter: two runs of the
     # same sweep must ask for the same arrangements in the same order, or the
     # bake-off is comparing samples rather than strategies.
@@ -14495,6 +14513,7 @@ class FreeformLayout:
                     if len(strips) >= _DETERMINISTIC_PACK_STRIPS
                     else self.workers
                 ),
+                deterministic=len(strips) >= _DETERMINISTIC_PACK_STRIPS,
                 seed=seed,
                 arrangement=arrangement,
                 projection_no_goods=tuple(projection_no_goods),
