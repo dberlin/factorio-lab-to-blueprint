@@ -329,34 +329,7 @@ def test_the_snapshot_carries_the_ceiling_and_the_elapsed_time(
         builder.shutdown()
 
 
-@pytest.mark.parametrize(
-    ("options", "expected_total"),
-    [
-        (
-            Options(
-                url=URL,
-                strategy="freeform",
-                candidate_policies=(
-                    CandidatePolicy.NO_PROLIFERATOR,
-                    CandidatePolicy.OUTPUT_PRODUCTS,
-                ),
-            ),
-            2,
-        ),
-        (
-            Options(
-                url=URL,
-                strategy="freeform",
-                candidate_policies=DEFAULT_CANDIDATE_POLICIES,
-                flow="Recipes\nid,name\ngraphene,Graphene\n",
-            ),
-            1,
-        ),
-    ],
-)
-def test_progress_total_uses_the_effective_candidate_count(
-    options: Options,
-    expected_total: int,
+def test_progress_total_comes_from_the_pipeline(
     small_build: pipeline.Build,
 ) -> None:
     def solve(_options: Options, note: pipeline.ProgressSink) -> pipeline.Build:
@@ -373,9 +346,53 @@ def test_progress_total_uses_the_effective_candidate_count(
 
     builder = Builder(solve=solve)
     try:
-        snap = _settled(builder, builder.submit(options).id)
+        job = builder.submit(
+            Options(
+                url=URL,
+                strategy="freeform",
+                candidate_policies=(
+                    CandidatePolicy.NO_PROLIFERATOR,
+                    CandidatePolicy.OUTPUT_PRODUCTS,
+                ),
+            )
+        )
+        snap = _settled(builder, job.id)
         progress = _object(snap["progress"])
-        assert progress["total"] == expected_total
+        assert progress["total"] == 99
+    finally:
+        builder.shutdown()
+
+
+def test_filtered_pipeline_total_is_not_replaced_by_the_request_ceiling(
+    small_build: pipeline.Build,
+) -> None:
+    def solve(_options: Options, note: pipeline.ProgressSink) -> pipeline.Build:
+        note(
+            pipeline.AttemptProgress(
+                1,
+                1,
+                "surviving-candidate",
+                "freeform",
+                "started",
+            )
+        )
+        return small_build
+
+    builder = Builder(solve=solve)
+    try:
+        job = builder.submit(
+            Options(
+                url=URL,
+                strategy="freeform",
+                candidate_policies=(
+                    CandidatePolicy.NO_PROLIFERATOR,
+                    CandidatePolicy.OUTPUT_PRODUCTS,
+                ),
+            )
+        )
+        snap = _settled(builder, job.id)
+        progress = _object(snap["progress"])
+        assert progress["total"] == 1
     finally:
         builder.shutdown()
 

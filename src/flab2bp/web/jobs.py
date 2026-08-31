@@ -23,7 +23,7 @@ import uuid
 from collections import OrderedDict
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from typing import Literal
 from urllib.parse import urlsplit
 
@@ -379,15 +379,7 @@ class Builder:
             job.state = "running"
             job.started_at = time.monotonic()
 
-        expected_progress_total = job.options.effective_candidate_count * (
-            pipeline.PRODUCTION_STRATEGY_COUNT
-            if job.options.strategy == "best"
-            else 1
-        )
-
         def note(step: pipeline.AttemptProgress) -> None:
-            if step.total != expected_progress_total:
-                step = replace(step, total=expected_progress_total)
             # Called from the solve thread; a poll reads it from another.
             with job._lock:
                 job.progress = step
