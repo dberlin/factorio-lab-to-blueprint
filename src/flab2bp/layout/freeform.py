@@ -12218,6 +12218,14 @@ class FreeformLayout:
                 candidate_height: _greedy_pack(strips, candidate_height)
                 for candidate_height in heights
             }
+            # These proofs carry offsets, widths, or relation rows from the old
+            # strip geometry. Exact and projection cuts self-filter by outline or
+            # geometry signature; these do not, so retaining them can forbid a
+            # relation the widened strip just made feasible.
+            feedback_by_height.clear()
+            compact_width_by_height.clear()
+            direct_relation_no_goods.clear()
+            direct_relation_no_good_keys.clear()
 
         while candidate_index < len(candidate_packs):
             height, arrangement, projection_retry = candidate_packs[candidate_index]

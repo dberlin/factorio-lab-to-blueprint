@@ -3841,6 +3841,156 @@ def test_unaffordable_pitch_feedback_replans_later_base_height(
     assert seen_candidates == [(20, 0, 7), (21, 0, 8)]
 
 
+
+def test_geometry_replan_discards_feedback_width_and_direct_cuts_from_old_strips(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = projected_chemical_plant_spec()
+    strips = plan_strips(spec, strip_len=2)
+    failure = finalize.ProjectionFailure(
+        "geom.collide",
+        (0, 1),
+        "adjacent projected machines collide",
+        160,
+    )
+    routed = DetailedRouteResult(
+        status=DetailedRouteStatus.ROUTED,
+        routed=(),
+        failures=(),
+        iterations=0,
+        expansions=0,
+    )
+    old_pitch_cut = freeform._DirectRelationNoGood(
+        DirectInsertId(0, 1, "pitch-sensitive", CargoDomain.UNSPRAYED),
+        delta_x=7,
+        delta_y=0,
+    )
+    seen_pack_state: list[tuple[int, int, bool, bool]] = []
+
+    def greedy(current: list[Strip], height: int) -> freeform._Pack:
+        variant = current[0].physical_variant
+        assert variant is not None
+        width = 20 if variant.pitch_x == 7 else 40
+        return freeform._Pack(
+            at={0: (3, 4)},
+            width=width,
+            height=height,
+            status="greedy",
+        )
+
+    def pack_candidate(
+        current: list[Strip],
+        *,
+        height: int,
+        width_bound: int,
+        feedback: FeedbackState | None,
+        direct_relation_no_goods: tuple[object, ...],
+        **_kwargs: object,
+    ) -> freeform._Pack:
+        variant = current[0].physical_variant
+        assert variant is not None
+        seen_pack_state.append(
+            (
+                variant.pitch_x,
+                width_bound,
+                feedback is not None,
+                bool(direct_relation_no_goods),
+            )
+        )
+        return replace(
+            greedy(current, height),
+            status=f"pack-{len(seen_pack_state)}",
+        )
+
+    def build_candidate(
+        _spec: BuildSpec,
+        _strips: list[Strip],
+        pack: freeform._Pack,
+        **_kwargs: object,
+    ) -> _BuildResult:
+        if pack.status == "pack-1":
+            return _BuildResult(None, _feedback_bearing_routing(), ())
+        return _BuildResult(
+            Placement(buildings=(), stats={"belt_tiles": 0.0}),
+            routed,
+            (),
+        )
+
+    def pitch_requirement(
+        _placement: Placement,
+        current: list[Strip],
+        _failure: finalize.ProjectionFailure,
+    ) -> ProjectionPitchRequirement:
+        strip = current[0]
+        variant = strip.physical_variant
+        assert strip.family_id is not None
+        assert variant is not None
+        from flab2bp.layout.strip_variants import StripInstanceId
+
+        return ProjectionPitchRequirement(
+            family_id=strip.family_id,
+            instance_id=StripInstanceId(
+                strip.family_id,
+                strip.machine_start,
+                strip.machines,
+            ),
+            variant_id=variant.variant_id,
+            axis="x",
+            rejected_pitch=7,
+            required_pitch=8,
+            failure=failure,
+        )
+
+    finalizations = 0
+
+    def finalize_candidate(
+        placement: Placement,
+        _policy: BandPolicy,
+    ) -> Placement:
+        nonlocal finalizations
+        finalizations += 1
+        if finalizations == 1:
+            raise finalize.ProjectionRefusal((failure,))
+        return placement
+
+    monkeypatch.setattr(
+        freeform,
+        "_band_policy_candidate_heights",
+        lambda _strips, _policy: (20,),
+    )
+    monkeypatch.setattr(freeform, "_greedy_pack", greedy)
+    monkeypatch.setattr(freeform, "_pack", pack_candidate)
+    monkeypatch.setattr(freeform, "_build", build_candidate)
+    monkeypatch.setattr(
+        freeform,
+        "_proof_scoped_no_goods",
+        lambda *_args, **_kwargs: ((old_pitch_cut,), None),
+    )
+    monkeypatch.setattr(freeform, "_projection_pitch_requirement", pitch_requirement)
+    monkeypatch.setattr(
+        validate,
+        "certify",
+        lambda *_args, **_kwargs: validate.Report(findings=()),
+    )
+    monkeypatch.setattr(finalize, "finalize_placement", finalize_candidate)
+    monkeypatch.setattr(
+        freeform,
+        "_room_for_another",
+        lambda *_args, **_kwargs: True,
+    )
+
+    result = FreeformLayout(
+        band_policy=BandPolicy("portable"),
+        arrangements=2,
+    )._sweep(spec, strips, 1.0)
+
+    assert result is not None
+    assert seen_pack_state == [
+        (7, 40, False, False),
+        (7, 22, True, True),
+        (8, 80, False, False),
+    ]
+
 def test_projection_no_good_forbids_only_the_exact_failed_pair_context() -> None:
     strip = plan_strips(single_recipe_spec())[0]
     strips = [
