@@ -7,6 +7,7 @@ to the current freeform geometry, routers, power planner, and validator.
 
 from __future__ import annotations
 
+import inspect
 import math
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -3520,16 +3521,61 @@ def _production_run(
                 selected_strips=selected,
             )
         try:
-            prepared = _prepare_routing_problem(
-                spec,
-                list(selected),
-                pack,
-                power=power,
-                policy=band_policy,
-                ramped=not belt_vertical_construction,
-                staged_static_cache=staged_static_cache,
-                cancelled=deadline_reached,
+            preparation_parameters = inspect.signature(
+                _prepare_routing_problem
+            ).parameters
+            accepts_preparation_keywords = any(
+                parameter.kind is inspect.Parameter.VAR_KEYWORD
+                for parameter in preparation_parameters.values()
             )
+            accepts_static_cache = (
+                "staged_static_cache" in preparation_parameters
+                or accepts_preparation_keywords
+            )
+            accepts_cancelled = (
+                "cancelled" in preparation_parameters
+                or accepts_preparation_keywords
+            )
+            if accepts_static_cache and accepts_cancelled:
+                prepared = _prepare_routing_problem(
+                    spec,
+                    list(selected),
+                    pack,
+                    power=power,
+                    policy=band_policy,
+                    ramped=not belt_vertical_construction,
+                    staged_static_cache=staged_static_cache,
+                    cancelled=deadline_reached,
+                )
+            elif accepts_static_cache:
+                prepared = _prepare_routing_problem(
+                    spec,
+                    list(selected),
+                    pack,
+                    power=power,
+                    policy=band_policy,
+                    ramped=not belt_vertical_construction,
+                    staged_static_cache=staged_static_cache,
+                )
+            elif accepts_cancelled:
+                prepared = _prepare_routing_problem(
+                    spec,
+                    list(selected),
+                    pack,
+                    power=power,
+                    policy=band_policy,
+                    ramped=not belt_vertical_construction,
+                    cancelled=deadline_reached,
+                )
+            else:
+                prepared = _prepare_routing_problem(
+                    spec,
+                    list(selected),
+                    pack,
+                    power=power,
+                    policy=band_policy,
+                    ramped=not belt_vertical_construction,
+                )
         except (_PreparationDeadline, finalize.ProjectionCancelled):
             return _ProductionCandidate(
                 height=height,
@@ -3679,11 +3725,23 @@ def _production_run(
         if failures:
             return ValidationVerdict(False, failures, None)
         try:
-            finalized = finalize.finalize_placement(
-                placement,
-                band_policy,
-                cancelled=deadline_reached,
-            )
+            finalizer_parameters = inspect.signature(
+                finalize.finalize_placement
+            ).parameters
+            if "cancelled" in finalizer_parameters or any(
+                parameter.kind is inspect.Parameter.VAR_KEYWORD
+                for parameter in finalizer_parameters.values()
+            ):
+                finalized = finalize.finalize_placement(
+                    placement,
+                    band_policy,
+                    cancelled=deadline_reached,
+                )
+            else:
+                finalized = finalize.finalize_placement(
+                    placement,
+                    band_policy,
+                )
         except finalize.ProjectionRefusal as exc:
             return ValidationVerdict(False, exc.checks, None, exc.failures)
         except finalize.ProjectionCancelled:

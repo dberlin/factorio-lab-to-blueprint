@@ -9933,17 +9933,28 @@ def _prepare_routing_problem(
         for ports in strip_in_ports
         for port in ports.values()
     ):
-        coater_list = _place_coaters(
-            canvas,
-            spec,
-            strips,
-            strip_in_ports,
-            belt_id,
-            belt_model,
-            policy=policy,
-            staged_static_cache=staged_static_cache,
-            cancelled=cancelled,
-        )
+        if cancelled is None:
+            coater_list = _place_coaters(
+                canvas,
+                spec,
+                strips,
+                strip_in_ports,
+                belt_id,
+                belt_model,
+                policy=policy,
+            )
+        else:
+            coater_list = _place_coaters(
+                canvas,
+                spec,
+                strips,
+                strip_in_ports,
+                belt_id,
+                belt_model,
+                policy=policy,
+                staged_static_cache=staged_static_cache,
+                cancelled=cancelled,
+            )
     coaters = len(coater_list)
     for coater in coater_list:
         strip_of_belt[coater.supply_belt] = strip_of_belt[coater.host_belt]
@@ -10019,17 +10030,22 @@ def _prepare_routing_problem(
     # of the change: an unpowerable pack is infeasible, so it is refused here --
     # before a single belt is routed -- rather than emerging as a coverage
     # failure once the pack and the routing have both spent the ground.
-    power_sites = (
-        _power_plan(
+    if not power:
+        power_sites = []
+    elif cancelled is None:
+        power_sites = _power_plan(
+            canvas,
+            route_bounds,
+            policy=policy,
+        )
+    else:
+        power_sites = _power_plan(
             canvas,
             route_bounds,
             policy=policy,
             staged_static_cache=staged_static_cache,
             cancelled=cancelled,
         )
-        if power
-        else []
-    )
 
     # External-input nets retain the existing lane-deduplication and item
     # precedence, while exposing their shared boundary cells immutably.
@@ -11901,6 +11917,7 @@ class FreeformLayout:
         returned, which is why the heights most likely to pay off are tried
         first.
         """
+        cancelled = None if deadline is None else lambda: _expired(deadline)
         candidates = _direct_insert_candidates(spec)
         greedy = _greedy_pack(strips, _height_seed(strips))
         bound = max(greedy.width, max((w for w, _h in map(_box, strips)), default=1))
@@ -12538,11 +12555,23 @@ class FreeformLayout:
                     for finding in report.errors:
                         _retain_refusal(rejected, finding)
                 continue
+            if cancelled is not None and cancelled():
+                break
             try:
-                placement = finalize.finalize_placement(
-                    placement,
-                    self.band_policy,
+                placement = (
+                    finalize.finalize_placement(
+                        placement,
+                        self.band_policy,
+                    )
+                    if cancelled is None
+                    else finalize.finalize_placement(
+                        placement,
+                        self.band_policy,
+                        cancelled=cancelled,
+                    )
                 )
+            except finalize.ProjectionCancelled:
+                break
             except finalize.ProjectionRefusal as exc:
                 learned = False
                 requires_exact_pack_no_good = False
@@ -12654,6 +12683,8 @@ class FreeformLayout:
                         (height, arrangement, True),
                     )
                 continue
+            if cancelled is not None and cancelled():
+                break
             # Area, then belt count. Two packs of equal area are not equally
             # good: the one with fewer belt tiles is fewer buildings to paste,
             # and a direct insert shows up here as exactly that. Without the

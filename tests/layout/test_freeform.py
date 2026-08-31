@@ -2711,6 +2711,8 @@ def _sweep_after_first_routing(
     forbid_finalization: bool = False,
     heights: tuple[int, ...] = (20,),
     subsequent_routing: DetailedRouteResult | None = None,
+    deadline: float | None = None,
+    finalizer: Callable[..., Placement] | None = None,
 ) -> tuple[Placement | None, list[tuple[int, int]], list[freeform.PackAttempt]]:
     spec = two_stage_spec()
     strips = plan_strips(spec)
@@ -2782,15 +2784,50 @@ def _sweep_after_first_routing(
         monkeypatch.setattr(
             finalize,
             "finalize_placement",
-            lambda placement, _policy: placement,
+            finalizer
+            if finalizer is not None
+            else lambda placement, _policy: placement,
         )
 
     attempts: list[freeform.PackAttempt] = []
     result = FreeformLayout(
         band_policy=BandPolicy("portable"),
         arrangements=arrangements,
-    )._sweep(spec, strips, 1.0, attempts=attempts)
+    )._sweep(spec, strips, 1.0, deadline=deadline, attempts=attempts)
     return result, seen, attempts
+
+
+def test_sweep_cancellation_inside_finalization_cannot_install_best(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: list[Callable[[], bool]] = []
+
+    def cancel_finalization(
+        _placement: Placement,
+        _policy: BandPolicy,
+        *,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> None:
+        assert cancelled is not None
+        observed.append(cancelled)
+        raise finalize.ProjectionCancelled
+
+    result, _seen, _attempts = _sweep_after_first_routing(
+        monkeypatch,
+        DetailedRouteResult(
+            DetailedRouteStatus.ROUTED,
+            (),
+            (),
+            0,
+            0,
+        ),
+        arrangements=1,
+        deadline=time.monotonic() + 10.0,
+        finalizer=cancel_finalization,
+    )
+
+    assert observed
+    assert result is None
 
 
 def test_exact_one_net_feedback_admits_the_next_configured_arrangement(
