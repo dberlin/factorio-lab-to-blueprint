@@ -8402,6 +8402,65 @@ class _JunctionProjectionFrame:
     projections: tuple[planet.Projection, ...]
 
 
+type _FrameWitnessRank = tuple[int, int, int, int, int]
+
+
+@dataclass(frozen=True, slots=True)
+class _ReachableFrameInterval:
+    """One extent/candidate over its contiguous physical latitude offsets."""
+
+    rotated: bool
+    offset_lo: int
+    offset_hi: int
+    width: int
+    height: int
+    min_x_lo: int
+    min_y_lo: int
+    candidate_index: int
+    candidate: finalize.FrameCandidate
+
+    def ordering_key(self) -> _FrameWitnessRank:
+        """Legacy four-edge rank with the common offset term removed."""
+        padding = self.candidate.south_padding
+        if self.rotated:
+            return (
+                padding,
+                self.min_y_lo,
+                padding + self.width - 1,
+                self.min_y_lo + self.height - 1,
+                self.candidate_index,
+            )
+        return (
+            self.min_x_lo,
+            padding,
+            self.min_x_lo + self.width - 1,
+            padding + self.height - 1,
+            self.candidate_index,
+        )
+
+    def witness(
+        self,
+        offset: int,
+    ) -> tuple[tuple[int, int, int, int], _FrameWitnessRank]:
+        min_x = (
+            self.candidate.south_padding - offset
+            if self.rotated
+            else self.min_x_lo
+        )
+        min_y = (
+            self.min_y_lo
+            if self.rotated
+            else self.candidate.south_padding - offset
+        )
+        bounds = (
+            min_x,
+            min_y,
+            min_x + self.width - 1,
+            min_y + self.height - 1,
+        )
+        return bounds, (*bounds, self.candidate_index)
+
+
 @dataclass(slots=True)
 class _StagedStaticCache:
     """Attempt-local memoization of pure finalizer projection inputs."""
@@ -8487,14 +8546,14 @@ def _junction_projection_frames(
     *,
     cancelled: Callable[[], bool] | None = None,
 ) -> tuple[_JunctionProjectionFrame, ...]:
-    """Distinct physical frame transforms reachable inside ``limit``.
+    """Distinct physical frames in exact legacy first-encounter order.
 
     A finalizer transform depends on orientation and latitude offset only:
     longitude translation is a rigid rotation of the planet.  Width/height
-    still select the certified bands and projection anchors, so enumerate each
-    distinct extent once, then union those projection signatures over the
-    contiguous offsets at which that extent is reachable.  This replaces four
-    independently chosen rectangle edges with two extent dimensions.
+    still select certified bands and anchors, so each distinct extent is
+    enumerated once.  Every candidate covers a contiguous offset interval.
+    Offset disjoint sets choose the lexicographically first old four-edge
+    witness without enumerating its left/bottom/right/top combinations.
     """
     if cancelled is not None and cancelled():
         raise _PreparationDeadline
@@ -8511,21 +8570,10 @@ def _junction_projection_frames(
     limit_width = limit_max_x - limit_min_x + 1
     limit_height = limit_max_y - limit_min_y + 1
     by_segments = {band.area_segments: band for band in planet.bands()}
-    interval_specs: list[
-        tuple[
-            bool,
-            int,
-            int,
-            int,
-            int,
-            int,
-            int,
-            finalize.FrameCandidate,
-        ]
-    ] = []
+    intervals: list[_ReachableFrameInterval] = []
     projection_intervals: dict[
         tuple[bool, int, int, int, tuple[int, ...]],
-        None,
+        _ReachableFrameInterval,
     ] = {}
 
     for width in range(occupied_width, limit_width + 1):
@@ -8541,7 +8589,7 @@ def _junction_projection_frames(
                 height,
                 policy,
             )
-            for candidate in candidates:
+            for candidate_index, candidate in enumerate(candidates):
                 if cancelled is not None and cancelled():
                     raise _PreparationDeadline
                 rotated = candidate.frame.rotated
@@ -8550,53 +8598,42 @@ def _junction_projection_frames(
                     if rotated
                     else (min_y_lo, min_y_hi)
                 )
-                offset_lo = candidate.south_padding - coordinate_hi
-                offset_hi = candidate.south_padding - coordinate_lo
-                interval_specs.append(
-                    (
-                        rotated,
-                        offset_lo,
-                        offset_hi,
-                        width,
-                        height,
-                        min_x_lo,
-                        min_y_lo,
-                        candidate,
-                    )
+                interval = _ReachableFrameInterval(
+                    rotated=rotated,
+                    offset_lo=candidate.south_padding - coordinate_hi,
+                    offset_hi=candidate.south_padding - coordinate_lo,
+                    width=width,
+                    height=height,
+                    min_x_lo=min_x_lo,
+                    min_y_lo=min_y_lo,
+                    candidate_index=candidate_index,
+                    candidate=candidate,
                 )
-                projection_intervals.setdefault(
-                    (
-                        rotated,
-                        offset_lo,
-                        offset_hi,
-                        candidate.frame.height,
-                        candidate.frame.certified_bands,
-                    ),
-                    None,
+                intervals.append(interval)
+                projection_key = (
+                    rotated,
+                    interval.offset_lo,
+                    interval.offset_hi,
+                    candidate.frame.height,
+                    candidate.frame.certified_bands,
                 )
+                prior = projection_intervals.get(projection_key)
+                if (
+                    prior is None
+                    or interval.ordering_key() < prior.ordering_key()
+                ):
+                    projection_intervals[projection_key] = interval
 
-    # Assign one exact reachable representative to each physical transform.
-    # Interval-disjoint-set skipping means each offset is materialized once;
-    # already-covered intervals cost one near-constant `find`, not their span.
-    frame_specs: dict[
-        tuple[bool, int],
-        tuple[tuple[int, int, int, int], finalize.FrameCandidate],
-    ] = {}
     offset_ranges = {
         rotated: (
-            min(spec[1] for spec in interval_specs if spec[0] is rotated),
-            max(spec[2] for spec in interval_specs if spec[0] is rotated),
+            min(interval.offset_lo for interval in intervals if interval.rotated is rotated),
+            max(interval.offset_hi for interval in intervals if interval.rotated is rotated),
         )
         for rotated in (False, True)
-        if any(spec[0] is rotated for spec in interval_specs)
-    }
-    next_unassigned = {
-        rotated: list(range(upper - lower + 2))
-        for rotated, (lower, upper) in offset_ranges.items()
+        if any(interval.rotated is rotated for interval in intervals)
     }
 
-    def first_unassigned(rotated: bool, position: int) -> int:
-        following = next_unassigned[rotated]
+    def first_unassigned(following: list[int], position: int) -> int:
         root = position
         while following[root] != root:
             if cancelled is not None and cancelled():
@@ -8610,88 +8647,106 @@ def _junction_projection_frames(
             position = parent
         return root
 
-    for (
-        rotated,
-        offset_lo,
-        offset_hi,
-        width,
-        height,
-        min_x_lo,
-        min_y_lo,
-        candidate,
-    ) in interval_specs:
+    # Sorting by the offset-independent form of `(min_x, min_y, max_x,
+    # max_y, candidate_index)` makes the first interval covering each offset
+    # exactly the witness the old four nested edge loops encountered first.
+    frame_specs: dict[
+        tuple[bool, int],
+        tuple[tuple[int, int, int, int], finalize.FrameCandidate],
+    ] = {}
+    frame_ranks: dict[tuple[bool, int], _FrameWitnessRank] = {}
+    next_frame_offset = {
+        rotated: list(range(upper - lower + 2))
+        for rotated, (lower, upper) in offset_ranges.items()
+    }
+    for interval in sorted(intervals, key=_ReachableFrameInterval.ordering_key):
         if cancelled is not None and cancelled():
             raise _PreparationDeadline
-        base, _upper = offset_ranges[rotated]
-        position = first_unassigned(rotated, offset_lo - base)
-        stop = offset_hi - base
+        base, _upper = offset_ranges[interval.rotated]
+        following = next_frame_offset[interval.rotated]
+        position = first_unassigned(following, interval.offset_lo - base)
+        stop = interval.offset_hi - base
         while position <= stop:
             if cancelled is not None and cancelled():
                 raise _PreparationDeadline
             offset = base + position
-            min_x = (
-                candidate.south_padding - offset
-                if rotated
-                else min_x_lo
-            )
-            min_y = (
-                min_y_lo
-                if rotated
-                else candidate.south_padding - offset
-            )
-            frame_specs[(rotated, offset)] = (
-                (
-                    min_x,
-                    min_y,
-                    min_x + width - 1,
-                    min_y + height - 1,
-                ),
-                candidate,
-            )
-            following = next_unassigned[rotated]
-            following[position] = first_unassigned(rotated, position + 1)
+            bounds, rank = interval.witness(offset)
+            key = (interval.rotated, offset)
+            frame_specs[key] = (bounds, interval.candidate)
+            frame_ranks[key] = rank
+            following[position] = first_unassigned(following, position + 1)
             position = following[position]
 
-    projections_by_frame: dict[
+    # A projection has its own first witness because different extent
+    # signatures can contribute the same band/anchor.  Each projection-offset
+    # pair is assigned once, so this work is proportional to the exact emitted
+    # projection union rather than interval span times candidate count.
+    projection_ranks: dict[
         tuple[bool, int],
-        dict[tuple[int, int], None],
+        dict[tuple[int, int], tuple[int, ...]],
     ] = {key: {} for key in frame_specs}
-    for (
-        rotated,
-        offset_lo,
-        offset_hi,
-        frame_height,
-        certified_bands,
-    ) in projection_intervals:
+    next_projection_offset: dict[
+        tuple[bool, tuple[int, int]],
+        list[int],
+    ] = {}
+    ordered_projection_intervals = sorted(
+        projection_intervals.values(),
+        key=_ReachableFrameInterval.ordering_key,
+    )
+    for interval in ordered_projection_intervals:
         if cancelled is not None and cancelled():
             raise _PreparationDeadline
-        projection_keys: list[tuple[int, int]] = []
-        for segments in certified_bands:
+        base, upper = offset_ranges[interval.rotated]
+        for band_index, segments in enumerate(
+            interval.candidate.frame.certified_bands
+        ):
             if cancelled is not None and cancelled():
                 raise _PreparationDeadline
             band = by_segments[segments]
-            projection_keys.extend(
-                (segments, anchor)
-                for anchor in band.anchors(frame_height)
-            )
-        for offset in range(offset_lo, offset_hi + 1):
-            if cancelled is not None and cancelled():
-                raise _PreparationDeadline
-            frame_projections = projections_by_frame[(rotated, offset)]
-            for projection_key in projection_keys:
+            for anchor_index, anchor in enumerate(
+                band.anchors(interval.candidate.frame.height)
+            ):
                 if cancelled is not None and cancelled():
                     raise _PreparationDeadline
-                frame_projections.setdefault(projection_key, None)
+                projection_key = (segments, anchor)
+                state_key = (interval.rotated, projection_key)
+                following = next_projection_offset.get(state_key)
+                if following is None:
+                    following = list(range(upper - base + 2))
+                    next_projection_offset[state_key] = following
+                position = first_unassigned(
+                    following,
+                    interval.offset_lo - base,
+                )
+                stop = interval.offset_hi - base
+                while position <= stop:
+                    if cancelled is not None and cancelled():
+                        raise _PreparationDeadline
+                    offset = base + position
+                    _bounds, rank = interval.witness(offset)
+                    projection_ranks[(interval.rotated, offset)][
+                        projection_key
+                    ] = (*rank, band_index, anchor_index)
+                    following[position] = first_unassigned(
+                        following,
+                        position + 1,
+                    )
+                    position = following[position]
 
     frames: list[_JunctionProjectionFrame] = []
-    for key, (bounds, candidate) in frame_specs.items():
+    for key in sorted(frame_specs, key=frame_ranks.__getitem__):
         if cancelled is not None and cancelled():
             raise _PreparationDeadline
-        projections_list: list[planet.Projection] = []
-        for segments, anchor in projections_by_frame[key]:
+        bounds, candidate = frame_specs[key]
+        ordered_projections = sorted(
+            projection_ranks[key],
+            key=projection_ranks[key].__getitem__,
+        )
+        projections: list[planet.Projection] = []
+        for segments, anchor in ordered_projections:
             if cancelled is not None and cancelled():
                 raise _PreparationDeadline
-            projections_list.append(
+            projections.append(
                 planet.Projection(
                     band=by_segments[segments],
                     anchor_row=anchor,
@@ -8699,12 +8754,11 @@ def _junction_projection_frames(
                     radius=colliders.PLANET_RADIUS,
                 )
             )
-        projections = tuple(projections_list)
         frames.append(
             _JunctionProjectionFrame(
                 bounds=bounds,
                 candidate=candidate,
-                projections=projections,
+                projections=tuple(projections),
             )
         )
     if cancelled is not None and cancelled():

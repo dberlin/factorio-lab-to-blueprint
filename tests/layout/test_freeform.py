@@ -10,6 +10,7 @@ from __future__ import annotations
 import dataclasses
 import itertools
 import math
+import random
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
@@ -4646,7 +4647,7 @@ def _brute_junction_projection_frames(
     limit: tuple[int, int, int, int],
     policy: BandPolicy,
 ) -> tuple[freeform._JunctionProjectionFrame, ...]:
-    """Retained four-edge oracle for reachable prospective materializations."""
+    """Four-edge oracle deduplicated by physical transform at first encounter."""
     occupied_min_x, occupied_min_y, occupied_max_x, occupied_max_y = occupied
     limit_min_x, limit_min_y, limit_max_x, limit_max_y = limit
     by_segments = {band.area_segments: band for band in planet.bands()}
@@ -4655,15 +4656,15 @@ def _brute_junction_projection_frames(
         tuple[finalize.FrameCandidate, ...],
     ] = {}
     frame_specs: dict[
-        tuple[bool, int, int, int],
+        tuple[bool, int],
         tuple[tuple[int, int, int, int], finalize.FrameCandidate],
     ] = {}
     projections_by_frame: dict[
-        tuple[bool, int, int, int],
+        tuple[bool, int],
         dict[tuple[int, int], None],
     ] = {}
     projection_signatures_by_frame: dict[
-        tuple[bool, int, int, int],
+        tuple[bool, int],
         set[tuple[int, tuple[int, ...]]],
     ] = {}
     for min_x in range(limit_min_x, occupied_min_x + 1):
@@ -4683,11 +4684,10 @@ def _brute_junction_projection_frames(
                         candidates_by_extent[extent] = candidates
                     for candidate in candidates:
                         rotated = candidate.frame.rotated
+                        origin = min_x if rotated else min_y
                         key = (
                             rotated,
-                            height if rotated else 0,
-                            min_x if rotated else min_y,
-                            candidate.south_padding,
+                            candidate.south_padding - origin,
                         )
                         frame_specs.setdefault(
                             key,
@@ -4743,6 +4743,38 @@ def _physical_projection_frames(
     return {key: frozenset(value) for key, value in physical.items()}
 
 
+def _ordered_projection_frames(
+    frames: Sequence[freeform._JunctionProjectionFrame],
+) -> tuple[
+    tuple[
+        bool,
+        int,
+        tuple[int, int, int, int],
+        finalize.FrameCandidate,
+        tuple[tuple[int, int], ...],
+    ],
+    ...,
+]:
+    return tuple(
+        (
+            frame.candidate.frame.rotated,
+            frame.candidate.south_padding
+            - (
+                frame.bounds[0]
+                if frame.candidate.frame.rotated
+                else frame.bounds[1]
+            ),
+            frame.bounds,
+            frame.candidate,
+            tuple(
+                (projection.band.area_segments, projection.anchor_row)
+                for projection in frame.projections
+            ),
+        )
+        for frame in frames
+    )
+
+
 @pytest.mark.parametrize(
     ("occupied", "limit", "policy"),
     (
@@ -4756,15 +4788,52 @@ def test_junction_projection_frames_match_four_edge_brute_oracle(
     limit: tuple[int, int, int, int],
     policy: BandPolicy,
 ) -> None:
-    expected = _physical_projection_frames(
-        _brute_junction_projection_frames(occupied, limit, policy)
+    expected = _brute_junction_projection_frames(occupied, limit, policy)
+    actual = freeform._junction_projection_frames(occupied, limit, policy)
+
+    assert _ordered_projection_frames(actual) == _ordered_projection_frames(expected)
+
+
+def test_junction_projection_frames_preserve_legacy_first_witness() -> None:
+    frames = freeform._junction_projection_frames(
+        (0, 0, 0, 0),
+        (-1, -1, 1, 1),
+        BandPolicy("portable"),
     )
 
-    actual = _physical_projection_frames(
-        freeform._junction_projection_frames(occupied, limit, policy)
-    )
+    assert frames[0].bounds == (-1, -1, 0, 0)
 
-    assert actual == expected
+
+def test_junction_projection_frame_order_matches_random_small_brute_oracle() -> None:
+    randomizer = random.Random(0xF24A)
+    for _fixture in range(24):
+        min_x = randomizer.randrange(-2, 3)
+        min_y = randomizer.randrange(-2, 3)
+        occupied = (
+            min_x,
+            min_y,
+            min_x + randomizer.randrange(1, 4),
+            min_y + randomizer.randrange(1, 4),
+        )
+        left, bottom, right, top = (
+            randomizer.randrange(3) for _side in range(4)
+        )
+        limit = (
+            occupied[0] - left,
+            occupied[1] - bottom,
+            occupied[2] + right,
+            occupied[3] + top,
+        )
+        policy = BandPolicy(
+            randomizer.choice(("portable", "100"))
+        )
+
+        expected = _brute_junction_projection_frames(occupied, limit, policy)
+        actual = freeform._junction_projection_frames(occupied, limit, policy)
+
+        assert _ordered_projection_frames(actual) == _ordered_projection_frames(
+            expected
+        )
 
 
 def test_junction_projection_frame_work_grows_quadratically_not_quartically() -> None:
