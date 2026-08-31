@@ -61,6 +61,7 @@ rather than tidiness.
 from __future__ import annotations
 
 import heapq
+import inspect
 import math
 import time
 from collections import defaultdict
@@ -8503,9 +8504,15 @@ def _cached_cleanup_survivor_bounds(
         raise _PreparationDeadline
     bounds = cache.cleanup_bounds.get(buildings)
     if bounds is None:
-        bounds = finalize._cleanup_survivor_bounds(
-            Placement(buildings=buildings),
-            cancelled=cancelled,
+        bounds = (
+            finalize._cleanup_survivor_bounds(
+                Placement(buildings=buildings),
+            )
+            if cancelled is None
+            else finalize._cleanup_survivor_bounds(
+                Placement(buildings=buildings),
+                cancelled=cancelled,
+            )
         )
         if cancelled is not None and cancelled():
             raise _PreparationDeadline
@@ -8811,13 +8818,23 @@ def _prospective_static_failure(
                 )
                 pending_materialized[materialized_key] = materialized
             materialized_buildings.append((index, materialized))
-        failure = finalize.first_projected_static_failure(
-            materialized_buildings,
-            frame.projections,
-            _clean_contexts=cache.clean_contexts,
-            _box_cache=cache.boxes,
-            candidate_index=candidate_index,
-            cancelled=cancelled,
+        failure = (
+            finalize.first_projected_static_failure(
+                materialized_buildings,
+                frame.projections,
+                _clean_contexts=cache.clean_contexts,
+                _box_cache=cache.boxes,
+                candidate_index=candidate_index,
+            )
+            if cancelled is None
+            else finalize.first_projected_static_failure(
+                materialized_buildings,
+                frame.projections,
+                _clean_contexts=cache.clean_contexts,
+                _box_cache=cache.boxes,
+                candidate_index=candidate_index,
+                cancelled=cancelled,
+            )
         )
         cache.materialized.update(pending_materialized)
         if failure is not None:
@@ -9180,9 +9197,15 @@ def _power_projection_envelope(
     if cancelled is not None and cancelled():
         raise _PreparationDeadline
     occupied = _core_bounds(canvas)
-    cleanup_inner = finalize._cleanup_survivor_bounds(
-        Placement(buildings=tuple(canvas.buildings)),
-        cancelled=cancelled,
+    cleanup_inner = (
+        finalize._cleanup_survivor_bounds(
+            Placement(buildings=tuple(canvas.buildings)),
+        )
+        if cancelled is None
+        else finalize._cleanup_survivor_bounds(
+            Placement(buildings=tuple(canvas.buildings)),
+            cancelled=cancelled,
+        )
     )
     return _projection_envelope(
         cleanup_inner,
@@ -9424,10 +9447,17 @@ def _power_plan(
     for projection in projections:
         if cancelled is not None and cancelled():
             raise _PreparationDeadline
-        existing_failure = finalize.projected_power_failure(
-            power_nodes,
-            projection,
-            cancelled=cancelled,
+        existing_failure = (
+            finalize.projected_power_failure(
+                power_nodes,
+                projection,
+            )
+            if cancelled is None
+            else finalize.projected_power_failure(
+                power_nodes,
+                projection,
+                cancelled=cancelled,
+            )
         )
         if existing_failure is not None:
             raise _Unpowerable(
@@ -9592,10 +9622,17 @@ def _power_plan(
             for peer in power_nodes:
                 if cancelled is not None and cancelled():
                     raise _PreparationDeadline
-                candidate_failure = finalize.projected_power_failure(
-                    (peer, candidate),
-                    projection,
-                    cancelled=cancelled,
+                candidate_failure = (
+                    finalize.projected_power_failure(
+                        (peer, candidate),
+                        projection,
+                    )
+                    if cancelled is None
+                    else finalize.projected_power_failure(
+                        (peer, candidate),
+                        projection,
+                        cancelled=cancelled,
+                    )
                 )
                 if candidate_failure is not None:
                     break
@@ -12437,6 +12474,16 @@ class FreeformLayout:
         started_at: float | None = None
         candidate_index = 0
         staged_static_cache = _StagedStaticCache()
+        finalizer_parameters = inspect.signature(
+            finalize.finalize_placement
+        ).parameters
+        finalizer_accepts_cancelled = (
+            "cancelled" in finalizer_parameters
+            or any(
+                parameter.kind is inspect.Parameter.VAR_KEYWORD
+                for parameter in finalizer_parameters.values()
+            )
+        )
 
         def projection_retry_affordable() -> bool:
             current_candidate_s = (
@@ -12978,7 +13025,7 @@ class FreeformLayout:
                         placement,
                         self.band_policy,
                     )
-                    if cancelled is None
+                    if cancelled is None or not finalizer_accepts_cancelled
                     else finalize.finalize_placement(
                         placement,
                         self.band_policy,

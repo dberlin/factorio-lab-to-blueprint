@@ -2875,6 +2875,40 @@ def test_sweep_cancellation_inside_finalization_cannot_install_best(
     assert result is None
 
 
+def test_sweep_legacy_finalizer_crossing_deadline_cannot_install_best(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    expired = False
+    finalized: list[Placement] = []
+
+    def legacy_finalizer(
+        placement: Placement,
+        _policy: BandPolicy,
+    ) -> Placement:
+        nonlocal expired
+        finalized.append(placement)
+        expired = True
+        return placement
+
+    monkeypatch.setattr(freeform, "_expired", lambda _deadline: expired)
+    result, _seen, _attempts = _sweep_after_first_routing(
+        monkeypatch,
+        DetailedRouteResult(
+            DetailedRouteStatus.ROUTED,
+            (),
+            (),
+            0,
+            0,
+        ),
+        arrangements=1,
+        deadline=time.monotonic() + 10.0,
+        finalizer=legacy_finalizer,
+    )
+
+    assert finalized
+    assert result is None
+
+
 def test_exact_one_net_feedback_admits_the_next_configured_arrangement(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -4962,6 +4996,43 @@ def test_cleanup_survivor_cache_is_scoped_to_complete_candidate_geometry(
         cancelled=lambda: False,
     ) == (2, 0, 2, 0)
     assert calls == [first, second]
+
+
+def test_cleanup_survivor_cache_omits_none_for_legacy_callback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    machine = catalog.building(2303)
+    buildings = (
+        PlacedBuilding(
+            2303,
+            machine.model_index,
+            2,
+            3,
+            width=machine.width,
+            height=machine.height,
+        ),
+    )
+    calls: list[Placement] = []
+
+    def legacy_survivor_bounds(
+        placement: Placement,
+    ) -> tuple[int, int, int, int]:
+        calls.append(placement)
+        return placement.bounds
+
+    monkeypatch.setattr(
+        finalize,
+        "_cleanup_survivor_bounds",
+        legacy_survivor_bounds,
+    )
+
+    bounds = freeform._cached_cleanup_survivor_bounds(
+        freeform._StagedStaticCache(),
+        buildings,
+    )
+
+    assert bounds == Placement(buildings=buildings).bounds
+    assert len(calls) == 1
 
 
 def test_prospective_projection_matches_finalizer_for_exact_ownerless_pair() -> None:
