@@ -537,25 +537,17 @@ def _is_machine_building(building: PlacedBuilding) -> bool:
     )
 
 
-def projection_pitch_requirement(
+type _ProjectionMachineKey = tuple[int, str | int, int, float, int, int]
+
+
+def projection_pitch_requirements(
     placement: Placement,
     *,
     instance_ids: tuple[StripInstanceId, ...],
     variants: tuple[StripVariant, ...],
-    failure: ProjectionFailure,
-) -> ProjectionPitchRequirement | None:
-    """Map exact adjacent-machine collision evidence to one typed X requirement."""
-    if failure.check != "geom.collide" or not isinstance(failure.buildings, tuple):
-        return None
-    indices = failure.buildings
-    building_count = len(placement.buildings)
-    if (
-        len(indices) != 2
-        or indices[0] == indices[1]
-        or any(type(index) is not int for index in indices)
-        or any(not 0 <= index < building_count for index in indices)
-    ):
-        return None
+    failures: tuple[ProjectionFailure, ...],
+) -> tuple[ProjectionPitchRequirement | None, ...]:
+    """Map an ordered batch of collisions through one exact placement index."""
     if (
         not isinstance(instance_ids, tuple)
         or not isinstance(variants, tuple)
@@ -570,73 +562,137 @@ def projection_pitch_requirement(
             for instance_id, variant in zip(instance_ids, variants, strict=True)
         )
     ):
-        return None
+        return (None,) * len(failures)
 
-    left = placement.buildings[indices[0]]
-    right = placement.buildings[indices[1]]
-    owner = left.owner_strip
-    if (
-        type(owner) is not int
-        or type(right.owner_strip) is not int
-        or right.owner_strip != owner
-        or not 0 <= owner < len(instance_ids)
-    ):
-        return None
-    instance_id = instance_ids[owner]
-    variant = variants[owner]
-    if (
-        not _is_machine_building(left)
-        or not _is_machine_building(right)
-        or (left.item_id, left.model_index, left.yaw)
-        != (right.item_id, right.model_index, right.yaw)
-        or left.yaw != variant.yaw
-        or (left.width, left.height)
-        != (variant.footprint_width, variant.footprint_height)
-        or (right.width, right.height)
-        != (variant.footprint_width, variant.footprint_height)
-        or abs(left.x - right.x) != variant.pitch_x
-    ):
-        return None
+    machine_flags: list[bool] = []
+    positions_by_key: dict[_ProjectionMachineKey, set[tuple[int, int]]] = {}
+    for building in placement.buildings:
+        is_machine = _is_machine_building(building)
+        machine_flags.append(is_machine)
+        owner = building.owner_strip
+        if not is_machine or type(owner) is not int or not 0 <= owner < len(variants):
+            continue
+        key = (
+            owner,
+            building.item_id,
+            building.model_index,
+            building.yaw,
+            building.width,
+            building.height,
+        )
+        positions_by_key.setdefault(key, set()).add((building.x, building.y))
 
-    owned_positions = {
-        (building.x, building.y)
-        for building in placement.buildings
-        if building.owner_strip == owner
-        and _is_machine_building(building)
-        and (building.item_id, building.model_index, building.yaw)
-        == (left.item_id, left.model_index, left.yaw)
-        and (building.width, building.height)
-        == (variant.footprint_width, variant.footprint_height)
-    }
-    if len(owned_positions) != len(variant.machine_origins_x):
-        return None
-    local_origin_x = variant.machine_origins_x[0]
-    placed_origin_x, placed_origin_y = min(owned_positions)
-    translation_x = placed_origin_x - local_origin_x
-    translation_y = placed_origin_y - variant.lane_plan.machine_row
-    ordinals = {
-        (
-            translation_x + origin_x,
-            translation_y + variant.lane_plan.machine_row,
-        ): ordinal
-        for ordinal, origin_x in enumerate(variant.machine_origins_x)
-    }
-    if (
-        ordinals.keys() != owned_positions
-        or (left.x, left.y) not in ordinals
-        or (right.x, right.y) not in ordinals
-        or abs(ordinals[(left.x, left.y)] - ordinals[(right.x, right.y)]) != 1
-    ):
-        return None
-    return ProjectionPitchRequirement(
-        family_id=instance_id.family_id,
-        instance_id=instance_id,
-        variant_id=variant.variant_id,
-        axis="x",
-        rejected_pitch=variant.pitch_x,
-        required_pitch=variant.pitch_x + 1,
-        failure=failure,
-    )
+    ordinals_by_key: dict[_ProjectionMachineKey, dict[tuple[int, int], int]] = {}
+    for key, owned_positions in positions_by_key.items():
+        owner, _item_id, _model_index, yaw, width, height = key
+        variant = variants[owner]
+        if (
+            yaw != variant.yaw
+            or (width, height)
+            != (variant.footprint_width, variant.footprint_height)
+            or len(owned_positions) != len(variant.machine_origins_x)
+        ):
+            continue
+        local_origin_x = variant.machine_origins_x[0]
+        placed_origin_x, placed_origin_y = min(owned_positions)
+        translation_x = placed_origin_x - local_origin_x
+        translation_y = placed_origin_y - variant.lane_plan.machine_row
+        ordinals = {
+            (
+                translation_x + origin_x,
+                translation_y + variant.lane_plan.machine_row,
+            ): ordinal
+            for ordinal, origin_x in enumerate(variant.machine_origins_x)
+        }
+        if ordinals.keys() == owned_positions:
+            ordinals_by_key[key] = ordinals
+
+    requirements: list[ProjectionPitchRequirement | None] = []
+    building_count = len(placement.buildings)
+    for failure in failures:
+        if failure.check != "geom.collide" or not isinstance(failure.buildings, tuple):
+            requirements.append(None)
+            continue
+        indices = failure.buildings
+        if (
+            len(indices) != 2
+            or indices[0] == indices[1]
+            or any(type(index) is not int for index in indices)
+            or any(not 0 <= index < building_count for index in indices)
+        ):
+            requirements.append(None)
+            continue
+
+        left = placement.buildings[indices[0]]
+        right = placement.buildings[indices[1]]
+        owner = left.owner_strip
+        if (
+            type(owner) is not int
+            or type(right.owner_strip) is not int
+            or right.owner_strip != owner
+            or not 0 <= owner < len(instance_ids)
+            or not machine_flags[indices[0]]
+            or not machine_flags[indices[1]]
+        ):
+            requirements.append(None)
+            continue
+        instance_id = instance_ids[owner]
+        variant = variants[owner]
+        key = (
+            owner,
+            left.item_id,
+            left.model_index,
+            left.yaw,
+            left.width,
+            left.height,
+        )
+        ordinals = ordinals_by_key.get(key)
+        left_position = (left.x, left.y)
+        right_position = (right.x, right.y)
+        if (
+            (left.item_id, left.model_index, left.yaw)
+            != (right.item_id, right.model_index, right.yaw)
+            or left.yaw != variant.yaw
+            or (left.width, left.height)
+            != (variant.footprint_width, variant.footprint_height)
+            or (right.width, right.height)
+            != (variant.footprint_width, variant.footprint_height)
+            or abs(left.x - right.x) != variant.pitch_x
+            or ordinals is None
+            or left_position not in ordinals
+            or right_position not in ordinals
+            or abs(ordinals[left_position] - ordinals[right_position]) != 1
+        ):
+            requirements.append(None)
+            continue
+        requirements.append(
+            ProjectionPitchRequirement(
+                family_id=instance_id.family_id,
+                instance_id=instance_id,
+                variant_id=variant.variant_id,
+                axis="x",
+                rejected_pitch=variant.pitch_x,
+                required_pitch=variant.pitch_x + 1,
+                failure=failure,
+            )
+        )
+    return tuple(requirements)
+
+
+def projection_pitch_requirement(
+    placement: Placement,
+    *,
+    instance_ids: tuple[StripInstanceId, ...],
+    variants: tuple[StripVariant, ...],
+    failure: ProjectionFailure,
+) -> ProjectionPitchRequirement | None:
+    """Map one collision through the same exact indexed batch implementation."""
+    return projection_pitch_requirements(
+        placement,
+        instance_ids=instance_ids,
+        variants=variants,
+        failures=(failure,),
+    )[0]
 
 
 def placement_geometry(machine_item_id: str | int, yaw: float) -> MachinePlacementGeometry:
@@ -1356,6 +1412,7 @@ __all__ = [
     "partition_strip_variant",
     "placement_geometry",
     "projection_pitch_requirement",
+    "projection_pitch_requirements",
     "split_strip_instance",
     "strip_pose_id",
     "validate_instance_partition",

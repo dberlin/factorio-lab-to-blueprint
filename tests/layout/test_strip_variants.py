@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import fields, replace
 from fractions import Fraction
 from itertools import combinations_with_replacement
+import random
 from typing import ClassVar
 
 import pytest
@@ -14,6 +15,7 @@ from flab2bp.layout import slots
 from flab2bp.layout.base import PlacedBuilding, Placement
 from flab2bp.layout.finalize import ProjectionFailure
 from flab2bp.layout.freeform import plan_strips
+import flab2bp.layout.strip_variants as strip_variants_module
 from flab2bp.layout.strip_variants import (
     CargoDomain,
     LogicalLane,
@@ -627,6 +629,270 @@ def test_projection_pitch_origin_matching_has_linear_structural_growth() -> None
     assert large_count <= 128 * 10
     assert brute_large_count >= brute_small_count * 12
     assert brute_large_count >= 2 * 128**2
+
+class _VariantScanCounter(tuple):
+    scans: ClassVar[int] = 0
+
+    def __iter__(self):  # type: ignore[no-untyped-def]
+        for variant in super().__iter__():
+            type(self).scans += 1
+            yield variant
+
+
+def _batch_projection_requirements(
+    placement: Placement,
+    instance_ids: tuple[StripInstanceId, ...],
+    variants: tuple[StripVariant, ...],
+    failures: tuple[ProjectionFailure, ...],
+) -> tuple[ProjectionPitchRequirement | None, ...]:
+    mapper = getattr(
+        strip_variants_module,
+        "projection_pitch_requirements",
+        None,
+    )
+    if mapper is not None:
+        return mapper(
+            placement,
+            instance_ids=instance_ids,
+            variants=variants,
+            failures=failures,
+        )
+    return tuple(
+        projection_pitch_requirement(
+            placement,
+            instance_ids=instance_ids,
+            variants=variants,
+            failure=failure,
+        )
+        for failure in failures
+    )
+
+
+def _projection_batch_scan_counts(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    failure_count: int,
+) -> tuple[int, int, int, int]:
+    family = _family(_single_machine_spec("chemical-plant", count=32))
+    instances = partition_strip_family(family, max_machine_count=2)
+    variants = _VariantScanCounter(instance.variant for instance in instances)
+    buildings = tuple(
+        _projection_machine(
+            instance.variant,
+            x=13 + owner * 30 + origin_x,
+            y=17 + owner * 10 + instance.variant.lane_plan.machine_row,
+            owner=owner,
+        )
+        for owner, instance in enumerate(instances)
+        for origin_x in instance.variant.machine_origins_x
+    )
+    failures = tuple(
+        ProjectionFailure(
+            "geom.collide",
+            (index % 2, 1 - index % 2),
+            "build colliders intersect",
+            160,
+        )
+        for index in range(failure_count)
+    )
+    machine_checks = 0
+    original_is_machine = strip_variants_module._is_machine_building
+
+    def count_machine(building: PlacedBuilding) -> bool:
+        nonlocal machine_checks
+        machine_checks += 1
+        return original_is_machine(building)
+
+    monkeypatch.setattr(
+        strip_variants_module,
+        "_is_machine_building",
+        count_machine,
+    )
+    _VariantScanCounter.scans = 0
+    requirements = _batch_projection_requirements(
+        Placement(buildings=buildings),
+        tuple(instance.instance_id for instance in instances),
+        variants,
+        failures,
+    )
+
+    assert tuple(requirement.failure for requirement in requirements if requirement) == failures
+    return len(instances), len(buildings), _VariantScanCounter.scans, machine_checks
+
+
+def test_projection_failure_batch_indexes_variants_and_buildings_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    small = _projection_batch_scan_counts(monkeypatch, failure_count=8)
+    large = _projection_batch_scan_counts(monkeypatch, failure_count=16)
+
+    small_strips, small_buildings, small_variant_scans, small_machine_checks = small
+    large_strips, large_buildings, large_variant_scans, large_machine_checks = large
+    assert (small_strips, small_buildings) == (large_strips, large_buildings)
+    assert (small_variant_scans, large_variant_scans) == (
+        small_strips,
+        large_strips,
+    )
+    assert (small_machine_checks, large_machine_checks) == (
+        small_buildings,
+        large_buildings,
+    )
+
+
+def test_projection_failure_batch_preserves_duplicate_reversed_and_unrelated_order() -> None:
+    family = _family(_single_machine_spec("chemical-plant", count=4))
+    instances = partition_strip_family(family, max_machine_count=2)
+    buildings = tuple(
+        _projection_machine(
+            instance.variant,
+            x=13 + owner * 30 + origin_x,
+            y=17 + owner * 10 + instance.variant.lane_plan.machine_row,
+            owner=owner,
+        )
+        for owner, instance in enumerate(instances)
+        for origin_x in instance.variant.machine_origins_x
+    )
+    forward = ProjectionFailure(
+        "geom.collide",
+        (0, 1),
+        "build colliders intersect",
+        160,
+    )
+    duplicate = replace(forward)
+    reversed_pair = replace(forward, buildings=(1, 0))
+    cross_strip = replace(forward, buildings=(1, 2))
+    unrelated = replace(forward, check="game.power_too_close")
+    other_strip = replace(forward, buildings=(2, 3))
+    failures = (
+        forward,
+        duplicate,
+        reversed_pair,
+        cross_strip,
+        unrelated,
+        other_strip,
+    )
+
+    requirements = _batch_projection_requirements(
+        Placement(buildings=buildings),
+        tuple(instance.instance_id for instance in instances),
+        tuple(instance.variant for instance in instances),
+        failures,
+    )
+
+    assert tuple(
+        None
+        if requirement is None
+        else (
+            requirement.instance_id,
+            requirement.variant_id,
+            requirement.failure,
+        )
+        for requirement in requirements
+    ) == (
+        (instances[0].instance_id, instances[0].variant_id, forward),
+        (instances[0].instance_id, instances[0].variant_id, duplicate),
+        (instances[0].instance_id, instances[0].variant_id, reversed_pair),
+        None,
+        None,
+        (instances[1].instance_id, instances[1].variant_id, other_strip),
+    )
+
+
+def test_projection_failure_batch_matches_randomized_small_scanning_oracle() -> None:
+    rng = random.Random(0xF1AB2)
+    for machine_count in range(2, 6):
+        family = _family(
+            _single_machine_spec("chemical-plant", count=machine_count)
+        )
+        variant = default_strip_variant(family)
+        (instance,) = partition_strip_family(
+            family,
+            max_machine_count=machine_count,
+        )
+        candidates = tuple(
+            (
+                13 + offset * variant.pitch_x,
+                17 + row_offset + variant.lane_plan.machine_row,
+            )
+            for offset in range(-1, machine_count + 1)
+            for row_offset in (0, 1)
+        )
+        for _case in range(32):
+            positions = tuple(rng.choice(candidates) for _ in range(machine_count))
+            placement = Placement(
+                buildings=tuple(
+                    _projection_machine(variant, x=x, y=y)
+                    for x, y in positions
+                )
+            )
+            pairs = tuple(
+                (rng.randrange(machine_count), rng.randrange(machine_count))
+                for _ in range(8)
+            )
+            first = ProjectionFailure(
+                "geom.collide",
+                pairs[0],
+                "build colliders intersect",
+                160,
+            )
+            failures = (
+                first,
+                replace(first),
+                replace(first, buildings=tuple(reversed(pairs[0]))),
+                replace(first, check="game.power_too_close"),
+                *(
+                    replace(first, buildings=pair)
+                    for pair in pairs[1:]
+                ),
+            )
+            owned_positions = set(positions)
+            expected: list[ProjectionPitchRequirement | None] = []
+            for failure in failures:
+                indices = failure.buildings
+                ordinals = (
+                    _brute_force_projection_origin_ordinals(
+                        variant.machine_origins_x,
+                        owned_positions,
+                        anchor=positions[indices[0]],
+                        machine_row=variant.lane_plan.machine_row,
+                    )
+                    if failure.check == "geom.collide"
+                    and len(indices) == 2
+                    and indices[0] != indices[1]
+                    else None
+                )
+                matches = (
+                    ordinals is not None
+                    and abs(positions[indices[0]][0] - positions[indices[1]][0])
+                    == variant.pitch_x
+                    and positions[indices[0]] in ordinals
+                    and positions[indices[1]] in ordinals
+                    and abs(
+                        ordinals[positions[indices[0]]]
+                        - ordinals[positions[indices[1]]]
+                    )
+                    == 1
+                )
+                expected.append(
+                    ProjectionPitchRequirement(
+                        family_id=instance.family_id,
+                        instance_id=instance.instance_id,
+                        variant_id=variant.variant_id,
+                        axis="x",
+                        rejected_pitch=variant.pitch_x,
+                        required_pitch=variant.pitch_x + 1,
+                        failure=failure,
+                    )
+                    if matches
+                    else None
+                )
+
+            assert _batch_projection_requirements(
+                placement,
+                (instance.instance_id,),
+                (variant,),
+                failures,
+            ) == tuple(expected)
 
 
 

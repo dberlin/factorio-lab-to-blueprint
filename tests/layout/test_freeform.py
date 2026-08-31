@@ -3832,10 +3832,10 @@ def test_freeform_owner_adapter_uses_realized_strip_variant(
     placement, instance, ordinary, failure = projected_chemical_plant_collision
     strips = plan_strips(projected_chemical_plant_spec(), strip_len=2)
 
-    requirement = freeform._projection_pitch_requirement(
+    (requirement,) = freeform._projection_pitch_requirements(
         placement,
         strips,
-        failure,
+        (failure,),
     )
 
     assert requirement == ProjectionPitchRequirement(
@@ -3902,12 +3902,13 @@ def _sweep_with_pitch_feedback(
             (),
         )
 
-    def pitch_requirement(
+    def pitch_requirements(
         _placement: Placement,
         current_strips: list[Strip],
-        _failure: finalize.ProjectionFailure,
-    ) -> ProjectionPitchRequirement | None:
+        failures: tuple[finalize.ProjectionFailure, ...],
+    ) -> tuple[ProjectionPitchRequirement | None, ...]:
         nonlocal feedback_index
+        assert len(failures) == 1
         required_pitch = required_pitches[feedback_index]
         feedback_index += 1
         strip = current_strips[0]
@@ -3921,14 +3922,16 @@ def _sweep_with_pitch_feedback(
             strip.machine_start,
             strip.machines,
         )
-        return ProjectionPitchRequirement(
-            family_id=strip.family_id,
-            instance_id=instance_id,
-            variant_id=physical_variant.variant_id,
-            axis="x",
-            rejected_pitch=required_pitch - 1,
-            required_pitch=required_pitch,
-            failure=failure,
+        return (
+            ProjectionPitchRequirement(
+                family_id=strip.family_id,
+                instance_id=instance_id,
+                variant_id=physical_variant.variant_id,
+                axis="x",
+                rejected_pitch=required_pitch - 1,
+                required_pitch=required_pitch,
+                failure=failures[0],
+            ),
         )
 
     def finalize_candidate(
@@ -3945,7 +3948,11 @@ def _sweep_with_pitch_feedback(
     monkeypatch.setattr(freeform, "_greedy_pack", lambda _strips, _height: pack)
     monkeypatch.setattr(freeform, "_pack", pack_candidate)
     monkeypatch.setattr(freeform, "_build", build_candidate)
-    monkeypatch.setattr(freeform, "_projection_pitch_requirement", pitch_requirement)
+    monkeypatch.setattr(
+        freeform,
+        "_projection_pitch_requirements",
+        pitch_requirements,
+    )
     monkeypatch.setattr(
         validate,
         "certify",
@@ -4085,29 +4092,32 @@ def test_unaffordable_pitch_feedback_replans_later_base_height(
             (),
         )
 
-    def pitch_requirement(
+    def pitch_requirements(
         _placement: Placement,
         current: list[Strip],
-        _failure: finalize.ProjectionFailure,
-    ) -> ProjectionPitchRequirement:
+        failures: tuple[finalize.ProjectionFailure, ...],
+    ) -> tuple[ProjectionPitchRequirement, ...]:
+        assert len(failures) == 1
         strip = current[0]
         variant = strip.physical_variant
         assert strip.family_id is not None
         assert variant is not None
         from flab2bp.layout.strip_variants import StripInstanceId
 
-        return ProjectionPitchRequirement(
-            family_id=strip.family_id,
-            instance_id=StripInstanceId(
-                strip.family_id,
-                strip.machine_start,
-                strip.machines,
+        return (
+            ProjectionPitchRequirement(
+                family_id=strip.family_id,
+                instance_id=StripInstanceId(
+                    strip.family_id,
+                    strip.machine_start,
+                    strip.machines,
+                ),
+                variant_id=variant.variant_id,
+                axis="x",
+                rejected_pitch=7,
+                required_pitch=8,
+                failure=failures[0],
             ),
-            variant_id=variant.variant_id,
-            axis="x",
-            rejected_pitch=7,
-            required_pitch=8,
-            failure=failure,
         )
 
     def finalize_candidate(
@@ -4125,7 +4135,11 @@ def test_unaffordable_pitch_feedback_replans_later_base_height(
     )
     monkeypatch.setattr(freeform, "_pack", pack_candidate)
     monkeypatch.setattr(freeform, "_build", build_candidate)
-    monkeypatch.setattr(freeform, "_projection_pitch_requirement", pitch_requirement)
+    monkeypatch.setattr(
+        freeform,
+        "_projection_pitch_requirements",
+        pitch_requirements,
+    )
     monkeypatch.setattr(
         validate,
         "certify",
@@ -4223,29 +4237,32 @@ def test_geometry_replan_discards_feedback_width_and_direct_cuts_from_old_strips
             (),
         )
 
-    def pitch_requirement(
+    def pitch_requirements(
         _placement: Placement,
         current: list[Strip],
-        _failure: finalize.ProjectionFailure,
-    ) -> ProjectionPitchRequirement:
+        failures: tuple[finalize.ProjectionFailure, ...],
+    ) -> tuple[ProjectionPitchRequirement, ...]:
+        assert len(failures) == 1
         strip = current[0]
         variant = strip.physical_variant
         assert strip.family_id is not None
         assert variant is not None
         from flab2bp.layout.strip_variants import StripInstanceId
 
-        return ProjectionPitchRequirement(
-            family_id=strip.family_id,
-            instance_id=StripInstanceId(
-                strip.family_id,
-                strip.machine_start,
-                strip.machines,
+        return (
+            ProjectionPitchRequirement(
+                family_id=strip.family_id,
+                instance_id=StripInstanceId(
+                    strip.family_id,
+                    strip.machine_start,
+                    strip.machines,
+                ),
+                variant_id=variant.variant_id,
+                axis="x",
+                rejected_pitch=7,
+                required_pitch=8,
+                failure=failures[0],
             ),
-            variant_id=variant.variant_id,
-            axis="x",
-            rejected_pitch=7,
-            required_pitch=8,
-            failure=failure,
         )
 
     finalizations = 0
@@ -4273,7 +4290,11 @@ def test_geometry_replan_discards_feedback_width_and_direct_cuts_from_old_strips
         "_proof_scoped_no_goods",
         lambda *_args, **_kwargs: ((old_pitch_cut,), None),
     )
-    monkeypatch.setattr(freeform, "_projection_pitch_requirement", pitch_requirement)
+    monkeypatch.setattr(
+        freeform,
+        "_projection_pitch_requirements",
+        pitch_requirements,
+    )
     monkeypatch.setattr(
         validate,
         "certify",
@@ -5888,8 +5909,8 @@ def _sweep_with_repeated_exact_feedback(
     monkeypatch.setattr(freeform, "_build", build_or_refuse)
     monkeypatch.setattr(
         freeform,
-        "_projection_pitch_requirement",
-        lambda *_args, **_kwargs: None,
+        "_projection_pitch_requirements",
+        lambda _placement, _strips, failures: (None,) * len(failures),
     )
     monkeypatch.setattr(
         finalize,

@@ -2900,22 +2900,22 @@ def _projection_no_good(
     )
 
 
-def _projection_pitch_requirement(
+def _projection_pitch_requirements(
     placement: Placement,
     strips: list[Strip],
-    failure: finalize.ProjectionFailure,
-) -> ProjectionPitchRequirement | None:
-    """Map Freeform owner indices through their exact realized strip records."""
+    failures: tuple[finalize.ProjectionFailure, ...],
+) -> tuple[ProjectionPitchRequirement | None, ...]:
+    """Map ordered Freeform failures through one realized-strip placement index."""
     from flab2bp.layout.strip_variants import (
         StripInstanceId,
-        projection_pitch_requirement,
+        projection_pitch_requirements,
     )
 
     instance_ids: list[StripInstanceId] = []
     variants: list[StripVariant] = []
     for strip in strips:
         if strip.family_id is None or strip.physical_variant is None:
-            return None
+            return (None,) * len(failures)
         instance_ids.append(
             StripInstanceId(
                 strip.family_id,
@@ -2924,11 +2924,11 @@ def _projection_pitch_requirement(
             )
         )
         variants.append(strip.physical_variant)
-    return projection_pitch_requirement(
+    return projection_pitch_requirements(
         placement,
         instance_ids=tuple(instance_ids),
         variants=tuple(variants),
-        failure=failure,
+        failures=failures,
     )
 
 
@@ -13434,7 +13434,33 @@ class FreeformLayout:
                 exact_projection_pair: ExactProjectionPair | None = None
                 geometry_learned = False
                 exact_retry_evidence: _ExactRetryEvidence | None = None
-                for failure in exc.failures:
+                pitch_requirements = _projection_pitch_requirements(
+                    placement,
+                    strips,
+                    exc.failures,
+                )
+                from flab2bp.layout.strip_variants import (
+                    StripInstanceId,
+                    strip_pose_id,
+                )
+
+                strips_by_instance: dict[StripInstanceId, Strip] = {}
+                for strip in strips:
+                    if strip.family_id is None:
+                        continue
+                    strips_by_instance.setdefault(
+                        StripInstanceId(
+                            strip.family_id,
+                            strip.machine_start,
+                            strip.machines,
+                        ),
+                        strip,
+                    )
+                for failure, requirement in zip(
+                    exc.failures,
+                    pitch_requirements,
+                    strict=True,
+                ):
                     if rejected is not None:
                         _retain_refusal(rejected, failure)
 
@@ -13465,25 +13491,9 @@ class FreeformLayout:
                             projection_no_goods.append(no_good)
                             learned = True
 
-                    requirement = _projection_pitch_requirement(
-                        placement,
-                        strips,
-                        failure,
-                    )
                     if requirement is None:
                         continue
-                    selected_strip = next(
-                        (
-                            strip
-                            for strip in strips
-                            if strip.family_id == requirement.instance_id.family_id
-                            and strip.machine_start
-                            == requirement.instance_id.machine_start
-                            and strip.machines
-                            == requirement.instance_id.machine_count
-                        ),
-                        None,
-                    )
+                    selected_strip = strips_by_instance.get(requirement.instance_id)
                     if (
                         selected_strip is None
                         or selected_strip.physical_variant is None
@@ -13491,7 +13501,7 @@ class FreeformLayout:
                         != requirement.variant_id
                     ):
                         continue
-                    from flab2bp.layout.strip_variants import strip_pose_id
+
 
                     pose_id = strip_pose_id(selected_strip.physical_variant)
                     retained_pitch = minimum_pitch_x.get(

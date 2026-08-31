@@ -78,6 +78,7 @@ from flab2bp.layout.sequence_solver import (
 )
 from flab2bp.layout.strip_variants import (
     ProjectionPitchRequirement,
+    StripInstanceId,
     StripVariant,
     generate_strip_families,
     partition_strip_family,
@@ -2808,6 +2809,48 @@ def _projection_pitch_stage_fixture() -> tuple[
         160,
     )
     return problem, state, placement, failure
+
+def test_stage_projection_pitch_requirement_batches_ordered_failures_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    problem, state, placement, failure = _projection_pitch_stage_fixture()
+    unrelated = replace(failure, check="game.power_too_close")
+    reversed_pair = replace(failure, buildings=tuple(reversed(failure.buildings)))
+    failures = (unrelated, failure, reversed_pair)
+    calls: list[tuple[finalize.ProjectionFailure, ...]] = []
+    mapper = sequence_solver_module.projection_pitch_requirements
+
+    def record_batch(
+        placement: Placement,
+        *,
+        instance_ids: tuple[StripInstanceId, ...],
+        variants: tuple[StripVariant, ...],
+        failures: tuple[finalize.ProjectionFailure, ...],
+    ) -> tuple[ProjectionPitchRequirement | None, ...]:
+        calls.append(failures)
+        return mapper(
+            placement,
+            instance_ids=instance_ids,
+            variants=variants,
+            failures=failures,
+        )
+
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "projection_pitch_requirements",
+        record_batch,
+    )
+
+    requirement = sequence_solver_module._stage_projection_pitch_requirement(
+        problem,
+        state,
+        placement,
+        failures,
+    )
+
+    assert calls == [failures]
+    assert requirement is not None
+    assert requirement.failure is failure
 
 
 def test_projection_pitch_feedback_rebuilds_failed_restart_and_rebases_siblings() -> None:

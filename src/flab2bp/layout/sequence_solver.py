@@ -130,7 +130,7 @@ from flab2bp.layout.strip_variants import (
     default_strip_variant,
     generate_strip_families,
     partition_strip_family,
-    projection_pitch_requirement,
+    projection_pitch_requirements,
     strip_pose_id,
     variant_with_minimum_pitch,
     variants_for_count,
@@ -2200,16 +2200,19 @@ def _stage_projection_pitch_requirement(
         problem.variant(strip, variant)
         for strip, variant in enumerate(state.variant_indices)
     )
-    for failure in projection_failures:
-        requirement = projection_pitch_requirement(
-            placement,
-            instance_ids=problem.instance_ids,
-            variants=selected_variants,
-            failure=failure,
-        )
-        if requirement is not None:
-            return requirement
-    return None
+    return next(
+        (
+            requirement
+            for requirement in projection_pitch_requirements(
+                placement,
+                instance_ids=problem.instance_ids,
+                variants=selected_variants,
+                failures=projection_failures,
+            )
+            if requirement is not None
+        ),
+        None,
+    )
 
 
 def _default_feedback(problem: PlacementProblem) -> FeedbackState:
