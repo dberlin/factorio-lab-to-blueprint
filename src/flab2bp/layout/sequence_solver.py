@@ -161,6 +161,8 @@ _DENSE_SPRAY_NO_POWER_MACHINE_THRESHOLD = 120
 _COARSE_SPRAY_NO_POWER_MACHINE_THRESHOLD = 250
 _COMPACT_LARGE_VARIANT_SIZE = 40
 _COMPACT_LARGE_VARIANT_DETERMINISTIC_CAP = 0.1
+_DENSE_SPRAY_ZERO_DIRECT_STRIP_LEN = 16
+_MODERATE_ROUTED_STRIP_LEN = 12
 _TOPOLOGY_BEAM_MIN_STRIPS = 7
 _TOPOLOGY_BEAM_MAX_STRIPS = 24
 _TOPOLOGY_BEAM_DETERMINISTIC_SECONDS = 0.2
@@ -256,6 +258,60 @@ def _serial_compact_seed_attempt(
         and sprayed_lanes >= _DENSE_SPRAY_LANE_THRESHOLD
         else 0
     )
+
+
+def _dense_spray_initial_strip_len(
+    requested: int,
+    *,
+    sprayed_lanes: int,
+    direct_candidates: int,
+) -> int:
+    """Coarsen only a dense-spray plan with no direct-insert structure."""
+    if (
+        sprayed_lanes >= _DENSE_SPRAY_LANE_THRESHOLD
+        and direct_candidates == 0
+    ):
+        return max(requested, _DENSE_SPRAY_ZERO_DIRECT_STRIP_LEN)
+    return requested
+
+
+def _moderate_routed_initial_strip_len(
+    requested: int,
+    *,
+    strip_count: int,
+    direct_candidates: int,
+) -> int:
+    """Preserve routing granularity for a medium direct-rich strip plan.
+
+    The lower bound is the topology beam's exact-admission limit. The upper
+    bound adds one large-family cohort; beyond it, saturated-family coarsening
+    is the bounded representation rather than another initial partition.
+    """
+    if (
+        direct_candidates >= strip_count
+        and _TOPOLOGY_BEAM_MAX_STRIPS
+        <= strip_count
+        <= _COMPACT_LARGE_VARIANT_SIZE + _TOPOLOGY_BEAM_MAX_STRIPS
+    ):
+        return max(requested, _MODERATE_ROUTED_STRIP_LEN)
+    return requested
+
+def _topology_budget_signature(
+    detailed: DetailedStageResult,
+) -> int | None:
+    """Identify repeated incomplete beam closures without treating them as proof."""
+    if detailed.routing.status is not DetailedRouteStatus.BUDGET:
+        return None
+    return detailed.routing.failed_count
+
+
+def _topology_budget_is_broad(
+    failed_count: int,
+    *,
+    strip_count: int,
+) -> bool:
+    """Return whether an incomplete closure left at least half the strips unresolved."""
+    return failed_count > 0 and 2 * failed_count >= strip_count
 
 
 @dataclass(slots=True)
@@ -3477,6 +3533,32 @@ def _production_run(
                 strip_len=planned_strip_len,
                 band_policy=band_policy,
             )
+        needs_initial_direct_count = (
+            len(spec.spray_lanes) >= _DENSE_SPRAY_LANE_THRESHOLD
+            or len(strips) >= _TOPOLOGY_BEAM_MAX_STRIPS
+        )
+        initial_direct_candidates = (
+            len(_direct_net_candidates(strips, spec))
+            if needs_initial_direct_count
+            else 1
+        )
+        initial_strip_len = _dense_spray_initial_strip_len(
+            planned_strip_len,
+            sprayed_lanes=len(spec.spray_lanes),
+            direct_candidates=initial_direct_candidates,
+        )
+        initial_strip_len = _moderate_routed_initial_strip_len(
+            initial_strip_len,
+            strip_count=len(strips),
+            direct_candidates=initial_direct_candidates,
+        )
+        if initial_strip_len != planned_strip_len:
+            planned_strip_len = initial_strip_len
+            strips = plan_strips(
+                spec,
+                strip_len=planned_strip_len,
+                band_policy=band_policy,
+            )
         strips, planned_strip_len = _coarsen_saturated_strip_plan(
             spec,
             strips,
@@ -3576,7 +3658,7 @@ def _production_run(
             sprayed_lanes=len(spec.spray_lanes),
             strip_count=len(strips),
             direct_candidates=len(direct_candidates),
-            strip_len=strip_len,
+            strip_len=planned_strip_len,
         )
         if (use_topology_beam or use_shared_pack) and topology_beam_height is not None:
             median_height = sorted(coarse_heights)[len(coarse_heights) // 2]
@@ -4267,7 +4349,7 @@ def _production_run(
         shared_height_rank = _shared_pack_height_rank(
             machine_count=spec.machine_count,
             strip_count=len(strips),
-            strip_len=strip_len,
+            strip_len=planned_strip_len,
             sprayed_lanes=len(spec.spray_lanes),
             direct_candidates=len(direct_candidates),
         )
@@ -4398,6 +4480,7 @@ def _production_run(
         )
         narrowest_width_seen: int | None = None
         refinement_attempted = False
+        prior_budget_signature: int | None = None
         for topology_index in range(beam.config.max_candidates):
             topology_stage_started = stage_admission.try_start()
             if topology_stage_started is None:
@@ -4432,11 +4515,24 @@ def _production_run(
                 stage_admission.finish(topology_stage_started)
                 continue
             decoded = _topology_close_decoded(candidate, hint)
-            solver.close_exact_decoded(
+            closed = solver.close_exact_decoded(
                 topology_beam_height,
                 decoded,
                 reason="topology-beam",
                 allowance_cap=topology_allowance,
+            )
+            budget_signature = _topology_budget_signature(closed)
+            repeated_budget = (
+                budget_signature is not None
+                and budget_signature == prior_budget_signature
+            )
+            prior_budget_signature = budget_signature
+            broad_budget = (
+                budget_signature is not None
+                and _topology_budget_is_broad(
+                    budget_signature,
+                    strip_count=beam_problem.size,
+                )
             )
             if tall_topology_role:
                 refinement_hint = _retain_refinement_hint(
@@ -4491,7 +4587,7 @@ def _production_run(
                     if solver._stage_stats[-1].exact_key is not None:
                         stop_topology = True
             stage_admission.finish(topology_stage_started)
-            if stop_topology:
+            if stop_topology or repeated_budget or broad_budget:
                 break
             if topology_index + 1 < beam.config.max_candidates:
                 beam.exclude(candidate.signature)
@@ -4502,12 +4598,12 @@ def _production_run(
                 _topology_seed_is_terminal(
                     machine_count=spec.machine_count,
                     strip_count=len(strips),
-                    strip_len=strip_len,
+                    strip_len=planned_strip_len,
                 )
                 or _small_direct_seed_role(
                     direct_candidates=len(direct_candidates),
                     strip_count=len(strips),
-                    strip_len=strip_len,
+                    strip_len=planned_strip_len,
                 )
             )
             and solver.exact_incumbent_reason

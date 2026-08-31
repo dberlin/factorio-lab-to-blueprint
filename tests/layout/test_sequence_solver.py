@@ -2078,6 +2078,83 @@ def test_serial_attempt_policy_selects_only_measured_topology_roles() -> None:
     assert sequence_solver_module._serial_compact_seed_attempt(168, 2, power=False) == 0
     assert sequence_solver_module._serial_compact_seed_attempt(58, 23, power=False) == 0
 
+@pytest.mark.parametrize(
+    ("requested", "sprayed_lanes", "direct_candidates", "expected"),
+    (
+        (4, 27, 0, 16),
+        (16, 27, 0, 16),
+        (4, 9, 0, 4),
+        (4, 47, 7, 4),
+        (4, 2, 0, 4),
+    ),
+)
+def test_dense_spray_without_direct_structure_uses_coarse_initial_strips(
+    requested: int,
+    sprayed_lanes: int,
+    direct_candidates: int,
+    expected: int,
+) -> None:
+    assert (
+        sequence_solver_module._dense_spray_initial_strip_len(
+            requested,
+            sprayed_lanes=sprayed_lanes,
+            direct_candidates=direct_candidates,
+        )
+        == expected
+    )
+
+
+@pytest.mark.parametrize(
+    ("requested", "strip_count", "direct_candidates", "expected"),
+    (
+        (4, 24, 24, 12),
+        (6, 37, 62, 12),
+        (4, 64, 64, 12),
+        (4, 23, 23, 4),
+        (4, 65, 102, 4),
+        (4, 53, 5, 4),
+        (16, 50, 50, 16),
+    ),
+)
+def test_moderate_routed_plan_preserves_partition_granularity(
+    requested: int,
+    strip_count: int,
+    direct_candidates: int,
+    expected: int,
+) -> None:
+    assert (
+        sequence_solver_module._moderate_routed_initial_strip_len(
+            requested,
+            strip_count=strip_count,
+            direct_candidates=direct_candidates,
+        )
+        == expected
+    )
+
+
+def test_topology_budget_signature_only_tracks_incomplete_failure_cardinality() -> None:
+    budget = DetailedStageResult(_routing(DetailedRouteStatus.BUDGET), None)
+    stranded = DetailedStageResult(_routing(DetailedRouteStatus.STRANDED), None)
+
+    assert sequence_solver_module._topology_budget_signature(budget) == 1
+    assert sequence_solver_module._topology_budget_signature(stranded) is None
+
+
+def test_broad_topology_budget_requires_half_the_beam_strips_unresolved() -> None:
+    assert not sequence_solver_module._topology_budget_is_broad(
+        4,
+        strip_count=10,
+    )
+    assert sequence_solver_module._topology_budget_is_broad(
+        5,
+        strip_count=10,
+    )
+    assert not sequence_solver_module._topology_budget_is_broad(
+        0,
+        strip_count=1,
+    )
+
+
 def test_small_direct_shared_pack_uses_the_wider_height_rank() -> None:
     assert (
         sequence_solver_module._shared_pack_height_rank(
