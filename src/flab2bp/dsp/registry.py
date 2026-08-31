@@ -656,6 +656,7 @@ _RULES: tuple[Entry, ...] = (
         note="cos(SKEW_AXIS_DEG).  Plan step 4.2 questions the rule, not the projection.",
     ),
     _e("rules.ADDON_AREA_RADIUS", Kind.RULE),
+    _e("rules.ADDON_LINE_MAX_DISTANCE", Kind.RULE),
     _e("rules.ADDON_AXIS_DEG", Kind.RULE, lint=True),
     _e(
         "rules.ADDON_TURRET_AXIS_DEG",
@@ -787,6 +788,11 @@ _RULES: tuple[Entry, ...] = (
         ),
     ),
     _e("rules.world_gap", Kind.RULE, depends_on=("dx", "dy", "dz")),
+    _e(
+        "rules.addon_line_distance",
+        Kind.RULE,
+        depends_on=("point", "line_a", "line_b"),
+    ),
     _e("rules.addon_axis_aligned", Kind.RULE, depends_on=("yaw", "dx", "dy")),
     _e(
         "rules.addon_ride_is_straight",

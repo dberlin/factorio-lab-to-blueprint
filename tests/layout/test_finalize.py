@@ -2321,6 +2321,28 @@ def test_projected_addon_supply_preserves_strict_radius_boundary(
 
     assert (None if failure is None else failure.check) == expected_check
 
+def test_projected_addon_supply_rejects_broke4_horizontal_raised_bus() -> None:
+    belts = (
+        (0, _belt(0, 0, output=None)),
+        (1, replace(_belt(1, -1, output=2), z=Fraction(1))),
+        (2, replace(_belt(0, -1, output=3), z=Fraction(1))),
+        (3, replace(_belt(-1, -1, output=None), z=Fraction(1))),
+    )
+    coater = _building(catalog.SPRAY_COATER_ID, 0, 0)
+
+    failure = finalize._projected_addon_failure(
+        belts,
+        ((4, coater, catalog.building(catalog.SPRAY_COATER_ID).addon_areas),),
+        _broke2_projection(),
+    )
+
+    assert failure == finalize.ProjectionFailure(
+        check="game.addon_supply",
+        buildings=(4, 2),
+        detail="addon area 1 misses belt 2's line by 0.3166 world units",
+        band=160,
+    )
+
 
 def test_projected_addon_supply_skips_projection_without_both_sides() -> None:
     class CountingProjection:

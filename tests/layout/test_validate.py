@@ -1512,6 +1512,40 @@ def test_game_addon_supply_uses_rotated_elevated_pose(yaw: float, supply: tuple[
         f.message for f in elevated.by_check("game.addon_supply")
     ]
 
+def test_game_addon_supply_rejects_broke4_horizontal_raised_bus() -> None:
+    """The area-to-belt gap is 0.3142 world units, above the strict 0.3 gate."""
+    placement = place(
+        belt(0, 0),  # 0: cargo belt the coater rides
+        belt(1, -1, 1, out=2),  # 1
+        belt(0, -1, 1, out=3),  # 2: nearest area-1 belt, running horizontally
+        belt(-1, -1, 1),  # 3
+        _coater(0, 0, yaw=0.0),  # 4: area 1 is at (0, -1.25, 1)
+    )
+
+    findings = validate(
+        placement,
+        only={"game.addon_supply"},
+    ).by_check("game.addon_supply")
+
+    assert len(findings) == 1
+    assert findings[0].buildings == (4, 2)
+    assert findings[0].detail["line_distance"] == "0.3142"
+
+
+def test_game_addon_supply_accepts_vertical_terminal_stub() -> None:
+    """A terminal supply tile running along the coater axis crosses area 1."""
+    placement = place(
+        belt(0, 0),  # 0: cargo belt
+        belt(0, -2, 1, out=2),  # 1
+        belt(0, -1, 1),  # 2: vertical terminal in area 1
+        _coater(0, 0, yaw=0.0),  # 3
+    )
+
+    assert not fired(
+        validate(placement, only={"game.addon_supply"}),
+        "game.addon_supply",
+    )
+
 
 def test_game_addon_supply_accepts_belt_inside_authoritative_radius() -> None:
     report = validate(

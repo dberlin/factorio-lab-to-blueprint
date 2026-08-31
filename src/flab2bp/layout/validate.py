@@ -1997,6 +1997,60 @@ def _belt_in_addon_area(
     ctx.cache.addon_area_belts[key] = selected
     return selected
 
+def _addon_belt_line_distance(
+    ctx: Context,
+    addon: PlacedBuilding,
+    *,
+    area: int,
+    belt_index: int,
+) -> float | None:
+    """Perpendicular world distance from one addon area to its selected belt."""
+    buildings = ctx.placement.buildings
+    belt = buildings[belt_index]
+    neighbour_index = (
+        belt.output_obj
+        if belt.output_obj is not None
+        and 0 <= belt.output_obj < len(buildings)
+        and ctx.kinds[belt.output_obj] is Kind.BELT
+        else next(
+            (
+                index
+                for index, candidate in ctx.of_kind(Kind.BELT)
+                if candidate.output_obj == belt_index
+            ),
+            None,
+        )
+    )
+    if neighbour_index is None:
+        return None
+
+    want = slots.addon_supply_position(
+        addon.item_id,
+        x=addon.x,
+        y=addon.y,
+        z=addon.z,
+        yaw=addon.yaw,
+        area=area,
+    )
+
+    def world_position(
+        x: Fraction | int,
+        y: Fraction | int,
+        z: Fraction | int,
+    ) -> tuple[float, float, float]:
+        return (
+            float(x) * dsp_colliders.GRID_ARC,
+            float(y) * dsp_colliders.GRID_ARC,
+            float(z) * rules.WORLD_UNITS_PER_LEVEL,
+        )
+
+    neighbour = buildings[neighbour_index]
+    return rules.addon_line_distance(
+        world_position(*want),
+        world_position(belt.x, belt.y, belt.z),
+        world_position(neighbour.x, neighbour.y, neighbour.z),
+    )
+
 
 def _expected_addon_items(
     ctx: Context,
@@ -2084,6 +2138,32 @@ def _addon_supply(ctx: Context) -> Iterable[Finding]:
                         "x": round(float(want[0]), 2),
                         "y": round(float(want[1]), 2),
                         "z": round(float(want[2]), 2),
+                    },
+                )
+                continue
+            line_distance = _addon_belt_line_distance(
+                ctx,
+                b,
+                area=pose.area,
+                belt_index=selected,
+            )
+            if (
+                line_distance is not None
+                and line_distance >= rules.ADDON_LINE_MAX_DISTANCE
+            ):
+                yield Finding(
+                    "game.addon_supply",
+                    Severity.ERROR,
+                    f"{cat.building(b.item_id).name} {i}'s addon area {pose.area} "
+                    f"misses selected belt {selected}'s own line by "
+                    f"{line_distance:.4f} world units; the game requires strictly "
+                    f"less than {rules.ADDON_LINE_MAX_DISTANCE}",
+                    (i, selected),
+                    {
+                        "area": pose.area,
+                        "belt": selected,
+                        "line_distance": f"{line_distance:.4f}",
+                        "max": rules.ADDON_LINE_MAX_DISTANCE,
                     },
                 )
                 continue

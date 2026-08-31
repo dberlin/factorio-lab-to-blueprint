@@ -106,6 +106,7 @@ from flab2bp.dsp import colliders
 
 __all__ = [
     "ADDON_AREA_RADIUS",
+    "ADDON_LINE_MAX_DISTANCE",
     "ADDON_AXIS_DEG",
     "ADDON_FROM_SLOT",
     "ADDON_NEIGHBOUR_RADIAL_GAP",
@@ -146,6 +147,7 @@ __all__ = [
     "PowerNode",
     "PowerSpacing",
     "addon_axis_aligned",
+    "addon_line_distance",
     "addon_axis_offset_deg",
     "addon_ride_is_straight",
     "belt_link_too_far",
@@ -573,11 +575,32 @@ SLOT_ALIGN_COS = math.cos(math.radians(SKEW_AXIS_DEG))
 #: wrong there cost a retraction, which is why there is exactly one conversion
 #: and every caller uses it.
 #:
-#: The companion clause, ``Maths.DistancePointLine(...) < 0.3f`` -- how near the
-#: area's centre must be to the belt's own LINE -- has never been given a
-#: constant or a port; only the radius above is checked.  Recorded here as an
-#: unported half of the rule rather than left implicit.
+#: How near the area's centre must be to the selected belt's own line.
+#: ``Maths.DistancePointLine(...) < 0.3f`` in the same addon-connection clause;
+#: strict, like the radius comparison.  A one-quarter-tile perpendicular miss
+#: is ``GRID_ARC / 4 == 0.314159...`` world units and therefore fails.
+ADDON_LINE_MAX_DISTANCE = 0.3
 ADDON_AREA_RADIUS = 1.0
+
+def addon_line_distance(
+    point: tuple[float, float, float],
+    line_a: tuple[float, float, float],
+    line_b: tuple[float, float, float],
+) -> float:
+    """``Maths.DistancePointLine`` for one addon's selected belt."""
+    axis = tuple(b - a for a, b in zip(line_a, line_b, strict=True))
+    length2 = sum(component * component for component in axis)
+    if length2 == 0.0:
+        return math.dist(point, line_a)
+    scale = sum(
+        (coordinate - origin) * component
+        for coordinate, origin, component in zip(point, line_a, axis, strict=True)
+    ) / length2
+    closest = tuple(
+        origin + scale * component
+        for origin, component in zip(line_a, axis, strict=True)
+    )
+    return math.dist(point, closest)
 
 #: How far off an addon's own axis the belt it rides may travel, in DEGREES.
 #: ``BuildTool_Addon.CheckBuildConditions``, the hand tool, over every belt its

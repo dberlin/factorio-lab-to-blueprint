@@ -7,15 +7,14 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from functools import cache
-from itertools import combinations
 from typing import Literal, cast
 
 from flab2bp.dsp import catalog, codec, colliders, planet, rules
 from flab2bp.layout import slots
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import AreaFrame, PlacedBuilding, Placement
-from flab2bp.layout.validate import certify as _certify
 from flab2bp.layout.validate import Report
+from flab2bp.layout.validate import certify as _certify
 from flab2bp.spec import BuildSpec
 
 type _Direction = Literal["input", "output"]
@@ -670,7 +669,10 @@ def _projected_power_candidates(
     for right, pose in enumerate(poses):
         if cancelled is not None and cancelled():
             raise ProjectionCancelled
-        cell = tuple(math.floor(axis / cell_size) for axis in pose)
+        cell = cast(
+            tuple[int, int, int],
+            tuple(math.floor(axis / cell_size) for axis in pose),
+        )
         for dx in (-1, 0, 1):
             for dy in (-1, 0, 1):
                 for dz in (-1, 0, 1):
@@ -1016,17 +1018,44 @@ def _projected_addon_failure(
     # Index in blueprint space first.  Projecting all belts for every legal
     # latitude was the dominant cost here; the lower bounds above can only
     # over-include, and the exact projected distance remains the verdict.
+    belt_position_by_index = {
+        belt_index: belt_position
+        for belt_position, (belt_index, _belt) in enumerate(belts)
+    }
+    predecessor_by_position: dict[int, int] = {}
+    for belt_position, (_belt_index, placed_belt) in enumerate(belts):
+        target_position = (
+            belt_position_by_index.get(placed_belt.output_obj)
+            if placed_belt.output_obj is not None
+            else None
+        )
+        if target_position is not None:
+            predecessor_by_position[target_position] = belt_position
     belt_grid: dict[tuple[int, int], list[int]] = {}
-    for belt_position, (_belt_index, belt) in enumerate(belts):
+    for belt_position, (_belt_index, placed_belt) in enumerate(belts):
         if cancelled is not None and cancelled():
             raise ProjectionCancelled
-        longitude, latitude = transformed(belt.x, belt.y)
+        longitude, latitude = transformed(placed_belt.x, placed_belt.y)
         cell = (
             math.floor(longitude) % projection.band.columns,
             math.floor(latitude),
         )
         belt_grid.setdefault(cell, []).append(belt_position)
     belt_positions: dict[int, tuple[float, float, float]] = {}
+
+    def projected_belt(belt_position: int) -> tuple[float, float, float]:
+        cached = belt_positions.get(belt_position)
+        if cached is not None:
+            return cached
+        placed = belts[belt_position][1]
+        projected = projection.position(
+            placed.x,
+            placed.y,
+            float(placed.z),
+        )
+        belt_positions[belt_position] = projected
+        return projected
+
     for addon_index, addon, areas in addons:
         if cancelled is not None and cancelled():
             raise ProjectionCancelled
@@ -1064,36 +1093,61 @@ def _projected_addon_failure(
                 }
             )
             supplied = False
+            line_misses: list[tuple[float, int, float]] = []
             for belt_position in candidates:
                 if cancelled is not None and cancelled():
                     raise ProjectionCancelled
-                belt = belt_positions.get(belt_position)
-                if belt is None:
-                    placed = belts[belt_position][1]
-                    belt = projection.position(
-                        placed.x,
-                        placed.y,
-                        float(placed.z),
-                    )
-                    belt_positions[belt_position] = belt
-                if (
-                    (target[0] - belt[0]) ** 2
-                    + (target[1] - belt[1]) ** 2
-                    + (target[2] - belt[2]) ** 2
-                    < radius2
-                ):
+                belt_point = projected_belt(belt_position)
+                distance2 = (
+                    (target[0] - belt_point[0]) ** 2
+                    + (target[1] - belt_point[1]) ** 2
+                    + (target[2] - belt_point[2]) ** 2
+                )
+                if distance2 >= radius2:
+                    continue
+                placed = belts[belt_position][1]
+                neighbour_position = (
+                    belt_position_by_index.get(placed.output_obj)
+                    if placed.output_obj is not None
+                    else None
+                )
+                if neighbour_position is None:
+                    neighbour_position = predecessor_by_position.get(belt_position)
+                if neighbour_position is None:
                     supplied = True
                     break
-            if not supplied:
+                line_distance = rules.addon_line_distance(
+                    target,
+                    belt_point,
+                    projected_belt(neighbour_position),
+                )
+                if line_distance < rules.ADDON_LINE_MAX_DISTANCE:
+                    supplied = True
+                    break
+                line_misses.append((distance2, belt_position, line_distance))
+            if supplied:
+                continue
+            if line_misses:
+                _distance2, belt_position, line_distance = min(line_misses)
+                belt_index = belts[belt_position][0]
                 return ProjectionFailure(
                     check="game.addon_supply",
-                    buildings=(addon_index,),
+                    buildings=(addon_index, belt_index),
                     detail=(
-                        f"addon area {area.area} has no belt within "
-                        f"{rules.ADDON_AREA_RADIUS} world unit"
+                        f"addon area {area.area} misses belt {belt_index}'s line by "
+                        f"{line_distance:.4f} world units"
                     ),
                     band=projection.band.area_segments,
                 )
+            return ProjectionFailure(
+                check="game.addon_supply",
+                buildings=(addon_index,),
+                detail=(
+                    f"addon area {area.area} has no belt within "
+                    f"{rules.ADDON_AREA_RADIUS} world unit"
+                ),
+                band=projection.band.area_segments,
+            )
     return None
 
 
@@ -1464,13 +1518,13 @@ def _projected_coater_splitter_candidates(
         )
 
     points: list[_CoaterSplitterKdPoint] = []
-    for position, splitter in enumerate(splitters):
+    for position, splitter_entry in enumerate(splitters):
         if cancelled is not None and cancelled():
             raise ProjectionCancelled
         points.append(
             _CoaterSplitterKdPoint(
                 position=position,
-                coordinates=coordinates(splitter[1]),
+                coordinates=coordinates(splitter_entry[1]),
             )
         )
     tree = (
@@ -1483,10 +1537,10 @@ def _projected_coater_splitter_candidates(
     )
     longitude_period = projection.band.columns * column_lower_bound
     candidates: list[tuple[tuple[int, colliders.Placed], ...]] = []
-    for coater, coater_bound in zip(coaters, coater_bounds, strict=True):
+    for coater_entry, coater_bound in zip(coaters, coater_bounds, strict=True):
         if cancelled is not None and cancelled():
             raise ProjectionCancelled
-        centre = coordinates(coater[1])
+        centre = coordinates(coater_entry[1])
         radius = coater_bound + splitter_bound
         radius2 = math.nextafter(radius * radius, math.inf)
         found: set[int] = set()
@@ -2283,18 +2337,24 @@ def independent_projection_pair(
         )
         min_x = min(building.x for _index, building in oriented)
         min_y = min(building.y for _index, building in oriented)
-        normalized = tuple(
-            (
-                index,
-                _collision_placed(
-                    replace(
-                        building,
-                        x=building.x - min_x,
-                        y=building.y - min_y,
-                    )
-                ),
-            )
-            for index, building in oriented
+        normalized = cast(
+            tuple[
+                tuple[int, colliders.Placed],
+                tuple[int, colliders.Placed],
+            ],
+            tuple(
+                (
+                    index,
+                    _collision_placed(
+                        replace(
+                            building,
+                            x=building.x - min_x,
+                            y=building.y - min_y,
+                        )
+                    ),
+                )
+                for index, building in oriented
+            ),
         )
         pair_width = max(
             building.x + building.width for _index, building in oriented
@@ -3050,10 +3110,11 @@ class _CleanupSurvivorGraph:
         for source in range(old_size, size):
             extended._poll()
             building = extended.buildings[source]
-            for direction, target in (
+            edges: tuple[tuple[_Direction, int | None], ...] = (
                 ("input", building.input_obj),
                 ("output", building.output_obj),
-            ):
+            )
+            for direction, target in edges:
                 extended.edge_visits += 1
                 if extended.belts[source]:
                     if target is not None and 0 <= target < size and extended.belts[target]:
