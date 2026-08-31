@@ -1225,7 +1225,7 @@ def test_external_route_order_control_is_non_exhaustive_and_emits_no_no_good(
     spec = two_stage_spec()
     strips = plan_strips(spec)
     attempt = _proof_attempt(failed, strips)
-    assert freeform._proof_scoped_no_goods(attempt, strips, spec) == ((), None)
+    assert freeform._proof_scoped_no_goods(attempt, strips) == ((), None)
 
 
 def test_elevated_external_port_bypasses_ground_fast_path_and_routes_a_ramp(
@@ -2590,6 +2590,11 @@ def _proof_attempt(
         ),
         promised_direct=promised_direct,
         realized_direct=realized_direct,
+        direct_candidates=freeform._direct_candidate_snapshot(
+            strips,
+            two_stage_spec(),
+            enabled=True,
+        ),
     )
 
 
@@ -2601,7 +2606,7 @@ def test_static_access_without_an_independent_relation_proof_is_evidence_only() 
         strips,
     )
 
-    local, exact = freeform._proof_scoped_no_goods(attempt, strips, spec)
+    local, exact = freeform._proof_scoped_no_goods(attempt, strips)
 
     assert local == ()
     assert exact is None
@@ -2646,13 +2651,52 @@ def test_static_access_structurally_impossible_direct_creates_only_local_no_good
         promised_direct=frozenset({direct}),
     )
 
-    local, exact = freeform._proof_scoped_no_goods(attempt, strips, spec)
+    local, exact = freeform._proof_scoped_no_goods(attempt, strips)
 
     assert len(local) == 1
     assert local[0].direct_id == direct
     assert local[0].delta_x == origins[destination][0] - origins[source][0]
     assert local[0].delta_y == origins[destination][1] - origins[source][1]
     assert exact is None
+
+def test_retained_direct_candidates_preserve_legal_relation_parity() -> None:
+    spec = two_stage_spec()
+    strips = plan_strips(spec)
+    (source, destination), candidate = next(
+        iter(_direct_net_candidates(strips, spec).items())
+    )
+    direct = DirectInsertId(
+        source,
+        destination,
+        candidate.item,
+        candidate.cargo_domain,
+    )
+    origins = [(index * 10, 0) for index in range(len(strips))]
+    origins[destination] = (
+        origins[source][0] + candidate.origin_deltas[0],
+        origins[source][1] + 1 + candidate.prod_row - candidate.cons_row,
+    )
+    attempt = _proof_attempt(
+        _routing_failures(RouteFailureKind.STATIC_ACCESS),
+        strips,
+        origins=tuple(origins),
+        promised_direct=frozenset({direct}),
+    )
+
+    assert freeform._proof_scoped_no_goods(attempt, strips) == ((), None)
+
+
+def test_retained_direct_candidates_reject_a_different_strip_plan() -> None:
+    spec = two_stage_spec()
+    strips = plan_strips(spec)
+    attempt = _proof_attempt(
+        _routing_failures(RouteFailureKind.STATIC_ACCESS),
+        strips,
+    )
+    replanned = plan_strips(spec, strip_len=1)
+
+    with pytest.raises(ValueError, match="different strip plan"):
+        freeform._proof_scoped_no_goods(attempt, replanned)
 
 
 def test_exhaustive_non_budget_failure_creates_full_assignment_no_good() -> None:
@@ -2666,7 +2710,7 @@ def test_exhaustive_non_budget_failure_creates_full_assignment_no_good() -> None
         strips,
     )
 
-    local, exact = freeform._proof_scoped_no_goods(attempt, strips, spec)
+    local, exact = freeform._proof_scoped_no_goods(attempt, strips)
 
     assert local == ()
     assert exact is not None
@@ -2698,7 +2742,7 @@ def test_unproved_and_budget_failures_do_not_exclude_geometry(
     strips = plan_strips(spec)
     attempt = _proof_attempt(routing, strips)
 
-    assert freeform._proof_scoped_no_goods(attempt, strips, spec) == ((), None)
+    assert freeform._proof_scoped_no_goods(attempt, strips) == ((), None)
 
 
 

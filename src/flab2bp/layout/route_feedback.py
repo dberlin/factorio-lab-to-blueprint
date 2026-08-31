@@ -168,8 +168,9 @@ class FeedbackState:
     endpoint_offsets: Mapping[NetId, tuple[Cell, Cell]] = field(default_factory=dict)
     #: Exact hot-wall histories keyed by the physical nets implicated in the
     #: failure that produced each wall. The shared history above remains the
-    #: routing penalty grid; packing must never form its Cartesian product with
-    #: every failed net.
+    #: two-dimensional routing penalty grid and is normalized to one entry per
+    #: ``(x, y)``, explicitly bounding it to ``outline[0] * outline[1]`` cells.
+    #: Packing must never form its Cartesian product with every failed net.
     net_cell_history: Mapping[NetId, Mapping[Cell, float]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -215,6 +216,11 @@ class FeedbackState:
             raise ValueError(
                 "feedback cell history must be finite, non-negative, and inside the outline"
             )
+        shared_cell_history: dict[Cell, float] = {}
+        for (x, y, _level), value in cell_history.items():
+            cell = (x, y, 0)
+            shared_cell_history[cell] = shared_cell_history.get(cell, 0.0) + value
+        cell_history = shared_cell_history
         if any(
             not isinstance(net, NetId)
             or any(
@@ -349,8 +355,9 @@ def update_feedback(
             for cell in failure.wall
             if _valid_cell(cell, width, height)
         )
-        for cell in wall:
-            cell_history[cell] = cell_history.get(cell, 0.0) + 1.0
+        for x, y, _level in wall:
+            shared_cell = (x, y, 0)
+            cell_history[shared_cell] = cell_history.get(shared_cell, 0.0) + 1.0
         for net in implicated:
             history = net_cell_history.setdefault(net, {})
             for cell in wall:

@@ -2254,6 +2254,57 @@ def _direct_net_candidates(
         )
     return out
 
+@dataclass(frozen=True, slots=True, eq=False)
+class _DirectCandidateSnapshot:
+    """Immutable direct-net geometry owned by one exact strip plan."""
+
+    strips: tuple[Strip, ...]
+    candidates: Mapping[tuple[int, int], _DirectCandidate]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.strips, tuple):
+            raise ValueError("direct candidates must retain an immutable strip plan")
+        object.__setattr__(
+            self,
+            "candidates",
+            MappingProxyType(dict(self.candidates)),
+        )
+
+    def __eq__(self, other: object) -> bool:
+        return (
+            isinstance(other, _DirectCandidateSnapshot)
+            and self.matches(other.strips)
+            and self.candidates == other.candidates
+        )
+
+    def __hash__(self) -> int:
+        return hash(
+            (
+                tuple(id(strip) for strip in self.strips),
+                tuple(sorted(self.candidates.items())),
+            )
+        )
+
+    def matches(self, strips: Sequence[Strip]) -> bool:
+        """Whether ``strips`` contains the exact physical port owners retained."""
+        return len(self.strips) == len(strips) and all(
+            retained is current
+            for retained, current in zip(self.strips, strips, strict=True)
+        )
+
+
+def _direct_candidate_snapshot(
+    strips: list[Strip],
+    spec: BuildSpec,
+    *,
+    enabled: bool,
+) -> _DirectCandidateSnapshot:
+    """Enumerate direct candidates once and bind them to their physical plan."""
+    return _DirectCandidateSnapshot(
+        tuple(strips),
+        _direct_net_candidates(strips, spec) if enabled else {},
+    )
+
 
 def _direct_alignment_targets(
     candidates: Mapping[tuple[int, int], _DirectCandidate],
@@ -2829,7 +2880,7 @@ def _pack(
     height: int,
     width_bound: int,
     time_budget_s: float,
-    direct_candidates: dict[tuple[int, int], _DirectCandidate],
+    direct_candidates: Mapping[tuple[int, int], _DirectCandidate],
     workers: int,
     seed: _Pack | None = None,
     arrangement: int = 0,
@@ -10368,6 +10419,7 @@ class PackAttempt:
     static_access: tuple[NetFailure, ...]
     promised_direct: frozenset[DirectInsertId]
     realized_direct: frozenset[DirectInsertId]
+    direct_candidates: _DirectCandidateSnapshot
 
     def __post_init__(self) -> None:
         if any(
@@ -10388,10 +10440,11 @@ def _width_slack_cap(compact_width: int) -> int:
 def _proof_scoped_no_goods(
     attempt: PackAttempt,
     strips: list[Strip],
-    spec: BuildSpec,
 ) -> tuple[tuple[_DirectRelationNoGood, ...], ExactPackNoGood | None]:
     """Derive only relation or assignment exclusions proved by this attempt."""
-    direct_candidates = _direct_net_candidates(strips, spec)
+    if not attempt.direct_candidates.matches(strips):
+        raise ValueError("direct candidate evidence belongs to a different strip plan")
+    direct_candidates = attempt.direct_candidates.candidates
     local: list[_DirectRelationNoGood] = []
     for direct in sorted(attempt.promised_direct - attempt.realized_direct):
         source = direct.source_strip
@@ -12044,7 +12097,12 @@ class FreeformLayout:
         candidates = _direct_insert_candidates(spec)
         greedy = _greedy_pack(strips, _height_seed(strips))
         bound = max(greedy.width, max((w for w, _h in map(_box, strips)), default=1))
-        net_candidates = _direct_net_candidates(strips, spec) if self.direct_insert else {}
+        direct_candidate_snapshot = _direct_candidate_snapshot(
+            strips,
+            spec,
+            enabled=self.direct_insert,
+        )
+        net_candidates = direct_candidate_snapshot.candidates
 
         # SHORTEST FIRST, and TALLEST-first was tried against it and reverted.
         #
@@ -12195,7 +12253,7 @@ class FreeformLayout:
             )
 
         def replan_strips_for_learned_geometry() -> None:
-            nonlocal strips, greedy, bound, net_candidates, seeds
+            nonlocal strips, greedy, bound, direct_candidate_snapshot, net_candidates, seeds
 
             replan_strip_len = max(strip.machines for strip in strips)
             strips = plan_strips(
@@ -12211,11 +12269,12 @@ class FreeformLayout:
                 greedy.width,
                 max((w for w, _h in map(_box, strips)), default=1),
             )
-            net_candidates = (
-                _direct_net_candidates(strips, spec)
-                if self.direct_insert
-                else {}
+            direct_candidate_snapshot = _direct_candidate_snapshot(
+                strips,
+                spec,
+                enabled=self.direct_insert,
             )
+            net_candidates = direct_candidate_snapshot.candidates
             seeds = {
                 candidate_height: _greedy_pack(strips, candidate_height)
                 for candidate_height in heights
@@ -12606,6 +12665,7 @@ class FreeformLayout:
                 ),
                 promised_direct=result.promised_direct,
                 realized_direct=result.realized_direct,
+                direct_candidates=direct_candidate_snapshot,
             )
             if attempts is not None:
                 attempts.append(attempt)
@@ -12613,7 +12673,6 @@ class FreeformLayout:
                 local_no_goods, exact_no_good = _proof_scoped_no_goods(
                     attempt,
                     strips,
-                    spec,
                 )
                 learned = False
                 for no_good in local_no_goods:
