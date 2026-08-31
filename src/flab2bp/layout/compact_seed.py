@@ -428,6 +428,7 @@ class CompactTopologyBeam:
         *,
         absolute_deadline: float | None = None,
         cancelled: Callable[[], bool] | None = None,
+        stop_when_width_admits: Callable[[int], bool] | None = None,
     ) -> CompactTopologyCandidate | None:
         """Solve the next not-yet-excluded topology within fixed deterministic work."""
         if self._solved >= self.config.max_candidates:
@@ -438,6 +439,8 @@ class CompactTopologyBeam:
             raise ValueError("topology deadline must be a finite monotonic-clock float")
         if cancelled is not None and not callable(cancelled):
             raise ValueError("topology cancellation check must be callable")
+        if stop_when_width_admits is not None and not callable(stop_when_width_admits):
+            raise ValueError("topology width-admission check must be callable")
         if (cancelled is not None and cancelled()) or _deadline_reached(absolute_deadline):
             return None
 
@@ -451,7 +454,17 @@ class CompactTopologyBeam:
             if remaining <= _DEADLINE_SAFETY_SECONDS:
                 return None
             solver.parameters.max_time_in_seconds = remaining - _DEADLINE_SAFETY_SECONDS
-        status_code = solver.solve(self._model)
+        class WidthAdmission(cp_model.CpSolverSolutionCallback):
+            """Stop once the exact incumbent admits already-routed evidence."""
+
+            def on_solution_callback(self) -> None:
+                assert stop_when_width_admits is not None
+                if stop_when_width_admits(self.Value(self_outline_width)):
+                    self.StopSearch()
+
+        self_outline_width = self._variables.outline_width
+        admission = WidthAdmission() if stop_when_width_admits is not None else None
+        status_code = solver.solve(self._model, admission)
         if (cancelled is not None and cancelled()) or _deadline_reached(absolute_deadline):
             return None
         status = _status_from_solver(status_code)

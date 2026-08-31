@@ -72,6 +72,7 @@ from flab2bp.layout.freeform import (
     _strip_geometry_signature,
     _Unpowerable,
     _Unseatable,
+    _width_slack_cap,
     plan_strips,
 )
 from flab2bp.layout.global_router import GlobalRouteResult, route_global
@@ -1814,6 +1815,11 @@ class SequenceSolver[PreparedT]:
                     height_state.quality_stagnation = 0
                     height_state.narrowest_key = None
         if not observation.continue_search:
+            if detailed.routing.failures:
+                height_state.feedback = update_feedback(
+                    decay_feedback(height_state.feedback),
+                    detailed.routing,
+                )
             self._record_routing_observation(
                 height_state,
                 selected,
@@ -2668,7 +2674,7 @@ def _topology_beam_height(
         strip_count=strip_count,
         sprayed_lanes=sprayed_lanes,
     ):
-        return coarse_heights[-1]
+        return coarse_heights[0]
     if _uses_mid_topology_height(
         machine_count=machine_count,
         strip_count=strip_count,
@@ -2890,7 +2896,7 @@ def _shared_pack_height_rank(
         and _SHARED_PACK_MACHINE_MIN <= machine_count <= _SHARED_PACK_MACHINE_MAX
         and strip_count <= _COMPACT_LARGE_VARIANT_SIZE
     ):
-        return 1
+        return 2
     if (
         direct_candidates == 0
         and strip_count < _TOPOLOGY_BEAM_MIN_STRIPS
@@ -3007,6 +3013,21 @@ def _topology_candidate_decoded(
         gap_area=0,
         variant_indices=candidate.variant_indices,
     )
+
+
+def _topology_close_decoded(
+    candidate: CompactTopologyCandidate,
+    routing_hint: DecodedPlacement | None,
+) -> DecodedPlacement:
+    """Reuse the first width-admissible hint in its existing candidate slot."""
+    decoded = _topology_candidate_decoded(candidate)
+    if (
+        candidate.topology_index != 0
+        or routing_hint is None
+        or routing_hint.width > _width_slack_cap(candidate.width)
+    ):
+        return decoded
+    return routing_hint
 
 
 def _variant_direct_eligibility(
@@ -3889,24 +3910,13 @@ def _production_run(
         return result
 
     def certify(placement: Placement) -> ValidationVerdict:
-        if deadline_reached():
+        def budget_verdict() -> ValidationVerdict:
             return ValidationVerdict(
                 False,
                 (),
                 None,
                 status=DetailedRouteStatus.BUDGET,
             )
-        report = validate.certify(placement, spec, expect_power=power)
-        if deadline_reached():
-            return ValidationVerdict(
-                False,
-                (),
-                None,
-                status=DetailedRouteStatus.BUDGET,
-            )
-        failures = tuple(sorted({finding.check for finding in report.errors}))
-        if failures:
-            return ValidationVerdict(False, failures, None)
 
         def project(candidate: Placement) -> Placement:
             finalizer_parameters = inspect.signature(
@@ -3923,41 +3933,28 @@ def _production_run(
                 )
             return finalize.finalize_placement(candidate, band_policy)
 
+        if deadline_reached():
+            return budget_verdict()
         try:
-            projected = project(placement)
             compacted = finalize.compact_open_boundary_belts_certified(
-                projected,
+                placement,
                 spec,
                 expect_power=power,
                 cancelled=deadline_reached,
             )
-            compacted_report = compacted.report or report
-            compacted_failures = tuple(
-                sorted({finding.check for finding in compacted_report.errors})
-            )
-            if compacted_failures:
-                return ValidationVerdict(False, compacted_failures, None)
-            finalized = (
-                projected
-                if compacted.placement is projected
-                else project(compacted.placement)
-            )
+            if deadline_reached():
+                return budget_verdict()
+            finalized = project(compacted.placement)
         except finalize.ProjectionRefusal as exc:
             return ValidationVerdict(False, exc.checks, None, exc.failures)
         except finalize.ProjectionCancelled:
-            return ValidationVerdict(
-                False,
-                (),
-                None,
-                status=DetailedRouteStatus.BUDGET,
-            )
+            return budget_verdict()
         if deadline_reached():
-            return ValidationVerdict(
-                False,
-                (),
-                None,
-                status=DetailedRouteStatus.BUDGET,
-            )
+            return budget_verdict()
+        report = validate.certify(finalized, spec, expect_power=power)
+        failures = tuple(sorted({finding.check for finding in report.errors}))
+        if failures:
+            return ValidationVerdict(False, failures, None)
         return ValidationVerdict(
             True,
             (),
@@ -4329,6 +4326,11 @@ def _production_run(
                     deadline if topology_index < protected_candidates else seed_deadline
                 ),
                 cancelled=deadline_reached,
+                stop_when_width_admits=(
+                    (lambda compact_width: hint.width <= _width_slack_cap(compact_width))
+                    if topology_index == 0
+                    else None
+                ),
             )
             if candidate is None:
                 stage_admission.finish(topology_stage_started)
@@ -4348,7 +4350,7 @@ def _production_run(
                     beam.exclude(candidate.signature)
                 stage_admission.finish(topology_stage_started)
                 continue
-            decoded = _topology_candidate_decoded(candidate)
+            decoded = _topology_close_decoded(candidate, hint)
             solver.close_exact_decoded(
                 topology_beam_height,
                 decoded,

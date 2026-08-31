@@ -437,6 +437,39 @@ def test_topology_beam_enumerates_distinct_deterministic_relation_signatures() -
     assert first_run == second_run
     assert first_run[0][2] != first_run[1][2]
 
+def test_topology_beam_can_stop_at_the_first_width_admitted_incumbent() -> None:
+    problem = _fixed_problem(
+        sizes=((3, 2), (2, 2), (1, 2), (2, 1)),
+        height=4,
+        nets=(),
+    )
+    hint = decode_sequence_pair(
+        SequencePair((0, 1, 2, 3), (0, 1, 2, 3)),
+        GapProfile.zero(problem.size),
+        problem.sizes,
+        outline_height=problem.outline_height,
+    )
+    beam = CompactTopologyBeam(
+        problem,
+        variant_indices=(0,) * problem.size,
+        width_bound=8,
+        base_seed=17,
+        coordinate_hint=hint,
+        config=CompactTopologyBeamConfig(
+            max_candidates=1,
+            max_deterministic_time=0.2,
+        ),
+    )
+    observed_widths: list[int] = []
+
+    candidate = beam.solve_next(
+        stop_when_width_admits=lambda width: not observed_widths.append(width)
+    )
+
+    assert candidate is not None
+    assert observed_widths == [candidate.width]
+    assert candidate.status is CompactSeedStatus.FEASIBLE
+
 
 def test_topology_refinement_validates_config_and_direct_target_types() -> None:
     problem = _fixed_problem(sizes=((2, 2), (2, 2)), nets=((0, 1),))

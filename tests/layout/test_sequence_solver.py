@@ -15,6 +15,7 @@ from flab2bp.dsp import catalog, rules
 from flab2bp.layout import finalize, slots, validate
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import (
+    AreaFrame,
     NoValidLayout,
     PlacedBuilding,
     Placement,
@@ -25,6 +26,8 @@ from flab2bp.layout.compact_seed import (
     CompactSeedDiagnostics,
     CompactSeedResult,
     CompactSeedStatus,
+    CompactTopologyCandidate,
+    PairwiseRelationSignature,
     VariantDirectInsertTarget,
 )
 from flab2bp.layout.freeform import (
@@ -636,6 +639,38 @@ def test_exact_candidate_caps_preserve_later_closures_and_fallback_discovery() -
     assert fake.detailed_allowances[2] > 0
     assert budget.spent == 22
     assert budget.spent < budget.total
+
+
+def test_exact_seed_routing_failure_becomes_shared_search_feedback() -> None:
+    fake = _FakeRouting(
+        detailed_results=(
+            DetailedStageResult(
+                _routing(
+                    DetailedRouteStatus.STRANDED,
+                    geometric_failure=True,
+                    failure_kind=RouteFailureKind.CONGESTION_WALL,
+                ),
+                None,
+            ),
+        )
+    )
+    solver = _solver(fake, heights=(40,))
+    decoded = DecodedPlacement(
+        x=(0,),
+        y=(0,),
+        width=1,
+        used_height=1,
+        x_windows=((0, 0),),
+        y_windows=((0, 0),),
+        gap_area=0,
+        variant_indices=(0,),
+    )
+
+    solver.close_exact_decoded(40, decoded, reason="topology-beam")
+
+    feedback = solver._heights[0].feedback
+    assert feedback.net_weight
+    assert feedback.cell_history
 
 
 def test_unseeded_solver_has_no_compact_closure() -> None:
@@ -1381,6 +1416,22 @@ def test_measured_stage_reserves_search_and_completion_spans_once_each() -> None
     assert admission.try_start() is None
 
 
+
+def test_measured_stage_reserves_bounded_work_without_an_incumbent() -> None:
+    now = 0.0
+    admission = sequence_solver_module._MeasuredStageAdmission(
+        deadline=10.0,
+        monotonic=lambda: now,
+    )
+    first = admission.try_start()
+    assert first == 0.0
+    now = 4.0
+    admission.record_completion(1.0)
+    admission.finish(first)
+    now = 8.0
+
+    assert admission.try_start() is None
+
 def test_later_cancelled_proxy_closes_the_best_completed_candidate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2059,7 +2110,7 @@ def test_small_direct_seed_role_requires_dense_direct_opportunity(
     ),
     (
         (20, 7, 6, 0, 4, 0),
-        (95, 27, 6, 27, 0, 1),
+        (95, 27, 6, 27, 0, 2),
         (16, 4, 6, 2, 0, 2),
         (9, 3, 6, 2, 0, 0),
     ),
@@ -2109,7 +2160,7 @@ def test_tall_topology_role_is_sprayed_and_saturated(
     )
 
 
-def test_tall_topology_height_uses_highest_bound_rank_not_numeric_height() -> None:
+def test_tall_topology_height_uses_narrowest_greedy_bound_rank() -> None:
     assert (
         sequence_solver_module._topology_beam_height(
             {},
@@ -2119,8 +2170,9 @@ def test_tall_topology_height_uses_highest_bound_rank_not_numeric_height() -> No
             sprayed_lanes=14,
             power=False,
         )
-        == 33
+        == 89
     )
+
 
 
 @pytest.mark.parametrize(
@@ -4191,6 +4243,158 @@ def test_sequence_backend_returns_authoritative_finalized_placement_once(
         completion=PlacementCompletion.COMPACTED_AND_FINALIZED,
     )
     assert placement.completion is PlacementCompletion.COMPACTED_AND_FINALIZED
+
+
+def test_sequence_completion_compacts_then_finalizes_then_validates_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = two_stage_spec()
+    policy = BandPolicy("portable")
+    production = _production_run(
+        spec,
+        band_policy=policy,
+        time_budget_s=20.0,
+        power=False,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+    )
+    routed = _placement(area=10, belt_tiles=2)
+    compacted = _placement(area=9, belt_tiles=1)
+    projected = replace(
+        _placement(area=8, belt_tiles=1),
+        frame=AreaFrame(
+            width=8,
+            height=1,
+            primary_band=40,
+            certified_bands=(40,),
+            rotated=False,
+        ),
+    )
+    trace: list[tuple[str, Placement]] = []
+
+    def compact(
+        candidate: Placement,
+        *_args: object,
+        **_kwargs: object,
+    ) -> finalize.BoundaryCompactionResult:
+        trace.append(("compact", candidate))
+        return finalize.BoundaryCompactionResult(compacted, validate.Report(findings=()))
+
+    def project(
+        candidate: Placement,
+        *_args: object,
+        **_kwargs: object,
+    ) -> Placement:
+        trace.append(("finalize", candidate))
+        return projected
+
+    def certify(
+        candidate: Placement,
+        *_args: object,
+        **_kwargs: object,
+    ) -> validate.Report:
+        trace.append(("validate", candidate))
+        monkeypatch.setattr(sequence_solver_module.time, "monotonic", lambda: float("inf"))
+        return validate.Report(findings=())
+
+    monkeypatch.setattr(finalize, "compact_open_boundary_belts_certified", compact)
+    monkeypatch.setattr(finalize, "finalize_placement", project)
+    monkeypatch.setattr(validate, "certify", certify)
+
+    verdict = production.solver.adapters.validate(routed)
+
+    assert verdict.ok
+    assert verdict.placement == replace(
+        projected,
+        completion=PlacementCompletion.COMPACTED_AND_FINALIZED,
+    )
+    assert trace == [
+        ("compact", routed),
+        ("finalize", compacted),
+        ("validate", projected),
+    ]
+
+def test_sequence_completion_cancels_projection_before_atomic_validation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    production = _production_run(
+        two_stage_spec(),
+        band_policy=BandPolicy("portable"),
+        time_budget_s=20.0,
+        power=False,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+    )
+    expired = False
+    validated = False
+
+    def monotonic() -> float:
+        return float("inf") if expired else 0.0
+
+    def compact(
+        *_args: object,
+        cancelled: Callable[[], bool],
+        **_kwargs: object,
+    ) -> Never:
+        nonlocal expired
+        expired = True
+        assert cancelled()
+        raise finalize.ProjectionCancelled
+
+    def certify(*_args: object, **_kwargs: object) -> validate.Report:
+        nonlocal validated
+        validated = True
+        return validate.Report(findings=())
+
+    monkeypatch.setattr(sequence_solver_module.time, "monotonic", monotonic)
+    monkeypatch.setattr(finalize, "compact_open_boundary_belts_certified", compact)
+    monkeypatch.setattr(validate, "certify", certify)
+
+    verdict = production.solver.adapters.validate(_placement(area=10, belt_tiles=2))
+
+    assert not verdict.ok
+    assert verdict.status is DetailedRouteStatus.BUDGET
+    assert not validated
+
+
+def test_first_topology_candidate_reuses_only_a_width_admissible_hint() -> None:
+    candidate = CompactTopologyCandidate(
+        topology_index=0,
+        status=CompactSeedStatus.FEASIBLE,
+        x=(0,),
+        y=(0,),
+        width=10,
+        used_height=1,
+        variant_indices=(0,),
+        signature=PairwiseRelationSignature(()),
+        deterministic_time=0.1,
+    )
+    hint = DecodedPlacement(
+        x=(10,),
+        y=(0,),
+        width=11,
+        used_height=1,
+        x_windows=((10, 10),),
+        y_windows=((0, 0),),
+        gap_area=0,
+        variant_indices=(0,),
+    )
+
+    assert sequence_solver_module._topology_close_decoded(candidate, hint) is hint
+    assert (
+        sequence_solver_module._topology_close_decoded(
+            replace(candidate, width=9),
+            hint,
+        )
+        is not hint
+    )
+    assert (
+        sequence_solver_module._topology_close_decoded(
+            replace(candidate, topology_index=1),
+            hint,
+        )
+        is not hint
+    )
 
 
 @pytest.mark.parametrize("belt_vertical_construction", [False, True])
