@@ -2785,6 +2785,17 @@ def _protected_topology_candidates(
         return 7
     return 3 if sprayed_lanes > 0 else 2
 
+def _uses_sparse_compact_topology_diversity(
+    *,
+    strip_count: int,
+    sprayed_lanes: int,
+) -> bool:
+    """Route the first relation distinct from the shelf on sparse compact spray plans."""
+    return (
+        0 < sprayed_lanes <= _DENSE_SPRAY_LANE_THRESHOLD
+        and strip_count <= 13
+    )
+
 
 def _topology_closure_allowance(
     allowance: int,
@@ -3823,8 +3834,11 @@ def _production_run(
     def prepare(height: int, decoded: DecodedPlacement) -> _ProductionCandidate:
         return prepare_candidate(height, decoded, align=True)
 
+    # Exact seeds freeze both coordinate windows to one point. Alignment therefore
+    # cannot move a strip or change a pair relation; it only records direct inserts
+    # already realized by the exact coordinates so preparation can reuse that proof.
     def prepare_exact(height: int, decoded: DecodedPlacement) -> _ProductionCandidate:
-        return prepare_candidate(height, decoded, align=False)
+        return prepare_candidate(height, decoded, align=True)
 
     def global_route(
         candidate: _ProductionCandidate,
@@ -4317,6 +4331,10 @@ def _production_run(
         )
         narrowest_width_seen: int | None = None
         refinement_attempted = False
+        diverse_topology_first = _uses_sparse_compact_topology_diversity(
+            strip_count=len(strips),
+            sprayed_lanes=len(spec.spray_lanes),
+        )
         for topology_index in range(beam.config.max_candidates):
             topology_stage_started = stage_admission.try_start()
             if topology_stage_started is None:
@@ -4345,6 +4363,14 @@ def _production_run(
                 else min(narrowest_width_seen, candidate.width)
             )
             telemetry.topology_beam_candidates += 1
+            if topology_index == 0 and diverse_topology_first:
+                # The first solve certifies that the shelf width is admissible.  For
+                # this compact sprayed role, spend the closure on the next relation
+                # rather than rerouting the same shelf-shaped routing evidence.
+                if topology_index + 1 < beam.config.max_candidates:
+                    beam.exclude(candidate.signature)
+                stage_admission.finish(topology_stage_started)
+                continue
             if not close_normal:
                 if topology_index + 1 < beam.config.max_candidates:
                     beam.exclude(candidate.signature)

@@ -1895,6 +1895,42 @@ def test_production_exact_preparation_propagates_deadline_and_reuses_only_pure_c
     assert len(caches) == 2
     assert caches[0] is caches[1]
 
+def test_production_exact_preparation_reuses_realized_direct_insert(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    promised_direct: list[frozenset[freeform_module.DirectInsertId]] = []
+
+    def capture_prepare(
+        _spec: BuildSpec,
+        _strips: list[freeform_module.Strip],
+        pack: freeform_module._Pack,
+        **_kwargs: object,
+    ) -> Never:
+        promised_direct.append(pack.direct)
+        raise freeform_module._PreparationDeadline
+
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "_prepare_routing_problem",
+        capture_prepare,
+    )
+    run = _production_run(
+        two_stage_spec(),
+        band_policy=BandPolicy("portable"),
+        time_budget_s=2.0,
+        power=False,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+    )
+    height = run.solver._heights[0]
+    decoded = decode_state(height.problem, height.restarts[0].anneal)
+
+    candidate = run.solver.adapters.prepare_exact(height.height, decoded)
+
+    assert candidate.decoded.x == decoded.x
+    assert candidate.decoded.y == decoded.y
+    assert promised_direct and promised_direct[0]
+
 
 def test_sequence_pair_layout_rejects_removed_power_option() -> None:
     constructor: Callable[..., SequencePairLayout] = SequencePairLayout
@@ -2216,6 +2252,28 @@ def test_tall_topology_role_protects_every_measured_candidate() -> None:
             tall_role=False,
         )
         == 3
+    )
+
+@pytest.mark.parametrize(
+    ("strip_count", "sprayed_lanes", "expected"),
+    (
+        (13, 3, True),
+        (14, 3, False),
+        (13, 0, False),
+        (13, 11, False),
+    ),
+)
+def test_sparse_compact_topology_routes_the_first_diverse_relation(
+    strip_count: int,
+    sprayed_lanes: int,
+    expected: bool,
+) -> None:
+    assert (
+        sequence_solver_module._uses_sparse_compact_topology_diversity(
+            strip_count=strip_count,
+            sprayed_lanes=sprayed_lanes,
+        )
+        is expected
     )
 
 
