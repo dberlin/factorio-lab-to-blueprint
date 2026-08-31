@@ -20,6 +20,8 @@ from flab2bp.spec import BuildSpec
 
 type _Direction = Literal["input", "output"]
 type _Side = Literal["left", "bottom", "right", "top"]
+_NO_PROTECTED_ROOTS: frozenset[int] = frozenset()
+
 
 @dataclass(frozen=True, slots=True)
 class ProjectionFailure:
@@ -2416,6 +2418,7 @@ def _boundary_open_belts(
     placement: Placement,
     side: _Side,
     *,
+    protected_roots: frozenset[int] = _NO_PROTECTED_ROOTS,
     cancelled: Callable[[], bool] | None = None,
 ) -> frozenset[int]:
     """Open belts on one current bounding side for the certified fallback."""
@@ -2425,7 +2428,8 @@ def _boundary_open_belts(
         if cancelled is not None and cancelled():
             raise ProjectionCancelled
         if (
-            catalog.is_belt(building.item_id)
+            index not in protected_roots
+            and catalog.is_belt(building.item_id)
             and (building.input_obj is None or building.output_obj is None)
             and (
                 (side == "left" and building.x == left)
@@ -2436,6 +2440,59 @@ def _boundary_open_belts(
         ):
             selected.add(index)
     return frozenset(selected)
+
+
+def _required_external_input_boundary_roots(
+    placement: Placement,
+    spec: BuildSpec,
+    *,
+    cancelled: Callable[[], bool] | None = None,
+) -> frozenset[int]:
+    """Find required player-fed roots from the emitted graph and build spec."""
+    belts: list[bool] = []
+    for building in placement.buildings:
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
+        belts.append(catalog.is_belt(building.item_id))
+    incoming: set[int] = set()
+    connected: set[int] = set()
+    for source, building in enumerate(placement.buildings):
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
+        for target in (building.input_obj, building.output_obj):
+            if target is None or not 0 <= target < len(belts):
+                continue
+            if belts[source]:
+                connected.add(source)
+            if belts[target]:
+                connected.add(target)
+        target = building.output_obj
+        if (
+            belts[source]
+            and target is not None
+            and 0 <= target < len(belts)
+            and belts[target]
+        ):
+            incoming.add(target)
+    left, bottom, right, top = placement.bounds
+    roots: set[int] = set()
+    for index, building in enumerate(placement.buildings):
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
+        if (
+            belts[index]
+            and index not in incoming
+            and index in connected
+            and building.carries_item in spec.external_inputs
+            and (
+                building.x == left
+                or building.y == bottom
+                or building.x + building.width - 1 == right
+                or building.y + building.height - 1 == top
+            )
+        ):
+            roots.add(index)
+    return frozenset(roots)
 
 
 @dataclass(slots=True)
@@ -2469,11 +2526,13 @@ class _CleanupSurvivorGraph:
         cancelled: Callable[[], bool] | None = None,
         _operations: _CleanupOperations | None = None,
         _include_boundary_open: bool = True,
+        _protected_roots: frozenset[int] = _NO_PROTECTED_ROOTS,
     ) -> None:
         self.buildings = placement.buildings
         self.cancelled = cancelled
         self._operations = _operations or _CleanupOperations()
         self.include_boundary_open = _include_boundary_open
+        self.protected_roots: frozenset[int] = _protected_roots
         self.active = [True] * len(self.buildings)
         self.active_count = len(self.buildings)
         self.belts: list[bool] = []
@@ -2637,6 +2696,7 @@ class _CleanupSurvivorGraph:
         fork.cancelled = self.cancelled
         fork._operations = self._operations
         fork.include_boundary_open = self.include_boundary_open
+        fork.protected_roots = self.protected_roots
         fork.active = self.active.copy()
         fork.active_count = self.active_count
         fork.belts = self.belts.copy()
@@ -2975,7 +3035,8 @@ class _CleanupSurvivorGraph:
         predecessor_count = self.predecessors[index]
         open_end = predecessor_count == 0 or not successor_is_belt
         protected = (
-            self.nonbelt_input[index] > 0
+            index in self.protected_roots
+            or self.nonbelt_input[index] > 0
             or self.nonbelt_output[index] > 0
             or bool(building.parameters)
         )
@@ -3196,22 +3257,35 @@ def _certified_side_fallback(
         sprayed_lanes=len(spec.spray_lanes),
     ):
         for side in ("left", "bottom", "right", "top"):
+            protected_roots = _required_external_input_boundary_roots(
+                compacted,
+                spec,
+                cancelled=cancelled,
+            )
             _ = attempt(
                 _boundary_open_belts(
                     compacted,
                     side,
+                    protected_roots=protected_roots,
                     cancelled=cancelled,
                 )
             )
     else:
         for _round in range(4):
+            protected_roots = _required_external_input_boundary_roots(
+                compacted,
+                spec,
+                cancelled=cancelled,
+            )
             removed = _boundary_open_belts(
                 compacted,
                 "left",
+                protected_roots=protected_roots,
                 cancelled=cancelled,
             ) | _boundary_open_belts(
                 compacted,
                 "bottom",
+                protected_roots=protected_roots,
                 cancelled=cancelled,
             )
             if not attempt(removed):
@@ -3238,10 +3312,16 @@ def compact_open_boundary_belts_certified(
     started = time.perf_counter()
     if cancelled is not None and cancelled():
         raise ProjectionCancelled
+    protected_roots = _required_external_input_boundary_roots(
+        placement,
+        spec,
+        cancelled=cancelled,
+    )
     graph = _CleanupSurvivorGraph(
         placement,
         cancelled=cancelled,
         _include_boundary_open=False,
+        _protected_roots=protected_roots,
     )
     survivors = graph.survivor_indices()
     removed_values: set[int] = set()

@@ -391,6 +391,50 @@ def test_compaction_prunes_open_belt_leaves_to_a_structural_fixed_point(
     assert [(belt.x, belt.y) for belt in compacted.buildings] == [(1, 1)]
 
 
+def test_compaction_preserves_required_external_input_boundary_roots(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    required_root = replace(
+        _linked_belt(0, 0, input_obj=None, output_obj=1),
+        carries_item="iron-ore",
+    )
+    lane = replace(
+        _linked_belt(1, 0, input_obj=None, output_obj=2),
+        carries_item="iron-ore",
+    )
+    consumer = replace(_building(2302, 2, 0), input_obj=1)
+    dead_leaf = replace(
+        _linked_belt(-1, 1, input_obj=None, output_obj=None),
+        carries_item="iron-ore",
+    )
+    placement = Placement(buildings=(required_root, lane, consumer, dead_leaf))
+    certified: list[Placement] = []
+
+    def certify(candidate: Placement, *_args: object, **_kwargs: object) -> _Report:
+        certified.append(candidate)
+        return _Report(errors=(object(),)) if len(certified) % 2 else _Report()
+
+    monkeypatch.setattr(finalize, "_certify", certify)
+
+    first = finalize.compact_open_boundary_belts(
+        placement,
+        two_stage_spec(),
+        expect_power=False,
+    )
+    second = finalize.compact_open_boundary_belts(
+        placement,
+        two_stage_spec(),
+        expect_power=False,
+    )
+
+    assert len(certified) == 4
+    assert all(required_root in candidate.buildings for candidate in certified)
+    assert first.buildings == second.buildings
+    assert required_root in first.buildings
+    assert dead_leaf not in first.buildings
+    assert required_root.x == first.bounds[0]
+
+
 def test_structural_compaction_matches_wave_oracle_with_linear_work(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -13537,8 +13537,9 @@ class FreeformLayout:
             parameter.kind is inspect.Parameter.VAR_KEYWORD
             for parameter in finalizer_parameters.values()
         )
-        certify_reserve_s = 0.0
+        compaction_reserve_s = 0.0
         finalize_reserve_s = 0.0
+        validation_reserve_s = 0.0
 
         def projection_retry_affordable() -> bool:
             current_candidate_s = (
@@ -13727,7 +13728,11 @@ class FreeformLayout:
             # that is what makes `time_budget_s` a wall rather than a suggestion.
             # `lay_out` turns it into a refusal that names the deadline, so the
             # distinction between "cannot" and "ran out" survives into the error.
-            completion_reserve_s = certify_reserve_s + finalize_reserve_s
+            completion_reserve_s = (
+                compaction_reserve_s
+                + finalize_reserve_s
+                + validation_reserve_s
+            )
             if (
                 deadline is not None
                 and deadline - time.monotonic() < completion_reserve_s
@@ -13775,7 +13780,9 @@ class FreeformLayout:
             if (
                 deadline is not None
                 and deadline - time.monotonic()
-                < certify_reserve_s + finalize_reserve_s
+                < compaction_reserve_s
+                + finalize_reserve_s
+                + validation_reserve_s
             ):
                 break
             if feedback is None:
@@ -14108,19 +14115,21 @@ class FreeformLayout:
             # is a search, and refusing outright is honest, while an invalid
             # blueprint is the worst outcome this program has.
             #
-            # Complete boundary cleanup belongs to candidate certification, not
-            # to a second post-layout finalization.  The cleanup returns the
-            # exact immutable report it had to compute before accepting changed
-            # survivors; reuse only that complete result.  An unchanged
-            # placement carries no report and is certified once here.
+            # Boundary cleanup certifies every changed survivor set for its own
+            # rollback decision.  That cached report is not this layout
+            # strategy's return contract: final projection still changes the
+            # exact placement, so Freeform consumes its authoritative validator
+            # only after both compaction and finalization are complete.
             if (
                 deadline is not None
                 and deadline - time.monotonic()
-                < certify_reserve_s + finalize_reserve_s
+                < compaction_reserve_s
+                + finalize_reserve_s
+                + validation_reserve_s
             ):
                 retain_attempt(_BuildBudgetStage.CERTIFICATION)
                 break
-            certify_started = time.monotonic()
+            compaction_started = time.monotonic()
             try:
                 compacted = finalize.compact_open_boundary_belts_certified(
                     placement,
@@ -14132,25 +14141,17 @@ class FreeformLayout:
                 retain_attempt(_BuildBudgetStage.CERTIFICATION)
                 break
             placement = compacted.placement
-            report = compacted.report
-            if report is None:
-                report = validate.certify(placement, spec, expect_power=True)
-            certify_reserve_s = max(
-                certify_reserve_s,
-                time.monotonic() - certify_started,
+            compaction_reserve_s = max(
+                compaction_reserve_s,
+                time.monotonic() - compaction_started,
             )
             if cancelled is not None and cancelled():
                 retain_attempt(_BuildBudgetStage.CERTIFICATION)
                 break
-            if report.errors:
-                if rejected is not None:
-                    for finding in report.errors:
-                        _retain_refusal(rejected, finding)
-                retain_attempt()
-                continue
             if (
                 deadline is not None
-                and deadline - time.monotonic() < finalize_reserve_s
+                and deadline - time.monotonic()
+                < finalize_reserve_s + validation_reserve_s
             ):
                 retain_attempt(_BuildBudgetStage.FINALIZATION)
                 break
@@ -14300,6 +14301,27 @@ class FreeformLayout:
             if cancelled is not None and cancelled():
                 retain_attempt(_BuildBudgetStage.FINALIZATION)
                 break
+            if (
+                deadline is not None
+                and deadline - time.monotonic() < validation_reserve_s
+            ):
+                retain_attempt(_BuildBudgetStage.CERTIFICATION)
+                break
+            certify_started = time.monotonic()
+            report = validate.certify(placement, spec, expect_power=True)
+            validation_reserve_s = max(
+                validation_reserve_s,
+                time.monotonic() - certify_started,
+            )
+            if cancelled is not None and cancelled():
+                retain_attempt(_BuildBudgetStage.CERTIFICATION)
+                break
+            if report.errors:
+                if rejected is not None:
+                    for finding in report.errors:
+                        _retain_refusal(rejected, finding)
+                retain_attempt()
+                continue
             if placement.frame is not None:
                 placement = replace(
                     placement,

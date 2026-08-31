@@ -2381,17 +2381,14 @@ class TestDirectInsertion:
             assert b.z == (b.z2 or 0), "sorters never span altitudes"
 
     def test_the_sweep_prefers_area_over_direct_insertion(self) -> None:
-        """Pins the measured trade-off, so a later change has to argue with it.
+        """Pins the post-cleanup trade, so a later change has to argue with it.
 
-        Direct insertion needs the consumer stacked under the producer, and
-        stacking pays MARGIN vertically between the two strips. On the balanced
-        pair that is 132 tiles with the direct insert against 125 without, for a
-        saving of 5 belt tiles. Area is the bake-off metric and it wins.
-
-        This is the honest ceiling on the feature as built: it replaces a routed
-        net with a sorter, but it does NOT delete the two lanes the sorter spans,
-        so it cannot pay for the row it costs. Deleting those lanes is the
-        structural change that would make it a real density lever.
+        The sweep and the explicitly stacked alternative both realize the
+        direct insert.  Certified boundary cleanup now removes the structural
+        belt leaves around the smaller swept pack as well, so density no longer
+        trades against belt count: the chosen pack is both smaller and uses
+        fewer belts.  Reintroducing the old assertion would force weightless
+        belts merely to preserve a historical trade that no longer exists.
         """
         spec = two_stage_spec()
         swept = FreeformLayout(
@@ -2402,10 +2399,13 @@ class TestDirectInsertion:
         stacked, _ = self._stacked(spec, direct=True)
 
         assert stacked.stats["direct_inserts"] >= 1.0
-        assert swept.area <= stacked.area, "the sweep must not choose a larger pack"
-        assert swept.stats["belt_tiles"] >= stacked.stats["belt_tiles"], (
-            "the cheaper-area pack is expected to carry MORE belts, which is the "
-            "trade being made"
+        assert swept.stats["direct_inserts"] >= 1.0
+        assert swept.area < stacked.area, (
+            "the sweep must choose the smaller direct pack"
+        )
+        assert swept.stats["belt_tiles"] < stacked.stats["belt_tiles"], (
+            "certified cleanup should make the smaller direct pack use fewer belts "
+            "than the explicitly stacked direct alternative"
         )
 
 
@@ -2923,8 +2923,9 @@ def test_routed_attempt_expiring_in_certification_names_certification_stage(
         arrangements=1,
         deadline=0.1,
         certifier=expire_in_certification,
-        finalizer=lambda *_args, **_kwargs: pytest.fail(
-            "an attempt that exhausted certification reached finalization"
+        finalizer=lambda placement, *_args, **_kwargs: replace(
+            placement,
+            frame=AreaFrame(1, 1, 4, (4,), False),
         ),
     )
 
@@ -2991,7 +2992,7 @@ def test_terminal_refusal_names_completion_stage_after_every_net_wired(
     assert "no wired packing" not in reason
 
 
-def test_sweep_reuses_complete_compaction_certification_before_finalization(
+def test_sweep_validates_exact_compacted_and_finalized_placement_before_completion(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     report = validate.Report(findings=())
@@ -3016,7 +3017,7 @@ def test_sweep_reuses_complete_compaction_certification_before_finalization(
         assert expect_power
         assert cancelled is not None
         assert not cancelled()
-        stages.append("certification")
+        stages.append("compaction")
         return CompactionResult(compacted, report)
 
     def finish(
@@ -3031,6 +3032,16 @@ def test_sweep_reuses_complete_compaction_certification_before_finalization(
             frame=AreaFrame(1, 1, 4, (4,), False),
         )
 
+    def certify(
+        placement: Placement,
+        *_args: object,
+        **_kwargs: object,
+    ) -> validate.Report:
+        assert placement.frame is not None
+        assert placement.completion is None
+        stages.append("validation")
+        return validate.Report(findings=())
+
     monkeypatch.setattr(
         finalize,
         "compact_open_boundary_belts_certified",
@@ -3042,18 +3053,83 @@ def test_sweep_reuses_complete_compaction_certification_before_finalization(
         _routing_failures(),
         arrangements=1,
         deadline=time.monotonic() + 10.0,
-        certifier=lambda *_args, **_kwargs: pytest.fail(
-            "a complete immutable compaction report was recomputed"
-        ),
+        certifier=certify,
         finalizer=finish,
     )
 
     assert result is not None
     assert result.buildings == compacted.buildings
     assert result.completion is PlacementCompletion.COMPACTED_AND_FINALIZED
-    assert stages == ["certification", "finalization"]
+    assert stages == ["compaction", "finalization", "validation"]
     assert len(attempts) == 1
     assert attempts[0].budget_stage is None
+
+
+def test_sweep_reserves_compaction_finalization_and_validation_as_exact_sum(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = 0.0
+    compactions = 0
+
+    def monotonic() -> float:
+        return clock
+
+    def compact(
+        placement: Placement,
+        _spec: BuildSpec,
+        **_kwargs: object,
+    ) -> finalize.BoundaryCompactionResult:
+        nonlocal clock, compactions
+        compactions += 1
+        clock += 2.0
+        return finalize.BoundaryCompactionResult(placement, None)
+
+    def finish(
+        placement: Placement,
+        _policy: BandPolicy,
+        **_kwargs: object,
+    ) -> Placement:
+        nonlocal clock
+        clock += 3.0
+        return replace(
+            placement,
+            frame=AreaFrame(1, 1, 4, (4,), False),
+        )
+
+    def reject(
+        *_args: object,
+        **_kwargs: object,
+    ) -> validate.Report:
+        nonlocal clock
+        clock += 2.0
+        return validate.Report(
+            findings=(
+                validate.Finding(
+                    "flow.conservation",
+                    validate.Severity.ERROR,
+                    "forced",
+                    (),
+                    {},
+                ),
+            )
+        )
+
+    monkeypatch.setattr(freeform.time, "monotonic", monotonic)
+    monkeypatch.setattr(finalize, "compact_open_boundary_belts_certified", compact)
+    result, seen, attempts = _sweep_after_first_routing(
+        monkeypatch,
+        _routing_failures(),
+        arrangements=1,
+        heights=(20, 21),
+        deadline=13.0,
+        finalizer=finish,
+        certifier=reject,
+    )
+
+    assert result is None
+    assert seen == [(20, 0)]
+    assert compactions == 1
+    assert len(attempts) == 1
 
 
 def test_sweep_cancellation_inside_finalization_cannot_install_best(
@@ -3841,14 +3917,27 @@ class TestSolverActuallyRuns:
                 ),
             )
         )
+        validated: list[Placement] = []
+
+        def reject(
+            candidate: Placement,
+            *_args: object,
+            **_kwargs: object,
+        ) -> validate.Report:
+            validated.append(candidate)
+            return rejection
+
         monkeypatch.setattr(
             "flab2bp.layout.freeform.validate.certify",
-            lambda *a, **k: rejection,
+            reject,
         )
         with pytest.raises(NoValidLayout) as exc:
             FreeformLayout(
                 band_policy=BandPolicy("portable"),
             ).lay_out(two_stage_spec(), time_budget_s=1.0)
+        assert validated
+        assert validated[-1].frame is not None
+        assert validated[-1].completion is None
         assert "rejected by our own validator" in exc.value.reason
         assert "flow.conservation" in exc.value.reason, (
             "the refusal must name the check, or the next reader goes to the "
