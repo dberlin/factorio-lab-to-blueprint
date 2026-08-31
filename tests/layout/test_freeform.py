@@ -3571,10 +3571,12 @@ def test_first_warm_start_substitution_is_width_bounded_and_attempt_neutral(
     placement = Placement(buildings=(), stats={"belt_tiles": 0.0})
     pack_calls = 0
     routed_packs: list[freeform._Pack] = []
+    pack_kwargs: dict[str, object] = {}
 
-    def pack(*_args: object, **_kwargs: object) -> freeform._Pack:
+    def pack(*_args: object, **kwargs: object) -> freeform._Pack:
         nonlocal pack_calls
         pack_calls += 1
+        pack_kwargs.update(kwargs)
         return compact
 
     def build(
@@ -3625,6 +3627,7 @@ def test_first_warm_start_substitution_is_width_bounded_and_attempt_neutral(
 
     assert result is not None
     assert pack_calls == len(routed_packs) == 1
+    assert pack_kwargs["stop_when_seed_admissible"] is True
     selected = routed_packs[0]
     expected = seed if uses_seed else compact
     assert (selected.at, selected.width, selected.height) == (

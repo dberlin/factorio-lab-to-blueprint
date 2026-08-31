@@ -3165,6 +3165,7 @@ def _pack(
     exact_pack_no_goods: tuple[ExactPackNoGood, ...] = (),
     direct_relation_no_goods: tuple[_DirectRelationNoGood, ...] = (),
     feedback: FeedbackState | None = None,
+    stop_when_seed_admissible: bool = False,
 ) -> _Pack | None:
     """Minimise width at a fixed height with CP-SAT.
 
@@ -3581,7 +3582,21 @@ def _pack(
     # same sweep must ask for the same arrangements in the same order, or the
     # bake-off is comparing samples rather than strategies.
     solver.parameters.random_seed = _PACK_RANDOM_SEED + _ARRANGEMENT_STRIDE * arrangement
-    status = solver.Solve(model)
+
+    class SeedAdmission(cp_model.CpSolverSolutionCallback):
+        """End this solve once its exact incumbent admits the routed seed."""
+
+        def on_solution_callback(self) -> None:
+            assert seed is not None
+            if seed.width <= _width_slack_cap(self.Value(w_var)):
+                self.StopSearch()
+
+    admission = (
+        SeedAdmission()
+        if stop_when_seed_admissible and seed is not None
+        else None
+    )
+    status = solver.Solve(model, admission)
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         return None
     return _Pack(
@@ -13788,6 +13803,12 @@ class FreeformLayout:
                 exact_pack_no_goods=tuple(exact_no_good_state.no_goods),
                 direct_relation_no_goods=tuple(direct_relation_no_goods),
                 feedback=feedback,
+                stop_when_seed_admissible=(
+                    candidate_index == 1
+                    and arrangement == 0
+                    and not projection_retry
+                    and feedback is None
+                ),
             )
             if pack is None:
                 continue
@@ -13807,10 +13828,12 @@ class FreeformLayout:
             # the fourteen-strip calibration chain, while continuing to tighten
             # it can replace it with a width-35 arrangement that strands one net.
             #
-            # It does not add a solve, route, arrangement, worker, or deadline,
-            # and the seed REPLACES the candidate rather than acting as the
-            # deleted loose fallback.  If the exact incumbent is too narrow to
-            # admit the seed, the final incumbent is routed instead.
+            # The admission callback stops only this first optimisation once the
+            # same exact width proof exists.  It does not add a solve, route,
+            # arrangement, worker, or deadline, and the seed REPLACES the
+            # candidate rather than acting as the deleted loose fallback.  If
+            # the exact incumbent is too narrow to admit the seed, CP-SAT keeps
+            # its normal bounded search and the final incumbent is routed.
             seed = seeds[height]
             if (
                 candidate_index == 1
