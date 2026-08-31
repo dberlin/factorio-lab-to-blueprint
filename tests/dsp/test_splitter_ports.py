@@ -8,6 +8,8 @@ from dataclasses import replace
 from fractions import Fraction
 from pathlib import Path
 
+import pytest
+
 from flab2bp.dsp import catalog, codec, splitter_ports
 from flab2bp.dsp.envelope import BlueprintFormatError
 from flab2bp.dsp.rules import BELT_PORT_DRAW_TO_SLOT, WORLD_UNITS_PER_LEVEL
@@ -105,6 +107,88 @@ def _observed_placement(
     )
 
 
+def _validation_complexity_fixture(
+    splitter_count: int,
+) -> tuple[PlacedBuilding, ...]:
+    splitter_model = catalog.building(catalog.SPLITTER_ID).model_index
+    belt_model = catalog.building(2002).model_index
+    sorter_model = catalog.building(2011).model_index
+    assembler_model = catalog.building(2303).model_index
+    buildings = [
+        PlacedBuilding(catalog.SPLITTER_ID, splitter_model, 0, 0)
+        for _ in range(splitter_count)
+    ]
+    buildings.extend(
+        PlacedBuilding(
+            2002,
+            belt_model,
+            0,
+            0,
+            output_obj=splitter,
+        )
+        for splitter in range(splitter_count)
+    )
+    buildings.extend(
+        PlacedBuilding(2011, sorter_model, 0, 0)
+        for _ in range(splitter_count)
+    )
+    buildings.extend(
+        PlacedBuilding(2303, assembler_model, 0, 0)
+        for _ in range(splitter_count)
+    )
+    return tuple(buildings)
+
+
+def _validation_node(
+    node_id: int,
+    item_id: int,
+    *,
+    output_obj: int | None = None,
+    input_obj: int | None = None,
+) -> splitter_ports._Node:
+    return splitter_ports._Node(
+        id=node_id,
+        item_id=item_id,
+        model_index=catalog.building(item_id).model_index,
+        x=0.0,
+        y=0.0,
+        z=0.0,
+        yaw=0.0,
+        area_index=0,
+        output_obj=output_obj,
+        input_obj=input_obj,
+        output_to_slot=0,
+        input_from_slot=0,
+        output_from_slot=0,
+        input_to_slot=0,
+    )
+
+
+def _many_observed_placements(
+    splitter_count: int,
+) -> tuple[PlacedBuilding, ...]:
+    buildings: list[PlacedBuilding] = []
+    for splitter in range(splitter_count):
+        offset = len(buildings)
+        for building in _observed_placement(38, "feed", splitter % 4):
+            buildings.append(
+                replace(
+                    building,
+                    output_obj=(
+                        None
+                        if building.output_obj is None
+                        else building.output_obj + offset
+                    ),
+                    input_obj=(
+                        None
+                        if building.input_obj is None
+                        else building.input_obj + offset
+                    ),
+                )
+            )
+    return tuple(buildings)
+
+
 def test_supplied_blueprint_is_rejected_with_all_wrong_ports_named() -> None:
     raw = BROKEN.read_bytes()
     assert hashlib.sha256(raw).hexdigest() == BROKEN_SHA256
@@ -112,6 +196,31 @@ def test_supplied_blueprint_is_rejected_with_all_wrong_ports_named() -> None:
 
     issues = splitter_ports.blueprint_issues(blueprint.buildings)
 
+    assert [
+        (
+            issue.splitter,
+            issue.belt,
+            issue.code,
+            issue.direction,
+            issue.recorded_port,
+            issue.expected_port,
+        )
+        for issue in issues
+    ] == [
+        (1632, 1013, "direction", "feed", 0, 1),
+        (1632, 1633, "own_slot", "draw", 1, 3),
+        (1632, 1633, "direction", "draw", 1, 3),
+        (1632, 1634, "own_slot", "draw", 2, 2),
+        (1635, 996, "direction", "feed", 0, 1),
+        (1635, 1636, "own_slot", "draw", 1, 3),
+        (1635, 1636, "direction", "draw", 1, 3),
+        (1635, 1637, "own_slot", "draw", 2, 2),
+        (1638, 1338, "direction", "feed", 0, 1),
+        (1638, 1639, "own_slot", "draw", 1, 3),
+        (1638, 1639, "direction", "draw", 1, 3),
+        (1638, 1640, "own_slot", "draw", 2, 0),
+        (1638, 1640, "direction", "draw", 2, 0),
+    ]
     assert Counter(issue.code for issue in issues) == {
         "direction": 7,
         "own_slot": 6,
@@ -233,6 +342,147 @@ def test_assignment_selects_each_port_on_all_splitter_model_variants() -> None:
                 )
                 assert actual == port, (model_index, direction, port)
                 assert splitter_ports.placement_issues(wired) == ()
+
+
+def test_reusable_context_matches_public_convenience_query() -> None:
+    buildings = _observed_placement(39, "feed", 3)
+    context = splitter_ports.placement_port_context(buildings)
+
+    assert context.expected_port(1, 2, "feed") == 3
+    assert splitter_ports.expected_placement_port(buildings, 1, 2, "feed") == 3
+    assert context.expected_port(-1, 2, "feed") is None
+    assert splitter_ports.expected_placement_port(buildings, -1, 2, "feed") is None
+
+
+def test_slot_assignment_builds_one_context_for_all_splitter_links(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real_raw_placement_nodes = splitter_ports._raw_placement_nodes
+    context_builds = 0
+
+    def counted_raw_placement_nodes(
+        buildings: tuple[PlacedBuilding, ...],
+    ) -> tuple[splitter_ports._Node, ...]:
+        nonlocal context_builds
+        context_builds += 1
+        return real_raw_placement_nodes(buildings)
+
+    monkeypatch.setattr(
+        splitter_ports, "_raw_placement_nodes", counted_raw_placement_nodes
+    )
+    buildings = _many_observed_placements(12)
+
+    wired = slots.assign_belt_slots(buildings)
+
+    assert [wired[group * 3 + 1].output_to_slot for group in range(12)] == [
+        group % 4 for group in range(12)
+    ]
+    assert context_builds == 1
+
+
+def test_validation_examines_each_building_once_when_splitter_count_grows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real_is_belt = catalog.is_belt
+    examinations = 0
+
+    def counted_is_belt(item_id: int) -> bool:
+        nonlocal examinations
+        examinations += 1
+        return real_is_belt(item_id)
+
+    monkeypatch.setattr(catalog, "is_belt", counted_is_belt)
+    measured: list[tuple[int, int]] = []
+    for splitter_count in (4, 8, 16):
+        buildings = _validation_complexity_fixture(splitter_count)
+        issues = splitter_ports.placement_issues(buildings)
+        measured.append((len(buildings), examinations))
+        examinations = 0
+
+        assert len(issues) == splitter_count
+        assert all(issue.code == "path" for issue in issues)
+
+    assert measured == [(16, 16), (32, 32), (64, 64)]
+
+
+def test_duplicate_splitters_use_bounded_predecessor_lookup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    splitter_count = 8
+    predecessor_count = 8
+    nodes = (
+        *(
+            _validation_node(7, catalog.SPLITTER_ID)
+            for _ in range(splitter_count)
+        ),
+        _validation_node(100, 2002, output_obj=7),
+        *(
+            _validation_node(200 + index, 2002, output_obj=100)
+            for index in range(predecessor_count)
+        ),
+        _validation_node(300, 2011, output_obj=7),
+        _validation_node(301, 2303, input_obj=7),
+    )
+    real_is_belt = catalog.is_belt
+    examinations = 0
+
+    def counted_is_belt(item_id: int) -> bool:
+        nonlocal examinations
+        examinations += 1
+        return real_is_belt(item_id)
+
+    monkeypatch.setattr(catalog, "is_belt", counted_is_belt)
+
+    issues = splitter_ports._issues(nodes)
+
+    assert [
+        (issue.splitter, issue.belt, issue.code) for issue in issues
+    ] == [(7, 100, "path")] * splitter_count
+    assert examinations == len(nodes)
+
+
+def test_indexed_attachment_lookup_preserves_order_and_ignores_non_belts() -> None:
+    splitter_model = catalog.building(catalog.SPLITTER_ID).model_index
+    belt_model = catalog.building(2002).model_index
+    sorter_model = catalog.building(2011).model_index
+    assembler_model = catalog.building(2303).model_index
+    buildings = (
+        PlacedBuilding(catalog.SPLITTER_ID, splitter_model, 0, 0),
+        PlacedBuilding(2303, assembler_model, 0, 0, output_obj=0),
+        PlacedBuilding(2011, sorter_model, 0, 0, output_obj=0),
+        PlacedBuilding(2002, belt_model, 0, 0, output_obj=0),
+        PlacedBuilding(catalog.SPLITTER_ID, splitter_model, 0, 0),
+        PlacedBuilding(
+            2002,
+            belt_model,
+            0,
+            0,
+            z=1,
+            input_obj=4,
+            output_obj=6,
+            input_from_slot=99,
+        ),
+        PlacedBuilding(2002, belt_model, 0, 1, z=1),
+        PlacedBuilding(2303, assembler_model, 0, 0, input_obj=4),
+    )
+
+    issues = splitter_ports.placement_issues(buildings)
+
+    assert [
+        (
+            issue.splitter,
+            issue.belt,
+            issue.code,
+            issue.direction,
+            issue.recorded_port,
+            issue.expected_port,
+        )
+        for issue in issues
+    ] == [
+        (0, 3, "path", "feed", 0, None),
+        (4, 5, "own_slot", "draw", 99, None),
+        (4, 5, "slot", "draw", 99, None),
+    ]
 
 
 def test_corrected_construction_path_emits_only_game_valid_splitter_ports() -> None:

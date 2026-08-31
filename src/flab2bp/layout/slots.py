@@ -1125,6 +1125,7 @@ def assign_belt_slots(
     takes a feeder, so it does not settle the case; it is settled the same way
     the pool is settled everywhere else, by not sharing a cell.
     """
+    port_context = splitter_ports.placement_port_context(buildings)
     taken: dict[int, set[int]] = {}
     for i, b in enumerate(buildings):
         if cat.is_belt(b.item_id) and (
@@ -1167,9 +1168,7 @@ def assign_belt_slots(
                 direction: splitter_ports.Direction = (
                     "feed" if field == "output_to_slot" else "draw"
                 )
-                port = splitter_ports.expected_placement_port(
-                    buildings, i, link, direction
-                )
+                port = port_context.expected_port(i, link, direction)
                 if port is None:
                     raise SlotUndetermined(
                         f"belt {i} at ({b.x}, {b.y}, {b.z}) cannot be matched to a "

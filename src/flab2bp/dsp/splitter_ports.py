@@ -14,8 +14,9 @@ from __future__ import annotations
 
 import math
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Literal
 
 from flab2bp.dsp import catalog
@@ -89,6 +90,47 @@ class _Node:
     input_to_slot: int
 
 
+type _Attachment = tuple[_Node, Direction, int]
+
+
+@dataclass(frozen=True, slots=True)
+class _NodeIndex:
+    by_id: Mapping[int, _Node]
+    unique_belt_predecessor: Mapping[int, _Node | None]
+    attachments_by_splitter: Mapping[int, tuple[_Attachment, ...]]
+
+    @classmethod
+    def build(cls, nodes: tuple[_Node, ...]) -> _NodeIndex:
+        by_id: dict[int, _Node] = {}
+        unique_belt_predecessor: dict[int, _Node | None] = {}
+        attachments: dict[int, list[_Attachment]] = defaultdict(list)
+        for node in nodes:
+            by_id[node.id] = node
+            if not catalog.is_belt(node.item_id):
+                continue
+            if node.output_obj is not None:
+                if node.output_obj in unique_belt_predecessor:
+                    unique_belt_predecessor[node.output_obj] = None
+                else:
+                    unique_belt_predecessor[node.output_obj] = node
+                attachments[node.output_obj].append(
+                    (node, "feed", node.output_to_slot)
+                )
+            if node.input_obj is not None and node.input_obj != node.output_obj:
+                attachments[node.input_obj].append(
+                    (node, "draw", node.input_from_slot)
+                )
+        return cls(
+            by_id=MappingProxyType(by_id),
+            unique_belt_predecessor=MappingProxyType(unique_belt_predecessor),
+            attachments_by_splitter=MappingProxyType(
+                {
+                    splitter: tuple(linked)
+                    for splitter, linked in attachments.items()
+                }
+            ),
+        )
+
 def _raw_placement_nodes(buildings: Sequence[PlacedBuilding]) -> tuple[_Node, ...]:
     return tuple(
         _Node(
@@ -151,38 +193,42 @@ def _rotated_port(
 def _outward_neighbour(
     belt: _Node,
     direction: Direction,
-    by_id: dict[int, _Node],
-    predecessors: dict[int, list[_Node]],
+    by_id: Mapping[int, _Node],
+    unique_belt_predecessor: Mapping[int, _Node | None],
 ) -> _Node | None:
-    if direction == "draw":
-        neighbour = by_id.get(belt.output_obj) if belt.output_obj is not None else None
-        candidates = (
-            [neighbour]
-            if neighbour is not None and catalog.is_belt(neighbour.item_id)
-            else []
-        )
-    else:
-        candidates = [
-            candidate
-            for candidate in predecessors.get(belt.id, ())
-            if catalog.is_belt(candidate.item_id)
-        ]
-    return candidates[0] if len(candidates) == 1 else None
+    if direction == "feed":
+        return unique_belt_predecessor.get(belt.id)
+    neighbour = by_id.get(belt.output_obj) if belt.output_obj is not None else None
+    return (
+        neighbour
+        if neighbour is not None and catalog.is_belt(neighbour.item_id)
+        else None
+    )
 
 
-def _outward(
-    belt: _Node,
-    direction: Direction,
-    by_id: dict[int, _Node],
-    predecessors: dict[int, list[_Node]],
+def _outward_from_neighbour(
+    belt: _Node, neighbour: _Node | None
 ) -> tuple[float, float] | None:
-    neighbour = _outward_neighbour(belt, direction, by_id, predecessors)
     if neighbour is None:
         return None
     dx, dy = neighbour.x - belt.x, neighbour.y - belt.y
     if math.hypot(dx, dy) <= _POSITION_TOLERANCE:
         return None
     return dx, dy
+
+
+def _outward(
+    belt: _Node,
+    direction: Direction,
+    by_id: Mapping[int, _Node],
+    unique_belt_predecessor: Mapping[int, _Node | None],
+) -> tuple[float, float] | None:
+    return _outward_from_neighbour(
+        belt,
+        _outward_neighbour(
+            belt, direction, by_id, unique_belt_predecessor
+        ),
+    )
 
 
 def _expected_port(
@@ -291,12 +337,7 @@ def _own_slot_issue(
 
 
 def _issues(nodes: tuple[_Node, ...]) -> tuple[SplitterPortIssue, ...]:
-    by_id = {node.id: node for node in nodes}
-    predecessors: dict[int, list[_Node]] = defaultdict(list)
-    for node in nodes:
-        if node.output_obj is not None:
-            predecessors[node.output_obj].append(node)
-
+    index = _NodeIndex.build(nodes)
     out: list[SplitterPortIssue] = []
     for splitter in nodes:
         if splitter.item_id != catalog.SPLITTER_ID:
@@ -305,100 +346,132 @@ def _issues(nodes: tuple[_Node, ...]) -> tuple[SplitterPortIssue, ...]:
             ports = catalog.port_poses_for_model(splitter.model_index)
         except KeyError:
             ports = ()
-        for belt in nodes:
-            if not catalog.is_belt(belt.item_id):
+        for belt, direction, recorded in index.attachments_by_splitter.get(
+            splitter.id, ()
+        ):
+            neighbour = _outward_neighbour(
+                belt, direction, index.by_id, index.unique_belt_predecessor
+            )
+            # Blueprint local offsets are per area.  Without the Blueprint
+            # area's placement transform, coordinates from different areas
+            # cannot be subtracted.  The belt-side pool slot is independent
+            # of geometry and is still checked across an area boundary.
+            same_area = belt.area_index == splitter.area_index and (
+                neighbour is None or neighbour.area_index == belt.area_index
+            )
+            outward = (
+                _outward_from_neighbour(belt, neighbour) if same_area else None
+            )
+            expected = (
+                _expected_port(splitter, belt, outward, ports)
+                if outward is not None
+                else None
+            )
+            own_slot_issue = _own_slot_issue(
+                splitter, belt, direction, recorded, expected
+            )
+            if own_slot_issue is not None:
+                out.append(own_slot_issue)
+            if not same_area:
                 continue
-            if belt.output_obj == splitter.id:
-                attachments: tuple[tuple[Direction, int], ...] = (
-                    ("feed", belt.output_to_slot),
+            if outward is None:
+                out.append(
+                    _issue(
+                        "path",
+                        splitter,
+                        belt,
+                        direction,
+                        recorded,
+                        None,
+                        "the outward belt segment needed to identify a physical "
+                        "port is missing or ambiguous",
+                    )
                 )
-            elif belt.input_obj == splitter.id:
-                attachments = (("draw", belt.input_from_slot),)
-            else:
                 continue
-            for direction, recorded in attachments:
-                neighbour = _outward_neighbour(
-                    belt, direction, by_id, predecessors
-                )
-                # Blueprint local offsets are per area.  Without the Blueprint
-                # area's placement transform, coordinates from different areas
-                # cannot be subtracted.  The belt-side pool slot is independent
-                # of geometry and is still checked across an area boundary.
-                same_area = belt.area_index == splitter.area_index and (
-                    neighbour is None or neighbour.area_index == belt.area_index
-                )
-                outward = (
-                    _outward(belt, direction, by_id, predecessors)
-                    if same_area
-                    else None
-                )
-                expected = (
-                    _expected_port(splitter, belt, outward, ports)
-                    if outward is not None
-                    else None
-                )
-                own_slot_issue = _own_slot_issue(
-                    splitter, belt, direction, recorded, expected
-                )
-                if own_slot_issue is not None:
-                    out.append(own_slot_issue)
-                if not same_area:
-                    continue
-                if outward is None:
-                    out.append(
-                        _issue(
-                            "path",
-                            splitter,
-                            belt,
-                            direction,
-                            recorded,
-                            None,
-                            "the outward belt segment needed to identify a physical "
-                            "port is missing or ambiguous",
-                        )
+            if not 0 <= recorded < len(ports):
+                out.append(
+                    _issue(
+                        "slot",
+                        splitter,
+                        belt,
+                        direction,
+                        recorded,
+                        expected,
+                        f"model {splitter.model_index} defines {len(ports)} ports",
                     )
-                    continue
-                if not 0 <= recorded < len(ports):
-                    out.append(
-                        _issue(
-                            "slot",
-                            splitter,
-                            belt,
-                            direction,
-                            recorded,
-                            expected,
-                            f"model {splitter.model_index} defines {len(ports)} ports",
-                        )
+                )
+                continue
+            port_z = _rotated_port(ports[recorded], splitter.yaw)[2]
+            if abs(port_z - (belt.z - splitter.z)) > _HEIGHT_TOLERANCE:
+                out.append(
+                    _issue(
+                        "height",
+                        splitter,
+                        belt,
+                        direction,
+                        recorded,
+                        expected,
+                        f"port height {port_z:g} does not match belt height "
+                        f"{belt.z - splitter.z:g}",
                     )
-                    continue
-                port_z = _rotated_port(ports[recorded], splitter.yaw)[2]
-                if abs(port_z - (belt.z - splitter.z)) > _HEIGHT_TOLERANCE:
-                    out.append(
-                        _issue(
-                            "height",
-                            splitter,
-                            belt,
-                            direction,
-                            recorded,
-                            expected,
-                            f"port height {port_z:g} does not match belt height "
-                            f"{belt.z - splitter.z:g}",
-                        )
+                )
+            if expected is None or recorded != expected:
+                out.append(
+                    _issue(
+                        "direction",
+                        splitter,
+                        belt,
+                        direction,
+                        recorded,
+                        expected,
+                        "the port forward vector does not face the adjoining "
+                        "belt path",
                     )
-                if expected is None or recorded != expected:
-                    out.append(
-                        _issue(
-                            "direction",
-                            splitter,
-                            belt,
-                            direction,
-                            recorded,
-                            expected,
-                            "the port forward vector does not face the adjoining "
-                            "belt path",
-                        )
-                    )
+                )
     return tuple(out)
+
+
+@dataclass(frozen=True, slots=True)
+class PlacementPortContext:
+    """One immutable placement index reused across physical-port queries."""
+
+    _nodes: tuple[_Node, ...]
+    _index: _NodeIndex
+
+    def expected_port(
+        self,
+        belt_index: int,
+        splitter_index: int,
+        direction: Direction,
+    ) -> int | None:
+        if not (
+            0 <= belt_index < len(self._nodes)
+            and 0 <= splitter_index < len(self._nodes)
+        ):
+            return None
+        belt = self._nodes[belt_index]
+        splitter = self._nodes[splitter_index]
+        outward = _outward(
+            belt,
+            direction,
+            self._index.by_id,
+            self._index.unique_belt_predecessor,
+        )
+        if outward is None:
+            return None
+        try:
+            ports = catalog.port_poses_for_model(splitter.model_index)
+        except KeyError:
+            return None
+        return _expected_port(splitter, belt, outward, ports)
+
+
+def placement_port_context(
+    buildings: Sequence[PlacedBuilding],
+) -> PlacementPortContext:
+    """Build the immutable physical-port index for one placement pass."""
+    nodes = _raw_placement_nodes(buildings)
+    return PlacementPortContext(nodes, _NodeIndex.build(nodes))
 
 
 def expected_placement_port(
@@ -407,32 +480,10 @@ def expected_placement_port(
     splitter_index: int,
     direction: Direction,
 ) -> int | None:
-    """Return the one physical Splitter port selected by a belt path."""
-    nodes = _raw_placement_nodes(buildings)
-    if not (
-        0 <= belt_index < len(nodes)
-        and 0 <= splitter_index < len(nodes)
-    ):
-        return None
-    belt = nodes[belt_index]
-    splitter = nodes[splitter_index]
-    predecessors: dict[int, list[_Node]] = defaultdict(list)
-    for node in nodes:
-        if node.output_obj is not None:
-            predecessors[node.output_obj].append(node)
-    outward = _outward(
-        belt,
-        direction,
-        {node.id: node for node in nodes},
-        predecessors,
+    """Return one physical Splitter port without retaining a placement index."""
+    return placement_port_context(buildings).expected_port(
+        belt_index, splitter_index, direction
     )
-    if outward is None:
-        return None
-    try:
-        ports = catalog.port_poses_for_model(splitter.model_index)
-    except KeyError:
-        return None
-    return _expected_port(splitter, belt, outward, ports)
 
 
 def expected_path_port(
