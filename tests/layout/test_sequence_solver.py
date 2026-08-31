@@ -4354,18 +4354,32 @@ def test_sequence_preparation_consumes_elevated_machine_and_tesla_junction_bans(
             AnnealState.initial(problem.size, run.solver.config.seed),
         ),
     )
-
     assert candidate.prepared is not None
     prepared = candidate.prepared
     workspace = prepared.new_workspace()
-    assert prepared.junction_ban
-    assert any(level > 0 for _x, _y, level in prepared.junction_ban)
-    assert workspace.canvas.junction_geometry_prepared
-    assert workspace.canvas.junction_ban == set(prepared.junction_ban)
-    assert prepared.junction_ban == freeform_module._prepared_junction_ban(
-        prepared.building_templates,
-        prepared.power_sites,
+    static_buildings = tuple(
+        building
+        for building in prepared.building_templates
+        if not catalog.is_belt(building.item_id)
+        and not catalog.is_sorter(building.item_id)
     )
+    transport_buildings = tuple(
+        building
+        for building in prepared.building_templates
+        if catalog.is_belt(building.item_id) or catalog.is_sorter(building.item_id)
+    )
+    machine_ban = freeform_module._prepared_junction_ban(static_buildings, ())
+    tesla_ban = freeform_module._prepared_junction_ban((), prepared.power_sites)
+    expected_ban = machine_ban | tesla_ban
+
+    assert machine_ban
+    assert tesla_ban
+    assert any(level > 0 for _x, _y, level in machine_ban)
+    assert any(level > 0 for _x, _y, level in tesla_ban)
+    assert freeform_module._prepared_junction_ban(transport_buildings, ()) == frozenset()
+    assert prepared.junction_ban == expected_ban
+    assert workspace.canvas.junction_geometry_prepared
+    assert workspace.canvas.junction_ban == set(expected_ban)
 
 
 def test_ray_receiver_sequence_closed_loop_routes_and_validates_exactly() -> None:

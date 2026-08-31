@@ -228,6 +228,7 @@ def test_compiled_decode_score_returns_coordinate_workspace_arrays() -> None:
         array("d"),
         array("d", [0.0, 0.0]),
         array("q"),
+        array("q"),
         array("q", [0]),
         bytearray(1),
         bytearray(1),
@@ -395,20 +396,23 @@ def test_backend_selection_falls_back_for_non_float_score_inputs() -> None:
     assert isinstance(build_sequence_kernel(problem, integer_history), PythonSequenceKernel)
 
 
-def test_direct_origin_deltas_stay_on_authoritative_kernel_path() -> None:
+def test_direct_origin_deltas_use_compiled_kernel_with_exact_controls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     problem = PlacementProblem(
         sizes=((2, 1), (2, 1)),
         nets=((0, 1),),
         outline_height=2,
         area_lower_bound=4,
     )
-    target = DirectInsertTarget((0, 1), 0, 1, 0, 0, 2, 2, (1,))
+    rejected_target = DirectInsertTarget((1, 0), 1, 0, 0, 0, 2, 2, (1,))
+    accepted_target = replace(rejected_target, origin_deltas=(0,))
     direct_context = PlacementCostContext(
         net_weights=(1.0,),
         net_pairs=problem.nets,
         history_outline=(0, 2),
         history_summed_area=(0.0, 0.0, 0.0),
-        direct_targets=(target,),
+        direct_targets=(rejected_target,),
     )
     state = AnnealState(
         pair=SequencePair((0, 1), (1, 0)),
@@ -416,21 +420,35 @@ def test_direct_origin_deltas_stay_on_authoritative_kernel_path() -> None:
         base_seed=7,
         variant_indices=(0, 0),
     )
-
-    assert isinstance(build_sequence_kernel(problem, direct_context), PythonSequenceKernel)
-
-    plain_context = replace(direct_context, direct_targets=())
-    actual = CompiledSequenceKernel(problem, plain_context).score_state(
+    rejected_reference = PythonSequenceKernel(problem, direct_context).score_state(state)
+    accepted_reference = PythonSequenceKernel(problem, direct_context).score_state(
         state,
-        direct_targets=(target,),
+        direct_targets=(accepted_target,),
     )
-    reference = PythonSequenceKernel(problem, plain_context).score_state(
-        state,
-        direct_targets=(target,),
-    )
+    compiled_decode_score = sequence_kernel_module._compiled_decode_score
+    assert compiled_decode_score is not None
+    compiled_calls = 0
 
-    assert reference.breakdown.missed_direct_inserts == 1
-    _assert_exact(actual, reference)
+    def observed_decode_score(*args: object) -> object:
+        nonlocal compiled_calls
+        compiled_calls += 1
+        return compiled_decode_score(*args)
+
+    monkeypatch.setattr(
+        sequence_kernel_module,
+        "_compiled_decode_score",
+        observed_decode_score,
+    )
+    kernel = build_sequence_kernel(problem, direct_context)
+    rejected = kernel.score_state(state)
+    accepted = kernel.score_state(state, direct_targets=(accepted_target,))
+
+    assert isinstance(kernel, CompiledSequenceKernel)
+    assert rejected_reference.breakdown.missed_direct_inserts == 1
+    assert accepted_reference.breakdown.missed_direct_inserts == 0
+    _assert_exact(rejected, rejected_reference)
+    _assert_exact(accepted, accepted_reference)
+    assert compiled_calls == 2
 
 
 def test_compiled_kernel_reuses_size_dependent_workspace() -> None:

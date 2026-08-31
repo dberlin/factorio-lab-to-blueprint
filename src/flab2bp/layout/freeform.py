@@ -10556,12 +10556,11 @@ def _prepare_routing_problem(
     )
 
     grouped_nets = _with_sibling_groups(prepared_nets)
-    # The detailed router can introduce a Splitter only when a source already
-    # flows onward or when source siblings can branch from one path. Destination
-    # siblings only point a routed tail at an existing sibling belt; they never
-    # call ``junction_is_clear``. With neither source shape present, materializing
-    # every reachable latitude frame would spend the routing budget proving
-    # legality for a building this attempt cannot emit.
+    # Projected coater legality is expensive and only matters when the detailed
+    # router can introduce a Splitter. Reserved Tesla towers are different:
+    # their elevated static geometry must be frozen with the prepared problem,
+    # so power reservations retain exact machine-and-tower bans even when this
+    # candidate's current net grouping cannot branch.
     junction_possible = _junction_geometry_required(
         grouped_nets,
         canvas.buildings,
@@ -10589,7 +10588,7 @@ def _prepare_routing_problem(
             junction_bounds=capacity,
             cancelled=cancelled,
         )
-        if junction_possible
+        if junction_possible or power_sites
         else frozenset()
     )
     if cancelled is not None and cancelled():
