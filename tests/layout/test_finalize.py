@@ -2334,7 +2334,7 @@ def test_projected_addon_supply_skips_projection_without_both_sides() -> None:
         assert projection.calls == 0
 
 
-def test_projected_addon_supply_projects_each_belt_once_per_projection() -> None:
+def test_projected_addon_supply_projects_only_nearby_belts_once() -> None:
     class CountingFlatProjection:
         band = next(
             candidate for candidate in planet.bands() if candidate.area_segments == 4
@@ -2364,7 +2364,7 @@ def test_projected_addon_supply_projects_each_belt_once_per_projection() -> None
         )
         is None
     )
-    assert projection.calls == len(belts) + len(areas)
+    assert projection.calls == len(areas) + 2
 
 
 

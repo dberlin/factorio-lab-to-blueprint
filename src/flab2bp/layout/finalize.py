@@ -980,15 +980,53 @@ def _projected_addon_failure(
 ) -> ProjectionFailure | None:
     if not belts or not addons:
         return None
-    belt_positions_list: list[tuple[float, float, float]] = []
-    for _belt_index, belt in belts:
+    radius2 = rules.ADDON_AREA_RADIUS**2
+    latitude_step = planet.latitude_rad_per_grid(projection.segment)
+    poleward = min(
+        math.cos(
+            min(
+                abs(grid),
+                planet.pole_grid_idx(projection.segment),
+            )
+            * latitude_step
+        )
+        for grid in (
+            projection.band.grid_lo,
+            projection.band.grid_hi,
+        )
+    )
+    column_lower_bound = (
+        projection.radius
+        * poleward
+        * planet.longitude_rad_per_grid(projection.band.area_segments)
+        * 0.9
+    )
+    row_lower_bound = projection.radius * latitude_step * 0.9
+    column_reach = min(
+        projection.band.columns,
+        math.ceil(rules.ADDON_AREA_RADIUS / max(column_lower_bound, 1e-9)) + 1,
+    )
+    row_reach = math.ceil(
+        rules.ADDON_AREA_RADIUS / max(row_lower_bound, 1e-9)
+    ) + 1
+
+    def transformed(x: float, y: float) -> tuple[float, float]:
+        return (y, x) if projection.rotated else (x, y)
+
+    # Index in blueprint space first.  Projecting all belts for every legal
+    # latitude was the dominant cost here; the lower bounds above can only
+    # over-include, and the exact projected distance remains the verdict.
+    belt_grid: dict[tuple[int, int], list[int]] = {}
+    for belt_position, (_belt_index, belt) in enumerate(belts):
         if cancelled is not None and cancelled():
             raise ProjectionCancelled
-        belt_positions_list.append(
-            projection.position(belt.x, belt.y, float(belt.z))
+        longitude, latitude = transformed(belt.x, belt.y)
+        cell = (
+            math.floor(longitude) % projection.band.columns,
+            math.floor(latitude),
         )
-    belt_positions = tuple(belt_positions_list)
-    radius2 = rules.ADDON_AREA_RADIUS**2
+        belt_grid.setdefault(cell, []).append(belt_position)
+    belt_positions: dict[int, tuple[float, float, float]] = {}
     for addon_index, addon, areas in addons:
         if cancelled is not None and cancelled():
             raise ProjectionCancelled
@@ -1008,10 +1046,36 @@ def _projected_addon_failure(
                 float(wanted[1]),
                 float(wanted[2]),
             )
+            longitude, latitude = transformed(float(wanted[0]), float(wanted[1]))
+            target_column = math.floor(longitude) % projection.band.columns
+            target_row = math.floor(latitude)
+            candidates = sorted(
+                {
+                    belt_position
+                    for dx in range(-column_reach, column_reach + 1)
+                    for dy in range(-row_reach, row_reach + 1)
+                    for belt_position in belt_grid.get(
+                        (
+                            (target_column + dx) % projection.band.columns,
+                            target_row + dy,
+                        ),
+                        (),
+                    )
+                }
+            )
             supplied = False
-            for belt in belt_positions:
+            for belt_position in candidates:
                 if cancelled is not None and cancelled():
                     raise ProjectionCancelled
+                belt = belt_positions.get(belt_position)
+                if belt is None:
+                    placed = belts[belt_position][1]
+                    belt = projection.position(
+                        placed.x,
+                        placed.y,
+                        float(placed.z),
+                    )
+                    belt_positions[belt_position] = belt
                 if (
                     (target[0] - belt[0]) ** 2
                     + (target[1] - belt[1]) ** 2
