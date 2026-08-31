@@ -57,6 +57,7 @@ from flab2bp.layout.freeform import (
     _connect_short_cuts,
     _dests,
     _direct_net_candidates,
+    _direct_column_deltas,
     _emit_strip,
     _greedy_pack,
     _Grid,
@@ -2334,6 +2335,95 @@ class TestLanesStopAtTheirLastTap:
 
 
 # --- direct insertion ------------------------------------------------------
+
+
+def test_direct_column_deltas_match_the_exact_pairwise_oracle() -> None:
+    rng = random.Random(0)
+    for _ in range(100):
+        source = tuple(
+            sorted(rng.sample(range(-8, 17), rng.randint(1, 20)))
+        )
+        destination = tuple(
+            sorted(rng.sample(range(-11, 14), rng.randint(1, 20)))
+        )
+
+        assert _direct_column_deltas(source, destination) == tuple(
+            sorted(
+                {
+                    source_column - destination_column
+                    for source_column in source
+                    for destination_column in destination
+                }
+            )
+        )
+    for count in (255, 256):
+        columns = tuple(range(count))
+        assert _direct_column_deltas(columns, columns) == tuple(
+            range(1 - count, count)
+        )
+
+
+
+
+def test_direct_column_delta_work_is_linear_in_packed_bytes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class CountedColumn(int):
+        subtractions = 0
+
+        def __sub__(self, other: object) -> int:
+            type(self).subtractions += 1
+            return int(self) - int(other)
+
+    class CountedBytearray(bytearray):
+        allocations = 0
+        writes = 0
+
+        def __init__(self, source: object = 0) -> None:
+            super().__init__(source)
+            type(self).allocations += len(self)
+
+        def __setitem__(self, key: object, value: object) -> None:
+            type(self).writes += 1
+            super().__setitem__(key, value)
+
+    extraction_reads = 0
+    extract = freeform._packed_nonzero_digits
+
+    def counted_extract(
+        packed: bytes,
+        coefficient_bytes: int,
+        digit_count: int,
+    ) -> bytearray:
+        class CountedPackedBytes:
+            def __iter__(self):
+                nonlocal extraction_reads
+                for value in packed:
+                    extraction_reads += 1
+                    yield value
+
+        return extract(CountedPackedBytes(), coefficient_bytes, digit_count)
+
+    monkeypatch.setattr(freeform, "bytearray", CountedBytearray, raising=False)
+    monkeypatch.setattr(freeform, "_packed_nonzero_digits", counted_extract)
+    source = tuple(CountedColumn(column) for column in range(0, 2400, 2))
+    destination = tuple(CountedColumn(column) for column in range(1, 2401, 2))
+    coefficient_bytes = 2
+    source_digits = source[-1] - source[0] + 1
+    destination_digits = destination[-1] - destination[0] + 1
+    product_digits = source_digits + destination_digits - 1
+
+    deltas = _direct_column_deltas(source, destination)
+
+    assert deltas == tuple(range(-2399, 2399, 2))
+    assert CountedColumn.subtractions <= 2 * (len(source) + len(destination))
+    assert extraction_reads == product_digits * coefficient_bytes
+    assert CountedBytearray.allocations == (
+        (source_digits + destination_digits) * coefficient_bytes + product_digits
+    )
+    assert CountedBytearray.writes <= (
+        len(source) + len(destination) + extraction_reads
+    )
 
 
 class TestDirectInsertion:

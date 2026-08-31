@@ -2326,6 +2326,84 @@ def _direct_clear_columns(
     return frozenset(occupied)
 
 
+def _packed_nonzero_digits(
+    packed: Sequence[int],
+    coefficient_bytes: int,
+    digit_count: int,
+) -> bytearray:
+    """Mark non-zero fixed-width digits with one linear packed-byte scan."""
+    present = bytearray(digit_count)
+    for byte_offset, value in enumerate(packed):
+        if value:
+            present[byte_offset // coefficient_bytes] = 1
+    return present
+
+
+def _direct_column_deltas(
+    source_columns: Sequence[int],
+    destination_columns: Sequence[int],
+) -> tuple[int, ...]:
+    """Compose two sorted column sets into their exact difference set.
+
+    The naïve run-pair formulation creates one interval for every source and
+    destination run. Alternating occupied/attachment columns make both run
+    counts linear in strip width, so that intermediate becomes quadratic even
+    though every possible delta lies in one linear-size integer range.
+
+    Treat each column set as a polynomial with a one at every occupied column,
+    reverse the destination polynomial, and multiply them. A non-zero
+    coefficient proves at least one exact source/destination pair for that
+    delta. Coefficients are packed in base ``2 ** (8 * coefficient_bytes)``;
+    choosing a base greater than the maximum pair count prevents carries, so
+    Python's exact integer multiplication is also an exact convolution.
+    """
+    if not source_columns or not destination_columns:
+        return ()
+
+    source_min = source_columns[0]
+    source_max = source_columns[-1]
+    destination_min = destination_columns[0]
+    destination_max = destination_columns[-1]
+    source_degree = source_max - source_min
+    destination_degree = destination_max - destination_min
+    max_pair_count = min(len(source_columns), len(destination_columns))
+    coefficient_bytes = max(1, (max_pair_count.bit_length() + 7) // 8)
+    assert max_pair_count < 1 << (8 * coefficient_bytes)
+
+    source_coefficients = bytearray((source_degree + 1) * coefficient_bytes)
+    for column in source_columns:
+        source_coefficients[(column - source_min) * coefficient_bytes] = 1
+
+    destination_coefficients = bytearray(
+        (destination_degree + 1) * coefficient_bytes
+    )
+    for column in destination_columns:
+        destination_coefficients[
+            (destination_max - column) * coefficient_bytes
+        ] = 1
+
+    product_digit_count = source_degree + destination_degree + 1
+    product = int.from_bytes(source_coefficients, "little") * int.from_bytes(
+        destination_coefficients, "little"
+    )
+    product_bytes = product.to_bytes(
+        product_digit_count * coefficient_bytes,
+        "little",
+    )
+    present = _packed_nonzero_digits(
+        product_bytes,
+        coefficient_bytes,
+        product_digit_count,
+    )
+
+    delta_origin = source_min - destination_max
+    return tuple(
+        delta_origin + degree
+        for degree, pair_count in enumerate(present)
+        if pair_count
+    )
+
+
 def _direct_origin_deltas(
     source: Strip,
     destination: Strip,
@@ -2352,54 +2430,7 @@ def _direct_origin_deltas(
     if not source_columns or not destination_columns:
         return ()
 
-    source_runs: list[tuple[int, int]] = []
-    run_start = run_end = source_columns[0]
-    for column in source_columns[1:]:
-        if column != run_end + 1:
-            source_runs.append((run_start, run_end))
-            run_start = column
-        run_end = column
-    source_runs.append((run_start, run_end))
-
-    destination_runs: list[tuple[int, int]] = []
-    run_start = run_end = destination_columns[0]
-    for column in destination_columns[1:]:
-        if column != run_end + 1:
-            destination_runs.append((run_start, run_end))
-            run_start = column
-        run_end = column
-    destination_runs.append((run_start, run_end))
-
-    # Every pair of contiguous runs has a contiguous difference set:
-    # [source_start - destination_end, source_end - destination_start].
-    # Merge those intervals rather than enumerating every column pair.
-    intervals = [
-        (source_start - destination_end, source_end - destination_start)
-        for source_start, source_end in source_runs
-        for destination_start, destination_end in destination_runs
-    ]
-    intervals.sort()
-
-    merged_count = 0
-    for interval_start, interval_end in intervals:
-        if merged_count == 0:
-            intervals[0] = (interval_start, interval_end)
-            merged_count = 1
-            continue
-        previous_start, previous_end = intervals[merged_count - 1]
-        if interval_start <= previous_end + 1:
-            if interval_end > previous_end:
-                intervals[merged_count - 1] = (previous_start, interval_end)
-            continue
-        intervals[merged_count] = (interval_start, interval_end)
-        merged_count += 1
-    del intervals[merged_count:]
-
-    return tuple(
-        delta
-        for interval_start, interval_end in intervals
-        for delta in range(interval_start, interval_end + 1)
-    )
+    return _direct_column_deltas(source_columns, destination_columns)
 
 
 def _direct_net_candidates(
