@@ -1815,6 +1815,158 @@ def target_bands(
     return ordered[start : start + 3]
 
 
+_PROJECTION_VARIANT_PERIMETER = 3
+
+
+@cache
+def _adjacent_machine_collides_in_band(
+    item_id: int,
+    yaw: float,
+    pitch_x: int,
+    *,
+    rotated: bool,
+    band_segments: int,
+) -> bool:
+    """Whether one repeated-machine relation fails anywhere in one exact band."""
+    info = catalog.building(item_id)
+    width, height = catalog.oriented_footprint(item_id, yaw)
+    if rotated:
+        left = PlacedBuilding(
+            item_id=item_id,
+            model_index=info.model_index,
+            x=0,
+            y=0,
+            width=height,
+            height=width,
+            yaw=(yaw - 90.0) % 360.0,
+        )
+        right = replace(left, y=pitch_x)
+        pair_height = pitch_x + width
+    else:
+        left = PlacedBuilding(
+            item_id=item_id,
+            model_index=info.model_index,
+            x=0,
+            y=0,
+            width=width,
+            height=height,
+            yaw=yaw,
+        )
+        right = replace(left, x=pitch_x)
+        pair_height = height
+    placed = (_collision_placed(left), _collision_placed(right))
+    band = next(
+        candidate
+        for candidate in planet.bands()
+        if candidate.area_segments == band_segments
+    )
+    return any(
+        planet.collisions_at(
+            placed,
+            planet.Projection(
+                band=band,
+                anchor_row=anchor,
+                segment=colliders.PLANET_SEGMENT,
+                radius=colliders.PLANET_RADIUS,
+            ),
+            ((0, 1),),
+        )
+        for anchor in band.anchors(pair_height)
+    )
+
+
+def _projection_pitch_contexts(
+    width: int,
+    height: int,
+    policy: BandPolicy,
+) -> tuple[tuple[bool, int], ...]:
+    """Every orientation/band a containing exact candidate may certify."""
+    ordered = tuple(sorted(planet.bands(), key=lambda band: band.area_segments))
+    primaries = (
+        tuple(
+            band
+            for band in ordered
+            if band.area_segments == policy.explicit_segments
+        )
+        if policy.explicit_segments is not None
+        else ordered
+    )
+    contexts: set[tuple[bool, int]] = set()
+    for primary in primaries:
+        for rotated, (columns, rows) in (
+            (False, (width, height)),
+            (True, (height, width)),
+        ):
+            if columns > primary.columns or rows > primary.rows:
+                continue
+            contexts.update(
+                (rotated, band.area_segments)
+                for band in target_bands(primary, policy)
+            )
+    return tuple(sorted(contexts, key=lambda context: (context[1], context[0])))
+
+
+@cache
+def projection_safe_machine_pitch_x(
+    machine_item_id: str | int,
+    yaw: float,
+    *,
+    machine_count: int,
+    box_height: int,
+    perimeter: int = _PROJECTION_VARIANT_PERIMETER,
+    policy: BandPolicy | None = None,
+) -> int:
+    """Return the first adjacent-machine pitch safe in every reachable frame.
+
+    Physical strip variants are chosen before packing fixes the final extent.
+    Their own box plus the shared entry perimeter therefore defines the smallest
+    containing candidate.  Unrelated packed geometry may promote that candidate
+    to any wider primary band, so portable selection must cover the union of
+    every such primary's certified bands and both fitting frame orientations.
+    Every legal latitude translation is tested with the finalizer's exact
+    collider projection.  If no padded envelope fits at all, retain the catalog
+    pitch and let the unchanged extent gate/finalizer report the refusal.
+    """
+    if type(machine_count) is not int or machine_count <= 0:
+        raise ValueError("machine count must be a positive integer")
+    if type(box_height) is not int or box_height <= 0:
+        raise ValueError("strip box height must be a positive integer")
+    if type(perimeter) is not int or perimeter < 0:
+        raise ValueError("projection perimeter must be a non-negative integer")
+    item_id = (
+        catalog.item_id(machine_item_id)
+        if isinstance(machine_item_id, str)
+        else machine_item_id
+    )
+    pitch_x = catalog.clearance(item_id, yaw)[0]
+    if machine_count == 1:
+        return pitch_x
+    active_policy = BandPolicy("portable") if policy is None else policy
+    maximum_pitch = max(
+        max(band.columns, band.rows) for band in planet.bands()
+    )
+    for candidate_pitch in range(pitch_x, maximum_pitch + 1):
+        contexts = _projection_pitch_contexts(
+            machine_count * candidate_pitch + 2 * perimeter,
+            box_height + 2 * perimeter,
+            active_policy,
+        )
+        if not contexts:
+            break
+        if all(
+            not _adjacent_machine_collides_in_band(
+                item_id,
+                yaw,
+                candidate_pitch,
+                rotated=rotated,
+                band_segments=band_segments,
+            )
+            for rotated, band_segments in contexts
+        ):
+            return candidate_pitch
+    return pitch_x
+
+
 def _primary_band_for_extent(
     width: int,
     height: int,

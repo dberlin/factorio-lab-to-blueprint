@@ -19,7 +19,10 @@ from typing import Literal
 from flab2bp.dsp import catalog
 from flab2bp.layout import slots
 from flab2bp.layout.base import Facing, PlacedBuilding, Placement
-from flab2bp.layout.finalize import ProjectionFailure
+from flab2bp.layout.finalize import (
+    ProjectionFailure,
+    projection_safe_machine_pitch_x,
+)
 from flab2bp.spec import BuildSpec
 
 
@@ -1245,6 +1248,20 @@ def _variant_id(
     )
 
 
+def _with_projection_safe_pitch(
+    item_id: int,
+    variant: StripVariant,
+) -> StripVariant:
+    """Reserve the shared exact pitch before either strategy sees a variant."""
+    required = projection_safe_machine_pitch_x(
+        item_id,
+        variant.yaw,
+        machine_count=len(variant.machine_origins_x),
+        box_height=variant.box_height,
+    )
+    return variant_with_minimum_pitch(variant, required)
+
+
 def _port_variants(
     family_id: StripFamilyId,
     item_id: int,
@@ -1301,18 +1318,21 @@ def _port_variants(
         box_height,
     )
     return (
-        StripVariant(
-            variant_id=variant_id,
-            yaw=yaw,
-            footprint_width=geometry.footprint_width,
-            footprint_height=geometry.footprint_height,
-            placement_geometry=geometry,
-            lane_plan=lane_plan,
-            box_width=box_width,
-            box_height=box_height,
-            attachment_plan=(),
-            port_dock_plan=port_docks,
-            machine_origins_x=machine_origins_x,
+        _with_projection_safe_pitch(
+            item_id,
+            StripVariant(
+                variant_id=variant_id,
+                yaw=yaw,
+                footprint_width=geometry.footprint_width,
+                footprint_height=geometry.footprint_height,
+                placement_geometry=geometry,
+                lane_plan=lane_plan,
+                box_width=box_width,
+                box_height=box_height,
+                attachment_plan=(),
+                port_dock_plan=port_docks,
+                machine_origins_x=machine_origins_x,
+            ),
         ),
     )
 
@@ -1349,18 +1369,21 @@ def _variants(
             box_height,
         )
         variants.append(
-            StripVariant(
-                variant_id=variant_id,
-                yaw=yaw,
-                footprint_width=geometry.footprint_width,
-                footprint_height=geometry.footprint_height,
-                placement_geometry=geometry,
-                lane_plan=lane_plan,
-                box_width=box_width,
-                box_height=box_height,
-                attachment_plan=attachments,
-                port_dock_plan=(),
-                machine_origins_x=machine_origins_x,
+            _with_projection_safe_pitch(
+                item_id,
+                StripVariant(
+                    variant_id=variant_id,
+                    yaw=yaw,
+                    footprint_width=geometry.footprint_width,
+                    footprint_height=geometry.footprint_height,
+                    placement_geometry=geometry,
+                    lane_plan=lane_plan,
+                    box_width=box_width,
+                    box_height=box_height,
+                    attachment_plan=attachments,
+                    port_dock_plan=(),
+                    machine_origins_x=machine_origins_x,
+                ),
             )
         )
     return tuple(variants)

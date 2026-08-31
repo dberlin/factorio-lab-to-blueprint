@@ -134,6 +134,27 @@ def test_equal_footprints_can_require_different_machine_pitch() -> None:
     assert assembler.pitch_x == 4
 
 
+@pytest.mark.parametrize(
+    ("machine", "count", "expected_pitch"),
+    (("chemical-plant", 2, 8), ("matrix-lab", 3, 6)),
+)
+def test_repeated_machine_variants_reserve_projection_safe_pitch(
+    machine: str,
+    count: int,
+    expected_pitch: int,
+) -> None:
+    family = _family(_single_machine_spec(machine, count=count))
+
+    assert family.variants
+    assert {variant.pitch_x for variant in family.variants} == {expected_pitch}
+    assert all(
+        variant.machine_origins_x
+        == tuple(range(0, count * expected_pitch, expected_pitch))
+        and variant.box_width == count * expected_pitch
+        for variant in family.variants
+    )
+
+
 def test_variant_with_minimum_pitch_regenerates_physical_identity() -> None:
     family = _family(_single_machine_spec("chemical-plant", count=2))
     ordinary = default_strip_variant(family)

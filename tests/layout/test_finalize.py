@@ -685,6 +685,35 @@ def test_projected_power_failure_rejects_flat_legal_pair_in_required_projection(
         for projection in _required_power_projections(40)
     )
 
+
+@pytest.mark.parametrize(
+    ("item_id", "yaw", "machine_count", "box_height", "flat_pitch", "safe_pitch"),
+    (
+        (2309, 0.0, 2, 8, 7, 8),
+        (2309, 180.0, 3, 8, 7, 8),
+        (2901, 0.0, 3, 8, 5, 6),
+        (2901, 270.0, 3, 8, 5, 6),
+    ),
+)
+def test_projection_safe_machine_pitch_covers_every_reachable_band_and_orientation(
+    item_id: int,
+    yaw: float,
+    machine_count: int,
+    box_height: int,
+    flat_pitch: int,
+    safe_pitch: int,
+) -> None:
+    assert catalog.clearance(item_id, yaw)[0] == flat_pitch
+    assert (
+        finalize.projection_safe_machine_pitch_x(
+            item_id,
+            yaw,
+            machine_count=machine_count,
+            box_height=box_height,
+        )
+        == safe_pitch
+    )
+
 def test_prospective_projection_static_predicate_matches_finalizer_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
