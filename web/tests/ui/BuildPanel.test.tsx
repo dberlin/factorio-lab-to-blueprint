@@ -31,6 +31,15 @@ test('build is disabled until there is a URL', () => {
   expect(screen.getByRole('button', { name: 'Build' })).toBeDisabled();
 });
 
+
+test('the Name input exposes the game title limit to the browser', () => {
+  mount();
+  const name = screen.getByRole('textbox', { name: 'Name' });
+
+  expect(name).toHaveAttribute('maxlength', '60');
+  expect((name as HTMLInputElement).maxLength).toBe(60);
+});
+
 test('candidate policies are all checked in presentation order by default', () => {
   mount();
   const group = screen.getByRole('group', { name: 'Candidate policies' });

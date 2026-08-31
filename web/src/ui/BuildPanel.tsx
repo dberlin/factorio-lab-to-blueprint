@@ -243,6 +243,7 @@ export function BuildPanel() {
         <input
           id={nameId}
           value={options.name}
+          maxLength={60}
           placeholder="(defaults to what it makes)"
           onChange={(e) => set('name', e.target.value)}
         />

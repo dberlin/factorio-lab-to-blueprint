@@ -88,9 +88,17 @@ is importable. The pin remains until a newer importable release is verified.
 
 ## What the page shows
 
-The blueprint's own **title** — which names the *product*, `space-warper 10/min (max prolif)`,
-not the candidate that won — then machine count, tile count, building count, which strategy
-and candidate produced it, what it makes and what has to be belted in.
+The blueprint's own **title** names the *product*, `space-warper 10/min (max prolif)`,
+not the candidate that won. Auto-generated titles are capped at 60 C# UTF-16 code units,
+matching Dyson Sphere Program's save check. If the composed title is too long, the second
+displayed product is shortened to uppercase initials first, then the first product; numeric
+hyphen-delimited tokens remain whole. Rates, output order, `+N more`, and the policy suffix
+stay unchanged whenever initials are enough. If they are not, the whole title is truncated
+at a valid UTF-16 boundary and ends in one `…`.
+
+The web **Name** input has the same 60-character browser limit. The page then shows the title,
+machine count, tile count, building count, which strategy and candidate produced it, what it
+makes and what has to be belted in.
 
 Then the parts that read as silence if nobody prints them:
 

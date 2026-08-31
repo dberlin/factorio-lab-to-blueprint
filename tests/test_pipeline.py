@@ -8,12 +8,14 @@ because by the time there is a return value the answer is "none of them".
 
 from __future__ import annotations
 
+from fractions import Fraction
 from pathlib import Path
 import time
 
 import pytest
 
 from flab2bp import pipeline
+from flab2bp.dsp import codec
 from flab2bp.lab.data import load_vendored
 from flab2bp.lab.flow import canonicalize_dataset, canonicalize_request
 from flab2bp.lab.url import parse_url
@@ -32,7 +34,7 @@ from flab2bp.rates.candidates import (
     CandidatePolicy,
     _build_candidates_canonical,
 )
-from flab2bp.spec import BuildSpecSet
+from flab2bp.spec import BuildSpec, BuildSpecSet
 
 #: Small, and known to lay out.  One candidate and one strategy so the test
 #: costs a second of CP-SAT rather than a minute -- the sequence is the subject,
@@ -43,6 +45,84 @@ DEADLINE_REGRESSION_URL = (
     "z=eJzLt63SMjQwUMu3dQrWMgPTzlrGILpEywgi7qRlaGZgoKVlqJZvaw4ShLLDQBr"
     "B7MykVFsntdzcItvIOqc617pAtdyCYls3tTJbQ0MAjnsZAA__&v=11"
 )
+
+
+def _title_spec(
+    outputs: dict[str, Fraction],
+    *,
+    label: str = "all-products",
+) -> BuildSpec:
+    return BuildSpec(groups=(), outputs=outputs, label=label)
+
+
+def test_generated_title_under_the_game_limit_is_unchanged() -> None:
+    spec = _title_spec({"space-warper": Fraction(1, 6)})
+
+    assert pipeline._title(spec) == "space-warper 10/min (all products)"
+    assert pipeline._generated_title(spec) == pipeline._title(spec)
+
+
+def test_exact_81_character_generated_title_abbreviates_the_second_product_first() -> None:
+    spec = _title_spec(
+        {
+            "quantum-chemical-plant": Fraction(20),
+            "proliferator-mk3-component": Fraction(1),
+        }
+    )
+    unbounded = (
+        "quantum-chemical-plant 1200/min, "
+        "proliferator-mk3-component 60/min (all products)"
+    )
+
+    assert len(unbounded) == 81
+    assert pipeline._title(spec) == unbounded
+    assert (
+        pipeline._generated_title(spec)
+        == "quantum-chemical-plant 1200/min, PMC 60/min (all products)"
+    )
+
+
+def test_first_product_is_abbreviated_only_after_the_second_is_not_enough() -> None:
+    spec = _title_spec(
+        {
+            "very-long-first-product-identifier": Fraction(2),
+            "very-long-second-product-identifier": Fraction(1),
+            "third-product": Fraction(1, 2),
+        },
+        label="output-products",
+    )
+
+    assert (
+        pipeline._generated_title(spec)
+        == "VLFPI 120/min, VLSPI 60/min +1 more (output products)"
+    )
+
+
+def test_product_initials_are_uppercase_and_retain_numeric_hyphen_tokens() -> None:
+    assert pipeline._product_initials("proliferator-3-component") == "P3C"
+
+
+def test_generated_title_uses_one_ellipsis_when_initials_still_exceed_the_limit() -> None:
+    spec = _title_spec(
+        {
+            "very-long-first-product-identifier": Fraction(int("9" * 40), 60),
+            "very-long-second-product-identifier": Fraction(int("8" * 40), 60),
+        }
+    )
+
+    title = pipeline._generated_title(spec)
+
+    assert title == f"VLFPI {'9' * 40}/min, VLSPI 8…"
+    assert pipeline._utf16_units(title) == pipeline.BLUEPRINT_SHORT_DESC_UTF16_LIMIT
+    assert title.count("…") == 1
+
+
+def test_utf16_ellipsis_truncation_never_splits_an_astral_character() -> None:
+    title = pipeline._ellipsize_utf16("x" * 58 + "😀" + "tail")
+
+    assert title == "x" * 58 + "…"
+    assert pipeline._utf16_units(title) == 59
+    title.encode("utf-16-le")
 
 
 @pytest.mark.parametrize("pinned", [False, True])
@@ -177,9 +257,8 @@ def test_build_defaults_to_one_portable_policy(
     assert all(expect_power for _, expect_power in expected_power)
 
 
-def test_completed_backend_output_skips_duplicate_completion(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+@pytest.fixture
+def completed_layout(monkeypatch: pytest.MonkeyPatch) -> Placement:
     completed = Placement(
         buildings=(),
         frame=AreaFrame(1, 1, 4, (4,), False),
@@ -211,7 +290,12 @@ def test_completed_backend_output_skips_duplicate_completion(
         "validate",
         lambda *_args, **_kwargs: validate.Report(findings=()),
     )
+    return completed
 
+
+def test_completed_backend_output_skips_duplicate_completion(
+    completed_layout: Placement,
+) -> None:
     result = pipeline.build(
         SMALL_URL,
         strategy="sequence-pair",
@@ -219,7 +303,26 @@ def test_completed_backend_output_skips_duplicate_completion(
         time_budget_s=0.5,
     )
 
-    assert result.placement.completion is PlacementCompletion.COMPACTED_AND_FINALIZED
+    assert result.placement.completion is completed_layout.completion
+
+
+def test_explicit_over_cap_pipeline_name_is_unchanged(
+    completed_layout: Placement,
+) -> None:
+    explicit_name = "explicit-" + "x" * 53
+    assert len(explicit_name) == 62
+
+    result = pipeline.build(
+        SMALL_URL,
+        strategy="sequence-pair",
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+        time_budget_s=0.5,
+        name=explicit_name,
+    )
+
+    assert result.placement.completion is completed_layout.completion
+    assert result.placement.short_desc == explicit_name
+    assert codec.decode(result.blueprint).header.short_desc == explicit_name
 
 
 @pytest.mark.slow
