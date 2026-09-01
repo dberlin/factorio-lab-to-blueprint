@@ -36,8 +36,9 @@ def test_json_profile_emits_one_bounded_machine_readable_record(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     tally = route_profile.Tally()
-    tally.t = {"route_all": 4.0, "astar": 1.25}
-    tally.n = {"route_all": 1, "astar": 3}
+    tally.t = {"route_all": 4.0, "astar": 1.25, "prepare": 2.5, "plan_strips": 0.5}
+    tally.n = {"route_all": 1, "astar": 3, "prepare": 2, "plan_strips": 1}
+    tally.prepare_calls = [2.0, 0.5]
     tally.expansions = 123
     tally.astar_hit = 2
     tally.astar_none = 1
@@ -88,6 +89,11 @@ def test_json_profile_emits_one_bounded_machine_readable_record(
         "expansions": 123,
         "hits": 2,
         "misses": 1,
+        "phases": {
+            "prepare": {"s": 2.5, "n": 2},
+            "plan_strips": {"s": 0.5, "n": 1},
+        },
+        "prepare_calls_s": [2.0, 0.5],
     }
     assert selected_policies == [CandidatePolicy.OUTPUT_PRODUCTS]
 
@@ -107,6 +113,20 @@ def test_tally_reads_iterations_from_detailed_route_result(
 
     assert tally.passes == 1
     assert tally.rounds == 7
+
+
+def test_install_wraps_preparation_phases_and_restores() -> None:
+    tally = route_profile.Tally()
+    original = freeform._prepared_junction_ban
+    restore = route_profile.install(tally)
+    try:
+        assert freeform._prepared_junction_ban is not original
+        freeform._prepared_junction_ban((), ())
+    finally:
+        restore()
+    assert freeform._prepared_junction_ban is original
+    assert tally.n["junction_ban"] == 1
+    assert tally.t["junction_ban"] >= 0.0
 
 
 def test_normal_profile_honors_sequence_pair_strategy(

@@ -37,7 +37,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from flab2bp.bench.corpus import URL_CORPUS  # noqa: E402
 from flab2bp.lab.data import load_vendored  # noqa: E402
 from flab2bp.lab.url import parse_url  # noqa: E402
-from flab2bp.layout import freeform  # noqa: E402
+from flab2bp.layout import (  # noqa: E402
+    finalize,
+    freeform,
+    global_router,
+    strip_variants,
+    validate,
+)
 from flab2bp.layout.band_policy import BandPolicy  # noqa: E402
 from flab2bp.layout.base import NoValidLayout, Placement  # noqa: E402
 from flab2bp.layout.route_feedback import Cell, DetailedRouteResult  # noqa: E402
@@ -92,6 +98,12 @@ def _spec(url_id: str, candidate_policy: CandidatePolicy) -> BuildSpec:
     ).candidates[0]
 
 
+PHASES = (
+    "plan_strips", "strip_families", "prepare", "place_coaters", "coater_frame_bans",
+    "junction_ban", "power_plan", "static_risks", "relaxed_search", "finalize", "validate",
+)
+
+
 class Tally:
     """Wall time and counts per routing phase, one run."""
 
@@ -106,6 +118,9 @@ class Tally:
         self.path_cells = 0
         #: One row per search: (expansions, seconds, path length or -1).
         self.calls: list[tuple[int, float, int]] = []
+        #: Seconds per `_prepare_routing_problem` call, in call order, so a
+        #: cold first candidate and a warm second one are both visible.
+        self.prepare_calls: list[float] = []
 
     def add(self, key: str, dt: float) -> None:
         self.t[key] = self.t.get(key, 0.0) + dt
@@ -289,6 +304,40 @@ def install(tally: Tally) -> Callable[[], None]:
         tally.add("merge_frontier", time.perf_counter() - t0)
         return out
 
+    def timed(target: str, key: str, module: object) -> Callable[[], None]:
+        original = getattr(module, target)
+
+        def shim(*args: object, **kwargs: object) -> object:
+            t0 = time.perf_counter()
+            try:
+                return original(*args, **kwargs)
+            finally:
+                dt = time.perf_counter() - t0
+                tally.add(key, dt)
+                if key == "prepare":
+                    tally.prepare_calls.append(dt)
+
+        setattr(module, target, shim)
+
+        def undo() -> None:
+            setattr(module, target, original)
+
+        return undo
+
+    phase_undo = [
+        timed("_prepare_routing_problem", "prepare", freeform),
+        timed("_place_coaters", "place_coaters", freeform),
+        timed("_projected_coater_junction_bans_by_frame", "coater_frame_bans", freeform),
+        timed("_prepared_junction_ban", "junction_ban", freeform),
+        timed("_power_plan", "power_plan", freeform),
+        timed("_staged_static_relation_projection_risks_uncached", "static_risks", freeform),
+        timed("plan_strips", "plan_strips", freeform),
+        timed("generate_strip_families", "strip_families", strip_variants),
+        timed("_search_relaxed", "relaxed_search", global_router),
+        timed("finalize_placement", "finalize", finalize),
+        timed("validate", "validate", validate),
+    ]
+
     freeform._astar = astar
     freeform._route_all = route_all
     freeform._commit_paths = commit
@@ -307,6 +356,8 @@ def install(tally: Tally) -> Callable[[], None]:
         type.__setattr__(freeform._Grid, "build_landmarks", orig_landmarks)
         freeform._reserve_port_access = orig_reserve
         freeform._merge_frontier = orig_merge
+        for undo in phase_undo:
+            undo()
 
     return restore
 
@@ -462,6 +513,12 @@ def main() -> int:
                 "expansions": tally.expansions,
                 "hits": tally.astar_hit,
                 "misses": tally.astar_none,
+                "phases": {
+                    key: {"s": tally.t[key], "n": tally.n[key]}
+                    for key in PHASES
+                    if key in tally.t
+                },
+                "prepare_calls_s": list(tally.prepare_calls),
             }, separators=(",", ":"), sort_keys=True))
             continue
 
@@ -485,6 +542,12 @@ def main() -> int:
         )
         print(f"      {'(route_all itself)':<22} {other:7.2f}s  "
               f"{100 * other / max(routing, 1e-9):5.1f}% of routing")
+        for key in PHASES:
+            if key in tally.t:
+                print(f"      {key:<22} {tally.t[key]:7.2f}s  n={tally.n[key]:<7} "
+                      f"{100 * tally.t[key] / max(wall, 1e-9):5.1f}% of wall")
+        if tally.prepare_calls:
+            print("      prepare per call: " + ", ".join(f"{s:.2f}" for s in tally.prepare_calls))
         print(f"    A*: {tally.astar_hit} found / {tally.astar_none} none, "
               f"{tally.expansions:,} expansions, "
               f"{tally.path_cells:,} path cells")
