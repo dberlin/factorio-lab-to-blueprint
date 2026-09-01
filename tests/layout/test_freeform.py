@@ -8194,6 +8194,10 @@ class TestPortAccessIsReservedForEveryRole:
         )
         assert held[(0, 0, 0)] == 1 and held[(8, 0, 0)] == 1, held
 
+
+
+
+
     def test_a_second_cell_never_takes_another_port_s_only_one(self) -> None:
         """Every port gets its first cell before any port gets its second.
 

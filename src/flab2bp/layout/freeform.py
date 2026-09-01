@@ -310,6 +310,11 @@ _DETERMINISTIC_PACK_STRIPS = 15
 #: that incumbent existed.  The wall limit remains armed as the hard deadline.
 _DETERMINISTIC_PACK_WORK = 0.02
 
+#: Deterministic work allowed only for choosing among already rank-optimal port
+#: access assignments. The ranked solution remains the safe fallback; this
+#: bounded polish must never turn a preparation step into an unbounded search.
+_ACCESS_TIE_DETERMINISTIC_WORK = 0.05
+
 
 #: Rip-up rounds with no improvement in the failure count before giving up.
 #:
@@ -4433,21 +4438,96 @@ def _projected_coater_supply_failure(
         (candidate.port.supply_belt, candidate.supply),
     )
     addons = ((candidate.port.coater, candidate.coater, areas),)
-    for projection in projections:
-        if cancelled is not None and cancelled():
-            raise _PreparationDeadline
+    if len(projections) == 1:
         try:
-            failure = finalize._projected_addon_failure(
+            return finalize._projected_addon_failure(
                 belts,
                 addons,
-                projection,
+                projections[0],
                 cancelled=cancelled,
             )
         except finalize.ProjectionCancelled:
             raise _PreparationDeadline from None
-        if failure is not None:
-            return failure
+
+    # These two staged belts cannot be connected to each other: the host's
+    # onward belt already belongs to the lane, while the new supply drop is
+    # linkless until detailed routing.  The finalizer's general predicate
+    # consequently reduces to its exact radius test.  Evaluate that relation
+    # directly across the candidate frames instead of rebuilding a spatial
+    # index and connection graph for every latitude.  Large sprayed factories
+    # exercise this boundary hundreds of thousands of times.
+    belt_indices = {index for index, _belt in belts}
+    linked_inside = any(
+        belt.output_obj in belt_indices
+        for _index, belt in belts
+        if belt.output_obj is not None
+    )
+    if linked_inside:
+        for projection in projections:
+            if cancelled is not None and cancelled():
+                raise _PreparationDeadline
+            try:
+                failure = finalize._projected_addon_failure(
+                    belts,
+                    addons,
+                    projection,
+                    cancelled=cancelled,
+                )
+            except finalize.ProjectionCancelled:
+                raise _PreparationDeadline from None
+            if failure is not None:
+                return failure
+        return None
+
+    wanted_by_area = tuple(
+        (
+            area.area,
+            slots.addon_supply_position(
+                candidate.coater.item_id,
+                x=candidate.coater.x,
+                y=candidate.coater.y,
+                z=candidate.coater.z,
+                yaw=candidate.coater.yaw,
+                area=area.area,
+            ),
+        )
+        for area in areas
+    )
+    radius2 = rules.ADDON_AREA_RADIUS**2
+    for projection in projections:
+        if cancelled is not None and cancelled():
+            raise _PreparationDeadline
+        belt_points = tuple(
+            projection.position(belt.x, belt.y, float(belt.z))
+            for _index, belt in belts
+        )
+        for area, wanted in wanted_by_area:
+            if cancelled is not None and cancelled():
+                raise _PreparationDeadline
+            target = projection.position(
+                float(wanted[0]),
+                float(wanted[1]),
+                float(wanted[2]),
+            )
+            if any(
+                (target[0] - belt[0]) ** 2
+                + (target[1] - belt[1]) ** 2
+                + (target[2] - belt[2]) ** 2
+                < radius2
+                for belt in belt_points
+            ):
+                continue
+            return finalize.ProjectionFailure(
+                check="game.addon_supply",
+                buildings=(candidate.port.coater,),
+                detail=(
+                    f"addon area {area} has no belt within "
+                    f"{rules.ADDON_AREA_RADIUS} world unit"
+                ),
+                band=projection.band.area_segments,
+            )
     return None
+
 
 
 def _prepare_port(port: _Port) -> _PreparedPort:
@@ -8106,6 +8186,17 @@ def _match_access_corridors(
             access_by_owner.setdefault(access, {}).setdefault(key, []).append(
                 variable
             )
+    corridor_by_access: dict[
+        tuple[Cell, int, Cell],
+        list[cp_model.IntVar],
+    ] = defaultdict(list)
+    for (key, rank, access, _exit_cell), variable in choices.items():
+        corridor_by_access[key, rank, access].append(variable)
+    selected_access: dict[tuple[Cell, int, Cell], cp_model.IntVar] = {}
+    for access_choice, variables in corridor_by_access.items():
+        variable = model.new_bool_var(f"selected_{access_choice}")
+        model.add(variable == sum(variables))
+        selected_access[access_choice] = variable
 
     for claim in claims:
         model.add(sum(by_claim[claim]) <= 1)
@@ -8142,22 +8233,38 @@ def _match_access_corridors(
             return {}
         model.add(sum(rank_vars) == round(solver.objective_value))
 
-    # The rank totals are now fixed. This final objective makes an otherwise
-    # equivalent solution stable without weakening first-claim priority.
-    ordered_choices = list(choices)
+    # Rank totals are fixed. Tie-break on ACCESS ownership only; exit witnesses
+    # are proof objects and do not alter the committed reservation. Including
+    # every witness in this objective created a large symmetric
+    # branch-and-bound tail on sprayed factories. Seed and bound this optional
+    # polish; the already rank-optimal assignment remains a complete fallback.
+    ordered_choices = tuple(choices)
+    if not ordered_choices:
+        return {}
+    ranked_values = {
+        choice: solver.boolean_value(variable)
+        for choice, variable in choices.items()
+    }
+    for choice, variable in choices.items():
+        model.add_hint(variable, int(ranked_values[choice]))
     model.minimize(
         sum(
-            ordinal * choices[choice]
-            for ordinal, choice in enumerate(ordered_choices, start=1)
+            ordinal * selected_access[access_choice]
+            for ordinal, access_choice in enumerate(selected_access, start=1)
         )
     )
+    solver.parameters.max_deterministic_time = _ACCESS_TIE_DETERMINISTIC_WORK
     status = solver.solve(model)
-    if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-        return {}
+    use_polished = status in (cp_model.OPTIMAL, cp_model.FEASIBLE)
 
     access_owner: dict[Cell, Cell] = {}
     for choice in ordered_choices:
-        if not solver.boolean_value(choices[choice]):
+        selected = (
+            solver.boolean_value(choices[choice])
+            if use_polished
+            else ranked_values[choice]
+        )
+        if not selected:
             continue
         key, _rank, access, _exit_cell = choice
         access_owner[access] = key
@@ -13378,14 +13485,15 @@ def _place_coaters(
                     ),
                     port=prepared_port,
                 )
+                projections = tuple(
+                    projection
+                    for frame in static_frames
+                    for projection in frame.projections
+                )
                 addon_failure = _projected_coater_supply_failure(
                     staged_candidate,
                     prospective[host],
-                    tuple(
-                        projection
-                        for frame in static_frames
-                        for projection in frame.projections
-                    ),
+                    projections,
                     cancelled=cancelled,
                 )
                 if addon_failure is not None:
@@ -13654,15 +13762,6 @@ def _place_proliferator_entry(
     It goes on the NORTH-WEST CORNER of the entry ring, and the corner is the
     point.  Nothing else can ever be placed further out -- the router and the
     power lattice are held inside ``_ROUTE_RING`` and the external input runs
-    stop on the entry ring itself -- so this tile is on the finished block's
-    bounding box in two directions at once and has open ground beside it by
-    construction.  It used to be placed one tile west of wherever the buildings
-    happened to reach at that moment, which was the boundary right up until the
-    next pass moved it; the tile then sat interior, walled in on four sides,
-    with an icon on it telling the player to belt proliferator into somewhere
-    they cannot reach.
-
-    A corner also keeps it clear of the straight input runs, which leave along
     strip rows and columns and so never use one.
     """
     x, y = core[0] - _ENTRY_RING, core[1] - _ENTRY_RING

@@ -487,6 +487,26 @@ def test_structural_compaction_matches_wave_oracle_with_linear_work(
     assert compacted.buildings == expected.buildings
 
 
+def test_certified_compaction_skips_graph_without_an_initial_prunable_belt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    placement = Placement(buildings=(_building(2302, 0, 0),))
+
+    def forbid_graph(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("a cleanup graph cannot peel without an initial leaf")
+
+    monkeypatch.setattr(finalize, "_CleanupSurvivorGraph", forbid_graph)
+
+    result = finalize.compact_open_boundary_belts_certified(
+        placement,
+        two_stage_spec(),
+        expect_power=False,
+    )
+
+    assert result.placement is placement
+    assert result.report is None
+
+
 def test_certified_compaction_returns_the_exact_clean_report(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

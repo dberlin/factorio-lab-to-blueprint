@@ -3651,6 +3651,11 @@ def compact_open_boundary_belts_certified(
     started = time.perf_counter()
     if cancelled is not None and cancelled():
         raise ProjectionCancelled
+    # The structural peel can only start from one of these leaves.  Building
+    # the event graph costs four coordinate indexes over every record; when the
+    # initial frontier is empty the exact fixed point is already the input.
+    if not _prunable_open_belts(placement, cancelled=cancelled):
+        return BoundaryCompactionResult(placement, None)
     protected_roots = _required_external_input_boundary_roots(
         placement,
         spec,
