@@ -106,6 +106,7 @@ from tests.layout.test_freeform import (
 )
 
 Prepared = tuple[int, DecodedPlacement]
+_PORTABLE_BAND_POLICY = BandPolicy("portable")
 
 
 class _ProductionRunCapture(TypedDict, total=False):
@@ -5073,7 +5074,7 @@ def test_sequence_reuses_adaptive_coarse_strip_partition_before_problem_identity
         selected_spec: BuildSpec,
         *,
         strip_len: int = 6,
-        band_policy: BandPolicy = BandPolicy("portable"),
+        band_policy: BandPolicy = _PORTABLE_BAND_POLICY,
         **kwargs: object,
     ) -> list[freeform_module.Strip]:
         coarse_replans.append((strip_len, band_policy))
@@ -5464,7 +5465,7 @@ def test_production_forwards_fixed_band_through_initial_compact_and_coarsen_plan
         spec: BuildSpec,
         *,
         strip_len: int = 6,
-        band_policy: BandPolicy = BandPolicy("portable"),
+        band_policy: BandPolicy = _PORTABLE_BAND_POLICY,
         **kwargs: object,
     ) -> list[freeform_module.Strip]:
         plan_calls.append((strip_len, band_policy))
@@ -5480,7 +5481,7 @@ def test_production_forwards_fixed_band_through_initial_compact_and_coarsen_plan
         strips: list[freeform_module.Strip],
         *,
         strip_len: int,
-        band_policy: BandPolicy = BandPolicy("portable"),
+        band_policy: BandPolicy = _PORTABLE_BAND_POLICY,
         **kwargs: object,
     ) -> tuple[list[freeform_module.Strip], int]:
         coarsen_calls.append(band_policy)
@@ -5536,7 +5537,7 @@ def test_production_forwards_fixed_band_through_fallback_replan(
         selected_spec: BuildSpec,
         *,
         strip_len: int = 6,
-        band_policy: BandPolicy = BandPolicy("portable"),
+        band_policy: BandPolicy = _PORTABLE_BAND_POLICY,
         **kwargs: object,
     ) -> list[freeform_module.Strip]:
         plan_calls.append((strip_len, band_policy))

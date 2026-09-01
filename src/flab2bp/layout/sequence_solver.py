@@ -39,10 +39,10 @@ from flab2bp.layout.compact_seed import (
     solve_compact_seed,
 )
 from flab2bp.layout.freeform import (
+    _COATER_WEST_CHANNEL,
     _ENTRY_RING,
     _ROUTING_BUDGET,
     _ROUTING_EXPANSIONS_PER_SECOND,
-    _COATER_WEST_CHANNEL,
     WEST_CHANNEL,
     DirectInsertId,
     ExactPackNoGood,
@@ -53,22 +53,22 @@ from flab2bp.layout.freeform import (
     _coarsen_saturated_strip_plan,
     _dests,
     _direct_alignment_targets,
-    _DirectCandidate,
     _direct_net_candidates,
+    _DirectCandidate,
+    _exact_projection_pair,
     _fanout_shortfall,
     _greedy_pack,
     _minimum_pack_width,
     _Pack,
     _pack,
-    _prepare_routing_problem,
     _PreparationDeadline,
+    _prepare_routing_problem,
     _PreparedRoutingProblem,
-    _StagedStaticCache,
+    _projection_no_good,
+    _projection_strip_pair,
     _staged_static_clearance_keys,
     _staged_static_preclearance_proved,
-    _projection_no_good,
-    _exact_projection_pair,
-    _projection_strip_pair,
+    _StagedStaticCache,
     _strip_geometry_signature,
     _Unpowerable,
     _Unseatable,
@@ -548,7 +548,9 @@ class ValidationVerdict:
         if self.status is DetailedRouteStatus.BUDGET and (
             self.ok or self.failed_checks or self.projection_failures
         ):
-            raise ValueError("an incomplete validation verdict cannot contain acceptance or failures")
+            raise ValueError(
+                "an incomplete validation verdict cannot contain acceptance or failures"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -2419,7 +2421,7 @@ def _projection_feedback_stage_update(
         for axis in ("negative", "positive"):
             if deadline is not None and time.monotonic() >= deadline:
                 return None
-            pair = (
+            sequence_pair = (
                 replace(
                     state.pair,
                     negative=swapped(state.pair.negative, left, right),
@@ -2430,7 +2432,7 @@ def _projection_feedback_stage_update(
                     positive=swapped(state.pair.positive, left, right),
                 )
             )
-            candidate = replace(state, pair=pair)
+            candidate = replace(state, pair=sequence_pair)
             candidate_pack = _decoded_pack(
                 problem.outline_height,
                 decode_state(problem, candidate),
@@ -4266,15 +4268,17 @@ def _production_run(
                     strip_pair = _projection_strip_pair(detailed.placement, failure)
                     if strip_pair is None:
                         continue
-                    no_good = _projection_no_good(
+                    projection_no_good = _projection_no_good(
                         detailed.placement,
                         pack,
                         selected,
                         failure,
                         band_policy,
                     )
-                    if no_good is None:
-                        no_good = ExactPackNoGood(
+                    relation_no_good: _ProjectionPackNoGood = (
+                        projection_no_good
+                        if projection_no_good is not None
+                        else ExactPackNoGood(
                             height=pack.height,
                             outline=problem.selected_sizes(state.variant_indices),
                             width=pack.width,
@@ -4287,10 +4291,11 @@ def _production_run(
                                 strip_pair,
                             ),
                         )
+                    )
                     projection_relation_feedback = (
                         problem,
                         projection_failures,
-                        no_good,
+                        relation_no_good,
                     )
                     break
         if projection_feedback is not None:
@@ -4305,7 +4310,7 @@ def _production_run(
                 )
 
         if projection_relation_feedback is not None:
-            feedback_problem, feedback_failures, no_good = (
+            feedback_problem, feedback_failures, feedback_no_good = (
                 projection_relation_feedback
             )
             if feedback_problem == problem and feedback_failures == projection_failures:
@@ -4318,7 +4323,7 @@ def _production_run(
                 return _projection_feedback_stage_update(
                     problem,
                     state,
-                    no_good,
+                    feedback_no_good,
                     west_channels=tuple(strip.west_channel for strip in selected),
                     geometry_signatures=tuple(
                         _strip_geometry_signature(strip) for strip in selected
