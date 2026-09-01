@@ -4,12 +4,7 @@ import type { Blueprint } from './types';
 
 export { BlueprintFormatError } from './envelope';
 export { decodeHtmlEntities, findBlueprintString } from './extract';
-export type {
-  Blueprint,
-  BlueprintArea,
-  BlueprintBuilding,
-  BlueprintHeader,
-} from './types';
+export type { Blueprint, BlueprintArea, BlueprintBuilding, BlueprintHeader } from './types';
 
 /** Parses a full `BLUEPRINT:` string into structured data. */
 export function parseBlueprint(text: string): Blueprint {

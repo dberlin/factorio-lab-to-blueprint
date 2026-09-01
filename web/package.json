@@ -11,8 +11,9 @@
     "test": "rstest run",
     "test:watch": "rstest watch",
     "typecheck": "tsc --noEmit",
-    "lint": "biome check . && eslint .",
-    "format": "biome format --write .",
+    "lint": "oxlint . && oxfmt --check . && eslint .",
+    "format": "oxfmt --write .",
+    "format:check": "oxfmt --check .",
     "extract-assets": "uv run scripts/extract_assets.py"
   },
   "dependencies": {
@@ -25,7 +26,6 @@
     "zod": "4.5.4"
   },
   "devDependencies": {
-    "@biomejs/biome": "latest",
     "@rsbuild/core": "latest",
     "@rsbuild/plugin-react": "2.1.0",
     "@rstest/core": "latest",
@@ -41,6 +41,8 @@
     "eslint": "^10.9.1",
     "eslint-plugin-react-hooks": "^7.1.1",
     "happy-dom": "^20.12.0",
+    "oxfmt": "0.65.0",
+    "oxlint": "1.80.0",
     "typescript": "^5.9.3",
     "wait-on": "^9.1.0"
   }

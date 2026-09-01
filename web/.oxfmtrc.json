@@ -1,0 +1,17 @@
+{
+  "$schema": "./node_modules/oxfmt/configuration_schema.json",
+  "ignorePatterns": [
+    "dist/**",
+    "public/**",
+    "node_modules/**",
+    "docs/superpowers/**",
+    "tests/fixtures/**/*.html",
+    "tests/fixtures/catalog/**"
+  ],
+  "printWidth": 100,
+  "tabWidth": 2,
+  "useTabs": false,
+  "semi": true,
+  "singleQuote": true,
+  "sortPackageJson": false
+}

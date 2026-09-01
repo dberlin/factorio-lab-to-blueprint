@@ -76,8 +76,9 @@ A proxy error for `/api/build` means the configured Python API is not reachable.
 | `bun run build` | Production bundle into `dist/`. |
 | `bun run test` | Rstest suite (`test:watch` for watch mode). |
 | `bun run typecheck` | `tsc --noEmit`. |
-| `bun run lint` | Biome check plus ESLint (React Hooks rules). |
-| `bun run format` | Biome formatter, writing in place. |
+| `bun run lint` | Oxlint, Oxfmt check, and ESLint (React Hooks rules). |
+| `bun run format` | Oxfmt formatter, writing in place. |
+| `bun run format:check` | Checks Oxfmt formatting without writing. |
 | `bun run extract-assets` | Regenerates `public/assets/` from the game install. |
 
 The development servers bind to `127.0.0.1` by default. Passing a different frontend host

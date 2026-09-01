@@ -58,7 +58,7 @@ export function InputPanel() {
   };
 
   return (
-    // biome-ignore lint/a11y/noStaticElementInteractions: drop target is a convenience over the paste/URL fallbacks below, not the only way to load a blueprint
+    // oxlint-disable-next-line jsx-a11y/no-static-element-interactions -- not the only input method
     <section
       className="input-panel"
       data-testid="dropzone"

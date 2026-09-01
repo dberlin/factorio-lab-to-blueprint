@@ -47,7 +47,7 @@ export function InfoPanel() {
           // Rows are freshly derived from a pure function every render (never
           // reordered independent of content); combining the index with the
           // label keeps keys unique even if a future decoder emits duplicates.
-          // biome-ignore lint/suspicious/noArrayIndexKey: see comment above
+          // oxlint-disable-next-line react/no-array-index-key -- see comment above
           <Fragment key={`${i}-${row.label}`}>
             <dt>{row.label}</dt>
             <dd className={row.inferred ? 'inferred' : undefined}>

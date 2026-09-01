@@ -130,7 +130,7 @@ export function md5f(input: Uint8Array): string {
       const tmp = d;
       d = c;
       c = b;
-      // biome-ignore lint/style/noNonNullAssertion: required to satisfy noUncheckedIndexedAccess
+      // oxlint-disable-next-line typescript/no-non-null-assertion -- required by noUncheckedIndexedAccess
       b = (b + rotl((a + f + T[i]! + M[g]!) | 0, S[i]!)) | 0;
       a = tmp;
     }

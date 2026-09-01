@@ -41,7 +41,7 @@ export function BuildingInstances({
 
   // key on count so a differently-sized blueprint remounts with correct buffers
   return (
-    // biome-ignore lint/a11y/noStaticElementInteractions: r3f mesh, not a DOM element
+    // oxlint-disable-next-line jsx-a11y/no-static-element-interactions -- r3f mesh, not a DOM element
     <instancedMesh
       key={count}
       ref={meshRef}
