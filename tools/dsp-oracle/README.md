@@ -26,7 +26,7 @@ changes a condition.
 
 The zip is a Thunderstore package, so **r2modman** installs it directly:
 
-> Settings → Import local mod → pick `flab2bp_oracle-1.1.1.zip`
+> Settings → Import local mod → pick `flab2bp_oracle-1.1.2.zip`
 
 r2modman reads `manifest.json` from the archive root and drops `FlabOracle.dll`
 into the profile's `BepInEx/plugins/`. Nothing else to do; it appears in the mod
@@ -41,7 +41,7 @@ be if any other mod is installed there.
 
 ```sh
 mkdir -p "$HOME/Dyson Sphere Program/BepInEx/plugins/flab2bp-oracle"
-unzip -oj /path/to/flab2bp_oracle-1.1.1.zip FlabOracle.dll \
+unzip -oj /path/to/flab2bp_oracle-1.1.2.zip FlabOracle.dll \
   -d "$HOME/Dyson Sphere Program/BepInEx/plugins/flab2bp-oracle"
 ```
 
@@ -79,24 +79,29 @@ off with `DumpOnPaste = false`.
 
 **Canonical model40 belt capture (automatic, no keypress and no successful
 build required).** Import `corrected.txt` and put its preview on the cursor. A
-semantic match requires the 75x36/160-band area, the model40 splitter at local
-`(45,2,0)` with yaw 90, and its attached z1 feed/draw plus the outer belts. The
-plugin retains only condition/pointer state changes and matching Physics queries.
-It writes one `model40-belt-capture-YYYYMMDD-HHMMSS-fff.json` after a false
-`CheckBuildConditionsPrestage` or a non-Ok target stabilizes for two frames. A
-successful `CreatePrebuilds` also flushes; a 1,800-frame safety window prevents a
-silent hang. The same loaded blueprint object is deduplicated after the file is
-written.
+semantic match requires the 75x36/160-band area and both yaw-90 model40
+splitters: the y2 control at local `(45,2,0)` and the y6 suspect at `(45,6,0)`,
+including each splitter's four attached z1 feed/draw belts. The plugin retains
+only condition/pointer state changes and matching Physics queries.
 
-The target file includes blueprint-array slots, live `bpPool`/active slots,
-reference identities, `previewIndex`, every connection slot, input/output/
-`coverbp` pointers, condition snapshots around rescue and propagation, and the
-exact sphere/capsule arguments and returned collider/`BuildPreviewModel`
-identities. Root-level semantic-match, prestage, tool-stage, raw grat-box,
-patch-applied, and target-active-hook-fired metadata distinguish an invalid
-stage-0 placement or unavailable wrapper from a real zero-collider result. The
-capture is independent of `DumpOnPaste`; disabling the generic two-file paste
-dump does not disable this one-shot diagnostic.
+It writes one `model40-belt-capture-YYYYMMDD-HHMMSS-fff.json` from the
+`CheckBuildConditions` postfix, after the game's collision rescue and condition
+propagation are complete, whether that method returns true or false. A false
+`CheckBuildConditionsPrestage`, a stable non-Ok target, and a 1,800-frame window
+remain bounded fallbacks if the full check is not reached. The same loaded
+blueprint object is deduplicated after the file is written.
+
+The target file groups the y2 control and y6 suspect separately. It includes
+both splitters and all eight adjacent belts in condition/pointer timeline
+snapshots, while Physics query events remain belt-specific. Blueprint-array
+slots, live `bpPool`/active slots, reference identities, `previewIndex`, every
+connection slot, input/output/`coverbp` pointers, exact sphere/capsule arguments,
+and returned collider/`BuildPreviewModel` identities are retained. Root-level
+prestage, tool-stage, raw grat-box, patch-applied, and target-active-hook-fired
+metadata distinguish an invalid stage-0 placement or unavailable wrapper from a
+real zero-collider result. The capture is independent of `DumpOnPaste`;
+disabling the generic two-file paste dump does not disable this one-shot
+diagnostic.
 
 Generic files are `BepInEx/flab2bp-oracle/dump-00001.json`,
 `dump-00002.json`, … The counter continues from the highest number already in
@@ -215,20 +220,19 @@ These are stated because the plugin cannot be end-to-end tested outside the game
 2. **`conditionText` is best-effort.** It calls into the game's localization; if
    that throws, the field is `null` and the numeric `condition` — which is what
    matters — is still exact.
-3. **Compile-verified, not play-verified.** Every game field and managed method
-   signature used here was compiled against the locally installed
-   `Assembly-CSharp.dll` and Unity modules; the Harmony Physics postfixes bind
-   arguments positionally (`__0`, `__1`, …), so they do not depend on metadata
-   parameter names. `SerializerCheck` exercises semantic matching, pool/reference
-   identity, bounded timeline JSON, and strict parsing against those same real
-   types. In-game hook execution has not yet been observed; do not call a target
-   capture successful until `corrected.txt` is built and the JSON is written.
+3. **The current game build has been play-verified.** The 1.1.1 target hooks
+   produced an in-game capture for `corrected.txt`, including managed Physics
+   results and the full condition pass. `SerializerCheck` also exercises
+   two-cluster semantic matching, pool/reference identity, bounded timeline JSON,
+   and strict parsing against the installed game types. A changed DSP or Unity
+   build can still invalidate a Harmony target; startup logs and the
+   patch/hook-fired fields make that explicit.
 
 ## Building
 
 ```sh
 cd tools/dsp-oracle
-./build-zip.sh          # -> dist/flab2bp_oracle-1.1.1.zip
+./build-zip.sh          # -> dist/flab2bp_oracle-1.1.2.zip
 ```
 
 Requires the .NET SDK and the game's managed assemblies (referenced by

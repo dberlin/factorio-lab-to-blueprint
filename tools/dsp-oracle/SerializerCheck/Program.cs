@@ -317,13 +317,27 @@ namespace FlabOracle.Check
             feedBuilding.outputObj = splitterBuilding;
             drawBuilding.inputObj = splitterBuilding;
 
+            BlueprintBuilding primaryWestBuilding = Building(36, 44f, 6f, 1f);
+            BlueprintBuilding primarySplitterBuilding = Building(40, 45f, 6f, 0f);
+            primarySplitterBuilding.yaw = 90f;
+            BlueprintBuilding primaryFeedBuilding = Building(36, 44.7780228f, 6.00012112f, 1.00009131f);
+            BlueprintBuilding primaryDrawBuilding = Building(36, 45.2219772f, 6.00012112f, 1.00009131f);
+            BlueprintBuilding primaryEastBuilding = Building(36, 46f, 6f, 1f);
+            primaryFeedBuilding.outputObj = primarySplitterBuilding;
+            primaryDrawBuilding.inputObj = primarySplitterBuilding;
+
             BlueprintBuilding[] buildings =
             {
                 westBuilding,
                 splitterBuilding,
                 feedBuilding,
                 drawBuilding,
-                eastBuilding
+                eastBuilding,
+                primaryWestBuilding,
+                primarySplitterBuilding,
+                primaryFeedBuilding,
+                primaryDrawBuilding,
+                primaryEastBuilding
             };
             for (int i = 0; i < buildings.Length; i++)
             {
@@ -348,35 +362,51 @@ namespace FlabOracle.Check
             draw.input = splitter;
             west.output = feed;
             east.input = draw;
+            BuildPreview primaryWest = Preview(beltDesc, 6, 406);
+            BuildPreview primarySplitter = Preview(splitterDesc, 7, 407);
+            BuildPreview primaryFeed = Preview(beltDesc, 8, 408);
+            BuildPreview primaryDraw = Preview(beltDesc, 9, 409);
+            BuildPreview primaryEast = Preview(beltDesc, 10, 410);
+            primaryFeed.output = primarySplitter;
+            primaryDraw.input = primarySplitter;
+            primaryWest.output = primaryFeed;
+            primaryEast.input = primaryDraw;
 
             BuildTool_BlueprintPaste tool = New<BuildTool_BlueprintPaste>();
             tool.blueprint = blueprint;
-            tool.bpPool = new[] { east, splitter, draw, west, feed };
+            tool.bpPool = new[] { primaryEast, east, primarySplitter, splitter, primaryDraw, draw, primaryWest, west, primaryFeed, feed };
             tool.bpCursor = tool.bpPool.Length;
             tool.blueprintPath = "/tmp/corrected.txt";
 
             TargetCaptureSession session;
             Check("target semantic match", TargetCaptureSession.TryCreate(tool, out session));
             session.SnapshotAll("check-prefix");
-            session.RecordAddError(feed, EBuildCondition.Collide);
+            session.RecordAddError(primaryFeed, EBuildCondition.Collide);
             string json = session.Serialize("createprebuilds-prefix", true, 700, true, true);
 
             using JsonDocument doc = JsonDocument.Parse(json);
             JsonElement root = doc.RootElement;
-            Check("target schema", root.GetProperty("schema").GetString() == "flab2bp-model40-belts/1");
+            Check("target schema", root.GetProperty("schema").GetString() == "flab2bp-model40-belts/2");
             Check("target sphere patch status", root.GetProperty("spherePatchApplied").GetBoolean());
             Check("target capsule patch status", root.GetProperty("capsulePatchApplied").GetBoolean());
             Check("target sphere hook not fabricated", !root.GetProperty("sphereHookFiredWhileTargetActive").GetBoolean());
             Check("target capsule hook not fabricated", !root.GetProperty("capsuleHookFiredWhileTargetActive").GetBoolean());
-            Check("target count", root.GetProperty("targets").GetArrayLength() == 4);
+            JsonElement groups = root.GetProperty("groups");
+            Check("two splitter groups", groups.GetArrayLength() == 2);
+            Check("control group label", groups[0].GetProperty("semantic").GetString() == "control-y2");
+            Check("primary group label", groups[1].GetProperty("semantic").GetString() == "suspect-y6");
+            Check("group target count", groups[1].GetProperty("targets").GetArrayLength() == 4);
             Check("target timeline bounded", root.GetProperty("events").GetArrayLength() == 2);
-            JsonElement feedJson = root.GetProperty("targets")[1];
+            Check("timeline includes both splitters", root.GetProperty("events")[0].GetProperty("targetStates").GetArrayLength() == 10);
+            Check("suspect splitter timeline label", root.GetProperty("events")[0].GetProperty("targetStates")[5]
+                .GetProperty("semantic").GetString() == "suspect-y6/model40-splitter");
+            JsonElement feedJson = groups[1].GetProperty("targets")[1];
             Check("feed semantic label", feedJson.GetProperty("semantic").GetString() == "splitter-feed");
-            Check("feed blueprint slot", feedJson.GetProperty("blueprintArraySlot").GetInt32() == 2);
-            Check("feed active slot", feedJson.GetProperty("final").GetProperty("activeSlot").GetInt32() == 4);
+            Check("feed blueprint slot", feedJson.GetProperty("blueprintArraySlot").GetInt32() == 7);
+            Check("feed active slot", feedJson.GetProperty("final").GetProperty("activeSlot").GetInt32() == 8);
             Check("feed output actual slot", feedJson.GetProperty("final").GetProperty("output")
-                .GetProperty("bpPoolSlot").GetInt32() == 1);
-            Check("add-error phase", root.GetProperty("events")[1].GetProperty("phase").GetString() == "add-error-message");
+                .GetProperty("bpPoolSlot").GetInt32() == 2);
+            Check("add-error group semantic", root.GetProperty("events")[1].GetProperty("semantic").GetString() == "suspect-y6/splitter-feed");
 
             BlueprintData capturedBlueprint = tool.blueprint;
             tool.blueprint = New<BlueprintData>();
@@ -390,15 +420,15 @@ namespace FlabOracle.Check
             session.ResetCycle();
             string flushReason;
             Check("monitor starts transient window", !session.MonitorFrame(90, out flushReason));
-            feed.condition = EBuildCondition.Collide;
+            primaryFeed.condition = EBuildCondition.Collide;
             Check("monitor observes transient non-Ok", !session.MonitorFrame(91, out flushReason));
-            feed.condition = EBuildCondition.Ok;
+            primaryFeed.condition = EBuildCondition.Ok;
             Check("monitor does not flush recovered target", !session.MonitorFrame(92, out flushReason));
             Check("monitor keeps recovered target active", !session.MonitorFrame(94, out flushReason));
 
             session.ResetCycle();
             Check("monitor waits on first frame", !session.MonitorFrame(100, out flushReason));
-            feed.condition = EBuildCondition.Collide;
+            primaryFeed.condition = EBuildCondition.Collide;
             Check("monitor retains query window after non-Ok", !session.MonitorFrame(101, out flushReason));
             Check("monitor waits for stable non-Ok", !session.MonitorFrame(102, out flushReason));
             Check("monitor flushes stable non-Ok target", session.MonitorFrame(103, out flushReason) && flushReason == "target-non-ok-stable");
@@ -407,7 +437,7 @@ namespace FlabOracle.Check
             Check("monitor metadata start frame", monitored.RootElement.GetProperty("monitorStartFrame").GetInt32() == 100);
 
             session.ResetCycle();
-            feed.condition = EBuildCondition.Ok;
+            primaryFeed.condition = EBuildCondition.Ok;
             session.RecordPrestageResult(false, 200);
             Check("prestage monitor starts armed", !session.MonitorFrame(200, out flushReason));
             Check("prestage monitor waits for stable false", !session.MonitorFrame(201, out flushReason));
@@ -417,11 +447,11 @@ namespace FlabOracle.Check
             Check("prestage observation metadata", prestage.RootElement.GetProperty("prestageObserved").GetBoolean());
 
             session.ResetCycle();
-            feed.condition = EBuildCondition.Ok;
+            primaryFeed.condition = EBuildCondition.Ok;
 
             for (int i = 0; i < 130; i++)
             {
-                session.RecordAddError(feed, EBuildCondition.Collide);
+                session.RecordAddError(primaryFeed, EBuildCondition.Collide);
             }
             using JsonDocument bounded = JsonDocument.Parse(session.Serialize("createprebuilds-prefix", true, 701, true, true));
             JsonElement boundedEvents = bounded.RootElement.GetProperty("events");
@@ -435,6 +465,12 @@ namespace FlabOracle.Check
             splitterBuilding.localOffset_x = 45.001f;
             Check("target rejects perturbed splitter coordinate", !TargetCaptureSession.TryCreate(tool, out ignored));
             splitterBuilding.localOffset_x = 45f;
+            primarySplitterBuilding.localOffset_y = 6.001f;
+            Check("target rejects perturbed y6 splitter", !TargetCaptureSession.TryCreate(tool, out ignored));
+            primarySplitterBuilding.localOffset_y = 6f;
+            primaryFeedBuilding.outputObj = splitterBuilding;
+            Check("target rejects detached y6 feed", !TargetCaptureSession.TryCreate(tool, out ignored));
+            primaryFeedBuilding.outputObj = primarySplitterBuilding;
             area.index = 3;
             Check("target rejects buildings from another area", !TargetCaptureSession.TryCreate(tool, out ignored));
         }

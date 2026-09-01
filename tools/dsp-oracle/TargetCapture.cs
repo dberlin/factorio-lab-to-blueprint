@@ -7,7 +7,7 @@ namespace FlabOracle
 {
     internal sealed class TargetCaptureSession
     {
-        internal const string SchemaId = "flab2bp-model40-belts/1";
+        internal const string SchemaId = "flab2bp-model40-belts/2";
         private const int EventLimit = 128;
         private const int NonOkSettleFrames = 2;
         private const int MonitorWindowFrames = 1800;
@@ -17,8 +17,8 @@ namespace FlabOracle
         private readonly string _blueprintPath;
         private readonly BlueprintArea _area;
         private readonly int _areaArraySlot;
+        private readonly Group[] _groups;
         private readonly Target[] _targets;
-        private readonly Target _splitter;
         private readonly List<Event> _events = new List<Event>(32);
         private int _sequence;
         private bool _truncated;
@@ -29,12 +29,12 @@ namespace FlabOracle
         private bool _nonOkObserved;
         private int _monitorLastChangeFrame = -1;
         private bool _hasMonitorState;
-        private readonly MonitorState[] _monitorStates = new MonitorState[4];
+        private readonly MonitorState[] _monitorStates;
         private bool _prestageObserved;
         private bool _lastPrestageResult;
         private int _prestageLastChangeFrame = -1;
 
-        private TargetCaptureSession(BuildTool_BlueprintPaste tool, BlueprintArea area, int areaArraySlot, Target[] targets, Target splitter)
+        private TargetCaptureSession(BuildTool_BlueprintPaste tool, BlueprintArea area, int areaArraySlot, Group[] groups)
         {
             _tool = tool;
             _blueprint = tool.blueprint;
@@ -42,10 +42,20 @@ namespace FlabOracle
             _blueprintPath = tool.blueprintPath;
             _area = area;
             _areaArraySlot = areaArraySlot;
-            _targets = targets;
-            _splitter = splitter;
-            _splitter.Tool = tool;
-            for (int i = 0; i < _targets.Length; i++) _targets[i].Tool = tool;
+            _groups = groups;
+            _targets = new Target[groups.Length * 5];
+            _monitorStates = new MonitorState[_targets.Length];
+            for (int g = 0; g < groups.Length; g++)
+            {
+                groups[g].Splitter.Tool = tool;
+                _targets[g * 5] = groups[g].Splitter;
+                for (int t = 0; t < groups[g].Targets.Length; t++)
+                {
+                    Target target = groups[g].Targets[t];
+                    target.Tool = tool;
+                    _targets[g * 5 + t + 1] = target;
+                }
+            }
         }
 
         internal BuildTool_BlueprintPaste Tool { get { return _tool; } }
@@ -75,30 +85,17 @@ namespace FlabOracle
             }
             if (matchedArea == null) return false;
 
-            BlueprintBuilding[] bs = tool.blueprint.buildings;
-            int splitter = Find(bs, 40, 45f, 2f, 0f);
-            int outerFeed = Find(bs, 36, 44f, 2f, 1f);
-            int feed = Find(bs, 36, 44.7723007f, 2.00012708f, 1.00009131f);
-            int draw = Find(bs, 36, 45.2276993f, 2.00012708f, 1.00009131f);
-            int outerDraw = Find(bs, 36, 46f, 2f, 1f);
-            if (splitter < 0 || outerFeed < 0 || feed < 0 || draw < 0 || outerDraw < 0) return false;
-            int areaIndex = matchedArea.index;
-            if (bs[splitter].areaIndex != areaIndex || bs[outerFeed].areaIndex != areaIndex ||
-                bs[feed].areaIndex != areaIndex || bs[draw].areaIndex != areaIndex ||
-                bs[outerDraw].areaIndex != areaIndex) return false;
-            if (!Near(bs[splitter].yaw, 90f) || !ReferenceEquals(bs[feed].outputObj, bs[splitter]) || !ReferenceEquals(bs[draw].inputObj, bs[splitter])) return false;
-
-            int[] slots = { outerFeed, feed, draw, outerDraw, splitter };
-            BuildPreview[] previews = new BuildPreview[5];
-            if (!FindPreviewGroup(tool, slots, previews)) return false;
-            Target[] targets =
+            BlueprintBuilding[] buildings = tool.blueprint.buildings;
+            Group control;
+            Group suspect;
+            if (!TryCreateGroup(tool, buildings, matchedArea.index, "control-y2", 2f,
+                44.7723007f, 2.00012708f, 45.2276993f, 2.00012708f, out control) ||
+                !TryCreateGroup(tool, buildings, matchedArea.index, "suspect-y6", 6f,
+                44.7780228f, 6.00012112f, 45.2219772f, 6.00012112f, out suspect))
             {
-                new Target("outer-feed", outerFeed, bs[outerFeed], previews[0]),
-                new Target("splitter-feed", feed, bs[feed], previews[1]),
-                new Target("splitter-draw", draw, bs[draw], previews[2]),
-                new Target("outer-draw", outerDraw, bs[outerDraw], previews[3])
-            };
-            capture = new TargetCaptureSession(tool, matchedArea, matchedAreaArraySlot, targets, new Target("model40-splitter", splitter, bs[splitter], previews[4]));
+                return false;
+            }
+            capture = new TargetCaptureSession(tool, matchedArea, matchedAreaArraySlot, new[] { control, suspect });
             return true;
         }
 
@@ -184,8 +181,8 @@ namespace FlabOracle
         {
             if (!Reserve()) return;
             Event e = NewEvent(phase, null);
-            e.States = new PreviewState[4];
-            for (int i = 0; i < 4; i++) e.States[i] = PreviewState.Read(_tool, _targets[i].Preview);
+            e.States = new PreviewState[_targets.Length];
+            for (int i = 0; i < _targets.Length; i++) e.States[i] = PreviewState.Read(_tool, _targets[i].Preview);
             _events.Add(e);
         }
 
@@ -251,9 +248,8 @@ namespace FlabOracle
             w.Prop("sphereHookFiredWhileTargetActive", _sphereHookFired);
             w.Prop("capsuleHookFiredWhileTargetActive", _capsuleHookFired);
             if (checkResult.HasValue) w.Prop("checkBuildConditionsResult", checkResult.Value); else w.Prop("checkBuildConditionsResult", (string)null);
-            WriteTarget(w, "splitter", _splitter);
-            w.BeginArray("targets");
-            for (int i = 0; i < 4; i++) { w.BeginObject(); WriteTargetFields(w, _targets[i]); w.EndObject(); }
+            w.BeginArray("groups");
+            for (int i = 0; i < _groups.Length; i++) WriteGroup(w, _groups[i]);
             w.EndArray();
             w.BeginArray("events");
             for (int i = 0; i < _events.Count; i++) WriteEvent(w, _events[i]);
@@ -265,9 +261,10 @@ namespace FlabOracle
         private void RecordQuery(string shape, Vector3 p0, Vector3 p1, float radius, Collider[] results, int mask, QueryTriggerInteraction qti, int result)
         {
             if (mask != 395264 || !Near(radius, 0.23f)) return;
-            for (int i = 0; i < 4; i++)
+            for (int i = 0; i < _targets.Length; i++)
             {
                 Target target = _targets[i];
+                if (target.Role == "model40-splitter") continue;
                 Vector3 expected = target.Preview.lpos + target.Preview.lpos.normalized * 0.2f;
                 float distance = shape == "sphere" ? Vector3.Distance(expected, p0) : SegmentDistance(expected, p0, p1);
                 if (distance > 0.025f || !Reserve()) continue;
@@ -299,7 +296,7 @@ namespace FlabOracle
         {
             return new Event { Sequence = ++_sequence, Phase = phase, Target = target, ToolStage = ReadToolStage() };
         }
-        private Target TargetFor(BuildPreview bp) { for (int i = 0; i < 4; i++) if (ReferenceEquals(_targets[i].Preview, bp)) return _targets[i]; return null; }
+        private Target TargetFor(BuildPreview bp) { for (int i = 0; i < _targets.Length; i++) if (ReferenceEquals(_targets[i].Preview, bp)) return _targets[i]; return null; }
         private static bool Near(float a, float b) { return a == b; }
 
         private void WriteGratBoxConditions(JsonWriter w)
@@ -319,6 +316,49 @@ namespace FlabOracle
                 w.EndObject();
             }
             w.EndArray();
+        }
+
+        private static bool TryCreateGroup(
+            BuildTool_BlueprintPaste tool,
+            BlueprintBuilding[] buildings,
+            int areaIndex,
+            string semantic,
+            float y,
+            float feedX,
+            float feedY,
+            float drawX,
+            float drawY,
+            out Group group)
+        {
+            group = null;
+            int splitter = Find(buildings, 40, 45f, y, 0f);
+            int outerFeed = Find(buildings, 36, 44f, y, 1f);
+            int feed = Find(buildings, 36, feedX, feedY, 1.00009131f);
+            int draw = Find(buildings, 36, drawX, drawY, 1.00009131f);
+            int outerDraw = Find(buildings, 36, 46f, y, 1f);
+            if (splitter < 0 || outerFeed < 0 || feed < 0 || draw < 0 || outerDraw < 0) return false;
+            if (buildings[splitter].areaIndex != areaIndex || buildings[outerFeed].areaIndex != areaIndex ||
+                buildings[feed].areaIndex != areaIndex || buildings[draw].areaIndex != areaIndex ||
+                buildings[outerDraw].areaIndex != areaIndex) return false;
+            if (!Near(buildings[splitter].yaw, 90f) ||
+                !ReferenceEquals(buildings[feed].outputObj, buildings[splitter]) ||
+                !ReferenceEquals(buildings[draw].inputObj, buildings[splitter])) return false;
+
+            int[] slots = { outerFeed, feed, draw, outerDraw, splitter };
+            BuildPreview[] previews = new BuildPreview[5];
+            if (!FindPreviewGroup(tool, slots, previews)) return false;
+            Target[] targets =
+            {
+                new Target(semantic, "outer-feed", outerFeed, buildings[outerFeed], previews[0]),
+                new Target(semantic, "splitter-feed", feed, buildings[feed], previews[1]),
+                new Target(semantic, "splitter-draw", draw, buildings[draw], previews[2]),
+                new Target(semantic, "outer-draw", outerDraw, buildings[outerDraw], previews[3])
+            };
+            group = new Group(
+                semantic,
+                new Target(semantic, "model40-splitter", splitter, buildings[splitter], previews[4]),
+                targets);
+            return true;
         }
 
         private static int Find(BlueprintBuilding[] bs, short model, float x, float y, float z)
@@ -371,16 +411,32 @@ namespace FlabOracle
             return null;
         }
 
+        private static void WriteGroup(JsonWriter w, Group group)
+        {
+            w.BeginObject();
+            w.Prop("semantic", group.Semantic);
+            WriteTarget(w, "splitter", group.Splitter);
+            w.BeginArray("targets");
+            for (int i = 0; i < group.Targets.Length; i++)
+            {
+                w.BeginObject();
+                WriteTargetFields(w, group.Targets[i]);
+                w.EndObject();
+            }
+            w.EndArray();
+            w.EndObject();
+        }
+
         private static void WriteTarget(JsonWriter w, string key, Target t) { w.BeginObject(key); WriteTargetFields(w, t); w.EndObject(); }
         private static void WriteTargetFields(JsonWriter w, Target t)
         {
-            w.Prop("semantic", t.Semantic); w.Prop("blueprintArraySlot", t.BlueprintSlot); w.Prop("blueprintIndexField", t.Building.index);
+            w.Prop("semantic", t.Role); w.Prop("blueprintArraySlot", t.BlueprintSlot); w.Prop("blueprintIndexField", t.Building.index);
             w.Prop("modelIndex", (int)t.Building.modelIndex); w.Prop("itemId", (int)t.Building.itemId);
             w.Prop("localOffset", new Vector3(t.Building.localOffset_x, t.Building.localOffset_y, t.Building.localOffset_z)); w.Prop("yaw", t.Building.yaw);
             WriteState(w, "final", PreviewState.Read(t.Tool, t.Preview));
         }
 
-        private static void WriteEvent(JsonWriter w, Event e)
+        private void WriteEvent(JsonWriter w, Event e)
         {
             w.BeginObject(); w.Prop("sequence", e.Sequence); w.Prop("phase", e.Phase);
             if (e.Target != null) w.Prop("semantic", e.Target.Semantic);
@@ -391,9 +447,8 @@ namespace FlabOracle
             if (e.State.HasValue) WriteState(w, "state", e.State.Value);
             if (e.States != null)
             {
-                string[] names = { "outer-feed", "splitter-feed", "splitter-draw", "outer-draw" };
                 w.BeginArray("targetStates");
-                for (int i = 0; i < e.States.Length; i++) { w.BeginObject(); w.Prop("semantic", names[i]); WriteStateFields(w, e.States[i]); w.EndObject(); }
+                for (int i = 0; i < e.States.Length; i++) { w.BeginObject(); w.Prop("semantic", _targets[i].Semantic); WriteStateFields(w, e.States[i]); w.EndObject(); }
                 w.EndArray();
             }
             if (e.Query != null) WriteQuery(w, e.Query);
@@ -435,11 +490,31 @@ namespace FlabOracle
             w.EndArray(); w.EndObject();
         }
 
+        private sealed class Group
+        {
+            internal string Semantic;
+            internal Target Splitter;
+            internal Target[] Targets;
+            internal Group(string semantic, Target splitter, Target[] targets)
+            {
+                Semantic = semantic;
+                Splitter = splitter;
+                Targets = targets;
+            }
+        }
+
         private sealed class Target
         {
-            internal string Semantic; internal int BlueprintSlot; internal BlueprintBuilding Building; internal BuildPreview Preview; internal BuildTool_BlueprintPaste Tool;
+            internal string Semantic; internal string Role; internal int BlueprintSlot; internal BlueprintBuilding Building; internal BuildPreview Preview; internal BuildTool_BlueprintPaste Tool;
             internal int QueryCount; internal int AddErrorCount;
-            internal Target(string semantic, int slot, BlueprintBuilding building, BuildPreview preview) { Semantic = semantic; BlueprintSlot = slot; Building = building; Preview = preview; }
+            internal Target(string group, string role, int slot, BlueprintBuilding building, BuildPreview preview)
+            {
+                Semantic = group + "/" + role;
+                Role = role;
+                BlueprintSlot = slot;
+                Building = building;
+                Preview = preview;
+            }
         }
         private sealed class Event
         {

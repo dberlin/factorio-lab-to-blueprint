@@ -24,7 +24,7 @@ namespace FlabOracle
     {
         public const string PluginGuid = "org.dberlin.flab2bp.oracle";
         public const string PluginName = "flab2bp build-condition oracle";
-        public const string PluginVersion = "1.1.1";
+        public const string PluginVersion = "1.1.2";
 
         private Harmony _harmony;
 

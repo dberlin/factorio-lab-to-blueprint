@@ -422,6 +422,7 @@ namespace FlabOracle
 
             TargetCaptureSession next;
             _pending = TargetCaptureSession.TryCreate(tool, out next) ? next : null;
+            if (_pending != null) _checkResult = null;
             _activeCapture = _pending;
             Announce(tool);
         }
@@ -432,8 +433,8 @@ namespace FlabOracle
             {
                 _announcedBlueprint = tool.blueprint;
                 Oracle.Log.LogMessage(
-                    "flab2bp oracle automatically armed for the canonical model40 belt cluster; " +
-                    "a bounded target capture will be written automatically from the Update monitor.");
+                    "flab2bp oracle automatically armed for the canonical model40 control/suspect belt clusters; " +
+                    "one bounded target capture will be written automatically after the game's condition pass.");
             }
         }
 
@@ -457,19 +458,19 @@ namespace FlabOracle
 
         internal static void ExitCheck(BuildTool_BlueprintPaste tool, bool result)
         {
-            if (_pending != null && _pending.Matches(tool))
+            if (_pending == null || !_pending.Matches(tool))
             {
-                _pending.SnapshotAll("check-postfix-after-propagation");
-                _checkResult = result;
+                return;
             }
-            _activeCapture = _pending;
+            _pending.SnapshotAll("check-postfix-after-propagation");
+            _checkResult = result;
+            Flush("check-build-conditions-postfix");
         }
 
         internal static void RecordPrestage(BuildTool_BlueprintPaste tool, bool result)
         {
             if (_pending != null && _pending.Matches(tool))
             {
-                _checkResult = null;
                 _activeCapture = _pending;
                 _pending.RecordPrestageResult(result, Time.frameCount);
             }

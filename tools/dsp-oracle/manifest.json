@@ -1,6 +1,6 @@
 {
   "name": "flab2bp_oracle",
-  "version_number": "1.1.1",
+  "version_number": "1.1.2",
   "website_url": "",
   "description": "Dumps DSP's own blueprint build-condition verdicts to JSON, so a layout tool can be diffed against the game instead of guessed at.",
   "dependencies": ["xiaoye97-BepInEx-5.4.17"]
