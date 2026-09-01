@@ -115,6 +115,16 @@ from flab2bp.spec import BuildSpec, MachineGroup, ProliferatorMode
 
 type SpecFactory = Callable[[], BuildSpec]
 
+
+def _identity_finalizer(
+    placement: Placement,
+    _policy: BandPolicy,
+    *,
+    cancelled: Callable[[], bool] | None = None,
+) -> Placement:
+    del cancelled
+    return placement
+
 _LEGACY_BAND_BY_SPEC_LABEL: Mapping[str, BandSelection] = {
     "single": "portable",
     "two-stage": "portable",
@@ -3836,7 +3846,7 @@ def test_first_warm_start_substitution_is_width_bounded_and_attempt_neutral(
     monkeypatch.setattr(
         finalize,
         "finalize_placement",
-        lambda candidate, _policy: candidate,
+        _identity_finalizer,
     )
     monkeypatch.setattr(
         validate,
@@ -3931,7 +3941,7 @@ def test_proof_scoped_route_feedback_uses_only_configured_width_slack(
     monkeypatch.setattr(
         finalize,
         "finalize_placement",
-        lambda placement, _policy: placement,
+        _identity_finalizer,
     )
 
     attempts: list[freeform.PackAttempt] = []
@@ -4369,13 +4379,16 @@ class TestSolverActuallyRuns:
             "certify",
             lambda *_args, **_kwargs: validate.Report(findings=()),
         )
-        monkeypatch.setattr(
-            finalize,
-            "finalize_placement",
-            lambda _placement, _policy: (_ for _ in ()).throw(
-                finalize.ProjectionRefusal((failure,))
-            ),
-        )
+        def refuse_projection(
+            _placement: Placement,
+            _policy: BandPolicy,
+            *,
+            cancelled: Callable[[], bool] | None = None,
+        ) -> Placement:
+            del cancelled
+            raise finalize.ProjectionRefusal((failure,))
+
+        monkeypatch.setattr(finalize, "finalize_placement", refuse_projection)
 
         with pytest.raises(NoValidLayout) as caught:
             FreeformLayout(
@@ -4570,7 +4583,7 @@ def projected_chemical_plant_collision(
     )
 
     assert len(machines) == 2
-    assert ordinary.pitch_x == 7
+    assert ordinary.pitch_x == 8
     assert tuple(
         (
             building.item_id,
@@ -4612,8 +4625,8 @@ def test_same_strip_adjacent_machine_collision_requires_next_pitch(
         instance_id=instance.instance_id,
         variant_id=ordinary.variant_id,
         axis="x",
-        rejected_pitch=7,
-        required_pitch=8,
+        rejected_pitch=8,
+        required_pitch=9,
         failure=failure,
     )
 
@@ -4640,8 +4653,8 @@ def test_freeform_owner_adapter_uses_realized_strip_variant(
         instance_id=instance.instance_id,
         variant_id=ordinary.variant_id,
         axis="x",
-        rejected_pitch=7,
-        required_pitch=8,
+        rejected_pitch=8,
+        required_pitch=9,
         failure=failure,
     )
 
@@ -4735,8 +4748,11 @@ def _sweep_with_pitch_feedback(
     def finalize_candidate(
         placement: Placement,
         _policy: BandPolicy,
+        *,
+        cancelled: Callable[[], bool] | None = None,
     ) -> Placement:
         nonlocal finalizations
+        del cancelled
         if finalizations < len(required_pitches):
             finalizations += 1
             raise finalize.ProjectionRefusal((failure,))
@@ -4805,11 +4821,11 @@ def test_pitch_retry_affordability_is_decided_before_geometry_replan(
 
     result, seen_candidates, _rejected = _sweep_with_pitch_feedback(
         monkeypatch,
-        (8,),
+        (9,),
     )
 
     assert result is not None
-    assert seen_candidates == [(20, 0, 7), (20, 0, 8)]
+    assert seen_candidates == [(20, 0, 8), (20, 0, 9)]
 
 
 def test_repeated_identical_pitch_feedback_does_not_duplicate_retry(
@@ -4817,11 +4833,11 @@ def test_repeated_identical_pitch_feedback_does_not_duplicate_retry(
 ) -> None:
     result, seen_candidates, rejected = _sweep_with_pitch_feedback(
         monkeypatch,
-        (8, 8),
+        (9, 9),
     )
 
     assert result is None
-    assert seen_candidates == [(20, 0, 7), (20, 0, 8)]
+    assert seen_candidates == [(20, 0, 8), (20, 0, 9)]
     assert len(rejected) == 1
     assert isinstance(rejected[0], finalize.ProjectionFailure)
 
@@ -4831,11 +4847,11 @@ def test_later_exact_pitch_failure_advances_same_candidate_once(
 ) -> None:
     result, seen_candidates, rejected = _sweep_with_pitch_feedback(
         monkeypatch,
-        (8, 9),
+        (9, 10),
     )
 
     assert result is not None
-    assert seen_candidates == [(20, 0, 7), (20, 0, 8), (20, 0, 9)]
+    assert seen_candidates == [(20, 0, 8), (20, 0, 9), (20, 0, 10)]
     assert len(rejected) == 1
     assert isinstance(rejected[0], finalize.ProjectionFailure)
 
@@ -4881,7 +4897,7 @@ def test_unaffordable_pitch_feedback_replans_later_base_height(
         variant = current[0].physical_variant
         assert variant is not None
         if pack.height == 21:
-            assert variant.pitch_x == 8
+            assert variant.pitch_x == 9
         return _BuildResult(
             placement=Placement(
                 buildings=(),
@@ -4917,8 +4933,8 @@ def test_unaffordable_pitch_feedback_replans_later_base_height(
                 ),
                 variant_id=variant.variant_id,
                 axis="x",
-                rejected_pitch=7,
-                required_pitch=8,
+                rejected_pitch=8,
+                required_pitch=9,
                 failure=failures[0],
             ),
         )
@@ -4926,7 +4942,10 @@ def test_unaffordable_pitch_feedback_replans_later_base_height(
     def finalize_candidate(
         placement: Placement,
         _policy: BandPolicy,
+        *,
+        cancelled: Callable[[], bool] | None = None,
     ) -> Placement:
+        del cancelled
         if placement.stats["test_height"] == 20.0:
             raise finalize.ProjectionRefusal((failure,))
         return placement
@@ -4962,7 +4981,7 @@ def test_unaffordable_pitch_feedback_replans_later_base_height(
 
     assert result is not None
     assert result.stats["test_height"] == 21.0
-    assert seen_candidates == [(20, 0, 7), (21, 0, 8)]
+    assert seen_candidates == [(20, 0, 8), (21, 0, 9)]
 
 
 
@@ -4994,7 +5013,7 @@ def test_geometry_replan_discards_feedback_width_and_direct_cuts_from_old_strips
     def greedy(current: list[Strip], height: int) -> freeform._Pack:
         variant = current[0].physical_variant
         assert variant is not None
-        width = 20 if variant.pitch_x == 7 else 40
+        width = 20 if variant.pitch_x == 8 else 40
         return freeform._Pack(
             at={0: (3, 4)},
             width=width,
@@ -5021,8 +5040,14 @@ def test_geometry_replan_discards_feedback_width_and_direct_cuts_from_old_strips
                 bool(direct_relation_no_goods),
             )
         )
+        candidate = greedy(current, height)
+        x_offset = len(seen_pack_state) - 1
         return replace(
-            greedy(current, height),
+            candidate,
+            at={
+                index: (x + x_offset, y)
+                for index, (x, y) in candidate.at.items()
+            },
             status=f"pack-{len(seen_pack_state)}",
         )
 
@@ -5068,8 +5093,8 @@ def test_geometry_replan_discards_feedback_width_and_direct_cuts_from_old_strips
                 ),
                 variant_id=variant.variant_id,
                 axis="x",
-                rejected_pitch=7,
-                required_pitch=8,
+                rejected_pitch=8,
+                required_pitch=9,
                 failure=failures[0],
             ),
         )
@@ -5079,8 +5104,11 @@ def test_geometry_replan_discards_feedback_width_and_direct_cuts_from_old_strips
     def finalize_candidate(
         placement: Placement,
         _policy: BandPolicy,
+        *,
+        cancelled: Callable[[], bool] | None = None,
     ) -> Placement:
         nonlocal finalizations
+        del cancelled
         finalizations += 1
         if finalizations == 1:
             raise finalize.ProjectionRefusal((failure,))
@@ -5119,13 +5147,13 @@ def test_geometry_replan_discards_feedback_width_and_direct_cuts_from_old_strips
     result = FreeformLayout(
         band_policy=BandPolicy("portable"),
         arrangements=2,
-    )._sweep(spec, strips, 1.0)
+    )._sweep(spec, strips, 5.0)
 
-    assert result is not None
+    assert result is not None, seen_pack_state
     assert seen_pack_state == [
-        (7, 40, False, False),
-        (7, 22, True, True),
-        (8, 80, False, False),
+        (8, 40, False, False),
+        (8, 22, True, True),
+        (9, 80, False, False),
     ]
 
 def test_projection_no_good_forbids_only_the_exact_failed_pair_context() -> None:
@@ -5460,8 +5488,11 @@ def test_projection_no_good_owned_strip_collision_learns_and_repacks(
     def finalize_projection(
         placement: Placement,
         _policy: BandPolicy,
+        *,
+        cancelled: Callable[[], bool] | None = None,
     ) -> Placement:
         nonlocal projections
+        del cancelled
         projections += 1
         if projections == 1:
             raise finalize.ProjectionRefusal((failure,))
@@ -6264,7 +6295,7 @@ def test_staged_static_pack_dependent_exhaustion_learns_exact_no_good(
     monkeypatch.setattr(
         finalize,
         "finalize_placement",
-        lambda placement, _policy: placement,
+        _identity_finalizer,
     )
 
     result = FreeformLayout(
@@ -6648,7 +6679,7 @@ def test_clearance_feedback_replans_later_base_height_without_minting_retry(
     monkeypatch.setattr(
         finalize,
         "finalize_placement",
-        lambda placement, _policy: placement,
+        _identity_finalizer,
     )
 
     result = FreeformLayout(
@@ -6858,7 +6889,10 @@ def _sweep_with_repeated_exact_feedback(
     def finalize_or_refuse(
         placement: Placement,
         _policy: BandPolicy,
+        *,
+        cancelled: Callable[[], bool] | None = None,
     ) -> Placement:
+        del cancelled
         if source == "finalizer" and placement.stats["test_height"] == 20.0:
             raise finalize.ProjectionRefusal((failure,))
         return placement
@@ -6990,7 +7024,7 @@ def test_unaffordable_base_height_is_not_started_after_valid_candidate(
     monkeypatch.setattr(
         finalize,
         "finalize_placement",
-        lambda placement, _policy: placement,
+        _identity_finalizer,
     )
     monkeypatch.setattr(
         freeform,
