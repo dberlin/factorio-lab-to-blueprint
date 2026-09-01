@@ -181,6 +181,14 @@ _CATALOG: tuple[Entry, ...] = (
     _e("catalog.BELT_IDS", Kind.DATA, note="Item ids for the three belt tiers."),
     _e("catalog.SORTER_IDS", Kind.DATA),
     _e("catalog.SPLITTER_ID", Kind.DATA),
+    _e(
+        "catalog.SPLITTER_MODEL_INDICES",
+        Kind.DATA,
+        note=(
+            "Game model identities for the Splitter variants supported by the "
+            "port validator; the model numbers are protocol data, not geometry."
+        ),
+    ),
     _e("catalog.SPRAY_COATER_ID", Kind.DATA),
     _e("catalog.FRACTIONATOR_ID", Kind.DATA),
     _e("catalog.TESLA_TOWER_ID", Kind.DATA),
@@ -319,9 +327,9 @@ _CATALOG: tuple[Entry, ...] = (
         "catalog.stack_pitch_z",
         Kind.RULE,
         depends_on=("building item id", "PrefabDesc.stackHeight"),
-        unconsulted_because=(
-            "PASTE GAP OutOfVerticalConstructionHeight: downstream validation "
-            "does not yet read the prefab-derived stack pitch."
+        note=(
+            "The splitter builder and validator both resolve the prefab-derived "
+            "pitch rather than restating the installed Splitter's two-level step."
         ),
     ),
     _e(
@@ -538,6 +546,22 @@ _RULES: tuple[Entry, ...] = (
     _e("rules.ADDON_TO_SLOT", Kind.RULE, note=_SLOT_INDEX_NOTE),
     _e("rules.SPLITTER_INPUT_TO_SLOT", Kind.RULE, note=_SLOT_INDEX_NOTE),
     _e("rules.SPLITTER_OUTPUT_FROM_SLOT", Kind.RULE, note=_SLOT_INDEX_NOTE),
+    _e(
+        "rules.SPLITTER_OUTPUT_TO_SLOT",
+        Kind.RULE,
+        note=(
+            f"{_SLOT_INDEX_NOTE} The Splitter's output-side sentinel is written "
+            "by both junction placement and final blueprint encoding."
+        ),
+    ),
+    _e(
+        "rules.SPLITTER_INPUT_FROM_SLOT",
+        Kind.RULE,
+        note=(
+            f"{_SLOT_INDEX_NOTE} The Splitter's input-side sentinel is written "
+            "by both junction placement and final blueprint encoding."
+        ),
+    ),
     _e(
         "rules.BELT_INPUT_SLOTS",
         Kind.RULE,
@@ -939,12 +963,6 @@ LINT_EXCEPTIONS: tuple[LintException, ...] = (
         "_PACK_SHARE: CP-SAT's share of a sweep's clock, set by measurement",
     ),
     LintException(
-        "flab2bp.layout.freeform",
-        "<module>",
-        24.0,
-        "_DETERMINISTIC_PACK_STRIPS: empirical packing-worker threshold; not skew degrees",
-    ),
-    LintException(
         "flab2bp.layout.sequence_pair",
         "SearchEnergy",
         0.35,
@@ -979,6 +997,13 @@ LINT_EXCEPTIONS: tuple[LintException, ...] = (
         "<module>",
         24.0,
         "_TOPOLOGY_BEAM_MAX_STRIPS: quadratic model-size cap; not skew degrees",
+    ),
+    LintException(
+        "flab2bp.layout.sequence_solver",
+        "<module>",
+        0.1,
+        "_COMPACT_LARGE_VARIANT_DETERMINISTIC_CAP: CP deterministic work; "
+        "not sorter geometry or the paste lateral epsilon",
     ),
     LintException(
         "flab2bp.layout.sequence_solver",
