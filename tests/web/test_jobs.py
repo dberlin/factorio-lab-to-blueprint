@@ -81,7 +81,11 @@ def test_unframed_success_finishes_as_controlled_error(
 ) -> None:
     unframed = dataclasses.replace(
         small_build,
-        placement=dataclasses.replace(small_build.placement, frame=None),
+        placement=dataclasses.replace(
+            small_build.placement,
+            frame=None,
+            completion=None,
+        ),
     )
     builder = Builder(solve=lambda _o, _p: unframed)
     try:

@@ -9,6 +9,7 @@ because by the time there is a return value the answer is "none of them".
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from fractions import Fraction
 from pathlib import Path
 
@@ -193,7 +194,7 @@ def test_pipeline_canonicalizes_once_before_internal_consumers(
 def test_build_defaults_to_one_portable_policy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Changing the default or reparsing at either finalizer breaks this."""
+    """Changing the default or reparsing during backend finalization breaks this."""
     seen: list[BandPolicy] = []
     expected_power: list[tuple[str, bool]] = []
     original_new_layout = pipeline._new_layout
@@ -214,15 +215,6 @@ def test_build_defaults_to_one_portable_policy(
             band_policy=band_policy,
         )
 
-    def compact_spy(
-        placement: Placement,
-        _spec: object,
-        *,
-        expect_power: bool,
-    ) -> Placement:
-        expected_power.append(("compact", expect_power))
-        return placement
-
     def validate_spy(
         _placement: Placement,
         _spec: object,
@@ -234,13 +226,14 @@ def test_build_defaults_to_one_portable_policy(
     def finalize_spy(
         placement: Placement,
         policy: BandPolicy,
+        *,
+        cancelled: Callable[[], bool] | None = None,
     ) -> Placement:
         seen.append(policy)
-        return original_finalize(placement, policy)
+        return original_finalize(placement, policy, cancelled=cancelled)
 
     monkeypatch.setattr(pipeline, "_new_layout", new_layout_spy)
     monkeypatch.setattr(finalize, "finalize_placement", finalize_spy)
-    monkeypatch.setattr(finalize, "compact_open_boundary_belts", compact_spy)
     monkeypatch.setattr(validate, "validate", validate_spy)
 
     pipeline.build(
@@ -250,10 +243,10 @@ def test_build_defaults_to_one_portable_policy(
         time_budget_s=3.0,
     )
 
-    assert len(seen) >= 3  # construction, internal finalization, pipeline defense
+    assert len(seen) >= 3  # construction and backend finalization attempts
     assert seen[0] == BandPolicy("portable")
     assert all(policy is seen[0] for policy in seen)
-    assert expected_power[-2:] == [("compact", True), ("validate", True)]
+    assert expected_power[-1] == ("validate", True)
     assert all(expect_power for _, expect_power in expected_power)
 
 

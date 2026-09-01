@@ -414,7 +414,11 @@ def test_cli_refuses_success_without_band_evidence(
 ) -> None:
     unframed = dataclasses.replace(
         band_build,
-        placement=dataclasses.replace(band_build.placement, frame=None),
+        placement=dataclasses.replace(
+            band_build.placement,
+            frame=None,
+            completion=None,
+        ),
     )
     monkeypatch.setattr(pipeline, "build", lambda *args, **kwargs: unframed)
 

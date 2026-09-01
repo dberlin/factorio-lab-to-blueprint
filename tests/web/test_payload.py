@@ -67,7 +67,11 @@ def test_payload_refuses_success_without_band_evidence(
 ) -> None:
     unframed = dataclasses.replace(
         small_build,
-        placement=dataclasses.replace(small_build.placement, frame=None),
+        placement=dataclasses.replace(
+            small_build.placement,
+            frame=None,
+            completion=None,
+        ),
     )
 
     with pytest.raises(ValueError, match="area frame"):
