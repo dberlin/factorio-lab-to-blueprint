@@ -9,12 +9,12 @@ Make one candidate evaluation cheap for both production strategies without
 changing what any evaluation concludes. Two halves, both gated on the same
 profiler and the same corpus audit:
 
-1. **Preparation.** Memoize the exact spherical-projection legality work that
-   `_prepare_routing_problem` repeats per candidate, keyed by the inputs each
-   predicate actually depends on, scoped to one spec and shared across every
-   candidate, height, and strategy in a process. Vectorize frame
-   materialization and collider overlap so a candidate's tens of thousands of
-   frame checks are one batch. Reuse strip planning within a `lay_out` call.
+1. **Preparation.** Stop repeating exact spherical-projection legality work:
+   run the cheap reach filter before materializing splitter stacks in the
+   coater junction-ban scan, share pure offset caches process-wide, share the
+   staged-static cache across every candidate, height, and strategy that
+   evaluates one spec in a process, drop a deep copy of frozen buildings, and
+   generate strip families once per `lay_out` call.
 2. **Routing.** Move the detailed A* inner loop and the relaxed global search
    into one Cython extension over the flat-integer grid they already use, with
    a Python fallback selected the way the sequence kernel selects its backend.
@@ -108,39 +108,42 @@ global search, commit, finalization, validation. The JSON schema is covered by
 the existing profiler tests. Every later step of this design is accepted or
 rejected on these fields, not on wall clock alone.
 
-### 5.2 Geometry memo
+### 5.2 Preparation work removed
 
-`src/flab2bp/layout/geometry_memo.py` owns one `GeometryMemo` object created
-per spec by `FreeformLayout.lay_out` and `SequencePairLayout.lay_out`, passed
-into `_prepare_routing_problem` beside the existing `_StagedStaticCache`, and
-shared across every candidate, height, and strategy that evaluates the same
-spec in the same process.
+Four exact changes, in the order the profile ranks them:
 
-Memo tables and their keys, each a pure function of its key:
+1. **Coater junction bans by frame** (3.4 to 3.8 s). The scan materializes a
+   whole splitter stack for every (cell, frame) pair before testing whether
+   the cell is within reach of the coater. Every member of a stack shares its
+   materialized x and y, so the reach test is evaluated once on the first
+   member and the stack is materialized only when some projection state
+   passes it. The rejected pairs produced no ban before; they still produce
+   none.
+2. **Junction ban offsets** (1.5 s). The cancellable offset computation
+   stores only into an attempt-local dict while the uncancellable one uses a
+   process-wide LRU. Both consult and fill one process-wide dict keyed by
+   the immutable obstacle pose, so a set proved once is never re-derived.
+3. **Spec-scoped staged-static cache.** `_StagedStaticCache` is already
+   attempt-local per `lay_out`; `geometry_memo.for_spec(spec)` hands out one
+   per spec object for the life of the process, bounded to a few specs, so
+   the second strategy in a `best` build and later `lay_out` calls reuse it.
+   It gains a `stats()` method reporting entries per table.
+4. **Building templates** (0.4 s). `_prepare_routing_problem` deep-copies a
+   list of frozen `PlacedBuilding` instances; a tuple of the same instances
+   is equivalent.
 
-| Table | Key | Value |
-|---|---|---|
-| collider pair | (model A, model B, relative offset, latitude index, band) | collides or not |
-| frame materialization | (building template, frame anchor) | projected pose |
-| junction ban offsets | (site model, neighbour model, relative offset, frame) | offset set |
-| coater junction ban by frame | (coater pose, frame, neighbour signature) | banned cells |
-| power pair condition | (tower site, powered tile, frame) | legal or not |
+Batching frame materialization and OBB overlap with NumPy is the next lever
+if the profiler still shows the coater scan above 1.0 s after change 1, and
+memoizing the power-plan peer condition is the lever after that if it shows
+above 0.5 s; both are written as follow-up tasks from the measured phase
+table rather than guessed at here.
 
-The existing attempt-local `_StagedStaticCache.junction_offsets` and the
-module-global `_STAGED_STATIC_RELATION_RISK_CACHE` are folded into the memo so
-there is one owner and one clearing rule. Tables are bounded by size and
-evicted least-recently-used; the working-set script in `scripts/` sizes them
-against the corpus.
-
-Frame materialization and OBB overlap are batched: a preparation collects the
-(template, frame) pairs it needs, materializes them in one NumPy call, and
-tests overlap in one call. `dataclasses.replace` leaves the per-building hot
-path.
-
-Invariants: the memo stores outputs only. Iteration order, tie-breaking, first
-failure selection, failure evidence text, and `preparation_failures` content
-are unchanged. A parity test builds the prepared problem for every corpus spec
-with and without the memo and asserts structural equality.
+Invariants: every change stores or skips outputs of pure functions only.
+Iteration order, tie-breaking, first failure selection, failure evidence
+text, and `preparation_failures` content are unchanged. Parity tests build
+the prepared problem with and without each change on representative corpus
+specs in the suite, and a script does the same for every corpus spec at the
+gate.
 
 ### 5.3 Planning reuse
 
@@ -195,23 +198,31 @@ Unchanged public surface: `FreeformLayout`, `SequencePairLayout`,
 Internal additions:
 
 ```python
-class GeometryMemo:
-    """Spec-scoped memo of pure projection predicates; outputs only."""
-    def __init__(self, *, bounds: MemoBounds = DEFAULT_MEMO_BOUNDS) -> None: ...
-    def collider_pair(self, key: ColliderPairKey) -> bool: ...
-    def materialize_frames(self, keys: Sequence[FrameKey]) -> np.ndarray: ...
-    def junction_offsets(self, key: JunctionOffsetKey) -> frozenset[Cell]: ...
-    def coater_frame_bans(self, key: CoaterBanKey) -> frozenset[Cell]: ...
-    def power_pair(self, key: PowerPairKey) -> bool: ...
-    def stats(self) -> MemoStats: ...   # hits, misses, evictions per table
+# flab2bp.layout.geometry_memo
+MEMO_SPECS_RETAINED: int
+def for_spec(spec: BuildSpec) -> _StagedStaticCache: ...
+def stats_for_spec(spec: BuildSpec) -> MemoStats: ...
+def clear() -> None: ...
 
-def astar_flat(...) -> KernelSearchResult: ...
-def relaxed_search_flat(...) -> KernelSearchResult: ...
-def route_kernel_available() -> bool: ...
+# flab2bp.layout.freeform
+_JUNCTION_BAN_OFFSET_CACHE: dict[JunctionOffsetKey, frozenset[Cell]]
+class _StagedStaticCache:
+    def stats(self) -> MemoStats: ...
+def _astar_python_loop(...) -> tuple[list[int] | None, int, int, list[int]]: ...
+
+# flab2bp.layout._route_kernel (Cython)
+def astar_flat(...) -> tuple[array[int] | None, int, int, array[int], int]: ...
+def relaxed_search_flat(...) -> tuple[array[int] | None, int, bool, bool]: ...
+
+# flab2bp.layout.route_kernel
+def compiled_available() -> bool: ...
+def selected_backend() -> Literal["python", "cython"]: ...
 ```
 
-`_prepare_routing_problem(..., memo: GeometryMemo | None = None)`; `None`
-builds a private memo so every existing caller and test keeps its behaviour.
+`_prepare_routing_problem` keeps its existing `staged_static_cache` keyword;
+`None` still builds a private cache so every existing caller and test keeps
+its behaviour. `FLAB2BP_ROUTE_KERNEL=python` forces the Python loops for
+parity runs. Placement stats carry `route_backend`.
 
 ## 7. Failure handling
 
@@ -229,13 +240,14 @@ builds a private memo so every existing caller and test keeps its behaviour.
 ## 8. Testing
 
 - Profiler: schema tests for the new fields; a smoke run on one small spec.
-- Memo: parity on every corpus spec against uncached preparation; per-table
-  key-purity tests (the same key twice yields the same value; a different
-  frame or offset yields an independent computation); eviction tests.
-- Planning reuse: call-count tests on one large spec.
-- Kernel: replay digest identity on three captured corpora; property test on
-  random grids; budget and deadline write-back tests mirroring the Python
-  tests; backend selection tests.
+- Preparation: parity with and without each change on representative corpus
+  specs in the suite; a script proving parity on every corpus spec at the
+  gate; registry identity and eviction tests; offset-cache sharing tests.
+- Planning reuse: call-count test on a small spec.
+- Kernel: replay digest identity on three captured corpora under both
+  backends; parity on every real search of two specs; random-grid parity
+  for the relaxed search; budget and expansion-cap write-back tests; backend
+  selection and fallback tests.
 - Gate: the corpus audit described in section 3, run by script, with the
   baseline JSONL and the candidate JSONL committed under the plan's evidence
   directory.
@@ -244,11 +256,13 @@ builds a private memo so every existing caller and test keeps its behaviour.
 
 1. Copy today's 30-second audit baseline into the evidence directory.
 2. Profiler split; record the pre-change profile for the three largest cells.
-3. Geometry memo with parity tests; re-profile; accept only if preparation on
-   `universe-matrix` drops below the goal or the profile explains why not.
-4. Planning reuse; re-profile.
-5. Routing kernel with digest parity; re-profile.
-6. Corpus gate; commit both JSONL files and the comparison.
+3. Planning reuse; re-profile.
+4. The four preparation changes, each with its parity test; re-profile after
+   each; accept only if the targeted phase drops or the profile explains why
+   not.
+5. Routing kernel with digest parity, then the relaxed search; re-profile.
+6. Corpus gate; commit the JSONL files, the parity output, and the
+   comparison.
 
 Each step is a separate commit that leaves the tree green. A step whose gate
 fails is reverted, not tuned around.
@@ -267,13 +281,15 @@ note and will be specified separately after this design's gate passes.
 
 ## 11. Risks
 
-- The memo's keys may miss a dependency, producing a stale hit. The parity
-  test over the whole corpus is the defence; any mismatch fails the step.
+- A shared cache's keys may miss a dependency, producing a stale hit. The
+  parity script over the whole corpus is the defence; any mismatch fails the
+  gate.
 - Cython float association order may differ from CPython for the same
   expression. The digest check is the defence; the kernel keeps the exact
   expression shapes the Python code uses.
 - Preparation may have a long tail this design does not name. The profiler is
   built first so the tail is measured before it is guessed at.
-- NumPy batching may change float rounding in overlap tests. Overlap is
-  computed on the same formulas with the same dtype; the parity test covers
-  every corpus spec.
+- The reach prefilter's exactness argument rests on every member of a
+  splitter stack sharing one materialized x and y. The parity test compares
+  the filtered and unfiltered scans on a spec with coaters, and the corpus
+  parity script covers the rest.
