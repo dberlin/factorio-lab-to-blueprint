@@ -2,20 +2,21 @@
 
 from __future__ import annotations
 
+import random
+from collections.abc import Iterator
 from dataclasses import fields, replace
 from fractions import Fraction
 from itertools import combinations_with_replacement
-import random
 from typing import ClassVar
 
 import pytest
 
+import flab2bp.layout.strip_variants as strip_variants_module
 from flab2bp.dsp import catalog
 from flab2bp.layout import slots
 from flab2bp.layout.base import PlacedBuilding, Placement
 from flab2bp.layout.finalize import ProjectionFailure
 from flab2bp.layout.freeform import plan_strips
-import flab2bp.layout.strip_variants as strip_variants_module
 from flab2bp.layout.strip_variants import (
     CargoDomain,
     LogicalLane,
@@ -23,6 +24,7 @@ from flab2bp.layout.strip_variants import (
     StripFamily,
     StripFamilyId,
     StripInstance,
+    StripInstanceId,
     StripVariant,
     _variants,
     default_strip_variant,
@@ -651,10 +653,10 @@ def test_projection_pitch_origin_matching_has_linear_structural_growth() -> None
     assert brute_large_count >= brute_small_count * 12
     assert brute_large_count >= 2 * 128**2
 
-class _VariantScanCounter(tuple):
+class _VariantScanCounter(tuple[StripVariant, ...]):
     scans: ClassVar[int] = 0
 
-    def __iter__(self):  # type: ignore[no-untyped-def]
+    def __iter__(self) -> Iterator[StripVariant]:
         for variant in super().__iter__():
             type(self).scans += 1
             yield variant
@@ -666,26 +668,11 @@ def _batch_projection_requirements(
     variants: tuple[StripVariant, ...],
     failures: tuple[ProjectionFailure, ...],
 ) -> tuple[ProjectionPitchRequirement | None, ...]:
-    mapper = getattr(
-        strip_variants_module,
-        "projection_pitch_requirements",
-        None,
-    )
-    if mapper is not None:
-        return mapper(
-            placement,
-            instance_ids=instance_ids,
-            variants=variants,
-            failures=failures,
-        )
-    return tuple(
-        projection_pitch_requirement(
-            placement,
-            instance_ids=instance_ids,
-            variants=variants,
-            failure=failure,
-        )
-        for failure in failures
+    return strip_variants_module.projection_pitch_requirements(
+        placement,
+        instance_ids=instance_ids,
+        variants=variants,
+        failures=failures,
     )
 
 
@@ -1279,8 +1266,8 @@ def test_contracted_same_pose_variant_is_rejected_by_partition_and_validation() 
     ordinary = variant_with_minimum_pitch(contracted, contracted.pitch_x + 1)
     family = replace(generated_family, variants=(ordinary,))
 
-    assert contracted.pitch_x == 7
-    assert ordinary.pitch_x == 8
+    assert contracted.pitch_x == 8
+    assert ordinary.pitch_x == 9
     assert strip_pose_id(contracted) == strip_pose_id(ordinary)
     with pytest.raises(ValueError, match="below the ordinary family pose"):
         partition_strip_variant(

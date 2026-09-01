@@ -25,7 +25,6 @@ from flab2bp.layout.finalize import (
 )
 from flab2bp.spec import BuildSpec
 
-
 LaneKind = Literal["input", "output"]
 LaneSide = Literal["north", "south"]
 _CARDINAL_YAWS = (0.0, 90.0, 180.0, 270.0)
@@ -593,7 +592,7 @@ def projection_pitch_requirements(
         owner = building.owner_strip
         if not is_machine or type(owner) is not int or not 0 <= owner < len(variants):
             continue
-        key = (
+        key: _ProjectionMachineKey = (
             owner,
             building.item_id,
             building.model_index,
@@ -618,15 +617,15 @@ def projection_pitch_requirements(
         placed_origin_x, placed_origin_y = min(owned_positions)
         translation_x = placed_origin_x - local_origin_x
         translation_y = placed_origin_y - variant.lane_plan.machine_row
-        ordinals = {
+        position_ordinals = {
             (
                 translation_x + origin_x,
                 translation_y + variant.lane_plan.machine_row,
             ): ordinal
             for ordinal, origin_x in enumerate(variant.machine_origins_x)
         }
-        if ordinals.keys() == owned_positions:
-            ordinals_by_key[key] = ordinals
+        if position_ordinals.keys() == owned_positions:
+            ordinals_by_key[key] = position_ordinals
 
     requirements: list[ProjectionPitchRequirement | None] = []
     building_count = len(placement.buildings)
@@ -1103,7 +1102,8 @@ def _logical_lanes(
     plan: _LogicalStripPlan,
     output_sides: tuple[LaneSide, ...] | None = None,
 ) -> tuple[tuple[LogicalLane, ...], tuple[LogicalLane, ...]]:
-    sides = output_sides or ("north",) * len(plan.out_lanes)
+    default_output_side: LaneSide = "north"
+    sides = output_sides or (default_output_side,) * len(plan.out_lanes)
     return (
         _input_logical_lanes(
             plan.in_above,
