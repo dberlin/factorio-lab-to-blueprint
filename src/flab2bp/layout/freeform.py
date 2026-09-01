@@ -4418,6 +4418,38 @@ class _StagedCoater:
     port: CoaterSupplyPort
 
 
+def _projected_coater_supply_failure(
+    candidate: _StagedCoater,
+    host: PlacedBuilding,
+    projections: Sequence[planet.Projection],
+    *,
+    cancelled: Callable[[], bool] | None = None,
+) -> finalize.ProjectionFailure | None:
+    """Check a staged coater's two required belts before routing starts."""
+
+    areas = catalog.building(candidate.coater.item_id).addon_areas
+    belts = (
+        (candidate.port.host_belt, host),
+        (candidate.port.supply_belt, candidate.supply),
+    )
+    addons = ((candidate.port.coater, candidate.coater, areas),)
+    for projection in projections:
+        if cancelled is not None and cancelled():
+            raise _PreparationDeadline
+        try:
+            failure = finalize._projected_addon_failure(
+                belts,
+                addons,
+                projection,
+                cancelled=cancelled,
+            )
+        except finalize.ProjectionCancelled:
+            raise _PreparationDeadline from None
+        if failure is not None:
+            return failure
+    return None
+
+
 def _prepare_port(port: _Port) -> _PreparedPort:
     return _PreparedPort(
         belt_index=port.belt,
@@ -13246,17 +13278,46 @@ def _place_coaters(
                     y=drop_cell[1],
                     z=drop_cell[2],
                 )
-                staged.append(
-                    _StagedCoater(
-                        supply=supply,
-                        coater=proposed_coater,
-                        projected_pair=(
-                            coater_index,
-                            _collision_pose(proposed_coater),
-                        ),
-                        port=prepared_port,
-                    )
+                staged_candidate = _StagedCoater(
+                    supply=supply,
+                    coater=proposed_coater,
+                    projected_pair=(
+                        coater_index,
+                        _collision_pose(proposed_coater),
+                    ),
+                    port=prepared_port,
                 )
+                addon_failure = _projected_coater_supply_failure(
+                    staged_candidate,
+                    prospective[host],
+                    tuple(
+                        projection
+                        for frame in static_frames
+                        for projection in frame.projections
+                    ),
+                    cancelled=cancelled,
+                )
+                if addon_failure is not None:
+                    projected_failures.append(
+                        (
+                            addon_failure,
+                            None,
+                            None,
+                            _exact_retry_evidence(
+                                "seating",
+                                addon_failure,
+                                dict(
+                                    enumerate((*prospective, supply, proposed_coater))
+                                ),
+                            ),
+                        )
+                    )
+                    failure_reasons.append(
+                        f"the {item} coater at ({cx}, {cy}, z={host_z}) loses "
+                        "a projected supply belt"
+                    )
+                    continue
+                staged.append(staged_candidate)
                 prospective.extend((supply, proposed_coater))
                 obstacle_index.add(coater_index, proposed_coater)
                 cleanup_bounds = candidate_bounds

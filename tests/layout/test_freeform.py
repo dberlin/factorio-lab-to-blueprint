@@ -13202,6 +13202,50 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
         assert canvas.buildings[got[0].coater].owner_strip == 0
         assert canvas.buildings[got[0].supply_belt].owner_strip == 0
 
+    def test_projected_supply_failure_tries_the_next_coater_seat(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        canvas, spec, strips, ports = self._fixture(4)
+        failure = finalize.ProjectionFailure(
+            "game.addon_supply",
+            (4,),
+            "the first seat loses its supply belt after projection",
+            160,
+        )
+        checked: list[int] = []
+
+        def projected_supply(
+            candidate: freeform._StagedCoater,
+            _host: PlacedBuilding,
+            _projections: Sequence[planet.Projection],
+            *,
+            cancelled: Callable[[], bool] | None = None,
+        ) -> finalize.ProjectionFailure | None:
+            assert cancelled is None
+            checked.append(candidate.port.host_x)
+            return failure if len(checked) == 1 else None
+
+        monkeypatch.setattr(
+            freeform,
+            "_projected_coater_supply_failure",
+            projected_supply,
+        )
+
+        got = freeform._place_coaters(
+            canvas,
+            spec,
+            strips,
+            ports,
+            2001,
+            35,
+            policy=BandPolicy("portable"),
+        )
+
+        assert len(got) == 1
+        assert len(checked) == 2
+        assert got[0].host_x == checked[1]
+
     def test_coater_candidates_do_not_recertify_boundary_cleanup(self) -> None:
         canvas, spec, strips, ports = self._fixture(4)
         initial_buildings = len(canvas.buildings)
@@ -14119,6 +14163,93 @@ def test_prepared_junction_ban_reuses_complete_geometry_offsets_per_attempt(
     assert ban == frozenset({(1, 5, 2), (19, 5, 2)})
 
 
+
+
+def test_projected_coater_supply_is_checked_during_preparation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    host = _belt(0, 0, item="hydrogen")
+    supply = replace(_belt(1, 0, item="proliferator"), z=F(1))
+    info = catalog.building(catalog.SPRAY_COATER_ID)
+    coater = PlacedBuilding(
+        catalog.SPRAY_COATER_ID,
+        info.model_index,
+        0,
+        0,
+        width=info.width,
+        height=info.height,
+    )
+    port = CoaterSupplyPort(
+        coater=2,
+        host_belt=0,
+        supply_belt=1,
+        item="hydrogen",
+        yaw=0.0,
+        host_x=0,
+        host_y=0,
+        host_z=0,
+        x=1,
+        y=0,
+        z=1,
+    )
+    staged = freeform._StagedCoater(
+        supply=supply,
+        coater=coater,
+        projected_pair=(2, freeform._collision_pose(coater)),
+        port=port,
+    )
+    band = planet.bands()[0]
+    projection = planet.Projection(
+        band,
+        next(iter(band.anchors(1))),
+        colliders.PLANET_SEGMENT,
+        colliders.PLANET_RADIUS,
+    )
+    expected = finalize.ProjectionFailure(
+        "game.addon_supply",
+        (2,),
+        "the staged coater loses one of its supply belts",
+        band.area_segments,
+    )
+    observed: list[
+        tuple[
+            tuple[tuple[int, PlacedBuilding], ...],
+            tuple[
+                tuple[
+                    int,
+                    PlacedBuilding,
+                    tuple[catalog.AddonSupplyPose, ...],
+                ],
+                ...,
+            ],
+        ]
+    ] = []
+
+    def reject(
+        belts: Sequence[tuple[int, PlacedBuilding]],
+        addons: Sequence[
+            tuple[int, PlacedBuilding, tuple[catalog.AddonSupplyPose, ...]]
+        ],
+        _projection: planet.Projection,
+        *,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> finalize.ProjectionFailure:
+        assert cancelled is None
+        observed.append((tuple(belts), tuple(addons)))
+        return expected
+
+    monkeypatch.setattr(finalize, "_projected_addon_failure", reject)
+
+    assert (
+        freeform._projected_coater_supply_failure(
+            staged,
+            host,
+            (projection,),
+        )
+        is expected
+    )
+    assert observed[0][0] == ((0, host), (1, supply))
+    assert observed[0][1][0][:2] == (2, coater)
 
 
 def test_projected_coater_junction_ban_reuses_identical_exact_relations(
