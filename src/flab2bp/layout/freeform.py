@@ -7850,7 +7850,7 @@ def _route_all(
                             )
                             if alternative_provenance:
                                 searched = alternative
-                                offered_guard_tap[i][searched.path[0]] = next(
+                                offered_guard_tap[i][alternative.path[0]] = next(
                                     iter(alternative_provenance.values())
                                 )
                             else:
@@ -7952,7 +7952,7 @@ def _route_all(
                 history[detail.cell] += _BLAME_WEIGHT
                 for blocking_cell in detail.blocking_cells:
                     history[blocking_cell] += _BLAME_WEIGHT
-                source, destination = _endpoint_cells(nets[index])
+                endpoint_source, endpoint_destination = _endpoint_cells(nets[index])
                 blockers = tuple(
                     _net_id(blocker) for blocker in detail.blocking_indices
                 )
@@ -7962,8 +7962,8 @@ def _route_all(
                     (detail.cell, *detail.blocking_cells),
                     blockers,
                     0,
-                    source=source,
-                    destination=destination,
+                    source=endpoint_source,
+                    destination=endpoint_destination,
                     blocking_endpoints=_blocking_endpoint_cells(blockers),
                 )
         for path in paths.values():
