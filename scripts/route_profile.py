@@ -41,6 +41,7 @@ from flab2bp.layout import (  # noqa: E402
     finalize,
     freeform,
     global_router,
+    sequence_solver,
     strip_variants,
     validate,
 )
@@ -304,8 +305,18 @@ def install(tally: Tally) -> Callable[[], None]:
         tally.add("merge_frontier", time.perf_counter() - t0)
         return out
 
-    def timed(target: str, key: str, module: object) -> Callable[[], None]:
-        original = getattr(module, target)
+    def timed(key: str, sites: Sequence[tuple[object, str]]) -> Callable[[], None]:
+        """Patch every ``(module, attribute)`` binding site with one shared shim.
+
+        A function reimported by name (``from ... import x``) is bound
+        separately in each importer's module namespace, so patching only its
+        defining module misses calls made through the other binding -- as
+        `sequence_solver` does for `_prepare_routing_problem`, `plan_strips`
+        and `generate_strip_families`.  Every site shares one shim and one
+        tally entry per call, however the caller reached it.
+        """
+        originals = [getattr(module, target) for module, target in sites]
+        original = originals[0]
 
         def shim(*args: object, **kwargs: object) -> object:
             t0 = time.perf_counter()
@@ -317,25 +328,40 @@ def install(tally: Tally) -> Callable[[], None]:
                 if key == "prepare":
                     tally.prepare_calls.append(dt)
 
-        setattr(module, target, shim)
+        for module, target in sites:
+            setattr(module, target, shim)
 
         def undo() -> None:
-            setattr(module, target, original)
+            for (module, target), orig in zip(sites, originals, strict=True):
+                setattr(module, target, orig)
 
         return undo
 
     phase_undo = [
-        timed("_prepare_routing_problem", "prepare", freeform),
-        timed("_place_coaters", "place_coaters", freeform),
-        timed("_projected_coater_junction_bans_by_frame", "coater_frame_bans", freeform),
-        timed("_prepared_junction_ban", "junction_ban", freeform),
-        timed("_power_plan", "power_plan", freeform),
-        timed("_staged_static_relation_projection_risks_uncached", "static_risks", freeform),
-        timed("plan_strips", "plan_strips", freeform),
-        timed("generate_strip_families", "strip_families", strip_variants),
-        timed("_search_relaxed", "relaxed_search", global_router),
-        timed("finalize_placement", "finalize", finalize),
-        timed("validate", "validate", validate),
+        timed("prepare", [
+            (freeform, "_prepare_routing_problem"),
+            (sequence_solver, "_prepare_routing_problem"),
+        ]),
+        timed("place_coaters", [(freeform, "_place_coaters")]),
+        timed("coater_frame_bans", [
+            (freeform, "_projected_coater_junction_bans_by_frame"),
+        ]),
+        timed("junction_ban", [(freeform, "_prepared_junction_ban")]),
+        timed("power_plan", [(freeform, "_power_plan")]),
+        timed("static_risks", [
+            (freeform, "_staged_static_relation_projection_risks_uncached"),
+        ]),
+        timed("plan_strips", [
+            (freeform, "plan_strips"),
+            (sequence_solver, "plan_strips"),
+        ]),
+        timed("strip_families", [
+            (strip_variants, "generate_strip_families"),
+            (sequence_solver, "generate_strip_families"),
+        ]),
+        timed("relaxed_search", [(global_router, "_search_relaxed")]),
+        timed("finalize", [(finalize, "finalize_placement")]),
+        timed("validate", [(validate, "validate")]),
     ]
 
     freeform._astar = astar

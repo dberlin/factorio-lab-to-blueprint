@@ -8,7 +8,7 @@ from typing import cast
 
 import pytest
 
-from flab2bp.layout import freeform, sequence_solver
+from flab2bp.layout import freeform, sequence_solver, strip_variants
 from flab2bp.layout.route_feedback import DetailedRouteResult, DetailedRouteStatus
 from flab2bp.rates import CandidatePolicy
 from scripts import route_profile
@@ -127,6 +127,43 @@ def test_install_wraps_preparation_phases_and_restores() -> None:
     assert freeform._prepared_junction_ban is original
     assert tally.n["junction_ban"] == 1
     assert tally.t["junction_ban"] >= 0.0
+
+
+def test_install_wraps_sequence_solvers_reimported_bindings_too() -> None:
+    # `sequence_solver` does `from flab2bp.layout.freeform import
+    # _prepare_routing_problem, plan_strips` and `from
+    # flab2bp.layout.strip_variants import generate_strip_families`, each
+    # binding the function under its own module -- a shim installed only on
+    # the defining module misses every call sequence-pair makes through its
+    # own binding. `plan_strips` is re-exported with an explicit `as
+    # plan_strips` alias so mypy treats it as public; `_prepare_routing_problem`
+    # and `generate_strip_families` are not, so they are read via `getattr`
+    # here, the same way `install()` itself patches them.
+    def seq_prepare() -> object:
+        return getattr(sequence_solver, "_prepare_routing_problem")  # noqa: B009
+
+    def seq_strip_families() -> object:
+        return getattr(sequence_solver, "generate_strip_families")  # noqa: B009
+
+    tally = route_profile.Tally()
+    originals = {
+        "prepare": seq_prepare(),
+        "plan_strips": sequence_solver.plan_strips,
+        "strip_families": seq_strip_families(),
+    }
+    restore = route_profile.install(tally)
+    try:
+        assert seq_prepare() is not originals["prepare"]
+        assert seq_prepare() is freeform._prepare_routing_problem
+        assert sequence_solver.plan_strips is not originals["plan_strips"]
+        assert sequence_solver.plan_strips is freeform.plan_strips
+        assert seq_strip_families() is not originals["strip_families"]
+        assert seq_strip_families() is strip_variants.generate_strip_families
+    finally:
+        restore()
+    assert seq_prepare() is originals["prepare"]
+    assert sequence_solver.plan_strips is originals["plan_strips"]
+    assert seq_strip_families() is originals["strip_families"]
 
 
 def test_normal_profile_honors_sequence_pair_strategy(
