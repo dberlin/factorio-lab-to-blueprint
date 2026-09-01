@@ -3366,17 +3366,18 @@ def test_junction_ports_fires_on_a_fifth_attachment() -> None:
     assert r.by_check("junction.ports")[0].detail["attached"] == 5
 
 
-def test_junction_colocated_clean_when_every_belt_shares_the_tile() -> None:
+def test_junction_colocated_clean_when_every_belt_shares_the_layout_tile() -> None:
+    """The emitter later moves each attachment to its exact physical port pose."""
     assert not fired(validate(junction_pair()), "junction.colocated")
 
 
 def test_junction_colocated_fires_on_an_adjacent_attachment() -> None:
-    """A belt naming a splitter from the next tile over pastes UNCONNECTED.
+    """A belt on another layout tile cannot identify a splitter attachment.
 
-    Nothing about the blueprint looks wrong -- the building exists, the link
-    resolves, the geometry is plausible -- and everything downstream of that
-    side silently receives nothing.  Measured on all 25 corpus splitters:
-    dx = dy = 0, without exception.
+    Internal placement uses the splitter tile plus a recorded port.  Blueprint
+    emission then replaces the common tile coordinate with that port's physical
+    pose.  A belt starting on an adjacent layout tile violates the internal
+    representation, regardless of whether its object link resolves.
     """
     p = place(
         belt(0, 0, out=1),  # 0

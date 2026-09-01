@@ -867,14 +867,12 @@ def _footprint(ctx: Context) -> Iterable[Finding]:
 def _overlap(ctx: Context) -> Iterable[Finding]:
     """No two buildings claim the same cell -- except those that share by design.
 
-    Belts, sorters and splitters are *belt-integrated*: they share a tile rather
-    than reserving one.  Splitters sit exactly co-located with a belt (measured
-    dx = dy = 0.00) and a sorter's anchors rest on the buildings it serves, so
-    none of them enter the blocking map at all.  Counting them would flag
-    blueprints the game itself produced -- in the corpus this is what accounts
-    for a splitter's footprint reaching into an adjacent Matrix Lab and a belt
-    running through a Storage Tank, both of which appear in blueprints that work
-    in game.
+    Belts, sorters and splitters are *belt-integrated*.  The layout model keeps
+    each splitter attachment on the splitter's integer-lattice tile; emission
+    later moves the belt record to the splitter's exact physical port pose.
+    Sorter anchors likewise rest on the buildings they serve, so none of these
+    enter the blocking map.  Counting them would flag valid layouts before
+    their game-space coordinates are materialized.
 
     Belt-on-belt collisions are still caught, by ``geom.belt_single_occupancy``.
     """
@@ -1009,14 +1007,17 @@ def _sorter_collide(ctx: Context) -> Iterable[Finding]:
 
 @check("geom.belt_single_occupancy")
 def _belt_single(ctx: Context) -> Iterable[Finding]:
-    """One belt per tile -- except belts attached to one Splitter port plane.
+    """One belt per tile -- except a junction's abstract layout tile.
 
     A belt running THROUGH a Splitter is represented by two belt buildings on
-    the same horizontal tile, one ending at the junction and one starting from
-    it, and a branch adds a third.  Models 39 and 40 also put two physical ports
-    one level above the Splitter's anchor, so the junction need only share the
-    belts' ``(x, y)``.  ``junction.port_pose`` separately proves that their
-    recorded ports exist at the belts' exact height.
+    the same abstract integer-lattice x/y tile, one ending at the junction and
+    one starting from it, and a branch adds a third.  Emission moves each
+    attached belt to its distinct physical port pose.  Models 39 and 40 also
+    put two physical ports one level above the Splitter's anchor, so the
+    junction need only share the belts' ``(x, y)``.
+    ``junction.port_pose`` separately proves that their recorded ports exist at
+    the exact model-specific height.  Reporting the internal co-location here
+    would reject a valid junction before that transformation.
 
     The exemption is narrow on purpose.  Every belt in the shared cell must be
     ATTACHED to the Splitter on that horizontal tile -- naming it as
@@ -3001,13 +3002,17 @@ def _junction_ports(ctx: Context) -> Iterable[Finding]:
 
 @check("junction.colocated")
 def _junction_colocated(ctx: Context) -> Iterable[Finding]:
-    """Every belt attached to a junction shares the junction's x/y tile.
+    """Every Splitter attachment uses the junction's abstract x/y layout tile.
 
-    The Splitter's alternate models have elevated ports, so altitude is not a
-    co-location constant.  ``junction.port_pose`` checks the recorded port's
-    exact model-specific height; this check owns only the shared tile invariant.
-    A belt naming a Splitter from an adjacent tile pastes with that side
-    unconnected.
+    Placement and routing operate on an integer lattice, where attached belts
+    share the Splitter's horizontal tile and differ by their recorded Splitter
+    port.  The alternate models have elevated ports, so altitude is not a
+    co-location constant.  The blueprint emitter transforms that representation
+    to the exact physical port pose required by the current game, and
+    ``junction.port_pose`` checks the recorded port's model-specific height.
+    An attachment on an adjacent layout tile cannot be transformed unambiguously
+    and pastes with that side unconnected.  Reported per attachment so the
+    finding names the belt to move.
     """
     bs = ctx.placement.buildings
     for j, s in ctx.of_kind(Kind.SPLITTER):
@@ -3021,7 +3026,8 @@ def _junction_colocated(ctx: Context) -> Iterable[Finding]:
                 Severity.ERROR,
                 f"belt {belt_idx} at ({b.x},{b.y},{b.z}) attaches to splitter {j} at "
                 f"({s.x},{s.y},{s.z}), x/y offset ({dx},{dy}); every attachment must "
-                "share the junction tile or that side pastes unconnected",
+                "share the junction's abstract layout tile before port-pose emission "
+                "or that side pastes unconnected",
                 (belt_idx, j),
                 {"junction": j, "belt": belt_idx, "dx": dx, "dy": dy},
             )
