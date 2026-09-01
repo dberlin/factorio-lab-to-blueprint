@@ -8312,6 +8312,60 @@ class TestPortAccessIsReservedForEveryRole:
             f"an unobstructed port held {len(for_port)} cells: {for_port}"
         )
 
+    def test_zero_onward_replay_is_deterministic(self) -> None:
+        """Keep the universe-all source trap reproducible without a full solve."""
+
+        def replay() -> tuple[
+            int,
+            tuple[tuple[int, int, int], ...],
+            tuple[tuple[int, int, int], ...],
+        ]:
+            canvas = _Canvas()
+            source = _Port(canvas.add(_belt(0, 0)), 0, 0, 0, 0)
+            blocker = _Port(canvas.add(_belt(2, 1)), 2, 1, 2, 2)
+            first_sink = _Port(canvas.add(_belt(9, 0)), 9, 0, 9, 9)
+            second_sink = _Port(canvas.add(_belt(13, 0)), 13, 0, 13, 13)
+            for cell in (
+                (-1, 0),
+                (0, -1),
+                (0, 1),
+                (1, -1),
+                (1, 1),
+                (2, 2),
+                (3, 1),
+            ):
+                canvas.add(_belt(*cell))
+
+            missing = _reserve_port_access(
+                canvas,
+                [
+                    _Net(src=source, dst=first_sink, item="hydrogen"),
+                    _Net(src=blocker, dst=second_sink, item="hydrogen"),
+                ],
+            )
+            access = tuple(
+                sorted(cell for cell, owner in canvas.reserved.items() if owner == (0, 0, 0))
+            )
+            onward = tuple(
+                sorted(
+                    candidate
+                    for cell in access
+                    for dx, dy in freeform._STEPS
+                    if (
+                        candidate := (cell[0] + dx, cell[1] + dy, cell[2])
+                    )
+                    != (0, 0, 0)
+                    and canvas.free(candidate)
+                )
+            )
+            return missing, access, onward
+
+        first = replay()
+        second = replay()
+
+        assert first == second
+        assert first == (0, ((1, 0, 0),), ())
+
 
 class TestTheProliferatorChainIsOneLinearRun:
     """No splitter may carry the proliferator, and no drop may be bypassed.

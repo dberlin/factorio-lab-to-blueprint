@@ -2009,6 +2009,29 @@ def test_production_exact_preparation_reuses_realized_direct_insert(
     assert promised_direct and promised_direct[0]
 
 
+def test_production_exact_preparation_replay_is_deterministic() -> None:
+    run = _production_run(
+        two_stage_spec(),
+        band_policy=BandPolicy("portable"),
+        time_budget_s=2.0,
+        power=False,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+    )
+    height = run.solver._heights[0]
+    decoded = decode_state(height.problem, height.restarts[0].anneal)
+
+    first = run.solver.adapters.prepare_exact(height.height, decoded)
+    second = run.solver.adapters.prepare_exact(height.height, decoded)
+
+    assert first == second
+    assert first.prepared is not None
+    assert second.prepared is not None
+    assert first.prepared.new_workspace().canvas.reserved == (
+        second.prepared.new_workspace().canvas.reserved
+    )
+
+
 def test_sequence_pair_layout_rejects_removed_power_option() -> None:
     constructor: Callable[..., SequencePairLayout] = SequencePairLayout
 
