@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from functools import cache
 from typing import Literal, cast
@@ -1031,16 +1031,18 @@ def _projected_addon_failure(
         )
         if target_position is not None:
             predecessor_by_position[target_position] = belt_position
+    scan_all_belts = len(belts) <= (2 * column_reach + 1) * (2 * row_reach + 1)
     belt_grid: dict[tuple[int, int], list[int]] = {}
-    for belt_position, (_belt_index, placed_belt) in enumerate(belts):
-        if cancelled is not None and cancelled():
-            raise ProjectionCancelled
-        longitude, latitude = transformed(placed_belt.x, placed_belt.y)
-        cell = (
-            math.floor(longitude) % projection.band.columns,
-            math.floor(latitude),
-        )
-        belt_grid.setdefault(cell, []).append(belt_position)
+    if not scan_all_belts:
+        for belt_position, (_belt_index, placed_belt) in enumerate(belts):
+            if cancelled is not None and cancelled():
+                raise ProjectionCancelled
+            longitude, latitude = transformed(placed_belt.x, placed_belt.y)
+            cell = (
+                math.floor(longitude) % projection.band.columns,
+                math.floor(latitude),
+            )
+            belt_grid.setdefault(cell, []).append(belt_position)
     belt_positions: dict[int, tuple[float, float, float]] = {}
 
     def projected_belt(belt_position: int) -> tuple[float, float, float]:
@@ -1078,19 +1080,23 @@ def _projected_addon_failure(
             longitude, latitude = transformed(float(wanted[0]), float(wanted[1]))
             target_column = math.floor(longitude) % projection.band.columns
             target_row = math.floor(latitude)
-            candidates = sorted(
-                {
-                    belt_position
-                    for dx in range(-column_reach, column_reach + 1)
-                    for dy in range(-row_reach, row_reach + 1)
-                    for belt_position in belt_grid.get(
-                        (
-                            (target_column + dx) % projection.band.columns,
-                            target_row + dy,
-                        ),
-                        (),
-                    )
-                }
+            candidates: Iterable[int] = (
+                range(len(belts))
+                if scan_all_belts
+                else sorted(
+                    {
+                        belt_position
+                        for dx in range(-column_reach, column_reach + 1)
+                        for dy in range(-row_reach, row_reach + 1)
+                        for belt_position in belt_grid.get(
+                            (
+                                (target_column + dx) % projection.band.columns,
+                                target_row + dy,
+                            ),
+                            (),
+                        )
+                    }
+                )
             )
             supplied = False
             line_misses: list[tuple[float, int, float]] = []
