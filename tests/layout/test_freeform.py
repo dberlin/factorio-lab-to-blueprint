@@ -3059,6 +3059,7 @@ def _sweep_after_first_routing(
     forbid_finalization: bool = False,
     heights: tuple[int, ...] = (20,),
     subsequent_routing: DetailedRouteResult | None = None,
+    distinct_arrangements: bool = True,
     deadline: float | None = None,
     finalizer: Callable[..., Placement] | None = None,
     certifier: Callable[..., validate.Report] | None = None,
@@ -3067,7 +3068,13 @@ def _sweep_after_first_routing(
     strips = plan_strips(spec)
     packs = {
         (height, arrangement): freeform._Pack(
-            at={index: (index * 10, 0) for index in range(len(strips))},
+            at={
+                index: (
+                    index * 10 + (arrangement if distinct_arrangements else 0),
+                    0,
+                )
+                for index in range(len(strips))
+            },
             width=20,
             height=height,
             status="test",
@@ -3482,6 +3489,26 @@ def test_exact_one_net_feedback_admits_the_next_configured_arrangement(
     assert result is not None
     assert seen == [(20, 0), (20, 1)]
     assert [attempt.routing.failed_count for attempt in attempts] == [1, 0]
+
+def test_feedback_retry_does_not_reroute_the_same_assignment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result, seen, attempts = _sweep_after_first_routing(
+        monkeypatch,
+        _feedback_bearing_routing(),
+        subsequent_routing=DetailedRouteResult(
+            DetailedRouteStatus.ROUTED,
+            (),
+            (),
+            1,
+            1,
+        ),
+        distinct_arrangements=False,
+    )
+
+    assert result is None
+    assert seen == [(20, 0), (20, 1)]
+    assert [attempt.routing.failed_count for attempt in attempts] == [1]
 
 
 def test_proof_scoped_near_miss_promotes_existing_feedback_retry_immediately(
@@ -10237,15 +10264,17 @@ class TestDetailedRoutingDiagnostics:
             for level in range(LEVELS):
                 canvas.blocked[x, y, level] = 0
 
-    def test_prelinked_carry_port_is_not_offered_at_another_height(
+    def test_prelinked_model40_carry_offers_only_lower_branch_ports(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """The routing frontier reserves the carry's physical port before A*.
+        """The routing frontier respects model 40's two physical port planes.
 
-        The onward belt descends east after leaving the elevated source.  A new
-        east start at level 1 would still name that same co-located east port;
-        routing height cannot make a second connection-pool cell.
+        The onward belt descends east after leaving the elevated source. Model
+        40's opposite carry ports remain on that upper z=1 plane, so another
+        east start is the same occupied port and must be withheld. Its
+        perpendicular branch ports are on the lower z=0 plane; north and south
+        starts must be offered there, never at the carry height.
         """
         canvas = _Canvas()
         bounds = (-4, -4, 4, 6)
@@ -10300,7 +10329,9 @@ class TestDetailedRoutingDiagnostics:
 
         assert observed
         assert (1, 0, 1) not in observed[0]
-        assert {(0, -1, 1), (0, 1, 1)} <= set(observed[0])
+        starts = set(observed[0])
+        assert {(0, -1, 0), (0, 1, 0)} <= starts
+        assert not {(0, -1, 1), (0, 1, 1)} & starts
 
     def test_a_sealed_pocket_reports_the_failed_net_and_blocking_owner(
         self,
@@ -10721,6 +10752,206 @@ class TestDetailedRoutingDiagnostics:
         failure = next(f for f in result.failures if f.net_id == failed_id)
         assert set(failure.wall) == set(destination_docks)
         assert failure.blocking_nets == (blocker_id,)
+
+
+    def test_occupied_source_docks_name_their_blocking_net(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        canvas = _Canvas()
+        bounds = (-8, -8, 8, 8)
+        canvas.limit = bounds
+        blocker_id = NetId(0, 1, "blocker", NetRole.INTERNAL, 0)
+        failed_id = NetId(2, 3, "failed", NetRole.INTERNAL, 0)
+        nets = [
+            self._net(canvas, (-7, -7), (7, 7), blocker_id),
+            self._net(canvas, (0, 0), (4, 0), failed_id),
+        ]
+        source_docks = (
+            (1, 0, 0),
+            (-1, 0, 0),
+            (0, 1, 0),
+            (0, -1, 0),
+        )
+        searches = iter(
+            (
+                _PathSearchResult(source_docks, None, (), 1),
+                _PathSearchResult(
+                    None,
+                    RouteFailureKind.DYNAMIC_ACCESS,
+                    (),
+                    0,
+                ),
+            )
+        )
+
+        def scripted_astar(
+            _canvas: _Canvas,
+            starts: Sequence[Cell],
+            _goals: set[Cell],
+            *_args: object,
+            **_kwargs: object,
+        ) -> _PathSearchResult:
+            result = next(searches)
+            if result.path is None:
+                assert starts == []
+            return result
+
+        monkeypatch.setattr("flab2bp.layout.freeform._astar", scripted_astar)
+        monkeypatch.setattr("flab2bp.layout.freeform.RRR_MAX", 1)
+        monkeypatch.setattr("flab2bp.layout.freeform._REPAIR_PASSES", 0)
+
+        result = _route_all(canvas, nets, 2001, 35, bounds)
+
+        failure = next(f for f in result.failures if f.net_id == failed_id)
+        assert set(failure.wall) == set(source_docks)
+        assert failure.blocking_nets == (blocker_id,)
+
+    def test_repair_frontier_can_name_movable_splitter_keepout(self) -> None:
+        canvas = _Canvas()
+        path = ((0, 0, 0),)
+        canvas.blocked[0, 1, 0] = _TENTATIVE
+
+        strict = freeform._merge_frontier(
+            canvas,
+            {0: path},
+            (0,),
+            lambda _x, _y, _level: True,
+        )
+        provenance: dict[Cell, Cell] = {}
+        repair = freeform._merge_frontier(
+            canvas,
+            {0: path},
+            (0,),
+            lambda _x, _y, _level: True,
+            provenance=provenance,
+            tentative_ok=True,
+        )
+
+        assert strict == set()
+        assert (0, 1, 0) in repair
+        assert provenance[0, 1, 0] == (0, 0, 0)
+
+    def test_first_fanout_route_detours_to_hold_a_future_tap(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        canvas = _Canvas()
+        bounds = (-3, -4, 13, 3)
+        canvas.limit = bounds
+        source = canvas.add(_belt(0, 0, item="gear"))
+        far_destination = canvas.add(_belt(10, 0, item="gear"))
+        near_destination = canvas.add(_belt(2, -3, item="gear"))
+        canvas.add(_belt(0, -1, item="static"))
+        for x in range(1, 10):
+            canvas.add(_belt(x, 1, item="static"))
+        shared_port = _Port(source, 0, 0, 0, 0)
+        nets = [
+            _Net(
+                src=shared_port,
+                dst=_Port(far_destination, 10, 0, 10, 10),
+                item="gear",
+                net_id=NetId(0, 1, "gear", NetRole.INTERNAL, 0),
+            ),
+            _Net(
+                src=shared_port,
+                dst=_Port(near_destination, 2, -3, 2, 2),
+                item="gear",
+                net_id=NetId(0, 2, "gear", NetRole.INTERNAL, 1),
+            ),
+        ]
+        searches = 0
+
+        def scripted_astar(
+            attempt_canvas: _Canvas,
+            *_args: object,
+            **_kwargs: object,
+        ) -> _PathSearchResult:
+            nonlocal searches
+            searches += 1
+            if searches == 1:
+                return _PathSearchResult(
+                    tuple((x, 0, 0) for x in range(1, 10)),
+                    None,
+                    (),
+                    9,
+                )
+            if searches == 2:
+                detour = (
+                    (-1, 0, 0),
+                    (-1, -1, 0),
+                    (-1, -2, 0),
+                    *(tuple((x, -2, 0) for x in range(11))),
+                    (10, -1, 0),
+                    (10, 0, 0),
+                )
+                return _PathSearchResult(detour, None, (), len(detour))
+            assert attempt_canvas.guard
+            return _PathSearchResult(
+                None,
+                RouteFailureKind.BUDGET,
+                (),
+                0,
+            )
+
+        monkeypatch.setattr(freeform, "_astar", scripted_astar)
+        monkeypatch.setattr(freeform, "RRR_MAX", 1)
+        monkeypatch.setattr(freeform, "_REPAIR_PASSES", 0)
+
+        result = _route_all(canvas, nets, 2001, 35, bounds)
+
+        assert result.status is DetailedRouteStatus.BUDGET
+        assert searches == 3
+
+    def test_repair_moves_a_route_out_of_a_future_fanout_junction(self) -> None:
+        canvas = _Canvas()
+        bounds = (-3, -4, 23, 4)
+        canvas.limit = bounds
+        for x in range(bounds[0], bounds[2] + 1):
+            for y in range(bounds[1], bounds[3] + 1):
+                canvas.belt_ban[x, y] = set(range(1, LEVELS))
+        source = canvas.add(_belt(0, 0, item="gear"))
+        far_destination = canvas.add(_belt(20, 0, item="gear"))
+        near_destination = canvas.add(_belt(2, -2, item="gear"))
+        foreign_source = canvas.add(_belt(1, 1, item="foreign"))
+        foreign_destination = canvas.add(_belt(19, 1, item="foreign"))
+        canvas.add(_belt(0, -1, item="static"))
+        shared_port = _Port(source, 0, 0, 0, 0)
+        nets = [
+            _Net(
+                src=shared_port,
+                dst=_Port(far_destination, 20, 0, 20, 20),
+                item="gear",
+                net_id=NetId(0, 1, "gear", NetRole.INTERNAL, 0),
+            ),
+            _Net(
+                src=shared_port,
+                dst=_Port(near_destination, 2, -2, 2, 2),
+                item="gear",
+                net_id=NetId(0, 2, "gear", NetRole.INTERNAL, 1),
+            ),
+            _Net(
+                src=_Port(foreign_source, 1, 1, 1, 1),
+                dst=_Port(foreign_destination, 19, 1, 19, 19),
+                item="foreign",
+                net_id=NetId(3, 4, "foreign", NetRole.INTERNAL, 0),
+            ),
+        ]
+
+        result = _route_all(
+            canvas,
+            nets,
+            2001,
+            35,
+            bounds,
+            budget={"left": 500_000},
+        )
+
+        assert result.status is DetailedRouteStatus.ROUTED
+        assert result.failed_count == 0
+        assert any(
+            building.item_id == catalog.SPLITTER_ID
+            for building in canvas.buildings
+        )
+
 
 
     def test_blocking_owners_are_snapshotted_when_the_search_fails(
