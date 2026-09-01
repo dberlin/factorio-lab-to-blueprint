@@ -93,11 +93,9 @@ smarter search until evaluation is cheap.
 - No new search operator, no-good, or acceptance rule.
 - No cross-process or on-disk cache. Memo state lives in one process and dies
   with it.
-- No C++, Numba, or JAX. Cython is the compiled toolchain, with one bounded
-  exception: the A* loop is also ported to Rust through PyO3 for a bake-off
-  on the replay bench, and exactly one of the two survives that task. The
-  decision rule is fixed before measuring: Rust must be at least 1.5x faster
-  on every captured corpus with identical digests, or it is deleted.
+- No Rust, C++, Numba, or JAX. Cython is the one compiled toolchain. A PyO3
+  bake-off was considered and dropped: A* is under 1.5 s per candidate on the
+  largest cells, so a second toolchain cannot move the gate.
 - No change to CLI, web, or pipeline interfaces.
 
 ## 5. Architecture
@@ -220,7 +218,7 @@ def relaxed_search_flat(...) -> tuple[array[int] | None, int, bool, bool]: ...
 
 # flab2bp.layout.route_kernel
 def compiled_available() -> bool: ...
-def selected_backend() -> Literal["python", "cython", "rust"]: ...   # "rust" only while the bake-off crate exists
+def selected_backend() -> Literal["python", "cython"]: ...
 ```
 
 `_prepare_routing_problem` keeps its existing `staged_static_cache` keyword;
@@ -274,9 +272,8 @@ there, not copied from earlier runs.
    not.
 5. Cython A* kernel with digest parity, then the Cython relaxed search;
    re-profile.
-6. PyO3 A* bake-off on the replay bench; prune the loser in the same commit.
-7. Corpus gate; commit the JSONL files, the parity output, the bake-off
-   record, and the comparison.
+6. Corpus gate; commit the JSONL files, the parity output, and the
+   comparison.
 
 Each step is a separate commit that leaves the tree green. A step whose gate
 fails is reverted, not tuned around.
