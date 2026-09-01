@@ -17,9 +17,16 @@ export const A_BLUEPRINT = readFileSync(
   'utf8',
 ).trim();
 
+/** A second real blueprint whose parsed model is visibly distinct in selection tests. */
+export const B_BLUEPRINT = readFileSync(
+  'tests/fixtures/factory-quick-start-step-3-red-cube.txt',
+  'utf8',
+).trim();
+
 export function aResult(overrides: Partial<BuildResult> = {}): BuildResult {
+  const blueprint = overrides.blueprint === undefined ? A_BLUEPRINT : overrides.blueprint;
   return {
-    blueprint: A_BLUEPRINT,
+    blueprint,
     valid: true,
     strategy: 'freeform',
     candidate: 'no-proliferator',
@@ -47,6 +54,7 @@ export function aResult(overrides: Partial<BuildResult> = {}): BuildResult {
         ok: true,
         errors: 0,
         chosen: true,
+        blueprint,
       },
     ],
     ...overrides,

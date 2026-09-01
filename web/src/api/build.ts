@@ -74,6 +74,8 @@ const Attempt = z.object({
   ok: z.boolean(),
   errors: z.number(),
   chosen: z.boolean(),
+  /** Withheld for an invalid attempt unless allow_invalid was requested. */
+  blueprint: z.string().nullable(),
 });
 
 /** How high a belt may go here, and whether that was read or assumed. */

@@ -8,7 +8,13 @@
  * produced no layout at all are the parts you need before trusting the result.
  * Every one of them reads as silence if the UI does not say it.
  */
-import type { AttemptFailure, BuildResult, ProjectionFailure, Refusal } from '../api/build';
+import type {
+  Attempt,
+  AttemptFailure,
+  BuildResult,
+  ProjectionFailure,
+  Refusal,
+} from '../api/build';
 export function ProjectionFailures({ failures }: { failures: ProjectionFailure[] }) {
   if (failures.length === 0) return null;
   return (
@@ -59,10 +65,14 @@ export function RefusalReport({ refusal }: { refusal: Refusal }) {
 export function BuildReportPanel({
   result,
   elapsedS,
+  selectedAttempt,
+  onSelectAttempt,
 }: {
   result: BuildResult;
   /** Optional server wall clock for the whole build. */
   elapsedS?: number;
+  selectedAttempt: Attempt | null;
+  onSelectAttempt(attempt: Attempt): void;
 }) {
   const inputs = Object.keys(result.external_inputs);
   const belt = result.belt_rules;
@@ -210,27 +220,47 @@ export function BuildReportPanel({
       )}
 
       {result.attempts.length > 1 && (
-        <table className="attempts">
+        <table className="attempts" aria-label="Candidate blueprints">
           <thead>
             <tr>
               <th>candidate</th>
               <th>strategy</th>
               <th>area</th>
               <th>errors</th>
+              <th>blueprint</th>
             </tr>
           </thead>
           <tbody>
-            {result.attempts.map((attempt) => (
-              <tr
-                key={`${attempt.candidate}/${attempt.strategy}`}
-                className={attempt.chosen ? 'chosen' : undefined}
-              >
-                <td>{attempt.candidate}</td>
-                <td>{attempt.strategy}</td>
-                <td>{attempt.area}</td>
-                <td>{attempt.errors}</td>
-              </tr>
-            ))}
+            {result.attempts.map((attempt) => {
+              const selectable = attempt.blueprint !== null;
+              const selected = attempt === selectedAttempt;
+              const select = () => {
+                if (selectable) onSelectAttempt(attempt);
+              };
+              return (
+                <tr
+                  key={`${attempt.candidate}/${attempt.strategy}`}
+                  className={
+                    selectable ? (selected ? 'selectable selected' : 'selectable') : undefined
+                  }
+                  aria-selected={selected}
+                  aria-disabled={selectable ? undefined : true}
+                  tabIndex={selectable ? 0 : undefined}
+                  onClick={select}
+                  onKeyDown={(event) => {
+                    if (event.key !== 'Enter' && event.key !== ' ') return;
+                    event.preventDefault();
+                    select();
+                  }}
+                >
+                  <td>{attempt.candidate}</td>
+                  <td>{attempt.strategy}</td>
+                  <td>{attempt.area}</td>
+                  <td>{attempt.errors}</td>
+                  <td>{selectable ? (selected ? 'selected' : 'view') : 'unavailable'}</td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       )}

@@ -2,15 +2,20 @@ import { afterEach, expect, test } from '@rstest/core';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { BlueprintProvider, useBlueprint } from '../../src/state/BlueprintProvider';
 import { BuildPanel } from '../../src/ui/BuildPanel';
-import { A_BLUEPRINT, aJob, aResult, restoreFetch, serving } from '../support/build';
+import { parseBlueprint } from '../../src/format';
+import { A_BLUEPRINT, B_BLUEPRINT, aJob, aResult, restoreFetch, serving } from '../support/build';
 import { realCatalog } from '../support/catalog';
 
 afterEach(restoreFetch);
 
-/** Reports what the provider was handed, so auto-render can be asserted on. */
+/** Reports the exact parsed blueprint handed to the viewer state. */
 function Probe() {
   const { blueprint } = useBlueprint();
-  return <span data-testid="loaded">{blueprint ? blueprint.buildings.length : 'none'}</span>;
+  return (
+    <span data-testid="loaded" data-blueprint-title={blueprint?.header.shortDesc ?? ''}>
+      {blueprint ? blueprint.buildings.length : 'none'}
+    </span>
+  );
 }
 
 const mount = () =>
@@ -26,11 +31,45 @@ function build(url = 'https://factoriolab.github.io/dsp/flow?o=graphene*60&v=11'
   fireEvent.click(screen.getByRole('button', { name: 'Build' }));
 }
 
+function candidateResult(chosenBlueprint = A_BLUEPRINT, alternativeBlueprint = B_BLUEPRINT) {
+  return {
+    ...aResult({ blueprint: chosenBlueprint }),
+    attempts: [
+      {
+        candidate: 'no-proliferator',
+        strategy: 'freeform',
+        area: 575,
+        ok: true,
+        errors: 0,
+        chosen: true,
+        blueprint: chosenBlueprint,
+      },
+      {
+        candidate: 'all-products',
+        strategy: 'sequence-pair',
+        area: 640,
+        ok: true,
+        errors: 0,
+        chosen: false,
+        blueprint: alternativeBlueprint,
+      },
+      {
+        candidate: 'output-products',
+        strategy: 'freeform',
+        area: 490,
+        ok: false,
+        errors: 1,
+        chosen: false,
+        blueprint: null,
+      },
+    ],
+  };
+}
+
 test('build is disabled until there is a URL', () => {
   mount();
   expect(screen.getByRole('button', { name: 'Build' })).toBeDisabled();
 });
-
 
 test('the Name input exposes the game title limit to the browser', () => {
   mount();
@@ -163,6 +202,175 @@ test('a finished build shows the string and renders it without a second click', 
   await waitFor(() => expect(screen.getByTestId('blueprint-string')).toHaveValue(A_BLUEPRINT));
   // The point of having the viewer in the same page: no copy-paste step.
   await waitFor(() => expect(screen.getByTestId('loaded')).not.toHaveTextContent('none'));
+});
+
+test('candidate rows select the blueprint string, viewer model, and copy source', async () => {
+  const result = candidateResult();
+  serving({ status: 202, body: { ...aJob(), result } });
+  const copied: string[] = [];
+  const originalClipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+  Object.defineProperty(navigator, 'clipboard', {
+    configurable: true,
+    value: {
+      writeText: (text: string) => {
+        copied.push(text);
+        return Promise.resolve();
+      },
+    },
+  });
+  mount();
+  build();
+
+  const chosen = await screen.findByRole('row', {
+    name: /no-proliferator freeform 575 0/i,
+  });
+  const alternative = screen.getByRole('row', {
+    name: /all-products sequence-pair 640 0/i,
+  });
+  expect(chosen).toHaveAttribute('aria-selected', 'true');
+  expect(alternative).toHaveAttribute('aria-selected', 'false');
+  expect(screen.getByTestId('blueprint-string')).toHaveValue(A_BLUEPRINT);
+  expect(screen.getByTestId('loaded')).toHaveAttribute(
+    'data-blueprint-title',
+    parseBlueprint(A_BLUEPRINT).header.shortDesc,
+  );
+
+  fireEvent.click(alternative);
+
+  expect(chosen).toHaveAttribute('aria-selected', 'false');
+  expect(alternative).toHaveAttribute('aria-selected', 'true');
+  expect(screen.getByTestId('blueprint-string')).toHaveValue(B_BLUEPRINT);
+  expect(screen.getByTestId('loaded')).toHaveAttribute(
+    'data-blueprint-title',
+    parseBlueprint(B_BLUEPRINT).header.shortDesc,
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Copy blueprint string' }));
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Copied' })).toBeInTheDocument());
+  expect(copied).toEqual([B_BLUEPRINT]);
+  expect(alternative).toHaveAttribute('aria-selected', 'true');
+
+  if (originalClipboard) Object.defineProperty(navigator, 'clipboard', originalClipboard);
+  else Reflect.deleteProperty(navigator, 'clipboard');
+});
+
+test('a clipboard completion cannot report success for a newly selected candidate', async () => {
+  serving({ status: 202, body: { ...aJob(), result: candidateResult() } });
+  let finishCopy = () => {};
+  const originalClipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+  Object.defineProperty(navigator, 'clipboard', {
+    configurable: true,
+    value: {
+      writeText: () =>
+        new Promise<void>((resolve) => {
+          finishCopy = resolve;
+        }),
+    },
+  });
+  mount();
+  build();
+
+  await screen.findByRole('row', {
+    name: /no-proliferator freeform 575 0/i,
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Copy blueprint string' }));
+  fireEvent.click(
+    screen.getByRole('row', {
+      name: /all-products sequence-pair 640 0/i,
+    }),
+  );
+  await act(async () => finishCopy());
+
+  expect(screen.getByRole('button', { name: 'Copy blueprint string' })).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Copied' })).not.toBeInTheDocument();
+  expect(screen.getByTestId('blueprint-string')).toHaveValue(B_BLUEPRINT);
+
+  if (originalClipboard) Object.defineProperty(navigator, 'clipboard', originalClipboard);
+  else Reflect.deleteProperty(navigator, 'clipboard');
+});
+
+test('candidate rows support keyboard selection and unavailable blueprints cannot be selected', async () => {
+  serving({ status: 202, body: { ...aJob(), result: candidateResult() } });
+  mount();
+  build();
+
+  const chosen = await screen.findByRole('row', {
+    name: /no-proliferator freeform 575 0/i,
+  });
+  const alternative = screen.getByRole('row', {
+    name: /all-products sequence-pair 640 0/i,
+  });
+  const unavailable = screen.getByRole('row', {
+    name: /output-products freeform 490 1/i,
+  });
+
+  fireEvent.keyDown(alternative, { key: 'Enter' });
+  expect(alternative).toHaveAttribute('aria-selected', 'true');
+  expect(screen.getByTestId('blueprint-string')).toHaveValue(B_BLUEPRINT);
+
+  expect(unavailable).toHaveAttribute('aria-disabled', 'true');
+  fireEvent.click(unavailable);
+  fireEvent.keyDown(unavailable, { key: 'Enter' });
+  expect(alternative).toHaveAttribute('aria-selected', 'true');
+  expect(unavailable).toHaveAttribute('aria-selected', 'false');
+  expect(screen.getByTestId('blueprint-string')).toHaveValue(B_BLUEPRINT);
+
+  fireEvent.keyDown(chosen, { key: ' ' });
+  expect(chosen).toHaveAttribute('aria-selected', 'true');
+  expect(screen.getByTestId('blueprint-string')).toHaveValue(A_BLUEPRINT);
+});
+
+test('a new result resets selection to its best available candidate', async () => {
+  const replacement = {
+    ...aResult({
+      blueprint: A_BLUEPRINT,
+      candidate: 'output-products',
+      strategy: 'sequence-pair',
+    }),
+    attempts: [
+      {
+        candidate: 'output-products',
+        strategy: 'sequence-pair',
+        area: 420,
+        ok: true,
+        errors: 0,
+        chosen: true,
+        blueprint: A_BLUEPRINT,
+      },
+      {
+        candidate: 'no-proliferator',
+        strategy: 'freeform',
+        area: 460,
+        ok: false,
+        errors: 1,
+        chosen: false,
+        blueprint: null,
+      },
+    ],
+  };
+  serving(
+    { status: 202, body: { ...aJob(), result: candidateResult() } },
+    { status: 202, body: { ...aJob(), id: 'replacement', result: replacement } },
+  );
+  mount();
+  build();
+
+  const alternative = await screen.findByRole('row', {
+    name: /all-products sequence-pair 640 0/i,
+  });
+  fireEvent.click(alternative);
+  expect(screen.getByTestId('blueprint-string')).toHaveValue(B_BLUEPRINT);
+
+  build('https://factoriolab.github.io/dsp/flow?o=processor*60&v=11');
+
+  await waitFor(() =>
+    expect(
+      screen.getByRole('row', { name: /output-products sequence-pair 420 0/i }),
+    ).toHaveAttribute('aria-selected', 'true'),
+  );
+  expect(screen.getByTestId('blueprint-string')).toHaveValue(A_BLUEPRINT);
+  expect(
+    within(screen.getByRole('table', { name: 'Candidate blueprints' })).queryByText('all-products'),
+  ).not.toBeInTheDocument();
 });
 
 test('an unpinned report offers both automatic fetch and a supplied flow', async () => {

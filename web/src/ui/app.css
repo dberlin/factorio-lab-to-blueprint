@@ -288,8 +288,20 @@ body {
 .attempts td {
   font-variant-numeric: tabular-nums;
 }
-.attempts tr.chosen td {
+.attempts tr.selectable {
+  cursor: pointer;
+}
+.attempts tr.selectable:focus-visible {
+  outline: 1px solid currentColor;
+  outline-offset: -1px;
+}
+.attempts tr.selected td {
   color: #9ad6a0;
+  font-weight: 600;
+}
+.attempts tr[aria-disabled='true'] {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 /* `--flow` as a paste or an upload. Its own row because a CSV export is not a

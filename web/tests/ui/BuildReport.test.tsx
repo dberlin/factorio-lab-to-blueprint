@@ -14,6 +14,8 @@ test.each([
         primary_band: primaryBand,
         certified_bands: [...certifiedBands],
       })}
+      selectedAttempt={null}
+      onSelectAttempt={() => {}}
     />,
   );
 

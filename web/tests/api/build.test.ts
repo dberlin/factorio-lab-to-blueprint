@@ -10,7 +10,7 @@ import {
   runBuild,
   submitBuild,
 } from '../../src/api/build';
-import { aJob, aResult, restoreFetch, serving } from '../support/build';
+import { A_BLUEPRINT, aJob, aResult, restoreFetch, serving } from '../support/build';
 
 afterEach(restoreFetch);
 
@@ -164,6 +164,7 @@ test('sequence-pair is accepted as an explicit response strategy', async () => {
         ok: true,
         errors: 0,
         chosen: true,
+        blueprint: A_BLUEPRINT,
       },
     ],
   });

@@ -10,6 +10,7 @@ import { useEffect, useId, useRef, useState } from 'react';
 import {
   BAND_OPTIONS,
   BandSelection,
+  type Attempt,
   type BuildOptions,
   BuildRequestError,
   DEFAULT_OPTIONS,
@@ -25,11 +26,13 @@ export function BuildPanel() {
   const { load, markStale } = useBlueprint();
   const [options, setOptions] = useState<BuildOptions>(DEFAULT_OPTIONS);
   const [job, setJob] = useState<Job | null>(null);
+  const [selectedAttemptKey, setSelectedAttemptKey] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [requestError, setRequestError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState<string | null>(null);
   const abort = useRef<AbortController | null>(null);
+  const copyGeneration = useRef(0);
   const urlId = useId();
   const nameId = useId();
   const strategyId = useId();
@@ -55,6 +58,7 @@ export function BuildPanel() {
     }));
 
   const start = async (overrides: Partial<BuildOptions> = {}) => {
+    copyGeneration.current += 1;
     abort.current?.abort();
     const controller = new AbortController();
     abort.current = controller;
@@ -63,11 +67,16 @@ export function BuildPanel() {
     setCopied(false);
     setCopyError(null);
     setJob(null);
+    setSelectedAttemptKey(null);
     try {
       const settled = await runBuild({ ...options, ...overrides }, setJob, controller.signal);
-      // Render it the moment it exists. The point of having the viewer in the
-      // same page is not having to copy the string somewhere to look at it.
-      if (settled.result?.blueprint) load(settled.result.blueprint);
+      // Render the chosen attempt the moment it exists. The point of having the
+      // viewer in the same page is not having to copy the string somewhere to
+      // look at it.
+      const chosen = settled.result?.attempts.find(
+        (attempt) => attempt.chosen && attempt.blueprint,
+      );
+      if (chosen?.blueprint) load(chosen.blueprint);
       // A refusal, an error, or a build whose string was withheld leaves the
       // canvas showing the build before it. Keeping it is the right call --
       // clearing would throw away what you were looking at -- but the toolbar
@@ -94,7 +103,23 @@ export function BuildPanel() {
     setJob(null);
   };
 
-  const blueprint = job?.result?.blueprint ?? null;
+  const selectedAttempt =
+    job?.result?.attempts.find(
+      (attempt) =>
+        attempt.blueprint !== null &&
+        `${attempt.candidate}/${attempt.strategy}` === selectedAttemptKey,
+    ) ??
+    job?.result?.attempts.find((attempt) => attempt.chosen && attempt.blueprint !== null) ??
+    null;
+  const blueprint = selectedAttempt?.blueprint ?? null;
+  const selectAttempt = (attempt: Attempt) => {
+    if (!attempt.blueprint) return;
+    copyGeneration.current += 1;
+    setSelectedAttemptKey(`${attempt.candidate}/${attempt.strategy}`);
+    setCopied(false);
+    setCopyError(null);
+    load(attempt.blueprint);
+  };
   const effectiveCandidateCount =
     options.flow.trim() || options.fetch_flow ? 1 : options.candidate_policies.length;
   const strategyCount = options.strategy === 'best' ? 2 : 1;
@@ -107,6 +132,9 @@ export function BuildPanel() {
    */
   const copy = () => {
     if (!blueprint) return;
+    const generation = ++copyGeneration.current;
+    setCopied(false);
+    setCopyError(null);
     const written = navigator.clipboard?.writeText(blueprint);
     if (!written) {
       setCopyError(
@@ -116,10 +144,12 @@ export function BuildPanel() {
     }
     void written.then(
       () => {
+        if (copyGeneration.current !== generation) return;
         setCopied(true);
         setCopyError(null);
       },
       (cause: unknown) => {
+        if (copyGeneration.current !== generation) return;
         setCopied(false);
         setCopyError(cause instanceof Error ? cause.message : String(cause));
       },
@@ -369,7 +399,12 @@ export function BuildPanel() {
               {copyError}
             </p>
           )}
-          <BuildReportPanel result={job.result} elapsedS={job.elapsed_s} />
+          <BuildReportPanel
+            result={job.result}
+            elapsedS={job.elapsed_s}
+            selectedAttempt={selectedAttempt}
+            onSelectAttempt={selectAttempt}
+          />
         </>
       )}
     </section>

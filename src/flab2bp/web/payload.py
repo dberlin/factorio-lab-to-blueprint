@@ -124,6 +124,7 @@ def describe(build: pipeline.Build, *, allow_invalid: bool = False) -> Json:
                 attempt.candidate == build.spec.label
                 and attempt.strategy == build.strategy
             ),
+            "blueprint": attempt.blueprint if (attempt.ok or allow_invalid) else None,
         }
         for attempt in sorted(build.attempts, key=lambda item: (not item.ok, item.area))
     ]

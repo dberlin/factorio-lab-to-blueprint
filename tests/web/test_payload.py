@@ -37,6 +37,17 @@ def test_the_blueprint_and_the_shape_of_the_build(small_build: pipeline.Build) -
     assert body["area"] == small_build.placement.area
 
 
+def test_each_built_attempt_carries_its_real_blueprint(
+    small_build: pipeline.Build,
+) -> None:
+    body = describe(small_build)
+    attempts = body["attempts"]
+    assert isinstance(attempts, list)
+    attempt = attempts[0]
+    assert isinstance(attempt, dict)
+    assert "blueprint" in attempt
+    assert attempt["blueprint"] == small_build.blueprint
+
 def test_payload_reports_literal_certified_bands(
     small_build: pipeline.Build,
 ) -> None:

@@ -270,10 +270,13 @@ class Attempt:
     strategy: str
     placement: Placement
     report: validate.Report
+    blueprint: str
+    #: Measured before display-only input markers are added to the blueprint.
+    layout_area: int
 
     @property
     def area(self) -> int:
-        return self.placement.area
+        return self.layout_area
 
     @property
     def ok(self) -> bool:
@@ -604,7 +607,25 @@ def build(
                 max_belt_z=belt_rules.max_z,
                 belt_vertical_construction=belt_rules.vertical_construction,
             )
-            attempts.append(Attempt(spec.label, sname, placement, report))
+            marked = markers.mark_external_belts(placement, spec)
+            labelled = replace(
+                marked,
+                short_desc=name or _generated_title(spec),
+                description=(
+                    f"flab2bp {sname} layout, {spec.label} candidate, "
+                    f"{spec.machine_count} machines, {placement.area} tiles"
+                ),
+            )
+            attempts.append(
+                Attempt(
+                    spec.label,
+                    sname,
+                    labelled,
+                    report,
+                    codec.encode(labelled),
+                    placement.area,
+                )
+            )
             if on_progress is not None:
                 on_progress(
                     AttemptProgress(
@@ -643,20 +664,6 @@ def build(
     best = min(pool, key=lambda a: a.area)
     chosen_spec = next(s for s in spec_set.candidates if s.label == best.candidate)
 
-    # Label the belts you have to connect to something. Done here rather than
-    # in each strategy: it needs only the Placement graph plus the spec's
-    # boundary items, so one implementation covers every layout backend.
-    marked = markers.mark_external_belts(best.placement, chosen_spec)
-
-    # Titles ride on the Placement, not on encode(), so stamp them here.
-    labelled = replace(
-        marked,
-        short_desc=name or _generated_title(chosen_spec),
-        description=(
-            f"flab2bp {best.strategy} layout, {chosen_spec.label} candidate, "
-            f"{chosen_spec.machine_count} machines, {best.area} tiles"
-        ),
-    )
     # Cross-check rather than trust. With the selection pinned this must be
     # empty; anything it names is the pin leaking, and a named leak is worth far
     # more than a silent one.
@@ -697,13 +704,12 @@ def build(
             display_rate=request.display_rate,
         )
 
-    blueprint = codec.encode(labelled)
     return Build(
         spec=chosen_spec,
-        placement=labelled,
+        placement=best.placement,
         report=best.report,
         strategy=best.strategy,
-        blueprint=blueprint,
+        blueprint=best.blueprint,
         attempts=tuple(attempts),
         refused=tuple(refused),
         flow_findings=findings + flow_dropped,
