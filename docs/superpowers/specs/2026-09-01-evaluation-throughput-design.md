@@ -93,7 +93,11 @@ smarter search until evaluation is cheap.
 - No new search operator, no-good, or acceptance rule.
 - No cross-process or on-disk cache. Memo state lives in one process and dies
   with it.
-- No Rust, C++, Numba, or JAX. Cython is the one compiled toolchain.
+- No C++, Numba, or JAX. Cython is the compiled toolchain, with one bounded
+  exception: the A* loop is also ported to Rust through PyO3 for a bake-off
+  on the replay bench, and exactly one of the two survives that task. The
+  decision rule is fixed before measuring: Rust must be at least 1.5x faster
+  on every captured corpus with identical digests, or it is deleted.
 - No change to CLI, web, or pipeline interfaces.
 
 ## 5. Architecture
@@ -216,7 +220,7 @@ def relaxed_search_flat(...) -> tuple[array[int] | None, int, bool, bool]: ...
 
 # flab2bp.layout.route_kernel
 def compiled_available() -> bool: ...
-def selected_backend() -> Literal["python", "cython"]: ...
+def selected_backend() -> Literal["python", "cython", "rust"]: ...   # "rust" only while the bake-off crate exists
 ```
 
 `_prepare_routing_problem` keeps its existing `staged_static_cache` keyword;
@@ -254,15 +258,25 @@ parity runs. Placement stats carry `route_backend`.
 
 ## 9. Delivery order
 
-1. Copy today's 30-second audit baseline into the evidence directory.
+Starting point: the master that includes the boundary-routing rewrite in
+flight in the main checkout on 2026-09-01 (it rewrites
+`_prepare_routing_problem`, `_route_all`, `_build_prepared`,
+`_commit_paths`, `_PreparedRoutingProblem`, and `_production_run`). The
+plan's worktree is created from that master and the baselines are generated
+there, not copied from earlier runs.
+
+1. Generate the 30-second and 15-second audit baselines on the starting
+   master into the evidence directory.
 2. Profiler split; record the pre-change profile for the three largest cells.
 3. Planning reuse; re-profile.
 4. The four preparation changes, each with its parity test; re-profile after
    each; accept only if the targeted phase drops or the profile explains why
    not.
-5. Routing kernel with digest parity, then the relaxed search; re-profile.
-6. Corpus gate; commit the JSONL files, the parity output, and the
-   comparison.
+5. Cython A* kernel with digest parity, then the Cython relaxed search;
+   re-profile.
+6. PyO3 A* bake-off on the replay bench; prune the loser in the same commit.
+7. Corpus gate; commit the JSONL files, the parity output, the bake-off
+   record, and the comparison.
 
 Each step is a separate commit that leaves the tree green. A step whose gate
 fails is reverted, not tuned around.

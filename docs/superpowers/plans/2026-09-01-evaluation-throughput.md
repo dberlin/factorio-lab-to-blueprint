@@ -26,6 +26,9 @@
 - Evidence files are tracked under `docs/superpowers/evidence/2026-09-01-evaluation-throughput/`. The `.superpowers/sdd/` workspace is git-ignored and holds only task briefs and reports.
 - Commit messages: imperative, sentence case, no trailing period, e.g. `perf(layout): share junction ban offsets across attempts`.
 - A step whose measurement misses its stated goal is not committed as if it passed: record the numbers and report.
+- **Work in flight on 2026-09-01.** The main checkout carries an uncommitted boundary-routing rewrite (routing requested outputs to the block boundary) touching `_prepare_routing_problem`, `_route_all`, `_build_prepared`, `_commit_paths`, `_PreparedRoutingProblem`, `_RoutingWorkspace`, `_route_external_inputs` (split into `_route_boundary_nets`, `_route_external_inputs`, `_route_external_outputs`), `sequence_solver._production_run`, `_variant_search_inputs`, and `finalize.compact_open_boundary_belts_certified`. Do not start this plan until that work has landed on master. Create this plan's worktree from that master. Every `file:line` reference below was taken at commit 4c09a85 and is a hint only: resolve each target by symbol name (Serena `find_symbol`) before editing.
+- Baselines are generated on the same master the plan starts from, never copied from `/tmp` files produced before the in-flight work landed.
+- Rust toolchain for the bake-off: cargo 1.98 is installed; `pyo3 = "0.29"` and `setuptools-rust==1.13.0` are the pinned versions. Nothing else in Rust.
 
 ---
 
@@ -41,16 +44,17 @@
 - Consumes: `scripts/audit.py --json PATH` JSONL rows with keys `strategy`, `url_id`, `spec_index`, `spec_label`, `power`, `budget`, `status`, `area`, `seconds`, `detail`.
 - Produces: `audit_compare.compare(baseline_rows, candidate_rows, *, noise_area, p95_seconds) -> Verdict` and the CLI `uv run python scripts/audit_compare.py BASELINE.jsonl CANDIDATE.jsonl [--noise-area 0.013] [--p95-seconds 30]`. Later tasks call the CLI as the gate.
 
-- [ ] **Step 1: Copy today's baselines into the tracked evidence directory**
+- [ ] **Step 1: Generate the baselines on the starting master**
 
 ```bash
+git log --oneline -1   # record this hash in the commit message: it is the baseline commit
 mkdir -p docs/superpowers/evidence/2026-09-01-evaluation-throughput
-cp /tmp/audit-budget30-current.jsonl docs/superpowers/evidence/2026-09-01-evaluation-throughput/baseline-budget30.jsonl
-cp /tmp/audit-final2.jsonl docs/superpowers/evidence/2026-09-01-evaluation-throughput/baseline-budget15.jsonl
+uv run python scripts/audit.py --budget 30 --jobs 16 --json docs/superpowers/evidence/2026-09-01-evaluation-throughput/baseline-budget30.jsonl | tail -4
+uv run python scripts/audit.py --budget 15 --jobs 16 --json docs/superpowers/evidence/2026-09-01-evaluation-throughput/baseline-budget15.jsonl | tail -4
 wc -l docs/superpowers/evidence/2026-09-01-evaluation-throughput/*.jsonl
 ```
 
-Expected: 72 lines in each file. If `/tmp/audit-budget30-current.jsonl` is missing, regenerate it first with `uv run python scripts/audit.py --budget 30 --jobs 16 --json /tmp/audit-budget30-current.jsonl` (about 3 minutes) and note in the commit message that the baseline was regenerated.
+Expected: 72 lines in each file, about 3 minutes each. Record each run's clean count in the commit message. The pre-in-flight figures (freeform 36/36 and sequence-pair 32/36 at 30 s; 63/72 at 15 s) are the reference; if the new baseline differs by more than two cells, say so in the commit message and continue, the gate compares against this file.
 
 - [ ] **Step 2: Write the failing tests for the comparison**
 
@@ -832,7 +836,7 @@ git commit -m "perf(layout): reach-filter coater junction bans before materializ
 ### Task 6: Stop deep-copying immutable building templates
 
 **Files:**
-- Modify: `src/flab2bp/layout/freeform.py:13146` (`building_templates=tuple(deepcopy(canvas.buildings))` inside `_prepare_routing_problem`)
+- Modify: `src/flab2bp/layout/freeform.py`, the `building_templates=tuple(deepcopy(canvas.buildings))` argument in the `_PreparedRoutingProblem(...)` construction at the end of `_prepare_routing_problem` (line 13146 at 4c09a85; the in-flight work rewrites this function, so locate it by the `deepcopy(canvas.buildings)` text)
 - Test: `tests/layout/test_freeform.py`
 
 **Interfaces:**
@@ -881,7 +885,7 @@ Expected: FAIL with `assert list not in [...]`
 
 - [ ] **Step 3: Replace the deep copy**
 
-At `freeform.py:13146` change
+In the `_PreparedRoutingProblem(...)` construction at the end of `_prepare_routing_problem`, change
 
 ```python
         building_templates=tuple(deepcopy(canvas.buildings)),
@@ -918,8 +922,8 @@ git commit -m "perf(layout): stop deep-copying frozen building templates"
 
 **Files:**
 - Create: `src/flab2bp/layout/geometry_memo.py`
-- Modify: `src/flab2bp/layout/freeform.py:10590-10641` (`_StagedStaticCache`, add `stats()`), `src/flab2bp/layout/freeform.py:15616` (`staged_static_cache = _StagedStaticCache()` inside `FreeformLayout._sweep`)
-- Modify: `src/flab2bp/layout/sequence_solver.py:4212` (`staged_static_cache = _StagedStaticCache()` inside `_production_run`)
+- Modify: `src/flab2bp/layout/freeform.py` (`_StagedStaticCache`, add `stats()`; the `staged_static_cache = _StagedStaticCache()` statement inside `FreeformLayout._sweep`, line 15616 at 4c09a85)
+- Modify: `src/flab2bp/layout/sequence_solver.py` (the `staged_static_cache = _StagedStaticCache()` statement inside `_production_run`, line 4212 at 4c09a85; the in-flight work edits this function, so locate the statement by text)
 - Test: `tests/layout/test_geometry_memo.py`
 
 **Interfaces:**
@@ -1759,7 +1763,13 @@ Write the `.pyi` stub with the signature shown in Interfaces, and add the extens
 Write `src/flab2bp/layout/route_kernel.py`:
 
 ```python
-"""Backend selection for the compiled routing loops."""
+"""Backend selection for the compiled routing loops.
+
+``FLAB2BP_ROUTE_KERNEL`` forces one backend: ``python``, ``cython``, or
+``rust`` (the last exists only while the Task 10 bake-off crate is present).
+Unset, the first available of ``cython`` then ``python`` is used until the
+bake-off decision changes ``_PREFERENCE``.
+"""
 
 from __future__ import annotations
 
@@ -1767,16 +1777,37 @@ import os
 from collections.abc import Callable
 from typing import Literal
 
-BackendName = Literal["python", "cython"]
+BackendName = Literal["python", "cython", "rust"]
 
-_compiled_astar: Callable[..., object] | None
+_candidates: dict[BackendName, Callable[..., object] | None] = {"python": None}
 try:
-    from flab2bp.layout._route_kernel import astar_flat as _compiled_astar
-except ImportError:
-    _compiled_astar = None
+    from flab2bp.layout._route_kernel import astar_flat as _cython_astar
 
-if os.environ.get("FLAB2BP_ROUTE_KERNEL") == "python":
-    _compiled_astar = None
+    _candidates["cython"] = _cython_astar
+except ImportError:
+    _candidates["cython"] = None
+try:
+    from flab2bp.layout._route_kernel_rs import astar_flat as _rust_astar
+
+    _candidates["rust"] = _rust_astar
+except ImportError:
+    _candidates["rust"] = None
+
+_PREFERENCE: tuple[BackendName, ...] = ("cython", "rust", "python")
+
+
+def _choose() -> BackendName:
+    forced = os.environ.get("FLAB2BP_ROUTE_KERNEL")
+    if forced in ("python", "cython", "rust"):
+        return forced  # type: ignore[return-value]
+    for name in _PREFERENCE:
+        if name == "python" or _candidates.get(name) is not None:
+            return name
+    return "python"
+
+
+_backend: BackendName = _choose()
+_compiled_astar: Callable[..., object] | None = _candidates.get(_backend)
 
 
 def compiled_available() -> bool:
@@ -1784,8 +1815,10 @@ def compiled_available() -> bool:
 
 
 def selected_backend() -> BackendName:
-    return "cython" if _compiled_astar is not None else "python"
+    return _backend if _compiled_astar is not None else "python"
 ```
+
+A forced backend whose extension is missing falls through to `python`, which is what `selected_backend()` then reports.
 
 - [ ] **Step 5: Split `freeform._astar` into wrapper plus loop**
 
@@ -2154,7 +2187,19 @@ In `global_router._search_relaxed`, keep the early returns and, after `weight` i
         return _SearchResult(tuple(_cut_loops(cells)), expansions, exhausted, was_cancelled)
 ```
 
-The Python loop below it is unchanged. Add `_compiled_relaxed` to `route_kernel.py` beside `_compiled_astar` (imported from `_route_kernel.relaxed_search_flat`, reset to `None` under the same environment override), add the `.pyi` entry, and extend `compiled_available()` to require both.
+The Python loop below it is unchanged. In `route_kernel.py`, add beside `_compiled_astar`:
+
+```python
+_compiled_relaxed: Callable[..., object] | None
+try:
+    from flab2bp.layout._route_kernel import relaxed_search_flat as _compiled_relaxed
+except ImportError:
+    _compiled_relaxed = None
+if _backend == "python":
+    _compiled_relaxed = None
+```
+
+The relaxed search has one compiled implementation (Cython) whichever A* backend the Task 10 bake-off selects; a forced `python` backend disables both. Add the `.pyi` entry for `relaxed_search_flat`.
 
 - [ ] **Step 4: Build and run the tests**
 
@@ -2176,7 +2221,466 @@ git commit -m "perf(layout): compile the relaxed global search"
 
 ---
 
-### Task 10: Record the routing backend in placement stats and the profiler
+### Task 10: PyO3 A* kernel bake-off against Cython
+
+**Files:**
+- Create: `rust/route_kernel/Cargo.toml`
+- Create: `rust/route_kernel/src/lib.rs`
+- Modify: `setup.py`, `pyproject.toml` (`[build-system].requires` and the `build` dependency group)
+- Modify: `src/flab2bp/layout/route_kernel.py` (already imports `_route_kernel_rs` when present)
+- Create: `docs/superpowers/evidence/2026-09-01-evaluation-throughput/kernel-bakeoff.md`
+- Test: `tests/layout/test_route_kernel.py`
+
+**Interfaces:**
+- Consumes: the `astar_flat` calling convention from Task 8 (same positional arguments, same five-tuple result), `scripts/route_bench.py --check`, `FLAB2BP_ROUTE_KERNEL`.
+- Produces: `flab2bp.layout._route_kernel_rs.astar_flat` with the identical signature; a decision recorded in `kernel-bakeoff.md`; the loser removed from the tree in the same commit as the decision.
+
+Decision rule, fixed before measuring: replay the three captured corpora from Task 8 Step 7 under both compiled backends, three rounds each, minimum `us/exp` per file. Both must print `MATCH`. If Rust is at least 1.5x faster than Cython on every file, Rust wins: `_PREFERENCE` becomes `("rust", "python")`, the Cython A* is deleted from `_route_kernel.pyx` (the relaxed search from Task 9 stays in Cython until a follow-up plan ports it), and the follow-up plan is opened. Otherwise Cython wins: the crate, the `setuptools-rust` dependency, and the `rust` branch of `route_kernel.py` are deleted. A gap under 1.5x is not worth a second toolchain.
+
+- [ ] **Step 1: Write the failing parity test**
+
+Add to `tests/layout/test_route_kernel.py`:
+
+```python
+def test_rust_astar_matches_cython_on_real_searches(monkeypatch: pytest.MonkeyPatch) -> None:
+    pytest.importorskip("flab2bp.layout._route_kernel_rs")
+    cases = _capture_searches(plastic_spec(), budget_s=4.0)
+    assert cases
+
+    monkeypatch.setattr(route_kernel, "_compiled_astar", route_kernel._candidates["cython"])
+    cython_results = [_replay(case) for case in cases]
+    monkeypatch.setattr(route_kernel, "_compiled_astar", route_kernel._candidates["rust"])
+    rust_results = [_replay(case) for case in cases]
+
+    for cython_result, rust_result in zip(cython_results, rust_results, strict=True):
+        assert rust_result.path == cython_result.path
+        assert rust_result.kind == cython_result.kind
+        assert rust_result.wall == cython_result.wall
+        assert rust_result.expansions == cython_result.expansions
+```
+
+- [ ] **Step 2: Run the test to verify it is skipped, then fails once the crate builds**
+
+Run: `uv run pytest tests/layout/test_route_kernel.py::test_rust_astar_matches_cython_on_real_searches -v`
+Expected: SKIPPED (no `_route_kernel_rs`). After Step 3 builds the crate with an empty `astar_flat`, it FAILS.
+
+- [ ] **Step 3: Add the crate and the build wiring**
+
+```toml
+# rust/route_kernel/Cargo.toml
+[package]
+name = "route_kernel_rs"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "_route_kernel_rs"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.29", features = ["extension-module"] }
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+```
+
+In `pyproject.toml`, add `"setuptools-rust==1.13.0"` to `[build-system].requires` and to the `build` dependency group, then `uv sync --group build`. In `setup.py`:
+
+```python
+from Cython.Build import cythonize
+from setuptools import Extension, setup
+from setuptools_rust import Binding, RustExtension
+
+setup(
+    ext_modules=cythonize(
+        [
+            Extension(
+                "flab2bp.layout._sequence_kernel",
+                ["src/flab2bp/layout/_sequence_kernel.pyx"],
+            ),
+            Extension(
+                "flab2bp.layout._route_kernel",
+                ["src/flab2bp/layout/_route_kernel.pyx"],
+            ),
+        ],
+        build_dir="build/cython",
+        compiler_directives={"language_level": "3"},
+    ),
+    rust_extensions=[
+        RustExtension(
+            "flab2bp.layout._route_kernel_rs",
+            path="rust/route_kernel/Cargo.toml",
+            binding=Binding.PyO3,
+            debug=False,
+        )
+    ],
+)
+```
+
+```rust
+// rust/route_kernel/src/lib.rs
+//! Flat-grid A* inner loop, the Task 8 Cython kernel ported line for line.
+//! Heap order is (f, g, index) with Python float semantics; costs accumulate
+//! in the same association order; the expansion checkpoint arithmetic is
+//! copied, not simplified.
+
+use pyo3::buffer::PyBuffer;
+use pyo3::prelude::*;
+use pyo3::types::{PyAny, PyTuple};
+use std::cmp::Ordering;
+use std::collections::BinaryHeap;
+
+#[derive(Clone, Copy)]
+struct Entry {
+    f: f64,
+    g: f64,
+    index: i64,
+}
+
+impl PartialEq for Entry {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == Ordering::Equal
+    }
+}
+impl Eq for Entry {}
+impl PartialOrd for Entry {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for Entry {
+    // BinaryHeap is a max-heap; reverse so the smallest (f, g, index) pops first.
+    // Costs are sums of non-negative terms, so partial_cmp never sees NaN.
+    fn cmp(&self, other: &Self) -> Ordering {
+        other
+            .f
+            .partial_cmp(&self.f)
+            .unwrap()
+            .then_with(|| other.g.partial_cmp(&self.g).unwrap())
+            .then_with(|| other.index.cmp(&self.index))
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+fn heuristic(
+    col: i64,
+    gh: i64,
+    single: bool,
+    exact: bool,
+    only_x: i64,
+    only_y: i64,
+    goal_columns: &[i64],
+    goal_box: (i64, i64, i64, i64),
+    bands: &[(usize, i64, i64)],
+    alt_flat: &[i64],
+    columns: i64,
+) -> f64 {
+    let x = col / gh;
+    let y = col - x * gh;
+    let mut far: f64 = if single {
+        ((x - only_x).abs() + (y - only_y).abs()) as f64
+    } else if exact {
+        let mut best_d: i64 = 1 << 30;
+        for pair in goal_columns.chunks_exact(2) {
+            let d = (x - pair[0]).abs() + (y - pair[1]).abs();
+            if d < best_d {
+                best_d = d;
+            }
+        }
+        best_d as f64
+    } else {
+        let (bx0, by0, bx1, by1) = goal_box;
+        let dx = (bx0 - x).max(x - bx1).max(0);
+        let dy = (by0 - y).max(y - by1).max(0);
+        (dx + dy) as f64
+    };
+    for &(band, lo, hi) in bands {
+        let dial = alt_flat[band * columns as usize + col as usize];
+        if dial < 0 {
+            continue;
+        }
+        let gap = (lo - dial) as f64;
+        if gap > far {
+            far = gap;
+        }
+        let gap = (dial - hi) as f64;
+        if gap > far {
+            far = gap;
+        }
+    }
+    far
+}
+
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn astar_flat<'py>(
+    py: Python<'py>,
+    flags: PyBuffer<u8>,
+    hist: PyBuffer<f64>,
+    pressure: f64,
+    alt_flat: PyBuffer<i64>,
+    band_count: i64,
+    goal_flag: PyBuffer<u8>,
+    goal_columns: PyBuffer<i64>,
+    exact_goals: bool,
+    goal_box: (i64, i64, i64, i64),
+    starts: PyBuffer<i64>,
+    gh: i64,
+    xstep: i64,
+    levels: i64,
+    level_toll: PyBuffer<f64>,
+    max_expansions: i64,
+    budget_left: i64,
+    deadline_every: i64,
+    deadline: Bound<'py, PyAny>,
+    expired: Bound<'py, PyAny>,
+) -> PyResult<Bound<'py, PyTuple>> {
+    // Buffers are read through ReadOnlyCell; copying the two big ones once per
+    // search would cost more than the search on a small grid, so read in place.
+    let flags = flags.as_slice(py).expect("flags must be contiguous");
+    let hist = hist.as_slice(py).expect("hist must be contiguous");
+    let alt = alt_flat.as_slice(py).expect("alt_flat must be contiguous");
+    let goal_flag = goal_flag.as_slice(py).expect("goal_flag must be contiguous");
+    let goal_columns: Vec<i64> = goal_columns.to_vec(py)?;
+    let starts: Vec<i64> = starts.to_vec(py)?;
+    let level_toll: Vec<f64> = level_toll.to_vec(py)?;
+    let alt: Vec<i64> = alt.iter().map(|c| c.get()).collect(); // small: bands x columns of i64
+
+    let size = flags.len();
+    let columns = (size as i64) / levels;
+    let negotiating = hist.len() > 0;
+    let goal_count = goal_columns.len() / 2;
+    let single = goal_count == 1;
+    let (only_x, only_y) = if goal_count > 0 { (goal_columns[0], goal_columns[1]) } else { (0, 0) };
+
+    // Landmark bands, dropping any landmark that cannot reach every goal.
+    let mut bands: Vec<(usize, i64, i64)> = Vec::new();
+    for b in 0..band_count as usize {
+        let mut lo: i64 = -1;
+        let mut hi: i64 = -1;
+        for pair in goal_columns.chunks_exact(2) {
+            let at = (pair[0] * gh + pair[1]) as usize;
+            let dial = alt[b * columns as usize + at];
+            if dial < 0 {
+                lo = -1;
+                break;
+            }
+            if lo < 0 || dial < lo {
+                lo = dial;
+            }
+            if dial > hi {
+                hi = dial;
+            }
+        }
+        if lo >= 0 {
+            bands.push((b, lo, hi));
+        }
+    }
+
+    let mut best = vec![f64::INFINITY; size];
+    let mut prev = vec![-1i64; size];
+    let mut via = vec![-1i64; size];
+    let mut hcache = vec![-1.0f64; columns as usize];
+    let moves: [[i64; 4]; 4] = [
+        [xstep, 2 * xstep, gh, 2 * gh],
+        [-xstep, -2 * xstep, -gh, -2 * gh],
+        [levels, 2 * levels, 1, 2],
+        [-levels, -2 * levels, -1, -2],
+    ];
+    let ramp_steps: [i64; 2] = [1, -1];
+
+    let mut heap: BinaryHeap<Entry> = BinaryHeap::with_capacity(1024);
+    for &si in &starts {
+        best[si as usize] = 0.0;
+        prev[si as usize] = -1;
+        let col = si / levels;
+        let h0 = heuristic(col, gh, single, exact_goals, only_x, only_y, &goal_columns, goal_box, &bands, &alt, columns);
+        heap.push(Entry { f: h0, g: 0.0, index: si });
+    }
+
+    let mut expansions: i64 = 0;
+    let start_left = budget_left;
+    let mut budget_left = budget_left;
+    let mut checkpoint = (max_expansions + 1).min(deadline_every).min(start_left);
+    let mut kind: i64 = 2;
+    let mut found: i64 = -1;
+    let deadline_none = deadline.is_none();
+
+    while let Some(cur) = heap.pop() {
+        let g = cur.g;
+        let ci = cur.index as usize;
+        if g > best[ci] {
+            continue;
+        }
+        expansions += 1;
+        if expansions >= checkpoint {
+            if expansions > max_expansions {
+                kind = 1;
+                budget_left = start_left - expansions + 1;
+                break;
+            }
+            if expansions % deadline_every == 0 && !deadline_none {
+                let hit: bool = expired.call1((deadline.clone(),))?.extract()?;
+                if hit {
+                    kind = 1;
+                    budget_left = start_left - expansions + 1;
+                    break;
+                }
+            }
+            if expansions >= start_left {
+                kind = 1;
+                budget_left = start_left - expansions;
+                break;
+            }
+            checkpoint = max_expansions + 1;
+            let due = (expansions / deadline_every + 1) * deadline_every;
+            if due < checkpoint {
+                checkpoint = due;
+            }
+            if start_left < checkpoint {
+                checkpoint = start_left;
+            }
+        }
+        if goal_flag[ci].get() != 0 {
+            kind = 0;
+            found = cur.index;
+            budget_left = start_left - expansions;
+            break;
+        }
+        let q = cur.index / levels;
+        let lvl = cur.index - q * levels;
+        let step_toll = 1.0 + level_toll[lvl as usize];
+        let run_base = g + 3.0;
+        for m in &moves {
+            let nxt = cur.index + m[0];
+            if flags[nxt as usize].get() == 0 {
+                continue;
+            }
+            let mut cost = g + step_toll;
+            if negotiating {
+                cost += hist[nxt as usize].get() * pressure;
+            }
+            if cost < best[nxt as usize] {
+                best[nxt as usize] = cost;
+                prev[nxt as usize] = cur.index;
+                via[nxt as usize] = -1;
+                let col = q + m[2];
+                let mut far = hcache[col as usize];
+                if far < 0.0 {
+                    far = heuristic(col, gh, single, exact_goals, only_x, only_y, &goal_columns, goal_box, &bands, &alt, columns);
+                    hcache[col as usize] = far;
+                }
+                heap.push(Entry { f: cost + far, g: cost, index: nxt });
+            }
+            let run = cur.index + m[1];
+            for &step in &ramp_steps {
+                if lvl + step < 0 || lvl + step >= levels {
+                    continue;
+                }
+                let toll2 = level_toll[(lvl + step) as usize];
+                let top = run + step;
+                if flags[top as usize].get() == 0 {
+                    continue;
+                }
+                let mut cost = run_base + toll2;
+                if negotiating {
+                    cost += hist[top as usize].get() * pressure;
+                }
+                if cost < best[top as usize] {
+                    best[top as usize] = cost;
+                    prev[top as usize] = cur.index;
+                    via[top as usize] = nxt;
+                    let col = q + m[3];
+                    let mut far = hcache[col as usize];
+                    if far < 0.0 {
+                        far = heuristic(col, gh, single, exact_goals, only_x, only_y, &goal_columns, goal_box, &bands, &alt, columns);
+                        hcache[col as usize] = far;
+                    }
+                    heap.push(Entry { f: cost + far, g: cost, index: top });
+                }
+            }
+        }
+    }
+    if kind == 2 {
+        // The heap emptied: sealed.  Same write-back as the Python loop.
+        budget_left = start_left - expansions;
+    }
+
+    let path: Option<Vec<i64>> = if kind == 0 {
+        let mut out = Vec::new();
+        let mut node = found;
+        while node != -1 {
+            out.push(node);
+            if via[node as usize] != -1 {
+                out.push(via[node as usize]);
+            }
+            node = prev[node as usize];
+        }
+        out.reverse();
+        Some(out)
+    } else {
+        None
+    };
+    let settled: Vec<i64> = if kind == 2 {
+        best.iter().enumerate().filter(|(_, b)| **b != f64::INFINITY).map(|(i, _)| i as i64).collect()
+    } else {
+        Vec::new()
+    };
+    PyTuple::new(py, [
+        path.into_pyobject(py)?.into_any(),
+        expansions.into_pyobject(py)?.into_any(),
+        kind.into_pyobject(py)?.into_any(),
+        settled.into_pyobject(py)?.into_any(),
+        budget_left.into_pyobject(py)?.into_any(),
+    ])
+}
+
+#[pymodule]
+fn _route_kernel_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(astar_flat, m)?)?;
+    Ok(())
+}
+```
+
+Two conventions to hold: `path` and `settled` come back as Python lists rather than `array("q")`; the Task 8 wrapper only iterates them, so no wrapper change is needed. The `deadline` argument is `None` or a float; `expired` is `freeform._expired`, called through Python only every `deadline_every` expansions, as in the other two backends. If `pyo3 0.29` renames `PyBuffer::as_slice` or `into_pyobject`, follow the 0.29 API reference; the shape of the port does not change.
+
+Build: `uv run python setup.py build_ext --inplace` now compiles both extensions. If pyo3 refuses the interpreter version, set `PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1` for the build and record that in `kernel-bakeoff.md`.
+
+- [ ] **Step 4: Run the parity test, then the bench under all three backends**
+
+```bash
+uv run pytest tests/layout/test_route_kernel.py -v
+for f in /tmp/rk-universe.pkl /tmp/rk-quantum.pkl /tmp/rk-plastic.pkl; do
+  echo "== $f"
+  FLAB2BP_ROUTE_KERNEL=python uv run python scripts/route_bench.py --cases "$f" --rounds 1 --check | tail -2
+  FLAB2BP_ROUTE_KERNEL=cython uv run python scripts/route_bench.py --cases "$f" --rounds 5 --check | tail -2
+  FLAB2BP_ROUTE_KERNEL=rust   uv run python scripts/route_bench.py --cases "$f" --rounds 5 --check | tail -2
+done
+```
+
+Expected: every line ends `MATCH`; three `BEST` lines per file. If the captures from Task 8 were removed from `/tmp`, recapture them with the Task 8 Step 7 commands first.
+
+- [ ] **Step 5: Decide and prune**
+
+Write `kernel-bakeoff.md` with the nine `BEST` lines, the per-file ratio Cython/Rust, the rule from the task header, and the decision. Then apply the decision in the tree: delete the losing implementation and its build wiring (crate directory plus `setuptools-rust` entries and the `RustExtension`, or the Cython `astar_flat` and its `.pyi` entry), leaving `route_kernel.py` importing only what remains, and set `_PREFERENCE` accordingly. Re-run `uv run pytest tests/layout/test_route_kernel.py tests/layout/test_freeform.py -q` after pruning.
+
+- [ ] **Step 6: Lint, type-check, commit**
+
+```bash
+uv run ruff check src/flab2bp/layout/route_kernel.py tests/layout/test_route_kernel.py
+uv run mypy src/flab2bp/layout/route_kernel.py tests/layout/test_route_kernel.py
+git add -A rust setup.py pyproject.toml uv.lock src/flab2bp/layout tests/layout/test_route_kernel.py docs/superpowers/evidence/2026-09-01-evaluation-throughput/kernel-bakeoff.md
+git commit -m "perf(layout): decide the A* kernel language by bake-off"
+```
+
+The commit message body carries the decision line from `kernel-bakeoff.md`.
+
+---
+
+### Task 11: Record the routing backend in placement stats and the profiler
 
 **Files:**
 - Modify: `scripts/route_profile.py` (JSON field `route_backend`)
@@ -2229,7 +2733,7 @@ git commit -m "bench: report the routing kernel backend in placement stats"
 
 ---
 
-### Task 11: Corpus-wide preparation parity, the 30-second gate, and evidence
+### Task 12: Corpus-wide preparation parity, the 30-second gate, and evidence
 
 **Files:**
 - Create: `scripts/prepare_parity.py`
@@ -2355,7 +2859,7 @@ Expected: every round prints `clean 72  refused 0  invalid 0  crashed 0 ... PASS
 
 - [ ] **Step 4: Write the gate record**
 
-`gate.md` contains: the commit hash under test; the three `audit_compare` output lines verbatim; the before/after profile table from Step 2; the last line of `prepare-parity.txt`; the six `route_bench` `BEST` lines from Task 8 Step 7; and one line per gate condition stating pass or fail. No prose beyond that.
+`gate.md` contains: the commit hash under test and the baseline commit hash from Task 1; the three `audit_compare` output lines verbatim; the before/after profile table from Step 2; the last line of `prepare-parity.txt`; the `route_bench` `BEST` lines for the surviving backend from Task 10 Step 4 and the decision line from `kernel-bakeoff.md`; and one line per gate condition stating pass or fail. No prose beyond that.
 
 - [ ] **Step 5: Full suite, lint, type-check, commit**
 
