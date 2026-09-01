@@ -8417,6 +8417,8 @@ def _route_all(
         def retain_commit_failures(
             unlinked: Collection[int],
             details: Mapping[int, _CommitFailure],
+            *,
+            retained_failures: dict[int, NetFailure] = round_failures,
         ) -> None:
             for index in unlinked:
                 detail = details.get(
@@ -8444,7 +8446,7 @@ def _route_all(
                 blockers = tuple(
                     _net_id(blocker) for blocker in detail.blocking_indices
                 )
-                round_failures[index] = NetFailure(
+                retained_failures[index] = NetFailure(
                     _net_id(index),
                     RouteFailureKind.COMMIT_LINK,
                     (detail.cell, *detail.blocking_cells),
@@ -9043,18 +9045,23 @@ def _commit_paths(
         failed_cell: Cell | None = None
         failed_reason = ""
 
-        def roll_back_prefix() -> None:
+        def roll_back_prefix(
+            *,
+            added_indices: list[int] = indices,
+            routed_path: Sequence[Cell] = path,
+            routed_altitudes: Sequence[Fraction] = altitudes,
+        ) -> None:
             """Remove belts added before this path's first rejected cell."""
-            while indices:
-                at = len(indices) - 1
-                building_index = indices.pop()
+            while added_indices:
+                at = len(added_indices) - 1
+                building_index = added_indices.pop()
                 if building_index != len(canvas.buildings) - 1:
                     raise AssertionError("path prefix is no longer the canvas tail")
                 canvas.buildings.pop()
-                x, y, level = path[at]
+                x, y, level = routed_path[at]
                 if canvas.blocked.get((x, y, level)) == building_index:
                     del canvas.blocked[x, y, level]
-                canvas.world_taken.discard((x, y, altitudes[at]))
+                canvas.world_taken.discard((x, y, routed_altitudes[at]))
         source_tap = (source_hints or {}).get(i)
         for at, ((x, y, lvl), z) in enumerate(
             zip(path, altitudes, strict=True)
@@ -16362,7 +16369,9 @@ class FreeformLayout:
             completion_cancelled = (
                 None
                 if completion_deadline is None
-                else lambda: _expired(completion_deadline)
+                else lambda completion_deadline=completion_deadline: _expired(
+                    completion_deadline
+                )
             )
             compaction_started = time.monotonic()
             try:
