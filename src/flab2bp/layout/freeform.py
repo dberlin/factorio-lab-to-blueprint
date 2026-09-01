@@ -12278,21 +12278,69 @@ def _prepare_routing_problem(
         )
     if cancelled is not None and cancelled():
         raise _PreparationDeadline
+    def prepared_endpoints(
+        prepared: _PreparedNet,
+    ) -> tuple[Cell | None, Cell]:
+        source = (
+            None
+            if prepared.src is None
+            else (prepared.src.x, prepared.src.y, prepared.src.z)
+        )
+        return source, (prepared.dst.x, prepared.dst.y, prepared.dst.z)
+
+    net_by_id = {prepared.net_id: prepared for prepared in prepared_nets}
+
+    def static_access_failure(
+        prepared: _PreparedNet,
+        failed: Cell,
+    ) -> NetFailure:
+        nearby = {
+            candidate
+            for dx, dy in _STEPS
+            for candidate in ((failed[0] + dx, failed[1] + dy, failed[2]),)
+        }
+        nearby.update(
+            candidate
+            for access in tuple(nearby)
+            for dx, dy in _STEPS
+            for candidate in ((access[0] + dx, access[1] + dy, access[2]),)
+        )
+        blocking_cells = tuple(
+            sorted(cell for cell in nearby if cell in canvas.reserved)
+        )
+        blocking_ports = {
+            canvas.reserved[cell]
+            for cell in blocking_cells
+            if canvas.reserved[cell] != failed
+        }
+        blocking_nets = tuple(
+            net_id
+            for candidate in prepared_nets
+            if candidate.net_id != prepared.net_id
+            and any(
+                endpoint in blocking_ports
+                for endpoint in prepared_endpoints(candidate)
+                if endpoint is not None
+            )
+            for net_id in (candidate.net_id,)
+        )
+        return NetFailure(
+            prepared.net_id,
+            RouteFailureKind.STATIC_ACCESS,
+            (failed, *blocking_cells),
+            blocking_nets,
+            0,
+            source=prepared_endpoints(prepared)[0],
+            destination=prepared_endpoints(prepared)[1],
+            blocking_endpoints=tuple(
+                prepared_endpoints(net_by_id[blocker])
+                for blocker in blocking_nets
+            ),
+        )
+
 
     preparation_failures = tuple(
-        NetFailure(
-            net.net_id,
-            RouteFailureKind.STATIC_ACCESS,
-            (failed,),
-            (),
-            0,
-            source=(
-                None
-                if net.src is None
-                else (net.src.x, net.src.y, net.src.z)
-            ),
-            destination=(net.dst.x, net.dst.y, net.dst.z),
-        )
+        static_access_failure(net, failed)
         for net in prepared_nets
         for failed in (
             next(
