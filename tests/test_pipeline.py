@@ -318,6 +318,37 @@ def test_explicit_over_cap_pipeline_name_is_unchanged(
     assert codec.decode(result.blueprint).header.short_desc == explicit_name
 
 
+def test_blueprint_encoding_failure_does_not_abort_later_strategy(
+    completed_layout: Placement,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    encode = codec.encode
+    calls = 0
+
+    def fail_first(placement: Placement) -> str:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise ValueError("invalid splitter port anchor")
+        return encode(placement)
+
+    monkeypatch.setattr(codec, "encode", fail_first)
+    result = pipeline.build(
+        SMALL_URL,
+        strategy="best",
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+        time_budget_s=0.5,
+    )
+
+    assert result.strategy == "sequence-pair"
+    assert result.placement.completion is completed_layout.completion
+    assert len(result.attempts) == 1
+    assert len(result.refused) == 1
+    assert result.refused[0].strategy == "freeform"
+    assert result.refused[0].reason == (
+        "blueprint encoding failed: invalid splitter port anchor"
+    )
+
 @pytest.mark.slow
 def test_every_pair_reports_started_and_then_how_it_ended() -> None:
     steps: list[pipeline.AttemptProgress] = []

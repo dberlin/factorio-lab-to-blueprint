@@ -616,13 +616,36 @@ def build(
                     f"{spec.machine_count} machines, {placement.area} tiles"
                 ),
             )
+            try:
+                blueprint = codec.encode(labelled)
+            except ValueError as exc:
+                reason = f"blueprint encoding failed: {exc}"
+                refused.append(
+                    LayoutAttemptFailure(
+                        candidate=spec.label,
+                        strategy=sname,
+                        reason=reason,
+                    )
+                )
+                if on_progress is not None:
+                    on_progress(
+                        AttemptProgress(
+                            index=pair_index,
+                            total=total_pairs,
+                            candidate=spec.label,
+                            strategy=sname,
+                            phase="refused",
+                            reason=reason,
+                        )
+                    )
+                continue
             attempts.append(
                 Attempt(
                     spec.label,
                     sname,
                     labelled,
                     report,
-                    codec.encode(labelled),
+                    blueprint,
                     placement.area,
                 )
             )
